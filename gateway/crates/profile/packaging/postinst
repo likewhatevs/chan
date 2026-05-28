@@ -1,0 +1,20 @@
+#!/bin/sh
+# Idempotent: shared across the three chan-gateway packages.
+set -e
+
+case "$1" in
+  configure)
+    if ! getent passwd chan-gateway >/dev/null; then
+      adduser --system --no-create-home --group chan-gateway
+    fi
+    install -d -m 0750 -o root -g chan-gateway /etc/chan-gateway
+    if [ -f /etc/chan-gateway/profile.env ]; then
+      chown root:chan-gateway /etc/chan-gateway/profile.env
+      chmod 0640 /etc/chan-gateway/profile.env
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

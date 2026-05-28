@@ -1,0 +1,17 @@
+/target
+/dist
+.env
+.env.*
+!.env.example
+*.swp
+.DS_Store
+
+# Local dev runner (scripts/dev/) writes generated secrets here.
+/scripts/dev/secrets/
+/scripts/dev/.run.pid
+
+# Frontend
+/node_modules
+/crates/*/web/node_modules
+/crates/*/web/dist
+/web-common/node_modules

@@ -1,0 +1,68 @@
+[package]
+name = "profile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Internal HTTP API for the chan-gateway user/identity/drive store."
+
+[[bin]]
+name = "profile-service"
+path = "src/main.rs"
+
+[lib]
+name = "profile"
+path = "src/lib.rs"
+
+[dependencies]
+gateway-common = { workspace = true }
+
+anyhow = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+
+# Debian package metadata. Built with cargo-deb (release workflow
+# in .github/workflows/release.yml). See crates/profile/packaging/
+# for the systemd unit, env template and postinst script.
+[package.metadata.deb]
+name = "chan-gateway-profile"
+maintainer = "fiorix <fiorix@gmail.com>"
+copyright = "2026, fiorix <fiorix@gmail.com>"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Internal HTTP API in front of Postgres for the chan-gateway suite.
+Holds users, linked OAuth identities and per-user drive URLs. Called
+only by sibling gateway services (identity, drive-proxy); not exposed
+publicly. Ships as a single static binary."""
+section = "net"
+priority = "optional"
+depends = "$auto, adduser"
+maintainer-scripts = "packaging/"
+assets = [
+    ["target/release/profile-service", "/usr/bin/chan-gateway-profile", "755"],
+    ["packaging/profile.env",          "/etc/chan-gateway/profile.env", "640"],
+]
+conf-files = ["/etc/chan-gateway/profile.env"]
+
+[package.metadata.deb.systemd-units]
+unit-name = "chan-gateway-profile"
+unit-scripts = "packaging/"
+enable = false
+start = false

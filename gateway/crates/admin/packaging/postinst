@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  configure)
+    install -d -m 0750 -o root -g root /etc/chan-gateway
+    if [ -f /etc/chan-gateway/admin.env ]; then
+      chmod 0640 /etc/chan-gateway/admin.env
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

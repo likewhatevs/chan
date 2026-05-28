@@ -84,6 +84,14 @@ jobs:
             echo "::error::tag $tag does not match desktop version $desktop_version"
             exit 1
           fi
+          # The gateway is versioned in lockstep with the root; its
+          # nested workspace carries its own [workspace.package] version
+          # that must be bumped in the same commit.
+          gateway_version=$(sed -n 's/^version = "\(.*\)"/\1/p' chan/gateway/Cargo.toml | head -1)
+          if [ "$version" != "$gateway_version" ]; then
+            echo "::error::tag $tag does not match gateway version $gateway_version"
+            exit 1
+          fi
 
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -198,6 +206,82 @@ jobs:
         with:
           name: release-linux-cli-${{ matrix.target }}
           path: chan/release-artifacts/*
+          if-no-files-found: error
+
+  gateway-linux-packages:
+    name: gateway packages (${{ matrix.target }})
+    # The gateway is a separate nested workspace and ships only the
+    # four server-side .deb packages, on linux amd64/arm64. Built on
+    # native runners per arch (no cross toolchain) like the CLI job.
+    # Artifact name uses the release-* prefix so publish-release picks
+    # it up via its existing download pattern + files glob.
+    needs: context
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            package_arch: amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            package_arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: chan
+
+      - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: chan/gateway
+          key: gateway-${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: chan/gateway/package-lock.json
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+
+      - name: Build SPA
+        # rust-embed bakes the identity SPA into the binary at compile
+        # time, so the bundle must exist before cargo build.
+        working-directory: chan/gateway
+        run: |
+          npm ci
+          npm run build --workspaces --if-present
+
+      - name: Build release binaries
+        working-directory: chan/gateway
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            -p profile -p identity -p drive-proxy -p admin
+
+      - name: Build .deb packages
+        working-directory: chan/gateway
+        run: |
+          set -e
+          mkdir -p release-artifacts
+          for crate in profile identity drive-proxy admin; do
+            cargo deb --no-build --no-strip \
+              --target ${{ matrix.target }} \
+              -p "$crate" \
+              --output release-artifacts/
+          done
+          ls -la release-artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-gateway-${{ matrix.package_arch }}
+          path: chan/gateway/release-artifacts/*.deb
           if-no-files-found: error
 
   linux-desktop-artifacts:
@@ -479,6 +563,7 @@ jobs:
     needs:
       - context
       - linux-cli-artifacts
+      - gateway-linux-packages
       - linux-desktop-artifacts
       - macos-cli-artifact
       - macos-desktop-artifacts

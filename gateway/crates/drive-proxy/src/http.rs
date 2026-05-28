@@ -1,0 +1,93 @@
+use std::sync::Arc;
+
+use axum::extract::{Request, State};
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Redirect, Response};
+use axum::routing::get;
+use axum::Router;
+use tower_http::trace::TraceLayer;
+
+use crate::config::Config;
+use crate::registry::Registry;
+
+/// Application state passed to every handler. Cookie- and
+/// session-related fields are gone; drive-proxy reads no cookie
+/// other than the `drive_gate` issued by the proxy gate itself.
+#[derive(Clone)]
+pub struct AppState {
+    pub cfg: Arc<Config>,
+    pub registry: Registry,
+}
+
+pub fn router(cfg: Arc<Config>, registry: Registry) -> Router {
+    let state = AppState { cfg, registry };
+    let admin = crate::admin::router(state.clone());
+    Router::new()
+        // /healthz answers on every Host; nginx hits it from the apex
+        // upstream during health checks.
+        .route("/healthz", get(healthz))
+        // Single fallback that dispatches on the Host header. Apex
+        // (drive.chan.app) only carries admin + healthz; everything
+        // else 404s. Wildcard ({user}.drive.chan.app) hands off to
+        // the proxy module.
+        .fallback(dispatch)
+        .merge(admin)
+        .with_state(state)
+        .layer(TraceLayer::new_for_http())
+}
+
+async fn healthz() -> &'static str {
+    "ok"
+}
+
+/// Host-keyed dispatch. The router has no static routes for the
+/// wildcard surface (`/`, `/{drive}`, `/{drive}/*`) because every
+/// request to a wildcard host must first parse `{user}` out of the
+/// header. axum's per-host routing requires the same layer stack on
+/// each route, so we resolve at the request level instead.
+///
+/// We deliberately do NOT use axum's `Host` extractor: it consults
+/// `Forwarded` and `X-Forwarded-Host` before the actual `Host`
+/// header. Both are client-controllable on this listener (nginx may
+/// scrub them, but the gateway must not assume so), and that
+/// extractor would let a hostile client route their request to a
+/// different tenant's wildcard surface by spoofing XFH. We read the
+/// raw `Host` header directly here.
+async fn dispatch(State(state): State<AppState>, req: Request) -> Response {
+    let cfg = &state.cfg;
+    let host = match req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(h) => h.to_string(),
+        None => return (StatusCode::BAD_REQUEST, "missing host").into_response(),
+    };
+    // Apex: only admin + healthz routes are wired explicitly; this
+    // fallback says everything else on the apex is 404.
+    if cfg.is_apex(&host) {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let Some(user) = cfg.parse_wildcard_user(&host) else {
+        // Host header that is neither the apex nor a recognized
+        // wildcard subdomain. Reject so a misrouted public listener
+        // doesn't expose the proxy by accident.
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+
+    // Wildcard root `/` -> dashboard. The dashboard lives at
+    // id.chan.app/drives in prod (configurable via DASHBOARD_URL);
+    // drive-proxy doesn't render any UI of its own, so a
+    // bare-domain hit bounces.
+    let path = req.uri().path();
+    if path == "/" || path.is_empty() {
+        return Redirect::to(&cfg.dashboard_url).into_response();
+    }
+
+    // Otherwise hand off to the proxy module. It parses the
+    // `/{drive}` (or `/{drive}/...`) prefix and applies the gate.
+    crate::proxy::handle(state.clone(), user, req).await
+}
+
+// dashboard_url derivation lives in Config::from_env; the
+// dispatcher just reads cfg.dashboard_url here.

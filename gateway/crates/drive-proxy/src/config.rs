@@ -1,0 +1,332 @@
+use std::net::SocketAddr;
+
+use anyhow::Context;
+use url::Url;
+
+/// Runtime config sourced from environment variables.
+#[derive(Clone)]
+pub struct Config {
+    /// Public listener (drive.chan.app apex + *.drive.chan.app
+    /// wildcard). Behind nginx + TLS.
+    pub bind_addr: SocketAddr,
+    /// Tunnel listener (apex `/v1/tunnel`). h2c behind nginx
+    /// `grpc_pass`; `chan serve` instances dial
+    /// `https://drive.chan.app/v1/tunnel` over h2/TLS, terminated at
+    /// nginx and forwarded here cleartext.
+    pub tunnel_bind_addr: SocketAddr,
+    /// Apex hostname (e.g. `drive.chan.app`). Used to distinguish
+    /// the admin/healthz surface from the wildcard reverse-proxy
+    /// surface in the Host-keyed router.
+    pub apex_host: String,
+    /// Wildcard suffix including the leading dot (e.g.
+    /// `.drive.chan.app`). The proxy router parses `{user}` out of
+    /// every Host that ends with this suffix.
+    pub wildcard_suffix: String,
+    /// Base URL of identity-service. drive-proxy POSTs to
+    /// `{identity_url}/internal/v1/tokens/validate` to validate the
+    /// PAT every `chan serve` presents in its tunnel handshake.
+    pub identity_url: Url,
+    /// Bearer drive-proxy presents on identity-service's
+    /// `/internal/v1/tokens/validate`. Resolution order documented
+    /// in `from_env`.
+    pub identity_auth_token: String,
+    /// Absolute URL the wildcard root (`{user}.drive.chan.app/`)
+    /// 302s to. The dashboard lives at id.chan.app/drives in prod;
+    /// dev sets this to `http://id.localtest.me:17000/drives`. If
+    /// unset, drive-proxy derives a sensible default by swapping
+    /// the `drive.` prefix on `apex_host` for `id.` and assuming
+    /// `https`.
+    pub dashboard_url: String,
+    /// HMAC-SHA256 secret used to verify entry tokens from identity
+    /// and mint session tokens for the `drive_gate` cookie. Same
+    /// value also configured on identity-service. Required.
+    pub drive_gate_secret: String,
+    /// Maximum number of distinct drives a single user can have
+    /// registered concurrently. `0` disables the cap. Reconnects of
+    /// an already-registered drive are always allowed (last-writer-
+    /// wins eviction in the tunnel registry handles that).
+    pub max_drives_per_user: usize,
+    /// Bearer for the `/admin/v1/*` tree. `None` makes every admin
+    /// route 401, which is the safe default if the env var is
+    /// missing on a fresh deploy.
+    pub admin_token: Option<String>,
+    /// Cap on response bytes streamed back from an upstream `chan
+    /// serve` per request. `None` (env unset or `0`) disables the
+    /// cap.
+    pub max_response_bytes: Option<usize>,
+    /// Cap on inbound request body bytes forwarded to the upstream.
+    /// `None` disables.
+    pub max_request_bytes: Option<usize>,
+    /// Hard cap on total time a single proxied HTTP request may
+    /// consume. `None` disables; default 60s. WebSocket requests use
+    /// per-half idle timeouts instead.
+    pub request_timeout: Option<std::time::Duration>,
+    /// Value to set on the outbound `X-Forwarded-Proto` header before
+    /// forwarding to the upstream `chan serve`. drive-proxy itself
+    /// does not see TLS (nginx terminates), so we cannot derive this
+    /// from the inbound connection; the inbound `X-Forwarded-Proto`
+    /// is client-controlled and must not be trusted. Defaults to
+    /// `https`; override with `FORWARDED_PROTO=http` for local dev.
+    pub forwarded_proto: String,
+}
+
+impl Config {
+    pub fn from_env() -> anyhow::Result<Self> {
+        let bind_addr: SocketAddr = std::env::var("BIND_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1:7002".to_string())
+            .parse()
+            .context("BIND_ADDR must be host:port")?;
+
+        let tunnel_bind_addr: SocketAddr = std::env::var("TUNNEL_BIND_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1:7100".to_string())
+            .parse()
+            .context("TUNNEL_BIND_ADDR must be host:port")?;
+
+        // Apex / wildcard split. Defaults match production
+        // (`drive.chan.app`, wildcard `*.drive.chan.app`). Both
+        // overridable; the wildcard suffix is derived from the apex
+        // unless explicitly set so dev / lab deployments only need
+        // one env var.
+        let apex_host = std::env::var("APEX_HOST")
+            .unwrap_or_else(|_| "drive.chan.app".to_string())
+            .trim()
+            .to_string();
+        if apex_host.is_empty() {
+            anyhow::bail!("APEX_HOST must not be empty");
+        }
+        let wildcard_suffix = std::env::var("WILDCARD_SUFFIX")
+            .unwrap_or_else(|_| format!(".{apex_host}"))
+            .trim()
+            .to_string();
+        if !wildcard_suffix.starts_with('.') {
+            anyhow::bail!(
+                "WILDCARD_SUFFIX must start with a dot (got {wildcard_suffix:?}); \
+                 e.g. .drive.chan.app"
+            );
+        }
+
+        let identity_url: Url = std::env::var("IDENTITY_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:7000".to_string())
+            .parse()
+            .context("IDENTITY_URL must be a URL")?;
+
+        // Bearer drive-proxy presents on identity-service's
+        // /internal/v1/tokens/validate. Resolution order:
+        //   1. IDENTITY_INTERNAL_TOKEN (preferred; matches the
+        //      identity-side env var name);
+        //   2. IDENTITY_AUTH_TOKEN (legacy local name, accepted so
+        //      pre-split deploys keep working);
+        //   3. PROFILE_AUTH_TOKEN (final back-compat fallback for
+        //      single-token deploys).
+        let identity_auth_token = std::env::var("IDENTITY_INTERNAL_TOKEN")
+            .or_else(|_| std::env::var("IDENTITY_AUTH_TOKEN"))
+            .or_else(|_| std::env::var("PROFILE_AUTH_TOKEN"))
+            .context(
+                "IDENTITY_INTERNAL_TOKEN (or IDENTITY_AUTH_TOKEN / PROFILE_AUTH_TOKEN) is required",
+            )?;
+
+        let drive_gate_secret =
+            std::env::var("DRIVE_GATE_SECRET").context("DRIVE_GATE_SECRET is required")?;
+        if drive_gate_secret.is_empty() {
+            anyhow::bail!("DRIVE_GATE_SECRET must not be empty");
+        }
+
+        // Dashboard redirect target. Explicit env var wins; otherwise
+        // derive from apex_host by swapping `drive.` -> `id.` and
+        // assuming https. The derived form is correct for prod but
+        // wrong for any dev / lab setup that uses a different scheme
+        // or a non-default port; in those cases set DASHBOARD_URL.
+        let dashboard_url = match std::env::var("DASHBOARD_URL") {
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => match apex_host.strip_prefix("drive.") {
+                Some(rest) => format!("https://id.{rest}/drives"),
+                None => "/drives".to_string(),
+            },
+        };
+
+        let max_drives_per_user: usize = match std::env::var("MAX_DRIVES_PER_USER") {
+            Ok(v) => v
+                .trim()
+                .parse()
+                .context("MAX_DRIVES_PER_USER must be a non-negative integer")?,
+            Err(_) => 0,
+        };
+
+        let admin_token = std::env::var("DRIVE_ADMIN_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let max_response_bytes = parse_byte_cap("MAX_RESPONSE_BYTES", Some(100 * 1024 * 1024))?;
+        let max_request_bytes = parse_byte_cap("MAX_REQUEST_BYTES", Some(100 * 1024 * 1024))?;
+        let forwarded_proto = std::env::var("FORWARDED_PROTO")
+            .unwrap_or_else(|_| "https".to_string())
+            .trim()
+            .to_string();
+        if forwarded_proto != "http" && forwarded_proto != "https" {
+            anyhow::bail!(
+                "FORWARDED_PROTO must be \"http\" or \"https\" (got {forwarded_proto:?})"
+            );
+        }
+
+        let request_timeout = match std::env::var("REQUEST_TIMEOUT_SECS") {
+            Ok(v) => {
+                let n: u64 = v
+                    .trim()
+                    .parse()
+                    .context("REQUEST_TIMEOUT_SECS must be a non-negative integer")?;
+                if n == 0 {
+                    None
+                } else {
+                    Some(std::time::Duration::from_secs(n))
+                }
+            }
+            Err(_) => Some(std::time::Duration::from_secs(60)),
+        };
+
+        Ok(Self {
+            bind_addr,
+            tunnel_bind_addr,
+            apex_host,
+            wildcard_suffix,
+            identity_url,
+            identity_auth_token,
+            dashboard_url,
+            drive_gate_secret,
+            max_drives_per_user,
+            admin_token,
+            max_response_bytes,
+            max_request_bytes,
+            request_timeout,
+            forwarded_proto,
+        })
+    }
+
+    /// Parse `{user}` out of a Host header, or `None` if the Host is
+    /// the apex (no user prefix) or doesn't match this gateway's
+    /// hostnames. The strip trims any optional `:port` suffix so
+    /// dev lookups against `127.0.0.1:7002` still work.
+    ///
+    /// The prefix must be a single DNS label: lowercase ASCII
+    /// alphanumerics plus `-`, no internal dots. Multi-label
+    /// prefixes (e.g. `evil.alice` against `*.drive.chan.app`) and
+    /// non-label characters are rejected so the resulting "username"
+    /// matches the shape username validators downstream accept.
+    pub fn parse_wildcard_user(&self, host: &str) -> Option<String> {
+        let host = host.split(':').next()?;
+        if host.eq_ignore_ascii_case(&self.apex_host) {
+            return None;
+        }
+        let suffix = self.wildcard_suffix.as_str();
+        if host.len() <= suffix.len() {
+            return None;
+        }
+        let (prefix, tail) = host.split_at(host.len() - suffix.len());
+        if !tail.eq_ignore_ascii_case(suffix) {
+            return None;
+        }
+        if prefix.is_empty() {
+            return None;
+        }
+        if !prefix
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        {
+            return None;
+        }
+        Some(prefix.to_ascii_lowercase())
+    }
+
+    /// True when the Host header names this gateway's apex.
+    pub fn is_apex(&self, host: &str) -> bool {
+        host.split(':')
+            .next()
+            .map(|h| h.eq_ignore_ascii_case(&self.apex_host))
+            .unwrap_or(false)
+    }
+}
+
+fn parse_byte_cap(name: &str, default: Option<usize>) -> anyhow::Result<Option<usize>> {
+    match std::env::var(name) {
+        Ok(v) => {
+            let n: usize = v
+                .trim()
+                .parse()
+                .with_context(|| format!("{name} must be a non-negative integer"))?;
+            Ok((n != 0).then_some(n))
+        }
+        Err(_) => Ok(default),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg() -> Config {
+        Config {
+            bind_addr: "127.0.0.1:7002".parse().unwrap(),
+            tunnel_bind_addr: "127.0.0.1:7100".parse().unwrap(),
+            apex_host: "drive.chan.app".into(),
+            wildcard_suffix: ".drive.chan.app".into(),
+            identity_url: "http://127.0.0.1:7000/".parse().unwrap(),
+            identity_auth_token: "x".into(),
+            dashboard_url: "https://id.chan.app/drives".into(),
+            drive_gate_secret: "x".into(),
+            max_drives_per_user: 0,
+            admin_token: None,
+            max_response_bytes: None,
+            max_request_bytes: None,
+            request_timeout: None,
+            forwarded_proto: "https".into(),
+        }
+    }
+
+    #[test]
+    fn apex_returns_none() {
+        let c = cfg();
+        assert_eq!(c.parse_wildcard_user("drive.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("DRIVE.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("drive.chan.app:7002"), None);
+    }
+
+    #[test]
+    fn wildcard_extracts_user() {
+        let c = cfg();
+        assert_eq!(
+            c.parse_wildcard_user("alice.drive.chan.app").as_deref(),
+            Some("alice"),
+        );
+        assert_eq!(
+            c.parse_wildcard_user("Alice.Drive.Chan.App").as_deref(),
+            Some("alice"),
+        );
+        assert_eq!(
+            c.parse_wildcard_user("alice.drive.chan.app:7002")
+                .as_deref(),
+            Some("alice"),
+        );
+    }
+
+    #[test]
+    fn unknown_host_returns_none() {
+        let c = cfg();
+        assert_eq!(c.parse_wildcard_user("example.com"), None);
+        assert_eq!(c.parse_wildcard_user(""), None);
+        assert_eq!(c.parse_wildcard_user(".drive.chan.app"), None);
+    }
+
+    #[test]
+    fn multi_label_prefix_rejected() {
+        // `evil.alice.drive.chan.app` would have matched the suffix
+        // before #18 and returned `"evil.alice"` as username. Now we
+        // require a single DNS label in the prefix.
+        let c = cfg();
+        assert_eq!(c.parse_wildcard_user("evil.alice.drive.chan.app"), None);
+        // Leading dot was already excluded by the substring length
+        // check + emptiness guard, but tighten the boundary explicitly.
+        assert_eq!(c.parse_wildcard_user("..drive.chan.app"), None);
+        // Underscores aren't legal DNS hostname chars and are not in
+        // the username alphabet either.
+        assert_eq!(c.parse_wildcard_user("a_b.drive.chan.app"), None);
+    }
+}

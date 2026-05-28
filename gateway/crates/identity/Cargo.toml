@@ -1,0 +1,81 @@
+[package]
+name = "identity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OAuth2 sign-in + session for id.chan.app. Calls profile-service over HTTP."
+
+[[bin]]
+name = "identity-service"
+path = "src/main.rs"
+
+[lib]
+name = "identity"
+path = "src/lib.rs"
+
+[dependencies]
+gateway-common = { workspace = true }
+
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+mime_guess = { workspace = true }
+oauth2 = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+rust-embed = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tower-sessions = { workspace = true }
+tower-sessions-sqlx-store = { workspace = true }
+tracing = { workspace = true }
+# Username profanity / leet-speak filter for /api/me/username. Small,
+# no-network, ASCII normalization. Any false positives are surfaced
+# as a 400 -- users can pick a different handle.
+rustrict = "0.7"
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+wiremock = "0.6"
+
+[package.metadata.deb]
+name = "chan-gateway-identity"
+maintainer = "fiorix <fiorix@gmail.com>"
+copyright = "2026, fiorix <fiorix@gmail.com>"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Public-facing OAuth2 sign-in service for the chan-gateway suite.
+Runs the GitHub auth-code + PKCE flow, maintains Postgres-backed
+sessions, and serves an embedded Svelte SPA at id.chan.app where
+users manage their drive URLs. Calls chan-gateway-profile over
+HTTP. Single static binary (frontend baked in via rust-embed)."""
+section = "net"
+priority = "optional"
+depends = "$auto, adduser"
+maintainer-scripts = "packaging/"
+assets = [
+    ["target/release/identity-service", "/usr/bin/chan-gateway-identity",  "755"],
+    ["packaging/identity.env",           "/etc/chan-gateway/identity.env", "640"],
+]
+conf-files = ["/etc/chan-gateway/identity.env"]
+
+[package.metadata.deb.systemd-units]
+unit-name = "chan-gateway-identity"
+unit-scripts = "packaging/"
+enable = false
+start = false

@@ -1,0 +1,43 @@
+[Unit]
+Description=chan-gateway identity service (id.chan.app, OAuth2 sign-in)
+Documentation=https://github.com/chan-writer/chan-gateway
+After=network-online.target postgresql.service chan-gateway-profile.service
+Wants=network-online.target chan-gateway-profile.service
+
+[Service]
+Type=simple
+User=chan-gateway
+Group=chan-gateway
+EnvironmentFile=/etc/chan-gateway/identity.env
+ExecStart=/usr/bin/chan-gateway-identity
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

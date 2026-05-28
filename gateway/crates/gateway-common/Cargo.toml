@@ -1,0 +1,29 @@
+[package]
+name = "gateway-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared internal helpers for the chan-gateway suite (profile-service client, embedded SPA serving)."
+
+[lib]
+name = "gateway_common"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+jsonwebtoken = { workspace = true }
+mime_guess = { workspace = true }
+reqwest = { workspace = true }
+rust-embed = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }

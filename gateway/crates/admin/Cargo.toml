@@ -1,0 +1,50 @@
+[package]
+name = "admin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Admin CLI for the chan-gateway suite (users, tokens, audit)."
+
+[[bin]]
+name = "chan-gateway-admin"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
+tokio-stream = "0.1"
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+clap = { version = "4", features = ["derive", "wrap_help", "env"] }
+comfy-table = { version = "7", default-features = false }
+
+# Debian package metadata. Built with cargo-deb. Unlike the other
+# gateway crates this one is a CLI -- no systemd unit, just the
+# binary and a stub env file siblings can source.
+[package.metadata.deb]
+name = "chan-gateway-admin"
+maintainer = "fiorix <fiorix@gmail.com>"
+copyright = "2026, fiorix <fiorix@gmail.com>"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Admin CLI for the chan-gateway suite. Manages users, personal access
+tokens, and surfaces login / token audit logs by talking to
+chan-gateway-profile over HTTP. Intended to run inside the
+chan-profile sdme container or anywhere else that can reach the
+internal profile-service URL."""
+section = "admin"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/chan-gateway-admin", "/usr/bin/chan-gateway-admin", "755"],
+    ["packaging/admin.env",               "/etc/chan-gateway/admin.env", "640"],
+]
+conf-files = ["/etc/chan-gateway/admin.env"]
+maintainer-scripts = "packaging/"

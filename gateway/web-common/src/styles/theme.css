@@ -1,0 +1,78 @@
+/* Shared palette + base element styles for id.chan.app and
+   drive.chan.app SPAs. Imported once per app from main.ts so the
+   two surfaces stay visually identical without duplicated rules.
+   Default dark; [data-theme="light"] flips it. */
+
+:root {
+  --bg: #1c1c1e;
+  --bg-card: #232325;
+  --bg-elev: #2a2a2c;
+  --bg-code: #2a2a2c;
+  --border: #3a3a3c;
+  --text: #f5f5f7;
+  --text-secondary: #98989d;
+  --text-heading: #f5f5f7;
+  --link: #58a6ff;
+  --btn-bg: #2a2a2c;
+  --btn-border: #3a3a3c;
+  --btn-hover: #98989d;
+  --accent: #3fb950;
+  --warn-text: #e3b341;
+  --brand: #f97316;
+  --hover-bg: rgba(255, 255, 255, 0.06);
+  --separator: #4a4a4d;
+}
+[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-card: #f5f5f7;
+  --bg-elev: #ffffff;
+  --bg-code: #e8e8ec;
+  --border: #d1d1d6;
+  --text: #1c1c1e;
+  --text-secondary: #6c6c70;
+  --text-heading: #1c1c1e;
+  --link: #0969da;
+  --btn-bg: #f2f2f4;
+  --btn-border: #d1d1d6;
+  --btn-hover: #6c6c70;
+  --accent: #1a7f37;
+  --warn-text: #9a6700;
+  --brand: #ea580c;
+  --hover-bg: rgba(0, 0, 0, 0.05);
+  --separator: #b0b0b6;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+  padding: .45rem .85rem;
+  cursor: pointer;
+}
+button:hover { border-color: var(--btn-hover); }
+input[type="text"], input[type="url"] {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .4rem .55rem;
+  box-sizing: border-box;
+}
+input[type="text"]:focus, input[type="url"]:focus {
+  outline: 1px solid var(--link);
+  border-color: var(--link);
+}
+a { color: var(--link); }

@@ -1,0 +1,52 @@
+[Unit]
+Description=chan-gateway profile service (internal user/identity/drive store)
+Documentation=https://github.com/chan-writer/chan-gateway
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chan-gateway
+Group=chan-gateway
+EnvironmentFile=/etc/chan-gateway/profile.env
+ExecStart=/usr/bin/chan-gateway-profile
+Restart=on-failure
+RestartSec=2
+
+# Hardening. profile-service is loopback-only by default; make a
+# compromised binary do as little extra harm as possible.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Drop all capabilities. profile-service binds 127.0.0.1:7001 as a
+# normal user (no need for CAP_NET_BIND_SERVICE on a high port) and
+# does no privileged work.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# System call allowlist. @system-service is the standard set for
+# long-running daemons; subtracting @privileged and @resources
+# blocks namespace / cgroup / module-loading footguns even if a
+# future code path tried to call them.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

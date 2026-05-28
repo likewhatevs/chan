@@ -7,7 +7,14 @@ name: CI
 on:
   push:
     branches: [main]
+    # The gateway (gateway/) is a separate workspace with its own gate
+    # (gateway-ci.yml). Skip the core gate on gateway-only changes; a
+    # mixed change still touches non-gateway paths and runs both.
+    paths-ignore:
+      - 'gateway/**'
   pull_request:
+    paths-ignore:
+      - 'gateway/**'
   workflow_dispatch:
 
 env:
