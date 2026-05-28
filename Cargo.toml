@@ -17,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.16.0"
+version = "0.17.0"
 edition = "2021"
 # Mirrors `rust-toolchain.toml`; pre-push and CI compile under the
 # same compiler. Bumping requires updating both files in the same
@@ -32,13 +32,13 @@ repository = "https://github.com/fiorix/chan"
 # declare their own `embeddings` feature that enables this one).
 # Without `default-features = false` here, per-crate overrides are
 # silently ignored by Cargo.
-chan-workspace = { version = "0.16.0", path = "crates/chan-workspace", default-features = false }
-chan-llm = { version = "0.16.0", path = "crates/chan-llm" }
-chan-report = { version = "0.16.0", path = "crates/chan-report" }
-chan-server = { version = "0.16.0", path = "crates/chan-server", default-features = false }
-chan-tunnel-client = { version = "0.16.0", path = "crates/chan-tunnel-client" }
-chan-tunnel-proto = { version = "0.16.0", path = "crates/chan-tunnel-proto" }
-chan-tunnel-server = { version = "0.16.0", path = "crates/chan-tunnel-server" }
+chan-workspace = { version = "0.17.0", path = "crates/chan-workspace", default-features = false }
+chan-llm = { version = "0.17.0", path = "crates/chan-llm" }
+chan-report = { version = "0.17.0", path = "crates/chan-report" }
+chan-server = { version = "0.17.0", path = "crates/chan-server", default-features = false }
+chan-tunnel-client = { version = "0.17.0", path = "crates/chan-tunnel-client" }
+chan-tunnel-proto = { version = "0.17.0", path = "crates/chan-tunnel-proto" }
+chan-tunnel-server = { version = "0.17.0", path = "crates/chan-tunnel-server" }
 
 anyhow = "1"
 async-trait = "0.1"
