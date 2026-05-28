@@ -90,9 +90,7 @@ describe("no inline close affordance on first-class surfaces", () => {
       await import("./WorkspaceInfoBody.svelte?raw")
     ).default as string;
     expect(workspaceInfo).toContain("onSetAsScope");
-    expect(workspaceInfo).toContain(
-      'onclick={onSetAsScope}>Graph from here',
-    );
+    expect(workspaceInfo).toMatch(/onclick=\{onSetAsScope\}\s*>Graph from here/);
     // Button is gated on the prop being present, mirroring the
     // FileInfoBody convention.
     expect(workspaceInfo).toMatch(/\{#if onSetAsScope\}[\s\S]*?Graph from here/);
@@ -111,8 +109,13 @@ describe("no inline close affordance on first-class surfaces", () => {
   // button targets the SELECTED directory (which may be unrelated
   // to the current scope's ancestor chain, e.g. a directory the
   // user navigated into via cross-link).
-  test("GraphPanel does not pass onSetAsScope to WorkspaceInfoBody", () => {
-    expect(graph).not.toMatch(/<WorkspaceInfoBody\s+onSetAsScope=/);
+  // A1 (phase-13): the workspace root is now a regular directory
+  // inspector, so GraphPanel wires BOTH the reveal and the scope
+  // callbacks for it (re-scopes the current tab to workspace root).
+  test("GraphPanel wires onReveal + onSetAsScope on WorkspaceInfoBody", () => {
+    expect(graph).toMatch(
+      /<WorkspaceInfoBody[\s\S]*?onReveal=\{\(\) => revealPathInBrowserTab\("", true\)\}[\s\S]*?onSetAsScope=\{\(\) => graphFromHere\("", true\)\}/,
+    );
   });
 
   test("GraphPanel wires 'Graph from here' for file + directory selections (I4)", () => {

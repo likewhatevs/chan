@@ -2047,12 +2047,15 @@
              Differentiated visually by GraphCanvas painting the
              "workspace" sub-kind in a darker fill with the HardDrive
              glyph.
-             `fullstack-a-33`: stop passing `onSetAsScope` from
-             the graph. The breadcrumb above is the in-graph path
-             to workspace-root scope; the button on WorkspaceInfoBody is
-             still used by FileBrowserSurface (which spawns a new
-             graph instead of re-scoping). -->
-        <WorkspaceInfoBody />
+             A1 (phase-13): the workspace root is now a regular
+             directory inspector. Wire both the directory actions:
+             "Show in File Browser" (revealPathInBrowserTab) and
+             "Graph from here" (graphFromHere re-scopes the current
+             tab to workspace root). variant defaults to inspector. -->
+        <WorkspaceInfoBody
+          onReveal={() => revealPathInBrowserTab("", true)}
+          onSetAsScope={() => graphFromHere("", true)}
+        />
       {:else if selectedFsNode && (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") && selectedFsNode.path !== undefined && !selectedFsNode.broken}
         <!-- Real fs-mode file or directory: render the same body as the
              file browser / editor inspector (counts, size, code

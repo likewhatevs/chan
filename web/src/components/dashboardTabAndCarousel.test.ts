@@ -155,8 +155,11 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
     expect(carousel).toMatch(
       /import WorkspaceInfoBody from "\.\/WorkspaceInfoBody\.svelte";/,
     );
+    // A1 (phase-13): the Dashboard slide passes variant="dashboard"
+    // so the workspace-root inspector keeps its Notes-directories
+    // config (the inspector variant drops it).
     expect(carousel).toMatch(
-      /<div class="slide slide-workspace" aria-label="Workspace info">[\s\S]{1,400}<WorkspaceInfoBody \/>/,
+      /<div class="slide slide-workspace" aria-label="Workspace info">[\s\S]{1,400}<WorkspaceInfoBody variant="dashboard" \/>/,
     );
   });
 
