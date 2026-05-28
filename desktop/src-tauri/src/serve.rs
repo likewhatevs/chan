@@ -632,10 +632,13 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyI': fire(e, 'app.infographics.open'); return;
         case 'BracketLeft':  fire(e, 'app.pane.prev'); return;
         case 'BracketRight': fire(e, 'app.pane.next'); return;
-        // `phase-12 lane-e` (addendum-2): Cmd+/ split right, Cmd+\
-        // split bottom. Web reaches splits via Hybrid Nav `/` / `\`.
+        // `phase-12 lane-e` (addendum-2): Cmd+/ split right. Split
+        // bottom is Cmd+Shift+/ (shift branch below) - moved off Cmd+\
+        // in `desktop-fixes` because 1Password's system-wide Cmd+\
+        // hotkey is dispatched by macOS before the key reaches this
+        // webview, so chan never received it. Web reaches splits via
+        // Hybrid Nav `/` and `?`.
         case 'Slash':        fire(e, 'app.pane.splitRight'); return;
-        case 'Backslash':    fire(e, 'app.pane.splitDown');  return;
       }
       const m = code.match(/^Digit([1-9])$/);
       if (m) {
@@ -655,6 +658,10 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyI': if (e.metaKey) fire(e, 'app.terminal.broadcastToggle'); return;
         case 'BracketLeft':  fire(e, 'app.tab.prev');      return;
         case 'BracketRight': fire(e, 'app.tab.next');      return;
+        // `desktop-fixes`: Cmd+Shift+/ (= Cmd+?) splits the active pane
+        // bottom, pairing with Cmd+/ split-right above. Replaces the old
+        // Cmd+\ binding that 1Password's global hotkey shadowed.
+        case 'Slash':        fire(e, 'app.pane.splitDown');  return;
       }
     }
   }
@@ -1079,8 +1086,9 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("app.tab.jump"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.next"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.prev"));
-        // `phase-12 lane-e` (addendum-2): Cmd+S search + Cmd+/ Cmd+\
-        // splits route through the native bridge too.
+        // `phase-12 lane-e` (addendum-2): Cmd+S search + Cmd+/ (right)
+        // / Cmd+Shift+/ (bottom) splits route through the native bridge
+        // too.
         assert!(KEY_BRIDGE_JS.contains("app.search.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.splitRight"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.splitDown"));

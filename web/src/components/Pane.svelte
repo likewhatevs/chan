@@ -520,7 +520,7 @@
       label: "Split bottom",
       icon: ArrowDown,
       command: "app.pane.splitBottom",
-      chord: paneModeChordLabel("\\"),
+      chord: paneModeChordLabel("?"),
       action: () => doPaneModeSplit("column"),
     },
     {

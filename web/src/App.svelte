@@ -637,10 +637,13 @@
       // Split keybinds reuse the right/down constraint from
       // `fullstack-21`'s hamburger menu. New pane lands as the focus
       // so subsequent edits inside the same transaction target it.
+      // `desktop-fixes`: split-bottom is `?` (Shift+/), not `\`, so the
+      // `/` (right) + `?` (bottom) pair mirrors the top-level Cmd+/ /
+      // Cmd+Shift+/ chords and dodges 1Password's global Cmd+\ hotkey.
       case "/":
         paneModeSplit("row");
         return;
-      case "\\":
+      case "?":
         paneModeSplit("column");
         return;
       // Close-all / kill-pane reuse the existing affordances and
@@ -1038,9 +1041,9 @@
         killActivePane();
         return;
       // `phase-12 lane-e` (addendum-2): top-level split chords
-      // (desktop Cmd+/ right, Cmd+\ bottom via KEY_BRIDGE_JS). row =
-      // split right, column = split bottom - same direction mapping
-      // as Hybrid Nav `/` and `\`.
+      // (desktop Cmd+/ right, Cmd+Shift+/ bottom via KEY_BRIDGE_JS).
+      // row = split right, column = split bottom - same direction
+      // mapping as Hybrid Nav `/` and `?`.
       case "app.pane.splitRight":
         splitActive("row");
         return;

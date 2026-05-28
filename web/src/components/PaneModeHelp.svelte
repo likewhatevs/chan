@@ -86,7 +86,7 @@
       title: "Split",
       rows: [
         { caps: [{ label: "/", key: "/" }], action: "Split right" },
-        { caps: [{ label: "\\", key: "\\" }], action: "Split down" },
+        { caps: [{ label: "?", key: "?" }], action: "Split down" },
       ],
     },
     {

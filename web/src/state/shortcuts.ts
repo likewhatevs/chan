@@ -293,9 +293,16 @@ export const SHORTCUTS: readonly Shortcut[] = [
   },
   // `phase-12 lane-e` (addendum-2): split the active pane. Listed
   // under desktop-native in the policy, so native-only chords; web
-  // reaches the same action via Hybrid Nav `/` and `\`. row = split
+  // reaches the same action via Hybrid Nav `/` and `?`. row = split
   // right, column = split bottom (matches `splitActive` + the Hybrid
   // hamburger's right/down constraint).
+  //
+  // `desktop-fixes`: split-bottom moved off `Mod+\` because 1Password
+  // registers Cmd+\ as a system-wide macOS hotkey that the OS dispatches
+  // before the keystroke ever reaches chan's webview, so chan never saw
+  // it. The pair is now Cmd+/ (right) + Cmd+Shift+/ (bottom) - the same
+  // physical key with/without Shift, mnemonically `/` and `?`. Hybrid
+  // Nav mirrors it: `/` right, `?` (Shift+/) bottom.
   {
     id: "app.pane.splitRight",
     label: "Split right",
@@ -305,7 +312,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   {
     id: "app.pane.splitDown",
     label: "Split bottom",
-    native: "Mod+\\",
+    native: "Mod+Shift+/",
     group: "Panes",
   },
   {

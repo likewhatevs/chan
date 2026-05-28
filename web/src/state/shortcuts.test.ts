@@ -79,13 +79,14 @@ describe("shortcut table", () => {
   });
 
   // `phase-12 lane-e` (addendum-2): splits are desktop-native only
-  // (web reaches them via Hybrid Nav `/` `\`), so they render in the
-  // native table but not the web one.
+  // (web reaches them via Hybrid Nav `/` `?`), so they render in the
+  // native table but not the web one. `desktop-fixes`: split-bottom is
+  // Cmd+Shift+/, not Cmd+\ (1Password owns the global Cmd+\ hotkey).
   test("advertises splits on native only", () => {
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
     expect(native).toMatch(/^Split right\s+Cmd\+\//m);
-    expect(native).toMatch(/^Split bottom\s+Cmd\+\\/m);
+    expect(native).toMatch(/^Split bottom\s+Cmd\+Shift\+\//m);
     expect(web).not.toMatch(/^Split right/m);
     expect(web).not.toMatch(/^Split bottom/m);
   });

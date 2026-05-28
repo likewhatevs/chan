@@ -204,7 +204,7 @@ describe("Pane right-click menus", () => {
       /label: "Split right"[\s\S]*?chord: paneModeChordLabel\("\/"\)/,
     );
     expect(paneSource).toMatch(
-      /label: "Split bottom"[\s\S]*?chord: paneModeChordLabel\("\\\\"\)/,
+      /label: "Split bottom"[\s\S]*?chord: paneModeChordLabel\("\?"\)/,
     );
     expect(paneSource).toMatch(
       /label: "Next pane"[\s\S]*?command: "app\.pane\.next"[\s\S]*?chord: formatChord\("Mod\+]"/,
