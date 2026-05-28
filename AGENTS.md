@@ -139,12 +139,12 @@ No TLS at the local hop.
 
 Tunnel mode (`chan serve --tunnel-token ...`, or `CHAN_TUNNEL_TOKEN`
 env var) replaces the local listener with a `chan-tunnel-client`
-dial to `drive.chan.app/v1/tunnel`. The workspace is then published at
-`{user}.drive.chan.app/{workspace}/*` over yamux substreams. The
+dial to `workspace.chan.app/v1/tunnel`. The workspace is then published at
+`{user}.workspace.chan.app/{workspace}/*` over yamux substreams. The
 single-user, single-machine assumption still holds: one chan serve
 process owns the workspace's writes; the tunnel just relocates the
 inbound transport. The bearer-token gate is auto-disabled in tunnel
-mode (the gateway in front of drive.chan.app is the trust boundary;
+mode (the gateway in front of workspace.chan.app is the trust boundary;
 default behavior 404s anonymous visitors, opt out with
 `--tunnel-public`). Wire protocol lives in
 `crates/chan-tunnel-proto`.

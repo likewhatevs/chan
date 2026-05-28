@@ -45,6 +45,18 @@ desktop/                Tauri shell (`chan-desktop`). Embeds
                         chan-server HTTP routes and stage temporary
                         OS payloads instead of reading workspace content
                         directly from Tauri filesystem code.
+
+gateway/                Account / sign-in / reverse-proxy surface for
+                        chan.app: profile + identity (id.chan.app) and
+                        workspace-proxy (workspace.chan.app), plus the
+                        admin CLI and shared gateway-common. A separate
+                        nested Cargo workspace (own lock + deps),
+                        Postgres-backed and linux amd64/arm64 only, so
+                        it is NOT a member of the root workspace and the
+                        core single-binary build never pulls in its
+                        sqlx/oauth2 stack. Consumes the in-repo
+                        chan-tunnel-* crates by path. See
+                        gateway/design.md and per-crate design docs.
 ```
 
 Phase 5 collapsed the historical `chan-writer/chan-core` sibling
@@ -224,7 +236,7 @@ matters for two paths:
   reads that meta tag at boot and prepends the prefix to every
   fetch and WebSocket URL.
 - Tunnel mode: chan-server runs at root inside the tunnel
-  (`{user}.drive.chan.app/{workspace}` is stripped by the gateway
+  (`{user}.workspace.chan.app/{workspace}` is stripped by the gateway
   before forwarding into the tunnel substream; the upstream sees
   `/`, `/assets/...`), but the SPA still needs to know the public
   path so its API URLs resolve from the browser's origin. On
@@ -249,10 +261,10 @@ when they expected JSON.
 - Tunnel (`CHAN_TUNNEL_TOKEN=...`): same axum router, but the
   transport is `chan_tunnel_client::run` instead of a TCP
   listener. The tunnel client dials
-  `drive.chan.app/v1/tunnel`, runs a Hello/HelloAck handshake
+  `workspace.chan.app/v1/tunnel`, runs a Hello/HelloAck handshake
   that names the workspace, and serves yamux substreams with the
   router. The bearer token is forced off in tunnel mode:
-  `{user}.drive.chan.app/{workspace}/` is the trust boundary (default
+  `{user}.workspace.chan.app/{workspace}/` is the trust boundary (default
   behavior 404s anonymous visitors; the workspace owner opens the
   workspace from id.chan.app's dashboard via a short-lived workspace-gate
   token, workspace-proxy validates and issues a host-only session

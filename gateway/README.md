@@ -160,15 +160,19 @@ mock the GitHub OAuth endpoints and profile-service via wiremock.
 
 ## Releases
 
-Tagging `v*` triggers `.github/workflows/release.yml`, which
-builds three .deb packages (`chan-gateway-profile`,
-`chan-gateway-identity`, `chan-gateway-workspace-proxy`) for amd64 and
-arm64 and uploads them to a GitHub Release. Cut one with:
+The gateway ships on the monorepo's release line: the gateway
+crates are versioned in lockstep with the root (`chan`), and a
+`v*` tag triggers the repo-root `.github/workflows/release.yml`,
+whose `gateway-linux-packages` job builds four .deb packages
+(`chan-gateway-profile`, `chan-gateway-identity`,
+`chan-gateway-workspace-proxy`, `chan-gateway-admin`) for amd64
+and arm64 and uploads them alongside the rest of the release.
 
-```sh
-git tag v0.1.0
-git push origin v0.1.0
-```
+There is no gateway-local release script: bump
+`gateway/Cargo.toml` in the same commit as the root `Cargo.toml`
+version, then cut the release from the monorepo root. The release
+workflow's `context` job asserts the tag matches the gateway
+version.
 
 To build .debs locally on macOS (one-off, before relying on CI):
 

@@ -64,6 +64,15 @@ desktop/                Tauri shell. Cross-platform desktop wrapper
                         per workspace and mounts the editor in a
                         webview window. Per-window state is keyed
                         by a `w=<window-label>` URL parameter.
+
+gateway/                Account / sign-in / reverse-proxy surface for
+                        chan.app (id.chan.app + workspace.chan.app).
+                        Separate nested Cargo workspace (profile,
+                        identity, workspace-proxy, admin,
+                        gateway-common); Postgres-backed, linux amd64/
+                        arm64 only. NOT a member of the root workspace,
+                        so the core build stays Postgres-free. See
+                        gateway/CLAUDE.md.
 ```
 
 Phase 5 collapsed the chan-core sibling workspace into this repo:
@@ -137,12 +146,12 @@ No TLS at the local hop.
 
 Tunnel mode (`chan serve --tunnel-token ...`, or `CHAN_TUNNEL_TOKEN`
 env var) replaces the local listener with a `chan-tunnel-client`
-dial to `drive.chan.app/v1/tunnel`. The workspace is then published at
-`{user}.drive.chan.app/{workspace}/*` over yamux substreams. The
+dial to `workspace.chan.app/v1/tunnel`. The workspace is then published at
+`{user}.workspace.chan.app/{workspace}/*` over yamux substreams. The
 single-user, single-machine assumption still holds: one chan serve
 process owns the workspace's writes; the tunnel just relocates the
 inbound transport. The bearer-token gate is auto-disabled in tunnel
-mode (the gateway in front of drive.chan.app is the trust boundary;
+mode (the gateway in front of workspace.chan.app is the trust boundary;
 default behavior 404s anonymous visitors, opt out with
 `--tunnel-public`). Wire protocol lives in
 `crates/chan-tunnel-proto`.

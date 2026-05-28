@@ -62,6 +62,41 @@ Do not bypass with `--no-verify` unless explicitly
 agreed. Hook failures get fixed in a NEW commit, not
 amended into the previous one.
 
+## Gateway (server-side, Postgres)
+
+`gateway/` is a separate nested Cargo workspace (the
+account / sign-in / reverse-proxy surface for chan.app:
+profile, identity, workspace-proxy, admin, gateway-
+common). It is NOT a member of the root workspace, so
+`cargo build`/`make pre-push` above never touch it, and
+the core build stays free of Postgres and the
+sqlx/oauth2 stack. The gateway has its own gate
+(`.github/workflows/gateway-ci.yml`) and ships only
+linux amd64/arm64 `.deb` packages, versioned in lockstep
+with the root (bump `gateway/Cargo.toml` in the same
+commit as the root version).
+
+Unlike the core, the gateway is Postgres-backed. Its
+integration tests create a throwaway schema per test
+under `TEST_DATABASE_URL`:
+
+```bash
+createdb chan_gateway_test
+export TEST_DATABASE_URL=postgres://localhost/chan_gateway_test
+
+cd gateway
+npm ci && npm run build --workspaces   # SPA; rust-embed needs web/dist
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test                             # needs TEST_DATABASE_URL
+```
+
+Because the shared pre-push hook is intentionally
+Postgres-free, it does not run the gateway gate. Run the
+block above by hand before pushing gateway changes;
+gateway-ci.yml runs the same gate (with a Postgres
+service) on PRs that touch `gateway/**`.
+
 ## Workflow
 
 1. Fork; create a feature branch off `main`.
