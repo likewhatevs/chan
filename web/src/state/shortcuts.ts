@@ -120,9 +120,16 @@ export type Shortcut = {
 /// `KEY_BRIDGE_JS` in `desktop/src-tauri/src/serve.rs`.
 export const SHORTCUTS: readonly Shortcut[] = [
   // App-level navigation
+  //
+  // `phase-13 lane-b` slice 3c: the global Settings overlay was
+  // retired; Cmd+, now flips the focused Terminal / Editor /
+  // Graph / FB / Dashboard surface to its back-of-card config
+  // (via `flipHybrid(layout.activePaneId)`). Press Cmd+, again
+  // to flip back. The command id is unchanged so command-bus
+  // callers and chan-desktop's KEY_BRIDGE_JS keep working.
   {
     id: "app.settings.toggle",
-    label: "Settings",
+    label: "Flip focused Hybrid",
     web: "Mod+,",
     native: "Mod+,",
     group: "App",

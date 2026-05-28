@@ -242,12 +242,11 @@ describe("Pane right-click menus", () => {
     // `fullstack-a-32` + `fullstack-a-67` slice 2 +
     // `fullstack-a-75`: spawn set unified across 5 entries (New
     // Draft / Terminal / File Browser / Rich Prompt / Graph),
-    // separator, then extras (Search + Infographics), then
-    // Settings. Same set + ordering as the pane hamburger and
-    // the carousel slide 1. Dashboard tab added by -a-75 (read-
-    // only shortcut sheet + future info panels); the user-
-    // visible label is still "Infographics" until widget work
-    // ships.
+    // separator, then extras (Search + Infographics). The
+    // Settings footer entry retired with the SettingsPanel
+    // OverlayShell in phase-13 slice 3c — Cmd+, now flips the
+    // focused Hybrid surface so Settings is reachable via the
+    // Dashboard back-of-card, not as an empty-pane menu row.
     expect(menuLabels()).toEqual([
       "New Draft",
       "Terminal",
@@ -256,7 +255,6 @@ describe("Pane right-click menus", () => {
       "Graph",
       "Search",
       "Infographics",
-      "Settings",
     ]);
   });
 

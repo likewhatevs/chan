@@ -18,7 +18,6 @@
     Maximize2,
     Minimize2,
     RotateCw,
-    Settings,
     X,
   } from "lucide-svelte";
   import {
@@ -39,7 +38,6 @@
     loadTreeDir,
     openFsGraphForFile,
     openGraphForTag,
-    openSettings,
     paneWidths,
     persistPaneWidths,
     revealPathInBrowser,
@@ -677,11 +675,6 @@
     menu?.close();
   }
 
-  function doOpenSettings(): void {
-    menu?.close();
-    openSettings();
-  }
-
   function reloadSearch(): void {
     menu?.close();
     queryToken += 1;
@@ -951,7 +944,8 @@
 {#snippet menuItems()}
   <!-- Section order matches the rest of the right-click menus:
        view toggles, (no content/navigation actions here — search is
-       read-only), Settings footer. -->
+       read-only), Reload footer. The Settings entry was retired with
+       the global Settings overlay (phase-13 lane-b slice 3c). -->
   <li>
     <button role="menuitem" onclick={toggleInspector}>
       {#if searchPanel.inspectorOpen}
@@ -971,14 +965,6 @@
       <RotateCw size={16} strokeWidth={1.75} aria-hidden="true" />
       <span class="menu-row-label">Reload</span>
       <span class="menu-row-chord"></span>
-    </button>
-  </li>
-  <li class="sep" role="separator"></li>
-  <li>
-    <button role="menuitem" onclick={doOpenSettings}>
-      <Settings size={14} strokeWidth={1.75} aria-hidden="true" />
-      <span class="menu-row-label">Settings</span>
-      <span class="menu-row-chord">{chordFor("app.settings.toggle") ?? ""}</span>
     </button>
   </li>
 {/snippet}

@@ -1,8 +1,9 @@
 <script lang="ts">
   // `fullstack-a-45` Task B: Terminal settings migrated out of
-  // `SettingsPanel.svelte` into the Hybrid back-side mount point
-  // introduced by `-a-43` Task A. Settings storage shape is
-  // unchanged; only the UI mounting point moves.
+  // the (since-retired) global Settings overlay into the Hybrid
+  // back-side mount point introduced by `-a-43` Task A. Settings
+  // storage shape is unchanged; only the UI mounting point
+  // moves.
 
   import { api } from "../api/client";
   import type { GlobalConfig, Preferences } from "../api/types";
@@ -21,8 +22,9 @@
   /// most users either want by default or fall back to from a
   /// custom environment; the "Custom..." escape hatch toggles a
   /// free-text input for exotic values (alacritty-direct, kitty,
-  /// vt100, etc.). Mirrors the constant set previously in
-  /// SettingsPanel before `-a-45` moved this section.
+  /// vt100, etc.). Mirrors the constant set that lived on the
+  /// retired global Settings overlay before `-a-45` moved this
+  /// section.
   const KNOWN_TERM_VALUES = [
     "xterm-256color",
     "xterm",
@@ -37,9 +39,10 @@
   /// Local edit buffer for the terminal slice. We mirror
   /// `workspace.info.preferences` into a private snapshot so the form
   /// can debounce a burst of changes into one PATCH without
-  /// clobbering external edits (e.g. SettingsPanel saving theme
-  /// changes in parallel). Re-syncs from the server on every
-  /// workspace.info refresh when no local edit is in flight.
+  /// clobbering external edits (e.g. a parallel theme save from
+  /// another back-of-card surface). Re-syncs from the server on
+  /// every workspace.info refresh when no local edit is in
+  /// flight.
   let editing = $state<Preferences | null>(null);
   let saveStatus = $state<SaveStatus>("idle");
 
@@ -200,7 +203,8 @@
   /// Compare the local terminal slice against the server's most
   /// recent workspace.info.preferences. The dirty check is scoped to
   /// the terminal subtree so we never trigger a PATCH for theme /
-  /// editor / date changes (those belong to SettingsPanel).
+  /// editor / date changes (those belong to other back-of-card
+  /// surfaces).
   function terminalDirty(): boolean {
     if (!editing) return false;
     const server = workspace.info?.preferences?.terminal;
@@ -219,12 +223,11 @@
   }
 
   /// Save the terminal slice. We re-fetch the current global config
-  /// before PATCHing so concurrent edits from SettingsPanel (theme
-  /// etc.) merge correctly: the new GlobalConfig payload starts
-  /// from the server's latest state and overlays only this form's
-  /// terminal subtree. Mirrors SettingsPanel's two-fetch
-  /// re-sync pattern after the PATCH so workspace.info stays
-  /// authoritative.
+  /// before PATCHing so concurrent edits from other back-of-card
+  /// surfaces (theme etc.) merge correctly: the new GlobalConfig
+  /// payload starts from the server's latest state and overlays
+  /// only this form's terminal subtree. The two-fetch re-sync
+  /// pattern after the PATCH keeps workspace.info authoritative.
   async function save(): Promise<void> {
     if (!editing || inflight) return;
     if (!terminalDirty()) return;
@@ -264,8 +267,8 @@
     } finally {
       inflight = false;
       // If another edit landed while saving, reschedule. Same
-      // guard SettingsPanel uses to avoid an infinite loop on
-      // identical-to-server state.
+      // guard the other back-of-card configs use to avoid an
+      // infinite loop on identical-to-server state.
       if (terminalDirty() && terminalSnapshot() !== failedSaveSnap) {
         scheduleSave();
       }
@@ -424,10 +427,10 @@
     background: color-mix(in srgb, var(--accent, #f97316) 6%, transparent);
     border-radius: 4px;
   }
-  /* `fullstack-b-11` Terminal field layout carried over from
-     SettingsPanel; the .terminal-* scope keeps the styles
-     local to this component now that the SettingsPanel section
-     is gone. */
+  /* `fullstack-b-11` Terminal field layout carried over from the
+     retired global Settings overlay; the .terminal-* scope
+     keeps the styles local to this component now that the old
+     section is gone. */
   .terminal-field {
     display: flex;
     flex-direction: column;

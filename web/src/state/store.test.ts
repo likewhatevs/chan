@@ -16,7 +16,7 @@ import {
   revealPathInBrowser,
   scheduleSessionSave,
   scopeFsGraphFromHere,
-  settingsOverlay,
+  searchPanel,
   tree,
   treeExpanded,
   fbTreeInstances,
@@ -73,7 +73,10 @@ afterEach(() => {
   layout.rootId = pane.id;
   layout.activePaneId = pane.id;
   layout.nodes = { [pane.id]: pane };
-  settingsOverlay.open = false;
+  searchPanel.open = false;
+  searchPanel.inspectorOpen = false;
+  searchPanel.query = "";
+  searchPanel.scopeId = "workspace";
   graphReloadSignal.nonce = 0;
   browserSelection.path = null;
   browserSelection.showWorkspace = false;
@@ -328,20 +331,26 @@ describe("legacy overlay hash retirement (W5)", () => {
   });
 
   test("persistence strips retired + unknown legacy hash keys, keeps live keys", () => {
-    // `assistant` (phase-5) + `scopes` are unknown; `graph` + `files` are
-    // now retired (W5). All fall out of HASH_KEYS, so dropUnknownHashKeys
-    // strips them while the live `settings` key survives.
+    // `assistant` (phase-5) + `scopes` are unknown; `graph`, `files`,
+    // and `settings` are now retired (`files`/`graph` by W5;
+    // `settings` by phase-13 lane-b slice 3c when the Settings
+    // overlay was deleted). All fall out of HASH_KEYS, so
+    // dropUnknownHashKeys strips them. The live `search` key still
+    // survives.
     const removedOverlayKey = "assist" + "ant";
     window.history.replaceState(
       null,
       "",
-      `/#${removedOverlayKey}=open&scopes=2&graph=workspace&files=1:notes.md&settings=1`,
+      `/#${removedOverlayKey}=open&scopes=2&graph=workspace&files=1:notes.md&settings=1&search=1:hello`,
     );
-    settingsOverlay.open = true;
+    searchPanel.open = true;
+    searchPanel.query = "hello";
+    searchPanel.inspectorOpen = true;
+    searchPanel.scopeId = "workspace";
 
     persistStateToHash();
 
-    expect(window.location.hash).toBe("#settings=1");
+    expect(window.location.hash).toBe("#search=1%3Ahello");
   });
 });
 

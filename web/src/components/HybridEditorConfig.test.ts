@@ -1,16 +1,23 @@
 import { describe, expect, test } from "vitest";
 import source from "./HybridEditorConfig.svelte?raw";
-import panel from "./SettingsPanel.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
-// `fullstack-a-46` Task C: Editor settings UI migrated out of
-// SettingsPanel into HybridEditorConfig. Four sections move:
-// Editor theme, Layout (line spacing), Date pills (date format),
-// On save (strip trailing whitespace). Settings
-// storage shape unchanged; both surfaces still PATCH the same
-// `GlobalConfig.preferences`. The dirty comparator + save are
-// scoped to the editor-related fields so SettingsPanel-owned
-// edits (semantic-search) don't trigger spurious PATCHes.
+// `fullstack-a-46` Task C: Editor settings UI migrated out of the
+// (since-retired) global Settings overlay into HybridEditorConfig.
+// Four sections move: Editor theme, Layout (line spacing), Date
+// pills (date format), On save (strip trailing whitespace).
+// Settings storage shape unchanged; both surfaces still PATCH the
+// same `GlobalConfig.preferences`. The dirty comparator + save
+// are scoped to the editor-related fields so parallel saves
+// from other surfaces (e.g. HybridFileBrowserConfig's
+// semantic-search) didn't trigger spurious PATCHes.
+//
+// `phase-13 lane-b` slice 3c: the global Settings overlay was
+// retired (Appearance + Screen Lock + Screensaver moved to
+// DashboardTab back-of-card). The migration-direction assertions
+// that used to pin "X is gone from the old overlay" are dropped —
+// the file no longer exists, so there's nothing left to regress
+// against.
 
 describe("fullstack-a-46: HybridEditorConfig wiring", () => {
   test("warning copy distinguishes device-wide settings from body theme scope", () => {
@@ -59,8 +66,9 @@ describe("fullstack-a-46: HybridEditorConfig wiring", () => {
   });
 
   test("live-applies the data-editor-theme attribute on every editor_theme change", () => {
-    // Carry-over from SettingsPanel: the editor in the background
-    // re-skins without waiting for the autosave round-trip.
+    // Carry-over from the retired global Settings overlay: the
+    // editor in the background re-skins without waiting for the
+    // autosave round-trip.
     expect(source).toMatch(
       /setAttribute\([\s\S]*?"data-editor-theme"[\s\S]*?editing\.editor_theme/,
     );
@@ -78,8 +86,9 @@ describe("fullstack-a-46: HybridEditorConfig wiring", () => {
 
   test("save merges only editor fields onto the server's current GlobalConfig", () => {
     // Race safety: re-fetch the latest config, overlay editor
-    // fields, then PATCH. SettingsPanel's semantic-search save
-    // can't be clobbered by a parallel HybridEditorConfig save.
+    // fields, then PATCH. Parallel saves from other surfaces
+    // (e.g. HybridFileBrowserConfig's semantic-search save) can't
+    // be clobbered by a HybridEditorConfig save.
     expect(source).toMatch(/const current = await api\.config\(\)/);
     expect(source).toMatch(
       /preferences:\s*\{[\s\S]*?\.\.\.current\.preferences[\s\S]*?editor_theme:\s*editing\.editor_theme[\s\S]*?strip_trailing_whitespace_on_save:[\s\S]*?editing\.strip_trailing_whitespace_on_save/,
@@ -88,10 +97,12 @@ describe("fullstack-a-46: HybridEditorConfig wiring", () => {
   });
 
   test("dirty check is scoped to the four editor-related fields (-a-53)", () => {
-    // `-a-53` reverted Appearance to SettingsPanel; the
-    // `editing.theme` field is no longer touched here. dirty()
-    // compares 4 fields now: editor_theme + line_spacing +
-    // date_format + strip_trailing_whitespace_on_save.
+    // `-a-53` reverted Appearance to the global Settings overlay
+    // (since retired in phase-13 lane-b slice 3c, where Appearance
+    // moved to DashboardTab back-of-card). The `editing.theme`
+    // field is no longer touched here. dirty() compares 4 fields
+    // now: editor_theme + line_spacing + date_format +
+    // strip_trailing_whitespace_on_save.
     expect(source).toMatch(/function editorDirty\(\): boolean/);
     expect(source).toMatch(/editing\.editor_theme !== server\.editor_theme/);
     expect(source).not.toMatch(/editing\.theme !== server\.theme/);
@@ -105,8 +116,9 @@ describe("fullstack-a-46: HybridEditorConfig wiring", () => {
   test("normalizeEditor backfills line_spacing + date_format defaults", () => {
     // line_spacing "tight" → "compact" migration + the catalog
     // default fallback for retired date_format ids carry over
-    // from SettingsPanel's normalizePrefs. Keeps the dirty()
-    // comparison stable across a server re-fetch.
+    // from the retired global Settings overlay's normalizePrefs.
+    // Keeps the dirty() comparison stable across a server
+    // re-fetch.
     expect(source).toMatch(
       /if \(p\.line_spacing === "tight"\) p\.line_spacing = "compact"/,
     );
@@ -130,48 +142,5 @@ describe("Wave 4: Editor back-side controls", () => {
       /<select class="config-select family" bind:value=\{editing\.date_format\}>/,
     );
     expect(source).toMatch(/\.config-select \{[\s\S]{1,300}border: 1px solid var\(--border\)/);
-  });
-});
-
-describe("fullstack-a-46 + fullstack-a-53: Editor section trim in SettingsPanel", () => {
-  test("editor section headers for migrated subsections are gone", () => {
-    // `-a-46` migrated Editor theme, Layout, Date pills, On
-    // save. `-a-53` reverted Appearance back to SettingsPanel —
-    // so Appearance IS still in SettingsPanel; the others
-    // stay migrated.
-    expect(panel).not.toMatch(/<h3>Editor theme<\/h3>/);
-    expect(panel).not.toMatch(/<h3>Layout<\/h3>/);
-    expect(panel).not.toMatch(/<h3>Date pills<\/h3>/);
-    expect(panel).not.toMatch(/<h3>On save<\/h3>/);
-  });
-
-  test("Appearance section restored to SettingsPanel (-a-53 revert)", () => {
-    expect(panel).toMatch(/<h3>Appearance<\/h3>/);
-    expect(panel).toMatch(/name="settings-appearance"/);
-    expect(panel).toMatch(/import\s+\{[^}]*\bsetThemeChoice\b/);
-  });
-
-  test("editor-only imports are gone from SettingsPanel", () => {
-    // `-a-46` migrations: EditorTheme + LineSpacing + DATE_FORMATS
-    // + editorToolsPrefs stay gone. `-a-53` revert restores
-    // setThemeChoice + ThemeChoice for the Appearance section.
-    expect(panel).not.toMatch(/import\s+\{[^}]*\bEditorTheme\b/);
-    expect(panel).not.toMatch(/import\s+\{[^}]*\bLineSpacing\b/);
-    expect(panel).not.toMatch(/import\s+\{[^}]*\bDATE_FORMATS\b/);
-    expect(panel).not.toMatch(/import\s+\{[^}]*\beditorToolsPrefs\b/);
-  });
-
-  test("editor-side $effects no longer present in SettingsPanel", () => {
-    expect(panel).not.toMatch(/setAttribute\([\s\S]*?"data-editor-theme"/);
-    expect(panel).not.toMatch(/editorToolsPrefs\.stripTrailingWhitespaceOnSave/);
-  });
-
-  test("editor preference field accesses are gone from SettingsPanel", () => {
-    expect(panel).not.toMatch(/editing\.editor_theme/);
-    expect(panel).not.toMatch(/editing\.line_spacing/);
-    expect(panel).not.toMatch(/editing\.date_format/);
-    expect(panel).not.toMatch(
-      /editing\.strip_trailing_whitespace_on_save/,
-    );
   });
 });

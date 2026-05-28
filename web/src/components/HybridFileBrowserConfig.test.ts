@@ -1,14 +1,18 @@
 import { describe, expect, test } from "vitest";
 import source from "./HybridFileBrowserConfig.svelte?raw";
-import panel from "./SettingsPanel.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
 // `fullstack-a-48` Task F (option B): Search / Indexing / Reports
-// settings UI migrated out of SettingsPanel into
-// HybridFileBrowserConfig. Three toggles ship in v1: Semantic
-// search (moved verbatim from `-a-21`), multi-model picker
-// placeholder (Round-3 Track 2 future slot), chan-reports through
-// the per-workspace reports endpoints.
+// settings UI migrated out of the (since-retired) global Settings
+// overlay into HybridFileBrowserConfig. Three toggles ship in v1:
+// Semantic search (moved verbatim from `-a-21`), multi-model
+// picker placeholder (Round-3 Track 2 future slot), chan-reports
+// through the per-workspace reports endpoints.
+//
+// `phase-13 lane-b` slice 3c: the global Settings overlay was
+// retired; the migration-direction assertions that used to pin
+// "X is gone from the old overlay" are dropped (the file no
+// longer exists).
 
 describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
   test("warning copy distinguishes workspace-wide scope from per-FB-pane", () => {
@@ -25,7 +29,7 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
     expect(source).toMatch(/api\.semanticDownload\(\)/);
     expect(source).toMatch(/api\.semanticDisable\(\)/);
     expect(source).toMatch(/api\.semanticState\(\)/);
-    // Polling cadence preserved verbatim from SettingsPanel.
+    // Polling cadence preserved verbatim from the retired global Settings overlay.
     expect(source).toMatch(/SEMANTIC_POLL_INTERVAL_MS\s*=\s*3000/);
   });
 
@@ -40,7 +44,7 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
     );
   });
 
-  test("formatModelSize helper carries over from SettingsPanel", () => {
+  test("formatModelSize helper carries over from the retired global Settings overlay", () => {
     expect(source).toMatch(
       /function formatModelSize\(bytes: number \| null \| undefined\)/,
     );
@@ -110,43 +114,5 @@ describe("Wave 4: File Browser back-side controls", () => {
   test("model dropdown uses the polished config-select style", () => {
     expect(source).toMatch(/class="config-select family"/);
     expect(source).toMatch(/\.config-select \{[\s\S]{1,300}border: 1px solid var\(--border\)/);
-  });
-});
-
-describe("fullstack-a-48: rich Semantic search state machine removed from SettingsPanel", () => {
-  test("semantic search section stays gone from SettingsPanel", () => {
-    expect(panel).not.toMatch(/<h3>Semantic search<\/h3>/);
-    expect(panel).not.toMatch(/BGE semantic search/);
-  });
-
-  test("rich model-download state machine helpers stay gone", () => {
-    // These helpers belong to HybridFileBrowserConfig, not the
-    // global Settings overlay.
-    expect(panel).not.toMatch(/async function toggleSemantic\b/);
-    expect(panel).not.toMatch(/async function semanticToggle\b/);
-    expect(panel).not.toMatch(/async function loadSemanticState/);
-    expect(panel).not.toMatch(/function formatModelSize/);
-    expect(panel).not.toMatch(/api\.semantic(State|Enable|Disable)\(\)/);
-    expect(panel).not.toMatch(/api\.semanticDownload\(\)/);
-  });
-
-  test("download-state variables stay gone", () => {
-    expect(panel).not.toMatch(/let\s+semanticState\s*=/);
-    expect(panel).not.toMatch(/let\s+semanticBusy\s*=/);
-    expect(panel).not.toMatch(/let\s+semanticError\s*=/);
-    expect(panel).not.toMatch(/let\s+semanticDownloading\s*=/);
-    expect(panel).not.toMatch(/let\s+semanticEnabling\s*=/);
-    expect(panel).not.toMatch(/let\s+semanticPollTimer\s*=/);
-  });
-});
-
-describe("Wave 2: reports controls removed from SettingsPanel", () => {
-  test("chan-reports controls stay owned by HybridFileBrowserConfig", () => {
-    expect(source).toMatch(/<h3>chan-reports<\/h3>/);
-    expect(source).toMatch(/api\.reports(State|Enable|Disable)\(/);
-    expect(panel).not.toContain("chan-reports");
-    expect(panel).not.toMatch(/api\.reports(State|Enable|Disable)\(\)/);
-    expect(panel).not.toMatch(/toggleReports/);
-    expect(panel).not.toMatch(/reportsEnabled|reportsBusy|reportsError/);
   });
 });

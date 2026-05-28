@@ -47,8 +47,12 @@ describe("fullstack-a-98: Hybrid hamburger removes stale theme/flip rows", () =>
     expect(pane).not.toContain("Sun");
   });
 
-  test("Settings remains the Hybrid pane footer action", () => {
-    expect(pane).toMatch(
+  test("Settings footer retired from the Hybrid pane menu (phase-13 slice 3c)", () => {
+    // The Cmd+, rebind moves Settings off the empty-pane menu and
+    // onto the Dashboard back-of-card via flipHybrid. The pane
+    // menu must no longer carry a Settings row that dispatches
+    // app.settings.toggle.
+    expect(pane).not.toMatch(
       /onclick=\{\(\) => dispatchCommand\("app\.settings\.toggle"\)\}[\s\S]*?<span class="menu-row-label">Settings<\/span>/,
     );
   });

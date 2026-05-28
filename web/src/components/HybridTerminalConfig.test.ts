@@ -3,13 +3,13 @@ import source from "./HybridTerminalConfig.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
 // `fullstack-a-45` (Task B): the Terminal preferences UI migrated
-// out of SettingsPanel into HybridTerminalConfig. These pins
-// carry over the wiring guarantees the original
-// `SettingsPanel.terminal.test.ts` from `fullstack-b-11` enforced
-// (scrollback range / number / clamp; TERM dropdown ships the
-// known terminfo entries plus Custom sentinel; custom input
-// renders only when the sentinel is active) and adds new pins
-// for the warning copy required by `-a-45`.
+// out of the (since-retired) global Settings overlay into
+// HybridTerminalConfig. These pins carry over the wiring
+// guarantees the original `fullstack-b-11` terminal-section test
+// enforced (scrollback range / number / clamp; TERM dropdown
+// ships the known terminfo entries plus Custom sentinel; custom
+// input renders only when the sentinel is active) and adds new
+// pins for the warning copy required by `-a-45`.
 
 describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
   test("warning copy distinguishes device-wide settings from body theme scope", () => {
@@ -52,9 +52,9 @@ describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
 
   test("save path re-fetches global config before PATCH to avoid clobbering parallel edits", () => {
     // The merge-with-current-server pattern is the safety net for
-    // SettingsPanel running an autosave in parallel. The PATCH
-    // body must overlay only the terminal subtree onto whatever
-    // the server currently has.
+    // another back-of-card surface running an autosave in
+    // parallel. The PATCH body must overlay only the terminal
+    // subtree onto whatever the server currently has.
     expect(source).toMatch(/const current = await api\.config\(\)/);
     expect(source).toMatch(
       /preferences: \{ \.\.\.current\.preferences, terminal: editing\.terminal \}/,
@@ -74,10 +74,10 @@ describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
 
   test("dirty check is scoped to the terminal subtree", () => {
     // The dirty comparator must NOT compare the whole Preferences
-    // object — that would react to SettingsPanel-owned edits and
-    // fire a spurious PATCH (worse: a PATCH from this surface
-    // could clobber theme / editor / date edits SettingsPanel
-    // hadn't yet flushed).
+    // object — that would react to edits owned by other
+    // back-of-card surfaces and fire a spurious PATCH (worse: a
+    // PATCH from this surface could clobber theme / editor /
+    // date edits another surface hadn't yet flushed).
     expect(source).toMatch(/function terminalDirty\(\): boolean/);
     expect(source).toMatch(
       /JSON\.stringify\(editing\.terminal \?\? null\)[\s\S]*?JSON\.stringify\(server \?\? null\)/,

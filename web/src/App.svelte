@@ -16,7 +16,6 @@
   import PromptModal from "./components/PromptModal.svelte";
   import SearchPanel from "./components/SearchPanel.svelte";
   import SearchStatusOverlay from "./components/SearchStatusOverlay.svelte";
-  import SettingsPanel from "./components/SettingsPanel.svelte";
   import Workspace from "./components/Workspace.svelte";
   import {
     applyInitialTheme,
@@ -29,7 +28,6 @@
     fileOps,
     openGraph,
     openGraphWithContext,
-    openSettings,
     pathPromptState,
     noteDraftCreated,
     persistLayoutToHash,
@@ -43,7 +41,6 @@
     searchStatusOverlay,
     searchPanel,
     setTransientStatus,
-    settingsOverlay,
     syncOverlayStack,
     toggleBrowserSidePane,
     topOverlay,
@@ -204,7 +201,6 @@
   // launch. Both helpers debounce internally.
   $effect(() => {
     if (!bootstrapped) return;
-    void settingsOverlay.open;
     void searchPanel.open;
     void searchPanel.query;
     // search_scope= sibling key in the hash captures this; bumping
@@ -251,7 +247,6 @@
   // back through reactive paths.
   $effect(() => {
     void searchPanel.open;
-    void settingsOverlay.open;
     void searchStatusOverlay.open;
     syncOverlayStack();
   });
@@ -671,9 +666,13 @@
     // via Pane Mode now — the keymap stops shipping two chords for
     // the same action. The native shell's `KEY_BRIDGE_JS` was
     // updated in lockstep.
+    // `phase-13 lane-b` slice 3c: Cmd+, no longer opens the
+    // (retired) global Settings overlay; it flips the focused
+    // Hybrid (Terminal / Editor / Graph / FB / Dashboard) to its
+    // back-of-card. Cmd+, again flips back.
     if (meta && !e.shiftKey && !e.altKey && e.key === ",") {
       e.preventDefault();
-      openSettings();
+      flipHybrid(layout.activePaneId);
       return;
     }
     // `fullstack-a-90`: removed the legacy `Alt+Space` rich-prompt
@@ -971,8 +970,11 @@
   function runCommand(name: string, detail: Record<string, unknown>): void {
     switch (name) {
       case "app.settings.toggle":
-        if (settingsOverlay.open) closeOverlay("settings");
-        else openSettings();
+        // `phase-13 lane-b` slice 3c: command id unchanged so
+        // chan-desktop's KEY_BRIDGE_JS + command-bus callers keep
+        // working, but the action is now "flip focused Hybrid"
+        // (Settings overlay retired).
+        flipHybrid(layout.activePaneId);
         return;
       // `fullstack-a-32`: chan-desktop's KEY_BRIDGE_JS fires these
       // ids on native Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M. Route
@@ -1238,7 +1240,6 @@
 <WorkspaceWarningsModal />
 <SearchPanel />
 <SearchStatusOverlay />
-<SettingsPanel />
 <!-- CAS conflict prompt: surfaces when a save returns 409. Mounted
      once per window so any pane can trigger it; the dialog itself
      keys off `conflictDialog.tabId`. -->

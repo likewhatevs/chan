@@ -53,7 +53,6 @@
     Radio,
     RefreshCw,
     Search,
-    Settings,
     Terminal,
     User,
     X,
@@ -146,7 +145,11 @@
 
   /// Empty-pane right-click menu, arranged into the canonical
   /// sections shared by every chan menu: content actions, then
-  /// navigation, then pane controls, then Settings as the footer.
+  /// navigation, then pane controls. The Settings footer entry
+  /// retired with the SettingsPanel OverlayShell in phase-13
+  /// slice 3c — Cmd+, now flips the focused Hybrid surface
+  /// (Dashboard hosts the Appearance / Screen Lock /
+  /// Screensaver / Metadata controls on its back-of-card).
   /// Each row carries an icon and (optionally) the keyboard chord
   /// for the same action — the empty pane is also the discovery
   /// surface for shortcuts, so we keep the chord hint visible.
@@ -1397,16 +1400,6 @@
               </button>
             </li>
           {/each}
-          <li>
-            <button
-              role="menuitem"
-              onclick={() => dispatchCommand("app.settings.toggle")}
-            >
-              <Settings size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span class="menu-row-label">Settings</span>
-              <span class="menu-row-chord">{chordLabel("app.settings.toggle")}</span>
-            </button>
-          </li>
         </HamburgerMenu>
       </div>
     {/if}

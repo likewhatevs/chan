@@ -51,10 +51,10 @@
 
   // ---- About slide (slice 3b-1) ------------------------------------------
   //
-  // Mirrors the `<section class="about">` block in SettingsPanel.svelte
-  // so the version / embeddings flag / attributions read the same in
-  // both places. The SettingsPanel copy stays put for now; the dual
-  // render is intentional until slice 3c retires the panel.
+  // Sole home for the version / embeddings flag / attribution surface
+  // now that slice 3c retired the global Settings overlay. The shape
+  // mirrors the retired overlay's `<section class="about">` block
+  // verbatim so muscle memory survives the move.
 
   let buildInfo = $state<BuildInfo | null>(null);
 
@@ -470,12 +470,12 @@
   <div class="slide-stage">
     {#if slideIndex === 0}
       <!-- Phase-13 slice 3b-1: slide 0 is the About widget. It
-           mirrors the SettingsPanel about section verbatim and adds
-           a "Fund the work" CTA with the donation QR + the website
-           / source links so the user has one self-contained surface
-           to learn what chan is and how to support it. The
-           SettingsPanel copy is kept until slice 3c retires the
-           panel. -->
+           mirrors the (retired) global Settings overlay's about
+           section verbatim and adds a "Fund the work" CTA with the
+           donation QR + the website / source links so the user has
+           one self-contained surface to learn what chan is and how
+           to support it. Slice 3c retired the overlay; the About
+           widget here is the sole home for this surface now. -->
       <div class="slide slide-about" aria-label="About">
         <div class="slide-title">About</div>
         <div class="about-grid">

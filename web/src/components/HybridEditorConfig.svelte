@@ -1,18 +1,20 @@
 <script lang="ts">
-  // `fullstack-a-46` Task C: Editor settings migrated out of
-  // `SettingsPanel.svelte` into the Hybrid back-side mount point
-  // introduced by `-a-43` Task A. Four sections live here:
-  // Editor theme, Layout (line spacing), Date pills (date format),
-  // On save (strip trailing whitespace). Appearance stays in the
-  // main Settings overlay as the global default. This back side
-  // only offers the top-bar body theme switch shared by all
-  // Hybrid Editor tabs.
+  // `fullstack-a-46` Task C: Editor settings migrated out of the
+  // (since-retired) global Settings overlay into the Hybrid
+  // back-side mount point introduced by `-a-43` Task A. Four
+  // sections live here: Editor theme, Layout (line spacing), Date
+  // pills (date format), On save (strip trailing whitespace).
+  // Appearance lives on the Dashboard back-of-card (phase-13
+  // lane-b slice 3c) as the global default. This back side only
+  // offers the top-bar body theme switch shared by all Hybrid
+  // Editor tabs.
   //
   // Same self-contained / merge-against-current-server save shape
   // as `HybridTerminalConfig.svelte` (-a-45). The dirty comparator
   // is scoped to the editor-related preference fields so a
-  // SettingsPanel edit elsewhere doesn't trigger a spurious PATCH
-  // from here, and vice versa.
+  // parallel save elsewhere (HybridFileBrowserConfig's
+  // semantic-search etc.) doesn't trigger a spurious PATCH from
+  // here, and vice versa.
 
   import { api } from "../api/client";
   import type {
@@ -51,10 +53,10 @@
 
   /// Normalize editor-related fields. The line_spacing migration
   /// from "tight" → "compact" + the fallback to "standard" carry
-  /// over from SettingsPanel's `normalizePrefs`; date_format
-  /// falls through to the catalog default when the persisted id
-  /// has been retired. Keeps the dirty() comparison stable across
-  /// a server re-fetch.
+  /// over from the retired global Settings overlay's
+  /// `normalizePrefs`; date_format falls through to the catalog
+  /// default when the persisted id has been retired. Keeps the
+  /// dirty() comparison stable across a server re-fetch.
   function normalizeEditor(p: Preferences): Preferences {
     if (p.line_spacing === "tight") p.line_spacing = "compact";
     if (p.line_spacing !== "compact" && p.line_spacing !== "standard") {
@@ -90,7 +92,7 @@
   /// Live-apply the editor-theme attribute on every change so the
   /// editor in the background re-skins instantly, without waiting
   /// for the 500 ms autosave + server round-trip. Carry-over from
-  /// SettingsPanel.
+  /// the retired global Settings overlay.
   $effect(() => {
     if (!editing) return;
     document.documentElement.setAttribute(
@@ -110,8 +112,8 @@
   });
 
   /// Dirty check scoped to the editor-related preference fields.
-  /// Comparing the whole preferences object would react to
-  /// SettingsPanel-owned edits (terminal moved to its own back,
+  /// Comparing the whole preferences object would react to edits
+  /// owned by other back-of-card surfaces (terminal config, FB
   /// semantic-search, etc.) and fire spurious PATCHes.
   function editorDirty(): boolean {
     if (!editing || !workspace.info) return false;
@@ -136,8 +138,9 @@
   /// Save the editor-related slice. Mirrors `-a-45`'s
   /// merge-against-current-server pattern: fetch the latest
   /// GlobalConfig from the server first, overlay only the
-  /// editor-related fields, then PATCH. SettingsPanel's parallel
-  /// autosave (semantic-search, etc.) can not be clobbered.
+  /// editor-related fields, then PATCH. Parallel autosaves from
+  /// other back-of-card surfaces (semantic-search, etc.) can not
+  /// be clobbered.
   async function save(): Promise<void> {
     if (!editing || inflight) return;
     if (!editorDirty()) return;
@@ -316,9 +319,10 @@
     border-radius: 4px;
   }
   /* Theme + Layout + Date pills + On save share the
-     same theme-row / theme-opt pill shape from SettingsPanel.
-     Copied locally so this back-side surface doesn't depend on
-     SettingsPanel CSS being mounted. */
+     same theme-row / theme-opt pill shape used by the Dashboard
+     back-of-card's Appearance section. Each back-side surface
+     keeps a local copy so they don't depend on a sibling's CSS
+     being mounted. */
   .theme-row { display: flex; gap: 4px; flex-wrap: wrap; }
   .theme-opt {
     display: inline-flex;
@@ -346,10 +350,11 @@
     background: var(--hover-bg);
   }
   /* `fullstack-a-25` carry-over: trailing-whitespace toggle reuses
-     the chip pill from the radio rows. Renamed `strip-toggle` to
-     keep the class semantics tied to its content (was
-     `.semantic-toggle` in SettingsPanel; that name no longer
-     fits since semantic-search stayed there). */
+     the chip pill from the radio rows. The class was renamed
+     `strip-toggle` to keep the class semantics tied to its
+     content (it was once `.semantic-toggle` when these controls
+     lived on a now-retired surface; that name no longer fits
+     since semantic-search lives in HybridFileBrowserConfig). */
   .strip-toggle input[type="checkbox"]:disabled,
   .strip-toggle:has(input[type="checkbox"]:disabled) {
     cursor: not-allowed;

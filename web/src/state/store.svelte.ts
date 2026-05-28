@@ -58,7 +58,7 @@ import {
   tabsForPath,
 } from "./tabs.svelte";
 import { graphData, invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
-import { SETTINGS_DISABLED, withTokenQuery } from "../api/transport";
+import { withTokenQuery } from "../api/transport";
 import { uiConfirm } from "./confirm.svelte";
 import { applyEditorToolPreferences } from "./editorTools.svelte";
 import { fbWatchResyncAll } from "./fbWatch.svelte";
@@ -1090,7 +1090,10 @@ const HASH_LAYOUT = "s";
 const HASH_SIDEBAR = "c"; // "1" if collapsed, absent if expanded
 const HASH_SEARCH = "search";
 const HASH_SEARCH_SCOPE = "search_scope";
-const HASH_SETTINGS = "settings";
+// The legacy `settings` overlay hash key was RETIRED by `phase-13 lane-b`
+// slice 3c (global Settings overlay deleted; Cmd+, now flips the focused
+// Hybrid). Old `settings=1` bookmarks degrade gracefully — the key is
+// not in HASH_KEYS so dropUnknownHashKeys strips it on the next write.
 // The legacy `files` (browser) and `graph` per-overlay keys are RETIRED by
 // the scope-concept wipe (W5): graph + browser surfaces are first-class tabs
 // and persist via the layout `s` key, so the per-overlay hash is redundant.
@@ -1101,7 +1104,6 @@ const HASH_KEYS = new Set([
   HASH_LAYOUT,
   HASH_SEARCH,
   HASH_SEARCH_SCOPE,
-  HASH_SETTINGS,
 ]);
 
 function hashParams(): URLSearchParams {
@@ -1176,9 +1178,6 @@ function applyOverlaysFromHash(): void {
     if (scope) searchPanel.scopeId = scope;
     searchPanel.open = true;
   }
-  if (params.has(HASH_SETTINGS) && !SETTINGS_DISABLED) {
-    settingsOverlay.open = true;
-  }
 }
 
 /// Write the current layout + overlay state to `location.hash` via
@@ -1220,11 +1219,6 @@ export function persistStateToHash(): void {
   } else {
     params.delete(HASH_SEARCH);
     params.delete(HASH_SEARCH_SCOPE);
-  }
-  if (settingsOverlay.open) {
-    params.set(HASH_SETTINGS, "1");
-  } else {
-    params.delete(HASH_SETTINGS);
   }
   const next = params.toString();
   url.hash = next ? `#${next}` : "";
@@ -1810,26 +1804,16 @@ export function openGraphForLanguage(language: string): void {
   scheduleSessionSave();
 }
 
-// ---- settings overlay --------------------------------------------------
+// ---- search-status overlay ---------------------------------------------
 //
-// Settings has no scope picker (it's per-device-global, applies
-// everywhere), so this is a one-bit overlay state.
+// `phase-13 lane-b` slice 3c: the global Settings overlay was
+// retired. The Appearance + Screen Lock + Screensaver controls
+// moved into DashboardTab.svelte's back-of-card (flipHybrid).
+// Cmd+, no longer opens an overlay; it flips the focused Hybrid.
+// `settingsOverlay`, `openSettings`, and `settingsDisabled` were
+// deleted with the overlay.
 
-export const settingsOverlay = $state<{ open: boolean }>({ open: false });
 export const searchStatusOverlay = $state<{ open: boolean }>({ open: false });
-
-/// True when the server forbids opening Settings (today: tunnel
-/// mode with --tunnel-public). Sourced from the SPA shell meta tag
-/// at module load. The pill and any other entry point check this
-/// to grey themselves out; `openSettings` also gates on it so the
-/// Cmd/Ctrl+, keybinding cannot work around the disabled button.
-export const settingsDisabled = SETTINGS_DISABLED;
-
-export function openSettings(): void {
-  if (SETTINGS_DISABLED) return;
-  settingsOverlay.open = true;
-  scheduleSessionSave();
-}
 
 // ---- file browser overlay ----------------------------------------------
 //
@@ -2000,7 +1984,7 @@ function resolveGraphSpawnContext(scopeId: string): SpawnContext {
 // the topmost overlay is visually accessible, the scrim target is
 // naturally the same as the stack top.
 
-export type OverlayId = "search" | "search-status" | "settings";
+export type OverlayId = "search" | "search-status";
 
 export const overlayStack = $state<{ ids: OverlayId[] }>({ ids: [] });
 
@@ -2029,9 +2013,6 @@ export function closeOverlay(id: OverlayId): void {
     case "search-status":
       searchStatusOverlay.open = false;
       return;
-    case "settings":
-      settingsOverlay.open = false;
-      return;
   }
 }
 
@@ -2045,7 +2026,6 @@ export function syncOverlayStack(): void {
   const open = new Set<OverlayId>();
   if (searchPanel.open) open.add("search");
   if (searchStatusOverlay.open) open.add("search-status");
-  if (settingsOverlay.open) open.add("settings");
   // Drop closed entries while preserving the existing relative
   // order of those that remain.
   const kept = overlayStack.ids.filter((id) => open.has(id));

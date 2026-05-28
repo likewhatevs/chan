@@ -107,9 +107,9 @@ describe("fullstack-a-75: carousel slide 1 redesign", () => {
 
 describe("phase-13 slice 3b-1: carousel slide rework", () => {
   // Slide 0 is now the About widget (version + embeddings flag +
-  // attributions + donation QR + chan.app/source links). The
-  // SettingsPanel about copy stays put until slice 3c retires the
-  // panel; both copies coexist for now.
+  // attributions + donation QR + chan.app/source links). Slice 3c
+  // retired the global Settings overlay; the carousel About widget
+  // is the sole home for the version/attribution surface now.
   test("slide 0 is the About widget", () => {
     expect(carousel).toMatch(
       /<div class="slide slide-about" aria-label="About">/,
@@ -209,8 +209,13 @@ describe("Wave 4: Dashboard settings", () => {
   });
 
   test("settings view uses the shared surface theme shell and OK button", () => {
+    // `phase-13 lane-b` slice 3c: surfaceThemeOverride is now
+    // imported alongside the global Appearance helpers
+    // (setThemeChoice + ThemeChoice + ui) from store.svelte, so
+    // the assertion matches the import inside a multi-import
+    // block rather than requiring a dedicated import line.
     expect(dashboard).toMatch(
-      /import \{ surfaceThemeOverride \} from "\.\.\/state\/store\.svelte";/,
+      /import \{[\s\S]{1,400}surfaceThemeOverride,?[\s\S]{0,400}\} from "\.\.\/state\/store\.svelte";/,
     );
     expect(dashboard).toMatch(/data-theme=\{surfaceThemeOverride\("dashboard"\)\}/);
     expect(dashboard).toMatch(/ariaLabel="Infographics settings"/);
@@ -218,6 +223,11 @@ describe("Wave 4: Dashboard settings", () => {
       /<HybridSurfaceConfigShell[\s\S]{1,220}title="Infographics"[\s\S]{1,120}surface="dashboard"[\s\S]{1,160}onDone=\{closeSettings\}/,
     );
     expect(dashboard).not.toMatch(/type DashboardAppearance/);
+    // Slice 3c added a GLOBAL Appearance radio group to this
+    // back-of-card; the radio `name` deliberately uses
+    // `app-appearance` (not `dashboard-appearance`) so the
+    // earlier rejected per-tab DashboardAppearance enum can't
+    // sneak back via the same name.
     expect(dashboard).not.toMatch(/name="dashboard-appearance"/);
     expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,

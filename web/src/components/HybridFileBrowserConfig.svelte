@@ -1,8 +1,9 @@
 <script lang="ts">
   // `fullstack-a-48` Task F (option B): Search / Indexing /
-  // Reports settings migrated from `SettingsPanel.svelte`'s
-  // Semantic search section into the Hybrid FB back-side mount
-  // point introduced by `-a-43` Task A. Three toggles in v1:
+  // Reports settings migrated from the (since-retired) global
+  // Settings overlay's Semantic search section into the Hybrid FB
+  // back-side mount point introduced by `-a-43` Task A. Three
+  // toggles in v1:
   //
   // 1. Semantic search (moved verbatim from -a-21; same state
   //    machine, same polling cadence, same enable/download/
@@ -84,8 +85,9 @@
     }
   }
 
-  // Semantic search state, same shape as the SettingsPanel
-  // `-a-21` original. Endpoints are stateful POSTs on the server;
+  // Semantic search state, same shape as the `-a-21` original
+  // (lived in the retired global Settings overlay back then).
+  // Endpoints are stateful POSTs on the server;
   // the SPA owns the downloading + enabling spinners (we don't
   // round-trip those flags through preferences).
   let buildInfo = $state<BuildInfo | null>(null);
@@ -239,7 +241,7 @@
     </p>
 
     <!-- `fullstack-a-21` semantic-search opt-in (migrated from
-         SettingsPanel by `-a-48`). -->
+         the retired global Settings overlay by `-a-48`). -->
     <section>
       <h3>Semantic search</h3>
       {#if buildInfo && !buildInfo.features.embeddings}
@@ -424,9 +426,9 @@
     padding: 5px 7px;
     font: inherit;
   }
-  /* Semantic-search info grid carried over verbatim from
-     SettingsPanel so the Active / Stored-at rows render with the
-     same affordances. */
+  /* Semantic-search info grid carried over verbatim from the
+     retired global Settings overlay so the Active / Stored-at
+     rows render with the same affordances. */
   .grid {
     display: grid;
     grid-template-columns: 7em 1fr;
@@ -439,7 +441,7 @@
   .mono { font-family: ui-monospace, monospace; }
   .muted { color: var(--text-secondary); font-style: italic; }
   /* Spinner during semantic-model download. Local copy keeps this
-     surface independent of SettingsPanel CSS. */
+     surface self-contained. */
   .spinner {
     display: inline-block;
     width: 12px;
