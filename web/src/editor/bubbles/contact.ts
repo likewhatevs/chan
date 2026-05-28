@@ -76,14 +76,18 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
   let reqSeq = 0;
   let debounceTimer: number | undefined;
   let alive = true;
-  /// `fullstack-a-70`: mention-corpus completion is opt-in.
-  /// Wiki mode (the legacy `@` trigger) ONLY surfaces contact
-  /// files — wiki-links resolve to paths, not bare tokens.
-  /// Mention mode (the `@@` trigger) merges both: contact-file
-  /// hits first, then mention-only tokens from
-  /// `api.mentions` below.
+  /// Phase-13 A4: mention-corpus completion is surfaced under BOTH
+  /// triggers. The single-`@` (wiki) trigger used to show only
+  /// contact files; users typing `@name` expected the broader
+  /// `@@<Name>` corpus (handles referenced in markdown bodies that
+  /// have no contact file) to be searchable too. Both modes now
+  /// merge contact-file hits first, then mention-only tokens from
+  /// `api.mentions`. The insertion shape still follows the picked
+  /// row's kind, not the trigger: a contact-file hit commits a
+  /// wiki-link under `@` (`commit`), a mention-only hit commits
+  /// `@@<Name>` under either trigger (`commitMention`).
   const mode: ContactBubbleMode = opts.mode ?? "wiki";
-  const includeMentions = mode === "mention";
+  const includeMentions = true;
 
   const list = document.createElement("div");
   list.className = "md-bubble-list";
