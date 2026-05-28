@@ -41,6 +41,8 @@
     isFullyExpandedForInstance,
     openFsGraphForDirectory,
     openFsGraphForFile,
+    openGraphForContact,
+    openGraphForLanguage,
     paneWidths,
     persistPaneWidths,
     persistLayoutToHash,
@@ -607,7 +609,11 @@
                the convention `graphSelection()` uses for non-workspace
                selections — `openFsGraphForDirectory` / `openFsGraphForFile`
                both spawn a fresh tab, never re-scope). -->
-          <WorkspaceInfoBody onSetAsScope={() => openFsGraphForDirectory("")} />
+          <WorkspaceInfoBody
+            onSetAsScope={() => openFsGraphForDirectory("")}
+            onLanguageClick={openGraphForLanguage}
+            onContactNavigate={openGraphForContact}
+          />
         {:else}
           <FileInfoBody
             path={browserSelection.path}

@@ -33,7 +33,13 @@
     GraphViewNode,
     IndexingStateResponse,
   } from "../api/types";
-  import { workspace, indexStatus, ui } from "../state/store.svelte";
+  import {
+    workspace,
+    indexStatus,
+    ui,
+    openGraphForContact,
+    openGraphForLanguage,
+  } from "../state/store.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
   import WorkspaceInfoBody from "./WorkspaceInfoBody.svelte";
   import {
@@ -425,7 +431,11 @@
       <div class="slide slide-workspace" aria-label="Workspace info">
         <div class="slide-title">Workspace</div>
         <div class="workspace-info-host">
-          <WorkspaceInfoBody variant="dashboard" />
+          <WorkspaceInfoBody
+            variant="dashboard"
+            onLanguageClick={openGraphForLanguage}
+            onContactNavigate={openGraphForContact}
+          />
         </div>
       </div>
     {:else}

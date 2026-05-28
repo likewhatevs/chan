@@ -20,7 +20,15 @@
     ReportPrefix,
   } from "../api/types";
   import { formatMtime, formatSize } from "../state/format";
-  import { fileOps, tree, workspace } from "../state/store.svelte";
+  import {
+    fileOps,
+    openGraphAtNode,
+    openGraphForContact,
+    openGraphForLanguage,
+    tree,
+    workspace,
+  } from "../state/store.svelte";
+  import { ensureGraphLoaded, graphData } from "../state/graphData.svelte";
   import {
     downloadTransfer,
     downloadTransferActive,
@@ -45,14 +53,30 @@
   /// The aggregate stats grid, File Kinds, and Code/COCOMO sections
   /// render in both variants. `onReveal` wires the "Show in File
   /// Browser" button (inspector variant only).
+  /// A5 + A6 (phase-13 closing-2): the workspace inspector reaches
+  /// parity with FileInfoBody's clickable Languages + Contacts.
+  ///   - `onLanguageClick`: fired when a language row is clicked;
+  ///     opens that language's graph lens. Mirrors FileInfoBody's
+  ///     `openGraphForLanguage(lang.name)` wiring.
+  ///   - `onContactNavigate`: fired when a contact pill is clicked
+  ///     for a RESOLVED contact (a `chan.kind: contact` file). The
+  ///     graph host can select the node on the canvas; other hosts
+  ///     spawn a contact-scoped lens. Unresolved `@@name` mentions
+  ///     always route through `openGraphAtNode` (no file to scope to).
+  /// Both default to the store helpers so a standalone mount stays
+  /// functional even when a host doesn't wire them.
   let {
     variant = "inspector",
     onReveal,
     onSetAsScope,
+    onLanguageClick = openGraphForLanguage,
+    onContactNavigate,
   }: {
     variant?: "inspector" | "dashboard";
     onReveal?: () => void;
     onSetAsScope?: () => void;
+    onLanguageClick?: (language: string) => void;
+    onContactNavigate?: (path: string) => void;
   } = $props();
 
   /// Action-row plumbing (inspector variant). Mirrors FileInfoBody's
@@ -279,6 +303,64 @@
       : 0,
   );
 
+  /// A6 (phase-13 closing-2): Contacts section at the workspace root.
+  /// FileInfoBody's contact pills derive from a single file's outgoing
+  /// edges (`selectionEdgesFor(path)`); the workspace ROOT has no
+  /// single-file refs, so the workspace-level "every contact in the
+  /// workspace" source is the shared semantic graph snapshot. Two node
+  /// kinds surface as contacts:
+  ///   1. `kind:"file"` with `node_kind:"contact"`: a resolved contact
+  ///      note (`chan.kind: contact` frontmatter). Navigates to its
+  ///      contact-scoped lens (or the host's canvas selection).
+  ///   2. `kind:"mention"`: an unresolved `@@name` with no contact file
+  ///      on disk yet. Opens the workspace graph with the mention node
+  ///      pre-selected, matching FileInfoBody's unresolved-mention arm.
+  /// Loading the graph is cheap + shared: `graphData` is a global cache,
+  /// and FileInfoBody already triggers the same load for any file's refs.
+  $effect(() => {
+    void ensureGraphLoaded();
+  });
+
+  type ContactPill = {
+    key: string;
+    label: string;
+    path: string | null;
+    onClick: () => void;
+  };
+  const contactPills = $derived.by<ContactPill[]>(() => {
+    const view = graphData.view;
+    if (!view) return [];
+    const navigateContact = onContactNavigate
+      ? (p: string) => onContactNavigate(p)
+      : (p: string) => openGraphForContact(p);
+    const out: ContactPill[] = [];
+    const seen = new Set<string>();
+    for (const n of view.nodes) {
+      if (n.kind === "file" && n.node_kind === "contact" && !n.missing) {
+        if (seen.has(n.id)) continue;
+        seen.add(n.id);
+        out.push({
+          key: n.id,
+          label: n.label,
+          path: n.path,
+          onClick: () => navigateContact(n.path),
+        });
+      } else if (n.kind === "mention") {
+        if (seen.has(n.id)) continue;
+        seen.add(n.id);
+        const id = n.id;
+        out.push({
+          key: id,
+          label: n.label.replace(/^@@/, ""),
+          path: null,
+          onClick: () => openGraphAtNode(id),
+        });
+      }
+    }
+    out.sort((a, b) => a.label.localeCompare(b.label));
+    return out;
+  });
+
   /// COCOMO formatting helpers; identical shape to FileInfoBody so the
   /// dir-mode and workspace-root inspectors format the same way.
   function fmtMonths(n: number): string {
@@ -446,7 +528,12 @@
         <ul class="lang-list">
           {#each visibleLanguages as lang (lang.name)}
             <li class="lang-row">
-              <span class="lang-name" title={lang.name}>{lang.name}</span>
+              <button
+                type="button"
+                class="lang-name"
+                title="open in graph (scoped to this language)"
+                onclick={() => onLanguageClick(lang.name)}
+              >{lang.name}</button>
               <span class="lang-files">{lang.files} file{lang.files === 1 ? "" : "s"}</span>
               <span class="lang-sloc">{lang.code.toLocaleString()} SLOC</span>
             </li>
@@ -482,6 +569,29 @@
     <div class="refs-loading">loading report…</div>
   {:else if reportError}
     <div class="refs-error">report unavailable: {reportError}</div>
+  {/if}
+
+  <!-- A6 (phase-13 closing-2): Contacts section, mirroring
+       FileInfoBody's contact pill list. Renders in both variants
+       whenever the workspace graph holds contact / mention nodes so
+       the workspace root reads like any other folder inspector. -->
+  {#if contactPills.length > 0}
+    <section class="refs">
+      <h4>Contacts</h4>
+      <ul>
+        {#each contactPills as c (c.key)}
+          <li>
+            <button
+              class="ref contact"
+              onclick={c.onClick}
+              title={c.path
+                ? `open in graph (scoped to ${c.path})`
+                : "open in graph"}
+            >{c.label}</button>
+          </li>
+        {/each}
+      </ul>
+    </section>
   {/if}
 
   {#if variant === "dashboard"}
@@ -709,6 +819,61 @@
     color: var(--text-secondary);
     margin: 0 0 0.25rem 0;
   }
+  /* A6 (phase-13 closing-2): Contacts pill list, mirroring
+     FileInfoBody's `.refs ul` + `.ref.contact` so the workspace
+     inspector's contacts read identically to a file inspector's. */
+  .refs ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .refs li { margin: 0; }
+  .ref {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: default;
+    font: inherit;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+  button.ref {
+    cursor: pointer;
+  }
+  button.ref:hover {
+    border-color: var(--btn-hover);
+    background: var(--hover-bg);
+  }
+  /* Contact rows: same block-button shape with a small person
+     silhouette prefixed in --warn-text so a glance tells you the
+     entry is a person rather than a generic doc. Icon matches the
+     editor wiki pill + FileInfoBody contact rows. */
+  .ref.contact {
+    color: var(--warn-text);
+    padding-left: 22px;
+    position: relative;
+  }
+  .ref.contact::before {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    transform: translateY(-50%);
+    background: currentColor;
+    -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
+    mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
+  }
   .hint {
     color: var(--text-secondary);
     font-size: 11.5px;
@@ -818,9 +983,28 @@
     font-size: 13px;
     align-items: baseline;
   }
+  /* A5 (phase-13 closing-2): promoted to a <button> so the language
+     name routes to the Graph (scoped to this language). Strip default
+     button chrome, left-align, add hover + focus affordance. Stays a
+     grid cell at column 1; no layout shift vs. the prior <span>.
+     Mirrors FileInfoBody's `.lang-name`. */
   .lang-name {
     color: var(--text);
     word-break: break-word;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    font-size: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .lang-name:hover { text-decoration: underline; }
+  .lang-name:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: 1px;
+    border-radius: 2px;
   }
   .lang-files,
   .lang-sloc {
