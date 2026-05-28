@@ -28,9 +28,9 @@ pub async fn serve<R: RustEmbed>(uri: Uri, banner: &'static [u8]) -> Response {
         return res;
     }
 
-    if !std::path::Path::new(path)
+    if std::path::Path::new(path)
         .extension()
-        .is_some_and(|e| !e.is_empty())
+        .is_none_or(|e| e.is_empty())
     {
         return serve_embedded::<R>("index.html").unwrap_or_else(|| not_built(banner));
     }

@@ -1,7 +1,7 @@
 # Dev setup (sdme + Postgres)
 
 chan-gateway runs Postgres-backed services (identity, profile,
-drive-proxy) plus their integration tests. The recommended dev
+workspace-proxy) plus their integration tests. The recommended dev
 layout uses the same toolchain production runs:
 [sdme][sdme] containers, with Postgres in one of them. The same
 container configs that `chan-prod-setup` ships in production are

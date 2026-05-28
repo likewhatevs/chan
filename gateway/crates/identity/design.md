@@ -9,9 +9,9 @@ chan-gateway suite. Owns:
 - The session cookie. Host-only on `id.chan.app`; it never spans
   subdomains.
 - Personal access tokens for the chan CLI / chan-tunnel.
-- The dashboard: profile management plus the live-drive list.
-- Drive-gate entry-token mint for the cross-origin handoff to
-  `drive.chan.app`.
+- The dashboard: profile management plus the live-workspace list.
+- Workspace-gate entry-token mint for the cross-origin handoff to
+  `workspace.chan.app`.
 
 Profile data (canonical user record, identities, audit) lives in
 profile-service; identity must not race with itself or duplicate user
@@ -26,13 +26,13 @@ axum HTTP server with three layers of routing under `id.chan.app`:
    callback consumes it and either upgrades the session to
    authenticated (`user_id`) or fails.
 2. `/api/*`: session-gated JSON API for the embedded SPA. Covers
-   `me`, profile management, PAT lifecycle, the drive list, and the
-   drive-gate mint endpoint.
+   `me`, profile management, PAT lifecycle, the workspace list, and the
+   workspace-gate mint endpoint.
 3. `/internal/v1/tokens/validate`: Bearer-gated endpoint called by
    chan-tunnel-server during handshake. Lives on its own sub-router
    so the session middleware doesn't try to load a cookie session for
    a non-cookie caller. A per-token-fingerprint throttle wraps it as
-   defense in depth alongside the primary throttle in drive-proxy.
+   defense in depth alongside the primary throttle in workspace-proxy.
 
 Static SPA assets are baked in at build time via `rust_embed` and
 served by `gateway_common::static_files::serve`. Anything not matched
@@ -41,7 +41,7 @@ without an extension serve `index.html` (SPA fallback).
 
 The session layer (`SessionManagerLayer` from `tower_sessions`) sits
 at the outermost edge and applies to every route. **Cookie scope is
-host-only on `id.chan.app`.** No `Domain` attribute. drive-proxy does
+host-only on `id.chan.app`.** No `Domain` attribute. workspace-proxy does
 not share this cookie.
 
 ## Public surface
@@ -83,7 +83,7 @@ Full route table is in [`README.md`](README.md). Highlights:
 10. **Rotate the session id (`session.cycle_id()`)** at the privilege
     boundary, before storing `user_id`. Closes session fixation.
 11. Insert `user_id`, write a `login` audit row, claim any pending
-    drive grants for this user's verified emails, 303 to the
+    workspace grants for this user's verified emails, 303 to the
     stashed post-login URL (or `/`).
 
 ### PAT lifecycle
@@ -104,7 +104,7 @@ PAT shape: `chan_pat_<32 random bytes, base64url, no pad>`.
   - Append `used` to `api_token_audit`.
 - Revoke (`DELETE /api/tokens/:id`):
   - Mark the row revoked.
-  - Best-effort: call drive-proxy admin `kill_user_tunnels` for the
+  - Best-effort: call workspace-proxy admin `kill_user_tunnels` for the
     user. Per-PAT eviction is not possible today
     (chan-tunnel-server does not track which token registered which
     substream); the conservative call is kill-all.
@@ -116,76 +116,76 @@ PAT shape: `chan_pat_<32 random bytes, base64url, no pad>`.
 1. Resolve `user_id` from the session.
 2. `profile.get_user(uid)`. Flush session and 401 if the user is gone
    underneath the cookie.
-3. Call drive-proxy admin `GET /admin/v1/users/{username}/tunnels`
-   for the live-drive list. Empty for blocked users.
-4. Return `{user, drives: [TunnelView]}`.
+3. Call workspace-proxy admin `GET /admin/v1/users/{username}/tunnels`
+   for the live-workspace list. Empty for blocked users.
+4. Return `{user, workspaces: [TunnelView]}`.
 
-The SPA renders one card per drive. Each card's "open" link points
-at `/api/drives/open?u={user}&d={drive}` (server-side, see below) so
+The SPA renders one card per workspace. Each card's "open" link points
+at `/api/workspaces/open?u={user}&d={workspace}` (server-side, see below) so
 the entry token is minted at click time, not at page-render time
 (otherwise short-exp tokens go stale before the user clicks).
 
-### Drive-gate mint
+### Workspace-gate mint
 
-`GET /api/drives/open?u={user}&d={drive}`:
+`GET /api/workspaces/open?u={user}&d={workspace}`:
 
 1. Resolve session; refuse if anonymous or blocked.
 2. Resolve `u` to a user record via profile
    `GET /v1/users/by-username`. Unknown handle returns 404 (same
-   shape as no-access and unknown-drive).
-3. Call profile `GET /v1/users/{owner_id}/drives/{d}/access?as=
+   shape as no-access and unknown-workspace).
+3. Call profile `GET /v1/users/{owner_id}/workspaces/{d}/access?as=
    {session.user_id}`. Owner returns `owner`, an accepted grantee
    returns `viewer`/`editor`, anything else 404.
-4. Verify the drive is live on drive-proxy for `u` (cheap defense-
-   in-depth; drive-proxy is the authority on registrations).
-5. Mint a 30s `entry` JWT (HS256, `DRIVE_GATE_SECRET`) with
-   `{sub: session.user_id, drv: d, aud: "{u}.drive.chan.app", ...}`.
-   `sub` is the *caller's* id, not the owner's, so the drive_gate
+4. Verify the workspace is live on workspace-proxy for `u` (cheap defense-
+   in-depth; workspace-proxy is the authority on registrations).
+5. Mint a 30s `entry` JWT (HS256, `WORKSPACE_GATE_SECRET`) with
+   `{sub: session.user_id, drv: d, aud: "{u}.workspace.chan.app", ...}`.
+   `sub` is the *caller's* id, not the owner's, so the workspace_gate
    cookie minted on the next leg carries the right identity for
    upstream collab attribution.
-6. 303 to `https://{u}.drive.chan.app/{d}/?t=<jwt>`.
+6. 303 to `https://{u}.workspace.chan.app/{d}/?t=<jwt>`.
 
-drive-proxy verifies the JWT, mints its own 24h session-shape JWT,
-sets it as a `Path=/<drive>/` host-only cookie, and 303s to the clean
-URL. The shared JWT type lives in `gateway_common::drive_gate`.
+workspace-proxy verifies the JWT, mints its own 24h session-shape JWT,
+sets it as a `Path=/<workspace>/` host-only cookie, and 303s to the clean
+URL. The shared JWT type lives in `gateway_common::workspace_gate`.
 
 ### Share landing
 
-`GET /s/:owner/:drive` is the public entry for copied share links.
+`GET /s/:owner/:workspace` is the public entry for copied share links.
 It is intentionally unauthenticated at the door so the owner can
 mint a URL that works for any recipient.
 
-1. Validate `owner` (username shape) and `drive` (1-64 lowercase
+1. Validate `owner` (username shape) and `workspace` (1-64 lowercase
    alnum + `[._-]`); malformed values 404.
-2. No session: stash `/s/:owner/:drive` under
+2. No session: stash `/s/:owner/:workspace` under
    `post_login_redirect` and 303 to `/`. The SPA renders the OAuth
    picker; on callback, the stash is consumed and the user lands
    back here with a fresh session.
 3. With a session: resolve owner -> profile access check -> mint
-   entry JWT -> 303 to drive-proxy. Same code path as
-   `/api/drives/open` once auth is established.
+   entry JWT -> 303 to workspace-proxy. Same code path as
+   `/api/workspaces/open` once auth is established.
 
 The post-login redirect is validated to start with a single `/`
 and to contain no `:` or `//` prefix, so a hostile stash cannot
 point the callback at another origin.
 
-### Per-drive sharing grants (SPA surface)
+### Per-workspace sharing grants (SPA surface)
 
-The owner manages drives and grants from the dashboard. Routes
+The owner manages workspaces and grants from the dashboard. Routes
 (all session-gated; the session user is implicitly the owner):
 
-- `POST /api/drives` body `{drive_name}` (idempotent create; the
-  drive persists with no grants and no live tunnel, so the
+- `POST /api/workspaces` body `{workspace_name}` (idempotent create; the
+  workspace persists with no grants and no live tunnel, so the
   dashboard can show it offline)
-- `DELETE /api/drives/:drive` (FK cascade drops every grant)
-- `POST /api/drives/:drive/grants` body `{grantee_email, role}`
-  (idempotent create / role-promote; auto-upserts the parent drive
+- `DELETE /api/workspaces/:workspace` (FK cascade drops every grant)
+- `POST /api/workspaces/:workspace/grants` body `{grantee_email, role}`
+  (idempotent create / role-promote; auto-upserts the parent workspace
   on the profile side)
-- `GET  /api/drives/:drive/grants`
+- `GET  /api/workspaces/:workspace/grants`
 - `DELETE /api/grants/:id`
-- `GET  /api/drives/owned` (drives I own; from the `drives` table
+- `GET  /api/workspaces/owned` (workspaces I own; from the `workspaces` table
   joined with grant counts)
-- `GET  /api/drives/incoming` (drives shared with me)
+- `GET  /api/workspaces/incoming` (workspaces shared with me)
 
 All forward to profile-service over the service bearer. Validation
 re-runs in profile; identity does only the cheap shape check before
@@ -201,8 +201,8 @@ identity reads the per-user resolved flag map from profile
   false`, so the operator must `chan-admin flag grant oauth_login
   <ident>` for the first user before they can sign in.
 - `/api/me` (full map): the SPA gates UI affordances on the
-  resolved values. Today that's `share_drives` (hides the Drives
-  tab and the share panel inside `Drives.svelte` when off). The
+  resolved values. Today that's `share_workspaces` (hides the Workspaces
+  tab and the share panel inside `Workspaces.svelte` when off). The
   map is re-fetched on every `/api/me`, so a rollout takes effect
   on the next dashboard reload — no SPA logout / login dance.
 
@@ -229,7 +229,7 @@ swept on their own callbacks.
 1. Look up the user (need the username for the next step).
 2. `profile.delete_user(uid)`. FK cascades clean up identities and
    `api_tokens`.
-3. Best-effort: call drive-proxy `kill_user_tunnels(username)` so
+3. Best-effort: call workspace-proxy `kill_user_tunnels(username)` so
    live yamux registrations die at the same time the DB row goes.
 4. Flush the session.
 
@@ -281,8 +281,8 @@ Plus:
   `Domain` attribute.
 - `HttpOnly`, `SameSite=Lax`, 30-day inactivity expiry.
 - `Secure` follows the `COOKIE_SECURE` env var.
-- drive-proxy does **not** read this cookie. Cross-service auth flows
-  through the drive-gate JWT, not through cookie sharing.
+- workspace-proxy does **not** read this cookie. Cross-service auth flows
+  through the workspace-gate JWT, not through cookie sharing.
 
 ### Session id rotates on login
 
@@ -297,25 +297,25 @@ cookie from being carried into the authenticated state.
 - PAT validate compares hashes (the upstream lookup is a parameterised
   SQL query, not a string compare).
 
-### Drive-gate mint, not session sharing
+### Workspace-gate mint, not session sharing
 
-`DRIVE_GATE_SECRET` is the only credential identity uses to talk
-auth to drive-proxy. It is distinct from `PROFILE_AUTH_TOKEN`,
-`IDENTITY_INTERNAL_TOKEN` and `DRIVE_ADMIN_TOKEN`. identity uses it
-only to mint `typ: entry` tokens; drive-proxy uses it to verify
+`WORKSPACE_GATE_SECRET` is the only credential identity uses to talk
+auth to workspace-proxy. It is distinct from `PROFILE_AUTH_TOKEN`,
+`IDENTITY_INTERNAL_TOKEN` and `WORKSPACE_ADMIN_TOKEN`. identity uses it
+only to mint `typ: entry` tokens; workspace-proxy uses it to verify
 those and to mint its own `typ: session` cookies.
 
 ### IDENTITY_INTERNAL_TOKEN is required and distinct
 
-The bearer drive-proxy presents on `/internal/v1/tokens/validate` is
+The bearer workspace-proxy presents on `/internal/v1/tokens/validate` is
 `IDENTITY_INTERNAL_TOKEN`. It is required; there is no fallback to
 `PROFILE_AUTH_TOKEN`. Rotating one bearer never rotates another.
 
 ### PAT validate runs its own throttle
 
-Mirror of drive-proxy's `ThrottlingValidator`. Throttled requests
+Mirror of workspace-proxy's `ThrottlingValidator`. Throttled requests
 return 401, identical on the wire to an unknown token, so the
-throttle is not observable from the outside. The drive-proxy
+throttle is not observable from the outside. The workspace-proxy
 throttle catches the typical case; this one catches a leaked
 internal bearer being used to brute-force PATs directly.
 
@@ -347,12 +347,12 @@ internal bearer being used to brute-force PATs directly.
 | BadRequest    | 400  | input or OAuth-flow failure            |
 | NotFound      | 404  | unknown provider, missing user / token |
 | Conflict      | 409  | username taken, rename cap reached     |
-| Upstream      | 502  | profile / drive-proxy unhappy          |
+| Upstream      | 502  | profile / workspace-proxy unhappy          |
 | Anyhow        | 500  | startup or unexpected                  |
 | Reqwest       | 502  | network failure to a sibling service   |
 
 `From<gateway_common::profile_client::ProfileError>` and
-`From<gateway_common::drive_admin_client::DriveAdminError>` plug
+`From<gateway_common::workspace_admin_client::WorkspaceAdminError>` plug
 sibling-service errors into the local enum so request handlers can
 `?` straight through.
 
@@ -361,10 +361,10 @@ sibling-service errors into the local enum so request handlers can
 - axum 0.7 + `tower_sessions` + Postgres session store (host-only
   cookie scope)
 - `oauth2` crate with `rustls-tls` for PKCE + token exchange
-- `reqwest` for profile-service, drive-proxy admin, and the OAuth
+- `reqwest` for profile-service, workspace-proxy admin, and the OAuth
   providers' REST APIs
-- `gateway-common` for the profile-service client, the drive-admin
-  client, the shared drive_gate JWT type, and the SPA static-asset
+- `gateway-common` for the profile-service client, the workspace-admin
+  client, the shared workspace_gate JWT type, and the SPA static-asset
   handler
 - `jsonwebtoken` for HS256 entry-token mint
 - `subtle`, `rustrict`, `rand::rngs::OsRng`, `sha2::Sha256`
@@ -375,7 +375,7 @@ sibling-service errors into the local enum so request handlers can
 - WebAuthn / passkeys
 - Magic-link sign-in
 - Device flow for headless clients
-- Per-PAT scopes (PATs authenticate a user; drive-gate enforces drive
+- Per-PAT scopes (PATs authenticate a user; workspace-gate enforces workspace
   ownership separately at the URL layer)
-- Refresh of the drive-gate session cookie on the drive.chan.app side
+- Refresh of the workspace-gate session cookie on the workspace.chan.app side
   (24h hard exp; users re-enter via the dashboard)

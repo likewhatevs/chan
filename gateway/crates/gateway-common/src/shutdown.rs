@@ -2,7 +2,7 @@
 //!
 //! Completes on the first of SIGTERM (Unix) or Ctrl-C. Used by every
 //! gateway service to gate `axum::serve(...).with_graceful_shutdown(...)`
-//! and to cancel auxiliary listeners (drive-proxy's tunnel acceptor).
+//! and to cancel auxiliary listeners (workspace-proxy's tunnel acceptor).
 //!
 //! Why not just `tokio::signal::ctrl_c()`: production processes are
 //! terminated with SIGTERM by orchestration (systemd, kubernetes). A

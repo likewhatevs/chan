@@ -7,9 +7,9 @@ case "$1" in
       adduser --system --no-create-home --group chan-gateway
     fi
     install -d -m 0750 -o root -g chan-gateway /etc/chan-gateway
-    if [ -f /etc/chan-gateway/drive-proxy.env ]; then
-      chown root:chan-gateway /etc/chan-gateway/drive-proxy.env
-      chmod 0640 /etc/chan-gateway/drive-proxy.env
+    if [ -f /etc/chan-gateway/workspace-proxy.env ]; then
+      chown root:chan-gateway /etc/chan-gateway/workspace-proxy.env
+      chmod 0640 /etc/chan-gateway/workspace-proxy.env
     fi
     ;;
 esac

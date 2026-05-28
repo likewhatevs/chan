@@ -6,7 +6,7 @@
 //! live secrets; the plaintext leaves on the create response and is
 //! never persisted.
 //!
-//! Scope is intentionally flat: a token authenticates a user. Drive
+//! Scope is intentionally flat: a token authenticates a user. Workspace
 //! ownership is enforced at the URL layer (`chan.app/{username}/...`)
 //! by chan-tunnel, not via per-token bindings -- mirrors the new
 //! GitHub fine-grained model.
@@ -65,10 +65,10 @@ pub struct ApiToken {
     pub created_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub last_used_at: Option<DateTime<Utc>>,
-    /// Capabilities the token carries. Returned to drive-proxy at
+    /// Capabilities the token carries. Returned to workspace-proxy at
     /// validate time and gates chan-tunnel-server's scope checks
     /// (`tunnel` for any dial, `tunnel.public` for anonymous-readable
-    /// drives). Newly-issued tokens default to `["tunnel"]`; granting
+    /// workspaces). Newly-issued tokens default to `["tunnel"]`; granting
     /// extra scopes is a deliberate act at create time.
     pub scopes: Vec<String>,
 }
@@ -100,15 +100,15 @@ pub struct ValidatedToken {
     pub username: String,
     pub token_id: Uuid,
     pub expires_at: Option<DateTime<Utc>>,
-    /// Per-token capabilities. drive-proxy forwards these into
+    /// Per-token capabilities. workspace-proxy forwards these into
     /// `chan_tunnel_server::Validated::scopes`, which the listener
     /// uses to gate `tunnel` (any dial) and `tunnel.public`
-    /// (anonymous-readable drive).
+    /// (anonymous-readable workspace).
     pub scopes: Vec<String>,
 }
 
 /// Default scope set for a freshly-issued token. Private-only:
-/// the holder can dial chan-tunnel but cannot expose a drive
+/// the holder can dial chan-tunnel but cannot expose a workspace
 /// anonymously. Granting `tunnel.public` (or any future scope) is
 /// an explicit step in the token-create call.
 pub const DEFAULT_TOKEN_SCOPES: &[&str] = &["tunnel"];

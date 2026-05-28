@@ -5,7 +5,7 @@
 //!
 //! `ProfileError` is the client's own error enum so this crate has
 //! no axum / IntoResponse dependency. Each consumer (identity,
-//! drive-proxy) provides a `From<ProfileError>` for its local
+//! workspace-proxy) provides a `From<ProfileError>` for its local
 //! request-handler error.
 
 use chrono::{DateTime, Utc};
@@ -36,7 +36,7 @@ pub struct User {
     pub email: String,
     pub display_name: Option<String>,
     pub username: String,
-    /// Lifetime rename counter. drive-proxy ignores this; identity
+    /// Lifetime rename counter. workspace-proxy ignores this; identity
     /// reads it to surface "edits remaining" in the SPA.
     #[serde(default)]
     pub username_edits: i32,
@@ -49,7 +49,7 @@ pub struct User {
     #[serde(default)]
     pub block_reason: Option<String>,
     /// Provider-supplied avatar URL. Browser fetches it directly;
-    /// drive-proxy doesn't read this field.
+    /// workspace-proxy doesn't read this field.
     #[serde(default)]
     pub avatar_url: Option<String>,
 }
@@ -112,18 +112,18 @@ pub struct FeatureFlagOverride {
 pub type FlagMap = std::collections::BTreeMap<String, bool>;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Drive {
+pub struct Workspace {
     pub id: Uuid,
     pub owner_user_id: Uuid,
-    pub drive_name: String,
+    pub workspace_name: String,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DriveGrant {
+pub struct WorkspaceGrant {
     pub id: Uuid,
     pub owner_user_id: Uuid,
-    pub drive_name: String,
+    pub workspace_name: String,
     pub grantee_email: String,
     #[serde(default)]
     pub grantee_user_id: Option<Uuid>,
@@ -133,16 +133,16 @@ pub struct DriveGrant {
     pub accepted_at: Option<DateTime<Utc>>,
 }
 
-/// Reply from `GET /v1/users/:o/drives/:d/access?as=<id>`.
+/// Reply from `GET /v1/users/:o/workspaces/:d/access?as=<id>`.
 /// `role` is one of `owner`, `editor`, `viewer`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DriveAccess {
+pub struct WorkspaceAccess {
     pub role: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct OwnedDriveSummary {
-    pub drive_name: String,
+pub struct OwnedWorkspaceSummary {
+    pub workspace_name: String,
     pub grant_count: i64,
 }
 
@@ -155,7 +155,7 @@ pub struct IncomingShare {
     pub owner_display_name: Option<String>,
     #[serde(default)]
     pub owner_avatar_url: Option<String>,
-    pub drive_name: String,
+    pub workspace_name: String,
     pub role: String,
     pub accepted_at: DateTime<Utc>,
 }
@@ -546,14 +546,18 @@ impl ProfileClient {
     }
 
     /// Idempotent. 201 on insert, 200 on hit-existing — caller maps
-    /// both to "drive now exists".
-    pub async fn create_drive(&self, owner_id: Uuid, drive_name: &str) -> ProfileResult<Drive> {
+    /// both to "workspace now exists".
+    pub async fn create_workspace(
+        &self,
+        owner_id: Uuid,
+        workspace_name: &str,
+    ) -> ProfileResult<Workspace> {
         let res = self
             .req(
                 reqwest::Method::POST,
-                &format!("/v1/users/{owner_id}/drives"),
+                &format!("/v1/users/{owner_id}/workspaces"),
             )
-            .json(&serde_json::json!({"drive_name": drive_name}))
+            .json(&serde_json::json!({"workspace_name": workspace_name}))
             .send()
             .await?;
         match res.status() {
@@ -564,11 +568,11 @@ impl ProfileClient {
         }
     }
 
-    pub async fn list_drives(&self, owner_id: Uuid) -> ProfileResult<Vec<Drive>> {
+    pub async fn list_workspaces(&self, owner_id: Uuid) -> ProfileResult<Vec<Workspace>> {
         let res = self
             .req(
                 reqwest::Method::GET,
-                &format!("/v1/users/{owner_id}/drives"),
+                &format!("/v1/users/{owner_id}/workspaces"),
             )
             .send()
             .await?;
@@ -578,11 +582,15 @@ impl ProfileClient {
         }
     }
 
-    pub async fn delete_drive(&self, owner_id: Uuid, drive_name: &str) -> ProfileResult<()> {
+    pub async fn delete_workspace(
+        &self,
+        owner_id: Uuid,
+        workspace_name: &str,
+    ) -> ProfileResult<()> {
         let res = self
             .req(
                 reqwest::Method::DELETE,
-                &format!("/v1/users/{owner_id}/drives/{drive_name}"),
+                &format!("/v1/users/{owner_id}/workspaces/{workspace_name}"),
             )
             .send()
             .await?;
@@ -594,20 +602,20 @@ impl ProfileClient {
     }
 
     /// Create-or-promote: re-adding the same email on the same
-    /// `(owner, drive)` updates the role and keeps the existing
+    /// `(owner, workspace)` updates the role and keeps the existing
     /// `created_at` / `grantee_user_id` / `accepted_at` on the server
     /// side. Returns the resulting row in both cases.
-    pub async fn create_drive_grant(
+    pub async fn create_workspace_grant(
         &self,
         owner_id: Uuid,
-        drive: &str,
+        workspace: &str,
         grantee_email: &str,
         role: &str,
-    ) -> ProfileResult<DriveGrant> {
+    ) -> ProfileResult<WorkspaceGrant> {
         let res = self
             .req(
                 reqwest::Method::POST,
-                &format!("/v1/users/{owner_id}/drives/{drive}/grants"),
+                &format!("/v1/users/{owner_id}/workspaces/{workspace}/grants"),
             )
             .json(&serde_json::json!({
                 "grantee_email": grantee_email,
@@ -623,15 +631,15 @@ impl ProfileClient {
         }
     }
 
-    pub async fn list_drive_grants(
+    pub async fn list_workspace_grants(
         &self,
         owner_id: Uuid,
-        drive: &str,
-    ) -> ProfileResult<Vec<DriveGrant>> {
+        workspace: &str,
+    ) -> ProfileResult<Vec<WorkspaceGrant>> {
         let res = self
             .req(
                 reqwest::Method::GET,
-                &format!("/v1/users/{owner_id}/drives/{drive}/grants"),
+                &format!("/v1/users/{owner_id}/workspaces/{workspace}/grants"),
             )
             .send()
             .await?;
@@ -645,7 +653,11 @@ impl ProfileClient {
     /// Owner-scoped delete. `owner_id` is required by the server, so
     /// a bug in identity-service can't let user A revoke user B's
     /// grant.
-    pub async fn delete_drive_grant(&self, owner_id: Uuid, grant_id: Uuid) -> ProfileResult<()> {
+    pub async fn delete_workspace_grant(
+        &self,
+        owner_id: Uuid,
+        grant_id: Uuid,
+    ) -> ProfileResult<()> {
         let res = self
             .req(
                 reqwest::Method::DELETE,
@@ -660,17 +672,19 @@ impl ProfileClient {
         }
     }
 
-    /// Per-request access gate. `Ok(Some(DriveAccess))` is access;
+    /// Per-request access gate. `Ok(Some(WorkspaceAccess))` is access;
     /// `Ok(None)` is no access (shares the 404 shape with "unknown
-    /// drive" on purpose, so callers can render a single "no access"
+    /// workspace" on purpose, so callers can render a single "no access"
     /// page without disclosing which case they hit).
-    pub async fn drive_access(
+    pub async fn workspace_access(
         &self,
         owner_id: Uuid,
-        drive: &str,
+        workspace: &str,
         caller: Uuid,
-    ) -> ProfileResult<Option<DriveAccess>> {
-        let mut url = self.url(&format!("/v1/users/{owner_id}/drives/{drive}/access"));
+    ) -> ProfileResult<Option<WorkspaceAccess>> {
+        let mut url = self.url(&format!(
+            "/v1/users/{owner_id}/workspaces/{workspace}/access"
+        ));
         url.query_pairs_mut().append_pair("as", &caller.to_string());
         let builder = self
             .http
@@ -685,7 +699,10 @@ impl ProfileClient {
         }
     }
 
-    pub async fn list_owned_drives(&self, user_id: Uuid) -> ProfileResult<Vec<OwnedDriveSummary>> {
+    pub async fn list_owned_workspaces(
+        &self,
+        user_id: Uuid,
+    ) -> ProfileResult<Vec<OwnedWorkspaceSummary>> {
         let res = self
             .req(
                 reqwest::Method::GET,

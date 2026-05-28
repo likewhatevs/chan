@@ -1,4 +1,4 @@
-# drive-proxy: design
+# workspace-proxy: design
 
 ## Problem
 
@@ -7,22 +7,22 @@ peer disconnects. The gateway needs a service that:
 
 1. Accepts the tunnel registration handshake.
 2. Reverse-proxies HTTP and WebSocket traffic into the registered
-   drive.
-3. Gates private drives behind a token minted by identity-service.
-   drive-proxy holds no session cookie of its own beyond a short-
-   lived, per-drive gate cookie scoped to one path.
+   workspace.
+3. Gates private workspaces behind a token minted by identity-service.
+   workspace-proxy holds no session cookie of its own beyond a short-
+   lived, per-workspace gate cookie scoped to one path.
 4. Supports admin operations (snapshot, evict, per-user list and
    bulk evict).
 
-The drive list, sign-in surface and every piece of user-facing UI
-live in identity-service. drive-proxy has no SPA and no public
+The workspace list, sign-in surface and every piece of user-facing UI
+live in identity-service. workspace-proxy has no SPA and no public
 `/api/*` of its own.
 
 ## Architecture
 
 Two public hostnames pointed at the same process:
 
-- `drive.chan.app` (apex): admin + tunnel + healthz only.
+- `workspace.chan.app` (apex): admin + tunnel + healthz only.
   - `POST /v1/tunnel` -- raw h2c, handled by `chan-tunnel-server` on
     a separate internal listener (`TUNNEL_BIND_ADDR`). nginx
     `grpc_pass`es this path; everything else on the apex hits the
@@ -31,18 +31,18 @@ Two public hostnames pointed at the same process:
   - `/healthz` -- liveness.
   - Anything else -- 404.
 
-- `*.drive.chan.app` (wildcard): tenant content only.
-  - `/` -- 302 to `https://id.chan.app/drives`.
-  - `/{drive}` -- 308 to `/{drive}/` (trailing slash canonical).
-  - `/{drive}/?t=<jwt>` -- entry: validate the entry token, set the
-    `drive_gate` cookie, 303 to the clean URL.
-  - `/{drive}/...` -- proxy to the registered tunnel for
-    `(host_user, drive)`. Public drives pass through; private drives
-    require a valid `drive_gate` cookie. Anything else -- 404.
+- `*.workspace.chan.app` (wildcard): tenant content only.
+  - `/` -- 302 to `https://id.chan.app/workspaces`.
+  - `/{workspace}` -- 308 to `/{workspace}/` (trailing slash canonical).
+  - `/{workspace}/?t=<jwt>` -- entry: validate the entry token, set the
+    `workspace_gate` cookie, 303 to the clean URL.
+  - `/{workspace}/...` -- proxy to the registered tunnel for
+    `(host_user, workspace)`. Public workspaces pass through; private workspaces
+    require a valid `workspace_gate` cookie. Anything else -- 404.
 
 A single axum router serves both apex and wildcard via a Host-keyed
 dispatch. The wildcard host's `{user}` is parsed out of the request's
-`Host` header; the prefix before `.drive.chan.app` is the username.
+`Host` header; the prefix before `.workspace.chan.app` is the username.
 
 The tunnel listener is unchanged: `chan-tunnel-server` runs raw h2
 on `TUNNEL_BIND_ADDR`, with the validator chain
@@ -50,39 +50,39 @@ on `TUNNEL_BIND_ADDR`, with the validator chain
 successful handshake the registry caches `(username -> user_id)`.
 
 The `Registry` (`registry.rs`) is the in-process map from
-`(username, drive)` to the live `TunnelHandle` plus the username
+`(username, workspace)` to the live `TunnelHandle` plus the username
 cache. The admin tree reads from the same registry that the proxy
 handler reads.
 
-## Drive gate
+## Workspace gate
 
-drive-proxy reads no `tower_sessions` cookie. Authentication for the
+workspace-proxy reads no `tower_sessions` cookie. Authentication for the
 proxy path uses a JWT minted by identity-service, signed with
-`DRIVE_GATE_SECRET` (HMAC-SHA256). The secret is shared between
-identity (mints both shapes) and drive-proxy (verifies, mints the
+`WORKSPACE_GATE_SECRET` (HMAC-SHA256). The secret is shared between
+identity (mints both shapes) and workspace-proxy (verifies, mints the
 session shape).
 
 Two tokens are involved:
 
 - **Entry token**: 30s exp, carried in `?t=` on the first hit to a
-  private drive. Issued by identity at `GET /api/drives/open?u=...&d=...`
-  after the dashboard verified the user owns the drive. Claims:
+  private workspace. Issued by identity at `GET /api/workspaces/open?u=...&d=...`
+  after the dashboard verified the user owns the workspace. Claims:
   `{iss: "id.chan.app", sub: user_id, drv: <slug>, aud: "<host>",
   typ: "entry", iat, exp}`.
 
 - **Session cookie**: 24h hard exp, written as `Set-Cookie:
-  drive_gate=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/<drive>/`.
-  Minted by drive-proxy on entry-token validation. Same claim
+  workspace_gate=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/<workspace>/`.
+  Minted by workspace-proxy on entry-token validation. Same claim
   envelope, `typ: "session"`. Stateless: no server-side store.
 
-Cookie `Path` scopes the credential to one drive. JS in
-`alice.drive.chan.app/blog/...` cannot read or send the cookie for
-`alice.drive.chan.app/journal/...` (path does not match). Cross-user
+Cookie `Path` scopes the credential to one workspace. JS in
+`alice.workspace.chan.app/blog/...` cannot read or send the cookie for
+`alice.workspace.chan.app/journal/...` (path does not match). Cross-user
 attacks are blocked by browser origin separation:
-`alice.drive.chan.app` and `bob.drive.chan.app` are distinct origins.
+`alice.workspace.chan.app` and `bob.workspace.chan.app` are distinct origins.
 
 The shared JWT type and signing helpers live in
-`gateway_common::drive_gate`.
+`gateway_common::workspace_gate`.
 
 ## Public surface
 
@@ -90,32 +90,32 @@ Full route table is in [`README.md`](README.md). Critical paths:
 
 ### Tunnel registration (apex only)
 
-`POST /v1/tunnel` on `drive.chan.app:443`. nginx routes this exact
-path to `grpc_pass grpc://chan-drive:7003`; everything else on the
+`POST /v1/tunnel` on `workspace.chan.app:443`. nginx routes this exact
+path to `grpc_pass grpc://chan-workspace:7003`; everything else on the
 apex `proxy_pass`es to the axum listener on `:7002`. The h2c handler
 in `chan-tunnel-server` validates the Bearer PAT via identity-service
-`/internal/v1/tokens/validate`, then registers the drive in the
+`/internal/v1/tokens/validate`, then registers the workspace in the
 shared registry.
 
 ### Reverse proxy (wildcard host)
 
-Auth gate for `*.drive.chan.app/<drive>/...`, in order:
+Auth gate for `*.workspace.chan.app/<workspace>/...`, in order:
 
-1. Registration `(host_user, drive)` not found in the registry -> 404.
+1. Registration `(host_user, workspace)` not found in the registry -> 404.
 2. `entry.public == true` -> pass through.
 3. Request carries `?t=<jwt>` -> verify signature + exp + aud + drv
-   match. On success: mint a session JWT, write `drive_gate` cookie
-   scoped to `Path=/<drive>/`, 303 to `/<drive>/` (clean URL).
-4. Request carries `drive_gate` cookie -> verify signature + exp +
-   claim match against `(host_user, drive)`. Pass through.
+   match. On success: mint a session JWT, write `workspace_gate` cookie
+   scoped to `Path=/<workspace>/`, 303 to `/<workspace>/` (clean URL).
+4. Request carries `workspace_gate` cookie -> verify signature + exp +
+   claim match against `(host_user, workspace)`. Pass through.
 5. Anything else (no cookie, expired cookie, bad signature, wrong
    user) -> 404.
 
 The 404 path checks `Accept: text/html`; browsers get the styled
-"drive not found" page, everything else gets the JSON
+"workspace not found" page, everything else gets the JSON
 `{"error":"not found"}` shape. Owners returning after the 24h cookie
-expires bounce through `id.chan.app/drives`; a bookmark to a private
-drive URL is not a session.
+expires bounce through `id.chan.app/workspaces`; a bookmark to a private
+workspace URL is not a session.
 
 ### Hop-by-hop hygiene
 
@@ -130,7 +130,7 @@ Inbound `Host`, `Cookie`, and `Authorization` are dropped.
 `X-Forwarded-For` is recomputed as `<existing chain>, <peer ip>`.
 `X-Forwarded-Proto` is set from `FORWARDED_PROTO` (default `https`,
 configured to match the terminator that fronts this listener).
-`X-Forwarded-Host` is set from the inbound `Host` header drive-proxy
+`X-Forwarded-Host` is set from the inbound `Host` header workspace-proxy
 itself routed on. Inbound `X-Forwarded-{Host,Proto}` are NOT trusted:
 they are client-controllable and an upstream that builds absolute
 URLs from XFH/XFProto would otherwise be steerable from outside.
@@ -177,12 +177,12 @@ window indefinitely.
 Routes:
 
 - `GET    /admin/v1/tunnels`                       list every live tunnel
-- `POST   /admin/v1/tunnels/:user/:drive/kill`     evict one tunnel
+- `POST   /admin/v1/tunnels/:user/:workspace/kill`     evict one tunnel
 - `GET    /admin/v1/users/:user/tunnels`           per-user snapshot
 - `POST   /admin/v1/users/:user/tunnels/kill`      bulk evict for a user
 - `GET    /admin/v1/tunnels/watch`                 SSE snapshot stream
 
-All bearer-gated by `DRIVE_ADMIN_TOKEN` (constant-time compare via
+All bearer-gated by `WORKSPACE_ADMIN_TOKEN` (constant-time compare via
 `subtle`) and rate-limited per source IP by `tower_governor`
 (4 rps + 16 burst). Lives on the apex hostname so tenant content
 cannot reach it via fetch.
@@ -200,18 +200,18 @@ listeners become independent again.
 
 ### No cookie session for the proxy path
 
-drive-proxy reads nothing from `tower_sessions`. The browser never
-sends an `.chan.app`-scoped cookie to `*.drive.chan.app` because no
+workspace-proxy reads nothing from `tower_sessions`. The browser never
+sends an `.chan.app`-scoped cookie to `*.workspace.chan.app` because no
 such cookie exists; id.chan.app's cookie is host-only on id.
 
 This is load-bearing for cross-tenant isolation:
 
-- Malicious tenant content at `evil.drive.chan.app` can run JS, but
+- Malicious tenant content at `evil.workspace.chan.app` can run JS, but
   the only cookies it can access are its own host-only ones. The
   browser will not auto-attach an id.chan.app cookie to a fetch on
-  `evil.drive.chan.app`.
-- Same-host attacks across a single user's drives are blocked by
-  the `Path=/<drive>/` scope on the `drive_gate` cookie.
+  `evil.workspace.chan.app`.
+- Same-host attacks across a single user's workspaces are blocked by
+  the `Path=/<workspace>/` scope on the `workspace_gate` cookie.
 - Cross-user attacks are blocked by browser origin separation; each
   user has their own subdomain.
 
@@ -220,12 +220,12 @@ This is load-bearing for cross-tenant isolation:
 Entry tokens have 30s exp so a leak (referer, browser history, ops
 log) closes in under a minute. Session cookies have 24h exp so
 day-to-day navigation is one click from the dashboard. Both signed
-with `DRIVE_GATE_SECRET` (HS256, no "alg: none" path; the validator
+with `WORKSPACE_GATE_SECRET` (HS256, no "alg: none" path; the validator
 hard-requires HS256). The crate is `jsonwebtoken`.
 
 Sliding session-cookie expiry is a follow-up if 24h proves annoying.
 Server-side revocation (an in-memory revoked-jti set) is also a
-follow-up; today rotation of `DRIVE_GATE_SECRET` is the only
+follow-up; today rotation of `WORKSPACE_GATE_SECRET` is the only
 immediate invalidation knob.
 
 ### Username cache populated on handshake
@@ -234,7 +234,7 @@ The tunnel validator returns `(user_id, username)`.
 `CapturingValidator` records that pair in the registry on every
 successful handshake. The proxy gate no longer reads `owner_id` for
 claim validation (that comparison locked grantees out of shared
-drives); the cache is retained as metadata for admin tooling and as
+workspaces); the cache is retained as metadata for admin tooling and as
 a defense-in-depth signal for future enforcement that needs to
 correlate the live tunnel with a specific account. A cache miss
 still reads as "unknown registration" -> 404 because tunnel presence
@@ -243,22 +243,22 @@ is what the registry tracks.
 ### Auth gate trust model
 
 The auth assertion on the wildcard path is the entry JWT, not "sub
-matches owner". identity-service calls `profile.drive_access(owner,
-drive, caller)` before minting any entry token, so a valid signature
+matches owner". identity-service calls `profile.workspace_access(owner,
+workspace, caller)` before minting any entry token, so a valid signature
 plus the right `aud` (= the inbound host, which is
-`{owner}.drive.chan.app`) plus the right `drv` (= the requested
-drive) proves the caller was authorized at mint time. identity owns
-the access-control policy; drive-proxy verifies the signed
+`{owner}.workspace.chan.app`) plus the right `drv` (= the requested
+workspace) proves the caller was authorized at mint time. identity owns
+the access-control policy; workspace-proxy verifies the signed
 assertion. The session cookie minted on entry-token validation
 carries the entry's `sub` unchanged so the upstream attribution
 chain knows whether the request belongs to the owner or a grantee.
 
 Tenant isolation is enforced by `aud`. A token minted for one
-subdomain (`alice.drive.chan.app`) cannot be replayed on another
-(`bob.drive.chan.app`) because `decode` rejects on `aud` mismatch.
-Drive isolation is enforced by `drv`. There is no separate
+subdomain (`alice.workspace.chan.app`) cannot be replayed on another
+(`bob.workspace.chan.app`) because `decode` rejects on `aud` mismatch.
+Workspace isolation is enforced by `drv`. There is no separate
 "this user is the owner" check, and intentionally so: requiring it
-would prevent accepted grantees from accessing the drives they have
+would prevent accepted grantees from accessing the workspaces they have
 been granted.
 
 ### Tunnel handshake throttles by token fingerprint
@@ -277,12 +277,12 @@ to make a guess loop glacial.
 
 The URL shape no longer carries `{user}` in the path. `{user}` lives
 in the host. The wildcard router strips exactly one segment
-(`/<drive>`) before forwarding to the upstream, which still expects
+(`/<workspace>`) before forwarding to the upstream, which still expects
 no prefix (chan serve in tunnel mode refuses `--prefix`).
 
 ### Admin tree on the apex
 
-Admin routes intentionally live on `drive.chan.app`, not on the
+Admin routes intentionally live on `workspace.chan.app`, not on the
 wildcard. Tenant content has no way to call them: the wildcard
 router never proxies `/admin/v1/*` upstream, and the apex never
 serves tenant content. `tower_governor`'s `PeerIpKeyExtractor`
@@ -296,33 +296,33 @@ on `oneshot`.
 - Tunnel registrations are ephemeral; they vanish when the peer
   disconnects or via admin evict.
 - The proxy path reads no `tower_sessions` cookie. The only cookie
-  it reads or writes is the host-only, path-scoped `drive_gate`.
+  it reads or writes is the host-only, path-scoped `workspace_gate`.
 - Bearer comparisons run at constant time.
 - Hop-by-hop headers are stripped on both legs of every request,
   including every header named by the inbound `Connection` value.
 - Reverse-proxy paths forward to the tunnel unchanged modulo the
-  single `/<drive>` segment strip.
+  single `/<workspace>` segment strip.
 - Request and response bodies are bounded by the configured caps.
 - HTTP requests are bounded end-to-end by `REQUEST_TIMEOUT_SECS`.
 - WebSocket halves are bounded by a 300s idle timeout each.
 
 ## Error model
 
-`drive_proxy::Error` (`src/error.rs`):
+`workspace_proxy::Error` (`src/error.rs`):
 
 | Variant       | HTTP | Notes                                     |
 |---------------|------|-------------------------------------------|
 | Unauthorized  | 401  | not used on the proxy path; the 404       |
 |               |      | path is preferred so existence does not   |
 |               |      | leak                                      |
-| NotFound      | 404  | unknown drive, invalid or missing gate    |
+| NotFound      | 404  | unknown workspace, invalid or missing gate    |
 |               |      | token, wrong user                         |
 | BadRequest    | 400  | input or proxy precondition failure       |
 | Upstream      | 502  | tunnel disconnected, h1 handshake failed  |
 | Anyhow        | 500  | startup or unexpected                     |
 | Reqwest       | 502  | profile-service unreachable               |
 
-drive-proxy carries no `Conflict` variant: nothing on this surface
+workspace-proxy carries no `Conflict` variant: nothing on this surface
 PATCHes a unique-constrained row.
 
 ## What's wired
@@ -335,7 +335,7 @@ PATCHes a unique-constrained row.
 - `tower::timeout` for the end-to-end HTTP request timeout
 - `tower_governor` rate limiter on the admin tree
 - `gateway-common` for the profile-service client, the shared
-  drive_gate JWT type, and the drive-admin types
+  workspace_gate JWT type, and the workspace-admin types
 
 ## What is not wired
 
@@ -345,5 +345,5 @@ PATCHes a unique-constrained row.
 - Per-PAT scopes (tunnel scope is implicit on validated PATs)
 - Multi-instance horizontal scale (one process, in-process registry)
 - Server-side session revocation (24h cookie exp is the only knob;
-  rotating `DRIVE_GATE_SECRET` is the nuclear option)
+  rotating `WORKSPACE_GATE_SECRET` is the nuclear option)
 - Sliding session-cookie expiry

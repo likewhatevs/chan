@@ -11,8 +11,8 @@ use crate::config::Config;
 use crate::registry::Registry;
 
 /// Application state passed to every handler. Cookie- and
-/// session-related fields are gone; drive-proxy reads no cookie
-/// other than the `drive_gate` issued by the proxy gate itself.
+/// session-related fields are gone; workspace-proxy reads no cookie
+/// other than the `workspace_gate` issued by the proxy gate itself.
 #[derive(Clone)]
 pub struct AppState {
     pub cfg: Arc<Config>,
@@ -27,8 +27,8 @@ pub fn router(cfg: Arc<Config>, registry: Registry) -> Router {
         // upstream during health checks.
         .route("/healthz", get(healthz))
         // Single fallback that dispatches on the Host header. Apex
-        // (drive.chan.app) only carries admin + healthz; everything
-        // else 404s. Wildcard ({user}.drive.chan.app) hands off to
+        // (workspace.chan.app) only carries admin + healthz; everything
+        // else 404s. Wildcard ({user}.workspace.chan.app) hands off to
         // the proxy module.
         .fallback(dispatch)
         .merge(admin)
@@ -41,7 +41,7 @@ async fn healthz() -> &'static str {
 }
 
 /// Host-keyed dispatch. The router has no static routes for the
-/// wildcard surface (`/`, `/{drive}`, `/{drive}/*`) because every
+/// wildcard surface (`/`, `/{workspace}`, `/{workspace}/*`) because every
 /// request to a wildcard host must first parse `{user}` out of the
 /// header. axum's per-host routing requires the same layer stack on
 /// each route, so we resolve at the request level instead.
@@ -76,8 +76,8 @@ async fn dispatch(State(state): State<AppState>, req: Request) -> Response {
     };
 
     // Wildcard root `/` -> dashboard. The dashboard lives at
-    // id.chan.app/drives in prod (configurable via DASHBOARD_URL);
-    // drive-proxy doesn't render any UI of its own, so a
+    // id.chan.app/workspaces in prod (configurable via DASHBOARD_URL);
+    // workspace-proxy doesn't render any UI of its own, so a
     // bare-domain hit bounces.
     let path = req.uri().path();
     if path == "/" || path.is_empty() {
@@ -85,7 +85,7 @@ async fn dispatch(State(state): State<AppState>, req: Request) -> Response {
     }
 
     // Otherwise hand off to the proxy module. It parses the
-    // `/{drive}` (or `/{drive}/...`) prefix and applies the gate.
+    // `/{workspace}` (or `/{workspace}/...`) prefix and applies the gate.
     crate::proxy::handle(state.clone(), user, req).await
 }
 

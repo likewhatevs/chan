@@ -109,11 +109,11 @@ impl TestEnv {
             cookie_secure: false,
             profile_client,
             internal_auth_token: "test-internal".to_string(),
-            drive_wildcard_suffix: ".drive.chan.app".to_string(),
-            drive_public_scheme: "https".to_string(),
-            drive_public_port: String::new(),
-            drive_admin: None,
-            drive_gate_secret: "test-drive-gate-secret-32-bytes-aa".to_string(),
+            workspace_wildcard_suffix: ".workspace.chan.app".to_string(),
+            workspace_public_scheme: "https".to_string(),
+            workspace_public_port: String::new(),
+            workspace_admin: None,
+            workspace_gate_secret: "test-workspace-gate-secret-32-bytes-aa".to_string(),
             providers: vec![Arc::new(provider)],
         });
         let router = http::router(cfg, store, api_tokens_for_state, TokenThrottle::new());

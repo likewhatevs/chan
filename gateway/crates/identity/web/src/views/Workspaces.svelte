@@ -2,48 +2,48 @@
   import {
     api,
     HttpError,
-    type Drive,
-    type DriveGrant,
-    type DriveGrantRole,
+    type Workspace,
+    type WorkspaceGrant,
+    type WorkspaceGrantRole,
     type IncomingShare,
-    type OwnedDriveSummary,
+    type OwnedWorkspaceSummary,
   } from "../lib/api";
   import { meStore } from "../state/me.svelte";
 
-  let { username, drives }: { username: string; drives: Drive[] } = $props();
+  let { username, workspaces }: { username: string; workspaces: Workspace[] } = $props();
 
-  // Pull the configured (potentially-offline) drive list and the
+  // Pull the configured (potentially-offline) workspace list and the
   // shared-with-me list once on mount. /api/me already gives us live
   // tunnels; the two profile-backed lists are loaded here so the
-  // Drives view doesn't bloat the /api/me payload for users who
+  // Workspaces view doesn't bloat the /api/me payload for users who
   // never open this tab.
-  let owned = $state<OwnedDriveSummary[]>([]);
+  let owned = $state<OwnedWorkspaceSummary[]>([]);
   let incoming = $state<IncomingShare[]>([]);
   let loadingLists = $state(true);
   let listsError = $state<string | null>(null);
 
-  // Per-drive grant cache. Keys are drive_name (lowercase, matching
+  // Per-workspace grant cache. Keys are workspace_name (lowercase, matching
   // server normalisation). Only populated on first expand of a row;
   // subsequent updates mutate this object in place.
-  let grants = $state<Record<string, DriveGrant[]>>({});
+  let grants = $state<Record<string, WorkspaceGrant[]>>({});
   let grantsLoading = $state<Record<string, boolean>>({});
   let grantsError = $state<Record<string, string | null>>({});
 
-  // Tracks which drive's share panel is open. Single-open keeps the
+  // Tracks which workspace's share panel is open. Single-open keeps the
   // UI compact; multi-open would also be fine, but visually noisy.
   let expanded = $state<string | null>(null);
 
-  // Add-grant form state, keyed by drive_name. Reset on submit.
+  // Add-grant form state, keyed by workspace_name. Reset on submit.
   let addEmail = $state<Record<string, string>>({});
-  let addRole = $state<Record<string, DriveGrantRole>>({});
+  let addRole = $state<Record<string, WorkspaceGrantRole>>({});
   let addBusy = $state<Record<string, boolean>>({});
   let addError = $state<Record<string, string | null>>({});
 
-  // New-drive form state. Submits to POST /api/drives, which
-  // persists the drive in profile-service so it survives a reload
+  // New-workspace form state. Submits to POST /api/workspaces, which
+  // persists the workspace in profile-service so it survives a reload
   // even with no grants and no live tunnel.
-  let newDrive = $state("");
-  let newDriveOpen = $state(false);
+  let newWorkspace = $state("");
+  let newWorkspaceOpen = $state(false);
   let newBusy = $state(false);
   let newError = $state<string | null>(null);
 
@@ -51,51 +51,51 @@
   // lists. Errors surface inline; we don't bounce to the error view.
   let refreshing = $state(false);
 
-  // Toast-style copied feedback. Keyed by drive_name so the button
+  // Toast-style copied feedback. Keyed by workspace_name so the button
   // shows "Copied" briefly without losing focus on the row.
   let copied = $state<Record<string, boolean>>({});
 
-  function unifyDrives() {
-    // My drives = live tunnels (status: online) UNION owned drives
+  function unifyWorkspaces() {
+    // My workspaces = live tunnels (status: online) UNION owned workspaces
     // from profile (status: offline when no live tunnel matches).
     // The owned list is the authoritative roster; live tunnels just
     // flip status to online when present.
-    const liveBy = new Map(drives.map((d) => [d.drive, d]));
+    const liveBy = new Map(workspaces.map((d) => [d.workspace, d]));
     const seen = new Set<string>();
     const rows: { name: string; label: string; online: boolean; public: boolean }[] = [];
     for (const o of owned) {
-      const live = liveBy.get(o.drive_name);
+      const live = liveBy.get(o.workspace_name);
       rows.push({
-        name: o.drive_name,
-        label: o.drive_name,
+        name: o.workspace_name,
+        label: o.workspace_name,
         online: !!live,
         public: live?.public ?? false,
       });
-      seen.add(o.drive_name);
+      seen.add(o.workspace_name);
     }
     // Live tunnels that aren't in owned yet (registry-only, e.g. a
     // `chan serve` started before the user opened this tab and the
     // owned list hasn't refreshed). Show them too so nothing
     // disappears between renders.
-    for (const d of drives) {
-      if (!seen.has(d.drive)) {
-        rows.push({ name: d.drive, label: d.label, online: true, public: d.public });
-        seen.add(d.drive);
+    for (const d of workspaces) {
+      if (!seen.has(d.workspace)) {
+        rows.push({ name: d.workspace, label: d.label, online: true, public: d.public });
+        seen.add(d.workspace);
       }
     }
     rows.sort((a, b) => a.name.localeCompare(b.name));
     return rows;
   }
 
-  // Re-derived whenever drives / owned change.
-  let myDrives = $derived(unifyDrives());
+  // Re-derived whenever workspaces / owned change.
+  let myWorkspaces = $derived(unifyWorkspaces());
 
   async function loadLists() {
     loadingLists = true;
     listsError = null;
     try {
       const [o, i] = await Promise.all([
-        api.listOwnedDrives(),
+        api.listOwnedWorkspaces(),
         api.listIncomingShares(),
       ]);
       owned = o;
@@ -116,29 +116,29 @@
     }
   }
 
-  // Lazy-load grants for one drive. Subsequent expansions hit the
+  // Lazy-load grants for one workspace. Subsequent expansions hit the
   // cache; explicit refresh-after-mutate paths re-call this.
-  async function loadGrants(drive: string, force = false) {
-    if (grants[drive] && !force) return;
-    grantsLoading[drive] = true;
-    grantsError[drive] = null;
+  async function loadGrants(workspace: string, force = false) {
+    if (grants[workspace] && !force) return;
+    grantsLoading[workspace] = true;
+    grantsError[workspace] = null;
     try {
-      grants[drive] = await api.listDriveGrants(drive);
+      grants[workspace] = await api.listWorkspaceGrants(workspace);
     } catch (e) {
-      grantsError[drive] = e instanceof Error ? e.message : String(e);
+      grantsError[workspace] = e instanceof Error ? e.message : String(e);
     } finally {
-      grantsLoading[drive] = false;
+      grantsLoading[workspace] = false;
     }
   }
 
-  function toggle(drive: string) {
-    if (expanded === drive) {
+  function toggle(workspace: string) {
+    if (expanded === workspace) {
       expanded = null;
       return;
     }
-    expanded = drive;
-    if (!addRole[drive]) addRole[drive] = "viewer";
-    void loadGrants(drive);
+    expanded = workspace;
+    if (!addRole[workspace]) addRole[workspace] = "viewer";
+    void loadGrants(workspace);
   }
 
   // Client-side email shape check. Stricter than backend on
@@ -152,52 +152,52 @@
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
   }
 
-  async function addGrant(drive: string) {
-    const email = (addEmail[drive] ?? "").trim();
-    const role = addRole[drive] ?? "viewer";
+  async function addGrant(workspace: string) {
+    const email = (addEmail[workspace] ?? "").trim();
+    const role = addRole[workspace] ?? "viewer";
     if (!isLikelyEmail(email)) {
-      addError[drive] = "Enter a valid email (local@host.tld)";
+      addError[workspace] = "Enter a valid email (local@host.tld)";
       return;
     }
-    addBusy[drive] = true;
-    addError[drive] = null;
+    addBusy[workspace] = true;
+    addError[workspace] = null;
     try {
-      const row = await api.addDriveGrant(drive, email, role);
-      const list = grants[drive] ?? [];
+      const row = await api.addWorkspaceGrant(workspace, email, role);
+      const list = grants[workspace] ?? [];
       // POST is create-or-promote: if a row with this email already
       // existed, replace it; otherwise prepend so the newest is
       // visible.
       const idx = list.findIndex((g) => g.id === row.id);
-      grants[drive] = idx >= 0
+      grants[workspace] = idx >= 0
         ? [...list.slice(0, idx), row, ...list.slice(idx + 1)]
         : [row, ...list];
-      addEmail[drive] = "";
+      addEmail[workspace] = "";
       // Owned-list grant_count may have ticked up if this was a brand
-      // new (drive, email) pair. Refresh in the background.
+      // new (workspace, email) pair. Refresh in the background.
       void loadLists();
     } catch (e) {
       if (e instanceof HttpError) {
-        addError[drive] = e.message;
+        addError[workspace] = e.message;
       } else {
-        addError[drive] = e instanceof Error ? e.message : String(e);
+        addError[workspace] = e instanceof Error ? e.message : String(e);
       }
     } finally {
-      addBusy[drive] = false;
+      addBusy[workspace] = false;
     }
   }
 
-  async function removeGrant(drive: string, id: string) {
+  async function removeGrant(workspace: string, id: string) {
     try {
-      await api.deleteDriveGrant(id);
-      grants[drive] = (grants[drive] ?? []).filter((g) => g.id !== id);
+      await api.deleteWorkspaceGrant(id);
+      grants[workspace] = (grants[workspace] ?? []).filter((g) => g.id !== id);
       void loadLists();
     } catch (e) {
-      grantsError[drive] = e instanceof Error ? e.message : String(e);
+      grantsError[workspace] = e instanceof Error ? e.message : String(e);
     }
   }
 
-  async function copyShareLink(owner: string, drive: string) {
-    const url = api.shareUrl(owner, drive);
+  async function copyShareLink(owner: string, workspace: string) {
+    const url = api.shareUrl(owner, workspace);
     try {
       await navigator.clipboard.writeText(url);
     } catch {
@@ -207,33 +207,33 @@
       window.prompt("Copy this share link:", url);
       return;
     }
-    copied[drive] = true;
+    copied[workspace] = true;
     setTimeout(() => {
-      copied[drive] = false;
+      copied[workspace] = false;
     }, 1500);
   }
 
-  function open(owner: string, drive: string) {
-    location.assign(api.driveOpenUrl(owner, drive));
+  function open(owner: string, workspace: string) {
+    location.assign(api.workspaceOpenUrl(owner, workspace));
   }
 
-  function isValidDriveName(s: string): boolean {
+  function isValidWorkspaceName(s: string): boolean {
     if (s.length < 1 || s.length > 64) return false;
     // Lowercase ascii alnum + . _ - (matches backend's validator
     // so we don't surface a server 400 for a cheap client check).
     return /^[a-z0-9._-]+$/.test(s);
   }
 
-  async function startNewDrive() {
-    const d = newDrive.trim().toLowerCase();
-    if (!isValidDriveName(d)) return;
+  async function startNewWorkspace() {
+    const d = newWorkspace.trim().toLowerCase();
+    if (!isValidWorkspaceName(d)) return;
     newBusy = true;
     newError = null;
     try {
-      await api.createDrive(d);
-      newDriveOpen = false;
-      newDrive = "";
-      // Pull owned again so the new row enters myDrives with the
+      await api.createWorkspace(d);
+      newWorkspaceOpen = false;
+      newWorkspace = "";
+      // Pull owned again so the new row enters myWorkspaces with the
       // (zero) grant_count; no flicker because the create succeeded
       // before we expand.
       await loadLists();
@@ -247,13 +247,13 @@
     }
   }
 
-  async function removeDrive(drive: string) {
-    if (!confirm(`Delete drive "${drive}" and all its grants?`)) return;
+  async function removeWorkspace(workspace: string) {
+    if (!confirm(`Delete workspace "${workspace}" and all its grants?`)) return;
     try {
-      await api.deleteDrive(drive);
+      await api.deleteWorkspace(workspace);
       // Collapse the panel if we were viewing this one.
-      if (expanded === drive) expanded = null;
-      delete grants[drive];
+      if (expanded === workspace) expanded = null;
+      delete grants[workspace];
       await loadLists();
     } catch (e) {
       listsError = e instanceof Error ? e.message : String(e);
@@ -265,9 +265,9 @@
   });
 </script>
 
-<section class="drives">
+<section class="workspaces">
   <header>
-    <h2>Drives</h2>
+    <h2>Workspaces</h2>
     <button
       class="ghost"
       type="button"
@@ -280,30 +280,30 @@
 
   <div class="block">
     <div class="block-head">
-      <h3>My drives</h3>
+      <h3>My workspaces</h3>
       <button
         type="button"
         class="ghost small-btn"
-        onclick={() => (newDriveOpen = !newDriveOpen)}
+        onclick={() => (newWorkspaceOpen = !newWorkspaceOpen)}
       >
-        {newDriveOpen ? "Cancel" : "+ Share a new drive"}
+        {newWorkspaceOpen ? "Cancel" : "+ Share a new workspace"}
       </button>
     </div>
 
-    {#if newDriveOpen}
+    {#if newWorkspaceOpen}
       <form
-        class="newdrive"
+        class="newworkspace"
         onsubmit={(e) => {
           e.preventDefault();
-          void startNewDrive();
+          void startNewWorkspace();
         }}
       >
         <div class="row">
           <input
-            id="new-drive-name"
+            id="new-workspace-name"
             type="text"
-            bind:value={newDrive}
-            placeholder="drive name (e.g. photos)"
+            bind:value={newWorkspace}
+            placeholder="workspace name (e.g. photos)"
             maxlength="64"
             autocomplete="off"
             spellcheck="false"
@@ -311,7 +311,7 @@
           />
           <button
             type="submit"
-            disabled={newBusy || !isValidDriveName(newDrive.trim().toLowerCase())}
+            disabled={newBusy || !isValidWorkspaceName(newWorkspace.trim().toLowerCase())}
           >
             {newBusy ? "..." : "Create"}
           </button>
@@ -323,24 +323,24 @@
           Lowercase letters, digits, and <code>._-</code> only. Add grants
           and copy the share link in the next step; status flips to
           online once you run
-          <code>chan serve --tunnel-drive={newDrive.trim().toLowerCase() || "<name>"}</code>.
+          <code>chan serve --tunnel-workspace={newWorkspace.trim().toLowerCase() || "<name>"}</code>.
         </p>
       </form>
     {/if}
 
-    {#if myDrives.length === 0 && !loadingLists}
+    {#if myWorkspaces.length === 0 && !loadingLists}
       <div class="empty">
-        <p>No drives connected or configured.</p>
+        <p>No workspaces connected or configured.</p>
         <p class="muted small">
           Run <code>chan serve &lt;path&gt;</code> on the machine that holds the
-          drive, with a personal access token set in the
+          workspace, with a personal access token set in the
           <code>CHAN_TUNNEL_TOKEN</code> environment variable. Generate a token
           under the Tokens tab.
         </p>
       </div>
     {:else}
       <ul class="list">
-        {#each myDrives as d (d.name)}
+        {#each myWorkspaces as d (d.name)}
           <li class="card" class:offline={!d.online}>
             <div class="row">
               <div class="meta">
@@ -353,7 +353,7 @@
                       Online &middot; only you and grantees can open
                     {/if}
                   {:else}
-                    Offline &middot; start <code>chan serve --tunnel-drive={d.name}</code>
+                    Offline &middot; start <code>chan serve --tunnel-workspace={d.name}</code>
                   {/if}
                 </div>
               </div>
@@ -394,10 +394,10 @@
                     <button
                       type="button"
                       class="ghost small-btn danger"
-                      onclick={() => removeDrive(d.name)}
-                      aria-label="Delete drive"
+                      onclick={() => removeWorkspace(d.name)}
+                      aria-label="Delete workspace"
                     >
-                      Delete drive
+                      Delete workspace
                     </button>
                   </div>
                 </div>
@@ -441,7 +441,7 @@
                 {:else if grantsError[d.name]}
                   <p class="err small">{grantsError[d.name]}</p>
                 {:else if (grants[d.name]?.length ?? 0) === 0}
-                  <p class="muted small">No grants yet. The drive stays
+                  <p class="muted small">No grants yet. The workspace stays
                     private until you add at least one.</p>
                 {:else}
                   <ul class="grantlist">
@@ -487,7 +487,7 @@
             <div class="row">
               <div class="meta">
                 <div class="label">
-                  {s.drive_name}
+                  {s.workspace_name}
                   <span class="muted small">&middot; from @{s.owner_username}</span>
                 </div>
                 <div class="muted small">
@@ -495,7 +495,7 @@
                 </div>
               </div>
               <div class="actions">
-                <button type="button" onclick={() => open(s.owner_username, s.drive_name)}>
+                <button type="button" onclick={() => open(s.owner_username, s.workspace_name)}>
                   Open
                 </button>
               </div>
@@ -508,7 +508,7 @@
 </section>
 
 <style>
-  .drives {
+  .workspaces {
     max-width: 720px;
     width: 100%;
     margin: 0 auto;
@@ -544,7 +544,7 @@
     justify-content: space-between;
     align-items: baseline;
   }
-  .newdrive {
+  .newworkspace {
     border: 1px dashed var(--border);
     border-radius: 8px;
     padding: .75rem 1rem;
@@ -552,12 +552,12 @@
     flex-direction: column;
     gap: .5rem;
   }
-  .newdrive .row {
+  .newworkspace .row {
     display: flex;
     gap: .5rem;
     align-items: center;
   }
-  .newdrive input {
+  .newworkspace input {
     flex: 1;
   }
   .empty {

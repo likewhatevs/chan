@@ -6,46 +6,46 @@ use url::Url;
 /// Runtime config sourced from environment variables.
 #[derive(Clone)]
 pub struct Config {
-    /// Public listener (drive.chan.app apex + *.drive.chan.app
+    /// Public listener (workspace.chan.app apex + *.workspace.chan.app
     /// wildcard). Behind nginx + TLS.
     pub bind_addr: SocketAddr,
     /// Tunnel listener (apex `/v1/tunnel`). h2c behind nginx
     /// `grpc_pass`; `chan serve` instances dial
-    /// `https://drive.chan.app/v1/tunnel` over h2/TLS, terminated at
+    /// `https://workspace.chan.app/v1/tunnel` over h2/TLS, terminated at
     /// nginx and forwarded here cleartext.
     pub tunnel_bind_addr: SocketAddr,
-    /// Apex hostname (e.g. `drive.chan.app`). Used to distinguish
+    /// Apex hostname (e.g. `workspace.chan.app`). Used to distinguish
     /// the admin/healthz surface from the wildcard reverse-proxy
     /// surface in the Host-keyed router.
     pub apex_host: String,
     /// Wildcard suffix including the leading dot (e.g.
-    /// `.drive.chan.app`). The proxy router parses `{user}` out of
+    /// `.workspace.chan.app`). The proxy router parses `{user}` out of
     /// every Host that ends with this suffix.
     pub wildcard_suffix: String,
-    /// Base URL of identity-service. drive-proxy POSTs to
+    /// Base URL of identity-service. workspace-proxy POSTs to
     /// `{identity_url}/internal/v1/tokens/validate` to validate the
     /// PAT every `chan serve` presents in its tunnel handshake.
     pub identity_url: Url,
-    /// Bearer drive-proxy presents on identity-service's
+    /// Bearer workspace-proxy presents on identity-service's
     /// `/internal/v1/tokens/validate`. Resolution order documented
     /// in `from_env`.
     pub identity_auth_token: String,
-    /// Absolute URL the wildcard root (`{user}.drive.chan.app/`)
-    /// 302s to. The dashboard lives at id.chan.app/drives in prod;
-    /// dev sets this to `http://id.localtest.me:17000/drives`. If
-    /// unset, drive-proxy derives a sensible default by swapping
-    /// the `drive.` prefix on `apex_host` for `id.` and assuming
+    /// Absolute URL the wildcard root (`{user}.workspace.chan.app/`)
+    /// 302s to. The dashboard lives at id.chan.app/workspaces in prod;
+    /// dev sets this to `http://id.localtest.me:17000/workspaces`. If
+    /// unset, workspace-proxy derives a sensible default by swapping
+    /// the `workspace.` prefix on `apex_host` for `id.` and assuming
     /// `https`.
     pub dashboard_url: String,
     /// HMAC-SHA256 secret used to verify entry tokens from identity
-    /// and mint session tokens for the `drive_gate` cookie. Same
+    /// and mint session tokens for the `workspace_gate` cookie. Same
     /// value also configured on identity-service. Required.
-    pub drive_gate_secret: String,
-    /// Maximum number of distinct drives a single user can have
+    pub workspace_gate_secret: String,
+    /// Maximum number of distinct workspaces a single user can have
     /// registered concurrently. `0` disables the cap. Reconnects of
-    /// an already-registered drive are always allowed (last-writer-
+    /// an already-registered workspace are always allowed (last-writer-
     /// wins eviction in the tunnel registry handles that).
-    pub max_drives_per_user: usize,
+    pub max_workspaces_per_user: usize,
     /// Bearer for the `/admin/v1/*` tree. `None` makes every admin
     /// route 401, which is the safe default if the env var is
     /// missing on a fresh deploy.
@@ -62,7 +62,7 @@ pub struct Config {
     /// per-half idle timeouts instead.
     pub request_timeout: Option<std::time::Duration>,
     /// Value to set on the outbound `X-Forwarded-Proto` header before
-    /// forwarding to the upstream `chan serve`. drive-proxy itself
+    /// forwarding to the upstream `chan serve`. workspace-proxy itself
     /// does not see TLS (nginx terminates), so we cannot derive this
     /// from the inbound connection; the inbound `X-Forwarded-Proto`
     /// is client-controlled and must not be trusted. Defaults to
@@ -83,12 +83,12 @@ impl Config {
             .context("TUNNEL_BIND_ADDR must be host:port")?;
 
         // Apex / wildcard split. Defaults match production
-        // (`drive.chan.app`, wildcard `*.drive.chan.app`). Both
+        // (`workspace.chan.app`, wildcard `*.workspace.chan.app`). Both
         // overridable; the wildcard suffix is derived from the apex
         // unless explicitly set so dev / lab deployments only need
         // one env var.
         let apex_host = std::env::var("APEX_HOST")
-            .unwrap_or_else(|_| "drive.chan.app".to_string())
+            .unwrap_or_else(|_| "workspace.chan.app".to_string())
             .trim()
             .to_string();
         if apex_host.is_empty() {
@@ -101,7 +101,7 @@ impl Config {
         if !wildcard_suffix.starts_with('.') {
             anyhow::bail!(
                 "WILDCARD_SUFFIX must start with a dot (got {wildcard_suffix:?}); \
-                 e.g. .drive.chan.app"
+                 e.g. .workspace.chan.app"
             );
         }
 
@@ -110,7 +110,7 @@ impl Config {
             .parse()
             .context("IDENTITY_URL must be a URL")?;
 
-        // Bearer drive-proxy presents on identity-service's
+        // Bearer workspace-proxy presents on identity-service's
         // /internal/v1/tokens/validate. Resolution order:
         //   1. IDENTITY_INTERNAL_TOKEN (preferred; matches the
         //      identity-side env var name);
@@ -125,34 +125,34 @@ impl Config {
                 "IDENTITY_INTERNAL_TOKEN (or IDENTITY_AUTH_TOKEN / PROFILE_AUTH_TOKEN) is required",
             )?;
 
-        let drive_gate_secret =
-            std::env::var("DRIVE_GATE_SECRET").context("DRIVE_GATE_SECRET is required")?;
-        if drive_gate_secret.is_empty() {
-            anyhow::bail!("DRIVE_GATE_SECRET must not be empty");
+        let workspace_gate_secret =
+            std::env::var("WORKSPACE_GATE_SECRET").context("WORKSPACE_GATE_SECRET is required")?;
+        if workspace_gate_secret.is_empty() {
+            anyhow::bail!("WORKSPACE_GATE_SECRET must not be empty");
         }
 
         // Dashboard redirect target. Explicit env var wins; otherwise
-        // derive from apex_host by swapping `drive.` -> `id.` and
+        // derive from apex_host by swapping `workspace.` -> `id.` and
         // assuming https. The derived form is correct for prod but
         // wrong for any dev / lab setup that uses a different scheme
         // or a non-default port; in those cases set DASHBOARD_URL.
         let dashboard_url = match std::env::var("DASHBOARD_URL") {
             Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
-            _ => match apex_host.strip_prefix("drive.") {
-                Some(rest) => format!("https://id.{rest}/drives"),
-                None => "/drives".to_string(),
+            _ => match apex_host.strip_prefix("workspace.") {
+                Some(rest) => format!("https://id.{rest}/workspaces"),
+                None => "/workspaces".to_string(),
             },
         };
 
-        let max_drives_per_user: usize = match std::env::var("MAX_DRIVES_PER_USER") {
+        let max_workspaces_per_user: usize = match std::env::var("MAX_WORKSPACES_PER_USER") {
             Ok(v) => v
                 .trim()
                 .parse()
-                .context("MAX_DRIVES_PER_USER must be a non-negative integer")?,
+                .context("MAX_WORKSPACES_PER_USER must be a non-negative integer")?,
             Err(_) => 0,
         };
 
-        let admin_token = std::env::var("DRIVE_ADMIN_TOKEN")
+        let admin_token = std::env::var("WORKSPACE_ADMIN_TOKEN")
             .ok()
             .filter(|s| !s.is_empty());
 
@@ -191,8 +191,8 @@ impl Config {
             identity_url,
             identity_auth_token,
             dashboard_url,
-            drive_gate_secret,
-            max_drives_per_user,
+            workspace_gate_secret,
+            max_workspaces_per_user,
             admin_token,
             max_response_bytes,
             max_request_bytes,
@@ -208,7 +208,7 @@ impl Config {
     ///
     /// The prefix must be a single DNS label: lowercase ASCII
     /// alphanumerics plus `-`, no internal dots. Multi-label
-    /// prefixes (e.g. `evil.alice` against `*.drive.chan.app`) and
+    /// prefixes (e.g. `evil.alice` against `*.workspace.chan.app`) and
     /// non-label characters are rejected so the resulting "username"
     /// matches the shape username validators downstream accept.
     pub fn parse_wildcard_user(&self, host: &str) -> Option<String> {
@@ -266,13 +266,13 @@ mod tests {
         Config {
             bind_addr: "127.0.0.1:7002".parse().unwrap(),
             tunnel_bind_addr: "127.0.0.1:7100".parse().unwrap(),
-            apex_host: "drive.chan.app".into(),
-            wildcard_suffix: ".drive.chan.app".into(),
+            apex_host: "workspace.chan.app".into(),
+            wildcard_suffix: ".workspace.chan.app".into(),
             identity_url: "http://127.0.0.1:7000/".parse().unwrap(),
             identity_auth_token: "x".into(),
-            dashboard_url: "https://id.chan.app/drives".into(),
-            drive_gate_secret: "x".into(),
-            max_drives_per_user: 0,
+            dashboard_url: "https://id.chan.app/workspaces".into(),
+            workspace_gate_secret: "x".into(),
+            max_workspaces_per_user: 0,
             admin_token: None,
             max_response_bytes: None,
             max_request_bytes: None,
@@ -284,24 +284,24 @@ mod tests {
     #[test]
     fn apex_returns_none() {
         let c = cfg();
-        assert_eq!(c.parse_wildcard_user("drive.chan.app"), None);
-        assert_eq!(c.parse_wildcard_user("DRIVE.chan.app"), None);
-        assert_eq!(c.parse_wildcard_user("drive.chan.app:7002"), None);
+        assert_eq!(c.parse_wildcard_user("workspace.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("WORKSPACE.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("workspace.chan.app:7002"), None);
     }
 
     #[test]
     fn wildcard_extracts_user() {
         let c = cfg();
         assert_eq!(
-            c.parse_wildcard_user("alice.drive.chan.app").as_deref(),
+            c.parse_wildcard_user("alice.workspace.chan.app").as_deref(),
             Some("alice"),
         );
         assert_eq!(
-            c.parse_wildcard_user("Alice.Drive.Chan.App").as_deref(),
+            c.parse_wildcard_user("Alice.Workspace.Chan.App").as_deref(),
             Some("alice"),
         );
         assert_eq!(
-            c.parse_wildcard_user("alice.drive.chan.app:7002")
+            c.parse_wildcard_user("alice.workspace.chan.app:7002")
                 .as_deref(),
             Some("alice"),
         );
@@ -312,21 +312,21 @@ mod tests {
         let c = cfg();
         assert_eq!(c.parse_wildcard_user("example.com"), None);
         assert_eq!(c.parse_wildcard_user(""), None);
-        assert_eq!(c.parse_wildcard_user(".drive.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user(".workspace.chan.app"), None);
     }
 
     #[test]
     fn multi_label_prefix_rejected() {
-        // `evil.alice.drive.chan.app` would have matched the suffix
+        // `evil.alice.workspace.chan.app` would have matched the suffix
         // before #18 and returned `"evil.alice"` as username. Now we
         // require a single DNS label in the prefix.
         let c = cfg();
-        assert_eq!(c.parse_wildcard_user("evil.alice.drive.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("evil.alice.workspace.chan.app"), None);
         // Leading dot was already excluded by the substring length
         // check + emptiness guard, but tighten the boundary explicitly.
-        assert_eq!(c.parse_wildcard_user("..drive.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("..workspace.chan.app"), None);
         // Underscores aren't legal DNS hostname chars and are not in
         // the username alphabet either.
-        assert_eq!(c.parse_wildcard_user("a_b.drive.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("a_b.workspace.chan.app"), None);
     }
 }

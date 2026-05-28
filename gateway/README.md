@@ -1,7 +1,7 @@
 # chan-gateway
 
 Identity and profile services behind `id.chan.app` and (later)
-`drive.chan.app`. Tracks [fiorix/chan#8][issue].
+`workspace.chan.app`. Tracks [fiorix/chan#8][issue].
 
 [issue]: https://github.com/fiorix/chan/issues/8
 
@@ -14,11 +14,11 @@ v0, scoped to the web flow:
 - `identity`: id.chan.app, OAuth2 sign-in (GitHub / Google /
   GitLab), Postgres-backed sessions, embedded Svelte SPA, personal
   access tokens. **(done)**
-- `drive-proxy`: drive.chan.app. chan-tunneld registers each
+- `workspace-proxy`: workspace.chan.app. chan-tunneld registers each
   `chan serve` instance at runtime via
   `POST /internal/v1/registrations` (bearer-auth with
   `REGISTRY_TOKEN`); registrations expire after a TTL of inactivity.
-  HTTP and WebSocket traffic at `drive.chan.app/{user}/{drive}/*` is
+  HTTP and WebSocket traffic at `workspace.chan.app/{user}/{workspace}/*` is
   reverse-proxied to the registered tunneld origin. Auth gate:
   `--public` registrations are open; otherwise the session user must
   match the tunnel owner (anon -> 303 to id.chan.app, wrong user ->
@@ -41,14 +41,14 @@ chan-gateway/
   Cargo.toml                       # workspace
   crates/identity/                 # bin: identity-service (id.chan.app)
   crates/identity/web/             # SPA embedded into identity-service
-  crates/drive-proxy/              # bin: drive-proxy-service (drive.chan.app)
-  crates/drive-proxy/web/          # SPA embedded into drive-proxy-service
+  crates/workspace-proxy/              # bin: workspace-proxy-service (workspace.chan.app)
+  crates/workspace-proxy/web/          # SPA embedded into workspace-proxy-service
   crates/profile/                  # bin: profile-service (internal)
   migrations/                      # sqlx migrations (Postgres)
 ```
 
 The frontends match `chan-writer/chan/web/` so id.chan.app,
-drive.chan.app and the editor read as the same product: Svelte 5 +
+workspace.chan.app and the editor read as the same product: Svelte 5 +
 Vite + TypeScript, dark default with the same CSS variable palette.
 
 ## Dev
@@ -64,7 +64,7 @@ Vite + TypeScript, dark default with the same CSS variable palette.
 ### Postgres
 
 One database covers everything; `profile` owns users / identities /
-drives, `identity` owns the `tower_sessions` table. Both auto-migrate
+workspaces, `identity` owns the `tower_sessions` table. Both auto-migrate
 on boot.
 
 ```sh
@@ -124,7 +124,7 @@ cargo run -p identity
 
 Open http://127.0.0.1:7000 and sign in with GitHub.
 
-Terminal 3 (drive-proxy-service, drive.chan.app surface on 7002):
+Terminal 3 (workspace-proxy-service, workspace.chan.app surface on 7002):
 
 ```sh
 export DATABASE_URL=postgres://chan:chan@127.0.0.1/chan_gateway
@@ -134,7 +134,7 @@ export PROFILE_SERVICE_URL=http://127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-token
 export IDENTITY_BASE_URL=http://127.0.0.1:7000
 export REGISTRY_TOKEN=dev-registry-token
-cargo run -p drive-proxy
+cargo run -p workspace-proxy
 ```
 
 Open http://127.0.0.1:7002 (signed in with GitHub via id.chan.app
@@ -144,7 +144,7 @@ For frontend iteration without re-embedding:
 
 ```sh
 npm run dev -w crates/identity/web      # :5173, proxies to :7000
-npm run dev -w crates/drive-proxy/web   # :5174, proxies to :7002
+npm run dev -w crates/workspace-proxy/web   # :5174, proxies to :7002
 ```
 
 ## Tests
@@ -162,7 +162,7 @@ mock the GitHub OAuth endpoints and profile-service via wiremock.
 
 Tagging `v*` triggers `.github/workflows/release.yml`, which
 builds three .deb packages (`chan-gateway-profile`,
-`chan-gateway-identity`, `chan-gateway-drive-proxy`) for amd64 and
+`chan-gateway-identity`, `chan-gateway-workspace-proxy`) for amd64 and
 arm64 and uploads them to a GitHub Release. Cut one with:
 
 ```sh
@@ -185,29 +185,29 @@ ls dist/                                   # six .deb files (3 services x 2 arch
 ```sh
 sudo apt install ./chan-gateway-profile_*.deb \
                  ./chan-gateway-identity_*.deb \
-                 ./chan-gateway-drive-proxy_*.deb
+                 ./chan-gateway-workspace-proxy_*.deb
 ```
 
 The packages share a system user (`chan-gateway`) and put env
-templates at `/etc/chan-gateway/{profile,identity,drive-proxy}.env`.
+templates at `/etc/chan-gateway/{profile,identity,workspace-proxy}.env`.
 Edit those, then enable + start each service:
 
 ```sh
 sudo systemctl enable --now chan-gateway-profile
 sudo systemctl enable --now chan-gateway-identity
-sudo systemctl enable --now chan-gateway-drive-proxy
+sudo systemctl enable --now chan-gateway-workspace-proxy
 ```
 
 The binaries listen on `127.0.0.1:{7001,7000,7002}` by default;
 front them with nginx + Let's Encrypt for `id.chan.app` and
-`drive.chan.app`.
+`workspace.chan.app`.
 
 ## Admin
 
 `chan-gateway-admin` (`crates/admin/`) is the operator CLI: list /
 block / unblock users, inspect personal access tokens, snapshot or
 kill live tunnels, read auth audit. It talks to profile-service's
-`/v1/admin/*` tree and drive-proxy's `/admin/v1/*` tree over plain
+`/v1/admin/*` tree and workspace-proxy's `/admin/v1/*` tree over plain
 HTTP, so run it on a host that can reach the internal listeners.
 
 ### Setup
@@ -216,7 +216,7 @@ Two service env vars guard the admin tree; rotate them like any
 other secret:
 
 - profile-service: `PROFILE_ADMIN_TOKEN=<random>`
-- drive-proxy:    `DRIVE_ADMIN_TOKEN=<random>`
+- workspace-proxy:    `WORKSPACE_ADMIN_TOKEN=<random>`
 
 A single-token deployment shares one secret across both services;
 `chan-gateway-admin` reads `CHAN_ADMIN_TOKEN` and sends it to each.
@@ -224,7 +224,7 @@ A single-token deployment shares one secret across both services;
 ```sh
 export CHAN_ADMIN_TOKEN=<same value as the service tokens>
 export CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:7001    # optional, default
-export CHAN_ADMIN_DRIVE_URL=http://127.0.0.1:7002      # optional, default
+export CHAN_ADMIN_WORKSPACE_URL=http://127.0.0.1:7002      # optional, default
 ```
 
 Build / install:
@@ -259,29 +259,29 @@ chan-gateway-admin token list alice@example.com
 chan-gateway-admin token revoke <token-uuid>
 chan-gateway-admin token audit  <token-uuid>
 
-# Live tunnels (drive-proxy in-memory registry)
+# Live tunnels (workspace-proxy in-memory registry)
 chan-gateway-admin tunnel ps
 chan-gateway-admin tunnel ps --user alice
-chan-gateway-admin tunnel kill alice home          # force one drive offline
+chan-gateway-admin tunnel kill alice home          # force one workspace offline
 chan-gateway-admin tunnel watch                    # SSE stream, top-style
 
 # Feature flags. Fresh deploys ship oauth_login=off and
-# share_drives=off so nobody can sign in until you enrol them.
+# share_workspaces=off so nobody can sign in until you enrol them.
 chan-gateway-admin flag list
 chan-gateway-admin flag grant oauth_login  alice@example.com
-chan-gateway-admin flag grant share_drives alice@example.com
+chan-gateway-admin flag grant share_workspaces alice@example.com
 chan-gateway-admin flag overrides oauth_login         # who has access
-chan-gateway-admin flag revoke share_drives alice@example.com
+chan-gateway-admin flag revoke share_workspaces alice@example.com
 chan-gateway-admin flag create my_feature --default-on --description "..."
 ```
 
 Add `--json` to any subcommand for jq-friendly output.
 
-The two seeded flags drive the rollout posture. `oauth_login`
+The two seeded flags workspace the rollout posture. `oauth_login`
 gates the OAuth callback; an account without the override is
 denied at sign-in with `?denied=oauth_login` in the redirect.
-`share_drives` is the SPA-side toggle for the per-drive sharing
-UI; flipping it off hides the Drives tab and the share panel.
+`share_workspaces` is the SPA-side toggle for the per-workspace sharing
+UI; flipping it off hides the Workspaces tab and the share panel.
 Both default to off so a fresh deploy has to grant the first user
 out-of-band (or pre-create users via `chan-admin user create` and
 then `flag grant`).

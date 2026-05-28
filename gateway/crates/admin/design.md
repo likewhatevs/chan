@@ -9,7 +9,7 @@ with shell loops, jq pipelines, and CI.
 
 ## Architecture
 
-Single Rust binary that talks HTTP to profile-service and drive-proxy.
+Single Rust binary that talks HTTP to profile-service and workspace-proxy.
 No database access; the CLI only consumes the existing admin HTTP
 routes.
 
@@ -21,8 +21,8 @@ Two HTTP clients live inside the binary:
 
 - `AdminClient`: profile-service (`CHAN_ADMIN_PROFILE_URL`). Resolves
   `<ident>` and calls the admin tree.
-- `DriveClient`: drive-proxy apex (`CHAN_ADMIN_DRIVE_URL`, typically
-  `https://drive.chan.app`). Talks to `/admin/v1/*` and decodes the
+- `WorkspaceClient`: workspace-proxy apex (`CHAN_ADMIN_WORKSPACE_URL`, typically
+  `https://workspace.chan.app`). Talks to `/admin/v1/*` and decodes the
   SSE snapshot stream for `tunnel watch`.
 
 Both clients use plain `reqwest` with a shared bearer configuration;
@@ -48,9 +48,9 @@ errors with the `NotFound` exit code.
 ### `user block`
 
 The block flow now lives server-side: profile-service fans out to
-drive-proxy in the same operation. The CLI still calls both for
-robustness against split deployments where the CLI's drive-proxy URL
-may differ from the profile container's view of drive-proxy, but the
+workspace-proxy in the same operation. The CLI still calls both for
+robustness against split deployments where the CLI's workspace-proxy URL
+may differ from the profile container's view of workspace-proxy, but the
 second call is idempotent (`killed: 0` is fine when profile already
 swept the registrations).
 
@@ -58,9 +58,9 @@ Order:
 
 1. `POST /v1/admin/users/:id/block` on profile-service. This sets
    `blocked_at`, revokes every live PAT, writes an `auth_audit` row
-   and, server-side, fires drive-proxy `kill_user_tunnels` for the
+   and, server-side, fires workspace-proxy `kill_user_tunnels` for the
    user. If profile fails the CLI stops here.
-2. `POST /admin/v1/users/:user/tunnels/kill` on drive-proxy. Belt-
+2. `POST /admin/v1/users/:user/tunnels/kill` on workspace-proxy. Belt-
    and-braces. A failure here surfaces as a warning on stderr but
    does not change the profile-side outcome.
 
@@ -82,7 +82,7 @@ deny override against a default-on flag.
 
 ### `tunnel watch`
 
-drive-proxy's `/admin/v1/tunnels/watch` is an SSE stream. `watch_loop`
+workspace-proxy's `/admin/v1/tunnels/watch` is an SSE stream. `watch_loop`
 consumes the stream, parses `event: snapshot` blocks, and re-renders.
 TTY mode clears the screen between renders (`\x1b[2J\x1b[H`) so the
 output behaves like `watch -n1`. `--json` emits one JSON line per
@@ -92,7 +92,7 @@ event for `jq` piping.
 
 Default rendering uses `comfy_table` with the `NOTHING` preset (no
 Unicode lines), targeting 80 columns. Columns are chosen per command
-(e.g. `USER`, `DRIVE`, `PUBLIC`, `PEER`, `UPTIME`, `CONNECTED` for
+(e.g. `USER`, `WORKSPACE`, `PUBLIC`, `PEER`, `UPTIME`, `CONNECTED` for
 `tunnel ps`). UUIDs are truncated to 8 chars in table mode.
 
 `--json` emits prettified JSON via `serde_json::to_string_pretty`
@@ -105,7 +105,7 @@ is fine for CLI workloads.
 
 `CHAN_ADMIN_TOKEN` is the simple default: one secret, both services
 accept it (single-token deployments set `PROFILE_ADMIN_TOKEN` and
-`DRIVE_ADMIN_TOKEN` to the same value). Deployments that rotate the
+`WORKSPACE_ADMIN_TOKEN` to the same value). Deployments that rotate the
 tokens independently can override per service via separate env vars.
 
 ### Exit codes are part of the contract
@@ -131,14 +131,14 @@ is meant to compose with `xargs` and `parallel`.
 Path segments contain only `[a-z0-9_.-]` (validated upstream), so the
 CLI ships a tiny inline `urlencoding::encode_path` rather than pulling
 in a real urlencoding crate. The full RFC 3986 table is overkill for
-a value that already passed username / drive-name validation.
+a value that already passed username / workspace-name validation.
 
 ## Invariants
 
 - The CLI is read-mostly. State changes go through documented HTTP
   routes; there are no direct database writes.
 - A blocked user always has every PAT revoked; the profile block flow
-  handles this server-side, and also fires drive-proxy eviction in
+  handles this server-side, and also fires workspace-proxy eviction in
   the same transaction.
 - `user delete` cascades through profile-service's FK chain; the CLI
   does not orchestrate the deletion across multiple endpoints.

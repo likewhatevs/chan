@@ -2,13 +2,13 @@
 //!
 //! Identity-service used to run a `tower_governor` per-IP gate on
 //! `/internal/v1/tokens/validate`, but the only peer that endpoint
-//! ever sees is drive-proxy itself: every request keys to the same
+//! ever sees is workspace-proxy itself: every request keys to the same
 //! container IP, the "per-IP" bucket degenerates into a single
 //! global one, and a noisy attacker can lock out legitimate
 //! handshakes while real source-IP diversity stays invisible.
 //!
 //! The brute-force surface lives one hop earlier, at the tunnel
-//! handshake in drive-proxy. We can't easily key on the original
+//! handshake in workspace-proxy. We can't easily key on the original
 //! client IP there (the listener is raw h2, not axum, and the
 //! gateway terminator wraps `chan-tunnel-server` from chan-core;
 //! plumbing X-Forwarded-For into the validator means a chan-core

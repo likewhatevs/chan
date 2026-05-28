@@ -1,18 +1,18 @@
 [package]
-name = "drive-proxy"
+name = "workspace-proxy"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "drive.chan.app: lists the signed-in user's live tunneld-registered drives."
+description = "workspace.chan.app: lists the signed-in user's live tunneld-registered workspaces."
 
 [[bin]]
-name = "drive-proxy-service"
+name = "workspace-proxy-service"
 path = "src/main.rs"
 
 [lib]
-name = "drive_proxy"
+name = "workspace_proxy"
 path = "src/lib.rs"
 
 [dependencies]
@@ -29,8 +29,8 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
-# Drive-gate HS256 verify (entry tokens from identity) and mint
-# (session cookies). Shared envelope lives in gateway_common::drive_gate.
+# Workspace-gate HS256 verify (entry tokens from identity) and mint
+# (session cookies). Shared envelope lives in gateway_common::workspace_gate.
 jsonwebtoken = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
@@ -59,29 +59,29 @@ serde_json = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 
 [package.metadata.deb]
-name = "chan-gateway-drive-proxy"
+name = "chan-gateway-workspace-proxy"
 maintainer = "fiorix <fiorix@gmail.com>"
 copyright = "2026, fiorix <fiorix@gmail.com>"
 license-file = ["../../LICENSE", "0"]
 extended-description = """\
 Public-facing service for the chan-gateway suite. Apex
-drive.chan.app carries the tunnel registration endpoint plus the
-admin tree; wildcard *.drive.chan.app reverse-proxies tenant
+workspace.chan.app carries the tunnel registration endpoint plus the
+admin tree; wildcard *.workspace.chan.app reverse-proxies tenant
 content into registered chan-serve peers, gated by a host-only,
-path-scoped JWT cookie minted by drive-proxy on first entry. No
+path-scoped JWT cookie minted by workspace-proxy on first entry. No
 SPA in this binary; the dashboard lives at id.chan.app."""
 section = "net"
 priority = "optional"
 depends = "$auto, adduser"
 maintainer-scripts = "packaging/"
 assets = [
-    ["target/release/drive-proxy-service", "/usr/bin/chan-gateway-drive-proxy",  "755"],
-    ["packaging/drive-proxy.env",           "/etc/chan-gateway/drive-proxy.env", "640"],
+    ["target/release/workspace-proxy-service", "/usr/bin/chan-gateway-workspace-proxy",  "755"],
+    ["packaging/workspace-proxy.env",           "/etc/chan-gateway/workspace-proxy.env", "640"],
 ]
-conf-files = ["/etc/chan-gateway/drive-proxy.env"]
+conf-files = ["/etc/chan-gateway/workspace-proxy.env"]
 
 [package.metadata.deb.systemd-units]
-unit-name = "chan-gateway-drive-proxy"
+unit-name = "chan-gateway-workspace-proxy"
 unit-scripts = "packaging/"
 enable = false
 start = false

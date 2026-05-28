@@ -1,34 +1,34 @@
-//! Reverse proxy for `*.drive.chan.app/{drive}/...` into the
+//! Reverse proxy for `*.workspace.chan.app/{workspace}/...` into the
 //! `chan serve` peer behind the registered tunnel.
 //!
 //! `{user}` is parsed out of the wildcard `Host` header by
 //! `http::dispatch` and handed in. The first path segment is
-//! `{drive}`.
+//! `{workspace}`.
 //!
 //! Auth gate, in this order:
 //!
-//!   * registration `(user, drive)` not found in the registry -> 404
+//!   * registration `(user, workspace)` not found in the registry -> 404
 //!   * `public` registration -> always pass through
 //!   * request has `?t=<entry-jwt>`:
-//!     * verify HS256 + exp + aud (Host) + drv (drive) -> mint a session
-//!       JWT carrying the entry's `sub`, set `drive_gate` cookie scoped
-//!       to `Path=/<drive>/`, 303 to the clean URL
+//!     * verify HS256 + exp + aud (Host) + drv (workspace) -> mint a session
+//!       JWT carrying the entry's `sub`, set `workspace_gate` cookie scoped
+//!       to `Path=/<workspace>/`, 303 to the clean URL
 //!     * any failure -> 404
-//!   * request has a valid `drive_gate` cookie (signature + aud + drv)
+//!   * request has a valid `workspace_gate` cookie (signature + aud + drv)
 //!     -> pass through
-//!   * anything else (no cookie, expired, wrong aud, wrong drive)
+//!   * anything else (no cookie, expired, wrong aud, wrong workspace)
 //!     -> 404
 //!
 //! The auth assertion is the entry JWT, not "sub matches owner". Identity
-//! mints entry tokens only after calling `profile.drive_access(owner,
-//! drive, caller)`, so a validly-signed entry with the right aud and drv
+//! mints entry tokens only after calling `profile.workspace_access(owner,
+//! workspace, caller)`, so a validly-signed entry with the right aud and drv
 //! proves the caller is authorized — owner or accepted grantee. The aud
-//! claim (= `{owner}.drive.chan.app`) is what enforces tenant isolation;
+//! claim (= `{owner}.workspace.chan.app`) is what enforces tenant isolation;
 //! comparing `sub` against the cached owner would lock out every grantee.
 //!
 //! 404 is preferred over 401 / 403 on the proxy path so an
-//! unauthenticated probe cannot distinguish "drive does not exist"
-//! from "drive exists but you are not signed in" or "wrong drive in
+//! unauthenticated probe cannot distinguish "workspace does not exist"
+//! from "workspace exists but you are not signed in" or "wrong workspace in
 //! the cookie." Owners returning after the 24h cookie expires bounce
 //! through the id.chan.app dashboard.
 //!
@@ -50,7 +50,7 @@ use axum::http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Sta
 use axum::response::{IntoResponse, Response};
 use chan_tunnel_server::TunnelHandle;
 use futures_util::{SinkExt, StreamExt};
-use gateway_common::drive_gate::{self, TokenType};
+use gateway_common::workspace_gate::{self, TokenType};
 use http_body_util::Limited;
 use hyper_util::rt::TokioIo;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -139,10 +139,10 @@ impl http_body::Body for DeadlineBody {
     }
 }
 
-/// Cookie name for the session-shape drive-gate token. Host-only on
-/// `{user}.drive.chan.app`; `Path=/{drive}/`; HttpOnly; Secure;
+/// Cookie name for the session-shape workspace-gate token. Host-only on
+/// `{user}.workspace.chan.app`; `Path=/{workspace}/`; HttpOnly; Secure;
 /// SameSite=Lax; 24h lifetime (matches the session JWT exp).
-const COOKIE_NAME: &str = "drive_gate";
+const COOKIE_NAME: &str = "workspace_gate";
 
 /// Hop-by-hop headers we strip on both legs (RFC 7230 6.1).
 /// Match is on the lowercase header name string; `HeaderName` can
@@ -184,15 +184,15 @@ fn connection_listed_headers(headers: &HeaderMap) -> Vec<HeaderName> {
 }
 
 /// Entry point from `http::dispatch`. `user` came out of the
-/// wildcard Host header; the first path segment is `{drive}`. axum's
+/// wildcard Host header; the first path segment is `{workspace}`. axum's
 /// extractors are not used at this level because the dispatcher
 /// already consumed `Host`.
 pub async fn handle(state: AppState, user: String, req: Request) -> Response {
-    let Some(drive) = peel_drive_segment(req.uri().path()) else {
+    let Some(workspace) = peel_workspace_segment(req.uri().path()) else {
         return not_found_response(req.headers());
     };
 
-    let Some(entry) = state.registry.get(&user, &drive) else {
+    let Some(entry) = state.registry.get(&user, &workspace) else {
         return not_found_response(req.headers());
     };
 
@@ -203,13 +203,13 @@ pub async fn handle(state: AppState, user: String, req: Request) -> Response {
     let is_ws = is_websocket_upgrade(req.headers());
 
     if !entry.public {
-        match resolve_gate(&state, &req, &user, &drive, &aud) {
+        match resolve_gate(&state, &req, &user, &workspace, &aud) {
             Gate::Pass => {}
             Gate::IssueSession { sub } => {
                 return issue_session_cookie(
-                    state.cfg.drive_gate_secret.as_bytes(),
+                    state.cfg.workspace_gate_secret.as_bytes(),
                     sub,
-                    &drive,
+                    &workspace,
                     &aud,
                     req.uri(),
                 );
@@ -222,7 +222,7 @@ pub async fn handle(state: AppState, user: String, req: Request) -> Response {
     // proxy itself ignores it.
     let _ = entry.owner_id;
 
-    let upstream_path_and_query = strip_drive_segment(req.uri());
+    let upstream_path_and_query = strip_workspace_segment(req.uri());
 
     if is_ws {
         let (mut parts, body) = req.into_parts();
@@ -284,12 +284,12 @@ enum Gate {
     /// cookie so the upstream attribution chain stays accurate.
     IssueSession { sub: Uuid },
     /// Anything that should map to 404 on the proxy path: no token,
-    /// bad signature, expired, wrong aud, wrong drive.
+    /// bad signature, expired, wrong aud, wrong workspace.
     Reject,
 }
 
-fn resolve_gate(state: &AppState, req: &Request, _user: &str, drive: &str, aud: &str) -> Gate {
-    let secret = state.cfg.drive_gate_secret.as_bytes();
+fn resolve_gate(state: &AppState, req: &Request, _user: &str, workspace: &str, aud: &str) -> Gate {
+    let secret = state.cfg.workspace_gate_secret.as_bytes();
 
     // Entry token in `?t=` takes precedence: it's how the dashboard
     // hands a freshly authenticated user off to the wildcard. A valid
@@ -301,32 +301,32 @@ fn resolve_gate(state: &AppState, req: &Request, _user: &str, drive: &str, aud: 
     // We do not compare `sub` against the registry-cached owner: that
     // would lock out every accepted grantee. The aud + drv claims
     // (signed at mint time by identity, which already checked
-    // `drive_access`) are the authorization assertion. Identity owns
-    // the policy; drive-proxy verifies the assertion.
+    // `workspace_access`) are the authorization assertion. Identity owns
+    // the policy; workspace-proxy verifies the assertion.
     if let Some(token) = entry_token_param(req.uri()) {
-        return match drive_gate::decode(secret, &token, TokenType::Entry, aud, drive) {
+        return match workspace_gate::decode(secret, &token, TokenType::Entry, aud, workspace) {
             Ok(claims) => Gate::IssueSession { sub: claims.sub },
             Err(_) => Gate::Reject,
         };
     }
 
     // No entry token: any one valid session cookie admits. A browser
-    // may send several `drive_gate` cookies under unusual conditions
+    // may send several `workspace_gate` cookies under unusual conditions
     // (stale cookie at a different path that got attached to this
     // request); accept the first that verifies under this aud + drv so
     // a stale duplicate doesn't 404 a legitimate session.
-    for cookie in drive_gate_cookies(req.headers()) {
-        if drive_gate::decode(secret, &cookie, TokenType::Session, aud, drive).is_ok() {
+    for cookie in workspace_gate_cookies(req.headers()) {
+        if workspace_gate::decode(secret, &cookie, TokenType::Session, aud, workspace).is_ok() {
             return Gate::Pass;
         }
     }
     Gate::Reject
 }
 
-/// Peel the first path segment as `{drive}`. Empty path / lone `/`
+/// Peel the first path segment as `{workspace}`. Empty path / lone `/`
 /// returns None (the dispatcher handles `/` separately by redirecting
 /// to the dashboard).
-fn peel_drive_segment(path: &str) -> Option<String> {
+fn peel_workspace_segment(path: &str) -> Option<String> {
     let trimmed = path.strip_prefix('/')?;
     let seg = trimmed.split('/').next()?;
     if seg.is_empty() {
@@ -335,13 +335,13 @@ fn peel_drive_segment(path: &str) -> Option<String> {
     Some(seg.to_string())
 }
 
-/// Strip `/<drive>` from the inbound path, leaving the path the
+/// Strip `/<workspace>` from the inbound path, leaving the path the
 /// upstream `chan serve` (running without `--prefix` in tunnel
 /// mode) expects. Always returns a path that starts with `/`.
-fn strip_drive_segment(uri: &Uri) -> String {
+fn strip_workspace_segment(uri: &Uri) -> String {
     let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
-    // Walk to the second '/': pq = "/drive[/...][?query]"; the
-    // second '/' is either at len("/drive") or absent.
+    // Walk to the second '/': pq = "/workspace[/...][?query]"; the
+    // second '/' is either at len("/workspace") or absent.
     let mut slashes = 0;
     for (i, c) in pq.char_indices() {
         if c == '/' {
@@ -351,7 +351,7 @@ fn strip_drive_segment(uri: &Uri) -> String {
             }
         }
     }
-    // No second slash: `/drive` with no trailing slash and no query.
+    // No second slash: `/workspace` with no trailing slash and no query.
     "/".to_string()
 }
 
@@ -402,14 +402,14 @@ fn percent_decode(s: &str) -> String {
         .unwrap_or_else(|| s.to_string())
 }
 
-/// Read the `drive_gate` cookie value from the Cookie header(s).
+/// Read the `workspace_gate` cookie value from the Cookie header(s).
 /// Manual parse: tower-cookies is no longer in this crate's dep tree
 /// (no sessions). RFC 6265 cookie-pair: `name=value; name=value; ...`.
 /// Returns every match in order so the caller can fall through stale
-/// duplicates (e.g. a browser sending an old + a fresh `drive_gate`
+/// duplicates (e.g. a browser sending an old + a fresh `workspace_gate`
 /// under different paths that both got attached to the same request).
 /// Quoted values (`name="value"`) get the quotes stripped per RFC.
-fn drive_gate_cookies(headers: &HeaderMap) -> Vec<String> {
+fn workspace_gate_cookies(headers: &HeaderMap) -> Vec<String> {
     let mut out = Vec::new();
     for raw in headers.get_all(header::COOKIE).iter() {
         let Ok(s) = raw.to_str() else { continue };
@@ -462,16 +462,22 @@ fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
     upgrade && conn
 }
 
-/// Mint a session JWT for `sub`, set it as a host-only `Path=/<drive>/`
+/// Mint a session JWT for `sub`, set it as a host-only `Path=/<workspace>/`
 /// cookie, and 303 to the clean URL (`?t=` stripped). Browsers
 /// follow the 303 with the new cookie attached. `sub` comes from the
 /// entry token we just verified — owner or accepted grantee — so the
 /// session cookie identifies the right user for upstream attribution.
-fn issue_session_cookie(secret: &[u8], sub: Uuid, drive: &str, aud: &str, uri: &Uri) -> Response {
-    let session = match drive_gate::encode_session(secret, sub, drive, aud) {
+fn issue_session_cookie(
+    secret: &[u8],
+    sub: Uuid,
+    workspace: &str,
+    aud: &str,
+    uri: &Uri,
+) -> Response {
+    let session = match workspace_gate::encode_session(secret, sub, workspace, aud) {
         Ok(t) => t,
         Err(e) => {
-            tracing::error!(error = ?e, "failed to mint drive_gate session token");
+            tracing::error!(error = ?e, "failed to mint workspace_gate session token");
             return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
         }
     };
@@ -481,7 +487,7 @@ fn issue_session_cookie(secret: &[u8], sub: Uuid, drive: &str, aud: &str, uri: &
     // them to outlive a tab close.
     let cookie_value = format!(
         "{COOKIE_NAME}={session}; \
-         Path=/{drive}/; \
+         Path=/{workspace}/; \
          HttpOnly; Secure; SameSite=Lax; Max-Age=86400"
     );
     let mut res = (StatusCode::SEE_OTHER, "").into_response();
@@ -598,10 +604,10 @@ async fn proxy_http(
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("response: {e}")))
 }
 
-/// Drop hop-by-hop headers, Host, Cookie (the drive_gate cookie has
+/// Drop hop-by-hop headers, Host, Cookie (the workspace_gate cookie has
 /// no business at the upstream), Authorization (a user-presented PAT
 /// or bearer has no business at the tenant's `chan serve` either;
-/// auth on this leg is the drive_gate handshake plus the tunnel
+/// auth on this leg is the workspace_gate handshake plus the tunnel
 /// trust boundary), and existing X-Forwarded-*. Honors the
 /// connection-token list per RFC 7230 6.1.
 fn strip_inbound_headers(headers: &mut HeaderMap) {
@@ -736,12 +742,12 @@ const X_FORWARDED_FOR: &str = "x-forwarded-for";
 const X_FORWARDED_PROTO: &str = "x-forwarded-proto";
 const X_FORWARDED_HOST: &str = "x-forwarded-host";
 
-/// Trust boundary: drive-proxy is the only thing between the client
+/// Trust boundary: workspace-proxy is the only thing between the client
 /// and the upstream `chan serve`. Inbound `X-Forwarded-Host` /
 /// `X-Forwarded-Proto` are entirely client-controlled (nginx may not
 /// scrub them, and the gateway must not assume it does) so we never
 /// forward those values; we re-derive `host` from the inbound `Host`
-/// header drive-proxy itself routed on, and `proto` from
+/// header workspace-proxy itself routed on, and `proto` from
 /// `cfg.forwarded_proto` (configured to match the terminator that
 /// fronts this listener). The inbound XFF chain is preserved because
 /// dropping it would break legitimate multi-hop observability for
@@ -829,7 +835,7 @@ fn html_not_found() -> Response {
 const NOT_FOUND_HTML: &str = r#"<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>drive not found - chan</title>
+<title>workspace not found - chan</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root {
@@ -875,8 +881,8 @@ const NOT_FOUND_HTML: &str = r#"<!doctype html>
   }
 </style>
 <main>
-  <h1>drive unavailable</h1>
-  <p>This drive is currently unavailable.</p>
+  <h1>workspace unavailable</h1>
+  <p>This workspace is currently unavailable.</p>
 </main>
 </html>
 "#;
@@ -904,33 +910,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn peel_drive_segment_basic() {
-        assert_eq!(peel_drive_segment("/blog").as_deref(), Some("blog"));
-        assert_eq!(peel_drive_segment("/blog/").as_deref(), Some("blog"));
+    fn peel_workspace_segment_basic() {
+        assert_eq!(peel_workspace_segment("/blog").as_deref(), Some("blog"));
+        assert_eq!(peel_workspace_segment("/blog/").as_deref(), Some("blog"));
         assert_eq!(
-            peel_drive_segment("/blog/sub/path").as_deref(),
+            peel_workspace_segment("/blog/sub/path").as_deref(),
             Some("blog")
         );
-        assert_eq!(peel_drive_segment("/"), None);
-        assert_eq!(peel_drive_segment(""), None);
+        assert_eq!(peel_workspace_segment("/"), None);
+        assert_eq!(peel_workspace_segment(""), None);
     }
 
     #[test]
-    fn strip_drive_segment_basic() {
+    fn strip_workspace_segment_basic() {
         let u = |s: &str| s.parse::<Uri>().unwrap();
-        assert_eq!(strip_drive_segment(&u("/blog/")), "/");
-        assert_eq!(strip_drive_segment(&u("/blog/assets/x.js")), "/assets/x.js");
-        assert_eq!(strip_drive_segment(&u("/blog/?a=1")), "/?a=1");
-        assert_eq!(strip_drive_segment(&u("/blog")), "/");
-    }
-
-    #[test]
-    fn strip_drive_segment_drops_t_param() {
-        let u = |s: &str| s.parse::<Uri>().unwrap();
-        assert_eq!(strip_drive_segment(&u("/blog/?t=abc")), "/");
-        assert_eq!(strip_drive_segment(&u("/blog/?t=abc&keep=1")), "/?keep=1");
+        assert_eq!(strip_workspace_segment(&u("/blog/")), "/");
         assert_eq!(
-            strip_drive_segment(&u("/blog/path?a=1&t=secret&b=2")),
+            strip_workspace_segment(&u("/blog/assets/x.js")),
+            "/assets/x.js"
+        );
+        assert_eq!(strip_workspace_segment(&u("/blog/?a=1")), "/?a=1");
+        assert_eq!(strip_workspace_segment(&u("/blog")), "/");
+    }
+
+    #[test]
+    fn strip_workspace_segment_drops_t_param() {
+        let u = |s: &str| s.parse::<Uri>().unwrap();
+        assert_eq!(strip_workspace_segment(&u("/blog/?t=abc")), "/");
+        assert_eq!(
+            strip_workspace_segment(&u("/blog/?t=abc&keep=1")),
+            "/?keep=1"
+        );
+        assert_eq!(
+            strip_workspace_segment(&u("/blog/path?a=1&t=secret&b=2")),
             "/path?a=1&b=2"
         );
     }
@@ -951,40 +963,40 @@ mod tests {
     }
 
     #[test]
-    fn drive_gate_cookies_extracts() {
+    fn workspace_gate_cookies_extracts() {
         let mut h = HeaderMap::new();
         h.insert(
             header::COOKIE,
-            HeaderValue::from_static("foo=bar; drive_gate=abc.def.ghi; baz=qux"),
+            HeaderValue::from_static("foo=bar; workspace_gate=abc.def.ghi; baz=qux"),
         );
-        assert_eq!(drive_gate_cookies(&h), vec!["abc.def.ghi".to_string()]);
+        assert_eq!(workspace_gate_cookies(&h), vec!["abc.def.ghi".to_string()]);
 
         // Duplicate cookies: caller is responsible for picking the
         // first that verifies. We return them in header order.
         let mut h = HeaderMap::new();
         h.append(
             header::COOKIE,
-            HeaderValue::from_static("drive_gate=stale.1.x"),
+            HeaderValue::from_static("workspace_gate=stale.1.x"),
         );
         h.append(
             header::COOKIE,
-            HeaderValue::from_static("drive_gate=fresh.2.y"),
+            HeaderValue::from_static("workspace_gate=fresh.2.y"),
         );
-        assert_eq!(drive_gate_cookies(&h), vec!["stale.1.x", "fresh.2.y"]);
+        assert_eq!(workspace_gate_cookies(&h), vec!["stale.1.x", "fresh.2.y"]);
 
         // RFC-style quoted value: quotes stripped.
         let mut h = HeaderMap::new();
         h.insert(
             header::COOKIE,
-            HeaderValue::from_static("drive_gate=\"abc.def.ghi\""),
+            HeaderValue::from_static("workspace_gate=\"abc.def.ghi\""),
         );
-        assert_eq!(drive_gate_cookies(&h), vec!["abc.def.ghi".to_string()]);
+        assert_eq!(workspace_gate_cookies(&h), vec!["abc.def.ghi".to_string()]);
 
         let mut h = HeaderMap::new();
         h.insert(header::COOKIE, HeaderValue::from_static("foo=bar"));
-        assert!(drive_gate_cookies(&h).is_empty());
+        assert!(workspace_gate_cookies(&h).is_empty());
 
-        assert!(drive_gate_cookies(&HeaderMap::new()).is_empty());
+        assert!(workspace_gate_cookies(&HeaderMap::new()).is_empty());
     }
 
     #[test]

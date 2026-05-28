@@ -33,7 +33,7 @@ CREATE TABLE identities (
 
 CREATE INDEX identities_user_id_idx ON identities (user_id);
 
-CREATE TABLE drives (
+CREATE TABLE workspaces (
     id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id    uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     label      text        NOT NULL,
@@ -42,4 +42,4 @@ CREATE TABLE drives (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX drives_user_id_idx ON drives (user_id);
+CREATE INDEX workspaces_user_id_idx ON workspaces (user_id);

@@ -1,26 +1,26 @@
-//! Drive-gate JWT envelope shared by identity-service (mints entry
-//! tokens) and drive-proxy (verifies entry tokens, mints + verifies
+//! Workspace-gate JWT envelope shared by identity-service (mints entry
+//! tokens) and workspace-proxy (verifies entry tokens, mints + verifies
 //! session cookies). HS256 only; `alg: none` is hard-rejected by the
 //! validation config.
 //!
 //! Token shapes:
 //!
 //! * `typ: "entry"` (issued by identity, lives in `?t=` URL param,
-//!   30s exp). After successful verification drive-proxy mints a
+//!   30s exp). After successful verification workspace-proxy mints a
 //!   session token of the same envelope but with `typ: "session"`,
-//!   sets it as a `Path=/<drive>/` host-only cookie, and 303s to the
+//!   sets it as a `Path=/<workspace>/` host-only cookie, and 303s to the
 //!   clean URL.
-//! * `typ: "session"` (issued and verified by drive-proxy, lives in
-//!   the `drive_gate` cookie, 24h exp).
+//! * `typ: "session"` (issued and verified by workspace-proxy, lives in
+//!   the `workspace_gate` cookie, 24h exp).
 //!
 //! Both shapes carry the same envelope so the verify path can decode
 //! once and dispatch on `typ`. `aud` binds the token to the wildcard
-//! host (`alice.drive.chan.app`) so a token minted for one user is
+//! host (`alice.workspace.chan.app`) so a token minted for one user is
 //! not accepted on another user's subdomain. `drv` binds it to one
-//! drive slug for the same reason.
+//! workspace slug for the same reason.
 //!
 //! Why HS256 (symmetric): both services run in the same trust zone
-//! and share the same secret already (`DRIVE_GATE_SECRET`). HS256
+//! and share the same secret already (`WORKSPACE_GATE_SECRET`). HS256
 //! gives the smallest token footprint and the simplest key rotation
 //! (one secret rotation invalidates every live token). Asymmetric
 //! buys nothing here.
@@ -37,14 +37,14 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Token issuer. Always `id.chan.app` for entry tokens; always
-    /// `drive.chan.app` for session tokens. Verified opportunistically
+    /// `workspace.chan.app` for session tokens. Verified opportunistically
     /// (we trust the signature; `iss` is a debug aid in logs).
     pub iss: String,
-    /// `users.id` of the drive owner.
+    /// `users.id` of the workspace owner.
     pub sub: Uuid,
-    /// Drive slug.
+    /// Workspace slug.
     pub drv: String,
-    /// Wildcard host the token is bound to (e.g. `alice.drive.chan.app`).
+    /// Wildcard host the token is bound to (e.g. `alice.workspace.chan.app`).
     pub aud: String,
     /// `"entry"` or `"session"`. See module doc.
     pub typ: String,
@@ -71,27 +71,27 @@ impl TokenType {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum DriveGateError {
+pub enum WorkspaceGateError {
     /// Signature failed HMAC verify, or the wire shape is bad.
     /// Library-level decode errors collapse here; the only thing we
     /// surface upstream is "token bad."
-    #[error("invalid drive-gate token: {0}")]
+    #[error("invalid workspace-gate token: {0}")]
     Decode(String),
 
     /// `exp` is in the past. Common case for an expired session
     /// cookie; the caller should treat this the same way as "no
     /// cookie at all" (404 on the proxy path) so existence does not
     /// leak.
-    #[error("drive-gate token expired")]
+    #[error("workspace-gate token expired")]
     Expired,
 
     /// `aud` claim does not match the expected host.
-    #[error("drive-gate token audience mismatch")]
+    #[error("workspace-gate token audience mismatch")]
     WrongAudience,
 
-    /// `drv` claim does not match the requested drive slug.
-    #[error("drive-gate token drive mismatch")]
-    WrongDrive,
+    /// `drv` claim does not match the requested workspace slug.
+    #[error("workspace-gate token workspace mismatch")]
+    WrongWorkspace,
 
     /// `typ` claim does not match the verify-call's expectation.
     /// Defensive: prevents an "entry" token being replayed as a
@@ -100,14 +100,14 @@ pub enum DriveGateError {
     /// only surfaces `want` to avoid echoing arbitrary content into
     /// any future log site that formats the error. Operators who
     /// need the observed value can read it directly off the variant.
-    #[error("drive-gate token type mismatch (want {want:?})")]
+    #[error("workspace-gate token type mismatch (want {want:?})")]
     WrongType { got: String, want: &'static str },
 }
 
-pub type DriveGateResult<T> = Result<T, DriveGateError>;
+pub type WorkspaceGateResult<T> = Result<T, WorkspaceGateError>;
 
 /// Mint an entry token (30s exp).
-pub fn encode_entry(secret: &[u8], sub: Uuid, drv: &str, aud: &str) -> DriveGateResult<String> {
+pub fn encode_entry(secret: &[u8], sub: Uuid, drv: &str, aud: &str) -> WorkspaceGateResult<String> {
     encode(
         secret,
         sub,
@@ -119,7 +119,12 @@ pub fn encode_entry(secret: &[u8], sub: Uuid, drv: &str, aud: &str) -> DriveGate
 }
 
 /// Mint a session token (24h exp).
-pub fn encode_session(secret: &[u8], sub: Uuid, drv: &str, aud: &str) -> DriveGateResult<String> {
+pub fn encode_session(
+    secret: &[u8],
+    sub: Uuid,
+    drv: &str,
+    aud: &str,
+) -> WorkspaceGateResult<String> {
     encode(
         secret,
         sub,
@@ -137,12 +142,12 @@ fn encode(
     aud: &str,
     typ: TokenType,
     lifetime: Duration,
-) -> DriveGateResult<String> {
+) -> WorkspaceGateResult<String> {
     let now = Utc::now();
     let claims = Claims {
         iss: match typ {
             TokenType::Entry => "id.chan.app".to_string(),
-            TokenType::Session => "drive.chan.app".to_string(),
+            TokenType::Session => "workspace.chan.app".to_string(),
         },
         sub,
         drv: drv.to_string(),
@@ -156,13 +161,13 @@ fn encode(
         &claims,
         &EncodingKey::from_secret(secret),
     )
-    .map_err(|e| DriveGateError::Decode(format!("encode: {e}")))
+    .map_err(|e| WorkspaceGateError::Decode(format!("encode: {e}")))
 }
 
 /// Verify a token and return the claims. `expected_typ` hard-fails if
 /// the token's `typ` does not match (an entry token cannot ride in
 /// the cookie slot and vice versa). `expected_aud` and `expected_drv`
-/// bind the verification to the host and drive the request actually
+/// bind the verification to the host and workspace the request actually
 /// hit; passing different values is a logic error in the caller.
 ///
 /// The validation config:
@@ -178,7 +183,7 @@ pub fn decode(
     expected_typ: TokenType,
     expected_aud: &str,
     expected_drv: &str,
-) -> DriveGateResult<Claims> {
+) -> WorkspaceGateResult<Claims> {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;
     // We match `aud` ourselves below so the error mapping is clean.
@@ -188,18 +193,18 @@ pub fn decode(
 
     let data = jwt_decode::<Claims>(token, &DecodingKey::from_secret(secret), &validation)
         .map_err(|e| match e.kind() {
-            jsonwebtoken::errors::ErrorKind::ExpiredSignature => DriveGateError::Expired,
-            _ => DriveGateError::Decode(format!("{e}")),
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature => WorkspaceGateError::Expired,
+            _ => WorkspaceGateError::Decode(format!("{e}")),
         })?;
     let claims = data.claims;
     if claims.aud != expected_aud {
-        return Err(DriveGateError::WrongAudience);
+        return Err(WorkspaceGateError::WrongAudience);
     }
     if claims.drv != expected_drv {
-        return Err(DriveGateError::WrongDrive);
+        return Err(WorkspaceGateError::WrongWorkspace);
     }
     if claims.typ != expected_typ.as_str() {
-        return Err(DriveGateError::WrongType {
+        return Err(WorkspaceGateError::WrongType {
             got: claims.typ.clone(),
             want: expected_typ.as_str(),
         });
@@ -224,27 +229,34 @@ mod tests {
 
     #[test]
     fn entry_roundtrip_ok() {
-        let t = encode_entry(SECRET, sample_uuid(), "blog", "alice.drive.chan.app").unwrap();
-        let c = decode(SECRET, &t, TokenType::Entry, "alice.drive.chan.app", "blog").unwrap();
+        let t = encode_entry(SECRET, sample_uuid(), "blog", "alice.workspace.chan.app").unwrap();
+        let c = decode(
+            SECRET,
+            &t,
+            TokenType::Entry,
+            "alice.workspace.chan.app",
+            "blog",
+        )
+        .unwrap();
         assert_eq!(c.sub, sample_uuid());
         assert_eq!(c.drv, "blog");
-        assert_eq!(c.aud, "alice.drive.chan.app");
+        assert_eq!(c.aud, "alice.workspace.chan.app");
         assert_eq!(c.typ, "entry");
         assert_eq!(c.iss, "id.chan.app");
     }
 
     #[test]
     fn session_roundtrip_ok() {
-        let t = encode_session(SECRET, sample_uuid(), "blog", "alice.drive.chan.app").unwrap();
+        let t = encode_session(SECRET, sample_uuid(), "blog", "alice.workspace.chan.app").unwrap();
         let c = decode(
             SECRET,
             &t,
             TokenType::Session,
-            "alice.drive.chan.app",
+            "alice.workspace.chan.app",
             "blog",
         )
         .unwrap();
-        assert_eq!(c.iss, "drive.chan.app");
+        assert_eq!(c.iss, "workspace.chan.app");
         assert_eq!(c.typ, "session");
     }
 
@@ -253,23 +265,31 @@ mod tests {
         // An entry token must not be accepted in the session slot.
         // Defensive: even if someone exfiltrates an entry token, it
         // can only ride the URL leg, not the cookie leg.
-        let entry = encode_entry(SECRET, sample_uuid(), "blog", "alice.drive.chan.app").unwrap();
+        let entry =
+            encode_entry(SECRET, sample_uuid(), "blog", "alice.workspace.chan.app").unwrap();
         let err = decode(
             SECRET,
             &entry,
             TokenType::Session,
-            "alice.drive.chan.app",
+            "alice.workspace.chan.app",
             "blog",
         )
         .unwrap_err();
-        assert!(matches!(err, DriveGateError::WrongType { .. }));
+        assert!(matches!(err, WorkspaceGateError::WrongType { .. }));
     }
 
     #[test]
     fn aud_mismatch_rejected() {
-        let t = encode_entry(SECRET, sample_uuid(), "blog", "alice.drive.chan.app").unwrap();
-        let err = decode(SECRET, &t, TokenType::Entry, "bob.drive.chan.app", "blog").unwrap_err();
-        assert!(matches!(err, DriveGateError::WrongAudience));
+        let t = encode_entry(SECRET, sample_uuid(), "blog", "alice.workspace.chan.app").unwrap();
+        let err = decode(
+            SECRET,
+            &t,
+            TokenType::Entry,
+            "bob.workspace.chan.app",
+            "blog",
+        )
+        .unwrap_err();
+        assert!(matches!(err, WorkspaceGateError::WrongAudience));
     }
 
     #[test]
@@ -277,30 +297,30 @@ mod tests {
         // Critical isolation property: a token minted for alice/blog
         // must not be accepted on alice/journal even on the same
         // subdomain.
-        let t = encode_session(SECRET, sample_uuid(), "blog", "alice.drive.chan.app").unwrap();
+        let t = encode_session(SECRET, sample_uuid(), "blog", "alice.workspace.chan.app").unwrap();
         let err = decode(
             SECRET,
             &t,
             TokenType::Session,
-            "alice.drive.chan.app",
+            "alice.workspace.chan.app",
             "journal",
         )
         .unwrap_err();
-        assert!(matches!(err, DriveGateError::WrongDrive));
+        assert!(matches!(err, WorkspaceGateError::WrongWorkspace));
     }
 
     #[test]
     fn wrong_secret_rejected() {
-        let t = encode_entry(SECRET, sample_uuid(), "blog", "alice.drive.chan.app").unwrap();
+        let t = encode_entry(SECRET, sample_uuid(), "blog", "alice.workspace.chan.app").unwrap();
         let err = decode(
             b"different-secret-32-bytes-long-ab",
             &t,
             TokenType::Entry,
-            "alice.drive.chan.app",
+            "alice.workspace.chan.app",
             "blog",
         )
         .unwrap_err();
-        assert!(matches!(err, DriveGateError::Decode(_)));
+        assert!(matches!(err, WorkspaceGateError::Decode(_)));
     }
 
     #[test]
@@ -314,7 +334,7 @@ mod tests {
         let header = base64_url(r#"{"alg":"none","typ":"JWT"}"#);
         let payload = base64_url(
             r#"{"iss":"id.chan.app","sub":"11111111-1111-4111-8111-111111111111",
-                "drv":"blog","aud":"alice.drive.chan.app","typ":"entry",
+                "drv":"blog","aud":"alice.workspace.chan.app","typ":"entry",
                 "iat":0,"exp":9999999999}"#,
         );
         let token = format!("{header}.{payload}.");
@@ -322,11 +342,11 @@ mod tests {
             SECRET,
             &token,
             TokenType::Entry,
-            "alice.drive.chan.app",
+            "alice.workspace.chan.app",
             "blog",
         )
         .unwrap_err();
-        assert!(matches!(err, DriveGateError::Decode(_)));
+        assert!(matches!(err, WorkspaceGateError::Decode(_)));
     }
 
     fn base64_url(s: &str) -> String {

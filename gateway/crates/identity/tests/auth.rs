@@ -126,11 +126,11 @@ impl TestApp {
             cookie_secure: false,
             profile_client,
             internal_auth_token: "test-internal".to_string(),
-            drive_wildcard_suffix: ".drive.chan.app".to_string(),
-            drive_public_scheme: "https".to_string(),
-            drive_public_port: String::new(),
-            drive_admin: None,
-            drive_gate_secret: "test-drive-gate-secret-32-bytes-aa".to_string(),
+            workspace_wildcard_suffix: ".workspace.chan.app".to_string(),
+            workspace_public_scheme: "https".to_string(),
+            workspace_public_port: String::new(),
+            workspace_admin: None,
+            workspace_gate_secret: "test-workspace-gate-secret-32-bytes-aa".to_string(),
             providers: vec![Arc::new(provider)],
         });
 
@@ -333,13 +333,13 @@ async fn happy_login(app: &TestApp, c: &mut Client<'_>, user_id: Uuid, email: &s
         .mount(&app.profile)
         .await;
 
-    // 3c. Feature flags. happy_login grants oauth_login + share_drives
+    // 3c. Feature flags. happy_login grants oauth_login + share_workspaces
     //     so the callback gate passes and the SPA gets the flags.
     Mock::given(method("GET"))
         .and(path(format!("/v1/users/{user_id}/flags")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "oauth_login": true,
-            "share_drives": true,
+            "share_workspaces": true,
         })))
         .mount(&app.profile)
         .await;
@@ -363,7 +363,7 @@ async fn login_then_me() {
     let uid = fake_user_id();
     happy_login(&app, &mut c, uid, "octo@example.com").await;
 
-    // /api/me returns just the user; drives moved to drive-proxy.
+    // /api/me returns just the user; workspaces moved to workspace-proxy.
     Mock::given(method("GET"))
         .and(path(format!("/v1/users/{uid}")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -381,10 +381,10 @@ async fn login_then_me() {
     let (s, _, body, _) = c.send(Method::GET, "/api/me", None).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["user"]["id"].as_str().unwrap(), uid.to_string());
-    // Drives now come from drive-proxy admin. TestApp wires
-    // drive_admin: None, so the list resolves to an empty array.
+    // Workspaces now come from workspace-proxy admin. TestApp wires
+    // workspace_admin: None, so the list resolves to an empty array.
     assert_eq!(
-        body["drives"].as_array().expect("drives present"),
+        body["workspaces"].as_array().expect("workspaces present"),
         &Vec::<serde_json::Value>::new()
     );
     app.cleanup().await;
@@ -634,7 +634,7 @@ async fn blocked_user_can_still_delete_account() {
 }
 
 // ---------------------------------------------------------------------------
-// Drive sharing (grants) + share landing
+// Workspace sharing (grants) + share landing
 // ---------------------------------------------------------------------------
 
 fn live_user_body(uid: Uuid, email: &str, username: &str) -> Value {
@@ -650,12 +650,12 @@ fn live_user_body(uid: Uuid, email: &str, username: &str) -> Value {
     })
 }
 
-fn grant_body(grant_id: Uuid, owner_id: Uuid, drive: &str, email: &str, role: &str) -> Value {
+fn grant_body(grant_id: Uuid, owner_id: Uuid, workspace: &str, email: &str, role: &str) -> Value {
     let now = chrono::Utc::now().to_rfc3339();
     json!({
         "id": grant_id,
         "owner_user_id": owner_id,
-        "drive_name": drive,
+        "workspace_name": workspace,
         "grantee_email": email,
         "grantee_user_id": null,
         "role": role,
@@ -671,7 +671,7 @@ async fn grant_create_requires_session() {
     let (s, _, _, _) = c
         .send(
             Method::POST,
-            "/api/drives/photos/grants",
+            "/api/workspaces/photos/grants",
             Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
         )
         .await;
@@ -698,7 +698,7 @@ async fn grant_create_validates_role() {
     let (s, _, _, _) = c
         .send(
             Method::POST,
-            "/api/drives/photos/grants",
+            "/api/workspaces/photos/grants",
             Some(json!({"grantee_email": "a@b.com", "role": "admin"})),
         )
         .await;
@@ -723,7 +723,7 @@ async fn grant_create_forwards_to_profile() {
         .await;
     let grant_id = Uuid::new_v4();
     Mock::given(method("POST"))
-        .and(path(format!("/v1/users/{uid}/drives/photos/grants")))
+        .and(path(format!("/v1/users/{uid}/workspaces/photos/grants")))
         .respond_with(ResponseTemplate::new(201).set_body_json(grant_body(
             grant_id,
             uid,
@@ -737,7 +737,7 @@ async fn grant_create_forwards_to_profile() {
     let (s, _, body, _) = c
         .send(
             Method::POST,
-            "/api/drives/photos/grants",
+            "/api/workspaces/photos/grants",
             Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
         )
         .await;
@@ -849,7 +849,9 @@ async fn share_landing_grantee_minted_jwt_redirect() {
         .mount(&app.profile)
         .await;
     Mock::given(method("GET"))
-        .and(path(format!("/v1/users/{owner_uid}/drives/photos/access")))
+        .and(path(format!(
+            "/v1/users/{owner_uid}/workspaces/photos/access"
+        )))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "editor"})))
         .mount(&app.profile)
         .await;
@@ -857,7 +859,7 @@ async fn share_landing_grantee_minted_jwt_redirect() {
     let (s, _, _, location) = c.send(Method::GET, "/s/owner-handle/photos", None).await;
     assert_eq!(s, StatusCode::SEE_OTHER);
     assert!(
-        location.starts_with("https://owner-handle.drive.chan.app/photos/?t="),
+        location.starts_with("https://owner-handle.workspace.chan.app/photos/?t="),
         "got {location}"
     );
     app.cleanup().await;
@@ -889,7 +891,9 @@ async fn share_landing_no_access_is_404() {
         .mount(&app.profile)
         .await;
     Mock::given(method("GET"))
-        .and(path(format!("/v1/users/{owner_uid}/drives/photos/access")))
+        .and(path(format!(
+            "/v1/users/{owner_uid}/workspaces/photos/access"
+        )))
         .respond_with(ResponseTemplate::new(404).set_body_json(json!({"error": "not found"})))
         .mount(&app.profile)
         .await;
@@ -999,6 +1003,6 @@ async fn me_includes_flags_map() {
     let (s, _, body, _) = c.send(Method::GET, "/api/me", None).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["flags"]["oauth_login"], true);
-    assert_eq!(body["flags"]["share_drives"], true);
+    assert_eq!(body["flags"]["share_workspaces"], true);
     app.cleanup().await;
 }

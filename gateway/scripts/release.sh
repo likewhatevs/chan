@@ -66,7 +66,7 @@ PY
 
 # cargo update on the lockfile so versions of our local crates also
 # reflect the new version (they read from workspace.package.version).
-cargo update -p profile -p identity -p drive-proxy >/dev/null
+cargo update -p profile -p identity -p workspace-proxy >/dev/null
 
 git add Cargo.toml Cargo.lock
 git commit -m "release: $TAG"

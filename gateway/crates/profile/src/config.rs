@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use gateway_common::drive_admin_client::DriveAdminClient;
+use gateway_common::workspace_admin_client::WorkspaceAdminClient;
 use url::Url;
 
 /// Runtime config sourced from environment variables.
@@ -17,14 +17,14 @@ pub struct Config {
     pub auth_token: String,
     /// Bearer for the /v1/admin/* tree. Distinct from `auth_token`
     /// so admin access can be rotated without touching identity /
-    /// drive-proxy. Optional: when unset, the admin tree returns
+    /// workspace-proxy. Optional: when unset, the admin tree returns
     /// 401 for every request, which is the safe default.
     pub admin_token: Option<String>,
-    /// Pre-built admin client for drive-proxy. `None` when
-    /// `DRIVE_ADMIN_TOKEN` is unset, in which case admin block
+    /// Pre-built admin client for workspace-proxy. `None` when
+    /// `WORKSPACE_ADMIN_TOKEN` is unset, in which case admin block
     /// skips the tunnel-kill call (the live substreams stay alive
     /// until they reconnect and the next validate refuses them).
-    pub drive_admin: Option<DriveAdminClient>,
+    pub workspace_admin: Option<WorkspaceAdminClient>,
 }
 
 impl Config {
@@ -45,19 +45,19 @@ impl Config {
             .ok()
             .filter(|s| !s.is_empty());
 
-        // DRIVE_ADMIN_URL points at drive-proxy's public listener; in
-        // single-listener deployments that's the same `drive.chan.app`
+        // WORKSPACE_ADMIN_URL points at workspace-proxy's public listener; in
+        // single-listener deployments that's the same `workspace.chan.app`
         // host. Unset is OK in lab / one-machine setups: block-user
         // still works, the live tunnel just lingers until reconnect.
-        let drive_admin = std::env::var("DRIVE_ADMIN_TOKEN")
+        let workspace_admin = std::env::var("WORKSPACE_ADMIN_TOKEN")
             .ok()
             .filter(|s| !s.is_empty())
-            .map(|tok| -> anyhow::Result<DriveAdminClient> {
-                let url: Url = std::env::var("DRIVE_ADMIN_URL")
-                    .context("DRIVE_ADMIN_URL is required when DRIVE_ADMIN_TOKEN is set")?
+            .map(|tok| -> anyhow::Result<WorkspaceAdminClient> {
+                let url: Url = std::env::var("WORKSPACE_ADMIN_URL")
+                    .context("WORKSPACE_ADMIN_URL is required when WORKSPACE_ADMIN_TOKEN is set")?
                     .parse()
-                    .context("DRIVE_ADMIN_URL must be a URL")?;
-                DriveAdminClient::new(url, tok)
+                    .context("WORKSPACE_ADMIN_URL must be a URL")?;
+                WorkspaceAdminClient::new(url, tok)
             })
             .transpose()?;
 
@@ -66,7 +66,7 @@ impl Config {
             database_url,
             auth_token,
             admin_token,
-            drive_admin,
+            workspace_admin,
         })
     }
 }

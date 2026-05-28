@@ -14,11 +14,11 @@
 //!   401 if the token is unknown / revoked / expired
 //!
 //! Scopes are per-token: identity stores them in `api_tokens.scopes`
-//! and emits them in the validate response. drive-proxy forwards
+//! and emits them in the validate response. workspace-proxy forwards
 //! them verbatim into `Validated::scopes`; chan-tunnel-server then
 //! gates `tunnel` (base dial) and `tunnel.public` (anonymous-readable
-//! drive) against the validated list. A token minted without
-//! `tunnel.public` cannot host a public drive at runtime.
+//! workspace) against the validated list. A token minted without
+//! `tunnel.public` cannot host a public workspace at runtime.
 
 use async_trait::async_trait;
 use chan_tunnel_server::{ServerError, Validated, Validator};
@@ -98,7 +98,7 @@ impl Validator for IdentityValidator {
 /// in the shared `Registry` on every successful validate. The
 /// reverse-proxy auth gate reads back the cached user_id when
 /// matching the session against the tunnel owner; without this
-/// cache drive-proxy would have to round-trip to profile-service
+/// cache workspace-proxy would have to round-trip to profile-service
 /// on every public request.
 pub struct CapturingValidator<V: Validator> {
     inner: V,

@@ -1,8 +1,8 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use gateway_common::drive_admin_client::DriveAdminError;
 use gateway_common::profile_client::ProfileError;
+use gateway_common::workspace_admin_client::WorkspaceAdminError;
 use serde_json::json;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -53,15 +53,15 @@ impl From<ProfileError> for Error {
     }
 }
 
-/// drive-proxy admin failures only surface in the account-delete and
+/// workspace-proxy admin failures only surface in the account-delete and
 /// token-revoke paths. Map them to Upstream so the caller can decide
 /// whether to log-and-continue (every current caller does) or to
 /// `?` straight through.
-impl From<DriveAdminError> for Error {
-    fn from(e: DriveAdminError) -> Self {
+impl From<WorkspaceAdminError> for Error {
+    fn from(e: WorkspaceAdminError) -> Self {
         match e {
-            DriveAdminError::Upstream(m) => Error::Upstream(m),
-            DriveAdminError::Reqwest(e) => Error::Reqwest(e),
+            WorkspaceAdminError::Upstream(m) => Error::Upstream(m),
+            WorkspaceAdminError::Reqwest(e) => Error::Reqwest(e),
         }
     }
 }
@@ -75,7 +75,7 @@ impl IntoResponse for Error {
             Error::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             Error::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             // Upstream detail (oauth2 RequestTokenError, profile-service body,
-            // drive-proxy admin response) stays in the server log; the public
+            // workspace-proxy admin response) stays in the server log; the public
             // body is fixed so OAuth provider errors and profile SQL fragments
             // do not leak through the 502.
             Error::Upstream(detail) => {

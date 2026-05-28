@@ -2,18 +2,18 @@
 
 ## Problem
 
-identity-service, drive-proxy and profile-service each had (or would
+identity-service, workspace-proxy and profile-service each had (or would
 have had) their own copies of:
 
 - a `ProfileClient` calling profile-service over HTTP, with
   near-identical method signatures and a duplicate `User` struct;
-- a `DriveAdminClient` calling drive-proxy admin (used by identity on
+- a `WorkspaceAdminClient` calling workspace-proxy admin (used by identity on
   revoke / delete and by profile on admin block);
 - a `static_files` handler embedding a Svelte SPA via `rust_embed`,
   identical except for the embed folder and a "frontend not built"
   banner string;
-- the shared JWT shape used by the drive-gate handoff between
-  identity (mint) and drive-proxy (verify + mint sessions).
+- the shared JWT shape used by the workspace-gate handoff between
+  identity (mint) and workspace-proxy (verify + mint sessions).
 
 Keeping the duplicates risked drift and made cross-cutting choices
 (timeouts, error mapping, MIME guessing, signing claims) live in
@@ -35,21 +35,21 @@ in the data-layer types:
   - `ProfileError`: thiserror enum with `NotFound`,
     `BadRequest(String)`, `Conflict(String)`, `Upstream(String)`,
     `Reqwest(reqwest::Error)`.
-- `drive_admin_client` (`src/drive_admin_client.rs`)
-  - `DriveAdminClient`: reqwest-backed client for the apex
-    `https://drive.chan.app` admin tree. 5-second timeout. Today
+- `workspace_admin_client` (`src/workspace_admin_client.rs`)
+  - `WorkspaceAdminClient`: reqwest-backed client for the apex
+    `https://workspace.chan.app` admin tree. 5-second timeout. Today
     exposes `kill_user_tunnels(username) -> usize` and the helpers
     needed by identity-side dashboard reads. Bearer token lives
     inside.
-  - `DriveAdminError`: thiserror enum with `Upstream(String)` and
+  - `WorkspaceAdminError`: thiserror enum with `Upstream(String)` and
     `Reqwest(reqwest::Error)`.
-- `drive_gate` (`src/drive_gate.rs`)
+- `workspace_gate` (`src/workspace_gate.rs`)
   - `Claims`: serde struct matching the entry / session JWT envelope
     (`iss`, `sub`, `drv`, `aud`, `typ`, `iat`, `exp`).
   - `TokenType::{Entry, Session}` and `encode_*` / `decode_*` helpers
     wrapping `jsonwebtoken` with HS256 hard-required. No `alg: none`
     path exists.
-  - `DriveGateError`: thiserror enum covering expiry, signature,
+  - `WorkspaceGateError`: thiserror enum covering expiry, signature,
     aud / drv / typ mismatch, and decode failures.
 - `static_files` (`src/static_files.rs`)
   - `serve<R: RustEmbed>(uri, banner) -> Response`: SPA fallback
@@ -73,20 +73,20 @@ in the data-layer types:
 | `write_auth_audit`      | append login / logout / block event      |
 | `delete_user`           | hard delete                              |
 
-`drive_admin_client::DriveAdminClient`:
+`workspace_admin_client::WorkspaceAdminClient`:
 
 | Method                       | Purpose                              |
 |------------------------------|--------------------------------------|
 | `kill_user_tunnels(user)`    | bulk evict; returns count            |
 | `list_user_tunnels(user)`    | snapshot for the dashboard           |
 
-`drive_gate`:
+`workspace_gate`:
 
 | Item                            | Purpose                            |
 |---------------------------------|------------------------------------|
 | `Claims` (serde)                | entry + session JWT envelope       |
 | `encode_entry(secret, claims)`  | identity mints                     |
-| `encode_session(secret, claims)`| drive-proxy mints                  |
+| `encode_session(secret, claims)`| workspace-proxy mints                  |
 | `decode(secret, token, aud)`    | both verify; returns `Claims`      |
 
 `static_files::serve` is a single async function with one type
@@ -96,7 +96,7 @@ parameter for the embedded asset set.
 
 ### No axum coupling in the data-layer types
 
-`ProfileError`, `DriveAdminError`, `DriveGateError` and `Claims` are
+`ProfileError`, `WorkspaceAdminError`, `WorkspaceGateError` and `Claims` are
 plain thiserror / serde types. Each consumer maps the error onto its
 local request-handler error via a `From` impl. Keeps gateway-common
 free of HTTP-framing decisions and lets each consumer decide whether
@@ -110,12 +110,12 @@ a given variant is a distinct status or folds into another.
 Splitting into per-consumer sub-structs would force parallel
 maintenance for negligible benefit.
 
-### Shared drive_gate
+### Shared workspace_gate
 
-Both identity and drive-proxy depend on the same JWT envelope and the
+Both identity and workspace-proxy depend on the same JWT envelope and the
 same HS256 verification config (hard-required alg, no fallback). One
 module here is the canonical place for both; the secret is shared
-between the two services via env var (`DRIVE_GATE_SECRET`).
+between the two services via env var (`WORKSPACE_GATE_SECRET`).
 
 ### `static_files::serve` is generic over `RustEmbed`
 
@@ -126,7 +126,7 @@ function takes the `R: RustEmbed` type parameter and calls
 `R::get(path)`; the consumer site is two lines of declaration plus
 one call.
 
-After the wildcard-subdomain refactor drive-proxy no longer has an
+After the wildcard-subdomain refactor workspace-proxy no longer has an
 SPA, so only identity-service uses this module today; it stays here
 in case a future service grows a UI.
 
@@ -142,15 +142,15 @@ template would obscure that; each consumer ships its own
 - `gateway_common` does not pull axum or any HTTP-routing framework
   into its data-layer surface. axum is a dependency only because
   `static_files::serve` returns `axum::response::Response`; nothing
-  in `profile_client`, `drive_admin_client` or `drive_gate` knows
+  in `profile_client`, `workspace_admin_client` or `workspace_gate` knows
   axum exists.
 - Bearer tokens passed to `ProfileClient::new` or
-  `DriveAdminClient::new` live inside the client; the `Debug` impl
+  `WorkspaceAdminClient::new` live inside the client; the `Debug` impl
   deliberately elides the token.
-- `drive_gate` enforces `alg: HS256` on every decode. No "alg: none"
+- `workspace_gate` enforces `alg: HS256` on every decode. No "alg: none"
   is ever accepted; no asymmetric algorithm is enabled.
 - HTTP calls run through one reqwest client per type with a fixed
-  timeout (10s for profile, 5s for drive-admin). New methods reuse
+  timeout (10s for profile, 5s for workspace-admin). New methods reuse
   the existing builder.
 
 ## Error model
@@ -165,14 +165,14 @@ template would obscure that; each consumer ships its own
 | `Upstream`    | any other non-success status               |
 | `Reqwest`     | `From<reqwest::Error>` for transport       |
 
-`DriveAdminError`:
+`WorkspaceAdminError`:
 
 | Variant       | Construction                               |
 |---------------|--------------------------------------------|
 | `Upstream`    | non-success status with body               |
 | `Reqwest`     | `From<reqwest::Error>`                     |
 
-`DriveGateError`:
+`WorkspaceGateError`:
 
 | Variant            | Construction                          |
 |--------------------|---------------------------------------|
@@ -190,7 +190,7 @@ Consumers map these into their local axum errors.
 - `chrono` for `DateTime<Utc>` in the user / audit types
 - `serde` + `serde_json` for the wire shapes
 - `thiserror` for the error enums
-- `jsonwebtoken` for `drive_gate`
+- `jsonwebtoken` for `workspace_gate`
 - `axum` (response types only), `mime_guess`, `rust-embed` for
   `static_files::serve`
 

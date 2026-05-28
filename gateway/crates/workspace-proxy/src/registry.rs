@@ -1,8 +1,8 @@
 //! Live tunnel registry: thin facade over `chan_tunnel_server::Registry`.
 //!
 //! The tunnel-server crate already maintains the authoritative
-//! `(user, drive) -> TunnelHandle` map (collision policy, eviction
-//! on disconnect, substream open). drive-proxy adds two things on
+//! `(user, workspace) -> TunnelHandle` map (collision policy, eviction
+//! on disconnect, substream open). workspace-proxy adds two things on
 //! top:
 //!
 //!   * a `username -> user_id` cache populated by the validator
@@ -57,12 +57,12 @@ pub struct Entry {
     pub public: bool,
 }
 
-/// Row shape for `/api/me`. `label` defaults to the drive slug
+/// Row shape for `/api/me`. `label` defaults to the workspace slug
 /// until the Hello frame carries a separate display label.
 #[derive(Debug, Clone)]
-pub struct DriveView {
+pub struct WorkspaceView {
     pub username: String,
-    pub drive: String,
+    pub workspace: String,
     pub label: String,
     pub public: bool,
 }
@@ -115,8 +115,8 @@ impl Registry {
     /// `None` when the tunnel disconnected, or when the username
     /// hasn't been seen in any tunnel handshake yet (no cached
     /// owner_id).
-    pub fn get(&self, username: &str, drive: &str) -> Option<Entry> {
-        let handle = self.tunnels.get(username, drive)?;
+    pub fn get(&self, username: &str, workspace: &str) -> Option<Entry> {
+        let handle = self.tunnels.get(username, workspace)?;
         let owner_id = self
             .user_ids
             .read()
@@ -132,7 +132,7 @@ impl Registry {
     }
 
     /// Snapshot every registered tunnel for the admin `tunnel ps`
-    /// view. Sorted by `(user, drive)` so output is stable.
+    /// view. Sorted by `(user, workspace)` so output is stable.
     pub fn list_all_tunnels(&self) -> Vec<TunnelInfo> {
         self.tunnels.list_all()
     }
@@ -140,8 +140,8 @@ impl Registry {
     /// Force a tunnel offline. Returns `true` if a registration
     /// was actually removed; `false` is the "nothing to kill"
     /// case that the CLI surfaces as a 404.
-    pub fn evict(&self, user: &str, drive: &str) -> bool {
-        self.tunnels.evict(user, drive)
+    pub fn evict(&self, user: &str, workspace: &str) -> bool {
+        self.tunnels.evict(user, workspace)
     }
 
     /// Evict every tunnel a user has live. Used on account-delete
@@ -156,9 +156,9 @@ impl Registry {
     /// reconnect. The cache will repopulate on the next successful
     /// validate.
     pub fn evict_all_for_user(&self, username: &str) -> usize {
-        let drives = self.tunnels.list_workspaces_for(username);
+        let workspaces = self.tunnels.list_workspaces_for(username);
         let mut killed = 0;
-        for d in drives {
+        for d in workspaces {
             if self.tunnels.evict(username, d.workspace.as_ref()) {
                 killed += 1;
             }
@@ -179,18 +179,18 @@ impl Registry {
             .remove(username);
     }
 
-    /// Active drives for one user, sorted by drive name for stable
+    /// Active workspaces for one user, sorted by workspace name for stable
     /// SPA ordering. Empty when nothing is registered.
-    pub fn list_for(&self, username: &str) -> Vec<DriveView> {
+    pub fn list_for(&self, username: &str) -> Vec<WorkspaceView> {
         self.tunnels
             .list_workspaces_for(username)
             .into_iter()
             .map(|info| {
-                let drive = info.workspace.as_ref().to_string();
-                DriveView {
+                let workspace = info.workspace.as_ref().to_string();
+                WorkspaceView {
                     username: username.to_string(),
-                    label: drive.clone(),
-                    drive,
+                    label: workspace.clone(),
+                    workspace,
                     public: info.public,
                 }
             })

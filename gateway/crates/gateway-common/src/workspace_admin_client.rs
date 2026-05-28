@@ -1,22 +1,22 @@
-//! Thin reqwest client for drive-proxy's `/admin/v1/*` tree.
+//! Thin reqwest client for workspace-proxy's `/admin/v1/*` tree.
 //!
 //! Used by:
 //!   * identity-service on PAT revoke, account delete, and dashboard
-//!     reads (`/api/me` merges the live drive list), so id can
-//!     render and gate without going through drive-proxy's wildcard
+//!     reads (`/api/me` merges the live workspace list), so id can
+//!     render and gate without going through workspace-proxy's wildcard
 //!     surface.
 //!   * profile-service on admin block, so the in-process yamux
-//!     registrations drive-proxy holds for that user are torn down
+//!     registrations workspace-proxy holds for that user are torn down
 //!     at the same time the DB state changes.
 //!
 //! Errors are surfaced but every write call site should treat this
-//! as best-effort: a brief drive-proxy outage shouldn't block the
+//! as best-effort: a brief workspace-proxy outage shouldn't block the
 //! primary action (revoke, block, delete). On the wire the existing
 //! tokens stop validating immediately; the live substreams just
 //! linger a bit longer than ideal. Read calls bubble up directly
 //! because the dashboard genuinely needs the answer to render.
 //!
-//! `DriveAdminError` is the client's own error enum so this crate
+//! `WorkspaceAdminError` is the client's own error enum so this crate
 //! has no axum / IntoResponse dependency. Each consumer maps it onto
 //! its local error via a `From` impl.
 
@@ -26,38 +26,38 @@ use serde::Deserialize;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
-pub enum DriveAdminError {
-    #[error("drive-proxy admin upstream: {0}")]
+pub enum WorkspaceAdminError {
+    #[error("workspace-proxy admin upstream: {0}")]
     Upstream(String),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
 }
 
-pub type DriveAdminResult<T> = Result<T, DriveAdminError>;
+pub type WorkspaceAdminResult<T> = Result<T, WorkspaceAdminError>;
 
-/// One live tunnel as drive-proxy reports it. Mirrors drive-proxy's
+/// One live tunnel as workspace-proxy reports it. Mirrors workspace-proxy's
 /// `admin::TunnelView`; the duplication is deliberate (this crate
-/// stays independent of drive-proxy's internal types so it can be
+/// stays independent of workspace-proxy's internal types so it can be
 /// pulled by identity and profile without a circular dep).
 #[derive(Debug, Clone, Deserialize)]
 pub struct TunnelView {
     pub user: String,
-    pub drive: String,
+    pub workspace: String,
     pub public: bool,
     pub peer_addr: Option<String>,
     pub connected_at: DateTime<Utc>,
 }
 
 #[derive(Clone)]
-pub struct DriveAdminClient {
+pub struct WorkspaceAdminClient {
     base: Url,
     http: reqwest::Client,
     token: String,
 }
 
-impl std::fmt::Debug for DriveAdminClient {
+impl std::fmt::Debug for WorkspaceAdminClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DriveAdminClient")
+        f.debug_struct("WorkspaceAdminClient")
             .field("base", &self.base)
             // token deliberately elided
             .finish()
@@ -82,7 +82,7 @@ fn encode_segment(s: &str) -> String {
     out
 }
 
-impl DriveAdminClient {
+impl WorkspaceAdminClient {
     pub fn new(base: Url, token: String) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
@@ -93,7 +93,7 @@ impl DriveAdminClient {
 
     /// Force-evict every tunnel `username` has live. Idempotent;
     /// "nothing to kill" returns `0`.
-    pub async fn kill_user_tunnels(&self, username: &str) -> DriveAdminResult<usize> {
+    pub async fn kill_user_tunnels(&self, username: &str) -> WorkspaceAdminResult<usize> {
         let mut url = self.base.clone();
         let user = encode_segment(username);
         url.set_path(&format!("/admin/v1/users/{user}/tunnels/kill"));
@@ -101,8 +101,8 @@ impl DriveAdminClient {
         let status = res.status();
         if !status.is_success() {
             let body = res.text().await.unwrap_or_default();
-            tracing::warn!(%status, body = %body, "drive-proxy admin upstream error");
-            return Err(DriveAdminError::Upstream(format!("{status}")));
+            tracing::warn!(%status, body = %body, "workspace-proxy admin upstream error");
+            return Err(WorkspaceAdminError::Upstream(format!("{status}")));
         }
         // The endpoint always returns 200 with a JSON body now, but
         // tolerate 204 to leave room for a future "noop" optimisation.
@@ -115,12 +115,12 @@ impl DriveAdminClient {
 
     /// Snapshot of every live tunnel for `username`. Identity's
     /// dashboard calls this on every `/api/me` so the SPA renders
-    /// the user's drive cards. Empty list when the user has nothing
+    /// the user's workspace cards. Empty list when the user has nothing
     /// connected; absent user returns 200 with an empty list (the
     /// endpoint doesn't 404 on unknown users so callers don't have
     /// to special-case the steady state where a fresh sign-in has
     /// nothing registered yet).
-    pub async fn list_user_tunnels(&self, username: &str) -> DriveAdminResult<Vec<TunnelView>> {
+    pub async fn list_user_tunnels(&self, username: &str) -> WorkspaceAdminResult<Vec<TunnelView>> {
         let mut url = self.base.clone();
         let user = encode_segment(username);
         url.set_path(&format!("/admin/v1/users/{user}/tunnels"));
@@ -128,8 +128,8 @@ impl DriveAdminClient {
         let status = res.status();
         if !status.is_success() {
             let body = res.text().await.unwrap_or_default();
-            tracing::warn!(%status, body = %body, "drive-proxy admin upstream error");
-            return Err(DriveAdminError::Upstream(format!("{status}")));
+            tracing::warn!(%status, body = %body, "workspace-proxy admin upstream error");
+            return Err(WorkspaceAdminError::Upstream(format!("{status}")));
         }
         let tunnels: Vec<TunnelView> = res.json().await?;
         Ok(tunnels)

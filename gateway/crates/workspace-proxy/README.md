@@ -1,13 +1,13 @@
-# drive-proxy
+# workspace-proxy
 
-Public-facing service at drive.chan.app. Lists the signed-in
-user's live drives and reverse-proxies HTTP / WebSocket traffic
+Public-facing service at workspace.chan.app. Lists the signed-in
+user's live workspaces and reverse-proxies HTTP / WebSocket traffic
 into them. Embeds `chan-tunnel-server` to terminate registrations
 from `chan serve` instances on a separate listener.
 
 ## Role in the system
 
-drive-proxy is the surface where users open their drives in a
+workspace-proxy is the surface where users open their workspaces in a
 browser. It reads the `id_session` cookie minted by
 identity-service and forwards authenticated traffic to the right
 `chan serve` peer through a yamux substream owned by an active
@@ -16,7 +16,7 @@ tunnel.
 ## Build
 
 ```bash
-cargo build -p drive-proxy
+cargo build -p workspace-proxy
 ```
 
 Frontend baked in at build time. The two SPAs in the workspace
@@ -24,7 +24,7 @@ share one npm install at the repo root:
 
 ```bash
 npm install
-npm run build -w crates/drive-proxy/web
+npm run build -w crates/workspace-proxy/web
 ```
 
 ## Dev run
@@ -38,12 +38,12 @@ export IDENTITY_BASE_URL=http://127.0.0.1:7000
 export IDENTITY_URL=http://127.0.0.1:7000
 export PROFILE_SERVICE_URL=http://127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-service-token
-cargo run -p drive-proxy
+cargo run -p workspace-proxy
 ```
 
 Two listeners come up:
 
-- `BIND_ADDR` (7002): public HTTP. drive.chan.app sits behind nginx
+- `BIND_ADDR` (7002): public HTTP. workspace.chan.app sits behind nginx
   + TLS in production; loopback in dev.
 - `TUNNEL_BIND_ADDR` (7100): h2c. tunnel.chan.app sits behind
   `nginx grpc_pass` in production; `chan serve` instances dial
@@ -73,8 +73,8 @@ Optional:
 |                        |                          | validate calls         |
 | `COOKIE_SECURE`        | `false`                  | HTTPS-only cookie      |
 | `COOKIE_DOMAIN`        | unset                    | `.chan.app` in prod    |
-| `MAX_DRIVES_PER_USER`  | `0` (unlimited)          | concurrent registrations |
-| `DRIVE_ADMIN_TOKEN`    | unset                    | enables `/admin/v1/*`  |
+| `MAX_WORKSPACES_PER_USER`  | `0` (unlimited)          | concurrent registrations |
+| `WORKSPACE_ADMIN_TOKEN`    | unset                    | enables `/admin/v1/*`  |
 | `MAX_RESPONSE_BYTES`   | `100 MiB` (`0` disables) | reverse-proxy body cap |
 
 ## Routes
@@ -88,23 +88,23 @@ Session-gated SPA + reverse proxy:
 | GET    | `/`                           | redirect to identity_base_url |
 | GET    | `/healthz`                    | health check                  |
 | GET    | `/api/config`                 | sign_in_url for the SPA       |
-| GET    | `/api/me`                     | current user + drives list    |
+| GET    | `/api/me`                     | current user + workspaces list    |
 | POST   | `/api/logout`                 | invalidate session            |
 | GET    | `/assets/*path`               | embedded SPA bundle           |
 | GET    | `/favicon.ico`, `/chan-mark.png` | embedded assets            |
 | GET    | `/:user`                      | per-user dashboard SPA root   |
-| GET    | `/:user/:drive`               | 308 to canonical              |
-|        |                               | `/:user/:drive/`              |
-| ANY    | `/:user/:drive/`              | reverse-proxy entry           |
-| ANY    | `/:user/:drive/*path`         | reverse-proxy deeper paths    |
+| GET    | `/:user/:workspace`               | 308 to canonical              |
+|        |                               | `/:user/:workspace/`              |
+| ANY    | `/:user/:workspace/`              | reverse-proxy entry           |
+| ANY    | `/:user/:workspace/*path`         | reverse-proxy deeper paths    |
 
-Admin (Bearer-gated by `DRIVE_ADMIN_TOKEN`, rate-limited):
+Admin (Bearer-gated by `WORKSPACE_ADMIN_TOKEN`, rate-limited):
 
 | Method | Path                                          | Purpose            |
 |--------|-----------------------------------------------|--------------------|
 | GET    | `/admin/v1/tunnels`                           | snapshot of all   |
 |        |                                               | registrations     |
-| POST   | `/admin/v1/tunnels/:user/:drive/kill`         | evict one tunnel  |
+| POST   | `/admin/v1/tunnels/:user/:workspace/kill`         | evict one tunnel  |
 | POST   | `/admin/v1/users/:user/tunnels/kill`          | bulk evict        |
 | GET    | `/admin/v1/tunnels/watch`                     | SSE snapshot stream |
 

@@ -2,15 +2,15 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use chan_tunnel_server::{serve_tunnel_listener, Validator};
-use drive_proxy::{
+use tokio::sync::Notify;
+use tracing_subscriber::EnvFilter;
+use workspace_proxy::{
     config::Config,
     http,
     identity_validator::{CapturingValidator, IdentityValidator},
     registry::Registry,
     throttle_validator::ThrottlingValidator,
 };
-use tokio::sync::Notify;
-use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -22,7 +22,7 @@ async fn main() -> ExitCode {
         .init();
 
     if let Err(e) = run().await {
-        tracing::error!(error = ?e, "drive-proxy-service exited with error");
+        tracing::error!(error = ?e, "workspace-proxy-service exited with error");
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
@@ -36,8 +36,8 @@ async fn run() -> anyhow::Result<()> {
         apex = %cfg.apex_host,
         wildcard = %cfg.wildcard_suffix,
         identity = %cfg.identity_url,
-        max_drives_per_user = cfg.max_drives_per_user,
-        "starting drive-proxy-service",
+        max_workspaces_per_user = cfg.max_workspaces_per_user,
+        "starting workspace-proxy-service",
     );
 
     let registry = Registry::new();
@@ -91,10 +91,10 @@ async fn run() -> anyhow::Result<()> {
     let mut tunnel = {
         let validator = validator.clone();
         let tunnels = registry.tunnels();
-        let max_drives = cfg.max_drives_per_user;
+        let max_workspaces = cfg.max_workspaces_per_user;
         tokio::spawn(async move {
             tokio::select! {
-                r = serve_tunnel_listener(tunnel_listener, validator, tunnels, max_drives) => r,
+                r = serve_tunnel_listener(tunnel_listener, validator, tunnels, max_workspaces) => r,
                 _ = tunnel_shutdown.notified() => {
                     tracing::info!("tunnel listener received shutdown");
                     Ok(())

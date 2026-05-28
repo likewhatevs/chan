@@ -42,7 +42,7 @@ INSERT INTO feature_flags (key, description, default_enabled) VALUES
     ('oauth_login',
      'Allow this user to complete OAuth sign-in. Gates access to the dashboard and PAT minting.',
      false),
-    ('share_drives',
-     'Surface the per-drive sharing UI (Drives tab + grant management + share links).',
+    ('share_workspaces',
+     'Surface the per-workspace sharing UI (Workspaces tab + grant management + share links).',
      false)
 ON CONFLICT (key) DO NOTHING;

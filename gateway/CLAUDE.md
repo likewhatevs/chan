@@ -15,24 +15,24 @@ crates:
 - `identity`: public service at `id.chan.app`. Runs OAuth2 sign-in
   (GitHub, Google, GitLab), holds the cookie session (host-only on
   `id.chan.app`), serves the only Svelte SPA in the suite (profile,
-  PAT lifecycle, drive list). Mints drive-gate entry tokens used to
-  hand the user off to `drive.chan.app`. Owns no domain data; calls
-  `profile` over HTTP and `drive-proxy` admin for the live-drive
+  PAT lifecycle, workspace list). Mints workspace-gate entry tokens used to
+  hand the user off to `workspace.chan.app`. Owns no domain data; calls
+  `profile` over HTTP and `workspace-proxy` admin for the live-workspace
   list.
-- `drive-proxy`: public service at `drive.chan.app` (apex) and
-  `*.drive.chan.app` (wildcard). Apex carries the tunnel
+- `workspace-proxy`: public service at `workspace.chan.app` (apex) and
+  `*.workspace.chan.app` (wildcard). Apex carries the tunnel
   registration endpoint (`POST /v1/tunnel` via raw h2c), the admin
   tree, and `/healthz`. Wildcard carries the per-user tenant content
-  surface: `{user}.drive.chan.app/{drive}/*` reverse-proxies into
+  surface: `{user}.workspace.chan.app/{workspace}/*` reverse-proxies into
   the registered `chan serve` peer, gated by a host-only,
-  path-scoped `drive_gate` JWT cookie minted by drive-proxy on first
+  path-scoped `workspace_gate` JWT cookie minted by workspace-proxy on first
   entry. No SPA in this crate.
 - `admin`: operator CLI. Talks to `profile` admin routes and
-  `drive-proxy` admin routes over Bearer auth.
+  `workspace-proxy` admin routes over Bearer auth.
 - `gateway-common`: shared internal library. Holds the typed
-  `profile-service` HTTP client, the `drive-proxy` admin client used
+  `profile-service` HTTP client, the `workspace-proxy` admin client used
   by identity (on revoke / delete) and profile (on admin block), the
-  shared drive-gate JWT envelope (HS256), and the SPA-fallback
+  shared workspace-gate JWT envelope (HS256), and the SPA-fallback
   static-asset handler used by identity. No binary.
 
 Each public-facing crate ships two docs: `README.md` is the
@@ -81,7 +81,7 @@ npm run dev -w crates/identity/web    # vite dev server for id.chan.app
 
 A fresh checkout without `web/dist/` still builds; identity's SPA
 endpoint returns a "frontend not built" banner that points at the
-right command. drive-proxy has no SPA.
+right command. workspace-proxy has no SPA.
 
 ## Writing Rules
 
@@ -110,7 +110,7 @@ acknowledged in a comment next to each compare.
 
 ### HTTP error mapping
 
-Each request-handler crate (`profile`, `identity`, `drive-proxy`)
+Each request-handler crate (`profile`, `identity`, `workspace-proxy`)
 defines a `thiserror::Error` enum with an `IntoResponse` impl that
 maps every variant to a precise HTTP status code. Public-facing
 messages are short and intentionally generic (`unauthorized`,
@@ -120,8 +120,8 @@ acceptable in `main.rs` and in startup paths; request handlers
 return explicit thiserror variants.
 
 `gateway_common::profile_client::ProfileError`,
-`gateway_common::drive_admin_client::DriveAdminError` and
-`gateway_common::drive_gate::DriveGateError` are the cross-service
+`gateway_common::workspace_admin_client::WorkspaceAdminError` and
+`gateway_common::workspace_gate::WorkspaceGateError` are the cross-service
 client errors. Each consumer maps them onto its local error via a
 `From` impl so request handlers can `?` straight through.
 
@@ -130,30 +130,30 @@ client errors. Each consumer maps them onto its local error via a
 identity-service owns the only session cookie in the suite:
 `id_session`, host-only on `id.chan.app` (no `Domain` attribute),
 `HttpOnly`, `SameSite=Lax`, 30-day inactivity expiry. `Secure`
-follows `COOKIE_SECURE`. drive-proxy does not read this cookie.
+follows `COOKIE_SECURE`. workspace-proxy does not read this cookie.
 
-drive-proxy's only cookie is `drive_gate`: host-only on
-`{user}.drive.chan.app`, `Path=/{drive}/`, 24h hard exp, HS256 JWT
-signed with `DRIVE_GATE_SECRET`. Minted by drive-proxy after
+workspace-proxy's only cookie is `workspace_gate`: host-only on
+`{user}.workspace.chan.app`, `Path=/{workspace}/`, 24h hard exp, HS256 JWT
+signed with `WORKSPACE_GATE_SECRET`. Minted by workspace-proxy after
 verifying an entry JWT issued by identity. Not shared with id.
 
 This split is the load-bearing piece of the cross-tenant isolation:
 no `.chan.app`-scoped cookie exists, so a browser does not auto-
-attach an id session to a fetch on `evil.drive.chan.app`. Cookie
+attach an id session to a fetch on `evil.workspace.chan.app`. Cookie
 sharing across the two services is replaced by an explicit
-drive-gate handoff (entry token in URL `?t=`, session cookie set by
-drive-proxy on validation).
+workspace-gate handoff (entry token in URL `?t=`, session cookie set by
+workspace-proxy on validation).
 
 ### Reverse-proxy trust boundary
 
-`drive-proxy` strips hop-by-hop headers (RFC 7230 6.1) on both the
+`workspace-proxy` strips hop-by-hop headers (RFC 7230 6.1) on both the
 request and response legs, **including every header named by the
 inbound `Connection` value** (also required by 6.1). Drops the
 inbound `Host`, `Cookie`, and `Authorization` headers. Recomputes
 `X-Forwarded-For` as `<existing chain>, <peer ip>`,
 `X-Forwarded-Proto` from `FORWARDED_PROTO` (configured to match the
 terminator that fronts this listener; default `https`), and
-`X-Forwarded-Host` from the inbound `Host` header drive-proxy
+`X-Forwarded-Host` from the inbound `Host` header workspace-proxy
 itself routed on. Inbound `X-Forwarded-Host` /
 `X-Forwarded-Proto` from clients are NOT trusted; nginx may not
 scrub them and the gateway must not assume it does. Upstream is
@@ -175,7 +175,7 @@ and use a 300s per-half idle timeout instead.
 
 Every service caps its Postgres pool at 4 connections. Postgres
 non-superuser slots are a shared resource; running `profile` plus
-`identity` plus `drive-proxy` on a single dev Postgres alongside
+`identity` plus `workspace-proxy` on a single dev Postgres alongside
 running tests can otherwise run the slot count out. The cap is
 documented in each service's pool-build site.
 
@@ -197,17 +197,17 @@ Three distinct bearers, all `openssl rand -hex 32`:
   API. profile-service also accepts `PROFILE_ADMIN_TOKEN` here so a
   single-token deployment works; the middleware runs both checks
   unconditionally to avoid which-token-matched timing leaks.
-- `IDENTITY_INTERNAL_TOKEN`: drive-proxy -> identity-service
+- `IDENTITY_INTERNAL_TOKEN`: workspace-proxy -> identity-service
   `/internal/v1/tokens/validate`. Required; no fallback to
   `PROFILE_AUTH_TOKEN`. Rotating one does not rotate the other.
-- `DRIVE_ADMIN_TOKEN`: identity-service and profile-service ->
-  drive-proxy admin tree. profile uses it on admin block; identity
+- `WORKSPACE_ADMIN_TOKEN`: identity-service and profile-service ->
+  workspace-proxy admin tree. profile uses it on admin block; identity
   uses it on revoke, delete, and dashboard reads.
 
 Plus one symmetric secret:
 
-- `DRIVE_GATE_SECRET`: HS256 signing key shared by identity (mints
-  entry JWTs) and drive-proxy (verifies entry, mints session JWTs).
+- `WORKSPACE_GATE_SECRET`: HS256 signing key shared by identity (mints
+  entry JWTs) and workspace-proxy (verifies entry, mints session JWTs).
 
 ## Contributor Patterns
 
@@ -230,8 +230,8 @@ full design rationale, read the crate's `design.md`.
   `format!`'d into queries; user input always goes through
   `.bind()` and `$N`.
 - **Block fans out server-side.** `POST /v1/admin/users/:id/block`
-  also calls drive-proxy `kill_user_tunnels` (best-effort) when a
-  `DriveAdminClient` is configured. Operators do not need a second
+  also calls workspace-proxy `kill_user_tunnels` (best-effort) when a
+  `WorkspaceAdminClient` is configured. Operators do not need a second
   hop.
 
 ### identity
@@ -258,37 +258,37 @@ full design rationale, read the crate's `design.md`.
   the privilege boundary, before storing `user_id`. Closes session
   fixation.
 - **Token revoke evicts tunnels.** `DELETE /api/tokens/:id` fires
-  drive-proxy `kill_user_tunnels` best-effort after the DB update.
-- **Drive-gate mint is its own route.** `GET /api/drives/open?u=
+  workspace-proxy `kill_user_tunnels` best-effort after the DB update.
+- **Workspace-gate mint is its own route.** `GET /api/workspaces/open?u=
   &d=` mints a 30s entry JWT and 303s to
-  `https://{u}.drive.chan.app/{d}/?t=<jwt>`. The dashboard links to
-  this route, not to drive-proxy directly, so the token is minted at
+  `https://{u}.workspace.chan.app/{d}/?t=<jwt>`. The dashboard links to
+  this route, not to workspace-proxy directly, so the token is minted at
   click time.
 
-### drive-proxy
+### workspace-proxy
 
-- **Apex vs wildcard.** `drive.chan.app` (apex): tunnel + admin +
-  healthz only. `*.drive.chan.app` (wildcard): tenant content only.
+- **Apex vs wildcard.** `workspace.chan.app` (apex): tunnel + admin +
+  healthz only. `*.workspace.chan.app` (wildcard): tenant content only.
   A single axum router dispatches on the `Host` header. The h2c
   tunnel endpoint runs on a separate internal listener; nginx
   `grpc_pass`es `/v1/tunnel` on the apex to it.
-- **No cookie session for the proxy path.** drive-proxy reads
-  nothing from `tower_sessions`. The proxy gate uses the `drive_gate`
+- **No cookie session for the proxy path.** workspace-proxy reads
+  nothing from `tower_sessions`. The proxy gate uses the `workspace_gate`
   JWT cookie minted on entry-token validation. Path-scoped to
-  `/{drive}/` so JS in one drive cannot read or send the cookie for
-  another drive on the same user's subdomain.
-- **Auth gate order on `/{drive}/*`** (in `proxy::handle`):
+  `/{workspace}/` so JS in one workspace cannot read or send the cookie for
+  another workspace on the same user's subdomain.
+- **Auth gate order on `/{workspace}/*`** (in `proxy::handle`):
   registration missing -> 404; `entry.public` -> pass through;
   `?t=<entry-jwt>` -> verify signature + aud + drv, mint session
   cookie carrying the entry's `sub`, 303 to the clean URL; valid
-  `drive_gate` cookie (signature + aud + drv) -> pass through;
-  anything else -> 404. Same 404 shape for "unknown drive" and "no
+  `workspace_gate` cookie (signature + aud + drv) -> pass through;
+  anything else -> 404. Same 404 shape for "unknown workspace" and "no
   token" so unauthenticated probes cannot enumerate registrations.
   The gate does not compare `sub` against the registry-cached
   owner_id: identity-service is the access-control authority (it
-  calls `profile.drive_access` before minting), and a sub-equals-
+  calls `profile.workspace_access` before minting), and a sub-equals-
   owner check locks every accepted grantee out of its shared
-  drives. The `aud` claim (= the inbound host) is what enforces
+  workspaces. The `aud` claim (= the inbound host) is what enforces
   tenant isolation.
 - **Hop-by-hop stripping is complete.** `HOP_BY_HOP_NAMES` lists
   the static names; `connection_listed_headers` parses the inbound
@@ -298,7 +298,7 @@ full design rationale, read the crate's `design.md`.
   axum HTTP listener share the in-process `Registry`. A
   registration on the tunnel listener is visible to the proxy
   handler on the very next request.
-- **JWT alg hard-required.** `gateway_common::drive_gate::decode`
+- **JWT alg hard-required.** `gateway_common::workspace_gate::decode`
   rejects anything other than HS256. No "alg: none" path exists in
   this codebase.
 
@@ -314,14 +314,14 @@ full design rationale, read the crate's `design.md`.
 ### gateway-common
 
 - **No axum / IntoResponse coupling in data-layer types.**
-  `ProfileError`, `DriveAdminError`, `DriveGateError` and `Claims`
+  `ProfileError`, `WorkspaceAdminError`, `WorkspaceGateError` and `Claims`
   are plain thiserror / serde. Each consumer maps via `From` for
   its local error.
 - **`User` is the superset.** The struct carries every field
   profile-service can return; consumers ignore the fields they
   don't need. Don't fork the struct per consumer.
-- **`drive_gate` is the single source of JWT shape.** Both
-  identity (mint) and drive-proxy (verify + mint sessions) call
+- **`workspace_gate` is the single source of JWT shape.** Both
+  identity (mint) and workspace-proxy (verify + mint sessions) call
   through this module. The HS256 alg is hard-required on every
   decode.
 
@@ -334,9 +334,9 @@ full design rationale, read the crate's `design.md`.
     schema, two-tier auth, atomic upsert, block fan-out.
   - [`crates/identity/design.md`](crates/identity/design.md):
     OAuth providers, PAT lifecycle, session contract,
-    drive-gate mint, dashboard.
-  - [`crates/drive-proxy/design.md`](crates/drive-proxy/design.md):
-    apex / wildcard split, drive-gate verify, registry model,
+    workspace-gate mint, dashboard.
+  - [`crates/workspace-proxy/design.md`](crates/workspace-proxy/design.md):
+    apex / wildcard split, workspace-gate verify, registry model,
     reverse-proxy hygiene.
   - [`crates/admin/design.md`](crates/admin/design.md):
     command surface, output contract, exit codes.

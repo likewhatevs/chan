@@ -30,7 +30,7 @@ async fn run() -> anyhow::Result<()> {
         pool,
         auth_token: cfg.auth_token.clone(),
         admin_token: cfg.admin_token.clone(),
-        drive_admin: cfg.drive_admin.clone(),
+        workspace_admin: cfg.workspace_admin.clone(),
     });
 
     let listener = tokio::net::TcpListener::bind(cfg.bind_addr).await?;

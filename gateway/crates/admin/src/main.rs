@@ -14,7 +14,7 @@
 //!   3  not found  (no row for the user/token id)
 //!
 //! Tunnel ps / kill / watch land in a follow-up that wires the
-//! drive-proxy admin endpoint.
+//! workspace-proxy admin endpoint.
 
 use std::process::ExitCode;
 
@@ -42,13 +42,13 @@ struct Cli {
     #[arg(long, global = true, env = "CHAN_ADMIN_PROFILE_URL")]
     profile_url: Option<String>,
 
-    /// HTTP URL of drive-proxy (used by `tunnel` subcommands).
-    /// Defaults to CHAN_ADMIN_DRIVE_URL or http://127.0.0.1:7002.
-    #[arg(long, global = true, env = "CHAN_ADMIN_DRIVE_URL")]
-    drive_url: Option<String>,
+    /// HTTP URL of workspace-proxy (used by `tunnel` subcommands).
+    /// Defaults to CHAN_ADMIN_WORKSPACE_URL or http://127.0.0.1:7002.
+    #[arg(long, global = true, env = "CHAN_ADMIN_WORKSPACE_URL")]
+    workspace_url: Option<String>,
 
     /// Bearer matching profile-service's PROFILE_ADMIN_TOKEN and
-    /// drive-proxy's DRIVE_ADMIN_TOKEN. Single-token deployments
+    /// workspace-proxy's WORKSPACE_ADMIN_TOKEN. Single-token deployments
     /// share one secret across both services; deployments that
     /// rotate them independently can override per-call with the
     /// dedicated env vars.
@@ -75,7 +75,7 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TokenCmd,
     },
-    /// Inspect and kill live tunnels (live drive-proxy registry).
+    /// Inspect and kill live tunnels (live workspace-proxy registry).
     Tunnel {
         #[command(subcommand)]
         cmd: TunnelCmd,
@@ -136,9 +136,9 @@ enum TunnelCmd {
         #[arg(long)]
         user: Option<String>,
     },
-    /// Force a tunnel offline by (user, drive). The chan serve
+    /// Force a tunnel offline by (user, workspace). The chan serve
     /// peer is free to reconnect.
-    Kill { user: String, drive: String },
+    Kill { user: String, workspace: String },
     /// Live snapshot stream (SSE). Re-renders the table every
     /// second until Ctrl-C.
     Watch {
@@ -277,17 +277,17 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cmd: UserCmd::Block { ident, reason },
         } => {
             // Block needs both clients: profile holds the canonical
-            // block + token revoke, drive-proxy holds live tunnel
+            // block + token revoke, workspace-proxy holds live tunnel
             // registrations that must be severed so the cookie-
             // session bypass (existing tunnels surviving an admin
-            // block) is closed. Profile first so a drive-proxy
+            // block) is closed. Profile first so a workspace-proxy
             // outage doesn't leave the user un-blocked.
             let profile = build_profile_client(cli.profile_url.as_deref(), &token)?;
             let u = profile.resolve_user(&ident).await?;
             let blocked = profile.block_user(u.id, reason.as_deref()).await?;
             render_users(std::slice::from_ref(&blocked), json);
-            match build_drive_client(cli.drive_url.as_deref(), &token) {
-                Ok(drive) => match drive.kill_user_tunnels(&blocked.username).await {
+            match build_workspace_client(cli.workspace_url.as_deref(), &token) {
+                Ok(workspace) => match workspace.kill_user_tunnels(&blocked.username).await {
                     Ok(killed) if killed > 0 => {
                         eprintln!("evicted {killed} live tunnel(s)");
                     }
@@ -297,7 +297,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     ),
                 },
                 Err(e) => {
-                    eprintln!("warning: profile block applied but drive client unavailable: {e:#}")
+                    eprintln!(
+                        "warning: profile block applied but workspace client unavailable: {e:#}"
+                    )
                 }
             }
             Ok(())
@@ -311,7 +313,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             token_cmd(&client, json, cmd).await
         }
         Cmd::Tunnel { cmd } => {
-            let client = build_drive_client(cli.drive_url.as_deref(), &token)?;
+            let client = build_workspace_client(cli.workspace_url.as_deref(), &token)?;
             tunnel_cmd(&client, json, cmd).await
         }
         Cmd::Flag { cmd } => {
@@ -328,11 +330,11 @@ fn build_profile_client(url: Option<&str>, token: &str) -> anyhow::Result<AdminC
     AdminClient::new(url, token.to_string()).context("build profile admin client")
 }
 
-fn build_drive_client(url: Option<&str>, token: &str) -> anyhow::Result<DriveClient> {
+fn build_workspace_client(url: Option<&str>, token: &str) -> anyhow::Result<WorkspaceClient> {
     let url = url
         .map(|s| s.to_string())
         .unwrap_or_else(|| "http://127.0.0.1:7002".to_string());
-    DriveClient::new(url, token.to_string()).context("build drive admin client")
+    WorkspaceClient::new(url, token.to_string()).context("build workspace admin client")
 }
 
 // ---------------------------------------------------------------------------
@@ -403,8 +405,8 @@ async fn user(c: &AdminClient, json: bool, cmd: UserCmd) -> anyhow::Result<()> {
             eprintln!("deleted {}", u.id);
         }
         UserCmd::Block { .. } => {
-            // Handled in `run` so it can use both profile + drive
-            // clients (profile.block_user followed by drive.kill_
+            // Handled in `run` so it can use both profile + workspace
+            // clients (profile.block_user followed by workspace.kill_
             // user_tunnels). Reaching this arm means the dispatch
             // forgot to intercept; fail loudly.
             unreachable!("UserCmd::Block must be intercepted in run()");
@@ -897,20 +899,20 @@ async fn read_body(res: reqwest::Response) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Drive (tunnel) admin client
+// Workspace (tunnel) admin client
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
-struct DriveClient {
+struct WorkspaceClient {
     base: url::Url,
     http: Client,
     token: String,
 }
 
-impl DriveClient {
+impl WorkspaceClient {
     fn new(base_url: String, token: String) -> anyhow::Result<Self> {
-        let base =
-            url::Url::parse(&base_url).with_context(|| format!("parse drive url: {base_url}"))?;
+        let base = url::Url::parse(&base_url)
+            .with_context(|| format!("parse workspace url: {base_url}"))?;
         let http = Client::builder()
             // Watch streams idle between snapshots; disable the
             // global timeout for it. Per-call timeouts are still
@@ -944,11 +946,11 @@ impl DriveClient {
         }
     }
 
-    async fn kill(&self, user: &str, drive: &str) -> anyhow::Result<()> {
+    async fn kill(&self, user: &str, workspace: &str) -> anyhow::Result<()> {
         let path = format!(
             "/admin/v1/tunnels/{}/{}/kill",
             urlencoding::encode_path(user),
-            urlencoding::encode_path(drive),
+            urlencoding::encode_path(workspace),
         );
         let res = self
             .http
@@ -1008,8 +1010,8 @@ impl DriveClient {
 
 /// Tiny helper: percent-encode path segments without pulling in a
 /// real urlencoding crate. Limits the alphabet to what a username
-/// or drive slug can contain (`[a-z0-9-]` plus `_` and `.` for
-/// drive names) so the typical path needs no escaping.
+/// or workspace slug can contain (`[a-z0-9-]` plus `_` and `.` for
+/// workspace names) so the typical path needs no escaping.
 mod urlencoding {
     pub fn encode_path(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
@@ -1025,7 +1027,7 @@ mod urlencoding {
     }
 }
 
-async fn tunnel_cmd(c: &DriveClient, json: bool, cmd: TunnelCmd) -> anyhow::Result<()> {
+async fn tunnel_cmd(c: &WorkspaceClient, json: bool, cmd: TunnelCmd) -> anyhow::Result<()> {
     match cmd {
         TunnelCmd::Ps { user } => {
             let mut tunnels = c.list().await?;
@@ -1034,9 +1036,9 @@ async fn tunnel_cmd(c: &DriveClient, json: bool, cmd: TunnelCmd) -> anyhow::Resu
             }
             render_tunnels(&tunnels, json);
         }
-        TunnelCmd::Kill { user, drive } => {
-            c.kill(&user, &drive).await?;
-            eprintln!("killed {user}/{drive}");
+        TunnelCmd::Kill { user, workspace } => {
+            c.kill(&user, &workspace).await?;
+            eprintln!("killed {user}/{workspace}");
         }
         TunnelCmd::Watch { user } => {
             watch_loop(c, user.as_deref(), json).await?;
@@ -1049,7 +1051,11 @@ async fn tunnel_cmd(c: &DriveClient, json: bool, cmd: TunnelCmd) -> anyhow::Resu
 /// Plain text mode clears the screen between renders so the
 /// output looks like `top`; --json mode emits one JSON line per
 /// event so it pipes into jq cleanly.
-async fn watch_loop(c: &DriveClient, user_filter: Option<&str>, json: bool) -> anyhow::Result<()> {
+async fn watch_loop(
+    c: &WorkspaceClient,
+    user_filter: Option<&str>,
+    json: bool,
+) -> anyhow::Result<()> {
     use std::io::Write;
     use tokio_stream::StreamExt;
 
@@ -1199,7 +1205,7 @@ struct FeatureFlagOverride {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct TunnelView {
     user: String,
-    drive: String,
+    workspace: String,
     public: bool,
     peer_addr: Option<String>,
     connected_at: DateTime<Utc>,
@@ -1289,7 +1295,7 @@ fn render_tunnels(rows: &[TunnelView], json: bool) {
         return;
     }
     let mut t = make_table();
-    t.set_header(["USER", "DRIVE", "PUBLIC", "PEER", "UPTIME", "CONNECTED"]);
+    t.set_header(["USER", "WORKSPACE", "PUBLIC", "PEER", "UPTIME", "CONNECTED"]);
     let now = Utc::now();
     for r in rows {
         let uptime = now
@@ -1299,7 +1305,7 @@ fn render_tunnels(rows: &[TunnelView], json: bool) {
             .unwrap_or_else(|_| "-".to_string());
         t.add_row([
             Cell::new(&r.user),
-            Cell::new(&r.drive),
+            Cell::new(&r.workspace),
             Cell::new(if r.public { "yes" } else { "no" }),
             Cell::new(r.peer_addr.as_deref().unwrap_or("-")),
             Cell::new(uptime),

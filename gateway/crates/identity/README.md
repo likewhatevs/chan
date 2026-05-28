@@ -2,7 +2,7 @@
 
 Public-facing OAuth2 sign-in service for id.chan.app. Runs the
 GitHub / Google / GitLab auth-code flow with PKCE, mints the
-`id_session` cookie shared with drive-proxy, and serves a Svelte
+`id_session` cookie shared with workspace-proxy, and serves a Svelte
 SPA where users manage their profile and personal access tokens
 (PATs).
 
@@ -10,7 +10,7 @@ SPA where users manage their profile and personal access tokens
 
 First public touch-point of chan-gateway. After a successful
 OAuth flow, the browser holds the `id_session` cookie and can
-move between id.chan.app and drive.chan.app without re-authing
+move between id.chan.app and workspace.chan.app without re-authing
 (both services read the same `tower_sessions` Postgres table).
 
 Identity-service owns:
@@ -85,9 +85,9 @@ Optional knobs:
 | `BASE_URL`              | `http://localhost:7000`  | public URL for redirects |
 | `COOKIE_SECURE`         | `false`                  | HTTPS-only cookie        |
 | `COOKIE_DOMAIN`         | unset                    | `.chan.app` in prod      |
-| `DRIVES_URL`            | `http://localhost:7002`  | shown in SPA topbar      |
-| `DRIVE_ADMIN_URL`       | `DRIVES_URL`             | drive-proxy admin base   |
-| `DRIVE_ADMIN_TOKEN`     | unset                    | enables tunnel evict on  |
+| `WORKSPACES_URL`            | `http://localhost:7002`  | shown in SPA topbar      |
+| `WORKSPACE_ADMIN_URL`       | `WORKSPACES_URL`             | workspace-proxy admin base   |
+| `WORKSPACE_ADMIN_TOKEN`     | unset                    | enables tunnel evict on  |
 |                         |                          | account delete           |
 
 ## Routes
@@ -105,7 +105,7 @@ Session-gated SPA API (`/api/*`):
 
 | Method | Path                  | Purpose                                 |
 |--------|-----------------------|-----------------------------------------|
-| GET    | `/api/config`         | drives_url for the topbar               |
+| GET    | `/api/config`         | workspaces_url for the topbar               |
 | GET    | `/api/providers`      | list of enabled OAuth providers         |
 | GET    | `/api/me`             | current user                            |
 | PATCH  | `/api/me/username`    | rename handle                           |
@@ -115,20 +115,20 @@ Session-gated SPA API (`/api/*`):
 | POST   | `/api/tokens`         | mint a PAT (returns plaintext once)     |
 | DELETE | `/api/tokens/:id`     | revoke a PAT                            |
 | GET    | `/api/tokens/:id/audit` | per-token audit log                   |
-| GET    | `/api/drives/open`    | mint drive-gate entry token + 303       |
-| POST   | `/api/drives`         | create a drive in the user's namespace  |
-| DELETE | `/api/drives/:d`      | delete a drive (cascades all its grants)|
-| GET    | `/api/drives/owned`   | drives the user owns                    |
-| GET    | `/api/drives/incoming`| drives shared with the user             |
-| POST   | `/api/drives/:d/grants`| share a drive by email                 |
-| GET    | `/api/drives/:d/grants`| list grants on the user's drive        |
-| DELETE | `/api/grants/:id`     | revoke a grant on the user's drive      |
+| GET    | `/api/workspaces/open`    | mint workspace-gate entry token + 303       |
+| POST   | `/api/workspaces`         | create a workspace in the user's namespace  |
+| DELETE | `/api/workspaces/:d`      | delete a workspace (cascades all its grants)|
+| GET    | `/api/workspaces/owned`   | workspaces the user owns                    |
+| GET    | `/api/workspaces/incoming`| workspaces shared with the user             |
+| POST   | `/api/workspaces/:d/grants`| share a workspace by email                 |
+| GET    | `/api/workspaces/:d/grants`| list grants on the user's workspace        |
+| DELETE | `/api/grants/:id`     | revoke a grant on the user's workspace      |
 
 Public share landing (no auth at the door):
 
 | Method | Path                  | Purpose                                 |
 |--------|-----------------------|-----------------------------------------|
-| GET    | `/s/:owner/:drive`    | OAuth-then-mint entry token for grantees |
+| GET    | `/s/:owner/:workspace`    | OAuth-then-mint entry token for grantees |
 
 Internal (Bearer-gated by `PROFILE_AUTH_TOKEN`):
 
@@ -138,8 +138,8 @@ Internal (Bearer-gated by `PROFILE_AUTH_TOKEN`):
 
 The internal route is called by chan-tunnel during tunnel
 handshake. PAT brute-force throttling runs one hop earlier in
-drive-proxy, keyed on a hash of the candidate token; the previous
-per-IP governor at this hop saw only drive-proxy's container IP
+workspace-proxy, keyed on a hash of the candidate token; the previous
+per-IP governor at this hop saw only workspace-proxy's container IP
 and degenerated into a single global bucket. See identity's
 `design.md` for the rationale.
 

@@ -3,8 +3,8 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
-use gateway_common::drive_admin_client::DriveAdminClient;
 use gateway_common::validators::{valid_username, MAX_USERNAME_EDITS};
+use gateway_common::workspace_admin_client::WorkspaceAdminClient;
 use serde::Deserialize;
 use sqlx::PgPool;
 use subtle::ConstantTimeEq;
@@ -14,10 +14,10 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 use crate::models::{
     AdminChangeEmail, AdminToken, AdminTokenAudit, AuthAudit, BlockUser, ClaimGrantsRequest,
-    ClaimGrantsResponse, CreateAuthAudit, CreateDrive, CreateDriveGrant, CreateIdentity,
-    CreateUser, Drive, DriveAccess, DriveGrant, FeatureFlag, FeatureFlagOverride,
-    FeatureFlagSummary, Identity, IncomingShare, OwnedDriveSummary, UpdateUser, UpdateUsername,
-    UpsertByIdentity, UpsertFlag, UpsertFlagOverride, UpsertResponse, User,
+    ClaimGrantsResponse, CreateAuthAudit, CreateIdentity, CreateUser, CreateWorkspace,
+    CreateWorkspaceGrant, FeatureFlag, FeatureFlagOverride, FeatureFlagSummary, Identity,
+    IncomingShare, OwnedWorkspaceSummary, UpdateUser, UpdateUsername, UpsertByIdentity, UpsertFlag,
+    UpsertFlagOverride, UpsertResponse, User, Workspace, WorkspaceAccess, WorkspaceGrant,
 };
 
 /// Single source of truth for the column list returned for `users`
@@ -43,7 +43,7 @@ fn user_cols_prefixed(alias: &str) -> String {
 /// path-traversal lookalikes have no legitimate use here and a
 /// downstream filename-mapper in `chan serve` could be surprised by
 /// the relative-path semantics.
-fn valid_drive_name(s: &str) -> bool {
+fn valid_workspace_name(s: &str) -> bool {
     let len = s.len();
     if !(1..=64).contains(&len) {
         return false;
@@ -71,12 +71,12 @@ pub struct AppState {
     /// route 401, which is the safe default if the env var was
     /// forgotten on a fresh deploy.
     pub admin_token: Option<String>,
-    /// Optional drive-proxy admin client used by `admin_block_user`
+    /// Optional workspace-proxy admin client used by `admin_block_user`
     /// to evict the user's live tunnels at the same moment we set
     /// `blocked_at`. `None` is fine in dev: tunnels just linger
     /// until reconnect, at which point the validate query refuses
     /// them on `blocked_at IS NOT NULL`.
-    pub drive_admin: Option<DriveAdminClient>,
+    pub workspace_admin: Option<WorkspaceAdminClient>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -95,26 +95,26 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/users/:id/identities", post(create_identity))
         .route(
-            "/v1/users/:owner_id/drives",
-            get(list_drives).post(create_drive),
+            "/v1/users/:owner_id/workspaces",
+            get(list_workspaces).post(create_workspace),
         )
         .route(
-            "/v1/users/:owner_id/drives/:drive",
-            axum::routing::delete(delete_drive),
+            "/v1/users/:owner_id/workspaces/:workspace",
+            axum::routing::delete(delete_workspace),
         )
         .route(
-            "/v1/users/:owner_id/drives/:drive/grants",
-            get(list_drive_grants).post(create_drive_grant),
+            "/v1/users/:owner_id/workspaces/:workspace/grants",
+            get(list_workspace_grants).post(create_workspace_grant),
         )
         .route(
-            "/v1/users/:owner_id/drives/:drive/access",
-            get(drive_access),
+            "/v1/users/:owner_id/workspaces/:workspace/access",
+            get(workspace_access),
         )
         .route(
             "/v1/users/:owner_id/grants/:id",
-            axum::routing::delete(delete_drive_grant),
+            axum::routing::delete(delete_workspace_grant),
         )
-        .route("/v1/users/:id/grants/owned", get(list_owned_drives))
+        .route("/v1/users/:id/grants/owned", get(list_owned_workspaces))
         .route("/v1/users/:id/grants/incoming", get(list_incoming_shares))
         .route("/v1/users/:id/grants/claim", post(claim_grants))
         .route("/v1/users/:id/flags", get(get_user_flags))
@@ -741,11 +741,11 @@ async fn admin_block_user(
     // we block. Without this, an authenticated `chan serve` keeps
     // serving over its existing yamux substreams until it disconnects;
     // the DB block is already enforced for new validates and new
-    // sessions, but the in-process registrations on drive-proxy don't
-    // see the row change. A drive-proxy outage at this exact moment
+    // sessions, but the in-process registrations on workspace-proxy don't
+    // see the row change. A workspace-proxy outage at this exact moment
     // is acceptable: the next reconnect's validate refuses the token
     // on `blocked_at IS NOT NULL`, so the gap closes shortly.
-    if let Some(client) = &state.drive_admin {
+    if let Some(client) = &state.workspace_admin {
         match client.kill_user_tunnels(&user.username).await {
             Ok(killed) if killed > 0 => {
                 tracing::info!(user = %user.username, killed, "evicted tunnels on admin block");
@@ -908,18 +908,18 @@ async fn admin_revoke_token(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Idempotent drive create. Re-issuing for the same (owner, name)
-/// returns the existing row at 200 OK instead of 409. The drive
+/// Idempotent workspace create. Re-issuing for the same (owner, name)
+/// returns the existing row at 200 OK instead of 409. The workspace
 /// name is the canonical key (per-owner namespace); the surrogate
 /// uuid is for FK joins only.
-async fn create_drive(
+async fn create_workspace(
     State(state): State<AppState>,
     Path(owner_id): Path<Uuid>,
-    Json(body): Json<CreateDrive>,
-) -> Result<(StatusCode, Json<Drive>)> {
-    let name = body.drive_name.trim().to_ascii_lowercase();
-    if !valid_drive_name(&name) {
-        return Err(Error::BadRequest("invalid drive name".into()));
+    Json(body): Json<CreateWorkspace>,
+) -> Result<(StatusCode, Json<Workspace>)> {
+    let name = body.workspace_name.trim().to_ascii_lowercase();
+    if !valid_workspace_name(&name) {
+        return Err(Error::BadRequest("invalid workspace name".into()));
     }
     let owner_exists =
         sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
@@ -933,10 +933,10 @@ async fn create_drive(
     // ON CONFLICT DO NOTHING + RETURNING returns 0 rows on hit, so
     // we follow up with a SELECT in that case. Two-step keeps the
     // INSERT happy-path single-statement.
-    let inserted = sqlx::query_as::<_, Drive>(
-        "INSERT INTO drives (owner_user_id, drive_name) VALUES ($1, $2) \
-         ON CONFLICT (owner_user_id, drive_name) DO NOTHING \
-         RETURNING id, owner_user_id, drive_name, created_at",
+    let inserted = sqlx::query_as::<_, Workspace>(
+        "INSERT INTO workspaces (owner_user_id, workspace_name) VALUES ($1, $2) \
+         ON CONFLICT (owner_user_id, workspace_name) DO NOTHING \
+         RETURNING id, owner_user_id, workspace_name, created_at",
     )
     .bind(owner_id)
     .bind(&name)
@@ -946,9 +946,9 @@ async fn create_drive(
     if let Some(d) = inserted {
         return Ok((StatusCode::CREATED, Json(d)));
     }
-    let existing = sqlx::query_as::<_, Drive>(
-        "SELECT id, owner_user_id, drive_name, created_at \
-         FROM drives WHERE owner_user_id = $1 AND drive_name = $2",
+    let existing = sqlx::query_as::<_, Workspace>(
+        "SELECT id, owner_user_id, workspace_name, created_at \
+         FROM workspaces WHERE owner_user_id = $1 AND workspace_name = $2",
     )
     .bind(owner_id)
     .bind(&name)
@@ -957,14 +957,14 @@ async fn create_drive(
     Ok((StatusCode::OK, Json(existing)))
 }
 
-async fn list_drives(
+async fn list_workspaces(
     State(state): State<AppState>,
     Path(owner_id): Path<Uuid>,
-) -> Result<Json<Vec<Drive>>> {
-    let rows = sqlx::query_as::<_, Drive>(
-        "SELECT id, owner_user_id, drive_name, created_at \
-         FROM drives WHERE owner_user_id = $1 \
-         ORDER BY drive_name",
+) -> Result<Json<Vec<Workspace>>> {
+    let rows = sqlx::query_as::<_, Workspace>(
+        "SELECT id, owner_user_id, workspace_name, created_at \
+         FROM workspaces WHERE owner_user_id = $1 \
+         ORDER BY workspace_name",
     )
     .bind(owner_id)
     .fetch_all(&state.pool)
@@ -972,26 +972,27 @@ async fn list_drives(
     Ok(Json(rows))
 }
 
-/// Drop a drive and (via FK CASCADE) every grant on it. The owner
+/// Drop a workspace and (via FK CASCADE) every grant on it. The owner
 /// remains responsible for stopping any `chan serve` they have
-/// running for this drive; the in-memory drive-proxy registration
-/// outlives the DELETE here. We do not call drive-proxy admin from
+/// running for this workspace; the in-memory workspace-proxy registration
+/// outlives the DELETE here. We do not call workspace-proxy admin from
 /// this path because the in-memory tunnel could still be useful
-/// (the owner can re-create the drive); ops that want to evict
+/// (the owner can re-create the workspace); ops that want to evict
 /// tunnels should use the admin block flow instead.
-async fn delete_drive(
+async fn delete_workspace(
     State(state): State<AppState>,
-    Path((owner_id, drive)): Path<(Uuid, String)>,
+    Path((owner_id, workspace)): Path<(Uuid, String)>,
 ) -> Result<StatusCode> {
-    let name = drive.trim().to_ascii_lowercase();
-    if !valid_drive_name(&name) {
-        return Err(Error::BadRequest("invalid drive name".into()));
+    let name = workspace.trim().to_ascii_lowercase();
+    if !valid_workspace_name(&name) {
+        return Err(Error::BadRequest("invalid workspace name".into()));
     }
-    let res = sqlx::query("DELETE FROM drives WHERE owner_user_id = $1 AND drive_name = $2")
-        .bind(owner_id)
-        .bind(&name)
-        .execute(&state.pool)
-        .await?;
+    let res =
+        sqlx::query("DELETE FROM workspaces WHERE owner_user_id = $1 AND workspace_name = $2")
+            .bind(owner_id)
+            .bind(&name)
+            .execute(&state.pool)
+            .await?;
     if res.rows_affected() == 0 {
         return Err(Error::NotFound);
     }
@@ -999,7 +1000,7 @@ async fn delete_drive(
 }
 
 /// Idempotent grant create/promote. Re-adding the same email on the
-/// same (owner, drive) returns the existing row with `role` updated
+/// same (owner, workspace) returns the existing row with `role` updated
 /// to the latest value; the original `created_at`, `grantee_user_id`
 /// and `accepted_at` are preserved via COALESCE so an already-claimed
 /// grant doesn't lose its claim when the owner adjusts the role.
@@ -1008,14 +1009,14 @@ async fn delete_drive(
 /// the common case where the recipient already has an account).
 /// Late signups are picked up by `claim_grants` on the next OAuth
 /// callback.
-async fn create_drive_grant(
+async fn create_workspace_grant(
     State(state): State<AppState>,
-    Path((owner_id, drive)): Path<(Uuid, String)>,
-    Json(body): Json<CreateDriveGrant>,
-) -> Result<(StatusCode, Json<DriveGrant>)> {
-    let drive = drive.trim().to_ascii_lowercase();
-    if !valid_drive_name(&drive) {
-        return Err(Error::BadRequest("invalid drive name".into()));
+    Path((owner_id, workspace)): Path<(Uuid, String)>,
+    Json(body): Json<CreateWorkspaceGrant>,
+) -> Result<(StatusCode, Json<WorkspaceGrant>)> {
+    let workspace = workspace.trim().to_ascii_lowercase();
+    if !valid_workspace_name(&workspace) {
+        return Err(Error::BadRequest("invalid workspace name".into()));
     }
     let email = body.grantee_email.trim();
     if !valid_email(email) {
@@ -1037,16 +1038,16 @@ async fn create_drive_grant(
 
     let mut tx = state.pool.begin().await?;
 
-    // Ensure the parent `drives` row exists. The FK from drive_grants
+    // Ensure the parent `workspaces` row exists. The FK from workspace_grants
     // requires it; auto-creating here keeps the grant API ergonomic
-    // (callers don't have to bootstrap the drive row in a separate
+    // (callers don't have to bootstrap the workspace row in a separate
     // hop) and is idempotent.
     sqlx::query(
-        "INSERT INTO drives (owner_user_id, drive_name) VALUES ($1, $2) \
-         ON CONFLICT (owner_user_id, drive_name) DO NOTHING",
+        "INSERT INTO workspaces (owner_user_id, workspace_name) VALUES ($1, $2) \
+         ON CONFLICT (owner_user_id, workspace_name) DO NOTHING",
     )
     .bind(owner_id)
-    .bind(&drive)
+    .bind(&workspace)
     .execute(&mut *tx)
     .await?;
 
@@ -1056,20 +1057,20 @@ async fn create_drive_grant(
             .fetch_optional(&mut *tx)
             .await?;
 
-    let row = sqlx::query_as::<_, DriveGrant>(
-        "INSERT INTO drive_grants \
-             (owner_user_id, drive_name, grantee_email, grantee_user_id, role, accepted_at) \
+    let row = sqlx::query_as::<_, WorkspaceGrant>(
+        "INSERT INTO workspace_grants \
+             (owner_user_id, workspace_name, grantee_email, grantee_user_id, role, accepted_at) \
          VALUES ($1, $2, $3, $4, $5, \
                  CASE WHEN $4::uuid IS NULL THEN NULL ELSE now() END) \
-         ON CONFLICT (owner_user_id, drive_name, lower(grantee_email)) DO UPDATE SET \
+         ON CONFLICT (owner_user_id, workspace_name, lower(grantee_email)) DO UPDATE SET \
              role = EXCLUDED.role, \
-             grantee_user_id = COALESCE(drive_grants.grantee_user_id, EXCLUDED.grantee_user_id), \
-             accepted_at = COALESCE(drive_grants.accepted_at, EXCLUDED.accepted_at) \
-         RETURNING id, owner_user_id, drive_name, grantee_email, grantee_user_id, role, \
+             grantee_user_id = COALESCE(workspace_grants.grantee_user_id, EXCLUDED.grantee_user_id), \
+             accepted_at = COALESCE(workspace_grants.accepted_at, EXCLUDED.accepted_at) \
+         RETURNING id, owner_user_id, workspace_name, grantee_email, grantee_user_id, role, \
                    created_at, accepted_at",
     )
     .bind(owner_id)
-    .bind(&drive)
+    .bind(&workspace)
     .bind(email)
     .bind(grantee_id)
     .bind(role)
@@ -1080,23 +1081,23 @@ async fn create_drive_grant(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
-async fn list_drive_grants(
+async fn list_workspace_grants(
     State(state): State<AppState>,
-    Path((owner_id, drive)): Path<(Uuid, String)>,
-) -> Result<Json<Vec<DriveGrant>>> {
-    let drive = drive.trim().to_ascii_lowercase();
-    if !valid_drive_name(&drive) {
-        return Err(Error::BadRequest("invalid drive name".into()));
+    Path((owner_id, workspace)): Path<(Uuid, String)>,
+) -> Result<Json<Vec<WorkspaceGrant>>> {
+    let workspace = workspace.trim().to_ascii_lowercase();
+    if !valid_workspace_name(&workspace) {
+        return Err(Error::BadRequest("invalid workspace name".into()));
     }
-    let rows = sqlx::query_as::<_, DriveGrant>(
-        "SELECT id, owner_user_id, drive_name, grantee_email, grantee_user_id, role, \
+    let rows = sqlx::query_as::<_, WorkspaceGrant>(
+        "SELECT id, owner_user_id, workspace_name, grantee_email, grantee_user_id, role, \
                 created_at, accepted_at \
-         FROM drive_grants \
-         WHERE owner_user_id = $1 AND drive_name = $2 \
+         FROM workspace_grants \
+         WHERE owner_user_id = $1 AND workspace_name = $2 \
          ORDER BY created_at",
     )
     .bind(owner_id)
-    .bind(&drive)
+    .bind(&workspace)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows))
@@ -1104,11 +1105,11 @@ async fn list_drive_grants(
 
 /// Owner-scoped delete. Path carries owner_id so a bug in the calling
 /// layer can't let user A revoke user B's grant by guessing its uuid.
-async fn delete_drive_grant(
+async fn delete_workspace_grant(
     State(state): State<AppState>,
     Path((owner_id, grant_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode> {
-    let res = sqlx::query("DELETE FROM drive_grants WHERE id = $1 AND owner_user_id = $2")
+    let res = sqlx::query("DELETE FROM workspace_grants WHERE id = $1 AND owner_user_id = $2")
         .bind(grant_id)
         .bind(owner_id)
         .execute(&state.pool)
@@ -1127,59 +1128,59 @@ struct AccessQuery {
 }
 
 /// Per-request access gate. identity-service calls this from
-/// `/api/drives/open` before minting an entry JWT. Returns:
+/// `/api/workspaces/open` before minting an entry JWT. Returns:
 ///   - `{role: "owner"}` if caller == owner
 ///   - `{role: "viewer"|"editor"}` if caller has a claimed grant
-///   - 404 in every other case (no-grant and unknown-drive share the
+///   - 404 in every other case (no-grant and unknown-workspace share the
 ///     same shape so the endpoint can't be used to enumerate which
-///     drives a user is sharing).
-async fn drive_access(
+///     workspaces a user is sharing).
+async fn workspace_access(
     State(state): State<AppState>,
-    Path((owner_id, drive)): Path<(Uuid, String)>,
+    Path((owner_id, workspace)): Path<(Uuid, String)>,
     Query(q): Query<AccessQuery>,
-) -> Result<Json<DriveAccess>> {
-    let drive = drive.trim().to_ascii_lowercase();
-    if !valid_drive_name(&drive) {
-        return Err(Error::BadRequest("invalid drive name".into()));
+) -> Result<Json<WorkspaceAccess>> {
+    let workspace = workspace.trim().to_ascii_lowercase();
+    if !valid_workspace_name(&workspace) {
+        return Err(Error::BadRequest("invalid workspace name".into()));
     }
     if owner_id == q.caller {
-        return Ok(Json(DriveAccess {
+        return Ok(Json(WorkspaceAccess {
             role: "owner".into(),
         }));
     }
     let role: Option<String> = sqlx::query_scalar(
-        "SELECT role FROM drive_grants \
-         WHERE owner_user_id = $1 AND drive_name = $2 AND grantee_user_id = $3",
+        "SELECT role FROM workspace_grants \
+         WHERE owner_user_id = $1 AND workspace_name = $2 AND grantee_user_id = $3",
     )
     .bind(owner_id)
-    .bind(&drive)
+    .bind(&workspace)
     .bind(q.caller)
     .fetch_optional(&state.pool)
     .await?;
-    role.map(|r| Json(DriveAccess { role: r }))
+    role.map(|r| Json(WorkspaceAccess { role: r }))
         .ok_or(Error::NotFound)
 }
 
-/// Drives this user owns. Paired in the SPA with the live-tunnel
-/// list from drive-proxy admin: a drive that shows up here but not
+/// Workspaces this user owns. Paired in the SPA with the live-tunnel
+/// list from workspace-proxy admin: a workspace that shows up here but not
 /// in the live list is the "configured / offline" state. The grant
-/// count is a LEFT JOIN aggregate, so a drive with no grants yet
+/// count is a LEFT JOIN aggregate, so a workspace with no grants yet
 /// still surfaces (it will not let anyone in until at least one
 /// grant lands, but the row exists for the dashboard).
-async fn list_owned_drives(
+async fn list_owned_workspaces(
     State(state): State<AppState>,
     Path(owner_id): Path<Uuid>,
-) -> Result<Json<Vec<OwnedDriveSummary>>> {
-    let rows = sqlx::query_as::<_, OwnedDriveSummary>(
-        "SELECT d.drive_name, COALESCE(g.cnt, 0)::bigint AS grant_count \
-         FROM drives d \
+) -> Result<Json<Vec<OwnedWorkspaceSummary>>> {
+    let rows = sqlx::query_as::<_, OwnedWorkspaceSummary>(
+        "SELECT d.workspace_name, COALESCE(g.cnt, 0)::bigint AS grant_count \
+         FROM workspaces d \
          LEFT JOIN ( \
-             SELECT owner_user_id, drive_name, COUNT(*) AS cnt \
-             FROM drive_grants \
-             GROUP BY owner_user_id, drive_name \
-         ) g ON g.owner_user_id = d.owner_user_id AND g.drive_name = d.drive_name \
+             SELECT owner_user_id, workspace_name, COUNT(*) AS cnt \
+             FROM workspace_grants \
+             GROUP BY owner_user_id, workspace_name \
+         ) g ON g.owner_user_id = d.owner_user_id AND g.workspace_name = d.workspace_name \
          WHERE d.owner_user_id = $1 \
-         ORDER BY d.drive_name",
+         ORDER BY d.workspace_name",
     )
     .bind(owner_id)
     .fetch_all(&state.pool)
@@ -1187,7 +1188,7 @@ async fn list_owned_drives(
     Ok(Json(rows))
 }
 
-/// Drives shared *with* this user. Only includes claimed grants so a
+/// Workspaces shared *with* this user. Only includes claimed grants so a
 /// pending invite (email matched but no sign-in yet — shouldn't happen
 /// for the caller themselves, but defensive) doesn't leak into the
 /// dashboard.
@@ -1199,8 +1200,8 @@ async fn list_incoming_shares(
         "SELECT g.id AS grant_id, \
                 u.id AS owner_user_id, u.username AS owner_username, \
                 u.display_name AS owner_display_name, u.avatar_url AS owner_avatar_url, \
-                g.drive_name, g.role, g.accepted_at \
-         FROM drive_grants g \
+                g.workspace_name, g.role, g.accepted_at \
+         FROM workspace_grants g \
          JOIN users u ON u.id = g.owner_user_id \
          WHERE g.grantee_user_id = $1 AND g.accepted_at IS NOT NULL \
          ORDER BY g.accepted_at DESC",
@@ -1240,7 +1241,7 @@ async fn claim_grants(
         return Ok(Json(ClaimGrantsResponse { claimed: 0 }));
     }
     let res = sqlx::query(
-        "UPDATE drive_grants \
+        "UPDATE workspace_grants \
          SET grantee_user_id = $1, accepted_at = now() \
          WHERE grantee_user_id IS NULL \
            AND lower(grantee_email) = ANY($2)",
@@ -1259,7 +1260,7 @@ async fn claim_grants(
 // ---------------------------------------------------------------------------
 
 /// 1-64 chars, lowercase ascii alnum plus `[._-]`. Matches the
-/// drive-name validator so all string-keyed surfaces use one shape.
+/// workspace-name validator so all string-keyed surfaces use one shape.
 fn valid_flag_key(s: &str) -> bool {
     let len = s.len();
     if !(1..=64).contains(&len) {
@@ -1271,7 +1272,7 @@ fn valid_flag_key(s: &str) -> bool {
 
 /// Service-tier: resolve every registered flag for a single user.
 /// Returns `{flag_key: bool}` so callers (identity-service /api/me,
-/// drive-proxy admin tooling) can render or gate without a second
+/// workspace-proxy admin tooling) can render or gate without a second
 /// hop. Unknown user is 404; unknown flag is simply absent from
 /// the map.
 async fn get_user_flags(

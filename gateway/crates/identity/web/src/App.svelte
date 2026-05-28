@@ -4,16 +4,16 @@
   import Login from "./views/Login.svelte";
   import Profile from "./views/Profile.svelte";
   import Tokens from "./views/Tokens.svelte";
-  import Drives from "./views/Drives.svelte";
+  import Workspaces from "./views/Workspaces.svelte";
   import { meStore } from "./state/me.svelte";
 
-  type Tab = "profile" | "tokens" | "drives";
+  type Tab = "profile" | "tokens" | "workspaces";
   let tab = $state<Tab>(tabFromHash());
 
   function tabFromHash(): Tab {
     const h = typeof location !== "undefined" ? location.hash : "";
     if (h === "#tokens") return "tokens";
-    if (h === "#drives") return "drives";
+    if (h === "#workspaces") return "workspaces";
     return "profile";
   }
 
@@ -22,18 +22,18 @@
     // replaceState so changing tabs doesn't push browser history.
     const target =
       next === "tokens" ? "#tokens" :
-      next === "drives" ? "#drives" : "#profile";
+      next === "workspaces" ? "#workspaces" : "#profile";
     if (location.hash !== target) {
       history.replaceState(null, "", target);
     }
   }
 
-  // Hide Drives tab when share_drives feature flag is off for this
-  // user. If they bookmarked #drives or pasted a URL into the bar,
+  // Hide Workspaces tab when share_workspaces feature flag is off for this
+  // user. If they bookmarked #workspaces or pasted a URL into the bar,
   // fall back to Profile so the dashboard always lands on a tab the
   // user can actually see.
   function visibleTab(t: Tab, sharesOn: boolean): Tab {
-    return t === "drives" && !sharesOn ? "profile" : t;
+    return t === "workspaces" && !sharesOn ? "profile" : t;
   }
 
   onMount(() => {
@@ -55,7 +55,7 @@
   {:else if meStore.status === "anon"}
     <Login />
   {:else if meStore.status === "loaded" && meStore.me}
-    {@const sharesOn = !!meStore.me.flags?.share_drives}
+    {@const sharesOn = !!meStore.me.flags?.share_workspaces}
     {@const activeTab = visibleTab(tab, sharesOn)}
     <Topbar me={meStore.me.user} onSignOut={() => meStore.logout()} />
     <nav class="tabs">
@@ -73,10 +73,10 @@
       </button>
       {#if sharesOn}
         <button
-          class:active={activeTab === "drives"}
-          onclick={() => setTab("drives")}
+          class:active={activeTab === "workspaces"}
+          onclick={() => setTab("workspaces")}
         >
-          Drives
+          Workspaces
         </button>
       {/if}
     </nav>
@@ -85,9 +85,9 @@
     {:else if activeTab === "tokens"}
       <Tokens />
     {:else}
-      <Drives
+      <Workspaces
         username={meStore.me.user.username}
-        drives={meStore.me.drives}
+        workspaces={meStore.me.workspaces}
       />
     {/if}
   {/if}

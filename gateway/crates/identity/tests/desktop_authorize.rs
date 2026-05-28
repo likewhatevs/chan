@@ -122,11 +122,11 @@ impl TestApp {
             cookie_secure: false,
             profile_client,
             internal_auth_token: "test-internal".to_string(),
-            drive_wildcard_suffix: ".drive.chan.app".to_string(),
-            drive_public_scheme: "https".to_string(),
-            drive_public_port: String::new(),
-            drive_admin: None,
-            drive_gate_secret: "test-drive-gate-secret-32-bytes-aa".to_string(),
+            workspace_wildcard_suffix: ".workspace.chan.app".to_string(),
+            workspace_public_scheme: "https".to_string(),
+            workspace_public_port: String::new(),
+            workspace_admin: None,
+            workspace_gate_secret: "test-workspace-gate-secret-32-bytes-aa".to_string(),
             providers: vec![Arc::new(provider)],
         });
 
@@ -311,7 +311,7 @@ fn extract_csrf(html: &str) -> String {
     after[..end].to_string()
 }
 
-/// Drive an end-to-end OAuth callback so the test client ends up
+/// Workspace an end-to-end OAuth callback so the test client ends up
 /// holding an authenticated session cookie tied to `user_id`.
 async fn happy_login(app: &TestApp, c: &mut Client<'_>, user_id: Uuid, email: &str) {
     let resp = c.get("/auth/github").await;

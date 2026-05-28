@@ -2,7 +2,7 @@
 # scripts/dev/run.sh
 #
 # Foreground runner for the local dev stack. Starts profile,
-# identity, and drive-proxy concurrently with their generated env
+# identity, and workspace-proxy concurrently with their generated env
 # files sourced; multiplexes stdout/stderr to this terminal with a
 # per-service prefix; Ctrl-C cleanly stops all three.
 #
@@ -16,7 +16,7 @@ SCRIPT_DIR="$(pwd -P)"
 SECRETS_DIR="$SCRIPT_DIR/secrets"
 ROOT="$(cd ../.. && pwd -P)"
 
-for f in profile identity drive-proxy; do
+for f in profile identity workspace-proxy; do
     if [[ ! -f "$SECRETS_DIR/$f.env" ]]; then
         echo "error: $SECRETS_DIR/$f.env missing; run scripts/dev/setup.sh first" >&2
         exit 1
@@ -29,7 +29,7 @@ echo "==> cargo build (workspace)"
 (cd "$ROOT" && cargo build --quiet \
     --bin profile-service \
     --bin identity-service \
-    --bin drive-proxy-service)
+    --bin workspace-proxy-service)
 
 pids=()
 cleanup() {
@@ -71,20 +71,20 @@ start_service() {
 }
 
 # Order: profile first so migrations are done before identity
-# tries to look up users; identity second; drive-proxy last so
+# tries to look up users; identity second; workspace-proxy last so
 # its tunnel handshakes go to a live identity.
 start_service profile      profile-service     "$SECRETS_DIR/profile.env"     $'\033[36m'
 sleep 1
 start_service identity     identity-service    "$SECRETS_DIR/identity.env"    $'\033[33m'
 sleep 1
-start_service drive-proxy  drive-proxy-service "$SECRETS_DIR/drive-proxy.env" $'\033[35m'
+start_service workspace-proxy  workspace-proxy-service "$SECRETS_DIR/workspace-proxy.env" $'\033[35m'
 
 echo
 echo "==> services starting"
 echo "    profile     127.0.0.1:17001"
 echo "    identity    http://id.localtest.me:17000"
-echo "    drive-proxy http://drive.localtest.me:17002 (apex)"
-echo "                http://*.drive.localtest.me:17002 (wildcard)"
+echo "    workspace-proxy http://workspace.localtest.me:17002 (apex)"
+echo "                http://*.workspace.localtest.me:17002 (wildcard)"
 echo "                127.0.0.1:17100 (h2c tunnel)"
 echo
 echo "Open the dashboard: http://id.localtest.me:17000"

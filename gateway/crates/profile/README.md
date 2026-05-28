@@ -3,13 +3,13 @@
 Internal HTTP API in front of Postgres. Owns the canonical user
 record, linked OAuth identities, the `api_tokens` table, and the
 authentication audit log. Called only by sibling chan-gateway
-services (`identity-service`, `drive-proxy`) and the operator CLI;
+services (`identity-service`, `workspace-proxy`) and the operator CLI;
 not exposed publicly.
 
 ## Role in the system
 
 profile-service is the single source of truth for "who is this
-user." Sessions live elsewhere (drive-proxy and identity-service
+user." Sessions live elsewhere (workspace-proxy and identity-service
 share a `tower_sessions` Postgres table). Cookie minting,
 profile-page rendering, and OAuth state are all someone else's
 problem; profile owns the rows.
@@ -63,15 +63,15 @@ Service API (`/v1/users/*`, `/v1/auth-audit`):
 | GET    | `/v1/users/by-identity`            | lookup by (provider, subject) |
 | POST   | `/v1/users/upsert-by-identity`     | atomic find-or-create-or-link |
 | POST   | `/v1/users/:id/identities`         | attach OAuth identity         |
-| GET    | `/v1/users/:o/drives`              | list owner's drives           |
-| POST   | `/v1/users/:o/drives`              | create drive (idempotent)     |
-| DELETE | `/v1/users/:o/drives/:d`           | delete drive (cascades grants)|
-| POST   | `/v1/users/:o/drives/:d/grants`    | create / promote drive grant  |
-| GET    | `/v1/users/:o/drives/:d/grants`    | list grants on a drive        |
-| GET    | `/v1/users/:o/drives/:d/access`    | access check, `?as=<user_id>` |
+| GET    | `/v1/users/:o/workspaces`              | list owner's workspaces           |
+| POST   | `/v1/users/:o/workspaces`              | create workspace (idempotent)     |
+| DELETE | `/v1/users/:o/workspaces/:d`           | delete workspace (cascades grants)|
+| POST   | `/v1/users/:o/workspaces/:d/grants`    | create / promote workspace grant  |
+| GET    | `/v1/users/:o/workspaces/:d/grants`    | list grants on a workspace        |
+| GET    | `/v1/users/:o/workspaces/:d/access`    | access check, `?as=<user_id>` |
 | DELETE | `/v1/users/:o/grants/:id`          | revoke a grant (owner-scoped) |
-| GET    | `/v1/users/:id/grants/owned`       | drives this user shares       |
-| GET    | `/v1/users/:id/grants/incoming`    | drives shared with this user  |
+| GET    | `/v1/users/:id/grants/owned`       | workspaces this user shares       |
+| GET    | `/v1/users/:id/grants/incoming`    | workspaces shared with this user  |
 | POST   | `/v1/users/:id/grants/claim`       | claim pending grants by email |
 | GET    | `/v1/users/:id/flags`              | resolved flags for one user   |
 | POST   | `/v1/auth-audit`                   | append login/logout event     |

@@ -23,7 +23,9 @@ use crate::api_tokens::{
 };
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::profile_client::{Drive, DriveGrant, IncomingShare, OwnedDriveSummary, User};
+use crate::profile_client::{
+    IncomingShare, OwnedWorkspaceSummary, User, Workspace, WorkspaceGrant,
+};
 use crate::static_files;
 use crate::token_throttle::TokenThrottle;
 
@@ -31,7 +33,7 @@ const SESSION_COOKIE: &str = "id_session";
 const KEY_USER: &str = "user_id";
 const KEY_PENDING: &str = "pending_oauth";
 /// Optional post-login redirect target. Set by the share landing
-/// when an unauthenticated user lands on `/s/:owner/:drive` so the
+/// when an unauthenticated user lands on `/s/:owner/:workspace` so the
 /// OAuth callback can resume the flow instead of dropping the user
 /// at the dashboard. Stored as a relative path; the callback
 /// validates the prefix before using it.
@@ -42,7 +44,7 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     pub api_tokens: ApiTokenService,
     /// Per-token-fingerprint rate limiter applied to
-    /// /internal/v1/tokens/validate. Defense in depth: drive-proxy
+    /// /internal/v1/tokens/validate. Defense in depth: workspace-proxy
     /// throttles by the same fingerprint one hop earlier, so this
     /// kicks in only if the internal bearer leaks and someone calls
     /// identity directly. Throttled requests come back as 401 so
@@ -67,8 +69,8 @@ const RESERVED_USERNAMES: &[&str] = &[
     "developer",
     "developers",
     "docs",
-    "drive",
-    "drives",
+    "workspace",
+    "workspaces",
     "help",
     "id",
     "identity",
@@ -109,8 +111,8 @@ pub fn router(
     token_throttle: TokenThrottle,
 ) -> Router {
     // Host-only on id.chan.app: no Domain attribute, so the cookie
-    // does not propagate to drive.chan.app or its subdomains. The
-    // drive-gate handoff covers the cross-service auth need; see
+    // does not propagate to workspace.chan.app or its subdomains. The
+    // workspace-gate handoff covers the cross-service auth need; see
     // crates/identity/design.md.
     let session_layer = SessionManagerLayer::new(store)
         .with_name(SESSION_COOKIE)
@@ -129,12 +131,12 @@ pub fn router(
     // its own sub-router so the session layer doesn't try to load a
     // cookie session for callers that don't have one.
     //
-    // No rate limit here. The only caller is drive-proxy, so a
+    // No rate limit here. The only caller is workspace-proxy, so a
     // governor at this hop sees one peer IP regardless of how many
     // distinct clients are probing tokens upstream: a single global
     // bucket that can lock out legitimate `chan serve` handshakes
     // while leaving real attacker shape invisible. The PAT
-    // brute-force gate now lives in drive-proxy, keyed on a hash of
+    // brute-force gate now lives in workspace-proxy, keyed on a hash of
     // the candidate token, where it can throttle guesses at a
     // specific PAT regardless of source-IP distribution.
     let internal = Router::new()
@@ -153,20 +155,23 @@ pub fn router(
         .route("/api/tokens", get(tokens_list).post(tokens_create))
         .route("/api/tokens/:id", axum::routing::delete(tokens_revoke))
         .route("/api/tokens/:id/audit", get(tokens_audit))
-        .route("/api/drives/open", get(drives_open))
-        .route("/api/drives/owned", get(drives_owned))
-        .route("/api/drives/incoming", get(drives_incoming))
-        .route("/api/drives", post(drives_create))
-        .route("/api/drives/:drive", axum::routing::delete(drives_delete))
+        .route("/api/workspaces/open", get(workspaces_open))
+        .route("/api/workspaces/owned", get(workspaces_owned))
+        .route("/api/workspaces/incoming", get(workspaces_incoming))
+        .route("/api/workspaces", post(workspaces_create))
         .route(
-            "/api/drives/:drive/grants",
-            get(drive_grants_list).post(drive_grants_create),
+            "/api/workspaces/:workspace",
+            axum::routing::delete(workspaces_delete),
+        )
+        .route(
+            "/api/workspaces/:workspace/grants",
+            get(workspace_grants_list).post(workspace_grants_create),
         )
         .route(
             "/api/grants/:id",
-            axum::routing::delete(drive_grants_delete),
+            axum::routing::delete(workspace_grants_delete),
         )
-        .route("/s/:owner/:drive", get(share_landing))
+        .route("/s/:owner/:workspace", get(share_landing))
         .route(
             "/desktop/authorize",
             get(crate::desktop_authorize::authorize),
@@ -448,7 +453,7 @@ async fn auth_callback_inner(
         .await
     {
         Ok(claimed) if claimed > 0 => {
-            tracing::info!(user = %user.username, claimed, "claimed pending drive grants");
+            tracing::info!(user = %user.username, claimed, "claimed pending workspace grants");
         }
         Ok(_) => {}
         Err(e) => {
@@ -539,10 +544,10 @@ async fn current_active_user(state: &AppState, session: &Session) -> Result<User
 }
 
 #[derive(Serialize)]
-struct DriveView {
-    /// Drive slug (`{user}.drive.chan.app/{drive}/`).
-    drive: String,
-    /// Display label. Defaults to the drive slug until the wire
+struct WorkspaceView {
+    /// Workspace slug (`{user}.workspace.chan.app/{workspace}/`).
+    workspace: String,
+    /// Display label. Defaults to the workspace slug until the wire
     /// carries a separate label.
     label: String,
     public: bool,
@@ -553,11 +558,11 @@ struct DriveView {
 #[derive(Serialize)]
 struct MeResponse {
     user: User,
-    /// Live tunnel snapshot for this user, sourced from drive-proxy
+    /// Live tunnel snapshot for this user, sourced from workspace-proxy
     /// admin. Empty when the user has no `chan serve` connected (or
-    /// is blocked, or drive-proxy is unreachable; in the unreachable
+    /// is blocked, or workspace-proxy is unreachable; in the unreachable
     /// case we log and serve an empty list so the dashboard renders).
-    drives: Vec<DriveView>,
+    workspaces: Vec<WorkspaceView>,
     /// Resolved feature flags for this user. Map of flag_key -> bool.
     /// Sourced from profile each call (no caching) so a gradual
     /// rollout takes effect on the next dashboard reload.
@@ -573,27 +578,27 @@ async fn me(State(state): State<AppState>, session: Session) -> Result<Response>
         return Err(Error::Unauthorized);
     };
 
-    // Drive list comes from drive-proxy. Blocked users get an empty
+    // Workspace list comes from workspace-proxy. Blocked users get an empty
     // list; the SPA renders the blocked view from `user.blocked_at`.
-    // drive-proxy outages also surface as empty (with a log line)
+    // workspace-proxy outages also surface as empty (with a log line)
     // rather than failing the whole `/api/me`: the dashboard is the
     // user's only way to discover other state (rename, PATs, account
     // delete), and that state still loads from profile-service.
-    let drives = if user.is_blocked() {
+    let workspaces = if user.is_blocked() {
         Vec::new()
-    } else if let Some(client) = &state.cfg.drive_admin {
+    } else if let Some(client) = &state.cfg.workspace_admin {
         match client.list_user_tunnels(&user.username).await {
             Ok(rows) => rows
                 .into_iter()
-                .map(|t| DriveView {
-                    label: t.drive.clone(),
-                    drive: t.drive,
+                .map(|t| WorkspaceView {
+                    label: t.workspace.clone(),
+                    workspace: t.workspace,
                     public: t.public,
                     status: "online",
                 })
                 .collect(),
             Err(e) => {
-                tracing::warn!(error = ?e, user = %user.username, "drive list fetch failed");
+                tracing::warn!(error = ?e, user = %user.username, "workspace list fetch failed");
                 Vec::new()
             }
         }
@@ -613,7 +618,7 @@ async fn me(State(state): State<AppState>, session: Session) -> Result<Response>
 
     Ok(Json(MeResponse {
         user,
-        drives,
+        workspaces,
         flags,
     })
     .into_response())
@@ -663,7 +668,7 @@ async fn providers_list(State(state): State<AppState>) -> Json<ProvidersResponse
 
 async fn delete_profile(State(state): State<AppState>, session: Session) -> Result<StatusCode> {
     let uid = current_user_id(&session).await?;
-    // Look the user up before delete so we can hand drive-proxy the
+    // Look the user up before delete so we can hand workspace-proxy the
     // username for the bulk tunnel evict; the row is gone after the
     // DELETE returns, including via FK cascade. Tolerate "already
     // gone" (cookie outlived the row) by treating None as a no-op.
@@ -678,11 +683,11 @@ async fn delete_profile(State(state): State<AppState>, session: Session) -> Resu
     state.cfg.profile_client.delete_user(uid).await?;
 
     // Best-effort: drop every live tunnel the user had open.
-    // drive-proxy holds those substreams in-process, so the cascade
+    // workspace-proxy holds those substreams in-process, so the cascade
     // above doesn't reach them. A failure here logs and continues;
     // the remote chan serve will get rejected on its next handshake
     // anyway because the PAT is now gone.
-    if let (Some(client), Some(name)) = (&state.cfg.drive_admin, username) {
+    if let (Some(client), Some(name)) = (&state.cfg.workspace_admin, username) {
         match client.kill_user_tunnels(&name).await {
             Ok(killed) if killed > 0 => {
                 tracing::info!(user = %name, killed, "evicted tunnels on account delete");
@@ -783,7 +788,7 @@ struct CreateTokenBody {
     /// Capabilities to grant the token. When absent (or empty), the
     /// service falls back to `DEFAULT_TOKEN_SCOPES` (`["tunnel"]`):
     /// the holder can dial chan-tunnel but cannot host a publicly-
-    /// readable drive. Grant `"tunnel.public"` explicitly when
+    /// readable workspace. Grant `"tunnel.public"` explicitly when
     /// minting tokens for users authorised to share anonymously.
     #[serde(default)]
     scopes: Option<Vec<String>>,
@@ -899,9 +904,9 @@ async fn tokens_revoke(
     // open. chan-serve instances using a non-revoked token will
     // reconnect on the next handshake; instances using the revoked
     // token fail the next validate and stay disconnected. A failure
-    // to reach drive-proxy logs and continues; the next handshake
+    // to reach workspace-proxy logs and continues; the next handshake
     // will refuse the token anyway via the DB check.
-    if let Some(client) = &state.cfg.drive_admin {
+    if let Some(client) = &state.cfg.workspace_admin {
         match client.kill_user_tunnels(&user.username).await {
             Ok(killed) if killed > 0 => {
                 tracing::info!(user = %user.username, killed, "evicted tunnels on PAT revoke");
@@ -934,14 +939,14 @@ async fn tokens_audit(
 }
 
 #[derive(Debug, Deserialize)]
-struct DrivesOpenQuery {
+struct WorkspacesOpenQuery {
     u: String,
     d: String,
 }
 
-/// Mint a drive-gate entry token and 303 the browser to
-/// `https://{u}.drive.chan.app/{d}/?t=<jwt>`. drive-proxy verifies
-/// the token, sets a host-only `drive_gate` cookie, and 303s to the
+/// Mint a workspace-gate entry token and 303 the browser to
+/// `https://{u}.workspace.chan.app/{d}/?t=<jwt>`. workspace-proxy verifies
+/// the token, sets a host-only `workspace_gate` cookie, and 303s to the
 /// clean URL. The whole handshake is invisible to the user past the
 /// initial click.
 ///
@@ -950,28 +955,28 @@ struct DrivesOpenQuery {
 ///   * `u` is resolved to a user record (case-insensitive username
 ///     lookup); 404 if unknown so the endpoint cannot be used to
 ///     probe handles;
-///   * profile `drive_access?as=<self>` is consulted: owner returns
+///   * profile `workspace_access?as=<self>` is consulted: owner returns
 ///     `owner`, accepted grantee returns `viewer`/`editor`, anyone
-///     else 404 (same shape as "unknown drive");
-///   * `d` is verified live in `u`'s tunnel registry on drive-proxy
+///     else 404 (same shape as "unknown workspace");
+///   * `d` is verified live in `u`'s tunnel registry on workspace-proxy
 ///     (cheap defense-in-depth and a friendly 404 instead of a
-///     valid-token-into-a-cold-drive race).
+///     valid-token-into-a-cold-workspace race).
 ///
-/// The entry token is short-lived (30s). drive-proxy validates
-/// signature + exp + aud (`{u}.drive.chan.app`) + drv (`{d}`) + sub
-/// (the caller's user_id, *not* the owner's, so the drive_gate
+/// The entry token is short-lived (30s). workspace-proxy validates
+/// signature + exp + aud (`{u}.workspace.chan.app`) + drv (`{d}`) + sub
+/// (the caller's user_id, *not* the owner's, so the workspace_gate
 /// cookie minted on the next leg carries the right identity for
 /// upstream collab attribution) and then issues its own 24h session
 /// JWT cookie.
-async fn drives_open(
+async fn workspaces_open(
     State(state): State<AppState>,
     session: Session,
-    Query(q): Query<DrivesOpenQuery>,
+    Query(q): Query<WorkspacesOpenQuery>,
 ) -> Result<Redirect> {
     let caller = current_active_user(&state, &session).await?;
     let owner_handle = q.u.trim().to_ascii_lowercase();
-    let drive = q.d.trim().to_ascii_lowercase();
-    if !valid_username(&owner_handle) || !is_drive_name_shape(&drive) {
+    let workspace = q.d.trim().to_ascii_lowercase();
+    if !valid_username(&owner_handle) || !is_workspace_name_shape(&workspace) {
         return Err(Error::NotFound);
     }
 
@@ -985,33 +990,32 @@ async fn drives_open(
         .await?
         .ok_or(Error::NotFound)?;
 
-    // Authorization. 404 on no-access matches the unknown-drive shape
-    // so this endpoint cannot be used to enumerate which drives an
+    // Authorization. 404 on no-access matches the unknown-workspace shape
+    // so this endpoint cannot be used to enumerate which workspaces an
     // owner is currently sharing or what handles exist.
     state
         .cfg
         .profile_client
-        .drive_access(owner.id, &drive, caller.id)
+        .workspace_access(owner.id, &workspace, caller.id)
         .await?
         .ok_or(Error::NotFound)?;
 
-    // Verify the drive is actually live before minting. drive-proxy is
+    // Verify the workspace is actually live before minting. workspace-proxy is
     // the authority on live registrations.
-    let client = state
-        .cfg
-        .drive_admin
-        .as_ref()
-        .ok_or_else(|| Error::Anyhow(anyhow::anyhow!("drive admin client not configured")))?;
+    let client =
+        state.cfg.workspace_admin.as_ref().ok_or_else(|| {
+            Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
+        })?;
     let live = client.list_user_tunnels(&owner.username).await?;
-    if !live.iter().any(|t| t.drive == drive) {
+    if !live.iter().any(|t| t.workspace == workspace) {
         return Err(Error::NotFound);
     }
 
-    let host = state.cfg.drive_host_for(&owner.username);
-    let token = gateway_common::drive_gate::encode_entry(
-        state.cfg.drive_gate_secret.as_bytes(),
+    let host = state.cfg.workspace_host_for(&owner.username);
+    let token = gateway_common::workspace_gate::encode_entry(
+        state.cfg.workspace_gate_secret.as_bytes(),
         caller.id,
-        &drive,
+        &workspace,
         &host,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
@@ -1022,18 +1026,18 @@ async fn drives_open(
     // origins without JS; the 30s exp keeps the leak window short.
     //
     // Scheme + port come from config so a local-dev deploy where
-    // `*.drive.localtest.me` resolves to 127.0.0.1 over plain HTTP
+    // `*.workspace.localtest.me` resolves to 127.0.0.1 over plain HTTP
     // builds the right URL.
     let url = format!(
-        "{scheme}://{host}{port}/{drive}/?t={token}",
-        scheme = state.cfg.drive_public_scheme,
-        port = state.cfg.drive_public_port,
+        "{scheme}://{host}{port}/{workspace}/?t={token}",
+        scheme = state.cfg.workspace_public_scheme,
+        port = state.cfg.workspace_public_port,
     );
     Ok(Redirect::to(&url))
 }
 
 // ---------------------------------------------------------------------------
-// Drive sharing (grants)
+// Workspace sharing (grants)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -1042,21 +1046,21 @@ struct CreateGrantBody {
     role: String,
 }
 
-/// Owner creates / promotes a grant on one of their drives. The
-/// session user is the owner; the URL carries only the drive name
+/// Owner creates / promotes a grant on one of their workspaces. The
+/// session user is the owner; the URL carries only the workspace name
 /// (not the owner's id), so a stale tab cannot mint grants against
-/// somebody else's drive.
-async fn drive_grants_create(
+/// somebody else's workspace.
+async fn workspace_grants_create(
     State(state): State<AppState>,
     session: Session,
-    Path(drive): Path<String>,
+    Path(workspace): Path<String>,
     Json(body): Json<CreateGrantBody>,
-) -> Result<(StatusCode, Json<DriveGrant>)> {
+) -> Result<(StatusCode, Json<WorkspaceGrant>)> {
     let user = current_active_user(&state, &session).await?;
     // Surface format errors before the round trip; profile re-checks.
-    let drive = drive.trim().to_ascii_lowercase();
-    if !is_drive_name_shape(&drive) {
-        return Err(Error::BadRequest("invalid drive name".into()));
+    let workspace = workspace.trim().to_ascii_lowercase();
+    if !is_workspace_name_shape(&workspace) {
+        return Err(Error::BadRequest("invalid workspace name".into()));
     }
     let role = body.role.trim();
     if role != "viewer" && role != "editor" {
@@ -1065,30 +1069,30 @@ async fn drive_grants_create(
     let grant = state
         .cfg
         .profile_client
-        .create_drive_grant(user.id, &drive, body.grantee_email.trim(), role)
+        .create_workspace_grant(user.id, &workspace, body.grantee_email.trim(), role)
         .await?;
     Ok((StatusCode::CREATED, Json(grant)))
 }
 
-async fn drive_grants_list(
+async fn workspace_grants_list(
     State(state): State<AppState>,
     session: Session,
-    Path(drive): Path<String>,
-) -> Result<Json<Vec<DriveGrant>>> {
+    Path(workspace): Path<String>,
+) -> Result<Json<Vec<WorkspaceGrant>>> {
     let user = current_active_user(&state, &session).await?;
-    let drive = drive.trim().to_ascii_lowercase();
-    if !is_drive_name_shape(&drive) {
-        return Err(Error::BadRequest("invalid drive name".into()));
+    let workspace = workspace.trim().to_ascii_lowercase();
+    if !is_workspace_name_shape(&workspace) {
+        return Err(Error::BadRequest("invalid workspace name".into()));
     }
     let rows = state
         .cfg
         .profile_client
-        .list_drive_grants(user.id, &drive)
+        .list_workspace_grants(user.id, &workspace)
         .await?;
     Ok(Json(rows))
 }
 
-async fn drive_grants_delete(
+async fn workspace_grants_delete(
     State(state): State<AppState>,
     session: Session,
     Path(grant_id): Path<Uuid>,
@@ -1100,65 +1104,69 @@ async fn drive_grants_delete(
     state
         .cfg
         .profile_client
-        .delete_drive_grant(user.id, grant_id)
+        .delete_workspace_grant(user.id, grant_id)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn drives_owned(
+async fn workspaces_owned(
     State(state): State<AppState>,
     session: Session,
-) -> Result<Json<Vec<OwnedDriveSummary>>> {
+) -> Result<Json<Vec<OwnedWorkspaceSummary>>> {
     let user = current_active_user(&state, &session).await?;
-    let rows = state.cfg.profile_client.list_owned_drives(user.id).await?;
+    let rows = state
+        .cfg
+        .profile_client
+        .list_owned_workspaces(user.id)
+        .await?;
     Ok(Json(rows))
 }
 
 #[derive(Debug, Deserialize)]
-struct CreateDriveBody {
-    drive_name: String,
+struct CreateWorkspaceBody {
+    workspace_name: String,
 }
 
-/// Create one drive in the owner's namespace. Idempotent at
+/// Create one workspace in the owner's namespace. Idempotent at
 /// profile-service: re-issuing for the same name returns the
 /// existing row.
-async fn drives_create(
+async fn workspaces_create(
     State(state): State<AppState>,
     session: Session,
-    Json(body): Json<CreateDriveBody>,
-) -> Result<Json<Drive>> {
+    Json(body): Json<CreateWorkspaceBody>,
+) -> Result<Json<Workspace>> {
     let user = current_active_user(&state, &session).await?;
-    let name = body.drive_name.trim().to_ascii_lowercase();
-    if !is_drive_name_shape(&name) {
-        return Err(Error::BadRequest("invalid drive name".into()));
+    let name = body.workspace_name.trim().to_ascii_lowercase();
+    if !is_workspace_name_shape(&name) {
+        return Err(Error::BadRequest("invalid workspace name".into()));
     }
-    let drive = state
+    let workspace = state
         .cfg
         .profile_client
-        .create_drive(user.id, &name)
+        .create_workspace(user.id, &name)
         .await?;
-    Ok(Json(drive))
+    Ok(Json(workspace))
 }
 
-async fn drives_delete(
+async fn workspaces_delete(
     State(state): State<AppState>,
     session: Session,
-    Path(drive): Path<String>,
+    Path(workspace): Path<String>,
 ) -> Result<StatusCode> {
     let user = current_active_user(&state, &session).await?;
-    let name = drive.trim().to_ascii_lowercase();
-    if !is_drive_name_shape(&name) {
-        return Err(Error::BadRequest("invalid drive name".into()));
+    let name = workspace.trim().to_ascii_lowercase();
+    if !is_workspace_name_shape(&name) {
+        return Err(Error::BadRequest("invalid workspace name".into()));
     }
     state
         .cfg
         .profile_client
-        .delete_drive(user.id, &name)
+        .delete_workspace(user.id, &name)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn drives_incoming(
+async fn workspaces_incoming(
     State(state): State<AppState>,
     session: Session,
 ) -> Result<Json<Vec<IncomingShare>>> {
@@ -1174,7 +1182,7 @@ async fn drives_incoming(
 /// Shape-only validator; profile re-checks. 1-64 chars, lowercase
 /// ascii alnum + `[._-]`, with `.` / `..` / leading-dot rejected to
 /// match the canonical rule in profile-service.
-fn is_drive_name_shape(s: &str) -> bool {
+fn is_workspace_name_shape(s: &str) -> bool {
     let len = s.len();
     if !(1..=64).contains(&len) {
         return false;
@@ -1193,25 +1201,25 @@ fn is_drive_name_shape(s: &str) -> bool {
 /// Public entry point for a copied share link.
 ///
 /// Flow:
-///   1. If the caller has no session, stash `/s/:owner/:drive` and
+///   1. If the caller has no session, stash `/s/:owner/:workspace` and
 ///      303 to `/` so the SPA shows the OAuth picker. The callback
 ///      reads the stash and 303s back here after sign-in.
 ///   2. With a session, resolve `:owner` (username -> User) and call
-///      profile `drive_access?as=<self>`. The owner case and the
+///      profile `workspace_access?as=<self>`. The owner case and the
 ///      grantee case both return a role; no-access returns 404.
 ///   3. On access, mint an entry JWT against the owner's
-///      `{owner}.drive.chan.app` host and 303 to drive-proxy so
-///      drive-proxy sets its `drive_gate` cookie and serves the
+///      `{owner}.workspace.chan.app` host and 303 to workspace-proxy so
+///      workspace-proxy sets its `workspace_gate` cookie and serves the
 ///      content. The same 30s short-lived entry token shape used by
-///      `/api/drives/open`.
+///      `/api/workspaces/open`.
 async fn share_landing(
     State(state): State<AppState>,
     session: Session,
-    Path((owner, drive)): Path<(String, String)>,
+    Path((owner, workspace)): Path<(String, String)>,
 ) -> Result<Redirect> {
     let owner = owner.trim().to_ascii_lowercase();
-    let drive = drive.trim().to_ascii_lowercase();
-    if !valid_username(&owner) || !is_drive_name_shape(&drive) {
+    let workspace = workspace.trim().to_ascii_lowercase();
+    if !valid_username(&owner) || !is_workspace_name_shape(&workspace) {
         return Err(Error::NotFound);
     }
 
@@ -1222,7 +1230,7 @@ async fn share_landing(
         .await
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("session get: {e}")))?;
     let Some(uid) = uid else {
-        let dest = format!("/s/{owner}/{drive}");
+        let dest = format!("/s/{owner}/{workspace}");
         session
             .insert(KEY_POST_LOGIN_REDIRECT, &dest)
             .await
@@ -1231,7 +1239,7 @@ async fn share_landing(
     };
 
     // Resolve the owner handle. 404 is the same shape as "no access"
-    // and "unknown drive", so a stranger cannot probe the existence
+    // and "unknown workspace", so a stranger cannot probe the existence
     // of a handle through this route.
     let owner_user = state
         .cfg
@@ -1243,31 +1251,31 @@ async fn share_landing(
     let access = state
         .cfg
         .profile_client
-        .drive_access(owner_user.id, &drive, uid)
+        .workspace_access(owner_user.id, &workspace, uid)
         .await?
         .ok_or(Error::NotFound)?;
 
-    let host = state.cfg.drive_host_for(&owner_user.username);
-    let token = gateway_common::drive_gate::encode_entry(
-        state.cfg.drive_gate_secret.as_bytes(),
+    let host = state.cfg.workspace_host_for(&owner_user.username);
+    let token = gateway_common::workspace_gate::encode_entry(
+        state.cfg.workspace_gate_secret.as_bytes(),
         uid,
-        &drive,
+        &workspace,
         &host,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
 
     tracing::info!(
         owner = %owner_user.username,
-        drive = %drive,
+        workspace = %workspace,
         caller = %uid,
         role = %access.role,
         "share landing: minting entry token",
     );
 
     let url = format!(
-        "{scheme}://{host}{port}/{drive}/?t={token}",
-        scheme = state.cfg.drive_public_scheme,
-        port = state.cfg.drive_public_port,
+        "{scheme}://{host}{port}/{workspace}/?t={token}",
+        scheme = state.cfg.workspace_public_scheme,
+        port = state.cfg.workspace_public_port,
     );
     Ok(Redirect::to(&url))
 }
@@ -1308,7 +1316,7 @@ async fn validate_token(
         return Err(Error::Unauthorized);
     }
     // Per-token-fingerprint rate limit before the DB lookup. Same
-    // shape as drive-proxy's outer throttle: a throttled call comes
+    // shape as workspace-proxy's outer throttle: a throttled call comes
     // back as the same 401 an unknown-token call returns, so the
     // throttle is not observable on the wire. See the module doc
     // for the threat model.

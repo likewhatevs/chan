@@ -3,14 +3,14 @@
 //! Three routes under `/admin/v1/`:
 //!
 //!   * `GET    /tunnels`            snapshot of every registered tunnel
-//!   * `POST   /tunnels/:user/:drive/kill`  force a tunnel offline
+//!   * `POST   /tunnels/:user/:workspace/kill`  force a tunnel offline
 //!   * `GET    /tunnels/watch`      SSE stream of periodic snapshots
 //!
-//! All gated by a single bearer token (`DRIVE_ADMIN_TOKEN`). The
+//! All gated by a single bearer token (`WORKSPACE_ADMIN_TOKEN`). The
 //! tunnel registry is in-memory and process-local, so admin reads
-//! always see exactly what this drive-proxy instance is serving --
+//! always see exactly what this workspace-proxy instance is serving --
 //! no cross-process aggregation in v0 because the deployment runs
-//! a single drive-proxy.
+//! a single workspace-proxy.
 
 use std::convert::Infallible;
 use std::time::Duration;
@@ -33,7 +33,7 @@ use crate::http::AppState;
 #[derive(Debug, Clone, Serialize)]
 pub struct TunnelView {
     pub user: String,
-    pub drive: String,
+    pub workspace: String,
     pub public: bool,
     pub peer_addr: Option<String>,
     pub connected_at: DateTime<Utc>,
@@ -52,7 +52,7 @@ pub fn router(state: AppState) -> Router<AppState> {
     // network, swap in an XFF-aware governor instead.
     Router::new()
         .route("/admin/v1/tunnels", get(list_tunnels))
-        .route("/admin/v1/tunnels/:user/:drive/kill", post(kill_tunnel))
+        .route("/admin/v1/tunnels/:user/:workspace/kill", post(kill_tunnel))
         .route("/admin/v1/users/:user/tunnels", get(list_user_tunnels))
         .route(
             "/admin/v1/users/:user/tunnels/kill",
@@ -89,10 +89,10 @@ async fn list_tunnels(State(state): State<AppState>) -> Json<Vec<TunnelView>> {
 }
 
 /// Per-user snapshot. Used by identity-service's `/api/me` to merge
-/// the live-drive list into the dashboard response. "User has nothing
+/// the live-workspace list into the dashboard response. "User has nothing
 /// connected" returns an empty array, not a 404, so callers do not
 /// special-case the steady state where a fresh sign-in has zero
-/// drives.
+/// workspaces.
 async fn list_user_tunnels(
     State(state): State<AppState>,
     Path(user): Path<String>,
@@ -112,7 +112,7 @@ async fn list_user_tunnels(
         .filter(|t| t.user.as_ref() == user)
         .map(|t| TunnelView {
             user: t.user.as_ref().to_string(),
-            drive: t.workspace.as_ref().to_string(),
+            workspace: t.workspace.as_ref().to_string(),
             public: t.public,
             peer_addr: t.peer_addr.map(|a| a.to_string()),
             connected_at: t.connected_at,
@@ -123,10 +123,10 @@ async fn list_user_tunnels(
 
 async fn kill_tunnel(
     State(state): State<AppState>,
-    Path((user, drive)): Path<(String, String)>,
+    Path((user, workspace)): Path<(String, String)>,
 ) -> std::result::Result<StatusCode, Error> {
-    if state.registry.evict(&user, &drive) {
-        tracing::info!(%user, %drive, "tunnel evicted by admin");
+    if state.registry.evict(&user, &workspace) {
+        tracing::info!(%user, %workspace, "tunnel evicted by admin");
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(Error::NotFound)
@@ -155,7 +155,7 @@ async fn kill_user_tunnels(
     Ok(Json(KillUserTunnelsResponse { killed }))
 }
 
-/// Periodic snapshot stream. Drive-proxy doesn't currently emit
+/// Periodic snapshot stream. Workspace-proxy doesn't currently emit
 /// register/deregister events to a broadcast channel, so we tick
 /// once a second and let the CLI render. Cheap: lock + clone of a
 /// small HashMap. Bumps to event-driven when there's evidence the
@@ -190,7 +190,7 @@ fn snapshot(state: &AppState) -> Vec<TunnelView> {
         .into_iter()
         .map(|t| TunnelView {
             user: t.user.as_ref().to_string(),
-            drive: t.workspace.as_ref().to_string(),
+            workspace: t.workspace.as_ref().to_string(),
             public: t.public,
             peer_addr: t.peer_addr.map(|a| a.to_string()),
             connected_at: t.connected_at,

@@ -84,7 +84,7 @@ impl TestApp {
             pool: pool.clone(),
             auth_token: TOKEN.to_string(),
             admin_token: Some(ADMIN_TOKEN.to_string()),
-            drive_admin: None,
+            workspace_admin: None,
         });
 
         Self {
@@ -880,7 +880,7 @@ async fn upsert_refreshes_avatar_when_changed() {
 async fn upsert_concurrent_first_time_no_orphans() {
     // Race regression: multiple concurrent first-time signups for
     // the same (provider, subject) must converge on a single user
-    // row, not leave orphans behind. Drives N parallel upserts and
+    // row, not leave orphans behind. Workspaces N parallel upserts and
     // asserts they all return the same user id and no extra users
     // were created with that email.
     let app = TestApp::new().await;
@@ -965,7 +965,7 @@ async fn cascade_on_user_delete() {
 }
 
 // ---------------------------------------------------------------------------
-// drive_grants
+// workspace_grants
 // ---------------------------------------------------------------------------
 
 async fn mk_user(app: &TestApp, email: &str) -> String {
@@ -984,14 +984,14 @@ async fn grant_create_resolves_existing_user() {
     let (s, v) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
     assert_eq!(v["grantee_user_id"], alice);
     assert_eq!(v["role"], "editor");
-    assert_eq!(v["drive_name"], "photos");
+    assert_eq!(v["workspace_name"], "photos");
     assert!(v["accepted_at"].is_string());
 
     app.cleanup().await;
@@ -1005,7 +1005,7 @@ async fn grant_create_pending_for_unknown_email() {
     let (s, v) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             Some(json!({"grantee_email": "future@x.com", "role": "viewer"})),
         )
         .await;
@@ -1025,7 +1025,7 @@ async fn grant_create_validates_inputs() {
     let (s, _) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             Some(json!({"grantee_email": "a@b.com", "role": "admin"})),
         )
         .await;
@@ -1035,18 +1035,18 @@ async fn grant_create_validates_inputs() {
     let (s, _) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             Some(json!({"grantee_email": "nope", "role": "viewer"})),
         )
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 
-    // Bad drive name (uppercase rejected after normalize roundtrip
+    // Bad workspace name (uppercase rejected after normalize roundtrip
     // would actually pass; we test illegal chars instead).
     let (s, _) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives/has%20space/grants"),
+            &format!("/v1/users/{owner}/workspaces/has%20space/grants"),
             Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
         )
         .await;
@@ -1057,7 +1057,7 @@ async fn grant_create_validates_inputs() {
     let (s, _) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{ghost}/drives/photos/grants"),
+            &format!("/v1/users/{ghost}/workspaces/photos/grants"),
             Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
         )
         .await;
@@ -1075,7 +1075,7 @@ async fn grant_create_is_idempotent_and_promotes_role() {
     let (s, v1) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
         )
         .await;
@@ -1084,7 +1084,7 @@ async fn grant_create_is_idempotent_and_promotes_role() {
     let (s, v2) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             Some(json!({"grantee_email": "ALICE@x.com", "role": "editor"})),
         )
         .await;
@@ -1105,14 +1105,14 @@ async fn grant_list_and_delete() {
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives/photos/grants"),
+        &format!("/v1/users/{owner}/workspaces/photos/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
     )
     .await;
     let (_, b) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             Some(json!({"grantee_email": "bob@x.com", "role": "editor"})),
         )
         .await;
@@ -1121,7 +1121,7 @@ async fn grant_list_and_delete() {
     let (s, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             None,
         )
         .await;
@@ -1140,7 +1140,7 @@ async fn grant_list_and_delete() {
     let (_, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             None,
         )
         .await;
@@ -1151,7 +1151,7 @@ async fn grant_list_and_delete() {
     let (_, again) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             Some(json!({"grantee_email": "bob@x.com", "role": "viewer"})),
         )
         .await;
@@ -1169,7 +1169,7 @@ async fn grant_list_and_delete() {
 }
 
 #[tokio::test]
-async fn drive_access_owner_grantee_and_stranger() {
+async fn workspace_access_owner_grantee_and_stranger() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     let alice = mk_user(&app, "alice@x.com").await;
@@ -1177,7 +1177,7 @@ async fn drive_access_owner_grantee_and_stranger() {
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives/photos/grants"),
+        &format!("/v1/users/{owner}/workspaces/photos/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
     )
     .await;
@@ -1186,7 +1186,7 @@ async fn drive_access_owner_grantee_and_stranger() {
     let (s, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/drives/photos/access?as={owner}"),
+            &format!("/v1/users/{owner}/workspaces/photos/access?as={owner}"),
             None,
         )
         .await;
@@ -1197,7 +1197,7 @@ async fn drive_access_owner_grantee_and_stranger() {
     let (s, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/drives/photos/access?as={alice}"),
+            &format!("/v1/users/{owner}/workspaces/photos/access?as={alice}"),
             None,
         )
         .await;
@@ -1208,17 +1208,17 @@ async fn drive_access_owner_grantee_and_stranger() {
     let (s, _) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/drives/photos/access?as={stranger}"),
+            &format!("/v1/users/{owner}/workspaces/photos/access?as={stranger}"),
             None,
         )
         .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 
-    // Unknown drive: also 404 (same shape).
+    // Unknown workspace: also 404 (same shape).
     let (s, _) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/drives/nope/access?as={alice}"),
+            &format!("/v1/users/{owner}/workspaces/nope/access?as={alice}"),
             None,
         )
         .await;
@@ -1235,7 +1235,7 @@ async fn claim_sweep_fills_pending_grants() {
     // Pre-seed a grant for an email that doesn't exist yet.
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives/photos/grants"),
+        &format!("/v1/users/{owner}/workspaces/photos/grants"),
         Some(json!({"grantee_email": "late@x.com", "role": "viewer"})),
     )
     .await;
@@ -1258,7 +1258,7 @@ async fn claim_sweep_fills_pending_grants() {
     let (s, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/drives/photos/access?as={late}"),
+            &format!("/v1/users/{owner}/workspaces/photos/access?as={late}"),
             None,
         )
         .await;
@@ -1286,19 +1286,19 @@ async fn list_owned_and_incoming() {
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives/photos/grants"),
+        &format!("/v1/users/{owner}/workspaces/photos/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
     )
     .await;
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives/photos/grants"),
+        &format!("/v1/users/{owner}/workspaces/photos/grants"),
         Some(json!({"grantee_email": "ghost@x.com", "role": "viewer"})),
     )
     .await;
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives/videos/grants"),
+        &format!("/v1/users/{owner}/workspaces/videos/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
     )
     .await;
@@ -1313,9 +1313,9 @@ async fn list_owned_and_incoming() {
     assert_eq!(s, StatusCode::OK);
     let arr = v.as_array().unwrap();
     assert_eq!(arr.len(), 2);
-    assert_eq!(arr[0]["drive_name"], "photos");
+    assert_eq!(arr[0]["workspace_name"], "photos");
     assert_eq!(arr[0]["grant_count"], 2);
-    assert_eq!(arr[1]["drive_name"], "videos");
+    assert_eq!(arr[1]["workspace_name"], "videos");
     assert_eq!(arr[1]["grant_count"], 1);
 
     let (s, v) = app
@@ -1345,7 +1345,7 @@ async fn cascade_grants_on_user_delete() {
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives/photos/grants"),
+        &format!("/v1/users/{owner}/workspaces/photos/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
     )
     .await;
@@ -1366,19 +1366,19 @@ async fn cascade_grants_on_user_delete() {
 }
 
 // ---------------------------------------------------------------------------
-// drives (first-class entity)
+// workspaces (first-class entity)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn drive_create_idempotent() {
+async fn workspace_create_idempotent() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
 
     let (s, v1) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives"),
-            Some(json!({"drive_name": "photos"})),
+            &format!("/v1/users/{owner}/workspaces"),
+            Some(json!({"workspace_name": "photos"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
@@ -1386,8 +1386,8 @@ async fn drive_create_idempotent() {
     let (s, v2) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives"),
-            Some(json!({"drive_name": "PHOTOS"})),
+            &format!("/v1/users/{owner}/workspaces"),
+            Some(json!({"workspace_name": "PHOTOS"})),
         )
         .await;
     assert_eq!(s, StatusCode::OK, "re-create returns 200, not 201");
@@ -1397,7 +1397,7 @@ async fn drive_create_idempotent() {
 }
 
 #[tokio::test]
-async fn drive_create_validates_name() {
+async fn workspace_create_validates_name() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
 
@@ -1405,8 +1405,8 @@ async fn drive_create_validates_name() {
         let (s, _) = app
             .req(
                 Method::POST,
-                &format!("/v1/users/{owner}/drives"),
-                Some(json!({"drive_name": bad})),
+                &format!("/v1/users/{owner}/workspaces"),
+                Some(json!({"workspace_name": bad})),
             )
             .await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "should reject {bad:?}");
@@ -1415,43 +1415,43 @@ async fn drive_create_validates_name() {
 }
 
 #[tokio::test]
-async fn drive_list_and_delete_cascades_grants() {
+async fn workspace_list_and_delete_cascades_grants() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     mk_user(&app, "alice@x.com").await;
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives"),
-        Some(json!({"drive_name": "photos"})),
+        &format!("/v1/users/{owner}/workspaces"),
+        Some(json!({"workspace_name": "photos"})),
     )
     .await;
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives/photos/grants"),
+        &format!("/v1/users/{owner}/workspaces/photos/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
     )
     .await;
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives"),
-        Some(json!({"drive_name": "videos"})),
+        &format!("/v1/users/{owner}/workspaces"),
+        Some(json!({"workspace_name": "videos"})),
     )
     .await;
 
     let (s, v) = app
-        .req(Method::GET, &format!("/v1/users/{owner}/drives"), None)
+        .req(Method::GET, &format!("/v1/users/{owner}/workspaces"), None)
         .await;
     assert_eq!(s, StatusCode::OK);
     let arr = v.as_array().unwrap();
     assert_eq!(arr.len(), 2);
-    assert_eq!(arr[0]["drive_name"], "photos");
-    assert_eq!(arr[1]["drive_name"], "videos");
+    assert_eq!(arr[0]["workspace_name"], "photos");
+    assert_eq!(arr[1]["workspace_name"], "videos");
 
     let (s, _) = app
         .req(
             Method::DELETE,
-            &format!("/v1/users/{owner}/drives/photos"),
+            &format!("/v1/users/{owner}/workspaces/photos"),
             None,
         )
         .await;
@@ -1459,16 +1459,16 @@ async fn drive_list_and_delete_cascades_grants() {
 
     // List shrinks.
     let (_, v) = app
-        .req(Method::GET, &format!("/v1/users/{owner}/drives"), None)
+        .req(Method::GET, &format!("/v1/users/{owner}/workspaces"), None)
         .await;
     assert_eq!(v.as_array().unwrap().len(), 1);
 
-    // Cascade dropped the grant. Listing grants on the deleted drive
+    // Cascade dropped the grant. Listing grants on the deleted workspace
     // returns an empty array (the route is valid; just no rows).
     let (_, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/drives/photos/grants"),
+            &format!("/v1/users/{owner}/workspaces/photos/grants"),
             None,
         )
         .await;
@@ -1478,8 +1478,8 @@ async fn drive_list_and_delete_cascades_grants() {
 }
 
 #[tokio::test]
-async fn owned_includes_driveless() {
-    // A brand-new drive with zero grants must still appear in
+async fn owned_includes_workspaceless() {
+    // A brand-new workspace with zero grants must still appear in
     // /grants/owned with grant_count = 0 so the dashboard can
     // render it.
     let app = TestApp::new().await;
@@ -1487,8 +1487,8 @@ async fn owned_includes_driveless() {
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/drives"),
-        Some(json!({"drive_name": "empty"})),
+        &format!("/v1/users/{owner}/workspaces"),
+        Some(json!({"workspace_name": "empty"})),
     )
     .await;
 
@@ -1502,18 +1502,18 @@ async fn owned_includes_driveless() {
     assert_eq!(s, StatusCode::OK);
     let arr = v.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["drive_name"], "empty");
+    assert_eq!(arr[0]["workspace_name"], "empty");
     assert_eq!(arr[0]["grant_count"], 0);
 
     app.cleanup().await;
 }
 
 #[tokio::test]
-async fn grant_create_autocreates_drive() {
-    // POST /v1/users/:o/drives/:d/grants must work even if the
-    // owner has not POSTed the drive first: the grant handler
-    // upserts the drives row in the same transaction. Important
-    // for back-compat with callers that don't know about /drives.
+async fn grant_create_autocreates_workspace() {
+    // POST /v1/users/:o/workspaces/:d/grants must work even if the
+    // owner has not POSTed the workspace first: the grant handler
+    // upserts the workspaces row in the same transaction. Important
+    // for back-compat with callers that don't know about /workspaces.
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     mk_user(&app, "alice@x.com").await;
@@ -1521,17 +1521,17 @@ async fn grant_create_autocreates_drive() {
     let (s, _) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/drives/auto/grants"),
+            &format!("/v1/users/{owner}/workspaces/auto/grants"),
             Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
 
     let (_, v) = app
-        .req(Method::GET, &format!("/v1/users/{owner}/drives"), None)
+        .req(Method::GET, &format!("/v1/users/{owner}/workspaces"), None)
         .await;
     let arr = v.as_array().unwrap();
-    assert!(arr.iter().any(|r| r["drive_name"] == "auto"));
+    assert!(arr.iter().any(|r| r["workspace_name"] == "auto"));
 
     app.cleanup().await;
 }
@@ -1541,16 +1541,16 @@ async fn grant_create_autocreates_drive() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn flags_seeded_oauth_login_and_share_drives() {
+async fn flags_seeded_oauth_login_and_share_workspaces() {
     let app = TestApp::new().await;
     let (s, v) = app.admin(Method::GET, "/v1/admin/flags", None).await;
     assert_eq!(s, StatusCode::OK);
     let arr = v.as_array().unwrap();
     let keys: Vec<&str> = arr.iter().map(|r| r["key"].as_str().unwrap()).collect();
     assert!(keys.contains(&"oauth_login"));
-    assert!(keys.contains(&"share_drives"));
+    assert!(keys.contains(&"share_workspaces"));
     for r in arr {
-        if r["key"] == "oauth_login" || r["key"] == "share_drives" {
+        if r["key"] == "oauth_login" || r["key"] == "share_workspaces" {
             assert_eq!(r["default_enabled"], false);
         }
     }
@@ -1658,18 +1658,22 @@ async fn flag_override_idempotent_and_lists() {
 
     app.admin(
         Method::POST,
-        "/v1/admin/flags/share_drives/overrides",
+        "/v1/admin/flags/share_workspaces/overrides",
         Some(json!({"user_id": alice, "enabled": true})),
     )
     .await;
     app.admin(
         Method::POST,
-        "/v1/admin/flags/share_drives/overrides",
+        "/v1/admin/flags/share_workspaces/overrides",
         Some(json!({"user_id": alice, "enabled": false})),
     )
     .await;
     let (s, v) = app
-        .admin(Method::GET, "/v1/admin/flags/share_drives/overrides", None)
+        .admin(
+            Method::GET,
+            "/v1/admin/flags/share_workspaces/overrides",
+            None,
+        )
         .await;
     assert_eq!(s, StatusCode::OK);
     let arr = v.as_array().unwrap();

@@ -1,6 +1,6 @@
 //! Per-key token bucket with a bounded map of in-flight keys.
 //!
-//! Shared by `drive-proxy::throttle_validator` (wraps a `Validator`)
+//! Shared by `workspace-proxy::throttle_validator` (wraps a `Validator`)
 //! and `identity::token_throttle` (called directly from the validate
 //! handler). Both throttles run the same shape: hash the candidate
 //! token to a 64-bit fingerprint, look up its bucket, refill at a

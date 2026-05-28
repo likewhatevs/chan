@@ -1,9 +1,9 @@
 # Local dev stack
 
 Bootstraps the four chan-gateway services (postgres + profile +
-identity + drive-proxy) against a workspace `cargo run` build, so
+identity + workspace-proxy) against a workspace `cargo run` build, so
 you can browse `id.localtest.me:17000` and exercise the dashboard,
-OAuth flow, and drive-gate handoff against the real binaries.
+OAuth flow, and workspace-gate handoff against the real binaries.
 
 `*.localtest.me` resolves to `127.0.0.1` for every subdomain via
 public DNS, which sidesteps the `/etc/hosts` surgery you would
@@ -17,9 +17,9 @@ default ports):
 |---------------|---------|------------------------------------------|
 | profile       | `17001` | http://127.0.0.1:17001                   |
 | identity      | `17000` | http://id.localtest.me:17000             |
-| drive-proxy   | `17002` | http://drive.localtest.me:17002 (apex)   |
-|               |         | http://*.drive.localtest.me:17002 (wild) |
-| drive tunnel  | `17100` | http://drive.localtest.me:17100 (h2c)    |
+| workspace-proxy   | `17002` | http://workspace.localtest.me:17002 (apex)   |
+|               |         | http://*.workspace.localtest.me:17002 (wild) |
+| workspace tunnel  | `17100` | http://workspace.localtest.me:17100 (h2c)    |
 
 ## One-time setup
 
@@ -54,7 +54,7 @@ default ports):
 scripts/dev/run.sh
 ```
 
-Spawns profile, identity, and drive-proxy in the foreground. Logs
+Spawns profile, identity, and workspace-proxy in the foreground. Logs
 from all three multiplex to stdout, prefixed by service. Ctrl-C
 sends SIGINT to all three and waits for clean shutdown.
 
@@ -65,13 +65,13 @@ Then open:
   identity-service mints a session cookie (host-only on
   `id.localtest.me`), and the SPA loads.
 
-The Drives tab is empty until a `chan serve` instance registers a
-drive (see below).
+The Workspaces tab is empty until a `chan serve` instance registers a
+workspace (see below).
 
 ### First-time sign-in: enrol yourself
 
 Both feature flags ship default-off, so the first OAuth sign-in
-will land on `/?denied=oauth_login` and the Drives tab stays
+will land on `/?denied=oauth_login` and the Workspaces tab stays
 hidden. Two-step bootstrap:
 
 ```sh
@@ -83,17 +83,17 @@ CHAN_ADMIN_TOKEN="$PT" CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:17001 \
   ../../target/debug/chan-gateway-admin user list
 
 # 2. Grant the two seeded flags on your account, then sign in
-#    again. Drives tab + share UI appear.
+#    again. Workspaces tab + share UI appear.
 CHAN_ADMIN_TOKEN="$PT" CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:17001 \
   ../../target/debug/chan-gateway-admin flag grant oauth_login <your-email>
 CHAN_ADMIN_TOKEN="$PT" CHAN_ADMIN_PROFILE_URL=http://127.0.0.1:17001 \
-  ../../target/debug/chan-gateway-admin flag grant share_drives <your-email>
+  ../../target/debug/chan-gateway-admin flag grant share_workspaces <your-email>
 ```
 
 Subsequent users repeat step 2. To open sign-in for everyone, flip
 the default with `chan-admin flag create oauth_login --default-on`.
 
-## Registering a test drive
+## Registering a test workspace
 
 In the `chan` repo (sibling of chan-gateway):
 
@@ -102,25 +102,25 @@ In the `chan` repo (sibling of chan-gateway):
 export CHAN_TUNNEL_TOKEN=chan_pat_...
 
 cd ../chan
-cargo run -p chan -- serve <some-drive-dir> \
-  --tunnel-url=http://drive.localtest.me:17100/v1/tunnel \
-  --tunnel-drive=blog
+cargo run -p chan -- serve <some-workspace-dir> \
+  --tunnel-url=http://workspace.localtest.me:17100/v1/tunnel \
+  --tunnel-workspace=blog
 ```
 
 The `http://` scheme on the URL triggers chan-tunnel-client's h2c
-path (no TLS); drive-proxy's tunnel listener is bound to
+path (no TLS); workspace-proxy's tunnel listener is bound to
 `127.0.0.1:17100` and speaks h2c directly. Once connected, the
-dashboard's Drives tab lists the drive; clicking Open redirects
-the browser through `/api/drives/open` to
-`http://<user>.drive.localtest.me:17002/blog/`.
+dashboard's Workspaces tab lists the workspace; clicking Open redirects
+the browser through `/api/workspaces/open` to
+`http://<user>.workspace.localtest.me:17002/blog/`.
 
 ## Notes
 
 * No TLS anywhere in this stack. `COOKIE_SECURE=false` is set in
   the identity env so the session cookie survives `http://`. Do
   not mirror this config into prod.
-* The drive-gate JWT redirect uses `DRIVE_PUBLIC_SCHEME=http` and
-  `DRIVE_PUBLIC_PORT=:17002`, so the URL identity builds points at
+* The workspace-gate JWT redirect uses `WORKSPACE_PUBLIC_SCHEME=http` and
+  `WORKSPACE_PUBLIC_PORT=:17002`, so the URL identity builds points at
   the dev port. Production sets both to their defaults
   (`https` and empty).
 * Postgres state persists across runs. To wipe and start fresh:

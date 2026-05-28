@@ -2,13 +2,13 @@
 
 Shared internal library for the chan-gateway crates. Houses the
 typed profile-service HTTP client and the SPA-fallback static
-asset handler used by both `identity-service` and `drive-proxy`.
+asset handler used by both `identity-service` and `workspace-proxy`.
 
 Not published; not user-facing. Has no binary.
 
 ## Role in the system
 
-Two consumers (identity-service and drive-proxy) need the same
+Two consumers (identity-service and workspace-proxy) need the same
 plumbing for talking to profile-service and serving an embedded
 Svelte SPA. This crate is the home for that shared code so the
 duplicate copies in each consumer can be reduced to a few-line

@@ -190,23 +190,23 @@ pub struct FeatureFlagSummary {
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct Drive {
+pub struct Workspace {
     pub id: Uuid,
     pub owner_user_id: Uuid,
-    pub drive_name: String,
+    pub workspace_name: String,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateDrive {
-    pub drive_name: String,
+pub struct CreateWorkspace {
+    pub workspace_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct DriveGrant {
+pub struct WorkspaceGrant {
     pub id: Uuid,
     pub owner_user_id: Uuid,
-    pub drive_name: String,
+    pub workspace_name: String,
     pub grantee_email: String,
     pub grantee_user_id: Option<Uuid>,
     pub role: String,
@@ -215,16 +215,16 @@ pub struct DriveGrant {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateDriveGrant {
+pub struct CreateWorkspaceGrant {
     pub grantee_email: String,
     pub role: String,
 }
 
 /// Access decision returned by the per-request gate. `role` is one
 /// of `owner`, `editor`, `viewer`; 404 means the caller has no
-/// access (same shape as "unknown drive", no enumeration leak).
+/// access (same shape as "unknown workspace", no enumeration leak).
 #[derive(Debug, Serialize)]
-pub struct DriveAccess {
+pub struct WorkspaceAccess {
     pub role: String,
 }
 
@@ -237,19 +237,19 @@ pub struct IncomingShare {
     pub owner_username: String,
     pub owner_display_name: Option<String>,
     pub owner_avatar_url: Option<String>,
-    pub drive_name: String,
+    pub workspace_name: String,
     pub role: String,
     pub accepted_at: DateTime<Utc>,
 }
 
-/// One drive the owner has configured shares on. `grant_count` is
+/// One workspace the owner has configured shares on. `grant_count` is
 /// the number of (active) grants on it; the SPA pairs this with the
-/// live-tunnel list from drive-proxy admin to surface "pending —
-/// start chan serve" status for drives that have shares but no live
+/// live-tunnel list from workspace-proxy admin to surface "pending —
+/// start chan serve" status for workspaces that have shares but no live
 /// registration.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct OwnedDriveSummary {
-    pub drive_name: String,
+pub struct OwnedWorkspaceSummary {
+    pub workspace_name: String,
     pub grant_count: i64,
 }
 

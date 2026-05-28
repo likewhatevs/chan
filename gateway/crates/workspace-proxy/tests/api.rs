@@ -1,9 +1,9 @@
-//! Integration tests for drive-proxy.
+//! Integration tests for workspace-proxy.
 //!
-//! No Postgres in this suite: drive-proxy no longer holds sessions
-//! or any DB state. The proxy gate is driven by drive-gate JWTs
-//! (HS256, shared `DRIVE_GATE_SECRET`), and tests mint those
-//! directly via `gateway_common::drive_gate`.
+//! No Postgres in this suite: workspace-proxy no longer holds sessions
+//! or any DB state. The proxy gate is driven by workspace-gate JWTs
+//! (HS256, shared `WORKSPACE_GATE_SECRET`), and tests mint those
+//! directly via `gateway_common::workspace_gate`.
 //!
 //! Tunnel registrations exercise the real chan-tunnel handshake
 //! (h2c POST, Hello/HelloAck, yamux) against an in-process tunnel
@@ -22,22 +22,22 @@ use axum::Router;
 use bytes::Bytes;
 use chan_tunnel_proto::{H2Duplex, TUNNEL_PATH};
 use chan_tunnel_server::{serve_tunnel_listener, ServerError, Validated, Validator};
-use gateway_common::drive_gate;
+use gateway_common::workspace_gate;
 use http::Method as HttpMethod;
 use serde_json::Value;
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use drive_proxy::config::Config;
-use drive_proxy::http as dp_http;
-use drive_proxy::identity_validator::CapturingValidator;
-use drive_proxy::registry::Registry;
+use workspace_proxy::config::Config;
+use workspace_proxy::http as dp_http;
+use workspace_proxy::identity_validator::CapturingValidator;
+use workspace_proxy::registry::Registry;
 
 const ADMIN_TOKEN: &str = "test-admin-token";
-const DRIVE_GATE_SECRET: &[u8] = b"test-drive-gate-secret-32-bytes-aa";
-const APEX_HOST: &str = "drive.chan.app";
-const WILDCARD_SUFFIX: &str = ".drive.chan.app";
+const WORKSPACE_GATE_SECRET: &[u8] = b"test-workspace-gate-secret-32-bytes-aa";
+const APEX_HOST: &str = "workspace.chan.app";
+const WILDCARD_SUFFIX: &str = ".workspace.chan.app";
 
 /// (user_id, username, scopes) row stored per-token in the stub.
 /// Aliased so clippy's `type_complexity` lint is happy on the
@@ -48,7 +48,7 @@ type StubRow = (Uuid, String, Vec<String>);
 /// in place of the real IdentityValidator so tests don't need
 /// identity-service. Scopes are per-token so a test can mint a
 /// private-only token (`["tunnel"]`) or a token that may host a
-/// public drive (`["tunnel", "tunnel.public"]`).
+/// public workspace (`["tunnel", "tunnel.public"]`).
 #[derive(Clone, Default)]
 struct StubValidator {
     by_token: Arc<StdMutex<HashMap<String, StubRow>>>,
@@ -101,10 +101,10 @@ struct TestApp {
 
 impl TestApp {
     async fn new() -> Self {
-        Self::new_with_max_drives(0).await
+        Self::new_with_max_workspaces(0).await
     }
 
-    async fn new_with_max_drives(max_drives_per_user: usize) -> Self {
+    async fn new_with_max_workspaces(max_workspaces_per_user: usize) -> Self {
         let registry = Registry::new();
 
         let cfg = Arc::new(Config {
@@ -114,9 +114,9 @@ impl TestApp {
             wildcard_suffix: WILDCARD_SUFFIX.into(),
             identity_url: "http://127.0.0.1:7000/".parse().unwrap(),
             identity_auth_token: "unused-in-tests".into(),
-            dashboard_url: "https://id.chan.app/drives".into(),
-            drive_gate_secret: std::str::from_utf8(DRIVE_GATE_SECRET).unwrap().into(),
-            max_drives_per_user,
+            dashboard_url: "https://id.chan.app/workspaces".into(),
+            workspace_gate_secret: std::str::from_utf8(WORKSPACE_GATE_SECRET).unwrap().into(),
+            max_workspaces_per_user,
             admin_token: Some(ADMIN_TOKEN.to_string()),
             max_response_bytes: None,
             max_request_bytes: None,
@@ -136,9 +136,13 @@ impl TestApp {
         {
             let tunnels = registry.tunnels();
             tokio::spawn(async move {
-                let _ =
-                    serve_tunnel_listener(tunnel_listener, validator, tunnels, max_drives_per_user)
-                        .await;
+                let _ = serve_tunnel_listener(
+                    tunnel_listener,
+                    validator,
+                    tunnels,
+                    max_workspaces_per_user,
+                )
+                .await;
             });
         }
 
@@ -154,43 +158,43 @@ impl TestApp {
         // Nothing DB-backed; just drop self.
     }
 
-    async fn register_tunnel(&self, username: &str, drive: &str, uid: Uuid, router: Router) {
-        self.register_tunnel_with(username, drive, uid, router, false)
+    async fn register_tunnel(&self, username: &str, workspace: &str, uid: Uuid, router: Router) {
+        self.register_tunnel_with(username, workspace, uid, router, false)
             .await
     }
 
     async fn register_tunnel_with(
         &self,
         username: &str,
-        drive: &str,
+        workspace: &str,
         uid: Uuid,
         router: Router,
         public: bool,
     ) {
         let token = format!("tok-{}", Uuid::new_v4().simple());
         self.stub.add(&token, uid, username);
-        spawn_tunnel_client(self.tunnel_addr, &token, drive, router, public).await;
+        spawn_tunnel_client(self.tunnel_addr, &token, workspace, router, public).await;
         for _ in 0..50 {
-            if self.registry.get(username, drive).is_some() {
+            if self.registry.get(username, workspace).is_some() {
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        panic!("tunnel for {username}/{drive} did not register");
+        panic!("tunnel for {username}/{workspace} did not register");
     }
 }
 
 async fn spawn_tunnel_client(
     tunnel_addr: SocketAddr,
     token: &str,
-    drive: &str,
+    workspace: &str,
     router: Router,
     public: bool,
 ) {
     let token = token.to_string();
-    let drive = drive.to_string();
+    let workspace = workspace.to_string();
     tokio::spawn(async move {
-        if let Err(e) = run_tunnel_client(tunnel_addr, &token, &drive, router, public).await {
+        if let Err(e) = run_tunnel_client(tunnel_addr, &token, &workspace, router, public).await {
             tracing::warn!(error = ?e, "test tunnel client ended");
         }
     });
@@ -199,7 +203,7 @@ async fn spawn_tunnel_client(
 async fn run_tunnel_client(
     tunnel_addr: SocketAddr,
     token: &str,
-    drive: &str,
+    workspace: &str,
     router: Router,
     public: bool,
 ) -> anyhow::Result<()> {
@@ -228,7 +232,7 @@ async fn run_tunnel_client(
     let cfg = chan_tunnel_client::ClientConfig {
         tunnel_url: "https://chan-tunnel/v1/tunnel".parse().unwrap(),
         token: token.to_string(),
-        workspace: drive.to_string(),
+        workspace: workspace.to_string(),
         public,
         ..Default::default()
     };
@@ -237,7 +241,7 @@ async fn run_tunnel_client(
     Ok(())
 }
 
-/// Send a request with a Host header. Drive-proxy routes off Host so
+/// Send a request with a Host header. Workspace-proxy routes off Host so
 /// every wildcard test must supply one; oneshot does not synthesize.
 async fn send_host(
     router: &Router,
@@ -289,16 +293,16 @@ async fn send_admin(
     (status, json)
 }
 
-/// Mint a drive-gate token of the requested shape. Tests use this to
+/// Mint a workspace-gate token of the requested shape. Tests use this to
 /// build URLs and cookies the proxy gate will accept (or to forge
 /// near-misses for the negative cases).
-fn mint(typ: drive_gate::TokenType, sub: Uuid, drv: &str, aud: &str) -> String {
+fn mint(typ: workspace_gate::TokenType, sub: Uuid, drv: &str, aud: &str) -> String {
     match typ {
-        drive_gate::TokenType::Entry => {
-            drive_gate::encode_entry(DRIVE_GATE_SECRET, sub, drv, aud).unwrap()
+        workspace_gate::TokenType::Entry => {
+            workspace_gate::encode_entry(WORKSPACE_GATE_SECRET, sub, drv, aud).unwrap()
         }
-        drive_gate::TokenType::Session => {
-            drive_gate::encode_session(DRIVE_GATE_SECRET, sub, drv, aud).unwrap()
+        workspace_gate::TokenType::Session => {
+            workspace_gate::encode_session(WORKSPACE_GATE_SECRET, sub, drv, aud).unwrap()
         }
     }
 }
@@ -346,10 +350,17 @@ async fn unknown_host_is_404() {
 #[tokio::test]
 async fn wildcard_root_redirects_to_dashboard() {
     let app = TestApp::new().await;
-    let (s, hdrs, _) = send_host(&app.router, Method::GET, "alice.drive.chan.app", "/", &[]).await;
+    let (s, hdrs, _) = send_host(
+        &app.router,
+        Method::GET,
+        "alice.workspace.chan.app",
+        "/",
+        &[],
+    )
+    .await;
     assert!(s.is_redirection(), "got {s}");
     let loc = hdrs.get(header::LOCATION).unwrap().to_str().unwrap();
-    assert_eq!(loc, "https://id.chan.app/drives");
+    assert_eq!(loc, "https://id.chan.app/workspaces");
     app.cleanup().await;
 }
 
@@ -358,7 +369,7 @@ async fn wildcard_root_redirects_to_dashboard() {
 // ---------------------------------------------------------------
 
 #[tokio::test]
-async fn unregistered_drive_is_404() {
+async fn unregistered_workspace_is_404() {
     let app = TestApp::new().await;
     let (s, _, body) = send_host(&app.router, Method::GET, &host_for("alice"), "/blog/", &[]).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -368,7 +379,7 @@ async fn unregistered_drive_is_404() {
 }
 
 #[tokio::test]
-async fn unregistered_drive_html_browser_gets_dead_end_page() {
+async fn unregistered_workspace_html_browser_gets_dead_end_page() {
     let app = TestApp::new().await;
     let (s, hdrs, body) = send_host(
         &app.router,
@@ -383,12 +394,12 @@ async fn unregistered_drive_html_browser_gets_dead_end_page() {
     assert!(ct.starts_with("text/html"));
     assert!(std::str::from_utf8(&body)
         .unwrap()
-        .contains("drive unavailable"));
+        .contains("workspace unavailable"));
     app.cleanup().await;
 }
 
 #[tokio::test]
-async fn public_drive_passes_through() {
+async fn public_workspace_passes_through() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     let upstream = Router::new().route("/", axum::routing::get(|| async { "public ok" }));
@@ -409,11 +420,11 @@ async fn public_drive_passes_through() {
 }
 
 // ---------------------------------------------------------------
-// Proxy gate (private + drive_gate JWT)
+// Proxy gate (private + workspace_gate JWT)
 // ---------------------------------------------------------------
 
 #[tokio::test]
-async fn private_drive_anonymous_is_404() {
+async fn private_workspace_anonymous_is_404() {
     // Indistinguishable from unregistered: no leak.
     let app = TestApp::new().await;
     app.register_tunnel("alice", "blog", Uuid::new_v4(), Router::new())
@@ -432,7 +443,7 @@ async fn entry_token_mints_session_cookie() {
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
-    let token = mint(drive_gate::TokenType::Entry, uid, "blog", &host);
+    let token = mint(workspace_gate::TokenType::Entry, uid, "blog", &host);
     let (s, hdrs, _) = send_host(
         &app.router,
         Method::GET,
@@ -445,7 +456,7 @@ async fn entry_token_mints_session_cookie() {
     let loc = hdrs.get(header::LOCATION).unwrap().to_str().unwrap();
     assert_eq!(loc, "/blog/");
     let set = hdrs.get(header::SET_COOKIE).unwrap().to_str().unwrap();
-    assert!(set.starts_with("drive_gate="), "got {set}");
+    assert!(set.starts_with("workspace_gate="), "got {set}");
     assert!(set.contains("Path=/blog/"));
     assert!(set.contains("HttpOnly"));
     assert!(set.contains("Secure"));
@@ -460,7 +471,7 @@ async fn entry_token_drops_t_param_but_keeps_other_query() {
     app.register_tunnel("alice", "blog", uid, Router::new())
         .await;
     let host = host_for("alice");
-    let token = mint(drive_gate::TokenType::Entry, uid, "blog", &host);
+    let token = mint(workspace_gate::TokenType::Entry, uid, "blog", &host);
     let (_, hdrs, _) = send_host(
         &app.router,
         Method::GET,
@@ -475,7 +486,7 @@ async fn entry_token_drops_t_param_but_keeps_other_query() {
 }
 
 #[tokio::test]
-async fn entry_token_for_wrong_drive_is_404() {
+async fn entry_token_for_wrong_workspace_is_404() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     app.register_tunnel("alice", "blog", uid, Router::new())
@@ -484,7 +495,7 @@ async fn entry_token_for_wrong_drive_is_404() {
         .await;
     let host = host_for("alice");
     // Token minted for `blog`, used on `journal`.
-    let token = mint(drive_gate::TokenType::Entry, uid, "blog", &host);
+    let token = mint(workspace_gate::TokenType::Entry, uid, "blog", &host);
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
@@ -503,13 +514,13 @@ async fn entry_token_for_wrong_host_is_404() {
     let uid = Uuid::new_v4();
     app.register_tunnel("alice", "blog", uid, Router::new())
         .await;
-    // Token minted with aud=bob.drive.chan.app, presented on
-    // alice.drive.chan.app.
+    // Token minted with aud=bob.workspace.chan.app, presented on
+    // alice.workspace.chan.app.
     let bad_token = mint(
-        drive_gate::TokenType::Entry,
+        workspace_gate::TokenType::Entry,
         uid,
         "blog",
-        "bob.drive.chan.app",
+        "bob.workspace.chan.app",
     );
     let (s, _, _) = send_host(
         &app.router,
@@ -531,13 +542,13 @@ async fn session_cookie_admits() {
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
-    let session = mint(drive_gate::TokenType::Session, uid, "blog", &host);
+    let session = mint(workspace_gate::TokenType::Session, uid, "blog", &host);
 
     let proxy_addr = serve_router_real(app.router.clone()).await;
     let res = reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/"))
         .header(header::HOST, &host)
-        .header(header::COOKIE, format!("drive_gate={session}"))
+        .header(header::COOKIE, format!("workspace_gate={session}"))
         .send()
         .await
         .unwrap();
@@ -547,7 +558,7 @@ async fn session_cookie_admits() {
 }
 
 #[tokio::test]
-async fn session_cookie_for_wrong_drive_is_404() {
+async fn session_cookie_for_wrong_workspace_is_404() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     app.register_tunnel("alice", "blog", uid, Router::new())
@@ -555,13 +566,13 @@ async fn session_cookie_for_wrong_drive_is_404() {
     app.register_tunnel("alice", "journal", uid, Router::new())
         .await;
     let host = host_for("alice");
-    let session = mint(drive_gate::TokenType::Session, uid, "blog", &host);
+    let session = mint(workspace_gate::TokenType::Session, uid, "blog", &host);
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
         &host,
         "/journal/",
-        &[("cookie", &format!("drive_gate={session}"))],
+        &[("cookie", &format!("workspace_gate={session}"))],
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -569,9 +580,9 @@ async fn session_cookie_for_wrong_drive_is_404() {
 }
 
 // Regression: identity mints entry JWTs with `sub = caller.user_id`
-// (owner or accepted grantee). drive-proxy used to compare `sub`
+// (owner or accepted grantee). workspace-proxy used to compare `sub`
 // against the registry-cached owner_id and 404 every grantee; the gate
-// now trusts identity's mint-time `drive_access` check and admits any
+// now trusts identity's mint-time `workspace_access` check and admits any
 // signed entry with the right aud + drv.
 #[tokio::test]
 async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
@@ -583,7 +594,7 @@ async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
 
     let host = host_for("alice");
     // Bob is an accepted grantee; identity mints sub = bob.
-    let entry = mint(drive_gate::TokenType::Entry, bob, "blog", &host);
+    let entry = mint(workspace_gate::TokenType::Entry, bob, "blog", &host);
     let (s, hdrs, _) = send_host(
         &app.router,
         Method::GET,
@@ -594,19 +605,19 @@ async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
     .await;
     assert_eq!(s, StatusCode::SEE_OTHER);
     let set = hdrs.get(header::SET_COOKIE).unwrap().to_str().unwrap();
-    assert!(set.starts_with("drive_gate="), "got {set}");
+    assert!(set.starts_with("workspace_gate="), "got {set}");
 
     // The minted session cookie must carry sub = bob (the grantee),
     // not sub = alice (the owner), so upstream attribution is correct.
     let cookie = set
-        .strip_prefix("drive_gate=")
+        .strip_prefix("workspace_gate=")
         .and_then(|s| s.split(';').next())
         .unwrap();
     let aud = host_for("alice");
-    let claims = drive_gate::decode(
-        DRIVE_GATE_SECRET,
+    let claims = workspace_gate::decode(
+        WORKSPACE_GATE_SECRET,
         cookie,
-        drive_gate::TokenType::Session,
+        workspace_gate::TokenType::Session,
         &aud,
         "blog",
     )
@@ -620,8 +631,8 @@ async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
 
 // Regression: a session cookie with a non-owner sub admits as long as
 // the signature + aud + drv match. Belongs alongside the
-// `session_cookie_for_wrong_drive_is_404` test which still validates the
-// real bound (drv must match the requested drive).
+// `session_cookie_for_wrong_workspace_is_404` test which still validates the
+// real bound (drv must match the requested workspace).
 #[tokio::test]
 async fn session_cookie_with_grantee_sub_admits() {
     let app = TestApp::new().await;
@@ -630,13 +641,13 @@ async fn session_cookie_with_grantee_sub_admits() {
     let upstream = Router::new().route("/", axum::routing::get(|| async { "grantee pass" }));
     app.register_tunnel("alice", "blog", alice, upstream).await;
     let host = host_for("alice");
-    let session = mint(drive_gate::TokenType::Session, bob, "blog", &host);
+    let session = mint(workspace_gate::TokenType::Session, bob, "blog", &host);
 
     let proxy_addr = serve_router_real(app.router.clone()).await;
     let res = reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/"))
         .header(header::HOST, &host)
-        .header(header::COOKIE, format!("drive_gate={session}"))
+        .header(header::COOKIE, format!("workspace_gate={session}"))
         .send()
         .await
         .unwrap();
@@ -654,7 +665,8 @@ async fn entry_token_with_bad_signature_is_404() {
     let host = host_for("alice");
     // Token minted with a different secret; same claim envelope.
     let bad =
-        drive_gate::encode_entry(b"some-other-secret-32-bytes-foobaa", uid, "blog", &host).unwrap();
+        workspace_gate::encode_entry(b"some-other-secret-32-bytes-foobaa", uid, "blog", &host)
+            .unwrap();
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
@@ -672,7 +684,7 @@ async fn entry_token_with_bad_signature_is_404() {
 // ---------------------------------------------------------------
 
 #[tokio::test]
-async fn proxy_strips_drive_segment() {
+async fn proxy_strips_workspace_segment() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     let upstream = Router::new()
@@ -778,7 +790,7 @@ async fn x_forwarded_for_appended_when_absent() {
     // no-inbound case here.
     let proto = headers.get("x-forwarded-proto").unwrap().to_str().unwrap();
     assert_eq!(proto, "https");
-    // X-Forwarded-Host is sourced from the inbound Host header drive-
+    // X-Forwarded-Host is sourced from the inbound Host header workspace-
     // proxy itself routed on, not from any inbound X-Forwarded-Host.
     let host = headers.get("x-forwarded-host").unwrap().to_str().unwrap();
     assert_eq!(host, host_for("alice"));
@@ -834,7 +846,7 @@ async fn x_forwarded_for_extended() {
 
 #[tokio::test]
 async fn cookie_header_stripped_from_upstream() {
-    // drive-proxy must never forward the drive_gate cookie to the
+    // workspace-proxy must never forward the workspace_gate cookie to the
     // tenant's chan-serve peer (the cookie is for the gate, not for
     // the tenant). Other inbound cookies the tenant content might
     // care about are also stripped today; if that proves wrong we
@@ -855,7 +867,7 @@ async fn cookie_header_stripped_from_upstream() {
     reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/z"))
         .header(header::HOST, host_for("alice"))
-        .header(header::COOKIE, "drive_gate=junk; other=value")
+        .header(header::COOKIE, "workspace_gate=junk; other=value")
         .send()
         .await
         .unwrap();
@@ -870,7 +882,7 @@ async fn authorization_header_stripped_from_upstream() {
     // A user-presented Authorization bearer (e.g. an API client that
     // happens to land on a tenant URL with its own credential) must
     // never reach the tenant's chan-serve. Auth on this leg is the
-    // drive-gate cookie / entry-token handshake; the tenant's content
+    // workspace-gate cookie / entry-token handshake; the tenant's content
     // has no business seeing the user's PAT or any other bearer.
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
@@ -906,7 +918,7 @@ async fn authorization_header_stripped_from_upstream() {
 // ---------------------------------------------------------------
 
 #[tokio::test]
-async fn websocket_bridges_text_frames_on_public_drive() {
+async fn websocket_bridges_text_frames_on_public_workspace() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as TgMessage;
 
@@ -972,21 +984,20 @@ async fn websocket_upgrade_runs_auth_gate() {
 }
 
 // ---------------------------------------------------------------
-// Tunnel listener (max_drives)
+// Tunnel listener (max_workspaces)
 // ---------------------------------------------------------------
 
 async fn try_register_tunnel(
     tunnel_addr: SocketAddr,
     token: &str,
-    drive: &str,
+    workspace: &str,
     router: Router,
 ) -> anyhow::Result<()> {
     let token = token.to_string();
-    let drive = drive.to_string();
-    let task =
-        tokio::spawn(
-            async move { run_tunnel_client(tunnel_addr, &token, &drive, router, false).await },
-        );
+    let workspace = workspace.to_string();
+    let task = tokio::spawn(async move {
+        run_tunnel_client(tunnel_addr, &token, &workspace, router, false).await
+    });
     match tokio::time::timeout(std::time::Duration::from_millis(300), task).await {
         Err(_) => Ok(()),
         Ok(Ok(Ok(()))) => Ok(()),
@@ -996,8 +1007,8 @@ async fn try_register_tunnel(
 }
 
 #[tokio::test]
-async fn tunnel_rejects_third_drive_when_limit_is_two() {
-    let app = TestApp::new_with_max_drives(2).await;
+async fn tunnel_rejects_third_workspace_when_limit_is_two() {
+    let app = TestApp::new_with_max_workspaces(2).await;
     let uid = Uuid::new_v4();
     app.register_tunnel("alice", "a", uid, Router::new()).await;
     app.register_tunnel("alice", "b", uid, Router::new()).await;
@@ -1007,22 +1018,22 @@ async fn tunnel_rejects_third_drive_when_limit_is_two() {
     let result = try_register_tunnel(app.tunnel_addr, &token, "c", Router::new()).await;
     assert!(
         result.is_err(),
-        "third drive should be rejected: {result:?}"
+        "third workspace should be rejected: {result:?}"
     );
 
-    let drives: Vec<String> = app
+    let workspaces: Vec<String> = app
         .registry
         .list_for("alice")
         .into_iter()
-        .map(|d| d.drive)
+        .map(|d| d.workspace)
         .collect();
-    assert_eq!(drives, vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(workspaces, vec!["a".to_string(), "b".to_string()]);
     app.cleanup().await;
 }
 
 #[tokio::test]
-async fn tunnel_allows_reconnect_of_existing_drive_at_limit() {
-    let app = TestApp::new_with_max_drives(2).await;
+async fn tunnel_allows_reconnect_of_existing_workspace_at_limit() {
+    let app = TestApp::new_with_max_workspaces(2).await;
     let uid = Uuid::new_v4();
     app.register_tunnel("alice", "a", uid, Router::new()).await;
     app.register_tunnel("alice", "b", uid, Router::new()).await;
@@ -1036,7 +1047,7 @@ async fn tunnel_allows_reconnect_of_existing_drive_at_limit() {
 
 #[tokio::test]
 async fn tunnel_unlimited_when_max_is_zero() {
-    let app = TestApp::new_with_max_drives(0).await;
+    let app = TestApp::new_with_max_workspaces(0).await;
     let uid = Uuid::new_v4();
     for d in ["a", "b", "c", "d"] {
         app.register_tunnel("alice", d, uid, Router::new()).await;
@@ -1109,7 +1120,7 @@ async fn admin_tunnels_list_and_kill() {
     .await;
     let arr = body.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["drive"], "open");
+    assert_eq!(arr[0]["workspace"], "open");
 
     // Unknown -> 404.
     let (s, _) = send_admin(
@@ -1145,8 +1156,11 @@ async fn admin_list_user_tunnels() {
     assert_eq!(s, StatusCode::OK);
     let arr = body.as_array().unwrap();
     assert_eq!(arr.len(), 2);
-    let drives: Vec<&str> = arr.iter().map(|r| r["drive"].as_str().unwrap()).collect();
-    assert_eq!(drives, vec!["blog", "home"]);
+    let workspaces: Vec<&str> = arr
+        .iter()
+        .map(|r| r["workspace"].as_str().unwrap())
+        .collect();
+    assert_eq!(workspaces, vec!["blog", "home"]);
 
     // Unknown user -> empty, not 404.
     let (s, body) = send_admin(
@@ -1182,7 +1196,7 @@ async fn admin_kill_user_tunnels_evicts_all_for_user() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["killed"], 2);
 
-    let drives: Vec<_> = app
+    let workspaces: Vec<_> = app
         .registry
         .list_all_tunnels()
         .into_iter()
@@ -1193,7 +1207,7 @@ async fn admin_kill_user_tunnels_evicts_all_for_user() {
             )
         })
         .collect();
-    assert_eq!(drives, vec![("bob".to_string(), "home".to_string())]);
+    assert_eq!(workspaces, vec![("bob".to_string(), "home".to_string())]);
 
     // Idempotent.
     let (_, body) = send_admin(

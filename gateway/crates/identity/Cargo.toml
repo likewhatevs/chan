@@ -62,7 +62,7 @@ extended-description = """\
 Public-facing OAuth2 sign-in service for the chan-gateway suite.
 Runs the GitHub auth-code + PKCE flow, maintains Postgres-backed
 sessions, and serves an embedded Svelte SPA at id.chan.app where
-users manage their drive URLs. Calls chan-gateway-profile over
+users manage their workspace URLs. Calls chan-gateway-profile over
 HTTP. Single static binary (frontend baked in via rust-embed)."""
 section = "net"
 priority = "optional"

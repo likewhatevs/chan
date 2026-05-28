@@ -128,7 +128,7 @@
   <p class="muted">
     Tokens authenticate <code>chan serve --tunnel-token</code> and other
     CLI clients. Treat them like passwords: a token grants the same
-    access as your account, scoped to your drives only.
+    access as your account, scoped to your workspaces only.
   </p>
 
   {#if listError}

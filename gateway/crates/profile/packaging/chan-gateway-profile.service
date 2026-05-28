@@ -1,5 +1,5 @@
 [Unit]
-Description=chan-gateway profile service (internal user/identity/drive store)
+Description=chan-gateway profile service (internal user/identity/workspace store)
 Documentation=https://github.com/chan-writer/chan-gateway
 After=network-online.target postgresql.service
 Wants=network-online.target

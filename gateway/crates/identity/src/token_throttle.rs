@@ -1,7 +1,7 @@
 //! Per-token-fingerprint rate limiter for /internal/v1/tokens/validate.
 //!
-//! drive-proxy already runs an identical throttle one hop earlier
-//! (`crates/drive-proxy/src/throttle_validator.rs`). This is the
+//! workspace-proxy already runs an identical throttle one hop earlier
+//! (`crates/workspace-proxy/src/throttle_validator.rs`). This is the
 //! defense-in-depth twin: if the shared internal bearer leaks and
 //! someone hits identity-service directly, the per-fingerprint
 //! token bucket caps brute force even when the upstream throttle
