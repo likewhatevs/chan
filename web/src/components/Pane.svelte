@@ -24,6 +24,7 @@
     paneModeStagedTabIds,
     paneModeSwapWith,
     paneWobble,
+    requestPaneWobble,
     reorderTab,
     reopenClosedTab,
     setActivePane,
@@ -360,6 +361,16 @@
   }
 
   function onPaneBodyMouseEnter(): void {
+    // Single-shot wobble cue on hover-enter, same effect as tab pills
+    // / right-click menus / split-close-move. Fires on every enter
+    // because the existing `paneWobble` bus increments a per-pane
+    // counter and the consumer's `$effect` re-toggles the `.wobble`
+    // class via rAF (see lines ~421-429), so consecutive enters all
+    // re-fire the animation cleanly. Kept JS-driven (rather than
+    // pure CSS `:hover`) so it reuses the existing single-shot
+    // re-fire plumbing and stays consistent with the keyboard
+    // pane-switch trigger fired from `setActivePane`.
+    requestPaneWobble(pane.id);
     if (!paneMode.transactionMode) return;
     if (!paneMode.grabPaneId) return;
     paneModeSetHover(pane.id);
@@ -1483,17 +1494,20 @@
   .pane[data-focus-color="orange"] { --pane-active-focus: #f97316; }
   .pane[data-focus-color="green"] { --pane-active-focus: #22c55e; }
   .pane[data-focus-color="pink"] { --pane-active-focus: #ff5fb7; }
-  /* Inset glow rather than just a border-color swap: 2px reads
-     clearly on both light and dark canvases, and the inset stays
-     inside the pane's own box so the surrounding layout doesn't
-     shift when focus moves between panes. The transparent border on
-     `.pane` keeps the box dimensions stable; this shadow paints
-     over the inside edge. Composes with the chrome shadow so the
-     focused pane keeps both its floating shadow and its focus ring. */
+  /* Inset glow rather than just a border-color swap: the inset
+     stays inside the pane's own box so the surrounding layout
+     doesn't shift when focus moves between panes. The transparent
+     border on `.pane` keeps the box dimensions stable; this shadow
+     paints over the inside edge. Composes with the chrome shadow
+     so the focused pane keeps both its floating shadow and its
+     focus ring. Thickness matches the active tab pill's
+     `0 0 0 1px var(--border)` ring above so the chrome reads as a
+     single 1px outline around the whole pane (tab strip + body),
+     not a thicker body ring stacked on a thinner top bar. */
   .pane.focused {
     border-color: var(--pane-active-focus);
     box-shadow:
-      inset 0 0 0 2px var(--pane-active-focus),
+      inset 0 0 0 1px var(--pane-active-focus),
       var(--pane-shadow);
   }
   .pane:hover::before,

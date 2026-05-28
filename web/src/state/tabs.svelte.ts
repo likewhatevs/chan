@@ -3129,7 +3129,15 @@ function insertSiblingPane(
 
 export function setActivePane(paneId: string): void {
   const current = activeLayout();
-  if (current.nodes[paneId]?.kind === "leaf") current.activePaneId = paneId;
+  if (current.nodes[paneId]?.kind !== "leaf") return;
+  // Single-shot wobble cue on keyboard / click pane-switch, mirroring
+  // the bounce already fired by split / close / pane-move. Only fire
+  // when the active pane actually CHANGES so re-clicks on the same
+  // pane (already-focused) stay quiet; otherwise the wobble would
+  // re-trigger on every mousedown that lands on the focused pane.
+  const previousActive = current.activePaneId;
+  current.activePaneId = paneId;
+  if (previousActive !== paneId) requestPaneWobble(paneId);
 }
 
 /// `fullstack-48` original, `fullstack-a-43` revisited: flip the
