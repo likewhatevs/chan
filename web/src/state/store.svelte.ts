@@ -1772,7 +1772,40 @@ export function openGraphForTag(nodeId: string, _label: string): void {
     scopeId: `tag:${nodeId}`,
     depth: 1,
     pendingSelectId: nodeId,
-    title: "Tag Graph",
+  });
+  scheduleSessionSave();
+}
+
+/** Phase-13 round-1 KIND slice 2a: open the graph scoped to a
+ *  contact (a Contact-kind note OR a workspace file referenced by
+ *  `@@mention`). Lane A's Inspector contact chips dispatch to this
+ *  helper; the lens semantics (subgraph centered on the contact
+ *  with edges to every doc referencing it) land in slice 2b on
+ *  the backend - until then the graph renders the workspace view
+ *  with the contact tab title pinned. Title formatting flows
+ *  through `graphTitle()` via the `contact:` scopeId prefix. */
+export function openGraphForContact(relPath: string): void {
+  openGraphInActivePane({
+    mode: "semantic",
+    scopeId: `contact:${relPath}`,
+    depth: 1,
+    pendingSelectId: relPath,
+  });
+  scheduleSessionSave();
+}
+
+/** Phase-13 round-1 KIND slice 2a: open the graph scoped to a
+ *  language. The language node is a bubble (no edge to a
+ *  directory) connected to every file of that language; depth
+ *  doesn't apply to language lenses, so `depth: 0` matches the
+ *  existing language-overview convention. Lane A's Inspector
+ *  language chips dispatch here. Backend lens lands in slice 2b. */
+export function openGraphForLanguage(language: string): void {
+  openGraphInActivePane({
+    mode: "semantic",
+    scopeId: `language:${language}`,
+    depth: 0,
+    pendingSelectId: `language:${language}`,
   });
   scheduleSessionSave();
 }

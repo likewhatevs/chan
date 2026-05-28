@@ -2945,35 +2945,45 @@ describe("truncateTabTitle (fullstack-66)", () => {
   });
 });
 
-describe("graphTitle (fullstack-64)", () => {
-  test("workspace scope reads as 'workspace'", () => {
-    expect(graphTitle("semantic", "workspace")).toBe("workspace");
-    expect(graphTitle("filesystem", "workspace")).toBe("workspace");
-    expect(graphTitle("semantic", "global")).toBe("workspace");
+describe("graphTitle (fullstack-64 + phase-13 KIND slice 2a)", () => {
+  // Phase-13 round-1 KIND slice 2a: titles carry a `kind=` prefix
+  // (`path=` / `tag=` / `contact=` / `lang=`) so the tab strip
+  // surfaces the lens shape next to the payload.
+  test("workspace scope reads as 'path=workspace'", () => {
+    expect(graphTitle("semantic", "workspace")).toBe("path=workspace");
+    expect(graphTitle("filesystem", "workspace")).toBe("path=workspace");
+    expect(graphTitle("semantic", "global")).toBe("path=workspace");
   });
 
-  test("file: scope reads as the file basename", () => {
-    expect(graphTitle("semantic", "file:notes/sub/foo.md")).toBe("foo.md");
-    expect(graphTitle("semantic", "file:README.md")).toBe("README.md");
-    // File at the workspace root with no path falls back to 'workspace'.
-    expect(graphTitle("semantic", "file:")).toBe("workspace");
+  test("file: scope reads as 'path=<basename>'", () => {
+    expect(graphTitle("semantic", "file:notes/sub/foo.md")).toBe("path=foo.md");
+    expect(graphTitle("semantic", "file:README.md")).toBe("path=README.md");
+    // File at the workspace root with no path falls back to 'path=workspace'.
+    expect(graphTitle("semantic", "file:")).toBe("path=workspace");
   });
 
-  test("dir: scope reads as the dir basename with a trailing slash", () => {
-    expect(graphTitle("semantic", "dir:notes/sub")).toBe("sub/");
-    expect(graphTitle("semantic", "dir:notes")).toBe("notes/");
+  test("dir: scope reads as 'path=<basename>/'", () => {
+    expect(graphTitle("semantic", "dir:notes/sub")).toBe("path=sub/");
+    expect(graphTitle("semantic", "dir:notes")).toBe("path=notes/");
     // dir: with no path is treated as the workspace root.
-    expect(graphTitle("semantic", "dir:")).toBe("workspace");
+    expect(graphTitle("semantic", "dir:")).toBe("path=workspace");
   });
 
-  test("tag: scope keeps the # prefix", () => {
-    expect(graphTitle("semantic", "tag:#search")).toBe("#search");
-    // Tag without the leading # gets one prepended.
-    expect(graphTitle("semantic", "tag:foo")).toBe("#foo");
+  test("tag: scope reads as 'tag=#<name>'", () => {
+    expect(graphTitle("semantic", "tag:#search")).toBe("tag=#search");
+    // Tag without the leading # gets one prepended (then the kind prefix).
+    expect(graphTitle("semantic", "tag:foo")).toBe("tag=#foo");
   });
 
-  test("contact: scope renders the contact name", () => {
-    expect(graphTitle("semantic", "contact:alice")).toBe("alice");
+  test("contact: scope reads as 'contact=<basename>'", () => {
+    expect(graphTitle("semantic", "contact:alice")).toBe("contact=alice");
+    // Workspace-relative contact paths peel to the file basename.
+    expect(graphTitle("semantic", "contact:Contacts/alice.md")).toBe("contact=alice.md");
+  });
+
+  test("language: scope reads as 'lang=<name>'", () => {
+    expect(graphTitle("semantic", "language:rust")).toBe("lang=rust");
+    expect(graphTitle("semantic", "language:typescript")).toBe("lang=typescript");
   });
 
   test("git_repo: scope renders the repo basename", () => {

@@ -100,11 +100,18 @@
     synthesizeScope(graphState.scopeId),
   );
 
-  /// Graph tabs only ever carry workspace / dir / file / tag scopeIds (set by
-  /// the openGraph* entry points). The wiped scope kinds (global, group,
-  /// git_repo) are never produced for a graph, so this resolver covers
-  /// only the live four; the dead kind-branches that used to handle the
-  /// others were removed with the scope-concept wipe.
+  /// Graph tabs carry workspace / dir / file / tag scopeIds today,
+  /// plus phase-13-round-1 KIND slice 2a's `contact:<rel_path>`
+  /// and `language:<lang>` prefixes (introduced by
+  /// `openGraphForContact` / `openGraphForLanguage`). The resolver
+  /// returns null for the two new prefixes; the panel falls back to
+  /// workspace-graph rendering for them until slice 2b lands the
+  /// lens semantics (a contact-centered or language-centered
+  /// subgraph filter and the matching ScopeOption kinds). The wiped
+  /// scope kinds (global, group, git_repo) are never produced for
+  /// a graph, so this resolver only covers the live entry points;
+  /// the dead kind-branches that used to handle the others were
+  /// removed with the scope-concept wipe.
   function synthesizeScope(scopeId: string): ScopeOption | null {
     if (scopeId === "workspace") return { id: "workspace", kind: "workspace", label: "workspace" };
     if (scopeId.startsWith("file:")) {

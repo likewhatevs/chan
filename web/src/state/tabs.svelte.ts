@@ -1237,21 +1237,33 @@ function defaultBrowserInspectorOpen(): boolean {
 /// scope read as `workspace`; the underlying `scopeId` is unchanged —
 /// only the rendered title shape moves.
 export function graphTitle(mode: GraphTab["mode"], scopeId: string): string {
+  // Phase-13 round-1 KIND slice 2a: every graph tab title carries
+  // a `kind=` prefix so the tab strip identifies the lens shape
+  // (`path=` / `tag=` / `contact=` / `lang=`) instead of relying
+  // on the icon + raw payload alone. `mode === "language"` keeps
+  // its dedicated `Languages` overview label (top-level lens, not
+  // a per-language lens — `language:<lang>` scopeId is the
+  // per-language case which renders as `lang=<name>`).
   if (mode === "language") return "Languages";
-  if (scopeId === "workspace" || scopeId === "global") return "workspace";
+  if (scopeId === "workspace" || scopeId === "global") return "path=workspace";
   if (scopeId.startsWith("file:")) {
-    return graphScopeBasename(scopeId.slice("file:".length)) || "workspace";
+    const name = graphScopeBasename(scopeId.slice("file:".length));
+    return name ? `path=${name}` : "path=workspace";
   }
   if (scopeId.startsWith("dir:")) {
     const name = graphScopeBasename(scopeId.slice("dir:".length));
-    return name ? `${name}/` : "workspace";
+    return name ? `path=${name}/` : "path=workspace";
   }
   if (scopeId.startsWith("tag:")) {
     const tag = scopeId.slice("tag:".length);
-    return tag.startsWith("#") ? tag : `#${tag}`;
+    return `tag=${tag.startsWith("#") ? tag : `#${tag}`}`;
   }
   if (scopeId.startsWith("contact:")) {
-    return scopeId.slice("contact:".length);
+    const name = graphScopeBasename(scopeId.slice("contact:".length));
+    return `contact=${name || scopeId.slice("contact:".length)}`;
+  }
+  if (scopeId.startsWith("language:")) {
+    return `lang=${scopeId.slice("language:".length)}`;
   }
   if (scopeId.startsWith("git_repo:")) {
     return graphScopeBasename(scopeId.slice("git_repo:".length));
