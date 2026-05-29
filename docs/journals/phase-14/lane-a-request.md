@@ -83,12 +83,23 @@ draft.md". Lane B owns the frontend half + the actual fix.
 
 Phase-13 round-2 carryovers that fall in this lane's area:
 
-- **De-flake the indexer test** (addendum-1 #2):
-  `chan-workspace::tests::write_text_does_not_wait_for_indexer_serial_lock`
-  (the indexer-flake family, cf. `writes_to_drafts_subtree_get_indexed_...`)
-  failed once on the v0.18.0 re-publish and gated the release. De-flake
-  it, or mark it so a timing failure cannot gate a release. Same
-  indexer/self-write area as A4 - do it alongside.
+- **De-flake the tests that gate CI / releases** (addendum-1 #2 + an
+  observed CI failure on `main`). A timing/env-sensitive test must not
+  red-light CI or a release. Two known offenders:
+  - `chan-workspace::tests::write_text_does_not_wait_for_indexer_serial_lock`
+    (the indexer-flake family, cf.
+    `writes_to_drafts_subtree_get_indexed_...`): failed once on the
+    v0.18.0 re-publish and gated the release. Same indexer/self-write
+    area as A4 - do it alongside.
+  - `chan-server::routes::terminal::tests::conditional_pty_programs_validate_real_terminal`
+    (`crates/chan-server/src/routes/terminal.rs:1132`): fails on the
+    GitHub macOS runner (`make ci-macos`) because the headless PTY's
+    `tty` does not report a `/dev/ttys…` device path, so the
+    "tty should report a device path" assertion trips. It currently
+    leaves `main` CI red. Guard it for a runner with no real tty
+    (detect + skip/relax) or mark it so it cannot gate CI; keep the
+    real-terminal assertion when a device tty is present.
+  De-flake or mark both; neither should be able to gate a release.
 - **Remove the vestigial `team-work-N` draft convention** (addendum-1
   #5): nothing creates `team-work-N` dirs anymore (Team Work uses the
   standard `untitled-N` path). Drop it from `chan-workspace`
