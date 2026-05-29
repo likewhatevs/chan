@@ -14,6 +14,7 @@ timing:
 
 - `/Users/fiorix/dev/github.com/fiorix/chan/CLAUDE.md` (writing rules)
 - `docs/journals/phase-14/roadmap-round-2.md` (the `/architect` brief for C1)
+- `docs/journals/phase-14/addendum-1.md` (phase-13 r2 carryovers; your caveat is #4)
 - `docs/journals/README.md` (the journals index; currently stale, stops at phase-7)
 - a sampling of `docs/journals/phase-*/` (the raw material for C2)
 
@@ -55,6 +56,19 @@ error/empty states) for clarity, factual accuracy, and reduced
 ambiguity. One consistent voice across the four frontend trees, written
 for human consumption, a snapshot of the present (no changelog, no
 history). See `roadmap-round-2.md`.
+
+## Addendum-1 caveat (do not over-clean; see `addendum-1.md` #4)
+
+Team Work notification bubbles were reduced to a static stub in
+phase-13 round 2 and the fsnotify watcher / agent-event backend was
+deleted; the functionality returns in a LATER phase. The orchestration
+skill docs (`docs/agents/orchestration/README.md` + `spawn-protocol.md`
++ `atomic-writes.md`) still describe the removed watcher / event-file /
+bubble-reply system because it is the BLUEPRINT for the returning
+implementation. Do NOT rewrite or delete that blueprint in C1/C2 - it
+is intentionally retained spec, not stale history. The second-brain
+reorg (C2) should record the round-2 status accurately ("removed,
+returning later") rather than treat the blueprint as dead.
 
 ## Worktree + branch
 

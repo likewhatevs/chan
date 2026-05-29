@@ -18,6 +18,7 @@ share only the seams in `coordination/contracts.md`.
 - `docs/journals/phase-14/coordination/event-lane-a-lane-b.md` (inbox; may not exist yet)
 - `docs/journals/phase-14/lane-b-plan-draft-restore-banner.md` (correctness item; the backend half is Lane A)
 - `docs/journals/phase-14/lane-b-plan-cmd-comma-flip.md` (correctness item)
+- `docs/journals/phase-14/addendum-1.md` (phase-13 r2 carryovers; your item is in B4)
 
 ## Worktree + branch
 
@@ -83,6 +84,19 @@ concrete and user-facing.
 - Cmd+, queued-shortcut "panes flip" desync -
   `lane-b-plan-cmd-comma-flip.md`. Audit + cleanup of the
   shortcut-dispatch / pane-focus path.
+
+### B4. Addendum-1 follow-up (see `addendum-1.md`)
+
+`/dl` preserve-release-metadata is a circular self-perpetuating guard
+(addendum-1 #1). `web-marketing/scripts/preserve-release-metadata.mjs`
+fetches the LIVE `https://chan.app/dl/releases.json`; on 404 it
+preserves nothing, so once `/dl` is clobbered every later marketing
+deploy keeps it 404 until a release regenerates it. Fix: source `/dl`
+from the GitHub release assets (as `release.yml`'s
+`generate-release-metadata.mjs` does), not by self-fetching the live
+site. Optional (CI, not strictly Lane B): put `pages.yml` +
+`release.yml` in a shared concurrency group so they can never deploy
+`github-pages` at once. `web-marketing/` is one of this lane's trees.
 
 ## Coordination
 

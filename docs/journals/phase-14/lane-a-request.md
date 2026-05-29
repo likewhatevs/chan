@@ -15,6 +15,7 @@ you propose first.
 - `docs/journals/phase-14/coordination/contracts.md`
 - `docs/journals/phase-14/coordination/event-lane-b-lane-a.md` (inbox; may not exist yet)
 - `docs/journals/phase-14/lane-b-plan-draft-restore-banner.md` (you own the backend half of its e2e stress test)
+- `docs/journals/phase-14/addendum-1.md` (phase-13 r2 carryovers; your items are in A5)
 
 ## Worktree + branch
 
@@ -77,6 +78,28 @@ CAS) -> re-read, many iterations; assert self-write suppression holds
 (own writes never broadcast as external via `bus.rs` / `self_writes.rs`),
 CAS mtime round-trips, and no spurious `DraftBroken` / "missing
 draft.md". Lane B owns the frontend half + the actual fix.
+
+### A5. Addendum-1 follow-ups (see `addendum-1.md`)
+
+Phase-13 round-2 carryovers that fall in this lane's area:
+
+- **De-flake the indexer test** (addendum-1 #2):
+  `chan-workspace::tests::write_text_does_not_wait_for_indexer_serial_lock`
+  (the indexer-flake family, cf. `writes_to_drafts_subtree_get_indexed_...`)
+  failed once on the v0.18.0 re-publish and gated the release. De-flake
+  it, or mark it so a timing failure cannot gate a release. Same
+  indexer/self-write area as A4 - do it alongside.
+- **Remove the vestigial `team-work-N` draft convention** (addendum-1
+  #5): nothing creates `team-work-N` dirs anymore (Team Work uses the
+  standard `untitled-N` path). Drop it from `chan-workspace`
+  (`drafts.rs` / `workspace.rs` / `paths.rs` comments + test examples).
+  Pristine, first-public-release discipline. (Confirm it is not needed
+  by the returning Team Work work - see Lane C / addendum-1 #4.)
+- **WKWebView desktop walk** (addendum-1 #3): NOT code - a human
+  WKWebView verify of the round-2 desktop changes (Cmd+Shift+N new
+  window, Cmd+I no longer Dashboard, Cmd+P Team Work, self-upgrade
+  0.17->0.18 from `/dl`). Build the dmg from the merged base
+  (`make macos-chan-dmg`). Track as a verification gate, not a change.
 
 ## Coordination
 
