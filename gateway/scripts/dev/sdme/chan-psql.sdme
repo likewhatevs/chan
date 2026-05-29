@@ -1,0 +1,44 @@
+# chan-psql (dev): postgresql-18 in an sdme container, for running the
+# gateway's Postgres-backed integration tests locally on Linux and on
+# macOS (via lima-vm hosting sdme).
+#
+# Sanitized dev copy of chan-prod-setup/services/chan-psql.sdme. The
+# prod version bind-mounts pgdata from the host and reads
+# POSTGRES_PASSWORD from /run/secrets/postgres.env; this one does
+# NEITHER. It is fully self-contained:
+#   - the cluster is created in-container by chan-pg-init.service on
+#     first boot (no host bind mount; `sdme join` if you want to poke
+#     inside),
+#   - a throwaway `chan` SUPERUSER (password `chan`) plus the
+#     chan_gateway and chan_gateway_test databases are created by
+#     chan-pg-bootstrap.service.
+#
+# DEV ONLY. The password is hardcoded and pg_hba accepts password auth
+# from any address. Never build/run this anywhere reachable beyond
+# your own machine.
+#
+# Base note: docker.io/ubuntu currently imports Ubuntu 26.04, whose
+# packaged Postgres is 18 (prod targets 16 on its own base). If your
+# base ships a different major, bump the version in this file and the
+# five files under etc/postgresql/ together.
+
+FROM ubuntu
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        postgresql-18 \
+        ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY etc/postgresql/postgresql.conf            /etc/postgresql/18/main/postgresql.conf
+COPY etc/postgresql/pg_hba.conf                /etc/postgresql/18/main/pg_hba.conf
+COPY etc/postgresql/bootstrap.sh               /usr/local/sbin/chan-pg-bootstrap
+COPY etc/postgresql/chan-pg-init.service       /etc/systemd/system/chan-pg-init.service
+COPY etc/postgresql/chan-pg-bootstrap.service  /etc/systemd/system/chan-pg-bootstrap.service
+
+RUN chmod 0755 /usr/local/sbin/chan-pg-bootstrap && \
+    chown root:postgres /etc/postgresql/18/main/postgresql.conf \
+                        /etc/postgresql/18/main/pg_hba.conf && \
+    chmod 0640 /etc/postgresql/18/main/postgresql.conf \
+               /etc/postgresql/18/main/pg_hba.conf && \
+    systemctl enable postgresql chan-pg-init.service chan-pg-bootstrap.service

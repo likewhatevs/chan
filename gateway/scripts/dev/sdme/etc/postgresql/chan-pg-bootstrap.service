@@ -1,0 +1,12 @@
+[Unit]
+Description=chan-psql dev first-boot bootstrap (role + databases)
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/chan-pg-bootstrap
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

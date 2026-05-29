@@ -77,18 +77,23 @@ with the root (bump `gateway/Cargo.toml` in the same
 commit as the root version).
 
 Unlike the core, the gateway is Postgres-backed. Its
-integration tests create a throwaway schema per test
-under `TEST_DATABASE_URL`:
+integration tests (`profile`, `identity`) create a
+throwaway schema per test under `TEST_DATABASE_URL`. The
+supported, reproducible setup runs Postgres in an `sdme`
+container (the same way CI does) and works on both Linux
+and macOS; see
+[`gateway/docs/testing-on-linux-and-macos.md`](gateway/docs/testing-on-linux-and-macos.md).
+Any Postgres with a `chan_gateway_test` database also
+works:
 
 ```bash
-createdb chan_gateway_test
-export TEST_DATABASE_URL=postgres://localhost/chan_gateway_test
+export TEST_DATABASE_URL=postgres://chan:chan@127.0.0.1:5432/chan_gateway_test
 
 cd gateway
 npm ci && npm run build --workspaces   # SPA; rust-embed needs web/dist
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test                             # needs TEST_DATABASE_URL
+cargo test                             # profile + identity need the DB
 ```
 
 Because the shared pre-push hook is intentionally

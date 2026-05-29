@@ -1,0 +1,21 @@
+[Unit]
+Description=chan-psql dev: initdb if data dir is empty
+DefaultDependencies=no
+After=local-fs.target
+Before=postgresql.service postgresql@18-main.service
+RequiresMountsFor=/var/lib/postgresql/18/main
+ConditionPathExists=!/var/lib/postgresql/18/main/PG_VERSION
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/install -d -m 0700 -o postgres -g postgres /var/lib/postgresql/18/main
+ExecStart=/usr/sbin/runuser -u postgres -- /usr/lib/postgresql/18/bin/initdb \
+    --pgdata=/var/lib/postgresql/18/main \
+    --auth-local=peer \
+    --auth-host=scram-sha-256 \
+    --encoding=UTF8 \
+    --locale=C.UTF-8
+
+[Install]
+WantedBy=multi-user.target
