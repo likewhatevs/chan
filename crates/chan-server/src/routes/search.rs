@@ -358,6 +358,7 @@ fn build_indexing_state(
             .children_count += 1;
     }
 
+    let mut current_file_matched_entry = false;
     for entry in entries
         .iter()
         .filter(|entry| !entry.is_dir && fs_ops::is_indexable_text(&entry.path))
@@ -370,40 +371,44 @@ fn build_indexing_state(
             }
             if current_file == Some(entry.path.as_str()) {
                 accum.indexing = true;
+                current_file_matched_entry = true;
             }
         }
     }
 
-    // Round-1 closing-8 (F2) + closing-9 (F2 fix-up): during the
-    // embedding phase the indexer sets `IndexStatus::Building.file`
-    // to the literal sentinel "embedding" (see
-    // `crates/chan-server/src/indexer.rs:822-837`) instead of a real
-    // file path, so the per-entry `current_file ==
-    // Some(entry.path.as_str())` match above never fires.
+    // Round-1 closing-8 (F2) + closing-9 + closing-11 (F2 fix-up
+    // 2): the indexer sets `IndexStatus::Building.file` to different
+    // values depending on what stage it's in - a real workspace-
+    // relative path during `GraphRebuild` / `IndexFile`
+    // (`crates/chan-server/src/indexer.rs:797-808`), the sentinel
+    // string `"embedding"` during `EmbedBatch` (line 822-838), and
+    // the empty string `""` in the initial Building window before
+    // the first per-file event arrives (line 310-314). Closing-8
+    // and closing-9 only detected the `"embedding"` sentinel, so:
     //
-    // Closing-8 marked dirs with `indexable_files > indexed_files`
-    // as Indexing on the sentinel, but the embedding phase runs
-    // AFTER BM25 (per the comment in `indexer.rs:809-814`), so by
-    // the time the sentinel surfaces `workspace.indexed_paths()`
-    // already lists every indexable file - `indexed_files ==
-    // indexable_files` everywhere and no directory turned orange.
+    // - During `IndexFile` the per-entry match above marks ONE
+    //   dir (the one containing the current file). Good.
+    // - During `EmbedBatch` closing-9 marked every dir with
+    //   `indexable_files > 0` via the sentinel check. Good.
+    // - During the initial Building window the per-entry match
+    //   never fires (no entry path equals `""`) AND the embedding
+    //   sentinel isn't hit either, so no dir got marked. The
+    //   dashboard read as "indexing isn't happening" even though
+    //   the pill showed otherwise.
     //
-    // The right semantic during the embedding sweep is: every
-    // directory that contains indexable content has work in flight
-    // (its embeddings haven't been flushed yet, regardless of what
-    // the BM25 index says). Drop the comparison and mark every dir
-    // with `indexable_files > 0` as Indexing - the bulk of dirs
-    // pulse orange across the sweep, and content-only dirs (no
-    // indexable text) stay quiet. When embedding finishes
-    // `current_file` clears and the dirs settle back to Indexed /
-    // Pending. Per `feedback_pre_release_no_backcompat` we consume
-    // the existing sentinel rather than introducing a new wire
-    // field.
-    let embedding_sweep = current_file == Some("embedding");
+    // Closing-11 generalises: if `current_file` is `Some(_)` but
+    // didn't match any entry path during the walk above, the
+    // indexer IS building but not at a granularity we can
+    // pinpoint - that's either the initial-Building window or any
+    // future sentinel-shaped label. Treat it as a broad sweep and
+    // mark every dir with indexable content. Per-entry matches
+    // (IndexFile / Reindexing of a real file) still take the
+    // narrower one-dir path.
+    let broad_sweep = current_file.is_some() && !current_file_matched_entry;
     let nodes = dirs
         .into_iter()
         .map(|(path, accum)| {
-            let in_progress = accum.indexing || (embedding_sweep && accum.indexable_files > 0);
+            let in_progress = accum.indexing || (broad_sweep && accum.indexable_files > 0);
             let state = if in_progress {
                 IndexingDirectoryState::Indexing
             } else if accum.indexable_files > 0 && accum.indexed_files == accum.indexable_files {
@@ -672,6 +677,81 @@ mod tests {
                 .find(|node| node.path.is_empty())
                 .map(|node| node.state),
             Some(IndexingDirectoryState::Indexing)
+        );
+    }
+
+    /// Round-1 closing-11 (F2 fix-up 2): the initial Building
+    /// window between `IndexStatus::Building { file: String::new(), .. }`
+    /// (indexer.rs:310-314) and the first per-file event also
+    /// signals "indexing in progress" - treat any `current_file`
+    /// that doesn't match an entry path as a broad sweep so the
+    /// pre-event window doesn't read as Idle on the dashboard.
+    #[test]
+    fn indexing_state_marks_broad_sweep_during_initial_building_empty_file_window() {
+        let entries = vec![
+            tree_entry("notes", true),
+            tree_entry("notes/a.md", false),
+            tree_entry("docs", true),
+            tree_entry("docs/b.md", false),
+        ];
+        let indexed_paths = BTreeSet::new();
+
+        let response = build_indexing_state(&entries, &indexed_paths, Some(""));
+
+        // Empty current_file is the initial Building state; treat
+        // as a broad sweep.
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path == "notes")
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Indexing)
+        );
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path == "docs")
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Indexing)
+        );
+    }
+
+    /// Per-entry match still takes the narrower path: a real file
+    /// path being processed marks only the dirs that contain it
+    /// (and its ancestors), not the rest of the workspace.
+    #[test]
+    fn indexing_state_per_file_match_only_marks_ancestors_of_current_file() {
+        let entries = vec![
+            tree_entry("notes", true),
+            tree_entry("notes/current.md", false),
+            tree_entry("docs", true),
+            tree_entry("docs/done.md", false),
+        ];
+        let indexed_paths = BTreeSet::from(["docs/done.md".to_string()]);
+
+        let response = build_indexing_state(&entries, &indexed_paths, Some("notes/current.md"));
+
+        // The ancestor chain of the in-flight file is Indexing.
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path == "notes")
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Indexing)
+        );
+        // A sibling dir that's fully BM25-indexed reads as Indexed,
+        // not Indexing - the per-entry match didn't broaden into
+        // a sweep.
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path == "docs")
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Indexed)
         );
     }
 
