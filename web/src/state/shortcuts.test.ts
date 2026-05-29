@@ -18,9 +18,10 @@ describe("shortcut table", () => {
     expect(table).toMatch(/^New terminal +Cmd\+T\b/m);
   });
 
-  // Sibling label `Terminal rich prompt` shouldn't ever sit under
-  // the bare-Terminal regex; the guards below anchor to that exact
-  // word to catch an accidental rename or duplicate entry.
+  // Sibling label `Team Work` (phase-13 r2 rename of "Terminal rich
+  // prompt") shouldn't ever sit under the bare-Terminal regex; the
+  // guards below anchor to that exact word to catch an accidental
+  // rename or duplicate entry.
   test("does not advertise a bare 'Terminal' row (web)", () => {
     const table = renderTable("web", "mac");
     expect(table).not.toMatch(/^Terminal +Cmd\+Alt\+T\b/m);
@@ -71,12 +72,19 @@ describe("shortcut table", () => {
     expect(renderTable("native", "mac")).toMatch(/^Search\s+Cmd\+S/m);
   });
 
-  // `phase-12 lane-e` (addendum-2 Q8): direct Cmd+I dashboard chord
-  // (in addition to Hybrid Nav `i`). Phase-13 round-1 closing
-  // (B5): label renamed from "Infographics" to "Dashboard".
-  test("advertises Cmd+I dashboard on both platforms", () => {
-    expect(renderTable("web", "mac")).toMatch(/^Dashboard\s+Cmd\+I/m);
-    expect(renderTable("native", "mac")).toMatch(/^Dashboard\s+Cmd\+I/m);
+  // Phase-13 r2 (B-slice 2): Cmd+I moved from Dashboard to the editor
+  // italic chord. Dashboard is now Hybrid-Nav-only (`Cmd+. i`); Cmd+I
+  // advertises Italic and Cmd+B advertises Bold under the Editor group.
+  test("advertises Dashboard via Hybrid Nav (no direct Cmd+I)", () => {
+    expect(renderTable("web", "mac")).toMatch(/^Dashboard\s+Cmd\+\. i/m);
+    expect(renderTable("native", "mac")).toMatch(/^Dashboard\s+Cmd\+\. i/m);
+  });
+
+  test("advertises editor Bold (Cmd+B) and Italic (Cmd+I)", () => {
+    expect(renderTable("web", "mac")).toMatch(/^Bold\s+Cmd\+B/m);
+    expect(renderTable("web", "mac")).toMatch(/^Italic\s+Cmd\+I/m);
+    expect(renderTable("native", "mac")).toMatch(/^Bold\s+Cmd\+B/m);
+    expect(renderTable("native", "mac")).toMatch(/^Italic\s+Cmd\+I/m);
   });
 
   // `phase-12 lane-e` (addendum-2): splits are desktop-native only

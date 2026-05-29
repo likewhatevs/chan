@@ -435,32 +435,27 @@ describe("tab close confirmation", () => {
     expect(activePane().activeTabId).toBe(reopened.id);
   });
 
-  test("closing a front tab while flipped preserves showingBack=true (fullstack-a-11 + -a-43)", async () => {
-    // Sibling fix to `fullstack-a-5`. Closing should never change
-    // a Hybrid's flip orientation — only the explicit flip chord
-    // does. Pre-`fullstack-a-11` the back side appeared to
-    // auto-flip to the front when the last back-side tab closed.
-    // Under `-a-43` the back is no longer a tab collection (it's
-    // a per-surface configuration view), so the regression shape
-    // shifted: now we pin that closing the last FRONT tab while
-    // the pane is flipped to its back leaves `showingBack=true`
-    // intact. The user is mid-configuration; closing a front tab
-    // shouldn't yank them back to an empty front.
+  test("closing the last front tab clears the flip (phase-13 r2 @@Alex Cmd+, audit)", async () => {
+    // Phase-13 r2 supersedes the earlier `fullstack-a-11` behaviour
+    // (which kept showingBack=true after the last front tab closed).
+    // Per @@Alex's Cmd+, audit, the flip is strictly tied to panes
+    // with >= 1 tab: a 0-tab pane is never flipped. Closing the last
+    // front tab while flipped therefore drops the flip and lands the
+    // pane on its empty front (welcome), instead of a stuck back-
+    // config surface the flip chord can't undo (flipHybrid's empty-
+    // pane guard would block re-flipping it).
     const front = fileTab({ id: "front", path: "notes/front.md" });
     const seed = resetLayout([front]);
     flipHybrid(seed.id);
     let live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
     expect(live.showingBack).toBe(true);
-    // Front tabs are still `pane.tabs` under the new model;
-    // closing the only front tab below should leave showingBack
-    // intact even though the front becomes empty.
 
     await closeTab(seed.id, "front", { force: true });
 
     live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
-    expect(live.showingBack).toBe(true);
+    expect(live.showingBack).toBe(false);
     expect(live.tabs).toHaveLength(0);
     expect(live.activeTabId).toBeNull();
   });
@@ -1702,7 +1697,13 @@ describe("splitPane side preservation", () => {
     expect(newPane.back).toBeUndefined();
   });
 
-  test("splitting from the back side puts the new pane on its back too (fullstack-a-43)", () => {
+  test("splitting a flipped pane yields a clean, unflipped new pane (phase-13 r2 @@Alex Cmd+, audit)", () => {
+    // Supersedes fullstack-a-43 ("the new pane inherits the back
+    // side"). The new pane is born empty, and flip is strictly tied to
+    // panes with >= 1 tab, so it must NOT inherit showingBack/back -
+    // copying the flip onto the empty new pane was a root cause of the
+    // @@Alex-reported Cmd+, bug (a flipped 0-tab pane the flip chord
+    // could not undo, whose orientation then leaked across panes).
     const seed = resetLayout([fileTab({ id: "f", path: "a.md" })]);
     flipHybrid(seed.id);
     const live = layout.nodes[seed.id];
@@ -1714,12 +1715,9 @@ describe("splitPane side preservation", () => {
     if (root?.kind !== "split") throw new Error("expected split");
     const newPane = layout.nodes[root.b];
     if (newPane?.kind !== "leaf") throw new Error("expected leaf");
-    expect(newPane.showingBack).toBe(true);
-    // `-a-43`: the back is no longer a tab collection — just a
-    // (theme-only for now) per-Hybrid slot. The new pane gets an
-    // empty back materialised on demand; overrides stay per-pane.
-    expect(newPane.back).toEqual({});
-    // Original pane's hybrid state is intact.
+    expect(newPane.showingBack).toBeFalsy();
+    expect(newPane.back).toBeUndefined();
+    // Original pane keeps its own flip.
     const original = layout.nodes[seed.id];
     if (original?.kind !== "leaf") throw new Error("expected leaf");
     expect(original.showingBack).toBe(true);
@@ -1904,14 +1902,14 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     expect(restored.back).toEqual({});
   });
 
-  test("setActivePane clears the previous pane's showingBack on focus move (B2c)", () => {
-    // Round-1 closing-2 (B2c): the user-reported drift was that a
-    // flipped pane left in the background "kept flipping" when
-    // focus returned. flipHybrid toggles showingBack on the
-    // focused pane only, so a pane that was flipped while losing
-    // focus needs its back state cleared on focus-move; otherwise
-    // the keymap intent on the returning pane (and any sibling
-    // pane that was already flipped) compounds with stale state.
+  test("focus changes never touch any pane's flip; flips are per-pane (phase-13 r2 @@Alex Cmd+, audit)", () => {
+    // Phase-13 r2 supersedes round-1 closing-2 (B2c), which cleared
+    // the previous pane's showingBack on focus-move. That coupling was
+    // the @@Alex-reported bug: switching pane focus visibly flipped
+    // sibling tabs. The flip is now a strictly per-pane boolean that
+    // ONLY flipHybrid writes; setActivePane leaves every pane's flip
+    // untouched, so two panes can be independently flipped and focus
+    // moves between them preserve both states.
     const left = fileTab({ id: "left", path: "notes/left.md" });
     const right = fileTab({ id: "right", path: "notes/right.md" });
     const leftPane = resetLayout([left]);
@@ -1921,36 +1919,40 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     const rightPaneId = root.b;
     const rightPane = layout.nodes[rightPaneId];
     if (rightPane?.kind !== "leaf") throw new Error("expected leaf");
+    // The split's new pane is born clean - NOT flipped, even though
+    // it was created while the focus was on a (would-be) flipped pane.
+    expect(rightPane.showingBack).toBeFalsy();
     rightPane.tabs.push(right);
     rightPane.activeTabId = right.id;
 
-    // Focus the left pane and flip it to its back.
+    // Flip the left pane.
     setActivePane(leftPane.id);
     flipHybrid(leftPane.id);
-    let leftLive = layout.nodes[leftPane.id];
-    if (leftLive?.kind !== "leaf") throw new Error("expected leaf");
-    expect(leftLive.showingBack).toBe(true);
+    const leftFlipped = layout.nodes[leftPane.id];
+    if (leftFlipped?.kind !== "leaf") throw new Error("expected leaf");
+    expect(leftFlipped.showingBack).toBe(true);
 
-    // Focus moves to the right pane; the left pane's back-side
-    // state resets so the next return shows the front first.
+    // Focus the right pane: the left pane STAYS flipped (no coupling).
     setActivePane(rightPaneId);
+    const leftAfterFocus = layout.nodes[leftPane.id];
+    if (leftAfterFocus?.kind !== "leaf") throw new Error("expected leaf");
+    expect(leftAfterFocus.showingBack).toBe(true);
 
-    leftLive = layout.nodes[leftPane.id];
-    if (leftLive?.kind !== "leaf") throw new Error("expected leaf");
-    expect(leftLive.showingBack).toBe(false);
-    // back marker persists (the pane is still a Hybrid surface);
-    // only the orientation resets.
-    expect(leftLive.back).toEqual({});
-
-    // Re-focusing the same pane is a no-op for showingBack.
+    // Flip the right pane too: now BOTH panes are independently flipped.
     flipHybrid(rightPaneId);
-    const rightLive = layout.nodes[rightPaneId];
-    if (rightLive?.kind !== "leaf") throw new Error("expected leaf");
-    expect(rightLive.showingBack).toBe(true);
+    expect((layout.nodes[leftPane.id] as LeafNode).showingBack).toBe(true);
+    expect((layout.nodes[rightPaneId] as LeafNode).showingBack).toBe(true);
+
+    // Focus bouncing between them changes nothing.
+    setActivePane(leftPane.id);
     setActivePane(rightPaneId);
-    const rightLiveAfter = layout.nodes[rightPaneId];
-    if (rightLiveAfter?.kind !== "leaf") throw new Error("expected leaf");
-    expect(rightLiveAfter.showingBack).toBe(true);
+    expect((layout.nodes[leftPane.id] as LeafNode).showingBack).toBe(true);
+    expect((layout.nodes[rightPaneId] as LeafNode).showingBack).toBe(true);
+
+    // Flipping one back is local to that pane.
+    flipHybrid(leftPane.id);
+    expect((layout.nodes[leftPane.id] as LeafNode).showingBack).toBe(false);
+    expect((layout.nodes[rightPaneId] as LeafNode).showingBack).toBe(true);
   });
 });
 

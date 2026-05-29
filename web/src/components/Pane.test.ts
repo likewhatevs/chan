@@ -156,7 +156,7 @@ describe("Pane right-click menus", () => {
       "New Draft",
       "Terminal",
       "File Browser",
-      "Rich Prompt",
+      "Team Work",
       "Graph",
       "Search",
       "Dashboard",
@@ -206,10 +206,10 @@ describe("Pane right-click menus", () => {
 
   test("pane hamburger pins roadmap chord labels to existing helpers", () => {
     expect(paneSource).toMatch(
-      /label: "Split right"[\s\S]*?chord: paneModeChordLabel\("\/"\)/,
+      /label: "Split right"[\s\S]*?chord: formatChord\("Mod\+\/", os\)/,
     );
     expect(paneSource).toMatch(
-      /label: "Split bottom"[\s\S]*?chord: paneModeChordLabel\("\?"\)/,
+      /label: "Split bottom"[\s\S]*?chord: formatChord\("Mod\+\?", os\)/,
     );
     expect(paneSource).toMatch(
       /label: "Next pane"[\s\S]*?command: "app\.pane\.next"[\s\S]*?chord: formatChord\("Mod\+]"/,

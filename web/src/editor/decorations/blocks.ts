@@ -443,6 +443,48 @@ const handleBulletList: TokenHandler = (ctx) => {
 /// the rendering to reflect what's in the source code").
 const BULLET_MARK = Decoration.mark({ class: "cm-md-ul-marker" });
 
+/// Phase-13 r2 (B-slice 1): per-image-1 marker glyphs. The class
+/// chosen here only ADDS a styling hook; the source bytes are
+/// untouched (so source mode + round-trip still show the literal
+/// `-` / `*`). The wysiwyg glyph substitution is pure CSS
+/// (Wysiwyg.svelte): `-` renders an en-dash at every level, `*`
+/// renders a filled bullet at the top level and a hollow bullet when
+/// nested. `+` (out of image-1 scope) keeps its literal styled char
+/// via the base BULLET_MARK.
+const BULLET_DASH = Decoration.mark({
+  class: "cm-md-ul-marker cm-md-ul-dash",
+});
+const BULLET_DOT_TOP = Decoration.mark({
+  class: "cm-md-ul-marker cm-md-ul-bullet cm-md-ul-bullet-top",
+});
+const BULLET_DOT_NESTED = Decoration.mark({
+  class: "cm-md-ul-marker cm-md-ul-bullet cm-md-ul-bullet-nested",
+});
+
+/// True when this ListItem sits inside another list (any depth > 0).
+/// Used to pick the filled vs hollow `*` bullet. Walks the syntax
+/// ancestry rather than the indent so it tracks the actual list
+/// structure (a `*` one space deeper is still top-level until it
+/// nests under a parent item).
+function isNestedListItem(
+  item: import("@lezer/common").SyntaxNode,
+): boolean {
+  let cur = item.parent;
+  while (cur) {
+    if (cur.name === "ListItem") return true;
+    cur = cur.parent;
+  }
+  return false;
+}
+
+/// Map a bullet ListMark's source char + nesting to its decoration.
+function bulletMarkerDecoration(ch: string, nested: boolean): Decoration {
+  const c = ch.trim();
+  if (c === "-") return BULLET_DASH;
+  if (c === "*") return nested ? BULLET_DOT_NESTED : BULLET_DOT_TOP;
+  return BULLET_MARK;
+}
+
 function decorateBulletList(
   ctx: TokenContext,
   list: import("@lezer/common").SyntaxNode,
@@ -467,7 +509,12 @@ function decorateBulletList(
       } while (sub.nextSibling());
     }
     if (!hasTask && markFrom !== -1 && markTo !== -1) {
-      ctx.push(BULLET_MARK, markFrom, markTo);
+      const ch = ctx.state.doc.sliceString(markFrom, markTo);
+      ctx.push(
+        bulletMarkerDecoration(ch, isNestedListItem(item)),
+        markFrom,
+        markTo,
+      );
     }
   } while (cursor.nextSibling());
 }

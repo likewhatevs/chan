@@ -850,17 +850,14 @@
       toggleActiveFileTabMode();
       return;
     }
-    // `phase-12 lane-e` (addendum-2 Q8): Cmd+I opens a Dashboard
-    // tab in the active pane (also reachable via Hybrid Nav `i`). The
-    // tab type already exists; this just adds the direct chord @@Alex
-    // approved. On chan-desktop KEY_BRIDGE_JS replays Cmd+I as
-    // app.dashboard.open (and stops propagation), so this branch is
-    // web-only. Cmd+I is not browser-reserved; preventDefault is safe.
-    if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyI") {
-      e.preventDefault();
-      openDashboardInActivePane();
-      return;
-    }
+    // `phase-13 r2` (B-slice 2): Cmd+I no longer opens Dashboard.
+    // @@Alex moved Dashboard off the direct chord so the editor can
+    // claim Cmd+I for italic (bound in Wysiwyg.svelte's CM6 keymap).
+    // There is intentionally no `KeyI` branch here: when the editor is
+    // focused its keymap toggles italic; otherwise Cmd+I is inert.
+    // Dashboard stays reachable via Hybrid Nav `Cmd+. i` and the
+    // Dashboard hamburger item. The desktop KEY_BRIDGE (serve.rs) drops
+    // its matching Cmd+I -> app.dashboard.open mapping in the same slice.
   }
 
   async function createDraftAndOpen(): Promise<void> {

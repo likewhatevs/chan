@@ -625,13 +625,14 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyS': fire(e, 'app.search.toggle');    return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
-        // `phase-12 lane-e` (addendum-2 Q8): Cmd+I opens a Dashboard
-        // tab in the active pane (also Hybrid Nav `i`). The user-
-        // visible label still reads "Infographics" until the
-        // dashboard widget rework lands. Distinct from Cmd+Opt+I
-        // (DevTools) - that has Alt and is handled in the alt
-        // branch above.
-        case 'KeyI': fire(e, 'app.dashboard.open'); return;
+        // `phase-13 r2` (B-slice 2): Cmd+I no longer opens Dashboard.
+        // @@Alex freed it for the editor's italic chord (bound in
+        // Wysiwyg.svelte's CM6 keymap); Dashboard is reachable via
+        // Hybrid Nav `Cmd+. i` + the Dashboard hamburger. With no
+        // `KeyI` case here, Cmd+I falls through to the focused webview
+        // (the editor toggles italic; otherwise inert). Cmd+Opt+I
+        // (DevTools, alt branch above) and Cmd+Shift+I (broadcast,
+        // shift branch below) are unaffected.
         case 'BracketLeft':  fire(e, 'app.pane.prev'); return;
         case 'BracketRight': fire(e, 'app.pane.next'); return;
         // `phase-12 lane-e` (addendum-2): Cmd+/ split right. Split
@@ -1094,7 +1095,11 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("app.search.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.splitRight"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.splitDown"));
-        assert!(KEY_BRIDGE_JS.contains("app.dashboard.open"));
+        // `phase-13 r2` (B-slice 2): Cmd+I was freed for the editor's
+        // italic chord, so the native bridge no longer maps it to
+        // Dashboard. Pin the removal so a regression that re-adds the
+        // case is caught (Dashboard is Hybrid-Nav-only now).
+        assert!(!KEY_BRIDGE_JS.contains("app.dashboard.open"));
     }
 
     #[test]

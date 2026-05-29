@@ -91,9 +91,19 @@ describe("list marker rendering (phase-13 bug 3: source-faithful)", () => {
     // for a glyph (•) or a dotted-outline chain (1.1.1.).
     expect(blocksSource).not.toContain("BulletMarkerWidget");
     expect(blocksSource).not.toContain("OrderedMarkerWidget");
+    // Phase-13 r2 (B-slice 1): the bullet marker gains a char/depth
+    // styling hook (dash vs filled-top vs hollow-nested). The source
+    // char is still kept in the doc; the glyph is a CSS ::before
+    // substitution in Wysiwyg.svelte, not a doc replacement.
+    expect(blocksSource).toContain("cm-md-ul-dash");
+    expect(blocksSource).toContain("cm-md-ul-bullet-top");
+    expect(blocksSource).toContain("cm-md-ul-bullet-nested");
+    expect(wysiwygSource).toContain(".cm-md-ul-dash::before");
+    expect(wysiwygSource).toContain(".cm-md-ul-bullet-top::before");
+    expect(wysiwygSource).toContain(".cm-md-ul-bullet-nested::before");
   });
 
-  test("renders a dash bullet as a dash, not a glyph", () => {
+  test("dash bullet keeps the source `-` and carries the dash class", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
@@ -105,16 +115,20 @@ describe("list marker rendering (phase-13 bug 3: source-faithful)", () => {
       }),
     });
 
-    expect(parent.querySelector(".cm-md-ul-marker")?.textContent).toBe("-");
+    // Phase-13 r2 (B-slice 1): the wysiwyg glyph is an en-dash via CSS
+    // ::before, but the doc + textContent stay the literal `-` (the
+    // bug-3 source-faithful guarantee). The dash class is the CSS hook.
+    const marker = parent.querySelector(".cm-md-ul-marker");
+    expect(marker?.textContent).toBe("-");
+    expect(marker?.classList.contains("cm-md-ul-dash")).toBe(true);
     expect(parent.textContent).toContain("- item");
-    expect(parent.textContent).not.toContain("• item");
     expect(view.state.doc.toString()).toBe("- item");
 
     view.destroy();
     parent.remove();
   });
 
-  test("renders an asterisk bullet as an asterisk", () => {
+  test("top-level asterisk keeps the source `*` and the filled class", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
@@ -126,8 +140,38 @@ describe("list marker rendering (phase-13 bug 3: source-faithful)", () => {
       }),
     });
 
-    expect(parent.querySelector(".cm-md-ul-marker")?.textContent).toBe("*");
+    const marker = parent.querySelector(".cm-md-ul-marker");
+    expect(marker?.textContent).toBe("*");
+    expect(marker?.classList.contains("cm-md-ul-bullet-top")).toBe(true);
     expect(parent.textContent).toContain("* item");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  test("nested asterisk gets the hollow class; top stays filled", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "* top\n    * nested",
+        extensions: [chanMarkdown(), chanDecorations()],
+      }),
+    });
+
+    const markers = Array.from(parent.querySelectorAll(".cm-md-ul-marker"));
+    const top = markers.find((m) =>
+      m.classList.contains("cm-md-ul-bullet-top"),
+    );
+    const nested = markers.find((m) =>
+      m.classList.contains("cm-md-ul-bullet-nested"),
+    );
+    // Filled top, hollow nested - both keep their literal `*`.
+    expect(top?.textContent).toBe("*");
+    expect(nested?.textContent).toBe("*");
+    expect(view.state.doc.toString()).toBe("* top\n    * nested");
 
     view.destroy();
     parent.remove();

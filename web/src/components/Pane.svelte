@@ -208,7 +208,9 @@
       chordId: "app.files.toggle",
     },
     {
-      label: "Rich Prompt",
+      // phase-13 r2: Rich Prompt -> Team Work (label from @@LaneA);
+      // chord id app.terminal.richPrompt stays stable.
+      label: "Team Work",
       icon: MessageSquare,
       command: "app.terminal.richPrompt",
       chordId: "app.terminal.richPrompt",
@@ -239,10 +241,6 @@
     const chord = s[platform];
     if (!chord) return "";
     return formatChord(chord, os);
-  }
-  function paneModeChordLabel(key: string): string {
-    const base = chordLabel("app.pane.mode");
-    return base ? `${base} ${key}` : key;
   }
 
   /// Round-1 closing-2 (lane-b-empty-pane-menu): the empty-pane
@@ -510,14 +508,19 @@
       label: "Split right",
       icon: ArrowRight,
       command: "app.pane.splitRight",
-      chord: paneModeChordLabel("/"),
+      // phase-13 r2 (B-slice 4): show the direct global chord
+      // (Cmd+/ , Cmd+?) instead of the Pane-Mode `Cmd+. /` prefix.
+      // The desktop KEY_BRIDGE fires app.pane.splitRight on Slash and
+      // app.pane.splitDown on Shift+Slash; the label is a display
+      // mnemonic for the same physical key (Shift+/ reads as `?`).
+      chord: formatChord("Mod+/", os),
       action: () => doPaneModeSplit("row"),
     },
     {
       label: "Split bottom",
       icon: ArrowDown,
       command: "app.pane.splitBottom",
-      chord: paneModeChordLabel("?"),
+      chord: formatChord("Mod+?", os),
       action: () => doPaneModeSplit("column"),
     },
     {

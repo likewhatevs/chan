@@ -2015,6 +2015,13 @@ async function closeTabAsync(
   if (p.activeTabId === tabId) {
     p.activeTabId = p.tabs[Math.max(0, idx - 1)]?.id ?? null;
   }
+  // Phase-13 r2 (@@Alex Cmd+, audit): flip is strictly for panes with
+  // >= 1 tab, so closing the last tab drops any flip. The pane lands
+  // on its empty front (welcome) instead of a stuck back-config
+  // surface the flip chord could not undo (the empty-pane guard in
+  // flipHybrid blocks re-flipping). Supersedes the round-1 behaviour
+  // that kept showingBack across a last-tab close.
+  if (p.tabs.length === 0) p.showingBack = false;
   // `fullstack-a-5`: do NOT auto-collapse an empty Hybrid pane.
   // Per the phase-8 bug list, closing the last tab in a Hybrid
   // pane should leave the pane in place rendering the empty
@@ -2192,6 +2199,8 @@ export async function closeTabsInPane(
   }
   p.tabs = [];
   p.activeTabId = null;
+  // Phase-13 r2 (@@Alex Cmd+, audit): empty pane is never flipped.
+  p.showingBack = false;
   return true;
 }
 
@@ -3050,21 +3059,18 @@ export function splitPane(
 ): void {
   if (!canSplit()) return;
   const original = pane(paneId);
-  // Preserve which side of the Hybrid is showing across the split.
-  // Splitting from the back keeps the new pane on its back too so
-  // the user doesn't lose orientation. The new pane gets an empty
-  // back materialised on demand; theme overrides stay per-pane.
+  // Phase-13 r2 (@@Alex Cmd+, audit): the new pane is born EMPTY, so
+  // it must NOT inherit the original's flip. A flipped state belongs
+  // strictly to a pane with >= 1 tab (flipHybrid's guard); copying
+  // showingBack onto a 0-tab pane produced a stuck "flipped empty
+  // pane" the flip chord could not undo, and the orientation then
+  // leaked across panes. The new pane starts clean on its front;
+  // flip is a per-pane boolean only the focused, non-empty pane sets.
   const newPane: LeafNode = {
     kind: "leaf",
     id: id("pane"),
     tabs: [],
     activeTabId: null,
-    ...(original.showingBack
-      ? {
-          showingBack: true,
-          back: {},
-        }
-      : {}),
   };
   insertSiblingPane(original.id, newPane, direction, placement);
   layout.activePaneId = newPane.id;
@@ -3111,20 +3117,13 @@ export function setActivePane(paneId: string): void {
   // pane (already-focused) stay quiet; otherwise the wobble would
   // re-trigger on every mousedown that lands on the focused pane.
   const previousActive = current.activePaneId;
-  // Round-1 closing-2 (B2c): clear the previous pane's
-  // `showingBack` when focus moves to a different pane. The
-  // flipHybrid keymap path toggles showingBack on the FOCUSED
-  // pane only, so leaving a flipped pane behind and coming back
-  // via focus would visually skip the flip-front animation and
-  // desync the chord intent. Resetting on focus-move keeps each
-  // pane's "is this the back surface?" state local to the time
-  // it had focus.
-  if (previousActive && previousActive !== paneId) {
-    const prev = current.nodes[previousActive];
-    if (prev && prev.kind === "leaf" && prev.showingBack) {
-      prev.showingBack = false;
-    }
-  }
+  // Phase-13 r2 (@@Alex Cmd+, audit): focus changes must NOT touch any
+  // pane's `showingBack`. The flip is a per-pane boolean owned solely
+  // by flipHybrid on the focused, non-empty pane; each pane keeps its
+  // own flipped/not-flipped state independently and across reloads.
+  // The round-1 closing-2 (B2c) attempt cleared the previous pane's
+  // showingBack here, which coupled panes - moving focus visibly
+  // flipped sibling tabs. Removing that coupling is the fix.
   current.activePaneId = paneId;
   if (previousActive !== paneId) requestPaneWobble(paneId);
 }
@@ -4125,7 +4124,11 @@ export async function restoreLayout(
         p.back = {};
       }
       if (node.ht) p.theme = node.ht === "d" ? "dark" : "light";
-      if (node.sb) p.showingBack = true;
+      // Phase-13 r2 (@@Alex Cmd+, audit): the per-pane flip persists
+      // across reloads, but only for a pane that still has tabs - a
+      // 0-tab pane is never flipped, so a stale `sb` on an empty pane
+      // is dropped defensively.
+      if (node.sb && p.tabs.length > 0) p.showingBack = true;
       layout.nodes[p.id] = p;
       if (node.f) activePaneId = p.id;
       return p.id;

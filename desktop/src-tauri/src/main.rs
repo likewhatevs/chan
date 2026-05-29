@@ -1826,8 +1826,11 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // `fullstack-b-27`: moved from `CmdOrCtrl+N` to
     // `CmdOrCtrl+Shift+N` so the SPA's New Draft handler (per
     // `fullstack-a-66`) can claim plain Cmd+N without the menu
-    // accelerator intercepting first. Menu label stays
-    // "New Window"; only the chord moves.
+    // accelerator intercepting first. Menu label stays "New Window".
+    // `phase-13 r2` (B-slice 3): the handler now opens a new window of
+    // the FOCUSED window's workspace (open_new_window_for_focused_workspace)
+    // instead of the workspace picker; the picker stays on the
+    // "Workspaces" (win-main) item.
     let new_window = MenuItemBuilder::with_id("app-new-window", "New Window")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
@@ -1866,8 +1869,8 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             let _ = show_window(app, "main");
         }
         "app-new-window" => {
-            if let Err(e) = open_new_launcher_window(app) {
-                tracing::warn!(error = %e, "open new launcher window failed");
+            if let Err(e) = open_new_window_for_focused_workspace(app) {
+                tracing::warn!(error = %e, "open new window for focused workspace failed");
             }
         }
         "chan-settings" => {
@@ -1902,6 +1905,48 @@ fn open_new_launcher_window(app: &tauri::AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| format!("building launcher window {label}: {e}"))?;
     Ok(())
+}
+
+/// `phase-13 r2` (B-slice 3): open a new window of the workspace that
+/// owns the currently focused window. Replaces the old Cmd+Shift+N
+/// behaviour (which always opened the workspace-picker launcher) per
+/// @@Alex: "open a new window of the currently open workspace".
+///
+/// Window labels are `workspace-<hash(key)>-<seq>` and the hash is
+/// one-way, so we recover the workspace key by matching
+/// `serve::workspace_window_prefix(key)` against the focused window's
+/// label across the running `serves` map, then reuse the same
+/// `spawn_local_workspace_window` path `open_local_workspace` uses.
+///
+/// Falls back to the launcher picker when no LOCAL `workspace-*` window
+/// is focused (the launcher itself, a `tunnel-*` / `outbound-*` window,
+/// or no running match), so the menu item never dead-ends. The
+/// "Workspaces" picker stays reachable via the `win-main` menu item.
+fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(focused) = app
+        .webview_windows()
+        .into_values()
+        .find(|w| w.label().starts_with("workspace-") && w.is_focused().unwrap_or(false))
+    else {
+        return open_new_launcher_window(app);
+    };
+    let focused_label = focused.label().to_string();
+    let state = app.state::<Arc<AppState>>();
+    let resolved = {
+        let serves = state.serves.lock().unwrap();
+        serves.iter().find_map(|(key, handle)| {
+            let prefix = serve::workspace_window_prefix(key);
+            if focused_label.starts_with(&format!("{prefix}-")) {
+                handle.url.clone().map(|url| (key.clone(), url))
+            } else {
+                None
+            }
+        })
+    };
+    match resolved {
+        Some((key, url)) => serve::spawn_local_workspace_window(app, &key, &url),
+        None => open_new_launcher_window(app),
+    }
 }
 
 /// Pick the next free `main-N` label. Launchers spawn from the

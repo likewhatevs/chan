@@ -438,6 +438,28 @@
         // insert a newline first). Returning true consumes the event.
         Prec.high(
           keymap.of([
+            // Phase-13 r2 (B-slice 2): conventional Bold / Italic
+            // chords. The toggle commands already existed (format.ts)
+            // and were advertised in StyleToolbar tooltips; this binds
+            // them in the editor keymap. Cmd+I was freed by moving
+            // Dashboard off it (shortcuts.ts + App.svelte + the desktop
+            // KEY_BRIDGE), so it no longer double-fires. Registered in
+            // this Prec.high block so CM6 consumes them before the
+            // document-level handlers; returning true preventDefaults.
+            {
+              key: "Mod-b",
+              run: (view) => {
+                fmt.toggleBold(view);
+                return true;
+              },
+            },
+            {
+              key: "Mod-i",
+              run: (view) => {
+                fmt.toggleItalic(view);
+                return true;
+              },
+            },
             // Mod-Enter at a date pill opens the calendar / format
             // popover (keyboard equivalent of clicking the pill).
             // Returns false when the caret isn't on a date so the
@@ -984,6 +1006,36 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-ul-marker) {
     color: var(--text-secondary, #888);
+  }
+  /* phase-13 r2 (B-slice 1): render bullet markers to match image-1
+     while keeping the source bytes intact (source mode + round-trip
+     still show the literal `-` / `*`; see blocks.ts). The literal
+     marker char is collapsed to zero width with font-size:0 and the
+     styled glyph is drawn by an IN-FLOW ::before (no positioning), so
+     the existing list-line text-indent places the glyph exactly where
+     the source char sat - at every nesting depth. (An absolute-
+     positioned overlay was tried first but text-indent does not apply
+     to out-of-flow boxes, so nested glyphs detached to the gutter.)
+     Hyphen -> en-dash at all levels; star -> filled bullet at the top
+     level, hollow bullet when nested. `+` keeps its literal styled
+     char via the base .cm-md-ul-marker rule (out of image-1 scope). */
+  :global(.md-wysiwyg-cm6 .cm-md-ul-dash),
+  :global(.md-wysiwyg-cm6 .cm-md-ul-bullet) {
+    font-size: 0;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-ul-dash::before),
+  :global(.md-wysiwyg-cm6 .cm-md-ul-bullet::before) {
+    font-size: var(--chan-editor-body-size, 11pt);
+    color: var(--text-secondary, #888);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-ul-dash::before) {
+    content: "\2013"; /* en-dash */
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-ul-bullet-top::before) {
+    content: "\25CF"; /* black circle (filled) - @@Alex r2 pick */
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-ul-bullet-nested::before) {
+    content: "\25EF"; /* large circle (hollow) - @@Alex r2 pick */
   }
   /* Left indent and guides on every line of every list (bullet,
      ordered, task). Three-class chain matches the fence-row pattern
