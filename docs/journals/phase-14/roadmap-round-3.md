@@ -45,16 +45,31 @@ Direction (intent, not a prescription):
   file browser, terminal, additional graphs) must remain interactive
   throughout.
 
-Graph interaction model (settled, unchanged by this work): single click
-opens the inspector, double click re-roots ("graph from here", depth
-resets to 1), background tap clears, and the depth slider paces batches.
-There is NO per-node expand/collapse - rescope covers that case - so
-this round adds no new node gesture; it only makes the existing
-delivery incremental. (The phase-13 round-1 graph design floated a
-per-node click-to-expand; it never shipped and is explicitly not wanted.)
+Graph interaction model (revised this round):
 
-Correctness bar: the graphs still render the same result they do today;
-only the delivery is paced.
+- Single click = select + open the inspector (unchanged). The "graph
+  from here" rescope lives in the inspector (and the existing
+  right-click / chord).
+- Double click on a DIRECTORY node = expand / collapse that directory
+  in place, WITHOUT reloading the graph. Expanding reveals the
+  directory's next degree (fetched incrementally per theme 1 if not
+  already loaded); collapsing hides its subtree. This is the per-node
+  1-by-1 control.
+- The old double-click "graph from here" is dropped: rescope is already
+  reachable from the inspector, so the gesture is freed for
+  expand/collapse.
+- The depth slider stays authoritative. Its `find -d N` scope defines
+  what is expanded vs collapsed; moving the slider re-establishes the
+  expanded set to depth N and overrides individual expand/collapse
+  toggles.
+- The expanded / collapsed directory set persists across a window
+  reload, the same way the File Browser does (reuse the
+  `treeExpanded` + sessionStorage persistence pattern).
+- Background tap clears the selection.
+
+Correctness bar: graph *contents* are unchanged and delivery is paced;
+the interaction changes above (double-click expand/collapse, dropped
+rescope-on-double-click, persistence) are intentional and additive.
 
 ## Theme 2: new-workspace pre-flight moves to chan-server
 
@@ -92,6 +107,11 @@ In practice:
   with no stall and no disruption to other surfaces.
 - API/WS payloads on the hot paths are bounded and incremental, not
   single large blobs.
+- Double-click on a directory node expands/collapses it in place with
+  no graph reload; the depth slider overrides individual toggles; the
+  expanded/collapsed set persists across a window reload (File Browser
+  parity). Double-click no longer rescopes; "graph from here" remains
+  in the inspector.
 - New-workspace pre-flight runs in chan-server on first boot, presented
   on a locked OverlayShell (no close button, ESC ignored), identical
   for local and remote workspaces; chan-desktop only launches the

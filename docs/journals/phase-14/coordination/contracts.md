@@ -10,17 +10,23 @@ file; a change to it is announced in the relevant `event-*` inbox.
 Replaces the current whole-payload `/api/fs-graph`, `/api/graph`,
 `/api/graph/languages`. To pin on kickoff:
 
-- request: scope (workspace root or a subdir), depth, and a cursor /
-  page token.
+- request kinds (both feed the same batch stream):
+  - depth scope: scope (workspace root or a subdir) + depth `N`
+    (`find -d N`), authoritative for the expanded set.
+  - single-directory expand: fetch just one directory's next degree
+    (the double-click expand), so B can grow one node in place without
+    a whole reload.
+- request also carries a cursor / page token for paging within a kind.
 - response unit: one small batch of nodes + edges, bounded by count
   and bytes.
 - transport: paged `/api/...` responses and/or `/ws` frames over the
   existing bus (`bus.rs`); decide which carries the bulk.
 - backpressure: how B signals "ready for the next batch" so A never
-  outruns the UI; how the depth slider requests the next batch rather
-  than refetching the whole graph.
+  outruns the UI; how the depth slider and a single-dir expand each
+  request the next batch rather than refetching the whole graph.
 - ordering / idempotency: a node arrives before its edges; a batch is
-  safe to re-request.
+  safe to re-request. (Collapse + persistence are frontend-only; the
+  backend just serves the batches B asks for.)
 
 (unfilled - fill at kickoff)
 

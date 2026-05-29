@@ -36,11 +36,19 @@ checkout under `docs/journals/phase-14/`.
   UI must stay responsive at all times; the editor, file browser,
   terminal, and other graphs stay interactive while a large workspace
   (`/tmp/linux`) fills in. The depth slider requests the next batch
-  (signals backpressure), never a whole refetch. Keep the existing
-  gesture model as-is: single click = inspector, double click =
-  "graph from here", background tap = clears. Do NOT add a per-node
-  expand/collapse gesture; rescope covers that case. This item only
-  makes delivery incremental, not the interactions.
+  (signals backpressure), never a whole refetch.
+- Graph gesture model (revised). Single click = select + open the
+  inspector (unchanged; the inspector keeps "graph from here").
+  **Double click on a directory node = expand/collapse it IN PLACE
+  with no graph reload** - expanding reveals the dir's next degree
+  (fetched incrementally via the contract if not already loaded),
+  collapsing hides its subtree. **Remove the old double-click "graph
+  from here"** (rescope stays in the inspector / right-click / chord).
+  The depth slider's `find -d N` scope is authoritative and overrides
+  individual expand/collapse. **Persist** the expanded/collapsed set
+  across a window reload like the File Browser - reuse the
+  `treeExpanded` + sessionStorage persistence in
+  `web/src/state/store.svelte.ts` (`persistTreeExpanded` and friends).
 - Pre-flight OverlayShell lock (round 3, theme 2): render the
   chan-server pre-flight per `contracts.md` section 2, LOCKED until
   complete - hide/remove the close button, ignore ESC, and guide the
