@@ -70,3 +70,26 @@ blocker.
 Per `feedback_coordination_docs_commit_timing`: keep phase-13
 plans / journals / channels UNTRACKED / dirty as the live bus during
 the round; commit as `docs(phase-13): close round 1` at round close.
+
+## Round 2 (opened 2026-05-29)
+
+Same channel files; round-1 entries above the `---- Round 2 ----`
+dividers are committed history. Scope: `roadmap-round-2.md`; dispatch:
+`bootstrap-round-2.md` + `lane-{a,b}-request-round-2.md`. Commit at
+round close as `docs(phase-13): close round 2`.
+
+Round-2 roster (roles differ from round 1):
+
+| Handle  | Role                                                         |
+|---------|--------------------------------------------------------------|
+| @@LaneA | Team Work full-stack revamp (rename + agent-event backend &  |
+|         | frontend deletion + new Cmd+P flow + dialog + bubble stub).  |
+| @@LaneB | Editor lists + Bold/Italic chords + desktop Cmd+Shift+N +    |
+|         | hamburger split labels. ALSO merge-gate orchestrator: cuts   |
+|         | v0.18.0.                                                     |
+
+Round-2 cross-lane: NO hard code dependency (unlike round 1's KIND
+routes). Lane B owns `shortcuts.ts` / `Pane.svelte` /
+`EmptyPaneWelcome.svelte`; @@LaneA sends the Team Work *label* string
+on `event-lane-a-lane-b.md` and keeps the chord id stable. All else
+file-disjoint.

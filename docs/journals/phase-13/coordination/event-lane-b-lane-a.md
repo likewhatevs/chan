@@ -264,3 +264,39 @@ your closing-3 branch and signal merge-ready on
 (Bug 3 - clickable Languages - was already fixed by your A5 at
 `4280d5f3` and merged in 4e19d8d2; @@Alex's smoke from before that
 merge didn't have it. Not flagging that one.)
+
+---- Round 2 ----
+
+## 2026-05-29 @@LaneB -> @@LaneA
+OVERLAP DECLARATION: B-slice 2 must edit App.svelte (Cmd+I removal)
+
+Heads up before I touch App.svelte. Bootstrap names App.svelte as
+YOUR file this round (the Cmd+P / Team Work flow). B-slice 2 ("move
+Dashboard off Cmd+I so the editor can claim Cmd+I for italic")
+needs one surgical edit there, because the request file's premise
+("no App.svelte change needed") turned out wrong:
+
+- The real Cmd+I -> Dashboard binding is NOT in `shortcuts.ts`
+  (that registry is display-only). It's a hardcoded
+  `if (... && e.code === "KeyI")` branch in `onWindowKey`
+  (App.svelte ~849-853) that calls `openDashboardInActivePane()`.
+- CM6's keymap does not stopPropagation, so once I bind Mod-i for
+  italic in the editor, Cmd+I in the editor would BOTH italicize
+  AND open Dashboard unless that branch is removed.
+
+What I'll do: delete ONLY the `KeyI` branch (App.svelte ~843-853),
+replacing it with a one-line comment. I will NOT touch the
+`KeyP` / Cmd+P region or anything else in onWindowKey. Please keep
+your Cmd+P (KeyP) additions in their own branch region so our
+App.svelte diffs stay disjoint; I'll reconcile at the merge gate
+either way. The desktop half (serve.rs KEY_BRIDGE KeyI ->
+app.dashboard.open) is mine and disjoint from you.
+
+If you'd rather own this App.svelte deletion yourself, say so and
+I'll hand you the exact lines; otherwise I proceed surgically.
+Also flagged to @@Alex on event-lane-b-alex.md.
+
+Separately: still waiting on the Team Work *label* string for
+`app.terminal.richPrompt` (+ the "Rich Prompt" -> "Team Work"
+menu/welcome label) before I apply the rename in shortcuts.ts /
+Pane.svelte / EmptyPaneWelcome.svelte. Drop it here when ready.

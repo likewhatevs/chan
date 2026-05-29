@@ -689,3 +689,80 @@ run build / vitest 1654 passed / 11 skipped.
 Verification: CSS-only render change, no reactivity. Static gate +
 parity pin; the visual sits with @@LaneB's combined-tree smoke at
 merge-gate. Reported merge-ready on event-lane-a-alex.md.
+
+# @@LaneA journal - Phase 13 round 2
+
+Round-2 scope: the Team Work (formerly Rich Prompt) full-stack revamp.
+Dispatch: lane-a-request-round-2.md. Worktree ../chan-lane-a brought to
+main (76f5e18b) on branch phase-13-r2-lane-a (clean reset; round-1 work
+all merged so worktree was clean).
+
+## 2026-05-29 @@LaneA r2 turn-1 - recon + orchestration plan
+
+Recovered context (CLAUDE.md, design, roadmap-round-2, bootstrap,
+README, inbox, this journal). Inbox (event-alex-lane-a.md) holds only
+the kickoff. Cross-lane event-lane-b-lane-a.md tail = round-1 closing
+items, nothing round-2.
+
+Recon (verified the request's anchors against current source; mapped
+every richPrompt/RichPrompt/watcher reference across web/src):
+- A1 backend files all present (terminal_sessions 2760, terminal.rs
+  2208, rich_prompts route 466, event_watcher 844, ws rich_prompts
+  535, lib.rs 1126).
+- Frontend rename ripples to ~30 files incl. ~20 test files. The TEST
+  surface crosses A2/A3/A4 file-ownership boundaries (source-pattern
+  ?raw tests pin the OLD Cmd+P flow). Decision: partition each test
+  file to exactly ONE subagent owner; I reconcile any cross-cutting /
+  unanticipated test fallout single-threaded at integration. No two
+  concurrent subagents edit the same file.
+- FileTree.svelte teamLoad refs are COMMENTS only (no code) - A2
+  scrubs them. Bubble.svelte is a generic stateless shell with no
+  watcher coupling - A4's stub work is BubbleOverlay.svelte only.
+
+FROZEN CONTRACT (dictated top-down so subagents never block on each
+other's symbol reports; I verify A2's output matches before Wave 2):
+- State: tab.teamWork : TeamWorkState (was tab.richPrompt :
+  TerminalRichPromptState). Watcher types removed:
+  WatcherEvent/SurveyQuestion/SurveyOption/ScopeGrant/
+  TerminalWatcherState + the tab.watcher field.
+- Component: web/src/components/TeamWork.svelte (renamed from
+  TerminalRichPrompt.svelte), default export, <TeamWork .../>.
+- <TeamWork> props (current set MINUS three): prompt={tab.teamWork},
+  onSubmit={submitTeamWork}, terminalSessionId={tab.terminalSessionId}.
+  DROP watcherPath, onSpawned, bubbleCount. Submit (Cmd+Enter) resets
+  tab.teamWork.buffer = "" after send.
+- tabs.svelte.ts renames: openActiveTerminalRichPrompt ->
+  openActiveTeamWork; primeTerminalRichPrompt -> primeTeamWork;
+  paneModeOpenRichPromptTerminal -> paneModeOpenTeamWorkTerminal;
+  showOrSpawnRichPromptInFocusedPane REMOVED (new flow replaces it).
+  NEW: createTeamWorkLeadTerminal(opts?: OpenTerminalOptions):
+  TerminalTab | null - fresh terminal in active pane + opens the Team
+  Work editor + returns the created tab (for Cancel deletion).
+- Dialog open (A3 implements, App.svelte calls):
+  openTeamDialog({ leadTabId, leadPaneId }). Cancel ->
+  closeTab(leadPaneId, leadTabId); Bootstrap -> lead-first orchestrator
+  using the existing lead tab.
+- Chord id app.terminal.richPrompt stays STABLE (Lane B's
+  shortcuts.ts). Label string -> "Team Work" (sent to Lane B).
+
+ORCHESTRATION (2 waves; max 3 concurrent subagents):
+- Wave 1 (concurrent): A1 Rust backend deletion (crates/ only,
+  isolated) + A2 frontend foundation (tabs.svelte.ts F0, client.ts F1,
+  api/types.ts, App.svelte F4 new flow, module deletions F2/F11,
+  FileTree comment scrub, A2 test partition). A2 = the F0 blocking
+  checkpoint; I verify its symbol map before Wave 2.
+- Wave 2 (concurrent): A3 TeamWork.svelte + TeamDialog + teamDialog +
+  teamOrchestrator + SpawnDialog deletion + A3 test partition; A4
+  TerminalTab.svelte + BubbleOverlay/Bubble stub + A4 test partition.
+- Integration (me): full gate (cargo fmt/clippy/test/no-default +
+  npm check/build/vitest), reconcile remaining test fallout +
+  cross-cutting refs, browser-smoke the Cmd+P flow / dialog
+  Cancel+Bootstrap / submit-reset / right-click menu / bubble stub,
+  then report merge-ready on event-lane-a-alex.md.
+
+Scope-creep flag queued for the bus: the empty-pane pane-mode "P"
+picker (paneModeOpenRichPromptTerminal) is OUT of the new dialog flow;
+it keeps spawning a plain Team Work terminal (terminal + embedded
+editor, no team dialog). The new lead-terminal+dialog flow is the
+Cmd+P / Cmd+Alt+P / hamburger "Team Work" entry only. Will confirm
+with @@Alex.

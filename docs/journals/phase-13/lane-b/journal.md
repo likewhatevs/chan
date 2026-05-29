@@ -913,3 +913,186 @@ moves per `reference_release_cut_mechanics`:
    release.yml).
 7. Verify `/dl/latest.json` supersedes 0.16.0 + chan-desktop
    self-upgrade walk.
+
+# @@LaneB journal - Phase 13 round 2
+
+Round 2 target: v0.18.0. Scope: editor list glyphs + Bold/Italic
+chords + desktop Cmd+Shift+N + hamburger split labels, plus the
+merge-gate orchestrator hat. Recovery files read: CLAUDE.md,
+lane-b-request-round-2.md, roadmap-round-2.md (image-1 list style,
+image-13 hamburger), bootstrap-round-2.md, coordination/README.md,
+event-alex-lane-b.md (round-2 kickoff in inbox), event-lane-a-lane-b.md
+(no Round 2 entries yet - no Team Work label string from @@LaneA).
+
+## 2026-05-29 round 2 - turn 1 setup + scoping
+
+Worktree: `../chan-lane-b` was clean at 0d1497cf (one behind main,
+just missing the docs commit). `git checkout -B phase-13-r2-lane-b
+main` -> now at 76f5e18b, clean.
+
+### Source recon (all four slices mapped to exact lines)
+
+- B-slice 4 (split labels): Pane.svelte paneNavigationActions
+  513/520 use `paneModeChordLabel("/")` / `("?")` -> renders the
+  Pane-Mode prefix `Cmd+. /` / `Cmd+. ?`. formatChord only swaps
+  Mod->Cmd/Ctrl; it does NOT fold Shift+/ -> ?. Plan: render the
+  roadmap mnemonics directly via `formatChord("Mod+/", os)` /
+  `formatChord("Mod+?", os)` (os already in scope at 527). The real
+  key bindings (shortcuts.ts Mod+/ / Mod+Shift+/, desktop KEY_BRIDGE
+  Slash) are unchanged - hamburger is display-only. paneModeChordLabel
+  becomes dead (only callers were 513/520); remove it. chordLabel
+  ("app.pane.mode") at 1198 is separate and stays.
+
+- B-slice 2 (bold/italic + Cmd+I): the big finding. The Cmd+I ->
+  Dashboard binding is NOT shortcuts.ts (display-only registry). It's
+  hardcoded `e.code === "KeyI"` in App.svelte::onWindowKey (~849) +
+  desktop KEY_BRIDGE serve.rs:634. CM6 keymap does not stopPropagation,
+  so binding Mod-i for italic without removing those = double-fire
+  (italic + Dashboard). So B-slice 2 spans: shortcuts.ts (mine) +
+  Wysiwyg.svelte keymap (mine) + serve.rs KEY_BRIDGE (mine) +
+  App.svelte (LANE A's file). Declared the App.svelte overlap to
+  @@LaneA + flagged the spec gap to @@Alex before editing.
+
+- B-slice 3 (Cmd+Shift+N): main.rs `app-new-window` menu branch
+  (1868) -> open_new_launcher_window (the picker). The window label is
+  `workspace-<hash(key)>-<seq>` (hash is one-way), so I recover the
+  focused window's key by matching `serve::workspace_window_prefix(key)`
+  (pub) against the focused label across `state.serves`
+  (HashMap<key, ServeHandle{url}>), then reuse
+  serve::spawn_local_workspace_window (same path open_local_workspace
+  uses). Fall back to open_new_launcher_window when no LOCAL
+  workspace-* window is focused (picker, tunnel-*, outbound-*, or no
+  running match) so the menu never dead-ends. "Workspaces" picker
+  stays reachable via the win-main menu item, so repurposing
+  app-new-window orphans nothing.
+
+- B-slice 1 (list glyphs): blocks.ts decorateBulletList marks each
+  ListMark with `cm-md-ul-marker` (Decoration.mark, source preserved
+  per round-1 bug-3). image-1 wants `-` -> en-dash all levels, `*` ->
+  filled bullet top / hollow nested. Plan: split the class by source
+  char + nesting (count ancestor ListItem nodes), and substitute the
+  glyph via pseudo-element CSS (color:transparent on the source char +
+  ::before glyph) so the source still round-trips. `+` keeps its
+  literal styled char (out of image scope). Ordered lists already
+  render the source `1.` styled - matches image-1, no change.
+
+### Coordination posted
+
+- event-lane-b-lane-a.md: declared the App.svelte KeyI-only deletion
+  overlap + reminded @@LaneA I'm waiting on the Team Work label string.
+- event-lane-b-alex.md: flagged the spec gap + my minor call to repoint
+  app.dashboard.open to `Mod+. i` (keeps Dashboard discoverable rather
+  than dropping its chord to nothing).
+
+## 2026-05-29 round 2 - turn 1 implementation + gate + smoke
+
+All four B-slices implemented as atomic commits, full gate green, two
+web slices browser-smoked. Commits on `phase-13-r2-lane-b`:
+
+- `f2f78e52` B-slice 4: hamburger Split right/bottom render `Cmd+/` /
+  `Cmd+?` via formatChord mnemonics (display-only; real bindings
+  unchanged). Removed dead paneModeChordLabel. renderTable cheatsheet
+  still shows the literal Cmd+Shift+/ (untouched).
+- `dc3a1230` B-slice 2: bound Mod-b / Mod-i in the Wysiwyg CM6 keymap;
+  moved Dashboard off Cmd+I. The real Cmd+I->Dashboard binding was the
+  hardcoded App.svelte::onWindowKey KeyI branch + the desktop KEY_BRIDGE
+  (serve.rs), NOT shortcuts.ts - removed both. shortcuts.ts repoints
+  app.dashboard.open to `Mod+. i` + adds app.editor.bold/italic entries.
+- `b16e699d` B-slice 3: desktop Cmd+Shift+N opens a new window of the
+  FOCUSED window's workspace (open_new_window_for_focused_workspace
+  maps the workspace-<hash>-<seq> label back to a running key via
+  serve::workspace_window_prefix, reuses spawn_local_workspace_window;
+  launcher fallback when no local workspace focused).
+- `3eb7f4c4` B-slice 1: list marker glyphs. blocks.ts splits the bullet
+  decoration by source char + nesting; Wysiwyg.svelte substitutes the
+  glyph via font-size:0 + IN-FLOW ::before so text-indent positions it
+  at every depth. (See smoke below for the absolute-overlay bug I caught
+  and fixed.) Glyphs: en-dash for `-`, U+25CF filled top / U+25EF hollow
+  nested for `*` (final @@Alex glyph pick).
+
+### Per-slice gate (combined lane-b head, all green)
+
+- cargo fmt --check: clean.
+- cargo clippy --all-targets -- -D warnings: clean.
+- cargo test: every result line 0 failed (351 chan-server, 540
+  chan-workspace, 76 chan-desktop, etc.; no indexer flake this run).
+- cargo build --no-default-features: clean.
+- web: npm run check (0 errors / 0 warnings / 4117 files), npm run build
+  (clean), npm test (1660 passed / 11 skipped).
+
+### Browser smoke (Chrome, ad-hoc /tmp/lbr2srv on /tmp/lbr2-ws, torn down)
+
+- B-slice 1 list glyphs: opened a file with all three list kinds at two
+  depths. FIRST pass used a position:absolute ::before overlay; the
+  screenshot showed NESTED glyphs detaching to the left gutter while
+  their content stayed indented - text-indent does not apply to
+  out-of-flow boxes. Fixed by switching to font-size:0 + in-flow
+  ::before; re-smoke showed correct per-depth alignment (en-dash all
+  levels, filled top / hollow nested bullets). This is the exact
+  `feedback_svelte_static_gate_misses_runtime` class - the static gate
+  (svelte-check + vitest) was green on the broken version.
+- B-slice 2 chords: triple-click a sentence, Cmd+B inserted `**`, Cmd+I
+  added `*` (combined `***`), and crucially NO Dashboard tab opened on
+  Cmd+I (the double-fire removal works). Empty-pane welcome also shows
+  "Dashboard  Cmd+. i" (the repointed chord) not Cmd+I.
+- B-slice 3 (desktop Cmd+Shift+N) + the Cmd+I removal on the desktop
+  KEY_BRIDGE are WKWebView-shape; flagged for @@Alex's chan-desktop
+  walk per `feedback_terminal_webgl_wkwebview` (Chrome/Blink can't
+  reproduce).
+
+## 2026-05-29 round 2 - turn 1 NEW ASKS (mid-turn, @@Alex direct)
+
+@@Alex raised four asks mid-turn while watching the smoke. Per
+`feedback_inflight_task_amendments` these are new tasks, not amendments;
+documented here + in `lane-b-round-2-addenda.md`.
+
+### New ask 1: bullet glyphs -> U+25CF / U+25EF
+
+@@Alex first confirmed U+2022 top / U+25E6 nested (via AskUserQuestion),
+then changed to U+25CF (filled black circle) top / U+25EF (large hollow
+circle) nested. Folded into the B-slice 1 commit (`3eb7f4c4`); re-smoked
+- renders ● filled top / ◯ hollow nested, correctly indented.
+
+### New ask 2: Cmd+, per-pane flip bug (`8c6f4a94`)
+
+@@Alex repro: Cmd+, on an empty pane "records it"; clicking a pane with
+a tab flips that tab; from there switching pane focus flips tabs. His
+spec: (1) flip strictly tied to panes with >= 1 tab; (2) each flip cycle
+must not impact other panes; (3) per-pane flipped/not-flipped boolean;
+(4) persists across window reloads.
+
+Two root causes, both leaking the per-pane flip across panes:
+1. `splitPane` copied showingBack/back onto the NEW pane (born EMPTY) ->
+   a flipped 0-tab pane the flip chord couldn't undo (flipHybrid's
+   empty-pane guard blocks re-flip), whose orientation then bled into
+   focus. New pane now starts clean.
+2. `setActivePane` (round-1 closing-2 B2c) cleared the PREVIOUS pane's
+   showingBack on every focus-move -> the visible "switching focus flips
+   tabs" bug. The B2c fix was itself the regression source; removed it.
+
+Now showingBack is a strictly per-pane boolean ONLY flipHybrid writes
+(guarded >= 1 tab); closeTab/closeTabsInPane clear it when the pane
+empties; restoreLayout restores it only when the pane still has tabs.
+Tests rewritten (B2c -> "focus never touches flip, two panes flip
+independently"; split test -> new pane clean; close-last-tab -> flip
+clears). Full web gate green.
+
+Browser-smoke (verified via the serialized layout hash + a screenshot):
+- Cmd+, flips a pane with a tab (sb:1).
+- Split a flipped pane -> new empty pane has NO sb/bm (clean).
+- Focus B -> A stays flipped; Cmd+, on empty B is a no-op.
+- Reload from the base URL (session.json restore) -> A still flipped, B
+  still clean. Per-pane persistence confirmed.
+
+Behaviour change flagged: the round-1 "keep showingBack across a
+last-tab close" (old test 438) is superseded by @@Alex's "strictly >= 1
+tab" - closing the last tab now drops the flip to the empty front.
+
+### New ask 3: document the new asks + commit the docs
+
+@@Alex: document the new asks and commit all the docs produced this turn
+as part of the deliverable. This deviates from
+`feedback_coordination_docs_commit_timing` (keep docs untracked until
+round close); committing now per his explicit ask. Captured the new asks
+in `lane-b-round-2-addenda.md` and committed the phase-13 docs to main as
+a `docs(phase-13)` in-flight commit.

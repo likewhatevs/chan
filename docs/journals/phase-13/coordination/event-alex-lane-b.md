@@ -26,3 +26,23 @@ Scoping notes:
   half-states, and don't TaskStop to take it now.
 - @@Alex: please confirm whether this is a closing-2 tail item or a
   round-2 carryover (`roadmap-round-2.md`).
+
+---- Round 2 ----
+
+## 2026-05-29 @@Alex -> @@LaneB
+Round 2 kickoff: editor/desktop/shell polish + merge gate + v0.18.0
+
+Round 2 is open. Scope: `roadmap-round-2.md`. Your dispatch:
+`lane-b-request-round-2.md` (B-slices 1-5 with file/line anchors).
+Bootstrap: `bootstrap-round-2.md`.
+
+You own: editor list glyphs (`image-1.png`), Bold/Italic chords with
+Dashboard moved OFF Cmd+I (@@Alex decision - keep its Hybrid Nav
+`Cmd+. i`), desktop Cmd+Shift+N -> current workspace (Tauri, verify in
+chan-desktop), and the hamburger split labels -> Cmd+/ , Cmd+?. You
+also own `shortcuts.ts` / `Pane.svelte` / `EmptyPaneWelcome.svelte`
+fully - apply the Team Work *label* string that @@LaneA sends on
+`event-lane-a-lane-b.md`. You are the merge-gate orchestrator: re-gate
+the combined tree, serialize merges to main, cut v0.18.0 (tag pushed
+only on my explicit ask). Read the request file in full before
+starting.

@@ -391,3 +391,41 @@ ready to merge: phase-13-lane-a@2506533c  -  separator between COCOMO and NOTES 
 
 Lane A closing-3 scope (the one routed item) is drained. Detail in
 lane-a/journal.md.
+
+---- Round 2 ----
+
+## 2026-05-29 @@LaneA -> @@Alex
+r2 open: Team Work revamp - recon done, 4 subagents dispatching
+
+Highlights
+- Worktree on phase-13-r2-lane-a @ main 76f5e18b (clean reset).
+- Verified the request's file/line anchors against current source and
+  mapped every richPrompt/RichPrompt/watcher ref across web/src
+  (~30 files, ~20 tests). Froze the full rename + prop contract
+  top-down (detail in lane-a/journal.md) so the A1-A4 subagents never
+  block on each other's symbol reports.
+- Orchestration: Wave 1 = A1 (Rust backend deletion, crates/ only,
+  isolated) + A2 (frontend foundation: tabs/client/types/App + dead-
+  module deletions). Wave 2 = A3 (TeamWork component + dialog redesign
+  + lead-first orchestrator + SpawnDialog deletion) + A4 (TerminalTab
+  + static bubble stub). I reconcile cross-cutting tests + run the full
+  gate + browser-smoke at integration.
+- Sent the "Team Work" label string to @@LaneB on
+  event-lane-a-lane-b.md (chord id app.terminal.richPrompt stays
+  stable per the plan).
+
+Scope flag (one decision, non-blocking - proceeding with the call,
+flip me if you disagree)
+- The empty-pane pane-mode "P" picker keeps spawning a PLAIN Team Work
+  terminal (terminal + embedded editor, no dialog). The new lead-
+  terminal + Spawn-agents dialog flow fires on Cmd+P / Cmd+Alt+P /
+  Hybrid hamburger "Team Work" only. Routing a modal into pane-mode
+  staging would be odd; the roadmap only names Cmd+P + the hamburger.
+
+Lowlights / contention
+- None yet. The riskiest piece is the ~20 source-pattern (?raw) tests
+  pinning the OLD Cmd+P flow; I'm partitioning them one-owner-per-file
+  and sweeping any cross-cutting fallout single-threaded at
+  integration so no two subagents edit the same file.
+
+Detail in lane-a/journal.md.

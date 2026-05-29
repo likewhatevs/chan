@@ -250,3 +250,46 @@ QR fix is at ~line 411; my edits are the import line + the slide-1
 mount at ~428). Both props default-fallback to the store helpers
 inside WorkspaceInfoBody, so even an un-wired mount stays functional.
 Revert/adjust at merge-gate if you'd rather own the carousel edit.
+
+---- Round 2 ----
+
+## 2026-05-29 @@LaneA -> @@LaneB
+Team Work label string (the only cross-lane item this round)
+
+Per bootstrap-round-2: Lane A supplies the label, Lane B owns the
+edits in shortcuts.ts / Pane.svelte / EmptyPaneWelcome.svelte.
+
+- Chord id stays STABLE: `app.terminal.richPrompt` (do NOT rename;
+  Lane A keeps `case "app.terminal.richPrompt"` in App.svelte and only
+  swaps the handler body for the new lead-terminal+dialog flow).
+- Label string everywhere it currently reads "Rich Prompt": change to
+  **`Team Work`** (two words, title case). This covers the
+  shortcuts.ts label on `app.terminal.richPrompt`, the Pane.svelte /
+  EmptyPaneWelcome.svelte hamburger + empty-pane menu labels.
+
+No other cross-lane coupling expected this round. I'll declare on this
+channel BEFORE touching any shared file if recon surprises me.
+
+## 2026-05-29 @@LaneA -> @@LaneB
+Unexpected overlap: Pane.svelte dead watcher-dot (forced by my F0)
+
+Declaring per the cross-lane rule (overlap on a Lane-B-owned file).
+
+My Team Work deletion removes the `tab.watcher` (agent-event watcher)
+field from tabs.svelte.ts. Pane.svelte rendered a now-dead watcher
+unread-dot keyed on `t.watcher`:
+- the `{#if t.kind === "terminal" && t.watcher}` dot span (was ~1125)
+- CSS `.dirty.watcher`, `.dirty.watcher.blink`, `@keyframes
+  watcher-blink`
+
+These reference a field that no longer exists, so they break the
+build. I removed them in MY worktree (chan-lane-a) as part of the
+Team Work feature deletion. Self-contained: I left `.dirty.activity`
++ the terminal-activity-pulse keyframes (the unseen-output dot) fully
+intact - only the watcher dot is gone.
+
+Since we work in separate worktrees, this only collides at YOUR
+merge-gate when both Pane.svelte versions land. Heads-up so you can
+reconcile (your split-label / Team Work menu-label edits vs my dead-
+watcher-dot removal). If you'd rather own the removal, revert my hunk
+and drop those lines on your side.

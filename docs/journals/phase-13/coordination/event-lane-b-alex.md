@@ -885,3 +885,84 @@ fast-forwarded.
    wave drains.
 
 Detail in `lane-b/journal.md`.
+
+---- Round 2 ----
+
+## 2026-05-29 @@LaneB -> @@Alex
+Turn 1: spec correction on B-slice 2 (App.svelte IS needed)
+
+Picked up round 2. Worktree on `phase-13-r2-lane-b` @ main
+(76f5e18b), clean. Working B-slices 4/2/3/1.
+
+CONTENTION (one item, low-risk, already declared to @@LaneA):
+- The request file says B-slice 2 ("Dashboard off Cmd+I") needs
+  "no App.svelte change". That's wrong. The actual Cmd+I ->
+  Dashboard binding is a hardcoded `e.code === "KeyI"` branch in
+  App.svelte::onWindowKey (~849), plus the desktop KEY_BRIDGE
+  (serve.rs:634) - NOT the shortcuts.ts registry (display-only).
+  To honour your "Cmd+I = editor italic, Dashboard via Hybrid Nav"
+  decision AND avoid a double-fire (CM6 doesn't stopPropagation),
+  I must delete that branch. App.svelte is @@LaneA's file this
+  round, so I declared a surgical KeyI-only deletion to them on
+  event-lane-b-lane-a.md and will reconcile at the merge gate.
+  Say the word if you'd rather @@LaneA own that 6-line deletion.
+
+Minor call I'm making (flag if you disagree): instead of dropping
+app.dashboard.open's chord to nothing (which would hide Dashboard
+from the cheatsheet + menus), I'm repointing it to its real
+reachable chord `Mod+. i` (Hybrid Nav). Keeps it discoverable;
+Cmd+I is still freed for italic.
+
+Still waiting on @@LaneA's Team Work label string before the
+"Rich Prompt" -> "Team Work" rename in my shared files.
+
+Detail in `lane-b/journal.md`.
+
+## 2026-05-29 @@LaneB -> @@Alex
+Turn 1: all 4 B-slices + 2 new asks done, gated, web-smoked
+
+All on `phase-13-r2-lane-b`. Full gate green (cargo fmt/clippy
+-Dwarnings/test/build --no-default-features; web check 0/0/4117 +
+build + vitest 1660). Commits:
+- f2f78e52 B4 hamburger split labels -> Cmd+/ , Cmd+?
+- dc3a1230 B2 Bold/Italic chords + Dashboard off Cmd+I
+- b16e699d B3 desktop Cmd+Shift+N -> current workspace
+- 3eb7f4c4 B1 list glyphs (en-dash / U+25CF / U+25EF)
+- 8c6f4a94 Cmd+, per-pane flip fix (your bug report)
+
+HIGHLIGHTS
+- B2: the real Cmd+I->Dashboard binding was NOT shortcuts.ts; it was a
+  hardcoded App.svelte KeyI branch + the desktop KEY_BRIDGE. Removed
+  both (App.svelte overlap declared to @@LaneA). Smoke: Cmd+I
+  italicises and does NOT open Dashboard.
+- B1: browser smoke caught a real bug the static gate missed - an
+  absolute-positioned ::before detached nested glyphs to the gutter.
+  Fixed with an in-flow approach; re-smoked OK. Glyphs are your final
+  pick: ● U+25CF top / ◯ U+25EF nested / en-dash for hyphens.
+- Cmd+, bug: two root causes - splitPane copied the flip onto the new
+  EMPTY pane, and setActivePane (round-1 B2c) cleared the previous
+  pane's flip on focus-move. Now flip is strictly per-pane, >= 1 tab,
+  cleared on empty, persisted across reload. Smoked all five invariants
+  via the serialized layout (flip + split-clean + focus-isolation +
+  empty no-op + reload-persist).
+
+FLAGS / DECISIONS FOR YOU
+- App.svelte KeyI deletion is in @@LaneA's file; declared on the
+  cross-lane channel. Say if you'd rather @@LaneA own it.
+- Cmd+, fix changes one prior behaviour: closing the last tab of a
+  flipped pane now drops the flip (was: keep mid-config back). Per your
+  "strictly >= 1 tab". Flag if you wanted the old behaviour.
+- DESKTOP-ONLY, needs your chan-desktop (WKWebView) walk, can't Chrome:
+  B3 Cmd+Shift+N new-window, and the Cmd+I removal on the native
+  KEY_BRIDGE. Per feedback_terminal_webgl_wkwebview.
+
+DOCS: committed the phase-13 docs to main now as a docs(phase-13)
+in-flight commit per your ask (deviates from the usual keep-untracked-
+until-round-close; noted in the journal + addenda). New asks captured in
+`lane-b-round-2-addenda.md`.
+
+STILL PENDING: @@LaneA's Team Work label string for the Rich Prompt ->
+Team Work rename in shortcuts.ts / Pane.svelte / EmptyPaneWelcome.svelte.
+
+Not merged to main yet (slices are merge-gate-ready on the branch; I
+hold merges for the round per the bootstrap). Detail: lane-b/journal.md.

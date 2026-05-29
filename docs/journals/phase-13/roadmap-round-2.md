@@ -4,9 +4,6 @@ Author: @@Alex
 
 More work for the existing lanes or new lanes if needed.
 
-**Agents**: do not read, to not use.
-**Status**: Draft.
-
 ## Clean ups
 ### Desktop native
 Add global chord for New Window Cmd+Shift+N: we currently have a cmd+shift+n which opens a new window of the Workspaces. Instead, what we want is to open a new window of the currently open workspace.
@@ -18,7 +15,7 @@ We are going to rename Rich Prompt -> Team Work, in the UI and in the code.
 Clean ups:
 - We no longer need the "Spawn agent" dialog and process
 - We are deleting the entire code and API related to filesystem watcher for tasks and events between agents
-- We are also deleting the templates for Rich Prompt and new team; no archival of prompts either
+- We are also deleting the templates for Rich Prompt and new team; no archival of prompts either››
 - No "Spawn agents" in the menu either, see below for the new process details
 
 
@@ -95,3 +92,10 @@ About the bubbles and stack/tray code:
 - We are going to change the way our lists are rendered, to match the following style (adapted to our fonts and themes, but using the same glyphs and spacing from the screenshot as reference):
 ![](./image-1.png#w=250)
 - The common chords for editor bold Cmd+B and italic Cmd+I are missing. Let's add them.
+
+### Hybrid hamburger
+The current menu: ![](./image-13.png#w=250)
+
+We want to change the shortcuts for split right and split bottom to cmd+/ and cmd+?
+
+
