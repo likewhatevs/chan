@@ -245,7 +245,14 @@
       selectedNode &&
       (selectedNode.kind === "folder" || selectedNode.kind === "file")
     ) {
-      graphFromHere(selectedNode.id, selectedNode.kind === "folder");
+      // Round-1 closing-3 (D2): semantic-mode folder nodes carry
+      // `id = "directory:<path>"` (workspace root is the empty
+      // string), and file nodes carry `id = <workspace-relative
+      // path>`. Passing the id to graphFromHere built
+      // `dir:directory:<path>` which the backend rejected with
+      // "no such path". The `.path` field is the canonical
+      // workspace-relative form for both kinds.
+      graphFromHere(selectedNode.path, selectedNode.kind === "folder");
     }
   }
 
@@ -1975,7 +1982,15 @@
       {#each ["tag", "mention", "language", "img", "folder", "markdown", "source"] as const as kind (kind)}
         {@const workspaceLike =
           currentScope?.kind === "workspace"}
-        {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : kind !== "language" || workspaceLike) && (kind !== "folder" || filesystemMode || workspaceLike)}
+        <!-- Round-1 closing-3 (D4): the language filter chip used
+             to be workspace-only because the pre-B9 backend only
+             emitted Language -> File edges at workspace scope. B9
+             pushed the per-file language edges through
+             `scoped_report_files`, so dir-scoped graphs now have
+             language data too. Show the chip whenever the layout
+             is the semantic graph (not the filesystem / language
+             modes), regardless of path scope. -->
+        {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : true) && (kind !== "folder" || filesystemMode || workspaceLike)}
           <button
             type="button"
             class="mbtn filter-row"
@@ -2240,7 +2255,17 @@
                   // language's lens (mirrors the breadcrumb /
                   // dir re-scope path, stays in semantic mode).
                   () => rescopeFromHere(`language:${inspectorSelection.language}`)
-                : undefined
+                : inspectorSelection?.kind === "tag"
+                  ? // Round-1 closing-3 (D1): tag inspector gets
+                    // the same "Graph from here" affordance as the
+                    // language bubble. Re-scopes the current graph
+                    // to the tag's lens (bidirectional BFS), so
+                    // clicking a hashtag node lets the user
+                    // descend into its neighbourhood without
+                    // having to navigate to Search + click the
+                    // chip there.
+                    () => rescopeFromHere(`tag:${inspectorSelection.nodeId}`)
+                  : undefined
           }
           documentsOverride={selectionDocumentsInScope}
         />

@@ -1476,12 +1476,36 @@
     void nodes;
     void edges;
     if (!sim) return;
+    // Round-1 closing-3 (D5): the Dashboard indexing slide polls
+    // /api/indexing/state every 3s, which produces a new
+    // (content-identical) `nodes`/`edges` array reference each
+    // tick. Pre-fix that re-fired `scheduleRefit(1200)` and the
+    // canvas zoomed back to fit-content, overriding the user's
+    // manual pan/zoom. When the node id SET hasn't changed (only
+    // node fields like `indexState` colour have refreshed), this
+    // is a content-update tick, not a structural change - skip
+    // the refit so the user's view stays put. Scope / depth /
+    // first-load swaps still refit because the set actually
+    // differs.
+    const nextIds = new Set<string>();
+    for (const n of nodes) nextIds.add(n.id);
+    let sameSet = dNodes.length > 0 && dNodes.length === nextIds.size;
+    if (sameSet) {
+      for (const n of dNodes) {
+        if (!nextIds.has(n.id)) {
+          sameSet = false;
+          break;
+        }
+      }
+    }
     rebuildAdjacency();
     rebuildWorkingSet();
-    rewarmSim(1);
-    // Full data swap: track the cluster all the way through its
-    // longest relaxation so the view re-fits as it spreads.
-    scheduleRefit(1200);
+    rewarmSim(sameSet ? 0.05 : 1);
+    if (!sameSet) {
+      // Full data swap: track the cluster all the way through its
+      // longest relaxation so the view re-fits as it spreads.
+      scheduleRefit(1200);
+    }
   });
 
   /// Visibility change without a full data swap: scope / depth /

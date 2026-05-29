@@ -44,6 +44,7 @@
     openGraphForLanguage,
   } from "../state/store.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
+  import InspectorBody from "./InspectorBody.svelte";
   import WorkspaceInfoBody from "./WorkspaceInfoBody.svelte";
   import {
     ChevronLeft,
@@ -212,12 +213,37 @@
   /// B12: clicks toggle the selected node so GraphCanvas surfaces
   /// the clicked node's label plus its 1-hop neighbours (siblings
   /// + parent + children), matching the main Graph tab's
-  /// selection-labeling rule. The dashboard surface still has no
-  /// inspector — selection is purely a labeling cue.
+  /// selection-labeling rule.
+  ///
+  /// Round-1 closing-3 (D3): selection now ALSO surfaces a
+  /// directory inspector on the right side of the slide (same
+  /// FileInfoBody the File Browser + Graph tab use for folder
+  /// rows). Clicking the canvas background clears the selection
+  /// and dismisses the inspector. Clicking the inspector's close
+  /// affordance does the same.
   let selectedIndexId = $state<string | null>(null);
   function onIndexingSelect(id: string | null): void {
     selectedIndexId = id;
   }
+  /// Resolve the selected node id back to a workspace-relative
+  /// path. `directoryId(path)` is the canonical mapping that
+  /// generates the ids fed to GraphCanvas; this is its inverse.
+  /// Returns null when nothing is selected or the id doesn't
+  /// match a known folder node (defensive — the canvas only
+  /// emits folder ids from the indexing spine).
+  const selectedIndexPath = $derived.by<string | null>(() => {
+    if (selectedIndexId === null) return null;
+    if (selectedIndexId === "") return "";
+    if (selectedIndexId.startsWith("directory:")) {
+      return selectedIndexId.slice("directory:".length);
+    }
+    return null;
+  });
+  const selectedIndexLabel = $derived.by<string>(() => {
+    if (selectedIndexPath === null) return "";
+    if (selectedIndexPath === "") return workspace.info?.label ?? "workspace";
+    return basename(selectedIndexPath);
+  });
 
   // ---- carousel state ----------------------------------------------------
 
@@ -478,17 +504,48 @@
             {/if}
           </div>
         {:else}
-          <div class="indexing-graph-host">
-            <GraphCanvas
-              open={slideIndex === 2}
-              nodes={indexingGraph.nodes}
-              edges={indexingGraph.edges}
-              visibleNodeIds={indexingNodeIds}
-              visibleEdges={indexingGraph.edges}
-              focalIds={indexingFocal}
-              selectedId={selectedIndexId}
-              onSelect={onIndexingSelect}
-            />
+          <div class="indexing-row">
+            <div class="indexing-graph-host">
+              <GraphCanvas
+                open={slideIndex === 2}
+                nodes={indexingGraph.nodes}
+                edges={indexingGraph.edges}
+                visibleNodeIds={indexingNodeIds}
+                visibleEdges={indexingGraph.edges}
+                focalIds={indexingFocal}
+                selectedId={selectedIndexId}
+                onSelect={onIndexingSelect}
+              />
+            </div>
+            <!-- Round-1 closing-3 (D3): selecting a directory node
+                 surfaces the same FileInfoBody (via InspectorBody's
+                 directory arm) that the File Browser + Graph tab
+                 use for folder rows. Clicking the canvas background
+                 calls onSelect(null) which clears
+                 `selectedIndexId`; the inspector collapses with it. -->
+            {#if selectedIndexPath !== null}
+              <div class="indexing-inspector" role="complementary" aria-label="directory details">
+                <div class="indexing-inspector-head">
+                  <span class="indexing-inspector-title">{selectedIndexLabel}</span>
+                  <button
+                    type="button"
+                    class="indexing-inspector-close"
+                    aria-label="close inspector"
+                    onclick={() => onIndexingSelect(null)}
+                  >×</button>
+                </div>
+                <div class="indexing-inspector-body">
+                  <InspectorBody
+                    selection={{
+                      kind: "directory",
+                      path: selectedIndexPath,
+                      label: selectedIndexLabel,
+                    }}
+                    showRefs={false}
+                  />
+                </div>
+              </div>
+            {/if}
           </div>
           <div class="indexing-legend" aria-hidden="true">
             <span class="legend-pair">
@@ -791,12 +848,75 @@
   /* Phase-13 slice 3b-2: GraphCanvas fills its host. The host
      itself flex-grows inside the slide so the spine renders into
      the full available area and reflows with the Dashboard tab
-     resize, just like the main Graph tab. */
-  .indexing-graph-host {
+     resize, just like the main Graph tab.
+     Round-1 closing-3 (D3): `.indexing-row` wraps the canvas
+     host + the inline inspector side-by-side; the host flex-
+     grows so the inspector slides in without pushing the graph
+     off-screen. */
+  .indexing-row {
     flex: 1;
     min-height: 0;
     width: 100%;
+    display: flex;
+    flex-direction: row;
+    gap: 0.5rem;
+    align-items: stretch;
+    min-width: 0;
+  }
+  .indexing-graph-host {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
     position: relative;
+  }
+  .indexing-inspector {
+    flex: 0 0 320px;
+    min-width: 0;
+    max-width: 50%;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--border);
+    background: var(--bg-card, var(--bg));
+    overflow: hidden;
+  }
+  .indexing-inspector-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+    gap: 0.5rem;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .indexing-inspector-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .indexing-inspector-close {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .indexing-inspector-close:hover {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+  .indexing-inspector-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 0.5rem 0.75rem;
   }
   .indexing-legend {
     display: flex;
