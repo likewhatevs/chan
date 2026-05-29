@@ -67,9 +67,12 @@ describe("fullstack-a-75: Pane.svelte render branch + import", () => {
     );
   });
 
-  test("render branch matches active?.kind === \"dashboard\"", () => {
+  test("render branch matches active?.kind === \"dashboard\" and passes the live tab", () => {
+    // Round-1 closing-10 (G3): Pane.svelte now threads the live
+    // DashboardTab proxy through so the carousel slide cursor can
+    // round-trip back into tabs.svelte.ts's session serializer.
     expect(pane).toMatch(
-      /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,200}<DashboardTab \/>/,
+      /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,200}<DashboardTab tab=\{active\} \/>/,
     );
   });
 });
@@ -272,11 +275,23 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
 });
 
 describe("fullstack-a-75b: DashboardTab mounts the carousel", () => {
-  test("DashboardTab imports + mounts EmptyPaneCarousel", () => {
+  test("DashboardTab imports + mounts EmptyPaneCarousel + threads tab.carouselSlide (G3)", () => {
     expect(dashboard).toMatch(
       /import EmptyPaneCarousel from "\.\/EmptyPaneCarousel\.svelte";/,
     );
-    expect(dashboard).toMatch(/<EmptyPaneCarousel \/>/);
+    // Round-1 closing-10 (G3): DashboardTab passes the persisted
+    // slide cursor + a write-back callback so the carousel
+    // position survives a window reload.
+    expect(dashboard).toMatch(
+      /<EmptyPaneCarousel[\s\S]{1,400}initialSlide=\{tab\.carouselSlide \?\? 0\}[\s\S]{1,200}onSlideChange=\{onCarouselSlideChange\}/,
+    );
+    expect(dashboard).toMatch(
+      /import \{[\s\S]{1,400}scheduleSessionSave[\s\S]{1,200}\} from "\.\.\/state\/store\.svelte"/,
+    );
+    expect(dashboard).toMatch(/type DashboardTab/);
+    expect(dashboard).toMatch(
+      /function onCarouselSlideChange\(i: number\): void \{[\s\S]{1,400}tab\.carouselSlide = i;[\s\S]{1,200}scheduleSessionSave\(\);/,
+    );
   });
 
   test("static ASCII pre + Shortcuts header dropped (carousel owns the shortcut surface now)", () => {

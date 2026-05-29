@@ -470,6 +470,14 @@ export type DashboardTab = {
   kind: "dashboard";
   id: string;
   title: string;
+  /// Round-1 closing-10 (G3): persisted carousel slide index so a
+  /// reload restores the user to the slide they were last on. 0 is
+  /// the About slide; 1 is Workspace; 2 is the Indexing graph. The
+  /// carousel's play/pause is server-persisted via
+  /// `empty_pane_carousel_cycling` so the auto-rotate preference
+  /// already survives a reload; the local slide cursor is what
+  /// needed wiring up.
+  carouselSlide?: number;
 };
 
 export type Tab =
@@ -3646,6 +3654,10 @@ type SerTab = {
   /// `inspectorWidth` / `outlineWidth` tab fields.
   iw?: number;
   ow?: number;
+  /// Round-1 closing-10 (G3): DashboardTab carousel slide cursor.
+  /// 0 (default, the About slide) is omitted to keep the hash
+  /// compact for the common case.
+  cs?: number;
 };
 type SerFocusColor = "o" | "g" | "p";
 type SerHybridTheme = "d" | "l";
@@ -3860,6 +3872,13 @@ function serializeTab(
   if (t.kind === "dashboard") {
     return {
       k: "d",
+      // Round-1 closing-10 (G3): persist the carousel slide
+      // cursor so a reload restores the user to the slide they
+      // were on. Skip the field when at the default (0 = About)
+      // so the hash stays compact for the common case.
+      ...(typeof t.carouselSlide === "number" && t.carouselSlide > 0
+        ? { cs: t.carouselSlide }
+        : {}),
       ...active,
     };
   }
@@ -4119,6 +4138,13 @@ export async function restoreLayout(
             kind: "dashboard",
             id: id("dashboard"),
             title: "Dashboard",
+            // Round-1 closing-10 (G3): restore the carousel slide
+            // cursor when the hash carries one. Absence reads as
+            // "back to the About slide" so legacy / fresh tabs
+            // land on the default.
+            ...(typeof sertab.cs === "number" && sertab.cs > 0
+              ? { carouselSlide: Math.max(0, Math.floor(sertab.cs)) }
+              : {}),
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;

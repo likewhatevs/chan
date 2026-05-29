@@ -1353,7 +1353,7 @@
         onFlip={() => flipHybrid(pane.id)}
       />
     {:else if active?.kind === "dashboard"}
-      <DashboardTab />
+      <DashboardTab tab={active} />
     {:else if !active}
       <div
         class="placeholder"

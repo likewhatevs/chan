@@ -181,11 +181,20 @@
       // Matching the main Graph tab's appearance is the user-
       // visible ask. Children directories keep their indexState
       // (that's what drives the indexing legend on this slide).
+      //
+      // Round-1 closing-10 (G4): label the workspace root with the
+      // workspace name (or "workspace" as the steady-state
+      // fallback) the same way the main Graph tab does, instead of
+      // the literal "/" basename. Matches the user-facing label in
+      // the file browser title bar.
       const isWorkspaceRoot = n.path === "";
+      const label = isWorkspaceRoot
+        ? (workspace.info?.label ?? "workspace")
+        : basename(n.path);
       nodes.push({
         kind: "folder",
         id: directoryId(n.path),
-        label: basename(n.path),
+        label,
         path: n.path,
         files: 0,
         code: 0,
@@ -258,8 +267,45 @@
 
   // ---- carousel state ----------------------------------------------------
 
+  /// Round-1 closing-10 (G3): DashboardTab passes the persisted
+  /// slide cursor in (via the tabs.svelte.ts serialization round-
+  /// trip) so a window reload restores the carousel to the slide
+  /// the user was last on. `onSlideChange` lets the parent write
+  /// the live cursor back to its DashboardTab.carouselSlide field
+  /// so subsequent reloads keep the position aligned. Both props
+  /// default to no-op for non-DashboardTab hosts (today there
+  /// aren't any; the prop shape leaves room for one without
+  /// touching the carousel's internals).
+  type Props = {
+    initialSlide?: number;
+    onSlideChange?: (slide: number) => void;
+  };
+  let { initialSlide = 0, onSlideChange }: Props = $props();
+
   const slideCount = 3;
-  let slideIndex = $state(0);
+  // Capture the initial prop value into a `$state` cell exactly
+  // once at mount. Subsequent prop changes don't fight the user's
+  // live navigation - the parent's tab.carouselSlide value is the
+  // SOURCE for THIS mount; once mounted, the carousel owns its
+  // own cursor and writes back via `onSlideChange`.
+  function clampInitialSlide(raw: number): number {
+    return Math.min(Math.max(0, Math.floor(raw)), 2);
+  }
+  // One-shot snapshot of the persisted slide cursor (Round-1
+  // closing-10 / G3). The `state_referenced_locally` lint warns
+  // that a $state init expression only sees the initial prop
+  // value, which is the exact semantic we want here - a derived
+  // live link would have the parent yank the cursor back as it
+  // observes its own writes during navigation.
+  // svelte-ignore state_referenced_locally
+  let slideIndex = $state(clampInitialSlide(initialSlide));
+  // Fire the parent callback whenever the cursor moves. The
+  // tab.carouselSlide update is idempotent (the DashboardTab
+  // handler short-circuits when the value already matches) so an
+  // initial-mount fire is a no-op when the prop already matched.
+  $effect(() => {
+    onSlideChange?.(slideIndex);
+  });
   let hovering = $state(false);
   let focused = $state(false);
   /// `cycling` is the explicit, persisted preference from

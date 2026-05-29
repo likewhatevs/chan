@@ -2299,7 +2299,18 @@
                     // having to navigate to Search + click the
                     // chip there.
                     () => rescopeFromHere(`tag:${inspectorSelection.nodeId}`)
-                  : undefined
+                  : inspectorSelection?.kind === "mention" && selectedContactPath
+                    ? // Round-1 closing-10 (G2): mention inspector
+                      // gets the same "Graph from here" affordance
+                      // as the tag inspector when the mention
+                      // resolves to a contact file. Routes through
+                      // `contact:<relPath>` so the lens fires the
+                      // bidirectional BFS around that contact. An
+                      // unresolved mention (no matching file) has
+                      // no meaningful from-here target, so the
+                      // button stays hidden in that case.
+                      () => rescopeFromHere(`contact:${selectedContactPath}`)
+                    : undefined
           }
           documentsOverride={selectionDocumentsInScope}
         />

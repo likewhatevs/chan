@@ -899,6 +899,35 @@ describe("pane state", () => {
     expect(activePane().activeTabId).toBe(first.id);
   });
 
+  test("hash round-trips a Dashboard tab's carousel slide cursor (G3)", async () => {
+    // Round-1 closing-10 (G3): the user-visible expectation is "the
+    // slide I left the carousel on is the slide it opens to after a
+    // window reload". The persisted field is `cs` in SerTab.
+    resetLayout([]);
+    openDashboardInActivePane();
+    const live = activePane().tabs[0];
+    if (live?.kind !== "dashboard") throw new Error("expected dashboard tab");
+    live.carouselSlide = 2;
+
+    const snapshot = serializeLayout();
+    await restoreLayout(snapshot!);
+
+    const restored = activePane().tabs[0];
+    if (restored?.kind !== "dashboard")
+      throw new Error("expected dashboard tab after restore");
+    expect(restored.carouselSlide).toBe(2);
+  });
+
+  test("Dashboard tab with carouselSlide=0 omits the cs field in the hash (G3)", () => {
+    // Default-slide tabs keep the hash compact; the field only
+    // emits when the user has moved off the About slide.
+    resetLayout([]);
+    openDashboardInActivePane();
+    const snapshot = serializeLayout();
+    const json = JSON.stringify(snapshot);
+    expect(json).not.toMatch(/"cs":/);
+  });
+
   test("two BrowserTab records carry independent inspectorWidth (fullstack-84)", () => {
     resetLayout([]);
     const tab1 = openBrowserInActivePane();

@@ -27,9 +27,27 @@
     currentPlatform,
     formatChord,
   } from "../state/shortcuts";
-  import { surfaceThemeOverride } from "../state/store.svelte";
+  import {
+    scheduleSessionSave,
+    surfaceThemeOverride,
+  } from "../state/store.svelte";
+  import { type DashboardTab } from "../state/tabs.svelte";
   import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
+
+  // Round-1 closing-10 (G3): the parent passes the live
+  // DashboardTab so the carousel slide cursor persists across
+  // window reloads. The tab is a $state proxy from
+  // tabs.svelte.ts; mutating `tab.carouselSlide` reactively
+  // updates the layout snapshot the next session save observes.
+  type Props = { tab: DashboardTab };
+  let { tab }: Props = $props();
+
+  function onCarouselSlideChange(i: number): void {
+    if (tab.carouselSlide === i) return;
+    tab.carouselSlide = i;
+    scheduleSessionSave();
+  }
 
   let menu: HamburgerMenu | undefined = $state();
   let menuOpen = $state(false);
@@ -90,7 +108,10 @@
     </li>
   </HamburgerMenu>
 
-  <EmptyPaneCarousel />
+  <EmptyPaneCarousel
+    initialSlide={tab.carouselSlide ?? 0}
+    onSlideChange={onCarouselSlideChange}
+  />
 </div>
 
 <style>
