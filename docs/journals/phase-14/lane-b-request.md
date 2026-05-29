@@ -16,6 +16,8 @@ share only the seams in `coordination/contracts.md`.
 - `docs/journals/phase-14/roadmap-round-3.md` (theme 1 frontend half + theme 2 OverlayShell)
 - `docs/journals/phase-14/coordination/contracts.md`
 - `docs/journals/phase-14/coordination/event-lane-a-lane-b.md` (inbox; may not exist yet)
+- `docs/journals/phase-14/lane-b-plan-draft-restore-banner.md` (correctness item; the backend half is Lane A)
+- `docs/journals/phase-14/lane-b-plan-cmd-comma-flip.md` (correctness item)
 
 ## Worktree + branch
 
@@ -67,6 +69,20 @@ Over the result of B1, across all four frontend trees:
 - First-public-release discipline: delete back-compat shims, aliases,
   dead transitional code, and changelog-style comments; keep only
   WHY-snapshot comments. The source must read fresh-like-new.
+
+### B3. Correctness bugs (live; have their own plan docs)
+
+Two reported bugs with dedicated plans; each ships with the
+regression/stress test it needs. They can lead the lane since they are
+concrete and user-facing.
+
+- Draft "unsaved changes from a previous session" false banner -
+  `lane-b-plan-draft-restore-banner.md`. Lane B owns the
+  `editorBuffer.ts` / `FileEditorTab.svelte` fix; Lane A owns the
+  backend half of the e2e stress test (coordinate via the inbox).
+- Cmd+, queued-shortcut "panes flip" desync -
+  `lane-b-plan-cmd-comma-flip.md`. Audit + cleanup of the
+  shortcut-dispatch / pane-focus path.
 
 ## Coordination
 

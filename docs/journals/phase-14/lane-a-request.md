@@ -14,6 +14,7 @@ you propose first.
 - `docs/journals/phase-14/roadmap-round-3.md` (theme 1 + theme 2)
 - `docs/journals/phase-14/coordination/contracts.md`
 - `docs/journals/phase-14/coordination/event-lane-b-lane-a.md` (inbox; may not exist yet)
+- `docs/journals/phase-14/lane-b-plan-draft-restore-banner.md` (you own the backend half of its e2e stress test)
 
 ## Worktree + branch
 
@@ -65,6 +66,17 @@ Move the pre-flight out of chan-desktop into chan-server's first boot.
   starts `chan serve`, which runs the pre-flight server-side before the
   UI is usable; the desktop stops owning the pre-flight logic.
 - Same flow for local and remote (inbound/outbound) workspaces.
+
+### A4. Backend half of the draft-banner e2e stress test
+
+Per `lane-b-plan-draft-restore-banner.md`: a chan-server/chan-workspace
+integration stress test (reuse the `crates/chan-workspace/tests/`
+harness + the draft unit tests in `routes/drafts.rs:228`). Hammer
+create-draft -> write/autosave (`/api/files` with `expected_mtime_ns`
+CAS) -> re-read, many iterations; assert self-write suppression holds
+(own writes never broadcast as external via `bus.rs` / `self_writes.rs`),
+CAS mtime round-trips, and no spurious `DraftBroken` / "missing
+draft.md". Lane B owns the frontend half + the actual fix.
 
 ## Coordination
 
