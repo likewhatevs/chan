@@ -1,10 +1,16 @@
 # Building and testing chan on Linux and macOS
 
 chan's gates run on Linux (the canonical CI target) and macOS. The
-reproducible way to get a Linux environment locally on either host is
-`sdme`, the project's systemd-nspawn container manager. This is the
+reproducible way to get a Linux environment **locally** on either host
+is `sdme`, the project's systemd-nspawn container manager. This is the
 same flow for everyone: on a Linux host you run `sdme` directly; on
 macOS you run it inside a lightweight Linux VM via `lima`.
+
+`sdme` is a local-development tool only. CI does not use it: GitHub
+Actions runs on its own ubuntu runners (native, with apt-installed
+deps and service containers). The dev setup and the CI setup are
+intentionally different, the same as the rest of chan; see "How this
+maps to CI" at the end.
 
 This doc covers the local Linux flow. For the core build/test
 commands themselves (fmt, clippy, tests, web) on your host directly,
@@ -84,9 +90,16 @@ The gateway is a separate workspace with Postgres-backed integration
 tests. Its container setup (a `chan-psql` Postgres rootfs) and the
 test commands live in
 [`gateway/docs/testing-on-linux-and-macos.md`](../../gateway/docs/testing-on-linux-and-macos.md).
-Because containers share host networking, the gateway gate can run on
-your host against the `chan-psql` container at `localhost:5432`, or in
-its own build container alongside it.
+
+The gateway's per-change test loop runs `cargo` + `npm` **on your
+host** against the `chan-psql` container at `localhost:5432` (host
+networking makes it reachable). That inner loop needs Rust + Node on
+the host; only Postgres lives in a container. Binding the source into
+a container instead does not help here: lima mounts `/Users`
+read-only, so `cargo`/`npm` could not write `target/`, `node_modules`,
+or `web/dist`. The in-container flows on this page (the core gate
+above, the packaging validation below) are for CI parity and deploy
+validation, not the inner loop.
 
 ## Packaging: validate a deploy locally
 
@@ -146,10 +159,17 @@ generated secrets, and the workspace-gate wiring are all consistent.
 
 ## How this maps to CI
 
+CI does not run `sdme`. GitHub Actions runs directly on its ubuntu
+runners with the deps installed natively; the `sdme` flow above is
+just the local way to reproduce that Linux environment on your
+machine. The two are deliberately separate setups.
+
 - `.github/workflows/ci.yml` runs `make ci-linux` then `make ci-macos`
-  (the same targets above).
-- `.github/workflows/gateway-ci.yml` runs the gateway gate against a
-  `postgres:16` service container, scoped to `gateway/**`.
+  (the same Make targets the container runs above), with the Tauri
+  build deps apt-installed on the runner.
+- `.github/workflows/gateway-ci.yml` runs the gateway gate directly on
+  the runner against a `postgres:16` **service container** (not
+  `chan-psql`), scoped to `gateway/**`.
 
 Local `sdme` is the fast loop; CI is the canonical lane (and owns
 x86_64).
