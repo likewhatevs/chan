@@ -103,9 +103,13 @@ describe("GI-4: directory nodes are slightly bigger than leaf nodes", () => {
     expect(canvas).toMatch(/const RADIUS_DOC = 7;/);
   });
 
-  test("renderRadius gives folder nodes the RADIUS_DIR base", () => {
+  test("renderRadius gives folder nodes the RADIUS_DIR base and workspace its own 1.5x size (E1+E2)", () => {
+    // Round-1 closing-4 (E2): workspace root sized 1.5x every
+    // other directory so the structural anchor reads as the hub
+    // at a glance. RADIUS_WORKSPACE = RADIUS_DIR * 1.5.
+    expect(canvas).toMatch(/const RADIUS_WORKSPACE = RADIUS_DIR \* 1\.5;/);
     expect(canvas).toMatch(
-      /kind === "doc" \|\| kind === "workspace"\s*\?\s*RADIUS_DOC\s*:\s*kind === "folder"\s*\?\s*RADIUS_DIR\s*:\s*RADIUS_BASE/,
+      /kind === "workspace"\s*\?\s*RADIUS_WORKSPACE\s*:\s*kind === "doc"\s*\?\s*RADIUS_DOC\s*:\s*kind === "folder"\s*\?\s*RADIUS_DIR\s*:\s*RADIUS_BASE/,
     );
   });
 });

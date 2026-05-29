@@ -151,6 +151,10 @@
   /// the doc/workspace hub size) so they read as clearly clickable folder
   /// targets without dominating the graph. Slightly bigger, not much.
   const RADIUS_DIR = 6;
+  /// Round-1 closing-4 (E2): the workspace-root anchor is 1.5x
+  /// every other directory so it reads as the structural hub at a
+  /// glance instead of competing with leaf folders.
+  const RADIUS_WORKSPACE = RADIUS_DIR * 1.5;
   const RADIUS_HUB_SCALE = 1.4;
 
   /// Icon glyph occupies this fraction of the rendered diameter.
@@ -211,6 +215,15 @@
   /// for transform; null = no easing in flight.
   let refitUntil = 0;
   let fitTarget: { x: number; y: number; k: number } | null = null;
+  /// Round-1 closing-4 (E3): once the user has manually panned,
+  /// zoomed, or dragged a node, the view belongs to them. Periodic
+  /// re-renders of the same node set (e.g., the Dashboard indexing
+  /// slide polling `/api/indexing/state` every 3s, which produces
+  /// fresh array references with no structural change) must not
+  /// snap the view back to fit-content. The flag stays set until
+  /// the node SET genuinely differs from what's on screen - then
+  /// it's clearly a new dataset and a refit IS the right thing.
+  let userInteracted = false;
   /// B12: when `start()` runs before the host has been measured
   /// (carousel mounts GraphCanvas before slide 2 is visible, so
   /// the first `resize()` clamps the canvas to 0x0), the initial
@@ -508,15 +521,18 @@
   }
 
   function renderRadius(kind: DKind, id: string): number {
-    // Workspace root is the structural anchor of the whole graph — size
-    // it like the doc nodes so it reads as a primary hub instead of
-    // a leaf directory.
+    // Workspace root is the structural anchor of the whole graph - per
+    // E2 it's 1.5x every other directory so the hub reads at a
+    // glance. Doc nodes stay at the prior RADIUS_DOC; folder
+    // (non-workspace) nodes stay at RADIUS_DIR.
     const base =
-      kind === "doc" || kind === "workspace"
-        ? RADIUS_DOC
-        : kind === "folder"
-          ? RADIUS_DIR
-          : RADIUS_BASE;
+      kind === "workspace"
+        ? RADIUS_WORKSPACE
+        : kind === "doc"
+          ? RADIUS_DOC
+          : kind === "folder"
+            ? RADIUS_DIR
+            : RADIUS_BASE;
     if (maxBacklinks <= 0) return base;
     const bl = backlinks.get(id) ?? 0;
     // Linear ramp from base to base*RADIUS_HUB_SCALE across the
@@ -1184,9 +1200,13 @@
       n.fy = n.y;
       sim?.alphaTarget(0.3).restart();
       cancelRefit();
+      // E3: drag is user interaction; subsequent same-set data
+      // refreshes must not snap the view back.
+      userInteracted = true;
     } else {
       panStart = { x: e.clientX, y: e.clientY, tx: transform.x, ty: transform.y };
       cancelRefit();
+      userInteracted = true;
     }
   }
 
@@ -1278,6 +1298,9 @@
     const factor = Math.exp(-e.deltaY * SENSITIVITY);
     const k2 = Math.min(6, Math.max(0.15, transform.k * factor));
     cancelRefit();
+    // E3: zoom is user interaction; subsequent same-set data
+    // refreshes must not snap the view back.
+    userInteracted = true;
     // Zoom toward the cursor: the world point under the cursor
     // must stay anchored across the transform. Solve for the new
     // (tx, ty) that holds wx, wy invariant.
@@ -1392,6 +1415,14 @@
   /// view eases toward the moving target without snapping, and stays
   /// active until both the window expires and the easing converges.
   function scheduleRefit(ms: number): void {
+    // E3: skip auto-refit once the user has panned, zoomed, or
+    // dragged a node. The view belongs to them; periodic data
+    // refreshes (e.g., Dashboard indexing polling) must not snap
+    // back to fit-content. The interaction flag resets when the
+    // node SET actually differs from the current dNodes (scope /
+    // depth change, first load), so genuine dataset swaps still
+    // re-frame the cluster.
+    if (userInteracted) return;
     refitUntil = performance.now() + ms;
   }
 
@@ -1502,6 +1533,10 @@
     rebuildWorkingSet();
     rewarmSim(sameSet ? 0.05 : 1);
     if (!sameSet) {
+      // E3: a genuine set change (scope/depth/first-load) resets
+      // the user-interaction lock so the new dataset gets a fresh
+      // auto-fit. Same-set ticks keep the user's view intact.
+      userInteracted = false;
       // Full data swap: track the cluster all the way through its
       // longest relaxation so the view re-fits as it spreads.
       scheduleRefit(1200);
@@ -1519,13 +1554,22 @@
     void focalIds;
     if (!sim) return;
     const { added, removed } = rebuildWorkingSet();
-    const alpha = added.length > 0 ? 0.35 : removed.length > 0 ? 0.2 : 0.1;
+    // Round-1 closing-4 (E3): the Dashboard indexing slide re-
+    // derives its `visibleNodeIds` (a new Set ref) + `visibleEdges`
+    // (a new array ref) every 3s poll, which used to fire
+    // `scheduleRefit(400)` even when nothing structurally
+    // changed - the view snapped back on every tick. When the
+    // working set is unchanged (no nodes added or removed), this
+    // is a content-only re-render; skip the refit + the
+    // simulation re-warm so the canvas stays still.
+    if (added.length === 0 && removed.length === 0) return;
+    const alpha = added.length > 0 ? 0.35 : 0.2;
     rewarmSim(alpha);
     // Scope / filter / depth change: re-fit so the focal node stays
     // centered and the new visible set lands inside the viewport.
     // Depth bumps that add nodes need the longest window; pure
     // filter toggles settle fastest.
-    const ms = added.length > 0 ? 900 : removed.length > 0 ? 600 : 400;
+    const ms = added.length > 0 ? 900 : 600;
     scheduleRefit(ms);
   });
 
