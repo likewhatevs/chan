@@ -48,6 +48,11 @@ frontend bundle embedded via `rust-embed`. Embedding
 happens at compile time, so any frontend change requires
 rebuilding `cargo build -p chan` to be visible.
 
+To run these gates in a Linux container that mirrors CI
+(natively on Linux, or via `lima` + `sdme` on macOS), and
+to validate the gateway's `.deb` packaging end to end, see
+[`docs/contributing/linux-and-macos.md`](docs/contributing/linux-and-macos.md).
+
 ## Pre-push gate
 
 Installing the pre-push hook

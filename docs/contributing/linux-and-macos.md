@@ -94,9 +94,55 @@ The gateway ships four `.deb` packages run under systemd. To verify
 the prod path (packages -> postinst user -> systemd units ->
 `configure.sh` -> running services) end to end, build and install them
 in a systemd container with a reachable Postgres (the `chan-psql`
-container from the gateway doc):
+container from the gateway doc; host networking makes it reachable at
+`localhost:5432`).
 
-<!-- PACKAGING_STEPS -->
+```sh
+# create a build container and seed the repo (tracked files only)
+limactl shell default sudo sdme create chan-gw-build -r ubuntu
+limactl shell default sudo sdme start  chan-gw-build
+git archive HEAD -o ~/chan-src.tar
+limactl shell default sudo sdme cp ~/chan-src.tar chan-gw-build:/root/chan.tar
+
+# drop into the container; everything below runs inside it
+limactl shell default sudo sdme join chan-gw-build
+```
+
+Inside `chan-gw-build`:
+
+```sh
+mkdir -p /root/chan && tar -xf /root/chan.tar -C /root/chan
+
+# build deps + the pinned toolchain. openssl + python3 are required by
+# configure.sh (random secrets + password URL-encoding).
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y build-essential pkg-config libssl-dev curl \
+  ca-certificates nodejs npm openssl python3
+curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+. "$HOME/.cargo/env"
+cargo install cargo-deb
+
+# build the SPA, then the four .debs
+cd /root/chan/gateway
+npm ci && npm run build --workspaces
+cargo build --release -p profile -p identity -p workspace-proxy -p admin
+for c in profile identity workspace-proxy admin; do cargo deb --no-build -p "$c"; done
+
+# install (postinst creates the chan-gateway user + units + default env),
+# generate config, start, and check health
+dpkg -i target/debian/*.deb || apt-get -f install -y
+bash scripts/configure.sh   # answers: PG user/pass/db, base domain, scheme, >=1 provider
+systemctl enable --now chan-gateway-profile chan-gateway-identity chan-gateway-workspace-proxy
+systemctl is-active chan-gateway-profile chan-gateway-identity chan-gateway-workspace-proxy
+for p in 7001 7000 7002; do curl -fsS "http://127.0.0.1:$p/healthz"; echo; done
+```
+
+`configure.sh` points `DATABASE_URL` at `127.0.0.1` for the answers
+above, so the `chan-psql` container must be running on the same host
+network. All three `/healthz` returning `ok` means the deb assets,
+the systemd units (which load the shared `domain.env` first), the
+generated secrets, and the workspace-gate wiring are all consistent.
 
 ## How this maps to CI
 
