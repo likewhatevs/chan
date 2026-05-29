@@ -3,10 +3,19 @@
 `chan` is the local notes-and-editor host. It also doubles
 as an orchestration host: a single-machine surface where
 agents (claude, codex, gemini, custom) can be spawned into
-named terminal tabs, exchange typed events with each
-other and with the user through an fsnotify-driven
-watcher, and reach chan's MCP server through `CHAN_MCP_*`
-terminal environment variables.
+named terminal tabs (the Team Work flow) and reach chan's
+MCP server through `CHAN_MCP_*` terminal environment
+variables.
+
+> Phase-13 r2 note: the fsnotify-driven event-coordination
+> layer (typed event files -> watcher -> `poke` dispatch ->
+> notification bubbles) was REMOVED in the Team Work revamp,
+> along with the event-reply / submit-mode endpoints and the
+> Spawn-agents dialog. The notification bubble overlay is now
+> a frontend-only static stub. Equivalent functionality is
+> planned to return in a later phase; the event/watcher
+> contracts below are retained as the blueprint for that
+> returning implementation.
 
 This SKILL documents the contracts external authors need
 to integrate with that surface.
@@ -25,10 +34,12 @@ to integrate with that surface.
 * **Loopback HTTP server** at `127.0.0.1` with bearer-
   token auth (per-launch token printed on stderr; appended
   to the URL when chan launches a browser).
-* **Per-terminal-session fsnotify watcher** that ingests
-  typed event files written into a user-chosen directory,
-  dispatches `poke\n` to the matching agent's PTY, and
-  surfaces events to the rich-prompt bubble overlay.
+* **Per-terminal-session fsnotify watcher** - REMOVED in
+  phase-13 r2 (Team Work revamp); planned to return. It
+  ingested typed event files written into a user-chosen
+  directory, dispatched `poke\n` to the matching agent's
+  PTY, and surfaced events to the Team Work bubble overlay
+  (now a frontend-only static stub).
 * **In-process MCP server** exposed over a Unix-domain
   socket; chan-launched terminals get `CHAN_MCP_*` env
   vars to find it.

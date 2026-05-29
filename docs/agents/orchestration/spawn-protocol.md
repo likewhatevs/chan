@@ -94,10 +94,15 @@ watcher directory:
 }
 ```
 
-The rich-prompt bubble overlay renders this as a normal
-single-topic survey (per `fullstack-18` / `fullstack-20`).
-Reply via the SPA writes the survey-reply through
-chan-server's reply endpoint; chan-server reacts:
+NOTE (phase-13 r2): the bubble overlay is now a frontend-only
+static stub and chan-server's event-reply endpoint was removed
+in the Team Work revamp; the live survey/reply flow below is
+retained as the blueprint for the returning implementation.
+
+Previously, the Team Work bubble overlay rendered this as a
+normal single-topic survey (per `fullstack-18` / `fullstack-20`).
+Reply via the SPA wrote the survey-reply through chan-server's
+reply endpoint; chan-server reacted:
 
 * `1` → focus the spawn tab so the user can complete
   setup interactively.

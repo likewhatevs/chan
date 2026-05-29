@@ -6,6 +6,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Phase 13 round 2 (heading to v0.18.0).
+
+### Changed
+
+- Renamed the "Rich Prompt" feature to "Team Work" across the UI and the
+  code: the chord id (`app.terminal.richPrompt` -> `app.terminal.teamWork`),
+  the component, CSS, the tab field + its session serialization, and the
+  backend draft convention all moved to team-work. Cmd+P now instantiates
+  a Team Work lead terminal with an embedded editor first, then the
+  Spawn-agents dialog over it (Cancel deletes the lead tab; Bootstrap
+  runs the lead-first bootstrap).
+- Editor list markers render in a new style: en-dash for `-`, a filled
+  circle for top-level `*` and a hollow circle when nested; ordered lists
+  keep the source numbers. Source bytes are unchanged.
+- Dashboard moved off Cmd+I so the editor can use Cmd+I for italic;
+  Dashboard stays on Hybrid Nav (`Cmd+. i`) and the hamburger.
+- Hamburger split-right / split-bottom rows show the direct `Cmd+/` and
+  `Cmd+?` chords instead of the Pane-Mode prefix.
+- Cmd+, pane flip is strictly per-pane: only panes with at least one tab
+  can flip, focus changes never flip other panes, and the flip persists
+  across window reloads.
+
+### Added
+
+- Editor Bold (Cmd+B) and Italic (Cmd+I) chords.
+- Desktop: Cmd+Shift+N opens a new window of the currently focused
+  workspace (previously the workspace picker).
+
+### Removed
+
+- The filesystem-watcher agent-event coordination backend (the event
+  watcher, the event-reply / submit-mode endpoints, the Rich Prompt
+  workspace archival + spool, and the orphaned team name-registry API)
+  and the Spawn-agent(s) dialog/process. The notification bubble overlay
+  is reduced to a frontend-only static stub; equivalent functionality is
+  planned to return in a later phase.
+
 ## [v0.16.0] - 2026-05-27
 
 Phase 12 release. The headline is a breaking terminology rename from
