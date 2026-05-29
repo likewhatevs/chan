@@ -53,6 +53,17 @@
   let inflight = false;
   let lastSentSnapshot: string | null = null;
   let failedSaveSnap: string | null = null;
+  /// Round-1 closing-3 (C1): tracks the JSON snapshot of the
+  /// server's `preferences.terminal` slice the last time we
+  /// re-synced `editing` from it. The hydration effect below
+  /// would otherwise reassign `editing` to a content-identical
+  /// clone on every workspace.info change (including the one
+  /// triggered by our own save), producing a new $state proxy on
+  /// each pass and re-firing the effect on its own write —
+  /// Svelte 5 throws `effect_update_depth_exceeded` when that
+  /// runaway exceeds the safety limit. Bail when the server's
+  /// terminal slice hasn't actually changed.
+  let lastSyncedServerSnap: string | null = null;
 
   function clone(p: Preferences): Preferences {
     return JSON.parse(JSON.stringify(p));
@@ -76,6 +87,16 @@
   /// while a background workspace refresh races. After a successful
   /// save we deliberately re-sync so the form reflects the
   /// server's authoritative state.
+  ///
+  /// Round-1 closing-3 (C1): the prior body ran `editing = normalize(...)`
+  /// every time the effect fired, which replaced the $state proxy
+  /// with a content-identical clone after a save (workspace.info
+  /// changes -> effect re-fires -> editing reassigned -> effect
+  /// re-fires on its own write -> ...) and tripped Svelte 5's
+  /// `effect_update_depth_exceeded` guard. The fix tracks the
+  /// JSON of the server's terminal slice and bails when it
+  /// hasn't actually changed, so the proxy identity stays
+  /// stable post-save.
   $effect(() => {
     const info = workspace.info;
     if (!info) return;
@@ -83,6 +104,15 @@
       // User has unsaved local edits; do not clobber.
       if (lastSentSnapshot === null) return;
     }
+    const serverSnap = JSON.stringify(info.preferences?.terminal ?? null);
+    if (editing && serverSnap === lastSyncedServerSnap) {
+      // Server-side terminal slice unchanged since the last
+      // hydration; the live buffer already matches. Reassigning
+      // would create an identical-content clone and re-trigger
+      // this effect.
+      return;
+    }
+    lastSyncedServerSnap = serverSnap;
     editing = normalizeTerminal(clone(info.preferences));
   });
 

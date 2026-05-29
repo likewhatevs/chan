@@ -24,7 +24,13 @@ describe("phase-13 round-1 closing B10: Source Code Pro toggle placement", () =>
 
   test("Dashboard About slide keeps the SCP attribution + OFL link but no toggle", () => {
     expect(carousel).toMatch(/Source Code Pro Regular/);
-    expect(carousel).toMatch(/href="\/static\/fonts\/OFL\.txt"/);
+    // Round-1 closing-3 (C2): the OFL link now points at the
+    // canonical upstream URL (adobe-fonts/source-code-pro) instead
+    // of the embedded `/static/fonts/OFL.txt` path, which under
+    // chan-desktop's non-root mount resolved to 127.0.0.1.
+    expect(carousel).toMatch(
+      /href="https:\/\/github\.com\/adobe-fonts\/source-code-pro\/blob\/release\/LICENSE\.md"/,
+    );
     // No toggle wiring lives on the carousel side — terminal
     // font is a terminal-back-of-card concern.
     expect(carousel).not.toMatch(/setFontChoice\(/);

@@ -2771,7 +2771,19 @@ function expandAncestorsInAllInstances(path: string, includeSelf: boolean): void
 /// Poll cadence: fast while the indexer is doing work or has errored,
 /// slow when idle (so we still pick up CLI-driven `chan index` runs
 /// in the background without hammering the server every second).
+///
+/// Round-1 closing-3 (Bug 1): single-file watcher reindexes are
+/// server-side visible for ~10ms (`Reindexing` set -> apply ->
+/// `Idle`). The previous 1500ms fast cadence let the
+/// "reindexing Drafts/<...>" pill linger for up to 1.5s after the
+/// server had already returned to idle, which under sustained
+/// editing read as "the pill never clears". The transient cadence
+/// catches the post-reindex idle within a fraction of a second so
+/// the pill clears in real time; the full-build (multi-file)
+/// cadence stays slower since those passes legitimately take
+/// seconds and per-tick UI churn isn't useful.
 const FAST_POLL_MS = 1500;
+const TRANSIENT_POLL_MS = 250;
 const SLOW_POLL_MS = 10_000;
 
 let indexPollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2795,9 +2807,14 @@ async function pollIndexStatusOnce(): Promise<void> {
   try {
     const s = await api.indexStatus();
     indexStatus.value = s;
-    // Building / reindexing / error → fast poll so the pill updates
-    // promptly. Idle → slow poll.
-    nextDelay = s.state === "idle" ? SLOW_POLL_MS : FAST_POLL_MS;
+    // Idle → slow poll. Single-file Reindexing → transient cadence
+    // so the post-reindex idle is caught within ~250ms (Bug 1).
+    // Multi-file Building → fast cadence (the pass takes seconds
+    // and per-tick UI churn isn't useful). Error → fast cadence so
+    // an operator-visible recovery surfaces quickly.
+    if (s.state === "idle") nextDelay = SLOW_POLL_MS;
+    else if (s.state === "reindexing") nextDelay = TRANSIENT_POLL_MS;
+    else nextDelay = FAST_POLL_MS;
   } catch {
     // Server unreachable or 503 (search disabled): slow-poll. Don't
     // surface as a status-bar error; the pill itself shows "n/a".

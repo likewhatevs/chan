@@ -46,9 +46,29 @@
   let inflight = false;
   let lastSentSnapshot: string | null = null;
   let failedSaveSnap: string | null = null;
+  /// Round-1 closing-3 (C1): tracks the JSON snapshot of the
+  /// server's editor-related preference slice the last time we
+  /// re-synced `editing` from it. Without this guard the
+  /// hydration effect reassigned `editing` to a content-identical
+  /// clone on every workspace.info change (including the one
+  /// triggered by our own save), producing a new $state proxy
+  /// each pass and re-firing the effect on its own write -
+  /// Svelte 5 throws `effect_update_depth_exceeded` when that
+  /// runaway exceeds the safety limit.
+  let lastSyncedServerSnap: string | null = null;
 
   function clone(p: Preferences): Preferences {
     return JSON.parse(JSON.stringify(p));
+  }
+
+  function serverEditorSnapshot(p: Preferences | null | undefined): string {
+    if (!p) return "null";
+    return JSON.stringify({
+      editor_theme: p.editor_theme,
+      line_spacing: p.line_spacing,
+      date_format: p.date_format,
+      strip_trailing_whitespace_on_save: p.strip_trailing_whitespace_on_save,
+    });
   }
 
   /// Normalize editor-related fields. The line_spacing migration
@@ -80,12 +100,31 @@
     });
   }
 
+  /// Round-1 closing-3 (C1): the prior body ran
+  /// `editing = normalize(...)` every time the effect fired,
+  /// which replaced the $state proxy with a content-identical
+  /// clone after a save (workspace.info changes -> effect
+  /// re-fires -> editing reassigned -> effect re-fires on its
+  /// own write -> ...) and tripped Svelte 5's
+  /// `effect_update_depth_exceeded` guard. The fix tracks the
+  /// JSON of the server's editor slice and bails when it
+  /// hasn't actually changed, so the proxy identity stays
+  /// stable post-save.
   $effect(() => {
     const info = workspace.info;
     if (!info) return;
     if (editing && editorSnapshot() !== lastSentSnapshot) {
       if (lastSentSnapshot === null) return;
     }
+    const serverSnap = serverEditorSnapshot(info.preferences);
+    if (editing && serverSnap === lastSyncedServerSnap) {
+      // Server-side editor slice unchanged since the last
+      // hydration; the live buffer already matches. Reassigning
+      // would create an identical-content clone and re-trigger
+      // this effect.
+      return;
+    }
+    lastSyncedServerSnap = serverSnap;
     editing = normalizeEditor(clone(info.preferences));
   });
 

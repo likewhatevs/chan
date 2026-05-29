@@ -127,12 +127,19 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
     expect(carousel).toMatch(/embeddings/);
     expect(carousel).toMatch(/Source Code Pro Regular/);
     expect(carousel).toMatch(/dcragusa\/MatrixScreensaver/);
+    // Round-1 closing-3 (C2): license links resolve to canonical
+    // upstream URLs instead of the embedded `/static/...` paths,
+    // which under chan-desktop's non-root mount surfaced as
+    // 127.0.0.1 links. The font lives in the adobe-fonts
+    // source-code-pro repo + the screen-lock in dcragusa's repo.
     expect(carousel).toMatch(
-      /href="\/static\/fonts\/OFL\.txt"/,
+      /href="https:\/\/github\.com\/adobe-fonts\/source-code-pro\/blob\/release\/LICENSE\.md"/,
     );
     expect(carousel).toMatch(
-      /href="\/static\/matrix\/LICENSE-MatrixScreensaver\.txt"/,
+      /href="https:\/\/github\.com\/dcragusa\/MatrixScreensaver\/blob\/master\/LICENSE"/,
     );
+    expect(carousel).not.toMatch(/href="\/static\/fonts\/OFL\.txt"/);
+    expect(carousel).not.toMatch(/href="\/static\/matrix\/LICENSE-MatrixScreensaver\.txt"/);
   });
 
   test("About widget loads buildInfo from the typed API", () => {
@@ -154,9 +161,33 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
       /import \{[\s\S]{1,200}withTokenQuery[\s\S]{1,200}\} from "\.\.\/api\/transport"/,
     );
     expect(carousel).toMatch(/Fund the work/);
+    // Round-1 closing-3 (C3): "Share the love, cheers!" tail
+    // appended to the Fund-the-work copy.
     expect(carousel).toMatch(
-      /Chan is independent software\. Small tips help cover time[\s\S]{1,40}spent on releases, packaging, and documentation\./,
+      /Chan is independent software\. Small tips help cover time[\s\S]{1,40}spent on releases, packaging, and documentation\.[\s\S]{1,40}Share the love, cheers!/,
     );
+  });
+
+  test("About widget licenses block sits after the QR + the separator (C2)", () => {
+    // C2: license rows moved OUT of the top about-grid into a
+    // dedicated `.about-licenses` block, separated from the
+    // Fund-the-work surface by `.about-sep`. Chan's own Apache
+    // 2.0 license joins the section so the three runtime
+    // licenses live together.
+    expect(carousel).toMatch(
+      /<div class="about-fund">[\s\S]{1,2000}<div class="about-sep"[\s\S]{1,200}<div class="about-licenses">[\s\S]{1,3000}<a href="https:\/\/github\.com\/fiorix\/chan\/blob\/main\/LICENSE"[\s\S]{1,200}Apache 2\.0[\s\S]{1,400}Source Code Pro Regular[\s\S]{1,1200}dcragusa\/MatrixScreensaver/,
+    );
+    expect(carousel).toMatch(/\.about-licenses \{[\s\S]{1,400}grid-template-columns: max-content 1fr/);
+    expect(carousel).toMatch(/\.about-sep \{[\s\S]{1,400}background: var\(--border\)/);
+    // The terminal-font + matrix-screen-lock rows appear EXACTLY
+    // ONCE in the source now (inside `.about-licenses`); pre-fix
+    // they ALSO appeared inside `.about-grid`. Asserting a single
+    // occurrence prevents the prior dual-render from sneaking
+    // back.
+    const fontMatches = carousel.match(/<span class="k">terminal font<\/span>/g);
+    expect(fontMatches?.length ?? 0).toBe(1);
+    const matrixMatches = carousel.match(/<span class="k">matrix screen lock<\/span>/g);
+    expect(matrixMatches?.length ?? 0).toBe(1);
   });
 
   test("About widget renders icon-linked website + source links", () => {
@@ -192,6 +223,29 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
   test("slide 2 stays the indexing graph and flags the slice 3b-2 deferral", () => {
     expect(carousel).toMatch(/class="slide slide-indexing"/);
     expect(carousel).toMatch(/slice 3b-2/);
+  });
+
+  test("indexing slide maximises to the tab width/height with a 10px border (Bug 2)", () => {
+    // Round-1 closing-3 (Bug 2): the About + Workspace slides
+    // are text-shaped and read better in the centered 720px
+    // column; the indexing graph wants the full tab area so the
+    // spine doesn't compress to a vertical band. The wide-stage
+    // class is toggled only on slideIndex === 2 + drops the
+    // `max-width: 720px` cap, and the carousel-wide variant
+    // tightens the outer padding to ~10px so the canvas reads
+    // edge-to-edge with a reasonable breathing border.
+    expect(carousel).toMatch(
+      /class="slide-stage" class:slide-stage-wide=\{slideIndex === 2\}/,
+    );
+    expect(carousel).toMatch(
+      /class="carousel"\s*\n\s*class:carousel-wide=\{slideIndex === 2\}/,
+    );
+    expect(carousel).toMatch(
+      /\.slide-stage-wide \{[\s\S]{1,200}max-width: none;/,
+    );
+    expect(carousel).toMatch(
+      /\.carousel-wide \{[\s\S]{1,200}padding: 10px;/,
+    );
   });
 
   test("indexing slide tracks a selectedIndexId so GraphCanvas labels selection + 1-hop (B12)", () => {

@@ -314,6 +314,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
   class="carousel"
+  class:carousel-wide={slideIndex === 2}
   bind:this={containerEl}
   role="region"
   aria-label="empty pane carousel"
@@ -325,7 +326,12 @@
   onfocusout={() => (focused = false)}
   onkeydown={onKeyDown}
 >
-  <div class="slide-stage">
+  <!-- Round-1 closing-3 (Bug 2): the indexing slide drops the
+       720px stage cap so the graph fills the tab width/height
+       (minus a 10px breathing border). The About + Workspace
+       slides keep the centered column - their content is
+       text-shaped and centered reads better there. -->
+  <div class="slide-stage" class:slide-stage-wide={slideIndex === 2}>
     {#if slideIndex === 0}
       <!-- Phase-13 slice 3b-1: slide 0 is the About widget. It
            mirrors the (retired) global Settings overlay's about
@@ -349,27 +355,6 @@
             {:else}
               <span class="muted">off (BM25 only)</span>
             {/if}
-          </span>
-          <!-- Source Code Pro attribution. Ships with chan under
-               the SIL Open Font License 1.1; the OFL notice is at
-               /static/fonts/OFL.txt next to the .woff2. -->
-          <span class="k">terminal font</span>
-          <span class="v">
-            Source Code Pro Regular
-            <span class="muted">
-              (<a href="/static/fonts/OFL.txt" target="_blank" rel="noopener">SIL OFL 1.1</a>)
-            </span>
-          </span>
-          <!-- Matrix screen-lock attribution. The renderer and
-               font assets are adapted from the MIT-licensed
-               dcragusa/MatrixScreensaver project; the license
-               notice ships in the embedded app bundle. -->
-          <span class="k">matrix screen lock</span>
-          <span class="v">
-            <a href="https://github.com/dcragusa/MatrixScreensaver" target="_blank" rel="noopener">dcragusa/MatrixScreensaver</a>
-            <span class="muted">
-              (<a href="/static/matrix/LICENSE-MatrixScreensaver.txt" target="_blank" rel="noopener">MIT</a>)
-            </span>
           </span>
         </div>
 
@@ -402,6 +387,7 @@
             <p class="fund-text">
               Chan is independent software. Small tips help cover time
               spent on releases, packaging, and documentation.
+              Share the love, cheers!
             </p>
           </div>
           <img
@@ -411,6 +397,36 @@
             width="160"
             height="160"
           />
+        </div>
+
+        <!-- Round-1 closing-3 (C2): licenses / attribution
+             section moved BELOW the QR + a separator. The prior
+             SIL OFL and MIT links pointed at the embedded
+             `/static/...` paths, which under chan-desktop's
+             non-root mount resolved against 127.0.0.1; the
+             user-facing expectation is a canonical upstream URL.
+             Chan's own Apache 2 license joins the section so the
+             three runtime licenses sit together in one place. -->
+        <div class="about-sep" role="separator" aria-hidden="true"></div>
+        <div class="about-licenses">
+          <span class="k">chan</span>
+          <span class="v">
+            <a href="https://github.com/fiorix/chan/blob/main/LICENSE" target="_blank" rel="noopener">Apache 2.0</a>
+          </span>
+          <span class="k">terminal font</span>
+          <span class="v">
+            Source Code Pro Regular
+            <span class="muted">
+              (<a href="https://github.com/adobe-fonts/source-code-pro/blob/release/LICENSE.md" target="_blank" rel="noopener">SIL OFL 1.1</a>)
+            </span>
+          </span>
+          <span class="k">matrix screen lock</span>
+          <span class="v">
+            <a href="https://github.com/dcragusa/MatrixScreensaver" target="_blank" rel="noopener">dcragusa/MatrixScreensaver</a>
+            <span class="muted">
+              (<a href="https://github.com/dcragusa/MatrixScreensaver/blob/master/LICENSE" target="_blank" rel="noopener">MIT</a>)
+            </span>
+          </span>
         </div>
       </div>
     {:else if slideIndex === 1}
@@ -576,6 +592,20 @@
     width: 100%;
     max-width: 720px;
   }
+  /* Bug 2: indexing slide variant. The graph slide needs the
+     full tab width/height to read; the column cap that suits
+     About + Workspace text content makes the spine look
+     constrained to a vertical band. `max-width: none` drops the
+     720px cap; the carousel-wide variant tightens the carousel's
+     own padding so the breathing border around the canvas reads
+     as ~10px instead of the 16-32px the About/Workspace slides
+     want. */
+  .slide-stage-wide {
+    max-width: none;
+  }
+  .carousel-wide {
+    padding: 10px;
+  }
   .slide {
     display: flex;
     flex-direction: column;
@@ -633,10 +663,6 @@
   .about-grid .ok {
     color: var(--accent, var(--text));
   }
-  .about-grid a {
-    color: var(--link, var(--text));
-    text-decoration: underline;
-  }
   .about-links {
     display: flex;
     flex-wrap: wrap;
@@ -686,6 +712,36 @@
     background: #fff;
     padding: 6px;
     flex-shrink: 0;
+  }
+  /* C2: licenses block sits below the QR + a separator. The
+     2-column grid mirrors `.about-grid` so the key / value
+     alignment reads as a continuation of the top section. */
+  .about-sep {
+    height: 1px;
+    background: var(--border);
+    opacity: 0.6;
+    margin: 0.25rem 0;
+  }
+  .about-licenses {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 14px;
+    font-size: 13px;
+    width: 100%;
+  }
+  .about-licenses .k {
+    color: var(--text-secondary);
+  }
+  .about-licenses .v {
+    color: var(--text);
+  }
+  .about-licenses .muted {
+    color: var(--text-secondary);
+    opacity: 0.85;
+  }
+  .about-licenses a {
+    color: var(--link, var(--text));
+    text-decoration: underline;
   }
   /* --- Slide 1 (Workspace info) --- */
   .slide-workspace {

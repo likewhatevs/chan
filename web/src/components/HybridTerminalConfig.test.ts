@@ -190,3 +190,27 @@ describe("Wave 4: Terminal back-side controls", () => {
     expect(source).toMatch(/\.config-select \{[\s\S]{1,300}border: 1px solid var\(--border\)/);
   });
 });
+
+describe("round-1 closing-3 (C1): post-save effect_update_depth_exceeded guard", () => {
+  // The hydration $effect used to reassign `editing` to a
+  // content-identical clone on every workspace.info change, which
+  // replaced the $state proxy and re-fired the effect on its own
+  // write -> Svelte 5 trips
+  // https://svelte.dev/e/effect_update_depth_exceeded. Repro: flip
+  // the Hybrid terminal back, change font; the save() reassigns
+  // workspace.info, the effect cycles, the UI freezes.
+  //
+  // Fix tracks the JSON of the server's `preferences.terminal`
+  // slice and bails when the slice hasn't actually changed.
+  test("tracks lastSyncedServerSnap across workspace.info refreshes", () => {
+    expect(source).toMatch(
+      /let lastSyncedServerSnap: string \| null = null;/,
+    );
+  });
+
+  test("hydration effect bails when the server terminal slice hasn't changed", () => {
+    expect(source).toMatch(
+      /\$effect\(\(\) => \{[\s\S]{1,2000}const serverSnap = JSON\.stringify\(info\.preferences\?\.terminal \?\? null\);[\s\S]{1,400}if \(editing && serverSnap === lastSyncedServerSnap\) \{[\s\S]{1,800}return;[\s\S]{1,200}\}[\s\S]{1,200}lastSyncedServerSnap = serverSnap;[\s\S]{1,200}editing = normalizeTerminal\(clone\(info\.preferences\)\);/,
+    );
+  });
+});
