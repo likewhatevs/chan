@@ -18,9 +18,10 @@ describe("shortcut table", () => {
     expect(table).toMatch(/^New terminal +Cmd\+T\b/m);
   });
 
-  // Sibling label `Terminal rich prompt` shouldn't ever sit under
-  // the bare-Terminal regex; the guards below anchor to that exact
-  // word to catch an accidental rename or duplicate entry.
+  // Sibling label `Team Work` (phase-13 r2 rename of "Terminal rich
+  // prompt") shouldn't ever sit under the bare-Terminal regex; the
+  // guards below anchor to that exact word to catch an accidental
+  // rename or duplicate entry.
   test("does not advertise a bare 'Terminal' row (web)", () => {
     const table = renderTable("web", "mac");
     expect(table).not.toMatch(/^Terminal +Cmd\+Alt\+T\b/m);

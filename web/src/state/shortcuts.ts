@@ -142,9 +142,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // Universal Hybrid Nav `p` (added in `fullstack-50`) covers
   // every platform including Win/Linux web where Cmd+P is owned
   // by the browser's print dialog and Cmd+Alt+P isn't a thing.
+  // Phase-13 r2: the chord id stays `app.terminal.richPrompt` (stable -
+  // @@LaneA keeps the handler), but the label + flow are now "Team
+  // Work" (Rich Prompt was renamed). Label string supplied by @@LaneA
+  // on event-lane-a-lane-b.md; this is a Lane-B-owned edit.
   {
     id: "app.terminal.richPrompt",
-    label: "Terminal rich prompt",
+    label: "Team Work",
     web: "Cmd+Alt+P",
     native: "Mod+P",
     group: "App",

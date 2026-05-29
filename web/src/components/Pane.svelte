@@ -208,7 +208,9 @@
       chordId: "app.files.toggle",
     },
     {
-      label: "Rich Prompt",
+      // phase-13 r2: Rich Prompt -> Team Work (label from @@LaneA);
+      // chord id app.terminal.richPrompt stays stable.
+      label: "Team Work",
       icon: MessageSquare,
       command: "app.terminal.richPrompt",
       chordId: "app.terminal.richPrompt",

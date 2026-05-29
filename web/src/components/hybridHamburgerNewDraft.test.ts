@@ -27,9 +27,11 @@ describe("fullstack-a-67 slice 2: spawnActions includes New Draft first", () => 
     expect(pane).toMatch(/empty-pane right-click \+ the pane[\s\S]*?hamburger \+ the empty-pane carousel/i);
   });
 
-  test("the existing 4 spawn entries are preserved in order (Terminal/FB/RP/Graph)", () => {
+  test("the existing 4 spawn entries are preserved in order (Terminal/FB/Team Work/Graph)", () => {
+    // phase-13 r2: the Rich Prompt entry was relabelled "Team Work"
+    // (chord id app.terminal.richPrompt stays stable).
     expect(pane).toMatch(
-      /label: "Terminal",[\s\S]*?label: "File Browser",[\s\S]*?label: "Rich Prompt",[\s\S]*?label: "Graph",/,
+      /label: "Terminal",[\s\S]*?label: "File Browser",[\s\S]*?label: "Team Work",[\s\S]*?label: "Graph",/,
     );
   });
 });

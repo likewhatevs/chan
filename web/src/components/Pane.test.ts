@@ -156,7 +156,7 @@ describe("Pane right-click menus", () => {
       "New Draft",
       "Terminal",
       "File Browser",
-      "Rich Prompt",
+      "Team Work",
       "Graph",
       "Search",
       "Dashboard",

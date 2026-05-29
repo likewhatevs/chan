@@ -399,7 +399,7 @@ describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
     const welcome = (await import("./EmptyPaneWelcome.svelte?raw"))
       .default as string;
     expect(welcome).toMatch(
-      /const spawnEntries: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Rich Prompt",[\s\S]{1,800}label: "Graph",/,
+      /const spawnEntries: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Team Work",[\s\S]{1,800}label: "Graph",/,
     );
     // B9: secondary tile row now carries Search + Dashboard
     // (Search first), and both render their chord hints via
