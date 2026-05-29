@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import richPrompt from "./TerminalRichPrompt.svelte?raw";
+import richPrompt from "./TeamWork.svelte?raw";
 
 // `fullstack-a-89b`: empirical cursor/placeholder Y-alignment
 // fix. Tests pin the CSS rule + the leading-space placeholder

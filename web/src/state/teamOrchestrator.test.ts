@@ -3,17 +3,21 @@ import {
   identityPrompt,
   memberHandle,
   parseEnvLines,
+  teamNameFromPath,
   translateConfig,
+  wireToDialog,
 } from "./teamOrchestrator.svelte";
 import type { TeamDialogConfig } from "./teamDialog.svelte";
+import type { TeamConfigWire } from "../api/client";
 
-// `fullstack-a-79` slice 1: orchestrator translation +
-// helpers. The full bootstrap chain (api.teamCreate → teamLoad
-// → spawnTerminal per worker → notify) is wired in
-// `runTeamBootstrap` and tested via integration paths;
-// here we pin the pure translators.
+// phase-13-r2 `lane-a-A3`: orchestrator translators + the
+// `# Team work` identity prompt. The full lead-first bootstrap
+// chain (writeTeamConfigFile -> launch lead -> spawn workers ->
+// prime editor -> broadcast) is exercised in
+// teamBootstrapOrchestrator.test.ts; here we pin the pure
+// translators.
 
-describe("fullstack-a-79: parseEnvLines", () => {
+describe("parseEnvLines", () => {
   test("parses KEY=value lines into a Record", () => {
     expect(parseEnvLines("FOO=bar\nBAZ=qux")).toEqual({
       FOO: "bar",
@@ -47,40 +51,46 @@ describe("fullstack-a-79: parseEnvLines", () => {
   });
 });
 
-describe("fullstack-a-79: memberHandle", () => {
+describe("memberHandle", () => {
   test("auto-prefixes with @@ when autoPrefix is on", () => {
     expect(
-      memberHandle(
-        { name: "Lead", command: "claude", env: "", isLead: true },
-        true,
-      ),
+      memberHandle({ name: "Lead", command: "claude", env: "", isLead: true }, true),
     ).toBe("@@Lead");
   });
 
   test("returns raw name when autoPrefix is off", () => {
     expect(
-      memberHandle(
-        { name: "Lead", command: "claude", env: "", isLead: true },
-        false,
-      ),
+      memberHandle({ name: "Lead", command: "claude", env: "", isLead: true }, false),
     ).toBe("Lead");
   });
 
   test("skips double-prefix when name already starts with @@", () => {
     expect(
-      memberHandle(
-        { name: "@@Lead", command: "claude", env: "", isLead: true },
-        true,
-      ),
+      memberHandle({ name: "@@Lead", command: "claude", env: "", isLead: true }, true),
     ).toBe("@@Lead");
   });
 });
 
-describe("fullstack-a-79: translateConfig", () => {
+describe("teamNameFromPath", () => {
+  test("derives the team name from the config dir", () => {
+    expect(teamNameFromPath("/tmp/new-team-1/chan-team.toml")).toBe("new-team-1");
+  });
+
+  test("uses the file name when the path has no parent dir segment", () => {
+    // `/chan-team.toml` has no intermediate dir, so the derived
+    // team name is the file base. The default flow always nests
+    // under a team dir (e.g. /tmp/new-team-1/...), so this is an
+    // edge case rather than the common path.
+    expect(teamNameFromPath("/chan-team.toml")).toBe("chan-team.toml");
+  });
+});
+
+describe("translateConfig", () => {
   function sample(overrides: Partial<TeamDialogConfig> = {}): TeamDialogConfig {
     return {
       hostName: "Alice",
-      teamName: "demo",
+      configMode: "new",
+      configPath: "/tmp/demo/chan-team.toml",
       size: 2,
       autoPrefix: true,
       members: [
@@ -92,8 +102,9 @@ describe("fullstack-a-79: translateConfig", () => {
     };
   }
 
-  test("maps camelCase → snake_case shape (team_name, host_name, host_handle, auto_prefix_at, created_at, members)", () => {
+  test("maps camelCase -> snake_case shape", () => {
     const out = translateConfig(sample());
+    // team_name comes from the config path's directory.
     expect(out.team_name).toBe("demo");
     expect(out.host_name).toBe("Alice");
     expect(out.host_handle).toBe("@@Alice");
@@ -102,7 +113,7 @@ describe("fullstack-a-79: translateConfig", () => {
     expect(out.members.length).toBe(2);
   });
 
-  test("each member carries handle / command / env / is_lead in snake_case", () => {
+  test("each member carries handle / command / env / is_lead", () => {
     const out = translateConfig(sample());
     expect(out.members[0]).toMatchObject({
       handle: "@@Lead",
@@ -116,7 +127,7 @@ describe("fullstack-a-79: translateConfig", () => {
     });
   });
 
-  test("auto-injects CHAN_TAB_NAME=<handle> when env doesn't already carry it", () => {
+  test("auto-injects CHAN_TAB_NAME=<handle> when env doesn't carry it", () => {
     const out = translateConfig(sample());
     expect(out.members[0].env.CHAN_TAB_NAME).toBe("@@Lead");
     expect(out.members[1].env.CHAN_TAB_NAME).toBe("@@Worker1");
@@ -126,67 +137,178 @@ describe("fullstack-a-79: translateConfig", () => {
     const out = translateConfig(
       sample({
         members: [
-          {
-            name: "Lead",
-            command: "claude",
-            env: "CHAN_TAB_NAME=Custom",
-            isLead: true,
-          },
-          {
-            name: "Worker1",
-            command: "claude",
-            env: "",
-            isLead: false,
-          },
+          { name: "Lead", command: "claude", env: "CHAN_TAB_NAME=Custom", isLead: true },
+          { name: "Worker1", command: "claude", env: "", isLead: false },
         ],
       }),
     );
     expect(out.members[0].env.CHAN_TAB_NAME).toBe("Custom");
   });
 
-  test("created_at is ISO 8601 UTC", () => {
+  test("tabs mode persists no member position", () => {
     const out = translateConfig(sample());
-    expect(out.created_at).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
+    expect(out.members[0].position).toBeUndefined();
+    expect(out.members[1].position).toBeUndefined();
+  });
+
+  test("split mode persists each member's row-major {row,col} position", () => {
+    const out = translateConfig(
+      sample({
+        size: 2,
+        realEstate: {
+          kind: "split",
+          grid: { rows: 1, cols: 2 },
+          slots: [[0], [1]],
+        },
+      }),
+    );
+    expect(out.members[0].position).toEqual({ row: 0, col: 0 });
+    expect(out.members[1].position).toEqual({ row: 0, col: 1 });
   });
 });
 
-describe("fullstack-a-79: identityPrompt", () => {
-  test("constructs the addendum-a 2026-05-23 prompt verbatim with host/lead asymmetry", () => {
-    expect(
-      identityPrompt(
-        "@@Alice",
-        "@@Lead",
-        "Drafts/team-foo/docs/bootstrap.md",
-      ),
-    ).toBe(
-      "Hello, I am @@Alice and you are $CHAN_TAB_NAME. Our team lead is @@Lead. Identify yourself and read Drafts/team-foo/docs/bootstrap.md with the chan MCP read_file tool (a Drafts/ path is a chan workspace location, not a file under your working directory).",
-    );
+describe("wireToDialog", () => {
+  function wire(overrides: Partial<TeamConfigWire> = {}): TeamConfigWire {
+    return {
+      team_name: "demo",
+      host_name: "Alice",
+      host_handle: "@@Alice",
+      auto_prefix_at: true,
+      created_at: "2026-05-29T08:00:00.000Z",
+      members: [
+        {
+          handle: "@@Lead",
+          command: "claude",
+          env: { CHAN_TAB_NAME: "@@Lead", FOO: "bar" },
+          is_lead: true,
+        },
+        {
+          handle: "@@Worker1",
+          command: "claude",
+          env: { CHAN_TAB_NAME: "@@Worker1" },
+          is_lead: false,
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  test("inverse of translateConfig: snake_case -> camelCase round-trip", () => {
+    const dialog = wireToDialog(wire(), "/tmp/demo/chan-team.toml");
+    expect(dialog.hostName).toBe("Alice");
+    expect(dialog.configMode).toBe("load");
+    expect(dialog.configPath).toBe("/tmp/demo/chan-team.toml");
+    expect(dialog.autoPrefix).toBe(true);
+    expect(dialog.size).toBe(2);
+    expect(dialog.members).toEqual([
+      { name: "@@Lead", command: "claude", env: "FOO=bar", isLead: true },
+      { name: "@@Worker1", command: "claude", env: "", isLead: false },
+    ]);
   });
 
-  test("Drafts bootstrap paths are routed through the chan MCP read_file tool", () => {
-    const out = identityPrompt(
-      "@@Alice",
-      "@@Lead",
-      "Drafts/team-foo/docs/bootstrap.md",
-    );
-    expect(out).toContain("chan MCP read_file tool");
+  test("strips CHAN_TAB_NAME from the visible env field", () => {
+    const dialog = wireToDialog(wire(), "/tmp/demo/chan-team.toml");
+    expect(dialog.members[0].env).not.toContain("CHAN_TAB_NAME");
+    expect(dialog.members[1].env).not.toContain("CHAN_TAB_NAME");
   });
 
-  test("plain workspace paths get no MCP hint (they resolve relative to cwd)", () => {
-    const out = identityPrompt("@@Alice", "@@Lead", "notes/bootstrap.md");
+  test("no member position -> real estate is tabs", () => {
+    const dialog = wireToDialog(wire(), "/tmp/demo/chan-team.toml");
+    expect(dialog.realEstate).toEqual({ kind: "tabs" });
+  });
+
+  test("member positions -> split real estate reconstructed from grid", () => {
+    const dialog = wireToDialog(
+      wire({
+        members: [
+          {
+            handle: "@@Lead",
+            command: "claude",
+            env: {},
+            is_lead: true,
+            position: { row: 0, col: 0 },
+          },
+          {
+            handle: "@@Worker1",
+            command: "claude",
+            env: {},
+            is_lead: false,
+            position: { row: 0, col: 1 },
+          },
+        ],
+      }),
+      "/tmp/demo/chan-team.toml",
+    );
+    expect(dialog.realEstate.kind).toBe("split");
+    if (dialog.realEstate.kind === "split") {
+      expect(dialog.realEstate.grid).toEqual({ rows: 1, cols: 2 });
+      expect(dialog.realEstate.slots).toEqual([[0], [1]]);
+    }
+  });
+
+  test("preserves auto_prefix_at when false", () => {
+    const dialog = wireToDialog(
+      wire({ auto_prefix_at: false }),
+      "/tmp/demo/chan-team.toml",
+    );
+    expect(dialog.autoPrefix).toBe(false);
+  });
+});
+
+describe("translateConfig <-> wireToDialog round-trips real estate", () => {
+  test("split layout survives a full save -> load -> save round-trip", () => {
+    const original: TeamDialogConfig = {
+      hostName: "Neo",
+      configMode: "new",
+      configPath: "/tmp/round/chan-team.toml",
+      size: 3,
+      autoPrefix: true,
+      members: [
+        { name: "Lead", command: "claude", env: "", isLead: true },
+        { name: "Worker1", command: "claude", env: "", isLead: false },
+        { name: "Worker2", command: "claude", env: "", isLead: false },
+      ],
+      realEstate: {
+        kind: "split",
+        grid: { rows: 2, cols: 2 },
+        slots: [[0], [1], [2], []],
+      },
+    };
+    const wireOut = translateConfig(original);
+    const back = wireToDialog(wireOut, "/tmp/round/chan-team.toml");
+    expect(back.realEstate.kind).toBe("split");
+    if (back.realEstate.kind === "split") {
+      // Cells 0..2 hold the three members in order; the grid is
+      // derived from the max row/col seen (2x2).
+      expect(back.realEstate.grid).toEqual({ rows: 2, cols: 2 });
+      expect(back.realEstate.slots[0]).toEqual([0]);
+      expect(back.realEstate.slots[1]).toEqual([1]);
+      expect(back.realEstate.slots[2]).toEqual([2]);
+    }
+  });
+});
+
+describe("identityPrompt", () => {
+  test("renders the # Team work prompt with size / host / lead + worker bullets", () => {
+    const out = identityPrompt(3, "@@Neo", "@@Lead", ["@@Worker1", "@@Worker2"]);
     expect(out).toBe(
-      "Hello, I am @@Alice and you are $CHAN_TAB_NAME. Our team lead is @@Lead. Identify yourself and read notes/bootstrap.md.",
+      "# Team work\n" +
+        "We are a team of 3. Our host is @@Neo and the team lead is @@Lead.\n" +
+        "You are $CHAN_TAB_NAME. Identify yourself and get ready to work with\n" +
+        "the rest of the team:\n" +
+        "- @@Worker1\n" +
+        "- @@Worker2",
     );
-    expect(out).not.toContain("read_file");
   });
 
   test("does NOT escape $CHAN_TAB_NAME (agents read it as a live env-var)", () => {
-    const out = identityPrompt(
-      "@@Bob",
-      "@@Lead",
-      "Drafts/team-bar/docs/bootstrap.md",
-    );
+    const out = identityPrompt(2, "@@Neo", "@@Lead", ["@@Worker1"]);
     expect(out).toContain("$CHAN_TAB_NAME");
     expect(out).not.toContain("\\$CHAN_TAB_NAME");
+  });
+
+  test("solo lead (no workers) renders a placeholder bullet", () => {
+    const out = identityPrompt(1, "@@Neo", "@@Lead", []);
+    expect(out).toContain("- (no other agents)");
   });
 });

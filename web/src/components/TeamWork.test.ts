@@ -3,17 +3,16 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import TerminalRichPrompt from "./TerminalRichPrompt.svelte";
+import TeamWork from "./TeamWork.svelte";
 import { api } from "../api/client";
 import {
   layout,
   type LeafNode,
-  type TerminalRichPromptState,
+  type TeamWorkState,
 } from "../state/tabs.svelte";
 import {
   ui,
 } from "../state/store.svelte";
-import { closeSpawnDialog } from "../state/spawnDialog.svelte";
 
 const mounted: Array<Record<string, any>> = [];
 
@@ -22,7 +21,6 @@ afterEach(() => {
   document.body.innerHTML = "";
   ui.status = null;
   resetLayout();
-  closeSpawnDialog();
   vi.restoreAllMocks();
 });
 
@@ -59,7 +57,7 @@ function pointerEvent(type: string, clientY: number): PointerEvent {
   return event;
 }
 
-async function renderPrompt(prompt: TerminalRichPromptState) {
+async function renderPrompt(prompt: TeamWorkState) {
   installPointerCaptureStubs();
   const target = document.createElement("div");
   Object.assign(target.style, {
@@ -81,14 +79,14 @@ async function renderPrompt(prompt: TerminalRichPromptState) {
   document.body.append(target);
 
   const onSubmit = vi.fn();
-  const component = mount(TerminalRichPrompt, {
+  const component = mount(TeamWork, {
     target,
     props: { prompt, onSubmit },
   });
   mounted.push(component);
   await tick();
   const root = target.querySelector<HTMLElement>(".rich-prompt");
-  if (!root) throw new Error("rich prompt not mounted");
+  if (!root) throw new Error("team work prompt not mounted");
   return { target, root, onSubmit };
 }
 
@@ -106,17 +104,9 @@ function buttonByText(target: ParentNode, text: string): HTMLButtonElement {
   return el;
 }
 
-async function waitFor(condition: () => boolean): Promise<void> {
-  for (let i = 0; i < 20; i += 1) {
-    if (condition()) return;
-    await tick();
-    await Promise.resolve();
-  }
-}
-
-describe("TerminalRichPrompt", () => {
+describe("TeamWork", () => {
   test("Escape closes the action menu without closing the prompt", async () => {
-    const prompt: TerminalRichPromptState = {
+    const prompt: TeamWorkState = {
       buffer: "## keep\n\nthis draft",
       heightPx: 320,
       open: true,
@@ -124,7 +114,7 @@ describe("TerminalRichPrompt", () => {
     };
     const { target, root } = await renderPrompt(prompt);
 
-    button(target, "Rich Prompt actions").click();
+    button(target, "Team Work actions").click();
     await tick();
     expect(target.querySelector(".ctx")).not.toBeNull();
 
@@ -137,7 +127,7 @@ describe("TerminalRichPrompt", () => {
   });
 
   test("Cmd/Ctrl+Enter submits raw markdown and keeps the overlay state", async () => {
-    const prompt: TerminalRichPromptState = {
+    const prompt: TeamWorkState = {
       buffer: "one **two**\n![alt](attachments/a.png)",
       heightPx: 320,
       open: true,
@@ -164,7 +154,7 @@ describe("TerminalRichPrompt", () => {
     // editor, never submit the prompt. The wrapper short-circuits
     // before the submit guard so a stray Shift+Enter that bubbles
     // up (e.g. editor not focused) cannot reach `submit()`.
-    const prompt: TerminalRichPromptState = {
+    const prompt: TeamWorkState = {
       buffer: "draft",
       heightPx: 320,
       open: true,
@@ -190,7 +180,7 @@ describe("TerminalRichPrompt", () => {
     // in Wysiwyg / Source claims the keystroke first when the editor
     // has focus; this test exercises the wrapper fallback that fires
     // when the keydown bubbles up unhandled (defaultPrevented=false).
-    const prompt: TerminalRichPromptState = {
+    const prompt: TeamWorkState = {
       buffer: "hi",
       heightPx: 320,
       open: true,
@@ -219,7 +209,7 @@ describe("TerminalRichPrompt", () => {
     // `submit()` again — `pwd` reached the PTY as `pwdpwd`. The
     // wrapper now bails on `defaultPrevented`; source mode is
     // unaffected because Source has no Mod-Enter binding.
-    const prompt: TerminalRichPromptState = {
+    const prompt: TeamWorkState = {
       buffer: "pwd",
       heightPx: 320,
       open: true,
@@ -241,7 +231,7 @@ describe("TerminalRichPrompt", () => {
   });
 
   test("send button submits the same raw source as the keyboard path", async () => {
-    const prompt: TerminalRichPromptState = {
+    const prompt: TeamWorkState = {
       buffer: "# prompt\n\nbody",
       heightPx: 280,
       open: true,
@@ -256,7 +246,7 @@ describe("TerminalRichPrompt", () => {
   });
 
   test("height drag clamps to minimum height and top gap", async () => {
-    const prompt: TerminalRichPromptState = {
+    const prompt: TeamWorkState = {
       buffer: "",
       heightPx: 320,
       open: true,
@@ -281,7 +271,7 @@ describe("TerminalRichPrompt", () => {
     // the test clicks. Toolbar default flipped to off in -a-24, so
     // explicitly open it here — this test is exercising the mode-
     // toggle, not the toolbar's default visibility.
-    const prompt: TerminalRichPromptState = {
+    const prompt: TeamWorkState = {
       buffer: "draft",
       heightPx: 320,
       open: true,
@@ -299,14 +289,14 @@ describe("TerminalRichPrompt", () => {
   test("mounted terminal prompts keep draft and submit state isolated", async () => {
     // Same `styleToolbarOpen: true` rationale as the mode-toggle
     // test above — `fullstack-a-24` default-off the toolbar.
-    const first: TerminalRichPromptState = {
+    const first: TeamWorkState = {
       buffer: "first draft",
       heightPx: 260,
       open: true,
       mode: "source",
       styleToolbarOpen: true,
     };
-    const second: TerminalRichPromptState = {
+    const second: TeamWorkState = {
       buffer: "second draft",
       heightPx: 360,
       open: true,
@@ -328,8 +318,11 @@ describe("TerminalRichPrompt", () => {
     expect(second.buffer).toBe("second draft");
   });
 
-  test("action menu drops prompt-local file and watcher controls", async () => {
-    const prompt: TerminalRichPromptState = {
+  test("action menu drops prompt-local file, watcher, and spawn controls", async () => {
+    // Phase-13 r2: the right-click menu lost the agent-spawn entry
+    // points (Spawn agent / Spawn agents) and the copy-config helpers
+    // alongside the older file/watcher controls.
+    const prompt: TeamWorkState = {
       buffer: "# reusable prompt\n\nbody",
       heightPx: 320,
       open: true,
@@ -337,132 +330,62 @@ describe("TerminalRichPrompt", () => {
     };
     const { target } = await renderPrompt(prompt);
 
-    button(target, "Rich Prompt actions").click();
+    button(target, "Team Work actions").click();
     await tick();
 
     expect(target.textContent).not.toContain("New File from here");
     expect(target.textContent).not.toContain("Watch directory");
     expect(target.textContent).not.toContain("Stop watching");
+    expect(target.textContent).not.toContain("Spawn agent");
+    expect(target.textContent).not.toContain("Spawn agents");
+    expect(target.textContent).not.toContain("Copy metadata dir");
+    expect(target.textContent).not.toContain("Copy Spawn agents config");
     expect(target.querySelector("button[aria-label='Close']")).toBeNull();
   });
 
-  test("Spawn agents action opens the global team dialog", async () => {
-    // `fullstack-a-78` repurposed the icon-btn from "Watch
-    // directory" to Spawn agents. The dialog's bootstrap flow
-    // lives in `-a-79` (orchestrator); slice 1 just opens the
-    // dialog + hands off via the request bus.
-    const { teamDialogState, closeTeamDialog } = await import(
-      "../state/teamDialog.svelte"
-    );
-    closeTeamDialog();
-    const prompt: TerminalRichPromptState = {
-      buffer: "",
+  test("action menu lists the Phase-13 r2 items in order", async () => {
+    const prompt: TeamWorkState = {
+      buffer: "draft",
       heightPx: 320,
       open: true,
-      mode: "source",
+      mode: "wysiwyg",
     };
-    installPointerCaptureStubs();
-    const target = document.createElement("div");
-    Object.assign(target.style, { position: "relative", height: "500px" });
-    document.body.append(target);
-    const component = mount(TerminalRichPrompt, {
-      target,
-      props: {
-        prompt,
-        onSubmit: vi.fn(),
-        terminalSessionId: "term_123",
-        watcherPath: null,
-      },
-    });
-    mounted.push(component);
+    const { target } = await renderPrompt(prompt);
+
+    button(target, "Team Work actions").click();
     await tick();
 
-    button(target, "Rich Prompt actions").click();
-    await tick();
-    buttonByText(target, "Spawn agents").click();
-    await tick();
-    expect(teamDialogState.request).not.toBeNull();
-    expect(teamDialogState.request?.hostSessionId).toBe("term_123");
-    closeTeamDialog();
+    const labels = [...target.querySelectorAll<HTMLButtonElement>(".ctx button")].map(
+      (btn) => btn.textContent?.trim(),
+    );
+    expect(labels).toEqual([
+      "Show source code",
+      "Show style toolbar",
+      "Bubble stack",
+      "Bubble tray",
+      "Collapse prompt",
+    ]);
   });
 
-  test("Spawn agent opens dialog and posts terminal control request", async () => {
-    const spawn = vi.spyOn(api, "spawnTerminal").mockResolvedValue({
-      session: "spawn_session",
-      tab_label: "@@Pair",
-    });
-    const prompt: TerminalRichPromptState = {
+  test("Bubble stack / tray set the workspace layout preference", async () => {
+    // The handler also calls `showBubbleStub()` (from the A4-owned
+    // `bubbleStub.svelte`) to surface the example bubble; that side
+    // effect is verified at integration. Here we pin the surviving
+    // layout-preference round-trip.
+    const setMode = vi.spyOn(api, "setBubbleOverlayMode").mockResolvedValue(undefined);
+    const prompt: TeamWorkState = {
       buffer: "",
       heightPx: 320,
       open: true,
       mode: "source",
     };
-    const onSpawned = vi.fn();
-    installPointerCaptureStubs();
-    const target = document.createElement("div");
-    Object.assign(target.style, { position: "relative", height: "500px" });
-    document.body.append(target);
-    const component = mount(TerminalRichPrompt, {
-      target,
-      props: {
-        prompt,
-        onSubmit: vi.fn(),
-        terminalSessionId: "orchestrator_session",
-        onSpawned,
-      },
-    });
-    mounted.push(component);
+    const { target } = await renderPrompt(prompt);
+
+    button(target, "Team Work actions").click();
+    await tick();
+    buttonByText(target, "Bubble tray").click();
     await tick();
 
-    const setSubmitMode = vi
-      .spyOn(api, "setTerminalSubmitMode")
-      .mockResolvedValue(undefined);
-    const picker = target.querySelector<HTMLSelectElement>(".agent-picker");
-    if (!picker) throw new Error("agent picker not found");
-    picker.value = "codex";
-    picker.dispatchEvent(new Event("change", { bubbles: true }));
-    await waitFor(() => setSubmitMode.mock.calls.length === 1);
-    expect(prompt.agentTarget).toBe("codex");
-    expect(prompt.submitMode).toBe("agent");
-    expect(setSubmitMode).toHaveBeenCalledWith("orchestrator_session", "agent");
-
-    // `fullstack-a-4`: SpawnDialog mounts at the App root in
-    // real life; in this test we mount it as a sibling so the
-    // global state singleton workspaces it through to render.
-    const SpawnDialog = (await import("./SpawnDialog.svelte")).default;
-    const dialogHost = document.createElement("div");
-    document.body.append(dialogHost);
-    const dialogComponent = mount(SpawnDialog, { target: dialogHost, props: {} });
-    mounted.push(dialogComponent);
-    await tick();
-
-    button(target, "Rich Prompt actions").click();
-    await tick();
-    buttonByText(target, "Spawn agent").click();
-    await tick();
-    const dialog = document.body.querySelector<HTMLElement>(".spawn-dialog");
-    if (!dialog) throw new Error("spawn dialog not mounted");
-    const inputs = [...dialog.querySelectorAll<HTMLInputElement>("input")];
-    const textareas = [...dialog.querySelectorAll<HTMLTextAreaElement>("textarea")];
-    inputs[0]!.value = "@@Pair";
-    inputs[0]!.dispatchEvent(new Event("input", { bubbles: true }));
-    await tick();
-    textareas[0]!.value = "codex --model gpt-5";
-    textareas[0]!.dispatchEvent(new Event("input", { bubbles: true }));
-    await tick();
-    textareas[1]!.value = "FOO=bar";
-    textareas[1]!.dispatchEvent(new Event("input", { bubbles: true }));
-    await tick();
-
-    [...dialog.querySelectorAll("button")].find((el) => el.textContent?.includes("Spawn"))!.click();
-    await waitFor(() => onSpawned.mock.calls.length === 1);
-
-    expect(spawn).toHaveBeenCalledWith({
-      name: "@@Pair",
-      command: "codex --model gpt-5",
-      env: { FOO: "bar" },
-      orchestrator_session: "orchestrator_session",
-    });
-    expect(onSpawned).toHaveBeenCalledWith({ session: "spawn_session", tab_label: "@@Pair" }, "@@Pair");
+    expect(setMode).toHaveBeenCalledWith("tray");
   });
 });

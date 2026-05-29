@@ -33,9 +33,6 @@ import type {
   ReportPrefix,
   ResetMode,
   ResetResponse,
-  RichPromptCloseResponse,
-  RichPromptResponse,
-  RichPromptSubmitResponse,
   SearchHit,
   SemanticState,
   SemanticModelRegistry,
@@ -693,50 +690,6 @@ export const api = {
   /// dir).
   createDraft: () =>
     req<{ path: string; name: string }>("POST", "/api/drafts/new"),
-  /// `fullstack-a-66` slice d: persist a Rich Prompt submission
-  /// as `Drafts/rich-prompt-N/prompt.md`. The SPA POSTs the
-  /// editor source + the chan-server route picks the next slot
-  /// (first is `rich-prompt`; subsequent are `rich-prompt-1`,
-  /// `rich-prompt-2`, ...). The returned path is the unified
-  /// shape so graph, search, editor, terminal, and MCP can
-  /// address the history entries without further plumbing.
-  createRichPromptDraft: (content: string) =>
-    req<{ path: string; name: string }>("POST", "/api/drafts/rich-prompt", {
-      content,
-    }),
-  createRichPromptWorkspace: (session: string, name?: string) =>
-    req<RichPromptResponse>("POST", "/api/rich-prompts", {
-      session,
-      ...(name ? { name } : {}),
-    }),
-  richPromptStatus: (name: string, session?: string) => {
-    const params = new URLSearchParams();
-    if (session) params.set("session", session);
-    const suffix = params.size > 0 ? `?${params.toString()}` : "";
-    return req<RichPromptResponse>(
-      "GET",
-      `/api/rich-prompts/${encodeURIComponent(name)}/status${suffix}`,
-    );
-  },
-  submitRichPromptWorkspace: (
-    name: string,
-    body: {
-      content: string;
-      expected_sequence: number;
-      expected_mtime_ns?: number | null;
-    },
-  ) =>
-    req<RichPromptSubmitResponse>(
-      "POST",
-      `/api/rich-prompts/${encodeURIComponent(name)}/submit`,
-      body,
-    ),
-  closeRichPromptWorkspace: (name: string, session: string) =>
-    req<RichPromptCloseResponse>(
-      "POST",
-      `/api/rich-prompts/${encodeURIComponent(name)}/close`,
-      { session },
-    ),
   inspectDraft: (path: string) =>
     req<DraftInspectResponse>("POST", "/api/drafts/inspect", { path }),
   discardDraft: (path: string) =>
@@ -1027,46 +980,6 @@ export const api = {
       "GET",
       `/api/fs-graph?scope=${encodeURIComponent(opts.scope)}&path=${encodeURIComponent(opts.path)}&depth=${encodeURIComponent(String(opts.depth ?? 1))}`,
     ),
-  setTerminalWatcher: (sessionId: string, path: string) =>
-    req<void>("POST", `/api/terminal/${encodeURIComponent(sessionId)}/watcher`, { path }),
-  clearTerminalWatcher: (sessionId: string) =>
-    req<void>("DELETE", `/api/terminal/${encodeURIComponent(sessionId)}/watcher`),
-  /// `fullstack-b-13`: flip the receiving session's submit-mode
-  /// (workspaces the trailing chord bytes after a "poke" notification
-  /// from `dispatch_agent_event`). Mirrors `setTerminalWatcher`;
-  /// 204 on success, 404 on unknown session, 400 on bad mode.
-  setTerminalSubmitMode: (sessionId: string, mode: "shell" | "agent") =>
-    req<void>("PUT", `/api/terminal/${encodeURIComponent(sessionId)}/submit-mode`, { mode }),
-  writeTerminalEventReply: (
-    sessionId: string,
-    body: {
-      id: string;
-      type: "survey-reply";
-      from: string;
-      to: string;
-      answers: Array<{ question_index: number; key: string }>;
-      scope_grant: "one-shot" | "topic-session" | "topic-phase";
-      follow_up?: boolean;
-      note?: string;
-    },
-  ) =>
-    req<void>(
-      "POST",
-      `/api/terminal/${encodeURIComponent(sessionId)}/event-reply`,
-      body,
-    ),
-  /// systacean-9: list the event files in the session's
-  /// attached watcher directory. Returns raw `{path, content}`
-  /// pairs; the caller parses each via `parseWatcherEvent` from
-  /// state/watcherEvents. Replaces the prior `api.list(dir) +
-  /// api.read(path)` composition, which routed through the
-  /// workspace-sandboxed `/api/files` and ENOENT-ed on absolute
-  /// outside-workspace watcher paths.
-  terminalWatcherEvents: (sessionId: string) =>
-    req<Array<{ path: string; content: string }>>(
-      "GET",
-      `/api/terminal/${encodeURIComponent(sessionId)}/watcher/events`,
-    ),
   spawnTerminal: (body: TerminalSpawnRequest) =>
     req<TerminalSpawnResponse>("POST", "/api/terminals", body),
   restartTerminal: (sessionId: string, body?: TerminalRestartRequest) =>
@@ -1206,6 +1119,20 @@ export const api = {
       `/api/teams/${encodeURIComponent(sourceName)}/duplicate`,
       { new_name: newName },
     ),
+  /// phase-13-r2 `lane-a-A3`: path-based chan-team.toml read/write
+  /// backing the Team Work dialog's New/Load flow. The config
+  /// lives at a user-chosen absolute path (default
+  /// `/tmp/new-team-1/chan-team.toml`), deliberately OUTSIDE the
+  /// workspace sandbox: it is app-level dev-orchestration config,
+  /// not notes content (see crates/chan-server/src/routes/
+  /// team_config.rs for the WHY). `readTeamConfigFile` backs the
+  /// Load auto-validate (400 on missing / invalid TOML);
+  /// `writeTeamConfigFile` re-saves the (possibly edited) config
+  /// on Bootstrap.
+  readTeamConfigFile: (path: string) =>
+    req<TeamConfigWire>("POST", "/api/team-config/read", { path }),
+  writeTeamConfigFile: (path: string, config: TeamConfigWire) =>
+    req<void>("POST", "/api/team-config/write", { path, config }),
 };
 
 /// `fullstack-a-79`: wire shape for `Workspace::create_team` /

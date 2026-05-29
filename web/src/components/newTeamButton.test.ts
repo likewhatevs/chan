@@ -1,72 +1,81 @@
 import { describe, expect, test } from "vitest";
-import app from "../App.svelte?raw";
-import prompt from "./TerminalRichPrompt.svelte?raw";
 import dialog from "./TeamDialog.svelte?raw";
+import {
+  defaultTeamConfig,
+  TEAM_MAX_SIZE,
+  TEAM_MIN_SIZE,
+  validateTeamConfig,
+} from "../state/teamDialog.svelte";
 
-// `fullstack-a-78` slice 1: button repurpose + dialog mount.
-// Tests pin the wiring shape so the airplane-grid slice 2 can
-// extend the dialog without re-litigating slice 1's contract.
+// phase-13-r2 `lane-a-A3`: the redesigned Team Work dialog. Pins
+// the New/Load path-config control, the 1-9 dropdown (no slider),
+// the "drag-me" chip rename, the removed copy/paste buttons, and
+// the default-state contract (host name "Neo", New mode).
 
-describe("fullstack-a-78 slice 1: App.svelte mounts TeamDialog at root", () => {
-  test("imports TeamDialog + teamDialogState", () => {
-    expect(app).toMatch(/import TeamDialog from "\.\/components\/TeamDialog\.svelte";/);
-    expect(app).toMatch(/import \{ teamDialogState \} from "\.\/state\/teamDialog\.svelte";/);
+describe("default config contract", () => {
+  test("host name defaults to Neo, New mode, one lead agent", () => {
+    const cfg = defaultTeamConfig();
+    expect(cfg.hostName).toBe("Neo");
+    expect(cfg.configMode).toBe("new");
+    expect(cfg.configPath).toBe("/tmp/new-team-1/chan-team.toml");
+    expect(cfg.size).toBe(TEAM_MIN_SIZE);
+    expect(cfg.members).toHaveLength(1);
+    expect(cfg.members[0].isLead).toBe(true);
+    expect(cfg.autoPrefix).toBe(true);
   });
 
-  test("renders the dialog only when a request is pending", () => {
-    expect(app).toMatch(
-      /\{#if teamDialogState\.request\}\s*<TeamDialog request=\{teamDialogState\.request\} \/>\s*\{\/if\}/,
-    );
-  });
-});
-
-describe("fullstack-a-78 slice 1: Rich Prompt Spawn agents button", () => {
-  test("imports openTeamDialog from state/teamDialog", () => {
-    expect(prompt).toMatch(
-      /import \{[\s\S]*?openTeamDialog as openGlobalTeamDialog,[\s\S]*?\} from "\.\.\/state\/teamDialog\.svelte";/,
-    );
-  });
-
-  test("openNewTeamDialog helper exists + opens the global dialog", () => {
-    expect(prompt).toMatch(
-      /function openNewTeamDialog\(\): void \{[\s\S]*?openGlobalTeamDialog\(\{[\s\S]*?hostSessionId: terminalSessionId,/,
-    );
-  });
-
-  test("plus menu opens the Spawn agents dialog", () => {
-    expect(prompt).toMatch(
-      /onclick=\{openMenuFromButton\}[\s\S]*?aria-label="Rich Prompt actions"/,
-    );
-    expect(prompt).toMatch(
-      /<button type="button" onclick=\{openNewTeamDialog\}>[\s\S]*?<span>Spawn agents<\/span>/,
-    );
-  });
-
-  test("legacy file and manual watcher actions are gone", () => {
-    expect(prompt).not.toMatch(/New File from here/);
-    expect(prompt).not.toMatch(/function watchDirectory/);
-    expect(prompt).not.toMatch(/Stop watching/);
+  test("validate requires an absolute config path (no team name)", () => {
+    const cfg = { ...defaultTeamConfig(), configPath: "relative/x.toml" };
+    expect(validateTeamConfig(cfg)).toBe("Path to configuration must be absolute");
+    const empty = { ...defaultTeamConfig(), configPath: "" };
+    expect(validateTeamConfig(empty)).toBe("Path to configuration required");
+    expect(validateTeamConfig(defaultTeamConfig())).toBeNull();
   });
 });
 
-describe("fullstack-a-78 slice 1: TeamDialog component shell", () => {
+describe("TeamDialog component shell", () => {
   test("renders Bootstrap + Cancel footer buttons", () => {
     expect(dialog).toMatch(/class="team-dialog-bootstrap"[\s\S]*?onclick=\{onBootstrap\}/);
     expect(dialog).toMatch(/class="team-dialog-cancel"[\s\S]*?onclick=\{onCancel\}/);
   });
 
-  test("inputs cover host name + team name + size slider + auto-prefix checkbox", () => {
+  test("host name input defaults placeholder to Neo", () => {
     expect(dialog).toMatch(/bind:value=\{config\.hostName\}/);
-    expect(dialog).toMatch(/bind:value=\{config\.teamName\}/);
-    expect(dialog).toMatch(/bind:checked=\{config\.autoPrefix\}/);
-    expect(dialog).toMatch(/type="range"[\s\S]*?min=\{TEAM_MIN_SIZE\}[\s\S]*?max=\{TEAM_MAX_SIZE\}/);
+    expect(dialog).toMatch(/placeholder="Neo"/);
   });
 
-  test("renders copy/paste config actions", () => {
-    expect(dialog).toMatch(/onclick=\{\(\) => void onCopyConfig\(\)\}/);
-    expect(dialog).toMatch(/onclick=\{\(\) => void onPasteConfig\(\)\}/);
-    expect(dialog).toMatch(/Copy config/);
-    expect(dialog).toMatch(/Paste config/);
+  test("auto-prefix checkbox is kept", () => {
+    expect(dialog).toMatch(/bind:checked=\{config\.autoPrefix\}/);
+  });
+
+  test("Team configuration New/Load toggle replaces the Team name field", () => {
+    expect(dialog).toMatch(/Team configuration/);
+    expect(dialog).toMatch(/setConfigMode\("new"\)/);
+    expect(dialog).toMatch(/setConfigMode\("load"\)/);
+    // The old free-text Team name binding is gone.
+    expect(dialog).not.toMatch(/bind:value=\{config\.teamName\}/);
+  });
+
+  test("Path to configuration field binds config.configPath", () => {
+    expect(dialog).toMatch(/Path to configuration/);
+    expect(dialog).toMatch(/bind:value=\{config\.configPath\}/);
+  });
+
+  test("New mode shows the team-management-dir info line", () => {
+    expect(dialog).toMatch(/team management files will be created in/);
+  });
+
+  test("Load mode auto-validates the path via readTeamConfigFile", () => {
+    expect(dialog).toMatch(/api\.readTeamConfigFile/);
+    expect(dialog).toMatch(/void validateAndLoad\(\)/);
+  });
+
+  test("agent count is a 1-9 dropdown, not a slider", () => {
+    expect(dialog).toMatch(/Number of agents/);
+    expect(dialog).toMatch(/onSizeChange\(Number\(/);
+    expect(dialog).not.toMatch(/type="range"/);
+    // The dropdown spans TEAM_MIN_SIZE..TEAM_MAX_SIZE.
+    expect(dialog).toMatch(/TEAM_MAX_SIZE - TEAM_MIN_SIZE \+ 1/);
   });
 
   test("per-member row renders name + command + env + lead radio", () => {
@@ -76,15 +85,31 @@ describe("fullstack-a-78 slice 1: TeamDialog component shell", () => {
     expect(dialog).toMatch(/name="team-lead"/);
   });
 
-  test("airplane-grid placeholder for slice 2 present", () => {
-    // Match loosely: text uses `&` literal in Svelte source but
-    // the compiled HTML may entity-encode it; assert the
-    // key terms + the slice-2 reference.
-    expect(dialog).toMatch(/Airplane-grid/);
-    expect(dialog).toMatch(/fullstack-a-78[\s\S]*?slice 2/);
+  test("the unassigned chip is relabeled drag-me", () => {
+    expect(dialog).toMatch(/drag-me/);
+    expect(dialog).not.toMatch(/>unassigned</);
   });
 
-  test("Escape key closes the dialog (svelte:window onkeydown wired)", () => {
+  test("copy/paste config buttons are removed", () => {
+    expect(dialog).not.toMatch(/Copy config/);
+    expect(dialog).not.toMatch(/Paste config/);
+    expect(dialog).not.toMatch(/onCopyConfig/);
+    expect(dialog).not.toMatch(/onPasteConfig/);
+  });
+
+  test("Cancel deletes the lead terminal tab the dialog was opened over", () => {
+    expect(dialog).toMatch(
+      /function onCancel\(\): void \{[\s\S]{1,400}closeTab\(request\.leadPaneId, request\.leadTabId/,
+    );
+  });
+
+  test("Bootstrap runs the orchestrator against the lead tab + pane", () => {
+    expect(dialog).toMatch(
+      /runTeamBootstrap\(config, \{[\s\S]{1,200}leadTabId: request\.leadTabId,[\s\S]{1,80}leadPaneId: request\.leadPaneId,/,
+    );
+  });
+
+  test("Escape key closes the dialog", () => {
     expect(dialog).toMatch(
       /function onKeydown\(e: KeyboardEvent\): void \{[\s\S]*?if \(e\.key === "Escape" && !busy\) \{[\s\S]*?onCancel\(\);/,
     );

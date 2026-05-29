@@ -1,66 +1,134 @@
-import { describe, expect, test } from "vitest";
-import orchestrator from "./teamOrchestrator.svelte.ts?raw";
+// @vitest-environment jsdom
 
-// `fullstack-a-79` slice 5: lead-terminal rename + PTY
-// restart. The host's rich-prompt terminal IS the lead's
-// terminal per addendum-b clarification #1; the orchestrator's
-// step 6 stages the identity prompt in the rich-prompt buffer
-// (which references `$CHAN_TAB_NAME` literally), and step 7
-// renames the tab to the lead's handle + restarts the PTY so
-// the shell's CHAN_TAB_NAME env-var actually equals the lead
-// handle when the prompt submits.
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { api } from "../api/client";
+import { runTeamBootstrap } from "./teamOrchestrator.svelte";
+import type { TeamDialogConfig } from "./teamDialog.svelte";
+import { layout, type LeafNode, type TerminalTab } from "./tabs.svelte";
 
-// SKIPPED post-slice-5b refactor (round-close 2026-05-23): the
-// source-grep pins below match the pre-slice-5b orchestrator
-// structure. Behavior is empirically HOLD per @@WebtestA rounds
-// 41-45. Round-3 to re-pin against the current structure.
-describe.skip("fullstack-a-79 slice 5: orchestrator step 7 (lead rename + restart)", () => {
-  test("step 7 sits AFTER step 6 (lead prompt) and BEFORE the success notify", () => {
-    expect(orchestrator).toMatch(
-      /\/\/ 6\. Deliver the identity prompt[\s\S]{1,2000}\/\/ 7\. Rename \+ restart the host's terminal[\s\S]{1,2000}notify\(`Team "\$\{wire\.team_name\}" bootstrapped\.`\);/,
-    );
+// phase-13-r2 `lane-a-A3`: the lead launches FIRST, in place. The
+// old close-host-then-respawn-lead dance is gone: the Team Work
+// Lead terminal already exists (created at Cmd+P), so the
+// orchestrator restarts ITS pty with the lead command + env. These
+// tests pin the in-place launch + the env carry-through.
+
+function leadTab(partial: Partial<TerminalTab> = {}): TerminalTab {
+  return {
+    kind: "terminal",
+    id: "lead-tab",
+    title: "Terminal",
+    createdAt: 1,
+    broadcastEnabled: false,
+    broadcastTargetIds: [],
+    terminalSessionId: "lead-session",
+    ...partial,
+  };
+}
+
+function setLayout(lead: TerminalTab): void {
+  const pane: LeafNode = {
+    kind: "leaf",
+    id: "pane-test",
+    tabs: [lead],
+    activeTabId: lead.id,
+  };
+  layout.rootId = pane.id;
+  layout.activePaneId = pane.id;
+  layout.nodes = { [pane.id]: pane };
+  layout.focusColor = "blue";
+}
+
+// `layout.nodes` is a $state proxy: re-read the lead tab from the
+// layout to observe in-place mutations (rename) the orchestrator
+// makes via the proxy.
+function leadFromLayout(): TerminalTab {
+  const node = layout.nodes["pane-test"];
+  if (!node || node.kind !== "leaf") throw new Error("no lead pane");
+  const tab = node.tabs.find((t) => t.id === "lead-tab");
+  if (!tab || tab.kind !== "terminal") throw new Error("no lead tab");
+  return tab;
+}
+
+function config(): TeamDialogConfig {
+  return {
+    hostName: "Neo",
+    configMode: "new",
+    configPath: "/tmp/solo/chan-team.toml",
+    size: 1,
+    autoPrefix: true,
+    members: [{ name: "Lead", command: "claude --resume", env: "DEBUG=1", isLead: true }],
+    realEstate: { kind: "tabs" },
+  };
+}
+
+function mockApi() {
+  vi.spyOn(api, "writeTeamConfigFile").mockResolvedValue(undefined as unknown as void);
+  vi.spyOn(api, "spawnTerminal").mockResolvedValue({
+    session: "w",
+    tab_label: "w",
   });
+  const restart = vi
+    .spyOn(api, "restartTerminal")
+    .mockResolvedValue(undefined as unknown as void);
+  return { restart };
+}
 
-  test("gated on hostSessionId + leadTab + leadHandle + terminalSessionId", () => {
-    expect(orchestrator).toMatch(
-      /if \(hostSessionId\) \{[\s\S]{1,2000}const leadTab = findTerminalBySession\(hostSessionId\);[\s\S]{1,400}const leadEntry = wire\.members\.find\(\(m\) => m\.is_lead\);[\s\S]{1,400}const leadHandle = leadEntry\?\.handle;[\s\S]{1,400}if \(leadTab && leadHandle && leadTab\.terminalSessionId\) \{/,
-    );
-  });
-
-  test("renames the tab via renameTerminalTab before the PTY restart", () => {
-    expect(orchestrator).toMatch(
-      /renameTerminalTab\(leadTab, leadHandle\);[\s\S]{1,400}await api\.restartTerminal\(/,
-    );
-  });
-
-  test("api.restartTerminal carries the new name + the session windowId", () => {
-    expect(orchestrator).toMatch(
-      /api\.restartTerminal\(leadTab\.terminalSessionId, \{[\s\S]{1,400}name: leadHandle,[\s\S]{1,200}window_id: sessionWindowId\(\),[\s\S]{1,80}\}\);/,
-    );
-  });
-
-  test("markTerminalEnvNameRestarted fires on success so the env-stale prompt clears", () => {
-    expect(orchestrator).toMatch(
-      /await api\.restartTerminal\([\s\S]{1,800}markTerminalEnvNameRestarted\(leadTab\);/,
-    );
-  });
-
-  test("restart failure is non-fatal — surfaces via notify, does not bail the chain", () => {
-    expect(orchestrator).toMatch(
-      /try \{[\s\S]{1,400}await api\.restartTerminal\([\s\S]{1,1200}\} catch \(err\) \{[\s\S]{1,400}notify\([\s\S]{1,400}Lead terminal restart failed/,
-    );
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
+  setLayout(leadTab());
 });
 
-describe.skip("fullstack-a-79 slice 5: imports for step 7", () => {
-  test("sessionWindowId imported from api/client", () => {
-    expect(orchestrator).toMatch(
-      /import \{ api, sessionWindowId,[\s\S]{1,200}\} from "\.\.\/api\/client";/,
-    );
+describe("lead launch (in-place, lead-first)", () => {
+  test("restarts the existing lead session with command + env + name", async () => {
+    const lead = leadTab();
+    setLayout(lead);
+    const { restart } = mockApi();
+    await runTeamBootstrap(config(), {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    expect(restart).toHaveBeenCalledTimes(1);
+    const [session, opts] = restart.mock.calls[0];
+    expect(session).toBe("lead-session");
+    expect(opts).toMatchObject({
+      name: "@@Lead",
+      command: "claude --resume",
+    });
+    // CHAN_TAB_NAME is auto-injected; the user's env entry rides
+    // along.
+    expect(opts?.env?.CHAN_TAB_NAME).toBe("@@Lead");
+    expect(opts?.env?.DEBUG).toBe("1");
   });
 
-  test("renameTerminalTab + markTerminalEnvNameRestarted imported from tabs.svelte", () => {
-    expect(orchestrator).toMatch(/markTerminalEnvNameRestarted,/);
-    expect(orchestrator).toMatch(/renameTerminalTab,/);
+  test("never closes the lead session (no close/respawn dance)", async () => {
+    setLayout(leadTab());
+    mockApi();
+    const close = vi.spyOn(api, "closeTerminal");
+    await runTeamBootstrap(config(), {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  test("renames the lead tab to the lead handle in place", async () => {
+    setLayout(leadTab());
+    mockApi();
+    await runTeamBootstrap(config(), {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    expect(leadFromLayout().title).toBe("@@Lead");
+  });
+
+  test("no PTY yet: renames the tab but skips the restart (edge case)", async () => {
+    setLayout(leadTab({ terminalSessionId: undefined }));
+    const { restart } = mockApi();
+    await runTeamBootstrap(config(), {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    expect(restart).not.toHaveBeenCalled();
+    expect(leadFromLayout().title).toBe("@@Lead");
   });
 });

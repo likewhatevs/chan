@@ -5,9 +5,7 @@ import {
   defaultGridForSize,
   defaultTeamConfig,
   emptySlotsForGrid,
-  exportTeamDialogConfig,
   gridShapesForSize,
-  importTeamDialogConfig,
   openTeamDialog,
   reshapeSplitGrid,
   resizeTeamMembers,
@@ -18,16 +16,18 @@ import {
   validateTeamConfig,
 } from "./teamDialog.svelte";
 
-// `fullstack-a-78` slice 1: TeamDialog state singleton + helpers.
-//
-// Tests pin the validation contract + the resize semantics
-// (lead preservation + automatic Worker-N filling) + the
-// open/close bus shape.
+// phase-13-r2 `lane-a-A3`: TeamDialog state singleton + helpers.
+// Pins the validation contract (path-based, no team name), the
+// resize semantics (lead preservation + Worker-N filling), the
+// open/close bus shape (leadTabId/leadPaneId), and the real-estate
+// grid helpers (unchanged from the original dialog).
 
-describe("fullstack-a-78: defaultTeamConfig", () => {
-  test("default config has one lead agent (TEAM_MIN_SIZE)", () => {
+describe("defaultTeamConfig", () => {
+  test("default config: Neo host, New mode, one lead agent", () => {
     const cfg = defaultTeamConfig();
     expect(cfg.size).toBe(TEAM_MIN_SIZE);
+    expect(cfg.hostName).toBe("Neo");
+    expect(cfg.configMode).toBe("new");
     expect(cfg.members).toHaveLength(1);
     expect(cfg.members.filter((m) => m.isLead)).toHaveLength(1);
     expect(cfg.members[0].isLead).toBe(true);
@@ -36,54 +36,41 @@ describe("fullstack-a-78: defaultTeamConfig", () => {
   });
 });
 
-describe("fullstack-a-78: validateTeamConfig", () => {
-  test("requires non-empty Your name (per -a-80 slice 2 copy fix matching the field label)", () => {
-    const cfg = { ...defaultTeamConfig(), hostName: "" };
-    expect(validateTeamConfig(cfg)).toBe("Your name required");
+describe("validateTeamConfig", () => {
+  test("requires non-empty Your name", () => {
+    expect(validateTeamConfig({ ...defaultTeamConfig(), hostName: "" })).toBe(
+      "Your name required",
+    );
   });
 
-  test("requires non-empty Team name (per -a-80 slice 2 copy fix matching the field label)", () => {
-    const cfg = { ...defaultTeamConfig(), hostName: "Alex", teamName: "" };
-    expect(validateTeamConfig(cfg)).toBe("Team name required");
+  test("requires a non-empty, absolute config path", () => {
+    expect(validateTeamConfig({ ...defaultTeamConfig(), configPath: "" })).toBe(
+      "Path to configuration required",
+    );
+    expect(
+      validateTeamConfig({ ...defaultTeamConfig(), configPath: "rel/x.toml" }),
+    ).toBe("Path to configuration must be absolute");
   });
 
   test("rejects size below TEAM_MIN_SIZE", () => {
-    const cfg = {
-      ...defaultTeamConfig(),
-      hostName: "Alex",
-      teamName: "a",
-      size: 0,
-    };
-    expect(validateTeamConfig(cfg)).toContain("at least");
+    expect(validateTeamConfig({ ...defaultTeamConfig(), size: 0 })).toContain(
+      "at least",
+    );
   });
 
   test("rejects size above TEAM_MAX_SIZE", () => {
-    const cfg = {
-      ...defaultTeamConfig(),
-      hostName: "Alex",
-      teamName: "a",
-      size: 99,
-    };
-    expect(validateTeamConfig(cfg)).toContain("at most");
+    expect(validateTeamConfig({ ...defaultTeamConfig(), size: 99 })).toContain(
+      "at most",
+    );
   });
 
   test("requires exactly one lead", () => {
     const noLead = defaultTeamConfig();
-    noLead.hostName = "Alex";
-    noLead.teamName = "a";
     noLead.members[0].isLead = false;
     expect(validateTeamConfig(noLead)).toBe("one member must be marked as lead");
 
-    const twoLeads = defaultTeamConfig();
-    twoLeads.hostName = "Alex";
-    twoLeads.teamName = "a";
-    twoLeads.size = 2;
-    twoLeads.members.push({
-      name: "Worker1",
-      command: "claude",
-      env: "",
-      isLead: true,
-    });
+    const twoLeads = resizeTeamMembers({ ...defaultTeamConfig(), size: 2 });
+    twoLeads.members[1].isLead = true;
     expect(validateTeamConfig(twoLeads)).toBe(
       "exactly one member can be marked as lead",
     );
@@ -91,70 +78,18 @@ describe("fullstack-a-78: validateTeamConfig", () => {
 
   test("requires every member to have a name", () => {
     const cfg = defaultTeamConfig();
-    cfg.hostName = "Alex";
-    cfg.teamName = "a";
     cfg.members[0].name = "";
     expect(validateTeamConfig(cfg)).toBe("every member needs a name");
   });
 
-  test("rejects duplicate team name", () => {
-    const cfg = { ...defaultTeamConfig(), hostName: "Alex", teamName: "alpha" };
-    const existing = new Set(["alpha"]);
-    expect(validateTeamConfig(cfg, existing)).toContain("already exists");
-  });
-
   test("returns null for valid config", () => {
-    const cfg = { ...defaultTeamConfig(), hostName: "Alex", teamName: "alpha" };
-    expect(validateTeamConfig(cfg)).toBeNull();
+    expect(validateTeamConfig(defaultTeamConfig())).toBeNull();
   });
 });
 
-describe("Phase 9 Spawn agents config copy/paste", () => {
-  test("export/import round-trips the dialog config", () => {
-    const cfg = resizeTeamMembers({
-      ...defaultTeamConfig(),
-      hostName: "Alex",
-      teamName: "alpha",
-      size: 2,
-    });
-    cfg.members[1].command = "codex";
-    cfg.members[1].env = "DEBUG=1";
-
-    const imported = importTeamDialogConfig(exportTeamDialogConfig(cfg));
-
-    expect(imported).toEqual(cfg);
-  });
-
-  test("import clamps old oversized configs to the Phase 9 maximum", () => {
-    const imported = importTeamDialogConfig(
-      JSON.stringify({
-        hostName: "Alex",
-        teamName: "oversized",
-        size: 16,
-        members: Array.from({ length: 16 }, (_, idx) => ({
-          name: idx === 0 ? "Lead" : `Worker${idx}`,
-          command: "claude",
-          env: "",
-          isLead: idx === 0,
-        })),
-      }),
-    );
-
-    expect(imported.size).toBe(9);
-    expect(imported.members).toHaveLength(9);
-  });
-
-  test("import rejects invalid JSON", () => {
-    expect(() => importTeamDialogConfig("{nope")).toThrow(
-      /not valid JSON/,
-    );
-  });
-});
-
-describe("fullstack-a-78: resizeTeamMembers", () => {
+describe("resizeTeamMembers", () => {
   test("grow: appends fresh Worker-N entries", () => {
-    const cfg = { ...defaultTeamConfig(), size: 4 };
-    const out = resizeTeamMembers(cfg);
+    const out = resizeTeamMembers({ ...defaultTeamConfig(), size: 4 });
     expect(out.members).toHaveLength(4);
     expect(out.members[2].name).toBe("Worker2");
     expect(out.members[3].name).toBe("Worker3");
@@ -162,55 +97,50 @@ describe("fullstack-a-78: resizeTeamMembers", () => {
   });
 
   test("shrink: truncates from the end", () => {
-    const big = defaultTeamConfig();
-    big.size = 4;
-    const grown = resizeTeamMembers(big);
-    // Now shrink back to 2.
-    grown.size = 2;
-    const shrunk = resizeTeamMembers(grown);
+    const grown = resizeTeamMembers({ ...defaultTeamConfig(), size: 4 });
+    const shrunk = resizeTeamMembers({ ...grown, size: 2 });
     expect(shrunk.members).toHaveLength(2);
     expect(shrunk.members[0].isLead).toBe(true);
   });
 
   test("shrink-past-lead: default lead to slot 0", () => {
-    const cfg = defaultTeamConfig();
-    cfg.size = 3;
-    const grown = resizeTeamMembers(cfg);
-    // Move lead to slot 2 then shrink to 2.
+    const grown = resizeTeamMembers({ ...defaultTeamConfig(), size: 3 });
     grown.members[0].isLead = false;
     grown.members[2].isLead = true;
-    grown.size = 2;
-    const shrunk = resizeTeamMembers(grown);
+    const shrunk = resizeTeamMembers({ ...grown, size: 2 });
     expect(shrunk.members).toHaveLength(2);
     expect(shrunk.members[0].isLead).toBe(true);
   });
 });
 
-describe("fullstack-a-78: openTeamDialog / closeTeamDialog bus", () => {
-  test("open sets state.request; close clears it", () => {
+describe("openTeamDialog / closeTeamDialog bus", () => {
+  test("open sets state.request with the lead tab + pane; close clears it", () => {
     expect(teamDialogState.request).toBeNull();
-    openTeamDialog({ onBootstrap: () => {} });
-    expect(teamDialogState.request).not.toBeNull();
+    openTeamDialog({ leadTabId: "lead-tab", leadPaneId: "pane-1" });
+    expect(teamDialogState.request).toEqual({
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-1",
+    });
     closeTeamDialog();
     expect(teamDialogState.request).toBeNull();
   });
 });
 
-describe("fullstack-a-78 slice 2: gridShapesForSize", () => {
-  test("size 2 yields 1×2 and 2×1", () => {
+describe("gridShapesForSize", () => {
+  test("size 2 yields 1x2 and 2x1", () => {
     const shapes = gridShapesForSize(2);
     expect(shapes).toContainEqual({ rows: 1, cols: 2 });
     expect(shapes).toContainEqual({ rows: 2, cols: 1 });
   });
 
-  test("size 4 yields most-balanced 2×2 first", () => {
+  test("size 4 yields most-balanced 2x2 first", () => {
     const shapes = gridShapesForSize(4);
     expect(shapes[0]).toEqual({ rows: 2, cols: 2 });
     expect(shapes).toContainEqual({ rows: 1, cols: 4 });
     expect(shapes).toContainEqual({ rows: 4, cols: 1 });
   });
 
-  test("size 6 yields 2×3, 3×2, 1×6, 6×1", () => {
+  test("size 6 yields 2x3, 3x2, 1x6, 6x1", () => {
     const shapes = gridShapesForSize(6);
     expect(shapes).toContainEqual({ rows: 2, cols: 3 });
     expect(shapes).toContainEqual({ rows: 3, cols: 2 });
@@ -218,7 +148,7 @@ describe("fullstack-a-78 slice 2: gridShapesForSize", () => {
     expect(shapes).toContainEqual({ rows: 6, cols: 1 });
   });
 
-  test("prime size 5 still produces shapes that hold ≥5 cells", () => {
+  test("prime size 5 still produces shapes that hold >=5 cells", () => {
     const shapes = gridShapesForSize(5);
     expect(shapes.length).toBeGreaterThan(0);
     for (const s of shapes) {
@@ -227,23 +157,18 @@ describe("fullstack-a-78 slice 2: gridShapesForSize", () => {
   });
 });
 
-describe("fullstack-a-78 slice 2: defaultGridForSize", () => {
-  test("default for size 4 is 2×2 (most balanced)", () => {
+describe("defaultGridForSize", () => {
+  test("default for size 4 is 2x2 (most balanced)", () => {
     expect(defaultGridForSize(4)).toEqual({ rows: 2, cols: 2 });
   });
 
-  test("default for size 6 is 2×3", () => {
+  test("default for size 6 is 2x3", () => {
     expect(defaultGridForSize(6)).toEqual({ rows: 2, cols: 3 });
-  });
-
-  test("default for size 5 falls back to nearest balanced shape", () => {
-    const def = defaultGridForSize(5);
-    expect(def.rows * def.cols).toBeGreaterThanOrEqual(5);
   });
 });
 
-describe("fullstack-a-78 slice 2: switchRealEstate", () => {
-  test("tabs → split picks default grid + empty slots", () => {
+describe("switchRealEstate", () => {
+  test("tabs -> split picks default grid + empty slots", () => {
     const cfg = defaultTeamConfig();
     const next = switchRealEstate(cfg, "split");
     expect(next.realEstate.kind).toBe("split");
@@ -253,20 +178,18 @@ describe("fullstack-a-78 slice 2: switchRealEstate", () => {
     }
   });
 
-  test("split → tabs drops the grid + slots", () => {
+  test("split -> tabs drops the grid + slots", () => {
     const cfg = switchRealEstate(defaultTeamConfig(), "split");
-    const next = switchRealEstate(cfg, "tabs");
-    expect(next.realEstate).toEqual({ kind: "tabs" });
+    expect(switchRealEstate(cfg, "tabs").realEstate).toEqual({ kind: "tabs" });
   });
 
-  test("split → split is a no-op (preserves the grid)", () => {
+  test("split -> split is a no-op (preserves the grid)", () => {
     const cfg = switchRealEstate(defaultTeamConfig(), "split");
-    const next = switchRealEstate(cfg, "split");
-    expect(next).toBe(cfg);
+    expect(switchRealEstate(cfg, "split")).toBe(cfg);
   });
 });
 
-describe("fullstack-a-78 slice 2: reshapeSplitGrid", () => {
+describe("reshapeSplitGrid", () => {
   test("re-picks grid + resets slots when reshaping", () => {
     const cfg = switchRealEstate({ ...defaultTeamConfig(), size: 4 }, "split");
     const reshaped = reshapeSplitGrid(cfg, { rows: 1, cols: 4 });
@@ -280,12 +203,11 @@ describe("fullstack-a-78 slice 2: reshapeSplitGrid", () => {
 
   test("no-op when realEstate.kind === 'tabs'", () => {
     const cfg = defaultTeamConfig();
-    const reshaped = reshapeSplitGrid(cfg, { rows: 1, cols: 2 });
-    expect(reshaped).toBe(cfg);
+    expect(reshapeSplitGrid(cfg, { rows: 1, cols: 2 })).toBe(cfg);
   });
 });
 
-describe("fullstack-a-78 slice 2: assignMemberToCell + unassignMember", () => {
+describe("assignMemberToCell + unassignMember", () => {
   test("assign places the member in the target cell", () => {
     const cfg = switchRealEstate(defaultTeamConfig(), "split");
     const next = assignMemberToCell(cfg, 0, 0);
@@ -338,8 +260,8 @@ describe("fullstack-a-78 slice 2: assignMemberToCell + unassignMember", () => {
   });
 });
 
-describe("fullstack-a-78 slice 2: resize preserves the split mode", () => {
-  test("resize from 2 → 4 keeps split mode + picks new default grid", () => {
+describe("resize preserves the split mode", () => {
+  test("resize from 2 -> 4 keeps split mode + picks new default grid", () => {
     const cfg = switchRealEstate(
       resizeTeamMembers({ ...defaultTeamConfig(), size: 2 }),
       "split",

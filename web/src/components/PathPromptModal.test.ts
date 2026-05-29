@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import modal from "./PathPromptModal.svelte?raw";
-import terminalRichPrompt from "./TerminalRichPrompt.svelte?raw";
+import teamWork from "./TeamWork.svelte?raw";
 
 // `fullstack-b-3`: the rich-prompt watcher dialog needed a path
 // prompt that is neither "create" nor "move" / "rename". An
@@ -62,10 +62,10 @@ describe("new-file-and-draft-spec item 3: PathPromptModal notice line", () => {
   });
 });
 
-describe("Phase 9: TerminalRichPrompt removed the manual watcher dialog", () => {
-  test("Rich Prompt no longer opens PathPromptModal for watcher attach", () => {
-    expect(terminalRichPrompt).not.toMatch(/function watchDirectory/);
-    expect(terminalRichPrompt).not.toMatch(/uiPathPrompt/);
-    expect(terminalRichPrompt).not.toMatch(/mode: "attach"/);
+describe("Team Work has no manual watcher dialog", () => {
+  test("Team Work editor never opens PathPromptModal for watcher attach", () => {
+    expect(teamWork).not.toMatch(/function watchDirectory/);
+    expect(teamWork).not.toMatch(/uiPathPrompt/);
+    expect(teamWork).not.toMatch(/mode: "attach"/);
   });
 });

@@ -1,7 +1,7 @@
 //! Interactive PTY-backed terminal sessions and terminal control APIs.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -14,11 +14,10 @@ use portable_pty::PtySize;
 use serde::{Deserialize, Serialize};
 
 use crate::error::err_tunnel_public_locked;
-use crate::event_watcher::{SurveyAnswer, SurveyScope};
 use crate::signal::now_unix_secs;
 use crate::state::AppState;
 use crate::terminal_sessions::{
-    CloseReason, CreateError, CreateOptions, SessionEvent, SubmitMode, ALT_SCREEN_ATTACH_PRELUDE,
+    CloseReason, CreateError, CreateOptions, SessionEvent, ALT_SCREEN_ATTACH_PRELUDE,
 };
 
 const DEFAULT_COLS: u16 = 80;
@@ -30,7 +29,6 @@ const MAX_ROWS: u16 = 200;
 pub struct TerminalQuery {
     session: Option<String>,
     since: Option<u64>,
-    agent_echo_since: Option<u64>,
     cols: Option<u16>,
     rows: Option<u16>,
     tab_name: Option<String>,
@@ -40,26 +38,11 @@ pub struct TerminalQuery {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct WatcherBody {
-    path: String,
-}
-
-/// `fullstack-b-13`: per-session shell-vs-agent submit-mode flip.
-/// Accepts `"shell"` or `"agent"`; any other value is a 400. SPA
-/// flips this whenever the rich-prompt toolbar toggle changes
-/// state.
-#[derive(Debug, Deserialize)]
-pub struct SubmitModeBody {
-    mode: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct CreateTerminalBody {
     name: String,
     command: String,
     #[serde(default)]
     env: BTreeMap<String, String>,
-    orchestrator_session: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,25 +66,6 @@ pub struct RestartTerminalBody {
     /// same key are replaced.
     #[serde(default)]
     env: Option<std::collections::BTreeMap<String, String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct EventReplyBody {
-    id: String,
-    #[serde(rename = "type")]
-    event_type: EventReplyType,
-    from: String,
-    to: String,
-    answers: Vec<SurveyAnswer>,
-    scope_grant: SurveyScope,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    note: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-enum EventReplyType {
-    SurveyReply,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -173,19 +137,6 @@ enum ServerFrame {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<&'static str>,
     },
-    /// systacean-33: agent_event_echo frame. The
-    /// `dispatch_agent_event` path used to write the poke
-    /// bytes straight to the PTY; now it broadcasts a
-    /// `SessionEvent::AgentEventEcho` which serializes to
-    /// this frame, and the SPA decodes + routes through its
-    /// `-a-31` broadcast layer per `-a-92`. Payload is base64-
-    /// encoded raw bytes (poke text + submit-mode chord).
-    #[serde(rename = "agent_event_echo")]
-    AgentEventEcho {
-        seq: u64,
-        event_id: String,
-        payload_b64: String,
-    },
 }
 
 pub async fn api_terminal_ws(
@@ -224,7 +175,6 @@ pub async fn api_terminal_ws(
     let opts = TerminalWsOptions {
         session_id: query.session,
         since: query.since,
-        agent_echo_since: query.agent_echo_since,
         size,
         tab_name,
         window_id,
@@ -233,86 +183,6 @@ pub async fn api_terminal_ws(
     };
     ws.on_upgrade(move |socket| terminal_ws(socket, state, opts))
         .into_response()
-}
-
-pub async fn api_set_terminal_watcher(
-    State(state): State<Arc<AppState>>,
-    AxumPath(session): AxumPath<String>,
-    Json(body): Json<WatcherBody>,
-) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
-    let workspace_root = state.workspace_root.clone();
-    let watcher_path = body.path;
-    let result =
-        tokio::task::spawn_blocking(move || resolve_watcher_dir(&workspace_root, &watcher_path))
-            .await;
-    let dir = match result {
-        Ok(Ok(dir)) => dir,
-        Ok(Err(message)) => return (StatusCode::BAD_REQUEST, message).into_response(),
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("terminal watcher task panicked: {e}"),
-            )
-                .into_response()
-        }
-    };
-    match state.terminal_sessions.set_watcher(&session, dir) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, "terminal session not found").into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            format!("failed to start terminal watcher: {e}"),
-        )
-            .into_response(),
-    }
-}
-
-pub async fn api_unset_terminal_watcher(
-    State(state): State<Arc<AppState>>,
-    AxumPath(session): AxumPath<String>,
-) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
-    if state.terminal_sessions.clear_watcher(&session) {
-        StatusCode::NO_CONTENT.into_response()
-    } else {
-        (StatusCode::NOT_FOUND, "terminal watcher not found").into_response()
-    }
-}
-
-/// `fullstack-b-13`: flip a session's submit-mode (shell ↔ agent).
-/// SPA hits this whenever the rich-prompt toolbar toggle changes
-/// state. Mirrors the `set_terminal_watcher` shape (path-bound
-/// session id, JSON body, 204 on success, 404 when the session id
-/// is unknown).
-pub async fn api_set_terminal_submit_mode(
-    State(state): State<Arc<AppState>>,
-    AxumPath(session): AxumPath<String>,
-    Json(body): Json<SubmitModeBody>,
-) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
-    let mode = match body.mode.as_str() {
-        "shell" => SubmitMode::Shell,
-        "agent" => SubmitMode::Agent,
-        other => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("unknown submit mode: {other:?} (expected \"shell\" or \"agent\")"),
-            )
-                .into_response();
-        }
-    };
-    if state.terminal_sessions.set_submit_mode(&session, mode) {
-        StatusCode::NO_CONTENT.into_response()
-    } else {
-        (StatusCode::NOT_FOUND, "terminal session not found").into_response()
-    }
 }
 
 pub async fn api_create_terminal(
@@ -343,11 +213,6 @@ pub async fn api_create_terminal(
     if let Err(message) = validate_terminal_env(&body.env) {
         return (StatusCode::BAD_REQUEST, message).into_response();
     }
-    let preflight = body.orchestrator_session.as_deref().and_then(|id| {
-        state
-            .terminal_sessions
-            .watcher_preflight_config(id, name.clone())
-    });
     let opts = CreateOptions {
         size: pty_size(None, None),
         tab_name: Some(name.clone()),
@@ -356,7 +221,6 @@ pub async fn api_create_terminal(
         cwd: None,
         command: Some(command),
         env: body.env,
-        preflight,
     };
     match state.terminal_sessions.create(opts) {
         Ok(handle) => (
@@ -450,180 +314,14 @@ pub async fn api_delete_terminal(
     }
 }
 
-/// systacean-9: shape returned by `GET /api/terminal/:session/watcher/events`.
-/// One entry per event-file in the session's `watcher_dir`, with raw
-/// content so the SPA's existing `parseWatcherEvent` still does the
-/// JSON validation. Server doesn't try to know the WatcherEvent
-/// shape — keeps the parser in one place.
-#[derive(Debug, Serialize)]
-struct WatcherEventEntry {
-    path: String,
-    content: String,
-}
-
-const WATCHER_EVENT_MAX_BYTES: u64 = 1024 * 1024;
-
-/// systacean-9: list event files in the active watcher's directory.
-/// Replaces the prior SPA pattern of `api.list(dir) + api.read(path)`
-/// per file: that composition routed through `/api/files` which
-/// applies the workspace-sandbox path-resolution rules, so absolute
-/// outside-workspace watcher paths surfaced as ENOENT. The new endpoint
-/// reads the watcher's `dir` directly via `std::fs::read_dir` +
-/// `read_to_string`, bypassing the workspace sandbox.
-///
-/// Security: the watcher attach (`/api/terminal/:session/watcher`) is
-/// settings-gated. Once a session has a `watcher_dir` set, the read
-/// endpoint trusts it — same trust boundary as the existing
-/// `event-reply` endpoint, which writes to the same `dir`.
-pub async fn api_terminal_watcher_events(
-    State(state): State<Arc<AppState>>,
-    AxumPath(session): AxumPath<String>,
-) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
-    let Some(dir) = state.terminal_sessions.watcher_dir(&session) else {
-        return (
-            StatusCode::CONFLICT,
-            "terminal watcher is not attached".to_string(),
-        )
-            .into_response();
-    };
-    let result = tokio::task::spawn_blocking(move || list_watcher_events(&dir)).await;
-    match result {
-        Ok(Ok(entries)) => Json(entries).into_response(),
-        Ok(Err(e)) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to read watcher events: {e}"),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("terminal watcher events task panicked: {e}"),
-        )
-            .into_response(),
-    }
-}
-
-fn list_watcher_events(dir: &Path) -> std::io::Result<Vec<WatcherEventEntry>> {
-    let mut paths: Vec<PathBuf> = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let ft = entry.file_type()?;
-        if !ft.is_file() {
-            continue;
-        }
-        let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
-        };
-        if !is_watcher_event_filename(name_str) {
-            continue;
-        }
-        if entry.metadata()?.len() > WATCHER_EVENT_MAX_BYTES {
-            continue;
-        }
-        paths.push(entry.path());
-    }
-    // Sort for deterministic order. Matches the SPA's prior
-    // `localeCompare` sort so re-reads stay stable.
-    paths.sort();
-    let mut out = Vec::with_capacity(paths.len());
-    for path in paths {
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue, // best-effort, mirror SPA's `try{}catch{}`
-        };
-        out.push(WatcherEventEntry {
-            path: path.display().to_string(),
-            content,
-        });
-    }
-    Ok(out)
-}
-
-/// systacean-9: match the SPA's prior filename regex
-/// (`^(event|pre-flight)-.+\.(md|json)$`) so the server-side filter
-/// agrees with what the frontend used to do. Hidden files (leading
-/// dot) are skipped to mirror the `event_watcher::ingest_once` rule.
-fn is_watcher_event_filename(name: &str) -> bool {
-    if name.starts_with('.') {
-        return false;
-    }
-    let stem = if let Some(rest) = name.strip_prefix("event-") {
-        rest
-    } else if let Some(rest) = name.strip_prefix("pre-flight-") {
-        rest
-    } else {
-        return false;
-    };
-    let Some(dot_idx) = stem.rfind('.') else {
-        return false;
-    };
-    if dot_idx == 0 {
-        // No characters between the prefix and the extension dot.
-        return false;
-    }
-    let ext = &stem[dot_idx + 1..];
-    matches!(ext, "md" | "json")
-}
-
-pub async fn api_terminal_event_reply(
-    State(state): State<Arc<AppState>>,
-    AxumPath(session): AxumPath<String>,
-    body: Result<Json<EventReplyBody>, JsonRejection>,
-) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
-    let Json(body) = match body {
-        Ok(body) => body,
-        Err(e) => {
-            return (StatusCode::BAD_REQUEST, format!("invalid event reply: {e}")).into_response()
-        }
-    };
-    if let Err(message) = validate_event_reply(&body) {
-        return (StatusCode::BAD_REQUEST, message).into_response();
-    }
-    let Some(dir) = state.terminal_sessions.watcher_dir(&session) else {
-        return (
-            StatusCode::CONFLICT,
-            "terminal watcher is not attached".to_string(),
-        )
-            .into_response();
-    };
-    match write_event_reply_atomic(&dir, &body).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            format!("failed to write event reply: {e}"),
-        )
-            .into_response(),
-    }
-}
-
 struct TerminalWsOptions {
     session_id: Option<String>,
     since: Option<u64>,
-    agent_echo_since: Option<u64>,
     size: PtySize,
     tab_name: Option<String>,
     window_id: Option<String>,
     mcp_env: bool,
     cwd: Option<PathBuf>,
-}
-
-fn validate_event_reply(body: &EventReplyBody) -> Result<(), String> {
-    if body.id.trim().is_empty() {
-        return Err("event reply id is required".into());
-    }
-    if body.from.trim().is_empty() {
-        return Err("event reply from is required".into());
-    }
-    if body.to.trim().is_empty() {
-        return Err("event reply to is required".into());
-    }
-    Ok(())
 }
 
 fn normalize_terminal_name(name: &str) -> Option<String> {
@@ -656,40 +354,6 @@ fn validate_terminal_env(env: &BTreeMap<String, String>) -> Result<(), String> {
     Ok(())
 }
 
-async fn write_event_reply_atomic(dir: &Path, body: &EventReplyBody) -> std::io::Result<()> {
-    let file_id = event_reply_file_id(&body.id);
-    let final_path = dir.join(format!("event-reply-{file_id}.md"));
-    let tmp_path = dir.join(format!(
-        ".event-reply-{file_id}-{:016x}.tmp",
-        rand::random::<u64>()
-    ));
-    let bytes = serde_json::to_vec(body)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    let result = async {
-        tokio::fs::write(&tmp_path, bytes).await?;
-        tokio::fs::rename(&tmp_path, &final_path).await
-    }
-    .await;
-    let _ = tokio::fs::remove_file(&tmp_path).await;
-    result
-}
-
-fn event_reply_file_id(id: &str) -> String {
-    let mut out = String::with_capacity(id.len());
-    for ch in id.trim().chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
-            out.push(ch);
-        } else {
-            out.push('-');
-        }
-    }
-    if out.is_empty() {
-        "reply".into()
-    } else {
-        out
-    }
-}
-
 async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: TerminalWsOptions) {
     state
         .last_activity
@@ -703,12 +367,10 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
         cwd: opts.cwd,
         command: None,
         env: Default::default(),
-        preflight: None,
     };
     let mut session = match state.terminal_sessions.get_or_create_for_ws(
         opts.session_id.as_deref(),
         opts.since,
-        opts.agent_echo_since,
         create_opts,
     ) {
         Ok(session) => session,
@@ -783,23 +445,6 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
             .is_err()
     {
         return;
-    }
-    for echo in &session.agent_echo_replay {
-        use base64::Engine;
-        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&echo.bytes);
-        if send_frame(
-            &mut socket,
-            ServerFrame::AgentEventEcho {
-                seq: echo.seq,
-                event_id: echo.event_id.clone(),
-                payload_b64,
-            },
-        )
-        .await
-        .is_err()
-        {
-            return;
-        }
     }
     session.request_redraw();
     let (cwd, cwd_rel) = terminal_cwd_payload(&state.workspace(), session.cwd());
@@ -904,21 +549,6 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                         let _ = send_frame(&mut socket, ServerFrame::Closed { reason }).await;
                         break;
                     }
-                    Ok(SessionEvent::AgentEventEcho(echo)) => {
-                        // systacean-33: serialize the raw bytes as
-                        // a base64 payload + emit the
-                        // `agent_event_echo` frame; SPA decodes +
-                        // routes through `-a-31` per `-a-92`.
-                        use base64::Engine;
-                        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&echo.bytes);
-                        if send_frame(&mut socket, ServerFrame::AgentEventEcho {
-                            seq: echo.seq,
-                            event_id: echo.event_id,
-                            payload_b64,
-                        }).await.is_err() {
-                            break;
-                        }
-                    }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         let _ = send_frame(
                             &mut socket,
@@ -1000,66 +630,15 @@ fn resolve_terminal_cwd(
         .map_err(|e| format!("invalid terminal cwd: {e}"))
 }
 
-/// Resolve the user-supplied watcher path to an absolute directory,
-/// creating it if missing.
-///
-/// `fullstack-b-3` relaxed the previous "must live under
-/// `workspace_root`" gate. Watcher event files are infrastructure
-/// traffic (per the phase-7 event protocol they go straight through
-/// `tokio::fs` in the event-reply endpoint, bypassing
-/// `chan_workspace::Workspace::write_text`), so the workspace-sandbox guard
-/// that exists for user content does not apply here. The watcher
-/// dialog now accepts arbitrary filesystem paths subject to OS
-/// permissions. Workspace-relative inputs still resolve through
-/// `resolve_safe_strict` so the common in-workspace case keeps its
-/// symlink-escape protection; absolute inputs go straight to the
-/// filesystem.
-///
-/// Missing paths are created silently (`create_dir_all`). The bug
-/// repro asked for "missing → create silently or with a single
-/// confirm"; the modal previews the create intent in the status
-/// row before submit, so the silent variant suffices.
-fn resolve_watcher_dir(workspace_root: &Path, raw: &str) -> Result<PathBuf, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err("watcher path is required".into());
-    }
-    let path = Path::new(trimmed);
-    let abs = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        // Workspace-relative input: keep the strict resolver so an
-        // in-workspace watcher still benefits from the symlink-escape
-        // check. A user who wants a watcher OUTSIDE the workspace
-        // types an absolute path and lands on the branch above.
-        chan_workspace::fs_ops::resolve_safe_strict(workspace_root, trimmed)
-            .map_err(|e| format!("invalid watcher path: {e}"))?
-    };
-    // Create the directory on demand. `create_dir_all` is a no-op
-    // when the path already exists as a directory; it errors when
-    // it exists as a file or symlink-to-file, which we want to
-    // surface verbatim.
-    std::fs::create_dir_all(&abs).map_err(|e| format!("invalid watcher path: {e}"))?;
-    let meta = std::fs::metadata(&abs).map_err(|e| format!("invalid watcher path: {e}"))?;
-    if !meta.is_dir() {
-        return Err("invalid watcher path: path is not a directory".into());
-    }
-    Ok(abs)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::TerminalConfig;
     use crate::terminal_sessions::{AttachHandle, Registry, RegistryConfig};
-    use axum::body::{to_bytes, Body};
-    use axum::http::Request;
-    use axum::routing::post;
-    use axum::Router;
+    use axum::body::to_bytes;
     use std::fs;
     use std::process::Command;
     use std::time::{Duration, Instant};
-    use tower::ServiceExt;
 
     struct TestTerminal {
         _registry: Registry,
@@ -1098,7 +677,6 @@ mod tests {
                     cwd: None,
                     command: None,
                     env: Default::default(),
-                    preflight: None,
                 })
                 .expect("spawn pty");
             Self {
@@ -1223,208 +801,6 @@ mod tests {
         assert!(resolve_terminal_cwd(&workspace, Some("notes/today.md")).is_err());
     }
 
-    #[test]
-    fn is_watcher_event_filename_matches_spa_regex() {
-        // systacean-9: the server-side filter has to agree with what
-        // the SPA used to do (regex `^(event|pre-flight)-.+\.(md|json)$`).
-        // Pin the agreement so a future refactor on either side
-        // doesn't quietly drift.
-        assert!(is_watcher_event_filename("event-1.json"));
-        assert!(is_watcher_event_filename("event-survey.md"));
-        assert!(is_watcher_event_filename("pre-flight-abc.md"));
-        assert!(is_watcher_event_filename("pre-flight-x.json"));
-        // Empty stem between prefix and extension is rejected.
-        assert!(!is_watcher_event_filename("event-.md"));
-        assert!(!is_watcher_event_filename("pre-flight-.json"));
-        // Wrong extension.
-        assert!(!is_watcher_event_filename("event-1.txt"));
-        // No matching prefix.
-        assert!(!is_watcher_event_filename("notes-x.md"));
-        assert!(!is_watcher_event_filename("survey.json"));
-        // Hidden file: skipped to match `event_watcher::ingest_once`.
-        assert!(!is_watcher_event_filename(".event-1.json"));
-        // No extension at all.
-        assert!(!is_watcher_event_filename("event-1"));
-    }
-
-    #[test]
-    fn list_watcher_events_reads_outside_workspace_dir() {
-        // systacean-9: pin the happy path for the outside-workspace
-        // watcher read. The endpoint's whole point is that an
-        // absolute outside-workspace `watcher_dir` (the case lane-B's
-        // walkthrough surfaced as broken) lists + reads its event
-        // files without routing through the workspace sandbox.
-        let outside = tempfile::tempdir().expect("outside-workspace temp");
-        fs::write(
-            outside.path().join("event-1.json"),
-            r#"{"id":"e1","type":"poke","from":"@@A","to":"@@B"}"#,
-        )
-        .expect("write event-1");
-        fs::write(
-            outside.path().join("pre-flight-abc.md"),
-            r#"{"id":"pf-abc","type":"pre-flight","from":"@@Auth","to":"@@Host"}"#,
-        )
-        .expect("write pre-flight");
-        // Non-event files + hidden tmp must be filtered out.
-        fs::write(outside.path().join("notes.md"), b"unrelated").expect("write notes");
-        fs::write(outside.path().join(".event-1.tmp"), b"in-flight").expect("write tmp");
-        fs::create_dir_all(outside.path().join("subdir")).expect("create subdir");
-        fs::write(outside.path().join("subdir/event-nested.json"), b"{}").expect("write nested");
-
-        let entries = list_watcher_events(outside.path()).expect("list");
-        let names: Vec<String> = entries
-            .iter()
-            .map(|e| {
-                std::path::Path::new(&e.path)
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect();
-        // Sorted, top-level only, event-shaped only.
-        assert_eq!(names, vec!["event-1.json", "pre-flight-abc.md"]);
-        // Contents are passed through verbatim for the SPA's
-        // `parseWatcherEvent` to validate.
-        assert!(entries[0].content.contains("\"id\":\"e1\""));
-        assert!(entries[1].content.contains("\"type\":\"pre-flight\""));
-    }
-
-    #[test]
-    fn list_watcher_events_skips_oversized_event_files() {
-        let outside = tempfile::tempdir().expect("outside-workspace temp");
-        fs::write(outside.path().join("event-small.json"), "{}").expect("write small event");
-        fs::write(
-            outside.path().join("event-huge.json"),
-            vec![b'x'; WATCHER_EVENT_MAX_BYTES as usize + 1],
-        )
-        .expect("write huge event");
-
-        let entries = list_watcher_events(outside.path()).expect("list");
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].path.ends_with("event-small.json"));
-    }
-
-    #[test]
-    fn resolve_watcher_dir_allows_absolute_and_workspace_relative_directories() {
-        let tmp = tempfile::tempdir().expect("temp workspace");
-        fs::create_dir_all(tmp.path().join("events")).expect("create dir");
-
-        assert_eq!(
-            resolve_watcher_dir(tmp.path(), "events").expect("relative dir"),
-            tmp.path().join("events")
-        );
-        assert_eq!(
-            resolve_watcher_dir(tmp.path(), &tmp.path().join("events").display().to_string())
-                .expect("absolute dir"),
-            tmp.path().join("events")
-        );
-    }
-
-    /// `fullstack-b-3` relaxed the workspace-root gate on absolute
-    /// watcher paths: event files are infra traffic, not user
-    /// content, and the chan-workspace sandbox doesn't apply. A path
-    /// pointing at a real directory outside the workspace is now
-    /// accepted; the in-workspace sandbox via
-    /// `resolve_safe_strict` still applies to relative inputs.
-    #[test]
-    fn resolve_watcher_dir_allows_absolute_outside_workspace_root() {
-        let tmp = tempfile::tempdir().expect("temp workspace");
-        let outside = tempfile::tempdir().expect("outside workspace");
-
-        let abs_outside = outside.path().display().to_string();
-        let resolved = resolve_watcher_dir(tmp.path(), &abs_outside).expect("outside dir attaches");
-        assert_eq!(resolved, outside.path());
-    }
-
-    /// `fullstack-b-3` also has the resolver create the watcher
-    /// directory on demand. Missing path → create silently
-    /// (`create_dir_all` is a no-op if the path already exists).
-    #[test]
-    fn resolve_watcher_dir_creates_missing_path() {
-        let tmp = tempfile::tempdir().expect("temp workspace");
-        // Workspace-relative path that doesn't exist yet.
-        let relative = "events/inbound";
-        let resolved = resolve_watcher_dir(tmp.path(), relative).expect("relative dir created");
-        assert!(resolved.is_dir(), "watcher dir should now exist on disk");
-        assert_eq!(resolved, tmp.path().join("events/inbound"));
-
-        // Absolute path that doesn't exist yet, well outside the
-        // workspace root.
-        let outside_parent = tempfile::tempdir().expect("outside parent");
-        let abs_missing = outside_parent.path().join("watcher-inbox");
-        assert!(!abs_missing.exists());
-        let resolved = resolve_watcher_dir(tmp.path(), &abs_missing.display().to_string())
-            .expect("absolute dir created");
-        assert!(resolved.is_dir(), "watcher dir should now exist on disk");
-        assert_eq!(resolved, abs_missing);
-    }
-
-    #[test]
-    fn resolve_watcher_dir_rejects_empty_escape_and_files() {
-        let tmp = tempfile::tempdir().expect("temp workspace");
-        fs::create_dir_all(tmp.path().join("events")).expect("create dir");
-        fs::write(tmp.path().join("events/event.json"), "{}").expect("create file");
-
-        // Empty path is still required.
-        assert!(resolve_watcher_dir(tmp.path(), "").is_err());
-        // Workspace-relative `..` escape still bounces through the
-        // strict resolver, which rejects it; the relaxation only
-        // applies to absolute inputs.
-        assert!(resolve_watcher_dir(tmp.path(), "../outside").is_err());
-        // Existing file (not a directory) is still an error;
-        // create_dir_all errors out when the path resolves to a
-        // file, and the metadata check catches anything else.
-        assert!(resolve_watcher_dir(tmp.path(), "events/event.json").is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn resolve_watcher_dir_absolute_symlink_accepts_target() {
-        // `fullstack-b-3`: an absolute path that happens to traverse
-        // a symlink out of the workspace is now accepted — the watcher
-        // is intentionally allowed to live outside the workspace. We
-        // still require the resolved target to be a directory.
-        let tmp = tempfile::tempdir().expect("temp workspace");
-        let outside = tempfile::tempdir().expect("outside workspace");
-        fs::create_dir_all(tmp.path().join("events")).expect("create dir");
-        std::os::unix::fs::symlink(outside.path(), tmp.path().join("events/outside"))
-            .expect("symlink escape");
-
-        let resolved = resolve_watcher_dir(
-            tmp.path(),
-            &tmp.path().join("events/outside").display().to_string(),
-        )
-        .expect("absolute symlink target accepted");
-        assert!(resolved.is_dir());
-    }
-
-    fn reply_body(id: &str, note: &str) -> EventReplyBody {
-        EventReplyBody {
-            id: id.into(),
-            event_type: EventReplyType::SurveyReply,
-            from: "@@Alex".into(),
-            to: "@@Systacean".into(),
-            answers: vec![SurveyAnswer {
-                question_index: 0,
-                key: "1".into(),
-            }],
-            scope_grant: SurveyScope::OneShot,
-            note: Some(note.into()),
-        }
-    }
-
-    fn tmp_reply_files(dir: &Path) -> Vec<String> {
-        std::fs::read_dir(dir)
-            .expect("read event dir")
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                name.starts_with(".event-reply-").then_some(name)
-            })
-            .collect()
-    }
-
     async fn response_json(response: Response) -> serde_json::Value {
         let (parts, body) = response.into_parts();
         assert!(
@@ -1441,7 +817,6 @@ mod tests {
             name: "@@Spawned".into(),
             command: command.into(),
             env: BTreeMap::new(),
-            orchestrator_session: None,
         }
     }
 
@@ -1491,7 +866,6 @@ mod tests {
                 name: "@@Spawned".into(),
                 command: " ".into(),
                 env: BTreeMap::new(),
-                orchestrator_session: None,
             })),
         )
         .await;
@@ -1603,165 +977,6 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(state.terminal_sessions.attach(&session, None).is_none());
-    }
-
-    #[tokio::test]
-    async fn api_create_terminal_writes_preflight_event_to_orchestrator_watcher() {
-        let state = crate::state::test_support::make_test_state(false, false);
-        let orchestrator = state
-            .terminal_sessions
-            .create(CreateOptions {
-                size: pty_size(None, None),
-                tab_name: Some("@@Architect".into()),
-                window_id: None,
-                mcp_env: true,
-                cwd: None,
-                command: Some("sleep 5".into()),
-                env: Default::default(),
-                preflight: None,
-            })
-            .expect("orchestrator terminal");
-        let orchestrator_id = orchestrator.id().to_string();
-        let dir = tempfile::tempdir().expect("watch dir");
-        state
-            .terminal_sessions
-            .set_watcher(&orchestrator_id, dir.path().to_path_buf())
-            .expect("set watcher");
-        let body = CreateTerminalBody {
-            name: "@@Spawned".into(),
-            command: "printf 'please log in first\\n'; sleep 1".into(),
-            env: BTreeMap::new(),
-            orchestrator_session: Some(orchestrator_id.clone()),
-        };
-
-        let response = api_create_terminal(State(state.clone()), Ok(Json(body))).await;
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let deadline = Instant::now() + PROBE_BUDGET;
-        let mut found = None;
-        while Instant::now() < deadline {
-            found = std::fs::read_dir(dir.path())
-                .expect("read event dir")
-                .filter_map(|entry| entry.ok())
-                .find(|entry| {
-                    entry
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with("pre-flight-")
-                });
-            if found.is_some() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        let entry = found.expect("pre-flight event file");
-        let text = std::fs::read_to_string(entry.path()).expect("read event");
-        assert!(text.contains(r#""type":"pre-flight""#));
-        assert!(text.contains("please log in first"));
-        state
-            .terminal_sessions
-            .close(&orchestrator_id, CloseReason::Explicit);
-    }
-
-    #[tokio::test]
-    async fn write_event_reply_atomic_writes_json_and_cleans_tmp() {
-        let dir = tempfile::tempdir().expect("event dir");
-
-        write_event_reply_atomic(dir.path(), &reply_body("survey-alpha", "go"))
-            .await
-            .expect("write reply");
-
-        let path = dir.path().join("event-reply-survey-alpha.md");
-        let text = tokio::fs::read_to_string(path).await.expect("read reply");
-        assert!(text.contains(r#""type":"survey-reply""#));
-        assert!(text.contains(r#""note":"go""#));
-        assert!(tmp_reply_files(dir.path()).is_empty());
-    }
-
-    #[tokio::test]
-    async fn write_event_reply_atomic_concurrent_calls_leave_valid_destination() {
-        let dir = tempfile::tempdir().expect("event dir");
-        let body_a = reply_body("survey-alpha", "a");
-        let body_b = reply_body("survey-alpha", "b");
-        let a = write_event_reply_atomic(dir.path(), &body_a);
-        let b = write_event_reply_atomic(dir.path(), &body_b);
-
-        let (ra, rb) = tokio::join!(a, b);
-        ra.expect("write a");
-        rb.expect("write b");
-
-        let path = dir.path().join("event-reply-survey-alpha.md");
-        let text = tokio::fs::read_to_string(path).await.expect("read reply");
-        let parsed: EventReplyBody = serde_json::from_str(&text).expect("valid reply json");
-        assert_eq!(parsed.id, "survey-alpha");
-        assert!(matches!(parsed.note.as_deref(), Some("a" | "b")));
-        assert!(tmp_reply_files(dir.path()).is_empty());
-    }
-
-    #[tokio::test]
-    async fn write_event_reply_atomic_cleans_tmp_on_failure() {
-        let dir = tempfile::tempdir().expect("event dir");
-        std::fs::create_dir(dir.path().join("event-reply-survey-alpha.md"))
-            .expect("block final path with dir");
-
-        let err = write_event_reply_atomic(dir.path(), &reply_body("survey-alpha", "go"))
-            .await
-            .expect_err("rename over dir should fail");
-
-        assert_eq!(err.kind(), std::io::ErrorKind::IsADirectory);
-        assert!(tmp_reply_files(dir.path()).is_empty());
-    }
-
-    #[tokio::test]
-    async fn api_terminal_event_reply_refuses_without_attached_watcher() {
-        let state = crate::state::test_support::make_test_state(false, false);
-
-        let response = api_terminal_event_reply(
-            State(state),
-            AxumPath("missing-session".into()),
-            Ok(Json(reply_body("survey-alpha", "go"))),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-    }
-
-    #[tokio::test]
-    async fn api_terminal_event_reply_maps_schema_rejection_to_bad_request() {
-        let state = crate::state::test_support::make_test_state(false, false);
-        let app = Router::new()
-            .route(
-                "/api/terminal/:session/event-reply",
-                post(api_terminal_event_reply),
-            )
-            .with_state(state);
-        let req = Request::builder()
-            .method("POST")
-            .uri("/api/terminal/session-a/event-reply")
-            .header("content-type", "application/json")
-            .body(Body::from(
-                r#"{
-                  "id": "survey-alpha",
-                  "type": "survey",
-                  "from": "@@Alex",
-                  "to": "@@Systacean",
-                  "answers": [{"question_index": 0, "key": "1"}],
-                  "scope_grant": "one-shot"
-                }"#,
-            ))
-            .expect("request");
-
-        let response = app.oneshot(req).await.expect("response");
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn validate_event_reply_rejects_missing_required_text() {
-        let mut body = reply_body("survey-alpha", "go");
-        assert!(validate_event_reply(&body).is_ok());
-        body.id = " ".into();
-        assert!(validate_event_reply(&body).is_err());
     }
 
     async fn collect_until(session: &mut AttachHandle, needle: &str, timeout: Duration) -> String {
@@ -2140,69 +1355,5 @@ mod tests {
                 && out.contains("<CHAN_CONTROL_SOCKET=/tmp/chan-control-test.sock>"),
             "mcp_env=false should not affect chan control env vars, got {out:?}"
         );
-    }
-
-    #[tokio::test]
-    async fn api_set_terminal_submit_mode_flips_session_field() {
-        // `fullstack-b-13`: PUT /api/terminal/:session/submit-mode
-        // mirrors set_terminal_watcher: 204 on success, 404 when the
-        // session is unknown, 400 on a body the parser doesn't
-        // recognise.
-        let state = crate::state::test_support::make_test_state(false, false);
-        let response = api_create_terminal(
-            State(state.clone()),
-            Ok(Json(create_terminal_body("sleep 60"))),
-        )
-        .await;
-        let json = response_json(response).await;
-        let session = json["session"].as_str().expect("session id").to_string();
-
-        // shell → agent.
-        let response = api_set_terminal_submit_mode(
-            State(state.clone()),
-            AxumPath(session.clone()),
-            Json(SubmitModeBody {
-                mode: "agent".into(),
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-        // agent → shell.
-        let response = api_set_terminal_submit_mode(
-            State(state.clone()),
-            AxumPath(session.clone()),
-            Json(SubmitModeBody {
-                mode: "shell".into(),
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-        // Unknown mode value → 400.
-        let response = api_set_terminal_submit_mode(
-            State(state.clone()),
-            AxumPath(session.clone()),
-            Json(SubmitModeBody {
-                mode: "bogus".into(),
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-        // Unknown session → 404.
-        let response = api_set_terminal_submit_mode(
-            State(state.clone()),
-            AxumPath("nonexistent".into()),
-            Json(SubmitModeBody {
-                mode: "agent".into(),
-            }),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-        state
-            .terminal_sessions
-            .close(&session, CloseReason::Explicit);
     }
 }

@@ -1122,14 +1122,6 @@
             aria-label="terminal output since last focus"
           >●</span>
         {/if}
-        {#if t.kind === "terminal" && t.watcher}
-          <span
-            class="dirty watcher"
-            class:blink={t.watcher.unread}
-            title="watcher active"
-            aria-label="watcher active"
-          >●</span>
-        {/if}
         <button
           class="close"
           onclick={(e) => {
@@ -1645,13 +1637,6 @@
     line-height: 1;
     color: var(--info-text);
   }
-  /* `fullstack-a-2`: watcher dot uses the same yellow attention
-     family as `.back-attention` and `.dirty.activity`. Blue read
-     as info/idle and the dot is specifically a "needs your
-     attention" cue, so unify on the warn-text token. */
-  .dirty.watcher {
-    color: var(--warn-text, #d29922);
-  }
   .dirty.activity {
     color: var(--warn-text, #d29922);
   }
@@ -1669,12 +1654,6 @@
     50% {
       opacity: 0.35;
     }
-  }
-  .dirty.watcher.blink {
-    animation: watcher-blink 850ms steps(2, start) infinite;
-  }
-  @keyframes watcher-blink {
-    50% { opacity: .25; }
   }
   /* `fullstack-a-10`: Chrome-style tab-name fade. Replace the
      phase-7 `fullstack-66` middle-elision (`head[..]tail`) with

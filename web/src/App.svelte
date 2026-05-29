@@ -6,9 +6,8 @@
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
   import DraftCloseModal from "./components/DraftCloseModal.svelte";
   import WorkspaceWarningsModal from "./components/WorkspaceWarningsModal.svelte";
-  import SpawnDialog from "./components/SpawnDialog.svelte";
   import TeamDialog from "./components/TeamDialog.svelte";
-  import { teamDialogState } from "./state/teamDialog.svelte";
+  import { teamDialogState, openTeamDialog } from "./state/teamDialog.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
@@ -60,7 +59,7 @@
     enterPaneMode,
     isWindowFullyReadOnly,
     layout,
-    openActiveTerminalRichPrompt,
+    createTeamWorkLeadTerminal,
     openBrowserInActivePane,
     toggleActiveTerminalBroadcastSelectAll,
     openFind,
@@ -81,13 +80,12 @@
     paneModeMoveFocus,
     paneModeOpenBrowser,
     paneModeOpenGraph,
-    paneModeOpenRichPromptTerminal,
+    paneModeOpenTeamWorkTerminal,
     paneModeOpenTerminal,
     paneModeResize,
     paneModeSplit,
     paneModeStageDraftEditor,
     paneModeSwap,
-    showOrSpawnRichPromptInFocusedPane,
     splitActive,
     toggleActiveFileTabMode,
   } from "./state/tabs.svelte";
@@ -344,9 +342,21 @@
     openBrowserInActivePane({ select });
     scheduleSessionSave();
   }
-  function spawnRichPromptFromContext(): void {
+  /// Phase 13 round 2 Team Work flow: Cmd+P (and Cmd+Alt+P, and the
+  /// Hybrid hamburger "Team Work" item, all on the stable chord id
+  /// `app.terminal.richPrompt`) now instantiate the Team Work Lead
+  /// Terminal FIRST (a fresh terminal with the markdown editor armed
+  /// open, like Cmd+N embedded at the bottom), then open the
+  /// Spawn-agents dialog OVER it. The dialog owns Cancel (deletes the
+  /// exact lead tab) and Bootstrap (lead-first orchestrator). The
+  /// pane-mode "P" picker keeps its own plain Team Work terminal spawn
+  /// (paneModeOpenTeamWorkTerminal); only this top-level entry opens
+  /// the dialog.
+  function spawnTeamWorkFromContext(): void {
     const ctx = resolveSpawnContext();
-    showOrSpawnRichPromptInFocusedPane({ cwd: ctx.dir });
+    const lead = createTeamWorkLeadTerminal({ cwd: ctx.dir });
+    if (!lead) return;
+    openTeamDialog({ leadTabId: lead.id, leadPaneId: activePane().id });
     scheduleSessionSave();
   }
   function spawnGraphFromContext(): void {
@@ -589,7 +599,7 @@
       // the same fresh-terminal rule to top-level Cmd+P.
       case "p":
       case "P":
-        paneModeOpenRichPromptTerminal(resolveSpawnContext());
+        paneModeOpenTeamWorkTerminal(resolveSpawnContext());
         return;
       // `fullstack-a-68 slice 2`: `N` stages a new draft editor —
       // mirrors the top-level Cmd+N "new draft" chord (the
@@ -719,7 +729,7 @@
     }
     if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyP") {
       e.preventDefault();
-      spawnRichPromptFromContext();
+      spawnTeamWorkFromContext();
       return;
     }
     // `fullstack-a-32`: Cmd+Shift+M spawns a context-aware graph on
@@ -1007,7 +1017,7 @@
         spawnTerminalFromContext();
         return;
       case "app.terminal.richPrompt":
-        spawnRichPromptFromContext();
+        spawnTeamWorkFromContext();
         return;
       case "app.terminal.broadcastToggle":
         toggleActiveTerminalBroadcastSelectAll();
@@ -1258,16 +1268,12 @@
      once per window so any pane can trigger it; the dialog itself
      keys off `conflictDialog.tabId`. -->
 <ConflictModal />
-<!-- `fullstack-a-4`: Spawn agent dialog. Mounted at the App
-     root rather than inside the rich prompt so its `position:
-     fixed` backdrop is never clipped by an ancestor's stacking
-     context (the pane has `overflow: hidden`; the rich prompt itself is a
-     positioned z-index: 20 stacking context). -->
-<SpawnDialog />
-<!-- `fullstack-a-78`: Spawn agents dialog mounted at App root for
-     the same stacking-context reasons as SpawnDialog. Renders
-     only when a request is pending; closes itself on
-     Bootstrap / Cancel / Escape / backdrop click. -->
+<!-- Team Work Spawn-agents dialog, mounted at App root so its
+     `position: fixed` backdrop is never clipped by a pane's
+     `overflow: hidden` stacking context. Renders only when a request
+     is pending (set by the Cmd+P lead-terminal flow); the dialog
+     closes itself on Bootstrap / Cancel / Escape / backdrop click and
+     owns deleting the lead tab on Cancel. -->
 {#if teamDialogState.request}
   <TeamDialog request={teamDialogState.request} />
 {/if}

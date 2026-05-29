@@ -173,7 +173,7 @@ fn workspace_info(state: &AppState) -> Result<WorkspaceInfo, String> {
 }
 
 fn workspace_warnings(workspace: &chan_workspace::Workspace) -> Vec<WorkspaceWarning> {
-    let mut warnings = match workspace.draft_preflight() {
+    match workspace.draft_preflight() {
         Ok(issues) => issues
             .into_iter()
             .map(|issue| WorkspaceWarning {
@@ -187,20 +187,7 @@ fn workspace_warnings(workspace: &chan_workspace::Workspace) -> Vec<WorkspaceWar
             path: "Drafts".to_string(),
             message: e.to_string(),
         }],
-    };
-    match workspace.rich_prompt_preflight() {
-        Ok(issues) => warnings.extend(issues.into_iter().map(|issue| WorkspaceWarning {
-            kind: "broken_rich_prompt",
-            path: format!("Drafts/{}", issue.name),
-            message: issue.message,
-        })),
-        Err(e) => warnings.push(WorkspaceWarning {
-            kind: "rich_prompt_preflight_failed",
-            path: "Drafts".to_string(),
-            message: e.to_string(),
-        }),
     }
-    warnings
 }
 
 #[cfg(test)]

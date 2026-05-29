@@ -1455,57 +1455,6 @@ impl Workspace {
         )
     }
 
-    /// Create an active Rich Prompt session under Drafts metadata.
-    /// The active marker is written last so reload/preflight never
-    /// treats a partially-created directory as an active prompt.
-    pub fn create_rich_prompt_session(
-        &self,
-        requested_name: Option<&str>,
-    ) -> Result<crate::rich_prompts::RichPromptSession> {
-        crate::rich_prompts::create(
-            &self.paths.drafts,
-            requested_name,
-            crate::rich_prompts::DEFAULT_PROCESS_TEXT,
-        )
-    }
-
-    /// Inspect one active Rich Prompt session.
-    pub fn inspect_rich_prompt_session(
-        &self,
-        name: &str,
-    ) -> Result<crate::rich_prompts::RichPromptSession> {
-        crate::rich_prompts::inspect(&self.paths.drafts, name)
-    }
-
-    /// Inspect active Rich Prompt sessions and report non-fatal
-    /// problems that should be surfaced on workspace boot.
-    pub fn rich_prompt_preflight(&self) -> Result<Vec<crate::rich_prompts::RichPromptIssue>> {
-        crate::rich_prompts::preflight(&self.paths.drafts)
-    }
-
-    /// Archive a submitted prompt buffer into `prompt-N.md` and
-    /// reset `draft.md` to a fresh blank buffer.
-    pub fn submit_rich_prompt_session(
-        &self,
-        name: &str,
-        content: &str,
-        expected_sequence: u64,
-        expected_mtime_ns: Option<i64>,
-    ) -> Result<crate::rich_prompts::RichPromptSubmitReport> {
-        crate::rich_prompts::submit(
-            &self.paths.drafts,
-            name,
-            content,
-            expected_sequence,
-            expected_mtime_ns,
-        )
-    }
-
-    /// Move an active Rich Prompt session to metadata trash.
-    pub fn discard_rich_prompt_session(&self, name: &str) -> Result<()> {
-        crate::rich_prompts::discard(&self.paths.drafts, &self.paths.trash.join("drafts"), name)
-    }
-
     // ---- teams (systacean-30) ----
     //
     // Teams live inside the per-workspace Drafts metadata

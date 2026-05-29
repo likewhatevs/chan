@@ -1,30 +1,33 @@
 <script lang="ts">
   import { Bot, X } from "lucide-svelte";
   import { onMount } from "svelte";
+  import { api } from "../api/client";
+  import { closeTab } from "../state/tabs.svelte";
+  import { teamConfigDir } from "../state/teamConfigPath";
   import {
     assignMemberToCell,
     closeTeamDialog,
     defaultTeamConfig,
-    exportTeamDialogConfig,
     gridShapesForSize,
-    importTeamDialogConfig,
     reshapeSplitGrid,
     resizeTeamMembers,
     switchRealEstate,
     TEAM_MAX_SIZE,
     TEAM_MIN_SIZE,
     type GridShape,
+    type TeamConfigMode,
     type TeamDialogConfig,
     type TeamDialogRequest,
     type TeamMemberDraft,
     unassignMember,
     validateTeamConfig,
   } from "../state/teamDialog.svelte";
+  import { runTeamBootstrap, wireToDialog } from "../state/teamOrchestrator.svelte";
 
-  /// `fullstack-a-78` slice 1: Spawn agents dialog shell. Inputs
-  /// + per-member rows + Bootstrap button. Airplane-grid
-  /// drag&drop deferred to slice 2; the real-estate selector
-  /// renders a placeholder for `split` until slice 2 ships.
+  /// phase-13-r2 `lane-a-A3`: Team Work dialog. Opens over the
+  /// already-created Team Work Lead terminal (the dialog request
+  /// carries that tab + pane id). Cancel deletes the lead tab;
+  /// Bootstrap runs the lead-first orchestrator against it.
 
   let {
     request,
@@ -32,44 +35,27 @@
     request: TeamDialogRequest;
   } = $props();
 
-  // `request.initial` is captured once at mount; the dialog is
-  // unmounted + remounted across requests so this is the
-  // intended single-shot capture.
+  // The dialog is unmounted + remounted across requests so this
+  // single-shot capture is intended.
   // svelte-ignore state_referenced_locally
-  let config: TeamDialogConfig = $state(
-    mergeDefaults(defaultTeamConfig(), request.initial),
-  );
+  let config: TeamDialogConfig = $state(defaultTeamConfig());
   let busy = $state(false);
   let submitError = $state<string | null>(null);
-  let configStatus = $state<string | null>(null);
+  // Load-mode path validation. `loadStatus` shows the resolved
+  // config name on success; `loadError` carries the backend 400.
+  let loadStatus = $state<string | null>(null);
+  let loadError = $state<string | null>(null);
   let nameInputEl = $state<HTMLInputElement | undefined>();
 
-  // `fullstack-a-78`: focus the host-name input on mount so
-  // the user can start typing immediately. Mirrors the
-  // SpawnDialog pattern (focus on the most-likely first
-  // field).
   onMount(() => {
     queueMicrotask(() => nameInputEl?.focus());
   });
 
-  function mergeDefaults(
-    base: TeamDialogConfig,
-    initial: Partial<TeamDialogConfig> | undefined,
-  ): TeamDialogConfig {
-    if (!initial) return base;
-    return {
-      ...base,
-      ...initial,
-      members:
-        initial.members && initial.members.length > 0
-          ? [...initial.members]
-          : base.members,
-    };
-  }
+  const issue = $derived<string | null>(validateTeamConfig(config));
 
-  const issue = $derived<string | null>(
-    validateTeamConfig(config, new Set()),
-  );
+  // Info line for New mode: the dir the team management files land
+  // in, derived from the config path.
+  const configDir = $derived(teamConfigDir(config.configPath));
 
   function setMemberField<K extends keyof TeamMemberDraft>(
     idx: number,
@@ -96,13 +82,39 @@
     config = resizeTeamMembers({ ...config, size: clamped });
   }
 
-  /// `fullstack-a-78` slice 2: airplane-grid + drag&drop.
-  /// Drag preview carries the member index (positional id in
-  /// `config.members`). Dropping on a cell calls
-  /// `assignMemberToCell` which removes the member from any
-  /// prior cell + appends to the target. Same-cell drop is
-  /// idempotent. Dropping outside a cell (e.g. the member-row
-  /// area) calls `unassignMember`.
+  function setConfigMode(mode: TeamConfigMode): void {
+    if (config.configMode === mode) return;
+    config = { ...config, configMode: mode };
+    loadStatus = null;
+    loadError = null;
+  }
+
+  /// Load mode: on path entry, read + validate the chan-team.toml
+  /// via the backend. On success, prepopulate the form from the
+  /// loaded config (the user is now in a pre-populated New form,
+  /// still editable). On failure, surface the 400 message inline.
+  async function validateAndLoad(): Promise<void> {
+    loadStatus = null;
+    loadError = null;
+    const path = config.configPath.trim();
+    if (!path) {
+      loadError = "Path to configuration required";
+      return;
+    }
+    busy = true;
+    try {
+      const wire = await api.readTeamConfigFile(path);
+      const loaded = wireToDialog(wire, path);
+      config = resizeTeamMembers(loaded);
+      loadStatus = `Loaded "${wire.team_name}"`;
+    } catch (err) {
+      loadError = (err as Error).message ?? String(err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // ---- split-pane airplane grid (drag&drop) ----------------------
   let draggingMember = $state<number | null>(null);
 
   function onMemberDragStart(idx: number, e: DragEvent): void {
@@ -142,9 +154,6 @@
     config = reshapeSplitGrid(config, shape);
   }
 
-  /// Find which split-grid cell a member is currently in.
-  /// Returns null when the member is unassigned. Used to
-  /// render the cell badge on the member row.
   function cellOfMember(memberIdx: number): number | null {
     if (config.realEstate.kind !== "split") return null;
     for (let i = 0; i < config.realEstate.slots.length; i += 1) {
@@ -154,8 +163,7 @@
   }
 
   /// Render a member's handle as it'll appear in chan + the
-  /// downstream agent's `CHAN_TAB_NAME`. Auto-prefix wraps the
-  /// name with `@@`; off-mode shows the raw value.
+  /// downstream agent's `CHAN_TAB_NAME`.
   function handleOf(member: TeamMemberDraft): string {
     if (!config.autoPrefix) return member.name;
     return member.name.startsWith("@@") ? member.name : `@@${member.name}`;
@@ -169,7 +177,10 @@
     }
     busy = true;
     try {
-      await request.onBootstrap(config);
+      await runTeamBootstrap(config, {
+        leadTabId: request.leadTabId,
+        leadPaneId: request.leadPaneId,
+      });
       closeTeamDialog();
     } catch (err) {
       submitError = `bootstrap failed: ${(err as Error).message}`;
@@ -178,39 +189,11 @@
     }
   }
 
-  async function onCopyConfig(): Promise<void> {
-    submitError = null;
-    configStatus = null;
-    const clipboard = navigator.clipboard;
-    if (!clipboard?.writeText) {
-      submitError = "clipboard write is unavailable";
-      return;
-    }
-    try {
-      await clipboard.writeText(exportTeamDialogConfig(config));
-      configStatus = "Configuration copied";
-    } catch (err) {
-      submitError = `copy failed: ${(err as Error).message}`;
-    }
-  }
-
-  async function onPasteConfig(): Promise<void> {
-    submitError = null;
-    configStatus = null;
-    const clipboard = navigator.clipboard;
-    if (!clipboard?.readText) {
-      submitError = "clipboard read is unavailable";
-      return;
-    }
-    try {
-      config = importTeamDialogConfig(await clipboard.readText());
-      configStatus = "Configuration pasted";
-    } catch (err) {
-      submitError = `paste failed: ${(err as Error).message}`;
-    }
-  }
-
+  /// Cancel/dismiss: delete the exact Team Work Lead terminal tab
+  /// that Cmd+P created, then dismiss the dialog (restoring the
+  /// previous state).
   function onCancel(): void {
+    void closeTab(request.leadPaneId, request.leadTabId, { force: true });
     closeTeamDialog();
   }
 
@@ -256,7 +239,7 @@
           bind:this={nameInputEl}
           bind:value={config.hostName}
           type="text"
-          placeholder="Alex"
+          placeholder="Neo"
           autocomplete="off"
         />
         <span class="team-field-hint">
@@ -265,43 +248,76 @@
         </span>
       </label>
 
-      <label class="team-field">
-        <span class="team-field-label">Team name</span>
-        <input
-          bind:value={config.teamName}
-          type="text"
-          placeholder="team-alpha"
-          autocomplete="off"
-        />
-      </label>
-
       <label class="team-checkbox-row">
         <input type="checkbox" bind:checked={config.autoPrefix} />
         <span>Auto-prefix names with <code>@@</code></span>
       </label>
 
-      <div class="team-config-actions">
-        <button type="button" onclick={() => void onCopyConfig()} disabled={busy}>
-          Copy config
-        </button>
-        <button type="button" onclick={() => void onPasteConfig()} disabled={busy}>
-          Paste config
-        </button>
-      </div>
+      <fieldset class="team-realestate">
+        <legend>Team configuration</legend>
+        <div
+          class="team-realestate-toggle"
+          role="radiogroup"
+          aria-label="Team configuration source"
+        >
+          <button
+            type="button"
+            class="team-realestate-mode"
+            class:on={config.configMode === "new"}
+            onclick={() => setConfigMode("new")}
+          >
+            New
+          </button>
+          <button
+            type="button"
+            class="team-realestate-mode"
+            class:on={config.configMode === "load"}
+            onclick={() => setConfigMode("load")}
+          >
+            Load
+          </button>
+        </div>
+
+        <label class="team-field">
+          <span class="team-field-label">Path to configuration</span>
+          <input
+            bind:value={config.configPath}
+            type="text"
+            placeholder="/tmp/new-team-1/chan-team.toml"
+            autocomplete="off"
+            onchange={() => {
+              if (config.configMode === "load") void validateAndLoad();
+            }}
+          />
+          {#if config.configMode === "new"}
+            <span class="team-field-hint">
+              team management files will be created in <code>{configDir}</code>
+            </span>
+          {:else if loadError}
+            <span class="team-field-hint team-load-error" role="alert">
+              {loadError}
+            </span>
+          {:else if loadStatus}
+            <span class="team-field-hint" role="status">{loadStatus}</span>
+          {:else}
+            <span class="team-field-hint">
+              Enter a path to an existing <code>chan-team.toml</code> to load it.
+            </span>
+          {/if}
+        </label>
+      </fieldset>
 
       <label class="team-field">
-        <span class="team-field-label">
-          Agents (excluding you): {config.size}
-        </span>
-        <input
-          type="range"
-          min={TEAM_MIN_SIZE}
-          max={TEAM_MAX_SIZE}
-          step="1"
+        <span class="team-field-label">Number of agents</span>
+        <select
           value={config.size}
           onchange={(e) =>
-            onSizeChange(Number((e.currentTarget as HTMLInputElement).value))}
-        />
+            onSizeChange(Number((e.currentTarget as HTMLSelectElement).value))}
+        >
+          {#each Array.from({ length: TEAM_MAX_SIZE - TEAM_MIN_SIZE + 1 }, (_, i) => TEAM_MIN_SIZE + i) as n (n)}
+            <option value={n}>{n}</option>
+          {/each}
+        </select>
       </label>
 
       <fieldset class="team-members">
@@ -362,7 +378,7 @@
                   cell {assignedCell + 1}
                 </button>
               {:else}
-                <span class="team-member-cell-badge unassigned">unassigned</span>
+                <span class="team-member-cell-badge unassigned">drag-me</span>
               {/if}
             {/if}
           </div>
@@ -401,9 +417,9 @@
                   config.realEstate.grid.rows === shape.rows &&
                   config.realEstate.grid.cols === shape.cols}
                 onclick={() => onShapeClick(shape)}
-                title={`${shape.rows}×${shape.cols}`}
+                title={`${shape.rows}x${shape.cols}`}
               >
-                {shape.rows}×{shape.cols}
+                {shape.rows}x{shape.cols}
               </button>
             {/each}
           </div>
@@ -424,7 +440,7 @@
               >
                 <span class="team-cell-index">{cellIdx + 1}</span>
                 {#if cell.length === 0}
-                  <span class="team-cell-empty">drop robot</span>
+                  <span class="team-cell-empty">drop bot(s) here</span>
                 {:else}
                   <ul class="team-cell-robots">
                     {#each cell as memberIdx (memberIdx)}
@@ -444,17 +460,14 @@
           </div>
 
           <p class="team-airplane-hint">
-            Drag a robot from the member rows above into a
-            cell. Same-cell drop stacks robots as tabs in
-            that pane.
+            Drag a robot from the member rows above into a cell.
+            Same-cell drop stacks robots as tabs in that pane.
           </p>
         {/if}
       </fieldset>
 
       {#if submitError}
         <p class="team-dialog-error" role="alert">{submitError}</p>
-      {:else if configStatus}
-        <p class="team-dialog-status" role="status">{configStatus}</p>
       {:else if issue}
         <p class="team-dialog-hint">{issue}</p>
       {/if}
@@ -536,7 +549,7 @@
     color: var(--text-secondary);
   }
   .team-field input[type="text"],
-  .team-field input[type="range"] {
+  .team-field select {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -548,26 +561,14 @@
     font-size: 0.75rem;
     color: var(--text-secondary);
   }
+  .team-load-error {
+    color: var(--danger-text);
+  }
   .team-checkbox-row {
     display: flex;
     align-items: center;
     gap: 8px;
     font-size: 0.875rem;
-  }
-  .team-config-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .team-config-actions button {
-    padding: 5px 10px;
-    background: var(--btn-bg);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    color: var(--text);
-    cursor: pointer;
-    font: inherit;
-    font-size: 0.8rem;
   }
   .team-members {
     border: 1px solid var(--border);
@@ -741,11 +742,6 @@
   .team-dialog-error {
     margin: 0;
     color: var(--danger-text);
-    font-size: 0.875rem;
-  }
-  .team-dialog-status {
-    margin: 0;
-    color: var(--text-secondary);
     font-size: 0.875rem;
   }
   .team-dialog-hint {

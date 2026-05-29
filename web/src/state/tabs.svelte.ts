@@ -272,8 +272,7 @@ export type TerminalTab = {
   terminalActivityPulsing?: boolean;
   cwd?: string;
   seedInput?: string;
-  richPrompt?: TerminalRichPromptState;
-  watcher?: TerminalWatcherState;
+  teamWork?: TeamWorkState;
 };
 
 export type GraphFilters = {
@@ -342,56 +341,7 @@ export type BrowserTab = {
   inspectorWidth?: number;
 };
 
-export type ScopeGrant = "one-shot" | "topic-session" | "topic-phase";
-
-export type SurveyOption = {
-  key: string;
-  label: string;
-};
-
-export type SurveyQuestion = {
-  header: string;
-  text: string;
-  options: SurveyOption[];
-};
-
-export type WatcherEvent = {
-  id: string;
-  type: "survey" | "survey-reply" | "poke" | string;
-  from: string;
-  to: string;
-  topic?: string;
-  questions?: SurveyQuestion[];
-  standing_options?: SurveyOption[];
-  scope?: ScopeGrant;
-  answers?: Array<{ question_index: number; key: string }>;
-  scope_grant?: ScopeGrant;
-  session?: string;
-  tab_label?: string;
-  note?: string;
-  path: string;
-};
-
-export type TerminalWatcherState = {
-  path: string;
-  events: WatcherEvent[];
-  seenIds: string[];
-  unread: boolean;
-  loading?: boolean;
-  error?: string;
-  trayExpanded?: boolean;
-  /// `fullstack-a-28`: ids the user explicitly dismissed via the
-  /// per-bubble close affordance. Survives watcher polls so a
-  /// dismissed bubble does not re-surface when its source file is
-  /// still on disk. Reply-based dismissal (writing
-  /// `event-reply-<id>.md`) remains the preferred path for
-  /// surveys + pre-flight standing options; explicit close is the
-  /// universal escape hatch (poke bubbles + any bubble the user
-  /// wants to hide without replying). Persisted on `SerTab.dbi`.
-  dismissedIds?: string[];
-};
-
-export type TerminalRichPromptState = {
+export type TeamWorkState = {
   buffer: string;
   heightPx?: number;
   open?: boolean;
@@ -408,7 +358,7 @@ export type TerminalRichPromptState = {
   workspaceError?: string | null;
   mode?: "wysiwyg" | "source";
   styleToolbarOpen?: boolean;
-  /// `fullstack-79`: bumped on every `openActiveTerminalRichPrompt`
+  /// `fullstack-79`: bumped on every `openActiveTeamWork`
   /// call so the prompt component re-focuses its input even when
   /// `open` was already true. Mirrors the find-bar `focusNonce`
   /// pattern at line 95.
@@ -421,8 +371,8 @@ export type TerminalRichPromptState = {
   /// expanded (`undefined` reads as `false`).
   collapsed?: boolean;
   /// `fullstack-a-29`: actual rendered height (px) of the
-  /// rich-prompt root, written by a ResizeObserver in
-  /// `TerminalRichPrompt.svelte`. The terminal-host margin
+  /// Team Work root, written by a ResizeObserver in the Team
+  /// Work editor component. The terminal-host margin
   /// reactor reads this in preference to `heightPx` so the
   /// reserved space tracks both the expanded drag-resize AND
   /// the `fullstack-a-24` collapse transition (where the prompt
@@ -954,7 +904,6 @@ function tabForReopen(src: Tab): Tab {
     tab.sessionMcpEnv = undefined;
     tab.terminalEnvTabName = undefined;
     tab.terminalEnvNamePromptDismissed = undefined;
-    tab.watcher = undefined;
   }
   return tab;
 }
@@ -1030,16 +979,16 @@ export function toggleActiveTerminalBroadcastSelectAll(): void {
   }
 }
 
-export function openActiveTerminalRichPrompt(): void {
+export function openActiveTeamWork(): void {
   const tab = activeTerminalTab();
   if (!tab) return;
-  // `fullstack-b-8`: the rich-prompt editor is a child component
+  // `fullstack-b-8`: the Team Work editor is a child component
   // that focuses inside `onMount` (Source / Wysiwyg). Until Svelte
   // flushes the open-state update + the editor child mounts and
   // focuses, whatever previously held focus (typically xterm's
   // helper-textarea since the user was just looking at a terminal)
   // is still the keyboard target. A fast typer who starts typing
-  // immediately after the rich-prompt chord (Cmd+P, Cmd+Alt+P, or
+  // immediately after the Team Work chord (Cmd+P, Cmd+Alt+P, or
   // Hybrid Nav `p`) hits that race window: the first
   // keystroke lands on xterm-helper-textarea, fires
   // `term.onData -> sendUserInput`, and is sent to the PTY behind
@@ -1049,8 +998,8 @@ export function openActiveTerminalRichPrompt(): void {
   // the editor mounts, so the missed keystroke goes nowhere
   // visible instead of into the live shell.
   blurTerminalHelperTextarea();
-  if (!tab.richPrompt) {
-    tab.richPrompt = {
+  if (!tab.teamWork) {
+    tab.teamWork = {
       buffer: "",
       heightPx: 320,
       open: true,
@@ -1058,12 +1007,12 @@ export function openActiveTerminalRichPrompt(): void {
       focusNonce: 1,
     };
   } else {
-    tab.richPrompt.open = true;
-    tab.richPrompt.mode ??= "wysiwyg";
+    tab.teamWork.open = true;
+    tab.teamWork.mode ??= "wysiwyg";
     // `fullstack-79`: bump every call (including when the prompt
     // is already open) so the input re-focuses even if the user
     // had clicked away.
-    tab.richPrompt.focusNonce = (tab.richPrompt.focusNonce ?? 0) + 1;
+    tab.teamWork.focusNonce = (tab.teamWork.focusNonce ?? 0) + 1;
   }
 }
 
@@ -1087,17 +1036,19 @@ function blurTerminalHelperTextarea(): void {
   }
 }
 
-/// Phase 9 Rich Prompt rule: every top-level invocation creates a
-/// fresh terminal and opens the prompt on that new tab. The old
-/// terminal-local toggle made Cmd+P behave differently depending on
-/// focus and left it out of sync with Hybrid Nav `P`, which already
-/// stages a fresh rich-prompt terminal.
-export function showOrSpawnRichPromptInFocusedPane(
+/// Team Work lead-terminal factory. Creates a fresh terminal in the
+/// active pane and opens the Team Work editor on it, returning the
+/// created tab. The Cmd+P flow uses the returned handle so the Team
+/// dialog can delete the just-spawned terminal if the user cancels
+/// before committing.
+export function createTeamWorkLeadTerminal(
   opts: OpenTerminalOptions = {},
-): void {
+): TerminalTab | null {
   const p = activePane();
-  openTerminalInPane(p.id, opts);
-  openActiveTerminalRichPrompt();
+  const tab = openTerminalInPane(p.id, opts);
+  if (!tab) return null;
+  openActiveTeamWork();
+  return tab;
 }
 
 export type OpenTerminalOptions = {
@@ -1135,7 +1086,7 @@ export function openTerminalInPane(
     lastSeq: undefined,
     cwd: cwd || undefined,
     seedInput: seedInput || undefined,
-    richPrompt: undefined,
+    teamWork: undefined,
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
@@ -1455,17 +1406,17 @@ export function findTerminalBySession(sessionId: string): TerminalTab | null {
   return null;
 }
 
-/// `fullstack-a-79` slice 2: prime the rich-prompt buffer on
+/// `fullstack-a-79` slice 2: prime the Team Work buffer on
 /// a terminal tab + flag it open. Mirrors the shape
-/// `openActiveTerminalRichPrompt` uses but without the focus
+/// `openActiveTeamWork` uses but without the focus
 /// nonce kick (the orchestrator just wants the text seeded; the
 /// user focuses the prompt themselves to commit). Used by the
 /// orchestrator to deliver the identity prompt to the lead's
-/// terminal (which IS the host session — see addendum-b
+/// terminal (which IS the host session, see addendum-b
 /// clarification #1).
-export function primeTerminalRichPrompt(tab: TerminalTab, text: string): void {
-  if (!tab.richPrompt) {
-    tab.richPrompt = {
+export function primeTeamWork(tab: TerminalTab, text: string): void {
+  if (!tab.teamWork) {
+    tab.teamWork = {
       buffer: text,
       heightPx: 320,
       open: true,
@@ -1474,9 +1425,9 @@ export function primeTerminalRichPrompt(tab: TerminalTab, text: string): void {
     };
     return;
   }
-  tab.richPrompt.buffer = text;
-  tab.richPrompt.open = true;
-  tab.richPrompt.mode ??= "wysiwyg";
+  tab.teamWork.buffer = text;
+  tab.teamWork.open = true;
+  tab.teamWork.mode ??= "wysiwyg";
 }
 
 export function hasGraphTab(): boolean {
@@ -2306,21 +2257,7 @@ function cloneTab(src: Tab): Tab {
       lastAgentEchoSeq: src.lastAgentEchoSeq,
       cwd: src.cwd,
       seedInput: src.seedInput,
-      richPrompt: src.richPrompt ? { ...src.richPrompt } : undefined,
-      watcher: src.watcher
-        ? {
-            path: src.watcher.path,
-            events: [...src.watcher.events],
-            seenIds: [...src.watcher.seenIds],
-            unread: src.watcher.unread,
-            loading: src.watcher.loading,
-            error: src.watcher.error,
-            trayExpanded: src.watcher.trayExpanded,
-            ...(src.watcher.dismissedIds
-              ? { dismissedIds: [...src.watcher.dismissedIds] }
-              : {}),
-          }
-        : undefined,
+      teamWork: src.teamWork ? { ...src.teamWork } : undefined,
     };
   }
   if (src.kind === "graph") {
@@ -2752,7 +2689,7 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
     lastSeq: undefined,
     cwd: cwd || undefined,
     seedInput: undefined,
-    richPrompt: undefined,
+    teamWork: undefined,
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
@@ -2837,15 +2774,15 @@ export function openDashboardInActivePane(): void {
 }
 
 /// `fullstack-a-68 slice 2`: Hybrid Nav transactional staging.
-/// Cmd+K mode `P`. Spawn a fresh "smart prompt" terminal inside
-/// the draft's focused pane — a regular terminal tab with the
-/// rich-prompt overlay armed open + focused on first mount. The
+/// Cmd+K mode `P`. Spawn a fresh Team Work terminal inside
+/// the draft's focused pane, a regular terminal tab with the
+/// Team Work overlay armed open + focused on first mount. The
 /// pre-`fullstack-a-68 slice 2` Cmd+K P semantic (toggle the
-/// rich-prompt overlay on the focused pane's existing terminal)
-/// retired with the addendum-a transactional rework; the rich-
-/// prompt overlay is still reachable from the terminal's own
+/// Team Work overlay on the focused pane's existing terminal)
+/// retired with the addendum-a transactional rework; the Team
+/// Work overlay is still reachable from the terminal's own
 /// hamburger / `Cmd+P` (native) chord.
-export function paneModeOpenRichPromptTerminal(ctx?: SpawnContext): void {
+export function paneModeOpenTeamWorkTerminal(ctx?: SpawnContext): void {
   const draft = draftLayout();
   if (!draft) return;
   const p = draft.nodes[draft.activePaneId];
@@ -2865,7 +2802,7 @@ export function paneModeOpenRichPromptTerminal(ctx?: SpawnContext): void {
     lastSeq: undefined,
     cwd: cwd || undefined,
     seedInput: undefined,
-    richPrompt: {
+    teamWork: {
       buffer: "",
       heightPx: 320,
       open: true,
@@ -3592,8 +3529,9 @@ type SerTab = {
   me?: 0;
   /// MCP env mode used by the persisted PTY session. Default on.
   sme?: 0;
-  /// Rich-prompt draft state. Only emitted in per-window session
-  /// payloads, never in shareable URL hashes.
+  /// Team Work draft state (the `rp*` short keys predate the rename
+  /// and stay as the persisted wire shape). Only emitted in per-window
+  /// session payloads, never in shareable URL hashes.
   rpb?: string;
   rph?: number;
   rpo?: 1;
@@ -3614,15 +3552,6 @@ type SerTab = {
   /// shape short.
   rpsm?: "a";
   rpa?: "c" | "x" | "g";
-  /// Terminal watcher path + unread bit. Session-scoped like the
-  /// terminal id; the server owns the real watcher lifecycle.
-  twp?: string;
-  twu?: 1;
-  /// `fullstack-a-28`: ids the user explicitly dismissed from the
-  /// bubble overlay via the per-bubble close affordance. Conditional
-  /// spread on serialize so the empty case keeps the persisted shape
-  /// short; absence on deserialize reads as "no dismissals."
-  dbi?: string[];
   /// Graph tab state.
   gm?: "s" | "f" | "l";
   gs?: string;
@@ -3788,45 +3717,36 @@ function serializeTab(
               : {}),
           }
         : {}),
-      ...(opts.terminalSessions && t.richPrompt
+      ...(opts.terminalSessions && t.teamWork
         ? {
-            rpb: t.richPrompt.buffer,
-            ...(t.richPrompt.heightPx
-              ? { rph: Math.max(1, Math.floor(t.richPrompt.heightPx)) }
+            rpb: t.teamWork.buffer,
+            ...(t.teamWork.heightPx
+              ? { rph: Math.max(1, Math.floor(t.teamWork.heightPx)) }
               : {}),
-            ...(t.richPrompt.open ? { rpo: 1 as const } : {}),
-            ...(t.richPrompt.mode === "source" ? { rpm: "s" as const } : {}),
-            ...(t.richPrompt.collapsed ? { rpc: 1 as const } : {}),
-            ...(typeof t.richPrompt.pageWidthRatio === "number" &&
-            Number.isFinite(t.richPrompt.pageWidthRatio) &&
-            t.richPrompt.pageWidthRatio > 0 &&
-            t.richPrompt.pageWidthRatio < 1
-              ? { rppw: t.richPrompt.pageWidthRatio }
+            ...(t.teamWork.open ? { rpo: 1 as const } : {}),
+            ...(t.teamWork.mode === "source" ? { rpm: "s" as const } : {}),
+            ...(t.teamWork.collapsed ? { rpc: 1 as const } : {}),
+            ...(typeof t.teamWork.pageWidthRatio === "number" &&
+            Number.isFinite(t.teamWork.pageWidthRatio) &&
+            t.teamWork.pageWidthRatio > 0 &&
+            t.teamWork.pageWidthRatio < 1
+              ? { rppw: t.teamWork.pageWidthRatio }
               : {}),
-            ...(t.richPrompt.submitMode === "agent" ? { rpsm: "a" as const } : {}),
-            ...(t.richPrompt.agentTarget && t.richPrompt.agentTarget !== "none"
+            ...(t.teamWork.submitMode === "agent" ? { rpsm: "a" as const } : {}),
+            ...(t.teamWork.agentTarget && t.teamWork.agentTarget !== "none"
               ? {
                   rpa:
-                    t.richPrompt.agentTarget === "codex"
+                    t.teamWork.agentTarget === "codex"
                       ? "x"
-                      : t.richPrompt.agentTarget === "gemini"
+                      : t.teamWork.agentTarget === "gemini"
                         ? "g"
                         : "c",
                 }
               : {}),
-            ...(t.richPrompt.workspaceName ? { rpn: t.richPrompt.workspaceName } : {}),
-            ...(typeof t.richPrompt.submissionSequence === "number" &&
-            Number.isFinite(t.richPrompt.submissionSequence)
-              ? { rpsq: Math.max(0, Math.floor(t.richPrompt.submissionSequence)) }
-              : {}),
-          }
-        : {}),
-      ...(opts.terminalSessions && t.watcher
-        ? {
-            twp: t.watcher.path,
-            ...(t.watcher.unread ? { twu: 1 as const } : {}),
-            ...(t.watcher.dismissedIds && t.watcher.dismissedIds.length > 0
-              ? { dbi: [...t.watcher.dismissedIds] }
+            ...(t.teamWork.workspaceName ? { rpn: t.teamWork.workspaceName } : {}),
+            ...(typeof t.teamWork.submissionSequence === "number" &&
+            Number.isFinite(t.teamWork.submissionSequence)
+              ? { rpsq: Math.max(0, Math.floor(t.teamWork.submissionSequence)) }
               : {}),
           }
         : {}),
@@ -4073,30 +3993,7 @@ export async function restoreLayout(
               : terminalSessionId
                 ? true
                 : undefined;
-          const richPrompt = richPromptFromSer(sertab, savedTerm);
-          // `fullstack-b-18`: SerTab.rpsm persists the rich-prompt
-          // submit-mode SPA-side, but the server-side `Session.agent_mode`
-          // defaults to false on every spawn / chan-server restart. A
-          // restored "agent" tab looks fine in the toolbar but the
-          // server emits the shell chord. Re-sync the server immediately
-          // after restore so the visible state matches reality. Fire-
-          // and-forget: a 404 (stale session id) or 5xx is logged and
-          // the user can re-toggle via the toolbar to retry.
-          if (
-            terminalSessionId &&
-            (richPrompt?.submitMode === "agent" ||
-              (richPrompt?.agentTarget !== undefined &&
-                richPrompt.agentTarget !== "none"))
-          ) {
-            void api
-              .setTerminalSubmitMode(terminalSessionId, "agent")
-              .catch((err) => {
-                console.warn(
-                  "[chan] submit-mode resync on restore failed",
-                  err,
-                );
-              });
-          }
+          const teamWork = teamWorkFromSer(sertab, savedTerm);
           const tab: TerminalTab = {
             kind: "terminal",
             id: id("term"),
@@ -4115,19 +4012,7 @@ export async function restoreLayout(
               Number.isFinite(sertab.tae ?? savedTerm?.tae)
                 ? Math.max(0, Math.floor((sertab.tae ?? savedTerm?.tae)!))
                 : undefined,
-            richPrompt,
-            watcher: terminalSessionId && (sertab.twp ?? savedTerm?.twp)
-              ? {
-                  path: sertab.twp ?? savedTerm?.twp ?? "",
-                  events: [],
-                  seenIds: [],
-                  unread: sertab.twu === 1 || savedTerm?.twu === 1,
-                  ...((sertab.dbi ?? savedTerm?.dbi) &&
-                  (sertab.dbi ?? savedTerm?.dbi)!.length > 0
-                    ? { dismissedIds: [...(sertab.dbi ?? savedTerm?.dbi)!] }
-                    : {}),
-                }
-              : undefined,
+            teamWork,
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
@@ -4277,10 +4162,10 @@ function serializedLeaves(node: SerNode | null, out: SerLeaf[] = []): SerLeaf[] 
   return out;
 }
 
-function richPromptFromSer(
+function teamWorkFromSer(
   tab: SerTab | undefined,
   fallback?: SerTab,
-): TerminalRichPromptState | undefined {
+): TeamWorkState | undefined {
   const src =
     tab?.rpb !== undefined ||
     tab?.rph !== undefined ||
@@ -4379,19 +4264,8 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
             ? Math.max(0, Math.floor(savedTerm.tae))
             : undefined;
       }
-      const richPrompt = richPromptFromSer(savedTerm);
-      if (richPrompt) liveTerms[j]!.richPrompt = richPrompt;
-      if (savedTerm.twp) {
-        liveTerms[j]!.watcher = {
-          path: savedTerm.twp,
-          events: [],
-          seenIds: [],
-          unread: savedTerm.twu === 1,
-          ...(savedTerm.dbi && savedTerm.dbi.length > 0
-            ? { dismissedIds: [...savedTerm.dbi] }
-            : {}),
-        };
-      }
+      const teamWork = teamWorkFromSer(savedTerm);
+      if (teamWork) liveTerms[j]!.teamWork = teamWork;
     }
   }
 }

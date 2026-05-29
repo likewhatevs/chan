@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { Bot, ChevronDown, ChevronUp, Code2, Copy, GripHorizontal, Pilcrow, Plus, Send, Type } from "lucide-svelte";
+  import { ChevronDown, ChevronUp, Code2, GripHorizontal, Layers, Pilcrow, Plus, Send, Type } from "lucide-svelte";
   import {
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
@@ -9,41 +9,23 @@
   import Source from "../editor/Source.svelte";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
-  import type { TerminalRichPromptState } from "../state/tabs.svelte";
+  import type { TeamWorkState } from "../state/tabs.svelte";
   import { api } from "../api/client";
   import {
     workspace,
     setTransientStatus,
     ui,
   } from "../state/store.svelte";
-  import type { TerminalSpawnResponse } from "../api/types";
-  import { openSpawnDialog as openGlobalSpawnDialog } from "../state/spawnDialog.svelte";
-  import {
-    defaultTeamConfig,
-    exportTeamDialogConfig,
-    openTeamDialog as openGlobalTeamDialog,
-  } from "../state/teamDialog.svelte";
-  import { runTeamBootstrap } from "../state/teamOrchestrator.svelte";
+  import { showBubbleStub } from "../state/bubbleStub.svelte";
 
   let {
     prompt,
     onSubmit,
     terminalSessionId,
-    watcherPath,
-    onSpawned,
-    bubbleCount = 0,
   }: {
-    prompt: TerminalRichPromptState;
+    prompt: TeamWorkState;
     onSubmit: (source: string) => void;
     terminalSessionId?: string;
-    watcherPath?: string | null;
-    onSpawned?: (response: TerminalSpawnResponse, name: string) => void;
-    /// `fullstack-a-4`: number of unanswered survey bubbles
-    /// currently rendered above the prompt. When > 0, the prompt
-    /// does NOT auto-focus its input so numbered keystrokes flow
-    /// to the BubbleOverlay's window keydown handler. When the
-    /// count drops to 0, focus returns to the prompt input.
-    bubbleCount?: number;
   } = $props();
 
   const MIN_HEIGHT = 150;
@@ -57,34 +39,24 @@
   // gap between the blinking cursor and the placeholder text so
   // the cursor reads as a starting position rather than overlapping
   // the first glyph. Paired with the `.cm-placeholder` CSS rule
-  // in TerminalRichPrompt's style block below.
+  // in TeamWork's style block below.
   const PROMPT_PLACEHOLDER_TEXT = " Write your prompt; Enter to send, Shift+Enter for a new line";
   let rootEl: HTMLDivElement | undefined = $state();
   let wysiwygRef: Wysiwyg | undefined = $state();
   let sourceRef: Source | undefined = $state();
   let selVer = $state(0);
   let menu = $state<{ x: number; y: number } | null>(null);
-  let agentModeBusy = $state(false);
   let dragging = false;
   const workspaceRow = $derived(workspaceStatus());
-  const eventCount = $derived(Math.max(0, bubbleCount));
 
-  // `fullstack-79`: auto-focus the input on every `openActiveTerminalRichPrompt`
+  // `fullstack-79`: auto-focus the input on every `openActiveTeamWork`
   // call. The `focusNonce` is bumped by the open helper even when the prompt
   // is already open, so re-show via Cmd+K p / Cmd+P steals focus back
   // even if the user had clicked away. `tick()` waits for the editor child's
   // `bind:this` to settle on first mount, and for the `{#key mode()}` block
   // to remount when the user toggles between wysiwyg and source.
-  //
-  // `fullstack-a-4`: when survey bubbles are present we leave focus
-  // alone so the BubbleOverlay's window keydown handler receives
-  // the numbered-reply keystrokes (its `editableTarget` guard
-  // would otherwise swallow them if the editor stole focus first).
-  // Once `bubbleCount` drops to 0, the effect re-runs and snaps
-  // focus back to the prompt input.
   $effect(() => {
     void prompt.focusNonce;
-    if (bubbleCount > 0) return;
     const inSource = mode() === "source";
     void tick().then(() => {
       if (inSource) {
@@ -102,7 +74,7 @@
   //     TerminalTab.svelte (covers the `fullstack-a-24` collapse
   //     transition where `heightPx` is stale).
   //   - width feeds the per-prompt page-width clamp in
-  //     `richPromptPageWidthPx` below, needed so the cap is
+  //     `teamWorkPageWidthPx` below, needed so the cap is
   //     relative to THIS prompt's painted width, not the pane's
   //     editor wrapper.
   // ResizeObserver is the natural source of truth here; both
@@ -126,13 +98,13 @@
   // OVERRIDES the inherited `--chan-page-max-width` set by
   // Pane.svelte on the editor wrapper. Result: narrowing the
   // editor's page-width slider in pane A no longer cascades onto
-  // pane B's rich prompt, each prompt carries its own.
+  // pane B's Team Work prompt, each prompt carries its own.
   //
   // Absent / undefined ratio reads as "no cap" (the prompt's
   // composer uses 100% of the painted width). Explicit ratio in
   // [0.25, 1.0); 1.0 / 100% rounds to absent on serialize so the
   // no-cap default keeps the persisted shape short.
-  function richPromptPageWidthPx(): string {
+  function teamWorkPageWidthPx(): string {
     // `none` is the documented sentinel both Wysiwyg.svelte and
     // Source.svelte recognise via `max-width: var(--chan-page-max-width, none);`
     // Overriding the pane-level value with `none` is what
@@ -148,7 +120,7 @@
     return `${Math.max(240, Math.round(width * ratio))}px`;
   }
 
-  function onRichPromptPageWidthSlider(e: Event): void {
+  function onTeamWorkPageWidthSlider(e: Event): void {
     const pct = Number((e.currentTarget as HTMLInputElement).value);
     if (!Number.isFinite(pct)) return;
     const clamped = Math.min(PAGE_WIDTH_MAX_PCT, Math.max(PAGE_WIDTH_MIN_PCT, pct));
@@ -156,7 +128,7 @@
     prompt.pageWidthRatio = ratio >= 1 ? undefined : ratio;
   }
 
-  function richPromptPageWidthPct(): number {
+  function teamWorkPageWidthPct(): number {
     const ratio = prompt.pageWidthRatio;
     if (!ratio || ratio >= 1) return PAGE_WIDTH_MAX_PCT;
     return Math.round(ratio * 100);
@@ -202,22 +174,13 @@
     return prompt.agentTarget ?? (prompt.submitMode === "agent" ? "claude" : "none");
   }
 
-  async function setAgentTarget(next: AgentTarget): Promise<void> {
-    const previousTarget = agentTarget();
-    const previousMode = prompt.submitMode;
+  // Wave-1 removed the per-terminal submit-mode server endpoint, so
+  // the agent picker is now a local-only preference write. It records
+  // which agent the Team Work prompt targets; nothing round-trips to
+  // the PTY here.
+  function setAgentTarget(next: AgentTarget): void {
     prompt.agentTarget = next;
     prompt.submitMode = next === "none" ? "shell" : "agent";
-    if (!terminalSessionId) return;
-    agentModeBusy = true;
-    try {
-      await api.setTerminalSubmitMode(terminalSessionId, prompt.submitMode);
-    } catch (err) {
-      prompt.agentTarget = previousTarget;
-      prompt.submitMode = previousMode;
-      ui.status = `submit-mode flip failed: ${(err as Error).message}`;
-    } finally {
-      agentModeBusy = false;
-    }
   }
 
   function workspaceStatus(): { text: string; error: boolean } | null {
@@ -335,45 +298,10 @@
     menu = null;
   }
 
-  /// Phase 9: Spawn agents moved into the prompt action menu. The
-  /// dialog's Bootstrap button hands off to the orchestrator, which
-  /// persists the team config, loads the per-team watcher, spawns
-  /// terminals, and waits for preflight confirmation before prompt
-  /// staging.
-  function openNewTeamDialog(): void {
-    menu = null;
-    openGlobalTeamDialog({
-      hostSessionId: terminalSessionId,
-      onBootstrap: async (config) => {
-        await runTeamBootstrap(config, terminalSessionId);
-      },
-      onSpawned: (response, agentName) => onSpawned?.(response, agentName),
-    });
-  }
-
-  function openSpawnDialog(): void {
-    menu = null;
-    openGlobalSpawnDialog({
-      orchestratorSessionId: terminalSessionId,
-      onSpawned: (response, agentName) => onSpawned?.(response, agentName),
-    });
-  }
-
-  async function copySpawnAgentsConfig(): Promise<void> {
-    menu = null;
-    const clipboard = navigator.clipboard;
-    if (!clipboard?.writeText) {
-      ui.status = "clipboard write is unavailable";
-      return;
-    }
-    try {
-      await clipboard.writeText(exportTeamDialogConfig(defaultTeamConfig()));
-      setTransientStatus("copied spawn agents config");
-    } catch (err) {
-      ui.status = `copy failed: ${(err as Error).message}`;
-    }
-  }
-
+  // "Bubble stack" / "Bubble tray" set the workspace-level layout
+  // preference (which way the survey bubbles stack above the prompt)
+  // and then surface the static example bubble in the chosen layout
+  // via `showBubbleStub()` so the user sees the effect immediately.
   async function setBubbleMode(mode: "stack" | "tray"): Promise<void> {
     menu = null;
     if (workspace.info) {
@@ -382,6 +310,7 @@
         preferences: { ...workspace.info.preferences, bubble_overlay_mode: mode },
       };
     }
+    showBubbleStub();
     try {
       await api.setBubbleOverlayMode(mode);
     } catch (err) {
@@ -397,10 +326,10 @@
   class:collapsed={collapsed()}
   bind:this={rootEl}
   style:height={collapsed() ? null : `${prompt.heightPx ?? 320}px`}
-  style:--chan-page-max-width={richPromptPageWidthPx()}
+  style:--chan-page-max-width={teamWorkPageWidthPx()}
   role="dialog"
   tabindex="-1"
-  aria-label="rich terminal prompt"
+  aria-label="Team Work prompt"
   onkeydown={onKeydown}
   oncontextmenu={onContextMenu}
 >
@@ -432,27 +361,19 @@
       type="button"
       class="icon-btn"
       onclick={openMenuFromButton}
-      title="Rich Prompt actions"
-      aria-label="Rich Prompt actions"
+      title="Team Work actions"
+      aria-label="Team Work actions"
       aria-haspopup="menu"
       aria-expanded={menu ? "true" : "false"}
     >
       <Plus size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
-    <span
-      class="event-pill"
-      title={watcherPath ? `Watching ${watcherPath}` : "No event watcher"}
-      aria-label={`${eventCount} visible events`}
-    >
-      {eventCount}
-    </span>
     <select
       class="agent-picker"
       value={agentTarget()}
-      disabled={agentModeBusy}
       aria-label="Agent picker"
       title="Agent picker"
-      onchange={(e) => void setAgentTarget((e.currentTarget as HTMLSelectElement).value as AgentTarget)}
+      onchange={(e) => setAgentTarget((e.currentTarget as HTMLSelectElement).value as AgentTarget)}
     >
       <option value="none">none</option>
       <option value="claude">claude</option>
@@ -497,7 +418,7 @@
           bind:this={wysiwygRef}
           bind:value={prompt.buffer}
           currentPath={null}
-          autoFocus={bubbleCount === 0}
+          autoFocus={true}
           placeholderText={PROMPT_PLACEHOLDER_TEXT}
           onSubmit={submit}
           onSelectionChange={() => (selVer += 1)}
@@ -508,7 +429,7 @@
           bind:value={prompt.buffer}
           path="prompt.md"
           syntaxHighlight
-          autoFocus={bubbleCount === 0}
+          autoFocus={true}
           placeholderText={PROMPT_PLACEHOLDER_TEXT}
           onSubmit={submit}
         />
@@ -543,12 +464,12 @@
           min={PAGE_WIDTH_MIN_PCT}
           max={PAGE_WIDTH_MAX_PCT}
           step={PAGE_WIDTH_STEP_PCT}
-          value={richPromptPageWidthPct()}
-          oninput={onRichPromptPageWidthSlider}
+          value={teamWorkPageWidthPct()}
+          oninput={onTeamWorkPageWidthSlider}
           onmousedown={(e) => e.stopPropagation()}
-          aria-label="rich prompt page width"
+          aria-label="team work page width"
         />
-        <span class="page-width-value">{richPromptPageWidthPct()}%</span>
+        <span class="page-width-value">{teamWorkPageWidthPct()}%</span>
       </div>
       <button type="button" onclick={toggleMode}>
         {#if mode() === "source"}
@@ -563,24 +484,16 @@
         <Type size={15} strokeWidth={1.75} aria-hidden="true" />
         <span>{toolbarOpen() ? "Hide style toolbar" : "Show style toolbar"}</span>
       </button>
-      <button type="button" onclick={openSpawnDialog}>
-        <Bot size={15} strokeWidth={1.75} aria-hidden="true" />
-        <span>Spawn agent</span>
+      <div class="ctx-separator" role="separator"></div>
+      <button type="button" onclick={() => void setBubbleMode("stack")}>
+        <Layers size={15} strokeWidth={1.75} aria-hidden="true" />
+        <span>Bubble stack</span>
       </button>
-      <button type="button" onclick={openNewTeamDialog}>
-        <Bot size={15} strokeWidth={1.75} aria-hidden="true" />
-        <span>Spawn agents</span>
+      <button type="button" onclick={() => void setBubbleMode("tray")}>
+        <Layers size={15} strokeWidth={1.75} aria-hidden="true" />
+        <span>Bubble tray</span>
       </button>
-      {#if prompt.workspaceAbs || prompt.workspacePath}
-        <button type="button" onclick={copyWorkspacePath}>
-          <Copy size={15} strokeWidth={1.75} aria-hidden="true" />
-          <span>Copy metadata dir</span>
-        </button>
-      {/if}
-      <button type="button" onclick={copySpawnAgentsConfig}>
-        <Copy size={15} strokeWidth={1.75} aria-hidden="true" />
-        <span>Copy Spawn agents config</span>
-      </button>
+      <div class="ctx-separator" role="separator"></div>
       <button type="button" onclick={toggleCollapsed}>
         {#if collapsed()}
           <ChevronUp size={15} strokeWidth={1.75} aria-hidden="true" />
@@ -589,14 +502,6 @@
           <ChevronDown size={15} strokeWidth={1.75} aria-hidden="true" />
           <span>Collapse prompt</span>
         {/if}
-      </button>
-      <button type="button" onclick={() => void setBubbleMode("stack")}>
-        <Type size={15} strokeWidth={1.75} aria-hidden="true" />
-        <span>Bubble stack</span>
-      </button>
-      <button type="button" onclick={() => void setBubbleMode("tray")}>
-        <Type size={15} strokeWidth={1.75} aria-hidden="true" />
-        <span>Bubble tray</span>
       </button>
     </div>
   {/if}
@@ -613,10 +518,9 @@
      attached-to-bottom.
 
      Collapsed state (`.rich-prompt.collapsed`): clamps the prompt to
-     min-height = the header row only; the composer-editor + watcher
-     row + spawn-dialog block all hide. The user keeps the prompt
-     attached (chevron expands) but reclaims vertical room for the
-     bubbles above. */
+     min-height = the header row only; the composer-editor + workspace
+     row hide. The user keeps the prompt attached (chevron expands) but
+     reclaims vertical room for the bubbles above. */
   .rich-prompt {
     position: absolute;
     left: 12px;
@@ -699,20 +603,6 @@
   .icon-btn:disabled {
     cursor: default;
     opacity: .55;
-  }
-  .event-pill {
-    min-width: 28px;
-    height: 26px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg);
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    flex-shrink: 0;
   }
   .agent-picker {
     height: 26px;
@@ -830,6 +720,14 @@
   }
   .ctx button:hover {
     background: var(--hover-bg);
+  }
+  /* Divider between the editor-display group, the bubble-layout
+     group, and the trailing collapse action so the three blocks
+     read as distinct. */
+  .ctx-separator {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--separator, var(--border));
   }
   /* `fullstack-a-30`: per-prompt page-width slider in the
      context menu. Same shape as the editor's tab-menu slider in

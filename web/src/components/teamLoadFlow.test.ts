@@ -1,80 +1,126 @@
-import { describe, expect, test } from "vitest";
-import tree from "./FileTree.svelte?raw";
+// @vitest-environment jsdom
 
-// `fullstack-a-80` slice 1: FB team-dir badge + Load Team
-// right-click entry + Duplicate flow on the already-loaded
-// branch. Tests pin the architectural shape; behavioral
-// coverage of the load/duplicate round-trips lands when
-// @@WebtestA walks against a populated workspace.
+import { afterEach, describe, expect, test, vi } from "vitest";
+import client from "../api/client.ts?raw";
+import dialog from "./TeamDialog.svelte?raw";
+import { api } from "../api/client";
+import type { TeamConfigWire } from "../api/client";
+import {
+  runTeamBootstrap,
+  translateConfig,
+  wireToDialog,
+} from "../state/teamOrchestrator.svelte";
+import { resizeTeamMembers } from "../state/teamDialog.svelte";
+import { layout, type LeafNode, type TerminalTab } from "../state/tabs.svelte";
 
-describe("fullstack-a-80 slice 1: team-dir detection", () => {
-  test("TEAM_DIR_RE matches Drafts/team-{name}", () => {
-    expect(tree).toMatch(/const TEAM_DIR_RE = \/\^Drafts\\\/team-\(\[\^\/\]\+\)\$\//);
-  });
+// phase-13-r2 `lane-a-A3`: the path-based New/Load config flow. Load
+// reads an existing chan-team.toml back via readTeamConfigFile,
+// prepopulates the (still-editable) form via wireToDialog, and
+// re-saves the edited config via writeTeamConfigFile on Bootstrap.
 
-  test("teamNameFromPath extracts the {name} group", () => {
-    expect(tree).toMatch(
-      /function teamNameFromPath\(path: string\): string \| null \{[\s\S]{1,400}const match = TEAM_DIR_RE\.exec\(path\);[\s\S]{1,200}return match \? match\[1\] : null;/,
+describe("api client: path-based team-config read/write", () => {
+  test("readTeamConfigFile POSTs /api/team-config/read with { path }", () => {
+    expect(client).toMatch(
+      /readTeamConfigFile: \(path: string\) =>[\s\S]{1,200}req<TeamConfigWire>\("POST", "\/api\/team-config\/read", \{ path \}\)/,
     );
   });
 
-  test("isTeamDir piggy-backs on teamNameFromPath", () => {
-    expect(tree).toMatch(
-      /function isTeamDir\(path: string\): boolean \{[\s\S]{1,200}return teamNameFromPath\(path\) !== null;/,
+  test("writeTeamConfigFile POSTs /api/team-config/write with { path, config }", () => {
+    expect(client).toMatch(
+      /writeTeamConfigFile: \(path: string, config: TeamConfigWire\) =>[\s\S]{1,200}req<void>\("POST", "\/api\/team-config\/write", \{ path, config \}\)/,
     );
   });
 });
 
-describe("fullstack-a-80 slice 1: team-badge in the tree", () => {
-  test("Users icon renders for team dirs (overrides Folder)", () => {
-    expect(tree).toMatch(
-      /\{#if isTeamDir\(node\.path\)\}[\s\S]{1,600}<Users size=\{14\}/,
-    );
+describe("TeamDialog Load flow", () => {
+  test("Load populates the form from wireToDialog + stays editable (resizeTeamMembers)", () => {
+    expect(dialog).toMatch(/const wire = await api\.readTeamConfigFile\(path\);/);
+    expect(dialog).toMatch(/const loaded = wireToDialog\(wire, path\);/);
+    expect(dialog).toMatch(/config = resizeTeamMembers\(loaded\);/);
   });
 
-  test("Users icon imported from lucide-svelte", () => {
-    expect(tree).toMatch(/Users,/);
-  });
-});
-
-describe("fullstack-a-80 slice 1: Load Team menu entry", () => {
-  test("entry gated on menu.isDir && isTeamDir(menu.path)", () => {
-    expect(tree).toMatch(
-      /\{#if menu\.isDir && isTeamDir\(menu\.path\)\}[\s\S]{1,800}onclick=\{\(\) => void loadTeamFromMenu\(menu!\.path\)\}[\s\S]{1,400}<span>Load Team<\/span>/,
-    );
-  });
-
-  test("Play icon imported (Load Team affordance)", () => {
-    expect(tree).toMatch(/Play,/);
+  test("Load surfaces the backend 400 inline instead of throwing", () => {
+    expect(dialog).toMatch(/loadError = \(err as Error\)\.message/);
   });
 });
 
-describe("fullstack-a-80 slice 1: loadTeamFromMenu handler", () => {
-  test("walks teamListLoaded first", () => {
-    expect(tree).toMatch(
-      /async function loadTeamFromMenu\(path: string\): Promise<void> \{[\s\S]{1,1000}const \{ teams \} = await api\.teamListLoaded\(\);/,
-    );
+function leadTab(): TerminalTab {
+  return {
+    kind: "terminal",
+    id: "lead-tab",
+    title: "Terminal",
+    createdAt: 1,
+    broadcastEnabled: false,
+    broadcastTargetIds: [],
+    terminalSessionId: "lead-session",
+  };
+}
+
+function setLayout(lead: TerminalTab): void {
+  const pane: LeafNode = {
+    kind: "leaf",
+    id: "pane-test",
+    tabs: [lead],
+    activeTabId: lead.id,
+  };
+  layout.rootId = pane.id;
+  layout.activePaneId = pane.id;
+  layout.nodes = { [pane.id]: pane };
+  layout.focusColor = "blue";
+}
+
+function loadedWire(): TeamConfigWire {
+  return {
+    team_name: "saved-team",
+    host_name: "Trinity",
+    host_handle: "@@Trinity",
+    auto_prefix_at: true,
+    created_at: "2026-05-29T00:00:00.000Z",
+    members: [
+      { handle: "@@Lead", command: "claude", env: { CHAN_TAB_NAME: "@@Lead" }, is_lead: true },
+      {
+        handle: "@@Worker1",
+        command: "codex",
+        env: { CHAN_TAB_NAME: "@@Worker1" },
+        is_lead: false,
+      },
+    ],
+  };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  setLayout(leadTab());
+});
+
+describe("Load -> edit -> Bootstrap re-saves the config", () => {
+  test("a loaded config round-trips into an editable dialog config", () => {
+    const cfg = resizeTeamMembers(wireToDialog(loadedWire(), "/tmp/x/chan-team.toml"));
+    expect(cfg.configMode).toBe("load");
+    expect(cfg.hostName).toBe("Trinity");
+    expect(cfg.members.map((m) => m.name)).toEqual(["@@Lead", "@@Worker1"]);
+    // The config is a plain editable object; translating it back
+    // yields the same members (the round-trip the dialog uses on
+    // Bootstrap).
+    const back = translateConfig(cfg);
+    expect(back.members.map((m) => m.handle)).toEqual(["@@Lead", "@@Worker1"]);
   });
 
-  test("already-loaded branch: notify + uiPrompt + teamDuplicate", () => {
-    expect(tree).toMatch(
-      /if \(teams\.includes\(name\)\) \{[\s\S]{1,1200}const newName = await uiPrompt\([\s\S]{1,400}await api\.teamDuplicate\(name, trimmed\);[\s\S]{1,400}notify\(/,
-    );
-  });
+  test("Bootstrap writes the (edited) config back to the path", async () => {
+    const lead = leadTab();
+    setLayout(lead);
+    const write = vi
+      .spyOn(api, "writeTeamConfigFile")
+      .mockResolvedValue(undefined as unknown as void);
+    vi.spyOn(api, "restartTerminal").mockResolvedValue(undefined as unknown as void);
+    vi.spyOn(api, "spawnTerminal").mockResolvedValue({ session: "w", tab_label: "w" });
 
-  test("not-loaded branch (slice 2): teamGetConfig + openTeamDialog with wireToDialog(...) initial", () => {
-    // `fullstack-a-80` slice 2 replaced the slice-1
-    // teamLoad-and-notify placeholder with the real
-    // dialog-from-config flow. The handler now reads the
-    // persisted TeamConfig, translates it back to the SPA
-    // shape, and opens the global team dialog. Bootstrap
-    // runs the standard `-a-79` orchestrator chain.
-    expect(tree).toMatch(
-      /const wire = await api\.teamGetConfig\(name\);[\s\S]{1,400}const initial = wireToDialog\(wire\);[\s\S]{1,400}openTeamDialog\(\{[\s\S]{1,800}initial,/,
-    );
-  });
+    const cfg = resizeTeamMembers(wireToDialog(loadedWire(), "/tmp/x/chan-team.toml"));
+    await runTeamBootstrap(cfg, { leadTabId: "lead-tab", leadPaneId: "pane-test" });
 
-  test("api.teamListLoaded + teamLoad + teamDuplicate all reachable via the api import", () => {
-    expect(tree).toMatch(/import \{ api \} from "\.\.\/api\/client";/);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0][0]).toBe("/tmp/x/chan-team.toml");
+    // The persisted wire carries the loaded host name.
+    expect(write.mock.calls[0][1]).toMatchObject({ host_name: "Trinity" });
   });
 });

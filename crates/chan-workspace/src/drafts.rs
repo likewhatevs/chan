@@ -137,10 +137,7 @@ pub fn preflight(drafts_dir: &Path) -> Result<Vec<DraftIssue>> {
         };
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
-        if crate::rich_prompts::owns_preflight(&name, &path)
-            || crate::rich_prompts::is_legacy_history_dir(&name, &path)
-            || crate::teams::owns_preflight(&name, &path)
-        {
+        if crate::teams::owns_preflight(&name, &path) {
             continue;
         }
         let meta = match fs::symlink_metadata(&path) {
