@@ -358,19 +358,21 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
-  // `phase-12 lane-e` (addendum-2 Q8): Dashboard tab. The tab type
-  // already existed; this is the direct chord (@@Alex approved cmd+i
-  // in addition to Hybrid Nav `i`). Both open the tab in the active
-  // pane. Phase-13 round-1 closing (B5): label renamed from
-  // "Infographics" to "Dashboard" to match the surface name.
+  // Dashboard tab. Phase-13 r2 (B-slice 2): @@Alex moved Dashboard
+  // OFF the direct Cmd+I chord so the editor can claim Cmd+I for
+  // italic. Dashboard now has no direct chord; it stays reachable via
+  // Hybrid Nav `Cmd+. i` (handled in App.svelte::handlePaneModeKey)
+  // and the Dashboard hamburger item. The chord recorded here is the
+  // Hybrid Nav sequence, purely for cheatsheet + menu discoverability:
+  // it is NOT a dispatch source (no e.code branch matches it as a
+  // single keypress), and `escapeTerminal` is dropped because no
+  // single-key Cmd+I chord opens Dashboard anymore.
   {
     id: "app.dashboard.open",
     label: "Dashboard",
-    web: "Mod+I",
-    native: "Mod+I",
+    web: "Mod+. i",
+    native: "Mod+. i",
     group: "App",
-    note: "or Mod+. i (Hybrid Nav)",
-    escapeTerminal: true,
   },
   // Tab navigation
   {
@@ -443,12 +445,34 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "Editor",
     escapeTerminal: true,
   },
+  // Phase-13 r2 (B-slice 2): Bold + Italic are now bound in the
+  // editor's CM6 keymap (Wysiwyg.svelte -> fmt.toggleBold/Italic);
+  // Cmd+I was freed by moving Dashboard to Hybrid Nav only. These
+  // entries exist for cheatsheet + StyleToolbar tooltip discoverability;
+  // the editor keymap is the dispatch source, so no `escapeTerminal`
+  // (the embedded editor is CM6, not xterm - keystrokes never route
+  // through the terminal escape path).
+  {
+    id: "app.editor.bold",
+    label: "Bold",
+    native: "Mod+B",
+    web: "Mod+B",
+    group: "Editor",
+  },
+  {
+    id: "app.editor.italic",
+    label: "Italic",
+    native: "Mod+I",
+    web: "Mod+I",
+    group: "Editor",
+  },
 ];
 
-// Editor formatting chords (bold / italic / strike / inline code)
-// are NOT wired through any keymap today — they only exist as click
-// targets in StyleToolbar.svelte. Add them back to this registry
-// once the editor's keymap layer binds them.
+// Editor strikethrough / inline-code chords are not in this registry:
+// strike (Cmd+Shift+S) is owned by the editor keymap directly and
+// inline code remains a click-only target in StyleToolbar.svelte.
+// Bold (Cmd+B) + Italic (Cmd+I) graduated into the registry above
+// once the editor keymap layer bound them (phase-13 r2).
 
 const MOD_LABEL: Record<OS, string> = {
   mac: "Cmd",

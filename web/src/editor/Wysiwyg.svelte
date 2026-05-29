@@ -438,6 +438,28 @@
         // insert a newline first). Returning true consumes the event.
         Prec.high(
           keymap.of([
+            // Phase-13 r2 (B-slice 2): conventional Bold / Italic
+            // chords. The toggle commands already existed (format.ts)
+            // and were advertised in StyleToolbar tooltips; this binds
+            // them in the editor keymap. Cmd+I was freed by moving
+            // Dashboard off it (shortcuts.ts + App.svelte + the desktop
+            // KEY_BRIDGE), so it no longer double-fires. Registered in
+            // this Prec.high block so CM6 consumes them before the
+            // document-level handlers; returning true preventDefaults.
+            {
+              key: "Mod-b",
+              run: (view) => {
+                fmt.toggleBold(view);
+                return true;
+              },
+            },
+            {
+              key: "Mod-i",
+              run: (view) => {
+                fmt.toggleItalic(view);
+                return true;
+              },
+            },
             // Mod-Enter at a date pill opens the calendar / format
             // popover (keyboard equivalent of clicking the pill).
             // Returns false when the caret isn't on a date so the

@@ -71,12 +71,19 @@ describe("shortcut table", () => {
     expect(renderTable("native", "mac")).toMatch(/^Search\s+Cmd\+S/m);
   });
 
-  // `phase-12 lane-e` (addendum-2 Q8): direct Cmd+I dashboard chord
-  // (in addition to Hybrid Nav `i`). Phase-13 round-1 closing
-  // (B5): label renamed from "Infographics" to "Dashboard".
-  test("advertises Cmd+I dashboard on both platforms", () => {
-    expect(renderTable("web", "mac")).toMatch(/^Dashboard\s+Cmd\+I/m);
-    expect(renderTable("native", "mac")).toMatch(/^Dashboard\s+Cmd\+I/m);
+  // Phase-13 r2 (B-slice 2): Cmd+I moved from Dashboard to the editor
+  // italic chord. Dashboard is now Hybrid-Nav-only (`Cmd+. i`); Cmd+I
+  // advertises Italic and Cmd+B advertises Bold under the Editor group.
+  test("advertises Dashboard via Hybrid Nav (no direct Cmd+I)", () => {
+    expect(renderTable("web", "mac")).toMatch(/^Dashboard\s+Cmd\+\. i/m);
+    expect(renderTable("native", "mac")).toMatch(/^Dashboard\s+Cmd\+\. i/m);
+  });
+
+  test("advertises editor Bold (Cmd+B) and Italic (Cmd+I)", () => {
+    expect(renderTable("web", "mac")).toMatch(/^Bold\s+Cmd\+B/m);
+    expect(renderTable("web", "mac")).toMatch(/^Italic\s+Cmd\+I/m);
+    expect(renderTable("native", "mac")).toMatch(/^Bold\s+Cmd\+B/m);
+    expect(renderTable("native", "mac")).toMatch(/^Italic\s+Cmd\+I/m);
   });
 
   // `phase-12 lane-e` (addendum-2): splits are desktop-native only
