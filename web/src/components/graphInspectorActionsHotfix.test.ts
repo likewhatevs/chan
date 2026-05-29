@@ -104,12 +104,24 @@ describe("GI-4: directory nodes are slightly bigger than leaf nodes", () => {
   });
 
   test("renderRadius gives folder nodes the RADIUS_DIR base and workspace its own 1.5x size (E1+E2)", () => {
-    // Round-1 closing-4 (E2): workspace root sized 1.5x every
-    // other directory so the structural anchor reads as the hub
-    // at a glance. RADIUS_WORKSPACE = RADIUS_DIR * 1.5.
-    expect(canvas).toMatch(/const RADIUS_WORKSPACE = RADIUS_DIR \* 1\.5;/);
+    // Round-1 closing-4 (E2) + closing-9 (E2 fix-up): workspace
+    // root sized 1.5x the WORST-CASE dir radius (RADIUS_DIR *
+    // RADIUS_HUB_SCALE), not the base. Pre-fix
+    // RADIUS_WORKSPACE = RADIUS_DIR * 1.5 = 9 only beat a base
+    // RADIUS_DIR = 6 leaf; a hub-scaled top-level dir reached
+    // 6 * 1.4 = 8.4 and the workspace blurred into the
+    // neighbours. RADIUS_WORKSPACE = RADIUS_DIR *
+    // RADIUS_HUB_SCALE * 1.5 keeps the 1.5x gap at every
+    // backlink density. Workspace also skips the backlink ramp
+    // so its size stays exactly RADIUS_WORKSPACE.
+    expect(canvas).toMatch(
+      /const RADIUS_WORKSPACE = RADIUS_DIR \* RADIUS_HUB_SCALE \* 1\.5;/,
+    );
     expect(canvas).toMatch(
       /kind === "workspace"\s*\?\s*RADIUS_WORKSPACE\s*:\s*kind === "doc"\s*\?\s*RADIUS_DOC\s*:\s*kind === "folder"\s*\?\s*RADIUS_DIR\s*:\s*RADIUS_BASE/,
+    );
+    expect(canvas).toMatch(
+      /if \(kind === "workspace"\) return base;[\s\S]{1,400}if \(maxBacklinks <= 0\) return base;/,
     );
   });
 });

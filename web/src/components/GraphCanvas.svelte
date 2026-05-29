@@ -151,11 +151,19 @@
   /// the doc/workspace hub size) so they read as clearly clickable folder
   /// targets without dominating the graph. Slightly bigger, not much.
   const RADIUS_DIR = 6;
-  /// Round-1 closing-4 (E2): the workspace-root anchor is 1.5x
-  /// every other directory so it reads as the structural hub at a
-  /// glance instead of competing with leaf folders.
-  const RADIUS_WORKSPACE = RADIUS_DIR * 1.5;
   const RADIUS_HUB_SCALE = 1.4;
+  /// Round-1 closing-4 (E2) + closing-9 (E2 fix-up): the workspace-
+  /// root anchor stays clearly 1.5x larger than any other directory,
+  /// INCLUDING dirs that the backlink ramp has already pushed to
+  /// `RADIUS_DIR * RADIUS_HUB_SCALE`. Pre-fix `RADIUS_WORKSPACE =
+  /// RADIUS_DIR * 1.5 = 9` only beat a base-radius leaf folder
+  /// (6 -> 9, 1.5x), but a hub-scaled top-level dir reached
+  /// `6 * 1.4 = 8.4` and the workspace looked the same size next
+  /// to it. Compute against the worst-case dir radius so the 1.5x
+  /// gap survives the backlink ramp, and exempt workspace from the
+  /// ramp itself so the hub stays exactly this size regardless of
+  /// how many things link to it.
+  const RADIUS_WORKSPACE = RADIUS_DIR * RADIUS_HUB_SCALE * 1.5;
 
   /// Icon glyph occupies this fraction of the rendered diameter.
   /// Matches the cytoscape value so the visual mass of icons doesn't
@@ -533,6 +541,13 @@
           : kind === "folder"
             ? RADIUS_DIR
             : RADIUS_BASE;
+    // Round-1 closing-9 (E2 fix-up): workspace skips the backlink
+    // ramp. RADIUS_WORKSPACE already accounts for the max-scaled
+    // dir size, so further inflating it via backlinks (which the
+    // workspace root always has the most of) would dominate the
+    // canvas. Pin workspace to the base; the 1.5x gap stays
+    // visible at every backlink density.
+    if (kind === "workspace") return base;
     if (maxBacklinks <= 0) return base;
     const bl = backlinks.get(id) ?? 0;
     // Linear ramp from base to base*RADIUS_HUB_SCALE across the

@@ -374,25 +374,36 @@ fn build_indexing_state(
         }
     }
 
-    // Round-1 closing-8 (F2): during the embedding phase the indexer
-    // sets `IndexStatus::Building.file` to the literal sentinel
-    // "embedding" (see `crates/chan-server/src/indexer.rs:822-837`)
-    // instead of a real file path, so the per-entry `current_file ==
-    // Some(entry.path.as_str())` match above never fires and every
-    // directory came back as Pending - the dashboard's INDEXING graph
-    // showed no pulsing orange even though the bottom-left status pill
-    // read "indexing X/Y (embedding)". Detect the sentinel here and
-    // treat every directory with outstanding indexable work
-    // (`indexable_files > indexed_files`) as Indexing so the user sees
-    // which dirs are still being processed across the embedding sweep.
-    // Per `feedback_pre_release_no_backcompat` we consume the existing
-    // sentinel rather than introducing a new wire field.
+    // Round-1 closing-8 (F2) + closing-9 (F2 fix-up): during the
+    // embedding phase the indexer sets `IndexStatus::Building.file`
+    // to the literal sentinel "embedding" (see
+    // `crates/chan-server/src/indexer.rs:822-837`) instead of a real
+    // file path, so the per-entry `current_file ==
+    // Some(entry.path.as_str())` match above never fires.
+    //
+    // Closing-8 marked dirs with `indexable_files > indexed_files`
+    // as Indexing on the sentinel, but the embedding phase runs
+    // AFTER BM25 (per the comment in `indexer.rs:809-814`), so by
+    // the time the sentinel surfaces `workspace.indexed_paths()`
+    // already lists every indexable file - `indexed_files ==
+    // indexable_files` everywhere and no directory turned orange.
+    //
+    // The right semantic during the embedding sweep is: every
+    // directory that contains indexable content has work in flight
+    // (its embeddings haven't been flushed yet, regardless of what
+    // the BM25 index says). Drop the comparison and mark every dir
+    // with `indexable_files > 0` as Indexing - the bulk of dirs
+    // pulse orange across the sweep, and content-only dirs (no
+    // indexable text) stay quiet. When embedding finishes
+    // `current_file` clears and the dirs settle back to Indexed /
+    // Pending. Per `feedback_pre_release_no_backcompat` we consume
+    // the existing sentinel rather than introducing a new wire
+    // field.
     let embedding_sweep = current_file == Some("embedding");
     let nodes = dirs
         .into_iter()
         .map(|(path, accum)| {
-            let in_progress =
-                accum.indexing || (embedding_sweep && accum.indexable_files > accum.indexed_files);
+            let in_progress = accum.indexing || (embedding_sweep && accum.indexable_files > 0);
             let state = if in_progress {
                 IndexingDirectoryState::Indexing
             } else if accum.indexable_files > 0 && accum.indexed_files == accum.indexable_files {
@@ -592,44 +603,45 @@ mod tests {
         assert!(json["nodes"][0]["children_count"].is_u64());
     }
 
-    /// Round-1 closing-8 (F2): during the embedding phase the indexer
-    /// sets `IndexStatus::Building.file` to the literal sentinel
-    /// `"embedding"` instead of a real file path. `build_indexing_state`
-    /// must detect that sentinel and mark every directory with
-    /// outstanding work as `Indexing`, otherwise the dashboard's INDEXING
-    /// graph stays grey across the bulk of an embedding sweep even
-    /// though the status pill reads `"indexing X/Y (embedding)"`.
+    /// Round-1 closing-8 (F2) + closing-9 (F2 fix-up): during the
+    /// embedding phase the indexer sets `IndexStatus::Building.file`
+    /// to the literal sentinel `"embedding"` instead of a real file
+    /// path. The embedding phase runs AFTER BM25, so by the time the
+    /// sentinel surfaces every indexable file already shows up in
+    /// `workspace.indexed_paths()` (the BM25 index). Counting
+    /// `indexable_files > indexed_files` (closing-8's first attempt)
+    /// reads everywhere as "BM25 done" -> no orange. The right signal
+    /// is "directory contains indexable content" because embeddings
+    /// are still pending across the whole sweep.
     #[test]
-    fn indexing_state_marks_pending_dirs_as_indexing_during_embedding_sweep() {
+    fn indexing_state_marks_every_dir_with_indexable_files_during_embedding_sweep() {
         let entries = vec![
-            tree_entry("done", true),
-            tree_entry("done/finished.md", false),
-            tree_entry("half", true),
-            tree_entry("half/done.md", false),
-            tree_entry("half/todo.md", false),
-            tree_entry("untouched", true),
-            tree_entry("untouched/todo.md", false),
+            tree_entry("notes", true),
+            tree_entry("notes/finished.md", false),
+            tree_entry("docs", true),
+            tree_entry("docs/done.md", false),
+            tree_entry("docs/another.md", false),
+            tree_entry("assets", true),
+            tree_entry("assets/logo.png", false),
         ];
-        let indexed_paths =
-            BTreeSet::from(["done/finished.md".to_string(), "half/done.md".to_string()]);
+        // BM25 has already indexed every text file (embedding phase
+        // runs AFTER BM25). `indexed_paths` reflects that completion.
+        let indexed_paths = BTreeSet::from([
+            "notes/finished.md".to_string(),
+            "docs/done.md".to_string(),
+            "docs/another.md".to_string(),
+        ]);
 
         let response = build_indexing_state(&entries, &indexed_paths, Some("embedding"));
 
-        // Fully indexed directories stay Indexed; partially indexed +
-        // not-yet-touched directories pulse Indexing.
+        // Every dir with indexable text flips to Indexing during the
+        // embedding sweep, even if BM25 already finished. The
+        // embeddings haven't flushed yet, so "in-flight" is correct.
         assert_eq!(
             response
                 .nodes
                 .iter()
-                .find(|node| node.path == "done")
-                .map(|node| node.state),
-            Some(IndexingDirectoryState::Indexed)
-        );
-        assert_eq!(
-            response
-                .nodes
-                .iter()
-                .find(|node| node.path == "half")
+                .find(|node| node.path == "notes")
                 .map(|node| node.state),
             Some(IndexingDirectoryState::Indexing)
         );
@@ -637,12 +649,22 @@ mod tests {
             response
                 .nodes
                 .iter()
-                .find(|node| node.path == "untouched")
+                .find(|node| node.path == "docs")
                 .map(|node| node.state),
             Some(IndexingDirectoryState::Indexing)
         );
-        // Workspace root also has outstanding work (half + untouched
-        // children) so it picks up the embedding-sweep Indexing too.
+        // Asset-only dirs carry no indexable text, so they stay
+        // Pending - they're not part of the embedding sweep.
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path == "assets")
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Pending)
+        );
+        // Workspace root aggregates every descendant's indexable
+        // content, so it also reads as Indexing.
         assert_eq!(
             response
                 .nodes
