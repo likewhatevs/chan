@@ -8,6 +8,10 @@ Wants=network-online.target chan-gateway-profile.service
 Type=simple
 User=chan-gateway
 Group=chan-gateway
+# Shared domain config (CHAN_DOMAIN + PUBLIC_SCHEME) loaded first; the
+# per-service file may override. Optional (`-`) so a stack that sets
+# the domain inline still starts.
+EnvironmentFile=-/etc/chan-gateway/domain.env
 EnvironmentFile=/etc/chan-gateway/workspace-proxy.env
 ExecStart=/usr/bin/chan-gateway-workspace-proxy
 Restart=on-failure

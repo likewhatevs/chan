@@ -290,6 +290,22 @@ requires `ConnectInfo<SocketAddr>`; production wires this via
 `into_make_service_with_connect_info`, tests inject it manually
 on `oneshot`.
 
+### Domain config is single-source
+
+The apex, wildcard, and the dashboard redirect's id host all derive
+from one base domain (`CHAN_DOMAIN`, e.g. `chan.app`) plus
+`PUBLIC_SCHEME`, via `gateway_common::domain::Domains`. identity-service
+derives the same hosts from the same two vars, so the two cannot drift
+(the workspace-gate JWT `aud` is the inbound host and must match). This
+replaced the earlier `apex_host.strip_prefix("workspace.")` ->
+`id.<rest>` string-swap. `APEX_HOST`, `WILDCARD_SUFFIX`, and
+`DASHBOARD_URL` remain as explicit overrides; the wildcard still
+follows the apex unless set, and `DASHBOARD_URL` is still needed when
+the id host runs on a non-default port (the derived form carries none).
+Defaults are dev-shaped (`localtest.me` / `http`); production sets
+`CHAN_DOMAIN` + `PUBLIC_SCHEME` once in the shared
+`/etc/chan-gateway/domain.env`, loaded by both systemd units.
+
 ## Invariants
 
 - Every registered tunnel has a known `owner_id`.

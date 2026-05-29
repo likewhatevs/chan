@@ -28,6 +28,7 @@
 //!     `identity::token_throttle`; both wrap this primitive in a
 //!     thin trait-level adapter.
 
+pub mod domain;
 pub mod profile_client;
 pub mod shutdown;
 pub mod static_files;

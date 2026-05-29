@@ -319,6 +319,27 @@ throttle is not observable from the outside. The workspace-proxy
 throttle catches the typical case; this one catches a leaked
 internal bearer being used to brute-force PATs directly.
 
+### Domain config is single-source
+
+The public hostnames are derived from one base domain (`CHAN_DOMAIN`,
+e.g. `chan.app`) plus `PUBLIC_SCHEME`, via
+`gateway_common::domain::Domains`. identity-service and workspace-proxy
+read the same two vars and derive the same `id.<base>` /
+`workspace.<base>` / `.workspace.<base>` hosts, so they cannot drift.
+This matters because the workspace-gate JWT `aud` is the inbound host:
+if the two services disagreed on the domain, the handoff would fail or
+isolation assumptions would shift.
+
+identity derives `BASE_URL` (its OAuth-callback origin) and
+`workspace_wildcard_suffix` from `CHAN_DOMAIN`; the fine-grained vars
+(`BASE_URL`, `WORKSPACE_WILDCARD_SUFFIX`, `WORKSPACE_PUBLIC_SCHEME`)
+remain as explicit overrides for non-default layouts (e.g. a dev port).
+Defaults are dev-shaped (`localtest.me` / `http`); production sets
+`CHAN_DOMAIN` + `PUBLIC_SCHEME` once in the shared
+`/etc/chan-gateway/domain.env`. The domain is still coupled to DNS, the
+wildcard TLS cert, and nginx `server_name`, so it is deploy-time
+config, not a runtime knob.
+
 ## Invariants
 
 - A signed-in session always carries `user_id: Uuid` under `KEY_USER`.

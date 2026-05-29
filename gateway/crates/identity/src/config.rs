@@ -24,7 +24,8 @@ pub struct Config {
     pub internal_auth_token: String,
     /// Wildcard suffix used to mint workspace-gate entry tokens. Each
     /// workspace opens at `{user}{wildcard_suffix}/{workspace}/`, e.g.
-    /// `alice.workspace.chan.app/blog/`. Default `.workspace.chan.app`.
+    /// `alice.workspace.chan.app/blog/`. Derived from `CHAN_DOMAIN`
+    /// (`.workspace.<base>`) unless `WORKSPACE_WILDCARD_SUFFIX` is set.
     pub workspace_wildcard_suffix: String,
     /// Scheme of the workspace-gate redirect URL (`https` in prod,
     /// `http` for local dev where `*.workspace.localtest.me` resolves
@@ -53,10 +54,27 @@ impl Config {
             .parse()
             .context("BIND_ADDR must be host:port")?;
 
-        let base_url: Url = std::env::var("BASE_URL")
-            .unwrap_or_else(|_| "http://localhost:7000".to_string())
-            .parse()
-            .context("BASE_URL must be a URL")?;
+        // Single-source domain config. CHAN_DOMAIN drives both the id
+        // and workspace hostnames; PUBLIC_SCHEME the URL scheme. Both
+        // default dev-shaped (localtest.me / http); production sets
+        // them once in the shared environment file. workspace-proxy
+        // derives the same hosts from the same vars, so the two cannot
+        // drift (the workspace-gate `aud` must match). See
+        // gateway_common::domain.
+        let domains = gateway_common::domain::Domains::from_env();
+        let public_scheme = read_public_scheme()?;
+
+        // identity-service's own public origin, used to build the
+        // OAuth callback redirect URIs registered with each provider.
+        // Defaults to the derived id host; override with BASE_URL when
+        // the origin differs (e.g. a dev port:
+        // http://id.localtest.me:7000).
+        let base_url: Url = match std::env::var("BASE_URL") {
+            Ok(v) if !v.trim().is_empty() => v.trim().parse().context("BASE_URL must be a URL")?,
+            _ => format!("{public_scheme}://{}", domains.id_host)
+                .parse()
+                .context("derived BASE_URL must be a URL")?,
+        };
 
         let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
 
@@ -82,12 +100,13 @@ impl Config {
         }
 
         // Wildcard suffix used to stitch the entry-token's `aud`
-        // claim and the redirect Location. `.workspace.chan.app` in prod.
-        // Override for lab / dev with WORKSPACE_WILDCARD_SUFFIX.
-        let workspace_wildcard_suffix = std::env::var("WORKSPACE_WILDCARD_SUFFIX")
-            .unwrap_or_else(|_| ".workspace.chan.app".to_string())
-            .trim()
-            .to_string();
+        // claim and the redirect Location. Defaults to the derived
+        // `.workspace.<base>`; override with WORKSPACE_WILDCARD_SUFFIX
+        // only for unusual layouts.
+        let workspace_wildcard_suffix = match std::env::var("WORKSPACE_WILDCARD_SUFFIX") {
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => domains.workspace_wildcard_suffix.clone(),
+        };
         if !workspace_wildcard_suffix.starts_with('.') {
             anyhow::bail!(
                 "WORKSPACE_WILDCARD_SUFFIX must start with a dot (got \
@@ -95,14 +114,14 @@ impl Config {
             );
         }
 
-        // Scheme + port for the workspace-gate redirect. Defaults are
-        // prod-shaped; local dev exports `http` and (typically)
-        // `:7002`. An empty port string is the prod case (URL has
-        // no explicit port, browser uses 443 implicitly).
-        let workspace_public_scheme = std::env::var("WORKSPACE_PUBLIC_SCHEME")
-            .unwrap_or_else(|_| "https".to_string())
-            .trim()
-            .to_string();
+        // Scheme of the workspace-gate redirect. Defaults to the
+        // shared PUBLIC_SCHEME; override with WORKSPACE_PUBLIC_SCHEME
+        // only when the workspace redirect scheme differs from the id
+        // origin's (rare).
+        let workspace_public_scheme = match std::env::var("WORKSPACE_PUBLIC_SCHEME") {
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => public_scheme.clone(),
+        };
         if workspace_public_scheme != "http" && workspace_public_scheme != "https" {
             anyhow::bail!(
                 "WORKSPACE_PUBLIC_SCHEME must be \"http\" or \"https\"; got \
@@ -217,6 +236,20 @@ impl Config {
             .trim_start_matches('.')
             .to_string()
     }
+}
+
+/// Read the shared PUBLIC_SCHEME (http/https), defaulting to the
+/// dev-shaped `http`. Production sets `https` once in the shared
+/// environment file.
+fn read_public_scheme() -> anyhow::Result<String> {
+    let scheme = std::env::var("PUBLIC_SCHEME")
+        .unwrap_or_else(|_| gateway_common::domain::DEFAULT_PUBLIC_SCHEME.to_string())
+        .trim()
+        .to_string();
+    if scheme != "http" && scheme != "https" {
+        anyhow::bail!("PUBLIC_SCHEME must be \"http\" or \"https\"; got {scheme:?}");
+    }
+    Ok(scheme)
 }
 
 fn parse_bool_env(name: &str, default: bool) -> anyhow::Result<bool> {

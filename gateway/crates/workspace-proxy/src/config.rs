@@ -82,22 +82,30 @@ impl Config {
             .parse()
             .context("TUNNEL_BIND_ADDR must be host:port")?;
 
-        // Apex / wildcard split. Defaults match production
-        // (`workspace.chan.app`, wildcard `*.workspace.chan.app`). Both
-        // overridable; the wildcard suffix is derived from the apex
-        // unless explicitly set so dev / lab deployments only need
-        // one env var.
-        let apex_host = std::env::var("APEX_HOST")
-            .unwrap_or_else(|_| "workspace.chan.app".to_string())
-            .trim()
-            .to_string();
+        // Single-source domain config. CHAN_DOMAIN drives both the
+        // workspace and id hostnames; PUBLIC_SCHEME the URL scheme.
+        // Both default dev-shaped (localtest.me / http); production
+        // sets them once in the shared environment file. identity
+        // derives the same hosts from the same vars, so the two cannot
+        // drift (the workspace-gate `aud` must match). See
+        // gateway_common::domain.
+        let domains = gateway_common::domain::Domains::from_env();
+        let public_scheme = read_public_scheme()?;
+
+        // Apex + wildcard default to the derived workspace hosts;
+        // override with APEX_HOST / WILDCARD_SUFFIX only for unusual
+        // layouts. The wildcard suffix follows the apex unless set.
+        let apex_host = match std::env::var("APEX_HOST") {
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => domains.workspace_apex.clone(),
+        };
         if apex_host.is_empty() {
             anyhow::bail!("APEX_HOST must not be empty");
         }
-        let wildcard_suffix = std::env::var("WILDCARD_SUFFIX")
-            .unwrap_or_else(|_| format!(".{apex_host}"))
-            .trim()
-            .to_string();
+        let wildcard_suffix = match std::env::var("WILDCARD_SUFFIX") {
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => format!(".{apex_host}"),
+        };
         if !wildcard_suffix.starts_with('.') {
             anyhow::bail!(
                 "WILDCARD_SUFFIX must start with a dot (got {wildcard_suffix:?}); \
@@ -132,16 +140,13 @@ impl Config {
         }
 
         // Dashboard redirect target. Explicit env var wins; otherwise
-        // derive from apex_host by swapping `workspace.` -> `id.` and
-        // assuming https. The derived form is correct for prod but
-        // wrong for any dev / lab setup that uses a different scheme
-        // or a non-default port; in those cases set DASHBOARD_URL.
+        // derive the id host from the same base domain
+        // (`{scheme}://id.<base>/workspaces`). The derived form carries
+        // no port, so a dev / lab setup on a non-default id port still
+        // needs DASHBOARD_URL set explicitly.
         let dashboard_url = match std::env::var("DASHBOARD_URL") {
             Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
-            _ => match apex_host.strip_prefix("workspace.") {
-                Some(rest) => format!("https://id.{rest}/workspaces"),
-                None => "/workspaces".to_string(),
-            },
+            _ => format!("{public_scheme}://{}/workspaces", domains.id_host),
         };
 
         let max_workspaces_per_user: usize = match std::env::var("MAX_WORKSPACES_PER_USER") {
@@ -243,6 +248,21 @@ impl Config {
             .map(|h| h.eq_ignore_ascii_case(&self.apex_host))
             .unwrap_or(false)
     }
+}
+
+/// Read the shared PUBLIC_SCHEME (http/https), defaulting to the
+/// dev-shaped `http`. Production sets `https` once in the shared
+/// environment file. Kept identical to identity-service's reader so
+/// the two derive matching public URLs.
+fn read_public_scheme() -> anyhow::Result<String> {
+    let scheme = std::env::var("PUBLIC_SCHEME")
+        .unwrap_or_else(|_| gateway_common::domain::DEFAULT_PUBLIC_SCHEME.to_string())
+        .trim()
+        .to_string();
+    if scheme != "http" && scheme != "https" {
+        anyhow::bail!("PUBLIC_SCHEME must be \"http\" or \"https\"; got {scheme:?}");
+    }
+    Ok(scheme)
 }
 
 fn parse_byte_cap(name: &str, default: Option<usize>) -> anyhow::Result<Option<usize>> {
