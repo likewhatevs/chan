@@ -31,7 +31,7 @@ function clampDepth(value: number, max: number): number {
   return Math.max(1, Math.min(max, Math.max(1, value)));
 }
 
-function relativeDepth(root: string, path: string): number {
+export function relativeDepth(root: string, path: string): number {
   const cleanRoot = root.replace(/^\/+|\/+$/g, "");
   const cleanPath = path.replace(/^\/+|\/+$/g, "");
   if (!cleanPath) return 1;

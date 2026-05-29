@@ -41,28 +41,46 @@ describe("GI-9: filesystem-mode graph renders the full containment spine", () =>
     expect(graph).toMatch(/if \(filesystemMode\) return null;/);
   });
 
-  test("the fs-mode null guard sits BEFORE the file-only seeding branch", () => {
-    // Ordering is load-bearing: the guard must short-circuit before the
-    // dir / file branches that seed only from `kind === "file"` nodes
-    // (the empty-seed bug). Anchor on the workspace null (scopedNodeIds),
-    // then the fs-mode null, then the dir-branch file-only seed.
-    const workspaceNull = graph.search(
-      /currentScope\.kind === "workspace"\) \{\s*return null;/,
+  test("the semantic-mode filesystem-depth branch is gated on !filesystemMode (fs-mode never enters it)", () => {
+    // The pre-F1 GI-9 fix returned null for both workspace AND
+    // filesystem mode, which avoided the file-only seed bug by short-
+    // circuiting altogether. The closing-8 (F1) `find -d N` filter
+    // narrows workspace + dir scope by node path depth, so it needs to
+    // skip fs-mode explicitly - the fs-graph endpoint already returns
+    // the depth-limited containment spine and a SPA-side filter on
+    // node paths would re-introduce the empty-seed shape for
+    // directory-only fs scopes. Both guards must coexist: the new
+    // branch reads `!filesystemMode &&` and the standalone
+    // `if (filesystemMode) return null;` stays as a defense for any
+    // future semantic-mode work that follows.
+    expect(graph).toMatch(
+      /if \(\s*!filesystemMode &&\s*\(currentScope\.kind === "workspace" \|\| currentScope\.kind === "dir"\)\s*\)/,
     );
+    expect(graph).toMatch(/if \(filesystemMode\) return null;/);
+    // File-scope seed is the last semantic branch.
     const fsNull = graph.search(/if \(filesystemMode\) return null;/);
     const fileSeed = graph.search(
-      /n\.kind === "file" &&\s*\(n\.path === root \|\| n\.path\.startsWith\(prefix\)\)/,
+      /currentScope\.kind === "file" \? \[currentScope\.path\] : \[\]/,
     );
-    expect(workspaceNull).toBeGreaterThan(-1);
-    expect(fsNull).toBeGreaterThan(workspaceNull);
     expect(fileSeed).toBeGreaterThan(fsNull);
   });
 
-  test("the dir-scope seed is still file-only (documents WHY fs-mode must bypass it)", () => {
-    // This is the line that produced the empty seed for directory
-    // children. If a future change makes the dir branch seed from
-    // folder nodes too, revisit whether the fs-mode null guard is still
-    // the right shape.
-    expect(graph).toMatch(/\.filter\(\s*\(n\) =>\s*n\.kind === "file" &&/);
+  test("round-1 closing-8 (F1): workspace + dir semantic scope use find -d N depth filter", () => {
+    // Workspace + dir scope in semantic mode now filter nodes by
+    // filesystem depth relative to the scope root (find -d N
+    // semantics) instead of returning null / running a hop-based
+    // BFS. depth >= depthCap lifts the filter (show full graph);
+    // the workspace-root anchor is always kept so the spine has a
+    // root to hang off.
+    expect(graph).toMatch(
+      /currentScope\.kind === "workspace" \|\| currentScope\.kind === "dir"/,
+    );
+    expect(graph).toMatch(/if \(graphState\.depth >= depthCap\) return null;/);
+    expect(graph).toMatch(
+      /relativeDepth\(rootPath, nodePath\) <= graphState\.depth/,
+    );
+    // The pre-F1 dir-scope file-only seed is gone; the only file-seed
+    // path remaining is file scope.
+    expect(graph).not.toMatch(/n\.path === root \|\| n\.path\.startsWith\(prefix\)/);
   });
 });

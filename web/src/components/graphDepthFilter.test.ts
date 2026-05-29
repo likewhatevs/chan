@@ -139,3 +139,31 @@ describe("round-1 closing-2 (B7b): depth slider works in workspace path-scope", 
     );
   });
 });
+
+describe("round-1 closing-8 (F1): find -d N depth semantics in semantic mode", () => {
+  test("workspace + dir scope filter by filesystem depth (relativeDepth)", () => {
+    // Per @@Alex's chord smoke: Cmd+Shift+M at the workspace root with
+    // depth=1 should show only the first level; cranking the slider to
+    // its max should show the full graph. The filter replaces the
+    // pre-F1 workspace `return null` (no narrowing) and the dir-scope
+    // hop-based BFS. Tag / mention / language meta-nodes always pass
+    // through; the workspace-root anchor is unconditional so the spine
+    // has a root.
+    expect(graph).toMatch(
+      /import \{[\s\S]{1,400}relativeDepth[\s\S]{1,40}\} from "\.\.\/graph\/depth"/,
+    );
+    expect(graph).toMatch(
+      /currentScope\.kind === "workspace" \|\| currentScope\.kind === "dir"/,
+    );
+    expect(graph).toMatch(/if \(graphState\.depth >= depthCap\) return null;/);
+    expect(graph).toMatch(
+      /n\.kind === "tag" \|\| n\.kind === "mention" \|\| n\.kind === "language"/,
+    );
+    expect(graph).toMatch(
+      /n\.kind === "folder" && \(n\.id === "" \|\| n\.path === ""\)/,
+    );
+    expect(graph).toMatch(
+      /relativeDepth\(rootPath, nodePath\) <= graphState\.depth/,
+    );
+  });
+});

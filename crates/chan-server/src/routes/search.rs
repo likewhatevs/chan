@@ -374,10 +374,26 @@ fn build_indexing_state(
         }
     }
 
+    // Round-1 closing-8 (F2): during the embedding phase the indexer
+    // sets `IndexStatus::Building.file` to the literal sentinel
+    // "embedding" (see `crates/chan-server/src/indexer.rs:822-837`)
+    // instead of a real file path, so the per-entry `current_file ==
+    // Some(entry.path.as_str())` match above never fires and every
+    // directory came back as Pending - the dashboard's INDEXING graph
+    // showed no pulsing orange even though the bottom-left status pill
+    // read "indexing X/Y (embedding)". Detect the sentinel here and
+    // treat every directory with outstanding indexable work
+    // (`indexable_files > indexed_files`) as Indexing so the user sees
+    // which dirs are still being processed across the embedding sweep.
+    // Per `feedback_pre_release_no_backcompat` we consume the existing
+    // sentinel rather than introducing a new wire field.
+    let embedding_sweep = current_file == Some("embedding");
     let nodes = dirs
         .into_iter()
         .map(|(path, accum)| {
-            let state = if accum.indexing {
+            let in_progress =
+                accum.indexing || (embedding_sweep && accum.indexable_files > accum.indexed_files);
+            let state = if in_progress {
                 IndexingDirectoryState::Indexing
             } else if accum.indexable_files > 0 && accum.indexed_files == accum.indexable_files {
                 IndexingDirectoryState::Indexed
@@ -574,6 +590,67 @@ mod tests {
             Some("indexed" | "indexing" | "pending")
         ));
         assert!(json["nodes"][0]["children_count"].is_u64());
+    }
+
+    /// Round-1 closing-8 (F2): during the embedding phase the indexer
+    /// sets `IndexStatus::Building.file` to the literal sentinel
+    /// `"embedding"` instead of a real file path. `build_indexing_state`
+    /// must detect that sentinel and mark every directory with
+    /// outstanding work as `Indexing`, otherwise the dashboard's INDEXING
+    /// graph stays grey across the bulk of an embedding sweep even
+    /// though the status pill reads `"indexing X/Y (embedding)"`.
+    #[test]
+    fn indexing_state_marks_pending_dirs_as_indexing_during_embedding_sweep() {
+        let entries = vec![
+            tree_entry("done", true),
+            tree_entry("done/finished.md", false),
+            tree_entry("half", true),
+            tree_entry("half/done.md", false),
+            tree_entry("half/todo.md", false),
+            tree_entry("untouched", true),
+            tree_entry("untouched/todo.md", false),
+        ];
+        let indexed_paths =
+            BTreeSet::from(["done/finished.md".to_string(), "half/done.md".to_string()]);
+
+        let response = build_indexing_state(&entries, &indexed_paths, Some("embedding"));
+
+        // Fully indexed directories stay Indexed; partially indexed +
+        // not-yet-touched directories pulse Indexing.
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path == "done")
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Indexed)
+        );
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path == "half")
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Indexing)
+        );
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path == "untouched")
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Indexing)
+        );
+        // Workspace root also has outstanding work (half + untouched
+        // children) so it picks up the embedding-sweep Indexing too.
+        assert_eq!(
+            response
+                .nodes
+                .iter()
+                .find(|node| node.path.is_empty())
+                .map(|node| node.state),
+            Some(IndexingDirectoryState::Indexing)
+        );
     }
 
     struct RouteTestApp {

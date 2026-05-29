@@ -73,7 +73,7 @@
   import KindChip from "./KindChip.svelte";
   import { classifyFile as classifyFileKind, type FileKind } from "../state/kinds";
   import { chordFor } from "../state/shortcuts";
-  import { FS_GRAPH_DEPTH_MAX, graphDepthCap } from "../graph/depth";
+  import { FS_GRAPH_DEPTH_MAX, graphDepthCap, relativeDepth } from "../graph/depth";
 
   let {
     tab,
@@ -674,8 +674,49 @@
   /// about one workspace at a time).
   const scopedNodeIds = $derived.by<Set<string> | null>(() => {
     if (!currentScope) return null;
-    if (currentScope.kind === "workspace") {
-      return null;
+    // Round-1 closing-8 (F1): semantic-mode workspace + dir scope
+    // now filter file / folder / media nodes by their filesystem
+    // depth relative to the scope root, matching `find -d N`
+    // semantics. depth=1 shows only the first level under the
+    // scope; cranking the slider to its derived max
+    // (`depthCap` = the workspace / dir probe's actual reachable
+    // depth) lifts the filter entirely and the full graph
+    // renders. Tag / mention / language meta-nodes always pass
+    // through - they get culled naturally by the edges filter
+    // if no visible file references them. File-scope keeps the
+    // hop-based BFS below; "Graph from here" on a single file
+    // is the right surface for hop semantics.
+    if (
+      !filesystemMode &&
+      (currentScope.kind === "workspace" || currentScope.kind === "dir")
+    ) {
+      if (graphState.depth >= depthCap) return null;
+      const rootPath =
+        currentScope.kind === "workspace" ? "" : currentScope.path;
+      const visible = new Set<string>();
+      for (const n of nodes) {
+        if (n.kind === "tag" || n.kind === "mention" || n.kind === "language") {
+          visible.add(n.id);
+          continue;
+        }
+        if (n.kind === "folder" && (n.id === "" || n.path === "")) {
+          // Workspace root anchor is always visible regardless of
+          // scope so the spine has a root to hang off.
+          visible.add(n.id);
+          continue;
+        }
+        // file / folder remain after the meta-node continue + the
+        // workspace-root short-circuit above. RenderedNode doesn't
+        // model media as a separate kind - media files come through
+        // as `kind: "file"` and the canvas re-classifies them via
+        // `classifyFile`. Their `.path` works the same way.
+        const nodePath = n.path;
+        if (!nodePath) continue;
+        if (relativeDepth(rootPath, nodePath) <= graphState.depth) {
+          visible.add(n.id);
+        }
+      }
+      return visible;
     }
     // GI-9: in filesystem mode the fs-graph endpoint already returns
     // exactly the in-scope, depth-limited containment spine (the depth
@@ -772,23 +813,16 @@
       }
       return visited;
     }
-    let seedPaths: string[];
-    if (currentScope.kind === "dir") {
-      const root = currentScope.path;
-      const prefix = root + "/";
-      seedPaths = nodes
-        .filter(
-          (n) =>
-            n.kind === "file" &&
-            (n.path === root || n.path.startsWith(prefix)),
-        )
-        .map((n) => (n.kind === "file" ? n.path : ""))
-        .filter((p) => p);
-    } else {
-      // Only `file` scope remains here: workspace + tag returned above, and
-      // the wiped group/global/git_repo kinds never reach a graph.
-      seedPaths = currentScope.kind === "file" ? [currentScope.path] : [];
-    }
+    // Only file scope reaches here in semantic mode:
+    //   - workspace + dir handled by the filesystem-depth branch above
+    //     (F1).
+    //   - tag / contact / language lenses return earlier.
+    //   - filesystem mode bails at the top of the derivation.
+    // File scope keeps the forward-BFS shape: "Graph from here" on a
+    // single file means "expand N hops along outgoing edges from this
+    // file" — the hop semantic the chord users built intuition around.
+    const seedPaths: string[] =
+      currentScope.kind === "file" ? [currentScope.path] : [];
     const seedIds = new Set<string>();
     for (const n of nodes) {
       if (n.kind === "file" && seedPaths.includes(n.path)) seedIds.add(n.id);
