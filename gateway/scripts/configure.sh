@@ -113,7 +113,13 @@ write_env() {
         cp -p "$path" "$backup"
         echo "backed up $path -> $backup"
     fi
-    install -m 0640 -o root -g chan-gateway /dev/stdin "$path" <<< "$content"
+    # Write via a redirect, not `install /dev/stdin`: GNU install fails
+    # with "No such file or directory" reading the here-string fd when
+    # the destination already exists (and the .debs ship these as
+    # conf-files, so it always does). Set owner/mode explicitly after.
+    printf '%s\n' "$content" > "$path"
+    chown root:chan-gateway "$path"
+    chmod 0640 "$path"
     echo "wrote $path"
 }
 
