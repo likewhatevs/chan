@@ -1520,25 +1520,35 @@
     // differs.
     const nextIds = new Set<string>();
     for (const n of nodes) nextIds.add(n.id);
-    let sameSet = dNodes.length > 0 && dNodes.length === nextIds.size;
-    if (sameSet) {
-      for (const n of dNodes) {
-        if (!nextIds.has(n.id)) {
-          sameSet = false;
-          break;
-        }
-      }
-    }
+    let overlap = 0;
+    for (const n of dNodes) if (nextIds.has(n.id)) overlap++;
+    const sameSet =
+      dNodes.length > 0 &&
+      dNodes.length === nextIds.size &&
+      overlap === dNodes.length;
+    // Round-1 closing-6 (E3 fix-up): pick the simulation re-warm
+    // alpha by structural delta, not by a binary "same set vs
+    // not". The Dashboard indexing slide adds nodes one at a time
+    // as files appear on disk - alpha=1 (the prior "full swap"
+    // strength) yanks every node toward the layout origin and
+    // looks more like a scope change than a fluid file-browser
+    // update. Treat anything with >=50% overlap as incremental
+    // (gentle alpha so existing nodes barely move and the new
+    // ones ease in); zero-or-low overlap reads as a real scope
+    // swap and warrants the strong re-warm.
+    const incremental = !sameSet && dNodes.length > 0 && overlap * 2 >= dNodes.length;
     rebuildAdjacency();
     rebuildWorkingSet();
-    rewarmSim(sameSet ? 0.05 : 1);
+    const alpha = sameSet ? 0.05 : incremental ? 0.2 : 1;
+    rewarmSim(alpha);
+    // E3: scheduleRefit is itself gated on `userInteracted`, so
+    // calling it on a structural change is a no-op once the user
+    // has taken control of the view. First-load (userInteracted
+    // false) still gets the auto-fit. We no longer reset the
+    // interaction flag on set changes - the file-browser-style
+    // expectation is that new nodes appear in place while the
+    // user's chosen viewport stays put.
     if (!sameSet) {
-      // E3: a genuine set change (scope/depth/first-load) resets
-      // the user-interaction lock so the new dataset gets a fresh
-      // auto-fit. Same-set ticks keep the user's view intact.
-      userInteracted = false;
-      // Full data swap: track the cluster all the way through its
-      // longest relaxation so the view re-fits as it spreads.
       scheduleRefit(1200);
     }
   });
@@ -1560,9 +1570,27 @@
     // `scheduleRefit(400)` even when nothing structurally
     // changed - the view snapped back on every tick. When the
     // working set is unchanged (no nodes added or removed), this
-    // is a content-only re-render; skip the refit + the
-    // simulation re-warm so the canvas stays still.
-    if (added.length === 0 && removed.length === 0) return;
+    // is a content-only re-render; skip the refit + the alpha
+    // bump so the canvas stays still.
+    //
+    // Round-1 closing-6 (E3 fix-up): the previous shape early-
+    // returned BEFORE re-binding the d3-force link force to the
+    // freshly-rebuilt `dEdges` (rebuildWorkingSet replaces it on
+    // every call). Skipping `rewarmSim` orphaned the link force
+    // pointing at stale DEdge objects, and the render walked the
+    // new `visibleEdgeRefs` whose endpoints had never been
+    // resolved -> the canvas painted no edges. The same-set path
+    // now rebinds the link force directly (no alpha bump, no
+    // refit) so edges keep rendering while the user's view stays
+    // put.
+    if (added.length === 0 && removed.length === 0) {
+      sim.nodes(dNodes);
+      const link = sim.force("link") as unknown as {
+        links(ls: DEdge[]): unknown;
+      } | undefined;
+      if (link && typeof link.links === "function") link.links(dEdges);
+      return;
+    }
     const alpha = added.length > 0 ? 0.35 : 0.2;
     rewarmSim(alpha);
     // Scope / filter / depth change: re-fit so the focal node stays
