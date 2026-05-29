@@ -301,4 +301,122 @@ mod tests {
 
         assert!(!workspace.drafts_dir().join("untitled-1").exists());
     }
+
+    // ---- A4: draft-banner backend stress test -------------------------
+    //
+    // The false "unsaved changes from a previous session" banner
+    // (lane-b-plan-draft-restore-banner.md) is a frontend bug, but it
+    // can only be exercised cleanly if the backend invariants it stands
+    // on hold under load. This is the backend half of the e2e stress
+    // test: it hammers create-draft -> autosave (CAS) -> re-read over
+    // many iterations against the REAL self-write suppression
+    // (self_writes.rs) + watcher bridge (bus.rs) the server wires up,
+    // and asserts:
+    //   1. self-write suppression holds: every own write (and notify's
+    //      2-3 event burst per write) is recognized as a self-echo and
+    //      never forwarded to the /ws fan-out as an external edit -- the
+    //      path that would otherwise drive the banner.
+    //   2. a genuine external edit still surfaces (suppression is not a
+    //      blanket mute).
+    //   3. the CAS mtime_ns token round-trips: each autosave's returned
+    //      token is valid for the next write; a stale token conflicts.
+    //   4. no spurious DraftBroken / "missing draft.md": inspect_draft +
+    //      re-read stay healthy across the whole loop.
+    #[test]
+    fn draft_autosave_loop_holds_suppression_cas_and_no_broken_draft() {
+        use crate::bus::{make_watch_bridge, ScopeRegistry};
+        use crate::self_writes::SelfWrites;
+        use chan_workspace::{WatchCallback, WatchEvent, WatchKind};
+        use std::sync::Arc;
+        use tokio::sync::broadcast;
+
+        let (_cfg, _root, workspace) = make_workspace();
+
+        // Wire the real suppression + bridge the server uses (not a
+        // mock). `events_tx` is the /ws fan-out the editor's
+        // external-edit banner listens on; a self-write must never land
+        // there.
+        let self_writes = Arc::new(SelfWrites::new());
+        let (events_tx, mut events_rx) = broadcast::channel::<String>(1024);
+        let (index_tx, _index_rx) = broadcast::channel::<WatchEvent>(1024);
+        let scopes = Arc::new(ScopeRegistry::new());
+        let bridge = make_watch_bridge(&events_tx, &index_tx, &self_writes, &scopes);
+
+        let echo = |bridge: &Arc<dyn WatchCallback>, kind, path: &str| {
+            bridge.on_event(WatchEvent {
+                kind,
+                path: Some(path.to_string()),
+                to: None,
+            });
+        };
+
+        // Create the draft the way api_create_draft does: seed draft.md,
+        // note the path so the Created event is suppressed.
+        let name = create_draft_sync(&workspace).unwrap();
+        let path = format!("Drafts/{name}/draft.md");
+        self_writes.note(&path);
+        echo(&bridge, WatchKind::Created, &path);
+
+        // Hammer the autosave loop. Track the CAS token across writes.
+        let mut token_ns = workspace.stat(&path).unwrap().mtime_ns;
+        for i in 0..200 {
+            let body = format!("# Draft\n\nautosave {i}\n");
+            // api_write_file notes BEFORE the blocking write; mirror it.
+            self_writes.note(&path);
+            workspace
+                .write_text_if_unchanged(&path, token_ns, &body)
+                .unwrap_or_else(|e| panic!("autosave {i} failed: {e:?}"));
+
+            // CAS token must round-trip: the post-write mtime_ns is the
+            // valid token for the next write.
+            let stat = workspace.stat(&path).unwrap();
+            assert!(stat.mtime_ns.is_some(), "autosave {i}: mtime_ns missing");
+            token_ns = stat.mtime_ns;
+
+            // notify often emits 2-3 events per logical write; every one
+            // must be suppressed (no consume-on-match).
+            echo(&bridge, WatchKind::Modified, &path);
+            echo(&bridge, WatchKind::Modified, &path);
+            echo(&bridge, WatchKind::Created, &path);
+
+            // Re-read + inspect: never DraftBroken / missing draft.md.
+            assert_eq!(
+                workspace.read_text(&path).unwrap(),
+                body,
+                "autosave {i}: re-read mismatch"
+            );
+            let inspected = workspace
+                .inspect_draft(&name)
+                .unwrap_or_else(|e| panic!("autosave {i}: inspect_draft broke: {e:?}"));
+            assert!(inspected.file_count >= 1, "autosave {i}: draft.md vanished");
+        }
+
+        // Not one self-write should have reached the /ws fan-out.
+        assert!(
+            matches!(
+                events_rx.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ),
+            "a self-write leaked to the editor as an external edit",
+        );
+
+        // A genuine external edit (a path we never noted) still surfaces.
+        echo(&bridge, WatchKind::Modified, "notes/external.md");
+        let frame = events_rx
+            .try_recv()
+            .expect("external edit must surface on /ws");
+        assert!(
+            frame.contains("external.md"),
+            "unexpected /ws frame: {frame}",
+        );
+
+        // A stale CAS token must conflict (lock-step token contract).
+        let err = workspace
+            .write_text_if_unchanged(&path, Some(1), "# stale\n")
+            .unwrap_err();
+        assert!(
+            matches!(err, chan_workspace::ChanError::WriteConflict { .. }),
+            "stale token did not conflict: {err:?}",
+        );
+    }
 }
