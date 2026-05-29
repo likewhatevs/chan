@@ -1,7 +1,7 @@
 /// Phase-13 round-2 Team Work revamp: the survey/poke "bubble"
 /// overlay no longer carries live watcher data (the agent-event
 /// watcher + survey-reply round-trip was deleted with the
-/// rich-prompt-workspace plumbing). The overlay is now a
+/// team-work-workspace plumbing). The overlay is now a
 /// frontend-only static EXAMPLE so the bubble layout (stack vs
 /// tray) and the survey shapes chan supports stay demonstrable
 /// without any network or filesystem traffic.

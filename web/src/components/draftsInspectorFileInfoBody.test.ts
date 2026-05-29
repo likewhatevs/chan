@@ -27,11 +27,11 @@ describe("fullstack-a-66 slice c follow-up: FileInfoBody Drafts header", () => {
 
   test("notice references the Cmd+N draft path pattern", () => {
     // phase-13 r2 (merge-gate cleanup): the Team Work revamp deleted the
-    // rich-prompt-workspace archival, so the stale "Rich Prompt
-    // submissions persist as Drafts/rich-prompt-N/" clause was removed.
+    // team-work-workspace archival, so the stale "Team Work
+    // submissions persist as Drafts/team-work-N/" clause was removed.
     expect(fileInfo).toMatch(/Drafts\/untitled-N/);
-    expect(fileInfo).not.toMatch(/Drafts\/rich-prompt-N/);
-    expect(fileInfo).not.toMatch(/Rich Prompt/);
+    expect(fileInfo).not.toMatch(/Drafts\/team-work-N/);
+    expect(fileInfo).not.toMatch(/Team Work/);
   });
 
   test("CSS rules for .kind-chip.drafts-chip + .drafts-notice present", () => {

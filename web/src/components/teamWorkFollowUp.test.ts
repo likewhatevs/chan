@@ -5,7 +5,7 @@ import terminal from "./TerminalTab.svelte?raw";
 // Phase-13 round-2 Team Work revamp: the BubbleOverlay is now a
 // frontend-only static example. The pre-revamp F-follow-up feature
 // (`surveyAsQuoteMarkdown` / `quoteSurveyToPrompt` in BubbleOverlay
-// quoting a live survey into the rich-prompt buffer via an
+// quoting a live survey into the team-work buffer via an
 // `onQuoteToPrompt` callback) is gone along with the watcher data
 // it depended on. The "F" affordance survives as a presentational
 // example marker only: clicking it dismisses the static example.
@@ -28,8 +28,8 @@ describe("Team Work revamp: F follow-up is presentational only", () => {
     expect(bubble).toMatch(/class="follow-button" onclick=\{dismiss\}/);
   });
 
-  test("TerminalTab no longer carries the quoteIntoRichPrompt callback", () => {
-    expect(terminal).not.toMatch(/quoteIntoRichPrompt/);
+  test("TerminalTab no longer carries the quoteIntoTeamWork callback", () => {
+    expect(terminal).not.toMatch(/quoteIntoTeamWork/);
     expect(terminal).not.toMatch(/onQuoteToPrompt/);
   });
 

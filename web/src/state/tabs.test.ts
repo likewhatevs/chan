@@ -584,13 +584,13 @@ describe("pane state", () => {
         buffer: "queued prompt",
         open: true,
         phase: "active",
-        workspaceName: "rich-prompt-2",
-        draftPath: "Drafts/rich-prompt-2/draft.md",
-        workspacePath: "Drafts/rich-prompt-2",
-        eventsPath: "Drafts/rich-prompt-2/spool/events",
-        processPath: "Drafts/rich-prompt-2/spool/process.md",
-        workspaceAbs: "/tmp/workspace/.chan/rich-prompt-2",
-        eventsAbs: "/tmp/workspace/.chan/rich-prompt-2/spool/events",
+        workspaceName: "team-work-2",
+        draftPath: "Drafts/team-work-2/draft.md",
+        workspacePath: "Drafts/team-work-2",
+        eventsPath: "Drafts/team-work-2/spool/events",
+        processPath: "Drafts/team-work-2/spool/process.md",
+        workspaceAbs: "/tmp/workspace/.chan/team-work-2",
+        eventsAbs: "/tmp/workspace/.chan/team-work-2/spool/events",
         submissionSequence: 7,
         submitMode: "agent",
         agentTarget: "claude",
@@ -614,8 +614,8 @@ describe("pane state", () => {
     if (moved?.kind !== "terminal") return;
     expect(moved.teamWork).toMatchObject({
       buffer: "queued prompt",
-      workspaceName: "rich-prompt-2",
-      eventsPath: "Drafts/rich-prompt-2/spool/events",
+      workspaceName: "team-work-2",
+      eventsPath: "Drafts/team-work-2/spool/events",
       submissionSequence: 7,
       submitMode: "agent",
       agentTarget: "claude",
@@ -2166,17 +2166,17 @@ describe("terminal session serialization", () => {
         teamWork: {
           buffer: "",
           open: true,
-          workspaceName: "rich-prompt-2",
+          workspaceName: "team-work-2",
           submissionSequence: 3,
         },
       }),
     ]);
 
     const shareable = serializeLayout();
-    expect(JSON.stringify(shareable)).not.toContain("rich-prompt-2");
+    expect(JSON.stringify(shareable)).not.toContain("team-work-2");
 
     const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpn\":\"rich-prompt-2\"");
+    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpn\":\"team-work-2\"");
     expect(JSON.stringify(sessionSnapshot)).toContain("\"rpsq\":3");
 
     await restoreLayout(sessionSnapshot!);
@@ -2184,7 +2184,7 @@ describe("terminal session serialization", () => {
     const [tab] = activePane().tabs;
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
-    expect(tab.teamWork?.workspaceName).toBe("rich-prompt-2");
+    expect(tab.teamWork?.workspaceName).toBe("team-work-2");
     expect(tab.teamWork?.submissionSequence).toBe(3);
   });
 

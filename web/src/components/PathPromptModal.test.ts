@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import modal from "./PathPromptModal.svelte?raw";
 import teamWork from "./TeamWork.svelte?raw";
 
-// `fullstack-b-3`: the rich-prompt watcher dialog needed a path
+// `fullstack-b-3`: the team-work watcher dialog needed a path
 // prompt that is neither "create" nor "move" / "rename". An
 // existing directory shouldn't trigger an "overwrites" warning
 // (attaching a watcher never overwrites), and a missing path

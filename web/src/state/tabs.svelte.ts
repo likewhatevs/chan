@@ -380,7 +380,7 @@ export type TeamWorkState = {
   /// persisted to SerTab — repopulated on every mount.
   measuredHeightPx?: number;
   /// `fullstack-a-30`: actual rendered width (px) of the
-  /// rich-prompt root, written by the same ResizeObserver. Feeds
+  /// team-work root, written by the same ResizeObserver. Feeds
   /// the per-prompt page-width clamp on the composer-editor so
   /// the cap is computed relative to THIS prompt's painted
   /// width, not the pane's editor wrapper. Not persisted.
@@ -388,7 +388,7 @@ export type TeamWorkState = {
   /// `fullstack-a-30`: per-prompt page-width ratio in (0.25, 1.0].
   /// `1.0` (or absent) reads as "no cap" — the composer fills
   /// the prompt's painted width. Set via the slider in the
-  /// rich-prompt context menu. Decouples the prompt's line width
+  /// team-work context menu. Decouples the prompt's line width
   /// from the global `pageWidth.ratio` so narrowing the editor
   /// in one tile does not cascade onto a sibling tile's prompt.
   pageWidthRatio?: number;
@@ -1395,7 +1395,7 @@ export function allTerminalTabs(): TerminalTab[] {
 /// chan-server session id. The team orchestrator pins the
 /// host session at dialog-open time (per `hostSessionId` on
 /// `TeamDialogRequest`); the lead-prompt step uses this to
-/// locate the tab and populate its rich-prompt buffer.
+/// locate the tab and populate its team-work buffer.
 /// Returns null when no matching tab is open — the orchestrator
 /// silently skips the lead-prompt step in that case.
 export function findTerminalBySession(sessionId: string): TerminalTab | null {
@@ -3509,7 +3509,7 @@ type SerTab = {
   /// Terminal PTY session id. Only emitted in the per-window
   /// session payload, never in the shareable URL hash.
   tsid?: string;
-  /// Active Rich Prompt workspace identity. Only emitted in the
+  /// Active Team Work workspace identity. Only emitted in the
   /// per-window session payload, alongside `tsid`.
   rpn?: string;
   rpsq?: number;
@@ -3522,7 +3522,7 @@ type SerTab = {
   /// after the pre-reload cursor.
   tseq?: number;
   /// Last injected agent-event echo sequence the browser handled.
-  /// Used only for replaying missed Rich Prompt watcher dispatches.
+  /// Used only for replaying missed Team Work watcher dispatches.
   tae?: number;
   /// Desired MCP env injection for fresh terminal sessions. Default on.
   me?: 0;
@@ -3535,7 +3535,7 @@ type SerTab = {
   rph?: number;
   rpo?: 1;
   rpm?: "w" | "s";
-  /// `fullstack-a-24`: rich-prompt collapsed flag. `1` when the
+  /// `fullstack-a-24`: team-work collapsed flag. `1` when the
   /// user collapsed the prompt to its minimal-height bar; absent
   /// otherwise. Sticks across close → re-open within a session.
   rpc?: 1;

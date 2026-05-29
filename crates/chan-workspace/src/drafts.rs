@@ -5,9 +5,9 @@
 //!
 //! Each draft is a DIRECTORY (e.g. `untitled-1/draft.md`) so the
 //! user can paste images and drop config files alongside the
-//! markdown without committing them. Rich Prompt history shares
+//! markdown without committing them. Team Work history shares
 //! the same machinery, distinguished by directory naming
-//! convention (`rich-prompt-N/`).
+//! convention (`team-work-N/`).
 //!
 //! The watcher + indexer integration that makes drafts
 //! participate in search + graph is implemented elsewhere (see
@@ -697,13 +697,13 @@ mod tests {
         let a = create_dir(&root, "untitled-1").unwrap();
         assert_eq!(a.name, "untitled-1");
         assert!(a.abs.is_dir());
-        let b = create_dir(&root, "rich-prompt-3").unwrap();
+        let b = create_dir(&root, "team-work-3").unwrap();
         assert!(b.abs.is_dir());
 
         let listed = list(&root).unwrap();
         assert_eq!(listed.len(), 2);
-        // list() sorts; rich-prompt-3 before untitled-1.
-        assert_eq!(listed[0].name, "rich-prompt-3");
+        // list() sorts; team-work-3 before untitled-1.
+        assert_eq!(listed[0].name, "team-work-3");
         assert_eq!(listed[1].name, "untitled-1");
     }
 

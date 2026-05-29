@@ -344,7 +344,7 @@
   }
   /// Phase 13 round 2 Team Work flow: Cmd+P (and Cmd+Alt+P, and the
   /// Hybrid hamburger "Team Work" item, all on the stable chord id
-  /// `app.terminal.richPrompt`) now instantiate the Team Work Lead
+  /// `app.terminal.teamWork`) now instantiate the Team Work Lead
   /// Terminal FIRST (a fresh terminal with the markdown editor armed
   /// open, like Cmd+N embedded at the bottom), then open the
   /// Spawn-agents dialog OVER it. The dialog owns Cancel (deletes the
@@ -372,7 +372,7 @@
   ///
   ///   Cmd+T          -> Terminal (native; Cmd+Alt+T on web Mac)
   ///   Cmd+O          -> File Browser (native; Cmd+Alt+O on web Mac)
-  ///   Cmd+P          -> Rich Prompt (native; Cmd+Alt+P on web Mac)
+  ///   Cmd+P          -> Team Work (native; Cmd+Alt+P on web Mac)
   ///   Cmd+Shift+M    -> Graph (native + web)
   ///   Mod+. t/o/p/v  -> universal aliases via Hybrid Nav
   ///
@@ -593,7 +593,7 @@
         openDashboardInActivePane();
         return;
       // `fullstack-a-68 slice 2`: `P` now stages a fresh smart-
-      // prompt terminal (a terminal tab with the rich-prompt
+      // prompt terminal (a terminal tab with the team-work
       // overlay armed open) instead of toggling the overlay on
       // the focused pane's existing terminal. Phase 9 applies
       // the same fresh-terminal rule to top-level Cmd+P.
@@ -699,8 +699,8 @@
       flipHybrid(layout.activePaneId);
       return;
     }
-    // `fullstack-a-90`: removed the legacy `Alt+Space` rich-prompt
-    // chord. Rich prompt is now Cmd+P (native) + Cmd+Alt+P (web Mac
+    // `fullstack-a-90`: removed the legacy `Alt+Space` team-work
+    // chord. Team Work is now Cmd+P (native) + Cmd+Alt+P (web Mac
     // fallback) + `Mod+. p` (Hybrid Nav). `-a-32`'s muscle-memory
     // bridge expired.
     // `fullstack-a-32`: spawn-chord family. Each Cmd+Alt+<letter>
@@ -1013,7 +1013,7 @@
       case "app.terminal.toggle":
         spawnTerminalFromContext();
         return;
-      case "app.terminal.richPrompt":
+      case "app.terminal.teamWork":
         spawnTeamWorkFromContext();
         return;
       case "app.terminal.broadcastToggle":

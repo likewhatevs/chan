@@ -27,7 +27,7 @@ afterEach(() => {
 function resetLayout(): LeafNode {
   const pane: LeafNode = {
     kind: "leaf",
-    id: "pane-rich-prompt-test",
+    id: "pane-team-work-test",
     tabs: [],
     activeTabId: null,
   };
@@ -85,7 +85,7 @@ async function renderPrompt(prompt: TeamWorkState) {
   });
   mounted.push(component);
   await tick();
-  const root = target.querySelector<HTMLElement>(".rich-prompt");
+  const root = target.querySelector<HTMLElement>(".team-work");
   if (!root) throw new Error("team work prompt not mounted");
   return { target, root, onSubmit };
 }

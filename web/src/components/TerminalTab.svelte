@@ -1206,7 +1206,7 @@
     scheduleTerminalSessionSave();
     // Phase-13 round-2: every submit to the lead terminal resets
     // the draft back to empty. The pre-revamp build cleared the
-    // buffer only after the rich-prompt-workspace archive write
+    // buffer only after the team-work-workspace archive write
     // confirmed (and only when the buffer was unchanged); the
     // archival path is gone, so the reset is now unconditional.
     if (tab.teamWork) {
@@ -1295,9 +1295,9 @@
     if (closeExitedTabFromKey(e)) {
       return;
     }
-    // `fullstack-a-90`: removed the legacy `Alt+Space` rich-prompt
+    // `fullstack-a-90`: removed the legacy `Alt+Space` team-work
     // chord. Cmd+P (native), Cmd+Alt+P (web Mac), and `Mod+. p`
-    // (Hybrid Nav) cover the rich-prompt entry points.
+    // (Hybrid Nav) cover the team-work entry points.
     if (
       (e.metaKey || e.ctrlKey) &&
       !e.shiftKey &&
@@ -1567,7 +1567,7 @@
             {tab.teamWork?.open ? "Hide Team Work" : "Show Team Work"}
           </span>
           <span class="mbtn-chord">
-            {chordFor("app.terminal.richPrompt") ?? ""}
+            {chordFor("app.terminal.teamWork") ?? ""}
           </span>
         </button>
         <div class="msep" role="separator"></div>

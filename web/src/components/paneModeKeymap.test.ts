@@ -29,7 +29,7 @@ describe("Cmd+K pane mode keymap (fullstack-40 inversion)", () => {
 // `fullstack-a-32` reshaped the Hybrid NAV spawn cases. The numeric
 // 1/2/3/4 cases are gone (they duplicated the new top-level chord
 // set Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). The letter mnemonics
-// `t/T` (terminal), `o/O` (browser), `p/P` (rich prompt — kept
+// `t/T` (terminal), `o/O` (browser), `p/P` (team work — kept
 // from -50), `v/V` (graph) are the in-Hybrid-NAV path; each
 // commits immediately and routes through the same context-aware
 // helper as the matching top-level chord. `f/F` (Search) and
@@ -146,7 +146,7 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords (fullstack-a-32)", () => 
 
   test("chan:command bridge routes through context-aware helpers", () => {
     // chan-desktop's KEY_BRIDGE_JS fires `app.terminal.toggle` /
-    // `app.files.toggle` / `app.terminal.richPrompt` /
+    // `app.files.toggle` / `app.terminal.teamWork` /
     // `app.graph.toggle` on native Cmd+T / Cmd+O / Cmd+P /
     // Cmd+Shift+M. -a-32 routes them through the same helpers
     // the web chords use so native + web behave identically.
@@ -157,7 +157,7 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords (fullstack-a-32)", () => 
       /case "app\.files\.toggle":\s*\n\s*spawnBrowserFromContext\(\);/,
     );
     expect(app).toMatch(
-      /case "app\.terminal\.richPrompt":\s*\n\s*spawnTeamWorkFromContext\(\);/,
+      /case "app\.terminal\.teamWork":\s*\n\s*spawnTeamWorkFromContext\(\);/,
     );
     expect(app).toMatch(
       /case "app\.graph\.toggle":\s*\n\s*spawnGraphFromContext\(\);/,
@@ -184,13 +184,13 @@ describe("Cmd+K pane mode Team Work binding (phase-13 r2)", () => {
     // phase-13 r2: the top-level chord instantiates the lead
     // terminal FIRST (createTeamWorkLeadTerminal), then opens the
     // Spawn-agents dialog over it (openTeamDialog with the lead tab
-    // + pane id). The old showOrSpawnRichPromptInFocusedPane helper
+    // + pane id). The old showOrSpawnTeamWorkInFocusedPane helper
     // is gone.
     expect(app).toMatch(/import \{[\s\S]{1,4000}createTeamWorkLeadTerminal,/);
     expect(app).toMatch(
       /function spawnTeamWorkFromContext\(\): void \{[\s\S]*?createTeamWorkLeadTerminal\(\{ cwd: ctx\.dir \}\);[\s\S]*?openTeamDialog\(\{ leadTabId: lead\.id, leadPaneId: activePane\(\)\.id \}\);/,
     );
-    expect(app).not.toMatch(/showOrSpawnRichPromptInFocusedPane/);
+    expect(app).not.toMatch(/showOrSpawnTeamWorkInFocusedPane/);
   });
 });
 

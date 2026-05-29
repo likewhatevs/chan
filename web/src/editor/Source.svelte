@@ -69,11 +69,11 @@
     highlightTrailingWhitespace?: boolean;
     initialCaret?: { from: number; to: number } | null;
     /// When false, skip the mount-time `view.focus()`. Mirrors the
-    /// same prop on `Wysiwyg.svelte` so the rich-prompt's bubble-gated
+    /// same prop on `Wysiwyg.svelte` so the team-work's bubble-gated
     /// focus policy in `fullstack-a-14` works in source mode too.
     autoFocus?: boolean;
     /// `fullstack-a-89`: empty-state placeholder text. Mirrors
-    /// the same prop on `Wysiwyg.svelte` so the rich prompt's
+    /// the same prop on `Wysiwyg.svelte` so the team work's
     /// source-mode placeholder works identically to wysiwyg
     /// mode. Unset = no placeholder (the file editor's source
     /// view doesn't want one).
@@ -81,7 +81,7 @@
     onCaretChange?: (from: number, to: number) => void;
     /// Chat-style send chord. When wired, plain Enter calls this
     /// (Shift+Enter still inserts a newline via CM6 default). Only
-    /// the terminal rich prompt threads it today; the file editor's
+    /// the terminal team work threads it today; the file editor's
     /// source view leaves it unset so Enter keeps inserting a
     /// newline.
     onSubmit?: () => void;
@@ -220,7 +220,7 @@
         EditorView.lineWrapping,
         // `fullstack-a-89`: optional empty-state placeholder.
         // Same shape as Wysiwyg.svelte's wiring; both modes
-        // need the prop so the rich prompt's mode-toggle
+        // need the prop so the team work's mode-toggle
         // (`-a-4`) keeps the placeholder visible in either.
         ...(placeholderText ? [placeholder(placeholderText)] : []),
         breathingRoom(),

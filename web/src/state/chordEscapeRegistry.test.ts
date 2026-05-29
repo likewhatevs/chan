@@ -8,7 +8,7 @@ import {
 } from "./shortcuts";
 
 // `fullstack-a-91`: chord-escape registry. Global App-group
-// chords (Settings, RichPrompt, Reload, FB, Graph, NewDraft,
+// chords (Settings, TeamWork, Reload, FB, Graph, NewDraft,
 // New Terminal, Hybrid Nav) carry `escapeTerminal: true`. The
 // `handleTerminalKeyEvent` xterm-`customKeyEventHandler` callback
 // consults the registry: matched events return false so the
@@ -22,7 +22,7 @@ describe("fullstack-a-91: registry shape", () => {
   test("App-group chords flagged escapeTerminal=true", () => {
     const required = [
       "app.settings.toggle",
-      "app.terminal.richPrompt",
+      "app.terminal.teamWork",
       "app.files.toggle",
       "app.graph.toggle",
       "app.terminal.toggle",
@@ -87,7 +87,7 @@ describe("fullstack-a-91: shouldEscapeTerminal lookup", () => {
     vi.unstubAllGlobals();
   });
 
-  test("Cmd+Alt+P (rich prompt web Mac chord) escapes", () => {
+  test("Cmd+Alt+P (team work web Mac chord) escapes", () => {
     // Test env runs as web platform (no Tauri global). Web Mac
     // users fire the Cmd+Alt+P fallback (Cmd+P is browser-owned
     // for the print dialog). Native chan-desktop's

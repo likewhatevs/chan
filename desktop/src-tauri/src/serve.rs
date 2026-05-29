@@ -570,8 +570,8 @@ const KEY_BRIDGE_JS: &str = r#"
   // `fullstack-b-2`: Cmd+T comes back as a direct chord for
   // "new terminal in active pane".
   // `fullstack-a-32`: Cmd+O / Cmd+P / Cmd+Shift+M added as direct
-  // chords for File Browser / Rich Prompt / Graph (with the
-  // matching `app.files.toggle` / `app.terminal.richPrompt` /
+  // chords for File Browser / Team Work / Graph (with the
+  // matching `app.files.toggle` / `app.terminal.teamWork` /
   // `app.graph.toggle` commands routed through the context-aware
   // helpers in App.svelte). Universal Hybrid NAV `t/o/p/v` covers
   // the web/Win/Linux fallback path.
@@ -613,7 +613,7 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyR': invokeIpc(e, 'reload_window'); return;
         case 'KeyT': fire(e, 'app.terminal.toggle'); return;
         case 'KeyO': fire(e, 'app.files.toggle');    return;
-        case 'KeyP': fire(e, 'app.terminal.richPrompt'); return;
+        case 'KeyP': fire(e, 'app.terminal.teamWork'); return;
         // `phase-12 lane-e` (addendum-2 Q6/Q7): Cmd+W closes the tab
         // on macOS. On Linux the platform mod is Ctrl and Ctrl+W is
         // readline delete-word inside a focused terminal, so DON'T
@@ -1059,7 +1059,7 @@ mod tests {
         // Pane Mode equivalent. `fullstack-b-2` brought
         // `app.terminal.toggle` back (Cmd+T). `fullstack-a-32`
         // brings back `app.files.toggle` (Cmd+O), `app.graph.toggle`
-        // (Cmd+Shift+M), and `app.terminal.richPrompt` (Cmd+P) as
+        // (Cmd+Shift+M), and `app.terminal.teamWork` (Cmd+P) as
         // direct chords with context-aware semantics. `phase-12
         // lane-e` (addendum-2) brings `app.search.toggle` back as a
         // direct chord too (Cmd+S = workspace-wide search), so it moves to
@@ -1079,7 +1079,7 @@ mod tests {
         // spawn chord family.
         assert!(KEY_BRIDGE_JS.contains("app.terminal.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.files.toggle"));
-        assert!(KEY_BRIDGE_JS.contains("app.terminal.richPrompt"));
+        assert!(KEY_BRIDGE_JS.contains("app.terminal.teamWork"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.prev"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.next"));
         assert!(KEY_BRIDGE_JS.contains("app.graph.toggle"));

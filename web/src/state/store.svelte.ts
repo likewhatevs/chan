@@ -302,10 +302,10 @@ function workspaceWarningStatusLabel(warnings: WorkspaceWarning[]): string {
 }
 
 export function workspaceWarningLabel(warning: WorkspaceWarning): string {
-  // phase-13 r2 (merge-gate cleanup): the `broken_rich_prompt` warning
-  // kind is gone - the Team Work revamp deleted the rich-prompt
+  // phase-13 r2 (merge-gate cleanup): the `broken_team_work` warning
+  // kind is gone - the Team Work revamp deleted the team-work
   // workspace archival, so the backend never emits it anymore (0 refs
-  // in crates/). Dropped the dead branch + its "Broken Rich Prompt"
+  // in crates/). Dropped the dead branch + its "Broken Team Work"
   // label rather than renaming it.
   const prefix =
     warning.kind === "broken_draft" ? "Broken draft" : "Workspace warning";

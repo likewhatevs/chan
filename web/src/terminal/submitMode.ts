@@ -1,4 +1,4 @@
-/// `fullstack-b-13`: chord byte sequence appended to the rich-prompt
+/// `fullstack-b-13`: chord byte sequence appended to the team-work
 /// buffer in Agent submit-mode. Claude Code v2.1.145 reads this
 /// (xterm modifyOtherKeys CSI for Cmd+Enter) as the "submit"
 /// chord; bare `\n` lands as a newline in its multi-line draft
@@ -13,11 +13,11 @@
 ///
 /// The server-side mirror lives in
 /// `crates/chan-server/src/terminal_sessions.rs::SubmitMode::submit_chord`;
-/// both consumers (rich-prompt Cmd+Enter submit, server-side
+/// both consumers (team-work Cmd+Enter submit, server-side
 /// `dispatch_agent_event` survey-reply echo) emit the same chord.
 export const AGENT_SUBMIT_CHORD = "\x1b[27;9;13~";
 
-/// `fullstack-b-13`: strip trailing newlines from the rich-prompt
+/// `fullstack-b-13`: strip trailing newlines from the team-work
 /// buffer before appending the agent chord. A stray `\n` between
 /// the buffer text and the chord lands as a newline inside the
 /// agent's multi-line draft, splitting the buffer across lines

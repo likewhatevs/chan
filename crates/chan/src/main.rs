@@ -76,7 +76,7 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   App
   ---
   Settings                                     Cmd+,
-  Terminal rich prompt                         Cmd+Alt+P   (macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav))
+  Terminal team work                         Cmd+Alt+P   (macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav))
   File browser                                 Cmd+Alt+O   (macOS web + native everywhere; all platforms via Mod+. o (Hybrid Nav))
   Graph                                        Cmd+Shift+M   (or Mod+. v (Hybrid Nav))
   New terminal                                 Cmd+Alt+T   (macOS web + native everywhere; all platforms via Mod+. t (Hybrid Nav))

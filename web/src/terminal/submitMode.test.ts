@@ -19,7 +19,7 @@ describe("submitMode (fullstack-b-13)", () => {
   });
 
   test("encodeForAgentSubmit preserves interior newlines", () => {
-    // Multi-paragraph rich-prompt drafts keep their structure;
+    // Multi-paragraph team-work drafts keep their structure;
     // only the trailing newline (which would land as a stray
     // line break inside the agent's draft before submit fires)
     // gets stripped.

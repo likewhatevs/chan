@@ -105,7 +105,7 @@
     highlightTrailingWhitespace?: boolean;
     initialCaret?: { from: number; to: number } | null;
     /// When false, the editor skips the mount-time `view.focus()`.
-    /// Hosts that own their own focus policy (e.g. the rich prompt
+    /// Hosts that own their own focus policy (e.g. the team work
     /// gating focus on bubble state in `fullstack-a-14`) pass false
     /// to keep the editor unfocused on mount; otherwise the unconditional
     /// mount focus would race past the host's gate.
@@ -113,7 +113,7 @@
     /// `fullstack-a-89`: empty-state placeholder text. When set
     /// the editor adds CM6's `placeholder` extension which
     /// renders at the cursor position (so cursor + placeholder
-    /// share the exact same x/y). Previously the rich prompt
+    /// share the exact same x/y). Previously the team work
     /// used a CSS overlay (`-a-24`) which fought CM6's internal
     /// coordinate system; `-a-84` + `-a-87` patched alignment
     /// but couldn't fully close the empirical gap. Unset = no
@@ -524,7 +524,7 @@
             // default Enter (newline) still fires.
             { key: "Enter", run: (view) => continueListOnEnter(view) },
             // Chat-style send chord. Only active when the host wires
-            // an `onSubmit` (terminal rich prompt today); plain file
+            // an `onSubmit` (terminal team work today); plain file
             // editors leave `onSubmit` unset so this entry returns
             // false and Enter falls through to CM6 default newline.
             // Shift+Enter is registered separately by CM6 as
@@ -572,7 +572,7 @@
     // parks focus on <body> by the time content arrives, so without
     // this rAF the editor mounts un-focused and the user has to click
     // to type. Gated on autoFocus so hosts that own their focus policy
-    // (rich prompt) stay unfocused.
+    // (team work) stay unfocused.
     if (autoFocus) {
       requestAnimationFrame(() => {
         if (!view) return;
@@ -606,7 +606,7 @@
     // Defer past the current frame so the focus lands after any
     // same-tick blur in the open path and after layout settles (the
     // pane may still be animating in). Gated on `autoFocus` so hosts
-    // that own their focus policy (rich prompt) stay unfocused.
+    // that own their focus policy (team work) stay unfocused.
     if (autoFocus) {
       requestAnimationFrame(() => {
         if (!view) return;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import richPrompt from "./TeamWork.svelte?raw";
+import teamWork from "./TeamWork.svelte?raw";
 import tabsModule from "../state/tabs.svelte.ts?raw";
 
 // fullstack-79: every `openActiveTeamWork` call bumps a
@@ -29,12 +29,12 @@ describe("fullstack-79: Team Work auto-focus on entry", () => {
     // bumps, then dispatches to the appropriate editor child after
     // the next tick (lets the {#key mode()} block remount on
     // wysiwyg/source toggle before we try to focus).
-    expect(richPrompt).toContain("void prompt.focusNonce");
-    expect(richPrompt).toContain("wysiwygRef?.focusEnd()");
-    expect(richPrompt).toContain("sourceRef?.focusAt(prompt.buffer.length)");
+    expect(teamWork).toContain("void prompt.focusNonce");
+    expect(teamWork).toContain("wysiwygRef?.focusEnd()");
+    expect(teamWork).toContain("sourceRef?.focusAt(prompt.buffer.length)");
   });
 
   test("Source mode also receives focus via sourceRef binding", () => {
-    expect(richPrompt).toContain("bind:this={sourceRef}");
+    expect(teamWork).toContain("bind:this={sourceRef}");
   });
 });

@@ -3,38 +3,38 @@ import app from "../App.svelte?raw";
 import terminal from "../components/TerminalTab.svelte?raw";
 import shortcuts from "./shortcuts.ts?raw";
 
-// `fullstack-a-90`: the legacy `Alt+Space` rich-prompt chord
+// `fullstack-a-90`: the legacy `Alt+Space` team-work chord
 // is removed. Cmd+P (native), Cmd+Alt+P (web Mac), and
 // `Mod+. p` (Hybrid NAV) cover every entry point.
 
 describe("fullstack-a-90: Alt+Space chord removed from App.svelte", () => {
-  test("no `altKey + Space` keymap branch for rich-prompt spawn", () => {
+  test("no `altKey + Space` keymap branch for team-work spawn", () => {
     expect(app).not.toMatch(
-      /if \(e\.altKey && !meta && !e\.shiftKey && e\.code === "Space"\) \{[\s\S]*?spawnRichPromptFromContext\(\);/,
+      /if \(e\.altKey && !meta && !e\.shiftKey && e\.code === "Space"\) \{[\s\S]*?spawnTeamWorkFromContext\(\);/,
     );
   });
 
   test("removal-rationale comment present", () => {
     expect(app).toMatch(
-      /`fullstack-a-90`:[\s\S]*?removed the legacy `Alt\+Space` rich-prompt/i,
+      /`fullstack-a-90`:[\s\S]*?removed the legacy `Alt\+Space` team-work/i,
     );
   });
 
   test("keymap header doc-block no longer advertises Alt+Space", () => {
-    expect(app).not.toMatch(/Alt\+Space\s+->\s+Rich Prompt/);
+    expect(app).not.toMatch(/Alt\+Space\s+->\s+Team Work/);
   });
 });
 
 describe("fullstack-a-90: Alt+Space chord removed from TerminalTab.svelte", () => {
-  test("no secondary `altKey + Space` handler firing `openRichPrompt`", () => {
+  test("no secondary `altKey + Space` handler firing `openTeamWork`", () => {
     expect(terminal).not.toMatch(
-      /if \(e\.altKey && !e\.ctrlKey && !e\.metaKey && !e\.shiftKey && e\.code === "Space"\) \{[\s\S]*?openRichPrompt\(\);/,
+      /if \(e\.altKey && !e\.ctrlKey && !e\.metaKey && !e\.shiftKey && e\.code === "Space"\) \{[\s\S]*?openTeamWork\(\);/,
     );
   });
 
   test("removal-rationale comment present", () => {
     expect(terminal).toMatch(
-      /`fullstack-a-90`:[\s\S]*?removed the legacy `Alt\+Space` rich-prompt/i,
+      /`fullstack-a-90`:[\s\S]*?removed the legacy `Alt\+Space` team-work/i,
     );
   });
 

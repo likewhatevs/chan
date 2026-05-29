@@ -1202,7 +1202,7 @@
             }}
           />
           {#if tab.styleToolbarOpen}
-            <!-- `fullstack-a-26`: parity with the rich-prompt
+            <!-- `fullstack-a-26`: parity with the team-work
                  toolbar — separator + rendered/source toggle next
                  to the formatting buttons. `mode` + `onModeToggle`
                  are passed through to the shared StyleToolbar

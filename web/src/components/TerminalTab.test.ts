@@ -9,7 +9,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 // across workers), not an xterm-mock or shared-state race. The `vi.mock`
 // calls below are hoisted by vitest above ALL imports, so this static
 // import still sees the mocked xterm modules. Matches the non-flaky
-// TerminalRichPrompt.test.ts pattern.
+// TerminalTeamWork.test.ts pattern.
 import TerminalTab from "./TerminalTab.svelte";
 import terminalSource from "./TerminalTab.svelte?raw";
 import type { TerminalTab as TerminalTabState } from "../state/tabs.svelte";
@@ -221,7 +221,7 @@ describe("TerminalTab menu", () => {
     },
   );
 
-  test("the Team Work toggle replaces the Rich Prompt entry", async () => {
+  test("the terminal menu shows the Team Work editor toggle", async () => {
     const tab = terminalTab({
       terminalSessionId: "term-session-1",
       teamWork: { buffer: "", open: false },
@@ -236,7 +236,6 @@ describe("TerminalTab menu", () => {
       (el) => (el.textContent || "").trim(),
     );
     expect(labels).toContain("Show Team Work");
-    expect(labels.some((label) => label.includes("Rich Prompt"))).toBe(false);
   });
 });
 
@@ -270,7 +269,7 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
     expect(terminalSource).toMatch(/prompt=\{tab\.teamWork\}/);
     expect(terminalSource).toMatch(/onSubmit=\{submitTeamWork\}/);
     expect(terminalSource).toMatch(/terminalSessionId=\{tab\.terminalSessionId\}/);
-    // Dropped props from the old TerminalRichPrompt mount.
+    // Dropped props from the old TerminalTeamWork mount.
     expect(terminalSource).not.toMatch(/watcherPath=/);
     expect(terminalSource).not.toMatch(/onSpawned=/);
     expect(terminalSource).not.toMatch(/\{bubbleCount\}/);
@@ -282,10 +281,10 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
     expect(terminalSource).not.toMatch(/onWatcherDetached=/);
   });
 
-  test("the deleted watcher + rich-prompt-workspace plumbing is gone", () => {
+  test("the deleted watcher + team-work-workspace plumbing is gone", () => {
     expect(terminalSource).not.toMatch(/refreshWatcherEvents/);
-    expect(terminalSource).not.toMatch(/ensureRichPromptWorkspace/);
-    expect(terminalSource).not.toMatch(/persistRichPromptSubmission/);
+    expect(terminalSource).not.toMatch(/ensureTeamWorkWorkspace/);
+    expect(terminalSource).not.toMatch(/persistTeamWorkSubmission/);
     expect(terminalSource).not.toMatch(/readWatcherEvents/);
     expect(terminalSource).not.toMatch(/watcherPollTimer/);
   });

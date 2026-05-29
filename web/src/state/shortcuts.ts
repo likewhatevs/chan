@@ -68,7 +68,7 @@ export type Shortcut = {
   /// `TerminalTab.svelte` returns `false` for this chord so the
   /// event bubbles out of xterm to the App-level keymap. Default
   /// false (xterm consumes the keystroke as a shell input). Set
-  /// true on App-group chords (Settings, RichPrompt, Reload,
+  /// true on App-group chords (Settings, TeamWork, Reload,
   /// FB toggle, Graph, NewDraft, Hybrid Nav, etc.) that must
   /// reach App.svelte regardless of terminal focus.
   escapeTerminal?: boolean;
@@ -97,12 +97,12 @@ export type Shortcut = {
 /// universal `Mod+. t` via Hybrid Nav).
 ///
 /// `fullstack-a-32` (2026-05-20) re-adds `app.files.toggle`,
-/// `app.graph.toggle`, and updates `app.terminal.richPrompt` to
+/// `app.graph.toggle`, and updates `app.terminal.teamWork` to
 /// the consistent spawn-chord shape:
 ///
 ///   app.files.toggle           Cmd+O native / Cmd+Alt+O web Mac / Mod+. o universal
 ///   app.graph.toggle           Cmd+Shift+M native + web        / Mod+. v universal
-///   app.terminal.richPrompt    Cmd+P native / Cmd+Alt+P web Mac / Mod+. p universal
+///   app.terminal.teamWork    Cmd+P native / Cmd+Alt+P web Mac / Mod+. p universal
 ///
 /// Inside Hybrid Nav, the numeric `1/2/3/4` cases drop (they
 /// duplicated the new mnemonic chords); `t/T`, `o/O`, `p/P`,
@@ -135,19 +135,19 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
-  // `fullstack-a-32`: Rich prompt chord migrates to Mod+P (native)
+  // `fullstack-a-32`: Team Work chord migrates to Mod+P (native)
   // / Cmd+Alt+P (web Mac) so the spawn-chord family (Cmd+T/O/P,
   // Cmd+Shift+M) reads uniformly. `fullstack-a-90` retired the
   // legacy Alt+Space alias the migration kept for muscle memory.
   // Universal Hybrid Nav `p` (added in `fullstack-50`) covers
   // every platform including Win/Linux web where Cmd+P is owned
   // by the browser's print dialog and Cmd+Alt+P isn't a thing.
-  // Phase-13 r2: the chord id stays `app.terminal.richPrompt` (stable -
+  // Phase-13 r2: the chord id stays `app.terminal.teamWork` (stable -
   // @@LaneA keeps the handler), but the label + flow are now "Team
-  // Work" (Rich Prompt was renamed). Label string supplied by @@LaneA
+  // Work" (Team Work was renamed). Label string supplied by @@LaneA
   // on event-lane-a-lane-b.md; this is a Lane-B-owned edit.
   {
-    id: "app.terminal.richPrompt",
+    id: "app.terminal.teamWork",
     label: "Team Work",
     web: "Cmd+Alt+P",
     native: "Mod+P",

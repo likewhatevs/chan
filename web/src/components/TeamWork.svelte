@@ -322,7 +322,7 @@
 <svelte:window onpointerdown={onWindowPointerDown} />
 
 <div
-  class="rich-prompt"
+  class="team-work"
   class:collapsed={collapsed()}
   bind:this={rootEl}
   style:height={collapsed() ? null : `${prompt.heightPx ?? 320}px`}
@@ -517,11 +517,11 @@
      sides replaces the prior single top-edge shadow that hinted
      attached-to-bottom.
 
-     Collapsed state (`.rich-prompt.collapsed`): clamps the prompt to
+     Collapsed state (`.team-work.collapsed`): clamps the prompt to
      min-height = the header row only; the composer-editor + workspace
      row hide. The user keeps the prompt attached (chevron expands) but
      reclaims vertical room for the bubbles above. */
-  .rich-prompt {
+  .team-work {
     position: absolute;
     left: 12px;
     right: 12px;
@@ -538,18 +538,18 @@
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
     overflow: hidden;
   }
-  .rich-prompt.collapsed {
+  .team-work.collapsed {
     min-height: 0;
     height: auto;
   }
-  .rich-prompt.collapsed .workspace-row,
-  .rich-prompt.collapsed .composer-editor {
+  .team-work.collapsed .workspace-row,
+  .team-work.collapsed .composer-editor {
     display: none;
   }
-  .rich-prompt.collapsed header {
+  .team-work.collapsed header {
     border-bottom: 0;
   }
-  .rich-prompt.collapsed .resize-handle {
+  .team-work.collapsed .resize-handle {
     display: none;
   }
   .resize-handle {
@@ -675,9 +675,9 @@
      `{cursor}{space}{default-text}` gap @@Alex's literal spec
      calls for.
      Scope is the prompt area only; the `:global` chain pins to
-     `.rich-prompt` (the root of this component) so the rule
+     `.team-work` (the root of this component) so the rule
      doesn't leak to other CM6 editors in the app. */
-  :global(.rich-prompt .cm-placeholder) {
+  :global(.team-work .cm-placeholder) {
     line-height: 1.2;
     vertical-align: middle;
   }

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from "vitest";
 // timing out (30s) under the full parallel suite, where Svelte-component
 // transform + import is heavily contended across workers. Resolving the
 // module once at module-eval (the same pattern the non-flaky
-// TerminalRichPrompt.test.ts uses) removes the import latency from every
+// TerminalTeamWork.test.ts uses) removes the import latency from every
 // timed test body. The auto-rotate stays harmless: each nav assertion
 // workspaces the slide synchronously and awaits a microtask `tick`, well
 // under the 5s interval, and a default-slide assertion runs immediately

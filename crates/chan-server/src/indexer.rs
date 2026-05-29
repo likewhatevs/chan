@@ -654,7 +654,7 @@ fn classify_watch_event(event: &WatchEvent, context: WatchContext) -> WatchActio
                 // create/modify/remove notifications during metadata
                 // churn. ProviderError and channel lag are the actual
                 // loss-of-scope signals; rebuilding here makes normal
-                // Rich Prompt workspace activity look broken.
+                // Team Work workspace activity look broken.
                 return WatchAction::Ignore;
             };
             if !chan_workspace::fs_ops::is_indexable_text(path) {

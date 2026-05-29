@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import richPrompt from "./TeamWork.svelte?raw";
+import teamWork from "./TeamWork.svelte?raw";
 import wysiwyg from "../editor/Wysiwyg.svelte?raw";
 import source from "../editor/Source.svelte?raw";
 
@@ -54,35 +54,35 @@ describe("fullstack-a-89: TeamWork wires the new prop + drops the overlay", () =
     // @@Alex's literal spec `{cursor}{space}{default-text}`.
     // Phase-13 bug 4: copy updated to advertise the chat-style
     // Enter / Shift+Enter chord split.
-    expect(richPrompt).toMatch(
+    expect(teamWork).toMatch(
       /const PROMPT_PLACEHOLDER_TEXT = " Write your prompt; Enter to send, Shift\+Enter for a new line";/,
     );
   });
 
   test("Wysiwyg + Source both receive placeholderText", () => {
-    expect(richPrompt).toMatch(
+    expect(teamWork).toMatch(
       /<Wysiwyg[\s\S]*?placeholderText=\{PROMPT_PLACEHOLDER_TEXT\}/,
     );
-    expect(richPrompt).toMatch(
+    expect(teamWork).toMatch(
       /<Source[\s\S]*?placeholderText=\{PROMPT_PLACEHOLDER_TEXT\}/,
     );
   });
 
   test("pre-`-a-89` CSS overlay markup removed", () => {
-    expect(richPrompt).not.toMatch(/<div class="prompt-placeholder"/);
-    expect(richPrompt).not.toMatch(
+    expect(teamWork).not.toMatch(/<div class="prompt-placeholder"/);
+    expect(teamWork).not.toMatch(
       /\{#if prompt\.buffer === ""\}[\s\S]*?prompt-placeholder/,
     );
   });
 
   test("pre-`-a-89` .prompt-placeholder CSS rule removed", () => {
-    expect(richPrompt).not.toMatch(/\.prompt-placeholder \{[\s\S]*?position: absolute;/);
+    expect(teamWork).not.toMatch(/\.prompt-placeholder \{[\s\S]*?position: absolute;/);
   });
 
   test("rationale comment cites the architecture swap + the superseded tasks", () => {
-    expect(richPrompt).toMatch(
+    expect(teamWork).toMatch(
       /`fullstack-a-89`:[\s\S]*?placeholder moved from[\s\S]*?CSS overlay/i,
     );
-    expect(richPrompt).toMatch(/`-a-84`[\s\S]*?`-a-87`/);
+    expect(teamWork).toMatch(/`-a-84`[\s\S]*?`-a-87`/);
   });
 });
