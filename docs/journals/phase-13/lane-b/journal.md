@@ -1131,3 +1131,38 @@ ff main 248bc830 -> c4a4adc6. No push. v0.18.0 cut held for @@Alex.
 Note: `rich-prompt-N` draft convention -> `team-work-N` (a draft prefix
 in chan-workspace tests/comments; the current flow uses untitled-N so
 it's vestigial-but-renamed - generic draft handling, not dead code).
+
+## 2026-05-29 round 2 - v0.18.0 release cut
+
+@@Alex greenlit the cut. Sequence:
+- Bumped 0.17.0 -> 0.18.0: Cargo.toml [workspace.package] + the 7
+  inter-crate [workspace.dependencies] pins + tauri.conf.json + Cargo.lock
+  (cargo check green). chore(release): 0.18.0 (cf9c4e83).
+- Backfilled CHANGELOG [v0.17.0] (round-1 cleanup, curated from the
+  retrospective) per @@Alex; [Unreleased] (-> v0.18.0) notes it builds
+  on it; refreshed the orchestration docs (watcher/bubble removed).
+- Pushed main (76f5e18b -> cf9c4e83) on @@Alex's "push yes".
+- Dry-run release.yml (publish=false): GREEN - all build/sign/notarize
+  jobs pass, publish/Pages correctly skipped (run 26628831879).
+- On @@Alex's "green light": annotated tag v0.18.0 + pushed -> release.yml
+  run 26630180499 GREEN, all 11 jobs incl. publish GitHub Release + /dl
+  metadata + deploy Pages. GitHub Release v0.18.0 published (not draft)
+  with the full CLI + desktop asset set.
+
+Verify:
+- GitHub Release + assets: confirmed published.
+- /dl manifests (chan.app/dl/cli/latest.json + /dl/desktop/latest.json):
+  404 immediately post-deploy. Root serves 200. The v0.18.0 Pages
+  deployment (10:09Z) is the LATEST github-pages deployment but the edge
+  still served the prior marketing deploy (09:13Z, from the main push,
+  which carries no /dl) - CDN propagation lag. The release artifact
+  bundles web-marketing/dist (marketing root + dl/), so /dl resolves once
+  the v0.18.0 deploy propagates. Re-checking; flag for infra only if it
+  persists past ~15 min.
+- chan-desktop self-upgrade 0.17.0 -> 0.18.0: data-driven from /dl (no
+  update.rs edit); needs @@Alex's WKWebView walk for end-to-end confirm.
+
+The desktop WKWebView items still want @@Alex's walk (B3 Cmd+Shift+N,
+Cmd+I removal, Cmd+P->teamWork KEY_BRIDGE) per
+feedback_terminal_webgl_wkwebview - the full combined dmg builds from
+main via `make macos-chan-dmg`.

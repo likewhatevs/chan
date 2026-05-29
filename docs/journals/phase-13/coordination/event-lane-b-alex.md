@@ -1047,3 +1047,30 @@ Cmd+Shift+N new-window, Cmd+I removal, and the Cmd+P->teamWork KEY_BRIDGE.
 
 HOLDING the v0.18.0 cut (version bump + tag) for your explicit go - say
 the word, or tell me if there's more to change first.
+
+## 2026-05-29 @@LaneB -> @@Alex
+v0.18.0 RELEASED - round 2 closed
+
+Cut done on your go. chore(release): 0.18.0 (cf9c4e83); dry-run green;
+tag v0.18.0 pushed -> release.yml run 26630180499 GREEN (all 11 jobs:
+CLI + desktop build/sign/notarize, publish GitHub Release, /dl metadata,
+deploy Pages). GitHub Release v0.18.0 is live (not draft) with the full
+asset set (CLI tarballs + .deb/.rpm + manual; desktop dmg + .app.tar.gz
++ .sig + AppImage).
+
+ONE open verify item (not a release-cut failure): chan.app/dl/* manifests
+404 right now while the site root serves 200. The v0.18.0 Pages deploy
+(10:09Z) is the latest github-pages deployment but the edge is still on
+the earlier marketing deploy (09:13Z from the main push, no /dl) - CDN
+propagation lag. The release Pages artifact bundles the marketing root +
+/dl, so /dl should resolve as it propagates. I'm re-checking; if it
+persists past ~15 min it's a Pages-deploy/serving thing for infra (the
+marketing pages.yml + release.yml both target github-pages), not the cut.
+
+Your turn for the end-to-end desktop verify (WKWebView, can't Chrome):
+- self-upgrade 0.17.0 -> 0.18.0 (data-driven from /dl, no update.rs edit).
+- B3 Cmd+Shift+N, Cmd+I removal, Cmd+P->teamWork KEY_BRIDGE.
+Build the full combined dmg from the main checkout: `make macos-chan-dmg`.
+
+Round 2 retrospective: retrospective-round-2.md. Committing the phase-13
+docs as docs(phase-13): close round 2.
