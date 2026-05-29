@@ -104,7 +104,7 @@ export CHAN_TUNNEL_TOKEN=chan_pat_...
 cd ../chan
 cargo run -p chan -- serve <some-workspace-dir> \
   --tunnel-url=http://workspace.localtest.me:17100/v1/tunnel \
-  --tunnel-workspace=blog
+  --tunnel-workspace-name=blog
 ```
 
 The `http://` scheme on the URL triggers chan-tunnel-client's h2c

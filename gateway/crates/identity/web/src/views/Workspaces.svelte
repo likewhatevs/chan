@@ -323,7 +323,7 @@
           Lowercase letters, digits, and <code>._-</code> only. Add grants
           and copy the share link in the next step; status flips to
           online once you run
-          <code>chan serve --tunnel-workspace={newWorkspace.trim().toLowerCase() || "<name>"}</code>.
+          <code>chan serve --tunnel-workspace-name={newWorkspace.trim().toLowerCase() || "<name>"}</code>.
         </p>
       </form>
     {/if}
@@ -353,7 +353,7 @@
                       Online &middot; only you and grantees can open
                     {/if}
                   {:else}
-                    Offline &middot; start <code>chan serve --tunnel-workspace={d.name}</code>
+                    Offline &middot; start <code>chan serve --tunnel-workspace-name={d.name}</code>
                   {/if}
                 </div>
               </div>

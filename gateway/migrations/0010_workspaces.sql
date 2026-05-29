@@ -2,7 +2,7 @@
 --
 -- Before this migration, a "workspace" only existed implicitly in two
 -- places: as a live registration on workspace-proxy's in-memory Registry
--- (set up by `chan serve --tunnel-workspace=<name>`), and as the
+-- (set up by `chan serve --tunnel-workspace-name=<name>`), and as the
 -- `workspace_name` column on `workspace_grants`. The dashboard derived "my
 -- workspaces" as the union of live tunnels plus distinct grant workspaces.
 -- That left no way for the owner to materialise a workspace *before*

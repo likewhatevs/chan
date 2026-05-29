@@ -204,7 +204,7 @@ Grants live in `workspace_grants` keyed on
 `(owner_user_id, workspace_name, lower(grantee_email))`:
 
 - The owner pre-seeds grants from id.chan.app's SPA *before* (or
-  alongside) running `chan serve --tunnel-workspace=<name>`. The grant
+  alongside) running `chan serve --tunnel-workspace-name=<name>`. The grant
   row exists independently of any live tunnel.
 - `grantee_user_id` is `NULL` until a sign-in is observed with a
   verified email matching `grantee_email`. Two resolution paths:
