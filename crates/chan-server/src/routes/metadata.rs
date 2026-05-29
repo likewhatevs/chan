@@ -197,11 +197,6 @@ fn perform_metadata_import(
 
     let mut cell = take_workspace_cell(state)?;
     state.terminal_sessions.close_all(CloseReason::Workspace);
-    state
-        .loaded_teams
-        .lock()
-        .map_err(|_| MetadataImportError::Poisoned("loaded teams lock"))?
-        .clear();
     cell.indexer.cancel();
     cell.watch_handle.take();
     let workspace_strong = cell.workspace.clone();

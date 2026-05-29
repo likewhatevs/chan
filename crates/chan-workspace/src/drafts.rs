@@ -137,9 +137,6 @@ pub fn preflight(drafts_dir: &Path) -> Result<Vec<DraftIssue>> {
         };
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
-        if crate::teams::owns_preflight(&name, &path) {
-            continue;
-        }
         let meta = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
             Err(e) => {
@@ -762,29 +759,6 @@ mod tests {
                 message: "missing draft.md".to_string(),
             }]
         );
-    }
-
-    #[test]
-    fn preflight_skips_teams() {
-        let td = TempDir::new().unwrap();
-        let root = td.path().join("drafts");
-        ensure_root(&root).unwrap();
-        crate::teams::create(
-            &root,
-            &crate::teams::TeamConfig {
-                team_name: "Footer".to_string(),
-                host_name: "Alex".to_string(),
-                host_handle: "@@Alex".to_string(),
-                auto_prefix_at: true,
-                created_at: "2026-05-25T00:00:00Z".to_string(),
-                members: vec![],
-            },
-        )
-        .unwrap();
-
-        let issues = preflight(&root).unwrap();
-
-        assert!(issues.is_empty());
     }
 
     #[test]

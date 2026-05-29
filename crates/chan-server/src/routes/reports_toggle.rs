@@ -149,7 +149,6 @@ mod tests {
                 terminal: ServerConfig::default().terminal,
             })),
             shutdown_rx,
-            loaded_teams: std::sync::Mutex::new(std::collections::HashMap::new()),
             scope_registry: std::sync::Arc::new(crate::bus::ScopeRegistry::new()),
         });
 

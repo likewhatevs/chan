@@ -8,7 +8,6 @@
 //! deadline and the test flakes, with the failing set shifting run to
 //! run. The affected tests:
 //!   - chan-workspace  `indexer::tests::*` (real-FSEvent indexer delivery)
-//!   - chan-workspace  `workspace::tests::watch_team_emits_events_with_prefix`
 //!   - chan-server `indexer::tests::*` boot-walk tests
 //!   - chan-server `routes::terminal::tests::*` real-PTY shell probes
 //!

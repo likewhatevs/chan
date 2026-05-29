@@ -65,9 +65,7 @@ use routes::{
     api_resolve_link, api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
     api_search_files, api_storage_reset, api_team_config_read, api_team_config_write,
-    api_team_create, api_team_duplicate, api_team_get_config, api_team_list_loaded, api_team_load,
-    api_team_unload, api_terminal_ws, api_upload_file, api_workspace_bootstrap, api_write_file,
-    ws_upgrade,
+    api_terminal_ws, api_upload_file, api_workspace_bootstrap, api_write_file, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -453,7 +451,6 @@ async fn build_app(
         last_activity: last_activity.clone(),
         terminal_sessions,
         shutdown_rx,
-        loaded_teams: Mutex::new(std::collections::HashMap::new()),
         scope_registry,
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
@@ -885,25 +882,6 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/drafts/inspect", post(api_inspect_draft))
         .route("/api/drafts/discard", post(api_discard_draft))
         .route("/api/drafts/promote", post(api_promote_draft))
-        // systacean-31: per-team watcher lifecycle. Load spins up
-        // a `Workspace::watch_team` handle; unload drops it
-        // (non-destructive; team persists on disk).
-        // `/loaded` is read-only for the SPA to know which teams
-        // are active.
-        // systacean-41 follow-up: axum 0.7 path-param syntax is
-        // `:name`, NOT `{name}`. The original `-31` routes used
-        // `{name}` (axum 0.8 shape) which axum 0.7 treats as a
-        // literal segment; these routes have never actually
-        // matched real team names in production. Fixed here as
-        // adjacent scope.
-        .route("/api/teams/:name/load", post(api_team_load))
-        .route("/api/teams/:name/unload", post(api_team_unload))
-        .route("/api/teams/:name/duplicate", post(api_team_duplicate))
-        // systacean-42: read the persisted TeamConfig for a team.
-        // Backs `-a-80 slice 2`'s Load Team dialog.
-        .route("/api/teams/:name/config", get(api_team_get_config))
-        .route("/api/teams/loaded", get(api_team_list_loaded))
-        .route("/api/teams", post(api_team_create))
         // phase-13-r2 `lane-a-A3`: path-based chan-team.toml
         // read/write for the Team Work dialog's New/Load flow.
         // Deliberately outside the workspace sandbox (user path,

@@ -1081,44 +1081,6 @@ export const api = {
       "/api/fonts/source-code-pro/download",
     ),
 
-  /// `fullstack-a-79`: team workspace endpoints from
-  /// `systacean-30` (chan-workspace primitives) + `systacean-41`
-  /// (HTTP routes). The orchestrator (`-a-79`) calls
-  /// teamCreate → teamLoad → terminal spawn-per-member; the
-  /// load flow (`-a-80`) consumes teamListLoaded +
-  /// teamDuplicate. `TeamConfigWire` mirrors chan-workspace's
-  /// `TeamConfig` (snake_case per serde default).
-  teamCreate: (name: string, config: TeamConfigWire) =>
-    req<TeamRefView>("POST", "/api/teams", { name, config }),
-  /// `fullstack-a-80` slice 2: read the persisted TeamConfig
-  /// for a team. Backs the Load Team dialog's populate-from-
-  /// config flow. Surfaces the same shape `POST /api/teams`'s
-  /// `config` field accepts so `GET → mutate → POST` round-
-  /// trip works without an adapter (systacean-42 +
-  /// teamCreate idempotency).
-  teamGetConfig: (name: string) =>
-    req<TeamConfigWire>(
-      "GET",
-      `/api/teams/${encodeURIComponent(name)}/config`,
-    ),
-  teamLoad: (name: string) =>
-    req<TeamLoadResponse>(
-      "POST",
-      `/api/teams/${encodeURIComponent(name)}/load`,
-    ),
-  teamUnload: (name: string) =>
-    req<{ ok: true }>(
-      "POST",
-      `/api/teams/${encodeURIComponent(name)}/unload`,
-    ),
-  teamListLoaded: () =>
-    req<{ teams: string[] }>("GET", "/api/teams/loaded"),
-  teamDuplicate: (sourceName: string, newName: string) =>
-    req<TeamRefView>(
-      "POST",
-      `/api/teams/${encodeURIComponent(sourceName)}/duplicate`,
-      { new_name: newName },
-    ),
   /// phase-13-r2 `lane-a-A3`: path-based chan-team.toml read/write
   /// backing the Team Work dialog's New/Load flow. The config
   /// lives at a user-chosen absolute path (default
@@ -1154,16 +1116,6 @@ export interface TeamConfigWire {
   auto_prefix_at: boolean;
   created_at: string;
   members: TeamMemberWire[];
-}
-
-export interface TeamRefView {
-  name: string;
-  abs: string;
-}
-
-export interface TeamLoadResponse {
-  team_name: string;
-  events_dir: string;
 }
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`
