@@ -171,6 +171,17 @@
     const known = new Set<string>();
     for (const n of data.nodes) known.add(n.path);
     for (const n of data.nodes) {
+      // Round-1 closing-7 (E1): omit `indexState` for the
+      // workspace-root node so GraphCanvas's `indexFill` override
+      // does NOT replace the workspace's standard `bgCard` disc
+      // fill. The hard-drive icon is stroked in text-secondary to
+      // read against `bgCard`; against an indexFill (accent /
+      // doc / textSec) the same stroke colour disappears into the
+      // fill and the workspace looks like a plain undrawn node.
+      // Matching the main Graph tab's appearance is the user-
+      // visible ask. Children directories keep their indexState
+      // (that's what drives the indexing legend on this slide).
+      const isWorkspaceRoot = n.path === "";
       nodes.push({
         kind: "folder",
         id: directoryId(n.path),
@@ -178,7 +189,7 @@
         path: n.path,
         files: 0,
         code: 0,
-        indexState: n.state,
+        ...(isWorkspaceRoot ? {} : { indexState: n.state }),
       });
     }
     const edges: CanvasEdge[] = [];
