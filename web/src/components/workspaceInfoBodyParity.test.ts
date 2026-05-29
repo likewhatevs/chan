@@ -72,6 +72,18 @@ describe("A1: WorkspaceInfoBody variant split + directory action row", () => {
     expect(workspaceInfo).toContain("scheduleSave");
   });
 
+  test("closing-3: the Notes-directories section carries the divider", () => {
+    // @@Alex asked explicitly for a separator between COCOMO and NOTES
+    // DIRECTORIES. The section gets a `.notes-dirs` class with a dashed
+    // top border (matching the COCOMO divider idiom).
+    expect(workspaceInfo).toMatch(
+      /<section class="refs notes-dirs">[\s\S]*?<h4>Notes directories<\/h4>/,
+    );
+    expect(workspaceInfo).toMatch(
+      /\.notes-dirs \{[\s\S]*?border-top: 1px dashed var\(--border\);/,
+    );
+  });
+
   test("EmptyPaneCarousel passes variant=\"dashboard\"", () => {
     expect(carousel).toMatch(/<WorkspaceInfoBody[\s\S]*?variant="dashboard"/);
   });

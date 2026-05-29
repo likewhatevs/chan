@@ -598,8 +598,12 @@
   <!-- A1 (phase-13): the Notes-directories config is Dashboard-only.
        The inspector variant drops it (the workspace root reads as a
        plain directory there); the Dashboard keeps the full
-       globalConfig/save/autosave plumbing unchanged. -->
-  <section class="refs">
+       globalConfig/save/autosave plumbing unchanged.
+       Closing-3: `.notes-dirs` adds an explicit divider above the
+       heading so the COCOMO / Code content (or Contacts) above is
+       visually separated from the Notes-directories config, per
+       @@Alex's repeated ask. -->
+  <section class="refs notes-dirs">
     <h4>Notes directories</h4>
     <p class="hint">
       Your default notes directory is where chan opens when launched
@@ -1024,6 +1028,15 @@
     padding: 0;
   }
   .see-more:hover { text-decoration: underline; }
+  /* Closing-3: divider between the Code/COCOMO (or Contacts) content
+     above and the Notes-directories config below. Matches the dashed
+     rule the COCOMO block uses so the dashboard inspector reads as
+     cleanly sectioned. The `.refs` margin-top supplies the gap above
+     the rule; padding-top spaces the heading below it. */
+  .notes-dirs {
+    padding-top: 0.7rem;
+    border-top: 1px dashed var(--border);
+  }
   .cocomo {
     margin-top: 0.5rem;
     padding-top: 0.4rem;
