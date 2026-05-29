@@ -145,8 +145,7 @@ pub struct WorkspacePaths {
     /// `untitled-1/draft.md` plus pasted images). The Drafts
     /// subtree sits in `~/.chan/workspaces/<metadata_key>/drafts/` so
     /// the user's workspace root stays clean of uncommitted scratch
-    /// work (SCM-friendly per the addendum-a spec). Team Work
-    /// history (`team-work-N/`) lives here too. The watcher +
+    /// work (SCM-friendly per the addendum-a spec). The watcher +
     /// indexer walk this subtree alongside the workspace root so drafts
     /// participate in search + graph.
     pub drafts: PathBuf,

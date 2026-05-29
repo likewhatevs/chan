@@ -1,0 +1,460 @@
+//! `GET /api/preflight` + `POST /api/preflight/decision`: first-boot
+//! workspace readiness, rendered by the SPA on a locked OverlayShell
+//! (contracts §2). chan-server owns the readiness flow so local and
+//! remote (tunnel) workspaces get the identical experience; the desktop
+//! shell only picks a path and launches `chan serve`.
+//!
+//! The snapshot is DERIVED from live state on every poll, so there is no
+//! first-boot flag to persist or reset:
+//!
+//!   - `index` step: the background indexer's `IndexStatus`. A fresh,
+//!     large workspace reads `running` (with `current`/`total`) while
+//!     its initial build runs and flips to `done` when the index
+//!     settles; an already-indexed workspace reads `done` at once. This
+//!     is the readiness gate that keeps the editor from opening onto a
+//!     half-built index on a big new workspace.
+//!   - `model` step (embeddings builds only): when the workspace has
+//!     semantic search enabled but the embedding model is not on disk,
+//!     the user must choose -- download it or fall back to keyword
+//!     search. Derived from the workspace's semantic config, so a "skip"
+//!     decision sticks via the existing `semantic_enabled` flag rather
+//!     than needing new state.
+//!
+//! `locked` is simply `phase != ready`; the OverlayShell hides its close
+//! button + ignores ESC while it is true and dismisses on `ready`.
+
+use std::sync::Arc;
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde::{Deserialize, Serialize};
+
+use crate::error::{err, err_state};
+use crate::indexer::IndexStatus;
+use crate::state::AppState;
+
+#[derive(Debug, Serialize)]
+struct PreflightSnapshot {
+    phase: Phase,
+    /// True until `phase == ready`. The single signal the OverlayShell
+    /// keys its lock on.
+    locked: bool,
+    steps: Vec<PreflightStep>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<PreflightError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Phase {
+    Running,
+    NeedsDecision,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Serialize)]
+struct PreflightStep {
+    id: &'static str,
+    label: &'static str,
+    state: StepState,
+    /// Progress counters for a `running` step (the index build's
+    /// file position). The OverlayShell's progress bar reads these as
+    /// the single source of truth, so the locked shell does not also
+    /// have to wire `/ws` progress frames (contracts §2 Q3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision: Option<Decision>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum StepState {
+    Pending,
+    Running,
+    Done,
+    NeedsDecision,
+    Failed,
+}
+
+#[derive(Debug, Serialize)]
+struct Decision {
+    prompt: &'static str,
+    choices: Vec<DecisionChoice>,
+}
+
+#[derive(Debug, Serialize)]
+struct DecisionChoice {
+    id: &'static str,
+    label: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct PreflightError {
+    step: &'static str,
+    message: String,
+}
+
+/// Map the indexer's status onto the `index` readiness step. Only
+/// `Idle` is `done`; `Building`/`Reindexing` are `running` (not ready),
+/// and a backend `Error` fails the step so the shell can surface it.
+fn index_step(status: &IndexStatus) -> PreflightStep {
+    let base = PreflightStep {
+        id: "index",
+        label: "Build search index",
+        state: StepState::Pending,
+        current: None,
+        total: None,
+        decision: None,
+    };
+    match status {
+        IndexStatus::Building { current, total, .. } => PreflightStep {
+            state: StepState::Running,
+            current: Some(*current),
+            total: Some(*total),
+            ..base
+        },
+        IndexStatus::Reindexing { .. } => PreflightStep {
+            state: StepState::Running,
+            ..base
+        },
+        IndexStatus::Idle { .. } => PreflightStep {
+            state: StepState::Done,
+            ..base
+        },
+        IndexStatus::Error { .. } => PreflightStep {
+            state: StepState::Failed,
+            ..base
+        },
+    }
+}
+
+fn index_error(status: &IndexStatus) -> Option<PreflightError> {
+    match status {
+        IndexStatus::Error { message } => Some(PreflightError {
+            step: "index",
+            message: message.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// The `model` step, embeddings builds only. Present only when the
+/// workspace has semantic search enabled: a BM25 workspace has nothing
+/// to decide. When enabled + the model is on disk the step is `done`;
+/// when enabled + the model is missing it is `needs_decision`
+/// (download the model vs. fall back to keyword search). A plain BM25
+/// workspace returns `None` (no step).
+#[cfg(feature = "embeddings")]
+fn model_step(workspace: &chan_workspace::Workspace) -> Option<PreflightStep> {
+    if !workspace.semantic_enabled().unwrap_or(false) {
+        return None;
+    }
+    let model = workspace.semantic_model().unwrap_or_default();
+    let present = chan_workspace::index::embeddings::resolve_model(&model).is_ok();
+    let base = PreflightStep {
+        id: "model",
+        label: "Embedding model",
+        state: StepState::Pending,
+        current: None,
+        total: None,
+        decision: None,
+    };
+    Some(if present {
+        PreflightStep {
+            state: StepState::Done,
+            ..base
+        }
+    } else {
+        PreflightStep {
+            state: StepState::NeedsDecision,
+            decision: Some(Decision {
+                prompt: "Download the embedding model for semantic search, or use keyword search?",
+                choices: vec![
+                    DecisionChoice {
+                        id: "download",
+                        label: "Download model",
+                    },
+                    DecisionChoice {
+                        id: "skip",
+                        label: "Use keyword search",
+                    },
+                ],
+            }),
+            ..base
+        }
+    })
+}
+
+#[cfg(not(feature = "embeddings"))]
+fn model_step(_workspace: &chan_workspace::Workspace) -> Option<PreflightStep> {
+    None
+}
+
+fn build_snapshot(
+    workspace: &chan_workspace::Workspace,
+    status: &IndexStatus,
+) -> PreflightSnapshot {
+    let mut steps = vec![index_step(status)];
+    if let Some(step) = model_step(workspace) {
+        steps.push(step);
+    }
+
+    // Phase precedence: a failure dominates, then a pending decision,
+    // then "all done" is ready, otherwise still running.
+    let phase = if steps.iter().any(|s| s.state == StepState::Failed) {
+        Phase::Failed
+    } else if steps.iter().any(|s| s.state == StepState::NeedsDecision) {
+        Phase::NeedsDecision
+    } else if steps.iter().all(|s| s.state == StepState::Done) {
+        Phase::Ready
+    } else {
+        Phase::Running
+    };
+
+    PreflightSnapshot {
+        phase,
+        locked: phase != Phase::Ready,
+        error: index_error(status),
+        steps,
+    }
+}
+
+pub async fn api_preflight(State(state): State<Arc<AppState>>) -> Response {
+    let workspace = match state.try_workspace() {
+        Ok(w) => w,
+        Err(e) => return err_state(&e),
+    };
+    let indexer = match state.try_indexer() {
+        Ok(i) => i,
+        Err(e) => return err_state(&e),
+    };
+    // Semantic reads hit sqlite + the model resolver touches the
+    // filesystem; do the whole derivation on the blocking pool.
+    match tokio::task::spawn_blocking(move || {
+        let status = indexer.snapshot();
+        build_snapshot(&workspace, &status)
+    })
+    .await
+    {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("preflight task panicked: {e}"),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DecisionBody {
+    step: String,
+    /// Only the embeddings build's `model` step reads this; on a
+    /// no-embeddings build there are no decisions, so the field is
+    /// deserialized but unused.
+    #[cfg_attr(not(feature = "embeddings"), allow(dead_code))]
+    choice: String,
+}
+
+// `state` is consumed only by the embeddings `model` decision arm; on a
+// no-embeddings build there are no decisions, so the binding is unused.
+#[cfg_attr(not(feature = "embeddings"), allow(unused_variables))]
+pub async fn api_preflight_decision(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<DecisionBody>,
+) -> Response {
+    match body.step.as_str() {
+        #[cfg(feature = "embeddings")]
+        "model" => model_decision(&state, &body.choice).await,
+        other => err(
+            StatusCode::BAD_REQUEST,
+            format!("no pending pre-flight decision for step {other:?}"),
+        ),
+    }
+}
+
+/// Apply a `model` step decision, then return the fresh snapshot so the
+/// shell re-renders without a second poll. `download` fetches the model
+/// (and the workspace's semantic flag stays on); `skip` flips the
+/// workspace back to keyword-only, which makes the model step drop out
+/// of the snapshot entirely.
+#[cfg(feature = "embeddings")]
+async fn model_decision(state: &Arc<AppState>, choice: &str) -> Response {
+    let workspace = match state.try_workspace() {
+        Ok(w) => w,
+        Err(e) => return err_state(&e),
+    };
+    let indexer = match state.try_indexer() {
+        Ok(i) => i,
+        Err(e) => return err_state(&e),
+    };
+    let choice = choice.to_owned();
+    // The blocking closure carries its error as `Box<Response>` so the
+    // `Result` Err variant stays pointer-sized (an axum `Response` is
+    // large; clippy::result_large_err otherwise fires under -D warnings).
+    match tokio::task::spawn_blocking(move || -> Result<PreflightSnapshot, Box<Response>> {
+        use chan_workspace::index::embeddings::{global_models_dir, Embedder};
+        match choice.as_str() {
+            "download" => {
+                let model = workspace
+                    .semantic_model()
+                    .map_err(|e| Box::new(crate::error::err_from(&e)))?;
+                let cache_dir = global_models_dir();
+                if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+                    return Err(Box::new(err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("creating model cache {}: {e}", cache_dir.display()),
+                    )));
+                }
+                if let Err(e) = Embedder::open(&model, &cache_dir).map(|_| ()) {
+                    let chan_err: chan_workspace::ChanError =
+                        chan_workspace::index::IndexError::Embed(e).into();
+                    return Err(Box::new(crate::error::err_from(&chan_err)));
+                }
+            }
+            "skip" => {
+                workspace
+                    .set_semantic_enabled(false)
+                    .map_err(|e| Box::new(crate::error::err_from(&e)))?;
+            }
+            other => {
+                return Err(Box::new(err(
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown choice {other:?} for pre-flight step \"model\""),
+                )));
+            }
+        }
+        let status = indexer.snapshot();
+        Ok(build_snapshot(&workspace, &status))
+    })
+    .await
+    {
+        Ok(Ok(snapshot)) => Json(snapshot).into_response(),
+        Ok(Err(response)) => *response,
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("preflight decision task panicked: {e}"),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn workspace() -> (TempDir, TempDir, Arc<chan_workspace::Workspace>) {
+        let cfg = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let ws = lib.open_workspace(root.path()).unwrap();
+        (cfg, root, ws)
+    }
+
+    fn idle() -> IndexStatus {
+        IndexStatus::Idle {
+            indexed_docs: 0,
+            indexed_vectors: 0,
+            model: "m".into(),
+        }
+    }
+
+    #[test]
+    fn building_index_locks_until_settled() {
+        let (_c, _r, ws) = workspace();
+        let snap = build_snapshot(
+            &ws,
+            &IndexStatus::Building {
+                current: 3,
+                total: 10,
+                file: "a.md".into(),
+            },
+        );
+        assert_eq!(snap.phase, Phase::Running);
+        assert!(snap.locked);
+        let index = snap.steps.iter().find(|s| s.id == "index").unwrap();
+        assert_eq!(index.state, StepState::Running);
+        assert_eq!(index.current, Some(3));
+        assert_eq!(index.total, Some(10));
+    }
+
+    #[test]
+    fn idle_bm25_workspace_is_ready_unlocked() {
+        let (_c, _r, ws) = workspace();
+        // A fresh workspace defaults to BM25 (semantic off), so there is
+        // no model step and an idle index means ready at once.
+        let snap = build_snapshot(&ws, &idle());
+        assert_eq!(snap.phase, Phase::Ready);
+        assert!(!snap.locked);
+        assert!(
+            snap.steps.iter().all(|s| s.id != "model"),
+            "a BM25 workspace must not show a model step"
+        );
+        assert!(snap.error.is_none());
+    }
+
+    #[test]
+    fn index_error_fails_with_message() {
+        let (_c, _r, ws) = workspace();
+        let snap = build_snapshot(
+            &ws,
+            &IndexStatus::Error {
+                message: "boom".into(),
+            },
+        );
+        assert_eq!(snap.phase, Phase::Failed);
+        assert!(snap.locked);
+        let error = snap.error.as_ref().expect("failed phase carries an error");
+        assert_eq!(error.step, "index");
+        assert_eq!(error.message, "boom");
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn semantic_enabled_surfaces_a_model_step() {
+        let (_c, _r, ws) = workspace();
+        // Enable semantic directly: the HTTP enable route guards on
+        // model presence, but the raw setter does not, which is exactly
+        // the "enabled but model maybe-missing" state the model step
+        // exists for.
+        ws.set_semantic_enabled(true).unwrap();
+        let snap = build_snapshot(&ws, &idle());
+        let model = snap
+            .steps
+            .iter()
+            .find(|s| s.id == "model")
+            .expect("semantic-enabled workspace must show a model step");
+        // The test environment's global model cache decides presence;
+        // assert the phase is consistent with whichever state results.
+        match model.state {
+            StepState::NeedsDecision => {
+                assert_eq!(snap.phase, Phase::NeedsDecision);
+                assert!(snap.locked);
+                assert!(model.decision.is_some(), "a decision step carries choices");
+            }
+            StepState::Done => {
+                assert_eq!(snap.phase, Phase::Ready);
+                assert!(!snap.locked);
+            }
+            other => panic!("unexpected model step state: {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn skip_decision_drops_the_model_step() {
+        let (_c, _r, ws) = workspace();
+        ws.set_semantic_enabled(true).unwrap();
+        // The "skip" decision flips semantic back off; the model step
+        // then drops out entirely and an idle index is ready.
+        ws.set_semantic_enabled(false).unwrap();
+        let snap = build_snapshot(&ws, &idle());
+        assert!(snap.steps.iter().all(|s| s.id != "model"));
+        assert_eq!(snap.phase, Phase::Ready);
+    }
+}

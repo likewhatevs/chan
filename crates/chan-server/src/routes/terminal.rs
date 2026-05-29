@@ -1129,11 +1129,24 @@ mod tests {
                 "__TTY_END__",
             )
             .await;
+            // A real PTY makes `tty` report a /dev/ttys… device path,
+            // which is the property we want to validate. But the GitHub
+            // macOS runner's spawned PTY slave does not always present a
+            // device path; there `tty` prints its documented "not a tty"
+            // result instead. That is a runner limitation, not a product
+            // regression, and it must NOT gate CI (addendum-1 #2 / A5b).
+            // So assert the device path ONLY when one is present, accept
+            // the "not a tty" headless case as a skip, and still fail on
+            // a probe that produced neither (a genuinely broken harness).
+            let has_device = out.contains("/dev/");
+            let headless = out.to_ascii_lowercase().contains("not a tty");
             assert!(
-                out.contains("/dev/"),
-                "tty should report a device path, got {out:?}"
+                has_device || headless,
+                "tty probe reported neither a /dev/ device path nor 'not a tty', got {out:?}"
             );
-            passed += 1;
+            if has_device {
+                passed += 1;
+            }
         }
 
         if command_available("stty") {

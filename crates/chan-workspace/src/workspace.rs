@@ -950,7 +950,7 @@ impl Workspace {
         // drafts cap-std handle (parallels the -26 read_text /
         // write_text routing). Three shapes:
         //   * "Drafts/" or "Drafts" → list the drafts root
-        //     (returns each `untitled-N` / `team-work-N`).
+        //     (returns each draft dir, e.g. `untitled-N`).
         //   * "Drafts/<name>" or "Drafts/<name>/<sub>" → list
         //     inside the drafts subtree.
         //   * anything else → workspace-root path (unchanged).
@@ -1405,11 +1405,11 @@ impl Workspace {
         &self.paths.drafts
     }
 
-    /// Create a draft directory by name (e.g. `"untitled-1"` or
-    /// `"team-work-3"`). Returns a handle with the leaf name +
-    /// absolute path. Errors when the name contains a path
-    /// separator / traversal segment / already exists. Atomic via
-    /// `fs::create_dir_all` on a non-existing leaf.
+    /// Create a draft directory by name (e.g. `"untitled-1"`).
+    /// Returns a handle with the leaf name + absolute path. Errors
+    /// when the name contains a path separator / traversal segment /
+    /// already exists. Atomic via `fs::create_dir_all` on a
+    /// non-existing leaf.
     pub fn create_draft_dir(&self, name: &str) -> Result<DraftRef> {
         drafts::create_dir(&self.paths.drafts, name)
     }
@@ -4531,9 +4531,21 @@ mod tests {
         lib.register_workspace(workspace_dir.path()).unwrap();
         let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
 
+        // Hold the indexer serialization lock, then race a small write
+        // against it. write_text must NOT acquire write_serial, so the
+        // write completes while we still hold the guard.
+        //
+        // The recv timeout is a DEADLOCK BACKSTOP, not a latency budget.
+        // If write_text wrongly took write_serial it would block forever
+        // (we hold the lock), so the test needs *some* ceiling to fail
+        // instead of hang. It is deliberately generous (seconds, not the
+        // old 150 ms) so a loaded CI runner's scheduling jitter on a
+        // tiny write cannot trip a false failure: the 150 ms budget
+        // red-lighted a release once (phase-13 r2 / addendum-1 #2). A
+        // correct write finishes in microseconds; only the bug path ever
+        // approaches this ceiling.
         let guard = workspace.write_serial.lock().unwrap();
         let workspace_for_write = workspace.clone();
-        let start = std::time::Instant::now();
         let (tx, rx) = std::sync::mpsc::channel();
         let writer = std::thread::spawn(move || {
             workspace_for_write
@@ -4542,15 +4554,10 @@ mod tests {
             tx.send(()).unwrap();
         });
 
-        let completed = rx.recv_timeout(std::time::Duration::from_millis(150));
+        let completed = rx.recv_timeout(std::time::Duration::from_secs(10));
         drop(guard);
         writer.join().unwrap();
-        completed.unwrap_or_else(|_| {
-            panic!(
-                "small write waited behind indexer serialization: {:?}",
-                start.elapsed()
-            )
-        });
+        completed.expect("write_text blocked on the indexer serial lock (deadlock backstop hit)");
         assert_eq!(workspace.read_text("fast.md").unwrap(), "# fast\nbody\n");
     }
 
@@ -5992,7 +5999,9 @@ mod tests {
         // moved + the draft is no longer listed.
         let (_cfg, root, workspace) = fixture();
         let a = workspace.create_draft_dir("untitled-1").unwrap();
-        let b = workspace.create_draft_dir("team-work-2").unwrap();
+        // An arbitrary non-`untitled` draft dir: listing must not
+        // assume the Cmd+N prefix.
+        let b = workspace.create_draft_dir("scratch-2").unwrap();
         assert!(a.abs.is_dir());
         assert!(b.abs.is_dir());
 
@@ -6004,7 +6013,7 @@ mod tests {
         let listed = workspace.list_drafts().unwrap();
         assert_eq!(listed.len(), 2);
         // Sorted by name.
-        assert_eq!(listed[0].name, "team-work-2");
+        assert_eq!(listed[0].name, "scratch-2");
         assert_eq!(listed[1].name, "untitled-1");
 
         // Promote untitled-1 into the workspace root.
@@ -6014,10 +6023,10 @@ mod tests {
         assert!(root.path().join("untitled-1").join("pasted.png").is_file());
         assert!(!workspace.drafts_dir().join("untitled-1").exists());
 
-        // team-work-2 still listed; untitled-1 gone.
+        // scratch-2 still listed; untitled-1 gone.
         let after = workspace.list_drafts().unwrap();
         assert_eq!(after.len(), 1);
-        assert_eq!(after[0].name, "team-work-2");
+        assert_eq!(after[0].name, "scratch-2");
     }
 
     #[test]

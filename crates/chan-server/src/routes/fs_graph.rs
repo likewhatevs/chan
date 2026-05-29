@@ -23,6 +23,7 @@
 //! `hardlink` edge in addition to their parent `contains` edges.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::fs::Metadata;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -31,6 +32,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::error::err;
@@ -45,6 +47,25 @@ const MAX_DEPTH: usize = 6;
 /// `truncated: true` flags it on the wire so the frontend can warn
 /// the user that they're looking at a partial graph.
 const MAX_NODES: usize = 10_000;
+
+/// Paged-delivery batch caps. A *paged* request (one carrying `limit`
+/// or `cursor`) returns at most this many nodes and at most this many
+/// bytes of node payload, whichever trips first, then hands back a
+/// `cursor` to resume. This is what keeps a large workspace
+/// (`/tmp/linux`) filling in gradually instead of blocking the UI on a
+/// single large payload. A *non-paged* request (neither param) keeps
+/// the historical whole-scope walk capped at `MAX_NODES` -- the
+/// depth-cap probe relies on that completeness.
+const BATCH_MAX_NODES: usize = 256;
+const BATCH_MAX_BYTES: usize = 64 * 1024;
+const BATCH_MIN_NODES: usize = 16;
+
+/// Cheap per-node serialized-size estimate for the byte budget. The
+/// node cap is the primary bound; this is a safety net so a directory
+/// of pathologically long names can't blow one frame past the byte
+/// ceiling. `id` + `path` are ~the rel path each, `name` is the
+/// basename, plus fixed JSON field overhead.
+const NODE_FIXED_BYTES: usize = 96;
 
 #[derive(Deserialize)]
 pub struct FsGraphParams {
@@ -64,6 +85,18 @@ pub struct FsGraphParams {
     /// parent / symlink target).
     #[serde(default = "default_depth")]
     depth: usize,
+    /// Opaque continuation token from a previous paged response's
+    /// `cursor`. Absent on the first request of a paged walk. Bound to
+    /// the `(scope, path, depth)` it was issued for; a mismatch is a
+    /// 400 so the caller restarts from no cursor.
+    #[serde(default)]
+    cursor: Option<String>,
+    /// Switches on paged delivery: the response is bounded to one batch
+    /// (`limit` nodes, clamped to `[BATCH_MIN_NODES, BATCH_MAX_NODES]`)
+    /// plus a `cursor` to fetch the next. Absent (and no `cursor`) =
+    /// the historical whole-scope walk the depth-cap probe relies on.
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 fn default_scope() -> FsGraphScope {
@@ -90,6 +123,49 @@ impl FsGraphScope {
     }
 }
 
+/// Resume position for a paged directory walk, encoded opaquely into
+/// the wire `cursor` (base64url of JSON). Bound to the `(path, depth)`
+/// of its walk so a stale cursor from a different scope is rejected up
+/// front rather than silently producing a wrong batch.
+///
+/// The walk is a depth-first pre-order over sorted directory entries;
+/// the resume state is therefore the DFS stack, which is bounded to at
+/// most `MAX_DEPTH` entries -- that is what keeps the cursor small.
+/// Short field names keep the encoded token compact.
+#[derive(Debug, Serialize, Deserialize)]
+struct FsCursor {
+    /// Scope path the walk was issued for (normalized rel).
+    p: String,
+    /// Requested (clamped) depth of the walk.
+    d: usize,
+    /// DFS stack, outermost directory first.
+    s: Vec<CursorFrame>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CursorFrame {
+    /// Directory rel path (workspace-relative POSIX, `""` = root).
+    r: String,
+    /// Index of the next child to process within the dir's sorted
+    /// entries.
+    i: usize,
+    /// Levels of children still allowed below this dir (`find -d`
+    /// budget). A child dir frame is pushed only while this is > 1.
+    l: usize,
+}
+
+fn encode_cursor(c: &FsCursor) -> String {
+    let json = serde_json::to_vec(c).unwrap_or_default();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
+}
+
+fn decode_cursor(s: &str) -> Option<FsCursor> {
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s.as_bytes())
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 #[derive(Debug, Serialize)]
 pub struct FsGraphResponse {
     /// Workspace root absolute path, identical to what `/api/workspace`
@@ -106,8 +182,19 @@ pub struct FsGraphResponse {
     pub nodes: Vec<NodeView>,
     pub edges: Vec<EdgeView>,
     /// True when the walker hit `MAX_NODES` and stopped early. Callers
-    /// should narrow the scope or reduce depth.
+    /// should narrow the scope or reduce depth. Paged responses never
+    /// truncate (paging is the answer to largeness); they hand back a
+    /// `cursor` instead.
     pub truncated: bool,
+    /// Opaque continuation token. `Some` only on a paged response with
+    /// more batches to come; `None` on the final paged batch and on
+    /// every non-paged whole-scope response. Callers must not parse it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    /// True when no more batches remain: the final paged batch, or any
+    /// non-paged whole-scope response. Always present so a paged client
+    /// has an unambiguous stop signal.
+    pub done: bool,
 }
 
 /// Node identifier shape:
@@ -207,9 +294,26 @@ pub async fn api_fs_graph(
     Query(p): Query<FsGraphParams>,
 ) -> Response {
     let workspace = state.workspace();
-    let result =
-        tokio::task::spawn_blocking(move || build_fs_graph(&workspace, p.scope, &p.path, p.depth))
-            .await;
+    // A request carrying `limit` or `cursor` is paged: bounded one
+    // batch at a time with a continuation token. Otherwise it is the
+    // historical whole-scope walk (the depth-cap probe needs that
+    // completeness).
+    let paged = p.limit.is_some() || p.cursor.is_some();
+    let result = tokio::task::spawn_blocking(move || {
+        if paged {
+            build_fs_graph_paged(
+                &workspace,
+                p.scope,
+                &p.path,
+                p.depth,
+                p.cursor.as_deref(),
+                p.limit,
+            )
+        } else {
+            build_fs_graph(&workspace, p.scope, &p.path, p.depth)
+        }
+    })
+    .await;
     match result {
         Ok(Ok(response)) => Json(response).into_response(),
         Ok(Err(e)) => err(e.status, e.message),
@@ -221,12 +325,24 @@ pub async fn api_fs_graph(
     }
 }
 
-pub fn build_fs_graph(
+/// The request scope after path resolution + the sandbox / escape /
+/// existence guards. Shared by the whole-scope and paged entry points
+/// so the (intricate) mid-path symlink escape check lives in one place.
+struct ResolvedScope {
+    root: PathBuf,
+    rel: String,
+    abs: PathBuf,
+    meta: Metadata,
+    /// Clamped to `[1, MAX_DEPTH]` for directory scope; `0` for file.
+    depth: usize,
+}
+
+fn resolve_scope(
     workspace: &chan_workspace::Workspace,
     scope: FsGraphScope,
     path: &str,
     requested_depth: usize,
-) -> Result<FsGraphResponse, FsGraphError> {
+) -> Result<ResolvedScope, FsGraphError> {
     let root: PathBuf = workspace.root().to_path_buf();
     let rel = normalize_rel(path);
     let abs = if rel.is_empty() {
@@ -267,8 +383,6 @@ pub fn build_fs_graph(
         }
     };
 
-    let depth = requested_depth.clamp(1, MAX_DEPTH);
-
     // Reject scope=directory against a non-directory up front so the
     // walker stays infallible; the wire error shape matches the
     // 400 we use elsewhere.
@@ -279,24 +393,144 @@ pub fn build_fs_graph(
         ));
     }
 
-    let mut walker = FsGraphWalker::new(root.clone(), workspace.walk_filter().clone());
+    let depth = match scope {
+        FsGraphScope::File => 0,
+        FsGraphScope::Directory => requested_depth.clamp(1, MAX_DEPTH),
+    };
+    Ok(ResolvedScope {
+        root,
+        rel,
+        abs,
+        meta,
+        depth,
+    })
+}
+
+pub fn build_fs_graph(
+    workspace: &chan_workspace::Workspace,
+    scope: FsGraphScope,
+    path: &str,
+    requested_depth: usize,
+) -> Result<FsGraphResponse, FsGraphError> {
+    let r = resolve_scope(workspace, scope, path, requested_depth)?;
+
+    let mut walker = FsGraphWalker::new(r.root.clone(), workspace.walk_filter().clone());
     match scope {
-        FsGraphScope::File => walker.walk_file(&rel, &abs, &meta),
-        FsGraphScope::Directory => walker.walk_directory(&rel, &abs, &meta, depth),
+        FsGraphScope::File => walker.walk_file(&r.rel, &r.abs, &r.meta),
+        FsGraphScope::Directory => walker.walk_directory(&r.rel, &r.abs, &r.meta, r.depth),
     }
 
     let (nodes, edges, truncated) = walker.finish();
     Ok(FsGraphResponse {
-        root: root.display().to_string(),
+        root: r.root.display().to_string(),
         scope: scope.label(),
-        path: rel,
-        depth: match scope {
-            FsGraphScope::File => 0,
-            FsGraphScope::Directory => depth,
-        },
+        path: r.rel,
+        depth: r.depth,
         nodes,
         edges,
         truncated,
+        cursor: None,
+        done: true,
+    })
+}
+
+/// Paged directory-scope walk: returns at most one bounded batch
+/// (`limit` nodes, clamped) plus a `cursor` to resume. File scope is
+/// always small (the file plus its parent / symlink target), so it is
+/// never paged -- it returns the whole `done: true` payload regardless
+/// of the paging params. The walk's node/edge CONTENTS are identical to
+/// `build_fs_graph`; only delivery is split into frames.
+///
+/// Hardlink edges are emitted per batch from the inodes seen in that
+/// batch (`finish`), so a hardlink pair split across two batches is not
+/// joined in paged mode. That is the one paged-mode content caveat;
+/// the whole-scope path (`build_fs_graph`) keeps hardlinks intact.
+pub fn build_fs_graph_paged(
+    workspace: &chan_workspace::Workspace,
+    scope: FsGraphScope,
+    path: &str,
+    requested_depth: usize,
+    cursor: Option<&str>,
+    limit: Option<usize>,
+) -> Result<FsGraphResponse, FsGraphError> {
+    let r = resolve_scope(workspace, scope, path, requested_depth)?;
+
+    if scope == FsGraphScope::File {
+        let mut walker = FsGraphWalker::new(r.root.clone(), workspace.walk_filter().clone());
+        walker.walk_file(&r.rel, &r.abs, &r.meta);
+        let (nodes, edges, truncated) = walker.finish();
+        return Ok(FsGraphResponse {
+            root: r.root.display().to_string(),
+            scope: scope.label(),
+            path: r.rel,
+            depth: r.depth,
+            nodes,
+            edges,
+            truncated,
+            cursor: None,
+            done: true,
+        });
+    }
+
+    // Directory scope. Decode + validate the resume cursor against this
+    // walk's (path, depth); a cursor from a different scope is a 400 so
+    // the caller restarts cleanly rather than getting a wrong batch.
+    let resume = match cursor {
+        Some(token) => {
+            let parsed = decode_cursor(token).ok_or_else(|| {
+                FsGraphError::new(StatusCode::BAD_REQUEST, "invalid graph cursor")
+            })?;
+            if parsed.p != r.rel || parsed.d != r.depth {
+                return Err(FsGraphError::new(
+                    StatusCode::BAD_REQUEST,
+                    "graph cursor does not match the requested scope/depth",
+                ));
+            }
+            Some(parsed.s)
+        }
+        None => None,
+    };
+
+    let batch_nodes = limit
+        .unwrap_or(BATCH_MAX_NODES)
+        .clamp(BATCH_MIN_NODES, BATCH_MAX_NODES);
+
+    let mut walker = FsGraphWalker::new(r.root.clone(), workspace.walk_filter().clone());
+    let next = walker.walk_directory_paged(
+        &r.rel,
+        &r.abs,
+        &r.meta,
+        r.depth,
+        resume,
+        BatchBudget {
+            max_nodes: batch_nodes,
+            max_bytes: BATCH_MAX_BYTES,
+        },
+    );
+    let (nodes, edges, truncated) = walker.finish();
+
+    let (cursor_out, done) = match next {
+        Some(frames) => (
+            Some(encode_cursor(&FsCursor {
+                p: r.rel.clone(),
+                d: r.depth,
+                s: frames,
+            })),
+            false,
+        ),
+        None => (None, true),
+    };
+
+    Ok(FsGraphResponse {
+        root: r.root.display().to_string(),
+        scope: scope.label(),
+        path: r.rel,
+        depth: r.depth,
+        nodes,
+        edges,
+        truncated,
+        cursor: cursor_out,
+        done,
     })
 }
 
@@ -412,6 +646,29 @@ fn basename_of(rel: &str, abs: &Path) -> String {
     }
 }
 
+/// Read a directory's entries and sort them by basename so the wire
+/// output is stable (`read_dir` order is platform-defined) and a paged
+/// walk's cursor resumes at a deterministic position. An unreadable
+/// directory yields no entries (the branch just ends).
+fn read_dir_sorted(abs: &Path) -> Vec<(OsString, PathBuf)> {
+    let Ok(read) = std::fs::read_dir(abs) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<(OsString, PathBuf)> = read
+        .filter_map(|r| r.ok())
+        .map(|e| (e.file_name(), e.path()))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+/// Cheap serialized-size estimate for one node, for the paged byte
+/// budget. `id` + `path` are ~the rel path each, plus the basename and
+/// fixed JSON field overhead.
+fn node_byte_estimate(rel: &str) -> usize {
+    NODE_FIXED_BYTES + rel.len() * 2 + rel.rsplit('/').next().map(str::len).unwrap_or(0)
+}
+
 fn node_kind_from_class(
     class: Option<&chan_workspace::PathClass>,
     ft: &std::fs::FileType,
@@ -454,6 +711,39 @@ struct FsGraphWalker {
     /// the same inode.
     inode_paths: HashMap<(u64, u64), Vec<String>>,
     truncated: bool,
+}
+
+/// Outcome of emitting one directory child. Shared by the recursive
+/// whole-scope `walk_dir` and the paged stack walk so the per-child
+/// classification (blocklist skip, ghost on stat failure, node + parent
+/// `contains` edge) lives in one place.
+enum ChildOutcome {
+    /// A real entry was emitted; carries its rel path + metadata so the
+    /// caller decides whether to descend into it.
+    Emitted { rel: String, meta: Metadata },
+    /// A missing / unreadable entry was emitted as a ghost; never
+    /// descended.
+    Ghost,
+}
+
+/// One directory on the paged walk's DFS stack: its sorted entries and
+/// how far through them we are. `levels` is the `find -d` budget of
+/// children still allowed below this dir (a child dir frame is pushed
+/// only while `levels > 1`, which yields exactly `relative_depth <=
+/// depth`).
+struct DirFrame {
+    rel: String,
+    entries: Vec<(OsString, PathBuf)>,
+    idx: usize,
+    levels: usize,
+}
+
+/// Per-call emission budget for a paged walk: cut the batch once either
+/// the node count or the estimated byte size is reached.
+#[derive(Clone, Copy)]
+struct BatchBudget {
+    max_nodes: usize,
+    max_bytes: usize,
 }
 
 impl FsGraphWalker {
@@ -583,79 +873,208 @@ impl FsGraphWalker {
             }
             return;
         }
-        let read = match std::fs::read_dir(parent_abs) {
-            Ok(r) => r,
-            Err(_) => return,
-        };
-        // Collect + sort by basename so the wire output is stable
-        // (read_dir order is platform-defined).
-        let mut entries: Vec<(std::ffi::OsString, PathBuf)> = read
-            .filter_map(|r| r.ok())
-            .map(|e| (e.file_name(), e.path()))
-            .collect();
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
-
-        for (name, child_abs) in entries {
-            let name_str = name.to_string_lossy();
-            // Skip workspace-internal state and the per-workspace blocklist
-            // dirs at ANY depth. Mirrors chan-workspace's `walk_workspace`
-            // (`.chan`/`.git` invariants) plus the `WalkFilter`
-            // (`node_modules`, `target`, `venv`, ...) so the
-            // filesystem graph excludes the same set the index, the
-            // File Browser spine, and the watcher feed exclude. A
-            // repo-root workspace otherwise plots its whole dependency
-            // tree (60K-131K nodes). The skip applies regardless of
-            // the entry's file type so a `.git` symlink can't slip a
-            // dependency tree back in.
-            if name_str == ".chan" || name_str == ".git" || self.filter.is_excluded(&name_str) {
-                continue;
-            }
-            let child_rel = if parent_rel.is_empty() {
-                name_str.to_string()
-            } else {
-                format!("{parent_rel}/{name_str}")
-            };
-            let child_meta = match std::fs::symlink_metadata(&child_abs) {
-                Ok(m) => m,
-                Err(_) => {
-                    let ghost = NodeView {
-                        id: child_rel.clone(),
-                        kind: "ghost",
-                        name: name_str.to_string(),
-                        path: child_rel.clone(),
-                        size: 0,
-                        path_class: None,
-                        permission: None,
-                        link_count: 1,
-                        mtime: None,
-                        target: None,
-                        outside: false,
-                        broken: true,
-                        target_escapes_workspace: false,
-                    };
-                    self.insert_node(ghost);
-                    self.push_edge(parent_rel.to_owned(), child_rel, "contains");
-                    continue;
-                }
-            };
-            self.visit_entry(&child_rel, &child_abs, &child_meta);
-            self.push_edge(parent_rel.to_owned(), child_rel.clone(), "contains");
-
-            if child_meta.is_dir()
-                && !child_meta.file_type().is_symlink()
-                && !child_meta.permissions().readonly()
-            {
-                if let Some(key) = inode_key(&child_meta) {
-                    if !visited_dirs.insert(key) {
-                        // Already walked this inode; skip to avoid
-                        // double-counting on platforms that allow
-                        // hardlinked dirs.
-                        continue;
+        for (name, child_abs) in read_dir_sorted(parent_abs) {
+            match self.emit_child(parent_rel, &name, &child_abs) {
+                None | Some(ChildOutcome::Ghost) => {}
+                Some(ChildOutcome::Emitted { rel, meta }) => {
+                    if meta.is_dir()
+                        && !meta.file_type().is_symlink()
+                        && !meta.permissions().readonly()
+                    {
+                        if let Some(key) = inode_key(&meta) {
+                            if !visited_dirs.insert(key) {
+                                // Already walked this inode; skip to avoid
+                                // double-counting on platforms that allow
+                                // hardlinked dirs.
+                                continue;
+                            }
+                        }
+                        self.walk_dir(&rel, &child_abs, depth_remaining - 1, visited_dirs);
                     }
                 }
-                self.walk_dir(&child_rel, &child_abs, depth_remaining - 1, visited_dirs);
             }
         }
+    }
+
+    /// Emit one directory child: skip the blocklist, emit a ghost on
+    /// stat failure, else emit the node + the parent `contains` edge.
+    /// Returns `None` for a skipped (blocklisted) entry, otherwise the
+    /// `ChildOutcome` so the caller can decide on descent. The single
+    /// source of per-child behaviour for both the recursive and paged
+    /// walks, so the two stay byte-identical in their node/edge output.
+    fn emit_child(
+        &mut self,
+        parent_rel: &str,
+        name: &OsStr,
+        child_abs: &Path,
+    ) -> Option<ChildOutcome> {
+        let name_str = name.to_string_lossy();
+        // Skip workspace-internal state and the per-workspace blocklist
+        // dirs at ANY depth. Mirrors chan-workspace's `walk_workspace`
+        // (`.chan`/`.git` invariants) plus the `WalkFilter`
+        // (`node_modules`, `target`, `venv`, ...) so the filesystem
+        // graph excludes the same set the index, the File Browser spine,
+        // and the watcher feed exclude. A repo-root workspace otherwise
+        // plots its whole dependency tree (60K-131K nodes). The skip
+        // applies regardless of file type so a `.git` symlink can't slip
+        // a dependency tree back in.
+        if name_str == ".chan" || name_str == ".git" || self.filter.is_excluded(&name_str) {
+            return None;
+        }
+        let child_rel = if parent_rel.is_empty() {
+            name_str.to_string()
+        } else {
+            format!("{parent_rel}/{name_str}")
+        };
+        let child_meta = match std::fs::symlink_metadata(child_abs) {
+            Ok(m) => m,
+            Err(_) => {
+                let ghost = NodeView {
+                    id: child_rel.clone(),
+                    kind: "ghost",
+                    name: name_str.to_string(),
+                    path: child_rel.clone(),
+                    size: 0,
+                    path_class: None,
+                    permission: None,
+                    link_count: 1,
+                    mtime: None,
+                    target: None,
+                    outside: false,
+                    broken: true,
+                    target_escapes_workspace: false,
+                };
+                self.insert_node(ghost);
+                self.push_edge(parent_rel.to_owned(), child_rel, "contains");
+                return Some(ChildOutcome::Ghost);
+            }
+        };
+        self.visit_entry(&child_rel, child_abs, &child_meta);
+        self.push_edge(parent_rel.to_owned(), child_rel.clone(), "contains");
+        Some(ChildOutcome::Emitted {
+            rel: child_rel,
+            meta: child_meta,
+        })
+    }
+
+    /// Bounded, resumable depth-scope walk. Emits at most `max_nodes`
+    /// nodes / `max_bytes` of node payload this call, then returns the
+    /// DFS stack to resume from (`None` = the walk is complete). On a
+    /// fresh walk (`resume` is `None`) it first emits the upstream
+    /// ancestor spine + the scope node; on resume it picks up mid-walk
+    /// without re-emitting what earlier batches already sent.
+    ///
+    /// Termination does NOT rely on the recursive walk's inode
+    /// visited-set (that state can't ride in a bounded cursor): the
+    /// `find -d` depth budget caps total descent at `MAX_DEPTH` levels,
+    /// so even a hardlinked-directory cycle stops at the depth bound.
+    fn walk_directory_paged(
+        &mut self,
+        rel: &str,
+        abs: &Path,
+        meta: &Metadata,
+        depth: usize,
+        resume: Option<Vec<CursorFrame>>,
+        budget: BatchBudget,
+    ) -> Option<Vec<CursorFrame>> {
+        debug_assert!(
+            meta.is_dir(),
+            "walk_directory_paged called on non-directory"
+        );
+        let mut stack: Vec<DirFrame> = Vec::new();
+        match resume {
+            None => {
+                self.emit_ancestor_chain(rel);
+                self.visit_entry(rel, abs, meta);
+                if meta.permissions().readonly() || depth == 0 {
+                    return None;
+                }
+                if let Some(frame) = self.open_dir_frame(rel, abs, depth) {
+                    stack.push(frame);
+                }
+            }
+            Some(frames) => {
+                for cf in frames {
+                    let dir_abs = self.root.join(&cf.r);
+                    if let Some(mut frame) = self.open_dir_frame(&cf.r, &dir_abs, cf.l) {
+                        frame.idx = cf.i.min(frame.entries.len());
+                        stack.push(frame);
+                    }
+                }
+            }
+        }
+
+        let mut emitted = 0usize;
+        let mut bytes = 0usize;
+        loop {
+            // Drop frames we've finished so a budget break below always
+            // leaves a frame with real pending work on top (no spurious
+            // trailing empty batch), and an empty stack means done.
+            while matches!(stack.last(), Some(f) if f.idx >= f.entries.len()) {
+                stack.pop();
+            }
+            let Some(top) = stack.last_mut() else { break };
+            if emitted >= budget.max_nodes || bytes >= budget.max_bytes {
+                break;
+            }
+            let (name, child_abs) = top.entries[top.idx].clone();
+            top.idx += 1;
+            let parent_rel = top.rel.clone();
+            let levels = top.levels;
+            match self.emit_child(&parent_rel, &name, &child_abs) {
+                None => {} // blocklisted: skipped, no budget spent
+                Some(ChildOutcome::Ghost) => {
+                    emitted += 1;
+                    bytes += NODE_FIXED_BYTES;
+                }
+                Some(ChildOutcome::Emitted {
+                    rel: child_rel,
+                    meta,
+                }) => {
+                    emitted += 1;
+                    bytes += node_byte_estimate(&child_rel);
+                    // Descend only while depth budget remains; `levels >
+                    // 1` is exactly `relative_depth + 1 <= depth`.
+                    if levels > 1
+                        && meta.is_dir()
+                        && !meta.file_type().is_symlink()
+                        && !meta.permissions().readonly()
+                    {
+                        if let Some(frame) = self.open_dir_frame(&child_rel, &child_abs, levels - 1)
+                        {
+                            stack.push(frame);
+                        }
+                    }
+                }
+            }
+        }
+
+        if stack.is_empty() {
+            None
+        } else {
+            Some(
+                stack
+                    .iter()
+                    .map(|f| CursorFrame {
+                        r: f.rel.clone(),
+                        i: f.idx,
+                        l: f.levels,
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    /// Open a directory as a DFS frame: its sorted entries plus the
+    /// `levels` budget. `None` when the directory can't be read (a
+    /// transient stat/permission failure just ends that branch).
+    fn open_dir_frame(&self, rel: &str, abs: &Path, levels: usize) -> Option<DirFrame> {
+        Some(DirFrame {
+            rel: rel.to_owned(),
+            entries: read_dir_sorted(abs),
+            idx: 0,
+            levels,
+        })
     }
 
     /// Emit a node for the path at `rel` with metadata `meta`. Records
@@ -980,6 +1399,8 @@ mod tests {
             nodes,
             edges,
             truncated,
+            cursor: None,
+            done: true,
         }
     }
 
@@ -1472,5 +1893,236 @@ mod tests {
                 .any(|n| n.id == "notes" && n.kind == "directory"),
             "notes/ should be a direct child at depth 1"
         );
+    }
+
+    // ---- A1: paced / paged delivery -----------------------------------
+
+    fn seed_paged_workspace() -> (TempDir, TempDir, std::sync::Arc<chan_workspace::Workspace>) {
+        let cfg = TempDir::new().unwrap();
+        let workspace_root = TempDir::new().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(workspace_root.path()).unwrap();
+        let ws = lib.open_workspace(workspace_root.path()).unwrap();
+        // A small multi-level tree: enough nodes to force several
+        // batches at a tiny batch size.
+        for i in 0..6 {
+            ws.write_text(&format!("top{i}.md"), "# t\n").unwrap();
+        }
+        for d in 0..3 {
+            for i in 0..4 {
+                ws.write_text(&format!("dir{d}/file{i}.md"), "# f\n")
+                    .unwrap();
+            }
+            ws.write_text(&format!("dir{d}/sub/deep{d}.md"), "# d\n")
+                .unwrap();
+        }
+        (cfg, workspace_root, ws)
+    }
+
+    type EdgeSet = std::collections::BTreeSet<(String, String, String)>;
+
+    fn collect_paged(
+        ws: &chan_workspace::Workspace,
+        path: &str,
+        depth: usize,
+        batch: usize,
+    ) -> (std::collections::BTreeSet<String>, EdgeSet, usize) {
+        let mut node_ids = std::collections::BTreeSet::new();
+        let mut edges: EdgeSet = std::collections::BTreeSet::new();
+        let mut cursor: Option<String> = None;
+        let mut batches = 0usize;
+        loop {
+            let resp = build_fs_graph_paged(
+                ws,
+                FsGraphScope::Directory,
+                path,
+                depth,
+                cursor.as_deref(),
+                Some(batch),
+            )
+            .expect("paged batch");
+            batches += 1;
+            for n in &resp.nodes {
+                node_ids.insert(n.id.clone());
+            }
+            for e in &resp.edges {
+                edges.insert((e.source.clone(), e.target.clone(), e.kind.to_string()));
+            }
+            if resp.done {
+                assert!(resp.cursor.is_none(), "done batch must carry no cursor");
+                break;
+            }
+            cursor = resp.cursor.clone();
+            assert!(cursor.is_some(), "non-final batch must carry a cursor");
+            assert!(batches < 10_000, "paged walk failed to terminate");
+        }
+        (node_ids, edges, batches)
+    }
+
+    fn whole_sets(
+        ws: &chan_workspace::Workspace,
+        path: &str,
+        depth: usize,
+    ) -> (std::collections::BTreeSet<String>, EdgeSet) {
+        let resp = build_fs_graph(ws, FsGraphScope::Directory, path, depth).unwrap();
+        let nodes = resp.nodes.iter().map(|n| n.id.clone()).collect();
+        let edges = resp
+            .edges
+            .iter()
+            .map(|e| (e.source.clone(), e.target.clone(), e.kind.to_string()))
+            .collect();
+        (nodes, edges)
+    }
+
+    #[test]
+    fn cursor_round_trips_through_base64() {
+        let c = FsCursor {
+            p: "dir0/sub".to_string(),
+            d: 3,
+            s: vec![
+                CursorFrame {
+                    r: "dir0".into(),
+                    i: 2,
+                    l: 3,
+                },
+                CursorFrame {
+                    r: "dir0/sub".into(),
+                    i: 0,
+                    l: 2,
+                },
+            ],
+        };
+        let decoded = decode_cursor(&encode_cursor(&c)).expect("decodes");
+        assert_eq!(decoded.p, c.p);
+        assert_eq!(decoded.d, c.d);
+        assert_eq!(decoded.s.len(), 2);
+        assert_eq!(decoded.s[0].r, "dir0");
+        assert_eq!(decoded.s[1].i, 0);
+        assert!(decode_cursor("!!!not base64!!!").is_none());
+    }
+
+    #[test]
+    fn paged_walk_reassembles_to_the_whole_walk() {
+        let (_cfg, _root, ws) = seed_paged_workspace();
+        for depth in [1usize, 2, 6] {
+            let (pn, pe, batches) = collect_paged(&ws, "", depth, 4);
+            let (wn, we) = whole_sets(&ws, "", depth);
+            assert_eq!(pn, wn, "node set mismatch at depth {depth}");
+            assert_eq!(pe, we, "edge set mismatch at depth {depth}");
+            // The tree is bigger than one batch at depth>=2, so paging
+            // actually split it (proves we exercised >1 batch).
+            if depth >= 2 {
+                assert!(batches > 1, "depth {depth} should need multiple batches");
+            }
+        }
+    }
+
+    #[test]
+    fn paged_batches_respect_the_node_budget() {
+        let (_cfg, _root, ws) = seed_paged_workspace();
+        // Request the floor batch size (a smaller `limit` clamps up to
+        // `BATCH_MIN_NODES`, so assert against the effective budget).
+        let batch = BATCH_MIN_NODES;
+        let mut cursor: Option<String> = None;
+        loop {
+            let resp = build_fs_graph_paged(
+                &ws,
+                FsGraphScope::Directory,
+                "",
+                6,
+                cursor.as_deref(),
+                Some(batch),
+            )
+            .unwrap();
+            // Bounded by the budget plus the once-only root + ancestor
+            // spine (<= 2 for a root-scope walk).
+            assert!(
+                resp.nodes.len() <= batch + 2,
+                "batch overran budget: {} nodes",
+                resp.nodes.len()
+            );
+            if resp.done {
+                break;
+            }
+            cursor = resp.cursor.clone();
+        }
+    }
+
+    #[test]
+    fn paged_cursor_is_idempotent() {
+        let (_cfg, _root, ws) = seed_paged_workspace();
+        let first =
+            build_fs_graph_paged(&ws, FsGraphScope::Directory, "", 6, None, Some(4)).unwrap();
+        let cursor = first.cursor.expect("first batch has more");
+        let a = build_fs_graph_paged(&ws, FsGraphScope::Directory, "", 6, Some(&cursor), Some(4))
+            .unwrap();
+        let b = build_fs_graph_paged(&ws, FsGraphScope::Directory, "", 6, Some(&cursor), Some(4))
+            .unwrap();
+        let ids = |r: &FsGraphResponse| r.nodes.iter().map(|n| n.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&a), ids(&b), "same cursor produced different batches");
+        assert_eq!(a.cursor, b.cursor);
+    }
+
+    #[test]
+    fn paged_cursor_bound_to_scope_and_depth() {
+        let (_cfg, _root, ws) = seed_paged_workspace();
+        let first =
+            build_fs_graph_paged(&ws, FsGraphScope::Directory, "", 2, None, Some(4)).unwrap();
+        let cursor = first.cursor.expect("more batches");
+        // Same cursor, different depth -> rejected (new walk).
+        let err = build_fs_graph_paged(&ws, FsGraphScope::Directory, "", 3, Some(&cursor), Some(4))
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(
+            err.message.contains("does not match"),
+            "got: {}",
+            err.message
+        );
+        // Garbage cursor -> rejected.
+        let err = build_fs_graph_paged(
+            &ws,
+            FsGraphScope::Directory,
+            "",
+            2,
+            Some("@@nope@@"),
+            Some(4),
+        )
+        .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(
+            err.message.contains("invalid graph cursor"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn single_dir_expand_returns_direct_children_only() {
+        let (_cfg, _root, ws) = seed_paged_workspace();
+        let (nodes, edges, _batches) = collect_paged(&ws, "dir0", 1, 4);
+        assert!(nodes.contains("dir0/file0.md"), "direct file missing");
+        assert!(nodes.contains("dir0/sub"), "direct subdir missing");
+        // The subdir's own child must NOT appear at depth 1.
+        assert!(
+            !nodes.contains("dir0/sub/deep0.md"),
+            "grandchild leaked at depth 1"
+        );
+        assert!(edges.contains(&(
+            "dir0".to_string(),
+            "dir0/file0.md".to_string(),
+            "contains".to_string()
+        )));
+    }
+
+    #[test]
+    fn file_scope_is_never_paged() {
+        let (_cfg, _root, ws) = seed_paged_workspace();
+        // Even with a limit set, file scope returns the whole small
+        // payload and reports done (the file + its parent spine).
+        let resp = build_fs_graph_paged(&ws, FsGraphScope::File, "dir0/file0.md", 0, None, Some(1))
+            .unwrap();
+        assert!(resp.done);
+        assert!(resp.cursor.is_none());
+        assert!(resp.nodes.iter().any(|n| n.id == "dir0/file0.md"));
     }
 }
