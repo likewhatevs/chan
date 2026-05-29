@@ -1,17 +1,22 @@
 # identity-service
 
 Public-facing OAuth2 sign-in service for id.chan.app. Runs the
-GitHub / Google / GitLab auth-code flow with PKCE, mints the
-`id_session` cookie shared with workspace-proxy, and serves a Svelte
-SPA where users manage their profile and personal access tokens
-(PATs).
+GitHub / Google / GitLab auth-code flow with PKCE, holds the
+host-only `id_session` cookie, and serves a Svelte SPA where users
+manage their profile, personal access tokens (PATs), and workspaces.
+It mints the short-lived workspace-gate entry token that hands a user
+off to workspace-proxy.
 
 ## Role in the system
 
-First public touch-point of chan-gateway. After a successful
-OAuth flow, the browser holds the `id_session` cookie and can
-move between id.chan.app and workspace.chan.app without re-authing
-(both services read the same `tower_sessions` Postgres table).
+First public touch-point of chan-gateway. After a successful OAuth
+flow the browser holds the `id_session` cookie, which is host-only on
+id.chan.app and is NOT shared with workspace-proxy. To open a
+workspace, identity mints a short-lived workspace-gate entry token and
+303s the browser to `{user}.workspace.<domain>/{workspace}/?t=<jwt>`;
+workspace-proxy verifies it and mints its own host-scoped cookie. That
+split is the load-bearing piece of cross-tenant isolation: no
+`.chan.app`-scoped cookie exists.
 
 Identity-service owns:
 
@@ -27,8 +32,8 @@ goes through profile-service over HTTP.
 cargo build -p identity
 ```
 
-Frontend baked in at build time via `rust_embed`. The two SPAs in
-the workspace share one npm install at the repo root:
+Frontend baked in at build time via `rust_embed`. identity is the
+gateway's only SPA; it installs from the gateway npm workspace root:
 
 ```bash
 npm install
@@ -48,10 +53,18 @@ export BIND_ADDR=127.0.0.1:7000
 export BASE_URL=http://127.0.0.1:7000
 export PROFILE_SERVICE_URL=http://127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-service-token
+export IDENTITY_INTERNAL_TOKEN=dev-internal-token
+export WORKSPACE_GATE_SECRET=dev-workspace-gate-secret
 export GITHUB_CLIENT_ID=...
 export GITHUB_CLIENT_SECRET=...
 cargo run -p identity
 ```
+
+Hostnames derive from `CHAN_DOMAIN` (default `localtest.me`) and
+`PUBLIC_SCHEME` (default `http`); `BASE_URL` defaults to
+`<scheme>://id.<domain>` and is set explicitly above only to pin the
+loopback port. For the full local stack, prefer `scripts/dev/setup.sh`
++ `scripts/dev/run.sh`.
 
 Register a GitHub OAuth app at
 `https://github.com/settings/developers` with callback
@@ -62,33 +75,41 @@ follow the same pattern.
 
 Required:
 
-| Name                    | Notes                                    |
-|-------------------------|------------------------------------------|
-| `DATABASE_URL`          | Postgres connection string               |
-| `PROFILE_SERVICE_URL`   | profile-service HTTP base URL            |
-| `PROFILE_AUTH_TOKEN`    | bearer for profile-service calls         |
-| At least one provider's `*_CLIENT_ID` + `*_CLIENT_SECRET` pair  |
+| Name                      | Notes                                       |
+|---------------------------|---------------------------------------------|
+| `DATABASE_URL`            | Postgres connection string                  |
+| `PROFILE_SERVICE_URL`     | profile-service HTTP base URL               |
+| `PROFILE_AUTH_TOKEN`      | bearer for profile-service calls            |
+| `IDENTITY_INTERNAL_TOKEN` | bearer workspace-proxy presents on validate |
+| `WORKSPACE_GATE_SECRET`   | HS256 secret; equals workspace-proxy's      |
+| At least one provider's `*_CLIENT_ID` + `*_CLIENT_SECRET` pair        |
 
 Provider credentials (each pair optional; leave both unset to
 disable):
 
 - `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
-- `GITHUB_ENTERPRISE_URL` (optional, switches to GHE endpoints)
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 - `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET`
 
+Domain (single source; see [`gateway/packaging/domain.env`](../../packaging/domain.env)):
+
+| Name                       | Default        | Purpose                     |
+|----------------------------|----------------|-----------------------------|
+| `CHAN_DOMAIN`              | `localtest.me` | base domain; derives hosts  |
+| `PUBLIC_SCHEME`            | `http`         | scheme for built URLs       |
+
 Optional knobs:
 
-| Name                    | Default                  | Purpose                  |
-|-------------------------|--------------------------|--------------------------|
-| `BIND_ADDR`             | `127.0.0.1:7000`         | listen address           |
-| `BASE_URL`              | `http://localhost:7000`  | public URL for redirects |
-| `COOKIE_SECURE`         | `false`                  | HTTPS-only cookie        |
-| `COOKIE_DOMAIN`         | unset                    | `.chan.app` in prod      |
-| `WORKSPACES_URL`            | `http://localhost:7002`  | shown in SPA topbar      |
-| `WORKSPACE_ADMIN_URL`       | `WORKSPACES_URL`             | workspace-proxy admin base   |
-| `WORKSPACE_ADMIN_TOKEN`     | unset                    | enables tunnel evict on  |
-|                         |                          | account delete           |
+| Name                       | Default                   | Purpose               |
+|----------------------------|---------------------------|-----------------------|
+| `BIND_ADDR`                | `127.0.0.1:7000`          | listen address        |
+| `BASE_URL`                 | `<scheme>://id.<domain>`  | OAuth callback origin |
+| `COOKIE_SECURE`            | `false`                   | HTTPS-only cookie     |
+| `WORKSPACE_WILDCARD_SUFFIX`| `.workspace.<domain>`     | redirect host suffix  |
+| `WORKSPACE_PUBLIC_SCHEME`  | `PUBLIC_SCHEME`           | workspace redirect scheme |
+| `WORKSPACE_PUBLIC_PORT`    | unset                     | `:port` for dev       |
+| `WORKSPACE_ADMIN_URL`      | unset                     | workspace-proxy admin base |
+| `WORKSPACE_ADMIN_TOKEN`    | unset                     | enables tunnel evict on revoke / delete |
 
 ## Routes
 
@@ -105,7 +126,6 @@ Session-gated SPA API (`/api/*`):
 
 | Method | Path                  | Purpose                                 |
 |--------|-----------------------|-----------------------------------------|
-| GET    | `/api/config`         | workspaces_url for the topbar               |
 | GET    | `/api/providers`      | list of enabled OAuth providers         |
 | GET    | `/api/me`             | current user                            |
 | PATCH  | `/api/me/username`    | rename handle                           |

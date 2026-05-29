@@ -35,15 +35,20 @@ Migrations under `migrations/` run on startup.
 
 ## Env vars
 
-| Name                  | Required | Notes                              |
-|-----------------------|----------|------------------------------------|
-| `DATABASE_URL`        | yes      | Postgres connection string         |
-| `BIND_ADDR`           | no       | Default `127.0.0.1:7001`           |
-| `PROFILE_AUTH_TOKEN`  | yes      | Bearer for `/v1/users/*` routes    |
-| `PROFILE_ADMIN_TOKEN` | no       | Bearer for `/v1/admin/*` routes    |
+| Name                   | Required | Notes                             |
+|------------------------|----------|-----------------------------------|
+| `DATABASE_URL`         | yes      | Postgres connection string        |
+| `BIND_ADDR`            | no       | Default `127.0.0.1:7001`          |
+| `PROFILE_AUTH_TOKEN`   | yes      | Bearer for `/v1/users/*` routes   |
+| `PROFILE_ADMIN_TOKEN`  | no       | Bearer for `/v1/admin/*` routes   |
+| `WORKSPACE_ADMIN_URL`  | no       | workspace-proxy admin base; set with the token |
+| `WORKSPACE_ADMIN_TOKEN`| no       | enables the admin-block fan-out that evicts the user's tunnels |
 
 A missing `PROFILE_ADMIN_TOKEN` makes every `/v1/admin/*` route
-return 401; that is the safe default for a fresh deploy.
+return 401; that is the safe default for a fresh deploy. When
+`WORKSPACE_ADMIN_URL` + `WORKSPACE_ADMIN_TOKEN` are set, blocking a
+user also tells workspace-proxy to drop that user's live tunnels
+(best-effort).
 
 ## Routes
 

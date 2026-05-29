@@ -119,19 +119,16 @@ impl Config {
             .context("IDENTITY_URL must be a URL")?;
 
         // Bearer workspace-proxy presents on identity-service's
-        // /internal/v1/tokens/validate. Resolution order:
-        //   1. IDENTITY_INTERNAL_TOKEN (preferred; matches the
-        //      identity-side env var name);
-        //   2. IDENTITY_AUTH_TOKEN (legacy local name, accepted so
-        //      pre-split deploys keep working);
-        //   3. PROFILE_AUTH_TOKEN (final back-compat fallback for
-        //      single-token deploys).
+        // /internal/v1/tokens/validate. Required; the same value is
+        // configured on identity as IDENTITY_INTERNAL_TOKEN. No
+        // fallback to PROFILE_AUTH_TOKEN: rotating the profile bearer
+        // must never silently rotate this one (matches identity's
+        // side, which also requires IDENTITY_INTERNAL_TOKEN outright).
         let identity_auth_token = std::env::var("IDENTITY_INTERNAL_TOKEN")
-            .or_else(|_| std::env::var("IDENTITY_AUTH_TOKEN"))
-            .or_else(|_| std::env::var("PROFILE_AUTH_TOKEN"))
-            .context(
-                "IDENTITY_INTERNAL_TOKEN (or IDENTITY_AUTH_TOKEN / PROFILE_AUTH_TOKEN) is required",
-            )?;
+            .context("IDENTITY_INTERNAL_TOKEN is required")?;
+        if identity_auth_token.is_empty() {
+            anyhow::bail!("IDENTITY_INTERNAL_TOKEN must not be empty");
+        }
 
         let workspace_gate_secret =
             std::env::var("WORKSPACE_GATE_SECRET").context("WORKSPACE_GATE_SECRET is required")?;

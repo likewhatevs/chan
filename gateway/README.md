@@ -14,15 +14,17 @@ v0, scoped to the web flow:
 - `identity`: id.chan.app, OAuth2 sign-in (GitHub / Google /
   GitLab), Postgres-backed sessions, embedded Svelte SPA, personal
   access tokens. **(done)**
-- `workspace-proxy`: workspace.chan.app. chan-tunneld registers each
-  `chan serve` instance at runtime via
-  `POST /internal/v1/registrations` (bearer-auth with
-  `REGISTRY_TOKEN`); registrations expire after a TTL of inactivity.
-  HTTP and WebSocket traffic at `workspace.chan.app/{user}/{workspace}/*` is
-  reverse-proxied to the registered tunneld origin. Auth gate:
-  `--public` registrations are open; otherwise the session user must
-  match the tunnel owner (anon -> 303 to id.chan.app, wrong user ->
-  403). **(done)**
+- `workspace-proxy`: workspace.chan.app (apex) +
+  `*.workspace.chan.app` (wildcard). Each `chan serve` instance dials
+  `POST /v1/tunnel` (raw h2c) and registers over an authenticated
+  yamux tunnel; HTTP and WebSocket traffic at
+  `{user}.workspace.chan.app/{workspace}/*` is reverse-proxied into it.
+  Entry is gated by the workspace-gate handoff: identity mints an
+  entry JWT, workspace-proxy verifies it and mints a host-only,
+  path-scoped `workspace_gate` cookie. `--tunnel-public` registrations
+  skip the gate; everything else without a valid token / cookie 404s
+  (same shape as an unknown workspace, so probes can't enumerate).
+  **(done)**
 
 Personal access tokens (PATs) cover the chan CLI / chan-tunnel use
 case today. Signed JWT access tokens, refresh-token rotation, and
@@ -127,18 +129,18 @@ Open http://127.0.0.1:7000 and sign in with GitHub.
 Terminal 3 (workspace-proxy-service, workspace.chan.app surface on 7002):
 
 ```sh
-export DATABASE_URL=postgres://chan:chan@127.0.0.1/chan_gateway
 export BIND_ADDR=127.0.0.1:7002
-export COOKIE_SECURE=false
-export PROFILE_SERVICE_URL=http://127.0.0.1:7001
-export PROFILE_AUTH_TOKEN=dev-token
-export IDENTITY_BASE_URL=http://127.0.0.1:7000
-export REGISTRY_TOKEN=dev-registry-token
+export TUNNEL_BIND_ADDR=127.0.0.1:7100
+export IDENTITY_URL=http://127.0.0.1:7000
+export IDENTITY_INTERNAL_TOKEN=dev-internal-token
+export WORKSPACE_GATE_SECRET=dev-workspace-gate-secret
 cargo run -p workspace-proxy
 ```
 
-Open http://127.0.0.1:7002 (signed in with GitHub via id.chan.app
-in the same browser; the cookie is shared on 127.0.0.1).
+workspace-proxy holds no database and no session cookie of its own; a
+workspace is reached by following the "open workspace" link from the
+id.chan.app dashboard, which carries the entry token. For the full
+local stack use `scripts/dev/setup.sh` + `scripts/dev/run.sh`.
 
 For frontend iteration without re-embedding:
 
