@@ -60,9 +60,10 @@ use routes::{
     api_indexing_state, api_inspect_draft, api_inspector, api_language_graph, api_link_targets,
     api_links, api_list_files, api_list_sessions, api_metadata_export, api_metadata_import,
     api_move, api_patch_config, api_patch_server_config, api_patch_workspace, api_post_attachment,
-    api_post_contacts_import, api_promote_draft, api_put_session, api_read_file, api_report_dir,
-    api_report_file, api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
-    api_resolve_link, api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
+    api_post_contacts_import, api_preflight, api_preflight_decision, api_promote_draft,
+    api_put_session, api_read_file, api_report_dir, api_report_file, api_report_prefix,
+    api_reports_disable, api_reports_enable, api_reports_state, api_resolve_link,
+    api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
     api_search_files, api_storage_reset, api_team_config_read, api_team_config_write,
     api_terminal_ws, api_upload_file, api_workspace_bootstrap, api_write_file, ws_upgrade,
@@ -900,6 +901,10 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/search/content", get(api_search_content))
         .route("/api/index/status", get(api_index_status))
         .route("/api/indexing/state", get(api_indexing_state))
+        // First-boot workspace readiness for the locked OverlayShell
+        // (contracts §2): poll the snapshot, submit a step decision.
+        .route("/api/preflight", get(api_preflight))
+        .route("/api/preflight/decision", post(api_preflight_decision))
         .route("/api/link-targets", get(api_link_targets))
         .route("/api/resolve-link", get(api_resolve_link))
         .route("/api/headings/*path", get(api_headings))
