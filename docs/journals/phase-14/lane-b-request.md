@@ -36,7 +36,11 @@ checkout under `docs/journals/phase-14/`.
   UI must stay responsive at all times; the editor, file browser,
   terminal, and other graphs stay interactive while a large workspace
   (`/tmp/linux`) fills in. The depth slider requests the next batch
-  (signals backpressure), never a whole refetch.
+  (signals backpressure), never a whole refetch. Keep the existing
+  gesture model as-is: single click = inspector, double click =
+  "graph from here", background tap = clears. Do NOT add a per-node
+  expand/collapse gesture; rescope covers that case. This item only
+  makes delivery incremental, not the interactions.
 - Pre-flight OverlayShell lock (round 3, theme 2): render the
   chan-server pre-flight per `contracts.md` section 2, LOCKED until
   complete - hide/remove the close button, ignore ESC, and guide the

@@ -45,6 +45,14 @@ Direction (intent, not a prescription):
   file browser, terminal, additional graphs) must remain interactive
   throughout.
 
+Graph interaction model (settled, unchanged by this work): single click
+opens the inspector, double click re-roots ("graph from here", depth
+resets to 1), background tap clears, and the depth slider paces batches.
+There is NO per-node expand/collapse - rescope covers that case - so
+this round adds no new node gesture; it only makes the existing
+delivery incremental. (The phase-13 round-1 graph design floated a
+per-node click-to-expand; it never shipped and is explicitly not wanted.)
+
 Correctness bar: the graphs still render the same result they do today;
 only the delivery is paced.
 
