@@ -299,6 +299,11 @@ export type GraphTab = {
   mode: "semantic" | "filesystem" | "language";
   scopeId: string;
   depth: number;
+  /// Expanded directory set for the filesystem-mode spine (double-click a
+  /// directory to reveal its next degree). Workspace-relative dir paths;
+  /// the scope root ("") is always expanded. Serialized so the
+  /// expand/collapse state survives a window reload (File Browser parity).
+  expanded: Record<string, boolean>;
   filters: GraphFilters;
   inspectorOpen: boolean;
   pendingSelectId: string | null;
@@ -1130,6 +1135,7 @@ export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): Gr
     mode,
     scopeId,
     depth: opts.depth ?? 1,
+    expanded: { "": true },
     filters: { ...DEFAULT_GRAPH_FILTERS },
     inspectorOpen: false,
     pendingSelectId: opts.pendingSelectId ?? null,
@@ -2277,6 +2283,7 @@ function cloneTab(src: Tab): Tab {
       mode: src.mode,
       scopeId: src.scopeId,
       depth: src.depth,
+      expanded: { ...src.expanded },
       filters: { ...src.filters },
       inspectorOpen: src.inspectorOpen,
       pendingSelectId: src.pendingSelectId,
@@ -2754,6 +2761,7 @@ export function paneModeOpenGraph(ctx?: SpawnContext): void {
     mode,
     scopeId,
     depth: 1,
+    expanded: { "": true },
     filters: { ...DEFAULT_GRAPH_FILTERS },
     inspectorOpen: false,
     pendingSelectId,
@@ -3557,6 +3565,10 @@ type SerTab = {
   gd?: number;
   gi?: 1;
   gf?: string;
+  /// Expanded directory paths for the filesystem spine (graph expand /
+  /// collapse). Workspace-relative; the root ("") is always expanded and
+  /// omitted. Absent when nothing beyond the root is open.
+  ge?: string[];
   gp?: string;
   /// `fullstack-81`: persisted live selection — `gn` is the graph
   /// node id last tapped by the user, `gnl` is the human-readable
@@ -3644,6 +3656,24 @@ function restoreFocusColor(color: SerFocusColor | undefined): FocusColor {
   if (color === "g") return "green";
   if (color === "p") return "pink";
   return "blue";
+}
+
+/// Expanded directory paths for a graph tab, excluding the always-open
+/// root. Used to serialize the filesystem-spine expand/collapse state.
+function graphExpandedList(expanded: Record<string, boolean>): string[] {
+  return Object.keys(expanded).filter((k) => k && expanded[k]);
+}
+
+/// Rebuild a graph tab's expanded set from its serialized path list. The
+/// root ("") is always expanded.
+function graphExpandedFromList(
+  list: string[] | undefined,
+): Record<string, boolean> {
+  const map: Record<string, boolean> = { "": true };
+  if (Array.isArray(list)) {
+    for (const p of list) if (typeof p === "string" && p) map[p] = true;
+  }
+  return map;
 }
 
 function encodeGraphTabFilters(f: GraphFilters): string {
@@ -3760,6 +3790,9 @@ function serializeTab(
       ...(t.depth !== 1 ? { gd: t.depth } : {}),
       ...(t.inspectorOpen ? { gi: 1 as const } : {}),
       gf: encodeGraphTabFilters(t.filters),
+      ...(graphExpandedList(t.expanded).length
+        ? { ge: graphExpandedList(t.expanded) }
+        : {}),
       ...(t.pendingSelectId ? { gp: t.pendingSelectId } : {}),
       // `fullstack-81`: persist the live selection so reload
       // restores both the selected node AND the
@@ -3943,6 +3976,7 @@ export async function restoreLayout(
             mode,
             scopeId,
             depth: Number.isFinite(sertab.gd) ? Math.max(0, Number(sertab.gd)) : 1,
+            expanded: graphExpandedFromList(sertab.ge),
             filters: decodeGraphTabFilters(sertab.gf),
             inspectorOpen: sertab.gi === 1,
             pendingSelectId: sertab.gp ?? selectedNodeId,

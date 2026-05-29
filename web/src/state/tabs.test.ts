@@ -3087,6 +3087,7 @@ describe("graphTabLabel (fullstack-81)", () => {
       mode: "semantic",
       scopeId: "workspace",
       depth: 1,
+      expanded: { "": true },
       filters: {
         link: true,
         tag: true,

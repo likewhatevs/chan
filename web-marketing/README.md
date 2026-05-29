@@ -105,9 +105,11 @@ It must not use GitHub `releases/latest/download` URLs. The collector builds
 that manifest from uploaded GitHub Release assets and detached updater
 signature assets.
 
-Normal Pages deploys from `main` preserve already published `/dl/**` metadata
-instead of generating new metadata. The release workflow is the only CI path
-that generates and publishes fresh `/dl/**` metadata.
+A manual Pages deploy (`gh workflow run pages.yml`) ships marketing-only
+updates between releases. It rebuilds `/dl/**` from the latest GitHub Release
+rather than reading the live site, so the download page and update-check
+metadata survive the deploy. The release workflow regenerates `/dl/**` for each
+new tag; both paths derive the same metadata from GitHub Release assets.
 
 Build the release manual bundle locally:
 

@@ -499,7 +499,51 @@ export type FsGraphResponse = {
   nodes: FsGraphNode[];
   edges: FsGraphEdge[];
   truncated: boolean;
+  /// Cursor-paged delivery (a request carrying `limit` or `cursor`):
+  /// `cursor` is the opaque continuation token for the next batch, null
+  /// on the final batch; `done` is true on the final batch. Absent on a
+  /// whole-scope (non-paged) response, which returns everything at once.
+  cursor?: string | null;
+  done?: boolean;
 };
+
+// New-workspace pre-flight (GET /api/preflight). chan-server derives the
+// snapshot from live state on every poll; the SPA renders it on a locked
+// surface until `phase === "ready"`.
+export type PreflightPhase = "running" | "needs_decision" | "ready" | "failed";
+export type PreflightStepState =
+  | "pending"
+  | "running"
+  | "done"
+  | "needs_decision"
+  | "failed";
+
+export type PreflightDecisionChoice = { id: string; label: string };
+export type PreflightDecision = {
+  prompt: string;
+  choices: PreflightDecisionChoice[];
+};
+export type PreflightStep = {
+  id: string;
+  label: string;
+  state: PreflightStepState;
+  /// Progress counters for a running step (the index build); the locked
+  /// surface reads these as the single source of truth for its bar.
+  current?: number;
+  total?: number;
+  /// Present when the step blocks on a user choice (`needs_decision`).
+  decision?: PreflightDecision;
+};
+export type PreflightError = { step: string; message: string };
+export type PreflightSnapshot = {
+  phase: PreflightPhase;
+  /// True until `phase === "ready"`. The single signal the locked surface
+  /// keys on: while true it shows with no close affordance and ignores ESC.
+  locked: boolean;
+  steps: PreflightStep[];
+  error?: PreflightError | null;
+};
+export type PreflightDecisionRequest = { step: string; choice: string };
 
 // ---------------------------------------------------------------------------
 // /ws message-type catalog (phase-11 spine contract, Part 3).

@@ -10,6 +10,7 @@
   import { teamDialogState, openTeamDialog } from "./state/teamDialog.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
+  import PreflightOverlay from "./components/PreflightOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
   import PaneModeHelp from "./components/PaneModeHelp.svelte";
   import PromptModal from "./components/PromptModal.svelte";
@@ -404,6 +405,22 @@
   ///     reserved in browsers — preventDefault doesn't win. Hence
   ///     the Alt+Shift / Ctrl+Alt fallbacks above; native binds
   ///     the VS Code-shaped chords directly.
+  /// True when a modal or the search overlay owns the keyboard. The
+  /// Cmd+, pane flip must bail then: flipping a pane the user can't see,
+  /// from under a dialog, lands on the obscured pane and reads as the
+  /// "panes flip" desync once they dismiss the surface and look around.
+  /// Mirrors the modal guard onCtrlDCapture uses for tab-close, plus the
+  /// overlay stack the search panel lives in.
+  function paneChordBlocked(): boolean {
+    return (
+      topOverlay() !== null ||
+      promptState.open ||
+      pathPromptState.open ||
+      confirmState.open ||
+      draftCloseState.open
+    );
+  }
+
   function onWindowKey(e: KeyboardEvent): void {
     const meta = e.metaKey || e.ctrlKey;
     if (paneMode.active) {
@@ -694,6 +711,9 @@
       !e.altKey &&
       (e.code === "Comma" || e.key === ",")
     ) {
+      // A modal or the search overlay owns the keyboard: let it keep
+      // the key rather than flipping the pane hidden behind it.
+      if (paneChordBlocked()) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       flipHybrid(layout.activePaneId);
@@ -991,10 +1011,11 @@
   function runCommand(name: string, detail: Record<string, unknown>): void {
     switch (name) {
       case "app.settings.toggle":
-        // `phase-13 lane-b` slice 3c: command id unchanged so
-        // chan-desktop's KEY_BRIDGE_JS + command-bus callers keep
-        // working, but the action is now "flip focused Hybrid"
-        // (Settings overlay retired).
+        // Command id kept for chan-desktop's KEY_BRIDGE_JS (native Cmd+,)
+        // and command-bus callers; the action is the focused-Hybrid flip.
+        // Same guard as the web chord so the native key can't flip a pane
+        // from under a dialog either.
+        if (paneChordBlocked()) return;
         flipHybrid(layout.activePaneId);
         return;
       // `fullstack-a-32`: chan-desktop's KEY_BRIDGE_JS fires these
@@ -1281,6 +1302,7 @@
      SPA shell without the launch token, so /api 401s and the app
      is unusable until they reopen the original URL. -->
 <MissingTokenOverlay />
+<PreflightOverlay />
 <!-- `fullstack-a-77` slice 2: screensaver cover. Mounts at App
      root so z-index sits above every chan overlay
      (`screensaver-backdrop` uses z=2000). The component

@@ -11,6 +11,8 @@ import type {
   DraftPromoteResponse,
   FileResponse,
   FsGraphResponse,
+  PreflightSnapshot,
+  PreflightDecisionRequest,
   GlobalConfig,
   GraphEdge,
   GraphSnapshot,
@@ -975,11 +977,29 @@ export const api = {
   },
   /// Filesystem graph payload: directories, files, symlinks, hardlinks,
   /// and ghost nodes. Distinct from the semantic markdown graph.
-  fsGraph: (opts: { scope: "file" | "directory"; path: string; depth?: number }) =>
+  // `limit` / `cursor` opt into cursor-paged delivery: the server returns
+  // a bounded batch plus a `cursor` to fetch the next, so a large scope
+  // fills in gradually instead of arriving as one blocking payload. Both
+  // absent = the whole-scope response (byte-identical to before).
+  fsGraph: (opts: {
+    scope: "file" | "directory";
+    path: string;
+    depth?: number;
+    limit?: number;
+    cursor?: string;
+  }) =>
     req<FsGraphResponse>(
       "GET",
-      `/api/fs-graph?scope=${encodeURIComponent(opts.scope)}&path=${encodeURIComponent(opts.path)}&depth=${encodeURIComponent(String(opts.depth ?? 1))}`,
+      `/api/fs-graph?scope=${encodeURIComponent(opts.scope)}&path=${encodeURIComponent(opts.path)}&depth=${encodeURIComponent(String(opts.depth ?? 1))}` +
+        (opts.limit !== undefined ? `&limit=${encodeURIComponent(String(opts.limit))}` : "") +
+        (opts.cursor !== undefined ? `&cursor=${encodeURIComponent(opts.cursor)}` : ""),
     ),
+  // New-workspace pre-flight: poll the readiness snapshot and submit the
+  // user's decision for a blocking step (e.g. download the embedding model
+  // vs keyword-only search).
+  preflight: () => req<PreflightSnapshot>("GET", "/api/preflight"),
+  preflightDecision: (body: PreflightDecisionRequest) =>
+    req<PreflightSnapshot>("POST", "/api/preflight/decision", body),
   spawnTerminal: (body: TerminalSpawnRequest) =>
     req<TerminalSpawnResponse>("POST", "/api/terminals", body),
   restartTerminal: (sessionId: string, body?: TerminalRestartRequest) =>

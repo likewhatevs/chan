@@ -154,97 +154,61 @@
     });
   });
 
-  // `fullstack-a-72` hang-recovery via localStorage; `-a-74`
-  // moved the debounce machinery into editorBuffer.ts so a
-  // `beforeunload` / `pagehide` flush can persist pending
-  // writes before the page tears down (force-reload skips
-  // Svelte component cleanups, which had been the previous
-  // flush trigger):
-  //
-  // * On mount: compare any pre-existing buffer to the
-  //   just-loaded disk content (`tab.saved`). If divergent,
-  //   surface `recoveredBuffer` so the banner renders + the
-  //   user can restore or discard.
-  // * On every content mutation: queue a debounced (500ms)
-  //   write via `queueBufferWrite` — the registry lives in
-  //   editorBuffer.ts so App.svelte's unload listeners can
-  //   flush all pending writes synchronously.
-  // * On save success / discard / clean transition / unmount:
-  //   cancel any pending write + clear the persisted buffer
-  //   via the appropriate helper.
+  // Hang-recovery via localStorage (editorBuffer.ts). A force-reload
+  // skips Svelte component cleanups, so the debounce + flush machinery
+  // lives in that module where App.svelte's `beforeunload` / `pagehide`
+  // listeners can drain it. Here we decide, once per disk load, whether
+  // a stored buffer is recoverable work, and keep the persisted buffer
+  // in step with the editor's clean/dirty state. The buffer is keyed on
+  // `tab.path` because tab ids regenerate on every page load; the path
+  // is what survives the reload the recovery exists for.
   let recoveredBuffer: EditorBuffer | null = $state(null);
 
   $effect(() => {
-    // Mount-time divergence check. Use the AS-LOADED disk
-    // content (`tab.saved`) — not `tab.content` — since the
-    // user may have already started editing this tick and we
-    // need to compare against what the FILE has, not what the
-    // BUFFER would have.
-    //
-    // `fullstack-a-82`: key the buffer on `tab.path` (not
-    // `tab.id`). Tab ids are module-counter-generated and
-    // reset on every page load — so a pre-`-a-82` buffer
-    // written as `chan:editor-buffer:<tabId>` became a dead
-    // reference after the user force-reloaded. Path keys
-    // survive the reload + the tab-id regeneration.
-    const disk = tab.saved ?? tab.content;
-    recoveredBuffer = divergentBufferOrNull(tab.path, tab.path, disk);
-    return () => {
-      // On graceful unmount (Cmd+W close / tab swap), cancel
-      // any pending write. Force-reload doesn't run this path;
-      // App.svelte's `beforeunload` / `pagehide` listeners
-      // call `flushPendingBufferWrites` to handle that.
-      cancelPendingBufferWrite(tab.path);
-    };
+    // Recovery decision. Deliberately depends on the on-disk content
+    // (`tab.saved`), NOT `tab.content`: it re-runs on load / save /
+    // reload but never on keystrokes, so it cannot mistake the user's
+    // own in-progress edits for a prior session. divergentBufferOrNull
+    // offers a buffer only when it came from a different page load,
+    // diverges from disk, and postdates the last save; on a save it
+    // resolves to null, which dismisses the banner with no extra
+    // bookkeeping. Declared before the persistence effect so it
+    // captures the buffer before that effect can touch storage.
+    const saved = tab.saved;
+    if (saved === undefined || tab.loading) return;
+    recoveredBuffer = divergentBufferOrNull(
+      tab.path,
+      tab.path,
+      saved,
+      tab.savedMtimeNs,
+    );
   });
 
   $effect(() => {
-    // Persistence on content mutation. Track `tab.content` +
-    // `tab.saved` as reactive deps so the effect re-runs on
-    // every mutation. Skip the write when the content matches
-    // the saved-on-disk content (clean state — nothing to
-    // recover; clear any leftover buffer + cancel any pending
-    // write so a stale recovered-state doesn't surface on
-    // next reload).
-    //
-    // `fullstack-a-82`: ALSO skip when `tab.saved` is undefined
-    // — that means the disk content hasn't finished loading
-    // yet (the openInActivePane initialiser sets
-    // `content: ""` + the async fetch fills in `tab.saved`
-    // later). Without this guard the mount-time effect would
-    // queue an empty `""` write that races the file fetch +
-    // could clobber the freshly-restored buffer with empty
-    // content after the 500ms debounce.
-    //
-    // `fullstack-a-83`: when a recovery banner is currently
-    // surfacing, DO NOT clear the buffer in the clean-state
-    // branch. This guards the effect-ordering race
-    // @@WebtestA caught: the mount-time effect + the
-    // persistence effect both fire in the same tick once
-    // `tab.saved` arrives;
-    // depending on the microtask order, the persistence
-    // effect's `clearEditorBuffer` can wipe the localStorage
-    // buffer between the mount effect's read and the user's
-    // chance to act on it. Banner stays on screen only until
-    // the user clicks Restore (which replaces `tab.content`)
-    // or Discard (which explicitly clears the buffer). Both
-    // paths drop `recoveredBuffer` to null + the next
-    // persistence-effect run will reach the clean-state
-    // branch + clear normally.
+    // Cancel any pending debounced write when the tab unmounts
+    // gracefully (Cmd+W close / tab swap). Force-reload doesn't reach
+    // this path; App.svelte's unload listeners flush instead.
+    const path = tab.path;
+    return () => cancelPendingBufferWrite(path);
+  });
+
+  $effect(() => {
+    // Keep the persisted buffer in step with the editor. Wait for the
+    // disk content to load (`saved` defined) so the placeholder empty
+    // content can't queue a write that races the fetch. While the
+    // editor is dirty, persist a debounced copy; once it returns to
+    // clean state, drop the buffer so a stale entry can't outlive the
+    // edit. A pending recovery buffer is left alone: it belongs to a
+    // previous load and its banner is still being offered, so clearing
+    // it here would lose unsaved work if the user switches tabs before
+    // acting. The recovery effect above drops that banner on the next
+    // save, after which this branch clears normally.
     const content = tab.content;
     const saved = tab.saved;
-    if (saved === undefined) return;
-    if (tab.loading) return;
+    if (saved === undefined || tab.loading) return;
     if (content === saved) {
-      if (recoveredBuffer !== null) {
-        // Banner is up — leave the buffer in place so the
-        // user can still click Restore. Skip queue cancel
-        // too; queueBufferWrite is a no-op in the clean
-        // state anyway.
-        return;
-      }
       cancelPendingBufferWrite(tab.path);
-      clearEditorBuffer(tab.path);
+      if (recoveredBuffer === null) clearEditorBuffer(tab.path);
       return;
     }
     queueBufferWrite(tab.path, content, tab.path);
@@ -254,21 +218,11 @@
     if (!recoveredBuffer) return;
     tab.content = recoveredBuffer.content;
     recoveredBuffer = null;
-    // The newly-set content is now divergent from `tab.saved`,
-    // so the debounced write effect will re-persist it on the
-    // next tick. No need to clear storage here.
+    // The restored content now diverges from disk, so the persistence
+    // effect re-persists it under the current session on the next tick.
   }
 
   function discardBuffer(): void {
-    // `fullstack-a-83` follow-up to `-a-82`: discard must use
-    // `tab.path` to match the path-keyed storage. The
-    // pre-`-a-83` `tab.id` form was a stale relic from before
-    // `-a-82` re-keyed the buffer — it silently no-op'd
-    // (tab.id changes on every reload, so `clearEditorBuffer`
-    // was called against a non-existent key). The banner
-    // would clear from `recoveredBuffer = null` but the
-    // localStorage entry would linger until natural
-    // expiration.
     clearEditorBuffer(tab.path);
     recoveredBuffer = null;
   }
@@ -717,12 +671,10 @@
   data-theme={surfaceThemeOverride("editor")}
 >
   {#if recoveredBuffer}
-    <!-- `fullstack-a-72`: hang-recovery banner. Surfaces when
-         localStorage has unsaved content for this tab that
-         diverges from the on-disk content. User picks Restore
-         (replace editor content with the buffer) or Discard
-         (clear the buffer and keep the disk content). Banner
-         clears itself either way. -->
+    <!-- Hang-recovery banner. Surfaces when a previous page load left
+         unsaved content for this file that diverges from disk. The user
+         picks Restore (replace the editor content with the buffer) or
+         Discard (keep the disk content). Either choice dismisses it. -->
     <div class="recovery-banner" role="alert">
       <span class="recovery-banner-text">
         Unsaved changes from a previous session were found.

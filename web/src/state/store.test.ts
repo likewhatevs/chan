@@ -607,6 +607,7 @@ describe("resolveSpawnContext (fullstack-43)", () => {
         mode: "semantic",
         scopeId: "file:notes/a.md",
         depth: 1,
+        expanded: { "": true },
         filters: {
           link: true,
           tag: true,
@@ -636,6 +637,7 @@ describe("resolveSpawnContext (fullstack-43)", () => {
         mode: "semantic",
         scopeId: "dir:notes/sub",
         depth: 1,
+        expanded: { "": true },
         filters: {
           link: true,
           tag: true,
@@ -662,6 +664,7 @@ describe("resolveSpawnContext (fullstack-43)", () => {
         mode: "semantic",
         scopeId: "workspace",
         depth: 1,
+        expanded: { "": true },
         filters: {
           link: true,
           tag: true,
@@ -688,6 +691,7 @@ describe("resolveSpawnContext (fullstack-43)", () => {
         mode: "semantic",
         scopeId: "tag:foo",
         depth: 1,
+        expanded: { "": true },
         filters: {
           link: true,
           tag: true,
