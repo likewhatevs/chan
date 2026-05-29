@@ -542,3 +542,150 @@ Reported merge-ready on event-lane-a-alex.md.
 
 
 
+
+## 2026-05-28 (round-1 closing-2) @@LaneA - open: A5 + A6 surveyed
+
+Intent: picking up the round-1 closing-2 task list
+(`lane-a-round-1-closing-2.md`). Two inspector-side items:
+- A5: workspace inspector (Dashboard slide 1 + Graph/FB workspace-root)
+  doesn't render Languages as clickable graph links like FileInfoBody.
+- A6: workspace inspector has no Contacts section at all.
+
+Worktree: `../chan-lane-a` rebased on `main@e30f73ef` (0.17.0 version
+bump committed, tag NOT cut - LaneB owns the cut). Clean rebase; my
+four+three round-1 commits are linear ancestors.
+
+Inbox/surface check:
+- `event-alex-lane-a.md`: empty (header only).
+- `event-lane-b-lane-a.md`: last @@LaneB append 15:30 (slice 4b merged,
+  lane-a roadmap drained). KIND helpers (`openGraphForLanguage`,
+  `openGraphForContact`) live on main since 24f1f31d.
+- `event-lane-b-alex.md`: LaneB closing slices 1+2 landed (B1-B12),
+  merged + retrospective at 92ea0677, 0.17.0 bump at e30f73ef.
+
+Source survey (read before acting):
+- A5: `WorkspaceInfoBody.svelte` lines 447-453 render each language as
+  a plain `<span class="lang-name">`. FileInfoBody (844-849) renders it
+  as a `<button ... onclick={() => openGraphForLanguage(lang.name)}>`.
+  Fix = mirror the button + a callback prop, wire from 3 mounts.
+- A6: `WorkspaceInfoBody.svelte` has no Contacts section. FileInfoBody's
+  contactPills derive from per-FILE `selectionEdgesFor(path)` refs -
+  not applicable to the workspace ROOT. The brief's `prefixReport /
+  directReport` hint is wrong (`directReport` doesn't exist;
+  `prefixReport` is a code report with no mention/link refs). The
+  correct workspace-level source is `graphData.view.nodes` (the shared
+  semantic workspace graph): every `kind:"file" node_kind:"contact"`
+  node = a resolved contact; every `kind:"mention"` node = an
+  unresolved `@@name`. That IS "all contacts in the workspace".
+
+Three mount sites (all need the new props wired):
+- EmptyPaneCarousel.svelte:428 (variant="dashboard")
+- GraphPanel.svelte:2066 (variant=inspector default)
+- FileBrowserSurface.svelte:610 (variant=inspector default)
+
+Plan: single slice (A5+A6 together, same file + same 3 mounts). Add
+`onLanguageClick?` + `onContactNavigate?` props (fallback to the store
+helpers, mirroring FileInfoBody's contactPills pattern), a
+graphData-driven `contactPills` derivation + `ensureGraphLoaded()`
+trigger, the language button swap + Contacts section, mirrored CSS,
+and extend workspaceInfoBodyParity.test.ts. Then full per-slice gate.
+
+## 2026-05-28 (round-1 closing-2) @@LaneA - A5 + A6 shipped
+
+Single slice (`4280d5f3`), web-only. WorkspaceInfoBody + the three
+mount sites + parity test.
+
+A5 (clickable Languages):
+- Added `onLanguageClick?: (language: string) => void` prop, defaulting
+  to `openGraphForLanguage`. Swapped the Code section's
+  `<span class="lang-name">` for a `<button>` firing
+  `onLanguageClick(lang.name)` + `title="open in graph (scoped to this
+  language)"`. CSS mirrored from FileInfoBody (button reset + hover +
+  focus-visible). No layout shift (still grid column 1).
+
+A6 (Contacts section):
+- The brief's `prefixReport / directReport` hint was wrong:
+  `directReport` doesn't exist and `prefixReport` is a code report
+  (no mention/link refs). FileInfoBody's contactPills come from a
+  single file's `selectionEdgesFor(path)` - no workspace-root
+  analogue. Correct workspace-level source = the shared semantic graph
+  snapshot `graphData.view.nodes`:
+  - `kind:"file" node_kind:"contact" !missing` -> resolved contact;
+    navigates via `onContactNavigate` prop (fallback
+    `openGraphForContact`).
+  - `kind:"mention"` -> unresolved `@@name`; opens node in-graph via
+    `openGraphAtNode`. Label strips the leading `@@`.
+  - Deduped by node id, sorted by label.
+- `$effect` calls `ensureGraphLoaded()` (cheap, shared global cache;
+  FileInfoBody already triggers it for any file's refs).
+- Added `onContactNavigate?: (path: string) => void` prop + a Contacts
+  `<section class="refs">` with the same `.ref.contact` pill markup +
+  person-silhouette `::before` icon FileInfoBody uses. Renders in BOTH
+  variants whenever contactPills is non-empty.
+
+Mount wiring (all three): EmptyPaneCarousel:36/428, GraphPanel
+import + :2066, FileBrowserSurface import + :610 - each passes
+`onLanguageClick={openGraphForLanguage}` +
+`onContactNavigate={openGraphForContact}`. Declared the
+EmptyPaneCarousel touch on event-lane-a-lane-b.md before editing.
+
+Tests: extended workspaceInfoBodyParity.test.ts (+14 net: A5 prop +
+button-swap + 3-mount pins; A6 prop + contactPills derivation + section
+render + 3-mount pins). Loosened two pre-existing A1 carousel-mount
+regexes (workspaceInfoBodyParity + dashboardTabAndCarousel) for the
+now multi-line mount.
+
+Gate (worktree HEAD 4280d5f3):
+- cargo fmt --check pass
+- cargo clippy --all-targets -- -D warnings pass
+- cargo test pass (the known indexer flake
+  `writes_to_drafts_subtree_get_indexed_under_drafts_prefix` tripped
+  once on the full run, passed in isolation - web-only change can't
+  touch it; per feedback_fresh_binary_rewalks)
+- cargo build --no-default-features pass
+- npm run check 0 err 0 warn (4117 files)
+- npm run build pass
+- npx vitest run 1639 passed / 11 skipped
+
+Verification status: STATIC + reactivity-reviewed. Per
+feedback_svelte_static_gate_misses_runtime A5/A6 are reactive Svelte
+($derived contactPills + ensureGraphLoaded $effect); the Chrome /
+chan-desktop smoke lives with @@LaneB's merge-gate cycle. Handed a
+clean static gate over. Reported merge-ready on event-lane-a-alex.md.
+
+Lane-a's round-1 closing-2 scope (A5 + A6) is drained.
+
+## 2026-05-29 (round-1 closing-3) @@LaneA - COCOMO/Notes-dirs separator
+
+Poke. Surface check:
+- main moved 4280d5f3 -> a8d15a88 (my A5/A6 merged in 4e19d8d2; Lane B's
+  closing-2 batch incl. the empty-pane right-click retirement I cut at
+  b428c4b7; closing-3 + closing-4 Lane B web fixes).
+- event-alex-lane-a.md: empty.
+- event-lane-b-lane-a.md (01:01): one Lane A closing-3 item routed -
+  @@Alex "I explicitly asked for a separator between cocomo and NOTES
+  DIRECTORIES, still missing". File-disjoint from Lane B.
+
+Rebased ../chan-lane-a on main@a8d15a88 (clean). WorkspaceInfoBody
+untouched on main since my 4280d5f3, so A6 version is current.
+
+Fix (`2506533c`, web-only):
+- Added `.notes-dirs` class to the dashboard-variant Notes-directories
+  `<section>` (was `class="refs"`, now `class="refs notes-dirs"`) +
+  a CSS rule `padding-top: 0.7rem; border-top: 1px dashed var(--border)`.
+  Matches the existing `.cocomo` dashed-divider idiom in the same file
+  for visual consistency. The `.refs` margin-top supplies the gap above
+  the rule. Dashboard-variant-only (the inspector variant drops NOTES
+  DIRECTORIES entirely). The divider sits at the TOP of the section, so
+  it correctly separates NOTES DIRECTORIES from whatever precedes it
+  (COCOMO when no contacts; the A6 Contacts section when present).
+- Parity test +1 pin (`.notes-dirs` class + dashed border).
+
+Gate (worktree HEAD 2506533c): cargo fmt --check / clippy
+--all-targets -D warnings / test (clean, no indexer flake this run) /
+build --no-default-features / npm run check 0 err 0 warn (4117) / npm
+run build / vitest 1654 passed / 11 skipped.
+
+Verification: CSS-only render change, no reactivity. Static gate +
+parity pin; the visual sits with @@LaneB's combined-tree smoke at
+merge-gate. Reported merge-ready on event-lane-a-alex.md.

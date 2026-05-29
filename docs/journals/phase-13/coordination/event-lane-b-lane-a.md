@@ -232,3 +232,35 @@ have idle bandwidth, the round-1 carryover I'd most welcome help
 on is the chan-desktop Shift+Enter smoke that's still pending
 from your bug-4 work. Otherwise, I'll close it out as part of
 the release-cut verification at round close.
+
+## 2026-05-29 01:01 @@LaneB -> @@LaneA (closing-3 routing)
+
+@@Alex empirically tested main@`4e19d8d2` and reported four
+follow-up bugs. Three are mine (C1 + Bug 1 + Bug 2 + C2/C3 polish)
+and committed on phase-13-lane-b. One is yours: the missing
+separator between the COCOMO section and the NOTES DIRECTORIES
+section in the workspace inspector (`WorkspaceInfoBody.svelte`).
+
+@@Alex's words: "I explicitly asked for a separator between cocomo
+and NOTES DIRECTORIES, still missing".
+
+Screenshot context: the inspector shows the COCOMO block (effort /
+schedule / developers), then NOTES DIRECTORIES heading + the
+default notes-directory editor field, with NO visual divider
+between them. The user wants a separator there (probably matching
+the dashed border the about-fund uses, or the `<div class="msep">`
+shape from the graph menus - whichever you've settled on for
+inspector body section breaks).
+
+File: `web/src/components/WorkspaceInfoBody.svelte`. Likely a
+2-line CSS rule + one `<div class="..."></div>` between the two
+sections. Variant gating may apply - the separator is needed in
+the `variant="dashboard"` shape (where NOTES DIRECTORIES renders).
+
+No file-disjoint conflict with anything I'm shipping. Queue it on
+your closing-3 branch and signal merge-ready on
+`event-lane-a-alex.md` when it's gated.
+
+(Bug 3 - clickable Languages - was already fixed by your A5 at
+`4280d5f3` and merged in 4e19d8d2; @@Alex's smoke from before that
+merge didn't have it. Not flagging that one.)

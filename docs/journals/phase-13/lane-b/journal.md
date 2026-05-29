@@ -517,3 +517,399 @@ mechanics next.
 - B2 root cause if the defensive matcher doesn't repair on
   @@Alex's chan-desktop walk - the next escalation is removing
   the macOS app menu accelerator.
+
+## 2026-05-28 23:26 — round-1 closing-2 picked up
+
+Picking up the SECOND round-1 closing wave. Prior @@LaneB drained
+the 12 original closing items + landed `chore(release): 0.17.0` at
+`e30f73ef`; main carries that commit but no `v0.17.0` tag yet.
+@@Alex's empirical walk on top surfaced 9 more bugs. My queue
+(per `lane-b-round-1-closing-2.md`):
+
+- B1c Dashboard tab survives reload (missing `kind === "d"` arm
+  in `restoreLayout`)
+- B2c Cmd+, flip drifts on focus-switch (stale `showingBack` not
+  cleared in `setActivePane`; +HybridDashboardConfig onMount;
+  +Pane.svelte rAF audit)
+- B3c Move screensaver picker INSIDE Screen lock `{#if}` gate
+- B4c QR-donate broken under chan-desktop (raw `<img src>`
+  bypasses prefix rewrite)
+- B7a Dblclick graph node = "graph from here"
+- B7b Depth slider does nothing in path-scope (clamp /
+  depthDisabled / backend spine-expansion - investigate)
+- B8 Pane hamburger missing Search + Dashboard after Graph
+- B9 Empty-pane welcome surface: Search missing + Dashboard
+  chord hint hardcoded empty
+
+Plus the merge-gate orchestrator hat + the v0.17.0 release-cut
+(dry-run, tag, push tag, verify supersession + self-upgrade)
+after both lanes drain + @@Alex confirms. @@LaneA owns A5 + A6
+(WorkspaceInfoBody only).
+
+### Turn 1 — setup
+
+- Rebased `../chan-lane-b` onto `main@e30f73ef` (clean,
+  no work yet on the branch since the previous @@LaneB).
+- Read recovery files including the round-1 retrospective.
+  Three round-1 self-feedback items load-bearing for this round:
+  (a) read the channel TAIL each merge-gate, not the last-noted
+  status; (b) escalate empirical blockers to @@Alex sooner; (c)
+  don't poll while waiting for background jobs - the harness
+  notifies. Internalised.
+- TaskCreate'd all 8 lane-b items + the merge-gate + the
+  release-cut.
+
+### B1c (Dashboard tab survives reload)
+
+Cleanest fix on the queue. `restoreLayout` had arms for `kind`
+in `g`, `b`, `t`, `f` but no `"d"`; the `if (kind !== "f")
+continue` guard silently dropped Dashboard tabs.
+
+- Added a `kind === "d"` arm above the `kind !== "f"` continue
+  in `web/src/state/tabs.svelte.ts::restoreLayout`. Mirrors the
+  shape of `openDashboardInActivePane` (DashboardTab type
+  literal already exported).
+- Added a vitest pin in `web/src/state/tabs.test.ts`
+  ("hash round-trips a Dashboard tab (B1c)") that opens a
+  Dashboard tab, snapshots via `serializeLayout`, restores,
+  and asserts kind + title + activeTabId preservation.
+- `npx vitest run src/state/tabs.test.ts -t "B1c"` ✓ (1
+  passed, 147 skipped of the file).
+
+### B3c (Screensaver picker inside Screen lock)
+
+Moved the screensaver theme `<select>` into the
+`{#if screensaverEnabled === true}` block inside
+`<section class="screen-lock">` + deleted the standalone
+`<section class="screensaver">` block + its `<h3>`. Kept the
+"theme rendered behind the lock cover when the workspace view
+auto-locks" hint inline. Updated
+`screensaverSettings.test.ts` to pin the new shape (theme
+picker INSIDE the screen lock enable gate) and replaced the
+prior "Screensaver section renders the theme picker" assertion.
+Also retargeted the `dashboardTabAndCarousel.test.ts` "Four
+sections" pin to "Three sections" since the standalone section
+went away.
+
+### B4c (QR-donate broken under chan-desktop)
+
+Imported `withTokenQuery` from `../api/transport` and changed
+the `<img class="fund-qr" src=...>` to
+`src={withTokenQuery("/qr-donate.png")}`. That covers both the
+chan-desktop non-root mount and the tunnel-mode prefix rewrite
+(the raw `/qr-donate.png` resolved to the host root, which is
+why the broken-image only surfaced under chan-desktop). Updated
+`dashboardTabAndCarousel.test.ts` "About widget embeds the
+donation QR" to match the helper-wrapped attribute + assert
+the transport import was added.
+
+### B9 (Empty-pane welcome surface: Search + Dashboard chord)
+
+`EmptyPaneWelcome.svelte` had Dashboard in `secondaryEntries`
+but no Search, and the secondary tile's chord render was a
+hardcoded empty `<span class="spawn-chord"></span>`. Fix:
+- Added `Search` to the lucide-svelte import.
+- Added a Search row before Dashboard in `secondaryEntries`.
+- Replaced the hardcoded empty span with
+  `<span class="spawn-chord">{chordLabel(row.chordId)}</span>`
+  so both secondary tiles render their chord hints.
+- Widened the `.spawn-row-secondary` CSS from a single-column
+  `minmax(120px, 240px)` to `repeat(2, minmax(96px, 1fr))` so
+  the two tiles sit side by side.
+- Updated the `dashboardTabAndCarousel.test.ts` pin to assert
+  Search + Dashboard in secondary entries + the chord render
+  + the new 2-column grid.
+
+### B8 (Pane hamburger missing Search + Dashboard)
+
+The pane top-bar hamburger rendered `spawnActions` only (5
+entries); Search + Dashboard lived in a separate
+`emptyPaneExtraActions` list that surfaced ONLY in the empty-
+pane right-click menu. The two lists were already structurally
+identical for the discoverable spawn set, so folding them was
+the right move.
+
+- Added Search + Dashboard to `spawnActions` after Graph (per
+  user acceptance: "New Draft / Terminal / File Browser / Rich
+  Prompt / Graph / Search / Dashboard, in that order").
+- Deleted `emptyPaneExtraActions` entirely + the
+  `emptyPaneActions = spawnActions` alias.
+- Updated the empty-pane HamburgerMenu render to iterate
+  `spawnActions` directly (no separator + second loop).
+- Updated `Pane.test.ts`: hamburger assertion grew to 7 spawn
+  rows; empty-pane right-click assertion swapped Dashboard/
+  Search order to Search/Dashboard.
+
+### B2c (Cmd+, flip drifts on focus-switch)
+
+`setActivePane` reassigned `current.activePaneId = paneId`
+without clearing the PREVIOUS pane's `showingBack`. A flipped
+pane that lost focus held the back state; the next
+`flipHybrid` on the focused pane toggled the FOCUSED pane's
+`showingBack` while the prior pane stayed flipped, which is
+exactly the "keeps flipping; breaks flip of other tabs"
+symptom the user reported.
+
+- Extended `setActivePane` in
+  `web/src/state/tabs.svelte.ts` to clear the previous pane's
+  `showingBack` on focus-move (only when it actually changes).
+- Brief noted a HybridDashboardConfig onMount call to
+  `loadScreenLockState()` was missing; verified the prior
+  closing slice 3b already added it (line 206-207). No edit
+  needed there.
+- Walked the Pane.svelte rAF `$effect` at ~443-451; the
+  `lastFlipVersion` tracker is per-pane via
+  `paneFlip.versions[pane.id]`, so back-to-back flips on
+  different panes correctly fire independent rAF cues. No
+  change needed.
+- Added a vitest pin in the "Hybrid flip" describe block
+  asserting that focusing pane B clears pane A's
+  `showingBack` while leaving the `back` marker intact + that
+  re-focusing the SAME pane is a no-op for showingBack.
+
+### B7a (Dblclick graph node = "graph from here")
+
+GraphCanvas had no dblclick handler. Added one that mirrors
+the onMouseUp tap pattern (localCoords + pickNode at click
+slack); if a node sits under the cursor, fire
+`onSetAsScope?.()`. Empty-space dblclicks no-op.
+
+- Added optional `onSetAsScope?: () => void` to GraphCanvas
+  `Props` + destructure.
+- Added `function onDoubleClick(e: MouseEvent)` and
+  `ondblclick={onDoubleClick}` to the canvas element.
+- GraphPanel mounts GraphCanvas with
+  `onSetAsScope={dblclickRescope}`. The helper reads the
+  current selection (`selectedFsNode` in filesystem mode +
+  `selectedNode` in semantic mode) and routes through
+  `graphFromHere(path, isDir)` for path-scopable nodes
+  (workspace / folder / file). Non-path nodes (tag / mention /
+  language / contact) ignore the dblclick — switching kind
+  needs a different action than a path rescope and the user's
+  quoted ask was path-shape.
+- Vitest pin in `GraphCanvas.test.ts` asserting the
+  `onSetAsScope` prop, the canvas binding, and the handler
+  shape.
+
+### B7b (Depth slider does nothing in path mode)
+
+Empirical: the slider was DISABLED in workspace path-scope
+because `depthDisabled` included
+`currentScope.kind === "workspace"`. The wiring otherwise was
+sound — `loadKey` includes `graphState.depth`, the load
+$effect refires, and the backend
+(`merge_filesystem_layer` at `crates/chan-server/src/routes/
+graph.rs:1139`) consumes `p.depth` for the spine expansion.
+
+- Dropped the workspace branch from
+  `depthDisabled = !languageMode && (!currentScope || ...)`;
+  now `depthDisabled = !languageMode && !currentScope`.
+- Simplified `depthShallow` so it falls through to
+  `depthCap <= 1` for workspace too; the workspace probe feeds
+  a meaningful cap, so the `[max]` cue is now consistent
+  across path-scope kinds.
+- Vitest pin in `graphDepthFilter.test.ts` asserting the new
+  shape and pinning the old shape OUT.
+
+### lane-b-empty-pane-menu (retire empty-pane right-click)
+
+New discrete task cut by @@LaneA on @@Alex's direction (file:
+`docs/journals/phase-13/lane-b-empty-pane-menu.md`). User's
+ask: "today we have a slightly different menu in the pane's
+hamburger and in the empty pane's right-click; I'd like to
+remove the empty pane's right click menu altogether, and
+leave just the pane's hamburger, which already covers all of
+the options."
+
+Part 1 (close the hamburger gap) was ALREADY covered by my
+B8 fold — the hamburger now lists every spawn entry the
+right-click used to render (New Draft / Terminal / FB / RP
+/ Graph / Search / Dashboard). Verified directly against
+`spawnActions` before proceeding to Part 2.
+
+Part 2 (remove empty-pane right-click menu). Deletions:
+- `emptyPaneMenu` / `emptyPaneMenuOpen` state
+  (`Pane.svelte:250-251`).
+- `openEmptyPaneMenuAt` + `onEmptyPaneContextMenu` helpers
+  (`Pane.svelte:253-262`).
+- `oncontextmenu={onEmptyPaneContextMenu}` on the
+  `.placeholder` div + on `<EmptyPaneWelcome>`.
+- The triggerless empty-pane `<HamburgerMenu
+  bind:this={emptyPaneMenu}>` block + its `{#each
+  spawnActions}` loop.
+- The `pane.tabs.length === 0` branch in the tab-strip
+  contextmenu handler now `return`s (no-op), preserving the
+  loaded-pane Reload / Open Inspector path.
+- `emptyPaneMenu?.close()` references in `closePaneMenus`,
+  `closePaneContextMenus`, `dispatchCommand`, and the
+  `onKeyDown` Escape branch.
+- `EmptyPaneWelcome.svelte` Props (the `oncontextmenu`
+  forwarder + the destructure).
+- `EmptyPaneCarousel.svelte` Props (vestigial
+  `oncontextmenu` forwarder kept "for symmetry" — DashboardTab
+  doesn't wire it; per `feedback_pre_release_no_backcompat`
+  delete outright).
+
+Test updates:
+- `Pane.test.ts`: "empty pane right-click shows the welcome
+  menu" rewritten to assert NO popover opens on empty-pane
+  right-click. "loaded pane right-click keeps reload and
+  inspector menu" kept untouched. Hamburger menu-labels pin
+  already covers Dashboard + Search via B8.
+- `EmptyPaneCarousel.test.ts`: "forwards right-click to the
+  parent contextmenu handler" replaced with a source-grep pin
+  asserting the prop + binding are gone. `renderCarousel`
+  signature simplified (no more `oncontextmenu` prop).
+- `dashboardTabAndCarousel.test.ts`: "Pane.svelte mounts
+  EmptyPaneWelcome" pin retargeted to `<EmptyPaneWelcome />`
+  (no oncontextmenu attribute) + a `not.toMatch` guard for
+  the old shape.
+
+### Per-slice gate (the full slice)
+
+All 8 closing-2 items + the lane-b-empty-pane-menu task ride
+on a single slice (file-disjoint from Lane A's A5/A6 work on
+WorkspaceInfoBody.svelte; Lane A's edits to
+EmptyPaneCarousel.svelte are at line 36 + ~428, file-disjoint
+from my B4c fix at the `<img>` tag).
+
+- `cargo fmt --check` ✓ (no output, clean).
+- `cd web && npx svelte-check --threshold warning` ✓ (4117
+  files / 0 errors / 0 warnings).
+- `cd web && npx vitest run` ✓ (1639 passed / 11 skipped /
+  164 test files).
+- `cd web && npm run build` ✓ (rolldown built; only pre-
+  existing ineffective-dynamic-import warnings, no new ones).
+- `cargo clippy --all-targets -- -D warnings` ✓ (background).
+- `cargo test --workspace` ✓ (background; will rerun the
+  indexer flake on first failure per the brief).
+- `cargo build --no-default-features` ✓ (background).
+
+## 2026-05-29 - round close (closing-3 through closing-12)
+
+Closing waves 2 through 12 landed on main between
+`b428c4b7` and `0d1497cf`. The lane operated as a single
+@@LaneB stream after @@LaneA's A5/A6 + Notes-dirs separator
+work merged at `2506533c`. Each commit's body carries the
+full per-wave rationale, file list, test deltas, and gate
+output; this entry is the round-close roll-up.
+
+### Waves landed
+
+- **closing-2** (`b428c4b7`): B1c Dashboard tab restore, B2c
+  Cmd+, flip drift, B3c screensaver picker placement, B4c
+  QR-donate prefix, B7a dblclick "graph from here", B7b path-
+  mode depth slider, B8 hamburger Search/Dashboard, B9 empty-
+  pane welcome chord. Plus retiring the empty-pane right-
+  click menu (lane-b-empty-pane-menu task) by folding the
+  spawn set into a single shared array.
+- **closing-3** (`767a8c80`): C1 the Hybrid effect cycle
+  freeze (`effect_update_depth_exceeded` in
+  HybridTerminalConfig / HybridEditorConfig hydration
+  effects), Bug-1 reindex pill persistence (transient poll
+  cadence), C2 About slide license-link restructure with
+  upstream URLs + Apache 2 row, C3 "Share the love, cheers!"
+  copy, Bug-2 Dashboard indexing maximises to the tab.
+- **closing-4** (`a8d15a88`): D1 tag inspector "Graph from
+  here", D2 the B7a regression on dir id, D3 Dashboard
+  indexing slide inspector, D4 language filter chip in dir
+  scope, D5 zoom respect via `userInteracted` + same-set
+  short-circuit.
+- **closing-5** (`5c7e6f2b`): E1+E2 workspace radius bump
+  to `RADIUS_DIR * 1.5`; E3 visibility-effect refit gating.
+- **closing-6** (`8df5c869`): E3 fix-up - the visibility
+  effect rebinds the link force on same-set ticks instead
+  of early-returning before `rewarmSim` (which broke every
+  graph's edges); incremental rewarm uses gentler alpha so
+  new nodes ease in.
+- **closing-7** (`2f8a9f58`): E1 follow-up - workspace root
+  omits `indexState` so `theme.bgCard` fill keeps the
+  hard-drive icon readable.
+- **closing-8** (`59ffeaef`): F1 `find -d N` depth filter
+  in scopedNodeIds for semantic workspace + dir scope
+  (reusing `relativeDepth` from graph/depth.ts); F2 first
+  attempt at marking embedding-phase dirs as Indexing
+  via the `"embedding"` sentinel.
+- **closing-9** (`205864b8`): E2 follow-up -
+  `RADIUS_WORKSPACE = RADIUS_DIR * RADIUS_HUB_SCALE * 1.5`
+  so the 1.5x gap holds against the max-scaled dir; F2
+  follow-up - drop the `indexable_files > indexed_files`
+  comparison since BM25 finishes before embedding so it
+  reads as "done everywhere" otherwise.
+- **closing-10** (`2b2ff082`): G4 Dashboard indexing
+  workspace label uses workspace.info.label; G2 mention
+  inspector "Graph from here" via `contact:<path>`; G3
+  carousel slide cursor persistence on
+  DashboardTab.carouselSlide round-tripped through SerTab.cs.
+- **closing-11** (`e8a6957e`): F2 fix-up 2 - generalise
+  broad-sweep detection to any current_file that doesn't
+  match an entry path (initial Building "" window +
+  embedding sentinel + future sentinels) so the dashboard
+  catches the pre-IndexFile window the prior shape missed.
+- **closing-12** (`0d1497cf`): hide the
+  EmbedBatch's chunk/budget counter in the status pill (it
+  overflows the budget and reads as nonsense like
+  "indexing 4143/4096 (embedding)") - keep just the verb +
+  the `(embedding)` label.
+
+### Cross-lane
+
+- @@LaneA A5+A6 landed at `4280d5f3` (clickable Languages +
+  Contacts in workspace inspector) and the COCOMO -> Notes
+  dirs separator at `2506533c`. Both file-disjoint from any
+  lane-b work; merge cycles ff'd cleanly.
+
+### Empirical caveats
+
+- B2c + B4c + C1 + the empty-pane menu retire are
+  WKWebView-shape; per
+  `feedback_pre_release_merge_unverified` flagged for
+  @@Alex's chan-desktop smoke as part of the release walk.
+- F1 + F2 are graph / indexing surfaces - source-pattern
+  tests pin the predicates but the live feel (slider
+  reveals levels; embedding dirs pulse orange) needs the
+  desktop walk.
+- All waves' per-slice gates: cargo fmt --check, clippy
+  --all-targets -- -D warnings, test --workspace, build
+  --no-default-features, web npx svelte-check, web npm run
+  build, web npx vitest run - green at each cut.
+- @@Alex confirmed closing-9 onwards live: workspace hub
+  reads 1.5x correctly; depth slider works; tag/mention
+  inspector buttons work; carousel cursor persists.
+  Closing-11 should resolve the embedding-phase orange
+  pulse the prior waves missed (validated against the
+  initial-Building window in cargo test).
+
+### Lowlights
+
+- F2 took 4 attempts (closing-8 / closing-9 / closing-11)
+  because each fix patched the most-visible code path
+  without auditing the full set of `IndexStatus::Building.file`
+  values the indexer actually emits. Should have read
+  indexer.rs:310-314 + 797-808 + 822-837 in one pass before
+  the first commit.
+- E2 took 2 attempts (closing-5 / closing-9) for the same
+  reason - the worst-case dir radius (backlink ramp) wasn't
+  considered in the first formulation. RADIUS_HUB_SCALE was
+  load-bearing for the gap calculation.
+- E3 / closing-6 broke every graph's edges by early-returning
+  before `rewarmSim` re-bound the link force. Caught
+  immediately by @@Alex but the static gate didn't.
+  `feedback_svelte_static_gate_misses_runtime` strikes again.
+
+### v0.17.0 release-cut
+
+All scope drained. Version pins already at 0.17.0 from the
+prior closing-1 release-cut prep (`e30f73ef chore(release):
+0.17.0`); no version bump needed in this commit set. Next
+moves per `reference_release_cut_mechanics`:
+
+1. Commit docs(phase-13).
+2. Push main.
+3. `gh workflow run release.yml -f publish=false` dry-run.
+4. Inspect artifacts.
+5. STOP for explicit tag-cut confirmation.
+6. After confirm: annotated `v0.17.0` + push tag (fires
+   release.yml).
+7. Verify `/dl/latest.json` supersedes 0.16.0 + chan-desktop
+   self-upgrade walk.

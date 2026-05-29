@@ -331,3 +331,63 @@ ready to merge: phase-13-lane-a@3c9f57bd  -  A1: workspace-root inspector reads 
 
 Full gate green (cargo fmt/clippy/test/build-nodefault + npm
 check/build + vitest 1619/11). Detail in lane-a/journal.md.
+
+## 2026-05-28 (round-1 closing-2) @@LaneA -> @@Alex
+ready to merge: phase-13-lane-a@4280d5f3 - A5 + A6 (workspace inspector Languages + Contacts)
+
+ready to merge: phase-13-lane-a@4280d5f3  -  clickable Languages + Contacts in workspace inspector (A5+A6)
+
+**Highlights**
+- A5: workspace inspector language rows are now graph-opening buttons
+  (Dashboard slide 1 + Graph/FB workspace-root), matching FileInfoBody.
+- A6: new Contacts section in the workspace inspector. Derived from the
+  shared semantic graph snapshot (`graphData.view.nodes`) since the
+  workspace ROOT has no single-file refs - resolved contact files +
+  unresolved `@@name` mentions both surface as clickable pills.
+- Both wired through all three WorkspaceInfoBody mount sites.
+- Full per-slice gate green; vitest 1639/11 (+14 net from A5/A6 pins).
+
+**Lowlights**
+- The brief's A6 data-source hint (`prefixReport / directReport`) was
+  wrong - `directReport` doesn't exist; `prefixReport` is a code
+  report with no refs. Used `graphData.view` (the correct
+  workspace-level contacts source) instead. Flagged in journal.
+- STATIC + reactivity-reviewed only. A5/A6 are reactive Svelte;
+  Chrome / chan-desktop smoke belongs to @@LaneB's merge-gate cycle
+  (per feedback_svelte_static_gate_misses_runtime). Not stalling
+  per feedback_pre_release_merge_unverified.
+
+**Contention**
+- A5/A6 touch EmptyPaneCarousel.svelte (LaneB's file) for the import +
+  the slide-1 mount props; declared on event-lane-a-lane-b.md before
+  editing. File-disjoint from LaneB's closing-2 carousel work
+  (their QR fix ~line 411; my edits at import + the slide-1 mount
+  ~428). Both props default-fallback to the store helpers, so an
+  un-wired mount stays functional. LaneB can reclaim at merge-gate.
+
+Lane-a round-1 closing-2 scope (A5 + A6) is drained. Detail in
+lane-a/journal.md.
+
+## 2026-05-29 (round-1 closing-3) @@LaneA -> @@Alex
+ready to merge: phase-13-lane-a@2506533c - COCOMO/Notes-dirs separator
+
+ready to merge: phase-13-lane-a@2506533c  -  separator between COCOMO and NOTES DIRECTORIES in the workspace inspector (dashboard variant)
+
+**Highlights**
+- The separator you asked for (twice) is in. `.notes-dirs` dashed
+  top-border on the Notes-directories section, matching the COCOMO
+  divider idiom already in WorkspaceInfoBody. Dashboard-variant-only.
+- Rebased on main@a8d15a88; file-disjoint from Lane B. Full gate
+  green (vitest 1654/11, no flake).
+
+**Lowlights**
+- CSS-only, so static-verified + parity-pinned only; the actual
+  pixels want a glance at @@LaneB's merge-gate combined smoke (per
+  feedback_svelte_static_gate_misses_runtime, though a static CSS
+  rule is low-risk).
+
+**Contention**
+- None. Single file (WorkspaceInfoBody.svelte) + its parity test.
+
+Lane A closing-3 scope (the one routed item) is drained. Detail in
+lane-a/journal.md.

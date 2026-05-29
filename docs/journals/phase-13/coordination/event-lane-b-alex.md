@@ -743,3 +743,145 @@ status.
 Picking step 1 now.
 
 Detail in `lane-b/journal.md`.
+
+## 2026-05-28 23:56 @@LaneB -> @@Alex (round-1 closing-2 + empty-pane menu retire)
+
+ready to merge: phase-13-lane-b@b428c4b7 - round-1 closing-2 batch (B1c B2c B3c B4c B7a B7b B8 B9) + lane-b-empty-pane-menu retire
+
+Single slice covers all 8 closing-2 items + the empty-pane right-click
+retirement @@LaneA cut on your direction. Touched files:
+- web/src/state/tabs.svelte.ts (B1c restore arm, B2c showingBack clear)
+- web/src/state/tabs.test.ts (B1c + B2c pins; setActivePane import)
+- web/src/components/HybridDashboardConfig.svelte (B3c picker move)
+- web/src/state/screensaverSettings.test.ts (B3c pin retarget)
+- web/src/components/EmptyPaneCarousel.svelte (B4c withTokenQuery;
+  empty-pane menu retire dropped the vestigial oncontextmenu prop)
+- web/src/components/EmptyPaneCarousel.test.ts (vestigial forwarder
+  pin)
+- web/src/components/GraphCanvas.svelte (B7a onSetAsScope prop +
+  ondblclick)
+- web/src/components/GraphCanvas.test.ts (B7a pin)
+- web/src/components/GraphPanel.svelte (B7a dblclickRescope; B7b
+  depthDisabled + depthShallow shape)
+- web/src/components/graphDepthFilter.test.ts (B7b pin)
+- web/src/components/Pane.svelte (B8 spawnActions fold;
+  lane-b-empty-pane-menu retire: removed emptyPaneMenu state +
+  helpers + the triggerless HamburgerMenu block + the .placeholder
+  oncontextmenu binding + the EmptyPaneWelcome oncontextmenu binding
+  + the tab-strip contextmenu empty-pane branch)
+- web/src/components/Pane.test.ts (B8 7-row hamburger; empty-pane
+  right-click no-op)
+- web/src/components/EmptyPaneWelcome.svelte (B9 Search + chord
+  render + grid; lane-b-empty-pane-menu dropped the oncontextmenu
+  prop)
+- web/src/components/dashboardTabAndCarousel.test.ts (B4c + B9 + B8
+  + Pane.svelte mount pin update)
+
+File-disjoint from @@LaneA's A5 + A6 (WorkspaceInfoBody.svelte +
+their EmptyPaneCarousel.svelte slide-1 mount edits at line 36 +
+~428). My EmptyPaneCarousel.svelte changes are the import + the
+`<img>` src + the deleted `oncontextmenu` prop + its outer div
+binding - non-overlapping with their changes. If they queue ready
+to merge, the integration tree should auto-merge ort-clean.
+
+Per-slice gate: green across the board.
+- cargo fmt --check
+- cargo clippy --all-targets -- -D warnings
+- cargo test --workspace
+- cargo build --no-default-features
+- web npx svelte-check --threshold warning (0 errors, 0 warnings)
+- web npm run build (rolldown ok; only pre-existing
+  ineffective-dynamic-import warnings)
+- web npx vitest run (1639 passed / 11 skipped / 164 files)
+
+Pre-release per `feedback_pre_release_no_backcompat`: empty-pane
+right-click affordance + vestigial oncontextmenu forwarders deleted
+outright (no shims).
+
+Empirical caveat per `feedback_svelte_static_gate_misses_runtime` +
+`feedback_terminal_webgl_wkwebview` + `feedback_pre_release_merge_unverified`:
+B2c, B4c, and the empty-pane right-click no-op are WKWebView-shape
+(reactivity timing + non-root mount + contextmenu suppression).
+Chrome MCP cannot drive WKWebView from this CLI; gated-green and
+flagged for your chan-desktop smoke as part of the v0.17.0 release-
+cut walk. Confirm flow:
+- Open + reload window with Dashboard tab: it persists (B1c).
+- Cmd+, on Dashboard flips to back; focus another pane and back -
+  no auto re-flip; flip-back via Cmd+, returns to carousel (B2c).
+- Dashboard back-of-card: Appearance / Screen lock / Metadata
+  archive (3 sections); toggle Screen lock OFF - timeout/PIN +
+  theme picker hide together; ON - both reappear (B3c).
+- About slide: QR code renders at 160x160 (B4c).
+- Graph: double-click a folder/file node rescopes "from here"
+  (B7a); slider on the default workspace graph drags through
+  depths 1..N revealing more directory tiers (B7b).
+- Pane hamburger (top-bar ⋮): 7 spawn rows (New Draft / Terminal /
+  File Browser / Rich Prompt / Graph / Search / Dashboard) then
+  Enter Hybrid Nav etc. (B8).
+- Empty single-pane welcome surface: 5 tiles + divider + 2
+  secondary tiles (Search Cmd+S, Dashboard Cmd+I) each with chord
+  hints (B9).
+- Right-click on an empty pane (single AND multi-pane): NO popover
+  opens (lane-b-empty-pane-menu).
+- Right-click on a loaded pane: still shows Reload / Open Inspector.
+
+Standing by for @@LaneA's merge-ready signal to open the
+combined-tree gate in ../chan-integration.
+
+## 2026-05-29 00:18 @@LaneB -> @@Alex (merge-gate cycle)
+
+merged: phase-13-lane-a@4280d5f3 + phase-13-lane-b@b428c4b7 -> main@4e19d8d2  -  round-1 closing-2 (Lane A A5+A6 + Lane B 8 closing items + lane-b-empty-pane-menu retire)
+
+Both lanes drained for closing-2; combined-tree gate green; main
+fast-forwarded.
+
+**Cycle**
+- Walked the FULL TAILS of both `event-lane-a-alex.md` +
+  `event-lane-b-alex.md` per round-1 retrospective lesson; lane-a
+  queued `4280d5f3` (A5+A6); lane-b queued `b428c4b7` (closing-2
+  batch). Both ready-to-merge.
+- `git worktree add ../chan-integration -b phase-13-integration main`.
+- `git merge --no-ff phase-13-lane-a`: ort, clean. 6 files /
+  +281 -7. Includes the shared-turf
+  `EmptyPaneCarousel.svelte` import + slide-1 mount prop pass-
+  through declared on `event-lane-a-lane-b.md`.
+- `git merge --no-ff phase-13-lane-b`: ort, clean (auto-merging
+  EmptyPaneCarousel.svelte + GraphPanel.svelte +
+  dashboardTabAndCarousel.test.ts succeeded without manual edits;
+  Lane A's edits at line 36 + ~428 and my edits at the `<img>` +
+  the removed `oncontextmenu` prop were file-disjoint as
+  declared).
+
+**Combined-tree gate**
+- cargo fmt --check ✓
+- cargo clippy --all-targets -- -D warnings ✓
+- cargo test --workspace ✓ (indexer flake did NOT fire this run)
+- cargo build --no-default-features ✓
+- web `npm install` + `npx svelte-check --threshold warning` ✓
+  (4117 files / 0 errors / 0 warnings)
+- web `npm run build` ✓
+- web `npx vitest run` ✓ (1646 passed / 11 skipped / 164 files;
+  +7 over my lane-b-only 1639 from Lane A's A5/A6 pins)
+- Fast-forwarded main `e30f73ef` -> `4e19d8d2`. Cleaned up
+  `../chan-integration` worktree + `phase-13-integration` branch.
+
+**Highlights**
+- Round-1 closing-2 scope drained across both lanes onto main.
+  Including the lane-b-empty-pane-menu retire (right-click on an
+  empty pane is now a no-op; pane hamburger carries the full
+  7-entry spawn set).
+- A5 (clickable Languages) lands on main so the user's
+  empirical-test Bug 3 from the post-build smoke is now
+  resolved.
+
+**Next moves**
+1. Address @@Alex's just-reported empirical bugs in a closing-3
+   wave: Bug 1 (Drafts reindex notification persistence; my
+   territory), Bug 2 (Dashboard indexing slide not maximized;
+   my territory), Bug 4 (missing COCOMO ↔ NOTES DIRECTORIES
+   separator; Lane A's `WorkspaceInfoBody.svelte` territory -
+   routing to them on `event-lane-b-lane-a.md`).
+2. The v0.17.0 release-cut stays on hold until the closing-3
+   wave drains.
+
+Detail in `lane-b/journal.md`.

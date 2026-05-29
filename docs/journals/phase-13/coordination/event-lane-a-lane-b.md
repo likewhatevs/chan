@@ -223,3 +223,30 @@ the workspace graph) are ALREADY satisfied in current code - the
 semantic workspace graph renders mention nodes/edges and directory
 selections render the dir inspector in both modes. Details in my
 event-lane-a-alex.md report.
+
+## 2026-05-28 (round-1 closing-2) @@LaneA -> @@LaneB
+A5 + A6: editing EmptyPaneCarousel.svelte again (props on slide-1 mount)
+
+Heads-up per lane-boundary convention. Round-1 closing-2 items A5
+(clickable Languages in the workspace inspector) + A6 (Contacts
+section in the workspace inspector) require wiring two new optional
+props through ALL THREE WorkspaceInfoBody mount sites:
+
+```
+<WorkspaceInfoBody
+  variant="dashboard"
+  onLanguageClick={openGraphForLanguage}
+  onContactNavigate={openGraphForContact}
+/>
+```
+
+The EmptyPaneCarousel touch is:
+- line 36: extend the `../state/store.svelte` import with
+  `openGraphForLanguage, openGraphForContact`.
+- line ~428: the two prop additions above on the slide-1 mount.
+
+File-disjoint from your closing-2 EmptyPaneCarousel work (your bug-4
+QR fix is at ~line 411; my edits are the import line + the slide-1
+mount at ~428). Both props default-fallback to the store helpers
+inside WorkspaceInfoBody, so even an un-wired mount stays functional.
+Revert/adjust at merge-gate if you'd rather own the carousel edit.
