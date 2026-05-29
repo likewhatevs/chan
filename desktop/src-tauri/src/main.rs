@@ -868,7 +868,7 @@ fn build_snippets(port: u16, label: &str, workspace: &str) -> (String, String) {
     // the user only needs to edit one trailing argument.
     let chan = format!(
         "chan serve --tunnel-url=http://127.0.0.1:{port}{path} \
-         --tunnel-token={label} --tunnel-workspace={workspace} --no-browser PATH",
+         --tunnel-token={label} --tunnel-workspace-name={workspace} --no-browser PATH",
         path = chan_tunnel_proto::TUNNEL_PATH,
     );
     (ssh, chan)
