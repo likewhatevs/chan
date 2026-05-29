@@ -783,9 +783,7 @@
         <strong>Drafts lives outside the workspace's root.</strong>
         Files here are stored in chan's metadata folder so they
         survive workspace moves + don't clutter your tree. Cmd+N
-        creates a fresh draft under <code>Drafts/untitled-N/</code>;
-        Rich Prompt submissions persist as
-        <code>Drafts/rich-prompt-N/</code>.
+        creates a fresh draft under <code>Drafts/untitled-N/</code>.
       </div>
     {/if}
     {#if specialBadges.length > 0}
