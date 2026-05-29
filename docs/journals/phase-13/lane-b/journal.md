@@ -1096,3 +1096,38 @@ as part of the deliverable. This deviates from
 round close); committing now per his explicit ask. Captured the new asks
 in `lane-b-round-2-addenda.md` and committed the phase-13 docs to main as
 a `docs(phase-13)` in-flight commit.
+
+## 2026-05-29 round 2 - merge gate + rich-prompt scrub + merge to main
+
+Lane A finished (55179ad9 feature + 25c81182 dead-code cleanup; gated
+25c81182 per their cross-lane note, NOT the stale 55179ad9 - round-1
+staleness lesson). Integration worktree `../chan-integration` off main;
+merged Lane A 25c81182 + Lane B ae06398b - clean auto-merge
+(Pane.svelte/tabs.svelte.ts/App.svelte overlaps merged fine).
+
+My residual sweep caught 2 user-facing "Rich Prompt" leftovers in Lane A
+files (store.svelte.ts "Broken Rich Prompt" dead warning branch +
+FileInfoBody stale "rich-prompt-N" drafts notice). @@Alex told me to fix
+them myself (74ec13d7), then "do not leave any rich prompt code behind".
+So I scrubbed EVERY "rich prompt" identifier across the combined tree
+(c4a4adc6, 160 refs, 35 files) via /tmp/scrub-richprompt.sh:
+- chord id app.terminal.richPrompt -> app.terminal.teamWork (atomic
+  across shortcuts/App/serve KEY_BRIDGE + test/Pane/EmptyPaneWelcome/
+  TerminalTab/chordEscapeRegistry/paneModeKeymap).
+- tab.richPrompt field + serialization -> tab.teamWork.
+- .rich-prompt CSS class -> .team-work; backend rich_prompt/rich-prompt
+  -> team_work/team-work; 5 richPrompt* test files -> teamWork*.
+- OVERRODE Lane A's "chord id stays stable" call, per @@Alex.
+- Fixed one flipped absence-guard the blanket rename produced
+  (TerminalTab.test asserted no "Team Work" label vs the "Show Team Work"
+  toggle it requires). svelte-check: 0 collisions; 0 residual refs.
+
+Full gate green (cargo fmt/clippy/test/build --no-default-features + web
+svelte-check 0/0/4107 + build + vitest 1570). Browser-smoked the
+static-gate-blind renames: Cmd+P (app.terminal.teamWork) fires the lead
+terminal + embedded editor (.team-work renders clean) + Lane A's dialog.
+ff main 248bc830 -> c4a4adc6. No push. v0.18.0 cut held for @@Alex.
+
+Note: `rich-prompt-N` draft convention -> `team-work-N` (a draft prefix
+in chan-workspace tests/comments; the current flow uses untitled-N so
+it's vestigial-but-renamed - generic draft handling, not dead code).

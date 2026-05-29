@@ -293,3 +293,43 @@ merge-gate when both Pane.svelte versions land. Heads-up so you can
 reconcile (your split-label / Team Work menu-label edits vs my dead-
 watcher-dot removal). If you'd rather own the removal, revert my hunk
 and drop those lines on your side.
+
+## 2026-05-29 @@LaneA -> @@LaneB
+merge-ready: Team Work revamp @55179ad9 (for your combined-tree gate)
+
+Lane-A round-2 scope is fully shipped on phase-13-r2-lane-a@55179ad9
+(one atomic commit, 71 files). Full gate green + browser-smoked.
+Reported to @@Alex on event-lane-a-alex.md.
+
+Two things for your merge-gate:
+1. Pane.svelte overlap (declared above): I removed the dead t.watcher
+   unread-dot + its CSS (forced by deleting the tab.watcher field).
+   Your Pane.svelte edits (split labels + Team Work menu label) will
+   collide here at merge time - reconcile by keeping both (my dead-dot
+   removal is independent of your label/split work).
+2. The "Team Work" label is still YOURS to apply (shortcuts.ts /
+   Pane.svelte / EmptyPaneWelcome.svelte). My tree keeps the chord id
+   app.terminal.richPrompt stable and still shows "Rich Prompt" in
+   those Lane-B-owned surfaces (I didn't touch them). After both lanes
+   merge, the chord routes to my new lead-terminal+dialog flow and your
+   label reads "Team Work".
+
+No other cross-lane coupling. Ping me if the combined gate surfaces
+anything in my surface.
+
+## 2026-05-29 @@LaneA -> @@LaneB
+new HEAD @25c81182 (gate this, not 55179ad9)
+
+@@Alex had me delete the orphaned name-registry team API as a follow-up
+cleanup commit. New branch HEAD:
+
+phase-13-r2-lane-a@25c81182  (= 55179ad9 feature + 25c81182 cleanup)
+
+25c81182 is pure dead-code deletion (-1479 lines): client.ts 6 dead
+team* methods; backend routes/teams.rs + /api/teams* routes +
+loaded_teams AppState; chan-workspace registry + workspace.rs team_*
+wrappers + drafts team-dir preflight. KEPT TeamConfig + the new
+/api/team-config route. Full gate green.
+
+Please gate 25c81182 (not the earlier 55179ad9). Pane.svelte overlap
+note above still applies.

@@ -766,3 +766,146 @@ it keeps spawning a plain Team Work terminal (terminal + embedded
 editor, no team dialog). The new lead-terminal+dialog flow is the
 Cmd+P / Cmd+Alt+P / hamburger "Team Work" entry only. Will confirm
 with @@Alex.
+
+## 2026-05-29 @@LaneA r2 turn-1 (cont) - waves landed + integration + smoke
+
+### Wave 1 (A1 backend deletion + A2 frontend foundation, parallel)
+- A1 (crates/ only, isolated): deleted the agent-event watcher +
+  rich-prompt-workspace spool across terminal_sessions / routes/
+  terminal / rich_prompts / event_watcher / chan-workspace rich_prompts
+  / lib.rs router + the /api/drafts/rich-prompt spool. Forced-removal
+  surfaces beyond the explicit list (all flagged, all direct consumers
+  of deleted symbols): workspace.rs wrappers, drafts.rs preflight,
+  routes/workspace.rs warnings branch, routes/health.rs
+  terminal_event_watcher block (permanently-zero dead counter - A1's
+  call, accepted). KEEP surfaces (bus/ws/content-watch/self_writes)
+  verified untouched. All 5 cargo gates green.
+- A2 (state/api/foundation): all frozen names landed (verified table) -
+  TeamWorkState, tab.teamWork, openActiveTeamWork, primeTeamWork,
+  paneModeOpenTeamWorkTerminal, createTeamWorkLeadTerminal;
+  showOrSpawnRichPromptInFocusedPane removed; watcher types + tab.watcher
+  + serialize/restore gone. client.ts: 9 methods + RichPrompt* types
+  removed; kept openWatchSocket (verified = content-change WS, NOT the
+  agent watcher). Deleted 7 dead modules+tests. Kept teamCreate/teamLoad
+  (still called by teamOrchestrator) - flagged.
+
+### Integration call I made BEFORE wave 2
+- Pane.svelte (Lane B file): removed the dead t.watcher unread-dot block
+  + its CSS (forced by the tab.watcher deletion). Declared on
+  event-lane-a-lane-b.md; Lane B reconciles at merge-gate (separate
+  worktrees, so no live collision).
+- Deleted docs/templates/team-process/ (A2 flagged it was under docs/).
+
+### Wave 2 (A3 dialog/orchestrator/config + A4 TerminalTab/bubbles + A6
+### component rename/menu, parallel)
+- A3: new path-based team-config vertical. Backend route
+  routes/team_config.rs (POST /api/team-config/{read,write}), std::fs
+  OUTSIDE the Workspace sandbox per risk #6 (my pre-authorized "small
+  path-based capability" call - chosen over shell-cwd because Load must
+  read contents back to prepopulate). Reused chan_workspace::TeamConfig
+  (TeamConfigWire) WITHOUT extending it (real-estate round-trips via the
+  existing per-member position field). Dialog redesign (Neo / New-Load /
+  1-9 dropdown / drag-me / real-estate kept / copy-paste removed) +
+  lead-first orchestrator (writeTeamConfigFile -> lead into existing tab
+  via restartTerminal, no respawn -> workers -> CHAN_TAB_NAME -> identity
+  prompt -> deselect-all then enable lead+workers). openTeamDialog({
+  leadTabId, leadPaneId}). Deleted teamLoadDialog/teamSplitPaneRealEstate
+  tests (pinned removed behavior); rewrote 6 partition tests.
+- A4: TerminalTab -382 lines (watcher poll + rich-prompt-workspace
+  archival block gone), submitTeamWork resets tab.teamWork.buffer=""
+  unconditionally after send (chord logic intact), <TeamWork> drops the
+  3 props, <BubbleOverlay> self-contained. New state/bubbleStub.svelte.ts
+  (showBubbleStub/hideBubbleStub/bubbleStubVisible). BubbleOverlay is a
+  static stub (single+multi-question+F-follow-up). Bubble.svelte
+  unchanged (generic shell).
+- A6: git mv TerminalRichPrompt.svelte -> TeamWork.svelte (+ .test.ts);
+  dropped watcherPath/onSpawned/bubbleCount props; menu reorder (page
+  width/source/style | sep | Bubble stack/tray | sep | Collapse prompt);
+  deleted SpawnDialog + spawnDialog. Updated component tests.
+
+### Integration (me, single-threaded)
+- App.svelte (the glue, depends on both waves): removed SpawnDialog
+  import+mount; openActiveTerminalRichPrompt dead-import dropped;
+  paneModeOpenRichPromptTerminal -> paneModeOpenTeamWorkTerminal;
+  spawnRichPromptFromContext -> spawnTeamWorkFromContext rewritten to
+  createTeamWorkLeadTerminal + openTeamDialog({leadTabId, leadPaneId}).
+- FileTree.svelte: RETIRED the name-registry "Load Team" menu
+  (loadTeamFromMenu + team-dir badge + isTeamDir/TEAM_DIR_RE + the
+  Users/Play/uiPrompt imports). It was built on the old name-based
+  /api/teams registry, conceptually orphaned by the path-based single
+  flow, and could not be meaningfully half-wired (no lead terminal,
+  name-registry vs path-config mismatch). Flagged to @@Alex.
+- Cross-cutting test sweep (the ?raw source-pattern tests that crossed
+  ownership boundaries): rewrote paneModeKeymap, cmdPRichPrompt3State,
+  paneModeStaging, toastAutoDismissSweep, PathPromptModal (import path);
+  deleted richPromptHistoryPersist.test.ts (entirely the deleted
+  archival API). Net web vitest 1568 passed / 156 files.
+
+### Full integrated gate (HEAD 55179ad9)
+- cargo fmt --check / clippy --all-targets -D warnings / test (all
+  pass) / build --no-default-features: GREEN.
+- npm run check 0 errors / npm run build / npx vitest run 1568 passed:
+  GREEN.
+
+### Browser-smoke (Chrome, scoped throwaway /tmp/chan-test-p13r2 on a
+### renamed binary /tmp/chan-lane-a-r2-srv:8793, torn down)
+All PASS, no console errors:
+- Cmd+P -> Team Work Lead Terminal (editor armed) + Spawn dialog over it.
+- Dialog: Neo default, New/Load toggle, path /tmp/new-team-1/chan-team.toml
+  + info line, 1-9 dropdown, members grow with N, drag-me chips (x3 at
+  N=3), Split-panes 1x3/3x1 grid + "drop bot(s) here" slots, real-estate.
+- Cancel -> exact lead tab deleted, hash empty, dialog closed.
+- Bootstrap (N=1, command set to harmless `echo` to avoid launching a
+  real agent): tab renamed @@Lead, lead command ran in the SAME tab (no
+  respawn), identity prompt placed in the lead editor with the CORRECTED
+  text ("We are a team of 1. Our host is @@Neo and the team lead is
+  @@Lead... - (no other agents)"), chan-team.toml written to
+  /tmp/new-team-1/ (well-formed TOML, OUTSIDE the sandbox).
+- Submit (Cmd+Enter): 187-char buffer -> empty (placeholder reappears).
+- Right-click menu: new order, removed items gone.
+- Bubble stack -> two static example bubbles (single-question +
+  multi-question with topic tabs + F-follow-up); clicking an option
+  dismisses; no network/fs.
+- Teardown: tab closed, server pkilled (scoped), workspace removed,
+  /tmp/new-team-1 cleaned.
+
+### Commit + open decisions (reported on event-lane-a-alex.md)
+- One atomic commit 55179ad9 on phase-13-r2-lane-a (the feature only
+  builds green as a whole; intermediate splits would be red).
+- Decisions made (flagged for @@Alex to flip): (1) FileTree Load-Team
+  retired; (2) dialog title kept "Spawn agents" (roadmap renamed the
+  concept but not this title string); (3) pane-mode P stays a plain
+  Team Work terminal (no dialog); (4) chan-team.toml via a path-based
+  backend route bypassing the Workspace sandbox (risk #6 authorized);
+  (5) teamCreate/teamLoad/teamGetConfig/teamDuplicate/teamListLoaded +
+  the /api/teams backend now orphaned dead surface - left for a
+  follow-up cleanup, not deleted (out of roadmap scope).
+
+## 2026-05-29 @@LaneA r2 turn-1 (cont) - @@Alex review + name-registry cleanup
+
+@@Alex reviewed the 5 flagged decisions: (1) sandbox-bypass fine, (2)
+FileTree retirement fine, (3) confirmed Cmd+P -> new Team Work flow is
+the intended change (pane-mode P is the pure rename, no behavior
+change), (4) "Spawn agents" title fine, (5) NOT left behind - pre-
+release, no back-compat, DELETE the orphaned name-registry. Heads-up to
+@@LaneB handled by @@Alex.
+
+Cleanup commit 25c81182 (on top of 55179ad9; new branch HEAD). Pure
+dead-code deletion, net -1479 lines, 15 files (crates/ + client.ts):
+- client.ts: removed the 6 name-registry methods + dead TeamRefView/
+  TeamLoadResponse types. Kept TeamConfigWire/TeamMemberWire (reused by
+  the path-based readTeamConfigFile/writeTeamConfigFile).
+- Backend (subagent, compiler-guided): deleted routes/teams.rs +
+  6 /api/teams* routes + loaded_teams AppState field (+ metadata import
+  clear + test fixtures); chan-workspace teams.rs registry (TeamRef/
+  TEAM_DIR_PREFIX/create/write_config/load/list/duplicate/owns_preflight
+  + tests); workspace.rs team_* wrappers (incl. the dead watch_team) +
+  tests; drafts.rs team-dir preflight skip + test. KEPT TeamConfig/
+  Member/Position + routes/team_config.rs.
+- Gate green: cargo fmt/clippy(0 warnings)/test/build --no-default-
+  features; npm check 0 err / build / vitest 1568.
+- No re-smoke needed: pure deletion of code with no remaining UI path
+  (FileTree retirement removed the only entry); static gate covers it.
+
+New merge-ready HEAD for @@LaneB: phase-13-r2-lane-a@25c81182
+(= 55179ad9 feature + 25c81182 cleanup).

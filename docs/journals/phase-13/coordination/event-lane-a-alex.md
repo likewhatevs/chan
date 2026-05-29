@@ -429,3 +429,84 @@ Lowlights / contention
   integration so no two subagents edit the same file.
 
 Detail in lane-a/journal.md.
+
+## 2026-05-29 @@LaneA -> @@Alex
+ready to merge: Team Work revamp - full slice gated + browser-smoked
+
+ready to merge: phase-13-r2-lane-a@55179ad9  -  Team Work full-stack revamp (rename + agent-event watcher backend deletion + lead-first Cmd+P/dialog flow + path-based chan-team.toml + bubble stub)
+
+Highlights
+- One atomic commit (the backend deletion + state rename + dialog/flow
+  redesign all rewrite the same surface and only build green together;
+  71 files, net -8325 lines). 4 in-session subagents ran in 2 waves on
+  disjoint files; I owned App.svelte (the glue) + the cross-cutting
+  ?raw source-pattern test sweep at integration single-threaded.
+- Full gate GREEN: cargo fmt/clippy/test/build --no-default-features;
+  npm run check (0 err) / build / vitest 1568 passed (156 files).
+- Browser-smoked the whole flow end to end, no console errors:
+  Cmd+P -> lead terminal + dialog; dialog new shape (Neo / New-Load /
+  1-9 dropdown / drag-me / real-estate / drop slots); Cancel deletes
+  the exact lead tab; Bootstrap is lead-first (renamed @@Lead, ran in
+  the SAME tab - no respawn dance - identity prompt placed with the
+  corrected text, chan-team.toml written to /tmp/new-team-1 OUTSIDE the
+  sandbox); Cmd+Enter resets the draft to empty; right-click menu new
+  order; bubble stub shows single+multi-question+F-follow-up and just
+  dismisses.
+
+Decisions I made (proceeded per your "make obvious calls" steer; flip
+any of these and I'll redo)
+1. chan-team.toml New/Load = a small path-based backend route
+   (/api/team-config/{read,write}) using std::fs OUTSIDE the Workspace
+   sandbox, per your risk #6 authorization. Chose this over the
+   "lead-terminal shell cwd" option because Load must read the file
+   back to prepopulate the dialog - the shell path can't feed that.
+2. FileTree's right-click "Load Team" (the old name-registry team
+   loader) is RETIRED. It was built on the /api/teams name registry,
+   orphaned by the new path-based single flow, and can't be cleanly
+   half-wired (no lead terminal; name-vs-path mismatch). If you want a
+   tree-based load kept, I'd rewire it to open the dialog in Load mode
+   seeded with the file's path - say the word.
+3. Pane-mode "P" (the empty-pane Hybrid-Nav picker) stays a PLAIN Team
+   Work terminal spawn (no dialog). The lead-terminal+dialog flow fires
+   on Cmd+P / Cmd+Alt+P / hamburger "Team Work" only.
+4. Dialog title still reads "Spawn agents" (the roadmap renamed the
+   Rich-Prompt concept but didn't name this title string). Easy to
+   switch to "Team Work" if you'd prefer.
+
+Lowlights / contention
+- Pane.svelte (Lane B file): I removed its dead t.watcher unread-dot
+  (forced by the watcher-field deletion). Declared on
+  event-lane-a-lane-b.md; @@LaneB reconciles at merge-gate.
+- Orphaned dead surface left for a follow-up (NOT deleted, out of
+  roadmap scope): the name-based /api/teams backend +
+  teamCreate/teamLoad/teamGetConfig/teamDuplicate/teamListLoaded client
+  methods + chan-workspace team registry are now unused after the FileTree
+  retirement. Worth a cleanup pass next round if you agree they're dead.
+- Desktop/WKWebView not driven (Chrome/Blink only, per
+  feedback_terminal_webgl_wkwebview); the flow is pure Svelte/CM6 with
+  no WKWebView-specific code, so Blink exercises the same path. Flagging
+  per feedback_pre_release_merge_unverified, not stalling.
+
+Detail in lane-a/journal.md. Lane-A round-2 scope is fully shipped.
+Standing by for @@LaneB's combined-tree merge-gate + any redirect.
+
+## 2026-05-29 @@LaneA -> @@Alex
+done: dead name-registry deleted - new HEAD @25c81182
+
+Your call on (5) done. Decisions (1)-(4) confirmed unchanged.
+
+ready to merge: phase-13-r2-lane-a@25c81182  -  Team Work revamp (55179ad9) + orphaned name-registry deletion (25c81182)
+
+- Deleted the whole name-based team registry: client.ts 6 methods +
+  dead types; backend routes/teams.rs + 6 /api/teams* routes +
+  loaded_teams AppState; chan-workspace teams.rs registry lifecycle +
+  workspace.rs team_* wrappers (incl. a dead watch_team I'd missed) +
+  the drafts team-dir preflight skip. Net -1479 lines, pure deletion.
+- KEPT TeamConfig/Member/Position + the path-based
+  /api/team-config/{read,write} route (the live New/Load surface).
+- Gate green (cargo fmt/clippy 0-warn/test/no-default; npm check 0-err/
+  build/vitest 1568). No re-smoke: dead code had no UI path after the
+  FileTree retirement, so the prior end-to-end smoke still stands.
+
+New branch HEAD is 25c81182 (two commits: feature + cleanup). @@LaneB
+should gate THIS, not 55179ad9. Lane-A round-2 scope fully drained.

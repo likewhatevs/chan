@@ -966,3 +966,84 @@ Team Work rename in shortcuts.ts / Pane.svelte / EmptyPaneWelcome.svelte.
 
 Not merged to main yet (slices are merge-gate-ready on the branch; I
 hold merges for the round per the bootstrap). Detail: lane-b/journal.md.
+
+## 2026-05-29 @@LaneB -> @@Alex
+Merge gate PAUSED - Lane A doing more cleanup
+
+You flagged Lane A is doing further dead-code cleanup, so their
+55179ad9 is stale. Pausing the combined-tree merge gate; I'll re-run it
+against Lane A's NEW commit once it lands + they signal on the cross-
+lane channel. Nothing merged to main (main is still 248bc830, docs
+only). A background cargo gate was running against the stale combined
+tree - disregarding its result.
+
+My lane is done + independent of Lane A's cleanup:
+- Applied the Team Work label (ae06398b) - chord id
+  app.terminal.richPrompt stays STABLE, so it's just a label swap and
+  is unaffected by whatever Lane A deletes.
+- Re your Q3 to Lane A ("cmd+p -> rich prompt now team work, right?"):
+  confirmed on my side - the chord id is unchanged, only the label +
+  (Lane A's) handler flow changed.
+
+phase-13-r2-lane-b @ ae06398b: B1-4 + Cmd+, fix + Team Work label, all
+gated + (web) smoked. Standing by for Lane A's cleanup commit.
+
+## 2026-05-29 @@LaneB -> @@Alex
+combined gate GREEN @ Lane A 25c81182; 2 rename residuals in Lane A files
+
+Re-gated against Lane A's NEW head (25c81182, after their dead-code
+cleanup) + my ae06398b. Clean auto-merge. FULL gate GREEN:
+- cargo fmt / clippy -Dwarnings / test (0 failed) / build
+  --no-default-features.
+- web svelte-check 0/0/4107 + build + vitest 1570 passed.
+
+Two user-facing "Rich Prompt" residuals my sweep caught, BOTH in Lane A
+files + both look like dead/stale leftovers of their deletion (so it's a
+rename-vs-REMOVE judgment that's theirs, not a blind swap):
+1. store.svelte.ts: "Broken Rich Prompt" warning label - but
+   `broken_rich_prompt` has ZERO backend refs now, so it's a dead
+   frontend branch. -> remove.
+2. FileInfoBody.svelte Drafts notice "Rich Prompt submissions persist as
+   Drafts/rich-prompt-N/" - the archival it describes was deleted. ->
+   stale clause, drop/rewrite.
+Flagged to @@LaneA on event-lane-b-lane-a.md with exact lines.
+
+These don't break the gate (green). HOLDING the merge to main pending
+the call:
+(a) Lane A fixes the 2 residuals on their branch -> I re-gate + merge; or
+(b) merge the gated-green tree now, Lane A cleans up in a follow-up.
+My lean: (a), since Lane A is warm + #2 is a now-incorrect user-facing
+notice. Your call. Still holding the v0.18.0 tag for you regardless.
+
+## 2026-05-29 @@LaneB -> @@Alex
+DONE: full rich-prompt scrub + combined tree MERGED to main (no push)
+
+Per your "do the cleanup yourself" + "do not leave any rich prompt code
+behind": I fixed the 2 residuals myself AND scrubbed EVERY remaining
+"rich prompt" identifier across the combined tree (160 refs, 35 files) -
+pre-release so no back-compat:
+- chord id app.terminal.richPrompt -> app.terminal.teamWork (all sites
+  + desktop KEY_BRIDGE moved atomically).
+- tab.richPrompt field + serialization -> tab.teamWork.
+- .rich-prompt CSS class -> .team-work; backend rich_prompt/rich-prompt
+  -> team_work/team-work; 5 richPrompt* test files renamed; all comments.
+- 0 "rich.?prompt" refs left in web/src + crates + desktop/src.
+
+GATE GREEN: cargo fmt/clippy -Dwarnings/test (0 failed)/build
+--no-default-features; web svelte-check 0/0/4107 + build + vitest 1570.
+BROWSER-SMOKED the wire/CSS/field renames: Cmd+P (app.terminal.teamWork)
+fires the lead terminal + embedded editor (.team-work renders clean) +
+Lane A's Spawn-agents dialog (Neo / New-Load / dropdown / Lead / real
+estate). No console errors.
+
+MERGED to main: ff'd 248bc830 -> c4a4adc6 (Lane A 25c81182 + Lane B
+ae06398b + residual cleanup 74ec13d7 + scrub c4a4adc6). NO push (per
+feedback_merge_is_not_push).
+
+You can now build the FULL combined dmg from the main checkout
+(/Users/fiorix/dev/github.com/fiorix/chan) for your chan-desktop walk:
+`make macos-chan-dmg`. The desktop bits needing your WKWebView eyes:
+Cmd+Shift+N new-window, Cmd+I removal, and the Cmd+P->teamWork KEY_BRIDGE.
+
+HOLDING the v0.18.0 cut (version bump + tag) for your explicit go - say
+the word, or tell me if there's more to change first.
