@@ -6,7 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Phase 13 round 2 (heading to v0.18.0).
+Phase 13 round 2 (heading to v0.18.0). Builds directly on the v0.17.0
+cleanup below.
 
 ### Changed
 
@@ -42,6 +43,45 @@ Phase 13 round 2 (heading to v0.18.0).
   and the Spawn-agent(s) dialog/process. The notification bubble overlay
   is reduced to a frontend-only static stub; equivalent functionality is
   planned to return in a later phase.
+
+## [v0.17.0] - 2026-05-28
+
+Phase 13 round 1: a broad cleanup-and-polish pass across the graph,
+dashboard, editor, inspector, and pane chrome. The round-2 Team Work and
+editor work builds directly on this foundation.
+
+### Added
+
+- Graph KIND lenses: clickable path / tag / contact / language chips in
+  the inspector open a focused subgraph; the tag and contact lenses walk
+  a bidirectional BFS so backlinks are included.
+- Dashboard (renamed from Infographics): About, Workspace-info, and a
+  read-only indexing-graph widget, plus a per-surface settings flip-back.
+- Editor `@`-completion surfaces the `@@mention` corpus; a language-bubble
+  inspector body.
+
+### Changed
+
+- Renamed Infographics -> Dashboard across labels, menus, and aria text.
+- Cmd+, now flips the focused Hybrid surface's config view; the global
+  SettingsPanel overlay was retired.
+- Inspector: the workspace root reads like a directory; absolute path +
+  a COPY button.
+
+### Fixed
+
+- Editor: new-document cursor focus; the fresh-draft "Unsaved changes"
+  prompt no longer fires on a pristine draft; list markers preserve the
+  authored character (a hyphen stays a hyphen, `*` stays `*`, ordered
+  numbers stay numbers); terminal Shift+Enter inserts a newline.
+- Pane: focus-ring thickness parity + an outer-halo focus wobble.
+- Indexing graph: fit-on-resize, a working depth slider, double-click
+  "graph from here", and clearer embedding-phase progress.
+
+### Removed
+
+- The empty-pane right-click context menu; its spawn entries (now
+  including Search + Dashboard) live on the single pane hamburger.
 
 ## [v0.16.0] - 2026-05-27
 
