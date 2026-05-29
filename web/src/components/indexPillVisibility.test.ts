@@ -80,4 +80,17 @@ describe("Slice G: AppStatusBar source keeps the idle-hide rule", () => {
     expect(statusBar).toMatch(/s\.state === "building"/);
     expect(statusBar).toMatch(/\{s\.current\}\/\{s\.total\}/);
   });
+
+  test("counter hides during the embedding-sentinel sub-phase (Round-1 closing-12)", () => {
+    // The IndexFile / GraphRebuild stages set current/total to
+    // "files indexed / total files" - readable. The EmbedBatch
+    // stage (sentinel `s.file === "embedding"`) instead reports
+    // chunks pending / batch budget, which once chunks exceed the
+    // budget reads as nonsense ("indexing 4143/4096 (embedding)").
+    // Hide the counter in that sub-phase so the pill just signals
+    // "embedding in progress".
+    expect(statusBar).toMatch(
+      /\{#if s\.state === "building"\}[\s\S]{1,1500}\{#if s\.file !== "embedding"\}[\s\S]{1,300}\{s\.current\}\/\{s\.total\}/,
+    );
+  });
 });

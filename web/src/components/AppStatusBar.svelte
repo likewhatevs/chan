@@ -86,8 +86,21 @@
               class:err={s.state === "error"}
             ></span>
             {#if s.state === "building"}
+              <!-- Round-1 closing-12: the `IndexFile` / `GraphRebuild`
+                   stages set `s.current / s.total` to "files
+                   indexed / total files" - readable. The
+                   `EmbedBatch` stage (sentinel `s.file === "embedding"`)
+                   sets them to "chunks pending flush / batch
+                   budget" instead, and once more chunks accumulate
+                   than the budget the counter reads as nonsense
+                   ("indexing 4143/4096 (embedding)"). Hide the
+                   count during the embedding phase so the pill
+                   just signals "embedding in progress" without the
+                   misleading numbers. -->
               indexing
-              <span class="num">{s.current}/{s.total}</span>
+              {#if s.file !== "embedding"}
+                <span class="num">{s.current}/{s.total}</span>
+              {/if}
               {#if s.file}<span class="muted">({s.file})</span>{/if}
             {:else if s.state === "reindexing"}
               reindexing <span class="muted">{s.file}</span>
