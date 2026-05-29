@@ -950,7 +950,7 @@ impl Workspace {
         // drafts cap-std handle (parallels the -26 read_text /
         // write_text routing). Three shapes:
         //   * "Drafts/" or "Drafts" → list the drafts root
-        //     (returns each `untitled-N` / `team-work-N`).
+        //     (returns each draft dir, e.g. `untitled-N`).
         //   * "Drafts/<name>" or "Drafts/<name>/<sub>" → list
         //     inside the drafts subtree.
         //   * anything else → workspace-root path (unchanged).
@@ -1405,11 +1405,11 @@ impl Workspace {
         &self.paths.drafts
     }
 
-    /// Create a draft directory by name (e.g. `"untitled-1"` or
-    /// `"team-work-3"`). Returns a handle with the leaf name +
-    /// absolute path. Errors when the name contains a path
-    /// separator / traversal segment / already exists. Atomic via
-    /// `fs::create_dir_all` on a non-existing leaf.
+    /// Create a draft directory by name (e.g. `"untitled-1"`).
+    /// Returns a handle with the leaf name + absolute path. Errors
+    /// when the name contains a path separator / traversal segment /
+    /// already exists. Atomic via `fs::create_dir_all` on a
+    /// non-existing leaf.
     pub fn create_draft_dir(&self, name: &str) -> Result<DraftRef> {
         drafts::create_dir(&self.paths.drafts, name)
     }
@@ -5999,7 +5999,9 @@ mod tests {
         // moved + the draft is no longer listed.
         let (_cfg, root, workspace) = fixture();
         let a = workspace.create_draft_dir("untitled-1").unwrap();
-        let b = workspace.create_draft_dir("team-work-2").unwrap();
+        // An arbitrary non-`untitled` draft dir: listing must not
+        // assume the Cmd+N prefix.
+        let b = workspace.create_draft_dir("scratch-2").unwrap();
         assert!(a.abs.is_dir());
         assert!(b.abs.is_dir());
 
@@ -6011,7 +6013,7 @@ mod tests {
         let listed = workspace.list_drafts().unwrap();
         assert_eq!(listed.len(), 2);
         // Sorted by name.
-        assert_eq!(listed[0].name, "team-work-2");
+        assert_eq!(listed[0].name, "scratch-2");
         assert_eq!(listed[1].name, "untitled-1");
 
         // Promote untitled-1 into the workspace root.
@@ -6021,10 +6023,10 @@ mod tests {
         assert!(root.path().join("untitled-1").join("pasted.png").is_file());
         assert!(!workspace.drafts_dir().join("untitled-1").exists());
 
-        // team-work-2 still listed; untitled-1 gone.
+        // scratch-2 still listed; untitled-1 gone.
         let after = workspace.list_drafts().unwrap();
         assert_eq!(after.len(), 1);
-        assert_eq!(after[0].name, "team-work-2");
+        assert_eq!(after[0].name, "scratch-2");
     }
 
     #[test]
