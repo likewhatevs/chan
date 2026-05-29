@@ -4531,9 +4531,21 @@ mod tests {
         lib.register_workspace(workspace_dir.path()).unwrap();
         let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
 
+        // Hold the indexer serialization lock, then race a small write
+        // against it. write_text must NOT acquire write_serial, so the
+        // write completes while we still hold the guard.
+        //
+        // The recv timeout is a DEADLOCK BACKSTOP, not a latency budget.
+        // If write_text wrongly took write_serial it would block forever
+        // (we hold the lock), so the test needs *some* ceiling to fail
+        // instead of hang. It is deliberately generous (seconds, not the
+        // old 150 ms) so a loaded CI runner's scheduling jitter on a
+        // tiny write cannot trip a false failure: the 150 ms budget
+        // red-lighted a release once (phase-13 r2 / addendum-1 #2). A
+        // correct write finishes in microseconds; only the bug path ever
+        // approaches this ceiling.
         let guard = workspace.write_serial.lock().unwrap();
         let workspace_for_write = workspace.clone();
-        let start = std::time::Instant::now();
         let (tx, rx) = std::sync::mpsc::channel();
         let writer = std::thread::spawn(move || {
             workspace_for_write
@@ -4542,15 +4554,10 @@ mod tests {
             tx.send(()).unwrap();
         });
 
-        let completed = rx.recv_timeout(std::time::Duration::from_millis(150));
+        let completed = rx.recv_timeout(std::time::Duration::from_secs(10));
         drop(guard);
         writer.join().unwrap();
-        completed.unwrap_or_else(|_| {
-            panic!(
-                "small write waited behind indexer serialization: {:?}",
-                start.elapsed()
-            )
-        });
+        completed.expect("write_text blocked on the indexer serial lock (deadlock backstop hit)");
         assert_eq!(workspace.read_text("fast.md").unwrap(), "# fast\nbody\n");
     }
 
