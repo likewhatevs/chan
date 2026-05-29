@@ -26,7 +26,6 @@
   import { WebglAddon } from "@xterm/addon-webgl";
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
-  import type { TerminalSpawnResponse } from "../api/types";
   import { chordFor, shouldEscapeTerminal } from "../state/shortcuts";
   import {
     advanceTerminalSeq,
@@ -37,9 +36,7 @@
     clearTerminalSession,
     flipHybrid,
     dismissTerminalEnvNamePrompt,
-    layout,
     markTerminalEnvNameRestarted,
-    openTerminalInActivePane,
     registerTerminalCloseSink,
     registerTerminalInputSink,
     renameTerminalTab,
@@ -63,7 +60,6 @@
     fileOps,
     openFsGraphForDirectory,
     scheduleSessionSave,
-    setTransientStatus,
     surfaceThemeOverride,
     ui,
   } from "../state/store.svelte";
@@ -92,13 +88,7 @@
   } from "../state/tabMenu.svelte";
   import BubbleOverlay from "./BubbleOverlay.svelte";
   import McpEnvInfoModal from "./McpEnvInfoModal.svelte";
-  import TerminalRichPrompt from "./TerminalRichPrompt.svelte";
-  import { readWatcherEvents } from "../state/watcherEvents";
-  import type {
-    RichPromptCloseResponse,
-    RichPromptResponse,
-    RichPromptSubmitResponse,
-  } from "../api/types";
+  import TeamWork from "./TeamWork.svelte";
 
   let {
     tab,
@@ -172,11 +162,6 @@
   let promptSeedSent = false;
   let terminalCwdAbs: string | null = $state(null);
   let terminalCwdVirtual: string | null = $state(null);
-  let watcherPollTimer: ReturnType<typeof setInterval> | null = null;
-  let richPromptWorkspaceRequest: Promise<void> | null = null;
-  let richPromptWorkspaceCreateKey = "";
-  let richPromptWorkspaceStatusKey = "";
-  const outputDecoder = new TextDecoder();
   let webglRendererActive = false;
   let webglContextLossRetries = 0;
   let ptyOutputWriteDepth = 0;
@@ -228,16 +213,6 @@
       ),
   );
   const mcpEnvOn = $derived(terminalMcpEnvEnabled(tab));
-  const watcherPath = $derived(tab.watcher?.path ?? null);
-  /// `fullstack-a-4`: count of survey/poke bubbles currently
-  /// visible in the BubbleOverlay (replies are siblings that
-  /// don't render). Passed to `TerminalRichPrompt` so the rich
-  /// prompt skips auto-focusing its input when bubbles are
-  /// waiting — numbered keystrokes then flow to BubbleOverlay's
-  /// window keydown handler. Re-derives on every watcher refresh.
-  const bubbleCount = $derived(
-    (tab.watcher?.events ?? []).filter((event) => event.type !== "survey-reply").length,
-  );
   const showMcpEnvDisabled = $derived(tab.sessionMcpEnv === false);
   const staleEnvName = $derived(terminalEnvTabNameStale(tab));
   const showStaleEnvPrompt = $derived(
@@ -256,24 +231,6 @@
       unregisterInput();
       unregisterClose();
     };
-  });
-
-  $effect(() => {
-    const rp = tab.richPrompt;
-    const session = tab.terminalSessionId;
-    if (!rp || !session) return;
-    if (!rp.open && !rp.workspaceName) return;
-    if (!rp.workspaceName) {
-      const key = `${tab.id}:${session}`;
-      if (richPromptWorkspaceCreateKey === key) return;
-      richPromptWorkspaceCreateKey = key;
-      void ensureRichPromptWorkspace(session);
-      return;
-    }
-    const key = `${rp.workspaceName}:${session}`;
-    if (richPromptWorkspaceStatusKey === key) return;
-    richPromptWorkspaceStatusKey = key;
-    void refreshRichPromptWorkspace(session, rp.workspaceName);
   });
 
   $effect(() => {
@@ -296,18 +253,18 @@
     setTerminalActivity(tab, false);
     sendFocusState();
     queueMicrotask(() => {
-      // `fullstack-a-17`: when the rich prompt is open it owns the
-      // keyboard. Cmd+K p on a pane without a terminal spawns one and
-      // opens the rich prompt in the same Svelte tick; without this
-      // gate, xterm's mount-time focus races past the rich prompt's
-      // focus effect and steals the caret. Bump `focusNonce` so the
-      // rich prompt's open-effect re-runs and lands the caret on the
+      // `fullstack-a-17`: when the Team Work prompt is open it owns
+      // the keyboard. Cmd+K p on a pane without a terminal spawns one
+      // and opens the prompt in the same Svelte tick; without this
+      // gate, xterm's mount-time focus races past the prompt's focus
+      // effect and steals the caret. Bump `focusNonce` so the
+      // prompt's open-effect re-runs and lands the caret on the
       // editor — covers both the Cmd+K p race AND the user returning
-      // to a pane whose rich prompt was already open (no focusNonce
-      // bump would otherwise fire there).
-      if (tab.richPrompt?.open) {
-        if (tab.richPrompt) {
-          tab.richPrompt.focusNonce = (tab.richPrompt.focusNonce ?? 0) + 1;
+      // to a pane whose prompt was already open (no focusNonce bump
+      // would otherwise fire there).
+      if (tab.teamWork?.open) {
+        if (tab.teamWork) {
+          tab.teamWork.focusNonce = (tab.teamWork.focusNonce ?? 0) + 1;
         }
         return;
       }
@@ -350,20 +307,6 @@
     if (!active) return;
     if (!term) return;
     recoverTerminalRendererAfterHostResume();
-  });
-
-  $effect(() => {
-    if (!watcherPath) {
-      if (watcherPollTimer) clearInterval(watcherPollTimer);
-      watcherPollTimer = null;
-      return;
-    }
-    void refreshWatcherEvents();
-    watcherPollTimer = setInterval(() => void refreshWatcherEvents(), 5000);
-    return () => {
-      if (watcherPollTimer) clearInterval(watcherPollTimer);
-      watcherPollTimer = null;
-    };
   });
 
   // Track the resolved terminal body theme so xterm.js' canvas
@@ -723,7 +666,6 @@
         const bytes = new Uint8Array(event.data);
         writePtyOutput(bytes);
         recordOutputBytes(bytes.byteLength);
-        maybeRefreshWatcher(bytes);
         maybeSeedPrompt();
         return;
       }
@@ -731,7 +673,6 @@
         const bytes = new Uint8Array(await event.data.arrayBuffer());
         writePtyOutput(bytes);
         recordOutputBytes(bytes.byteLength);
-        maybeRefreshWatcher(bytes);
         maybeSeedPrompt();
         return;
       }
@@ -1069,10 +1010,7 @@
     }
   }
 
-  async function closeTerminalForTab(): Promise<boolean> {
-    if (tab.richPrompt?.workspaceName) {
-      return discardRichPromptWorkspace();
-    }
+  function closeTerminalForTab(): boolean {
     explicitCloseSession();
     return true;
   }
@@ -1210,157 +1148,48 @@
   // the section is gone. `fullstack-43`'s context-aware spawn will
   // re-read the terminal's CWD through a centralised helper.
 
-  function ensureRichPrompt(): NonNullable<TerminalTabState["richPrompt"]> {
-    if (!tab.richPrompt) {
-      tab.richPrompt = {
+  function ensureTeamWork(): NonNullable<TerminalTabState["teamWork"]> {
+    if (!tab.teamWork) {
+      tab.teamWork = {
         buffer: "",
         heightPx: Math.max(220, Math.round((host?.clientHeight ?? 640) / 2)),
         open: false,
         mode: "wysiwyg",
       };
     }
-    if (!tab.richPrompt.heightPx) {
-      tab.richPrompt.heightPx = Math.max(220, Math.round((host?.clientHeight ?? 640) / 2));
+    if (!tab.teamWork.heightPx) {
+      tab.teamWork.heightPx = Math.max(220, Math.round((host?.clientHeight ?? 640) / 2));
     }
-    if (!tab.richPrompt.mode) tab.richPrompt.mode = "wysiwyg";
-    return tab.richPrompt;
+    if (!tab.teamWork.mode) tab.teamWork.mode = "wysiwyg";
+    return tab.teamWork;
   }
 
-  function richPromptErrorMessage(err: unknown): string {
-    return (err as Error)?.message || String(err);
-  }
-
-  function applyRichPromptWorkspace(resp: RichPromptResponse): void {
-    const rp = tab.richPrompt;
-    if (!rp) return;
-    rp.phase = resp.phase;
-    rp.workspaceName = resp.name;
-    rp.draftPath = resp.draft_path;
-    rp.workspacePath = resp.workspace_path;
-    rp.eventsPath = resp.events_path;
-    rp.processPath = resp.process_path;
-    rp.workspaceAbs = resp.workspace_abs;
-    rp.eventsAbs = resp.events_abs;
-    rp.submissionSequence = resp.submission_sequence;
-    rp.workspaceError = resp.error ?? null;
-    if (resp.watcher.state === "attached") {
-      if (tab.watcher?.path !== resp.events_path) watcherStarted(resp.events_path);
-    } else {
-      if (resp.watcher.state === "failed") {
-        rp.workspaceError = resp.error ?? resp.watcher.message;
-      }
-      watcherStopped();
-    }
-    scheduleTerminalSessionSave();
-  }
-
-  async function ensureRichPromptWorkspace(session: string): Promise<void> {
-    if (richPromptWorkspaceRequest) return richPromptWorkspaceRequest;
-    richPromptWorkspaceRequest = (async () => {
-      const rp = tab.richPrompt;
-      if (!rp) return;
-      rp.workspaceBusy = true;
-      rp.workspaceError = null;
-      try {
-        const resp = await api.createRichPromptWorkspace(session);
-        if (tab.terminalSessionId !== session) return;
-        applyRichPromptWorkspace(resp);
-      } catch (err) {
-        const live = tab.richPrompt;
-        if (live) {
-          live.phase = "broken";
-          live.workspaceError = richPromptErrorMessage(err);
-        }
-        setTransientStatus(`rich-prompt workspace failed: ${richPromptErrorMessage(err)}`);
-      } finally {
-        const live = tab.richPrompt;
-        if (live) live.workspaceBusy = false;
-        richPromptWorkspaceRequest = null;
-        scheduleTerminalSessionSave();
-      }
-    })();
-    return richPromptWorkspaceRequest;
-  }
-
-  async function refreshRichPromptWorkspace(session: string, name: string): Promise<void> {
-    const rp = tab.richPrompt;
-    if (!rp) return;
-    rp.workspaceBusy = true;
-    try {
-      const resp = await api.richPromptStatus(name, session);
-      if (tab.terminalSessionId !== session || tab.richPrompt?.workspaceName !== name) return;
-      applyRichPromptWorkspace(resp);
-    } catch (err) {
-      const live = tab.richPrompt;
-      if (live && live.workspaceName === name) {
-        live.phase = "broken";
-        live.workspaceError = richPromptErrorMessage(err);
-      }
-    } finally {
-      const live = tab.richPrompt;
-      if (live && live.workspaceName === name) live.workspaceBusy = false;
-      scheduleTerminalSessionSave();
-    }
-  }
-
-  function applyRichPromptSubmit(
-    resp: RichPromptSubmitResponse,
-    bufferAtSubmit: string,
-  ): void {
-    const rp = tab.richPrompt;
-    if (!rp || rp.workspaceName !== resp.name) return;
-    rp.phase = resp.phase;
-    rp.draftPath = resp.draft_path;
-    rp.submissionSequence = resp.submission_sequence;
-    rp.workspaceError = null;
-    if (rp.buffer === bufferAtSubmit) rp.buffer = "";
-    scheduleTerminalSessionSave();
-  }
-
-  function openRichPrompt(): void {
+  function openTeamWork(): void {
     closeTabMenu();
-    ensureRichPrompt().open = true;
-    if (tab.watcher) tab.watcher.unread = false;
+    ensureTeamWork().open = true;
     scheduleTerminalSessionSave();
-    void refreshWatcherEvents();
   }
 
-  function closeRichPrompt(): void {
-    ensureRichPrompt().open = false;
+  function closeTeamWork(): void {
+    ensureTeamWork().open = false;
     scheduleTerminalSessionSave();
     term?.focus();
   }
 
-  function toggleRichPromptFromMenu(): void {
+  function toggleTeamWorkFromMenu(): void {
     closeTabMenu();
-    if (tab.richPrompt?.open) closeRichPrompt();
-    else openRichPrompt();
+    if (tab.teamWork?.open) closeTeamWork();
+    else openTeamWork();
   }
 
-  /// `fullstack-a-69`: F-follow-up rewrite. BubbleOverlay
-  /// formats the current survey as a markdown quote + calls this
-  /// callback to inject it into the Rich Prompt buffer. The
-  /// quote is appended (so any in-flight draft survives), a
-  /// blank line is added below so the caret lands on a fresh
-  /// line, and `focusNonce` is bumped so the Wysiwyg/Source
-  /// re-focus and re-mount the new buffer cleanly.
-  function quoteIntoRichPrompt(markdown: string): void {
-    const rp = ensureRichPrompt();
-    const separator = rp.buffer.length === 0 ? "" : "\n\n";
-    rp.buffer = `${rp.buffer}${separator}${markdown}\n`;
-    rp.open = true;
-    rp.focusNonce = (rp.focusNonce ?? 0) + 1;
-    scheduleTerminalSessionSave();
-  }
-
-  function richPromptUsesAgentSubmit(): boolean {
-    const rp = tab.richPrompt;
+  function teamWorkUsesAgentSubmit(): boolean {
+    const rp = tab.teamWork;
     if (!rp) return false;
     if (rp.agentTarget && rp.agentTarget !== "none") return true;
     return rp.submitMode === "agent";
   }
 
-  function submitRichPrompt(source: string): void {
+  function submitTeamWork(source: string): void {
     // `fullstack-b-13`: when the prompt is in Agent submit-mode,
     // strip any trailing newline the editor left on the buffer
     // and append the agent-submit chord. Claude Code v2.1.145
@@ -1368,166 +1197,26 @@
     // as submit; a stray `\n` before the chord would land as a
     // newline in the agent's multi-line draft. Shell mode appends
     // a missing trailing newline so the command actually executes.
-    if (richPromptUsesAgentSubmit()) {
+    if (teamWorkUsesAgentSubmit()) {
       const stripped = source.replace(/\n+$/, "");
       sendUserInput(stripped + AGENT_SUBMIT_CHORD);
     } else {
       sendUserInput(source.endsWith("\n") ? source : `${source}\n`);
     }
     scheduleTerminalSessionSave();
-    // `fullstack-a-4`: caret stays in the rich prompt after
-    // Cmd+Enter so consecutive prompts are fluid. Previously we
-    // refocused the terminal here, which forced the user to
-    // click back into the prompt for every entry.
-    if (tab.richPrompt) tab.richPrompt.focusNonce = (tab.richPrompt.focusNonce ?? 0) + 1;
-    // Archive the exact editor buffer through Core's Rich Prompt
-    // workspace. This stays best-effort because the terminal has
-    // already received the input.
-    void persistRichPromptSubmission(source);
-  }
-
-  async function persistRichPromptSubmission(source: string): Promise<void> {
-    const trimmed = source.trim();
-    if (!trimmed) return;
-    const session = tab.terminalSessionId;
-    if (!tab.richPrompt?.workspaceName) {
-      if (!session) {
-        setTransientStatus("rich-prompt workspace not ready");
-        return;
-      }
-      await ensureRichPromptWorkspace(session);
+    // Phase-13 round-2: every submit to the lead terminal resets
+    // the draft back to empty. The pre-revamp build cleared the
+    // buffer only after the rich-prompt-workspace archive write
+    // confirmed (and only when the buffer was unchanged); the
+    // archival path is gone, so the reset is now unconditional.
+    if (tab.teamWork) {
+      tab.teamWork.buffer = "";
+      // `fullstack-a-4`: caret stays in the prompt after Cmd+Enter
+      // so consecutive prompts are fluid. Previously we refocused
+      // the terminal here, which forced the user to click back into
+      // the prompt for every entry.
+      tab.teamWork.focusNonce = (tab.teamWork.focusNonce ?? 0) + 1;
     }
-    const rp = tab.richPrompt;
-    const name = rp?.workspaceName;
-    if (!rp || !name) {
-      setTransientStatus("rich-prompt workspace not ready");
-      return;
-    }
-    const bufferAtSubmit = rp.buffer;
-    try {
-      const resp = await api.submitRichPromptWorkspace(name, {
-        content: source,
-        expected_sequence: rp.submissionSequence ?? 0,
-      });
-      applyRichPromptSubmit(resp, bufferAtSubmit);
-    } catch (err) {
-      if (tab.richPrompt?.workspaceName === name) {
-        tab.richPrompt.phase = "broken";
-        tab.richPrompt.workspaceError = richPromptErrorMessage(err);
-      }
-      setTransientStatus(
-        `rich-prompt submit archive failed: ${richPromptErrorMessage(err)}`,
-      );
-    }
-  }
-
-  async function discardRichPromptWorkspace(): Promise<boolean> {
-    const name = tab.richPrompt?.workspaceName;
-    if (!name) {
-      explicitCloseSession();
-      return true;
-    }
-    const rp = tab.richPrompt;
-    if (rp) {
-      rp.workspaceBusy = true;
-      rp.workspaceError = null;
-    }
-    let resp: RichPromptCloseResponse;
-    try {
-      resp = await api.closeRichPromptWorkspace(name, tab.terminalSessionId ?? "");
-    } catch (err) {
-      if (tab.richPrompt?.workspaceName === name) {
-        tab.richPrompt.phase = "broken";
-        tab.richPrompt.workspaceError = richPromptErrorMessage(err);
-        tab.richPrompt.workspaceBusy = false;
-      }
-      setTransientStatus(`rich-prompt close failed: ${richPromptErrorMessage(err)}`);
-      scheduleTerminalSessionSave();
-      return false;
-    }
-    if (resp.phase !== "discarded") {
-      if (tab.richPrompt?.workspaceName === name) {
-        tab.richPrompt.phase = "broken";
-        tab.richPrompt.workspaceError = resp.error ?? "rich prompt close failed";
-        tab.richPrompt.workspaceBusy = false;
-      }
-      setTransientStatus(`rich-prompt close failed: ${resp.error ?? "unknown error"}`);
-      scheduleTerminalSessionSave();
-      return false;
-    }
-    if (tab.richPrompt?.workspaceName === name) {
-      tab.richPrompt.phase = "discarded";
-      tab.richPrompt.open = false;
-      tab.richPrompt.workspaceBusy = false;
-      tab.richPrompt.workspaceError = null;
-    }
-    tab.watcher = undefined;
-    clearTerminalSession(tab);
-    scheduleTerminalSessionSave();
-    return true;
-  }
-
-  function watcherStarted(path: string): void {
-    tab.watcher = {
-      path,
-      events: [],
-      seenIds: [],
-      unread: false,
-      trayExpanded: false,
-    };
-    scheduleTerminalSessionSave();
-    void refreshWatcherEvents();
-  }
-
-  function watcherStopped(): void {
-    tab.watcher = undefined;
-    scheduleTerminalSessionSave();
-  }
-
-  function watcherDetached(): void {
-    tab.watcher = undefined;
-    // `fullstack-a-86`: auto-dismiss the reload-detected
-    // "watcher detached" toast — informational; user
-    // doesn't need to act on it.
-    setTransientStatus("watcher detached on reload");
-    scheduleTerminalSessionSave();
-  }
-
-  async function refreshWatcherEvents(): Promise<void> {
-    if (!tab.watcher) return;
-    if (!tab.terminalSessionId) return;
-    tab.watcher.loading = true;
-    try {
-      const events = await readWatcherEvents(tab.terminalSessionId);
-      const prior = new Set(tab.watcher.seenIds);
-      const ids = events.map((event) => event.id);
-      const hasNew = ids.some((id) => !prior.has(id));
-      tab.watcher.events = events;
-      tab.watcher.seenIds = ids;
-      tab.watcher.error = undefined;
-      if (hasNew && !tab.richPrompt?.open) tab.watcher.unread = true;
-    } catch (err) {
-      // systacean-14: server-side may report "terminal watcher is not
-      // attached" (HTTP 400) when the SerTab was restored from
-      // session storage after a serve restart but the new server has
-      // no watcher attached for this session. Mirror BubbleOverlay's
-      // detach detection so the pill clears on first refresh instead
-      // of leaving a permanent red toast on the UI.
-      const raw = (err as Error).message || "";
-      if (/409|404|watcher|not found|not attached|conflict/i.test(raw)) {
-        watcherDetached();
-        return;
-      }
-      tab.watcher.error = `watch read failed: ${raw || "unknown error"}`;
-    } finally {
-      if (tab.watcher) tab.watcher.loading = false;
-    }
-  }
-
-  function maybeRefreshWatcher(bytes: Uint8Array): void {
-    if (!tab.watcher) return;
-    const text = outputDecoder.decode(bytes, { stream: true });
-    if (/\bpoke\r?\n/.test(text)) void refreshWatcherEvents();
   }
 
   function runFind(next: boolean): void {
@@ -1634,39 +1323,6 @@
     if (t.closest(".terminal-tab-menu-bubble")) return;
     if (t.closest(".tab")) return;
     closeTabMenu();
-  }
-
-  function focusTerminalTab(tabId: string): void {
-    for (const node of Object.values(layout.nodes)) {
-      if (node.kind !== "leaf") continue;
-      if (!node.tabs.some((candidate) => candidate.id === tabId)) continue;
-      node.activeTabId = tabId;
-      layout.activePaneId = node.id;
-      closeTabMenu();
-      return;
-    }
-  }
-
-  function focusTerminalSession(sessionId: string | undefined): void {
-    if (!sessionId) return;
-    const found = allTerminalTabs().find((candidate) => candidate.terminalSessionId === sessionId);
-    if (found) focusTerminalTab(found.id);
-  }
-
-  function focusTerminalName(name: string | undefined): void {
-    const target = name?.trim();
-    if (!target) return;
-    const found = allTerminalTabs().find((candidate) => terminalTabName(candidate) === target);
-    if (found) focusTerminalTab(found.id);
-  }
-
-  function spawnCreated(response: TerminalSpawnResponse, name: string): void {
-    openTerminalInActivePane({
-      title: response.tab_label || name,
-      sessionId: response.session,
-      controlledTerminal: true,
-    });
-    scheduleTerminalSessionSave();
   }
 
   function toggleAllBroadcastTargets(): void {
@@ -1903,12 +1559,12 @@
           <span class="mbtn-chord">{chordFor("app.graph.toggle") ?? ""}</span>
         </button>
         <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={toggleRichPromptFromMenu}>
+        <button class="mbtn" onclick={toggleTeamWorkFromMenu}>
           <span class="mbtn-icon">
             <MessageSquare size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
           <span class="mbtn-label">
-            {tab.richPrompt?.open ? "Hide Rich Prompt" : "Show Rich Prompt"}
+            {tab.teamWork?.open ? "Hide Team Work" : "Show Team Work"}
           </span>
           <span class="mbtn-chord">
             {chordFor("app.terminal.richPrompt") ?? ""}
@@ -2017,30 +1673,21 @@
       />
     </div>
   {/if}
-  {#if tab.richPrompt?.open}
-    {#if tab.watcher}
-      <BubbleOverlay
-        watcher={tab.watcher}
-        sessionId={tab.terminalSessionId}
-        onRefresh={refreshWatcherEvents}
-        onWatcherDetached={watcherDetached}
-        onOpenTerminal={(event) => {
-          focusTerminalSession(event.session);
-          focusTerminalName(event.tab_label ?? event.from);
-        }}
-        onQuoteToPrompt={(markdown) => quoteIntoRichPrompt(markdown)}
-      />
-    {/if}
-    <TerminalRichPrompt
-      prompt={tab.richPrompt}
-      onSubmit={submitRichPrompt}
+  <!-- Phase-13 round-2: the bubble overlay is a self-contained
+       static example. It reads its own visibility (the bubbleStub
+       rune, flipped by the Team Work right-click menu) and the
+       persisted stack/tray layout preference, so it carries no
+       props and is mounted unconditionally rather than gated on the
+       Team Work prompt being open. -->
+  <BubbleOverlay />
+  {#if tab.teamWork?.open}
+    <TeamWork
+      prompt={tab.teamWork}
+      onSubmit={submitTeamWork}
       terminalSessionId={tab.terminalSessionId}
-      watcherPath={tab.watcher?.path ?? null}
-      onSpawned={spawnCreated}
-      {bubbleCount}
     />
   {/if}
-  <!-- `fullstack-a-4`: when the rich prompt is open we reserve
+  <!-- `fullstack-a-4`: when the Team Work prompt is open we reserve
        space at the bottom of the terminal-host equal to the
        prompt's current height plus the resize-handle gap. The
        xterm ResizeObserver picks the new size up and calls
@@ -2048,7 +1695,7 @@
        above the prompt instead of being painted over.
 
        `fullstack-a-29`: prefer the prompt's measured runtime
-       height (written by a ResizeObserver in TerminalRichPrompt)
+       height (written by a ResizeObserver in the Team Work editor)
        over the user-resized `heightPx` so the reactor tracks the
        `fullstack-a-24` collapse transition. When collapsed the
        CSS `height: auto` branch shrinks the prompt to header-
@@ -2060,8 +1707,8 @@
   <div
     class="terminal-host"
     bind:this={host}
-    style:margin-bottom={tab.richPrompt?.open
-      ? `${(tab.richPrompt.measuredHeightPx ?? tab.richPrompt.heightPx ?? 320) + 12}px`
+    style:margin-bottom={tab.teamWork?.open
+      ? `${(tab.teamWork.measuredHeightPx ?? tab.teamWork.heightPx ?? 320) + 12}px`
       : null}
   ></div>
 </div>

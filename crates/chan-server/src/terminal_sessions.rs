@@ -8,10 +8,8 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-use chrono::Local;
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use rand::RngCore;
@@ -20,14 +18,12 @@ use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
 use crate::config::TerminalConfig;
-use crate::event_watcher::{AgentEvent, EventWatcherHandle, WatcherFailure};
 use crate::signal::now_unix_secs;
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
 const BROADCAST_CAP: usize = 1024;
-const AGENT_ECHO_REPLAY_CAP: usize = 128;
 const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 const ALT_SCREEN_EXIT: &[u8] = b"\x1b[?1049l";
 const ALT_SCREEN_TAIL_BYTES: usize = ALT_SCREEN_ENTER.len() - 1;
@@ -36,42 +32,6 @@ const TERMINAL_FD_HEADROOM: u64 = 32;
 const TERMINAL_SESSION_FD_ESTIMATE: u64 = 8;
 
 pub const ALT_SCREEN_ATTACH_PRELUDE: &[u8] = b"\x1b[?1049h\x1b[2J\x1b[H";
-
-/// `fullstack-b-13`: per-session submit-mode toggle. Workspaces the
-/// trailing-byte choice when `dispatch_agent_event` writes a
-/// reply-notification "poke" into the receiving session's PTY.
-///
-/// * `Shell` (default): `b"poke\n"`. Today's behaviour. A shell
-///   sees the trailing `\n` as Enter and submits the line.
-/// * `Agent`: `b"poke\x1b[27;9;13~"`. Claude Code v2.1.145 reads
-///   `\x1b[27;9;13~` (xterm modifyOtherKeys CSI for Cmd+Enter) as
-///   the submit chord; bare `\n` lands as a newline in its
-///   multi-line draft and never submits. Probed live 2026-05-20;
-///   reproducer + data table at
-///   `docs/journals/phase-8/fullstack-b/fullstack-b-13.md`.
-///
-/// codex v0.130.0 diverges (submits on `\r`, ignores
-/// `\x1b[27;9;13~` silently). Per @@Alex's "if codex fails it's
-/// fine, just want the signal" directive, we ship single-chord
-/// with Claude Code's encoding; per-agent encoding map is deferred
-/// to Round-3 Track 5.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum SubmitMode {
-    #[default]
-    Shell,
-    Agent,
-}
-
-impl SubmitMode {
-    /// Trailing-byte sequence appended after the "poke" notification
-    /// literal in `dispatch_agent_event`.
-    fn submit_chord(self) -> &'static [u8] {
-        match self {
-            SubmitMode::Shell => b"\n",
-            SubmitMode::Agent => b"\x1b[27;9;13~",
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct RegistryConfig {
@@ -85,7 +45,6 @@ pub struct RegistryConfig {
 pub struct Registry {
     config: RegistryConfig,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
-    watcher_dropped_events: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,14 +56,6 @@ pub struct CreateOptions {
     pub cwd: Option<PathBuf>,
     pub command: Option<String>,
     pub env: BTreeMap<String, String>,
-    pub preflight: Option<PreflightConfig>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PreflightConfig {
-    pub dir: PathBuf,
-    pub from: String,
-    pub to: String,
 }
 
 #[derive(Debug)]
@@ -165,41 +116,14 @@ impl CloseReason {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum WatcherStatus {
-    Detached,
-    Attached {
-        dir: String,
-    },
-    Failed {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        dir: Option<String>,
-        message: String,
-    },
-}
-
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     Output(Vec<u8>),
-    Activity {
-        bytes_since_focus: u64,
-    },
+    Activity { bytes_since_focus: u64 },
     Resize(PtySize),
     Exit(u32),
     Error(String),
     Closed(CloseReason),
-    /// Agent event payload that the terminal WebSocket serializes
-    /// as `agent_event_echo`. The SPA decodes the bytes and routes
-    /// them through the existing input/broadcast path.
-    AgentEventEcho(AgentEventEcho),
-}
-
-#[derive(Debug, Clone)]
-pub struct AgentEventEcho {
-    pub seq: u64,
-    pub event_id: String,
-    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -211,7 +135,6 @@ pub struct AttachHandle {
     pub seq: u64,
     pub missed_bytes: u64,
     pub alt_screen: bool,
-    pub agent_echo_replay: Vec<AgentEventEcho>,
 }
 
 impl AttachHandle {
@@ -255,7 +178,6 @@ impl Registry {
         Self {
             config,
             sessions: Mutex::new(HashMap::new()),
-            watcher_dropped_events: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -269,7 +191,7 @@ impl Registry {
         let session =
             Session::spawn(id.clone(), self.config.clone(), opts).map_err(CreateError::Spawn)?;
         sessions.insert(id.clone(), session.clone());
-        Ok(session.attach(Some(0), None))
+        Ok(session.attach(Some(0)))
     }
 
     pub fn restart(
@@ -328,15 +250,10 @@ impl Registry {
 
     #[cfg(test)]
     pub fn attach(&self, id: &str, since: Option<u64>) -> Option<AttachHandle> {
-        self.attach_for_ws(id, since, None)
+        self.attach_for_ws(id, since)
     }
 
-    pub fn attach_for_ws(
-        &self,
-        id: &str,
-        since: Option<u64>,
-        agent_echo_since: Option<u64>,
-    ) -> Option<AttachHandle> {
+    pub fn attach_for_ws(&self, id: &str, since: Option<u64>) -> Option<AttachHandle> {
         let session = self
             .sessions
             .lock()
@@ -346,7 +263,7 @@ impl Registry {
         if session.closed.load(Ordering::Relaxed) {
             return None;
         }
-        Some(session.attach(since, agent_echo_since))
+        Some(session.attach(since))
     }
 
     #[cfg(test)]
@@ -356,18 +273,17 @@ impl Registry {
         since: Option<u64>,
         opts: CreateOptions,
     ) -> Result<AttachHandle, CreateError> {
-        self.get_or_create_for_ws(id, since, None, opts)
+        self.get_or_create_for_ws(id, since, opts)
     }
 
     pub fn get_or_create_for_ws(
         &self,
         id: Option<&str>,
         since: Option<u64>,
-        agent_echo_since: Option<u64>,
         opts: CreateOptions,
     ) -> Result<AttachHandle, CreateError> {
         if let Some(id) = id {
-            if let Some(handle) = self.attach_for_ws(id, since, agent_echo_since) {
+            if let Some(handle) = self.attach_for_ws(id, since) {
                 return Ok(handle);
             }
         }
@@ -407,130 +323,6 @@ impl Registry {
         for session in sessions {
             session.close(reason);
         }
-    }
-
-    pub fn set_watcher(self: &Arc<Self>, id: &str, dir: PathBuf) -> anyhow::Result<bool> {
-        let session = self
-            .sessions
-            .lock()
-            .expect("terminal registry poisoned")
-            .get(id)
-            .cloned();
-        let Some(session) = session else {
-            return Ok(false);
-        };
-        let weak = Arc::downgrade(self);
-        let dispatch = Arc::new(move |event: AgentEvent| {
-            if let Some(registry) = Weak::upgrade(&weak) {
-                registry.dispatch_agent_event(event);
-            }
-        });
-        let session_for_failure = Arc::downgrade(&session);
-        let on_failure: Arc<WatcherFailure> = Arc::new(move |message: String| {
-            if let Some(session) = session_for_failure.upgrade() {
-                session.mark_watcher_failed(message);
-            }
-        });
-        let watcher = EventWatcherHandle::start(
-            dir.clone(),
-            dispatch,
-            self.watcher_dropped_events.clone(),
-            Some(on_failure),
-        )?;
-        *session
-            .watcher_dir
-            .lock()
-            .expect("terminal watcher dir poisoned") = Some(dir);
-        session.clear_watcher_error();
-        *session.watcher.lock().expect("terminal watcher poisoned") = Some(watcher);
-        Ok(true)
-    }
-
-    pub fn clear_watcher(&self, id: &str) -> bool {
-        let session = self
-            .sessions
-            .lock()
-            .expect("terminal registry poisoned")
-            .get(id)
-            .cloned();
-        if let Some(session) = session {
-            let had_watcher = session
-                .watcher
-                .lock()
-                .expect("terminal watcher poisoned")
-                .take()
-                .is_some();
-            session
-                .watcher_dir
-                .lock()
-                .expect("terminal watcher dir poisoned")
-                .take();
-            session.clear_watcher_error();
-            had_watcher
-        } else {
-            false
-        }
-    }
-
-    pub fn watcher_status(&self, id: &str) -> Option<WatcherStatus> {
-        let session = self
-            .sessions
-            .lock()
-            .expect("terminal registry poisoned")
-            .get(id)
-            .cloned()?;
-        Some(session.watcher_status())
-    }
-
-    pub fn watcher_dir(&self, id: &str) -> Option<PathBuf> {
-        let session = self
-            .sessions
-            .lock()
-            .expect("terminal registry poisoned")
-            .get(id)
-            .cloned()?;
-        if session
-            .watcher
-            .lock()
-            .expect("terminal watcher poisoned")
-            .is_none()
-        {
-            return None;
-        }
-        let dir = session
-            .watcher_dir
-            .lock()
-            .expect("terminal watcher dir poisoned")
-            .clone();
-        dir
-    }
-
-    pub fn watcher_preflight_config(&self, id: &str, from: String) -> Option<PreflightConfig> {
-        let session = self
-            .sessions
-            .lock()
-            .expect("terminal registry poisoned")
-            .get(id)
-            .cloned()?;
-        if session
-            .watcher
-            .lock()
-            .expect("terminal watcher poisoned")
-            .is_none()
-        {
-            return None;
-        }
-        let dir = session
-            .watcher_dir
-            .lock()
-            .expect("terminal watcher dir poisoned")
-            .clone()?;
-        let to = session.tab_name.clone().unwrap_or_else(|| id.to_string());
-        Some(PreflightConfig { dir, from, to })
-    }
-
-    pub fn watcher_dropped_events(&self) -> u64 {
-        self.watcher_dropped_events.load(Ordering::Relaxed)
     }
 
     pub fn prune_idle(&self) -> usize {
@@ -593,102 +385,6 @@ impl Registry {
             .lock()
             .expect("terminal registry poisoned")
             .len()
-    }
-
-    fn dispatch_agent_event(&self, event: AgentEvent) {
-        if matches!(
-            event.event_type,
-            crate::event_watcher::AgentEventType::PreFlight
-        ) {
-            tracing::debug!(
-                id = %event.id,
-                from = %event.from,
-                to = %event.to,
-                "pre-flight event is UI-polled only"
-            );
-            return;
-        }
-        let Some(session) = self.find_agent_session(&event.to) else {
-            self.watcher_dropped_events.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!(
-                id = %event.id,
-                from = %event.from,
-                to = %event.to,
-                "dropping agent event with no matching terminal session"
-            );
-            return;
-        };
-        // TODO: wire /clear, /effort, and /fast automation here once
-        // @@Alex's richer control commands are cut for a later task.
-        //
-        // `fullstack-b-13`: trailing chord depends on the receiving
-        // session's submit-mode. Shell mode → `\n` (the original
-        // behaviour). Agent mode → `\x1b[27;9;13~` (Claude Code's
-        // xterm modifyOtherKeys Cmd+Enter chord, probed live
-        // 2026-05-20).
-        //
-        // systacean-21: rich-template echo when both `path` +
-        // `heading` are present (cache-bust mitigation for the
-        // bare-`poke` rate-limit pattern @@Alex hit daily). The
-        // template carries a wall-clock timestamp + the task
-        // location anchor so each poke is a unique input
-        // (cache-miss on the prompt-cache layer) + gives the
-        // agent immediate context. Falls back to bare `poke` when
-        // either field is missing (legacy events; survey types).
-        //
-        // systacean-33: swap from `session.send_input` (direct PTY
-        // write) to `session.broadcast(SessionEvent::AgentEventEcho)`.
-        // The WS layer serializes via `ServerFrame::AgentEventEcho`
-        // with a base64-encoded payload; the SPA decodes + writes
-        // via its existing `-a-31` broadcast layer (per `-a-92`).
-        // Routing through the SPA layer gives the bubble/event UI
-        // a single funnel for both agent events + manual keypresses
-        // — keeps the dispatch contract uniform across the wire.
-        let mode = session.submit_mode();
-        let poke_text = format_poke_text(event.path.as_deref(), event.heading.as_deref());
-        let chord = mode.submit_chord();
-        let mut bytes = Vec::with_capacity(poke_text.len() + chord.len());
-        bytes.extend_from_slice(poke_text.as_bytes());
-        bytes.extend_from_slice(chord);
-        session.emit_agent_event_echo(event.id, bytes);
-    }
-
-    /// `fullstack-b-13`: SPA-driven flip of a session's submit-mode.
-    /// Returns `true` when the session was found and updated;
-    /// `false` when the session id is unknown (the SPA may have a
-    /// stale handle after a session close + restart).
-    pub fn set_submit_mode(&self, session_id: &str, mode: SubmitMode) -> bool {
-        let sessions = self.sessions.lock().expect("terminal registry poisoned");
-        match sessions.get(session_id) {
-            Some(session) => {
-                session.set_submit_mode(mode);
-                true
-            }
-            None => false,
-        }
-    }
-
-    fn find_agent_session(&self, target: &str) -> Option<Arc<Session>> {
-        let normalized_target = normalize_agent_target(target)?;
-        let sessions = self.sessions.lock().expect("terminal registry poisoned");
-        let mut matches = sessions.values().filter(|session| {
-            session
-                .tab_name
-                .as_deref()
-                .and_then(normalize_agent_target)
-                .as_deref()
-                == Some(normalized_target.as_str())
-        });
-        let first = matches.next()?.clone();
-        if matches.next().is_some() {
-            tracing::warn!(
-                target,
-                normalized_target,
-                "dropping agent event with ambiguous terminal target"
-            );
-            return None;
-        }
-        Some(first)
     }
 }
 
@@ -761,8 +457,6 @@ struct Session {
     output_tx: broadcast::Sender<SessionEvent>,
     ring: Mutex<RingBuffer>,
     seq: AtomicU64,
-    agent_echo_ring: Mutex<VecDeque<AgentEventEcho>>,
-    agent_echo_seq: AtomicU64,
     last_activity: AtomicI64,
     attach_count: AtomicUsize,
     winsize: Mutex<PtySize>,
@@ -770,17 +464,7 @@ struct Session {
     bytes_since_focus: AtomicU64,
     in_alt_screen: AtomicBool,
     alt_screen_tail: Mutex<Vec<u8>>,
-    watcher: Mutex<Option<EventWatcherHandle>>,
-    watcher_dir: Mutex<Option<PathBuf>>,
-    watcher_error: Mutex<Option<String>>,
-    preflight: Mutex<Option<PreflightMonitor>>,
     closed: AtomicBool,
-    /// `fullstack-b-13`: per-session shell-vs-agent submit-mode
-    /// toggle. `true` ⇒ Agent; `false` ⇒ Shell (default). Set via
-    /// the SPA-driven `PUT /api/terminal/:session/submit-mode`
-    /// route; read by `dispatch_agent_event` to pick the trailing
-    /// chord bytes after the "poke" notification.
-    agent_mode: AtomicBool,
 }
 
 impl Session {
@@ -865,15 +549,12 @@ impl Session {
                 cwd: Some(cwd),
                 command: opts.command,
                 env: opts.env,
-                preflight: opts.preflight.clone(),
             },
             child_pid,
             command_tx,
             output_tx,
             ring: Mutex::new(RingBuffer::new(config.terminal.ring_bytes)),
             seq: AtomicU64::new(0),
-            agent_echo_ring: Mutex::new(VecDeque::new()),
-            agent_echo_seq: AtomicU64::new(0),
             last_activity: AtomicI64::new(now_unix_secs() as i64),
             attach_count: AtomicUsize::new(0),
             winsize: Mutex::new(opts.size),
@@ -881,12 +562,7 @@ impl Session {
             bytes_since_focus: AtomicU64::new(0),
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
-            watcher: Mutex::new(None),
-            watcher_dir: Mutex::new(None),
-            watcher_error: Mutex::new(None),
-            preflight: Mutex::new(opts.preflight.map(PreflightMonitor::new)),
             closed: AtomicBool::new(false),
-            agent_mode: AtomicBool::new(false),
         });
 
         {
@@ -979,7 +655,7 @@ impl Session {
         Ok(session)
     }
 
-    fn attach(self: Arc<Self>, since: Option<u64>, agent_echo_since: Option<u64>) -> AttachHandle {
+    fn attach(self: Arc<Self>, since: Option<u64>) -> AttachHandle {
         self.attach_count.fetch_add(1, Ordering::Relaxed);
         let rx = self.output_tx.subscribe();
         let alt_screen = self.in_alt_screen.load(Ordering::Relaxed);
@@ -992,7 +668,6 @@ impl Session {
                 .snapshot_since(since)
         };
         let seq = self.seq.load(Ordering::Relaxed);
-        let agent_echo_replay = self.agent_echo_replay_since(agent_echo_since);
         AttachHandle {
             id: self.id.clone(),
             session: self,
@@ -1001,7 +676,6 @@ impl Session {
             seq,
             missed_bytes,
             alt_screen,
-            agent_echo_replay,
         }
     }
 
@@ -1029,19 +703,6 @@ impl Session {
         self.bytes_since_focus.load(Ordering::Relaxed)
     }
 
-    fn submit_mode(&self) -> SubmitMode {
-        if self.agent_mode.load(Ordering::Relaxed) {
-            SubmitMode::Agent
-        } else {
-            SubmitMode::Shell
-        }
-    }
-
-    fn set_submit_mode(&self, mode: SubmitMode) {
-        self.agent_mode
-            .store(matches!(mode, SubmitMode::Agent), Ordering::Relaxed);
-    }
-
     fn request_redraw(&self) {
         let _ = self.command_tx.send(PtyCommand::Redraw);
     }
@@ -1063,15 +724,6 @@ impl Session {
         if self.closed.swap(true, Ordering::Relaxed) {
             return;
         }
-        self.watcher
-            .lock()
-            .expect("terminal watcher poisoned")
-            .take();
-        self.watcher_dir
-            .lock()
-            .expect("terminal watcher dir poisoned")
-            .take();
-        self.clear_watcher_error();
         self.broadcast(SessionEvent::Closed(reason));
         let _ = self.command_tx.send(PtyCommand::Kill);
     }
@@ -1083,22 +735,6 @@ impl Session {
         self.last_activity
             .store(now_unix_secs() as i64, Ordering::Relaxed);
         self.update_alt_screen(bytes);
-        let preflight = {
-            let mut monitor = self.preflight.lock().expect("terminal preflight poisoned");
-            let event = monitor.as_mut().and_then(|monitor| monitor.observe(bytes));
-            let exhausted = monitor
-                .as_ref()
-                .is_some_and(|monitor| monitor.lines_seen >= 8);
-            if event.is_some() || exhausted {
-                monitor.take();
-            }
-            event
-        };
-        if let Some(preflight) = preflight {
-            if let Err(e) = write_preflight_event(&preflight) {
-                tracing::warn!("failed to write terminal pre-flight event: {e}");
-            }
-        }
         let end_seq = {
             let mut ring = self.ring.lock().expect("terminal ring poisoned");
             ring.push(bytes);
@@ -1124,83 +760,6 @@ impl Session {
 
     fn broadcast(&self, event: SessionEvent) {
         let _ = self.output_tx.send(event);
-    }
-
-    fn emit_agent_event_echo(&self, event_id: String, bytes: Vec<u8>) {
-        let seq = self.agent_echo_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let echo = AgentEventEcho {
-            seq,
-            event_id,
-            bytes,
-        };
-        {
-            let mut ring = self
-                .agent_echo_ring
-                .lock()
-                .expect("terminal agent echo ring poisoned");
-            ring.push_back(echo.clone());
-            while ring.len() > AGENT_ECHO_REPLAY_CAP {
-                ring.pop_front();
-            }
-        }
-        self.broadcast(SessionEvent::AgentEventEcho(echo));
-    }
-
-    fn agent_echo_replay_since(&self, since: Option<u64>) -> Vec<AgentEventEcho> {
-        let since = since.unwrap_or(0);
-        self.agent_echo_ring
-            .lock()
-            .expect("terminal agent echo ring poisoned")
-            .iter()
-            .filter(|echo| echo.seq > since)
-            .cloned()
-            .collect()
-    }
-
-    fn watcher_status(&self) -> WatcherStatus {
-        let dir = self
-            .watcher_dir
-            .lock()
-            .expect("terminal watcher dir poisoned")
-            .clone();
-        if let Some(message) = self
-            .watcher_error
-            .lock()
-            .expect("terminal watcher error poisoned")
-            .clone()
-        {
-            return WatcherStatus::Failed {
-                dir: dir.map(|dir| dir.to_string_lossy().into_owned()),
-                message,
-            };
-        }
-        if self
-            .watcher
-            .lock()
-            .expect("terminal watcher poisoned")
-            .is_some()
-        {
-            return WatcherStatus::Attached {
-                dir: dir
-                    .map(|dir| dir.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            };
-        }
-        WatcherStatus::Detached
-    }
-
-    fn mark_watcher_failed(&self, message: String) {
-        *self
-            .watcher_error
-            .lock()
-            .expect("terminal watcher error poisoned") = Some(message);
-    }
-
-    fn clear_watcher_error(&self) {
-        self.watcher_error
-            .lock()
-            .expect("terminal watcher error poisoned")
-            .take();
     }
 
     fn update_alt_screen(&self, bytes: &[u8]) {
@@ -1235,51 +794,6 @@ impl Session {
             tail.extend_from_slice(&scan[scan.len() - keep..]);
         }
     }
-}
-
-/// systacean-21: build the rich poke template that
-/// `dispatch_agent_event` writes to the receiving agent's PTY.
-/// When both `path` + `heading` are present, returns
-/// `"Poke, it's <Weekday>, <day> <Month> at <HH:MM>. Check
-/// your task at <path>#<heading> and execute."`. Otherwise
-/// falls back to the bare `"poke"` string (legacy events;
-/// survey types where the path context doesn't apply).
-///
-/// The timestamp is system-local wall-clock per the task body's
-/// recommendation. Cache-bust on the prompt-cache layer relies
-/// on the timestamp + the path+heading combination being unique
-/// per poke; the architect-side workflow populates `path` +
-/// `heading` for the typical task-dispatch poke.
-fn format_poke_text(path: Option<&str>, heading: Option<&str>) -> String {
-    match (path, heading) {
-        (Some(p), Some(h)) => {
-            let now = Local::now();
-            // chrono format spec: `%a` = abbreviated weekday
-            // (Mon..Sun); `%-d` = day-of-month with no leading
-            // zero; `%b` = abbreviated month (Jan..Dec); `%H:%M`
-            // = zero-padded 24-hour HH:MM.
-            let ts = now.format("%a, %-d %b at %H:%M");
-            format!("Poke, it's {ts}. Check your task at {p}#{h} and execute.")
-        }
-        _ => "poke".to_string(),
-    }
-}
-
-fn normalize_agent_target(name: &str) -> Option<String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let bare = trimmed.strip_prefix("@@").unwrap_or(trimmed).trim();
-    if bare.is_empty() {
-        return None;
-    }
-    Some(
-        bare.chars()
-            .filter(|c| !c.is_ascii_whitespace() && *c != '-' && *c != '_')
-            .flat_map(char::to_lowercase)
-            .collect(),
-    )
 }
 
 fn path_inside_root(path: &Path, root: &Path) -> bool {
@@ -1338,106 +852,6 @@ fn command_builder(command: Option<&str>) -> CommandBuilder {
         cmd.args(["-lc", command]);
         cmd
     }
-}
-
-#[derive(Debug)]
-struct PreflightMonitor {
-    config: PreflightConfig,
-    pending: String,
-    lines_seen: usize,
-}
-
-#[derive(Debug)]
-struct PreflightEvent {
-    config: PreflightConfig,
-    line: String,
-}
-
-impl PreflightMonitor {
-    fn new(config: PreflightConfig) -> Self {
-        Self {
-            config,
-            pending: String::new(),
-            lines_seen: 0,
-        }
-    }
-
-    fn observe(&mut self, bytes: &[u8]) -> Option<PreflightEvent> {
-        self.pending.push_str(&String::from_utf8_lossy(bytes));
-        while let Some(pos) = self.pending.find('\n') {
-            let mut line: String = self.pending.drain(..=pos).collect();
-            line = line.trim_matches(&['\r', '\n'][..]).to_string();
-            self.lines_seen += 1;
-            if preflight_line_matches(&line) {
-                return Some(PreflightEvent {
-                    config: self.config.clone(),
-                    line,
-                });
-            }
-            if self.lines_seen >= 8 {
-                return None;
-            }
-        }
-        if self.pending.len() > 4096 {
-            self.lines_seen += 1;
-            let line = std::mem::take(&mut self.pending);
-            if preflight_line_matches(&line) {
-                return Some(PreflightEvent {
-                    config: self.config.clone(),
-                    line,
-                });
-            }
-        }
-        None
-    }
-}
-
-fn preflight_line_matches(line: &str) -> bool {
-    let line = line.to_ascii_lowercase();
-    [
-        "please log in",
-        "authentication required",
-        "not authenticated",
-        "gemini setup required",
-        "claude setup",
-        "login required",
-    ]
-    .iter()
-    .any(|needle| line.contains(needle))
-}
-
-#[derive(Serialize)]
-struct PreflightEventBody<'a> {
-    id: String,
-    #[serde(rename = "type")]
-    event_type: &'static str,
-    from: &'a str,
-    to: &'a str,
-    note: &'a str,
-}
-
-fn write_preflight_event(event: &PreflightEvent) -> std::io::Result<()> {
-    let id = format!("pre-flight-{:016x}", rand::random::<u64>());
-    let body = PreflightEventBody {
-        id: id.clone(),
-        event_type: "pre-flight",
-        from: &event.config.from,
-        to: &event.config.to,
-        note: &event.line,
-    };
-    let bytes = serde_json::to_vec(&body)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    let final_path = event.config.dir.join(format!("{id}.md"));
-    let tmp_path = event
-        .config
-        .dir
-        .join(format!(".{id}-{:016x}.tmp", rand::random::<u64>()));
-    let result = (|| {
-        std::fs::write(&tmp_path, bytes)?;
-        std::fs::rename(&tmp_path, &final_path)
-    })();
-    let _ = std::fs::remove_file(&tmp_path);
-    result
 }
 
 fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
@@ -1682,15 +1096,12 @@ mod tests {
                 cwd: None,
                 command: None,
                 env: Default::default(),
-                preflight: None,
             },
             child_pid: None,
             command_tx,
             output_tx,
             ring: Mutex::new(RingBuffer::new(ring_bytes)),
             seq: AtomicU64::new(0),
-            agent_echo_ring: Mutex::new(VecDeque::new()),
-            agent_echo_seq: AtomicU64::new(0),
             last_activity: AtomicI64::new(now_unix_secs() as i64),
             attach_count: AtomicUsize::new(0),
             winsize: Mutex::new(test_size()),
@@ -1698,12 +1109,7 @@ mod tests {
             bytes_since_focus: AtomicU64::new(0),
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
-            watcher: Mutex::new(None),
-            watcher_dir: Mutex::new(None),
-            watcher_error: Mutex::new(None),
-            preflight: Mutex::new(None),
             closed: AtomicBool::new(false),
-            agent_mode: AtomicBool::new(false),
         })
     }
 
@@ -1719,31 +1125,6 @@ mod tests {
                 Ok(Ok(SessionEvent::Output(data))) => out.push_str(&String::from_utf8_lossy(&data)),
                 Ok(Ok(_)) => {}
                 Ok(Err(_)) | Err(_) => return out,
-            }
-        }
-    }
-
-    /// systacean-33: collect the next `AgentEventEcho` payload from
-    /// the session's broadcast channel. Returns `None` on timeout.
-    /// Replaces `collect_until(handle, "poke", ...)` for dispatch
-    /// tests post-`-33`: the dispatch path no longer writes to the
-    /// PTY (no echo to read); it broadcasts an event the WS layer
-    /// serializes as `agent_event_echo`. Tests now read the bytes
-    /// directly + decode for substring matching.
-    async fn collect_agent_event_echo(
-        session: &mut AttachHandle,
-        timeout: Duration,
-    ) -> Option<AgentEventEcho> {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if tokio::time::Instant::now() >= deadline {
-                return None;
-            }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            match tokio::time::timeout(remaining, session.rx.recv()).await {
-                Ok(Ok(SessionEvent::AgentEventEcho(echo))) => return Some(echo),
-                Ok(Ok(_)) => {}
-                Ok(Err(_)) | Err(_) => return None,
             }
         }
     }
@@ -1798,7 +1179,7 @@ mod tests {
     #[tokio::test]
     async fn activity_event_fires_on_first_unfocused_output_and_clears_on_focus() {
         let session = test_session_with_ring(1024);
-        let mut attached = session.clone().attach(Some(0), None);
+        let mut attached = session.clone().attach(Some(0));
 
         session.record_output(b"one");
         let event = tokio::time::timeout(Duration::from_secs(1), attached.rx.recv())
@@ -1859,18 +1240,18 @@ mod tests {
     fn alt_screen_active_skips_replay_until_exit() {
         let session = test_session_with_ring(1024);
         session.record_output(b"before alt\n");
-        let attached = session.clone().attach(Some(0), None);
+        let attached = session.clone().attach(Some(0));
         assert_eq!(attached.replay.concat(), b"before alt\n");
         drop(attached);
 
         session.record_output(b"\x1b[?1049hdraw tui frame");
-        let attached = session.clone().attach(Some(0), None);
+        let attached = session.clone().attach(Some(0));
         assert!(attached.replay.is_empty());
         assert_eq!(attached.missed_bytes, 0);
         drop(attached);
 
         session.record_output(b"\x1b[?1049lback to shell\n");
-        let attached = session.attach(Some(0), None);
+        let attached = session.attach(Some(0));
         assert!(!attached.replay.is_empty());
         assert!(String::from_utf8_lossy(&attached.replay.concat()).contains("back to shell"));
     }
@@ -1948,7 +1329,6 @@ mod tests {
                 cwd: None,
                 command: None,
                 env: Default::default(),
-                preflight: None,
             })
             .unwrap();
         let id = handle.id().to_string();
@@ -1971,7 +1351,6 @@ mod tests {
                 cwd: None,
                 command: None,
                 env: Default::default(),
-                preflight: None,
             })
             .unwrap();
         let err = registry
@@ -1983,7 +1362,6 @@ mod tests {
                 cwd: None,
                 command: None,
                 env: Default::default(),
-                preflight: None,
             })
             .unwrap_err();
         assert!(matches!(err, CreateError::Capped));
@@ -2007,7 +1385,6 @@ mod tests {
                 cwd: None,
                 command: None,
                 env: Default::default(),
-                preflight: None,
             })
             .unwrap();
         let first_id = first.id().to_string();
@@ -2024,7 +1401,6 @@ mod tests {
                     cwd: None,
                     command: None,
                     env: Default::default(),
-                    preflight: None,
                 },
             )
             .unwrap();
@@ -2047,7 +1423,6 @@ mod tests {
                 cwd: None,
                 command: None,
                 env: Default::default(),
-                preflight: None,
             })
             .unwrap();
         let second = registry
@@ -2059,7 +1434,6 @@ mod tests {
                 cwd: None,
                 command: None,
                 env: Default::default(),
-                preflight: None,
             })
             .unwrap();
 
@@ -2075,7 +1449,6 @@ mod tests {
                     cwd: None,
                     command: None,
                     env: Default::default(),
-                    preflight: None,
                 },
             )
             .unwrap();
@@ -2086,55 +1459,6 @@ mod tests {
         registry.close(first.id(), CloseReason::Explicit);
         registry.close(second.id(), CloseReason::Explicit);
         registry.close(third.id(), CloseReason::Explicit);
-    }
-
-    #[test]
-    fn watcher_dir_tracks_active_watcher_lifecycle() {
-        let registry = Arc::new(Registry::new(test_config(1024, 4, 10)));
-        let handle = registry
-            .create(CreateOptions {
-                size: test_size(),
-                tab_name: Some("watch".into()),
-                window_id: Some("window-a".into()),
-                mcp_env: true,
-                cwd: None,
-                command: None,
-                env: Default::default(),
-                preflight: None,
-            })
-            .unwrap();
-        let id = handle.id().to_string();
-        let dir = tempfile::tempdir().expect("watch dir");
-
-        assert!(registry.watcher_dir(&id).is_none());
-        assert_eq!(registry.watcher_status(&id), Some(WatcherStatus::Detached));
-        assert!(registry
-            .set_watcher(&id, dir.path().to_path_buf())
-            .expect("set watcher"));
-        assert_eq!(registry.watcher_dir(&id), Some(dir.path().to_path_buf()));
-        assert!(matches!(
-            registry.watcher_status(&id),
-            Some(WatcherStatus::Attached { .. })
-        ));
-        assert!(registry.clear_watcher(&id));
-        assert!(registry.watcher_dir(&id).is_none());
-        assert_eq!(registry.watcher_status(&id), Some(WatcherStatus::Detached));
-        registry.close(&id, CloseReason::Explicit);
-        assert!(registry.watcher_status(&id).is_none());
-    }
-
-    #[test]
-    fn watcher_status_reports_session_failure() {
-        let session = test_session_with_ring(1024);
-        session.mark_watcher_failed("provider error".into());
-
-        assert_eq!(
-            session.watcher_status(),
-            WatcherStatus::Failed {
-                dir: None,
-                message: "provider error".into(),
-            }
-        );
     }
 
     #[tokio::test]
@@ -2155,7 +1479,6 @@ mod tests {
                 cwd: None,
                 command: Some("printf 'TERM=<%s>\\n' \"$TERM\"".into()),
                 env: Default::default(),
-                preflight: None,
             })
             .unwrap();
 
@@ -2165,498 +1488,6 @@ mod tests {
             "PTY did not echo configured TERM: {out:?}"
         );
         registry.close(handle.id(), CloseReason::Explicit);
-    }
-
-    #[tokio::test]
-    async fn dispatch_agent_event_writes_poke_to_matching_tab() {
-        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
-        let mut handle = registry
-            .create(CreateOptions {
-                size: test_size(),
-                tab_name: Some("Systacean".into()),
-                window_id: None,
-                mcp_env: true,
-                cwd: None,
-                command: None,
-                env: Default::default(),
-                preflight: None,
-            })
-            .unwrap();
-
-        registry.dispatch_agent_event(AgentEvent {
-            id: "event-1".into(),
-            event_type: crate::event_watcher::AgentEventType::Poke,
-            from: "@@Architect".into(),
-            to: "@@Systacean".into(),
-            topic: None,
-            questions: None,
-            standing_options: None,
-            scope: None,
-            answers: None,
-            scope_grant: None,
-            note: None,
-            path: None,
-            heading: None,
-        });
-
-        // systacean-33: the dispatch path now broadcasts an
-        // AgentEventEcho event instead of writing to the PTY. The
-        // SPA receives the WS frame + routes it through `-a-31`.
-        let echo = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
-            .await
-            .expect("agent_event_echo not emitted");
-        let text = String::from_utf8_lossy(&echo.bytes);
-        assert_eq!(echo.event_id, "event-1");
-        assert_eq!(echo.seq, 1);
-        assert!(
-            text.contains("poke"),
-            "agent_event_echo payload missing `poke`: {text:?}"
-        );
-        assert_eq!(registry.watcher_dropped_events(), 0);
-        registry.close(handle.id(), CloseReason::Explicit);
-    }
-
-    #[tokio::test]
-    async fn dispatch_agent_event_drops_ambiguous_tab_name_targets() {
-        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
-        let mut first = registry
-            .create(CreateOptions {
-                size: test_size(),
-                tab_name: Some("@@Agent".into()),
-                window_id: None,
-                mcp_env: true,
-                cwd: None,
-                command: None,
-                env: Default::default(),
-                preflight: None,
-            })
-            .unwrap();
-        let mut second = registry
-            .create(CreateOptions {
-                size: test_size(),
-                tab_name: Some("Agent".into()),
-                window_id: None,
-                mcp_env: true,
-                cwd: None,
-                command: None,
-                env: Default::default(),
-                preflight: None,
-            })
-            .unwrap();
-
-        registry.dispatch_agent_event(AgentEvent {
-            id: "event-ambiguous".into(),
-            event_type: crate::event_watcher::AgentEventType::Poke,
-            from: "@@Architect".into(),
-            to: "@@Agent".into(),
-            topic: None,
-            questions: None,
-            standing_options: None,
-            scope: None,
-            answers: None,
-            scope_grant: None,
-            note: None,
-            path: None,
-            heading: None,
-        });
-
-        assert_eq!(registry.watcher_dropped_events(), 1);
-        assert!(
-            collect_agent_event_echo(&mut first, Duration::from_millis(100))
-                .await
-                .is_none(),
-            "ambiguous target must not inject into first match"
-        );
-        assert!(
-            collect_agent_event_echo(&mut second, Duration::from_millis(100))
-                .await
-                .is_none(),
-            "ambiguous target must not inject into second match"
-        );
-        registry.close(first.id(), CloseReason::Explicit);
-        registry.close(second.id(), CloseReason::Explicit);
-    }
-
-    #[tokio::test]
-    async fn dispatch_agent_event_uses_chord_in_agent_mode() {
-        // `fullstack-b-13`: when the receiving session is in
-        // submit-mode = Agent, dispatch_agent_event appends Claude
-        // Code's xterm modifyOtherKeys Cmd+Enter chord
-        // (\x1b[27;9;13~) instead of a trailing \n. Probed live
-        // 2026-05-20 against Claude Code v2.1.145.
-        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
-        let mut handle = registry
-            .create(CreateOptions {
-                size: test_size(),
-                tab_name: Some("FullStackB".into()),
-                window_id: None,
-                mcp_env: true,
-                cwd: None,
-                command: None,
-                env: Default::default(),
-                preflight: None,
-            })
-            .unwrap();
-        let id = handle.id().to_string();
-
-        assert!(registry.set_submit_mode(&id, SubmitMode::Agent));
-
-        registry.dispatch_agent_event(AgentEvent {
-            id: "event-1".into(),
-            event_type: crate::event_watcher::AgentEventType::Poke,
-            from: "@@Architect".into(),
-            to: "@@FullStackB".into(),
-            topic: None,
-            questions: None,
-            standing_options: None,
-            scope: None,
-            answers: None,
-            scope_grant: None,
-            note: None,
-            path: None,
-            heading: None,
-        });
-
-        // systacean-33: post-WS-frame swap the dispatch broadcasts
-        // an AgentEventEcho carrying the raw bytes the legacy
-        // path would have written to the PTY. The agent-mode
-        // chord (\x1b[27;9;13~) appears VERBATIM in the payload
-        // — no PTY line discipline mangling — so the assertion
-        // becomes a direct byte-search instead of substring-
-        // against-shell-echo. Bonus: kills the macOS-specific
-        // PTY soft-wrap + caret-notation flakiness from prior
-        // smokes.
-        let echo = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
-            .await
-            .expect("agent_event_echo not emitted");
-        assert!(
-            echo.bytes
-                .windows(b"\x1b[27;9;13~".len())
-                .any(|w| w == b"\x1b[27;9;13~"),
-            "agent-mode dispatch did not include the chord bytes; got {:?}",
-            echo.bytes,
-        );
-        // Verify shell-mode `\n` did NOT slip in (chord replaces
-        // the newline, doesn't append to it).
-        assert!(
-            !echo.bytes.contains(&b'\n'),
-            "agent-mode dispatch still emitted a trailing \\n; got {:?}",
-            echo.bytes,
-        );
-        assert_eq!(registry.watcher_dropped_events(), 0);
-        registry.close(&id, CloseReason::Explicit);
-    }
-
-    #[tokio::test]
-    async fn dispatch_agent_event_treats_preflight_as_poll_only() {
-        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
-        let mut handle = registry
-            .create(CreateOptions {
-                size: test_size(),
-                tab_name: Some("Architect".into()),
-                window_id: None,
-                mcp_env: true,
-                cwd: None,
-                command: None,
-                env: Default::default(),
-                preflight: None,
-            })
-            .unwrap();
-
-        registry.dispatch_agent_event(AgentEvent {
-            id: "pre-flight-1".into(),
-            event_type: crate::event_watcher::AgentEventType::PreFlight,
-            from: "@@Spawned".into(),
-            to: "@@Architect".into(),
-            topic: None,
-            questions: None,
-            standing_options: None,
-            scope: None,
-            answers: None,
-            scope_grant: None,
-            note: Some("please log in".into()),
-            path: None,
-            heading: None,
-        });
-
-        assert_eq!(registry.watcher_dropped_events(), 0);
-        assert!(
-            collect_agent_event_echo(&mut handle, Duration::from_millis(100))
-                .await
-                .is_none(),
-            "pre-flight events should remain UI-polled and not inject into the PTY"
-        );
-        registry.close(handle.id(), CloseReason::Explicit);
-    }
-
-    #[test]
-    fn agent_event_echo_replays_for_late_attach() {
-        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
-        let handle = registry
-            .create(CreateOptions {
-                size: test_size(),
-                tab_name: Some("Systacean".into()),
-                window_id: None,
-                mcp_env: true,
-                cwd: None,
-                command: None,
-                env: Default::default(),
-                preflight: None,
-            })
-            .unwrap();
-        let id = handle.id().to_string();
-        drop(handle);
-
-        registry.dispatch_agent_event(AgentEvent {
-            id: "event-replay".into(),
-            event_type: crate::event_watcher::AgentEventType::Poke,
-            from: "@@Architect".into(),
-            to: "@@Systacean".into(),
-            topic: None,
-            questions: None,
-            standing_options: None,
-            scope: None,
-            answers: None,
-            scope_grant: None,
-            note: None,
-            path: None,
-            heading: None,
-        });
-
-        let replay_handle = registry
-            .attach_for_ws(&id, Some(0), Some(0))
-            .expect("reattach");
-        let replay = &replay_handle.agent_echo_replay;
-        assert_eq!(replay.len(), 1);
-        assert_eq!(replay[0].seq, 1);
-        assert_eq!(replay[0].event_id, "event-replay");
-        assert!(String::from_utf8_lossy(&replay[0].bytes).contains("poke"));
-
-        let replay_after_seen_handle = registry
-            .attach_for_ws(&id, Some(0), Some(replay[0].seq))
-            .expect("reattach after seen");
-        assert!(replay_after_seen_handle.agent_echo_replay.is_empty());
-        registry.close(&id, CloseReason::Explicit);
-    }
-
-    #[test]
-    fn set_submit_mode_flips_field_and_handles_missing_session() {
-        let registry = Registry::new(test_config(1024, 4, 10));
-        let handle = registry
-            .create(CreateOptions {
-                size: test_size(),
-                tab_name: None,
-                window_id: None,
-                mcp_env: false,
-                cwd: None,
-                command: None,
-                env: Default::default(),
-                preflight: None,
-            })
-            .unwrap();
-        let id = handle.id().to_string();
-
-        // Default is Shell.
-        let session = {
-            let sessions = registry.sessions.lock().expect("registry poisoned");
-            sessions.get(&id).cloned().expect("session in registry")
-        };
-        assert_eq!(session.submit_mode(), SubmitMode::Shell);
-
-        // Flip to Agent.
-        assert!(registry.set_submit_mode(&id, SubmitMode::Agent));
-        assert_eq!(session.submit_mode(), SubmitMode::Agent);
-
-        // Flip back to Shell.
-        assert!(registry.set_submit_mode(&id, SubmitMode::Shell));
-        assert_eq!(session.submit_mode(), SubmitMode::Shell);
-
-        // Unknown session id returns false (the SPA may carry a stale
-        // handle after a session close + restart; the route surfaces
-        // the false as a 404).
-        assert!(!registry.set_submit_mode("nonexistent", SubmitMode::Agent));
-
-        registry.close(&id, CloseReason::Explicit);
-    }
-
-    #[test]
-    fn submit_mode_chord_constants_match_probe_findings() {
-        // `fullstack-b-13`: shell chord is `\n` (Enter); agent chord
-        // is `\x1b[27;9;13~` (Claude Code v2.1.145 modifyOtherKeys
-        // Cmd+Enter). codex's `\r` is documented divergence; not
-        // tested here since the single-chord ship pins Claude Code's
-        // encoding.
-        assert_eq!(SubmitMode::Shell.submit_chord(), b"\n");
-        assert_eq!(SubmitMode::Agent.submit_chord(), b"\x1b[27;9;13~");
-        assert_eq!(SubmitMode::default(), SubmitMode::Shell);
-    }
-
-    #[tokio::test]
-    async fn dispatch_agent_event_writes_rich_template_when_path_and_heading_present() {
-        // systacean-21: when both `path` + `heading` are Some on
-        // the AgentEvent, dispatch_agent_event writes the rich
-        // template "Poke, it's <weekday>, <day> <month> at
-        // <HH:MM>. Check your task at <path>#<heading> and
-        // execute." instead of the bare "poke" literal. Each
-        // poke becomes a unique PTY input (cache-bust on the
-        // prompt-cache layer) + gives the agent immediate
-        // task-location context.
-        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
-        let mut handle = registry
-            .create(CreateOptions {
-                size: test_size(),
-                tab_name: Some("Systacean".into()),
-                window_id: None,
-                mcp_env: true,
-                cwd: None,
-                command: None,
-                env: Default::default(),
-                preflight: None,
-            })
-            .unwrap();
-
-        let task_path = "docs/journals/phase-8/systacean/systacean-21.md";
-        let heading = "2026-05-22-poke";
-        registry.dispatch_agent_event(AgentEvent {
-            id: "event-rich".into(),
-            event_type: crate::event_watcher::AgentEventType::Poke,
-            from: "@@Architect".into(),
-            to: "@@Systacean".into(),
-            topic: None,
-            questions: None,
-            standing_options: None,
-            scope: None,
-            answers: None,
-            scope_grant: None,
-            note: None,
-            path: Some(task_path.into()),
-            heading: Some(heading.into()),
-        });
-
-        // systacean-33: payload is broadcast verbatim as
-        // AgentEventEcho bytes (no PTY echo, no soft-wrap, no
-        // line-discipline mangling). The `-21`/`-26`/`-31` soft-
-        // wrap workarounds become unnecessary — kill the strips
-        // + read bytes directly. As a bonus, the cross-platform
-        // PTY-flake pattern that bit smokes -27/-29/-31/-32
-        // goes away for this test.
-        let echo = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
-            .await
-            .expect("agent_event_echo not emitted");
-        let text = String::from_utf8_lossy(&echo.bytes);
-        assert!(
-            text.contains("Poke, it's "),
-            "rich template missing prefix; got {text:?}"
-        );
-        let needle = format!("Check your task at {task_path}#{heading} and execute.");
-        assert!(
-            text.contains(&needle),
-            "rich template missing task-location anchor `{needle}`; got {text:?}"
-        );
-        registry.close(handle.id(), CloseReason::Explicit);
-    }
-
-    #[tokio::test]
-    async fn dispatch_agent_event_falls_back_to_bare_poke_when_path_missing() {
-        // systacean-21: when either `path` or `heading` is None,
-        // dispatch_agent_event falls back to the legacy bare
-        // "poke" literal. Covers: pre-`-21` event files that
-        // never carried path/heading; survey-type events where
-        // the path context doesn't apply. The submit chord
-        // append behaviour from -b-13 is preserved either way.
-        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
-        let mut handle = registry
-            .create(CreateOptions {
-                size: test_size(),
-                tab_name: Some("Systacean".into()),
-                window_id: None,
-                mcp_env: true,
-                cwd: None,
-                command: None,
-                env: Default::default(),
-                preflight: None,
-            })
-            .unwrap();
-
-        registry.dispatch_agent_event(AgentEvent {
-            id: "event-legacy".into(),
-            event_type: crate::event_watcher::AgentEventType::Poke,
-            from: "@@Architect".into(),
-            to: "@@Systacean".into(),
-            topic: None,
-            questions: None,
-            standing_options: None,
-            scope: None,
-            answers: None,
-            scope_grant: None,
-            note: None,
-            // heading is set but path is None → fallback per spec.
-            path: None,
-            heading: Some("ignored-without-path".into()),
-        });
-
-        // systacean-33: read AgentEventEcho directly (no PTY echo).
-        let echo = collect_agent_event_echo(&mut handle, Duration::from_secs(5))
-            .await
-            .expect("agent_event_echo not emitted");
-        let text = String::from_utf8_lossy(&echo.bytes);
-        assert!(
-            text.contains("poke"),
-            "legacy fallback should emit bare poke; got {text:?}"
-        );
-        assert!(
-            !text.contains("Check your task at"),
-            "legacy fallback must not emit the rich template; got {text:?}"
-        );
-        registry.close(handle.id(), CloseReason::Explicit);
-    }
-
-    #[test]
-    fn format_poke_text_emits_rich_template_with_chrono_spec() {
-        // systacean-21: pin the rich-template shape directly so
-        // the format spec doesn't drift away from the
-        // architect-side documentation in the task body. The
-        // exact timestamp is wall-clock so we don't assert on
-        // its value; we assert on the literal prefixes +
-        // path#heading anchor instead.
-        let out = super::format_poke_text(Some("path/to/task.md"), Some("2026-05-22-poke"));
-        assert!(out.starts_with("Poke, it's "), "got {out:?}");
-        assert!(
-            out.contains("Check your task at path/to/task.md#2026-05-22-poke and execute."),
-            "got {out:?}"
-        );
-        assert!(
-            !out.ends_with('\n'),
-            "trailing chord is added by the caller, not the helper; got {out:?}"
-        );
-
-        // Either missing field → bare "poke" (no template).
-        assert_eq!(super::format_poke_text(None, Some("h")), "poke");
-        assert_eq!(super::format_poke_text(Some("p"), None), "poke");
-        assert_eq!(super::format_poke_text(None, None), "poke");
-    }
-
-    #[test]
-    fn dispatch_agent_event_counts_unmatched_targets() {
-        let registry = Registry::new(test_config(4096, 4, 60));
-
-        registry.dispatch_agent_event(AgentEvent {
-            id: "event-1".into(),
-            event_type: crate::event_watcher::AgentEventType::Poke,
-            from: "@@Architect".into(),
-            to: "@@Missing".into(),
-            topic: None,
-            questions: None,
-            standing_options: None,
-            scope: None,
-            answers: None,
-            scope_grant: None,
-            note: None,
-            path: None,
-            heading: None,
-        });
-
-        assert_eq!(registry.watcher_dropped_events(), 1);
     }
 
     #[test]
@@ -2671,7 +1502,6 @@ mod tests {
                 cwd: None,
                 command: None,
                 env: Default::default(),
-                preflight: None,
             })
             .unwrap();
         let id = handle.id().to_string();
@@ -2697,7 +1527,6 @@ mod tests {
                 cwd: None,
                 command: None,
                 env: Default::default(),
-                preflight: None,
             })
             .unwrap();
         let mut second = registry.attach(first.id(), Some(first.seq)).unwrap();
@@ -2733,7 +1562,6 @@ mod tests {
                 cwd: None,
                 command: None,
                 env: Default::default(),
-                preflight: None,
             })
             .unwrap();
         let mut second = registry.attach(first.id(), Some(first.seq)).unwrap();

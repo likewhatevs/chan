@@ -1,109 +1,229 @@
-import { describe, expect, test } from "vitest";
-import richPrompt from "./TerminalRichPrompt.svelte?raw";
-import orchestrator from "../state/teamOrchestrator.svelte.ts?raw";
-import client from "../api/client.ts?raw";
+// @vitest-environment jsdom
 
-// `fullstack-a-79` slice 1: integration pins covering the
-// dialog → orchestrator handoff + the chan-server API wiring
-// for the team workspace endpoints.
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { api } from "../api/client";
+import { runTeamBootstrap } from "../state/teamOrchestrator.svelte";
+import type { TeamDialogConfig } from "../state/teamDialog.svelte";
+import {
+  allTerminalTabs,
+  layout,
+  terminalBroadcastMemberIds,
+  type LeafNode,
+  type TerminalTab,
+} from "../state/tabs.svelte";
 
-describe("fullstack-a-79 slice 1: TerminalRichPrompt onBootstrap dispatches the orchestrator", () => {
-  test("openNewTeamDialog passes onBootstrap → runTeamBootstrap", () => {
-    expect(richPrompt).toMatch(
-      /openGlobalTeamDialog\(\{[\s\S]{1,800}onBootstrap: async \(config\) => \{[\s\S]{1,400}await runTeamBootstrap\(config, terminalSessionId\);/,
-    );
+// phase-13-r2 `lane-a-A3`: lead-first bootstrap chain. The Team
+// Work Lead terminal ALREADY EXISTS (created at Cmd+P); the
+// orchestrator runs against it. These tests pin: config written,
+// lead launched FIRST into the existing tab (restart, no
+// respawn/close), workers spawned into new tabs, identity prompt
+// primed in the lead's embedded editor, and the final broadcast
+// membership set == {lead, workers} exactly.
+
+function leadTerminalTab(partial: Partial<TerminalTab> = {}): TerminalTab {
+  return {
+    kind: "terminal",
+    id: "lead-tab",
+    title: "Terminal",
+    createdAt: 1,
+    broadcastEnabled: false,
+    broadcastTargetIds: [],
+    terminalSessionId: "lead-session",
+    ...partial,
+  };
+}
+
+function resetLayoutWithLead(lead: TerminalTab): LeafNode {
+  const pane: LeafNode = {
+    kind: "leaf",
+    id: "pane-test",
+    tabs: [lead],
+    activeTabId: lead.id,
+  };
+  layout.rootId = pane.id;
+  layout.activePaneId = pane.id;
+  layout.nodes = { [pane.id]: pane };
+  layout.focusColor = "blue";
+  return pane;
+}
+
+// `layout.nodes` is a $state proxy: the orchestrator mutates the
+// PROXY of each tab, not the raw object passed to
+// resetLayoutWithLead. Re-read tabs from `allTerminalTabs()` (the
+// proxied source of truth) to observe rename / teamWork / broadcast
+// mutations.
+function tabFromLayout(id: string): TerminalTab {
+  const tab = allTerminalTabs().find((t) => t.id === id);
+  if (!tab) throw new Error(`tab ${id} not found`);
+  return tab;
+}
+
+function tabsConfig(): TeamDialogConfig {
+  return {
+    hostName: "Neo",
+    configMode: "new",
+    configPath: "/tmp/new-team-1/chan-team.toml",
+    size: 3,
+    autoPrefix: true,
+    members: [
+      { name: "Lead", command: "claude", env: "", isLead: true },
+      { name: "Worker1", command: "claude --resume", env: "", isLead: false },
+      { name: "Worker2", command: "codex", env: "", isLead: false },
+    ],
+    realEstate: { kind: "tabs" },
+  };
+}
+
+let spawnCounter = 0;
+
+function mockApi(): {
+  write: ReturnType<typeof vi.spyOn>;
+  restart: ReturnType<typeof vi.spyOn>;
+  spawn: ReturnType<typeof vi.spyOn>;
+} {
+  const write = vi
+    .spyOn(api, "writeTeamConfigFile")
+    .mockResolvedValue(undefined as unknown as void);
+  const restart = vi
+    .spyOn(api, "restartTerminal")
+    .mockResolvedValue(undefined as unknown as void);
+  spawnCounter = 0;
+  const spawn = vi.spyOn(api, "spawnTerminal").mockImplementation(async () => {
+    spawnCounter += 1;
+    return { session: `worker-session-${spawnCounter}`, tab_label: `w${spawnCounter}` };
   });
+  return { write, restart, spawn };
+}
 
-  test("runTeamBootstrap imported from state/teamOrchestrator.svelte", () => {
-    expect(richPrompt).toMatch(
-      /import \{ runTeamBootstrap \} from "\.\.\/state\/teamOrchestrator\.svelte";/,
-    );
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetLayoutWithLead(leadTerminalTab());
 });
 
-describe("fullstack-a-79 slice 1: orchestrator bootstrap chain", () => {
-  test("runTeamBootstrap walks teamCreate → placeTeamTemplates → teamLoad → spawnTerminal per worker", () => {
-    expect(orchestrator).toMatch(
-      /export async function runTeamBootstrap\([\s\S]{1,400}\): Promise<void> \{[\s\S]{1,4000}await api\.teamCreate\(wire\.team_name, wire\);[\s\S]{1,2000}await placeTeamTemplates\(wire\);[\s\S]{1,2000}await api\.teamLoad\(wire\.team_name\);[\s\S]{1,2000}await api\.spawnTerminal\(/,
-    );
+describe("runTeamBootstrap: lead-first flow", () => {
+  test("writes the chan-team.toml to the dialog's config path", async () => {
+    resetLayoutWithLead(leadTerminalTab());
+    const { write } = mockApi();
+    await runTeamBootstrap(tabsConfig(), {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0][0]).toBe("/tmp/new-team-1/chan-team.toml");
   });
 
-  test("lead member is skipped from spawn loop (host session is the lead's terminal)", () => {
-    // `fullstack-a-79` slice 4: loop now uses an indexed walk
-    // (`for (let i = 0; …)`) to look up the member's assigned
-    // pane id from the resolved real-estate map. The lead skip
-    // stays — host session IS the lead's terminal per
-    // addendum-b clarification #1.
-    expect(orchestrator).toMatch(
-      /for \(let i = 0; i < wire\.members\.length; i \+= 1\) \{[\s\S]{1,800}if \(m\.is_lead\) continue;/,
+  test("launches the LEAD agent into the existing tab via restart (no close/respawn)", async () => {
+    resetLayoutWithLead(leadTerminalTab());
+    const { restart } = mockApi();
+    const close = vi.spyOn(api, "closeTerminal");
+    await runTeamBootstrap(tabsConfig(), {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    // Lead is launched by restarting the EXISTING session with the
+    // lead command + env, never closed/respawned.
+    expect(restart).toHaveBeenCalledWith(
+      "lead-session",
+      expect.objectContaining({ name: "@@Lead", command: "claude" }),
     );
+    expect(close).not.toHaveBeenCalled();
+    // The lead tab is renamed in place (same tab id).
+    expect(tabFromLayout("lead-tab").title).toBe("@@Lead");
   });
 
-  test("each worker terminal opens in its resolved pane and is primed after preflight", () => {
-    // Phase 9 preflight spawns terminals first, then primes the
-    // rich prompt after the user confirms agents are ready.
-    expect(orchestrator).toMatch(
-      /const paneId = memberPaneIds\.workers\[i\] \?\? layout\.activePaneId;[\s\S]{1,400}const tab = openTerminalInPane\(paneId, \{[\s\S]{1,400}sessionId: response\.session,[\s\S]{1,200}title: response\.tab_label,[\s\S]{1,400}if \(tab\) spawnedWorkerTabs\.push\(tab\);/,
-    );
-    expect(orchestrator).toMatch(
-      /await confirmTeamPreflight\(wire\);[\s\S]{1,200}for \(const tab of spawnedWorkerTabs\) \{[\s\S]{1,120}primeTerminalRichPrompt\(tab, prompt\);/,
-    );
+  test("spawns one new tab per worker", async () => {
+    resetLayoutWithLead(leadTerminalTab());
+    const { spawn } = mockApi();
+    await runTeamBootstrap(tabsConfig(), {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(spawn.mock.calls[0][0]).toMatchObject({ name: "@@Worker1" });
+    expect(spawn.mock.calls[1][0]).toMatchObject({ name: "@@Worker2" });
+    // Lead tab + two worker tabs all live in the active pane (tabs
+    // real estate).
+    expect(allTerminalTabs()).toHaveLength(3);
   });
 
-  test("preflight confirmation is required before prompt staging", () => {
-    expect(orchestrator).toMatch(/import \{ uiConfirm \} from "\.\/confirm\.svelte";/);
-    expect(orchestrator).toMatch(/export async function confirmTeamPreflight/);
-    expect(orchestrator).toMatch(/confirmLabel: "Stage prompts"/);
+  test("primes the # Team work identity prompt into the lead's embedded editor", async () => {
+    resetLayoutWithLead(leadTerminalTab());
+    mockApi();
+    await runTeamBootstrap(tabsConfig(), {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    const lead = tabFromLayout("lead-tab");
+    expect(lead.teamWork?.open).toBe(true);
+    expect(lead.teamWork?.buffer).toContain("# Team work");
+    expect(lead.teamWork?.buffer).toContain("We are a team of 3");
+    expect(lead.teamWork?.buffer).toContain("Our host is @@Neo");
+    expect(lead.teamWork?.buffer).toContain("the team lead is @@Lead");
+    expect(lead.teamWork?.buffer).toContain("- @@Worker1");
+    expect(lead.teamWork?.buffer).toContain("- @@Worker2");
   });
 
-  test("split-pane real estate now WIRED (slice 4 — was scope-poked in slice 1)", () => {
-    // The slice-1 notify("Split-pane real estate not yet
-    // wired") is gone now that the orchestrator builds the
-    // grid via buildSplitGrid + maps members through
-    // resolveMemberPaneIds.
-    expect(orchestrator).not.toMatch(
-      /Split-pane real estate not yet wired/,
-    );
-    expect(orchestrator).toMatch(
-      /const memberPaneIds = resolveMemberPaneIds\(config\);/,
-    );
+  test("final broadcast membership == {lead, workers} exactly", async () => {
+    resetLayoutWithLead(leadTerminalTab());
+    mockApi();
+    await runTeamBootstrap(tabsConfig(), {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    const members = new Set(terminalBroadcastMemberIds(tabFromLayout("lead-tab")));
+    const all = allTerminalTabs();
+    const workerIds = all.filter((t) => t.id !== "lead-tab").map((t) => t.id);
+    // Lead + both workers are broadcast members; nothing else.
+    expect(members).toEqual(new Set(["lead-tab", ...workerIds]));
+    // Every team tab reads back as broadcast-enabled.
+    for (const tab of all) {
+      expect(tab.broadcastEnabled).toBe(true);
+    }
   });
 
-  test("focus restored to the lead's pane after the spawn loop", () => {
-    expect(orchestrator).toMatch(
-      /if \(leadPaneId\) setActivePane\(leadPaneId\);/,
-    );
+  test("pre-existing broadcast group is cleared before the team's set is applied", async () => {
+    // A stray terminal that was broadcasting before bootstrap must
+    // be force-cleared by the "Deselect all" step so it does not
+    // leak into the new team's broadcast set.
+    const lead = leadTerminalTab();
+    const stray: TerminalTab = {
+      kind: "terminal",
+      id: "stray",
+      title: "Stray",
+      createdAt: 1,
+      broadcastEnabled: true,
+      broadcastTargetIds: [],
+      terminalSessionId: "stray-session",
+    };
+    const pane: LeafNode = {
+      kind: "leaf",
+      id: "pane-test",
+      tabs: [lead, stray],
+      activeTabId: lead.id,
+    };
+    layout.rootId = pane.id;
+    layout.activePaneId = pane.id;
+    layout.nodes = { [pane.id]: pane };
+    layout.focusColor = "blue";
+    mockApi();
+    await runTeamBootstrap(tabsConfig(), {
+      leadTabId: "lead-tab",
+      leadPaneId: "pane-test",
+    });
+    // The stray is no longer in any broadcast group.
+    expect(tabFromLayout("stray").broadcastEnabled).toBe(false);
+    const members = new Set(terminalBroadcastMemberIds(tabFromLayout("lead-tab")));
+    expect(members.has("stray")).toBe(false);
   });
-});
 
-describe("fullstack-a-79 slice 1: api client team endpoints", () => {
-  test("teamCreate POSTs /api/teams with { name, config }", () => {
-    expect(client).toMatch(
-      /teamCreate: \(name: string, config: TeamConfigWire\) =>[\s\S]{1,200}req<TeamRefView>\("POST", "\/api\/teams", \{ name, config \}\),/,
-    );
-  });
-
-  test("teamLoad POSTs /api/teams/{name}/load", () => {
-    expect(client).toMatch(
-      /teamLoad: \(name: string\) =>[\s\S]{1,400}`\/api\/teams\/\$\{encodeURIComponent\(name\)\}\/load`/,
-    );
-  });
-
-  test("teamDuplicate POSTs /api/teams/{name}/duplicate with { new_name }", () => {
-    expect(client).toMatch(
-      /teamDuplicate: \(sourceName: string, newName: string\) =>[\s\S]{1,800}`\/api\/teams\/\$\{encodeURIComponent\(sourceName\)\}\/duplicate`,[\s\S]{1,400}\{ new_name: newName \}/,
-    );
-  });
-
-  test("teamListLoaded GETs /api/teams/loaded", () => {
-    expect(client).toMatch(
-      /teamListLoaded: \(\) =>[\s\S]{1,200}req<\{ teams: string\[\] \}>\("GET", "\/api\/teams\/loaded"\),/,
-    );
-  });
-
-  test("TeamConfigWire mirrors chan-workspace's snake_case shape", () => {
-    expect(client).toMatch(
-      /export interface TeamConfigWire \{[\s\S]{1,400}team_name: string;[\s\S]{1,80}host_name: string;[\s\S]{1,80}host_handle: string;[\s\S]{1,80}auto_prefix_at: boolean;[\s\S]{1,80}created_at: string;[\s\S]{1,200}members: TeamMemberWire\[\];/,
-    );
+  test("throws when the lead tab is missing (so the dialog surfaces the error)", async () => {
+    resetLayoutWithLead(leadTerminalTab());
+    mockApi();
+    await expect(
+      runTeamBootstrap(tabsConfig(), {
+        leadTabId: "does-not-exist",
+        leadPaneId: "pane-test",
+      }),
+    ).rejects.toThrow(/lead terminal not found/);
   });
 });

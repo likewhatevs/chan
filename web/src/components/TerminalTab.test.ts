@@ -11,6 +11,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 // import still sees the mocked xterm modules. Matches the non-flaky
 // TerminalRichPrompt.test.ts pattern.
 import TerminalTab from "./TerminalTab.svelte";
+import terminalSource from "./TerminalTab.svelte?raw";
 import type { TerminalTab as TerminalTabState } from "../state/tabs.svelte";
 import { closeTabMenu, openTabMenu } from "../state/tabMenu.svelte";
 
@@ -219,4 +220,73 @@ describe("TerminalTab menu", () => {
       expect(labels).toContain("Restart");
     },
   );
+
+  test("the Team Work toggle replaces the Rich Prompt entry", async () => {
+    const tab = terminalTab({
+      terminalSessionId: "term-session-1",
+      teamWork: { buffer: "", open: false },
+    });
+    await renderTerminal(tab, true);
+
+    openTabMenu(tab.id, { left: 0, top: 0, right: 0, bottom: 0 });
+    await tick();
+    await tick();
+
+    const labels = Array.from(document.body.querySelectorAll(".mbtn-label")).map(
+      (el) => (el.textContent || "").trim(),
+    );
+    expect(labels).toContain("Show Team Work");
+    expect(labels.some((label) => label.includes("Rich Prompt"))).toBe(false);
+  });
+});
+
+describe("TerminalTab Team Work revamp (source contract)", () => {
+  // Phase-13 round-2: the Team Work prompt and bubble overlay were
+  // rewritten. These pin the load-bearing structural changes that
+  // the runtime tests above don't reach (the prompt component is
+  // owned by another lane, so we assert the mount contract + the
+  // submit-reset behavior at the source level).
+
+  test("submitTeamWork unconditionally resets the draft buffer to empty", () => {
+    // Roadmap: every Cmd+Enter submit resets the draft back to
+    // empty. The pre-revamp build cleared the buffer only after a
+    // workspace-archive write confirmed; that path is gone.
+    expect(terminalSource).toMatch(/function submitTeamWork\(source: string\): void/);
+    expect(terminalSource).toMatch(/tab\.teamWork\.buffer = "";/);
+    // The conditional clear (`rp.buffer === bufferAtSubmit`) is gone.
+    expect(terminalSource).not.toMatch(/rp\.buffer === bufferAtSubmit/);
+  });
+
+  test("the client submit-chord logic is preserved", () => {
+    // Agent submit-mode still appends AGENT_SUBMIT_CHORD; shell mode
+    // still appends a trailing newline.
+    expect(terminalSource).toMatch(/teamWorkUsesAgentSubmit\(\)/);
+    expect(terminalSource).toMatch(/AGENT_SUBMIT_CHORD/);
+    expect(terminalSource).toMatch(/source\.endsWith\("\\n"\) \? source : `\$\{source\}\\n`/);
+  });
+
+  test("the TeamWork mount passes exactly the frozen three props", () => {
+    expect(terminalSource).toMatch(/<TeamWork\b/);
+    expect(terminalSource).toMatch(/prompt=\{tab\.teamWork\}/);
+    expect(terminalSource).toMatch(/onSubmit=\{submitTeamWork\}/);
+    expect(terminalSource).toMatch(/terminalSessionId=\{tab\.terminalSessionId\}/);
+    // Dropped props from the old TerminalRichPrompt mount.
+    expect(terminalSource).not.toMatch(/watcherPath=/);
+    expect(terminalSource).not.toMatch(/onSpawned=/);
+    expect(terminalSource).not.toMatch(/\{bubbleCount\}/);
+  });
+
+  test("the BubbleOverlay is mounted self-contained with no watcher props", () => {
+    expect(terminalSource).toMatch(/<BubbleOverlay \/>/);
+    expect(terminalSource).not.toMatch(/watcher=\{tab\.watcher\}/);
+    expect(terminalSource).not.toMatch(/onWatcherDetached=/);
+  });
+
+  test("the deleted watcher + rich-prompt-workspace plumbing is gone", () => {
+    expect(terminalSource).not.toMatch(/refreshWatcherEvents/);
+    expect(terminalSource).not.toMatch(/ensureRichPromptWorkspace/);
+    expect(terminalSource).not.toMatch(/persistRichPromptSubmission/);
+    expect(terminalSource).not.toMatch(/readWatcherEvents/);
+    expect(terminalSource).not.toMatch(/watcherPollTimer/);
+  });
 });

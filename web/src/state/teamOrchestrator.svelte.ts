@@ -1,63 +1,49 @@
-// `fullstack-a-79` slice 1: Team Bootstrap orchestrator.
+// phase-13-r2 `lane-a-A3`: Team Work bootstrap orchestrator.
 //
-// Walks the steps the addendum-b spec laid out for the Spawn agents
-// dialog's Bootstrap action. Slice 1 lands the core chain:
+// New lead-first flow (replaces the old close-host-then-respawn-lead
+// dance). The Team Work Lead terminal ALREADY EXISTS when this runs:
+// App.svelte created it at Cmd+P via `createTeamWorkLeadTerminal`,
+// and the dialog handed us its tab + pane id. So Bootstrap:
 //
-//   1. Persist config: `api.teamCreate(name, configWire)`.
-//   2. Load the watcher: `api.teamLoad(name)`.
-//   3. Spawn one terminal per non-lead member with
-//      `CHAN_TAB_NAME=<handle>` env + the agent's command.
-//   4. Ask the user to confirm the terminals are ready, then stage
-//      the identity prompt in each rich prompt.
-//   5. Surface a notify() on success so the user sees the team
-//      came up.
-//
-// Slice 2+ items deferred:
-//
-//   * Process-template placement (copying `-a-81`'s parameterised
-//     docs into `Drafts/team-{name}/docs/`).
-//   * Lead-side pre-flight survey trigger.
-//   * Split-pane real estate (slice 1 routes everything through
-//     tabs-in-current-Hybrid; the split-pane branch is just a
-//     scope-poke today).
-//   * `dispatch_agent_event`-driven identity prompts (slice 1
-//     stages rich-prompt buffers for in-process delivery; the
-//     event-channel path is wired in `-a-79` slice 2 when
-//     `systacean-21`'s rich-poke flow consumes a team channel).
+//   1. Save/update the chan-team.toml at the dialog's config path.
+//   2. Launch the LEAD agent FIRST into the existing lead tab, then
+//      the workers into new tabs (split-pane or tabs-in-Hybrid per
+//      the dialog's real estate).
+//   3. Each agent's identity is its `CHAN_TAB_NAME` env var.
+//   4. Place the identity prompt into the LEAD's embedded editor.
+//   5. Broadcast: deselect ALL terminals first, then enable ONLY the
+//      lead + workers set.
 
 import { api, type TeamConfigWire, type TeamMemberWire } from "../api/client";
-import { uiConfirm } from "./confirm.svelte";
 import { notify } from "./notify.svelte";
+import { teamConfigDir } from "./teamConfigPath";
 import {
+  allTerminalTabs,
   buildSplitGrid,
-  findTerminalBySession,
   layout,
   openTerminalInPane,
-  primeTerminalRichPrompt,
+  primeTeamWork,
+  renameTerminalTab,
   setActivePane,
+  setTerminalBroadcastEnabled,
+  setTerminalBroadcastTarget,
+  type TerminalTab,
 } from "./tabs.svelte";
-import type {
-  TeamDialogConfig,
-  TeamMemberDraft,
-} from "./teamDialog.svelte";
-import {
-  substituteTeamTemplate,
-  type TeamTemplateVars,
-} from "./teamTemplate";
+import type { TeamDialogConfig, TeamMemberDraft } from "./teamDialog.svelte";
 
-/// `fullstack-a-79` slice 3: process-template sources bundled
-/// into the SPA at build time via vite `?raw`. Architect routed
-/// this delivery shape on 2026-05-23 (no chan-server endpoint,
-/// no network round-trip on bootstrap). The team-process
-/// templates live under `docs/templates/team-process/` in the
-/// chan repo; vite's `fs.allow: ['.', '..']` lets the parent
-/// traversal resolve.
-import bootstrapTemplate from "../../../docs/templates/team-process/bootstrap.md.tpl?raw";
+/// Context the dialog hands the orchestrator: the EXISTING Team Work
+/// Lead terminal tab + the pane it lives in. The lead is never
+/// respawned; the orchestrator launches the lead agent INTO this
+/// tab.
+export interface TeamBootstrapContext {
+  leadTabId: string;
+  leadPaneId: string;
+}
 
-/// `fullstack-a-79`: parse the dialog's free-form env field
-/// ("KEY=VALUE" newline-separated) into a Record. Empty lines +
-/// surrounding whitespace stripped. Invalid lines surface as
-/// thrown errors so the orchestrator can bail with a message.
+/// Parse the dialog's free-form env field ("KEY=VALUE"
+/// newline-separated) into a Record. Empty lines + surrounding
+/// whitespace stripped. Invalid lines throw so the orchestrator can
+/// bail with a message.
 export function parseEnvLines(text: string): Record<string, string> {
   const env: Record<string, string> = {};
   if (!text) return env;
@@ -77,46 +63,51 @@ export function parseEnvLines(text: string): Record<string, string> {
   return env;
 }
 
-/// `fullstack-a-79`: compute the handle the way the dialog's
-/// `handleOf` helper does, `@@<name>` when `autoPrefix` is on
-/// AND the name doesn't already start with `@@`; raw otherwise.
-/// Mirrors `TeamDialog.svelte`'s helper so the persisted config
-/// matches what the user saw at submit time.
+/// Compute the handle the way the dialog's `handleOf` helper does:
+/// `@@<name>` when `autoPrefix` is on AND the name doesn't already
+/// start with `@@`; raw otherwise.
 export function memberHandle(member: TeamMemberDraft, autoPrefix: boolean): string {
   if (!autoPrefix) return member.name;
   return member.name.startsWith("@@") ? member.name : `@@${member.name}`;
 }
 
-/// `fullstack-a-79`: translate the SPA's camelCase
-/// `TeamDialogConfig` into the chan-workspace snake_case
-/// `TeamConfigWire` shape that `Workspace::create_team` accepts.
-/// `created_at` is set to the call time (ISO 8601 UTC) so the
-/// server gets a sortable timestamp. Member env strings are
-/// parsed into Records; CHAN_TAB_NAME gets auto-injected (per
-/// addendum-b clarification #8) so users don't have to type it.
+/// Translate the SPA's camelCase `TeamDialogConfig` into the
+/// snake_case `TeamConfigWire` shape persisted to chan-team.toml.
+/// `created_at` is the call time (ISO 8601 UTC). Each member's env
+/// is parsed into a Record; `CHAN_TAB_NAME=<handle>` is auto-injected
+/// unless the user supplied an override (the per-tab env var IS the
+/// agent's identity inside the PTY).
+///
+/// Real estate round-trips through the per-member `position`
+/// (row/col) field that chan-team.toml already carries: a member in
+/// split-cell `i` of an RxC grid gets `position = {row, col}`;
+/// tabs-mode members get no position. `wireToDialog` reconstructs the
+/// dialog's `realEstate` from these positions, so Load restores the
+/// same layout the user saw on save.
 export function translateConfig(config: TeamDialogConfig): TeamConfigWire {
   const hostHandle = memberHandle(
     { name: config.hostName, command: "", env: "", isLead: false },
     config.autoPrefix,
   );
-  const members: TeamMemberWire[] = config.members.map((m) => {
+  const positions = memberPositions(config);
+  const members: TeamMemberWire[] = config.members.map((m, idx) => {
     const env = parseEnvLines(m.env);
     const handle = memberHandle(m, config.autoPrefix);
-    // Auto-inject CHAN_TAB_NAME=<handle> unless the user
-    // already supplied an override. The per-tab env-var IS the
-    // agent's identity inside the PTY.
     if (!Object.prototype.hasOwnProperty.call(env, "CHAN_TAB_NAME")) {
       env.CHAN_TAB_NAME = handle;
     }
-    return {
+    const member: TeamMemberWire = {
       handle,
       command: m.command,
       env,
       is_lead: m.isLead,
     };
+    const pos = positions[idx];
+    if (pos) member.position = pos;
+    return member;
   });
   return {
-    team_name: config.teamName,
+    team_name: teamNameFromPath(config.configPath),
     host_name: config.hostName,
     host_handle: hostHandle,
     auto_prefix_at: config.autoPrefix,
@@ -125,27 +116,57 @@ export function translateConfig(config: TeamDialogConfig): TeamConfigWire {
   };
 }
 
-/// `fullstack-a-80` slice 2: inverse of `translateConfig`.
-/// Maps the chan-workspace snake_case wire shape back into the
-/// SPA's camelCase `TeamDialogConfig` so the Load Team flow
-/// can open the dialog populated from
-/// `Drafts/team-{name}/config.toml`. The user edits, hits
-/// Bootstrap, and the standard `runTeamBootstrap` chain runs
-/// (teamCreate is idempotent per systacean-42, re-running it
-/// for an existing team replaces the config in place).
+/// Map each member index to its split-grid `{row, col}` position.
+/// Returns an array aligned with `config.members`; entries are
+/// undefined in tabs mode (no position persisted).
+function memberPositions(
+  config: TeamDialogConfig,
+): (TeamMemberWire["position"] | undefined)[] {
+  const out: (TeamMemberWire["position"] | undefined)[] = config.members.map(
+    () => undefined,
+  );
+  if (config.realEstate.kind !== "split") return out;
+  const { grid, slots } = config.realEstate;
+  for (let cellIdx = 0; cellIdx < slots.length; cellIdx += 1) {
+    const row = Math.floor(cellIdx / grid.cols);
+    const col = cellIdx % grid.cols;
+    for (const memberIdx of slots[cellIdx] ?? []) {
+      if (memberIdx >= 0 && memberIdx < out.length) {
+        out[memberIdx] = { row, col };
+      }
+    }
+  }
+  return out;
+}
+
+/// chan-team.toml carries `team_name`; derive a stable name from the
+/// config's directory (e.g. `/tmp/new-team-1/chan-team.toml` ->
+/// `new-team-1`). Keeps the persisted config self-describing without
+/// re-adding a "Team name" field to the dialog.
+export function teamNameFromPath(path: string): string {
+  const dir = teamConfigDir(path);
+  const lastSlash = dir.lastIndexOf("/");
+  const base = lastSlash >= 0 ? dir.slice(lastSlash + 1) : dir;
+  return base.trim() || "team";
+}
+
+/// Inverse of `translateConfig`: map the snake_case wire shape back
+/// into the dialog's camelCase `TeamDialogConfig` so the Load flow
+/// opens the dialog populated from chan-team.toml. The user edits,
+/// hits Bootstrap, and the config is re-saved with their changes.
 ///
-/// `env` Records get serialised back to "KEY=VALUE\n" lines
-/// so the dialog's free-form textarea round-trips cleanly.
-/// `CHAN_TAB_NAME` is dropped from the visible env field,
-/// `translateConfig` auto-injects it on submit, so showing it
-/// here would create user confusion + a duplicate entry on
-/// the next round-trip.
-export function wireToDialog(wire: TeamConfigWire): TeamDialogConfig {
+/// `env` Records serialise back to "KEY=VALUE\n" lines;
+/// `CHAN_TAB_NAME` is dropped from the visible env field
+/// (`translateConfig` re-injects it on save, so showing it would
+/// create a duplicate on round-trip). Real estate is reconstructed
+/// from member positions.
+export function wireToDialog(
+  wire: TeamConfigWire,
+  configPath: string,
+): TeamDialogConfig {
   const members: TeamMemberDraft[] = wire.members.map((m) => {
-    const visibleEntries = Object.entries(m.env).filter(
-      ([k]) => k !== "CHAN_TAB_NAME",
-    );
-    const envText = visibleEntries
+    const envText = Object.entries(m.env)
+      .filter(([k]) => k !== "CHAN_TAB_NAME")
       .map(([k, v]) => `${k}=${v}`)
       .join("\n");
     return {
@@ -155,223 +176,165 @@ export function wireToDialog(wire: TeamConfigWire): TeamDialogConfig {
       isLead: m.is_lead,
     };
   });
+  const size = Math.max(members.length, 1);
   return {
     hostName: wire.host_name,
-    teamName: wire.team_name,
-    size: Math.max(members.length, 1),
+    configMode: "load",
+    configPath,
+    size,
     autoPrefix: wire.auto_prefix_at,
     members,
-    // chan-workspace's Member doesn't persist real-estate today
-    // (per systacean-30); default to tabs so the dialog opens
-    // in a sane state. The user can switch to split + assign
-    // members in slice 3+ once paneSplit lands.
-    realEstate: { kind: "tabs" },
+    realEstate: realEstateFromWire(wire, size),
   };
 }
 
-/// `fullstack-a-79`: assemble the identity prompt addendum-b
-/// clarification #4 calls for, rewritten per @@Alex's 2026-05-
-/// 23 spec to make host vs lead roles explicit. `$CHAN_TAB_NAME`
-/// is intentionally NOT escaped, the worker's shell expands it
-/// to the env-var value when the agent reads the prompt. The
-/// host-handle + lead-handle + bootstrap-doc substitute in
-/// literally.
-///
-/// Role asymmetry (verbatim @@Alex): the host (e.g. @@Alex)
-/// workspaces the team but mostly talks to the lead (e.g.
-/// @@Architect); agents send events to the lead by default +
-/// accept direct queries from the host but never reach out to
-/// the host on their own initiative.
+/// Rebuild the dialog's `realEstate` from member positions. When no
+/// member carries a position, the team is tabs-in-current-Hybrid.
+/// Otherwise derive the grid from the max row/col seen + map each
+/// positioned member into its row-major cell.
+function realEstateFromWire(
+  wire: TeamConfigWire,
+  size: number,
+): TeamDialogConfig["realEstate"] {
+  const positioned = wire.members
+    .map((m, idx) => ({ pos: m.position, idx }))
+    .filter((e): e is { pos: NonNullable<TeamMemberWire["position"]>; idx: number } =>
+      Boolean(e.pos),
+    );
+  if (positioned.length === 0) return { kind: "tabs" };
+  let maxRow = 0;
+  let maxCol = 0;
+  for (const { pos } of positioned) {
+    maxRow = Math.max(maxRow, pos.row);
+    maxCol = Math.max(maxCol, pos.col);
+  }
+  const grid = { rows: maxRow + 1, cols: maxCol + 1 };
+  const slots: number[][] = Array.from(
+    { length: grid.rows * grid.cols },
+    () => [],
+  );
+  for (const { pos, idx } of positioned) {
+    if (idx >= size) continue;
+    const cellIdx = pos.row * grid.cols + pos.col;
+    if (cellIdx >= 0 && cellIdx < slots.length) slots[cellIdx].push(idx);
+  }
+  return { kind: "split", grid, slots };
+}
+
+/// Build the `# Team work` identity prompt placed in the lead's
+/// embedded editor. `$CHAN_TAB_NAME` is intentionally NOT escaped:
+/// the lead's shell expands it to the env-var value when the agent
+/// reads the prompt. The team size, host handle, lead handle, and
+/// worker handles substitute in literally.
 export function identityPrompt(
+  size: number,
   hostHandle: string,
   leadHandle: string,
-  bootstrapDoc: string,
+  workerHandles: string[],
 ): string {
-  // `Drafts/...` is a path in chan's workspace namespace, NOT a file
-  // on the agent's filesystem: draft workspaces live in chan metadata
-  // OUTSIDE the workspace root, so a plain read of `Drafts/...` relative to
-  // the agent's cwd (the workspace root) finds nothing. Direct the agent to
-  // the chan MCP read_file tool, which resolves the Drafts/ namespace
-  // (see crates/chan-llm/src/prompts.rs). Plain workspace paths are ordinary
-  // content and read as written, so only Drafts refs get the hint.
-  const readStep = bootstrapDoc.startsWith("Drafts/")
-    ? `read ${bootstrapDoc} with the chan MCP read_file tool ` +
-      `(a Drafts/ path is a chan workspace location, not a file ` +
-      `under your working directory)`
-    : `read ${bootstrapDoc}`;
+  const bullets =
+    workerHandles.length > 0
+      ? workerHandles.map((h) => `- ${h}`).join("\n")
+      : "- (no other agents)";
   return (
-    `Hello, I am ${hostHandle} and you are $CHAN_TAB_NAME. ` +
-    `Our team lead is ${leadHandle}. ` +
-    `Identify yourself and ${readStep}.`
+    `# Team work\n` +
+    `We are a team of ${size}. Our host is ${hostHandle} and the team lead ` +
+    `is ${leadHandle}.\n` +
+    `You are $CHAN_TAB_NAME. Identify yourself and get ready to work with\n` +
+    `the rest of the team:\n` +
+    bullets
   );
 }
 
-/// `fullstack-a-79` slice 3: derive the
-/// `substituteTeamTemplate` vars from the wire config + a
-/// fallback phase-slug for teams that don't carry one. The
-/// host handle and lead handle come straight from the
-/// persisted config; workers are the remaining members in
-/// declared order; team_name maps to `{team-name}`.
-export function templateVarsForWire(wire: TeamConfigWire): TeamTemplateVars {
-  const leadEntry = wire.members.find((m) => m.is_lead);
-  const leadHandle = leadEntry?.handle ?? wire.host_handle;
-  const workerHandles = wire.members
-    .filter((m) => !m.is_lead)
-    .map((m) => m.handle);
-  return {
-    hostHandle: wire.host_handle,
-    leadHandle,
-    workerHandles,
-    teamName: wire.team_name,
-    // chan-workspace's TeamConfig doesn't persist a phase-slug
-    // today; new teams default to "phase-1" per
-    // `teamTemplate.ts`'s helper. Chan's own bootstrap (the
-    // architect-internal case) substitutes `phase-8` via
-    // `CHAN_INTERNAL_TEAM_VARS`; the orchestrator's path is
-    // the new-team default.
-  };
+/// Locate a terminal tab by id within a specific pane. Used to pin
+/// the existing Team Work Lead tab the dialog handed us.
+function leadTabIn(paneId: string, tabId: string): TerminalTab | null {
+  const node = layout.nodes[paneId];
+  if (!node || node.kind !== "leaf") return null;
+  const tab = node.tabs.find((t) => t.id === tabId);
+  return tab && tab.kind === "terminal" ? tab : null;
 }
 
-/// `fullstack-a-79` slice 3: place the process templates in
-/// `Drafts/team-{name}/docs/`. Per architect's 2026-05-23
-/// routing, templates ship via vite `?raw` (bundled at SPA
-/// build time) so the orchestrator doesn't need a chan-server
-/// round-trip. Substitutes `{host-handle}` / `{lead-handle}` /
-/// `{worker-N-handle}` / `{team-name}` / `{phase-slug}` via
-/// `substituteTeamTemplate`; writes to the team workspace's
-/// docs/ subdir (materialised by `Workspace::create_team` in step
-/// 1).
-export async function placeTeamTemplates(wire: TeamConfigWire): Promise<void> {
-  const vars = templateVarsForWire(wire);
-  const bootstrap = substituteTeamTemplate(bootstrapTemplate, vars);
-  await api.create(
-    `Drafts/team-${wire.team_name}/docs/bootstrap.md`,
-    false,
-    bootstrap,
-  );
-}
-
-/// `fullstack-a-79` slice 4: derive per-member target pane
-/// IDs from the dialog's real-estate. Two shapes:
-///
-/// * `tabs`: every member targets the currently-active pane.
-///   The orchestrator runs from the user's rich-prompt
-///   terminal (the lead's host session); spawning into the
-///   active pane stacks the workers as tabs next to the lead.
-///
-/// * `split`: walks `realEstate.slots[]` (row-major; one entry
-///   per grid cell, each entry is the list of member indexes
-///   assigned to that cell), builds the R×C grid via
-///   `buildSplitGrid`, and maps each member-index → pane-id.
-///   Unassigned members fall back to the starting pane
-///   (= grid cell 0) so they're never lost; the user can
-///   move them with the standard tab-drag flow after
-///   bootstrap. The lead's pane is always the starting pane
-///   per addendum-b clarification #1, even if the user
-///   assigned the lead to a different cell on the dialog, the
-///   lead's terminal is the host session and stays put.
-export function resolveMemberPaneIds(
-  config: TeamDialogConfig,
-): { lead: string; workers: (string | undefined)[] } {
-  const startId = layout.activePaneId;
-  if (config.realEstate.kind === "tabs") {
-    // All members → starting pane. The orchestrator uses
-    // `openTerminalInPane(startId, …)` for each worker.
-    return {
-      lead: startId,
-      workers: config.members.map(() => startId),
-    };
+/// Launch the lead agent INTO the existing lead tab. The tab already
+/// holds a shell PTY from Cmd+P; restart it with the lead's command +
+/// env so the agent runs in place. When the PTY hasn't attached yet
+/// (no session id), best-effort renames the tab so its
+/// `CHAN_TAB_NAME` is correct when the WS handshake eventually
+/// spawns the shell, the orchestrator's restart is skipped and the
+/// user re-runs the command if needed.
+async function launchLead(
+  leadTab: TerminalTab,
+  lead: TeamMemberWire,
+): Promise<void> {
+  renameTerminalTab(leadTab, lead.handle);
+  if (!leadTab.terminalSessionId) {
+    // No PTY yet: the rename is enough; the agent command can't be
+    // injected without a session. This is an edge case (the user
+    // would have to Bootstrap faster than the WS handshake).
+    return;
   }
-  // Split-pane: materialise the grid + invert slots.
+  await api.restartTerminal(leadTab.terminalSessionId, {
+    name: lead.handle,
+    command: lead.command,
+    env: lead.env,
+  });
+}
+
+/// Resolve the target pane for each worker (by member index) +
+/// confirm the lead's pane. Tabs mode: every worker shares the lead's
+/// pane (stacked as tabs). Split mode: build the RxC grid rooted at
+/// the lead's pane (cell 0 = lead) and map each worker to its
+/// assigned cell; unassigned workers fall back to the lead's pane.
+function resolveWorkerPanes(
+  config: TeamDialogConfig,
+  leadPaneId: string,
+): (string | undefined)[] {
+  if (config.realEstate.kind === "tabs") {
+    return config.members.map(() => leadPaneId);
+  }
   const { grid, slots } = config.realEstate;
-  const cells = buildSplitGrid(startId, grid.rows, grid.cols);
-  const fallback = cells[0] ?? startId;
-  const workers: (string | undefined)[] = new Array(
-    config.members.length,
-  ).fill(undefined);
+  const cells = buildSplitGrid(leadPaneId, grid.rows, grid.cols);
+  const fallback = cells[0] ?? leadPaneId;
+  const panes: (string | undefined)[] = config.members.map(() => undefined);
   for (let cellIdx = 0; cellIdx < slots.length; cellIdx += 1) {
-    const memberIdxs = slots[cellIdx] ?? [];
-    for (const memberIdx of memberIdxs) {
-      if (memberIdx < 0 || memberIdx >= config.members.length) continue;
-      workers[memberIdx] = cells[cellIdx] ?? fallback;
+    for (const memberIdx of slots[cellIdx] ?? []) {
+      if (memberIdx < 0 || memberIdx >= panes.length) continue;
+      panes[memberIdx] = cells[cellIdx] ?? fallback;
     }
   }
-  // Fill gaps + lead with the starting pane.
-  for (let i = 0; i < workers.length; i += 1) {
-    if (!workers[i]) workers[i] = fallback;
+  for (let i = 0; i < panes.length; i += 1) {
+    if (!panes[i]) panes[i] = fallback;
   }
-  return { lead: fallback, workers };
+  return panes;
 }
 
-export async function confirmTeamPreflight(wire: TeamConfigWire): Promise<void> {
-  const handles = wire.members.map((m) => m.handle).join(", ");
-  const confirmed = await uiConfirm({
-    title: "Agents ready?",
-    message: `Confirm spawned agents are ready before staging the identity prompt for ${handles}.`,
-    confirmLabel: "Stage prompts",
-    cancelLabel: "Keep dialog open",
-    destructive: false,
-  });
-  if (!confirmed) throw new Error("preflight cancelled");
-}
-
-/// `fullstack-a-79` slice 1: run the bootstrap chain. Throws
-/// (returns rejected promise) on any step's failure so the
-/// dialog can surface the error inline. The caller closes the
+/// Run the lead-first bootstrap chain. Throws on a step's failure so
+/// the dialog can surface the error inline; the caller closes the
 /// dialog on success.
 export async function runTeamBootstrap(
   config: TeamDialogConfig,
-  hostSessionId?: string,
+  ctx: TeamBootstrapContext,
 ): Promise<void> {
   const wire = translateConfig(config);
-  // 1. Persist config.
-  await api.teamCreate(wire.team_name, wire);
-  // 2. Place process templates. Per addendum-b's
-  //    process-template-placement step + `-a-81`'s
-  //    parameterised templates, write the bootstrap doc into
-  //    the team workspace's docs/ subdir so each agent's
-  //    `read docs/agents/bootstrap.md` directive resolves to a
-  //    pre-substituted file. `Workspace::create_team` already
-  //    materialised `Drafts/team-{name}/docs/` in step 1.
-  //    Failures don't bail the whole chain, the watcher load
-  //    + worker spawn still bring up a working team; just
-  //    flag in notify so the user can re-run / inspect.
-  try {
-    await placeTeamTemplates(wire);
-  } catch (err) {
-    notify(
-      `Template placement failed: ${(err as Error).message ?? err}`,
-    );
-  }
-  // 3. Load watcher.
-  await api.teamLoad(wire.team_name);
-  // 4. Materialise real-estate. For tabs-in-current-Hybrid the
-  //    spawn loop drops every worker into the active pane. For
-  //    split-pane, build the airplane-grid via paneSplit + map
-  //    each worker to the cell the user assigned via the dialog.
-  //    `fullstack-a-79` slice 4: per-cell assignment honors the
-  //    `slots[][]` array on `realEstate`. Lead's pane stays the
-  //    starting pane (= cells[0]) since the lead IS the host
-  //    session per addendum-b clarification #1; we don't move it
-  //    even if the user assigned the lead to another cell (slice
-  //    5 could add the moveTab step if needed).
-  const memberPaneIds = resolveMemberPaneIds(config);
-  const leadPaneId = memberPaneIds.lead;
-  // 5. Spawn worker terminals (lead is the host session, see
-  //    addendum-b clarification #1).
-  const leadHandle =
-    wire.members.find((m) => m.is_lead)?.handle ?? wire.host_handle;
-  // Bootstrap doc points at the placed-template path so workers'
-  // `read docs/agents/bootstrap.md` resolves to the actual per-
-  // team file written by `placeTeamTemplates` (slice 3), not the
-  // stale chan-repo reference. CWD for workers spawned via the
-  // orchestrator is the workspace root; the placed-template path is
-  // `Drafts/team-{name}/docs/bootstrap.md` per the unified-path
-  // chan-workspace routing.
-  const bootstrapDoc = `Drafts/team-${wire.team_name}/docs/bootstrap.md`;
-  const prompt = identityPrompt(wire.host_handle, leadHandle, bootstrapDoc);
-  const spawnedWorkerTabs: NonNullable<ReturnType<typeof openTerminalInPane>>[] = [];
-  for (let i = 0; i < wire.members.length; i += 1) {
+
+  // 1. Save/update the chan-team.toml at the user's config path.
+  //    This is app-level orchestration config written outside the
+  //    workspace sandbox (see api.writeTeamConfigFile).
+  await api.writeTeamConfigFile(config.configPath, wire);
+
+  const leadEntry = wire.members.find((m) => m.is_lead);
+  if (!leadEntry) throw new Error("config has no lead member");
+  const workerEntries = wire.members.filter((m) => !m.is_lead);
+
+  // 2a. Launch the LEAD FIRST into the existing lead tab.
+  const leadTab = leadTabIn(ctx.leadPaneId, ctx.leadTabId);
+  if (!leadTab) throw new Error("lead terminal not found");
+  await launchLead(leadTab, leadEntry);
+
+  // 2b. Resolve real estate + spawn the workers into new tabs.
+  const workerPanes = resolveWorkerPanes(config, ctx.leadPaneId);
+  const workerTabs: TerminalTab[] = [];
+  for (let i = 0; i < config.members.length; i += 1) {
     const m = wire.members[i];
     if (m.is_lead) continue;
     try {
@@ -379,113 +342,47 @@ export async function runTeamBootstrap(
         name: m.handle,
         command: m.command,
         env: m.env,
-        ...(hostSessionId ? { orchestrator_session: hostSessionId } : {}),
       });
-      const paneId = memberPaneIds.workers[i] ?? layout.activePaneId;
+      const paneId = workerPanes[i] ?? ctx.leadPaneId;
       const tab = openTerminalInPane(paneId, {
         sessionId: response.session,
         title: response.tab_label,
       });
-      if (tab) spawnedWorkerTabs.push(tab);
+      if (tab) {
+        renameTerminalTab(tab, m.handle);
+        workerTabs.push(tab);
+      }
     } catch (err) {
-      notify(
-        `spawn failed for ${m.handle}: ${(err as Error).message ?? err}`,
-      );
+      notify(`spawn failed for ${m.handle}: ${(err as Error).message ?? err}`);
     }
   }
-  await confirmTeamPreflight(wire);
-  for (const tab of spawnedWorkerTabs) {
-    primeTerminalRichPrompt(tab, prompt);
+
+  // 3 + 4. Place the identity prompt in the lead's embedded editor.
+  //    `$CHAN_TAB_NAME` is each agent's identity (env var, step 3).
+  const prompt = identityPrompt(
+    wire.members.length,
+    wire.host_handle,
+    leadEntry.handle,
+    workerEntries.map((m) => m.handle),
+  );
+  primeTeamWork(leadTab, prompt);
+
+  // Restore focus to the lead's pane so the editor lands there.
+  setActivePane(ctx.leadPaneId);
+
+  // 5. Broadcast membership. First force-clear EVERY terminal's
+  //    broadcast (the spec's "Deselect all" equivalent) so no
+  //    pre-existing broadcast group leaks into the new team. Then
+  //    enable ONLY the lead + workers set. We use the
+  //    setTerminalBroadcast* primitives (force-clear+set), not the
+  //    toggle helper, so the final membership is deterministic.
+  for (const tab of allTerminalTabs()) {
+    setTerminalBroadcastEnabled(tab, false);
   }
-  // Restore focus to the lead's pane so the rich-prompt buffer
-  // step lands there.
-  if (leadPaneId) setActivePane(leadPaneId);
-  // 6. Deliver the identity prompt to the lead's terminal (the
-  //    host session) via the rich-prompt buffer. Per addendum-b
-  //    clarification #1 the lead IS the user's current rich-
-  //    prompt terminal; we don't respawn it, just stage the
-  //    identity prompt in the composer so the user reviews +
-  //    submits. Silently no-op when:
-  //    - No host session id was passed (e.g. invoked from a
-  //      surface outside the rich-prompt context).
-  //    - The host terminal is no longer open (closed mid-flight).
-  // 6. Promote the host's pre-bootstrap terminal into the lead's
-  //    terminal. Per addendum-b clarification #1 + @@Alex's
-  //    2026-05-23 follow-up: the host's rich-prompt terminal IS
-  //    the lead's terminal, but the lead's shell needs to run
-  //    the lead member's COMMAND (e.g. `claude`), not the host's
-  //    pre-bootstrap default shell. The cleanest shape is
-  //    close-the-host-session + spawn the lead's PTY fresh in
-  //    the same pane: the new session is owned by /api/terminals
-  //    POST, has the right command/env/CHAN_TAB_NAME from spawn-
-  //    time, and the SPA's WS attaches to it normally (no
-  //    restart-with-command WS-reconnect plumbing needed). The
-  //    identity prompt then primes the NEW tab's rich-prompt
-  //    buffer (the buffer is SPA-side, tab-keyed).
-  //    Silently no-op when there's no host session, the host
-  //    terminal is closed, or the config has no `is_lead`
-  //    member.
-  if (hostSessionId) {
-    const oldLeadTab = findTerminalBySession(hostSessionId);
-    const leadEntry = wire.members.find((m) => m.is_lead);
-    if (oldLeadTab && leadEntry && oldLeadTab.terminalSessionId) {
-      // Locate the pane that owns the old lead tab. Falls back
-      // to the resolved lead pane id from step 4 if the walk
-      // can't pin one down (e.g. layout edge cases).
-      let oldLeadPaneId: string | undefined;
-      for (const node of Object.values(layout.nodes)) {
-        if (node.kind !== "leaf") continue;
-        if (node.tabs.some((t) => t.id === oldLeadTab.id)) {
-          oldLeadPaneId = node.id;
-          break;
-        }
-      }
-      const targetPaneId = oldLeadPaneId ?? leadPaneId ?? layout.activePaneId;
-      try {
-        await api.closeTerminal(oldLeadTab.terminalSessionId);
-      } catch (err) {
-        notify(
-          `Lead old-session close failed: ${(err as Error).message ?? err}`,
-        );
-      }
-      // Drop the old tab from its pane (its session is gone).
-      const oldPane = oldLeadPaneId ? layout.nodes[oldLeadPaneId] : undefined;
-      if (oldPane && oldPane.kind === "leaf") {
-        const idx = oldPane.tabs.findIndex((t) => t.id === oldLeadTab.id);
-        if (idx >= 0) {
-          oldPane.tabs.splice(idx, 1);
-          if (oldPane.activeTabId === oldLeadTab.id) {
-            oldPane.activeTabId = oldPane.tabs[Math.max(0, idx - 1)]?.id ?? null;
-          }
-        }
-      }
-      // Spawn the lead's terminal afresh + open in the lead's pane.
-      try {
-        const response = await api.spawnTerminal({
-          name: leadEntry.handle,
-          command: leadEntry.command,
-          env: leadEntry.env,
-          ...(hostSessionId ? { orchestrator_session: hostSessionId } : {}),
-        });
-        const newTab = openTerminalInPane(targetPaneId, {
-          sessionId: response.session,
-          title: response.tab_label,
-        });
-        if (newTab) {
-          // Prime the lead's identity prompt on the new tab.
-          primeTerminalRichPrompt(newTab, prompt);
-        }
-      } catch (err) {
-        notify(
-          `Lead spawn failed: ${(err as Error).message ?? err}`,
-        );
-      }
-    } else if (oldLeadTab) {
-      // Fallback when there is no lead member in the config:
-      // still prime the rich-prompt buffer on the old tab so
-      // the user has the identity prompt available.
-      primeTerminalRichPrompt(oldLeadTab, prompt);
-    }
+  setTerminalBroadcastEnabled(leadTab, true);
+  for (const tab of workerTabs) {
+    setTerminalBroadcastTarget(leadTab, tab.id, true);
   }
+
   notify(`Team "${wire.team_name}" bootstrapped.`);
 }

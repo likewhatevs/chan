@@ -21,7 +21,6 @@ mod config;
 mod control_socket;
 mod embed_seed;
 mod error;
-mod event_watcher;
 /// macOS CLI-to-desktop workspace handoff over a well-known per-user UDS.
 /// Public so both the `chan` CLI (client) and `chan-desktop`
 /// (listener) consume it; both already depend on chan-server.
@@ -53,25 +52,20 @@ pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 use auth::{auth_middleware, load_or_create_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
-    api_backlinks, api_build_info, api_close_rich_prompt, api_cloud_workspaces, api_create_draft,
-    api_create_file, api_create_rich_prompt, api_create_rich_prompt_session, api_create_terminal,
-    api_delete_file, api_delete_session, api_delete_terminal, api_discard_draft,
-    api_fonts_source_code_pro_download, api_fs_graph, api_fs_transfer, api_get_config,
-    api_get_contacts, api_get_mentions, api_get_rich_prompt_status, api_get_server_config,
-    api_get_session, api_get_workspace, api_graph, api_headings, api_health, api_index_rebuild,
-    api_index_status, api_indexing_state, api_inspect_draft, api_inspector, api_language_graph,
-    api_link_targets, api_links, api_list_files, api_list_sessions, api_metadata_export,
-    api_metadata_import, api_move, api_patch_config, api_patch_server_config, api_patch_workspace,
-    api_post_attachment, api_post_contacts_import, api_promote_draft, api_put_session,
-    api_read_file, api_report_dir, api_report_file, api_report_prefix, api_reports_disable,
-    api_reports_enable, api_reports_state, api_resolve_link, api_restart_terminal,
-    api_screensaver_clear_pin, api_screensaver_patch, api_screensaver_set_pin,
-    api_screensaver_state, api_screensaver_verify, api_search_content, api_search_files,
-    api_set_terminal_submit_mode, api_set_terminal_watcher, api_storage_reset,
-    api_submit_rich_prompt, api_team_create, api_team_duplicate, api_team_get_config,
-    api_team_list_loaded, api_team_load, api_team_unload, api_terminal_event_reply,
-    api_terminal_watcher_events, api_terminal_ws, api_unset_terminal_watcher, api_upload_file,
-    api_workspace_bootstrap, api_write_file, ws_upgrade,
+    api_backlinks, api_build_info, api_cloud_workspaces, api_create_draft, api_create_file,
+    api_create_terminal, api_delete_file, api_delete_session, api_delete_terminal,
+    api_discard_draft, api_fonts_source_code_pro_download, api_fs_graph, api_fs_transfer,
+    api_get_config, api_get_contacts, api_get_mentions, api_get_server_config, api_get_session,
+    api_get_workspace, api_graph, api_headings, api_health, api_index_rebuild, api_index_status,
+    api_indexing_state, api_inspect_draft, api_inspector, api_language_graph, api_link_targets,
+    api_links, api_list_files, api_list_sessions, api_metadata_export, api_metadata_import,
+    api_move, api_patch_config, api_patch_server_config, api_patch_workspace, api_post_attachment,
+    api_post_contacts_import, api_promote_draft, api_put_session, api_read_file, api_report_dir,
+    api_report_file, api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
+    api_resolve_link, api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
+    api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
+    api_search_files, api_storage_reset, api_team_config_read, api_team_config_write,
+    api_terminal_ws, api_upload_file, api_workspace_bootstrap, api_write_file, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -101,7 +95,7 @@ use std::time::Duration;
 
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::{delete, get, patch, post, put};
+use axum::routing::{delete, get, patch, post};
 use axum::Router;
 use chan_workspace::{Library, SearchAggression, WatchEvent, Workspace};
 use tokio::net::TcpListener;
@@ -457,7 +451,6 @@ async fn build_app(
         last_activity: last_activity.clone(),
         terminal_sessions,
         shutdown_rx,
-        loaded_teams: Mutex::new(std::collections::HashMap::new()),
         scope_registry,
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
@@ -886,44 +879,15 @@ fn router(state: Arc<AppState>) -> Router {
         // SPA Cmd+N chord routes here; response path opens via
         // the existing /api/files/Drafts/.../draft.md GET path.
         .route("/api/drafts/new", post(api_create_draft))
-        // `fullstack-a-66` slice d: Rich Prompt submission
-        // history. Each Cmd+Enter submit POSTs the source +
-        // server writes `Drafts/rich-prompt-N/prompt.md`. SPA
-        // gets the unified path back; graph, search, editor,
-        // terminal, and MCP can address it as Drafts content.
-        .route("/api/drafts/rich-prompt", post(api_create_rich_prompt))
         .route("/api/drafts/inspect", post(api_inspect_draft))
         .route("/api/drafts/discard", post(api_discard_draft))
         .route("/api/drafts/promote", post(api_promote_draft))
-        .route("/api/rich-prompts", post(api_create_rich_prompt_session))
-        .route(
-            "/api/rich-prompts/:name/status",
-            get(api_get_rich_prompt_status),
-        )
-        .route(
-            "/api/rich-prompts/:name/submit",
-            post(api_submit_rich_prompt),
-        )
-        .route("/api/rich-prompts/:name/close", post(api_close_rich_prompt))
-        // systacean-31: per-team watcher lifecycle. Load spins up
-        // a `Workspace::watch_team` handle; unload drops it
-        // (non-destructive; team persists on disk).
-        // `/loaded` is read-only for the SPA to know which teams
-        // are active.
-        // systacean-41 follow-up: axum 0.7 path-param syntax is
-        // `:name`, NOT `{name}`. The original `-31` routes used
-        // `{name}` (axum 0.8 shape) which axum 0.7 treats as a
-        // literal segment; these routes have never actually
-        // matched real team names in production. Fixed here as
-        // adjacent scope.
-        .route("/api/teams/:name/load", post(api_team_load))
-        .route("/api/teams/:name/unload", post(api_team_unload))
-        .route("/api/teams/:name/duplicate", post(api_team_duplicate))
-        // systacean-42: read the persisted TeamConfig for a team.
-        // Backs `-a-80 slice 2`'s Load Team dialog.
-        .route("/api/teams/:name/config", get(api_team_get_config))
-        .route("/api/teams/loaded", get(api_team_list_loaded))
-        .route("/api/teams", post(api_team_create))
+        // phase-13-r2 `lane-a-A3`: path-based chan-team.toml
+        // read/write for the Team Work dialog's New/Load flow.
+        // Deliberately outside the workspace sandbox (user path,
+        // default /tmp); see routes/team_config.rs module docs.
+        .route("/api/team-config/read", post(api_team_config_read))
+        .route("/api/team-config/write", post(api_team_config_write))
         .route(
             "/api/files/*path",
             get(api_read_file)
@@ -994,27 +958,6 @@ fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/terminals/:session/restart",
             post(api_restart_terminal),
-        )
-        .route(
-            "/api/terminal/:session/watcher",
-            post(api_set_terminal_watcher).delete(api_unset_terminal_watcher),
-        )
-        .route(
-            "/api/terminal/:session/watcher/events",
-            get(api_terminal_watcher_events),
-        )
-        .route(
-            "/api/terminal/:session/event-reply",
-            post(api_terminal_event_reply),
-        )
-        // `fullstack-b-13`: per-session shell-vs-agent submit-mode
-        // flip. SPA hits this whenever the rich-prompt toolbar
-        // toggle changes; the server reads the field in
-        // `dispatch_agent_event` to pick the trailing chord bytes
-        // after the "poke" notification.
-        .route(
-            "/api/terminal/:session/submit-mode",
-            put(api_set_terminal_submit_mode),
         )
         .route("/ws", get(ws_upgrade))
         // `fullstack-b-12`: bundled font assets (Source Code Pro

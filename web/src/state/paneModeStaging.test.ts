@@ -34,9 +34,9 @@ describe("fullstack-a-68 slice 2: paneMode state extended with stagedDraftEditor
 });
 
 describe("fullstack-a-68 slice 2: spawn helpers", () => {
-  test("paneModeOpenRichPromptTerminal pushes a TerminalTab with richPrompt armed", () => {
+  test("paneModeOpenTeamWorkTerminal pushes a TerminalTab with teamWork armed", () => {
     expect(tabs).toMatch(
-      /export function paneModeOpenRichPromptTerminal\(ctx\?: SpawnContext\): void \{[\s\S]{1,2000}richPrompt: \{[\s\S]{1,400}open: true,/,
+      /export function paneModeOpenTeamWorkTerminal\(ctx\?: SpawnContext\): void \{[\s\S]{1,2000}teamWork: \{[\s\S]{1,400}open: true,/,
     );
   });
 

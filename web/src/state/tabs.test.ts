@@ -41,7 +41,7 @@ import {
   paneModeMoveFocus,
   paneModeOpenBrowser,
   paneModeOpenGraph,
-  paneModeOpenRichPromptTerminal,
+  paneModeOpenTeamWorkTerminal,
   paneModeOpenTerminal,
   paneModeResize,
   paneModeSetGrab,
@@ -58,7 +58,7 @@ import {
   markLocalTabDrop,
   markTerminalEnvNameRestarted,
   moveTab,
-  openActiveTerminalRichPrompt,
+  openActiveTeamWork,
   renameTerminalTab,
   reopenClosedTab,
   reorderTab,
@@ -75,7 +75,7 @@ import {
   setWindowFocusColor,
   setTerminalSession,
   shouldCloseTabAfterDragEnd,
-  showOrSpawnRichPromptInFocusedPane,
+  createTeamWorkLeadTerminal,
   splitPane,
   tabLabel,
   tabLabelInPane,
@@ -580,12 +580,12 @@ describe("pane state", () => {
     expect(layout.activePaneId).toBe(right.id);
   });
 
-  test("moving a terminal preserves rich prompt workspace state", () => {
+  test("moving a terminal preserves Team Work workspace state", () => {
     const terminal = terminalTab({
       id: "term-a",
       title: "@@Agent",
       terminalSessionId: "session-a",
-      richPrompt: {
+      teamWork: {
         buffer: "queued prompt",
         open: true,
         phase: "active",
@@ -617,7 +617,7 @@ describe("pane state", () => {
     const moved = target.tabs[0];
     expect(moved?.kind).toBe("terminal");
     if (moved?.kind !== "terminal") return;
-    expect(moved.richPrompt).toMatchObject({
+    expect(moved.teamWork).toMatchObject({
       buffer: "queued prompt",
       workspaceName: "rich-prompt-2",
       eventsPath: "Drafts/rich-prompt-2/spool/events",
@@ -1085,14 +1085,14 @@ describe("pane state", () => {
     expect(terminals.every((tab) => tab.broadcastEnabled === false)).toBe(true);
   });
 
-  test("pane mode rich-prompt terminals share the draft title allocator", () => {
+  test("pane mode Team Work terminals share the draft title allocator", () => {
     resetLayout([]);
 
     enterPaneMode();
     paneModeSplit("row");
-    paneModeOpenRichPromptTerminal();
+    paneModeOpenTeamWorkTerminal();
     paneModeMoveFocus("left");
-    paneModeOpenRichPromptTerminal();
+    paneModeOpenTeamWorkTerminal();
     commitPaneMode();
 
     const terminals = Object.values(layout.nodes)
@@ -1104,7 +1104,7 @@ describe("pane state", () => {
       "Terminal-1",
       "Terminal-2",
     ]);
-    expect(terminals.every((tab) => tab.richPrompt?.open === true)).toBe(true);
+    expect(terminals.every((tab) => tab.teamWork?.open === true)).toBe(true);
   });
 
   test("File Browser and Graph spawns always add a new tab (fullstack-47)", () => {
@@ -1294,26 +1294,28 @@ describe("pane state", () => {
     expect(paneMode.spawnIntent).toBeNull();
   });
 
-  test("showOrSpawnRichPromptInFocusedPane spawns a terminal in an empty pane (fullstack-50)", () => {
+  test("createTeamWorkLeadTerminal spawns a terminal in an empty pane and returns it", () => {
     const seed = resetLayout([]);
 
-    showOrSpawnRichPromptInFocusedPane();
+    const created = createTeamWorkLeadTerminal();
 
     const pane = layout.nodes[seed.id] as LeafNode;
     expect(pane.tabs).toHaveLength(1);
     const terminal = pane.tabs[0];
     expect(terminal.kind).toBe("terminal");
     if (terminal.kind === "terminal") {
-      expect(terminal.richPrompt?.open).toBe(true);
-      expect(terminal.richPrompt?.mode).toBe("wysiwyg");
+      expect(terminal.teamWork?.open).toBe(true);
+      expect(terminal.teamWork?.mode).toBe("wysiwyg");
     }
     expect(pane.activeTabId).toBe(terminal.id);
+    // The factory returns the freshly-created tab so the Team dialog
+    // can delete it on Cancel.
+    expect(created?.id).toBe(terminal.id);
   });
 
-  test("showOrSpawnRichPromptInFocusedPane spawns fresh when active tab is not a terminal even if one exists elsewhere", () => {
-    // Phase 9 keeps the useful non-surprise part of the old
-    // contract: a pre-existing terminal elsewhere in the tab list
-    // is left untouched. Cmd+P opens a fresh rich-prompt terminal
+  test("createTeamWorkLeadTerminal spawns fresh in the active pane even when a terminal exists elsewhere", () => {
+    // A pre-existing terminal elsewhere in the tab list is left
+    // untouched. Cmd+P always opens a fresh Team Work terminal
     // instead of switching to it.
     const doc = fileTab({ id: "doc-1", path: "notes/x.md" });
     const terminal: TerminalTab = {
@@ -1327,7 +1329,7 @@ describe("pane state", () => {
     const seed = resetLayout([doc, terminal]);
     (layout.nodes[seed.id] as LeafNode).activeTabId = doc.id;
 
-    showOrSpawnRichPromptInFocusedPane();
+    const created = createTeamWorkLeadTerminal();
 
     const pane = layout.nodes[seed.id] as LeafNode;
     // Fresh terminal spawned + active; existing one untouched.
@@ -1336,10 +1338,11 @@ describe("pane state", () => {
     expect(pane.activeTabId).not.toBe("term-existing");
     const active = pane.tabs.find((t) => t.id === pane.activeTabId);
     expect(active?.kind).toBe("terminal");
-    expect((active as TerminalTab).richPrompt?.open).toBe(true);
+    expect((active as TerminalTab).teamWork?.open).toBe(true);
+    expect(created?.id).toBe(pane.activeTabId);
   });
 
-  test("showOrSpawnRichPromptInFocusedPane always spawns a fresh rich-prompt terminal", () => {
+  test("createTeamWorkLeadTerminal always spawns a fresh Team Work terminal", () => {
     const terminal: TerminalTab = {
       kind: "terminal",
       id: "term-1",
@@ -1347,29 +1350,30 @@ describe("pane state", () => {
       createdAt: 1,
       broadcastEnabled: false,
       broadcastTargetIds: [],
-      richPrompt: { buffer: "draft", heightPx: 200, open: true, mode: "source" },
+      teamWork: { buffer: "draft", heightPx: 200, open: true, mode: "source" },
     };
     const seed = resetLayout([terminal]);
     (layout.nodes[seed.id] as LeafNode).activeTabId = "term-1";
 
-    showOrSpawnRichPromptInFocusedPane({ cwd: "notes" });
+    const created = createTeamWorkLeadTerminal({ cwd: "notes" });
 
     const pane = layout.nodes[seed.id] as LeafNode;
     expect(pane.tabs).toHaveLength(2);
     const live = pane.tabs.find((t) => t.id === "term-1") as TerminalTab;
-    expect(live.richPrompt?.buffer).toBe("draft");
-    expect(live.richPrompt?.mode).toBe("source");
+    expect(live.teamWork?.buffer).toBe("draft");
+    expect(live.teamWork?.mode).toBe("source");
     const spawned = pane.tabs.find((t) => t.id === pane.activeTabId) as TerminalTab;
     expect(spawned.id).not.toBe("term-1");
     expect(spawned.kind).toBe("terminal");
     expect(spawned.cwd).toBe("notes");
-    expect(spawned.richPrompt?.open).toBe(true);
-    expect(spawned.richPrompt?.mode).toBe("wysiwyg");
+    expect(spawned.teamWork?.open).toBe(true);
+    expect(spawned.teamWork?.mode).toBe("wysiwyg");
+    expect(created?.id).toBe(spawned.id);
   });
 
-  test("openActiveTerminalRichPrompt blurs the focused xterm helper textarea (fullstack-b-8)", () => {
-    // The race: between the rich-prompt chord (Cmd+P / Cmd+Alt+P /
-    // Hybrid NAV `p`) and the rich-prompt editor child
+  test("openActiveTeamWork blurs the focused xterm helper textarea (fullstack-b-8)", () => {
+    // The race: between the Team Work chord (Cmd+P / Cmd+Alt+P /
+    // Hybrid NAV `p`) and the Team Work editor child
     // mounting + focusing, xterm-helper-textarea still owns focus.
     // Keystrokes typed in that window fire `term.onData` and reach
     // the live PTY, leaving the dispatched buffer short its first
@@ -1396,20 +1400,20 @@ describe("pane state", () => {
     helper.focus();
     expect(document.activeElement).toBe(helper);
 
-    openActiveTerminalRichPrompt();
+    openActiveTeamWork();
 
     expect(document.activeElement).not.toBe(helper);
     const pane = layout.nodes[seed.id] as LeafNode;
     const live = pane.tabs.find((t) => t.id === "term-blur") as TerminalTab;
-    expect(live.richPrompt?.open).toBe(true);
+    expect(live.teamWork?.open).toBe(true);
 
     document.body.removeChild(xtermRoot);
   });
 
-  test("openActiveTerminalRichPrompt leaves non-xterm focus alone (fullstack-b-8)", () => {
+  test("openActiveTeamWork leaves non-xterm focus alone (fullstack-b-8)", () => {
     // The blur is scoped to xterm-owned elements. A user invoking
     // the prompt from a code editor or any other input keeps their
-    // focus until the editor child takes over — we don't want to
+    // focus until the editor child takes over; we don't want to
     // strip focus globally.
     const terminal: TerminalTab = {
       kind: "terminal",
@@ -1427,7 +1431,7 @@ describe("pane state", () => {
     someInput.focus();
     expect(document.activeElement).toBe(someInput);
 
-    openActiveTerminalRichPrompt();
+    openActiveTeamWork();
 
     expect(document.activeElement).toBe(someInput);
 
@@ -2118,11 +2122,11 @@ describe("terminal session serialization", () => {
     expect(tab.terminalSessionId).toBe("term_plain");
   });
 
-  test("persists rich prompt drafts only in session layouts", async () => {
+  test("persists Team Work drafts only in session layouts", async () => {
     resetLayout([
       terminalTab({
         title: "prompt",
-        richPrompt: {
+        teamWork: {
           buffer: "## plan\n\nship it",
           heightPx: 420,
           open: true,
@@ -2145,7 +2149,7 @@ describe("terminal session serialization", () => {
     const [tab] = activePane().tabs;
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
-    expect(tab.richPrompt).toEqual({
+    expect(tab.teamWork).toEqual({
       buffer: "## plan\n\nship it",
       heightPx: 420,
       open: true,
@@ -2153,11 +2157,11 @@ describe("terminal session serialization", () => {
     });
   });
 
-  test("round-trips rich prompt workspace identity via session layout", async () => {
+  test("round-trips Team Work workspace identity via session layout", async () => {
     resetLayout([
       terminalTab({
         title: "prompt",
-        richPrompt: {
+        teamWork: {
           buffer: "",
           open: true,
           workspaceName: "rich-prompt-2",
@@ -2178,49 +2182,18 @@ describe("terminal session serialization", () => {
     const [tab] = activePane().tabs;
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
-    expect(tab.richPrompt?.workspaceName).toBe("rich-prompt-2");
-    expect(tab.richPrompt?.submissionSequence).toBe(3);
+    expect(tab.teamWork?.workspaceName).toBe("rich-prompt-2");
+    expect(tab.teamWork?.submissionSequence).toBe(3);
   });
 
-  test("round-trips watcher dismissedIds via SerTab.dbi (fullstack-a-28)", async () => {
-    // Explicit-close dismissals on bubble overlay survive session
-    // restore so the user does not have to re-dismiss the same
-    // poke / pre-flight bubble after a reload.
-    resetLayout([
-      terminalTab({
-        terminalSessionId: "term_dbi",
-        watcher: {
-          path: "events",
-          events: [],
-          seenIds: [],
-          unread: false,
-          dismissedIds: ["sticky-poke", "sticky-preflight"],
-        },
-      }),
-    ]);
-
-    const shareable = serializeLayout();
-    expect(JSON.stringify(shareable)).not.toContain("\"dbi\"");
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"dbi\":[\"sticky-poke\",\"sticky-preflight\"]");
-
-    await restoreLayout(sessionSnapshot!);
-
-    const [tab] = activePane().tabs;
-    expect(tab?.kind).toBe("terminal");
-    if (tab?.kind !== "terminal") return;
-    expect(tab.watcher?.dismissedIds).toEqual(["sticky-poke", "sticky-preflight"]);
-  });
-
-  test("round-trips rich-prompt submitMode via SerTab.rpsm (fullstack-b-13)", async () => {
+  test("round-trips Team Work submitMode via SerTab.rpsm (fullstack-b-13)", async () => {
     // Per-prompt shell-vs-agent toggle survives session restore.
     // Agent mode emits the short-form "a"; shell mode omits the
     // field entirely so the persisted shape stays clean.
     resetLayout([
       terminalTab({
         terminalSessionId: "term_rpsm",
-        richPrompt: {
+        teamWork: {
           buffer: "ship it",
           heightPx: 200,
           open: true,
@@ -2238,14 +2211,14 @@ describe("terminal session serialization", () => {
     const [tab] = activePane().tabs;
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
-    expect(tab.richPrompt?.submitMode).toBe("agent");
+    expect(tab.teamWork?.submitMode).toBe("agent");
   });
 
-  test("round-trips rich-prompt agent picker via SerTab.rpa", async () => {
+  test("round-trips Team Work agent picker via SerTab.rpa", async () => {
     resetLayout([
       terminalTab({
         terminalSessionId: "term_rpa",
-        richPrompt: {
+        teamWork: {
           buffer: "ship it",
           heightPx: 200,
           open: true,
@@ -2264,91 +2237,8 @@ describe("terminal session serialization", () => {
     const [tab] = activePane().tabs;
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
-    expect(tab.richPrompt?.agentTarget).toBe("codex");
-    expect(tab.richPrompt?.submitMode).toBe("agent");
-  });
-
-  test("re-syncs server-side submit-mode on tab restore (fullstack-b-18)", async () => {
-    // chan-server's `Session.agent_mode` defaults to false on every
-    // PTY spawn / server restart. A restored "agent" tab would look
-    // correct in the toolbar but emit the shell chord. The restore
-    // path must re-fire `setTerminalSubmitMode` so the server picks
-    // up the persisted SPA-side preference.
-    const setMode = vi
-      .spyOn(api, "setTerminalSubmitMode")
-      .mockResolvedValue(undefined);
-
-    resetLayout([
-      terminalTab({
-        terminalSessionId: "term_rpsm_restore",
-        richPrompt: {
-          buffer: "agent-mode resume",
-          heightPx: 200,
-          open: true,
-          mode: "wysiwyg",
-          submitMode: "agent",
-        },
-      }),
-    ]);
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    await restoreLayout(sessionSnapshot!);
-
-    expect(setMode).toHaveBeenCalledWith("term_rpsm_restore", "agent");
-  });
-
-  test("skips submit-mode resync on tab restore when mode is shell (fullstack-b-18)", async () => {
-    // Shell is the server-side default; an explicit re-sync would
-    // just be noise. Only fire the PUT when the persisted state is
-    // "agent" (the only mode that drifts from server's spawn-time
-    // default).
-    const setMode = vi
-      .spyOn(api, "setTerminalSubmitMode")
-      .mockResolvedValue(undefined);
-
-    resetLayout([
-      terminalTab({
-        terminalSessionId: "term_shell_restore",
-        richPrompt: {
-          buffer: "shell prompt",
-          heightPx: 200,
-          open: true,
-          mode: "wysiwyg",
-          submitMode: "shell",
-        },
-      }),
-    ]);
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    await restoreLayout(sessionSnapshot!);
-
-    expect(setMode).not.toHaveBeenCalled();
-  });
-
-  test("skips submit-mode resync when no terminalSessionId is present (fullstack-b-18)", async () => {
-    // Pre-attach tabs carry no server-side session id; the PUT would
-    // 404 unconditionally. Skip until the session attaches (the next
-    // agent picker change propagates manually).
-    const setMode = vi
-      .spyOn(api, "setTerminalSubmitMode")
-      .mockResolvedValue(undefined);
-
-    resetLayout([
-      terminalTab({
-        richPrompt: {
-          buffer: "no session yet",
-          heightPx: 200,
-          open: true,
-          mode: "wysiwyg",
-          submitMode: "agent",
-        },
-      }),
-    ]);
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    await restoreLayout(sessionSnapshot!);
-
-    expect(setMode).not.toHaveBeenCalled();
+    expect(tab.teamWork?.agentTarget).toBe("codex");
+    expect(tab.teamWork?.submitMode).toBe("agent");
   });
 
   test("omits rpsm from SerTab when submitMode is shell or absent (fullstack-b-13)", async () => {
@@ -2359,7 +2249,7 @@ describe("terminal session serialization", () => {
     resetLayout([
       terminalTab({
         terminalSessionId: "term_rpsm_default",
-        richPrompt: {
+        teamWork: {
           buffer: "default prompt",
           heightPx: 200,
           open: true,
@@ -2374,7 +2264,7 @@ describe("terminal session serialization", () => {
     resetLayout([
       terminalTab({
         terminalSessionId: "term_rpsm_shell",
-        richPrompt: {
+        teamWork: {
           buffer: "explicit shell",
           heightPx: 200,
           open: true,
@@ -2388,31 +2278,14 @@ describe("terminal session serialization", () => {
     expect(JSON.stringify(sessionSnapshot2)).not.toContain("\"rpsm\"");
   });
 
-  test("omits dbi from SerTab when dismissedIds is empty (fullstack-a-28)", async () => {
-    resetLayout([
-      terminalTab({
-        terminalSessionId: "term_empty",
-        watcher: {
-          path: "events",
-          events: [],
-          seenIds: [],
-          unread: false,
-        },
-      }),
-    ]);
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).not.toContain("\"dbi\"");
-  });
-
   test("round-trips per-prompt page-width via SerTab.rppw (fullstack-a-30)", async () => {
-    // Each rich prompt carries its own page-width ratio so
+    // Each Team Work prompt carries its own page-width ratio so
     // narrowing one prompt does not cascade onto a sibling tile.
     // Value persists across session restore.
     resetLayout([
       terminalTab({
         terminalSessionId: "term_rppw",
-        richPrompt: {
+        teamWork: {
           buffer: "narrow prompt draft",
           heightPx: 320,
           open: true,
@@ -2433,16 +2306,16 @@ describe("terminal session serialization", () => {
     const [tab] = activePane().tabs;
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
-    expect(tab.richPrompt?.pageWidthRatio).toBe(0.55);
+    expect(tab.teamWork?.pageWidthRatio).toBe(0.55);
   });
 
   test("omits rppw from SerTab when pageWidthRatio is unset or 100% (fullstack-a-30)", async () => {
-    // 100% / 1.0 is the "no cap" sentinel — rounds to absent so
+    // 100% / 1.0 is the "no cap" sentinel; rounds to absent so
     // the persisted shape stays short for the common case.
     resetLayout([
       terminalTab({
         terminalSessionId: "term_full",
-        richPrompt: {
+        teamWork: {
           buffer: "default prompt",
           heightPx: 320,
           open: true,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import richPrompt from "./TerminalRichPrompt.svelte?raw";
+import teamWork from "./TeamWork.svelte?raw";
 import fileEditor from "./FileEditorTab.svelte?raw";
 import terminal from "./TerminalTab.svelte?raw";
 
@@ -7,17 +7,15 @@ import terminal from "./TerminalTab.svelte?raw";
 // persistent `ui.status =` to auto-dismissing
 // `setTransientStatus()` across 4 more surfaces. Error paths
 // + directive surfaces stay persistent.
+//
+// Phase-13 r2: the Spawn-agents-config copy, the per-terminal
+// submit-mode flip, and the agent-event watcher were all deleted
+// with the Team Work revamp, so their toast assertions are gone.
 
 describe("fullstack-a-86: confirmed same-shape success swaps", () => {
-  test("TerminalRichPrompt metadata copy uses setTransientStatus", () => {
-    expect(richPrompt).toMatch(
+  test("Team Work Copy path uses setTransientStatus", () => {
+    expect(teamWork).toMatch(
       /setTransientStatus\("copied metadata dir"\)/,
-    );
-  });
-
-  test("TerminalRichPrompt Spawn agents config copy uses setTransientStatus", () => {
-    expect(richPrompt).toMatch(
-      /setTransientStatus\("copied spawn agents config"\)/,
     );
   });
 
@@ -28,17 +26,9 @@ describe("fullstack-a-86: confirmed same-shape success swaps", () => {
   });
 });
 
-describe("fullstack-a-86: debatable info swaps (watcher detached on reload)", () => {
-  test("TerminalTab watcher-detached toast auto-dismisses", () => {
-    expect(terminal).toMatch(
-      /setTransientStatus\("watcher detached on reload"\)/,
-    );
-  });
-});
-
 describe("fullstack-a-86: error paths stay persistent", () => {
-  test("TerminalRichPrompt copy-failed stays persistent", () => {
-    expect(richPrompt).toMatch(
+  test("Team Work copy-failed stays persistent", () => {
+    expect(teamWork).toMatch(
       /ui\.status = `copy failed: \$\{\(err as Error\)\.message\}`;/,
     );
   });
@@ -55,14 +45,8 @@ describe("fullstack-a-86: error paths stay persistent", () => {
     );
   });
 
-  test("TerminalRichPrompt submit-mode-flip-failed stays persistent", () => {
-    expect(richPrompt).toMatch(
-      /ui\.status = `submit-mode flip failed:/,
-    );
-  });
-
-  test("TerminalRichPrompt bubble-mode-failed stays persistent", () => {
-    expect(richPrompt).toMatch(/ui\.status = `bubble mode failed:/);
+  test("Team Work bubble-mode-failed stays persistent", () => {
+    expect(teamWork).toMatch(/ui\.status = `bubble mode failed:/);
   });
 });
 

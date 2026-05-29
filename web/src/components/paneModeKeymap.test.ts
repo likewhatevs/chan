@@ -81,9 +81,9 @@ describe("Cmd+K pane mode transactional staging (fullstack-a-68 slice 2)", () =>
     );
   });
 
-  test("p / P stages a rich-prompt terminal (no immediate commit, no toggle on existing terminal)", () => {
+  test("p / P stages a Team Work terminal (no immediate commit, no toggle on existing terminal)", () => {
     expect(app).toMatch(
-      /case "p":\s*\n\s*case "P":\s*\n?\s*paneModeOpenRichPromptTerminal\(resolveSpawnContext\(\)\);\s*\n\s*return;/,
+      /case "p":\s*\n\s*case "P":\s*\n?\s*paneModeOpenTeamWorkTerminal\(resolveSpawnContext\(\)\);\s*\n\s*return;/,
     );
   });
 
@@ -132,9 +132,9 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords (fullstack-a-32)", () => 
     );
   });
 
-  test("Cmd+Alt+P (web Mac) spawns rich prompt with context", () => {
+  test("Cmd+Alt+P (web Mac) spawns Team Work with context", () => {
     expect(app).toMatch(
-      /e\.metaKey && e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyP"[\s\S]*?spawnRichPromptFromContext\(\)/,
+      /e\.metaKey && e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyP"[\s\S]*?spawnTeamWorkFromContext\(\)/,
     );
   });
 
@@ -157,7 +157,7 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords (fullstack-a-32)", () => 
       /case "app\.files\.toggle":\s*\n\s*spawnBrowserFromContext\(\);/,
     );
     expect(app).toMatch(
-      /case "app\.terminal\.richPrompt":\s*\n\s*spawnRichPromptFromContext\(\);/,
+      /case "app\.terminal\.richPrompt":\s*\n\s*spawnTeamWorkFromContext\(\);/,
     );
     expect(app).toMatch(
       /case "app\.graph\.toggle":\s*\n\s*spawnGraphFromContext\(\);/,
@@ -165,29 +165,32 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords (fullstack-a-32)", () => 
   });
 });
 
-describe("Cmd+K pane mode rich-prompt binding (fullstack-a-68 slice 2 — retire fullstack-50 toggle)", () => {
-  test("p inside Hybrid Nav stages a smart-prompt terminal (no commit, no toggle on existing)", () => {
-    // pre-`-a-68 slice 2` (`fullstack-50`): `P` committed the
-    // draft + showed/spawned the rich prompt on the focused
-    // pane's existing terminal. Addendum-a's "back to
-    // transactional mode" framing replaces that with a fresh
-    // smart-prompt terminal staged into the draft.
+describe("Cmd+K pane mode Team Work binding (phase-13 r2)", () => {
+  test("p inside Hybrid Nav stages a plain Team Work terminal (no commit, no dialog)", () => {
+    // Hybrid Nav `P` stages a fresh Team Work terminal (terminal +
+    // embedded editor) into the draft. It does NOT open the
+    // Spawn-agents dialog: that is reserved for the top-level Cmd+P
+    // / Cmd+Alt+P / hamburger "Team Work" entry.
     expect(app).toMatch(
-      /case "p":\s*\n\s*case "P":\s*\n?\s*paneModeOpenRichPromptTerminal\(resolveSpawnContext\(\)\);/,
+      /case "p":\s*\n\s*case "P":\s*\n?\s*paneModeOpenTeamWorkTerminal\(resolveSpawnContext\(\)\);/,
     );
-    // The legacy "commit then show" path no longer surfaces
-    // inside the Hybrid Nav P case.
+    // The pane-mode P case must NOT open the team dialog.
     expect(app).not.toMatch(
-      /case "p":\s*\n\s*case "P":\s*\n?\s*commitPaneMode\(\);\s*\n[\s\S]{0,200}showOrSpawnRichPromptInFocusedPane/,
+      /case "p":\s*\n\s*case "P":\s*\n?\s*[\s\S]{0,200}openTeamDialog/,
     );
   });
 
-  test("showOrSpawnRichPromptInFocusedPane still imported (top-level Cmd+P chord uses it)", () => {
-    // The top-level Cmd+P path now shares the same fresh-terminal
-    // behavior as Hybrid Nav `P`.
+  test("top-level Cmd+P flow creates a Team Work lead terminal then opens the dialog", () => {
+    // phase-13 r2: the top-level chord instantiates the lead
+    // terminal FIRST (createTeamWorkLeadTerminal), then opens the
+    // Spawn-agents dialog over it (openTeamDialog with the lead tab
+    // + pane id). The old showOrSpawnRichPromptInFocusedPane helper
+    // is gone.
+    expect(app).toMatch(/import \{[\s\S]{1,4000}createTeamWorkLeadTerminal,/);
     expect(app).toMatch(
-      /import \{[\s\S]{1,4000}showOrSpawnRichPromptInFocusedPane,/,
+      /function spawnTeamWorkFromContext\(\): void \{[\s\S]*?createTeamWorkLeadTerminal\(\{ cwd: ctx\.dir \}\);[\s\S]*?openTeamDialog\(\{ leadTabId: lead\.id, leadPaneId: activePane\(\)\.id \}\);/,
     );
+    expect(app).not.toMatch(/showOrSpawnRichPromptInFocusedPane/);
   });
 });
 

@@ -2,25 +2,27 @@ import { describe, expect, test } from "vitest";
 import tabs from "../state/tabs.svelte.ts?raw";
 import graph from "./GraphPanel.svelte?raw";
 
-// Phase 9 Rich Prompt entrypoint check:
+// Phase 13 r2 Team Work entrypoint check:
 //
-// 1. Cmd+P always creates a fresh terminal with Rich Prompt open.
-//    It no longer toggles a prompt on the current terminal.
+// 1. Cmd+P instantiates a fresh Team Work Lead Terminal (a new
+//    terminal with the embedded editor armed open) and returns it
+//    so the dialog flow can delete it on Cancel. It no longer
+//    toggles a prompt on the current terminal.
 //
 // 2. Depth slider shallow-scope cue: when depthCap <= 1, render
 //    a `[max]` suffix so the user sees the slider is already at
 //    max without needing to drag.
 
-describe("Phase 9 Cmd+P fresh Rich Prompt terminal", () => {
-  test("helper always opens a new terminal in the active pane", () => {
+describe("Phase 13 r2 Cmd+P Team Work lead terminal", () => {
+  test("createTeamWorkLeadTerminal opens a fresh terminal in the active pane and returns it", () => {
     expect(tabs).toMatch(
-      /export function showOrSpawnRichPromptInFocusedPane\([\s\S]*?opts: OpenTerminalOptions = \{\},[\s\S]*?\): void \{[\s\S]*?const p = activePane\(\);[\s\S]*?openTerminalInPane\(p\.id, opts\);[\s\S]*?openActiveTerminalRichPrompt\(\);/,
+      /export function createTeamWorkLeadTerminal\([\s\S]*?opts: OpenTerminalOptions = \{\},[\s\S]*?\): TerminalTab \| null \{[\s\S]*?const p = activePane\(\);[\s\S]*?openTerminalInPane\(p\.id, opts\);[\s\S]*?openActiveTeamWork\(\);[\s\S]*?return tab;/,
     );
   });
 
-  test("old active-terminal toggle branch is gone", () => {
-    expect(tabs).not.toMatch(/activeTab\.richPrompt\?\.open/);
-    expect(tabs).not.toMatch(/richPrompt\.open = false/);
+  test("no active-terminal toggle branch (fresh terminal each time)", () => {
+    expect(tabs).not.toMatch(/activeTab\.teamWork\?\.open/);
+    expect(tabs).not.toMatch(/teamWork\.open = false/);
   });
 });
 
