@@ -1295,7 +1295,14 @@
         </div>
       </div>
     {:else if active?.kind === "file"}
-      <FileEditorTab tab={active} />
+      <!-- This branch only renders on the front face (not flipped, not
+           pane mode) for the active file tab, so `focused` reduces to
+           "is this the active pane". It makes the editor pull DOM focus
+           when the pane gains focus, matching the terminal surface. -->
+      <FileEditorTab
+        tab={active}
+        focused={viewLayout.activePaneId === pane.id}
+      />
     {:else if active?.kind === "graph"}
       <GraphPanel
         tab={active}

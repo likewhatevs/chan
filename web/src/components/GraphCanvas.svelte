@@ -1525,10 +1525,20 @@
     // zero-or-low overlap reads as a real scope swap and warrants the
     // strong re-warm.
     const incremental = !sameSet && dNodes.length > 0 && overlap * 2 >= dNodes.length;
+    // Capture emptiness BEFORE rebuildWorkingSet reassigns dNodes. An
+    // empty -> non-empty transition means the canvas opened before its
+    // data arrived (carousel flip-back, first load): start()'s fit ran
+    // on an empty set and left the viewport at the origin placeholder.
+    // We re-fit once the nodes have landed (below), independent of the
+    // userInteracted gate since there was nothing to interact with.
+    const wasEmpty = dNodes.length === 0;
     rebuildAdjacency();
     rebuildWorkingSet();
     const alpha = sameSet ? 0.05 : incremental ? 0.2 : 1;
     rewarmSim(alpha);
+    if (wasEmpty && dNodes.length > 0) {
+      fitToContent(24);
+    }
     // scheduleRefit is itself gated on `userInteracted`, so calling
     // it on a structural change is a no-op once the user has taken
     // control of the view. First-load (userInteracted false) still

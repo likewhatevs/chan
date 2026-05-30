@@ -39,6 +39,7 @@
     openGraphForContact,
     openGraphForLanguage,
   } from "../state/store.svelte";
+  import { indexingCache } from "../state/indexingStatus.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
   import InspectorBody from "./InspectorBody.svelte";
   import WorkspaceInfoBody from "./WorkspaceInfoBody.svelte";
@@ -109,7 +110,12 @@
   /// orange (in-flight) nodes can flip to green as the indexer
   /// makes progress. Polling stops the moment slide 2 hides; the
   /// effect cleanup clears the timer.
-  let indexing = $state<IndexingStateResponse | null>(null);
+  // Seed from the shared cache so a flip-back remount renders the graph
+  // immediately instead of flashing empty (the poll below still refreshes
+  // it). A one-shot read of the cache value is exactly the desired
+  // semantic; a live `$derived` link is not wanted here.
+  // svelte-ignore state_referenced_locally
+  let indexing = $state<IndexingStateResponse | null>(indexingCache.last);
   let indexingError = $state<string | null>(null);
   let indexingLoading = $state(false);
 
@@ -117,6 +123,8 @@
     indexingLoading = true;
     try {
       indexing = await api.indexingState();
+      // Persist for the next flip-back so the remount has data on hand.
+      indexingCache.last = indexing;
       indexingError = null;
     } catch (e) {
       indexingError = (e as Error).message;

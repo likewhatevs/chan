@@ -124,7 +124,13 @@
   // entries; Cmd+R + the pane hamburger are the canonical surfaces
   // for those.
 
-  let { tab }: { tab: FileTab } = $props();
+  // `focused` is true only when this editor's pane is the active pane.
+  // It gates the focus effect below so a global tab-focus pulse (or a
+  // remount on flip) never pulls the caret into a NON-active pane's
+  // editor. Pane.svelte derives it from `activePaneId`; defaults false
+  // for any other mount site.
+  let { tab, focused = false }: { tab: FileTab; focused?: boolean } =
+    $props();
   let editorTabEl: HTMLDivElement | undefined = $state();
 
   // Editor refs so the outline body can call scrollToHeading /
@@ -133,18 +139,22 @@
   let wysiwygRef: Wysiwyg | undefined = $state();
   let sourceRef: Source | undefined = $state();
 
-  // When the user switches into this editor tab via Cmd+Shift+[ /
-  // Cmd+Shift+] / Ctrl+Alt+1..9, the chord handler bumps
-  // `tabFocusPulse`. FileEditorTab only mounts when it's the active
-  // tab, so any pulse increment during our lifetime means we just
-  // became the focus target. Re-focus the appropriate editor ref via
-  // the `focus()` export on Source/Wysiwyg. queueMicrotask defers
-  // past the synchronous chord-handler stack so the editor view has
-  // had a tick to take the activeElement back from `<body>` (which
-  // `bumpTabFocusPulse` parks us on by blurring the prior focus).
+  // Pull keyboard focus into the editor whenever this pane is the
+  // active one. `focused` is read first so it is a tracked dependency:
+  // the effect re-runs when the pane gains focus (keyboard pane nav,
+  // flip back to the front face) and lands the caret here. Reading
+  // `tabFocusPulse.value` adds the within-pane tab-switch trigger
+  // (Cmd+Shift+[/], Ctrl+Alt+1..9). The `!focused` gate is what stops a
+  // pulse from focusing a sibling pane's editor and desyncing the caret
+  // from the focus highlight. queueMicrotask defers past the
+  // synchronous chord-handler stack so the editor view has had a tick to
+  // take the activeElement back from `<body>` (which `bumpTabFocusPulse`
+  // parks us on by blurring the prior focus).
   $effect(() => {
+    if (!focused) return;
     tabFocusPulse.value;
     queueMicrotask(() => {
+      if (!focused) return;
       if (tab.mode === "wysiwyg") wysiwygRef?.focus();
       else sourceRef?.focus();
     });
