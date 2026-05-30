@@ -21,7 +21,7 @@ describe("PaneModeHelp key-caps are clickable buttons", () => {
   });
 
   test("inert (descriptive-only) cap renders as <kbd> when cap.key is undefined", () => {
-    // The Shift + [ ] - = row is the canonical inert cap — modifier
+    // The Shift + [ ] - = row is the canonical inert cap - modifier
     // semantics can't be expressed as a single click, so the spec
     // says leave it descriptive-only.
     expect(paneModeHelp).toContain("Shift + [ ] - =");
@@ -54,7 +54,7 @@ describe("PaneModeHelp key-caps are clickable buttons", () => {
 
   test("spawn group renames to Stage (Enter to commit, Esc to discard)", () => {
     // Group title surfaces the transactional model; row labels
-    // start with "Stage …".
+    // start with "Stage ...".
     expect(paneModeHelp).toContain(
       'title: "Stage (Enter to commit, Esc to discard)"',
     );

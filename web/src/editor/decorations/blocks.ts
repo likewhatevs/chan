@@ -9,18 +9,18 @@
 // What we cover here:
 //   - Blockquote: line decoration on every quoted line so CSS can
 //     paint a left border + indent. Quote markers stay visible (per
-//     Obsidian convention — the `>` IS the visual cue that the line
+//     Obsidian convention - the `>` IS the visual cue that the line
 //     is quoted; hiding it removes meaning).
 //   - HorizontalRule: leave source text visible. Many notes use
 //     `---` as an authoring separator, and replacing it with a
 //     rendered rule makes the markdown harder to edit.
 //   - FencedCode: per-line decoration distinguishing opener row,
 //     content rows, closer row, plus a mark for the language info
-//     (CodeInfo). No hide — the fences stay visible (we want the
+//     (CodeInfo). No hide - the fences stay visible (we want the
 //     user to see the block structure as they edit).
 //   - Task (GFM task-list item): TaskMarker `[ ]` / `[x]` is replaced
 //     by the CheckboxWidget from widgets/checkbox.ts. The replace is
-//     boundary-inclusive — clicking the box edits the source.
+//     boundary-inclusive - clicking the box edits the source.
 //   - BulletList: source markers (`-` / `*` / `+`) render as
 //     themselves; a `cm-md-ul-marker` mark applies the styling
 //     class so CSS can color/space the marker without replacing
@@ -268,14 +268,14 @@ const handleFencedCode: TokenHandler = (ctx) => {
   // (the opener) and stretches the FencedCode node to doc end.
   // We detect that here so we can (a) keep the opener visible
   // while the caret sits anywhere in the block, even on body lines
-  // BELOW the opener — without this, the markers hide and the user
+  // BELOW the opener - without this, the markers hide and the user
   // has no signal they're typing inside an unclosed code block;
   // (b) drop a ghost ` ``` ` placeholder on the line past the last
   // body line so the missing closer is visually obvious.
   const isUnclosed = closeMarkFrom === openMarkFrom;
 
   // Show the fence verbatim (backticks + lang inline) whenever the
-  // caret is ANYWHERE inside the block — not just on the opener /
+  // caret is ANYWHERE inside the block - not just on the opener /
   // closer rows. For closed fences the opener-to-closer line span
   // covers everything; for unclosed fences the closer line equals
   // the opener line, so we must use the FencedCode node's full
@@ -347,7 +347,7 @@ const handleFencedCode: TokenHandler = (ctx) => {
   // at the end of the last body line so the user can see the
   // block isn't closed. Without it, an unclosed fence reads as
   // "regular text inside a slightly-shaded slab" and traps the
-  // caret silently — typed content keeps extending the fence with
+  // caret silently - typed content keeps extending the fence with
   // no visible cue.
   if (isUnclosed) {
     const lastLineObj = ctx.state.doc.line(lastLine);
@@ -372,7 +372,7 @@ class GhostCloserWidget extends WidgetType {
     const wrap = document.createElement("span");
     wrap.className = "cm-md-fence-ghost-closer";
     wrap.contentEditable = "false";
-    wrap.title = "Unclosed code block — click to add the closing ```";
+    wrap.title = "Unclosed code block - click to add the closing ```";
     wrap.textContent = "```";
     wrap.addEventListener("mousedown", (e) => {
       e.preventDefault();
@@ -400,7 +400,7 @@ class GhostCloserWidget extends WidgetType {
 const handleTask: TokenHandler = (ctx) => {
   // Walk children to find the TaskMarker (lezer-markdown's GFM
   // TaskList emits a Task block-level node with a TaskMarker child
-  // covering exactly `[ ]` / `[x]` / `[X]` — 3 chars).
+  // covering exactly `[ ]` / `[x]` / `[X]` - 3 chars).
   const line = ctx.state.doc.lineAt(ctx.node.from);
   ctx.push(listLineDecoration(line.text), line.from, line.from);
   const cursor = ctx.node.node.cursor();
@@ -583,7 +583,7 @@ const handleOrderedList: TokenHandler = (ctx) => {
     ctx.push(listLineDecoration(line.text), line.from, line.from);
   }
   // Skip the inner walk when this OrderedList is nested inside
-  // another OrderedList — the outer pass already drove this subtree.
+  // another OrderedList - the outer pass already drove this subtree.
   if (ancestorOrderedList(ctx.node.node)) return;
   decorateOrderedList(ctx, ctx.node.node);
 };

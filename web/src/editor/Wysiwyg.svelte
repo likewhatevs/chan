@@ -142,8 +142,8 @@
   const trailingWhitespace = new Compartment();
   /// Compartment for the write-side bundle (bubble listener / bubble
   /// keymap / image drop / HTML paste). Wraps these so flipping
-  /// `readonly` at runtime — e.g. user clicks the editor's "read"
-  /// toggle, or the file's user-write bit flips off on disk — tears
+  /// `readonly` at runtime - e.g. user clicks the editor's "read"
+  /// toggle, or the file's user-write bit flips off on disk - tears
   /// down the autocomplete pickers AND the paste/drop handlers
   /// without rebuilding the editor.
   const writeSideCompartment = new Compartment();
@@ -158,8 +158,7 @@
   /// Image atom Cmd/Ctrl-click handler. The image widget only fires
   /// onImageClick on Cmd/Ctrl-click now (plain click drops the caret
   /// inside the URL so the image bubble auto-opens via the
-  /// imageUrlAtCaret trigger). We treat Cmd/Ctrl-click as "open" —
-  /// route to the existing image-zoom modal.
+  /// imageUrlAtCaret trigger). We treat Cmd/Ctrl-click as "open" -   /// route to the existing image-zoom modal.
   function handleImageClick(args: ImageClickArgs): void {
     openImageZoom(args.src, currentPath);
     onImageClick(args);
@@ -438,7 +437,7 @@
             // ArrowDown / Mod-Enter / Enter-on-closer escape a fenced
             // code block that sits at the end of the doc. Without
             // this, Enter inserts a literal newline inside the fence
-            // and ArrowDown is a no-op — the user has no way out.
+            // and ArrowDown is a no-op - the user has no way out.
             // Each returns false when the trap conditions don't
             // apply so the keys keep their default behaviour
             // (cursorDown / caller submit / new line in code).
@@ -446,7 +445,7 @@
             // Mod-Enter inside any fenced code block: append a fresh
             // line just past the block end and place the caret
             // there. Always-on escape, independent of the block's
-            // position in the doc — for cases the doc-end-only
+            // position in the doc - for cases the doc-end-only
             // rule above can't catch (unclosed fence followed by
             // content, opener inside a list, etc.).
             { key: "Mod-Enter", run: (view) => fmt.exitFenceAnywhere(view) },
@@ -461,7 +460,7 @@
             // `>` and `<` on a block selection (every line fully
             // covered) wrap / unwrap the lines in a `> ` blockquote
             // prefix. Returns false when the selection doesn't
-            // qualify so the chars fall through to text input — a
+            // qualify so the chars fall through to text input - a
             // user typing `>` mid-paragraph still gets a literal `>`.
             { key: ">", run: (view) => fmt.quoteLines(view) },
             { key: "<", run: (view) => fmt.unquoteLines(view) },
@@ -712,7 +711,7 @@
        here so the first line of the editor clears the floating
        style toolbar pill when it's enabled (2.5rem) and reclaims
        that space when it's hidden (0.5rem). The variable was
-       orphaned during the CM6 migration — its old consumer lived
+       orphaned during the CM6 migration - its old consumer lived
        on the legacy `.md-wysiwyg` class. Restoring the wiring
        lets the file editor's "Show Style Toolbar" toggle actually
        shift the document. */
@@ -720,7 +719,7 @@
     /* Always keep 60px below the last line. Combined with the 60px
        bottom scrollMargin in breathing_room.ts, this is what gives
        the Google Docs effect: the caret never sits flush with the
-       bottom edge — when it would, CM scrolls so it stays 60px
+       bottom edge - when it would, CM scrolls so it stays 60px
        above, and this padding gives the scroll room to happen even
        at the doc's last line. */
     padding-bottom: 60px !important;
@@ -753,7 +752,7 @@
     background-color: var(--bg) !important;
   }
   /* CM6 paints `outline: 1px dotted` on .cm-editor.cm-focused as a
-     focus indicator. We don't want it — the cursor itself is
+     focus indicator. We don't want it - the cursor itself is
      indicator enough, and the dotted outline spans the editor's
      entire bounding box including the gutter, which looks like a
      vertical divider in the gutter column. */
@@ -783,7 +782,7 @@
   /* Folded-heading inline placeholder ("..." dropped at EOL when a
      heading collapses). CM6's baseTheme paints it as a bordered chip
      with #eee bg + #ddd border which reads as too heavy. Switch to a
-     light, borderless `…` that hints at the fold without competing
+     light, borderless `...` that hints at the fold without competing
      with the heading text. */
   :global(.md-wysiwyg-cm6 .cm-foldPlaceholder) {
     background: transparent;
@@ -839,7 +838,7 @@
      .cm-line { background: transparent !important }` rule has THREE
      class selectors. To beat it we chain `.cm-line.cm-md-X` (two
      classes on the same element) inside the same `.cm-editor`
-     scope — 4 class selectors total — and `!important` ties the
+     scope - 4 class selectors total - and `!important` ties the
      priority bucket. Without this the slab stays invisible. */
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-opener),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-closer),
@@ -855,14 +854,14 @@
        crash into the slab's right edge (the floating badge sits in
        this padded zone too). padding-left + padding-right written
        out separately because `padding-inline` was being overridden
-       by CM6's own `.cm-line` default `padding: 0 2px` — separate
+       by CM6's own `.cm-line` default `padding: 0 2px` - separate
        longhand props beat the shorthand-default cascade order. */
     padding-left: 0.75em !important;
     padding-right: 0.75em !important;
     /* The CM6 fold gutter eats ~18px on the LEFT of the editor; the
        right side has no gutter, so the slab bleeds to the editor's
        right edge while the left edge sits flush with the post-
-       gutter content edge — visibly lopsided. A transparent right
+       gutter content edge - visibly lopsided. A transparent right
        border + `background-clip: padding-box` paints the slab up to
        the padding edge only, leaving a matching empty strip on the
        right that mirrors the gutter on the left.
@@ -1224,7 +1223,7 @@
     box-sizing: border-box;
   }
   /* Hide the hover overlay (Edit / View) and the resize handle
-     on a broken image — there's no image to edit or view, and
+     on a broken image - there's no image to edit or view, and
      the controls competed with the badge's own right edge. */
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-broken="true"] .cm-md-image-actions),
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-broken="true"] .cm-md-image-handle) {
@@ -1258,7 +1257,7 @@
     margin-left: 1em;
   }
   /* Standalone mode (image alone on its source line). Alignment
-     positions the image within the line via margin — no float, no
+     positions the image within the line via margin - no float, no
      text wrap. The wrap is shrink-to-fit so the absolutely
      positioned overlay (Edit / View / resize handle) anchors to
      the IMAGE'S edges, not the line's full width. */
@@ -1280,7 +1279,7 @@
      preview, not a final commit. Pointer events stay enabled so the
      hover Edit / View overlay still works on the preview. Cap the
      thumbnail to ~160px so a wide image (`#w=250` / `#w=346`)
-     doesn't dominate the canvas — the preview is a reference, not
+     doesn't dominate the canvas - the preview is a reference, not
      the rendered version; the user is typing the URL right below
      it. The !important beats the inline `width: <N>px` the widget
      sets from the src fragment. */
@@ -1303,7 +1302,7 @@
     height: auto;
     object-fit: contain;
   }
-  /* Hide the resize handle on the edit-mode thumbnail — the
+  /* Hide the resize handle on the edit-mode thumbnail - the
      thumbnail isn't the rendered version, so committing a new
      width by dragging here would set `#w=N` to the THUMBNAIL's
      dimensions, not the user's intent. The handle reappears once
@@ -1328,7 +1327,7 @@
     bottom: 0;
     width: 0;
     height: 0;
-    /* Lower-right triangle "tick" — drag handle that mirrors the
+    /* Lower-right triangle "tick" - drag handle that mirrors the
        legacy editor's resize affordance. Built with CSS borders so
        the shape scales cleanly without a glyph. The colored bottom
        border + transparent right form the hypotenuse running
@@ -1429,7 +1428,7 @@
     padding: 4px;
     font-family: var(--chan-editor-body-family);
     font-size: 14px;
-    /* Bouncy reveal + hover wobble — matches the tab-menu bubble's
+    /* Bouncy reveal + hover wobble - matches the tab-menu bubble's
        easeOutBack motion so the editor's pickers feel of-a-piece. */
     transform-origin: top left;
     animation: cm-bubble-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);

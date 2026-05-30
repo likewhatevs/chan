@@ -5,7 +5,7 @@
  * Calibri stays as the fallback for users still on the older default,
  * and the rest of the stack covers systems without either installed.
  * Headings inherit the body face but pick up Word's classic blue tint
- * (#2F5496) at weight 600 — the look most readers recognize from
+ * (#2F5496) at weight 600 - the look most readers recognize from
  * "Heading 1" / "Heading 2" in the default Word style set.
  *
  * Links use #0563C1 (Word's "Hyperlink" character style). Tables get
@@ -23,7 +23,7 @@
   --chan-editor-heading-family: var(--chan-editor-body-family);
   --chan-editor-heading-color: #2f5496;
   /* Word's default style-set: H1 16pt bold, H2 13pt bold, H3 12pt
-     bold (each in #2F5496); H4–H6 step down in size and switch to a
+     bold (each in #2F5496); H4 - H6 step down in size and switch to a
      darker blue. Expressed in em against the 11pt body. */
   --chan-editor-h1-size: 1.45em;
   --chan-editor-h1-weight: 600;

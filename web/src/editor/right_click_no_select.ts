@@ -11,7 +11,7 @@ import { EditorView } from "@codemirror/view";
 /// Returning `true` from the handler tells CodeMirror "I've
 /// handled this event, don't run your default mousedown logic".
 /// The contextmenu event itself still fires (we don't
-/// preventDefault here) — `FileEditorTab.svelte`'s
+/// preventDefault here) - `FileEditorTab.svelte`'s
 /// `oncontextmenu={onEditorContext}` handles the menu pop.
 export function rightClickNoSelect(): ReturnType<
   typeof EditorView.domEventHandlers

@@ -92,7 +92,7 @@ export function openTagBubble(opts: TagBubbleOpts): TagBubbleHandle {
       shell.reposition();
       return;
     }
-    status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ to insert`;
+    status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} - ↵ to insert`;
     for (let i = 0; i < hits.length; i++) {
       const tag = hits[i]!;
       const row = document.createElement("div");

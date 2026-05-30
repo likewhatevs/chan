@@ -44,7 +44,7 @@ export function htmlPasteHandler(): Extension {
       if (!html) return false;
       if (!RICH_TAG_RE.test(html)) return false;
       event.preventDefault();
-      // Lazy import — the converter is only fetched on first rich
+      // Lazy import - the converter is only fetched on first rich
       // paste. Vite emits this as its own chunk.
       void htmlToMarkdown(html).then((md) => {
         if (!md) return;

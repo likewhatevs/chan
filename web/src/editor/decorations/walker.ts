@@ -10,7 +10,7 @@
 //   - `node` exposes the syntax-tree position (name, from, to). Handlers
 //     can descend via `node.node.firstChild` / `nextSibling` if they
 //     need internal structure (e.g. wikilink body, link URL).
-//   - `state` is the EditorState — handlers read doc text via
+//   - `state` is the EditorState - handlers read doc text via
 //     `state.doc.sliceString(...)`.
 //   - `sel` is the active selection.
 //   - `view` is the EditorView (rarely needed, but useful for atomic
@@ -21,19 +21,19 @@
 //     from `selection.ts`, bound to the current selection / state.
 //
 // Handlers are registered as `{ [nodeName]: handler }`. Unknown nodes
-// are silently skipped — handlers fill in coverage progressively
+// are silently skipped - handlers fill in coverage progressively
 // across steps 4 (marks, naked URL, headings), 5 (blocks), 6 (atoms).
 //
 // Re-run triggers (each one independently invalidates the decoration
 // set):
-//   - `update.docChanged` — text edits, paste, undo/redo.
-//   - `update.viewportChanged` — scroll, fold toggle, window resize.
-//   - `update.selectionSet` — caret/selection movement. Required so
+//   - `update.docChanged` - text edits, paste, undo/redo.
+//   - `update.viewportChanged` - scroll, fold toggle, window resize.
+//   - `update.selectionSet` - caret/selection movement. Required so
 //     the visibility rule (which hides decorations the selection
 //     intersects) re-evaluates on caret moves.
 //
 // All re-runs walk only the visible viewport (`view.viewport.from..to`)
-// per CM6 convention — cost stays proportional to visible content,
+// per CM6 convention - cost stays proportional to visible content,
 // not document size.
 
 import { syntaxTree } from "@codemirror/language";

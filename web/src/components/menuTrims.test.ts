@@ -18,7 +18,7 @@ describe("TerminalTab right-click: Search still gone; Settings comes back as fli
 
   test("no openSettingsFromMenu entry (the global Settings overlay opener)", () => {
     // `-80` dropped duplicating the global Settings chord
-    // (Cmd+,) in per-tab menus. That rule stands — no
+    // (Cmd+,) in per-tab menus. That rule stands - no
     // `openSettingsFromMenu` style handler in the source.
     expect(terminal).not.toContain("onclick={openSettingsFromMenu}");
   });

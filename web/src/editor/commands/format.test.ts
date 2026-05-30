@@ -4,7 +4,7 @@
 // these tests guard against: pressing ArrowDown / Mod-Enter at the
 // last line of an unclosed fenced block at doc end appends an empty
 // `\n`, but the new line still belongs to the (still-unclosed)
-// fence, so the user can never get out — every keypress just grows
+// fence, so the user can never get out - every keypress just grows
 // the file with no escape.
 
 import { describe, expect, test, afterEach, vi } from "vitest";
@@ -81,7 +81,7 @@ describe("escapeFenceAtDocEnd", () => {
   });
 
   test("regression: caret at start of closer line escapes (```sh / asdf / ```)", () => {
-    // Caret at the very start of the closer line — the position
+    // Caret at the very start of the closer line - the position
     // a user is in after typing the closer and clicking back into
     // it. Previously trapped because resolveInner(pos, 0) at this
     // boundary returned Document, missing the FencedCode.

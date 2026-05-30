@@ -9,7 +9,7 @@
  *
  * The defaults below match the editor's pre-themes look so a partial
  * theme override degrades gracefully. App chrome (panes, toolbar,
- * status bar) is NOT controlled by these vars — only the editor.
+ * status bar) is NOT controlled by these vars - only the editor.
  */
 :root {
   /* Body */

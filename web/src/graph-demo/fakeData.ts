@@ -5,7 +5,7 @@
 // are link / tag / mention / date.
 //
 // Deterministic via a tiny seeded PRNG so reload yields the same
-// shape unless the seed input changes — handy when comparing two
+// shape unless the seed input changes - handy when comparing two
 // force tunings against an identical graph.
 
 import type { GraphView, GraphViewEdge, GraphViewNode } from "../api/types";

@@ -8,16 +8,16 @@
   // actions in one place.
   //
   // Caller supplies:
-  //   - `open` (bindable) — true while the popover is up
+  //   - `open` (bindable) - true while the popover is up
   //   - `width` (estimate, for off-screen clamping; defaults to 240px)
   //   - `height` (estimate; controls below-vs-above flip)
-  //   - `children` — the <li> rows of the menu (the caller controls
+  //   - `children` - the <li> rows of the menu (the caller controls
   //     content + per-row click handlers)
   //
   // Two opener APIs:
-  //   - `openFromTrigger(el)` — measure the trigger button and anchor
+  //   - `openFromTrigger(el)` - measure the trigger button and anchor
   //     the popover to its bottom-right.
-  //   - `openAtCursor(x, y)` — anchor at the cursor, used by the
+  //   - `openAtCursor(x, y)` - anchor at the cursor, used by the
   //     parent's `oncontextmenu` so right-click feels native.
 
   import type { Snippet } from "svelte";
@@ -52,7 +52,7 @@
   /// the bubble doesn't pop in at (0,0); then, once mounted, measure
   /// its REAL bounding box and re-clamp into the viewport. The
   /// estimated `width` / `height` props are only used for the first
-  /// frame — actual content size wins thereafter.
+  /// frame - actual content size wins thereafter.
   function placeNearCursor(x: number, y: number): void {
     pos = clampToViewport(width, height, { x, y });
     refineAfterMount(x, y);
@@ -206,7 +206,7 @@
     .hamburger-menu:hover { transform: none; }
   }
   /* Row styling is exposed so per-overlay <li> contents can stay
-     terse — they only emit icon + label. Shared cap on hover bg
+     terse - they only emit icon + label. Shared cap on hover bg
      and svg sizing for consistency. */
   :global(.hamburger-menu li) { margin: 0; }
   :global(.hamburger-menu li.sep) {
@@ -266,7 +266,7 @@
     line-height: 1;
   }
   /* Two-column row layout used inside HamburgerMenu rows: label
-     flush-left, chord (Cmd+P, …) flush-right. Defined globally so
+     flush-left, chord (Cmd+P, ...) flush-right. Defined globally so
      every overlay menu and the empty-pane menu share one set of
      class names. Rows without a registered chord still render an
      empty `.menu-row-chord` sibling so the right column stays

@@ -5,8 +5,8 @@
   // SVG-icon bitmap compositing, scenegraph hit-testing) sits above
   // the d3-force simulation it wraps, and chews enough budget that
   // a 90-node graph never matches the Observable d3-force example's
-  // smoothness. Rendering straight to a canvas — one fill + ring +
-  // icon blit per node per tick — closes that gap.
+  // smoothness. Rendering straight to a canvas - one fill + ring +
+  // icon blit per node per tick - closes that gap.
   //
   // What GraphCanvas owns:
   //   - HTML5 canvas + animation loop (requestAnimationFrame)
@@ -254,7 +254,7 @@
   /// stroke is baked in at build time).
   const iconImages: Partial<Record<DKind, HTMLImageElement>> = {};
   /// Parallel set stroked in the muted text-secondary colour for
-  /// "ghost" rendering — broken-link targets and unresolved
+  /// "ghost" rendering - broken-link targets and unresolved
   /// mentions. The regular variant is stroked in the page bg so
   /// it knocks out against the kind-coloured disc; the ghost
   /// variant is stroked in textSec so it reads against the empty
@@ -273,7 +273,7 @@
     `<polyline points='20 16 15 11 5 19'/>`;
   const PATH_FOLDER =
     `<path d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/>`;
-  /// Lucide HardDrive — used as the workspace-root glyph so the node
+  /// Lucide HardDrive - used as the workspace-root glyph so the node
   /// reads as the storage anchor, distinct from any other directory.
   const PATH_WORKSPACE =
     `<line x1='22' y1='12' x2='2' y2='12'/>` +
@@ -313,7 +313,7 @@
   }
 
   function rebuildIcons(bg: string, ghostStroke: string): void {
-    // Regular variants — stroked in the page-bg so the icon
+    // Regular variants - stroked in the page-bg so the icon
     // "knocks out" against the kind-coloured disc. mention reuses
     // the contact silhouette because a fuzzy-resolved @@name IS
     // a contact for every UX purpose; the only difference between
@@ -337,7 +337,7 @@
     // reads; uses text-secondary (lifted off the bgCard fill that
     // matches the panel background).
     loadIcon(iconImages, "workspace", svgStrokeIcon(PATH_WORKSPACE, ghostStroke));
-    // Ghost variants — stroked in text-secondary so the icon
+    // Ghost variants - stroked in text-secondary so the icon
     // reads against the empty bgCard fill the ghost ring sits
     // over. Same paths as the regular set; only the stroke
     // colour differs.
@@ -484,7 +484,7 @@
     return "binary";
   }
 
-  /// Backlink counts per node — used to size hubs slightly larger.
+  /// Backlink counts per node - used to size hubs slightly larger.
   /// Pre-counted at assembly so the paint pass doesn't walk edges
   /// every frame.
   let backlinks: Map<string, number> = new Map();
@@ -544,7 +544,7 @@
   /// id "") sits at depth 0; top-level files / directories at
   /// depth 1; nested at depth = parent depth + 1. Non-hierarchical
   /// node kinds (tag / mention / language) return `depth: -1` so
-  /// the layout forces skip them — those nodes float on the
+  /// the layout forces skip them - those nodes float on the
   /// existing center force without a depth anchor.
   function nodeHierarchy(n: RenderedNode): {
     depth: number;
@@ -1021,7 +1021,7 @@
       const isAdj = adj?.has(n.id) === true;
       const isHover = n.id === hoverId;
       const isSiblingDim = siblingDim?.has(n.id) === true;
-      // Ghost styling fires only for broken-link targets — files
+      // Ghost styling fires only for broken-link targets - files
       // that another doc points at but don't exist on disk. A
       // `@@name` mention is free-form by design (the indexer
       // emits a node per distinct token; no contact file is

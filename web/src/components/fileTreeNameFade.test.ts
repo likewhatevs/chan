@@ -36,7 +36,7 @@ describe("FileTree .name fade-mask", () => {
   });
 
   test(".name retains its existing flex + button-reset rules", () => {
-    // The fade should be ADDITIVE — don't drop the flex:1 / button
+    // The fade should be ADDITIVE - don't drop the flex:1 / button
     // reset / cursor / inherit-style rules that make the row a
     // clickable filename button.
     expect(source).toMatch(/\.name \{[\s\S]*?flex: 1;/);

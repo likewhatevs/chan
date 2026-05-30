@@ -285,7 +285,7 @@
           onClick: () => navigateContact(m.path),
         });
       } else {
-        // Unresolved `@@name` — no matching contact on disk yet.
+        // Unresolved `@@name` - no matching contact on disk yet.
         // Falls back to workspace-scoped graph with the mention node
         // pre-selected (openGraphAtNode), since there's no file
         // to scope to.
@@ -575,11 +575,11 @@
   /// extrapolation that's noisy for a personal notes app. Effort,
   /// schedule, and developer-count carry the useful signal.
   function fmtMonths(n: number): string {
-    if (!Number.isFinite(n)) return "—";
+    if (!Number.isFinite(n)) return " - ";
     return n >= 10 ? `${Math.round(n)} mo` : `${n.toFixed(1)} mo`;
   }
   function fmtDevs(n: number): string {
-    if (!Number.isFinite(n)) return "—";
+    if (!Number.isFinite(n)) return " - ";
     return n >= 10 ? `${Math.round(n)}` : n.toFixed(1);
   }
 </script>
@@ -627,7 +627,7 @@
           <span class="dl-line"
             >Downloading {transfer.filename}{transfer.progress !== null
               ? ` (${Math.round(transfer.progress * 100)}%)`
-              : "…"}</span
+              : "..."}</span
           >
           {#if transfer.cancel}
             <button
@@ -872,7 +872,7 @@
         </div>
       </section>
     {:else if reportLoading}
-      <div class="refs-loading">loading report…</div>
+      <div class="refs-loading">loading report...</div>
     {:else if reportError}
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
@@ -928,22 +928,22 @@
       {/if}
       {#if showRefs && !image && !pdf}
         <span class="k">tags</span>
-        <span class="v">{refs ? refs.tags.length : "…"}</span>
+        <span class="v">{refs ? refs.tags.length : "..."}</span>
         <span class="k">contacts</span>
-        <span class="v">{refs ? contactPills.length : "…"}</span>
+        <span class="v">{refs ? contactPills.length : "..."}</span>
         <span class="k">dates</span>
-        <span class="v">{refs ? refs.dates.length : "…"}</span>
+        <span class="v">{refs ? refs.dates.length : "..."}</span>
         <span class="k">links out</span>
-        <span class="v">{refs ? nonContactLinks.length : "…"}</span>
+        <span class="v">{refs ? nonContactLinks.length : "..."}</span>
         <span class="k">backlinks</span>
-        <span class="v">{backlinksLoading ? `${backlinks.length}…` : backlinks.length}</span>
+        <span class="v">{backlinksLoading ? `${backlinks.length}...` : backlinks.length}</span>
       {:else if showRefs && (image || pdf)}
         <!-- Media files (images and PDFs) can be link targets but
              carry no outgoing references of their own. Show just
              the "linked from" count; tags / contacts / dates would
              always be zero. -->
         <span class="k">linked from</span>
-        <span class="v">{backlinksLoading ? `${backlinks.length}…` : backlinks.length}</span>
+        <span class="v">{backlinksLoading ? `${backlinks.length}...` : backlinks.length}</span>
       {/if}
     </div>
     {#if fileReport}
@@ -971,13 +971,13 @@
         </div>
       </section>
     {:else if reportLoading}
-      <div class="refs-loading">loading report…</div>
+      <div class="refs-loading">loading report...</div>
     {:else if reportError}
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
     {#if showRefs}
       {#if !graphData.view && graphData.loading}
-        <div class="refs-loading">loading references…</div>
+        <div class="refs-loading">loading references...</div>
       {:else if graphData.error}
         <div class="refs-error">references unavailable: {graphData.error}</div>
       {:else if refs}

@@ -90,7 +90,7 @@ const headingFoldGutter = gutter({
     // through folded ranges that follow this heading, so sampling
     // text via `sliceString(blockInfo.from, blockInfo.to)` would
     // return the heading + the folded body and our heading regex
-    // would still match — but `findHeadingFold` (below) needs the
+    // would still match - but `findHeadingFold` (below) needs the
     // exact line.to to locate the fold start, which is what the
     // foldService emits.
     const line = view.state.doc.lineAt(blockInfo.from);
@@ -147,8 +147,7 @@ const headingFoldGutter = gutter({
 export function headingFold(): Extension {
   // `codeFolding()` registers the fold state field that foldEffect /
   // unfoldEffect mutate. Without it the chevron click dispatches
-  // an effect that nothing listens to and the fold silently no-ops —
-  // gutter clicks logged the right blockInfo and dispatched, but
+  // an effect that nothing listens to and the fold silently no-ops -   // gutter clicks logged the right blockInfo and dispatched, but
   // foldedRanges stayed empty.
   return [codeFolding(), headingFoldService, headingFoldGutter];
 }

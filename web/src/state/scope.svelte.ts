@@ -1,6 +1,6 @@
 // Shared scope picker for the floating overlays (search, graph).
-// Both surfaces care about the same question — "what
-// part of my world are we working on right now?" — and render the
+// Both surfaces care about the same question - "what
+// part of my world are we working on right now?" - and render the
 // same dropdown:
 //
 //   - one entry per file currently visible in any leaf pane
@@ -81,7 +81,7 @@ export type ScopeOption =
       kind: "tag";
       label: string;
       /// Graph node id of the tag (e.g. `#search`). The graph
-      /// scoping logic seeds BFS from this id directly — no need to
+      /// scoping logic seeds BFS from this id directly - no need to
       /// resolve to a path list like the file-kind scopes do.
       nodeId: string;
       enabled?: boolean;
@@ -262,7 +262,7 @@ export function availableScopeOptions(opts: {
       path: dirPath,
     });
   }
-  // Auto-derived dir scopes — per request.md, when the scope is a
+  // Auto-derived dir scopes - per request.md, when the scope is a
   // single .md file include its parent directory, and when multiple
   // files share the scope (group) include their first common
   // ancestor. Both surface as `dir:<path>` so the consumer doesn't

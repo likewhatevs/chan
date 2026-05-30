@@ -4,11 +4,11 @@
 // inside the YAML body would be promoted to a heading and `---` separators
 // would render as horizontal rules. We define two block node types:
 //
-//   Frontmatter        the whole `---\n…\n---\n` block at doc start
+//   Frontmatter        the whole `---\n...\n---\n` block at doc start
 //   FrontmatterMark    the opening `---` and closing `---` lines
 //
 // Style: muted (`tags.meta`) so theme rules can dim it. The body is left
-// unstyled — v1 doesn't ship YAML highlighting.
+// unstyled - v1 doesn't ship YAML highlighting.
 //
 // Constraints:
 //   - Block must start at document position 0 (no leading blank lines).
@@ -18,7 +18,7 @@
 //   - The closing fence is the next line that is exactly `---` (or `...`,
 //     a YAML stream-end marker; we accept both for parity with Pandoc).
 //   - If we never find a closing fence before EOF, we DO NOT emit a
-//     Frontmatter node — falling back to the regular HR parser is more
+//     Frontmatter node - falling back to the regular HR parser is more
 //     graceful than dimming the entire document.
 
 import type { MarkdownConfig } from "@lezer/markdown";
@@ -67,7 +67,7 @@ export const Frontmatter: MarkdownConfig = {
           }
           if (!cx.nextLine()) {
             // Reached EOF without a closing fence. Not a frontmatter
-            // block — return false so the opener line gets re-parsed
+            // block - return false so the opener line gets re-parsed
             // as a horizontal rule by the standard parsers.
             return false;
           }

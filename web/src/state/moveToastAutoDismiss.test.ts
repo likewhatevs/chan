@@ -13,7 +13,7 @@ describe("move success uses setTransientStatus", () => {
     );
   });
 
-  test("empty-linkBits path clears ui.status (no orphan 'Moving…')", () => {
+  test("empty-linkBits path clears ui.status (no orphan 'Moving...')", () => {
     expect(store).toMatch(
       /\} else \{[\s\S]*?No link updates worth surfacing[\s\S]*?ui\.status = null;/,
     );

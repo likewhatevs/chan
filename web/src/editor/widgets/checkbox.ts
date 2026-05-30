@@ -9,7 +9,7 @@
 // decide what to swap. Safe across intervening edits and atomic
 // undo/redo.
 //
-// `eq()` compares only the `checked` state — same value === reuse the
+// `eq()` compares only the `checked` state - same value === reuse the
 // same DOM, no remount on unrelated transactions.
 
 import { WidgetType, type EditorView } from "@codemirror/view";
@@ -45,7 +45,7 @@ export class CheckboxWidget extends WidgetType {
   ignoreEvent(): boolean {
     // Returning false would let CM6 process events on the widget DOM
     // as part of normal editor input. Returning true keeps the widget
-    // self-contained — our mousedown handler owns the toggle.
+    // self-contained - our mousedown handler owns the toggle.
     return true;
   }
 }

@@ -68,7 +68,7 @@ describe("(3): New Directory dialog cursor at end", () => {
 
   test("default select-all branch still exists for other kinds/modes", () => {
     // Move / attach / file-non-default-name fall through to the
-    // original select-all behavior — preserved.
+    // original select-all behavior - preserved.
     expect(pathPromptModal).toMatch(/} else \{[\s\S]*?inputEl\?\.select\(\);/);
   });
 });

@@ -19,7 +19,7 @@ describe("graph loading-state: indexing cue", () => {
   });
 
   test("the status bar renders the indexing cue gated on indexBuilding", () => {
-    expect(graph).toMatch(/\{#if indexBuilding\}[\s\S]*?class="indexing"[\s\S]*?indexing…/);
+    expect(graph).toMatch(/\{#if indexBuilding\}[\s\S]*?class="indexing"[\s\S]*?indexing.../);
   });
 
   test("the indexing cue pulses (and respects reduced-motion)", () => {

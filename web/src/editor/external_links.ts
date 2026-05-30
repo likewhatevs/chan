@@ -26,7 +26,7 @@ export function isOpenableExternalUrl(url: string): boolean {
 /// Best-effort handoff to the desktop opener. Returns true when the
 /// call resolved; false when neither bridge was present or the call
 /// threw (capability denied, no default browser, no app handler for
-/// the scheme). Errors are logged to the console for debugging — the
+/// the scheme). Errors are logged to the console for debugging - the
 /// caller decides what the user sees.
 async function tryTauriOpen(w: TauriWindow, url: string): Promise<boolean> {
   try {
@@ -51,7 +51,7 @@ async function tryTauriOpen(w: TauriWindow, url: string): Promise<boolean> {
 /// Fallback after a desktop opener failure: copy the URL to the
 /// clipboard so the user can paste it manually, then surface a plain-
 /// English status message. Never falls back to window.open inside a
-/// Tauri webview — that would open the URL inside Chan.app's own
+/// Tauri webview - that would open the URL inside Chan.app's own
 /// shell, pollute its session, and defeat "external".
 async function copyAndNotifyFailure(url: string): Promise<void> {
   let copied = false;
@@ -65,8 +65,8 @@ async function copyAndNotifyFailure(url: string): Promise<void> {
   }
   notify(
     copied
-      ? "Couldn't open link in browser — URL copied to clipboard"
-      : `Couldn't open link in browser — ${url}`,
+      ? "Couldn't open link in browser - URL copied to clipboard"
+      : `Couldn't open link in browser - ${url}`,
   );
 }
 

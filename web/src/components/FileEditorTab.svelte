@@ -308,7 +308,7 @@
 
   /// Dismiss when the click lands outside the bubble AND outside any
   /// tab row (the row's own click handler already toggles the state,
-  /// so we ignore clicks that bubble up from it — without this guard
+  /// so we ignore clicks that bubble up from it - without this guard
   /// the global handler closes the menu before the row handler has a
   /// chance to reopen it, and a second click on the active tab feels
   /// dead).
@@ -559,14 +559,13 @@
     // SearchPanel's open-effect calls extractSearchSeed() on the
     // open transition, which reads window.getSelection() and pre-
     // fills `searchPanel.query` when the user had text highlighted.
-    // Same flow as the Mod+Shift+F chord — no extra wiring needed
+    // Same flow as the Mod+Shift+F chord - no extra wiring needed
     // beyond setting the open bit here.
     searchPanel.open = true;
   }
 
   async function doReopenMissing(): Promise<void> {
-    // First try to restore the SAME file at its original path —
-    // covers the false-positive case where the panel surfaced
+    // First try to restore the SAME file at its original path -     // covers the false-positive case where the panel surfaced
     // briefly because of an atomic-write race that's since
     // resolved. If the file is genuinely gone, fall through to
     // the FB-navigation flow so the user can pick the moved file
@@ -1103,7 +1102,7 @@
               // the popover) or on a writable plain click. Open the
               // resolved contact file; the widget passes a null path
               // when the name didn't match any contact (silent no-op
-              // for now — could surface a status hint later).
+              // for now - could surface a status hint later).
               if (args.path) void openInActivePane(args.path);
             }}
           />

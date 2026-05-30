@@ -5,7 +5,7 @@ import fileBrowserSurface from "./FileBrowserSurface.svelte?raw";
 // menu items are served via a triggerless HamburgerMenu opened at the
 // cursor by the tab-strip right-click or by `onBrowserContextMenu` on
 // the dock body. Only the Overlay variant keeps a header (close +
-// maximize + kebab — maximize has nowhere else to live).
+// maximize + kebab - maximize has nowhere else to live).
 
 describe("FileBrowserSurface header is overlay-only", () => {
   test("header is wrapped in {#if isOverlay}", () => {

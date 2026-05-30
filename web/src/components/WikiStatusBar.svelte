@@ -123,17 +123,17 @@
         {backlinkCount ?? "-"}
         <span class="lbl">backlinks</span>
       </span>
-      <span class="sep">·</span>
+      <span class="sep"> - </span>
       <span class="stat" title="words">
         {words}
         <span class="lbl">words</span>
       </span>
-      <span class="sep">·</span>
+      <span class="sep"> - </span>
       <span class="stat" title="characters">
         {chars}
         <span class="lbl">chars</span>
       </span>
-      <span class="sep">·</span>
+      <span class="sep"> - </span>
       <button
         class="lamp"
         class:on={!effectiveRead}

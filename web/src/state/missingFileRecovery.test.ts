@@ -80,7 +80,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("scheduleMissingFileCheck — debounced watcher reaction", () => {
+describe("scheduleMissingFileCheck - debounced watcher reaction", () => {
   test("does NOT mark fileMissing when the file is back within the debounce window", async () => {
     const seed = fileTab({ id: "tab-a", path: "notes/a.md" });
     resetLayout([seed]);
@@ -228,7 +228,7 @@ describe("Find-suggest lookup", () => {
   });
 });
 
-describe("attemptInPlaceReopen — Re-open button behaviour", () => {
+describe("attemptInPlaceReopen - Re-open button behaviour", () => {
   test("clears fileMissing when the original path is readable again", async () => {
     const seed = fileTab({
       id: "tab-i",

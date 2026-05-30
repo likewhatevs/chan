@@ -61,13 +61,13 @@ describe("setTransientStatus", () => {
     setTransientStatus("Copied path");
     vi.advanceTimersByTime(500);
 
-    // Simulate a persistent write (e.g. "Moving…") landing
+    // Simulate a persistent write (e.g. "Moving...") landing
     // mid-flight.
-    ui.status = "Moving…";
+    ui.status = "Moving...";
     ui.statusKind = "persistent";
 
     vi.advanceTimersByTime(5000);
-    expect(ui.status).toBe("Moving…");
+    expect(ui.status).toBe("Moving...");
     expect(ui.statusKind).toBe("persistent");
   });
 

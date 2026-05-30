@@ -25,7 +25,7 @@ const sources = (
 ) as Record<string, string>;
 
 const EXCLUDE = new Set<string>([
-  // The in-house replacement modules — references are explanatory,
+  // The in-house replacement modules - references are explanatory,
   // not invocations.
   "./state/store.svelte.ts",
   "./state/confirm.svelte.ts",

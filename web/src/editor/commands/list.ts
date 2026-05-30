@@ -77,7 +77,7 @@ function nextPrefix(prev: ListPrefix): string {
 ///     plus the next marker, drop caret after it.
 ///   - Non-empty item, caret elsewhere → fall through (default
 ///     newline). Auto-continuing mid-line is more annoying than
-///     useful — it splits a sentence with a stray bullet.
+///     useful - it splits a sentence with a stray bullet.
 export function continueListOnEnter(view: EditorView): boolean {
   const sel = view.state.selection.main;
   if (!sel.empty) return false;
@@ -86,7 +86,7 @@ export function continueListOnEnter(view: EditorView): boolean {
   if (!prefix) return false;
   const content = line.text.slice(prefix.length);
   if (content.length === 0) {
-    // Blank bullet — exit the list. Replace the whole line with
+    // Blank bullet - exit the list. Replace the whole line with
     // empty text and drop the caret at line.from.
     view.dispatch({
       changes: { from: line.from, to: line.to, insert: "" },
@@ -146,7 +146,7 @@ function shiftListLines(view: EditorView, dir: 1 | -1): boolean {
       changes.push({ from: line.from, to: line.from, insert: INDENT_UNIT });
     } else {
       // Strip up to INDENT_UNIT.length leading space chars. Tabs
-      // count as one char each — we don't try to expand them.
+      // count as one char each - we don't try to expand them.
       let strip = 0;
       while (strip < INDENT_UNIT.length && line.text[strip] === " ") strip++;
       if (strip > 0) {

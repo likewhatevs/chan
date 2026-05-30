@@ -15,7 +15,7 @@ function stripCommentsAndCss(src: string): string {
   // Drop HTML / Svelte comments (<!-- ... -->) which discuss
   // historical phase work, also not user-facing.
   const noHtml = noLine.replace(/<!--[\s\S]*?-->/g, "");
-  // Strip the <style> block — class names like `pane-mode-flash`
+  // Strip the <style> block - class names like `pane-mode-flash`
   // are internal CSS hooks, not user copy.
   const noStyle = noHtml.replace(/<style[\s\S]*?<\/style>/g, "");
   return noStyle;
@@ -34,7 +34,7 @@ describe("Hybrid Nav user-facing copy", () => {
     const visible = stripCommentsAndCss(pane);
     // Visible text in Svelte templates lives between tags
     // (`>Pane Mode<`) or inside attribute values
-    // (`aria-label="Pane Mode …"`). Internal references like
+    // (`aria-label="Pane Mode ..."`). Internal references like
     // `paneMode.active` (variable access) survive the strip and
     // are intentional; they're not rendered to the user.
     expect(visible).not.toContain(">Pane Mode<");

@@ -10,13 +10,13 @@
 //
 // This module provides two pieces:
 //
-//   - `openBubbleShell` — DOM scaffolding shared by every bubble.
+//   - `openBubbleShell` - DOM scaffolding shared by every bubble.
 //     Creates an absolute-positioned, body-attached wrap div with
 //     a high z-index, anchors it under the trigger, and re-anchors
 //     on viewport changes. The adapter builds its specific content
 //     (result list, preview, footer) inside `shell.wrap`.
 //
-//   - `BubbleHandle` — uniform keyboard contract every adapter
+//   - `BubbleHandle` - uniform keyboard contract every adapter
 //     exposes back to the host. The host's keydown handler routes
 //     events through `bubble.handleKey(event)` without per-type
 //     branches; each adapter decides how to interpret keys.
@@ -69,7 +69,7 @@ export function openBubbleShell(opts: BubbleShellOpts): BubbleShell {
 
   // Outside-mousedown dismiss. Without this, the bubble stays open
   // until the controller sees a selection change that invalidates the
-  // trigger spec — and a click in the doc that lands inside the still-
+  // trigger spec - and a click in the doc that lands inside the still-
   // valid trigger range (or on a button that preventDefaults) won't
   // dismiss. With outside-mousedown, clicks anywhere not inside the
   // bubble close it immediately AND let the underlying click through

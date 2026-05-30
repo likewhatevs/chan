@@ -5,9 +5,9 @@
 // pick to link to a specific point in the document. Headings are
 // excluded (they have heading anchors and live in `#` mode).
 //
-// Why parse client-side: chan-core has no `block` concept and the
+// Why parse client-side: chan-workspace has no `block` concept and the
 // HTTP file body is plain markdown. Block detection here is line-
-// based and intentionally simple; if/when chan-core grows a server-
+// based and intentionally simple; if/when chan-workspace grows a server-
 // side block index we can swap this out without touching the bubble.
 
 const BLOCK_ID_RE = /\^([A-Za-z0-9-]{4,})\s*$/;

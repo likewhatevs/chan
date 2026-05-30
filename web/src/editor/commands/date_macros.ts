@@ -21,7 +21,7 @@
 // the line doesn't end with one of the keywords, so the typed
 // character falls through to normal input. Returning true consumes
 // the key; the inserted space / newline does NOT make it into the
-// doc — keeps the flow "type @today, hit space, see today's date,
+// doc - keeps the flow "type @today, hit space, see today's date,
 // keep typing".
 
 import type { EditorView } from "@codemirror/view";
@@ -173,7 +173,7 @@ export function expandDateMacro(view: EditorView): boolean {
   // For the no-popover path (`@today`), land the caret OUTSIDE the
   // inserted date so the pill renders on the same keystroke. Without
   // this, the caret sits at the date's trailing boundary which the
-  // date widget treats as intersecting selection — the pill stays
+  // date widget treats as intersecting selection - the pill stays
   // collapsed as source until the next character moves the caret
   // past the boundary. Append a trailing space when the next char
   // isn't already whitespace; advance the caret one past the date.
@@ -224,7 +224,7 @@ export function expandDateMacro(view: EditorView): boolean {
           if (pickedFormatId !== formatId) persistDateFormat(pickedFormatId);
           anchor.remove();
           // Focus the editor so the user can keep typing without
-          // having to click back into the doc — the popover stole
+          // having to click back into the doc - the popover stole
           // focus while open.
           view.focus();
         },

@@ -27,7 +27,7 @@ const tsPath = join(here, "..", "src", "state", "shortcuts.ts");
 const webDir = join(here, "..");
 
 // Compile shortcuts.ts to a temp .mjs and import. Keeps shortcuts.ts
-// as the only place chord data lives — no parallel JS shadow file
+// as the only place chord data lives - no parallel JS shadow file
 // to drift out of sync. tsc is already installed for the web build.
 const work = mkdtempSync(join(tmpdir(), "chan-shortcuts-"));
 try {

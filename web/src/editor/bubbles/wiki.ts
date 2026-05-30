@@ -170,13 +170,13 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       return;
     }
     status.classList.remove("md-bubble-status-empty");
-    const openHint = opts.onOpenLink ? " · ⌘↵ open" : "";
+    const openHint = opts.onOpenLink ? " - ⌘↵ open" : "";
     if (mode.kind === "heading") {
-      status.textContent = `${hits.length} heading${hits.length === 1 ? "" : "s"} in ${mode.target} · ↵ insert${openHint}`;
+      status.textContent = `${hits.length} heading${hits.length === 1 ? "" : "s"} in ${mode.target} - ↵ insert${openHint}`;
     } else if (mode.kind === "block") {
-      status.textContent = `${hits.length} block${hits.length === 1 ? "" : "s"} in ${mode.target} · ↵ insert${openHint}`;
+      status.textContent = `${hits.length} block${hits.length === 1 ? "" : "s"} in ${mode.target} - ↵ insert${openHint}`;
     } else {
-      status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ insert${openHint}`;
+      status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} - ↵ insert${openHint}`;
     }
     for (let i = 0; i < hits.length; i++) {
       const hit = hits[i]!;
@@ -221,7 +221,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
           row.appendChild(path);
         } else {
           const title = t.title?.trim();
-          row.textContent = title && title !== t.path ? `${title} · ${t.path}` : t.path;
+          row.textContent = title && title !== t.path ? `${title} - ${t.path}` : t.path;
         }
       }
       row.addEventListener("mousedown", (e) => {

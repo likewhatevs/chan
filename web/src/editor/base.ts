@@ -37,7 +37,7 @@ export function themeExtensions(theme: ChanTheme): Extension[] {
   // The editor-theme dimension (github / google_docs / word) flows
   // through CSS vars on documentElement, which both .cm-content
   // (typography) and the host CSS (chrome) read. The syntax-
-  // highlight palette is deliberately NOT per-editor-theme — all
+  // highlight palette is deliberately NOT per-editor-theme - all
   // three editor themes share a single GitHub Primer palette,
   // branching only on light / dark. This keeps code snippets
   // reading the same regardless of which document chrome is

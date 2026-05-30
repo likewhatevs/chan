@@ -110,7 +110,7 @@
           </span>
         {/if}
         {#if indexVisible && importVisible}
-          <span class="sep">·</span>
+          <span class="sep"> - </span>
         {/if}
         {#if importVisible}
           <span class="section" aria-label="import status">
@@ -119,7 +119,7 @@
           </span>
         {/if}
         {#if (indexVisible || importVisible) && transferVisible}
-          <span class="sep">·</span>
+          <span class="sep"> - </span>
         {/if}
         {#if transferVisible}
           {@const transfer = fileTransferStatus.value!}
@@ -138,7 +138,7 @@
           </span>
         {/if}
         {#if (indexVisible || importVisible || transferVisible) && statusVisible}
-          <span class="sep">·</span>
+          <span class="sep"> - </span>
         {/if}
         {#if statusVisible}
           {#if statusActionVisible}
@@ -153,7 +153,7 @@
           {/if}
         {/if}
         {#if (indexVisible || importVisible || transferVisible || statusVisible) && paneModeVisible}
-          <span class="sep">·</span>
+          <span class="sep"> - </span>
         {/if}
         {#if paneModeVisible}
           <!-- Status-bar label for Hybrid Nav (Cmd+K). The

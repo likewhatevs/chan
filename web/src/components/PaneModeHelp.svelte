@@ -15,7 +15,7 @@
   type Cap = {
     /// Visible label on the kbd-shaped button (e.g. "↑", "W", "Tab").
     label: string;
-    /// Dispatch key — matches `KeyboardEvent.key`. `undefined` means
+    /// Dispatch key - matches `KeyboardEvent.key`. `undefined` means
     /// the cap is descriptive only (no action; renders as inert kbd).
     /// Used for compound descriptors like "Shift + [ ] - =" that
     /// can't be fired by a single click.

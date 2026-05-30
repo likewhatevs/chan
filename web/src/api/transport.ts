@@ -1,9 +1,9 @@
-// API transport: HTTP+WebSocket against the local chan-core server.
+// API transport: HTTP+WebSocket against the local chan-server.
 //
 // `chan serve` runs a real loopback server. The Tauri desktop and
 // (eventual) iOS shells spawn the same server in-process and point
 // their WebView at it via the same loopback URL. One transport
-// implementation, one wire format, one auth model — there is no
+// implementation, one wire format, one auth model - there is no
 // platform-specific path.
 //
 // The seam exists as a single module so client.ts can stay focused
@@ -122,7 +122,7 @@ export function authToken(): string | null {
 /// underlying NSURLSession doesn't always surface back to fetch).
 /// Without an upper bound, restoreLayout's `await
 /// loadTabContent(...)` for a stuck tab would block bootstrap
-/// forever and the user would see "loading…" with no way out.
+/// forever and the user would see "loading..." with no way out.
 ///
 /// Pass `timeoutMs: 0` to disable the cap. Reserve that for
 /// endpoints that legitimately run for minutes and rely on the

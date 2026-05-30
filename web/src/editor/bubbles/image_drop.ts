@@ -111,8 +111,7 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
 
 /// Where a pasted image should land. A paste carries no coordinates,
 /// so the natural target is the caret. But `selection.main.head` is 0
-/// for a freshly-opened document the user hasn't clicked into yet —
-/// pasting a screenshot right after opening a note would drop the image
+/// for a freshly-opened document the user hasn't clicked into yet - /// pasting a screenshot right after opening a note would drop the image
 /// at the very top, above the title (the reported bug). Only trust the
 /// caret when the editor actually has focus; otherwise append at the
 /// end of the document, which is the least-surprising landing spot for

@@ -241,7 +241,7 @@
     <section>
       <h3>Editor theme</h3>
       <p class="hint">
-        Style of the markdown editor only — typography, headings,
+        Style of the markdown editor only - typography, headings,
         code blocks, links, tables.
       </p>
       <div class="theme-row" role="radiogroup" aria-label="Editor theme">

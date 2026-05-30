@@ -5,7 +5,7 @@
 // the WYSIWYG mounts) so we can poke at the tree shape while wiring
 // decoration handling in steps 3+.
 //
-// Pure functions only — no CM imports beyond types so this module can
+// Pure functions only - no CM imports beyond types so this module can
 // be tree-shaken out of production builds if a future step decides to.
 
 import type { EditorState } from "@codemirror/state";
@@ -20,7 +20,7 @@ export type TreeDumpLine = {
 };
 
 /// Walk the syntax tree across a range and return a flat list of
-/// node descriptors. Intended for printing — keeps text snippets short
+/// node descriptors. Intended for printing - keeps text snippets short
 /// (max 40 chars, ellipsised) so the output stays readable.
 export function dumpTree(
   state: EditorState,

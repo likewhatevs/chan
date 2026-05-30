@@ -2,7 +2,7 @@
 //
 // Detection: lezer-markdown doesn't recognize dates, so this lives in
 // its own ViewPlugin (mirrors the tag pattern from widgets/tag.ts).
-// We delegate matching to dateFormats.findDateMatches — the same
+// We delegate matching to dateFormats.findDateMatches - the same
 // matcher the legacy editor used, kept under web/src/editor/ so date
 // catalog evolution stays in one place.
 //
@@ -11,7 +11,7 @@
 //     so the user can edit the literal source. The boundary-inclusive
 //     intersection rule (selectionInRange semantics) means clicking
 //     the pill places the caret AT the pill's boundary, which counts
-//     as intersection on the next update tick — pill collapses to
+//     as intersection on the next update tick - pill collapses to
 //     source.
 //   - When selection doesn't intersect, emit Decoration.replace with
 //     a DateWidget; the widget's DOM is a styled span.
@@ -85,7 +85,7 @@ class DateWidget extends WidgetType {
       if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
-      // Resolve the live source range via posAtDOM — captured `from`
+      // Resolve the live source range via posAtDOM - captured `from`
       // at construction time may have shifted by upstream edits.
       const pos = view.posAtDOM(el);
       if (pos < 0) return;
@@ -156,7 +156,7 @@ export function dateDecorations(): Extension {
   );
   return [
     plugin,
-    // Atomic ranges share the same DecorationSet — caret motion
+    // Atomic ranges share the same DecorationSet - caret motion
     // skips over the pill in one keystroke. When the selection
     // intersects a date and the widget gets suppressed (source
     // revealed), the corresponding atomic range disappears too,

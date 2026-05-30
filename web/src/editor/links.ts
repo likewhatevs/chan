@@ -40,7 +40,7 @@ export function wikiLinkToMarkdown(
     .map((s) => encodeURIComponent(s).replace(/%2F/g, "/"))
     .join("/");
   // Anchor is appended verbatim. Heading anchors are already
-  // slugged by chan-core (kebab-case ASCII); block anchors are
+  // slugged by chan-workspace (kebab-case ASCII); block anchors are
   // `^id` and round-trip cleanly through encodeURIComponent's
   // identity for `^`.
   const frag = anchor ? `#${anchor}` : "";

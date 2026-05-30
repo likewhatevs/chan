@@ -1,7 +1,7 @@
 // Language descriptions for fenced code blocks.
 //
 // Each entry uses CM6's LanguageDescription.of() with an async `load`
-// callback — the pack is only fetched the first time a code fence
+// callback - the pack is only fetched the first time a code fence
 // claims that language. Vite emits each dynamic import as its own
 // chunk, so the main bundle stays small and language support arrives
 // on demand.

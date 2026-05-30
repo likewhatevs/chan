@@ -4,7 +4,7 @@
   // file browser, search overlay, and graph all share one component.
   //
   // Caller hands in a discriminated `selection` describing what was
-  // clicked. Files (text + image) route to FileInfoBody — it already
+  // clicked. Files (text + image) route to FileInfoBody - it already
   // branches internally on extension, so the search "image" hit and
   // the graph "image-ish file" node both get the same preview. Tag
   // / mention / date nodes route to TagInfoBody.

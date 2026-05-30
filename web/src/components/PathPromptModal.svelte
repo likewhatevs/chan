@@ -86,7 +86,7 @@
   /// Effective path + the suffix we tacked on for the user (if
   /// any). We resolve the extension here so the status row can
   /// preview both the create-time `.md` auto-append and the
-  /// rename-time extension preservation in italic — same visual
+  /// rename-time extension preservation in italic - same visual
   /// language for both, which keeps the user from being surprised
   /// by store-side rewrites.
   /// When `kind === "either"`, the modal detects file vs directory
@@ -251,7 +251,7 @@
   });
   /// Subset of `suggestions` that participates in LCP-extension.
   /// The placeholder filename is excluded because its path is a
-  /// proposed name, not a fact about the workspace — folding it into
+  /// proposed name, not a fact about the workspace - folding it into
   /// the LCP would push the user's typed value past the directory
   /// boundary on the first Tab.
   const dirSuggestions = $derived(
@@ -491,7 +491,7 @@
       //      file placeholder.
       //   3. Otherwise extend the input to the longest common
       //      prefix of the directory suggestions (the placeholder
-      //      filename is excluded from LCP — it's a proposal, not
+      //      filename is excluded from LCP - it's a proposal, not
       //      a fact about the workspace). Shift+Tab cycles backwards
       //      from the bottom.
       e.preventDefault();
@@ -567,7 +567,7 @@
               }}
               onmouseenter={() => (highlightIdx = i)}
             >{#if s.kind === "dir"}{s.path}/{:else}{s.path}
-              <span class="placeholder-hint">(new file — Tab to accept)</span>
+              <span class="placeholder-hint">(new file - Tab to accept)</span>
             {/if}</li>
           {/each}
         </ul>
@@ -722,8 +722,7 @@
   /* Per-segment path render: existing path bits stay muted so they
      read as "context", and the to-be-created bits get the lighter
      mint-green (--info-text) so the new portion catches the eye
-     without shouting. Keeping the new segments at normal weight —
-     the color does the work. */
+     without shouting. Keeping the new segments at normal weight -      the color does the work. */
   .path-render .seg { color: var(--text-secondary); }
   .path-render .seg.isnew { color: var(--info-text); }
   /* Auto-appended chunks (currently just the `.md` we add to a

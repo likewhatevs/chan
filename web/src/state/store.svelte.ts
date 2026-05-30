@@ -129,7 +129,7 @@ export const ui = $state<{
   /// Notification kind workspaces the auto-dismiss policy. Transient
   /// statuses (action confirmations: "Copied path", "Saved", short
   /// notify() pings) clear themselves after a short window;
-  /// persistent statuses (in-flight ops: "Moving…", errors) stay
+  /// persistent statuses (in-flight ops: "Moving...", errors) stay
   /// until overwritten or explicitly cleared. Direct
   /// `ui.status = ...` writes default to persistent; transient
   /// writes go through `setTransientStatus` (or `notify()` which
@@ -249,7 +249,7 @@ const TRANSIENT_STATUS_DEFAULT_MS = 3000;
 let transientStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
 /// Set an auto-dismissing status pill. Used for action
-/// confirmations (Copied, Saved, etc.) — anything where the user
+/// confirmations (Copied, Saved, etc.) - anything where the user
 /// doesn't need to dismiss it manually. Re-entry cancels the
 /// prior timer so the latest message wins.
 export function setTransientStatus(
@@ -1394,7 +1394,7 @@ export const indexStatus = $state<{ value: IndexStatus | null }>({
 });
 
 /// Wire shape of a chan-workspace `ProgressEvent`, mirrored from
-/// chan-core's `progress::ProgressEvent`. Pinned here because the
+/// chan-workspace's `progress::ProgressEvent`. Pinned here because the
 /// frontend doesn't import a generated type; the chan-server WS
 /// bus.rs renders the same shape and we read it verbatim.
 type ProgressFrame = {
@@ -1417,7 +1417,7 @@ type ProgressFrame = {
 ///   - GraphRebuild: per-file walk during the graph pass.
 ///   - IndexFile: per-file step of the BM25 + dense build.
 /// Other stages (EmbedBatch, Reset, ModelLoad, Heartbeat, Import,
-/// RenameRewrite) don't override the indexer status today — they
+/// RenameRewrite) don't override the indexer status today - they
 /// live in their own surfaces (import wizard, etc.). The poller
 /// continues to run; on the next idle tick it resets the pill to
 /// the Idle counts.
@@ -1551,7 +1551,7 @@ export type GraphFilters = {
   img: boolean;
   /// Directory NODE filter, applicable to filesystem graph mode where
   /// directory nodes are emitted by the backend. Frontend-only toggle
-  /// — hides directory nodes (and edges touching them) without
+  /// - hides directory nodes (and edges touching them) without
   /// changing the backend request. Per request.md, directories as
   /// nodes often crowd a whole-workspace graph; the toggle lets the
   /// user collapse them for a cleaner view.
@@ -1659,7 +1659,7 @@ export function openGraphAtNode(nodeId: string): void {
   // Stack on top of whatever overlay invoked us (typically the
   // file browser via a tag chip). OverlayShell's z-index follows
   // `overlayStack.ids`, so the graph paints above and Escape
-  // pops just the graph — returning to the browser instead of
+  // pops just the graph - returning to the browser instead of
   // dismissing both at once.
   scheduleSessionSave();
 }
@@ -1667,7 +1667,7 @@ export function openGraphAtNode(nodeId: string): void {
 /** Open the graph overlay scoped to a specific file and pre-select
  *  that file's node. The file tab menu's "Show in Graph" routes
  *  here so the resulting subgraph is the file's neighbourhood, not
- *  the entire workspace — matching the user's mental model that
+ *  the entire workspace - matching the user's mental model that
  *  invoking the graph FROM a file means "show me what's around
  *  THIS file". */
 export function openGraphForFile(path: string): void {
@@ -1871,7 +1871,7 @@ export function revealPathInBrowser(
 /// new Graph tab can pre-select the source node.
 ///
 /// Reads from `activeLayout()` so it sees the draft mid-Pane Mode,
-/// not the committed layout — once the user moves focus to a
+/// not the committed layout - once the user moves focus to a
 /// freshly-split empty pane inside the same transaction, that
 /// empty pane has no context and the fallback (workspace root) kicks
 /// in.
@@ -1928,7 +1928,7 @@ function resolveGraphSpawnContext(scopeId: string): SpawnContext {
     return { dir: scopeId.slice("dir:".length) };
   }
   // "workspace", "tag:...", and any future scope shapes have no useful
-  // path anchor — fall back to workspace root.
+  // path anchor - fall back to workspace root.
   return { dir: "" };
 }
 
@@ -2239,7 +2239,7 @@ function clamp(n: number): number {
 
 /// Persist the chosen date format so the next `@today` / `@date`
 /// expansion uses it as the default. Called by the date popover's
-/// format-change callback (commit path). Idempotent — skips the PATCH
+/// format-change callback (commit path). Idempotent - skips the PATCH
 /// when the server already has the same value.
 let dateFormatPersistInflight: Promise<unknown> = Promise.resolve();
 export function persistDateFormat(formatId: string): void {
@@ -2629,7 +2629,7 @@ export function revealAndSelect(path: string): void {
   // so a later shift+click ranges from the revealed entry.
   fbSelectSingle(path);
   browserSelection.showWorkspace = false;
-  // The expansion change counts as a user action — persist it so
+  // The expansion change counts as a user action - persist it so
   // the next launch keeps the new entry in view.
   persistTreeExpanded();
 }
@@ -2848,7 +2848,7 @@ export type PathPromptKind = "file" | "folder" | "either";
 /// modal status row treats an existing directory as a normal
 /// attach (no overwrite warning) and a missing path as "create
 /// + attach" (silent backend create). Absolute paths outside the
-/// workspace root are first-class — watcher event files are infra
+/// workspace root are first-class - watcher event files are infra
 /// traffic, not user content, so the workspace sandbox doesn't apply.
 export type PathPromptMode = "create" | "move" | "attach";
 
@@ -2957,7 +2957,7 @@ export function resolvePathPrompt(value: string | null): void {
 /// The server runs the rename + link-rewrite pass synchronously. For a
 /// single-file rename with few backlinks this is sub-100ms; for a
 /// directory rename touching dozens of inbound references it can take a
-/// few hundred ms. We show a "Moving…" status indicator after a 200ms
+/// few hundred ms. We show a "Moving..." status indicator after a 200ms
 /// delay so a fast rename doesn't flash an indicator, but a slow one
 /// still tells the user the UI hasn't frozen.
 const MOVING_STATUS_DELAY_MS = 200;
@@ -2984,7 +2984,7 @@ async function performMove(path: string, target: string): Promise<void> {
     if (!confirmed) return;
   }
   let movingTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-    ui.status = "Moving…";
+    ui.status = "Moving...";
     movingTimer = null;
   }, MOVING_STATUS_DELAY_MS);
   // Mark both endpoints so the watcher handler ignores echoes of
@@ -3032,15 +3032,15 @@ async function performMove(path: string, target: string): Promise<void> {
     if (moveMsg) {
       setTransientStatus(moveMsg);
     } else {
-      // No link updates worth surfacing — clear any prior
-      // status so the user isn't left looking at "Moving…".
+      // No link updates worth surfacing - clear any prior
+      // status so the user isn't left looking at "Moving...".
       ui.status = null;
     }
   } catch (e) {
     ui.status = `rename failed: ${(e as Error).message}`;
   } finally {
     if (movingTimer) clearTimeout(movingTimer);
-    if (ui.status === "Moving…") ui.status = null;
+    if (ui.status === "Moving...") ui.status = null;
     movingPaths.delete(path);
     movingPaths.delete(target);
   }
@@ -3447,7 +3447,7 @@ export const fileOps = {
     }
   },
   /// Duplicate a file in-place. Reads the source via the API so any
-  /// unsaved buffer in the open tab is intentionally ignored — the
+  /// unsaved buffer in the open tab is intentionally ignored - the
   /// duplicate mirrors what's on disk, not what's in the editor.
   /// Resolves the next free `name-copy.ext`, `name-copy-2.ext`, ...
   /// under the same directory, creates the file, refreshes the tree,

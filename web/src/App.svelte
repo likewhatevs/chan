@@ -420,7 +420,7 @@
         // Materialize staged draft-editor intents BEFORE commitPaneMode promotes
         // the draft to live. Each staged entry pins the target paneId at press
         // time; createDraft is async so round-trips run in parallel. Commit
-        // doesn't wait — new-draft files land in their panes when resolved.
+        // doesn't wait - new-draft files land in their panes when resolved.
         materializeStagedDraftEditors();
         commitPaneMode();
         scheduleSessionSave();
@@ -997,7 +997,7 @@
   // component cleanup, so the last ~500ms of edits would be lost without
   // this. `beforeunload` + `pagehide` both fire reliably; pagehide is the
   // mobile-safe variant, beforeunload covers desktop reloads.
-  // Handlers are deliberately synchronous — async work in beforeunload is
+  // Handlers are deliberately synchronous - async work in beforeunload is
   // unreliable, and a synchronous localStorage write is fine.
   function onUnloadFlushBuffers(): void {
     flushPendingBufferWrites();

@@ -30,7 +30,7 @@ describe("Cmd+K pane mode keymap (transactional staging)", () => {
     expect(app).toMatch(
       /case "g":\s*\n\s*case "G":\s*\n?\s*case "v":\s*\n\s*case "V":[\s\S]*?paneModeOpenGraph\(resolveSpawnContext\(\)\);[\s\S]*?return;/,
     );
-    // v / V kept as legacy aliases — muscle memory protection.
+    // v / V kept as legacy aliases - muscle memory protection.
     expect(app).toMatch(/case "v":\s*\n\s*case "V":[\s\S]*?paneModeOpenGraph/);
   });
 

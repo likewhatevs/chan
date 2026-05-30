@@ -8,7 +8,7 @@
 //     chan-server's mention_to_contact map resolves back to the
 //     contact file via aliases + basename stem.
 //
-// Source: api.contacts(query, limit) — debounced 60ms per keystroke.
+// Source: api.contacts(query, limit) - debounced 60ms per keystroke.
 // req-seq pattern drops stale fetches if a newer query starts before
 // the older response arrives.
 
@@ -165,7 +165,7 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
       shell.reposition();
       return;
     }
-    status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ to insert`;
+    status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} - ↵ to insert`;
     for (let i = 0; i < hits.length; i++) {
       const hit = hits[i]!;
       const row = document.createElement("div");
@@ -197,7 +197,7 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
         if (c.aliases && c.aliases.length > 0) {
           const aliasLine = document.createElement("div");
           aliasLine.className = "md-bubble-row-sub md-bubble-row-aliases";
-          aliasLine.textContent = c.aliases.map((a) => `@@${a}`).join(" · ");
+          aliasLine.textContent = c.aliases.map((a) => `@@${a}`).join(" - ");
           row.appendChild(aliasLine);
         }
       }

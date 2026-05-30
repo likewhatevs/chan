@@ -5,13 +5,13 @@
 // UI: a small body-attached popover positioned under the pill DOM.
 //   - Header: <prev> Month YYYY <next> + format dropdown.
 //   - 7-column grid: Mo Tu We Th Fr Sa Su day-of-week labels (start
-//     of week is Monday — adjust if a future preference asks).
+//     of week is Monday - adjust if a future preference asks).
 //   - Day cells highlight selected and today.
 //   - Click a day to commit that date in the chosen format.
 //   - Esc / outside click / scroll dismisses without commit.
 //
 // Keep this surface intentionally small: no time-of-day, no range
-// selection, no recurrence — we're a notes app.
+// selection, no recurrence - we're a notes app.
 
 import {
   DATE_FORMATS,
@@ -174,7 +174,7 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
     // the focused one to 0 so it accepts focus + can be Tab'd in
     // when needed. setTimeout(0) pushes past CM6's own post-dispatch
     // focus-restore so the popover actually wins the focus race
-    // — requestAnimationFrame wasn't late enough (the editor's
+    // - requestAnimationFrame wasn't late enough (the editor's
     // contentDOM was re-focused inside that frame).
     const focusCell = grid.querySelector<HTMLButtonElement>(
       `button.md-date-day[data-ts="${selected.getTime()}"]`,
@@ -215,7 +215,7 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
     }
     select.addEventListener("change", () => {
       formatId = select.value as DateFormatId;
-      // Picking a format commits immediately — the user just told us
+      // Picking a format commits immediately - the user just told us
       // how they want the date written. Without this, changing the
       // dropdown was a silent no-op until the user also clicked a
       // day, which most users didn't expect.
@@ -287,7 +287,7 @@ export function openDatePopover(opts: DatePopoverOpts): { dismiss: () => void } 
     // selected.
     // stopImmediatePropagation is required: this listener lives in
     // the capture phase (see addEventListener below), so CM6 still
-    // sees the event by default — and CM6's keymap would move the
+    // sees the event by default - and CM6's keymap would move the
     // editor cursor on ArrowDown / insert a newline on Enter even
     // after we preventDefault'd. stopping propagation here keeps
     // the keys exclusively for the popover.

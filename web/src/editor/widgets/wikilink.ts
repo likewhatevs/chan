@@ -189,7 +189,7 @@ function getKind(target: string): LinkKind | undefined {
     kindCache.set(target, "image");
     return "image";
   }
-  // Async resolve — only one in-flight request per target.
+  // Async resolve - only one in-flight request per target.
   if (inflight.has(target)) return undefined;
   inflight.add(target);
   api
@@ -237,7 +237,7 @@ class WikiLinkWidget extends WidgetType {
     if (this.kind) el.dataset.refkind = this.kind;
     if (this.kind === "image") {
       // Image-kind wikilinks render the actual file as an inline
-      // thumbnail rather than a text pill — a `[[Recipes/photo.jpg]]`
+      // thumbnail rather than a text pill - a `[[Recipes/photo.jpg]]`
       // link to a media asset is more useful when you can see what
       // it points to. The pill stays a wrapping span so click +
       // selection-intersect behavior still applies; the only change
@@ -273,8 +273,7 @@ class WikiLinkWidget extends WidgetType {
       // via the live editable facet.
       const editable = view.state.facet(EditorView.editable);
       if (!editable) {
-        // Cmd/Ctrl-click skips the preview and opens directly —
-        // power-user shortcut that matches the write-mode
+        // Cmd/Ctrl-click skips the preview and opens directly -         // power-user shortcut that matches the write-mode
         // Cmd-click semantics.
         if (e.metaKey || e.ctrlKey) {
           this.onClick({ ...this.parsed, openInNewPane: true });
@@ -292,7 +291,7 @@ class WikiLinkWidget extends WidgetType {
       }
       // Cmd/Ctrl-click navigates immediately (open-in-new-pane).
       // Plain click reveals the source AND lands the caret in a
-      // position the trigger detector recognizes — the wiki bubble
+      // position the trigger detector recognizes - the wiki bubble
       // pops up with the existing target as the query, and the user
       // can pick a new target with Enter or open via Cmd+Enter.
       if (e.metaKey || e.ctrlKey) {
@@ -442,7 +441,7 @@ function scanWikiLinks(
         const label = state.doc.sliceString(labelFrom, labelTo);
         const url = state.doc.sliceString(urlFrom, urlTo);
         const parsed = parseInternalLink(url, label, fromPath);
-        if (!parsed) return; // external — handled by decorations/marks.ts
+        if (!parsed) return; // external - handled by decorations/marks.ts
         const kind = getKind(parsed.target);
         decos.push({
           from: outerFrom,

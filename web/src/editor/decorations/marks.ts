@@ -6,7 +6,7 @@
 //   2. If the active selection does NOT intersect the OUTER mark's
 //      range, emits `Decoration.replace({})` over each marker child to
 //      hide the source punctuation. Outer-range intersection (not per-
-//      child) so caret near *a* reveals BOTH `*` chars together — a
+//      child) so caret near *a* reveals BOTH `*` chars together - a
 //      per-child rule would show `*a` then `a*` as the caret crossed,
 //      which is the bug class the rewrite exists to eliminate.
 //
@@ -38,7 +38,7 @@ const MARK_NAKED_URL = Decoration.mark({ class: "cm-md-link" });
 // ---- helpers -------------------------------------------------------------
 
 /// Walk the node's children and return the open (first) and close (last)
-/// child boundaries. Returns null if the node has no children — a
+/// child boundaries. Returns null if the node has no children - a
 /// well-formed Emphasis / StrongEmphasis / Strikethrough / InlineCode
 /// always carries at least its opening + closing marker children, so a
 /// null return means the parser saw a malformed run we should skip.
@@ -59,7 +59,7 @@ function openCloseRange(
 }
 
 /// Standard "outer marks with markers at both ends" handler. Used for
-/// Emphasis, StrongEmphasis, Strikethrough, InlineCode — all of which
+/// Emphasis, StrongEmphasis, Strikethrough, InlineCode - all of which
 /// have the same shape: open marker, content, close marker.
 function handlePairedMark(contentDeco: Decoration): TokenHandler {
   return (ctx) => {
@@ -88,7 +88,7 @@ const handleStrong = handlePairedMark(MARK_BOLD);
 const handleStrike = handlePairedMark(MARK_STRIKE);
 const handleCode = handlePairedMark(MARK_CODE);
 
-/// Link `[label](url)` — external markdown links (internal paths get
+/// Link `[label](url)` - external markdown links (internal paths get
 /// promoted to atomic wikilink widgets in step 6). Children layout per
 /// lezer-markdown:
 ///   LinkMark `[`
@@ -120,10 +120,10 @@ function handleLink(ctx: TokenContext): void {
   } while (cursor.nextSibling());
   if (linkMarks.length < 4 || !urlRange) {
     // Reference-style link or otherwise non-`[label](url)` shape.
-    // Punt for now — references aren't part of v1 scope.
+    // Punt for now - references aren't part of v1 scope.
     return;
   }
-  // Skip internal links — those are owned by widgets/wikilink.ts and
+  // Skip internal links - those are owned by widgets/wikilink.ts and
   // render as atomic pills. We detect "internal" cheaply by URL-scheme
   // absence; the wikilink walker does the real normalizeHref check
   // (and falls through to here if the path is unresolvable).
@@ -165,7 +165,7 @@ function isInternalUrl(url: string): boolean {
 
 /// Bare URL handler. Fires for both naked URLs in paragraphs and the
 /// URL nodes inside Links / Images / Autolinks. The latter are owned
-/// by their parent's handler — detect parent context and skip.
+/// by their parent's handler - detect parent context and skip.
 function handleUrl(ctx: TokenContext): void {
   const parent = ctx.node.node.parent;
   if (!parent) return;

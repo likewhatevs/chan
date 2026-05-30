@@ -2,7 +2,7 @@
   // Find-on-page bar. Floats top-right of the editor canvas; one
   // per tab, mounted by FileEditorTab when `tab.find?.open` is set.
   // Host-driven only: the chan side binds no chord to opening
-  // Find — browser users get Cmd+F natively, chan-desktop fires
+  // Find - browser users get Cmd+F natively, chan-desktop fires
   // `app.find.open` via the chan:command bridge.
   //
   // FindBar is the policy layer; both editor adapters are pure

@@ -45,7 +45,7 @@ describe("call-site slack selection", () => {
   });
 
   test("onMouseDown drag-detect uses the DEFAULT (tight) slack so pan-on-empty-space stays usable", () => {
-    // The mousedown call doesn't pass a slack arg — it relies on
+    // The mousedown call doesn't pass a slack arg - it relies on
     // pickNode's default (PICK_SLACK_DRAG_PX). Pin the
     // call-shape: `pickNode(p.x, p.y)` with no third arg in the
     // mouse-down handler.

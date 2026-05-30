@@ -107,7 +107,7 @@
 
   /// Per-row is_dir lookup for the active tree, keyed by path. Workspaces
   /// the File-Browser tab title which needs to render "the parent
-  /// dir of the selected file" or "the selected directory" — and
+  /// dir of the selected file" or "the selected directory" - and
   /// the only way to disambiguate file vs dir on a `selected` path
   /// is to consult the tree. Re-derives whenever the tree refreshes.
   const treeIsDir = $derived<Map<string, boolean>>(
@@ -386,8 +386,7 @@
   /// Subscribe to the structural-wobble bus. Each splitPane /
   /// closePane / paneModeSwap bumps `paneWobble.versions[pane.id]`;
   /// we mirror that into a class toggle so the CSS animation
-  /// re-fires (CSS animations don't replay on a static class —
-  /// we briefly drop the class, then re-add it on rAF). The
+  /// re-fires (CSS animations don't replay on a static class -   /// we briefly drop the class, then re-add it on rAF). The
   /// `onanimationend` handler clears the class so the next event
   /// can re-trigger cleanly.
   const wobbleVersion = $derived(paneWobble.versions[pane.id] ?? 0);
@@ -658,7 +657,7 @@
   /// intra-window move, the layout was already mutated by
   /// moveTab/reorderTab and the tab is no longer here. If the tab is
   /// still in this pane after a successful move, the drop must have
-  /// landed in another window — close it locally so the visual
+  /// landed in another window - close it locally so the visual
   /// matches the cross-window result.
   function onDragEnd(e: DragEvent, tabId: string): void {
     if (shouldCloseTabAfterDragEnd(pane.id, tabId, e.dataTransfer?.dropEffect)) {
@@ -1371,7 +1370,7 @@
     border: 1px solid transparent;
     background: var(--bg);
     color: var(--text);
-    /* Pane chrome — floating shade. Margin keeps panes off the
+    /* Pane chrome - floating shade. Margin keeps panes off the
        workspace edge and off each other (the split divider is
        4px; with 4px margin on each side the inter-pane gap reads
        as one clean 12px channel). Overflow:hidden lets the
@@ -1394,7 +1393,7 @@
      colour. The transparent 1px border on `.pane` reserves the
      space at the outer edge so swapping the colour never shifts
      layout. Single source: no inset shadow, no chrome pseudo
-     layer — child elements (tab strip, terminal, editor) can't
+     layer - child elements (tab strip, terminal, editor) can't
      cover the border the way they cover inset shadows, so the
      ring reads uniformly 1px around all four sides instead of
      thicker at the body than at the top bar. */
@@ -1404,7 +1403,7 @@
   /* Single-shot wobble fires on the newly focused pane when the
      active pane CHANGES (keyboard/click pane-switch via
      setActivePane, plus split / close / pane-move which all land
-     on a focused pane). Outer halo pulse via box-shadow only — no
+     on a focused pane). Outer halo pulse via box-shadow only - no
      transform on `.pane` so xterm's WebGL glyph atlas is
      unaffected during focus changes. Same easeOutBack curve as the
      tab-pill / right-click-menu pop. The halo expands to ~6px
