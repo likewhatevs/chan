@@ -95,31 +95,31 @@ describe("graphDepthCap", () => {
     expect(graphDepthCap({ scope: { kind: "git_repo" }, nodes: [] })).toBe(10);
   });
 
-  // GI-7: the depth slider snapped back to 1 because the cap was derived
-  // from the fs-graph LOADED AT THE CURRENT DEPTH. At depth 1 only the
-  // depth-1 layer is loaded, so the cap collapsed to 1 even when deeper
-  // structure exists. These cases prove the cap depends on WHICH fs-graph
-  // is fed in: the shallow loaded slice caps at 1, but a full-depth probe
-  // of the same directory exposes the real reachable depth. GraphPanel's
-  // fix is to feed `graphDepthCap` the full-depth `dirDepthProbe` for a
-  // dir scope rather than the shallow loaded slice.
+  // The depth slider can snap back to 1 when the cap is derived
+  // from the fs-graph LOADED AT THE CURRENT DEPTH. At depth 1 only
+  // the depth-1 layer is loaded, so the cap collapses to 1 even
+  // when deeper structure exists. These cases prove the cap depends
+  // on WHICH fs-graph is fed in: a shallow loaded slice caps at 1,
+  // but a full-depth probe of the same directory exposes the real
+  // reachable depth. GraphPanel feeds `graphDepthCap` the
+  // full-depth `dirDepthProbe` for a dir scope.
   it("caps a dir at 1 from a depth-1 loaded slice but at the true depth from a full-depth probe", () => {
     const dir = { kind: "dir", path: "journals" } as const;
     // Slice loaded at depth 1: only the directory's depth-1 child dir.
     const shallowSlice = {
       truncated: false,
-      nodes: [fsNode("journals"), fsNode("journals/phase-11")],
+      nodes: [fsNode("journals"), fsNode("journals/year-1")],
     };
     expect(graphDepthCap({ scope: dir, nodes: [], fsGraph: shallowSlice })).toBe(1);
-    // Full-depth probe of the same dir reaches journals/phase-11/lane-a/
-    // journal.md (relative depth 3 from `journals`).
+    // Full-depth probe of the same dir reaches 3 levels deep
+    // (relative depth 3 from `journals`).
     const fullProbe = {
       truncated: false,
       nodes: [
         fsNode("journals"),
-        fsNode("journals/phase-11"),
-        fsNode("journals/phase-11/lane-a"),
-        fsNode("journals/phase-11/lane-a/journal.md"),
+        fsNode("journals/year-1"),
+        fsNode("journals/year-1/month-1"),
+        fsNode("journals/year-1/month-1/entry.md"),
       ],
     };
     expect(graphDepthCap({ scope: dir, nodes: [], fsGraph: fullProbe })).toBe(3);

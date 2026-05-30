@@ -1,11 +1,8 @@
-// `fullstack-a-35` → `fullstack-a-67f`: inline file-rename moved
-// from a full-width band above the editor body to a menu-top
-// input row, per addendum-a's "Name, editable like Terminal's"
-// spec. This test file now pins the NEW shape (menu-top input
-// + nameDraft state + commitTabName + onTabNameKey) and the
-// drop of the legacy `.rename-band` / `doRename` / `renameActive`
-// state. The `fileOps.renameInPlace` helper in store.svelte.ts
-// stays the canonical commit path.
+// Inline file-rename moved from a full-width band above the editor body
+// to a menu-top input row. This pins the new shape (nameDraft state +
+// commitTabName + onTabNameKey) and the removal of the legacy
+// `.rename-band` / `doRename` / `renameActive` state.
+// fileOps.renameInPlace remains the canonical commit path.
 
 import { describe, expect, test } from "vitest";
 import fileEditor from "./FileEditorTab.svelte?raw";

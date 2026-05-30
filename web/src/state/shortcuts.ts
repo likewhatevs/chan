@@ -64,13 +64,13 @@ export type Shortcut = {
   /// Optional trailing parenthetical for the table (e.g. "browser
   /// owns this chord — handled natively").
   note?: string;
-  /// `fullstack-a-91`: when true, `handleTerminalKeyEvent` in
-  /// `TerminalTab.svelte` returns `false` for this chord so the
-  /// event bubbles out of xterm to the App-level keymap. Default
-  /// false (xterm consumes the keystroke as a shell input). Set
-  /// true on App-group chords (Settings, TeamWork, Reload,
-  /// FB toggle, Graph, NewDraft, Hybrid Nav, etc.) that must
-  /// reach App.svelte regardless of terminal focus.
+  /// When true, `handleTerminalKeyEvent` in `TerminalTab.svelte`
+  /// returns `false` for this chord so the event bubbles out of
+  /// xterm to the App-level keymap. Default false (xterm consumes
+  /// the keystroke as a shell input). Set true on App-group chords
+  /// (Settings, TeamWork, Reload, FB toggle, Graph, NewDraft,
+  /// Hybrid Nav, etc.) that must reach App.svelte regardless of
+  /// terminal focus.
   escapeTerminal?: boolean;
 };
 
@@ -79,12 +79,10 @@ export type Shortcut = {
 export const SHORTCUTS: readonly Shortcut[] = [
   // App-level navigation
   //
-  // `phase-13 lane-b` slice 3c: the global Settings overlay was
-  // retired; Cmd+, now flips the focused Terminal / Editor /
-  // Graph / FB / Dashboard surface to its back-of-card config
-  // (via `flipHybrid(layout.activePaneId)`). Press Cmd+, again
-  // to flip back. The command id is unchanged so command-bus
-  // callers and chan-desktop's KEY_BRIDGE_JS keep working.
+  // Cmd+, flips the focused pane (Terminal / Editor / Graph /
+  // FB / Dashboard) to its back-of-card config surface via
+  // `flipHybrid(layout.activePaneId)`. Press again to flip back.
+  // The macOS preferences convention motivates this chord.
   {
     id: "app.settings.toggle",
     label: "Flip focused Hybrid",
@@ -93,17 +91,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
-  // `fullstack-a-32`: Team Work chord migrates to Mod+P (native)
-  // / Cmd+Alt+P (web Mac) so the spawn-chord family (Cmd+T/O/P,
-  // Cmd+Shift+M) reads uniformly. `fullstack-a-90` retired the
-  // legacy Alt+Space alias the migration kept for muscle memory.
-  // Universal Hybrid Nav `p` (added in `fullstack-50`) covers
-  // every platform including Win/Linux web where Cmd+P is owned
-  // by the browser's print dialog and Cmd+Alt+P isn't a thing.
-  // Phase-13 r2: the chord id stays `app.terminal.teamWork` (stable -
-  // @@LaneA keeps the handler), but the label + flow are now "Team
-  // Work" (Team Work was renamed). Label string supplied by @@LaneA
-  // on event-lane-a-lane-b.md; this is a Lane-B-owned edit.
+  // Team Work chord: Mod+P native / Cmd+Alt+P web-Mac so the
+  // spawn-chord family (Cmd+T/O/P, Cmd+Shift+M) reads uniformly.
+  // Hybrid Nav `p` covers Win/Linux web where Cmd+P is the
+  // browser's print dialog and Cmd+Alt+P isn't available.
   {
     id: "app.terminal.teamWork",
     label: "Team Work",
@@ -113,12 +104,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
     note: "macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav)",
     escapeTerminal: true,
   },
-  // `lane-c addendum-3`: toggle broadcast-input select-all/deselect-all
-  // for the active terminal (mirrors iTerm's broadcast-input shortcut).
-  // macOS-native ONLY: on the web cmd+shift+i is the browser DevTools
-  // chord, so there is no `web` binding. The native binding is enforced
-  // in chan-desktop's KEY_BRIDGE_JS gated on metaKey (= Cmd), so Linux
-  // ctrl+shift+i stays DevTools.
+  // Broadcast-input toggle for the active terminal (mirrors iTerm).
+  // macOS-native ONLY: cmd+shift+i is the browser DevTools chord on
+  // the web build, so there is no `web` binding. The native binding
+  // is gated on metaKey (= Cmd) so Linux ctrl+shift+i stays DevTools.
   {
     id: "app.terminal.broadcastToggle",
     label: "Toggle broadcast to all terminals",
@@ -127,12 +116,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
     note: "macOS native only (cmd+shift+i is DevTools on web / Linux)",
     escapeTerminal: true,
   },
-  // `fullstack-a-32`: file-browser top-level chord. Same shape as
-  // `app.terminal.toggle` — native uses Cmd+O; web fallback is
-  // Cmd+Alt+O (browser owns Cmd+O for Open File on Mac). Universal
-  // Hybrid Nav `o` is added in this task so every platform has
-  // a reachable chord even when Cmd+Alt+O isn't bound on
-  // Win/Linux.
+  // File-browser top-level chord. Native uses Cmd+O; web fallback
+  // is Cmd+Alt+O because the browser owns Cmd+O for Open File on
+  // Mac. Hybrid Nav `o` gives every platform a reachable chord
+  // even when Cmd+Alt+O isn't bound on Win/Linux.
   {
     id: "app.files.toggle",
     label: "File browser",
@@ -142,12 +129,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
     note: "macOS web + native everywhere; all platforms via Mod+. o (Hybrid Nav)",
     escapeTerminal: true,
   },
-  // `fullstack-a-32`: graph top-level chord. `Cmd+Shift+M` was the
-  // pre-`fullstack-42` binding and lands again here, this time
-  // wired with context-aware spawn semantics (the focused doc /
-  // terminal cwd seeds the graph's scope). Native AND web both
-  // use the same chord since browsers don't reserve it. Universal
-  // Hybrid Nav `v` covers fallback discoverability.
+  // Graph top-level chord. Context-aware spawn: the focused doc /
+  // terminal cwd seeds the graph's scope. Native and web share
+  // the same chord because browsers don't reserve Cmd+Shift+M.
+  // Hybrid Nav `v` is the fallback discoverability path.
   {
     id: "app.graph.toggle",
     label: "Graph",
@@ -157,18 +142,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     note: "or Mod+. v (Hybrid Nav)",
     escapeTerminal: true,
   },
-  // `fullstack-b-2`: Cmd+T comes back for "new terminal in active
-  // pane" (the action behind Pane Mode's `Cmd+K 1`) as a direct
-  // chord. Browsers reserve `Cmd+T` at the OS level so the web
-  // variant uses `Cmd+Alt+T` — Mac-only; `Ctrl+Alt+T` on
-  // Win/Linux web is already owned by `app.tab.reopenClosed` and
-  // we'd rather leave Pane Mode as the fallback than collide.
-  //
-  // `fullstack-b-9`: `Mod+. t` (Hybrid Nav `t` mnemonic) is the
-  // universal chord — works on every web platform including
-  // Win/Linux where `Cmd+Alt+T` isn't a thing. Surfaces in the
-  // PaneModeHelp cheatsheet as an alias for `1` so the discovery
-  // path stays inside the Hybrid Nav overlay.
+  // New terminal in the active pane as a direct chord. Browsers
+  // reserve Cmd+T at the OS level, so the web variant uses
+  // Cmd+Alt+T (Mac only). Ctrl+Alt+T on Win/Linux web is owned
+  // by `app.tab.reopenClosed`, so Pane Mode is the fallback there.
+  // Hybrid Nav `t` is the universal chord on every platform,
+  // surfaced in the PaneModeHelp cheatsheet as an alias for `1`.
   {
     id: "app.terminal.toggle",
     label: "New terminal",
@@ -178,13 +157,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
     note: "macOS web + native everywhere; all platforms via Mod+. t (Hybrid Nav)",
     escapeTerminal: true,
   },
-  // `fullstack-a-7`: Hybrid Nav chord swapped from Mod+K to
-  // Mod+. so Mod+, can own Settings (macOS preferences
-  // convention; `app.settings.toggle` above). Mod+. is not
-  // browser-reserved on macOS and survives both web + native
-  // dispatch through the same chord descriptor. The Flip
-  // chord (Mod+. Tab) follows the same swap so the chain
-  // stays internally consistent.
+  // Mod+. is not browser-reserved on macOS, so it survives both
+  // web + native dispatch through the same chord descriptor.
+  // Mod+, takes the macOS preferences convention (Settings flip),
+  // leaving Mod+. for Hybrid Nav. The Flip chord (Mod+. Tab)
+  // pairs with the same prefix for internal consistency.
   {
     id: "app.pane.mode",
     label: "Enter Hybrid Nav",
@@ -193,10 +170,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "Panes",
     escapeTerminal: true,
   },
-  // `fullstack-a-73`: window-level reload, like a browser Cmd+R.
-  // SPA chord routes through `reloadWindow()` (chan-desktop IPC
-  // OR `window.location.reload()` on web). chan-desktop's
-  // serve.rs:1140 Tauri-side binding stays as defense-in-depth.
+  // Window-level reload analogous to a browser Cmd+R. Routes
+  // through `reloadWindow()` (chan-desktop IPC or
+  // `window.location.reload()` on web). The Tauri-side binding
+  // in chan-desktop's serve.rs is defense-in-depth.
   {
     id: "app.window.reload",
     label: "Reload window",
@@ -205,11 +182,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
-  // `fullstack-a-66`: New Draft action — creates a fresh draft
-  // dir under chan-workspace's metadata-side Drafts folder + opens
-  // `draft.md` in the Hybrid Editor. chan-desktop's
-  // `-b-27` moved its "New Window" accelerator to Cmd+Shift+N
-  // so plain Cmd+N is reserved for this SPA handler.
+  // New Draft: creates a fresh draft dir under chan-workspace's
+  // metadata-side Drafts folder and opens `draft.md` in the
+  // Hybrid Editor. chan-desktop's "New Window" accelerator is
+  // Cmd+Shift+N, leaving plain Cmd+N for this SPA handler.
   {
     id: "app.draft.new",
     label: "New draft",
@@ -218,12 +194,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
-  // `fullstack-a-77` slice 3: manual screensaver lock.
-  // Routes through `screensaver.svelte::lockNow()` which sets
-  // `locked=true` + the App-root `ScreensaverOverlay`
-  // component covers the SPA. The only user-facing chord is the
-  // Hybrid Nav chain so plain Cmd+L stays available for the
-  // browser location bar.
+  // Manual screensaver lock. Routes through `screensaver.svelte::
+  // lockNow()` which sets `locked=true`; the App-root
+  // `ScreensaverOverlay` covers the SPA. Surfaced only via the
+  // Hybrid Nav chain so plain Cmd+L stays free for the browser
+  // location bar.
   {
     id: "app.screensaver.lock",
     label: "Lock screen",
@@ -238,12 +213,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+. Tab",
     group: "Panes",
   },
-  // `phase-12 lane-e` (addendum-2 Q5): pane nav splits per platform.
-  // Desktop-native keeps Cmd+[/] (no browser chrome to fight). The web
-  // build moves to Alt+[/] because Cmd+[/] is browser back/forward
-  // there. Tab nav already follows the same split (web Alt+Shift+[/],
-  // native Cmd+Shift+[/]). The web handler matches by `e.code` and
-  // preventDefaults the Option-mangled glyph, same as the tab handler.
+  // Pane nav splits per platform. Desktop-native keeps Cmd+[/]
+  // (no browser chrome to fight). The web build uses Alt+[/]
+  // because Cmd+[/] is browser back/forward. Tab nav mirrors
+  // this split (web Alt+Shift+[/], native Cmd+Shift+[/]). The
+  // web handler matches by `e.code` and preventDefaults the
+  // Option-mangled glyph, same as the tab handler.
   {
     id: "app.pane.prev",
     label: "Previous pane",
@@ -260,18 +235,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "Panes",
     escapeTerminal: true,
   },
-  // `phase-12 lane-e` (addendum-2): split the active pane. Listed
-  // under desktop-native in the policy, so native-only chords; web
-  // reaches the same action via Hybrid Nav `/` and `?`. row = split
-  // right, column = split bottom (matches `splitActive` + the Hybrid
-  // hamburger's right/down constraint).
-  //
-  // `desktop-fixes`: split-bottom moved off `Mod+\` because 1Password
-  // registers Cmd+\ as a system-wide macOS hotkey that the OS dispatches
-  // before the keystroke ever reaches chan's webview, so chan never saw
-  // it. The pair is now Cmd+/ (right) + Cmd+Shift+/ (bottom) - the same
-  // physical key with/without Shift, mnemonically `/` and `?`. Hybrid
-  // Nav mirrors it: `/` right, `?` (Shift+/) bottom.
+  // Split-active chords are native-only; web reaches them via
+  // Hybrid Nav `/` and `?`. Split-bottom is Cmd+Shift+/ rather
+  // than Cmd+\ because 1Password registers Cmd+\ as a system-wide
+  // macOS hotkey that the OS dispatches before the keystroke
+  // reaches chan's webview. The mnemonic is `/` right, `?` bottom
+  // (same physical key with/without Shift). Hybrid Nav mirrors it.
   {
     id: "app.pane.splitRight",
     label: "Split right",
@@ -305,13 +274,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Esc",
     group: "App",
   },
-  // `fullstack-56` dropped `app.save` (Cmd+S) because autosave is the
-  // canonical write path (debounced on idle + tab-close + visibility
-  // hooks); there was never a File->Save menu item. `phase-12 lane-e`
-  // (addendum-2) reclaims Cmd+S for WORKSPACE-WIDE SEARCH (the action
-  // previously reachable only via Hybrid Nav). @@Alex Q5 authorizes
-  // preventDefault on web to suppress the browser save-page dialog.
-  // Distinct from Cmd+Shift+S strikethrough (owned by the editor).
+  // Autosave is the canonical write path (debounced on idle +
+  // tab-close + visibility hooks), so Cmd+S is free for
+  // workspace-wide search. preventDefault on web suppresses the
+  // browser save-page dialog. Distinct from Cmd+Shift+S
+  // strikethrough (owned by the editor).
   {
     id: "app.search.toggle",
     label: "Search",
@@ -320,15 +287,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
-  // Dashboard tab. Phase-13 r2 (B-slice 2): @@Alex moved Dashboard
-  // OFF the direct Cmd+I chord so the editor can claim Cmd+I for
-  // italic. Dashboard now has no direct chord; it stays reachable via
-  // Hybrid Nav `Cmd+. i` (handled in App.svelte::handlePaneModeKey)
-  // and the Dashboard hamburger item. The chord recorded here is the
-  // Hybrid Nav sequence, purely for cheatsheet + menu discoverability:
-  // it is NOT a dispatch source (no e.code branch matches it as a
-  // single keypress), and `escapeTerminal` is dropped because no
-  // single-key Cmd+I chord opens Dashboard anymore.
+  // Dashboard has no direct chord; Cmd+I is the editor italic
+  // binding. Dashboard is reachable via Hybrid Nav `Cmd+. i`
+  // (handled in App.svelte::handlePaneModeKey) and the hamburger
+  // item. The entry here is for cheatsheet + menu discoverability
+  // only: it is NOT a dispatch source (no e.code branch matches
+  // it as a single keypress), so `escapeTerminal` is omitted.
   {
     id: "app.dashboard.open",
     label: "Dashboard",
@@ -393,12 +357,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+Shift+G",
     group: "Find",
   },
-  // `fullstack-a-67f` slice 2: Obsidian-style "Show Source Code"
-  // toggle. Cmd+E flips the active editor tab between its
-  // rendered surface (wysiwyg / pretty / table) and the raw
-  // source view. Native binds Mod+E. Web Mac has no
-  // browser-reserved conflict on Cmd+E, so the web SPA also
-  // accepts Mod+E.
+  // Obsidian-style "Show Source Code" toggle. Cmd+E flips the
+  // active editor tab between its rendered surface (wysiwyg /
+  // pretty / table) and the raw source view. Web Mac has no
+  // browser-reserved conflict on Cmd+E, so web and native share
+  // Mod+E.
   {
     id: "app.editor.toggleMode",
     label: "Show Source Code (toggle rendered/source)",
@@ -407,13 +370,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "Editor",
     escapeTerminal: true,
   },
-  // Phase-13 r2 (B-slice 2): Bold + Italic are now bound in the
-  // editor's CM6 keymap (Wysiwyg.svelte -> fmt.toggleBold/Italic);
-  // Cmd+I was freed by moving Dashboard to Hybrid Nav only. These
-  // entries exist for cheatsheet + StyleToolbar tooltip discoverability;
-  // the editor keymap is the dispatch source, so no `escapeTerminal`
-  // (the embedded editor is CM6, not xterm - keystrokes never route
-  // through the terminal escape path).
+  // Bold + Italic are bound in the editor's CM6 keymap
+  // (Wysiwyg.svelte -> fmt.toggleBold/Italic). These entries exist
+  // for cheatsheet + StyleToolbar tooltip discoverability; the
+  // editor keymap is the dispatch source, so no `escapeTerminal`
+  // (CM6 keystrokes never route through the terminal escape path).
   {
     id: "app.editor.bold",
     label: "Bold",
@@ -433,8 +394,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
 // Editor strikethrough / inline-code chords are not in this registry:
 // strike (Cmd+Shift+S) is owned by the editor keymap directly and
 // inline code remains a click-only target in StyleToolbar.svelte.
-// Bold (Cmd+B) + Italic (Cmd+I) graduated into the registry above
-// once the editor keymap layer bound them (phase-13 r2).
+// Bold (Cmd+B) + Italic (Cmd+I) are in the registry above because
+// the editor keymap binds them and tooltips need to discover them.
 
 const MOD_LABEL: Record<OS, string> = {
   mac: "Cmd",
@@ -470,10 +431,10 @@ export function chordFor(id: string): string | null {
   return formatChord(chord, currentOS());
 }
 
-/// `fullstack-a-91`: derive the platform-resolved chord from a
-/// raw `KeyboardEvent`. Used by `handleTerminalKeyEvent` to
-/// detect whether the incoming keystroke matches an
-/// `escapeTerminal` shortcut + should bubble out of xterm.
+/// Derive the platform-resolved chord from a raw `KeyboardEvent`.
+/// Used by `handleTerminalKeyEvent` to detect whether the incoming
+/// keystroke matches an `escapeTerminal` shortcut and should bubble
+/// out of xterm.
 ///
 /// Returns a chord string of the same shape the registry uses
 /// (e.g. `"Mod+P"`, `"Cmd+Alt+P"`, `"Ctrl+Alt+1"`). `Mod` is
@@ -524,11 +485,11 @@ function canonicalKey(e: KeyboardEvent): string | null {
   return k;
 }
 
-/// `fullstack-a-91`: chord-escape lookup. Returns true when
-/// the incoming `KeyboardEvent` matches any registry entry
-/// flagged `escapeTerminal: true`. `handleTerminalKeyEvent`
-/// calls this; on true, returns `false` to xterm so the event
-/// bubbles to the App-level keymap.
+/// Chord-escape lookup. Returns true when the incoming
+/// `KeyboardEvent` matches any registry entry flagged
+/// `escapeTerminal: true`. `handleTerminalKeyEvent` calls this;
+/// on true, returns `false` to xterm so the event bubbles to
+/// the App-level keymap.
 ///
 /// Matches BOTH the platform-resolved chord AND the
 /// cross-platform `Cmd+` literal alias (the registry's `Mod`

@@ -69,11 +69,10 @@ export function graphDepthCap({
   if (scope.kind === "file") return 1;
   if (scope.kind === "group") return clampDepth(scope.paths.length, hardMax);
   if (scope.kind === "tag" || scope.kind === "git_repo") return hardMax;
-  // Phase-13 KIND slice 2b. Contact lens uses depth meaningfully
-  // (BFS-from-center bidirectional) so it lifts the hard cap;
-  // language lens is always 1-hop per the roadmap, so the cap is
-  // pinned to 1 so the slider reads `[max]` and the user sees
-  // there's nothing more to reveal.
+  // Contact lens uses depth meaningfully (BFS-from-center
+  // bidirectional) so it lifts the hard cap. Language lens is
+  // always 1-hop, so the cap is pinned to 1 so the slider reads
+  // `[max]` and the user sees there's nothing more to reveal.
   if (scope.kind === "contact") return hardMax;
   if (scope.kind === "language") return 1;
   if (scope.kind === "workspace" || scope.kind === "global") {

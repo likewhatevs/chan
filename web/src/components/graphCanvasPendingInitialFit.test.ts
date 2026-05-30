@@ -1,16 +1,12 @@
 import { describe, expect, test } from "vitest";
 import graphCanvas from "./GraphCanvas.svelte?raw";
 
-// Phase-13 round-1 closing (B12): the carousel's indexing slide
-// mounts GraphCanvas before slide 2 is visible. The host's first
-// `resize()` therefore clamps the canvas to 0x0, the initial
-// `fitToContent(24)` returns null, and the view stays at the
-// origin/zoom-1 placeholder until the user manually zooms.
-// `pendingInitialFit` defers the fit until the host reports
-// nonzero dimensions so the spine ends up framed in the viewport
-// automatically.
+// GraphCanvas mounts before the carousel slide that hosts it becomes
+// visible, so the initial resize() clamps the canvas to 0x0 and
+// fitToContent(24) returns null. `pendingInitialFit` defers the fit
+// until the host reports nonzero dimensions.
 
-describe("closing B12: GraphCanvas pending-initial-fit", () => {
+describe("GraphCanvas pending-initial-fit", () => {
   test("pendingInitialFit flag is declared with the auto-fit state", () => {
     expect(graphCanvas).toMatch(/let pendingInitialFit = false;/);
   });

@@ -184,9 +184,8 @@ describe("graph watcher reload signal", () => {
       });
     });
 
-    // No graph tab open: the watcher signal stays put. (After the
-    // scope-concept wipe the reload gate is `hasGraphTab()`, not a
-    // graphOverlay flag.)
+    // No graph tab open: the watcher signal stays put. The reload
+    // gate is `hasGraphTab()`, not a graphOverlay flag.
     const empty: LeafNode = { kind: "leaf", id: "p", tabs: [], activeTabId: null };
     layout.rootId = "p";
     layout.activePaneId = "p";
@@ -245,12 +244,11 @@ describe("window commands", () => {
   });
 
   test("revealPathInBrowser always OPENS a File Browser tab (never focuses the dock / an existing tab)", () => {
-    // @@Alex: with a docked File Browser, reveal-in-browser must never
-    // focus the dock (or silently reuse another pane's browser tab) - it
-    // always OPENS a File Browser tab in the active pane. (Was: "focuses
-    // an existing browser tab instead of duplicating it"; that reuse is
-    // the behavior being overridden - it was the GI-8 root cause where a
-    // reveal from a graph tab produced no visible tab.)
+    // With a docked File Browser, reveal-in-browser must never focus
+    // the dock (or silently reuse another pane's browser tab) - it
+    // always OPENS a File Browser tab in the active pane. Reusing an
+    // existing tab was the root cause where a reveal from a graph tab
+    // produced no visible tab.
     const leftBrowser: BrowserTab = {
       kind: "browser",
       id: "browser-left",
@@ -310,12 +308,11 @@ describe("window commands", () => {
   });
 });
 
-describe("legacy overlay hash retirement (W5)", () => {
+describe("legacy overlay hash retirement", () => {
   test("legacy graph= / files= bookmarks are ignored on restore", () => {
-    // The scope-concept wipe retired the per-overlay hash for the graph +
-    // browser surfaces; those are first-class tabs restored via the layout
-    // `s` key now. Old `graph=` / `files=` bookmarks must degrade
-    // gracefully - never reopen the (now-dead) overlays, never crash.
+    // Graph + browser surfaces are first-class tabs restored via the
+    // layout `s` key. Old `graph=` / `files=` bookmarks must degrade
+    // gracefully: never reopen the dead overlays, never crash.
     window.history.replaceState(
       null,
       "",
@@ -331,12 +328,9 @@ describe("legacy overlay hash retirement (W5)", () => {
   });
 
   test("persistence strips retired + unknown legacy hash keys, keeps live keys", () => {
-    // `assistant` (phase-5) + `scopes` are unknown; `graph`, `files`,
-    // and `settings` are now retired (`files`/`graph` by W5;
-    // `settings` by phase-13 lane-b slice 3c when the Settings
-    // overlay was deleted). All fall out of HASH_KEYS, so
-    // dropUnknownHashKeys strips them. The live `search` key still
-    // survives.
+    // Unknown keys (`assistant`, `scopes`) and retired overlay keys
+    // (`graph`, `files`, `settings`) all fall out of HASH_KEYS so
+    // dropUnknownHashKeys strips them. The live `search` key survives.
     const removedOverlayKey = "assist" + "ant";
     window.history.replaceState(
       null,
@@ -416,7 +410,7 @@ describe("filesystem graph entrypoints", () => {
   });
 });
 
-describe("external-change banner (lane-c addendum-2 item 1)", () => {
+describe("external-change banner", () => {
   function placeFileTab(path: string, content: string): FileTab {
     const tab: FileTab = {
       kind: "file",
@@ -455,10 +449,10 @@ describe("external-change banner (lane-c addendum-2 item 1)", () => {
   }
 
   test("a watch event flags the open tab but never reloads or clears its content", () => {
-    // Regression: the watcher used to silently reload a clean buffer,
-    // which replaced the doc and snapped the caret to line 1, col 1 while
-    // @@Alex was typing. The watch path now only raises the dismissable
-    // banner (externalChange) and leaves the buffer untouched.
+    // Regression guard: the watcher used to silently reload a clean
+    // buffer, which replaced the doc and snapped the caret to line 1
+    // mid-edit. The watch path now only raises the dismissable banner
+    // (externalChange) and leaves the buffer untouched.
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = input instanceof Request ? input.url : String(input);
       const body = url.includes("/api/workspace")
@@ -482,7 +476,7 @@ describe("external-change banner (lane-c addendum-2 item 1)", () => {
   });
 });
 
-describe("resolveSpawnContext (fullstack-43)", () => {
+describe("resolveSpawnContext", () => {
   function placeTabs(tabs: Array<FileTab | TerminalTab | GraphTab | BrowserTab>): void {
     const pane: LeafNode = {
       kind: "leaf",
@@ -710,9 +704,9 @@ describe("resolveSpawnContext (fullstack-43)", () => {
   });
 });
 
-// Phase-11 Slice A: per-File-Browser-instance tree metadata. The registry is
-// the keyed structure that lets two simultaneously-visible instances keep
-// independent expand/collapse state (round-1 ask). These tests pin the
+// Per-File-Browser-instance tree metadata. The registry is the keyed
+// structure that lets two simultaneously-visible instances keep
+// independent expand/collapse state. These tests pin the
 // create/read/dispose contract and the cross-instance subscription refcount.
 describe("per-instance file browser tree registry", () => {
   test("ensureFbTreeInstance creates a root-expanded record, idempotent", () => {
@@ -772,11 +766,11 @@ describe("per-instance file browser tree registry", () => {
   });
 });
 
-// Phase-12 Slice E: FileTree renders + toggles off the per-instance map, so
-// the expand-all / collapse-all / full-expansion helpers now target one
-// instance. A dock side and a tab (two instances) must not toggle each other;
-// a programmatic reveal, by contrast, fans out to every live surface.
-describe("per-instance expansion helpers (Slice E)", () => {
+// FileTree renders + toggles off the per-instance map, so the expand-all /
+// collapse-all / full-expansion helpers target one instance. A dock side
+// and a tab (two instances) must not toggle each other; a programmatic
+// reveal fans out to every live surface.
+describe("per-instance expansion helpers", () => {
   function seedTree(): void {
     const dirs = ["docs", "docs/api", "notes"];
     tree.entries = dirs.map(
@@ -801,7 +795,7 @@ describe("per-instance expansion helpers (Slice E)", () => {
       "docs/api": true,
       notes: true,
     });
-    // The sibling instance is untouched: independence is the fix.
+    // The sibling instance is untouched: per-instance independence.
     expect(tab.expanded).toEqual({ "": true });
     expect(isFullyExpandedForInstance("fb-dock-left")).toBe(true);
     expect(isFullyExpandedForInstance("fb-tab-1")).toBe(false);

@@ -2,13 +2,11 @@ import { describe, expect, test } from "vitest";
 import bubble from "./BubbleOverlay.svelte?raw";
 import terminal from "./TerminalTab.svelte?raw";
 
-// Phase-13 round-2 Team Work revamp: the BubbleOverlay is now a
-// frontend-only static example. The pre-revamp F-follow-up feature
-// (`surveyAsQuoteMarkdown` / `quoteSurveyToPrompt` in BubbleOverlay
-// quoting a live survey into the team-work buffer via an
-// `onQuoteToPrompt` callback) is gone along with the watcher data
+// BubbleOverlay is now a frontend-only static example. The F-follow-up
+// feature (surveyAsQuoteMarkdown / quoteSurveyToPrompt quoting a live
+// survey into the team-work buffer) is gone along with the watcher data
 // it depended on. The "F" affordance survives as a presentational
-// example marker only: clicking it dismisses the static example.
+// example marker; clicking it dismisses the static example.
 
 describe("Team Work revamp: F follow-up is presentational only", () => {
   test("the F-key handler / quote-to-prompt plumbing is removed from BubbleOverlay", () => {

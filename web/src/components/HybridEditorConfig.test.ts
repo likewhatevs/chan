@@ -2,22 +2,11 @@ import { describe, expect, test } from "vitest";
 import source from "./HybridEditorConfig.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
-// `fullstack-a-46` Task C: Editor settings UI migrated out of the
-// (since-retired) global Settings overlay into HybridEditorConfig.
-// Four sections move: Editor theme, Layout (line spacing), Date
-// pills (date format), On save (strip trailing whitespace).
-// Settings storage shape unchanged; both surfaces still PATCH the
-// same `GlobalConfig.preferences`. The dirty comparator + save
-// are scoped to the editor-related fields so parallel saves
-// from other surfaces (e.g. HybridFileBrowserConfig's
-// semantic-search) didn't trigger spurious PATCHes.
-//
-// `phase-13 lane-b` slice 3c: the global Settings overlay was
-// retired (Appearance + Screen Lock + Screensaver moved to
-// DashboardTab back-of-card). The migration-direction assertions
-// that used to pin "X is gone from the old overlay" are dropped —
-// the file no longer exists, so there's nothing left to regress
-// against.
+// Editor settings (theme, line spacing, date format, strip trailing
+// whitespace) live in HybridEditorConfig. The dirty comparator and save
+// are scoped to the editor fields so parallel saves from other surfaces
+// do not trigger spurious PATCHes. Appearance and Screen Lock live in
+// the Dashboard back-of-card, not here.
 
 describe("HybridEditorConfig wiring", () => {
   test("warning copy distinguishes device-wide settings from body theme scope", () => {
@@ -66,19 +55,16 @@ describe("HybridEditorConfig wiring", () => {
   });
 
   test("live-applies the data-editor-theme attribute on every editor_theme change", () => {
-    // Carry-over from the retired global Settings overlay: the
-    // editor in the background re-skins without waiting for the
-    // autosave round-trip.
+    // The background editor re-skins immediately without waiting for
+    // the autosave round-trip.
     expect(source).toMatch(
       /setAttribute\([\s\S]*?"data-editor-theme"[\s\S]*?editing\.editor_theme/,
     );
   });
 
   test("keeps editorToolsPrefs.stripTrailingWhitespaceOnSave in sync", () => {
-    // `fullstack-a-25` carry-over: the editor's save() reads
-    // editorToolsPrefs synchronously; the toggle must propagate
-    // before the next save without waiting for the autosave +
-    // server round-trip.
+    // The editor's save() reads editorToolsPrefs synchronously, so the
+    // toggle must propagate before the next save.
     expect(source).toMatch(
       /editorToolsPrefs\.stripTrailingWhitespaceOnSave\s*=\s*editing\.strip_trailing_whitespace_on_save/,
     );
@@ -96,13 +82,10 @@ describe("HybridEditorConfig wiring", () => {
     expect(source).toMatch(/await api\.updateConfig\(cfgBody\)/);
   });
 
-  test("dirty check is scoped to the four editor-related fields (-a-53)", () => {
-    // `-a-53` reverted Appearance to the global Settings overlay
-    // (since retired in phase-13 lane-b slice 3c, where Appearance
-    // moved to DashboardTab back-of-card). The `editing.theme`
-    // field is no longer touched here. dirty() compares 4 fields
-    // now: editor_theme + line_spacing + date_format +
-    // strip_trailing_whitespace_on_save.
+  test("dirty check is scoped to the four editor-related fields", () => {
+    // dirty() compares four fields: editor_theme + line_spacing +
+    // date_format + strip_trailing_whitespace_on_save. The app theme
+    // (editing.theme) is owned by the Dashboard back-of-card.
     expect(source).toMatch(/function editorDirty\(\): boolean/);
     expect(source).toMatch(/editing\.editor_theme !== server\.editor_theme/);
     expect(source).not.toMatch(/editing\.theme !== server\.theme/);
@@ -114,11 +97,9 @@ describe("HybridEditorConfig wiring", () => {
   });
 
   test("normalizeEditor backfills line_spacing + date_format defaults", () => {
-    // line_spacing "tight" → "compact" migration + the catalog
-    // default fallback for retired date_format ids carry over
-    // from the retired global Settings overlay's normalizePrefs.
-    // Keeps the dirty() comparison stable across a server
-    // re-fetch.
+    // Migrates line_spacing "tight" -> "compact" and provides a catalog
+    // fallback for retired date_format ids, keeping dirty() stable
+    // across server re-fetches.
     expect(source).toMatch(
       /if \(p\.line_spacing === "tight"\) p\.line_spacing = "compact"/,
     );
@@ -145,14 +126,12 @@ describe("Wave 4: Editor back-side controls", () => {
   });
 });
 
-describe("(C1): post-save effect_update_depth_exceeded guard", () => {
-  // The hydration $effect used to reassign `editing` to a
+describe("post-save effect_update_depth_exceeded guard", () => {
+  // The hydration $effect must not reassign `editing` to a
   // content-identical clone on every workspace.info change, which
-  // replaced the $state proxy and re-fired the effect on its own
-  // write -> Svelte 5 trips effect_update_depth_exceeded. Repro:
-  // open a draft, flip the editor's Hybrid back, switch the
-  // editor theme; save() reassigns workspace.info, the effect
-  // cycles, the UI freezes.
+  // replaces the $state proxy and re-fires the effect -> Svelte 5
+  // trips effect_update_depth_exceeded (UI freeze). The fix tracks a
+  // JSON snapshot and bails when the server editor slice is unchanged.
   test("tracks lastSyncedServerSnap across workspace.info refreshes", () => {
     expect(source).toMatch(
       /let lastSyncedServerSnap: string \| null = null;/,

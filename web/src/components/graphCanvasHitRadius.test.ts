@@ -1,11 +1,9 @@
 import { describe, expect, test } from "vitest";
 import canvas from "./GraphCanvas.svelte?raw";
 
-// `fullstack-a-60`: graph canvas forgiving-clicks. Hit-test pad
-// expanded for click-to-select (and hover) WITHOUT widening
-// drag-detect's pad — so pan-on-empty-space stays usable while
-// users no longer need to zoom in to register clicks on small
-// nodes.
+// Graph canvas forgiving clicks: hit-test pad is wider for
+// click-to-select and hover, but not for drag-detect, so
+// pan-on-empty-space stays usable.
 
 describe("hit-radius slack constants", () => {
   test("PICK_SLACK_DRAG_PX = 4 (tight drag-vs-pan disambiguation)", () => {

@@ -126,21 +126,19 @@ export type TerminalPreferences = {
   idle_timeout_secs: number;
   session_cap: number;
   ring_bytes: number;
-  /// Per-terminal scrollback budget in MB (`fullstack-b-11`). Consumed
-  /// at xterm.js construction time; spawn-time only (existing
-  /// terminals keep their current scrollback until the session
-  /// restarts). Server clamps to [10, 500]; default 50.
+  /// Per-terminal scrollback budget in MB. Consumed at xterm.js
+  /// construction time; spawn-time only (existing terminals keep
+  /// their current scrollback until the session restarts). Server
+  /// clamps to [10, 500]; default 50.
   scrollback_mb?: number;
-  /// Default TERM env var on the spawned PTY (`fullstack-b-11`).
-  /// Optional on the wire so older servers (no field) deserialize
-  /// cleanly; the SPA treats `undefined` as the default
-  /// `xterm-256color`.
+  /// Default TERM env var on the spawned PTY. Optional on the wire
+  /// so older servers (no field) deserialize cleanly; the SPA
+  /// treats `undefined` as the default `xterm-256color`.
   default_term?: string;
-  /// `fullstack-b-30` slice b: terminal-font preference. Optional
-  /// on the wire so pre-`-b-30` servers (no field) deserialize as
-  /// the default `os-default` (per-OS native mono lead from slice
-  /// a). `source-code-pro` opts into Source Code Pro; the SPA
-  /// triggers the download endpoint when needed.
+  /// Terminal-font preference. Optional on the wire so older
+  /// servers (no field) deserialize as the default `os-default`
+  /// (per-OS native mono). `source-code-pro` opts into Source
+  /// Code Pro; the SPA triggers the download endpoint when needed.
   font?: TerminalFontChoice;
 };
 
@@ -208,13 +206,12 @@ export type Preferences = {
   /// Terminal PTY session retention settings. Not surfaced in
   /// Settings yet; round-tripped for config preservation.
   terminal: TerminalPreferences;
-  /// Round-2 watcher bubbles: show all bubbles inline, or collapse
-  /// them into a count tray until expanded.
+  /// Watcher bubbles display mode: show all inline, or collapse
+  /// to a count tray until expanded.
   bubble_overlay_mode: BubbleOverlayMode;
-  /// Auto-rotate the empty-pane carousel (fullstack-35). Optional in
-  /// the wire form so older servers that don't ship the field don't
-  /// trip the type contract; the UI treats `undefined` as the
-  /// default-true.
+  /// Auto-rotate the empty-pane carousel. Optional on the wire so
+  /// older servers that don't ship the field don't trip the type
+  /// contract; the UI treats `undefined` as the default-true.
   empty_pane_carousel_cycling?: boolean;
 };
 
@@ -405,10 +402,10 @@ export type GraphViewNode =
       path_class?: PathClass | null;
       files: number;
       code: number;
-      /// Phase-13 slice 3b-2: per-directory indexing status used by
-      /// the Dashboard indexing slide to colour the spine read-only.
-      /// Undefined for the normal graph view; the main graph leaves
-      /// folder fills on the standard `--g-folder` palette.
+      /// Per-directory indexing status used by the Dashboard
+      /// indexing slide to colour the spine read-only. Undefined
+      /// for the normal graph view; the main graph leaves folder
+      /// fills on the standard `--g-folder` palette.
       indexState?: "pending" | "indexed" | "indexing";
     }
   | {
@@ -428,12 +425,11 @@ export type GraphViewEdgeKind =
   | "contains"
   | "language"
   | "date"
-  /// `fullstack-a-66` slice e: distinguished edge from workspace-root
-  /// → Drafts-root. Emitted by chan-server's
-  /// `synthesize_drafts_layer` when any indexed file lives under
-  /// the `Drafts/` unified-keyspace prefix. Styled distinctly in
-  /// the graph canvas (yellow tint) so the drafts surface reads
-  /// as "different category" at a glance.
+  /// Distinguished edge from workspace-root to Drafts-root.
+  /// Emitted by chan-server's `synthesize_drafts_layer` when any
+  /// indexed file lives under the `Drafts/` unified-keyspace
+  /// prefix. Styled distinctly in the canvas (yellow tint) so the
+  /// drafts surface reads as "different category" at a glance.
   | "drafts_link";
 
 export type GraphViewEdge = {
@@ -546,26 +542,23 @@ export type PreflightSnapshot = {
 export type PreflightDecisionRequest = { step: string; choice: string };
 
 // ---------------------------------------------------------------------------
-// /ws message-type catalog (phase-11 spine contract, Part 3).
+// /ws message-type catalog.
 //
 // The watcher socket carries both directions. Server -> client frames are a
 // tagged union on `type`; client -> server frames are the scope sub/unsub
 // path. The legacy global `watch` frame stays for the editor's open-document
-// external-edit toast (a single-file concern); the new scoped `fs` frame
-// workspaces the per-directory File Browser / Graph tree (D2: two frames, two
-// consumers). The server-side serialization in chan-server must stay in
-// lockstep with these shapes; both sides pin them with a test.
+// external-edit toast (a single-file concern); the scoped `fs` frame serves
+// the per-directory File Browser / Graph tree (two frames, two consumers).
+// Server-side serialization in chan-server must stay in lockstep with these
+// shapes; both sides pin them with a test.
 // ---------------------------------------------------------------------------
 
-/// A single filesystem change as chan-workspace's watcher actually serializes it
-/// on the wire. Capitalized kinds plus the rename destination `to`, matching
-/// the verbatim `chan_workspace::WatchEvent` serialization the store dispatcher
-/// already reads (it branches on `"Removed"` / `"Renamed"`). Distinct from
-/// the older, narrower `WatchEvent` type below (lowercase kinds, no rename
-/// destination), which predates the rename support and does not match the
-/// live frame; new code should use `WatchEventWire`. Reconciling / retiring
-/// the stale `WatchEvent` is deferred to the File Browser slice that touches
-/// every consumer.
+/// A single filesystem change as chan-workspace's watcher serializes
+/// it on the wire. Capitalized kinds plus the rename destination `to`,
+/// matching the verbatim `chan_workspace::WatchEvent` serialization the
+/// store dispatcher reads (it branches on `"Removed"` / `"Renamed"`).
+/// Distinct from the older, narrower `WatchEvent` type below (lowercase
+/// kinds, no rename destination); new code should use `WatchEventWire`.
 export type WatchEventWire = {
   kind: "Created" | "Modified" | "Removed" | "Renamed";
   path: string;
@@ -709,13 +702,12 @@ export type BuildInfo = {
   };
 };
 
-/// Semantic-search state surface. `systacean-7` shape; consumed by
-/// the Settings UI (`fullstack-a-21`) to workspace the opt-in toggle +
-/// status row. `mode` is derived server-side as `"hybrid"` iff
-/// `semantic_enabled AND model_present`; the
-/// flag-on-but-model-deleted case falls back to `"bm25"`.
-/// `model_size_bytes` is null pre-download (the resolver only
-/// knows the size after the bundle lands on disk).
+/// Semantic-search state surface. Consumed by the Settings UI to
+/// render the opt-in toggle and status row. `mode` is derived
+/// server-side as `"hybrid"` iff `semantic_enabled AND
+/// model_present`; the flag-on-but-model-deleted case falls back
+/// to `"bm25"`. `model_size_bytes` is null pre-download (the
+/// resolver only knows the size after the bundle lands on disk).
 export type SemanticState = {
   mode: "bm25" | "hybrid";
   model_present: boolean;

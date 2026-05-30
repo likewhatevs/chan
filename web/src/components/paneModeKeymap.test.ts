@@ -1,10 +1,6 @@
-// Raw-source assertions on the Cmd+K (pane mode) keymap wired in
-// App.svelte. The dispatcher lives inline inside the App component
-// and is hard to mount in isolation, so this gate reads the source
-// directly and checks that the arrow → move-focus and WASD → swap
-// arrangement from `fullstack-40` is preserved. Catches accidental
-// regressions if someone "fixes" the mapping back to the
-// `fullstack-16` defaults.
+// Raw-source assertions on the Cmd+K pane-mode keymap in App.svelte.
+// The dispatcher is hard to mount in isolation, so the source is read
+// directly. Pins the arrow = move-focus and WASD = swap arrangement.
 
 import { describe, expect, test } from "vitest";
 import app from "../App.svelte?raw";
@@ -21,19 +17,14 @@ describe("Cmd+K pane mode keymap (inversion)", () => {
     expect(app).toContain('case "w":\n      case "W":\n        paneModeSwap("up");');
     expect(app).toContain('case "a":\n      case "A":\n        paneModeSwap("left");');
     expect(app).toContain('case "d":\n      case "D":\n        paneModeSwap("right");');
-    // `fullstack-74`: `s` rejoins WASD. Search moved to `f`.
+    // `s` rejoins WASD; Search moved to `f`.
     expect(app).toContain('case "s":\n      case "S":\n        paneModeSwap("down");');
   });
 });
 
-// `fullstack-a-32` reshaped the Hybrid NAV spawn cases. The numeric
-// 1/2/3/4 cases are gone (they duplicated the new top-level chord
-// set Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). The letter mnemonics
-// `t/T` (terminal), `o/O` (browser), `p/P` (team work — kept
-// from -50), `v/V` (graph) are the in-Hybrid-NAV path; each
-// commits immediately and routes through the same context-aware
-// helper as the matching top-level chord. `f/F` (Search) and
-// `h/H` (Help) are unchanged.
+// Hybrid NAV spawn cases: numeric 1/2/3/4 are gone (they duplicated
+// Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). Letter mnemonics t/o/p/v/g
+// are the in-NAV path; f/F (Search) and h/H (Help) are unchanged.
 describe("Cmd+K pane mode keymap (transactional staging)", () => {
   test("g / G writes directly to the draft layout (no immediate commit)", () => {
     expect(app).toMatch(
@@ -56,7 +47,6 @@ describe("Cmd+K pane mode keymap (transactional staging)", () => {
   });
 
   test("numeric 1 / 2 / 3 / 4 cases stay gone", () => {
-    // pre-`-a-32` cleanup preserved.
     expect(app).not.toMatch(/case "1": \{[\s\S]{0,60}paneModeStageSpawn/);
     expect(app).not.toMatch(/case "2": \{[\s\S]{0,60}paneModeStageSpawn/);
     expect(app).not.toMatch(/case "3": \{[\s\S]{0,60}paneModeStageSpawn/);
@@ -99,17 +89,11 @@ describe("Cmd+K pane mode transactional staging", () => {
     );
   });
 
-  test("Escape cancels (no materializeStagedDraftEditors call before cancelPaneMode)", () => {
-    // Cancel must run BEFORE materialize would — verify no
-    // materialize call sits between Enter's branch and the
-    // Escape case's cancelPaneMode (i.e. Escape just cancels).
+  test("Escape cancels without materializing staged draft editors", () => {
     expect(app).toMatch(
       /case "Escape":[\s\S]{0,800}cancelPaneMode\(\);/,
     );
-    // Sanity: the Escape branch must NOT call
-    // materializeStagedDraftEditors (it's OK to mention it in
-    // a comment for context — only the `()` call form is
-    // forbidden, and only before cancelPaneMode runs).
+    // The Escape branch must not call materializeStagedDraftEditors.
     expect(app).not.toMatch(
       /case "Escape":[\s\S]{0,400}materializeStagedDraftEditors\(\);[\s\S]{0,400}cancelPaneMode\(\);/,
     );
@@ -118,9 +102,8 @@ describe("Cmd+K pane mode transactional staging", () => {
 
 describe("Cmd+T / O / P / Cmd+Shift+M top-level chords", () => {
   test("Cmd+Alt+T (web Mac) routes through context-aware spawn helper", () => {
-    // pre-`-a-32` handler called `openTerminalInActivePane()` with
-    // no args. -a-32 routes through `spawnTerminalFromContext`
-    // which threads `resolveSpawnContext().dir` as `cwd`.
+    // Routes through spawnTerminalFromContext so resolveSpawnContext().dir
+    // is threaded as cwd.
     expect(app).toMatch(
       /e\.metaKey && e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyT"[\s\S]*?spawnTerminalFromContext\(\)/,
     );
@@ -145,11 +128,9 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords", () => {
   });
 
   test("chan:command bridge routes through context-aware helpers", () => {
-    // chan-desktop's KEY_BRIDGE_JS fires `app.terminal.toggle` /
-    // `app.files.toggle` / `app.terminal.teamWork` /
-    // `app.graph.toggle` on native Cmd+T / Cmd+O / Cmd+P /
-    // Cmd+Shift+M. -a-32 routes them through the same helpers
-    // the web chords use so native + web behave identically.
+    // chan-desktop's KEY_BRIDGE_JS fires these commands on native
+    // Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M and they route through
+    // the same helpers as the web chords.
     expect(app).toMatch(
       /case "app\.terminal\.toggle":\s*\n\s*spawnTerminalFromContext\(\);/,
     );
@@ -167,10 +148,8 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords", () => {
 
 describe("Cmd+K pane mode Team Work binding", () => {
   test("p inside Hybrid Nav stages a plain Team Work terminal (no commit, no dialog)", () => {
-    // Hybrid Nav `P` stages a fresh Team Work terminal (terminal +
-    // embedded editor) into the draft. It does NOT open the
-    // Spawn-agents dialog: that is reserved for the top-level Cmd+P
-    // / Cmd+Alt+P / hamburger "Team Work" entry.
+    // Hybrid Nav P stages a fresh Team Work terminal. The Spawn-agents
+    // dialog is reserved for the top-level Cmd+P / Cmd+Alt+P.
     expect(app).toMatch(
       /case "p":\s*\n\s*case "P":\s*\n?\s*paneModeOpenTeamWorkTerminal\(resolveSpawnContext\(\)\);/,
     );
@@ -181,11 +160,9 @@ describe("Cmd+K pane mode Team Work binding", () => {
   });
 
   test("top-level Cmd+P flow creates a Team Work lead terminal then opens the dialog", () => {
-    // phase-13 r2: the top-level chord instantiates the lead
-    // terminal FIRST (createTeamWorkLeadTerminal), then opens the
-    // Spawn-agents dialog over it (openTeamDialog with the lead tab
-    // + pane id). The old showOrSpawnTeamWorkInFocusedPane helper
-    // is gone.
+    // The lead terminal is created first (createTeamWorkLeadTerminal),
+    // then the Spawn-agents dialog is opened over it. The old
+    // showOrSpawnTeamWorkInFocusedPane helper is gone.
     expect(app).toMatch(/import \{[\s\S]{1,4000}createTeamWorkLeadTerminal,/);
     expect(app).toMatch(
       /function spawnTeamWorkFromContext\(\): void \{[\s\S]*?createTeamWorkLeadTerminal\(\{ cwd: ctx\.dir \}\);[\s\S]*?openTeamDialog\(\{ leadTabId: lead\.id, leadPaneId: activePane\(\)\.id \}\);/,
@@ -196,9 +173,7 @@ describe("Cmd+K pane mode Team Work binding", () => {
 
 describe("Cmd+K Backspace kill-pane", () => {
   test("Backspace closes the focused pane; k no longer bound to kill-pane", () => {
-    // `fullstack-77`: kill-pane moved from `k` / `K` to
-    // `Backspace`. The old letter is unbound (not repurposed) so
-    // the previous case block disappears from the dispatch.
+    // kill-pane moved to Backspace; the old `k` / `K` binding is gone.
     expect(app).toMatch(
       /case "Backspace":[\s\S]*?commitPaneMode\(\);[\s\S]*?killActivePane\(\);/,
     );
@@ -209,10 +184,8 @@ describe("Cmd+K Backspace kill-pane", () => {
 });
 
 describe("Track C pane shortcut wiring", () => {
-  // `phase-12 lane-e` (addendum-2 Q5): WEB pane nav moved to Alt+[/]
-  // (Cmd+[/] is browser back/forward on web). Desktop-native keeps
-  // Cmd+[/] via KEY_BRIDGE_JS, which stops propagation before this
-  // web-only handler runs.
+  // Web pane nav uses Alt+[/] because Cmd+[/] is browser back/forward.
+  // Desktop-native keeps Cmd+[/] via KEY_BRIDGE_JS.
   test("Alt+[ and Alt+] dispatch previous/next pane on web", () => {
     expect(app).toMatch(
       /e\.altKey && !e\.shiftKey && !meta && e\.code === "BracketLeft"[\s\S]*?selectPrevPane\(\);/,
@@ -249,8 +222,6 @@ describe("Track C pane shortcut wiring", () => {
 
 describe("Cmd+K dock toggles", () => {
   test("< toggles the right-side file browser dock", () => {
-    // Mapping per @@Alex's verbatim spec: less-than (right-facing
-    // arrow when read as an opening tag) toggles the right dock.
     expect(app).toMatch(
       /case "<":[\s\S]*?commitPaneMode\(\);[\s\S]*?toggleBrowserSidePane\("right"\);/,
     );
@@ -265,9 +236,8 @@ describe("Cmd+K dock toggles", () => {
 
 describe("Pane Mode entry flash removed", () => {
   test("no centre-window 'H for help' flash on Pane Mode entry", () => {
-    // `fullstack-61` introduced the flash; `fullstack-a-3` removes
-    // it as visual noise — the status-bar Hybrid pill already
-    // telegraphs `H help` and PaneModeHelp covers discovery.
+    // The status-bar Hybrid pill and PaneModeHelp cover discovery;
+    // the centre-window flash is removed as visual noise.
     expect(app).not.toContain("pane-mode-flash");
     expect(app).not.toContain("paneModeFlashVisible");
     expect(app).not.toContain("paneModeFlashKey");

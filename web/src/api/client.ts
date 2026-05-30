@@ -515,11 +515,9 @@ export const api = {
   /// has many `@@<Name>` references in body text but no contact
   /// file still surfaces in the completion dropdown.
   ///
-  /// Backed by `systacean-35`'s
-  /// `GET /api/mentions?q=<prefix>&limit=<int>` route. Labels
-  /// arrive WITH the `@@` sigil (the route composes it).
-  /// Empty `q` returns the full corpus capped at `limit`
-  /// (default 10).
+  /// Backed by `systacean-35`'s `GET /api/mentions?q=<prefix>&limit=<int>`
+  /// route. Labels arrive WITH the `@@` sigil (the route composes it).
+  /// Empty `q` returns the full corpus capped at `limit` (default 10).
   mentions: (q = "", limit = 10) => {
     const qs = new URLSearchParams();
     if (q) qs.set("q", q);
@@ -682,14 +680,11 @@ export const api = {
       }
       xhr.send(form);
     }),
-  /// `fullstack-a-66`: create a new draft directory + seeded
-  /// draft.md inside via the dedicated /api/drafts/new route. Picks the
-  /// next `untitled` / `untitled-N` name server-side via
-  /// `Workspace::next_untitled_draft_name`. Returns the unified-path
-  /// `Drafts/<name>/draft.md` which the SPA opens via the
-  /// existing /api/files/* GET path (post-`-26` unified-path API
-  /// routes Drafts/-prefixed paths through chan-workspace's drafts
-  /// dir).
+  /// Create a new draft directory with a seeded draft.md via
+  /// /api/drafts/new. Picks the next `untitled` / `untitled-N`
+  /// name server-side. Returns the unified-path
+  /// `Drafts/<name>/draft.md` which the SPA opens via
+  /// the existing /api/files/* GET path.
   createDraft: () =>
     req<{ path: string; name: string }>("POST", "/api/drafts/new"),
   inspectDraft: (path: string) =>
@@ -713,11 +708,10 @@ export const api = {
       dest_dir: destDir,
     }),
   /// Filename fuzzy search (the [[ autocomplete in the editor).
-  /// Hits the renamed /api/search/files endpoint; the legacy
-  /// /api/search alias still exists server-side for back-compat.
-  /// `prefix` scopes the result set to files under that directory:
-  /// the wiki-link picker passes the source file's git_repo root
-  /// when applicable so suggestions stay project-bound.
+  /// Hits /api/search/files. `prefix` scopes the result set to
+  /// files under that directory: the wiki-link picker passes the
+  /// source file's git_repo root when applicable so suggestions
+  /// stay project-bound.
   search: (q: string, limit = 10, prefix?: string | null) => {
     const params = new URLSearchParams({ q, limit: String(limit) });
     if (prefix) params.set("prefix", prefix);
@@ -847,11 +841,11 @@ export const api = {
       "GET",
       `/api/report/prefix?path=${encodeURIComponent(path)}`,
     ),
-  /// `fullstack-a-50` G3: per-directory roll-up via the O(1) cache
-  /// from `systacean-15`. Same response shape as `reportPrefix` but
-  /// reads from the maintained cache instead of walking the file map.
-  /// Empty `path` returns the workspace root. 404 when the directory
-  /// has no tracked files (caller treats null as "no report yet").
+  /// Per-directory roll-up via the O(1) maintained cache. Same
+  /// response shape as `reportPrefix` but avoids a full file-map
+  /// walk. Empty `path` returns the workspace root. 404 when the
+  /// directory has no tracked files (caller treats null as "no
+  /// report yet").
   reportDir: (path: string) =>
     req<ReportPrefix>(
       "GET",
@@ -1022,13 +1016,11 @@ export const api = {
       preferences: { ...cfg.preferences, empty_pane_carousel_cycling: cycling },
     });
   },
-  /// `systacean-7` semantic-search endpoints. Surface is open-read
-  /// (state) + settings-gated mutations (download / enable / disable).
-  /// The download endpoint is synchronous in v1; the POST blocks
-  /// until the resolver has the bytes on disk, then returns. The
-  /// Settings UI polls `/state` in parallel to detect the
-  /// `model_present` transition without depending on per-byte
-  /// progress events.
+  /// Semantic-search endpoints. Open-read for state; settings-
+  /// gated for mutations (download / enable / disable). The
+  /// download POST blocks until the resolver has the bytes on
+  /// disk. The Settings UI polls `/state` in parallel to detect
+  /// the `model_present` transition without per-byte progress.
   semanticState: () => req<SemanticState>("GET", "/api/index/semantic/state"),
   semanticModels: () =>
     req<SemanticModelRegistry>("GET", "/api/index/semantic/models"),
@@ -1038,24 +1030,23 @@ export const api = {
   semanticEnable: () => req<SemanticState>("POST", "/api/index/semantic/enable"),
   semanticDisable: () => req<SemanticState>("POST", "/api/index/semantic/disable"),
   /// `fullstack-a-76`: per-workspace chan-reports toggle. Mirrors the
-  /// semantic-toggle shape (state / enable / disable). Reports
-  /// endpoints landed in `systacean-39` at
+  /// semantic-toggle shape (state / enable / disable). Backed by
+  /// `systacean-39` at
   /// `crates/chan-server/src/routes/reports_toggle.rs`. The
-  /// `enable` call triggers an incremental indexing pass per
-  /// `-27`'s contract; `disable` is idempotent at the
-  /// chan-workspace layer.
+  /// `enable` call triggers an incremental indexing pass;
+  /// `disable` is idempotent at the chan-workspace layer.
   reportsState: () =>
     req<{ enabled: boolean }>("GET", "/api/index/reports/state"),
   reportsEnable: () =>
     req<{ enabled: boolean }>("POST", "/api/index/reports/enable"),
   reportsDisable: () =>
     req<{ enabled: boolean }>("POST", "/api/index/reports/disable"),
-  /// `fullstack-a-77`: screensaver state + PIN endpoints. Backed
-  /// by `systacean-40` (`crates/chan-server/src/routes/screensaver.rs`).
-  /// The PIN hash never appears in the response body; the
-  /// state shape carries `pin_set: bool` instead, and `verify`
-  /// returns a single `verified: bool` from a server-side
-  /// constant-time compare. PBKDF2 happens client-side via
+  /// Screensaver state and PIN endpoints
+  /// (`crates/chan-server/src/routes/screensaver.rs`). The PIN
+  /// hash never appears in the response body; the state shape
+  /// carries `pin_set: bool` instead, and `verify` returns a
+  /// single `verified: bool` from a server-side constant-time
+  /// compare. PBKDF2 happens client-side via
   /// `state/screensaver.ts::hashPin`; payload field
   /// `{ hash: base64 }`.
   screensaverState: () =>
@@ -1090,34 +1081,32 @@ export const api = {
       "/api/screensaver/verify",
       { hash: hash_b64 },
     ),
-  /// `fullstack-b-30` slice b: download Source Code Pro Regular +
-  /// OFL.txt into `<user-config>/chan/fonts/`. Idempotent server-
-  /// side; safe to call from a click handler without guarding.
-  /// Surfaces { dir, files: [{ name, bytes }] } so the SPA can
-  /// reflect the post-download state.
+  /// Download Source Code Pro Regular + OFL.txt into
+  /// `<user-config>/chan/fonts/`. Idempotent server-side; safe
+  /// to call from a click handler without guarding. Surfaces
+  /// { dir, files: [{ name, bytes }] } so the SPA can reflect
+  /// the post-download state.
   fontsSourceCodeProDownload: () =>
     req<{ dir: string; files: { name: string; bytes: number }[] }>(
       "POST",
       "/api/fonts/source-code-pro/download",
     ),
 
-  /// phase-13-r2 `lane-a-A3`: path-based chan-team.toml read/write
-  /// backing the Team Work dialog's New/Load flow. The config
-  /// lives at a user-chosen absolute path (default
-  /// `/tmp/new-team-1/chan-team.toml`), deliberately OUTSIDE the
-  /// workspace sandbox: it is app-level dev-orchestration config,
-  /// not notes content (see crates/chan-server/src/routes/
-  /// team_config.rs for the WHY). `readTeamConfigFile` backs the
-  /// Load auto-validate (400 on missing / invalid TOML);
-  /// `writeTeamConfigFile` re-saves the (possibly edited) config
-  /// on Bootstrap.
+  /// Path-based chan-team.toml read/write backing the Team Work
+  /// dialog's New/Load flow. The config lives at a user-chosen
+  /// absolute path, deliberately OUTSIDE the workspace sandbox:
+  /// it is app-level dev-orchestration config, not notes content
+  /// (see crates/chan-server/src/routes/team_config.rs).
+  /// `readTeamConfigFile` backs the Load auto-validate (400 on
+  /// missing / invalid TOML); `writeTeamConfigFile` re-saves the
+  /// (possibly edited) config on Bootstrap.
   readTeamConfigFile: (path: string) =>
     req<TeamConfigWire>("POST", "/api/team-config/read", { path }),
   writeTeamConfigFile: (path: string, config: TeamConfigWire) =>
     req<void>("POST", "/api/team-config/write", { path, config }),
 };
 
-/// `fullstack-a-79`: wire shape for `Workspace::create_team` /
+/// Wire shape for `Workspace::create_team` /
 /// `Workspace::duplicate_team`. snake_case to match chan-workspace's
 /// serde-default field naming. The SPA translates its own
 /// camelCase `TeamDialogConfig` into this on submit.

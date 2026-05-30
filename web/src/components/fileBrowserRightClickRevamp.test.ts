@@ -2,11 +2,10 @@ import { describe, expect, test } from "vitest";
 import surface from "./FileBrowserSurface.svelte?raw";
 import pane from "./Pane.svelte?raw";
 
-// `fullstack-a-67e`: File Browser right-click / hamburger menu
-// revamp per addendum-a's verbatim spec. Slice 1 covers the FB
-// tab right-click + hamburger surface (FileBrowserSurface.svelte).
-// The in-tree selection menu (FileTree.svelte row right-click)
-// is a sibling slice — separate pins land with that change.
+// File Browser right-click / hamburger menu revamp covering the
+// FileBrowserSurface tab right-click and hamburger. The in-tree
+// selection menu (FileTree.svelte row right-click) pins are in
+// fileTreeSelectionMenu.test.ts.
 
 describe("FBSurface menu header: path-derived workspace label + path row", () => {
   test("workspace-label-row renders the API label without an editable input", () => {
@@ -24,7 +23,7 @@ describe("FBSurface menu header: path-derived workspace label + path row", () =>
     expect(surface).toMatch(
       /class="workspace-path-text">\{workspace\.info\?\.root \?\? ""\}/,
     );
-    // The fade pattern from `-a-67 slice 1b` (Graph) ports over.
+    // Same fade pattern as the Graph scope-header row.
     expect(surface).toMatch(
       /\.workspace-path-text\)[\s\S]{1,800}mask-image: linear-gradient\(to right, black calc\(100% - 1\.25rem\), transparent\);/,
     );

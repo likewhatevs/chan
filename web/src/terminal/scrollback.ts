@@ -1,4 +1,4 @@
-// Terminal scrollback sizing helpers (`fullstack-b-11`).
+// Terminal scrollback sizing helpers.
 //
 // xterm.js measures `scrollback` in lines, not bytes. The Settings UI
 // exposes a per-terminal MB budget; the spawn site needs lines. Both
@@ -15,8 +15,8 @@ export const SCROLLBACK_MB_MAX = 500;
 
 /// Default budget for first-launch users (and for `default_term` clear
 /// fallbacks coming back from the server). Translates to >> 20k lines
-/// at the baseline 80-col width, so the pre-`fullstack-b-11` 20k cap
-/// is strictly improved by default.
+/// at the baseline 80-col width, which strictly improves on the
+/// previous 20k cap.
 export const SCROLLBACK_MB_DEFAULT = 50;
 
 /// Baseline column width used for the MB -> lines conversion. xterm.js

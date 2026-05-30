@@ -6,28 +6,23 @@ import fileTree from "./FileTree.svelte?raw";
 
 describe("file-browser reveal actions", () => {
   test("terminal tab does not leak to the legacy file-browser overlay", () => {
-    // `fullstack-42` dropped the "Show Dir" / "Graph dir" entries
-    // from the terminal hamburger menu (Pane Mode + context covers
-    // them). Their click handlers were removed too; what stays is
-    // the rule that NOTHING in TerminalTab opens the old overlay.
+    // The "Show Dir" / "Graph dir" terminal menu entries are gone.
+    // Nothing in TerminalTab opens the old overlay.
     expect(terminal).not.toContain("browserOverlay.open = true");
     expect(terminal).not.toContain("function showTerminalCwd()");
     expect(terminal).not.toContain("function graphTerminalCwd()");
   });
 
   test("graph inspector reveal buttons reveal in a browser TAB", () => {
-    // GI-8: the graph is a tab now, so reveal opens a File Browser TAB
-    // (via the tab-world `openBrowserInActivePane` primitive, the same
-    // one the File Browser's own "Open in File Browser" uses) and the
-    // graph persists. The overlay-era `revealPathInBrowser(...)` +
-    // `close()` chain is gone (it opened no visible tab from a graph tab).
+    // Reveal opens a File Browser TAB via openBrowserInActivePane so
+    // the graph tab persists. The overlay-era revealPathInBrowser +
+    // close() chain is gone.
     expect(graph).toContain("function revealSelectedFile()");
     expect(graph).toContain("function revealSelectedFsEntry()");
     expect(graph).toContain("function revealPathInBrowserTab(path: string, isDir: boolean)");
     expect(graph).toContain("revealPathInBrowserTab(selectedNode.path, false)");
-    // GI-5 preserved: directories expand the directory ITSELF (upto =
-    // parts.length) so the File Browser opens AT the dir; files expand
-    // ancestors only.
+    // Directories expand the directory ITSELF (upto = parts.length)
+    // so the File Browser opens AT the dir; files expand ancestors.
     expect(graph).toContain(
       "revealPathInBrowserTab(selectedFsNode.path, isFsDirectory(selectedFsNode))",
     );
@@ -39,19 +34,15 @@ describe("file-browser reveal actions", () => {
   });
 });
 
-// The Graph and File Browser surfaces are now first-class tabs; closing
-// happens via the tab strip's `×`, so neither surface should ship an
-// inline close affordance in its own chrome.
+// Graph and File Browser are first-class tabs; closing happens via the
+// tab strip. Neither surface ships an inline close affordance.
 describe("no inline close affordance on first-class surfaces", () => {
   test("GraphPanel chrome has no chrome-btn.close button", () => {
     expect(graph).not.toContain('class="chrome-btn close"');
   });
 
-  // fullstack-64: drop the overlay-era maximize button + the scope
-  // selector dropdown. Cmd+K 3 + "Graph from here" are the canonical
-  // scope-setting paths now. The snap-back $effect that reset
-  // scopeId to defaultScopeId() also goes (was the fullstack-57
-  // bug surface).
+  // Overlay-era maximize button + scope selector dropdown are gone.
+  // Cmd+K + "Graph from here" are the canonical scope-setting paths.
   test("GraphPanel chrome has no Maximize2 / Minimize2 button", () => {
     expect(graph).not.toContain("<Maximize2");
     expect(graph).not.toContain("<Minimize2");
@@ -64,27 +55,20 @@ describe("no inline close affordance on first-class surfaces", () => {
   });
 
   test("GraphPanel no longer snaps scopeId back to defaultScopeId on mount", () => {
-    // The fullstack-57 bug surface: `if (!currentScope)
-    // graphState.scopeId = defaultScopeId()` clobbered a freshly-
-    // spawned file:/dir: scope. Synthesizing the ScopeOption from
-    // the scopeId prefix replaces the snap-back.
+    // The old snap-back clobbered a freshly-spawned file:/dir: scope.
+    // Synthesizing the ScopeOption from the scopeId prefix replaces it.
     expect(graph).not.toContain("graphState.scopeId = defaultScopeId()");
     expect(graph).toContain("synthesizeScope(graphState.scopeId)");
   });
 
-  // fullstack-68 + scope-concept wipe (lane-a A1): the Graph tab's
-  // chrome bar is removed ENTIRELY. Filter chips + hamburger items
-  // live in the tab right-click bubble; the overlay-only `{#if !tab}`
-  // bar (and its `<div class="bar">`) went away with the overlay
-  // variant - GraphPanel is now tab-only.
+  // The Graph tab chrome bar is removed entirely. Filter chips and
+  // hamburger items live in the tab right-click bubble. GraphPanel is
+  // now tab-only.
   test("GraphPanel has no chrome bar (overlay variant removed)", () => {
     expect(graph).not.toContain('<div class="bar">');
     expect(graph).not.toContain("{#if !tab}");
   });
 
-  // fullstack-73: "Graph from here" affordance on WorkspaceInfoBody so
-  // every inspector surface offers the same action when the workspace
-  // root is selected.
   test("WorkspaceInfoBody renders 'Graph from here' only when onSetAsScope is provided", async () => {
     const workspaceInfo = (
       await import("./WorkspaceInfoBody.svelte?raw")
@@ -96,46 +80,28 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(workspaceInfo).toMatch(/\{#if onSetAsScope\}[\s\S]*?Graph from here/);
   });
 
-  // `fullstack-a-33`: the explicit "Graph from here" button on the
-  // graph's inspector goes away for file / tag / mention bodies.
-  // WorkspaceInfoBody / FileInfoBody / TagInfoBody still ship the
-  // button (FileBrowserSurface consumes it), but the GraphPanel
-  // no longer passes `onSetAsScope` for those. The ancestor
-  // breadcrumb above the inspector body is the in-graph re-scope
-  // path.
-  // `fullstack-a-50` G3 re-introduces `onSetAsScope` ONLY for the
-  // new directory inspector (DirectoryInfoBody) — the breadcrumb
-  // covers ancestor navigation upward; the directory inspector's
-  // button targets the SELECTED directory (which may be unrelated
-  // to the current scope's ancestor chain, e.g. a directory the
-  // user navigated into via cross-link).
-  // A1 (phase-13): the workspace root is now a regular directory
-  // inspector, so GraphPanel wires BOTH the reveal and the scope
-  // callbacks for it (re-scopes the current tab to workspace root).
+  // GraphPanel wires onSetAsScope for workspace root and directory nodes.
+  // File / tag / mention bodies use the ancestor breadcrumb for re-scope.
   test("GraphPanel wires onReveal + onSetAsScope on WorkspaceInfoBody", () => {
     expect(graph).toMatch(
       /<WorkspaceInfoBody[\s\S]*?onReveal=\{\(\) => revealPathInBrowserTab\("", true\)\}[\s\S]*?onSetAsScope=\{\(\) => graphFromHere\("", true\)\}/,
     );
   });
 
-  test("GraphPanel wires 'Graph from here' for file + directory selections (I4)", () => {
-    // inspector-spec.md I4 re-adds the explicit "Graph from here"
-    // action to the graph inspector for BOTH file and folder nodes.
-    // GI-6 made the handler kind-aware: it now takes an `isDir` flag so
-    // a directory re-roots to itself (not its parent). The semantic
-    // branch passes isDir from the selection kind; the fs branch passes
-    // the precomputed `fsIsDir`.
+  test("GraphPanel wires 'Graph from here' for file + directory selections", () => {
+    // "Graph from here" is present for both file and folder nodes.
+    // The handler is kind-aware: directories re-root to themselves;
+    // files re-root to the parent folder.
     expect(graph).toMatch(
       /onSetAsScope=\{[\s\S]*?inspectorSelection\?\.kind === "file" \|\|[\s\S]*?=== "directory"[\s\S]*?graphFromHere\(\s*inspectorSelection\.path,\s*inspectorSelection\.kind === "directory",\s*\)/,
     );
     expect(graph).toMatch(/onSetAsScope=\{\(\) => graphFromHere\(fsPath, fsIsDir\)\}/);
   });
 
-  test("graphFromHere re-roots in place: dir to itself, file to its parent (I4)", () => {
-    // GI-6: a directory re-roots to `dir:<path>` (the dir itself, workspace
-    // root for the empty path); a file re-roots to its parent dir. The
-    // old always-parent rule made re-rooting a child folder onto its
-    // already-current parent a no-op + left the inspector blank.
+  test("graphFromHere re-roots in place: dir to itself, file to its parent", () => {
+    // A directory re-roots to dir:<path> (workspace root for "").
+    // A file re-roots to its parent dir. The old always-parent rule
+    // made re-rooting a child folder a no-op and left the inspector blank.
     expect(graph).toContain("function graphFromHere(path: string, isDir: boolean)");
     expect(graph).toMatch(/if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "workspace";/);
     expect(graph).toMatch(/const parent = slash > 0 \? path\.slice\(0, slash\) : ""/);
@@ -144,24 +110,19 @@ describe("no inline close affordance on first-class surfaces", () => {
   });
 
   test("GraphPanel renders the scope-crumbs ancestor breadcrumb", () => {
-    // Breadcrumb band sits inside the Inspector children, gated
-    // on `scopeAncestors.length > 0` so tag / git_repo / global
-    // scopes (no path) hide it. Each non-current segment is a
-    // `<button class="crumb">` wired to `rescopeFromHere(...)`.
+    // Breadcrumb gated on scopeAncestors.length > 0 so scopes with
+    // no path (tag, global) hide it. Each non-current segment is a
+    // button wired to rescopeFromHere.
     expect(graph).toContain("scopeAncestors");
     expect(graph).toMatch(/class="scope-crumbs"/);
     expect(graph).toMatch(/class="crumb"[\s\S]*?onclick=\{\(\) => rescopeFromHere\(crumb\.scopeId\)\}/);
-    // Workspace root is always the head of the chain so the user
-    // can hop back to workspace scope from any depth.
     expect(graph).toMatch(/scopeId: "workspace", current: true/);
   });
 
   test("GraphPanel rescopeFromHere mutates the current tab (no new spawn)", () => {
-    // The breadcrumb's click handler must NOT spawn a new graph
-    // tab; it mutates `graphState.scopeId` in place so the same
-    // tab follows the user back up the path. The previous
-    // `scopeFsGraphFromHere` import is gone for the same reason
-    // (still used by FileBrowserSurface, not by GraphPanel).
+    // The breadcrumb click mutates graphState.scopeId in place so the
+    // same tab follows the user back up the path. scopeFsGraphFromHere
+    // is no longer imported here.
     expect(graph).toContain("function rescopeFromHere(scopeId: string)");
     expect(graph).toContain("graphState.scopeId = scopeId;");
     expect(graph).toContain("graphState.depth = 1;");
@@ -175,11 +136,8 @@ describe("no inline close affordance on first-class surfaces", () => {
   });
 
   test("GraphPanel renders a tab-menu-bubble with mbtn rows + vertical filter rows", () => {
-    // `fullstack-68` introduced the bubble; `fullstack-75` aligned
-    // it with the standard hamburger-menu row shape (`.mbtn`) and
-    // moved the filter chips to vertical rows. `fullstack-a-98`
-    // keeps Depth + Reload + per-filter rows and adds the
-    // addendum-a footer rows.
+    // The bubble uses standard hamburger-menu row shape (.mbtn) with
+    // vertical filter rows (Depth + Reload + per-filter + footer rows).
     expect(graph).toMatch(/\{#if tab && tabMenuOpen\}[\s\S]*?class="tab-menu-bubble"/);
     expect(graph).toMatch(
       /class="tab-menu-bubble"[\s\S]*?class="mbtn depth-row"/,
@@ -187,8 +145,8 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).toMatch(
       /class="tab-menu-bubble"[\s\S]*?class="mbtn filter-row"[\s\S]*?show\[kind\] = !show\[kind\]/,
     );
-    // The horizontal flex `.filters` chip container belongs to the
-    // overlay variant's bar only; the bubble must NOT carry it.
+    // The horizontal flex .filters chip container belongs to the overlay
+    // bar only; the bubble must not carry it.
     expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?<div class="bubble-filters">/,
     );
@@ -214,10 +172,8 @@ describe("no inline close affordance on first-class surfaces", () => {
   });
 });
 
-// fullstack-54: FileBrowserSurface drops the path-display header span
-// (the `/private/tmp/...` row that duplicated the tab-strip context).
-// The chrome row collapses to a slim strip with the kebab on the
-// right; no path text in any variant.
+// FileBrowserSurface drops the path-display header span (it duplicated
+// the tab-strip context). The chrome row collapses to a slim strip.
 describe("no path-display header on FileBrowserSurface", () => {
   test('no <span class="name"> in the header', () => {
     expect(fileBrowserSurface).not.toContain('class="name"');
@@ -229,8 +185,8 @@ describe("no path-display header on FileBrowserSurface", () => {
   });
 });
 
-// fullstack-38: right-docked file browser mirrors row layout so the
-// tree visually anchors against whichever viewport edge it sits on.
+// Right-docked file browser mirrors row layout so the tree anchors
+// against the viewport edge it sits on.
 describe("right-docked file browser mirrors text alignment", () => {
   test("FileBrowserSurface forwards dockSide=right to FileTree only in dock variant", () => {
     expect(fileBrowserSurface).toContain(
@@ -260,11 +216,9 @@ describe("right-docked file browser mirrors text alignment", () => {
   });
 });
 
-// fullstack-49: collapsed-directory chevron mirrors with the dock side.
-// Left-dock + overlay + tab variants keep ChevronRight; right-dock
-// flips to ChevronLeft because the mirrored row layout reads children
-// as "opening inward" toward the left. Expanded chevron stays
-// ChevronDown — symmetric on the horizontal axis.
+// Collapsed-directory chevron mirrors the dock side. Left-dock +
+// overlay + tab keep ChevronRight; right-dock flips to ChevronLeft
+// (children "open inward"). Expanded chevron stays ChevronDown.
 describe("right-docked file browser chevron direction", () => {
   test("FileTree imports ChevronLeft alongside ChevronDown / ChevronRight", () => {
     expect(fileTree).toContain("ChevronLeft");
@@ -273,10 +227,9 @@ describe("right-docked file browser chevron direction", () => {
   });
 
   test("collapsed-dir chevron branches on rightDock to ChevronLeft vs ChevronRight", () => {
-    // The render block must include both ChevronLeft (right-dock
-    // variant) and ChevronRight (default) for the collapsed state,
-    // gated by the rightDock flag. The expanded state stays
-    // ChevronDown unconditionally.
+    // Both ChevronLeft (right-dock) and ChevronRight (default) appear
+    // for the collapsed state, gated by rightDock. Expanded is always
+    // ChevronDown.
     expect(fileTree).toMatch(
       /\{#if expanded\[node\.path\]\}[\s\S]*?<ChevronDown[\s\S]*?\{:else if rightDock\}[\s\S]*?<ChevronLeft[\s\S]*?\{:else\}[\s\S]*?<ChevronRight/,
     );

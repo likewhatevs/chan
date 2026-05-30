@@ -149,9 +149,8 @@ describe("Pane right-click menus", () => {
     expect(document.body.querySelector(".menu-label span")?.textContent?.trim()).toBe(
       "Focus border colour",
     );
-    // Round-1 closing-2 (B8): Search + Dashboard joined the pane
-    // top-bar hamburger after Graph, so the surface offers the
-    // same 7-entry spawn set as the empty-pane right-click menu.
+    // Search + Dashboard join the pane hamburger after Graph so
+    // all three spawn surfaces offer the same 7-entry set.
     expect(menuLabels()).toEqual([
       "New Draft",
       "Terminal",
@@ -226,12 +225,9 @@ describe("Pane right-click menus", () => {
   });
 
   test("empty pane right-click opens NO menu (empty-pane-menu)", async () => {
-    // Round-1 closing-2 (lane-b-empty-pane-menu): the empty-pane
-    // right-click context menu was retired. The pane hamburger
-    // (⋮) now carries every spawn entry the right-click menu
-    // used to render (B8 folded Search + Dashboard into
-    // `spawnActions`), so the duplicate surface was removed.
-    // Right-clicking an empty pane is a no-op; no popover opens.
+    // The pane hamburger (⋮) carries every spawn entry; the right-click
+    // surface would be a duplicate, so it is removed.
+    // Right-clicking an empty pane is a no-op.
     const pane: LeafNode = {
       kind: "leaf",
       id: "pane-empty",
@@ -250,9 +246,8 @@ describe("Pane right-click menus", () => {
     );
     await tick();
 
-    // No popover anywhere in the DOM after the right-click; the
-    // hamburger trigger button stays put but its menu does not
-    // pop open.
+    // Right-clicking an empty pane is a no-op; no popover opens.
+    // The hamburger trigger button is present but its menu stays closed.
     expect(document.body.querySelector(".hamburger-menu")).toBeNull();
   });
 
@@ -306,10 +301,8 @@ describe("Pane right-click menus", () => {
     expect(menuLabels()).toEqual(["Reload", "Open Inspector"]);
   });
 
-  // `fullstack-a-43` removed the `.back-attention` indicator. The
-  // two phase-C pins that asserted its presence + absence don't
-  // apply under the new back-side configuration-view model — the
-  // back has no "unread" or "activity" surface to flag.
+  // The back-side configuration view model has no "unread" or
+  // "activity" surface to flag, so no back-attention indicator exists.
 });
 
 describe("Pane back-side configuration view", () => {
@@ -343,11 +336,9 @@ describe("Pane back-side configuration view", () => {
     expect(
       target.querySelector('[aria-label="Hybrid Terminal configuration"]'),
     ).not.toBeNull();
-    // `fullstack-a-54`: tab strip stays visible on the back side
-    // (mirrored via the .flipped class).
-    // `fullstack-a-55`: the family-name title was removed from
-    // the tab strip — the back-side config component owns its
-    // own title at the top of its content area.
+    // The tab strip stays visible on the back side (mirrored via .flipped).
+    // The back-side config component owns its own title; the tab strip
+    // carries no family-name title slot.
     const tabs = target.querySelector(".tabs");
     expect(tabs).not.toBeNull();
     expect(tabs!.classList.contains("flipped")).toBe(true);
@@ -423,9 +414,8 @@ describe("Pane back-side configuration view", () => {
     };
     const target = await renderPane(pane, { paneMode: false });
 
-    // `fullstack-a-54`: tab strip stays visible on the back side
-    // (was hidden under -a-43). The back-side wrapper still
-    // renders BELOW the tab strip.
+    // The tab strip stays visible on the back side. The back-side
+    // wrapper still renders below the tab strip.
     const tabs = target.querySelector(".tabs");
     expect(tabs).not.toBeNull();
     expect(tabs!.classList.contains("flipped")).toBe(true);
@@ -434,7 +424,7 @@ describe("Pane back-side configuration view", () => {
 });
 
 describe("Pane flip UX redesign", () => {
-  test("family-name title is NOT rendered in the tab strip (-a-55)", async () => {
+  test("family-name title is NOT rendered in the tab strip", async () => {
     const front = {
       kind: "file" as const,
       fileKind: "document" as const,
@@ -466,8 +456,7 @@ describe("Pane flip UX redesign", () => {
       showingBack: true,
     };
     const target = await renderPane(pane, { paneMode: false });
-    // `-a-55` regression guard: the back-side config component
-    // owns its own title; the tab-strip slot is empty.
+    // The back-side config component owns its own title; the tab-strip slot is empty.
     expect(target.querySelector(".hybrid-title")).toBeNull();
     // The back-side config view IS still rendered.
     expect(
@@ -490,30 +479,26 @@ describe("Pane flip UX redesign", () => {
     expect(target.querySelector(".hybrid-title")).toBeNull();
   });
 
-  test("Pane source carries the -a-55 flip CSS (per-child scaleX + row-reverse)", () => {
-    // `-a-54` applied the transform to the whole `.tab`, which
-    // broke click routing (webtest-a-5 check #6 PARTIAL). `-a-55`
-    // moves the transform to per-child selectors so the `.tab`
+  test("Pane source carries the flip CSS (per-child scaleX + row-reverse)", () => {
+    // The transform is applied to per-child selectors so the `.tab`
     // element's click target stays in natural coordinates.
     expect(paneSource).toMatch(
       /\.tabs\.flipped \.tab \.tab-icon[\s\S]*?\.tabs\.flipped \.tab \.path[\s\S]*?transform: scaleX\(-1\)/,
     );
-    // Old whole-tab transform regression guard.
+    // Whole-tab transform must not exist (it breaks click routing).
     expect(paneSource).not.toMatch(
       /\.tabs\.flipped \.tab \{ transform: scaleX\(-1\); \}/,
     );
-    // `-a-55` right-alignment: row-reverse on flipped + order: 1
-    // on actions puts hamburger leftmost + tabs flowing from the
-    // right edge per @@Alex's "tabs aligned to the right" framing.
+    // Right-alignment: row-reverse on flipped + order: 1 on actions
+    // puts hamburger leftmost with tabs flowing from the right edge.
     expect(paneSource).toMatch(
       /\.tabs\.flipped \{[\s\S]*?flex-direction: row-reverse/,
     );
     expect(paneSource).toMatch(/\.tabs\.flipped \.actions \{[\s\S]*?order: 1/);
-    // Old order: -1 swap regression guard (was -a-54's shape).
     expect(paneSource).not.toMatch(/\.tabs\.flipped \.actions \{[\s\S]*?order: -1/);
   });
 
-  test("clicking a tab from the flipped state still swaps active (-a-55)", async () => {
+  test("clicking a tab from the flipped state still swaps active", async () => {
     const t1 = terminalTab({ id: "front-t1", title: "T1" });
     const t2 = terminalTab({ id: "front-t2", title: "T2" });
     const pane: LeafNode = {

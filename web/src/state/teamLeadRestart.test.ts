@@ -6,11 +6,10 @@ import { runTeamBootstrap } from "./teamOrchestrator.svelte";
 import type { TeamDialogConfig } from "./teamDialog.svelte";
 import { layout, type LeafNode, type TerminalTab } from "./tabs.svelte";
 
-// phase-13-r2 `lane-a-A3`: the lead launches FIRST, in place. The
-// old close-host-then-respawn-lead dance is gone: the Team Work
-// Lead terminal already exists (created at Cmd+P), so the
-// orchestrator restarts ITS pty with the lead command + env. These
-// tests pin the in-place launch + the env carry-through.
+// The lead launches FIRST, in place. The Team Work Lead terminal
+// already exists (created at Cmd+P), so the orchestrator restarts
+// ITS pty with the lead command + env. These tests pin the in-place
+// launch + the env carry-through.
 
 function leadTab(partial: Partial<TerminalTab> = {}): TerminalTab {
   return {

@@ -1,19 +1,17 @@
-// phase-13-r2 `lane-a-A3`: global Team Work dialog request bus.
+// Global Team Work dialog request bus.
 //
 // The dialog renders at the App root so it's free of every parent
 // stacking context (the Team Work editor is absolute / z-index:20;
-// panes are overflow-hidden; Hybrid Nav adds a filter to
-// non-focused panes - any of those can clip a position:fixed
-// dialog).
+// panes are overflow-hidden; Hybrid Nav adds a filter to non-focused
+// panes - any of those can clip a position:fixed dialog).
 //
-// New process (phase-13 round 2): Cmd+P / the Hybrid menu first
-// creates the Team Work *Lead* terminal (the terminal with the
-// embedded editor), THEN opens this dialog over it. The dialog
-// carries the lead tab + pane id so:
+// Cmd+P / the Hybrid menu first creates the Team Work Lead terminal
+// (the terminal with the embedded editor), THEN opens this dialog over
+// it. The dialog carries the lead tab + pane id so:
 //   * Cancel/dismiss deletes that exact lead terminal tab + restores
 //     the previous state.
-//   * Bootstrap runs the lead-first orchestrator against the
-//     EXISTING lead tab (it is never respawned).
+//   * Bootstrap runs the lead-first orchestrator against the EXISTING
+//     lead tab (it is never respawned).
 
 import { TEAM_CONFIG_DEFAULT_PATH } from "./teamConfigPath";
 
@@ -112,8 +110,8 @@ export type TeamConfigMode = "new" | "load";
 
 export interface TeamDialogConfig {
   hostName: string;
-  /// Team configuration source mode. Replaces the old "Team name"
-  /// field per the phase-13 round-2 spec.
+  /// Team configuration source mode: "new" or "load". Controls whether
+  /// the dialog writes or reads chan-team.toml.
   configMode: TeamConfigMode;
   /// Absolute path to the chan-team.toml. New: where it will be
   /// written. Load: where it is read from. Defaults to
@@ -128,11 +126,10 @@ export interface TeamDialogConfig {
   realEstate: TeamRealEstate;
 }
 
-/// The dialog request object. Per the phase-13 round-2 frozen
-/// contract, App.svelte creates the Team Work Lead terminal at Cmd+P
-/// FIRST, then opens the dialog passing that exact tab + pane id.
-/// Cancel deletes `{leadPaneId, leadTabId}`; Bootstrap runs the
-/// lead-first orchestrator against it.
+/// The dialog request object. App.svelte creates the Team Work Lead
+/// terminal at Cmd+P FIRST, then opens the dialog passing that exact
+/// tab + pane id. Cancel deletes `{leadPaneId, leadTabId}`; Bootstrap
+/// runs the lead-first orchestrator against it.
 export interface TeamDialogRequest {
   leadTabId: string;
   leadPaneId: string;

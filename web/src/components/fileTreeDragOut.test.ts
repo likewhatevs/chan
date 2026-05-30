@@ -4,11 +4,10 @@ import fileTree from "./FileTree.svelte?raw";
 import fileInfo from "./FileInfoBody.svelte?raw";
 import store from "../state/store.svelte.ts?raw";
 
-// Bug 2 / round-1: File Browser native drag IN and OUT is removed. The
-// macOS native drag-out crashed; the user now exports via the Download
-// button and imports via the Upload button. These tests assert the
-// drag-out payloads + the native Tauri command are GONE, while the
-// app-internal tree-move drag and the Download/Upload buttons stay.
+// Native file drag-out is removed (macOS drag-out crashed). Export
+// and import now use the Download and Upload buttons. These tests assert
+// the drag-out payloads and the native Tauri command are gone, while
+// the app-internal tree-move drag and the transfer buttons stay.
 describe("FileTree browser drag-out removed", () => {
   test("api still exposes token-bearing download URLs (for the Download button)", () => {
     expect(client).toMatch(/downloadUrl: \(path: string\) =>/);
@@ -49,17 +48,15 @@ describe("FileTree browser drag-out removed", () => {
   });
 
   test("shared inspectors expose Upload and Download transfer actions", () => {
-    // I1/I2: the Upload + Download buttons live in the shared
-    // actionsSection (multiline markup); Download gained a
-    // disabled={downloadBusy} attr for the desktop progress path.
+    // Upload + Download live in the shared actionsSection; Download
+    // is disabled while a desktop transfer is in progress.
     expect(fileInfo).toMatch(/onclick=\{triggerUpload\}/);
     expect(fileInfo).toMatch(/onclick=\{downloadSelection\}/);
     expect(fileInfo).toMatch(/disabled=\{downloadBusy\}/);
     expect(fileInfo).toMatch(/fileOps\.replaceFileAt\(entry\.path, files\[0\]!\)/);
     expect(fileInfo).toMatch(/fileOps\.uploadFilesTo\(entry\.path, files\)/);
-    // I3: the divergent DirectoryInfoBody was retired; the folder
-    // inspector is now FileInfoBody's dir branch, which uploads to the
-    // directory + downloads it as a tar through the same handlers.
+    // The folder inspector uses FileInfoBody's dir branch, not a
+    // separate DirectoryInfoBody component.
     expect(fileInfo).toMatch(/fileOps\.uploadFilesTo\(entry\.path, files\)/);
   });
 

@@ -1,23 +1,16 @@
 import { describe, expect, test } from "vitest";
 import panel from "./GraphPanel.svelte?raw";
 
-// Phase-11 graph/inspector hotfix (graph-inspector-bugs.md, GI-5/6/7).
-//
-// GI-1/GI-2 fixed the FILE-node Open / Show File actions. The
-// DIRECTORY-node actions (Show Directory, Graph from here) plus the
-// depth slider were still broken. These tests lock the directory + depth
-// behaviour at the source level, mirroring graphInspectorActionsHotfix's
-// `?raw` pins (the handlers live inside the Svelte component and the bugs
-// were reactive wiring, not pure functions, so the pin is on the wiring).
+// Graph directory-node inspector hotfix. Directory-node actions (Show
+// Directory, Graph from here) and the depth slider were broken. These
+// source-level pins mirror graphInspectorActionsHotfix's ?raw pattern
+// because the handlers live inside the Svelte component.
 
 describe("Show Directory reveals + ENTERS the directory in the File Browser", () => {
   test("revealSelectedFsEntry opens a File Browser TAB, expanding the dir itself", () => {
-    // GI-5 was a visual no-op; GI-8 then showed the overlay-era reveal
-    // (revealPathInBrowser + close) opened no visible tab from a graph
-    // tab. Now revealSelectedFsEntry routes through revealPathInBrowserTab
-    // (tab-world): directories pass isDir=true so it expands the directory
-    // ITSELF (upto = parts.length) and the File Browser tab opens AT it;
-    // files expand ancestors only.
+    // revealSelectedFsEntry routes through revealPathInBrowserTab.
+    // Directories pass isDir=true so the browser expands the directory
+    // itself (upto = parts.length) and opens AT it; files expand ancestors.
     expect(panel).toMatch(
       /function revealSelectedFsEntry\(\): void \{[\s\S]*?revealPathInBrowserTab\(selectedFsNode\.path, isFsDirectory\(selectedFsNode\)\)/,
     );
@@ -33,10 +26,9 @@ describe("Show Directory reveals + ENTERS the directory in the File Browser", ()
 
 describe("Graph from here on a directory re-roots at the dir itself + keeps it selected", () => {
   test("graphFromHere takes an isDir flag and re-roots dirs to the dir itself, files to the parent", () => {
-    // Directory: scope to `dir:<path>` (the dir itself), not its parent.
-    // The old parent rule made re-rooting a child folder onto its already-
-    // current parent a no-op (scopeId unchanged -> no reload) which left
-    // the inspector blank. File: keep the parent-folder rule.
+    // Directory: scope to `dir:<path>` (not its parent). The old always-
+    // parent rule made re-rooting to the current parent a no-op and left
+    // the inspector blank. File: parent-folder rule is kept.
     expect(panel).toMatch(/function graphFromHere\(path: string, isDir: boolean\): void \{/);
     expect(panel).toMatch(/if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "workspace";/);
     expect(panel).toMatch(
@@ -63,7 +55,7 @@ describe("Graph from here on a directory re-roots at the dir itself + keeps it s
 });
 
 describe("depth slider holds its dragged value via a full-depth dir probe", () => {
-  test("a dirDepthProbe state mirrors the workspaceDepthProbe pattern", () => {
+  test("a dirDepthProbe state tracks the dir at full depth", () => {
     expect(panel).toMatch(/let dirDepthProbe: FsGraphResponse \| null = \$state\(null\);/);
     expect(panel).toMatch(/let dirDepthProbeLoading = \$state\(false\);/);
     expect(panel).toMatch(/let dirDepthProbePath: string \| null = \$state\(null\);/);
@@ -83,11 +75,9 @@ describe("depth slider holds its dragged value via a full-depth dir probe", () =
   });
 
   test("depthCap prefers the full-depth dir probe and never caps below the loaded depth", () => {
-    // Feeding graphDepthCap the deep probe (not the shallow loaded slice)
-    // is the fix: the cap reflects the dir's REACHABLE depth, so dragging
-    // the slider to 2/3 is no longer clamped back to 1. The Math.max with
-    // graphState.depth keeps the cap from snapping below what's on screen
-    // before the probe lands.
+    // The cap uses the deep probe so dragging to 2/3 is not clamped back
+    // to 1. Math.max with graphState.depth prevents snapping below what
+    // is on screen before the probe lands.
     expect(panel).toMatch(/if \(filesystemMode && currentScope\?\.kind === "dir"\) \{/);
     expect(panel).toMatch(
       /fsGraph: dirDepthProbe \?\? \{ nodes: fsNodes, truncated: fsTruncated \},/,

@@ -9,10 +9,10 @@ import { tableDecorations } from "./table";
 const TABLE_DOC = [
   "before",
   "",
-  "| Agent | Skills |",
-  "|-------|--------|",
-  "| @@FullStack | webdev |",
-  "| @@Systacean | syseng |",
+  "| Name | Skills |",
+  "|------|--------|",
+  "| @@Alice | frontend |",
+  "| @@Bob | syseng |",
   "",
   "after",
 ].join("\n");
@@ -31,7 +31,7 @@ describe("tableDecorations", () => {
     });
 
     expect(parent.querySelector(".cm-md-table")).toBeTruthy();
-    expect(parent.textContent).toContain("@@FullStack");
+    expect(parent.textContent).toContain("@@Alice");
     expect(view.state.doc.toString()).toBe(TABLE_DOC);
 
     view.destroy();

@@ -1,21 +1,11 @@
 import { describe, expect, test } from "vitest";
 import editor from "./FileEditorTab.svelte?raw";
 
-// `fullstack-a-67f`: FileEditorTab right-click menu revamp per
-// addendum-a's verbatim Editor spec. Slice 1 covers:
-//
-// * Menu-top editable Name input (mirror of Workspace name in FB +
-//   Terminal name).
-// * Show Source Code + Collapse Code Blocks band.
-// * View-toggles + cleanup utilities (Outline / Details / Style
-//   Toolbar / Syntax Highlight / Highlight TW / Remove TW) kept
-//   against spec — orphan risk; flagged in journal.
-// * Search / Find / Copy path to file / Copy path to $CWD band.
-// * "From $CWD" spawn band (Duplicate / New File / New Terminal /
-//   New File Browser / New Graph).
-// * Settings (flipHybrid) + Reopen Closed Tab + Close foot.
-// * Reload Window / Open Inspector tail dropped (handled in
-//   tabMenuReloadInspector.test.ts).
+// FileEditorTab right-click menu. Pins: menu-top editable Name input;
+// Show Source Code + Collapse Code Blocks; Find / Copy paths; From-$CWD
+// spawn band (Duplicate, New File, New Terminal, New File Browser, New
+// Graph); Settings (flipHybrid) + Reopen + Close foot. Reload + Open
+// Inspector dropped (see tabMenuReloadInspector.test.ts).
 
 describe("menu-top Name input", () => {
   test("name-row + name-input + name-label rendered inside the action-list", () => {
@@ -122,7 +112,7 @@ describe("Find / Copy paths", () => {
     expect(editor).not.toContain("printMarkdownDocument");
   });
 
-  test("Copy path to file (renamed) + Copy path to $CWD (new) entries", () => {
+  test("Copy path to file + Copy path to $CWD entries", () => {
     expect(editor).toMatch(
       /<span class="mbtn-label">Copy path to file<\/span>/,
     );
@@ -132,10 +122,8 @@ describe("Find / Copy paths", () => {
   });
 
   test("doCopyCwdPath helper writes the parent-dir path to clipboard", () => {
-    // Phase-13 slice 3: routes the Clipboard API call through the
-    // shared copyTextToClipboard helper (state/store.svelte.ts) so the
-    // editor menu's copy buttons, the inspector's COPY button, and the
-    // warnings dialog all share one writeText + fallback path.
+    // Routes through copyTextToClipboard so the editor, inspector COPY,
+    // and warnings dialog all share one writeText + fallback path.
     expect(editor).toMatch(
       /async function doCopyCwdPath\(\): Promise<void> \{[\s\S]{1,400}lastIndexOf\("\/"\)[\s\S]{1,400}copyTextToClipboard\(cwd/,
     );
@@ -179,7 +167,7 @@ describe("dropped entries", () => {
     );
   });
 
-  test("\"Copy File Path\" renamed to \"Copy path to file\"", () => {
+  test("\"Copy File Path\" is gone (replaced by \"Copy path to file\")", () => {
     expect(editor).not.toMatch(/<span class="mbtn-label">Copy File Path<\/span>/);
   });
 });

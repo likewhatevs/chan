@@ -1,14 +1,9 @@
 import { describe, expect, test } from "vitest";
 import tree from "./FileTree.svelte?raw";
 
-// `fullstack-a-67e`: FileTree in-tree selection menu reshape
-// per addendum-a's FB selection-menu spec. Slice 1 covers the
-// "From selection" header, the New Graph entry, the relabels
-// (Search this → Search; Terminal from here → New Terminal),
-// and the visual separator between workflow + per-row ops.
-// The unified "New File or Directory" dialog (one input that
-// detects file vs dir) is deferred to slice 2 — needs a
-// `kind: "either"` extension to PathPromptModal.
+// FileTree in-tree selection menu: "From selection" header, New Graph
+// entry, label updates (Search, New Terminal), separator between
+// workflow and per-row ops, and unified "New File or Directory" dialog.
 
 describe("FileTree selection menu header + new entries", () => {
   test("From-selection label rendered at the top of the ctx menu", () => {
@@ -28,8 +23,7 @@ describe("FileTree selection menu header + new entries", () => {
   });
 
   test("Unified \"New File or Directory\" entry replaces the separate New File / New Directory rows", () => {
-    // `fullstack-a-67e` slice 2: spec calls for one entry; the
-    // modal detects file-vs-dir from the trailing slash.
+    // One entry; the modal detects file-vs-dir from the trailing slash.
     expect(tree).toMatch(/<span>New File or Directory<\/span>/);
     expect(tree).not.toMatch(/<span>New File<\/span>/);
     expect(tree).not.toMatch(/<span>New Directory<\/span>/);

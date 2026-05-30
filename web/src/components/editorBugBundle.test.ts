@@ -4,15 +4,13 @@ import source from "../editor/Source.svelte?raw";
 import rightClickNoSelectMod from "../editor/right_click_no_select.ts?raw";
 import pathPromptModal from "./PathPromptModal.svelte?raw";
 
-// `fullstack-a-65` — three small editor bug fixes bundled:
-// 1. Right-click on editor selects a whole line/word before the
-//    context menu opens. Fix: CodeMirror domEventHandler that
-//    returns true on mousedown when button === 2.
-// 2. Image-as-raw-text after tab switch back to editor. Fix:
-//    view.requestMeasure() in focus() + onMount so image
-//    decorations re-evaluate against an updated viewport.
+// Three small editor fixes:
+// 1. Right-click selects a line/word before the context menu opens.
+//    Fix: CodeMirror domEventHandler returns true on button === 2 mousedown.
+// 2. Image-as-raw-text after tab switch. Fix: view.requestMeasure()
+//    in focus() + onMount so image decorations re-evaluate.
 // 3. New Directory dialog selects the whole pre-populated path.
-//    Fix: cursor-at-end for kind="folder", mode="create".
+//    Fix: cursor-at-end for kind="folder" mode="create".
 
 describe("(1): right-click no select", () => {
   test("right_click_no_select extension returns true on button===2 mousedown", () => {

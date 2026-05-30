@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 
-// Phase-11 Slice E: the File Browser scoped-subscription manager. These
-// tests pin the cross-instance refcount behaviour the round-1 ask
-// requires:
+// File Browser scoped-subscription manager. Tests pin the cross-instance
+// refcount behaviour:
 //   * sub1(dir) emits a wire `sub`,
 //   * sub2(dir) from a second instance REUSES it (no second `sub`),
 //   * unsub by the first instance keeps the scope (refcount 2 -> 1, no
@@ -13,8 +12,7 @@
 //     pane cannot leak server-side watchers),
 //   * a reconnect replays the union of all instances' scopes.
 // The manager talks to the live watcher socket via `watchSubscription()`;
-// we workspace that with the same controllable fake WebSocket the Slice A
-// transport test uses (jsdom has no WebSocket).
+// the test uses a controllable fake WebSocket (jsdom has no WebSocket).
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {

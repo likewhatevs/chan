@@ -1,22 +1,17 @@
 import { describe, expect, test } from "vitest";
 import graph from "./GraphPanel.svelte?raw";
 
-// `fullstack-a-63`: chip count semantics — node-tally, not edge-
-// tally. Pre-`-a-63` the count loop iterated `edges` and bumped
-// `c[kind]++` per edge kind, so a mention chip across 1973 mention
-// edges fanning into ~48 contact nodes displayed `1973` instead of
-// `48`. @@Alex's UX expectation: chip count = "how many of THIS
-// thing is in the graph", which is the node count.
+// Chip counts are node tallies, not edge tallies. Iterating edges and
+// bumping per edge kind makes a mention chip show the edge count (~1973)
+// instead of the distinct contact node count (~48). The correct UX is
+// "how many of THIS thing is in the graph".
 //
-// Source-pin tests (raw string match) — the counts() derive is
-// short + lives in a single $derived.by block + the new shape is
-// distinctive enough to pin via regex without bringing the full
-// Svelte runtime into the unit-test environment.
+// Source-pin tests match the raw string of the counts $derived block,
+// which is short and distinctive enough to pin without the Svelte runtime.
 
 describe("chip count loop is node-tally", () => {
   test("counts derive iterates `nodes` not `edges` for chip totals", () => {
-    // Pre-`-a-63` shape (gone): `for (const e of edges) { ...
-    // c[kind]++; }` — pin the absence.
+    // Pin the absence of the old edge-iteration form.
     const stripped = graph
       .split("\n")
       .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("///"))
@@ -41,7 +36,7 @@ describe("chip count loop is node-tally", () => {
     expect(graph).toMatch(/else if \(cls === "contact"\) c\.mention\+\+/);
   });
 
-  test("img + markdown + source counts unchanged (already node-tally pre-`-a-63`)", () => {
+  test("img + markdown + source counts are node tallies", () => {
     expect(graph).toMatch(/if \(cls === "img"\) c\.img\+\+/);
     expect(graph).toMatch(/else if \(cls === "doc"\) c\.markdown\+\+/);
     expect(graph).toMatch(/else if \(cls === "source"\) c\.source\+\+/);
@@ -51,7 +46,7 @@ describe("chip count loop is node-tally", () => {
     expect(graph).toMatch(/if \(n\.kind === "folder"\) \{[\s\S]*?c\.folder\+\+;/);
   });
 
-  test("comment block documents the `-a-63` semantic correction", () => {
+  test("comment block documents the semantic correction (chip counts are NODE tallies)", () => {
     expect(graph).toMatch(/`fullstack-a-63` semantic correction: chip counts are NODE/i);
   });
 });

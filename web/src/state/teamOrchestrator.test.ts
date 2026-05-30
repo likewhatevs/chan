@@ -10,13 +10,8 @@ import {
 import type { TeamDialogConfig } from "./teamDialog.svelte";
 import type { TeamConfigWire } from "../api/client";
 
-// phase-13-r2 `lane-a-A3`: orchestrator translators + the
-// `# Team work` identity prompt. The full lead-first bootstrap
-// chain (writeTeamConfigFile -> launch lead -> spawn workers ->
-// prime editor -> broadcast) is exercised in
-// teamBootstrapOrchestrator.test.ts; here we pin the pure
-// translators.
-
+// Pure translator unit tests. The full bootstrap chain is exercised
+// in teamBootstrapOrchestrator.test.ts; here we pin the translators.
 describe("parseEnvLines", () => {
   test("parses KEY=value lines into a Record", () => {
     expect(parseEnvLines("FOO=bar\nBAZ=qux")).toEqual({

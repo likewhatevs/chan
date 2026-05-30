@@ -7,14 +7,14 @@ import {
   shouldEscapeTerminal,
 } from "./shortcuts";
 
-// `fullstack-a-91`: chord-escape registry. Global App-group
-// chords (Settings, TeamWork, Reload, FB, Graph, NewDraft,
-// New Terminal, Hybrid Nav) carry `escapeTerminal: true`. The
-// `handleTerminalKeyEvent` xterm-`customKeyEventHandler` callback
-// consults the registry: matched events return false so the
-// chord bubbles out of xterm to the App-level keymap.
+// Chord-escape registry. Global App-group chords (Settings,
+// TeamWork, Reload, FB, Graph, NewDraft, New Terminal, Hybrid
+// Nav) carry `escapeTerminal: true`. The
+// `handleTerminalKeyEvent` xterm-`customKeyEventHandler`
+// callback consults the registry: matched events return false
+// so the chord bubbles out of xterm to the App-level keymap.
 
-describe("fullstack-a-91: registry shape", () => {
+describe("chord-escape registry shape", () => {
   test("Shortcut type carries an optional escapeTerminal flag", () => {
     expect(shortcutsRaw).toMatch(/escapeTerminal\?: boolean;/);
   });
@@ -45,7 +45,7 @@ describe("fullstack-a-91: registry shape", () => {
   });
 });
 
-describe("fullstack-a-91: chordFromEvent normalisation", () => {
+describe("chordFromEvent normalisation", () => {
   beforeEach(() => {
     // Force macOS so `Mod` maps to metaKey deterministically.
     vi.stubGlobal("navigator", { userAgent: "Mac OS X" });
@@ -79,7 +79,7 @@ describe("fullstack-a-91: chordFromEvent normalisation", () => {
   });
 });
 
-describe("fullstack-a-91: shouldEscapeTerminal lookup", () => {
+describe("shouldEscapeTerminal lookup", () => {
   beforeEach(() => {
     vi.stubGlobal("navigator", { userAgent: "Mac OS X" });
   });
@@ -136,7 +136,7 @@ describe("fullstack-a-91: shouldEscapeTerminal lookup", () => {
   });
 });
 
-describe("fullstack-a-91: TerminalTab consults shouldEscapeTerminal", () => {
+describe("TerminalTab consults shouldEscapeTerminal", () => {
   test("handleTerminalKeyEvent imports + calls shouldEscapeTerminal", () => {
     expect(terminalRaw).toMatch(
       /import \{ chordFor, shouldEscapeTerminal \} from "\.\.\/state\/shortcuts";/,

@@ -4,11 +4,9 @@ import app from "../App.svelte?raw";
 import tabs from "../state/tabs.svelte.ts?raw";
 import editor from "./FileEditorTab.svelte?raw";
 
-// `fullstack-a-67f` slice 2: Obsidian-style Mod+E "Show Source
-// Code" chord. Pin: registry entry + the keymap handler in
-// App.svelte + the runCommand branch + the store-side
-// toggleActiveFileTabMode helper + the chord-hint surface in
-// the editor menu.
+// Mod+E "Show Source Code" chord. Pins: registry entry, keymap handler
+// in App.svelte, runCommand branch, toggleActiveFileTabMode helper,
+// and the chord-hint surface in the editor menu.
 
 describe("shortcut registry entry", () => {
   test("app.editor.toggleMode entry exists with Mod+E (web + native)", () => {

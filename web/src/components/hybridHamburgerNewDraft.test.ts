@@ -2,10 +2,9 @@ import { describe, expect, test } from "vitest";
 import pane from "./Pane.svelte?raw";
 import app from "../App.svelte?raw";
 
-// New Draft is the first spawn surface in the Hybrid hamburger.
-// Shared across the empty-pane right-click menu, the pane hamburger,
-// and the empty-pane carousel slide 1 so all three surfaces offer the
-// same affordance.
+// New Draft is the first spawn entry in the Hybrid hamburger, the
+// empty-pane right-click menu, and the carousel, backed by one shared
+// `spawnActions` list.
 
 describe("spawnActions includes New Draft first", () => {
   test("`New Draft` entry sits at slot 0 of spawnActions", () => {
@@ -20,7 +19,7 @@ describe("spawnActions includes New Draft first", () => {
     );
   });
 
-  test("rationale comment cites the three shared spawn surfaces", () => {
+  test("source comment cites the three shared spawn surfaces", () => {
     expect(pane).toMatch(
       /empty-pane right-click menu[\s\S]*?pane hamburger[\s\S]*?empty-pane carousel/i,
     );
@@ -50,9 +49,8 @@ describe("Hybrid hamburger carries no theme/flip rows", () => {
   });
 
   test("no Settings footer in the Hybrid pane menu", () => {
-    // Cmd+, opens Settings via the Dashboard back-of-card
-    // (flipHybrid), so the pane menu carries no Settings row that
-    // dispatches app.settings.toggle.
+    // Cmd+, opens Settings via the Dashboard back-of-card (flipHybrid);
+    // a duplicate Settings row is not needed in the pane menu.
     expect(pane).not.toMatch(
       /onclick=\{\(\) => dispatchCommand\("app\.settings\.toggle"\)\}[\s\S]*?<span class="menu-row-label">Settings<\/span>/,
     );
@@ -63,13 +61,6 @@ describe("App.svelte runCommand routes app.draft.new", () => {
   test("runCommand switch dispatches `app.draft.new` to createDraftAndOpen", () => {
     expect(app).toMatch(
       /case "app\.draft\.new":[\s\S]*?void createDraftAndOpen\(\);[\s\S]*?return;/,
-    );
-  });
-
-  test("rationale comment cites the chord + menu + native menu convergence", () => {
-    expect(app).toMatch(/`fullstack-a-67` slice 2/);
-    expect(app).toMatch(
-      /menu \+ the Cmd\+N chord \+[\s\S]{1,80}native menu all converge/i,
     );
   });
 

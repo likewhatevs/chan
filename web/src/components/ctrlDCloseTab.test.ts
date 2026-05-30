@@ -1,21 +1,11 @@
 // @vitest-environment jsdom
 //
-// Smoke tests for the `fullstack-41` Ctrl+D close-tab keybind. The
-// dispatcher itself lives in App.svelte; a full mount of the app is
-// expensive, so this gate combines two cheaper checks:
-//
-// 1. Per-tab-type behavior is exercised by directly invoking the
-//    underlying `closeTab` against a synthetic layout. The Ctrl+D
-//    dispatcher is a thin wrapper around `closeTab(p.id,
-//    p.activeTabId)`, so once we know `closeTab` closes Files /
-//    Graph / Doc tabs (existing helpers do), the dispatcher is just
-//    the routing decision.
-//
-// 2. The routing decision (terminal skipped; modal-up skipped;
-//    pane-mode skipped) is verified by reading App.svelte's source
-//    and asserting the guards are present. This is the same shape
-//    as `paneModeKeymap.test.ts` and catches accidental drift if
-//    someone "simplifies" the handler later.
+// Ctrl+D close-tab smoke tests. Two cheaper checks replace a full App mount:
+// 1. Per-tab-type behavior via direct closeTab invocations (the dispatcher
+//    is a thin wrapper around closeTab(p.id, p.activeTabId)).
+// 2. The routing guards (terminal skipped; modal-up skipped; pane-mode
+//    skipped) verified against App.svelte source, same pattern as
+//    paneModeKeymap.test.ts.
 
 import { afterEach, describe, expect, test } from "vitest";
 import {
@@ -33,9 +23,8 @@ import { clearRecentlyClosedTabsForTest } from "../state/tabs.svelte";
 import app from "../App.svelte?raw";
 
 function fileTab(partial: Partial<FileTab> = {}): FileTab {
-  // Mirrors the shape used by `state/tabs.test.ts`: `content` equal
-  // to `saved` keeps the tab clean so the close-tab path doesn't
-  // pop the unsaved-changes confirmation modal.
+  // content equal to saved keeps the tab clean so the close-tab path
+  // does not pop the unsaved-changes confirmation modal.
   return {
     kind: "file",
     fileKind: "document",
@@ -127,9 +116,8 @@ describe("Ctrl+D dispatcher (App.svelte raw-source guards)", () => {
   });
 
   test("listener is registered on document capture to beat CodeMirror", () => {
-    // CodeMirror's keymap fires at bubble; capture-phase ensures the
-    // close-tab path wins over the multi-cursor default. The third
-    // argument to addEventListener is `true` (capture).
+    // Capture phase fires before CodeMirror's bubble-phase keymap,
+    // so the close-tab path wins over the multi-cursor default.
     expect(app).toContain(
       'document.addEventListener("keydown", onCtrlDCapture, true)',
     );

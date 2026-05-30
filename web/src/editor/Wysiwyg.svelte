@@ -2,19 +2,6 @@
   // CodeMirror 6 WYSIWYG editor. The doc IS the markdown source per
   // editor-cm6/design.md spec #1; rendered appearance is a pure
   // decoration layer built from @lezer/markdown's syntax tree.
-  //
-  // Step 4 scope: bare mount + chanMarkdown grammar + decorations for
-  // marks (bold/italic/strike/code/link/naked URL) and headings. No
-  // pills, no bubbles, no autosave wiring yet — those land in later
-  // steps. Not yet imported by App.svelte; the existing tiptap
-  // editor remains the production surface until cutover (step 11).
-  //
-  // The component's prop contract MUST eventually match the legacy
-  // editor/Wysiwyg.svelte (value, readonly, onSubmit, onSelectionChange,
-  // wikiPickerPrefix, currentPath, plus the imperative API surface)
-  // so cutover is a one-line import swap. v1 only ships `value` + the
-  // findAdapter; the rest is added as later steps fill in the
-  // corresponding behavior.
 
   import { onDestroy, onMount } from "svelte";
   import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";

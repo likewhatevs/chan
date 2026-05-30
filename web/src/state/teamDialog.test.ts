@@ -16,11 +16,10 @@ import {
   validateTeamConfig,
 } from "./teamDialog.svelte";
 
-// phase-13-r2 `lane-a-A3`: TeamDialog state singleton + helpers.
 // Pins the validation contract (path-based, no team name), the
 // resize semantics (lead preservation + Worker-N filling), the
 // open/close bus shape (leadTabId/leadPaneId), and the real-estate
-// grid helpers (unchanged from the original dialog).
+// grid helpers.
 
 describe("defaultTeamConfig", () => {
   test("default config: Neo host, New mode, one lead agent", () => {

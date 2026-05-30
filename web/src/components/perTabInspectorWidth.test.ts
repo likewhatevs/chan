@@ -3,12 +3,10 @@ import fileBrowserSurface from "./FileBrowserSurface.svelte?raw";
 import graphPanel from "./GraphPanel.svelte?raw";
 import fileEditorTab from "./FileEditorTab.svelte?raw";
 
-// fullstack-84: per-tab inspector width on BrowserTab / GraphTab /
-// FileTab. The two-way bind uses Svelte 5's function-pair syntax
-// so the getter falls back to `paneWidths.<kind>` while the setter
-// writes the tab record. Tabs land with the singleton's current
-// value as default; once the user resizes one tab, that tab carries
-// its own width and others stay put.
+// Per-tab inspector width on BrowserTab / GraphTab / FileTab. The
+// two-way bind uses Svelte 5's function-pair syntax: the getter falls
+// back to the paneWidths singleton; the setter writes the tab record.
+// Resizing one tab leaves others unchanged.
 
 describe("FileBrowserSurface binds inspector width per-tab", () => {
   test("inspector width getter/setter pair routes through tab state", () => {

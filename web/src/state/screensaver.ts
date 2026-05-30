@@ -1,5 +1,5 @@
-// `fullstack-a-77` slice 1: PBKDF2 PIN-hash helper. The
-// screensaver feature hashes the user's PIN client-side via
+// PBKDF2 PIN-hash helper. The screensaver feature hashes the
+// user's PIN client-side via
 // `crypto.subtle.deriveBits` and posts the base64-encoded
 // digest to `/api/screensaver/pin` (per `systacean-40`'s
 // endpoint contract). The server stores the bytes verbatim;
@@ -89,10 +89,9 @@ function base64Encode(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/// Default screensaver inactivity timeout (seconds). Matches
-/// `systacean-40`'s chan-workspace default so a fresh workspace
-/// without a persisted value renders the same UX as a workspace
-/// that's been touched.
+/// Default screensaver inactivity timeout (seconds). Matches the
+/// chan-workspace default so a fresh workspace without a persisted
+/// value renders the same UX as one that has been configured.
 export const SCREENSAVER_DEFAULT_TIMEOUT_SECS = 300;
 
 /// Minimum + maximum timeout values the Settings UI should

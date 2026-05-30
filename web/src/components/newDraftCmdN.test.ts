@@ -4,8 +4,8 @@ import client from "../api/client.ts?raw";
 import shortcuts from "../state/shortcuts.ts?raw";
 import tabs from "../state/tabs.svelte.ts?raw";
 
-// `fullstack-a-66` slice 1: SPA Cmd+N → /api/drafts/new →
-// open in active pane.
+// SPA Cmd+N creates a draft via /api/drafts/new and opens it in the
+// active pane.
 
 describe("api.createDraft helper", () => {
   test("createDraft posts to /api/drafts/new + returns { path, name }", () => {

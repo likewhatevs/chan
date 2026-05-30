@@ -1,21 +1,13 @@
 import { describe, expect, test } from "vitest";
 import source from "./GraphCanvas.svelte?raw";
 
-// `fullstack-a-49` (G2): filesystem-hierarchy as graph spine.
-// Layout transform added to GraphCanvas's d3-force simulation so
-// every plotted node sits ABOVE its ancestor-chain to the workspace
-// root (GI-10: workspace root anchors the bottom, the spine grows up).
-// Three load-bearing pieces:
-//
-// 1. `DNode` extended with `depth` + `parentId`.
-// 2. `nodeHierarchy()` helper derives depth + parentId from
-//    kind + path.
-// 3. `buildSim()` wires a depth-aware `forceY` + a custom
-//    `parentXForce` so files sit ABOVE their parent dir + siblings
-//    cluster horizontally under the same parent.
-//
-// Tests pin the wiring shape so a future refactor can't silently
-// drop the hierarchy backbone.
+// Filesystem-hierarchy as graph spine. GraphCanvas's d3-force simulation
+// places every node above its ancestor chain to the workspace root
+// (the root anchors at the bottom; the spine grows up). Load-bearing
+// pieces: DNode extended with depth + parentId; nodeHierarchy() derives
+// those from kind + path; buildSim() wires a depth-aware forceY +
+// parentXForce so files sit above their parent dir and siblings cluster
+// horizontally. Tests pin the wiring shape.
 
 describe("filesystem-hierarchy layout shape", () => {
   test("DNode carries depth + parentId fields", () => {
@@ -31,8 +23,8 @@ describe("filesystem-hierarchy layout shape", () => {
   });
 
   test("nodeHierarchy: tag / mention / language nodes get depth = -1", () => {
-    // Non-hierarchical kinds float on the existing center force;
-    // they don't anchor to a depth band.
+    // Non-hierarchical kinds float on the center force rather than
+    // anchoring to a depth band.
     expect(source).toMatch(
       /if \(n\.kind === "tag" \|\| n\.kind === "mention" \|\| n\.kind === "language"\)/,
     );
@@ -55,12 +47,8 @@ describe("filesystem-hierarchy layout shape", () => {
   });
 
   test("nodeHierarchy: file depth = path segment count; parent is parent dir node id", () => {
-    // File at "docs/foo.md" → depth 2, parent "directory:docs".
-    // File at "README.md" → depth 1, parent "" (workspace root).
-    // Pin the same derivation block for file/media kinds (no
-    // separate branch needed because the helper falls through to
-    // the path-based shape after the folder + non-hierarchical
-    // early-returns).
+    // File at "docs/foo.md" -> depth 2, parent "directory:docs".
+    // File at "README.md" -> depth 1, parent "" (workspace root).
     expect(source).toMatch(/const filePath = n\.path \?\? ""/);
   });
 
@@ -77,10 +65,9 @@ describe("filesystem-hierarchy layout shape", () => {
   });
 
   test("buildSim wires depth-aware forceY for hierarchical nodes", () => {
-    // The original `forceY<DNode>(0)` is replaced. Hierarchical
-    // nodes (depth >= 0) target `-depth * hierarchyYSpacing` (GI-10:
-    // negative so the spine grows UP from the workspace root at the
-    // bottom); non-hierarchical (depth < 0) fall back to centerStrength.
+    // Hierarchical nodes (depth >= 0) target -depth * hierarchyYSpacing
+    // so the spine grows up from the workspace root at the bottom.
+    // Non-hierarchical nodes (depth < 0) fall back to centerStrength.
     expect(source).toMatch(
       /forceY<DNode>\(\(d\) => \{[\s\S]*?return -d\.depth \* FORCE\.hierarchyYSpacing/,
     );
@@ -112,7 +99,7 @@ describe("filesystem-hierarchy layout shape", () => {
   });
 });
 
-describe("(B7a): dblclick = graph from here", () => {
+describe("dblclick on a node = graph from here", () => {
   test("Props expose an optional onSetAsScope callback", () => {
     expect(source).toMatch(
       /type Props = \{[\s\S]{1,2000}onSetAsScope\?: \(\) => void;/,
@@ -127,9 +114,8 @@ describe("(B7a): dblclick = graph from here", () => {
   });
 
   test("onDoubleClick picks at click-slack + invokes onSetAsScope when a node sits under the cursor", () => {
-    // The handler shape mirrors onMouseUp's tap path: localCoords +
-    // pickNode at the wider click slack. Empty-space dblclicks must
-    // NOT rescope (the guard reads the picked node before firing).
+    // Mirrors onMouseUp's tap path: localCoords + pickNode at the wider
+    // click slack. Empty-space dblclicks must NOT rescope.
     expect(source).toMatch(
       /function onDoubleClick\(e: MouseEvent\): void \{[\s\S]{1,200}const p = localCoords\(e\);[\s\S]{1,200}const n = pickNode\(p\.x, p\.y, PICK_SLACK_CLICK_PX\);[\s\S]{1,200}if \(n && onSetAsScope\) onSetAsScope\(\);/,
     );

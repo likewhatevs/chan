@@ -1,18 +1,17 @@
 // @vitest-environment jsdom
 //
-// I1 (inspector consistency + layout): the inspector Download button
-// routes through fileOps.downloadPathWithProgress, which must branch on
-// isTauriDesktop():
-//   - desktop  -> @@LaneB's runDesktopDownload (progress-tracked, workspaces
-//                 the downloadTransfer store the indicator binds to),
-//   - browser  -> the existing <a download> hand-off to the native
-//                 download manager.
+// The inspector Download button routes through
+// fileOps.downloadPathWithProgress, which branches on isTauriDesktop():
+//   - desktop -> runDesktopDownload (progress-tracked, drives
+//                the downloadTransfer store the indicator binds to),
+//   - browser -> the existing <a download> hand-off to the native
+//                download manager.
 // These tests pin that branch so the desktop integration can't silently
 // regress to the browser-only path.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-// Mock the lane-B capability before the store module evaluates so the
+// Mock the desktop capability before the store module evaluates so the
 // import binding fileOps reads is the mock.
 const isTauriDesktop = vi.fn<() => boolean>();
 const runDesktopDownload = vi.fn<(url: string, name: string) => Promise<string>>();

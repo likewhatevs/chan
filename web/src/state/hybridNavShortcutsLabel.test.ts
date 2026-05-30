@@ -1,11 +1,10 @@
 import { describe, expect, test } from "vitest";
 import shortcuts from "./shortcuts.ts?raw";
 
-// `fullstack-a-68 slice 1b`: catch the missed `shortcuts.ts`
-// "NAV" label remnants from slice 1's rename. @@WebtestA's
-// walk (`3328d57`) flagged PARTIAL on the original sweep.
+// Pins the title-case "Hybrid Nav" label in shortcuts.ts: no
+// "NAV" (all-caps) variant should remain anywhere in the registry.
 
-describe("fullstack-a-68 slice 1b: shortcuts.ts NAV label sweep", () => {
+describe("shortcuts.ts Hybrid Nav label casing", () => {
   test("no `Hybrid NAV` literal remains in shortcuts.ts", () => {
     expect(shortcuts).not.toContain("Hybrid NAV");
   });
@@ -15,8 +14,7 @@ describe("fullstack-a-68 slice 1b: shortcuts.ts NAV label sweep", () => {
   });
 
   test("registry notes carry the title-case `Hybrid Nav` form", () => {
-    // Spot-check a few entries that the original slice 1
-    // sweep should have caught but didn't (per webtest).
+    // Spot-check entries that confirm the rename is complete.
     expect(shortcuts).toContain("Mod+. p (Hybrid Nav)");
     expect(shortcuts).toContain("Mod+. o (Hybrid Nav)");
     expect(shortcuts).toContain("Mod+. v (Hybrid Nav)");

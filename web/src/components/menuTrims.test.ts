@@ -4,14 +4,11 @@ import fileBrowserSurface from "./FileBrowserSurface.svelte?raw";
 import fileTree from "./FileTree.svelte?raw";
 import graph from "./GraphPanel.svelte?raw";
 
-// fullstack-80: right-click menu trims across Terminal / FB / Graph
-// surfaces + FB click-to-inspector for tab + overlay variants.
-//
-// Rationale recap: Search is `Cmd+K f` post-`-74`; Settings is
-// `Cmd+,`. Both are global keystrokes; duplicating them in every
-// per-tab right-click menu is noise. `Show/Hide Details` becomes
-// redundant once clicking a row auto-opens the inspector in tab +
-// overlay variants (the variants where the inspector is visible).
+// Right-click menu trims across Terminal / FB / Graph + FB
+// click-to-inspector for tab + overlay variants. Search (Cmd+K f)
+// and Settings (Cmd+,) are global keystrokes and are not duplicated
+// in per-tab menus. Show/Hide Details is redundant once row-clicks
+// auto-open the inspector in tab + overlay variants.
 
 describe("TerminalTab right-click: Search still gone; Settings comes back as flip", () => {
   test("no Search menu entry (Cmd+K f is the global surface)", () => {
@@ -27,13 +24,9 @@ describe("TerminalTab right-click: Search still gone; Settings comes back as fli
   });
 
   test("Settings (flip) entry is present and routes to flipToSettings", () => {
-    // `fullstack-a-67d`: addendum-a re-adds a Settings entry
-    // that flips the tab to its back-side config view
-    // (HybridTerminalConfig). Semantically distinct from the
-    // global Settings overlay — this is a per-tab flip, not a
-    // global shortcut duplicate. The `-80` rule is preserved
-    // (no global-Settings duplicate); the new entry uses a
-    // different handler.
+    // A Settings entry flips the tab to its back-side config view
+    // (HybridTerminalConfig). This is a per-tab flip, not a global
+    // shortcut duplicate; the no-global-duplicate rule is preserved.
     expect(terminal).toContain("onclick={flipToSettings}");
     expect(terminal).toMatch(/<span class="mbtn-label">Settings<\/span>/);
   });

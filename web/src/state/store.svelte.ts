@@ -2836,15 +2836,14 @@ export function resolvePrompt(value: string | null): void {
 //     fire a separate uiConfirm before performing the destructive
 //     action.
 
-/// `fullstack-a-67e` slice 2: `"either"` lets the unified
-/// "New File or Directory" prompt accept both shapes. The
-/// modal detects file-vs-dir from the path's trailing slash:
-/// `foo/bar/` → directory, `foo/bar` (or with an extension)
-/// → file. Callers resolve the returned path against the
-/// chosen kind via `pathPromptKind()` below.
+/// `"either"` lets the unified "New File or Directory" prompt accept
+/// both shapes. The modal detects file-vs-dir from the path's trailing
+/// slash: `foo/bar/` is a directory, `foo/bar` (or with an extension)
+/// is a file. Callers resolve the returned path against the chosen kind
+/// via `pathPromptKind()` below.
 export type PathPromptKind = "file" | "folder" | "either";
-/// `attach` (added per `fullstack-b-3`) is the watcher-dialog mode:
-/// the user picks a path to attach a long-running watcher to,
+/// `attach` is the watcher-dialog mode: the user picks a path to
+/// attach a long-running watcher to,
 /// which is neither "create the entity" nor "move into it". The
 /// modal status row treats an existing directory as a normal
 /// attach (no overwrite warning) and a missing path as "create
@@ -3023,13 +3022,9 @@ async function performMove(path: string, target: string): Promise<void> {
         `${resp.conflicts.length} conflict${resp.conflicts.length === 1 ? "" : "s"}`,
       );
     }
-    // `fullstack-a-85`: success toast was sticky pre-fix
-    // because the success branch wrote `ui.status =` directly
-    // (persistent shape). Other success confirmations use
-    // `setTransientStatus(msg)` which auto-dismisses at
-    // `TRANSIENT_STATUS_DEFAULT_MS` (3s). Move the success
-    // branch to the transient helper; error path stays
-    // persistent so the user notices failures.
+    // Route the success message through the transient helper so
+    // it auto-dismisses. Error path stays persistent so the user
+    // notices failures.
     const moveMsg =
       linkBits.length > 0
         ? `Moved '${target}' (${linkBits.join(", ")})`
@@ -3092,12 +3087,12 @@ export const fileOps = {
   /// Inspector Download action. In the browser the native download
   /// manager handles progress + the Downloads folder + reveal, so we
   /// keep the `<a download>` path. chan-desktop's webview has no such
-  /// manager, so on desktop we route through @@LaneB's
-  /// `runDesktopDownload` capability (api/desktop.ts): it fetches over
-  /// the loopback connection with XHR progress and saves through a
-  /// Tauri command, driving the shared `downloadTransfer` store the
-  /// inspector indicator binds to. Fire-and-forget: the store carries
-  /// progress / error / savedPath so callers don't await.
+  /// manager, so on desktop we route through `runDesktopDownload`
+  /// (api/desktop.ts): it fetches over the loopback connection with
+  /// XHR progress and saves through a Tauri command, driving the shared
+  /// `downloadTransfer` store the inspector indicator binds to.
+  /// Fire-and-forget: the store carries progress / error / savedPath
+  /// so callers don't await.
   downloadPathWithProgress(path: string, isDir: boolean): void {
     if (isTauriDesktop()) {
       const url = new URL(
@@ -3313,17 +3308,14 @@ export const fileOps = {
       ui.status = `create failed: ${(e as Error).message}`;
     }
   },
-  /// `fullstack-a-67e` slice 2: unified "New File or Directory"
-  /// dialog. Opens a single PathPromptModal with `kind: "either"`;
-  /// the user types a path ending in `/` for a directory or
-  /// without the trailing slash for a file. On submit, dispatches
-  /// to the underlying API + UI flow that matches the detected
-  /// kind: directories get `revealAndSelect`'d (matches the
-  /// `createDir` flow); files get `.md` auto-appended + opened in
-  /// the active pane (matches `createFile`). The dialog itself
-  /// owns the kind detection via `effectiveKind` — this caller
-  /// re-detects on the resolved path so the dispatch matches what
-  /// the modal validated against.
+  /// Unified "New File or Directory" dialog. Opens a single
+  /// PathPromptModal with `kind: "either"`; the user types a path
+  /// ending in `/` for a directory or without the trailing slash for a
+  /// file. On submit, dispatches to the API + UI flow that matches the
+  /// detected kind: directories get `revealAndSelect`'d; files get
+  /// `.md` auto-appended + opened in the active pane. The dialog owns
+  /// kind detection via `effectiveKind`; this caller re-detects on the
+  /// resolved path so the dispatch matches what the modal validated.
   async createFileOrDir(parentPath: string): Promise<void> {
     const defaultValue = parentPath ? `${parentPath}/` : "";
     const next = await uiPathPrompt({
@@ -3389,12 +3381,11 @@ export const fileOps = {
   async moveTo(from: string, to: string): Promise<void> {
     await performMove(from, to);
   },
-  /// `fullstack-a-35`: inline-rename entry point for the
-  /// FileEditorTab's header-band UX. Same `performMove` machinery
-  /// (overwrite confirm, link rewrite, tab rekey, watcher
-  /// suppression) as `rename` above; just bypasses the modal so the
-  /// header band can workspace the input directly. Preserves the source
-  /// extension when `next` lacks one — matches `fileOps.rename`.
+  /// Inline-rename entry point for the FileEditorTab's header-band UX.
+  /// Same `performMove` machinery (overwrite confirm, link rewrite, tab
+  /// rekey, watcher suppression) as `rename` above; just bypasses the
+  /// modal so the header band can drive the input directly. Preserves
+  /// the source extension when `next` lacks one.
   async renameInPlace(path: string, next: string, isDir = false): Promise<void> {
     const trimmed = next.trim();
     if (!trimmed || trimmed === path) return;

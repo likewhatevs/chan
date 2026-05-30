@@ -1,11 +1,8 @@
 import { describe, expect, test } from "vitest";
 import graph from "./GraphPanel.svelte?raw";
 
-// `fullstack-a-67` slice (Graph surface only): right-click menu
-// gets a path-header row showing the current scope's path + a
-// kind-appropriate icon. Click wiring → inspector deferred to a
-// follow-up slice; this commit lands the display-only row to
-// match the @@Alex addendum spec.
+// Graph right-click menu scope-header row: shows the current scope's
+// path + a kind-appropriate icon. Click wiring opens the inspector.
 
 describe("(Graph slice): scope-header row", () => {
   test("Lucide icons imported (FileText / Folder / HardDrive / Hash)", () => {
@@ -26,7 +23,6 @@ describe("(Graph slice): scope-header row", () => {
     expect(graph).toMatch(/currentScope\.kind === "dir"[\s\S]*?<Folder/);
     expect(graph).toMatch(/currentScope\.kind === "tag"[\s\S]*?<Hash/);
     // The remaining live scope kind (file) falls through to FileText.
-    // (global / git_repo / group were retired by the scope-concept wipe.)
     expect(graph).toMatch(/<FileText/);
   });
 

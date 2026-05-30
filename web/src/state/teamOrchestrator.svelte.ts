@@ -1,9 +1,8 @@
-// phase-13-r2 `lane-a-A3`: Team Work bootstrap orchestrator.
+// Team Work bootstrap orchestrator.
 //
-// New lead-first flow (replaces the old close-host-then-respawn-lead
-// dance). The Team Work Lead terminal ALREADY EXISTS when this runs:
-// App.svelte created it at Cmd+P via `createTeamWorkLeadTerminal`,
-// and the dialog handed us its tab + pane id. So Bootstrap:
+// Lead-first flow: the Team Work Lead terminal ALREADY EXISTS when this
+// runs (App.svelte created it at Cmd+P via `createTeamWorkLeadTerminal`,
+// and the dialog handed us its tab + pane id). Bootstrap:
 //
 //   1. Save/update the chan-team.toml at the dialog's config path.
 //   2. Launch the LEAD agent FIRST into the existing lead tab, then

@@ -1,27 +1,19 @@
 import { describe, expect, test } from "vitest";
 import graph from "./GraphPanel.svelte?raw";
 
-// Phase-11 GI-9 (next-round-backlog.md): the filesystem graph omitted
-// most subdirectories at depth. The root cause was that `scopedNodeIds`
-// applied the SEMANTIC scope BFS (which seeds only from `kind === "file"`
-// nodes) to filesystem mode, where a directory's shallow children are
-// DIRECTORIES, not files. The seed set came up empty and a pure-directory
-// fs-graph rendered 0/N. The invariant that prevents regression: in
-// filesystem mode `scopedNodeIds` must run its OWN branch and never fall
-// through to the file-seed BFS.
+// Filesystem graph spine visibility. The bug: `scopedNodeIds` ran the
+// semantic BFS (seeds from `kind === "file"`) in filesystem mode, where
+// a directory-only scope has no file seeds, so the graph rendered 0/N.
+// Fix: filesystem mode gets its own branch that never falls through to the
+// file-seed BFS.
 //
-// The directory-spine visibility is now driven by the per-instance
-// expanded set (double-click a directory to reveal its next degree; File
-// Browser parity). A node renders only when every ancestor directory up to
-// the scope root is expanded, and the depth slider seeds that set to depth
-// N - so the default view is the full spine to depth N, collapsible per
-// directory. File scope stays a focused single-file view (no tree to
-// expand) and keeps the unfiltered spine.
+// Spine visibility is driven by the per-instance expanded set
+// (double-click a dir to reveal the next degree; File Browser parity).
+// A node renders only when every ancestor up to the scope root is
+// expanded. The depth slider seeds that set, so the default view is the
+// full spine to depth N. File scope keeps the unfiltered spine.
 //
-// These pins live at the source level because scopedNodeIds is a
-// component-internal $derived (not a pure function), mirroring the
-// existing graphParentEdgeInvariant / graphDirInspectorHotfix `?raw`
-// pins. The behavioural side is verified in-browser per the journal.
+// Source-level pins mirror graphParentEdgeInvariant / graphDirInspectorHotfix.
 
 describe("filesystem-mode graph spine visibility", () => {
   test("filesystem mode filters by the expanded set, not the file-seed BFS", () => {
@@ -35,9 +27,9 @@ describe("filesystem-mode graph spine visibility", () => {
     );
   });
 
-  test("filesystem mode never reaches the semantic file-seed BFS (the 0/N bug)", () => {
+  test("filesystem mode never reaches the semantic file-seed BFS", () => {
     // The fs-mode branch must precede the file-seed path so a
-    // directory-only fs scope can never hit the empty-seed shape.
+    // directory-only fs scope never hits the empty-seed shape.
     const fsBranch = graph.search(/if \(filesystemMode\) \{/);
     const fileSeed = graph.search(
       /currentScope\.kind === "file" \? \[currentScope\.path\] : \[\]/,
@@ -51,11 +43,10 @@ describe("filesystem-mode graph spine visibility", () => {
     );
   });
 
-  test("(F1): workspace + dir semantic scope use find -d N depth filter", () => {
-    // Workspace + dir scope in SEMANTIC mode filter nodes by filesystem
-    // depth relative to the scope root (find -d N semantics). depth >=
-    // depthCap lifts the filter; the workspace-root anchor is always kept
-    // so the spine has a root to hang off.
+  test("workspace + dir semantic scope use find -d N depth filter", () => {
+    // In semantic mode, workspace + dir scope filter by filesystem depth
+    // relative to the scope root. depth >= depthCap lifts the filter;
+    // the workspace-root anchor is always kept.
     expect(graph).toMatch(
       /currentScope\.kind === "workspace" \|\| currentScope\.kind === "dir"/,
     );
@@ -63,8 +54,7 @@ describe("filesystem-mode graph spine visibility", () => {
     expect(graph).toMatch(
       /relativeDepth\(rootPath, nodePath\) <= graphState\.depth/,
     );
-    // The pre-F1 dir-scope file-only seed is gone; the only file-seed path
-    // remaining is file scope.
+    // The only remaining file-seed path is file scope.
     expect(graph).not.toMatch(/n\.path === root \|\| n\.path\.startsWith\(prefix\)/);
   });
 });

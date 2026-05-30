@@ -3,26 +3,11 @@ import graph from "./GraphPanel.svelte?raw";
 import store from "../state/store.svelte.ts?raw";
 import tabs from "../state/tabs.svelte.ts?raw";
 
-// `fullstack-a-57`: Graph filter chips extended with FileBucket
-// toggles (markdown / source) so users can hide markdown to see
-// source-code population (or vice versa). Wire data lives in
-// chan-report's `FileBucket` from `systacean-16`, but the audit
-// found `GraphNodeView::File` doesn't carry the bucket field —
-// SPA reuses `-a-51`'s client-side `classifyFile` helper to
-// dispatch file nodes into buckets (mirrors the chan-server's
-// future emit shape).
-//
-// Tests pin:
-// - GraphFilters shape (markdown + source bits) in BOTH
-//   store.svelte.ts and tabs.svelte.ts (duplicate type kept in
-//   lockstep).
-// - URL-hash encoder: 8-bit format with a default-on guard.
-// - Per-tab SerTab encoder: version-2 sentinel for legacy
-//   default-on behaviour.
-// - FilterKind union extension + FILTER_COLORS swatches.
-// - Hidden-id derived sets + visibleNodeIds consumption.
-// - Chip iteration sites carry the new kinds.
-// - classifyFile dispatches doc / source / binary buckets.
+// Graph filter chips include markdown + source FileBucket toggles.
+// GraphNodeView::File does not carry a bucket field, so the SPA uses
+// a client-side classifyFile helper. Tests pin: GraphFilters shape in
+// both modules; SerTab version-2 sentinel; FilterKind + FILTER_COLORS;
+// hidden-id derived sets; chip iteration sites; classifyFile dispatch.
 
 describe("GraphFilters shape (both modules)", () => {
   test("store.svelte.ts GraphFilters has markdown + source bits", () => {
@@ -50,10 +35,9 @@ describe("GraphFilters shape (both modules)", () => {
   });
 });
 
-// The old store.svelte.ts URL-hash filter codec (encodeGraphFilters /
-// decodeGraphFilters) was REMOVED by the scope-concept wipe (W5, lane-a A3):
-// the `graph=` overlay hash is retired. The live filter codec is the
-// layout-`s` graph-tab encoder in tabs.svelte.ts, locked by the block below.
+// The URL-hash filter codec (encodeGraphFilters / decodeGraphFilters) was
+// removed along with the `graph=` overlay hash. The live filter codec is
+// the layout-`s` graph-tab encoder in tabs.svelte.ts.
 
 describe("SerTab encoder version sentinel", () => {
   test("encoder prefixes payload with version sentinel '2'", () => {
@@ -122,9 +106,8 @@ describe("hidden-id derived sets + visibility", () => {
 
 describe("chip iteration sites + counts", () => {
   test("the chip iteration site includes markdown + source", () => {
-    // Scope-concept wipe (lane-a A1) removed the overlay-bar
-    // `filterChips` snippet, leaving the tab-menu bubble as the SINGLE
-    // chip-iteration site; it must still carry markdown + source.
+    // The tab-menu bubble is the single chip-iteration site; it must
+    // carry markdown + source.
     const matches = graph.match(
       /\["tag", "mention", "language", "img", "folder", "markdown", "source"\] as const/g,
     );

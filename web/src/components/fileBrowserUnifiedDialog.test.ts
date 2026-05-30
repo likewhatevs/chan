@@ -4,13 +4,10 @@ import store from "../state/store.svelte.ts?raw";
 import tree from "./FileTree.svelte?raw";
 import surface from "./FileBrowserSurface.svelte?raw";
 
-// `fullstack-a-67e` slice 2: unified "New File or Directory"
-// dialog + FileTree Settings flip. Slice 1 lifted the in-tree
-// menu structure; slice 2 collapses the separate New File +
-// New Directory entries into a single dialog that detects
-// file-vs-dir from the path's trailing slash, and pipes the
-// `onFlip` callback down from FBSurface so the Settings entry
-// at the foot of the in-tree menu calls `flipHybrid(pane.id)`.
+// Unified "New File or Directory" dialog and FileTree Settings flip.
+// The dialog detects file-vs-dir from the path's trailing slash.
+// `onFlip` is piped from FBSurface so the in-tree Settings entry
+// calls `flipHybrid(pane.id)`.
 
 describe("PathPromptKind union extension", () => {
   test("PathPromptKind union accepts \"either\"", () => {

@@ -1,14 +1,11 @@
 import { describe, expect, test } from "vitest";
 import pane from "./Pane.svelte?raw";
 
-// `fullstack-b-2`: pane mode (Hybrid NAV / Cmd+K) used to unmount
-// every TerminalTab in the pane, disposing the xterm.js EditorView
-// and dropping the 20k-line scrollback buffer. The active terminal
-// now stays mounted; only its `active` prop flips to false during
-// pane mode so the existing CSS rule hides it via
-// `visibility: hidden`. These checks pin the source so a future
-// edit that re-introduces the outer `{#if !paneMode.active}`
-// wrapper around the terminal each-block trips the test.
+// Pane mode (Hybrid NAV / Cmd+K) must not unmount TerminalTab instances.
+// Unmounting disposes the xterm.js EditorView and drops the scrollback
+// buffer. Instead the `active` prop flips to false and the existing CSS
+// visibility rule hides the terminal. These pins catch any regression
+// that re-introduces an outer `{#if !paneMode.active}` guard.
 
 describe("TerminalTabs survive Hybrid NAV toggles", () => {
   test("terminal each-block does not sit under a {#if !paneMode.active}", () => {
@@ -23,20 +20,17 @@ describe("TerminalTabs survive Hybrid NAV toggles", () => {
   });
 
   test("active prop is gated by !paneMode.active + !pane.showingBack", () => {
-    // The prop must short-circuit on pane mode so the existing
-    // visibility-hidden CSS rule fires during Hybrid NAV.
-    // `fullstack-a-43` also added `!pane.showingBack` to keep
-    // terminals hidden while the back-side configuration view
-    // is up.
+    // The prop short-circuits on pane mode so the visibility-hidden
+    // CSS fires during Hybrid NAV. `!pane.showingBack` keeps terminals
+    // hidden while the back-side configuration view is up.
     expect(pane).toMatch(
       /active=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId\}/,
     );
   });
 
   test("focused prop is gated by !paneMode.active + !pane.showingBack", () => {
-    // Same gates on focused so we don't pull focus into a hidden
-    // xterm during pane mode OR the back-side config view (would
-    // swallow the next chord).
+    // Same gates on focused so focus is never pulled into a hidden
+    // xterm during pane mode or the back-side config view.
     expect(pane).toMatch(
       /focused=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId && viewLayout\.activePaneId === pane\.id\}/,
     );

@@ -18,9 +18,9 @@ function leadFromLayout(): TerminalTab {
   return tab;
 }
 
-// phase-13-r2 `lane-a-A3`: the identity prompt lands in the LEAD's
-// embedded Team Work editor (primeTeamWork), not in a worker tab.
-// These tests pin the placement target + the prompt content.
+// The identity prompt lands in the LEAD's embedded Team Work editor
+// (primeTeamWork), not in a worker tab. These tests pin the placement
+// target + the prompt content.
 
 function leadTab(): TerminalTab {
   return {

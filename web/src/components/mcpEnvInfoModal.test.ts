@@ -2,12 +2,8 @@ import { describe, expect, test } from "vitest";
 import modal from "./McpEnvInfoModal.svelte?raw";
 import terminal from "./TerminalTab.svelte?raw";
 
-// `fullstack-a-67d` slice 2: MCP env info button → modal
-// dialog conversion per addendum-a's "dialog like the New File
-// one" spec. Tests pin the new component shape + the
-// TerminalTab.svelte wiring (info button opens modal; the
-// "Show MCP env in terminal" CTA moved INTO the modal; the
-// inline popover dropped).
+// MCP env info button opens a modal dialog. The "Show MCP env in
+// terminal" CTA lives inside the modal; the inline popover is gone.
 
 describe("McpEnvInfoModal component", () => {
   test("modal renders gated on the `open` prop with dialog role + aria-modal", () => {
@@ -73,9 +69,7 @@ describe("TerminalTab wiring", () => {
     expect(terminal).not.toMatch(/aria-expanded=\{mcpInfoOpen\}/);
   });
 
-  test("standalone \"Show MCP env in terminal\" menu row dropped (moved into modal)", () => {
-    // The mbtn row label "Show MCP env in terminal" no longer
-    // exists in the menu; the modal's CTA owns the surface.
+  test("standalone \"Show MCP env in terminal\" menu row dropped (CTA lives in modal)", () => {
     expect(terminal).not.toMatch(
       /<span class="mbtn-label">Show MCP env in terminal<\/span>/,
     );

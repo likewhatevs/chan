@@ -230,10 +230,9 @@ export type FileTab = {
   /// on every selection change; the editor that mounts next reads
   /// it once on first content apply to restore the caret.
   caret?: { from: number; to: number };
-  /// `fullstack-84`: per-tab inspector + outline widths so two file
-  /// tabs side by side carry independent inspector/outline sizes.
-  /// Fall back to `paneWidths.inspector` / `paneWidths.outline`
-  /// when unset.
+  /// Per-tab inspector and outline widths so two file tabs side by
+  /// side carry independent inspector/outline sizes. Fall back to
+  /// `paneWidths.inspector` / `paneWidths.outline` when unset.
   inspectorWidth?: number;
   outlineWidth?: number;
 };
@@ -452,17 +451,14 @@ export function truncateTabTitle(label: string): string {
   return `${head}${TAB_TITLE_ELLIPSIS}${tail}`;
 }
 
-/// `fullstack-81`: title for a Graph tab. Selection wins over
-/// scope — when the user has tapped a node, the tab strip
-/// reads as the node's label (basename for files / dirs, `#tag`
-/// for tags, contact name, etc.). No selection → fall back to
-/// the scope-derived title from `-64` cached on `tab.title`.
-///
-/// Phase-13 round-1 closing (B1): even with a selection, keep
-/// the kind= prefix produced by `graphTitle()` so the tab strip
-/// keeps identifying the lens shape (path= / tag= / contact= /
-/// lang=). Titles without an `=` (top-level Languages overview,
-/// legacy / test-only bare strings) still render the bare label.
+/// Title for a Graph tab. Selection wins over scope: when the user
+/// has tapped a node, the tab strip reads as the node's label
+/// (basename for files / dirs, `#tag` for tags, contact name, etc.).
+/// No selection falls back to the scope-derived title cached on
+/// `tab.title`. Even with a selection, the kind= prefix from
+/// `graphTitle()` is kept so the tab strip identifies the lens
+/// shape (path= / tag= / contact= / lang=). Titles without an `=`
+/// (top-level Languages overview, bare strings) render the bare label.
 export function graphTabLabel(t: GraphTab): string {
   const label = t.selectedNodeLabel?.trim();
   if (!label) return t.title;
@@ -497,14 +493,13 @@ export function tabLabel(t: Tab, ctx?: BrowserLabelCtx): string {
   return slash < 0 ? p : p.slice(slash + 1);
 }
 
-/// `fullstack-a-1`: Files tab title is always a directory. File
-/// selection → parent dir; directory selection → that dir; no
-/// selection or selection at workspace root → workspace's display name.
-/// Trailing slash is always rendered so the tab strip reads as a
-/// directory unambiguously. `ctx.workspaceName` is the display name
-/// for the workspace root case; when absent, falls back to the tab's
-/// own `title` (default `Files`) for backwards compat in unit
-/// tests where the workspace context isn't wired.
+/// Files tab title is always a directory. File selection shows the
+/// parent dir; directory selection shows that dir; no selection or
+/// selection at workspace root shows the workspace display name.
+/// Trailing slash is always rendered so the tab strip is unambiguous.
+/// `ctx.workspaceName` is the display name for the workspace root
+/// case; when absent, falls back to the tab's own `title` (default
+/// `Files`) so unit tests that don't wire workspace context still work.
 export function browserTabLabel(t: BrowserTab, ctx?: BrowserLabelCtx): string {
   const workspaceName = ctx?.workspaceName?.trim();
   const rootName = workspaceName || t.title;
@@ -587,20 +582,17 @@ function commonSuffixLength(groups: string[][]): number {
 export function tabTooltip(t: Tab): string {
   if (t.kind === "terminal") return terminalTabName(t);
   if (t.kind === "graph") {
-    // `fullstack-81`: surface selection + scope so hover
-    // disambiguates two Graph tabs viewing the same scope with
-    // different focal nodes — or two with the same selection
-    // under different scopes.
+    // Surface selection + scope so hover disambiguates two Graph tabs
+    // viewing the same scope with different focal nodes, or two with
+    // the same selection under different scopes.
     if (t.selectedNodeId) {
       return `Graph: ${t.scopeId} · ${t.selectedNodeId}`;
     }
     return `Graph: ${t.scopeId}`;
   }
   if (t.kind === "browser") {
-    // `fullstack-65`: surface the per-tab selection so hover
-    // disambiguates two Files tabs whose basenames collide
-    // (e.g. `index.md` in different dirs). No selection → keep
-    // the generic label.
+    // Surface the per-tab selection so hover disambiguates two Files
+    // tabs whose basenames collide (e.g. `index.md` in different dirs).
     return t.selected ? `File Browser: ${t.selected}` : "File Browser";
   }
   if (t.kind === "dashboard") return t.title;
@@ -634,26 +626,18 @@ function nextTerminalTitle(state: LayoutState = layout): string {
   return `Terminal-${max + 1}`;
 }
 
-/// `fullstack-48` original, `fullstack-a-43` revisited: each pane
-/// (Hybrid in user-facing copy) holds an optional back-side slot.
-/// Under `-a-43` the back is no longer a content collection — it is
-/// a per-surface configuration view scoped to the type of the
-/// currently-active front tab. `pane.tabs` / `pane.activeTabId`
-/// always describe the FRONT side; `showingBack` toggles whether the
-/// pane renders the front content tabs or the back configuration
-/// surface. `flipHybrid()` only toggles `showingBack`; under
-/// `-a-47` the per-side theme split is gone — both sides of a
-/// Hybrid share `pane.theme` (the per-Hybrid theme override from
-/// `-b-5` now lives at one slot, not two).
+/// Each pane (Hybrid in user-facing copy) holds an optional back-side
+/// slot. The back is a per-surface configuration view scoped to the
+/// type of the currently-active front tab. `pane.tabs` /
+/// `pane.activeTabId` always describe the FRONT side; `showingBack`
+/// toggles which surface renders. Both sides share `pane.theme`.
 export type HybridTheme = "dark" | "light";
 
 export type HybridSide = {
-  /// Marker type for "this pane has been flipped at least once"
-  /// (i.e., it's a Hybrid). Empty body under `-a-47`: the
-  /// `theme` slot collapsed into `pane.theme`. Kept as a typed
-  /// `back?: HybridSide` marker so `pane.back !== undefined`
-  /// still discriminates "Hybrid vs never-flipped" for menu
-  /// gating in `Pane.svelte`.
+  /// Marker type for "this pane has been flipped at least once."
+  /// Empty body: `pane.theme` owns the single per-Hybrid theme.
+  /// `pane.back !== undefined` discriminates Hybrid vs never-flipped
+  /// for menu gating in `Pane.svelte`.
 };
 
 export type Pane = {
@@ -663,9 +647,8 @@ export type Pane = {
   /// Visible-side theme override (`undefined` = follow global).
   theme?: HybridTheme;
   /// Hidden side. `undefined` for never-flipped panes; the first
-  /// `flipHybrid()` call lazily materialises it with an inverted
-  /// default theme so the back reads as the obvious mirror under
-  /// the per-side theme override from `-b-5`.
+  /// `flipHybrid()` call lazily materializes it so `pane.back !== undefined`
+  /// gates the Hybrid menu entries.
   back?: HybridSide;
   /// User-visible flag for "this Hybrid is currently flipped to its
   /// back-side configuration view". Independent of whether `back`
@@ -718,31 +701,23 @@ export const layout = $state<{
 
 export type LayoutState = typeof layout;
 
-/// `fullstack-72`: staged spawn for the Hybrid Nav (Pane Mode)
-/// number keys. Tab already uses a draft/commit model — pressing
-/// Tab flips the Hybrid live, Enter keeps it, Esc reverses. The
-/// 1/2/3 keys used to push directly into the draft tab list which
-/// made it look like a committed change. They now stage a single
-/// intent here; `commitPaneMode()` reads it and pushes the tab
-/// into the draft as part of the seal, so the pill's
-/// "Enter commit · Esc discard" promise holds for every keystroke.
-///
-/// Replacement (`1` then `2`) overwrites the intent — only the
-/// most recent staging fires on commit. Esc / cancel clears the
-/// intent without spawning.
+/// Staged spawn intent for Pane Mode number keys. The intent queues
+/// here so the pane-mode "Enter commit / Esc discard" contract holds
+/// for every keystroke; `commitPaneMode()` materializes it as part of
+/// the seal. A second staging overwrites the first; Esc clears it
+/// without spawning.
 export type PaneModeSpawnKind = "terminal" | "browser" | "graph";
 export type PaneModeSpawnIntent = {
   kind: PaneModeSpawnKind;
   ctx: SpawnContext;
 };
 
-/// `fullstack-a-44`: `transactionMode` is the mouse-driven variant of
-/// Hybrid Nav. Entered by drag-from-dead-zone (Entry A — sets
-/// `grabPaneId` to the originating pane) or by double-click on the
-/// dead zone (Entry B — `grabPaneId` stays null until the user clicks
-/// + drags inside a pane). Mouse handlers in transaction mode operate
-/// on the full pane body, not just the top bar. Enter / Esc / Cmd+.
-/// exit through the same paths as keyboard NAV.
+/// Mouse-driven variant of Hybrid Nav. Entered by drag-from-dead-zone
+/// (sets `grabPaneId` to the originating pane) or by double-click on
+/// the dead zone (`grabPaneId` stays null until the user clicks and
+/// drags inside a pane). Mouse handlers in transaction mode operate on
+/// the full pane body, not just the top bar. Enter / Esc / Cmd+. exit
+/// through the same paths as keyboard Nav.
 export const paneMode = $state<{
   active: boolean;
   draft: LayoutState | null;
@@ -750,11 +725,10 @@ export const paneMode = $state<{
   transactionMode: boolean;
   grabPaneId: string | null;
   hoverPaneId: string | null;
-  /// `fullstack-a-68 slice 2`: queue of "new draft editor"
-  /// intents staged during the current pane-mode session.
-  /// Materialised on Enter (commit); discarded on Esc (cancel).
-  /// Each entry pins the target paneId at press time so
-  /// later focus changes don't redirect the materialization.
+  /// Queue of "new draft editor" intents staged during the current
+  /// pane-mode session. Materialized on Enter (commit); discarded on
+  /// Esc (cancel). Each entry pins the target paneId at press time so
+  /// later focus changes don't redirect materialization.
   stagedDraftEditors: { paneId: string }[];
 }>({
   active: false,
@@ -781,13 +755,12 @@ export function requestPaneWobble(paneId: string): void {
   paneWobble.versions[paneId] = (paneWobble.versions[paneId] ?? 0) + 1;
 }
 
-/// `fullstack-a-22`: separate event bus for the Hybrid pane flip
-/// animation. `paneWobble` is the structural-change cue (split /
-/// close / swap → scale bounce); `paneFlip` is the orientation-
-/// change cue (Hybrid flip → Y-axis rotation). Two distinct
-/// visual signals for two distinct kinds of state change. Same
-/// versioned-counter shape so Pane.svelte's subscription pattern
-/// works identically for both.
+/// Separate event bus for the Hybrid pane flip animation. `paneWobble`
+/// is the structural-change cue (split / close / swap gives a scale
+/// bounce); `paneFlip` is the orientation-change cue (Hybrid flip
+/// gives a Y-axis rotation). Two distinct visual signals for two
+/// distinct kinds of state change. Same versioned-counter shape so
+/// Pane.svelte's subscription pattern works identically for both.
 export const paneFlip = $state<{ versions: Record<string, number> }>({
   versions: {},
 });
@@ -937,11 +910,10 @@ export function activeTerminalTab(): TerminalTab | null {
   return t;
 }
 
-/// `lane-c addendum-3`: toggle broadcast SELECT-ALL <-> DESELECT-ALL for
-/// the active terminal, the chord-driven equivalent of the per-tab
-/// "Select All" / "Deselect All" button (TerminalTab.toggleAllBroadcast-
-/// Targets). Walks every terminal tab INCLUDING self (self via
-/// broadcastEnabled, others via broadcast targets), so the bulk action
+/// Toggle broadcast SELECT-ALL / DESELECT-ALL for the active terminal.
+/// Chord-driven equivalent of the per-tab "Select All" / "Deselect All"
+/// button. Walks every terminal tab including self (self via
+/// broadcastEnabled, others via broadcast targets) so the bulk action
 /// matches the per-row UI. No-op when the active tab isn't a terminal.
 export function toggleActiveTerminalBroadcastSelectAll(): void {
   const tab = activeTerminalTab();
@@ -965,21 +937,14 @@ export function toggleActiveTerminalBroadcastSelectAll(): void {
 export function openActiveTeamWork(): void {
   const tab = activeTerminalTab();
   if (!tab) return;
-  // `fullstack-b-8`: the Team Work editor is a child component
-  // that focuses inside `onMount` (Source / Wysiwyg). Until Svelte
-  // flushes the open-state update + the editor child mounts and
-  // focuses, whatever previously held focus (typically xterm's
-  // helper-textarea since the user was just looking at a terminal)
-  // is still the keyboard target. A fast typer who starts typing
-  // immediately after the Team Work chord (Cmd+P, Cmd+Alt+P, or
-  // Hybrid Nav `p`) hits that race window: the first
-  // keystroke lands on xterm-helper-textarea, fires
-  // `term.onData -> sendUserInput`, and is sent to the PTY behind
-  // the user's back. The dispatch they later trigger from the
-  // prompt is short the first character and the terminal appears
-  // to "drop" it. Blurring up front parks focus on `<body>` until
-  // the editor mounts, so the missed keystroke goes nowhere
-  // visible instead of into the live shell.
+  // The Team Work editor focuses inside `onMount`. Until Svelte flushes
+  // the open-state update and the editor child mounts, whatever held
+  // focus before (typically xterm's helper-textarea) is still the
+  // keyboard target. A fast typer hits this race: the first keystroke
+  // lands on xterm-helper-textarea, fires `term.onData -> sendUserInput`,
+  // and goes to the PTY behind the user's back. Blurring up front parks
+  // focus on `<body>` until the editor mounts, so the missed keystroke
+  // goes nowhere visible instead of into the live shell.
   blurTerminalHelperTextarea();
   if (!tab.teamWork) {
     tab.teamWork = {
@@ -992,9 +957,8 @@ export function openActiveTeamWork(): void {
   } else {
     tab.teamWork.open = true;
     tab.teamWork.mode ??= "wysiwyg";
-    // `fullstack-79`: bump every call (including when the prompt
-    // is already open) so the input re-focuses even if the user
-    // had clicked away.
+    // Bump every call (including when already open) so the input
+    // re-focuses even if the user had clicked away.
     tab.teamWork.focusNonce = (tab.teamWork.focusNonce ?? 0) + 1;
   }
 }
@@ -1100,12 +1064,10 @@ export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): Gr
   const p = pane(paneId);
   const mode = opts.mode ?? "semantic";
   const scopeId = opts.scopeId ?? "workspace";
-  // `fullstack-47`: no dedup on spawn. Each invocation creates a
-  // fresh graph tab with its own scope, filters, and pending
-  // selection so the user can compare two views of the same
-  // graph side-by-side. If a caller really wants "activate the
-  // existing one", they can find it on `pane.tabs` and set
-  // `activeTabId` directly.
+  // No dedup on spawn. Each invocation creates a fresh graph tab with
+  // its own scope, filters, and pending selection so the user can
+  // compare two views side-by-side. Callers that want "activate the
+  // existing one" can find it on `pane.tabs` and set `activeTabId`.
   const tab: GraphTab = {
     kind: "graph",
     id: id("graph"),
@@ -1128,9 +1090,8 @@ export function openBrowserInActivePane(
   opts: { select?: string | null } = {},
 ): BrowserTab {
   const p = activePane();
-  // `fullstack-47`: no dedup. Each press of the file-browser
-  // affordance spawns a new browser tab with its own current dir
-  // and inspector state.
+  // No dedup. Each press spawns a new browser tab with its own current
+  // dir and inspector state.
   const tab: BrowserTab = {
     kind: "browser",
     id: id("browser"),
@@ -1176,25 +1137,14 @@ function defaultBrowserInspectorOpen(): boolean {
   return window.innerWidth >= 768;
 }
 
-/// `fullstack-64`: title for a Graph tab. Per @@Alex, the tab name
-/// reads as the basename of whatever the user scoped the graph to
-/// — file basename, dir name, contact name, `#tag` — so the tab
-/// strip identifies the subject directly instead of re-labelling
-/// every graph as a generic "File Graph" / "Tag Graph". The chrome
-/// icon already conveys "this is a graph", so no extra suffix.
-///
-/// `mode === "language"` is a top-level lens (not a per-scope
-/// view) and keeps its dedicated `Languages` label. Workspace / global
-/// scope read as `workspace`; the underlying `scopeId` is unchanged —
-/// only the rendered title shape moves.
+/// Title for a Graph tab. The tab name reads as the basename of
+/// whatever the user scoped the graph to (file basename, dir name,
+/// contact name, `#tag`) so the tab strip identifies the subject
+/// directly. Every title carries a `kind=` prefix so the tab strip
+/// also identifies the lens shape (`path=` / `tag=` / `contact=` /
+/// `lang=`). `mode === "language"` is a top-level lens (not per-scope)
+/// and keeps its dedicated `Languages` label.
 export function graphTitle(mode: GraphTab["mode"], scopeId: string): string {
-  // Phase-13 round-1 KIND slice 2a: every graph tab title carries
-  // a `kind=` prefix so the tab strip identifies the lens shape
-  // (`path=` / `tag=` / `contact=` / `lang=`) instead of relying
-  // on the icon + raw payload alone. `mode === "language"` keeps
-  // its dedicated `Languages` overview label (top-level lens, not
-  // a per-language lens — `language:<lang>` scopeId is the
-  // per-language case which renders as `lang=<name>`).
   if (mode === "language") return "Languages";
   if (scopeId === "workspace" || scopeId === "global") return "path=workspace";
   if (scopeId.startsWith("file:")) {
@@ -1353,9 +1303,8 @@ export function setTerminalActivity(tab: TerminalTab, active: boolean): void {
   if (!active) tab.terminalActivityPulsing = undefined;
 }
 
-/// `lane-c addendum-3`: drive the unseen-output dot's pulse. True while
-/// output is actively arriving; false once it stops (the dot goes solid
-/// while the output stays unseen).
+/// Drive the unseen-output dot's pulse. True while output is actively
+/// arriving; false once it stops (the dot goes solid while unseen).
 export function setTerminalActivityPulsing(tab: TerminalTab, pulsing: boolean): void {
   tab.terminalActivityPulsing = pulsing || undefined;
 }
@@ -1375,13 +1324,10 @@ export function allTerminalTabs(): TerminalTab[] {
   return terminalTabsIn(layout);
 }
 
-/// `fullstack-a-79` slice 2: find a TerminalTab by its
-/// chan-server session id. The team orchestrator pins the
-/// host session at dialog-open time (per `hostSessionId` on
-/// `TeamDialogRequest`); the lead-prompt step uses this to
-/// locate the tab and populate its team-work buffer.
-/// Returns null when no matching tab is open — the orchestrator
-/// silently skips the lead-prompt step in that case.
+/// Find a TerminalTab by its chan-server session id. Used by the team
+/// orchestrator to locate the tab and populate its team-work buffer.
+/// Returns null when no matching tab is open; the orchestrator silently
+/// skips the lead-prompt step in that case.
 export function findTerminalBySession(sessionId: string): TerminalTab | null {
   if (!sessionId) return null;
   for (const tab of allTerminalTabs()) {
@@ -1390,14 +1336,10 @@ export function findTerminalBySession(sessionId: string): TerminalTab | null {
   return null;
 }
 
-/// `fullstack-a-79` slice 2: prime the Team Work buffer on
-/// a terminal tab + flag it open. Mirrors the shape
-/// `openActiveTeamWork` uses but without the focus
-/// nonce kick (the orchestrator just wants the text seeded; the
-/// user focuses the prompt themselves to commit). Used by the
-/// orchestrator to deliver the identity prompt to the lead's
-/// terminal (which IS the host session, see addendum-b
-/// clarification #1).
+/// Prime the Team Work buffer on a terminal tab and flag it open.
+/// Mirrors `openActiveTeamWork` but without the focus nonce kick:
+/// the orchestrator seeds the text and the user focuses the prompt
+/// themselves to commit.
 export function primeTeamWork(tab: TerminalTab, text: string): void {
   if (!tab.teamWork) {
     tab.teamWork = {
@@ -1506,10 +1448,9 @@ function notifyDraftPromoted(path: string): void {
 }
 
 // The draft-CLOSE modal (close a draft tab: name a destination + Save,
-// or Discard). The explicit "Save to Workspace" action moved to
-// PathPromptModal (`new-file-and-draft-spec.md` item 3,
-// `saveDraftTabToWorkspace` below), so this modal is now the close path
-// only and always renders the close copy + the Discard button.
+// or Discard). This modal is the close path only; the explicit
+// "Save to Workspace" action uses `saveDraftTabToWorkspace` via
+// PathPromptModal instead.
 export const draftCloseState = $state<{
   open: boolean;
   path: string;
@@ -1857,38 +1798,28 @@ export function openInActivePane(
 /// presses keep rotating instead of dead-ending at the edges. No-op
 /// when the pane is empty or the active tab is somehow not in the
 /// tab list (shouldn't happen but keeps a bad state from crashing).
-/// `fullstack-a-64` keyboard tab-switch focus pulse. Chord-driven
-/// tab switches (`Cmd+Shift+[/]`, `Ctrl+Alt+1..9`) need to also
-/// move keyboard focus to the new active surface — otherwise the
-/// next keystroke lands in the PRIOR tab and damages docs (the
-/// CRITICAL bug from @@Alex's addendum). Mouse-click tab switch
-/// already works because terminal tabs have a `$effect(() => {
-/// if (!focused) return; ... term.focus(); })` that fires on the
-/// `focused` prop flip — BUT some tab kinds (FileEditorTab) don't
-/// have an equivalent path, and even when they do the chord-fired
-/// switch leaves the previously-focused contenteditable holding
-/// the OS-level focus until something explicitly takes it.
 ///
-/// Mechanism: a global $state counter bumped here. Tab-kind
-/// components subscribe via $effect; when the pulse increments
-/// AND the tab is focused, the component re-runs its focus
-/// routine in a microtask.
+/// Chord-driven tab switches need to also move keyboard focus to the
+/// new active surface; otherwise the next keystroke lands in the prior
+/// tab. Mouse-click tab switch already works because terminal tabs have
+/// a `$effect` that fires on the `focused` prop flip, but some tab
+/// kinds don't have an equivalent path and the chord-fired switch
+/// leaves the previously-focused contenteditable holding OS focus until
+/// something explicitly takes it.
+///
+/// Mechanism: a global $state counter bumped here. Tab-kind components
+/// subscribe via $effect; when the pulse increments AND the tab is
+/// focused, the component re-runs its focus routine in a microtask.
 export const tabFocusPulse = $state({ value: 0 });
 export function bumpTabFocusPulse(): void {
   tabFocusPulse.value += 1;
-  // `fullstack-a-64`: blur the currently-focused element AFTER
-  // bumping. The chord keydown was synchronously dispatched while
-  // the prior tab's input had DOM focus; even if the active tab
-  // changes, the prior input's element retains
-  // `document.activeElement` until something explicitly takes
-  // focus. Blurring here parks focus on `<body>` so the new tab's
-  // pulse-triggered focus call (or its mount-time autoFocus) can
-  // land cleanly without racing the editor's contenteditable.
-  //
-  // SSR-safe: the `typeof document !== "undefined"` guard mirrors
-  // the pattern already used by `blurTerminalHelperTextarea`. The
-  // active element check skips `<body>` so we don't blur the
-  // default focus owner unnecessarily.
+  // Blur the currently-focused element after bumping. The chord keydown
+  // was synchronously dispatched while the prior tab's input had DOM
+  // focus; even if the active tab changes, the prior element retains
+  // `document.activeElement` until something explicitly takes focus.
+  // Blurring parks focus on `<body>` so the new tab's pulse-triggered
+  // focus call can land cleanly without racing the contenteditable.
+  // SSR-safe; skips `<body>` so we don't blur the default focus owner.
   if (typeof document === "undefined") return;
   const el = document.activeElement;
   if (el instanceof HTMLElement && el !== document.body) {
@@ -1999,28 +1930,21 @@ async function closeTabAsync(
   if (p.activeTabId === tabId) {
     p.activeTabId = p.tabs[Math.max(0, idx - 1)]?.id ?? null;
   }
-  // Phase-13 r2 (@@Alex Cmd+, audit): flip is strictly for panes with
-  // >= 1 tab, so closing the last tab drops any flip. The pane lands
-  // on its empty front (welcome) instead of a stuck back-config
-  // surface the flip chord could not undo (the empty-pane guard in
-  // flipHybrid blocks re-flipping). Supersedes the round-1 behaviour
-  // that kept showingBack across a last-tab close.
+  // Flip is strictly for panes with >= 1 tab; closing the last tab
+  // drops any flip so the pane lands on its empty front (welcome)
+  // instead of a stuck back-config surface the chord cannot undo.
   if (p.tabs.length === 0) p.showingBack = false;
-  // `fullstack-a-5`: do NOT auto-collapse an empty Hybrid pane.
-  // Per the phase-8 bug list, closing the last tab in a Hybrid
-  // pane should leave the pane in place rendering the empty
-  // landing (chan logo + Cmd+K hint) so the Hybrid structure
-  // survives a transient empty state. Use the explicit
+  // Do NOT auto-collapse an empty Hybrid pane. Closing the last tab
+  // should leave the pane in place rendering the empty landing so the
+  // Hybrid structure survives a transient empty state. Use the explicit
   // `closePane` action to dismiss the pane.
 }
 
 /// Server-side seed for a brand-new draft (see
 /// `crates/chan-server/src/routes/drafts.rs::NEW_DRAFT_CONTENT`).
-/// A draft whose buffer matches this string and is clean against
-/// disk has not been edited since creation — treat it as empty so
-/// the close path skips the "Close Draft" modal that would
-/// otherwise prompt the user to save / discard a pristine draft
-/// (bug 2 in phase-13 round 1).
+/// A draft whose buffer matches this string and is clean against disk
+/// has not been edited since creation. Treat it as empty so the close
+/// path skips the "Close Draft" modal for pristine drafts.
 const NEW_DRAFT_SEED = "# Draft\n";
 
 async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
@@ -2076,19 +2000,15 @@ export async function saveDraftTabToWorkspace(tab: FileTab): Promise<boolean> {
       if (isDirty(tab)) return false;
     }
     const info = await api.inspectDraft(tab.path);
-    // `new-file-and-draft-spec.md` item 3: the draft Save reuses the
-    // SAME PathPromptModal as New File (autocomplete, live status row,
-    // pre-flight validation). The draft's shape decides the dialog
+    // The draft Save reuses PathPromptModal (autocomplete, live status
+    // row, pre-flight validation). The draft's shape decides the dialog
     // kind, detected server-side via `has_attachments`:
-    //   - lone draft.md  -> a FILE target, gated like New File
-    //     (`.md` auto-append + the editable-text check).
-    //   - a draft workspace (the user pasted images / opened a
-    //     terminal / wrote files in the draft dir) -> a DIRECTORY
-    //     target (the modal's `folder` Dir-only mode: no `.md`
-    //     append, trailing `/` allowed) PLUS a notice telling the
-    //     user the whole directory is being saved as a directory,
-    //     since the path field alone can't convey "the entire
-    //     workspace moves here".
+    //   - lone draft.md -> a FILE target (`.md` auto-append + the
+    //     editable-text check).
+    //   - a draft workspace (user pasted images / opened a terminal /
+    //     wrote files in the draft dir) -> a DIRECTORY target (modal's
+    //     `folder` Dir-only mode: no `.md` append, trailing `/` allowed)
+    //     plus a notice explaining the whole directory is saved.
     const target = info.has_attachments
       ? await uiPathPrompt({
           title: "save draft to workspace (directory)",
@@ -2104,21 +2024,19 @@ export async function saveDraftTabToWorkspace(tab: FileTab): Promise<boolean> {
           defaultValue: draftDefaultTarget(info),
           kind: "file",
           mode: "create",
-          // Same editable-text gate as `fileOps.createFile`: the
-          // backend refuses to promote a single-file draft to a
-          // non-editable target, so reject it in the dialog instead
-          // of bouncing through a post-close error.
+          // Same editable-text gate as `fileOps.createFile`: reject
+          // non-editable targets in the dialog so the error surfaces
+          // before the close instead of after.
           validate: (path) =>
             isEditableText(path)
               ? null
               : `'${path}' is not an editable text file (only .md and .txt)`,
         });
     if (target === null) return false;
-    // The modal already resolved + validated the path (`.md` append
-    // for the file case, trailing-slash folder for the dir case).
-    // `promoteDraft` takes the path verbatim; the trailing slash on a
-    // directory target is harmless (the backend validates the
-    // relative path either way).
+    // The modal resolved and validated the path (`.md` append for the
+    // file case, trailing-slash folder for the dir case). `promoteDraft`
+    // takes it verbatim; the trailing slash on a directory target is
+    // harmless.
     if (isDirty(tab)) {
       await performSave(tab);
       if (isDirty(tab)) return false;
@@ -2134,10 +2052,9 @@ export async function saveDraftTabToWorkspace(tab: FileTab): Promise<boolean> {
   }
 }
 
-/// Drop every tab in every pane. Used by the M4-D mobile reset
-/// flow so the editor doesn't keep showing a now-deleted file
-/// after the user wipes the workspace. Pane structure is left
-/// alone (the workspace's split tree survives), only the tabs go.
+/// Drop every tab in every pane. Pane structure is preserved; only the
+/// tabs go. Used by mobile reset flows so the editor stops showing a
+/// now-deleted file after the user wipes the workspace.
 export async function closeAllTabs(opts?: CloseTabsOptions): Promise<void> {
   const entries = Object.values(layout.nodes).flatMap((node) =>
     node.kind === "leaf" ? node.tabs.map((tab) => ({ paneId: node.id, tab })) : [],
@@ -2183,7 +2100,7 @@ export async function closeTabsInPane(
   }
   p.tabs = [];
   p.activeTabId = null;
-  // Phase-13 r2 (@@Alex Cmd+, audit): empty pane is never flipped.
+  // Empty pane is never flipped.
   p.showingBack = false;
   return true;
 }
@@ -2330,9 +2247,9 @@ function cloneNode(src: Node): Node {
     tabs: src.tabs.map((tab) => cloneTab(tab)),
     activeTabId: src.activeTabId,
     ...(src.theme ? { theme: src.theme } : {}),
-    // `-a-47`: HybridSide is an empty marker after the theme
-    // collapse. Preserve "back has been materialised" by cloning
-    // an empty object; pane.back !== undefined still discriminates.
+    // HybridSide is an empty marker. Preserve "back has been
+    // materialized" by cloning an empty object; pane.back !== undefined
+    // still discriminates Hybrid vs never-flipped.
     ...(src.back ? { back: {} } : {}),
     ...(src.showingBack ? { showingBack: true } : {}),
   };
@@ -2362,11 +2279,10 @@ export function enterPaneMode(): void {
   paneMode.stagedDraftEditors = [];
 }
 
-/// `fullstack-a-44`: mouse-driven NAV entry. `grabPaneId` is the pane
-/// the user started dragging from (Entry A — drag-with-payload), or
-/// null when entered via double-click on the dead zone (Entry B —
-/// drag-no-payload; mode is standby until the user clicks + drags
-/// inside any pane). Idempotent if already in transaction mode.
+/// Mouse-driven Nav entry. `grabPaneId` is the pane the user started
+/// dragging from (drag-with-payload), or null when entered via
+/// double-click on the dead zone (standby until the user clicks and
+/// drags inside any pane). Idempotent if already in transaction mode.
 export function enterPaneModeTransaction(grabPaneId: string | null): void {
   if (!paneMode.active) {
     paneMode.draft = cloneLayoutState(layout);
@@ -2377,18 +2293,17 @@ export function enterPaneModeTransaction(grabPaneId: string | null): void {
   paneMode.grabPaneId = grabPaneId;
 }
 
-/// `fullstack-a-44`: set the current grab pane while in transaction
-/// mode. Used when the user clicks + drags inside any pane after
-/// entering via Entry B, or when they re-grab a different pane
-/// mid-transaction. No-op outside transaction mode.
+/// Set the current grab pane while in transaction mode. Used when the
+/// user clicks and drags inside any pane after entering via double-click,
+/// or re-grabs a different pane mid-transaction. No-op outside
+/// transaction mode.
 export function paneModeSetGrab(paneId: string | null): void {
   if (!paneMode.transactionMode) return;
   paneMode.grabPaneId = paneId;
 }
 
-/// `fullstack-a-44`: track the pane currently under the cursor while
-/// a grab is held. Workspaces the drop-target highlight. No-op outside
-/// transaction mode.
+/// Track the pane currently under the cursor while a grab is held.
+/// Drives the drop-target highlight. No-op outside transaction mode.
 export function paneModeSetHover(paneId: string | null): void {
   if (!paneMode.transactionMode) return;
   paneMode.hoverPaneId = paneId;
@@ -2396,12 +2311,10 @@ export function paneModeSetHover(paneId: string | null): void {
 
 export function commitPaneMode(): void {
   if (!paneMode.active || !paneMode.draft) return;
-  // `fullstack-72`: apply any staged spawn intent into the draft
-  // before sealing the layout so the new tab lands as part of the
-  // same transaction. Callers that need to prime side effects
-  // for a staged spawn (e.g. App.svelte's Enter handler calling
-  // `revealAndSelect` for a browser intent) should peek the
-  // intent via `paneMode.spawnIntent` *before* calling commit.
+  // Apply any staged spawn intent into the draft before sealing so the
+  // new tab lands as part of the same transaction. Callers that prime
+  // side effects for a staged spawn (e.g. `revealAndSelect` for a
+  // browser intent) should peek `paneMode.spawnIntent` before calling.
   if (paneMode.spawnIntent) {
     const { kind, ctx } = paneMode.spawnIntent;
     if (kind === "terminal") paneModeOpenTerminal(ctx);
@@ -2431,9 +2344,8 @@ export function cancelPaneMode(): void {
   paneMode.stagedDraftEditors = [];
 }
 
-/// `fullstack-72`: stage a tab spawn for commit. Replaces any
-/// previously-staged intent — pressing `1` then `2` results in
-/// the second intent alone (no terminal spawned). Has no effect
+/// Stage a tab spawn for commit. Replaces any previously-staged intent;
+/// pressing `1` then `2` results in the second intent alone. No-op
 /// outside Pane Mode.
 export function paneModeStageSpawn(
   kind: PaneModeSpawnKind,
@@ -2515,11 +2427,11 @@ export function paneModeSwap(direction: Direction): void {
   paneModeSwapWith(draft.activePaneId, nextId);
 }
 
-/// `fullstack-a-44`: swap two arbitrary panes' contents by id. The
-/// directional `paneModeSwap` reduces to this once the neighbour
-/// resolves. Transaction-mode mouse drag uses this directly: the
-/// grab pane is `grabId`, the drop target is `dropId`. Focus moves
-/// to the destination so subsequent swaps chain naturally.
+/// Swap two arbitrary panes' contents by id. The directional
+/// `paneModeSwap` reduces to this once the neighbour resolves.
+/// Transaction-mode mouse drag uses this directly: grab pane is
+/// `grabId`, drop target is `dropId`. Focus moves to the destination
+/// so subsequent swaps chain naturally.
 export function paneModeSwapWith(grabId: string, dropId: string): void {
   const draft = draftLayout();
   if (!draft) return;
@@ -2556,16 +2468,12 @@ function nearestAncestorSplit(
   return null;
 }
 
-/// Hybrid Nav resize. `positive=true` shifts the divider toward
-/// the right (row axis) or the bottom (column axis); `positive=false`
-/// shifts it toward the left / top. This is the
-/// `fullstack-a-9` convention: bracket-direction == divider-
-/// direction, independent of which side of the split the active
-/// pane sits on. Pre-`-a-9` the dispatch flipped sign based on the
-/// active leaf's side, which read as inverted when focus was on the
-/// right / bottom child. ratio is A's share of the split (A is the
-/// left / top child), so `positive` maps directly to the ratio
-/// delta sign.
+/// Hybrid Nav resize. `positive=true` shifts the divider toward the
+/// right (row axis) or the bottom (column axis); `positive=false`
+/// shifts it toward the left / top. Bracket-direction equals
+/// divider-direction, independent of which side of the split the
+/// active pane sits on. `ratio` is A's share of the split (A is the
+/// left / top child), so `positive` maps directly to the delta sign.
 export function paneModeResize(
   axis: SplitNode["direction"],
   positive: boolean,
@@ -2622,10 +2530,9 @@ function insertSiblingPaneIn(
 }
 
 /// Cmd+K mode `/` and `\\` keybinds. Splits the focused pane in the
-/// draft tree only; Enter seals the split + any tabs spawned during
-/// the mode, Esc rolls everything back. Matches the right + down
-/// constraint @@Alex landed in `fullstack-21` for the hamburger
-/// menu's structural actions.
+/// draft tree only; Enter seals the split and any tabs spawned during
+/// the mode, Esc rolls everything back. Structural actions are
+/// constrained to right + down.
 export function paneModeSplit(direction: "row" | "column"): void {
   const draft = draftLayout();
   if (!draft) return;
@@ -2641,28 +2548,26 @@ export function paneModeSplit(direction: "row" | "column"): void {
   draft.activePaneId = newPane.id;
 }
 
-/// `fullstack-43` context for a Pane Mode spawn key. The Cmd+K
-/// 1/2/3/4 handlers in App.svelte resolve the focused tab into one
-/// of these shapes before calling the spawn helpers, so a new
-/// terminal lands on the source file's parent directory and a new
-/// Graph tab can scope itself to (and pre-select) the source node.
+/// Context for a Pane Mode spawn key. The Cmd+K 1/2/3/4 handlers
+/// resolve the focused tab into this shape before calling the spawn
+/// helpers, so a new terminal lands on the source file's parent
+/// directory and a new Graph tab can scope to (and pre-select) the
+/// source node.
 ///
-/// `dir` is the directory the spawn should anchor to (terminal cwd,
-/// new-file parent, graph dir-scope, file-browser fallback). `""`
-/// means workspace root.
+/// `dir` is the directory the spawn anchors to (terminal cwd, new-file
+/// parent, graph dir-scope, file-browser fallback). `""` means root.
 ///
-/// `file` is the file the source tab is currently pointing at, when
-/// applicable. File-Browser and Graph spawns prefer this for the
-/// "select this exact node" behavior; terminal / new-file always
-/// fall back to `dir` (the file's parent).
+/// `file` is the file the source tab points at, when applicable.
+/// File-Browser and Graph spawns prefer it for "select this exact node";
+/// terminal / new-file always fall back to `dir`.
 export type SpawnContext = {
   dir: string;
   file?: string;
 };
 
-/// Cmd+K mode `1`. Spawn a new terminal tab inside the draft's
-/// focused pane. The session WebSocket only opens once the tab
-/// mounts, so an Esc rollback leaves no backend state behind.
+/// Cmd+K mode `1`. Spawn a new terminal tab inside the draft's focused
+/// pane. The session WebSocket opens only when the tab mounts, so an
+/// Esc rollback leaves no backend state behind.
 export function paneModeOpenTerminal(ctx?: SpawnContext): void {
   const draft = draftLayout();
   if (!draft) return;
@@ -2689,11 +2594,10 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
   p.activeTabId = tab.id;
 }
 
-/// Cmd+K mode `2`. Spawn a fresh File Browser tab inside the
-/// draft's focused pane. Per `fullstack-47` every press is a new
-/// tab — pile them up if the user wants multiple browser views.
-/// When `ctx` carries a file or dir, the inspector pops open so the
-/// per-`fullstack-43` auto-selected node lands with its info pane
+/// Cmd+K mode `2`. Spawn a fresh File Browser tab inside the draft's
+/// focused pane. Every press is a new tab so the user can pile up
+/// multiple browser views. When `ctx` carries a file or dir, the
+/// inspector opens so the auto-selected node lands with its info pane
 /// already visible.
 export function paneModeOpenBrowser(ctx?: SpawnContext): void {
   const draft = draftLayout();
@@ -2711,12 +2615,10 @@ export function paneModeOpenBrowser(ctx?: SpawnContext): void {
   p.activeTabId = tab.id;
 }
 
-/// Cmd+K mode `3`. Spawn a fresh Graph tab inside the draft's
-/// focused pane. Same no-dedup semantic as `paneModeOpenBrowser`.
-/// When `ctx` carries a file or dir, scope the new tab to that
-/// node and pre-select it — GraphPanel pops the inspector on
-/// pendingSelectId, matching `fullstack-32`'s "Graph from here"
-/// rule.
+/// Cmd+K mode `3`. Spawn a fresh Graph tab inside the draft's focused
+/// pane. Same no-dedup semantic as `paneModeOpenBrowser`. When `ctx`
+/// carries a file or dir, scope the new tab to that node and pre-select
+/// it; GraphPanel pops the inspector on `pendingSelectId`.
 export function paneModeOpenGraph(ctx?: SpawnContext): void {
   const draft = draftLayout();
   if (!draft) return;
@@ -2748,10 +2650,9 @@ export function paneModeOpenGraph(ctx?: SpawnContext): void {
   p.activeTabId = tab.id;
 }
 
-/// `fullstack-a-75`: spawn a Dashboard tab inside the named
-/// pane (live layout). Mirrors the shape of `openTerminalInPane`
-/// + `openBrowserInActivePane` — append the new tab + flip it
-/// active. No-op if the pane id doesn't resolve to a leaf.
+/// Spawn a Dashboard tab inside the named pane (live layout). Mirrors
+/// the shape of `openTerminalInPane` + `openBrowserInActivePane`:
+/// append and flip active. No-op if the pane id doesn't resolve to a leaf.
 export function openDashboardInPane(paneId: string): void {
   const node = layout.nodes[paneId];
   if (!node || node.kind !== "leaf") return;
@@ -2768,15 +2669,9 @@ export function openDashboardInActivePane(): void {
   openDashboardInPane(layout.activePaneId);
 }
 
-/// `fullstack-a-68 slice 2`: Hybrid Nav transactional staging.
-/// Cmd+K mode `P`. Spawn a fresh Team Work terminal inside
-/// the draft's focused pane, a regular terminal tab with the
-/// Team Work overlay armed open + focused on first mount. The
-/// pre-`fullstack-a-68 slice 2` Cmd+K P semantic (toggle the
-/// Team Work overlay on the focused pane's existing terminal)
-/// retired with the addendum-a transactional rework; the Team
-/// Work overlay is still reachable from the terminal's own
-/// hamburger / `Cmd+P` (native) chord.
+/// Cmd+K mode `P`. Spawn a fresh Team Work terminal inside the draft's
+/// focused pane: a regular terminal tab with the Team Work overlay
+/// armed open and focused on first mount.
 export function paneModeOpenTeamWorkTerminal(ctx?: SpawnContext): void {
   const draft = draftLayout();
   if (!draft) return;
@@ -2809,18 +2704,12 @@ export function paneModeOpenTeamWorkTerminal(ctx?: SpawnContext): void {
   p.activeTabId = tab.id;
 }
 
-/// `fullstack-a-68 slice 2`: stage a "new draft editor" intent
-/// onto the currently-focused pane. Materialization is async
-/// (needs `api.createDraft()` to mint the file), so the intent
-/// queues up to commit-time. Multiple presses queue multiple
-/// staged drafts, each targeting the pane that was focused at
-/// the time of the press.
-///
-/// `paneModeMaterializeStagedDrafts()` is the commit-time
-/// resolver — it walks the queue, creates each draft, and
-/// inserts the matching `FileTab` into the appropriate pane
-/// in the draft layout before the standard commitPaneMode
-/// promotes the draft to live state.
+/// Stage a "new draft editor" intent onto the currently-focused pane.
+/// Materialization is async (needs `api.createDraft()` to mint the
+/// file), so the intent queues to commit-time. Multiple presses queue
+/// multiple staged drafts, each targeting the pane focused at press
+/// time. `paneModeMaterializeStagedDrafts()` is the commit-time
+/// resolver.
 export interface StagedDraftEditor {
   paneId: string;
 }
@@ -2830,17 +2719,10 @@ export function paneModeStageDraftEditor(): void {
   paneMode.stagedDraftEditors.push({ paneId });
 }
 
-/// `fullstack-a-68 slice 2`: stage a tab that was added to the
-/// draft layout via paneModeOpen* during pane mode. The set
-/// tracks tab ids that exist in the draft but not in the live
-/// layout; consumers (Pane.svelte's tab strip) render these as
-/// dimmed "ghost rows" while pane mode is open. `commitPaneMode`
-/// clears the set as part of the standard teardown.
-///
-/// Walks the draft layout vs the live layout to derive the set
-/// fresh; cheaper to recompute than to maintain a parallel index
-/// since the number of tabs is small + the set is consumed only
-/// during render.
+/// Return the set of tab ids that exist in the draft but not in the
+/// live layout. Consumers (Pane.svelte's tab strip) render these as
+/// dimmed "ghost rows" while pane mode is open. Derived fresh each
+/// call; cheaper than a parallel index given the small tab count.
 export function paneModeStagedTabIds(): Set<string> {
   if (!paneMode.active || !paneMode.draft) return new Set();
   const live = new Set<string>();
@@ -2987,24 +2869,19 @@ export function splitActive(direction: "row" | "column"): void {
   splitPane(layout.activePaneId, direction, "after");
 }
 
-/// `fullstack-a-79` slice 4: materialise an R×C grid of panes
-/// starting from `startPaneId`. Returns the pane IDs in
-/// row-major order (`cells[r * cols + c]`).
+/// Materialize an R×C grid of panes starting from `startPaneId`.
+/// Returns the pane IDs in row-major order (`cells[r * cols + c]`).
 ///
 /// Strategy:
 ///   1. Build a top row of `cols` panes by splitting horizontally
-///      (`direction: "row"`) from the starting pane `cols - 1`
-///      times. Each split adds the new pane to the RIGHT.
-///   2. For each of the `cols` column-heads, split vertically
-///      (`direction: "column"`) `rows - 1` times. Each split
-///      adds the new pane BELOW.
+///      from the starting pane `cols - 1` times. Each split adds a
+///      pane to the RIGHT.
+///   2. For each column-head, split vertically `rows - 1` times.
+///      Each split adds a pane BELOW.
 ///
-/// Side effect: `layout.activePaneId` ends up on the bottom-
-/// right pane. Callers that care (e.g. team-orchestrator
-/// keeping focus on the lead's pane) restore it afterwards.
-///
-/// For `1×1` grids the helper short-circuits — no splits, the
-/// returned cells array is `[startPaneId]`.
+/// Side effect: `layout.activePaneId` ends on the bottom-right pane.
+/// Callers that need focus on a specific pane restore it afterwards.
+/// For `1×1` grids the helper short-circuits with `[startPaneId]`.
 export function buildSplitGrid(
   startPaneId: string,
   rows: number,
@@ -3045,13 +2922,10 @@ export function splitPane(
 ): void {
   if (!canSplit()) return;
   const original = pane(paneId);
-  // Phase-13 r2 (@@Alex Cmd+, audit): the new pane is born EMPTY, so
-  // it must NOT inherit the original's flip. A flipped state belongs
-  // strictly to a pane with >= 1 tab (flipHybrid's guard); copying
-  // showingBack onto a 0-tab pane produced a stuck "flipped empty
-  // pane" the flip chord could not undo, and the orientation then
-  // leaked across panes. The new pane starts clean on its front;
-  // flip is a per-pane boolean only the focused, non-empty pane sets.
+  // New panes are born empty and must NOT inherit the original's flip.
+  // A flipped state belongs strictly to a pane with >= 1 tab; copying
+  // showingBack onto a 0-tab pane produces a stuck "flipped empty pane"
+  // the chord cannot undo.
   const newPane: LeafNode = {
     kind: "leaf",
     id: id("pane"),
@@ -3103,44 +2977,34 @@ export function setActivePane(paneId: string): void {
   // pane (already-focused) stay quiet; otherwise the wobble would
   // re-trigger on every mousedown that lands on the focused pane.
   const previousActive = current.activePaneId;
-  // Phase-13 r2 (@@Alex Cmd+, audit): focus changes must NOT touch any
-  // pane's `showingBack`. The flip is a per-pane boolean owned solely
-  // by flipHybrid on the focused, non-empty pane; each pane keeps its
-  // own flipped/not-flipped state independently and across reloads.
-  // The round-1 closing-2 (B2c) attempt cleared the previous pane's
-  // showingBack here, which coupled panes - moving focus visibly
-  // flipped sibling tabs. Removing that coupling is the fix.
+  // Focus changes must NOT touch any pane's `showingBack`. The flip is
+  // a per-pane boolean owned solely by flipHybrid on the focused,
+  // non-empty pane; each pane keeps its own state independently and
+  // across reloads. Coupling this to focus causes moving focus to visibly
+  // flip sibling tabs.
   current.activePaneId = paneId;
   if (previousActive !== paneId) requestPaneWobble(paneId);
 }
 
-/// `fullstack-48` original, `fullstack-a-43` revisited: flip the
-/// pane between its front (content tabs) and its back (per-surface
-/// configuration view). Under `-a-43` the back is no longer a
-/// content collection — `pane.tabs` always stays the front's tab
-/// list. Under `-a-47` the per-side theme override collapsed to a
-/// single per-Hybrid value (`pane.theme`); this function now only
-/// toggles `showingBack`. The hamburger Theme entry from `-a-27`
-/// keeps writing to `pane.theme` directly.
+/// Flip the pane between its front (content tabs) and its back
+/// (per-surface configuration view). `pane.tabs` always stays the
+/// front's tab list. `pane.theme` is the single per-Hybrid theme
+/// value; this function only toggles `showingBack`.
 export function flipHybrid(paneId: string): void {
   const node = activeLayout().nodes[paneId];
   if (!node || node.kind !== "leaf") return;
-  // Empty pane has no surface to flip; the chrome animation
-  // would still fire without this guard (B4 smoke regression:
-  // "Cmd+, on empty pane flips the whole pane visually").
+  // Empty pane has no surface to flip; guard so the chrome animation
+  // does not fire on an empty pane.
   if (node.tabs.length === 0) return;
   if (!node.back) {
-    // Lazy init: materialise an empty back marker so subsequent
-    // `pane.back !== undefined` checks read this pane as a
-    // Hybrid (gates the hamburger Theme / Flip entries). The
-    // marker is empty under `-a-47`; pane.theme owns the
-    // single per-Hybrid theme.
+    // Lazy init: materialise an empty back marker so `pane.back !== undefined`
+    // gates the hamburger Theme / Flip entries. `pane.theme` owns the
+    // single per-Hybrid theme value.
     node.back = {};
   }
   node.showingBack = !node.showingBack;
-  // `fullstack-a-22`: orientation-change flip cue (Y-axis rotation)
-  // distinct from the structural wobble used for split / close /
-  // swap.
+  // Orientation-change cue (Y-axis rotation), distinct from the
+  // structural wobble used for split / close / swap.
   requestPaneFlip(node.id);
 }
 
@@ -3148,16 +3012,12 @@ export function setMode(tab: Tab, mode: Mode): void {
   if (tab.kind === "file") tab.mode = mode;
 }
 
-/// `fullstack-a-67f` slice 2: flip the active pane's file tab
-/// between source and the rendered surface. Routed via the
-/// Mod+E chord (Obsidian-style "Show Source Code") + the
-/// editor's right-click "Show Source Code" entry. Caret
-/// remap (renderedCaretForSourceCaret etc.) lives inside
-/// FileEditorTab.svelte's `doToggleMode`; this chord-level
-/// helper does the basic mode flip and lets the editor's
-/// internal effect handle position fidelity on the next
-/// render. No-op when the active tab isn't a file tab —
-/// the chord stays harmless outside the editor.
+/// Flip the active pane's file tab between source and the rendered
+/// surface. Routed via the Mod+E chord and the editor's right-click
+/// "Show Source Code" entry. Caret remap lives inside
+/// `FileEditorTab.svelte`'s `doToggleMode`; this helper does the basic
+/// flip and lets the editor's internal effect handle position fidelity.
+/// No-op when the active tab isn't a file tab.
 export function toggleActiveFileTabMode(): void {
   const node = layout.nodes[layout.activePaneId];
   if (!node || node.kind !== "leaf") return;
@@ -3502,10 +3362,8 @@ type SerTab = {
   /// Terminal was created through the HTTP control channel; restart
   /// uses the server-side restart endpoint.
   tc?: 1;
-  /// Legacy byte-sequence offset once persisted in session payloads.
-  /// Restore ignores this so a browser reload replays the server
-  /// ring into a fresh xterm buffer instead of asking for only bytes
-  /// after the pre-reload cursor.
+  /// Legacy byte-sequence offset. Ignored on restore so a reload
+  /// replays the full server ring into a fresh xterm buffer.
   tseq?: number;
   /// Last injected agent-event echo sequence the browser handled.
   /// Used only for replaying missed Team Work watcher dispatches.
@@ -3514,27 +3372,20 @@ type SerTab = {
   me?: 0;
   /// MCP env mode used by the persisted PTY session. Default on.
   sme?: 0;
-  /// Team Work draft state (the `rp*` short keys predate the rename
-  /// and stay as the persisted wire shape). Only emitted in per-window
-  /// session payloads, never in shareable URL hashes.
+  /// Team Work draft state. Only emitted in per-window session payloads,
+  /// never in shareable URL hashes.
   rpb?: string;
   rph?: number;
   rpo?: 1;
   rpm?: "w" | "s";
-  /// `fullstack-a-24`: team-work collapsed flag. `1` when the
-  /// user collapsed the prompt to its minimal-height bar; absent
-  /// otherwise. Sticks across close → re-open within a session.
+  /// Team-work collapsed flag. `1` when the user collapsed the prompt
+  /// to its minimal-height bar; absent otherwise.
   rpc?: 1;
-  /// `fullstack-a-30`: per-prompt page-width ratio in (0.25, 1.0).
-  /// Conditional spread on serialize so the unconfigured / 100 %
-  /// case keeps the persisted shape short; absence on deserialize
-  /// reads as "no cap" (decoupled from the global
-  /// `pageWidth.ratio`).
+  /// Per-prompt page-width ratio in (0.25, 1.0). Absence reads as
+  /// "no cap" (decoupled from the global `pageWidth.ratio`).
   rppw?: number;
-  /// `fullstack-b-13`: per-prompt shell-vs-agent submit-mode
-  /// toggle. `"a"` ⇒ Agent; absent ⇒ Shell (default). Conditional
-  /// spread on serialize so the default case keeps the persisted
-  /// shape short.
+  /// Per-prompt shell-vs-agent submit-mode toggle. `"a"` means Agent;
+  /// absent means Shell (default).
   rpsm?: "a";
   rpa?: "c" | "x" | "g";
   /// Graph tab state.
@@ -3548,33 +3399,27 @@ type SerTab = {
   /// omitted. Absent when nothing beyond the root is open.
   ge?: string[];
   gp?: string;
-  /// `fullstack-81`: persisted live selection — `gn` is the graph
-  /// node id last tapped by the user, `gnl` is the human-readable
-  /// label cached so the tab title can render before the graph
-  /// data finishes reloading.
+  /// Persisted live selection: `gn` is the last-tapped graph node id,
+  /// `gnl` is the cached human-readable label so the tab title renders
+  /// before graph data finishes reloading.
   gn?: string;
   gnl?: string;
   /// Browser tab state.
   bi?: 1;
-  /// `fullstack-58`: per-tab File Browser view state. Selection (`bs`),
-  /// workspace-info-showing flag (`bd`), expanded directory paths (`be`),
-  /// and scroll offset (`bsc`). All optional; absence means "default
-  /// (no selection, workspace info hidden, only the implicit root
-  /// expanded, scroll at top)".
+  /// Per-tab File Browser view state. Selection (`bs`), workspace-info-
+  /// showing flag (`bd`), expanded directory paths (`be`), and scroll
+  /// offset (`bsc`). All optional; absence means default state.
   bs?: string;
   bd?: 1;
   be?: string[];
   bsc?: number;
-  /// `fullstack-84`: per-tab inspector / outline widths.
-  /// `iw` covers BrowserTab + GraphTab + FileTab; `ow` is FileTab
-  /// only (outline pane). Emitted only when set so single-tab
-  /// hashes stay clean. Restored back onto the corresponding
-  /// `inspectorWidth` / `outlineWidth` tab fields.
+  /// Per-tab inspector / outline widths. `iw` covers BrowserTab +
+  /// GraphTab + FileTab; `ow` is FileTab only (outline pane). Emitted
+  /// only when set so single-tab hashes stay clean.
   iw?: number;
   ow?: number;
-  /// Round-1 closing-10 (G3): DashboardTab carousel slide cursor.
-  /// 0 (default, the About slide) is omitted to keep the hash
-  /// compact for the common case.
+  /// DashboardTab carousel slide cursor. 0 (the About slide, the
+  /// default) is omitted to keep the hash compact.
   cs?: number;
 };
 type SerFocusColor = "o" | "g" | "p";
@@ -3585,30 +3430,18 @@ type SerLeaf = {
   f?: 1;
   wc?: SerFocusColor;
   pc?: SerFocusColor;
-  /// `fullstack-48` original, revisited in `-a-43` + `-a-47`:
-  /// per-pane Hybrid back-side state. The `bt` slot (back-side
-  /// tabs) was removed in `-a-43` — the back is no longer a
-  /// content collection. The `hb` slot (back-side theme override)
-  /// was removed in `-a-47` — pane.theme is the single per-Hybrid
-  /// theme. Wire-compat: `bt` and `hb` from older sessions are
-  /// parsed and discarded on rehydrate; the front-side `ht` wins
-  /// per the `-a-47` migration spec ("pick the front-side value as
-  /// the canonical one"). Set `sb?: true` to remember the pane is
-  /// currently flipped to the back configuration view, and
-  /// `bm?: true` to flag a Hybrid that's been materialised (the
-  /// presence of pane.back marker).
+  /// Per-pane Hybrid back-side state. The back is a per-surface
+  /// configuration view; `pane.theme` is the single per-Hybrid theme.
+  /// Wire-compat: legacy `bt` and `hb` fields from older sessions are
+  /// parsed and discarded on rehydrate; the front-side `ht` wins.
   /// `ht`: per-Hybrid theme override.
-  /// `sb`: `1` when the pane is currently flipped to its back
-  /// configuration view.
+  /// `sb`: `1` when the pane is currently flipped to its back view.
   /// `bm`: `1` when the pane has been flipped at least once.
-  /// Replaces `-a-43`'s "hb implies materialised" signal, now
-  /// that hb is gone.
   ht?: SerHybridTheme;
   sb?: 1;
   bm?: 1;
-  /// Legacy: pre-`-a-43` back-side tabs. Pre-`-a-47`
-  /// back-side theme override. Both ignored on rehydrate to
-  /// keep wire compat with older URL hashes / session blobs.
+  /// Legacy: back-side tabs and back-side theme override from older
+  /// sessions. Ignored on rehydrate for wire compat.
   bt?: SerTab[];
   hb?: SerHybridTheme;
 };
@@ -3655,12 +3488,9 @@ function graphExpandedFromList(
 }
 
 function encodeGraphTabFilters(f: GraphFilters): string {
-  // `fullstack-a-57` introduced FileBucket toggles (markdown / source)
-  // and bumped the payload version. The leading `2` is a sentinel so
-  // the decoder can tell a legacy payload (no version prefix; missing
-  // `d`/`s` bits should default ON) from a new-format payload (version
-  // prefix present; missing `d`/`s` mean explicit OFF). Always
-  // present in new-format payloads regardless of toggle state.
+  // The leading `2` is a version sentinel so the decoder can tell a
+  // legacy payload (no prefix; missing `d`/`s` default ON) from a
+  // current payload (prefix present; missing `d`/`s` mean explicit OFF).
   return [
     "2",
     f.link ? "l" : "",
@@ -3676,11 +3506,9 @@ function encodeGraphTabFilters(f: GraphFilters): string {
 
 function decodeGraphTabFilters(s: string | undefined): GraphFilters {
   const src = s ?? "2ltmaifds";
-  // `fullstack-a-57` version sentinel: a leading `2` marks the
-  // new-format payload. Without it the payload is from a pre-`-a-57`
-  // session and the `markdown` / `source` bits default to ON
-  // (matching existing-session behaviour); with it, missing chars
-  // are explicit OFF.
+  // A leading `2` marks the current payload format. Without it the
+  // payload is from an older session and `markdown` / `source` default
+  // ON; with it, missing chars are explicit OFF.
   const isV2 = src.startsWith("2");
   return {
     link: src.includes("l"),
@@ -3772,10 +3600,8 @@ function serializeTab(
         ? { ge: graphExpandedList(t.expanded) }
         : {}),
       ...(t.pendingSelectId ? { gp: t.pendingSelectId } : {}),
-      // `fullstack-81`: persist the live selection so reload
-      // restores both the selected node AND the
-      // selection-driven tab title without waiting for the graph
-      // data to reload.
+      // Persist the live selection so reload restores both the selected
+      // node and the selection-driven tab title before data reloads.
       ...(t.selectedNodeId ? { gn: t.selectedNodeId } : {}),
       ...(t.selectedNodeLabel ? { gnl: t.selectedNodeLabel } : {}),
       ...(t.inspectorWidth && t.inspectorWidth > 0
@@ -3802,10 +3628,8 @@ function serializeTab(
   if (t.kind === "dashboard") {
     return {
       k: "d",
-      // Round-1 closing-10 (G3): persist the carousel slide
-      // cursor so a reload restores the user to the slide they
-      // were on. Skip the field when at the default (0 = About)
-      // so the hash stays compact for the common case.
+      // Persist the carousel slide so reload restores the user to the
+      // slide they were on. Skip at default (0) to keep the hash short.
       ...(typeof t.carouselSlide === "number" && t.carouselSlide > 0
         ? { cs: t.carouselSlide }
         : {}),
@@ -3862,13 +3686,10 @@ function serializeNode(
       t: tabs,
       ...(n.id === layout.activePaneId ? { f: 1 as const } : {}),
     };
-    // Hybrid back-side state lives inside the same SerLeaf so the
-    // URL hash + per-window session round-trip the flip-aware
-    // layout. Empty / never-flipped panes emit nothing extra so
-    // the hash stays as short as before for the common case.
-    // `-a-47`: `hb` (back-side theme override) no longer emitted;
-    // `bm` (back-materialised marker) takes over from "hb implies
-    // materialised" so a Hybrid pane with no per-side theme still
+    // Hybrid back-side state is inlined into SerLeaf so the URL hash
+    // and per-window session both round-trip the flip-aware layout.
+    // Never-flipped panes emit nothing extra. `bm` marks "has been
+    // flipped at least once" so a Hybrid with no per-side theme still
     // serializes its Hybrid-ness.
     const ht = serializeHybridTheme(n.theme);
     if (ht) out.ht = ht;
@@ -3937,12 +3758,10 @@ export async function restoreLayout(
         if (kind === "g") {
           const mode = restoreGraphMode(sertab.gm);
           const scopeId = sertab.gs || "workspace";
-          // `fullstack-81`: prefer `gn` (the persisted live
-          // selection) as the post-restore selection seed so the
-          // user lands back on the same focal node. The graph
-          // load consumes `pendingSelectId` once and clears it;
-          // `selectedNodeId` stays so the tab title stays
-          // selection-driven.
+          // Prefer `gn` (persisted live selection) as the post-restore
+          // seed so the user lands on the same focal node. The graph
+          // load consumes `pendingSelectId` once; `selectedNodeId`
+          // stays so the tab title remains selection-driven.
           const selectedNodeId =
             typeof sertab.gn === "string" ? sertab.gn : null;
           const selectedNodeLabel =
@@ -3990,9 +3809,8 @@ export async function restoreLayout(
           if (sertab.a) p.activeTabId = tab.id;
           continue;
         }
-        // Settings ("s") and health ("h") used to be tab kinds
-        // that round-tripped through the session. Both are overlays
-        // now; silently drop saved entries from older sessions.
+        // Settings ("s") and health ("h") are overlays now; silently
+        // drop saved entries from older sessions.
         if (kind === "t") {
           const savedTerm = savedTerms[termIndex++];
           const terminalSessionId = sertab.tsid ?? savedTerm?.tsid;
@@ -4034,10 +3852,8 @@ export async function restoreLayout(
             kind: "dashboard",
             id: id("dashboard"),
             title: "Dashboard",
-            // Round-1 closing-10 (G3): restore the carousel slide
-            // cursor when the hash carries one. Absence reads as
-            // "back to the About slide" so legacy / fresh tabs
-            // land on the default.
+            // Restore the carousel slide when the hash carries one.
+            // Absence falls back to the About slide (the default).
             ...(typeof sertab.cs === "number" && sertab.cs > 0
               ? { carouselSlide: Math.max(0, Math.floor(sertab.cs)) }
               : {}),
@@ -4088,8 +3904,7 @@ export async function restoreLayout(
           // false, so we don't need to fake it here).
           readMode: sertab.r === 1,
           fsWritable: true,
-          // Absent `s` field = default-off; `s: 1` = user previously
-          // enabled the floating style toolbar.
+          // Absent means default-off; `s: 1` means the style toolbar is on.
           styleToolbarOpen: sertab.s === 1,
           // Default-on. `h: 0` in the hash means user disabled
           // highlight on this tab; any other value (absent / 1)
@@ -4118,16 +3933,11 @@ export async function restoreLayout(
       }
       // If no tab was marked active but there are tabs, focus the first.
       if (!p.activeTabId && p.tabs.length > 0) p.activeTabId = p.tabs[0]!.id;
-      // Back-side is no longer a tab collection (`-a-43`); its
-      // theme override is no longer separate from the front
-      // (`-a-47`). The new wire signal is `bm` (back-materialised
-      // marker). Legacy `bt` / `hb` are accepted but discarded:
-      // `bt` tabs drop, `hb` theme drops (the front-side `ht`
-      // wins per the `-a-47` migration spec). A legacy session
-      // that carried `bt` or `hb` implies the pane WAS a Hybrid
-      // (had been flipped at least once) — materialise the
-      // empty back marker so `pane.back !== undefined` stays
-      // accurate for menu gating after restore.
+      // The back is a configuration view, not a tab collection.
+      // `bm` is the wire signal for "pane has been flipped at least
+      // once." Legacy `bt` / `hb` are accepted but discarded; their
+      // presence implies the pane was a Hybrid, so materialise the
+      // empty back marker to keep `pane.back !== undefined` accurate.
       if (
         node.bm ||
         node.hb ||
@@ -4136,10 +3946,8 @@ export async function restoreLayout(
         p.back = {};
       }
       if (node.ht) p.theme = node.ht === "d" ? "dark" : "light";
-      // Phase-13 r2 (@@Alex Cmd+, audit): the per-pane flip persists
-      // across reloads, but only for a pane that still has tabs - a
-      // 0-tab pane is never flipped, so a stale `sb` on an empty pane
-      // is dropped defensively.
+      // The flip persists across reloads, but only for non-empty panes.
+      // A stale `sb` on an empty pane is dropped defensively.
       if (node.sb && p.tabs.length > 0) p.showingBack = true;
       layout.nodes[p.id] = p;
       if (node.f) activePaneId = p.id;
@@ -4217,22 +4025,14 @@ function teamWorkFromSer(
         : undefined,
     open: src.rpo === 1,
     mode: src.rpm === "s" ? "source" : "wysiwyg",
-    // `fullstack-a-24`: only emit the collapsed flag when the user
-    // actually collapsed the prompt. Absence reads as expanded, the
-    // default. Keeps the round-tripped object shape minimal so
-    // existing exact-shape assertions don't regress on the extra
-    // field.
+    // Absence reads as expanded (the default); only emit when collapsed.
     ...(src.rpc === 1 ? { collapsed: true } : {}),
-    // `fullstack-a-30`: per-prompt page-width ratio. Only emit when
-    // the persisted value is a finite number strictly inside the
-    // clamped (0, 1) range — `1.0` means "no cap" and rounds to
-    // omitted, matching the conditional-spread on serialize.
+    // Per-prompt page-width ratio. Only emit when strictly inside (0, 1);
+    // `1.0` means "no cap" and is omitted, matching serialize.
     ...(typeof src.rppw === "number" && Number.isFinite(src.rppw) && src.rppw > 0 && src.rppw < 1
       ? { pageWidthRatio: src.rppw }
       : {}),
-    // `fullstack-b-13`: only emit submitMode when the user picked
-    // Agent. Absence reads as Shell, matching the conditional
-    // spread on serialize.
+    // Absence reads as Shell (the default); only emit for Agent.
     ...(src.rpsm === "a" ? { submitMode: "agent" as const } : {}),
     ...(src.rpa
       ? {
@@ -4436,11 +4236,10 @@ export function beginMissingFileReopen(tabId: string): void {
   layout.activePaneId = found.paneId;
 }
 
-/// Refresh a non-dirty tab's content from disk. Used by USER-INITIATED
+/// Refresh a non-dirty tab's content from disk. Used by user-initiated
 /// flows that intend to adopt the new disk content (e.g. file replace).
-/// If the buffer is dirty we leave it alone. NOT used for watcher events
-/// anymore - see `flagExternalChange` (watcher events must not silently
-/// reload the open doc; `lane-c addendum-2 item 1`).
+/// If the buffer is dirty, it is left alone. Not used for watcher events;
+/// watcher events must not silently reload an open doc (see `flagExternalChange`).
 export async function refreshTabFromDisk(tabId: string): Promise<void> {
   const found = findFileTabById(tabId);
   if (!found) return;
@@ -4448,13 +4247,12 @@ export async function refreshTabFromDisk(tabId: string): Promise<void> {
   await loadTabContent(found.paneId, found.tab.id, found.tab.path);
 }
 
-/// `lane-c addendum-2 item 1`: a watcher event reported an external
-/// (non-self) write to this open file's path. Do NOT reload - replacing
-/// the doc snapped the caret to line 1, col 1 while the user was typing.
-/// Raise the dismissable "changed on disk" banner instead; the user opts
-/// into the reload, or their next save hits the 409 conflict modal.
-/// Applies to clean AND dirty buffers (server-side self-write dedupe
-/// already drops echoes of our own writes, so anything here is external).
+/// A watcher event reported an external (non-self) write to this open
+/// file's path. Do NOT reload: replacing the doc snaps the caret to
+/// 1:1 while the user is typing. Raise the dismissable "changed on disk"
+/// banner instead; the user opts into the reload, or their next save
+/// hits the 409 conflict modal. Applies to clean and dirty buffers
+/// (self-write dedupe already drops echoes of our own writes).
 export function flagExternalChange(tabId: string): void {
   const found = findFileTabById(tabId);
   if (found) found.tab.externalChange = true;

@@ -2,13 +2,12 @@ import { describe, expect, test } from "vitest";
 import source from "./screensaver.svelte.ts?raw";
 import overlay from "../components/ScreensaverOverlay.svelte?raw";
 
-// `fullstack-a-77c`: no-PIN lockout fix. When the workspace
-// has no PIN set, any keypress or click on the screensaver
-// backdrop dismisses the lock. The helper text already
-// promised this behavior in slice 2; this slice makes the
+// When the workspace has no PIN set, any keypress or click on
+// the screensaver backdrop dismisses the lock. The helper
+// text already promises this; unlockWithoutPin makes the
 // mechanism match the text.
 
-describe("fullstack-a-77c: state machine helper", () => {
+describe("no-PIN unlock: state machine helper", () => {
   test("unlockWithoutPin is exported", () => {
     expect(source).toMatch(/export function unlockWithoutPin\(\): void \{/);
   });
@@ -26,7 +25,7 @@ describe("fullstack-a-77c: state machine helper", () => {
   });
 });
 
-describe("fullstack-a-77c: overlay branching", () => {
+describe("no-PIN unlock: overlay branching", () => {
   test("overlay imports unlockWithoutPin", () => {
     expect(overlay).toMatch(
       /import \{[\s\S]{1,200}unlockWithoutPin,[\s\S]{1,80}\} from "\.\.\/state\/screensaver\.svelte";/,

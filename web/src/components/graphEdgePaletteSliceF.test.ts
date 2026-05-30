@@ -28,7 +28,6 @@ describe("contains (dir->dir / dir->file) edges stay grey", () => {
 describe("link edges coloured by source document type", () => {
   test("fileKindColor resolves the palette hue per node kind", () => {
     expect(canvas).toMatch(/function fileKindColor\(kind: DKind\): string/);
-    // Markdown documents are orange (--g-doc); the round-1 example.
     expect(canvas).toMatch(/case "doc":\s*\n\s*return theme\.doc;/);
     // Source files royalblue (--g-source).
     expect(canvas).toMatch(/case "source":\s*\n\s*return theme\.source;/);

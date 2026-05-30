@@ -2,17 +2,10 @@ import { describe, expect, test } from "vitest";
 import modal from "./PathPromptModal.svelte?raw";
 import teamWork from "./TeamWork.svelte?raw";
 
-// `fullstack-b-3`: the team-work watcher dialog needed a path
-// prompt that is neither "create" nor "move" / "rename". An
-// existing directory shouldn't trigger an "overwrites" warning
-// (attaching a watcher never overwrites), and a missing path
-// shouldn't surface a "creates new directory" preamble for
-// absolute paths (the SPA can't see the OS filesystem; the
-// backend creates on demand). The new `attach` mode handles both.
-//
-// These checks pin the source so a future refactor that drops the
-// branch, or accidentally routes the watcher dialog back through
-// `mode: "move"`, trips the test.
+// PathPromptModal `attach` mode: an existing directory should not
+// trigger an "overwrites" warning, and a missing absolute path should
+// not surface a "creates new directory" preamble (the SPA cannot see
+// the OS filesystem; the backend creates on demand).
 
 describe("PathPromptModal attach mode", () => {
   test("modal renders 'attach watcher to' label in attach mode", () => {
@@ -20,9 +13,8 @@ describe("PathPromptModal attach mode", () => {
   });
 
   test("existing-folder branch skips the overwrite warning in attach mode", () => {
-    // The status derivation has an explicit `mode === "attach"`
-    // branch that returns a `creates`-shaped status with empty
-    // ancestors when the target is already in the tree.
+    // The status derivation has a `mode === "attach"` branch that
+    // returns a creates-shaped status with empty ancestors.
     expect(modal).toMatch(/if \(pathPromptState\.mode === "attach"\) \{/);
     expect(modal).toMatch(/newAncestors: \[\]/);
   });
@@ -37,32 +29,28 @@ describe("PathPromptModal attach mode", () => {
   });
 
   test("pathSegments demotes the final segment when attaching to an existing dir", () => {
-    // `tailIsExisting` flips the "new" colouring off so the visible
-    // chunk reads as context, not as a fresh-create cue.
+    // tailIsExisting flips the "new" colouring off so the segment
+    // reads as context rather than a fresh-create cue.
     expect(modal).toMatch(/const tailIsExisting =\s+s\.mode === "attach"/);
   });
 });
 
-describe("new-file-and-draft-spec item 3: PathPromptModal notice line", () => {
+describe("PathPromptModal notice line", () => {
   // The save-from-draft flow passes a `notice` to explain that the
-  // whole draft directory is being saved as a directory (the Dir-only
-  // `folder` mode). The modal renders it above the input as a
-  // non-blocking info line (never gates submit). These checks pin the
-  // render branch + the muted-info styling so a refactor that drops
-  // the notice trips the test.
+  // draft directory is being saved as a folder. It renders above the
+  // input as a non-blocking info line (never gates submit).
   test("modal renders the notice above the input when present", () => {
     expect(modal).toMatch(/\{#if pathPromptState\.notice\}/);
     expect(modal).toMatch(/<div class="notice">\{pathPromptState\.notice\}<\/div>/);
   });
 
   test("notice uses the muted info hue, not the error/warn colours", () => {
-    // The status row owns err (red) / warn (amber); the notice is
-    // context, so it reads as info-muted.
+    // The status row owns err/warn colours; the notice is contextual.
     expect(modal).toMatch(/\.notice \{[\s\S]{0,120}var\(--info-text/);
   });
 });
 
-describe("Team Work has no manual watcher dialog", () => {
+describe("Team Work has no watcher attach dialog", () => {
   test("Team Work editor never opens PathPromptModal for watcher attach", () => {
     expect(teamWork).not.toMatch(/function watchDirectory/);
     expect(teamWork).not.toMatch(/uiPathPrompt/);
