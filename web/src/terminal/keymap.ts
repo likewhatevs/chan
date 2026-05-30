@@ -211,6 +211,46 @@ export function resetTerminalKeyboardProtocolState(
   protocol.kitty.alternateStack = [];
 }
 
+/// Compact snapshot of the negotiated state for the session hash. Only the
+/// load-bearing flags survive (xterm modifyOtherKeys + kitty main/alt
+/// flags + which screen is active); the transient push/pop stacks are
+/// dropped and re-established by the reattach replay. Returns `null` when
+/// everything is default so a plain shell never bloats the hash.
+export type SerializedKeyboardProtocolState = {
+  x?: number;
+  km?: number;
+  ka?: number;
+  s?: "alt";
+};
+
+export function serializeKeyboardProtocolState(
+  protocol: TerminalKeyboardProtocolState | undefined,
+): SerializedKeyboardProtocolState | null {
+  if (!protocol) return null;
+  const snapshot: SerializedKeyboardProtocolState = {};
+  if (protocol.xtermModifyOtherKeys > 0) snapshot.x = protocol.xtermModifyOtherKeys;
+  if (protocol.kitty.mainFlags > 0) snapshot.km = protocol.kitty.mainFlags;
+  if (protocol.kitty.alternateFlags > 0) snapshot.ka = protocol.kitty.alternateFlags;
+  if (protocol.kitty.screen === "alternate") snapshot.s = "alt";
+  return Object.keys(snapshot).length > 0 ? snapshot : null;
+}
+
+/// Rebuild a protocol state from a session-hash snapshot. This is what
+/// lets Shift+Enter -> newline survive a PAGE RELOAD reattaching to a
+/// long-lived agent whose original negotiation has scrolled out of the
+/// reattach replay ring (the case the in-memory tab state cannot cover,
+/// since the page reload drops the heap).
+export function restoreKeyboardProtocolState(
+  snapshot: SerializedKeyboardProtocolState,
+): TerminalKeyboardProtocolState {
+  const protocol = createTerminalKeyboardProtocolState();
+  protocol.xtermModifyOtherKeys = Math.max(0, snapshot.x ?? 0);
+  protocol.kitty.mainFlags = Math.max(0, snapshot.km ?? 0);
+  protocol.kitty.alternateFlags = Math.max(0, snapshot.ka ?? 0);
+  protocol.kitty.screen = snapshot.s === "alt" ? "alternate" : "main";
+  return protocol;
+}
+
 function enterModifier(ev: KeyboardEvent): number | null {
   if (ev.shiftKey && !ev.ctrlKey && !ev.metaKey) return 2;
   if (ev.ctrlKey && !ev.shiftKey && !ev.metaKey) return 5;

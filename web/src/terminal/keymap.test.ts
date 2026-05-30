@@ -7,6 +7,8 @@ import {
   handleTerminalMetaKey,
   queryXtermModifierKeys,
   resetTerminalKeyboardProtocolState,
+  restoreKeyboardProtocolState,
+  serializeKeyboardProtocolState,
   terminalMetaKeyBytes,
 } from "./keymap";
 
@@ -152,5 +154,45 @@ describe("terminal meta key mapping", () => {
 
     expect(queryXtermModifierKeys(protocol, [4])).toBe("\x1b[>4;0m");
     expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBeNull();
+  });
+
+  test("default state serializes to null (plain shell keeps the hash clean)", () => {
+    expect(serializeKeyboardProtocolState(createTerminalKeyboardProtocolState())).toBeNull();
+    expect(serializeKeyboardProtocolState(undefined)).toBeNull();
+  });
+
+  test("negotiated state survives a serialize/restore round-trip (BUG-3 reload)", () => {
+    const protocol = createTerminalKeyboardProtocolState();
+    applyXtermModifierKeys(protocol, [4, 2]);
+    // Shift+Enter -> modifyOtherKeys sequence before the round-trip.
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBe(
+      "\x1b[27;2;13~",
+    );
+
+    const snapshot = serializeKeyboardProtocolState(protocol);
+    expect(snapshot).toEqual({ x: 2 });
+
+    // A reload reattaching to a long-lived agent rebuilds from the
+    // snapshot; Shift+Enter must still emit the sequence, not submit.
+    const restored = restoreKeyboardProtocolState(snapshot!);
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), restored)).toBe(
+      "\x1b[27;2;13~",
+    );
+  });
+
+  test("kitty flags + alternate screen round-trip", () => {
+    const protocol = createTerminalKeyboardProtocolState();
+    applyKittyKeyboardProtocol(protocol, "set", [8]); // REPORT_ALL_KEYS on main
+    protocol.kitty.screen = "alternate";
+    applyKittyKeyboardProtocol(protocol, "set", [8]); // and on alternate
+
+    const snapshot = serializeKeyboardProtocolState(protocol);
+    expect(snapshot).toEqual({ km: 8, ka: 8, s: "alt" });
+
+    const restored = restoreKeyboardProtocolState(snapshot!);
+    expect(restored.kitty.screen).toBe("alternate");
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), restored)).toBe(
+      "\x1b[13;2u",
+    );
   });
 });

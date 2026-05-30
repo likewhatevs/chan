@@ -20,6 +20,14 @@ import { uiConfirm } from "./confirm.svelte";
 import { editorToolsPrefs } from "./editorTools.svelte";
 import { classifyPath, isCsv, isEditableText, isJson } from "./fileTypes";
 import type { FileKind } from "./kinds";
+import {
+  createTerminalKeyboardProtocolState,
+  resetTerminalKeyboardProtocolState,
+  restoreKeyboardProtocolState,
+  serializeKeyboardProtocolState,
+  type SerializedKeyboardProtocolState,
+  type TerminalKeyboardProtocolState,
+} from "../terminal/keymap";
 import { notify } from "./notify.svelte";
 // `uiPathPrompt` lives in store.svelte, which has a TOP-LEVEL side
 // effect (`registerDraftPromotionSink(...)`) that calls back into THIS
@@ -272,6 +280,27 @@ export type TerminalTab = {
   cwd?: string;
   seedInput?: string;
   teamWork?: TeamWorkState;
+  /// Broadcast group label. A group is a plain string, not an allocated
+  /// resource: it "exists" iff >=1 terminal references it, and is
+  /// implicitly destroyed when the last member closes. Defaults to
+  /// "default" (via `terminalTabGroup`); change requires a restart so the
+  /// SPA group and the server's per-session `tab_group` (set at spawn from
+  /// the same value) never diverge. Scopes the Cmd+Shift+I client
+  /// broadcast: input fans out only to same-group terminals.
+  group?: string;
+  /// Keyboard-protocol negotiation state (xterm modifyOtherKeys / kitty
+  /// flags) the running program announced. Lives on the TAB, not the
+  /// TerminalTab component, so it survives a component remount: a remount
+  /// on reattach to a long-lived PTY would otherwise reset it to zero,
+  /// and a long-lived agent never re-announces its protocol after the
+  /// reconnect, so modified-Enter (Shift+Enter -> newline) falls through
+  /// to a plain submit. Reset only on a fresh spawn; kept across reattach.
+  /// A compact snapshot is serialized to the session hash (`kp`) so the
+  /// state ALSO survives a page reload reattaching to a long-lived agent
+  /// whose original negotiation has scrolled out of the reattach replay
+  /// ring (the heap is gone on a reload, so the in-memory copy cannot
+  /// help; the replay would only re-establish a still-recent negotiation).
+  keyboardProtocol?: TerminalKeyboardProtocolState;
 };
 
 export type GraphFilters = {
@@ -603,6 +632,40 @@ export function terminalTabName(t: TerminalTab): string {
   return t.title.trim() || "Terminal";
 }
 
+export const DEFAULT_TERMINAL_GROUP = "default";
+
+/// The tab's broadcast group, normalized. An empty / unset group is
+/// "default", so a brand-new terminal always belongs to a group and the
+/// `"default"` string is never special-cased in code.
+export function terminalTabGroup(t: TerminalTab): string {
+  return t.group?.trim() || DEFAULT_TERMINAL_GROUP;
+}
+
+/// Set the tab's broadcast group (context-menu field). Stored normalized;
+/// a blank value falls back to "default". The change takes effect on the
+/// next spawn, so callers gate it behind a restart prompt to keep the SPA
+/// group and the server-side `tab_group` consistent.
+export function setTerminalGroup(t: TerminalTab, group: string): void {
+  t.group = group.trim() || DEFAULT_TERMINAL_GROUP;
+}
+
+/// Return the tab's keyboard-protocol state, lazily creating it on first
+/// use. `fresh` (a brand-new spawn, no surviving session) forces a clean
+/// slate; a reattach keeps whatever the program previously negotiated so
+/// modified-Enter keeps working across a component remount. See the
+/// `keyboardProtocol` field on `TerminalTab`.
+export function ensureTerminalKeyboardProtocol(
+  tab: TerminalTab,
+  fresh: boolean,
+): TerminalKeyboardProtocolState {
+  if (!tab.keyboardProtocol) {
+    tab.keyboardProtocol = createTerminalKeyboardProtocolState();
+  } else if (fresh) {
+    resetTerminalKeyboardProtocolState(tab.keyboardProtocol);
+  }
+  return tab.keyboardProtocol;
+}
+
 function terminalTabsIn(state: LayoutState): TerminalTab[] {
   const out: TerminalTab[] = [];
   for (const node of Object.values(state.nodes)) {
@@ -909,7 +972,10 @@ export function activeTerminalTab(): TerminalTab | null {
 export function toggleActiveTerminalBroadcastSelectAll(): void {
   const tab = activeTerminalTab();
   if (!tab) return;
-  const targets = allTerminalTabs();
+  const group = terminalTabGroup(tab);
+  const targets = allTerminalTabs().filter(
+    (t) => terminalTabGroup(t) === group,
+  );
   if (targets.length === 0) return;
   const selected = new Set(terminalBroadcastMemberIds(tab));
   const allSelected = targets.every((t) =>
@@ -995,6 +1061,7 @@ export type OpenTerminalOptions = {
   title?: string;
   sessionId?: string;
   controlledTerminal?: boolean;
+  group?: string;
 };
 
 export function openTerminalInActivePane(opts: OpenTerminalOptions = {}): TerminalTab | null {
@@ -1010,6 +1077,7 @@ export function openTerminalInPane(
   const cwd = opts.cwd?.trim();
   const seedInput = opts.seedInput?.trim();
   const title = opts.title?.trim();
+  const group = opts.group?.trim();
   const tab: TerminalTab = {
     kind: "terminal",
     id: id("term"),
@@ -1024,6 +1092,7 @@ export function openTerminalInPane(
     lastSeq: undefined,
     cwd: cwd || undefined,
     seedInput: seedInput || undefined,
+    group: group && group !== DEFAULT_TERMINAL_GROUP ? group : undefined,
     teamWork: undefined,
   };
   p.tabs.push(tab);
@@ -1222,8 +1291,15 @@ export function setTerminalBroadcastTarget(
 }
 
 export function terminalBroadcastMemberIds(tab: TerminalTab): string[] {
-  void tab;
-  return [...terminalBroadcastGroupIds()];
+  // Broadcast is scoped to the source's group: only same-group terminals
+  // are ever members. A single-member group has no targets (no-op).
+  const group = terminalTabGroup(tab);
+  const inGroup = new Set(
+    allTerminalTabs()
+      .filter((t) => terminalTabGroup(t) === group)
+      .map((t) => t.id),
+  );
+  return [...terminalBroadcastGroupIds()].filter((id) => inGroup.has(id));
 }
 
 export function removeTerminalFromBroadcastGroup(tab: TerminalTab, memberId: string): void {
@@ -1402,10 +1478,15 @@ async function runTerminalCloseSinks(tabs: Tab[]): Promise<boolean> {
 /// id alone or via a server-side bus without preserving this boundary.
 export function broadcastTerminalInput(sourceTab: TerminalTab, data: string): void {
   if (!sourceTab.broadcastEnabled) return;
+  // `terminalBroadcastMemberIds` already scopes to the source's group;
+  // the group re-check below is defensive (a member could change group
+  // between resolution and fan-out, though group change requires restart).
   const targets = new Set(terminalBroadcastMemberIds(sourceTab));
   if (targets.size === 0) return;
+  const group = terminalTabGroup(sourceTab);
   for (const tab of allTerminalTabs()) {
     if (tab.id === sourceTab.id || !targets.has(tab.id)) continue;
+    if (terminalTabGroup(tab) !== group) continue;
     terminalInputSinks.get(tab.id)?.(data);
   }
 }
@@ -3360,6 +3441,15 @@ type SerTab = {
   me?: 0;
   /// MCP env mode used by the persisted PTY session. Default on.
   sme?: 0;
+  /// Terminal broadcast group. Emitted only when non-default so a
+  /// reattach after reload keeps the terminal in its group (and the
+  /// SPA group stays consistent with the server's per-session tab_group).
+  tg?: string;
+  /// Negotiated keyboard-protocol snapshot (modifyOtherKeys / kitty
+  /// flags). Emitted only for a live session with non-default state so
+  /// Shift+Enter -> newline survives a reload reattaching to a long-lived
+  /// agent. See `TerminalTab.keyboardProtocol`.
+  kp?: SerializedKeyboardProtocolState;
   /// Team Work draft state. Only emitted in per-window session payloads,
   /// never in shareable URL hashes.
   rpb?: string;
@@ -3527,6 +3617,9 @@ function serializeTab(
     return {
       k: "t",
       n: t.title,
+      ...(terminalTabGroup(t) !== DEFAULT_TERMINAL_GROUP
+        ? { tg: terminalTabGroup(t) }
+        : {}),
       ...(opts.terminalSessions && t.mcpEnv === false ? { me: 0 as const } : {}),
       ...(opts.terminalSessions && t.terminalSessionId
         ? {
@@ -3538,6 +3631,10 @@ function serializeTab(
             t.lastAgentEchoSeq > 0
               ? { tae: Math.floor(t.lastAgentEchoSeq) }
               : {}),
+            ...(() => {
+              const kp = serializeKeyboardProtocolState(t.keyboardProtocol);
+              return kp ? { kp } : {};
+            })(),
           }
         : {}),
       ...(opts.terminalSessions && t.teamWork
@@ -3811,6 +3908,13 @@ export async function restoreLayout(
                 ? true
                 : undefined;
           const teamWork = teamWorkFromSer(sertab, savedTerm);
+          const group = (sertab.tg ?? savedTerm?.tg)?.trim();
+          // Restore the negotiated keyboard protocol for a reattaching
+          // session so Shift+Enter -> newline survives a reload even when
+          // the agent's original negotiation has scrolled out of replay.
+          const kpSnapshot = terminalSessionId
+            ? (sertab.kp ?? savedTerm?.kp)
+            : undefined;
           const tab: TerminalTab = {
             kind: "terminal",
             id: id("term"),
@@ -3822,6 +3926,10 @@ export async function restoreLayout(
             sessionMcpEnv,
             terminalSessionId,
             controlledTerminal: sertab.tc === 1 || savedTerm?.tc === 1,
+            group: group && group !== DEFAULT_TERMINAL_GROUP ? group : undefined,
+            keyboardProtocol: kpSnapshot
+              ? restoreKeyboardProtocolState(kpSnapshot)
+              : undefined,
             lastSeq: undefined,
             lastAgentEchoSeq:
               terminalSessionId &&

@@ -47,15 +47,36 @@ pub struct Registry {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
 }
 
+/// Broadcast group default. A terminal with no explicit group belongs to
+/// this group; it is never special-cased, just the value absence resolves
+/// to (mirrors the SPA's `terminalTabGroup`).
+pub const DEFAULT_TERMINAL_GROUP: &str = "default";
+
 #[derive(Debug, Clone)]
 pub struct CreateOptions {
     pub size: PtySize,
     pub tab_name: Option<String>,
+    /// Broadcast group label. `None` resolves to `DEFAULT_TERMINAL_GROUP`.
+    /// Stored per live session so `cs term list` / `term write` can
+    /// resolve groups server-side, and exported as `$CHAN_TAB_GROUP`.
+    pub tab_group: Option<String>,
     pub window_id: Option<String>,
     pub mcp_env: bool,
     pub cwd: Option<PathBuf>,
     pub command: Option<String>,
     pub env: BTreeMap<String, String>,
+}
+
+/// Read-only view of a live terminal session, for the control socket's
+/// `cs term list`. The control socket holds a read handle to the
+/// `Registry` and renders these grouped by `tab_group`.
+#[derive(Debug, Clone)]
+pub struct TerminalSessionSummary {
+    pub session_id: String,
+    pub tab_name: Option<String>,
+    /// Resolved group (never empty; `DEFAULT_TERMINAL_GROUP` when unset).
+    pub tab_group: String,
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -198,6 +219,9 @@ impl Registry {
         &self,
         id: &str,
         tab_name: Option<String>,
+        // Outer `None` keeps the existing group; `Some(None)` sets the
+        // default group; `Some(Some(g))` sets group `g`.
+        tab_group: Option<Option<String>>,
         window_id: Option<String>,
         command: Option<String>,
         env: Option<BTreeMap<String, String>>,
@@ -218,6 +242,9 @@ impl Registry {
         let mut opts = old.restart_options();
         if tab_name.is_some() {
             opts.tab_name = tab_name;
+        }
+        if let Some(group) = tab_group {
+            opts.tab_group = group;
         }
         if window_id.is_some() {
             opts.window_id = window_id;
@@ -310,6 +337,64 @@ impl Registry {
             .expect("terminal registry poisoned")
             .remove(id)
             .is_some()
+    }
+
+    /// Snapshot of every live session, for `cs term list`. The control
+    /// socket holds a read handle to the registry and groups these by
+    /// `tab_group`. `cwd` is the session's current working directory when
+    /// it can be read from the child process.
+    pub fn session_summaries(&self) -> Vec<TerminalSessionSummary> {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        sessions
+            .values()
+            .filter(|session| !session.closed.load(Ordering::Relaxed))
+            .map(|session| TerminalSessionSummary {
+                session_id: session.id.clone(),
+                tab_name: session.tab_name.clone(),
+                tab_group: session
+                    .tab_group
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_TERMINAL_GROUP.to_string()),
+                cwd: session.cwd(),
+            })
+            .collect()
+    }
+
+    /// Write raw bytes to the PTY stdin of every live session matching the
+    /// given tab name and/or group, for `cs term write`. A `None` filter
+    /// matches every session on that axis; passing both narrows to the
+    /// intersection. Returns how many sessions were written to. This is the
+    /// natural PTY-stdin path, independent of any SPA state.
+    pub fn write_input_matching(
+        &self,
+        tab_name: Option<&str>,
+        tab_group: Option<&str>,
+        data: &[u8],
+    ) -> usize {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        let mut written = 0;
+        for session in sessions.values() {
+            if session.closed.load(Ordering::Relaxed) {
+                continue;
+            }
+            if let Some(name) = tab_name {
+                if session.tab_name.as_deref() != Some(name) {
+                    continue;
+                }
+            }
+            if let Some(group) = tab_group {
+                let resolved = session
+                    .tab_group
+                    .as_deref()
+                    .unwrap_or(DEFAULT_TERMINAL_GROUP);
+                if resolved != group {
+                    continue;
+                }
+            }
+            session.send_input(data);
+            written += 1;
+        }
+        written
     }
 
     pub fn close_all(&self, reason: CloseReason) {
@@ -449,6 +534,7 @@ impl Drop for Registry {
 struct Session {
     id: String,
     tab_name: Option<String>,
+    tab_group: Option<String>,
     window_id: Option<String>,
     workspace_root: PathBuf,
     spawn_opts: CreateOptions,
@@ -503,6 +589,14 @@ impl Session {
         if let Some(tab_name) = tab_name.as_deref() {
             cmd.env("CHAN_TAB_NAME", tab_name);
         }
+        // Every terminal has a well-defined group, so $CHAN_TAB_GROUP is
+        // always set (default when unset) — an agent can read it
+        // unconditionally to learn its broadcast group.
+        let tab_group = opts.tab_group;
+        cmd.env(
+            "CHAN_TAB_GROUP",
+            tab_group.as_deref().unwrap_or(DEFAULT_TERMINAL_GROUP),
+        );
         let window_id = opts.window_id;
         if let Some(window_id) = window_id.as_deref() {
             cmd.env("CHAN_WINDOW_ID", window_id);
@@ -539,11 +633,13 @@ impl Session {
         let session = Arc::new(Self {
             id,
             tab_name,
+            tab_group,
             window_id,
             workspace_root: config.workspace_root.clone(),
             spawn_opts: CreateOptions {
                 size: opts.size,
                 tab_name: None,
+                tab_group: None,
                 window_id: None,
                 mcp_env: opts.mcp_env,
                 cwd: Some(cwd),
@@ -716,6 +812,7 @@ impl Session {
         let mut opts = self.spawn_opts.clone();
         opts.size = *self.winsize.lock().expect("terminal winsize poisoned");
         opts.tab_name = self.tab_name.clone();
+        opts.tab_group = self.tab_group.clone();
         opts.window_id = self.window_id.clone();
         opts
     }
@@ -987,6 +1084,7 @@ fn clear_mcp_env(cmd: &mut CommandBuilder) {
         "CHAN_MCP_COMMAND",
         "CHAN_MCP_COMMAND_JSON",
         "CHAN_MCP_SERVER_JSON",
+        "CHAN_TAB_GROUP",
         "CHAN_WINDOW_ID",
         "CHAN_CONTROL_SOCKET",
         "CHAN_WORKSPACE_NAME",
@@ -1086,11 +1184,13 @@ mod tests {
         Arc::new(Session {
             id: "test-session".to_string(),
             tab_name: None,
+            tab_group: None,
             window_id: None,
             workspace_root: PathBuf::from("/"),
             spawn_opts: CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                tab_group: None,
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
@@ -1324,6 +1424,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                tab_group: None,
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
@@ -1346,6 +1447,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                tab_group: None,
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
@@ -1357,6 +1459,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                tab_group: None,
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
@@ -1380,6 +1483,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: Some("B19v2".into()),
+                tab_group: None,
                 window_id: Some("window-a".into()),
                 mcp_env: true,
                 cwd: None,
@@ -1396,6 +1500,7 @@ mod tests {
                 CreateOptions {
                     size: test_size(),
                     tab_name: Some("B19v2".into()),
+                    tab_group: None,
                     window_id: Some("window-a".into()),
                     mcp_env: true,
                     cwd: None,
@@ -1418,6 +1523,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: Some("dup".into()),
+                tab_group: None,
                 window_id: Some("window-a".into()),
                 mcp_env: true,
                 cwd: None,
@@ -1429,6 +1535,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: Some("dup".into()),
+                tab_group: None,
                 window_id: Some("window-a".into()),
                 mcp_env: true,
                 cwd: None,
@@ -1444,6 +1551,7 @@ mod tests {
                 CreateOptions {
                     size: test_size(),
                     tab_name: Some("dup".into()),
+                    tab_group: None,
                     window_id: Some("window-a".into()),
                     mcp_env: true,
                     cwd: None,
@@ -1474,6 +1582,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                tab_group: None,
                 window_id: None,
                 mcp_env: false,
                 cwd: None,
@@ -1497,6 +1606,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                tab_group: None,
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
@@ -1522,6 +1632,7 @@ mod tests {
                     pixel_height: 0,
                 },
                 tab_name: None,
+                tab_group: None,
                 window_id: None,
                 mcp_env: true,
                 cwd: None,
@@ -1557,6 +1668,7 @@ mod tests {
             .create(CreateOptions {
                 size: test_size(),
                 tab_name: None,
+                tab_group: None,
                 window_id: None,
                 mcp_env: true,
                 cwd: None,

@@ -158,6 +158,20 @@ enum Command {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: PathBuf,
     },
+    /// Drive the current chan window from its terminal (the `cs` alias).
+    ///
+    /// Reached as `chan shell <action>` or, via a `cs -> chan` symlink
+    /// the user puts on PATH, as `cs <action>`. Every action targets the
+    /// chan window that spawned this terminal ($CHAN_WINDOW_ID +
+    /// $CHAN_CONTROL_SOCKET); outside a chan terminal they error clearly.
+    ///
+    /// To enable the short `cs` name, symlink it onto your PATH once:
+    ///   ln -s "$(command -v chan)" ~/.local/bin/cs
+    /// chan ships no symlink; this is the only setup it needs.
+    Shell {
+        #[command(subcommand)]
+        action: ShellAction,
+    },
     /// Generate shell completion scripts.
     Completions {
         /// Shell to generate completions for.
@@ -408,6 +422,71 @@ enum ContactsAction {
 }
 
 #[derive(Subcommand, Debug)]
+enum ShellAction {
+    /// Open a path in the current window (same as `chan open`). Without
+    /// a path, opens the terminal's current directory in the browser.
+    Open {
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        path: Option<PathBuf>,
+    },
+    /// Open the documentation graph in the current window. With a path,
+    /// focuses the graph on that file or directory.
+    Graph {
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        path: Option<PathBuf>,
+    },
+    /// Open a Dashboard tab in the current window.
+    Dashboard {
+        /// Initial carousel slide index (0-based). Out-of-range values
+        /// land on the default slide.
+        #[arg(long = "carousel-index")]
+        carousel_index: Option<u32>,
+    },
+    /// Terminal operations against the current window's live sessions.
+    Term {
+        #[command(subcommand)]
+        action: TermAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TermAction {
+    /// Open a new terminal tab in the current window.
+    New {
+        /// Working directory for the new terminal (workspace-relative or
+        /// absolute under the workspace root). Defaults to the workspace
+        /// root.
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        path: Option<PathBuf>,
+        /// Tab name ($CHAN_TAB_NAME inside the new terminal).
+        #[arg(long = "tab-name")]
+        tab_name: Option<String>,
+        /// Broadcast group ($CHAN_TAB_GROUP). Defaults to "default".
+        #[arg(long = "tab-group")]
+        tab_group: Option<String>,
+    },
+    /// Write raw bytes to live terminal session(s), selected by name
+    /// and/or group. No newline is appended: `cs term write $'ls\n'`
+    /// runs; `cs term write ls` only types. At least one selector is
+    /// required.
+    Write {
+        /// Literal bytes to write. Omit with --stdin to stream instead.
+        cmd: Option<String>,
+        /// Read the bytes from this process's stdin instead of `cmd`.
+        #[arg(long)]
+        stdin: bool,
+        /// Target every session with this tab name.
+        #[arg(long = "tab-name")]
+        tab_name: Option<String>,
+        /// Target every session in this group (broadcast).
+        #[arg(long = "tab-group")]
+        tab_group: Option<String>,
+    },
+    /// List live terminal sessions as JSON, grouped by group.
+    List,
+}
+
+#[derive(Subcommand, Debug)]
 enum ImportSource {
     /// Import from a CSV file. Currently only Google Contacts
     /// CSV is supported (export at contacts.google.com -> Export
@@ -615,8 +694,32 @@ enum ReportsAction {
     },
 }
 
+/// Parse argv with the `cs` alias rewrite. When the binary is invoked
+/// through a `cs` symlink (argv[0] basename == "cs"), the remaining args
+/// parse as `chan shell <args>`, so `cs term list` == `chan shell term
+/// list`. The symlink is the user's to create (documented in
+/// `chan shell --help`); the build never ships one.
+fn parse_cli() -> Cli {
+    let mut argv = std::env::args_os();
+    let Some(arg0) = argv.next() else {
+        return Cli::parse();
+    };
+    let invoked_as_cs = Path::new(&arg0)
+        .file_stem()
+        .map(|stem| stem == "cs")
+        .unwrap_or(false);
+    if !invoked_as_cs {
+        return Cli::parse();
+    }
+    let mut rewritten: Vec<std::ffi::OsString> = Vec::with_capacity(2);
+    rewritten.push(arg0);
+    rewritten.push("shell".into());
+    rewritten.extend(argv);
+    Cli::parse_from(rewritten)
+}
+
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = parse_cli();
     init_tracing(cli.verbose);
 
     match cli.command {
@@ -632,6 +735,13 @@ fn main() -> Result<()> {
                 .build()
                 .context("building tokio runtime")?;
             rt.block_on(cmd_open(path))
+        }
+        Command::Shell { action } => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?;
+            rt.block_on(cmd_shell(action))
         }
         Command::Completions { shell } => cmd_completions(shell),
         Command::Remove { path } => cmd_remove(path),
@@ -1732,7 +1842,41 @@ struct OpenEnv {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ControlRequest {
-    OpenPath { window_id: String, path: PathBuf },
+    // Category 1: open a UI tab in the originating window. The server
+    // pushes a window_command keyed by window_id; only that window acts.
+    OpenPath {
+        window_id: String,
+        path: PathBuf,
+    },
+    OpenGraph {
+        window_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<PathBuf>,
+    },
+    OpenTermNew {
+        window_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<PathBuf>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tab_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tab_group: Option<String>,
+    },
+    OpenDashboard {
+        window_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        carousel_index: Option<u32>,
+    },
+    // Category 2: act on / inspect live PTY sessions the server owns. No
+    // window_id; the server resolves sessions through its registry.
+    TermWrite {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tab_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tab_group: Option<String>,
+        data: String,
+    },
+    TermList,
 }
 
 #[cfg(unix)]
@@ -1771,27 +1915,162 @@ fn open_env() -> Result<OpenEnv> {
     )
 }
 
+/// Resolve just the control socket, for category-2 actions (`cs term
+/// write` / `term list`) that act on the server's live sessions and so do
+/// not need a window to target.
+fn control_socket_env() -> Result<PathBuf> {
+    let socket = std::env::var("CHAN_CONTROL_SOCKET")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("not running inside a chan terminal; this needs $CHAN_CONTROL_SOCKET")
+        })?;
+    Ok(PathBuf::from(socket))
+}
+
+fn absolutize(path: PathBuf) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()
+            .context("resolving current directory")?
+            .join(path))
+    }
+}
+
 async fn cmd_open(path: PathBuf) -> Result<()> {
     let env = open_env()?;
-    let abs = if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()
-            .context("resolving current directory")?
-            .join(path)
-    };
-    send_control_request(
+    let abs = absolutize(path)?;
+    let message = send_control_request(
         &env.control_socket,
         ControlRequest::OpenPath {
             window_id: env.window_id,
             path: abs,
         },
     )
-    .await
+    .await?;
+    eprintln!("{message}");
+    Ok(())
+}
+
+async fn cmd_shell(action: ShellAction) -> Result<()> {
+    match action {
+        ShellAction::Open { path } => {
+            let env = open_env()?;
+            // No path -> open the terminal's cwd in the browser.
+            let abs = absolutize(path.unwrap_or(PathBuf::from(".")))?;
+            let message = send_control_request(
+                &env.control_socket,
+                ControlRequest::OpenPath {
+                    window_id: env.window_id,
+                    path: abs,
+                },
+            )
+            .await?;
+            eprintln!("{message}");
+            Ok(())
+        }
+        ShellAction::Graph { path } => {
+            let env = open_env()?;
+            let abs = path.map(absolutize).transpose()?;
+            let message = send_control_request(
+                &env.control_socket,
+                ControlRequest::OpenGraph {
+                    window_id: env.window_id,
+                    path: abs,
+                },
+            )
+            .await?;
+            eprintln!("{message}");
+            Ok(())
+        }
+        ShellAction::Dashboard { carousel_index } => {
+            let env = open_env()?;
+            let message = send_control_request(
+                &env.control_socket,
+                ControlRequest::OpenDashboard {
+                    window_id: env.window_id,
+                    carousel_index,
+                },
+            )
+            .await?;
+            eprintln!("{message}");
+            Ok(())
+        }
+        ShellAction::Term { action } => cmd_shell_term(action).await,
+    }
+}
+
+async fn cmd_shell_term(action: TermAction) -> Result<()> {
+    match action {
+        TermAction::New {
+            path,
+            tab_name,
+            tab_group,
+        } => {
+            let env = open_env()?;
+            let abs = path.map(absolutize).transpose()?;
+            let message = send_control_request(
+                &env.control_socket,
+                ControlRequest::OpenTermNew {
+                    window_id: env.window_id,
+                    path: abs,
+                    tab_name,
+                    tab_group,
+                },
+            )
+            .await?;
+            eprintln!("{message}");
+            Ok(())
+        }
+        TermAction::Write {
+            cmd,
+            stdin,
+            tab_name,
+            tab_group,
+        } => {
+            if tab_name.is_none() && tab_group.is_none() {
+                anyhow::bail!("cs term write needs --tab-name and/or --tab-group");
+            }
+            // Raw bytes, no implicit newline (@@Alex decision). --stdin
+            // reads this process's stdin to EOF; otherwise the literal
+            // `cmd`. Terminal input is UTF-8 text.
+            let data = if stdin {
+                use std::io::Read;
+                let mut buf = Vec::new();
+                std::io::stdin()
+                    .read_to_end(&mut buf)
+                    .context("reading stdin")?;
+                String::from_utf8(buf).context("stdin must be UTF-8 for cs term write")?
+            } else {
+                cmd.ok_or_else(|| anyhow::anyhow!("cs term write needs a command or --stdin"))?
+            };
+            let socket = control_socket_env()?;
+            let message = send_control_request(
+                &socket,
+                ControlRequest::TermWrite {
+                    tab_name,
+                    tab_group,
+                    data,
+                },
+            )
+            .await?;
+            eprintln!("{message}");
+            Ok(())
+        }
+        TermAction::List => {
+            let socket = control_socket_env()?;
+            // The registry JSON goes to stdout so it pipes cleanly.
+            let json = send_control_request(&socket, ControlRequest::TermList).await?;
+            println!("{json}");
+            Ok(())
+        }
+    }
 }
 
 #[cfg(unix)]
-async fn send_control_request(socket: &Path, request: ControlRequest) -> Result<()> {
+async fn send_control_request(socket: &Path, request: ControlRequest) -> Result<String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
 
@@ -1815,17 +2094,14 @@ async fn send_control_request(socket: &Path, request: ControlRequest) -> Result<
     let response: ControlResponse =
         serde_json::from_str(&line).context("decoding control response")?;
     match response {
-        ControlResponse::Ok { message } => {
-            eprintln!("{message}");
-            Ok(())
-        }
+        ControlResponse::Ok { message } => Ok(message),
         ControlResponse::Error { message } => anyhow::bail!("{message}"),
     }
 }
 
 #[cfg(not(unix))]
-async fn send_control_request(_socket: &Path, _request: ControlRequest) -> Result<()> {
-    anyhow::bail!("chan open requires unix-domain sockets on this build");
+async fn send_control_request(_socket: &Path, _request: ControlRequest) -> Result<String> {
+    anyhow::bail!("chan shell requires unix-domain sockets on this build");
 }
 
 /// Bridge between the agent subprocess and the MCP server hosted in

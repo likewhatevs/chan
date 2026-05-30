@@ -93,6 +93,26 @@ describe("terminalWsPath", () => {
     ).not.toContain("mcp_env");
   });
 
+  test("adds tab_group only for non-default groups", () => {
+    expect(
+      terminalWsPath({
+        cols: 80,
+        rows: 24,
+        tabName: "agent",
+        tabGroup: "foobar",
+      }),
+    ).toBe("/api/terminal/ws?cols=80&rows=24&tab_name=agent&tab_group=foobar");
+    // The default group is implicit; never on the wire.
+    expect(
+      terminalWsPath({
+        cols: 80,
+        rows: 24,
+        tabName: "plain",
+        tabGroup: "default",
+      }),
+    ).not.toContain("tab_group");
+  });
+
   test("adds cwd only for fresh terminal sessions", () => {
     expect(
       terminalWsPath({

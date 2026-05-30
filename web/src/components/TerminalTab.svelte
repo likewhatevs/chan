@@ -16,6 +16,7 @@
     Search,
     Settings2,
     Terminal as TerminalIcon,
+    Users,
     X,
   } from "lucide-svelte";
   import { Terminal } from "@xterm/xterm";
@@ -34,6 +35,7 @@
     canReopenClosedTab,
     closeTab,
     clearTerminalSession,
+    ensureTerminalKeyboardProtocol,
     flipHybrid,
     dismissTerminalEnvNamePrompt,
     markTerminalEnvNameRestarted,
@@ -51,7 +53,9 @@
     terminalBroadcastMemberIds,
     terminalEnvTabNameStale,
     terminalMcpEnvEnabled,
+    terminalTabGroup,
     terminalTabName,
+    setTerminalGroup,
     type TerminalTab as TerminalTabState,
   } from "../state/tabs.svelte";
   import {
@@ -65,10 +69,8 @@
   } from "../state/store.svelte";
   import { terminalWsPath } from "../terminal/session";
   import {
-    createTerminalKeyboardProtocolState,
     handleTerminalMetaKey,
     installKeyboardProtocolHandlers,
-    resetTerminalKeyboardProtocolState,
   } from "../terminal/keymap";
   import { injectShowMcpEnvCommand } from "../terminal/mcpEnv";
   import { installTerminalReportGuards } from "../terminal/xtermReports";
@@ -172,7 +174,6 @@
   let webglContextLossRetries = 0;
   let ptyOutputWriteDepth = 0;
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
-  const keyboardProtocol = createTerminalKeyboardProtocolState();
   let hostResumeListenerCleanup: (() => void) | null = null;
   // Wall-clock-gap sleep/wake detector. See
   // installHostResumeListeners for why focus/pageshow/visibilitychange
@@ -202,12 +203,16 @@
   // (this tab joins the broadcast group); other rows route to
   // `setTerminalBroadcastTarget`. The self row is the only knob that
   // controls THIS tab's participation (no umbrella on/off button).
+  // Broadcast is group-scoped: the picker only lists terminals in this
+  // tab's group, so you can only ever target same-group peers.
   const broadcastTargets = $derived(
-    allTerminalTabs().sort((a, b) => {
-      if (a.id === tab.id) return -1;
-      if (b.id === tab.id) return 1;
-      return 0;
-    }),
+    allTerminalTabs()
+      .filter((t) => terminalTabGroup(t) === terminalTabGroup(tab))
+      .sort((a, b) => {
+        if (a.id === tab.id) return -1;
+        if (b.id === tab.id) return 1;
+        return 0;
+      }),
   );
   const selectedBroadcastTargets = $derived(new Set(terminalBroadcastMemberIds(tab)));
   // "Select All" walks every row INCLUDING self so the bulk action
@@ -223,6 +228,18 @@
   const staleEnvName = $derived(terminalEnvTabNameStale(tab));
   const showStaleEnvPrompt = $derived(
     staleEnvName && !tab.terminalEnvNamePromptDismissed,
+  );
+  // Pending broadcast-group edit. `null` = not editing; the field then
+  // shows the effective group. The effective group (`tab.group`) is the
+  // SPAWN value: it drives client broadcast scoping AND is sent to the
+  // server, and it changes only on restart, so the SPA group and the
+  // server's per-session `tab_group` never diverge. Typing here only
+  // stages a value; `restart()` commits it past the cancel gate.
+  let groupDraft = $state<string | null>(null);
+  const groupFieldValue = $derived(groupDraft ?? terminalTabGroup(tab));
+  const groupChanged = $derived(
+    groupDraft !== null &&
+      (groupDraft.trim() || "default") !== terminalTabGroup(tab),
   );
   $effect(() => {
     if (!host || term) return;
@@ -576,7 +593,15 @@
       tabStopWidth: 8,
       theme: terminalTheme(),
     });
-    resetTerminalKeyboardProtocolState(keyboardProtocol);
+    // Reset the negotiated keyboard-protocol state ONLY on a fresh spawn
+    // (no surviving session to reattach to). Reattaching to a long-lived
+    // PTY keeps the protocol the program already announced, since a
+    // running agent won't re-announce after the reconnect; resetting here
+    // is what regressed Shift+Enter -> newline into a plain submit.
+    const keyboardProtocol = ensureTerminalKeyboardProtocol(
+      tab,
+      !tab.terminalSessionId,
+    );
     installTerminalReportGuards(term);
     installKeyboardProtocolHandlers(term, keyboardProtocol, sendInput);
     fit = new FitAddon();
@@ -632,6 +657,7 @@
         cols: term.cols,
         rows: term.rows,
         tabName: terminalTabName(tab),
+        tabGroup: terminalTabGroup(tab),
         windowId: sessionWindowId(),
         sessionId: tab.terminalSessionId,
         lastSeq: tab.lastSeq,
@@ -966,13 +992,28 @@
       });
       if (!confirmed) return;
     }
+    // Commit a pending group edit past the cancel gate. The new group
+    // takes effect on this respawn for both the SPA (broadcast scoping)
+    // and the server ($CHAN_TAB_GROUP + registry tab_group).
+    if (groupDraft !== null) {
+      setTerminalGroup(tab, groupDraft);
+      groupDraft = null;
+    }
     if (tab.controlledTerminal && tab.terminalSessionId) {
       try {
         await api.restartTerminal(tab.terminalSessionId, {
           name: terminalTabName(tab),
+          group: terminalTabGroup(tab),
           window_id: sessionWindowId(),
         });
         markTerminalEnvNameRestarted(tab);
+        // A controlled restart reuses the session id but kills the old
+        // shell and spawns a fresh one, so the negotiated keyboard
+        // protocol no longer applies: reset it in place (same object the
+        // installed parser handlers + key handler hold) so a fresh plain
+        // shell doesn't inherit the killed agent's modifyOtherKeys. An
+        // agent respawn simply re-announces on startup.
+        ensureTerminalKeyboardProtocol(tab, true);
         status = "connecting";
         statusDetail = "restart requested";
       } catch (err) {
@@ -1244,7 +1285,7 @@
     // would be swallowed by xterm + written to the PTY as
     // escape sequences.
     if (shouldEscapeTerminal(e)) return false;
-    return handleTerminalMetaKey(e, sendUserInput, keyboardProtocol);
+    return handleTerminalMetaKey(e, sendUserInput, tab.keyboardProtocol);
   }
 
   function onShellKeydown(e: KeyboardEvent): void {
@@ -1367,6 +1408,32 @@
           }}
         />
       </label>
+      <label class="rename-row">
+        <span class="rename-label">
+          <Users size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Group</span>
+        </span>
+        <input
+          class="rename-input"
+          value={groupFieldValue}
+          spellcheck="false"
+          placeholder="default"
+          oninput={(e) => (groupDraft = (e.currentTarget as HTMLInputElement).value)}
+          onkeydown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              (e.currentTarget as HTMLInputElement).blur();
+            }
+          }}
+        />
+      </label>
+      {#if groupChanged}
+        <div class="env-stale-row">
+          <span>Group change applies on restart (the shell respawns in the new group).</span>
+          <button type="button" onclick={() => void restart()}>Restart now</button>
+          <button type="button" onclick={() => (groupDraft = null)}>Cancel</button>
+        </div>
+      {/if}
       <!-- Status reads "connected: <detail>" (colon, not em dash). -->
       <div class="terminal-status-row">
         <span class:connected={status === "connected"} class="terminal-status">

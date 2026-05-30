@@ -32,6 +32,7 @@ pub struct TerminalQuery {
     cols: Option<u16>,
     rows: Option<u16>,
     tab_name: Option<String>,
+    tab_group: Option<String>,
     window_id: Option<String>,
     mcp_env: Option<TerminalMcpEnv>,
     cwd: Option<String>,
@@ -54,6 +55,10 @@ pub struct CreateTerminalResponse {
 #[derive(Debug, Deserialize)]
 pub struct RestartTerminalBody {
     name: Option<String>,
+    /// Broadcast group for the respawned shell. Sets `$CHAN_TAB_GROUP`
+    /// and the registry's per-session `tab_group`. Absent / "default"
+    /// resolves to the default group.
+    group: Option<String>,
     window_id: Option<String>,
     /// Optional command override. When supplied, the restarted PTY
     /// runs this command instead of the original spawn command.
@@ -150,6 +155,7 @@ pub async fn api_terminal_ws(
 
     let size = pty_size(query.cols, query.rows);
     let tab_name = query.tab_name.as_deref().and_then(normalize_tab_name);
+    let tab_group = query.tab_group.as_deref().and_then(normalize_tab_group);
     let window_id = query.window_id.as_deref().and_then(normalize_window_id);
     let mcp_env = query.mcp_env.unwrap_or_default().enabled();
     let cwd = if query.session.is_some() {
@@ -177,6 +183,7 @@ pub async fn api_terminal_ws(
         since: query.since,
         size,
         tab_name,
+        tab_group,
         window_id,
         mcp_env,
         cwd,
@@ -216,6 +223,7 @@ pub async fn api_create_terminal(
     let opts = CreateOptions {
         size: pty_size(None, None),
         tab_name: Some(name.clone()),
+        tab_group: None,
         window_id: None,
         mcp_env: true,
         cwd: None,
@@ -253,7 +261,7 @@ pub async fn api_restart_terminal(
     if state.tunnel_public {
         return err_tunnel_public_locked();
     }
-    let (tab_name, window_id, command, env) = if let Some(Json(body)) = body {
+    let (tab_name, tab_group, window_id, command, env) = if let Some(Json(body)) = body {
         let tab_name = match body.name.as_deref() {
             Some(name) => match normalize_tab_name(name) {
                 Some(name) => Some(name),
@@ -263,6 +271,10 @@ pub async fn api_restart_terminal(
             },
             None => None,
         };
+        // Three-way: outer None (no `group` field) keeps the existing
+        // group; `Some(None)` (blank / "default") sets the default group;
+        // `Some(Some(g))` sets group g.
+        let tab_group = body.group.as_deref().map(normalize_tab_group);
         let window_id = match body.window_id.as_deref() {
             Some(id) => match normalize_window_id(id) {
                 Some(id) => Some(id),
@@ -273,13 +285,13 @@ pub async fn api_restart_terminal(
             },
             None => None,
         };
-        (tab_name, window_id, body.command, body.env)
+        (tab_name, tab_group, window_id, body.command, body.env)
     } else {
-        (None, None, None, None)
+        (None, None, None, None, None)
     };
     match state
         .terminal_sessions
-        .restart(&session, tab_name, window_id, command, env)
+        .restart(&session, tab_name, tab_group, window_id, command, env)
     {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "terminal session not found").into_response(),
@@ -319,6 +331,7 @@ struct TerminalWsOptions {
     since: Option<u64>,
     size: PtySize,
     tab_name: Option<String>,
+    tab_group: Option<String>,
     window_id: Option<String>,
     mcp_env: bool,
     cwd: Option<PathBuf>,
@@ -362,6 +375,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
     let create_opts = CreateOptions {
         size: opts.size,
         tab_name: opts.tab_name,
+        tab_group: opts.tab_group,
         window_id: opts.window_id,
         mcp_env: opts.mcp_env,
         cwd: opts.cwd,
@@ -616,6 +630,17 @@ fn normalize_window_id(id: &str) -> Option<String> {
     Some(trimmed.chars().take(256).collect())
 }
 
+/// Normalize a broadcast group. Blank / "default" resolve to `None` so the
+/// server treats the default group as the absence of an explicit group
+/// (mirrors the SPA wire, which omits the default).
+fn normalize_tab_group(group: &str) -> Option<String> {
+    let trimmed = group.trim();
+    if trimmed.is_empty() || trimmed == "default" {
+        return None;
+    }
+    Some(trimmed.chars().take(128).collect())
+}
+
 fn resolve_terminal_cwd(
     workspace: &chan_workspace::Workspace,
     cwd: Option<&str>,
@@ -672,6 +697,7 @@ mod tests {
                 .create(CreateOptions {
                     size,
                     tab_name,
+                    tab_group: None,
                     window_id: Some("window-test".into()),
                     mcp_env,
                     cwd: None,
@@ -941,6 +967,7 @@ mod tests {
             AxumPath(session.clone()),
             Some(Json(RestartTerminalBody {
                 name: Some("@@Second".into()),
+                group: None,
                 window_id: None,
                 command: None,
                 env: None,
@@ -1203,7 +1230,7 @@ mod tests {
             )
             .await;
             terminal.handle.send_input(
-                b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '<CHAN_WORKSPACE_NAME=%s>\\n' \"$CHAN_WORKSPACE_NAME\"; printf '<CHAN_WORKSPACE_PATH=%s>\\n' \"$CHAN_WORKSPACE_PATH\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
+                b"printf '\\n__CWD_HOME_BEGIN__\\n'; pwd; printf '<HOME=%s>\\n' \"$HOME\"; printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; printf '<CHAN_TAB_GROUP=%s>\\n' \"$CHAN_TAB_GROUP\"; printf '<CHAN_WINDOW_ID=%s>\\n' \"$CHAN_WINDOW_ID\"; printf '<CHAN_CONTROL_SOCKET=%s>\\n' \"$CHAN_CONTROL_SOCKET\"; printf '<CHAN_WORKSPACE_NAME=%s>\\n' \"$CHAN_WORKSPACE_NAME\"; printf '<CHAN_WORKSPACE_PATH=%s>\\n' \"$CHAN_WORKSPACE_PATH\"; env | grep -E '^(CHAN|CLAUDE|CODEX|GEMINI)_MCP_' | sort; printf '\\n__CWD_HOME_END__\\n'\r",
             );
             let out = collect_until(&mut terminal.handle, "__CWD_HOME_END__", PROBE_BUDGET).await;
             assert!(
@@ -1217,6 +1244,10 @@ mod tests {
             assert!(
                 out.contains("<CHAN_TAB_NAME=build>"),
                 "terminal should expose the tab name env var, got {out:?}"
+            );
+            assert!(
+                out.contains("<CHAN_TAB_GROUP=default>"),
+                "terminal with no group should expose CHAN_TAB_GROUP=default, got {out:?}"
             );
             assert!(
                 out.contains("<CHAN_WINDOW_ID=window-test>"),

@@ -6,8 +6,11 @@ describe("TerminalTab generated reply routing", () => {
     expect(terminal).toContain(
       'import { installTerminalReportGuards } from "../terminal/xtermReports";',
     );
+    // The keyboard-protocol state lives on the tab (survives a remount on
+    // reattach); start() resets it only on a fresh spawn, then installs
+    // the report guards.
     expect(terminal).toMatch(
-      /term = new Terminal\([\s\S]*?\);\s*resetTerminalKeyboardProtocolState\(keyboardProtocol\);\s*installTerminalReportGuards\(term\);/,
+      /term = new Terminal\([\s\S]*?\);[\s\S]*?const keyboardProtocol = ensureTerminalKeyboardProtocol\([\s\S]*?\);\s*installTerminalReportGuards\(term\);/,
     );
   });
 

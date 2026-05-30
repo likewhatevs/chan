@@ -2,6 +2,7 @@ export type TerminalWsPathOpts = {
   cols: number;
   rows: number;
   tabName: string;
+  tabGroup?: string | null;
   windowId?: string | null;
   sessionId?: string | null;
   lastSeq?: number | null;
@@ -16,6 +17,11 @@ export function terminalWsPath(opts: TerminalWsPathOpts): string {
     rows: String(opts.rows),
     tab_name: opts.tabName,
   });
+  // Only non-default groups go on the wire; the server defaults the
+  // per-session tab_group to "default" when absent, keeping the common
+  // case's URL short.
+  const tabGroup = opts.tabGroup?.trim();
+  if (tabGroup && tabGroup !== "default") params.set("tab_group", tabGroup);
   const windowId = opts.windowId?.trim();
   if (windowId) params.set("window_id", windowId);
   const sessionId = opts.sessionId?.trim();

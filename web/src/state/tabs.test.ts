@@ -13,6 +13,7 @@ import {
   clearTerminalSession,
   clearRecentlyClosedTabsForTest,
   closePane,
+  ensureTerminalKeyboardProtocol,
   closeTab,
   closeTabsInPane,
   cancelPaneMode,
@@ -1938,6 +1939,47 @@ describe("find state", () => {
   });
 });
 
+describe("terminal keyboard-protocol survival (BUG-3)", () => {
+  test("a fresh spawn creates a zero-state protocol on the tab", () => {
+    const tab = terminalTab();
+
+    const protocol = ensureTerminalKeyboardProtocol(tab, true);
+
+    expect(protocol).toBe(tab.keyboardProtocol);
+    expect(protocol.xtermModifyOtherKeys).toBe(0);
+    expect(protocol.kitty.mainFlags).toBe(0);
+  });
+
+  test("a reattach keeps the protocol the program already negotiated", () => {
+    const tab = terminalTab();
+    const protocol = ensureTerminalKeyboardProtocol(tab, true);
+    // The running agent announced modifyOtherKeys; this is what a
+    // remount-on-reattach must not lose.
+    protocol.xtermModifyOtherKeys = 1;
+
+    // start() on a reattach passes fresh=false (terminalSessionId set).
+    const reattached = ensureTerminalKeyboardProtocol(tab, false);
+
+    expect(reattached).toBe(protocol);
+    expect(reattached.xtermModifyOtherKeys).toBe(1);
+  });
+
+  test("a fresh spawn resets a stale protocol in place (same object)", () => {
+    const tab = terminalTab();
+    const protocol = ensureTerminalKeyboardProtocol(tab, true);
+    protocol.xtermModifyOtherKeys = 1;
+    protocol.kitty.mainFlags = 8;
+
+    // A controlled restart / brand-new shell resets, keeping the same
+    // reference the installed parser handlers hold.
+    const afterRestart = ensureTerminalKeyboardProtocol(tab, true);
+
+    expect(afterRestart).toBe(protocol);
+    expect(afterRestart.xtermModifyOtherKeys).toBe(0);
+    expect(afterRestart.kitty.mainFlags).toBe(0);
+  });
+});
+
 describe("terminal session serialization", () => {
   test("terminal activity marker is ephemeral session state", () => {
     const tab = terminalTab();
@@ -2045,6 +2087,37 @@ describe("terminal session serialization", () => {
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
     expect(tab.lastAgentEchoSeq).toBe(12);
+  });
+
+  test("round-trips the negotiated keyboard protocol in session layouts (BUG-3 reload)", async () => {
+    const src = terminalTab({ title: "agent", terminalSessionId: "term_123" });
+    // The agent negotiated xterm modifyOtherKeys; this is what a reload
+    // reattaching past the replay window must keep so Shift+Enter inserts
+    // a newline instead of submitting.
+    ensureTerminalKeyboardProtocol(src, true).xtermModifyOtherKeys = 2;
+    resetLayout([src]);
+
+    const hashSnapshot = serializeLayout();
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+
+    // The shareable hash never carries it (it rides with the live session).
+    expect(JSON.stringify(hashSnapshot)).not.toContain("\"kp\"");
+    expect(JSON.stringify(sessionSnapshot)).toContain("\"kp\"");
+
+    await restoreLayout(sessionSnapshot!);
+
+    const [tab] = activePane().tabs;
+    expect(tab?.kind).toBe("terminal");
+    if (tab?.kind !== "terminal") return;
+    expect(tab.keyboardProtocol?.xtermModifyOtherKeys).toBe(2);
+  });
+
+  test("does not serialize the keyboard protocol for a fresh (sessionless) terminal", () => {
+    const src = terminalTab({ title: "fresh" });
+    ensureTerminalKeyboardProtocol(src, true).xtermModifyOtherKeys = 2;
+    resetLayout([src]);
+    // No tsid -> the kp rides with the live session only; nothing to persist.
+    expect(JSON.stringify(serializeLayout({ terminalSessions: true }))).not.toContain("\"kp\"");
   });
 
   test("ignores legacy terminal sequence cursors on reload", async () => {
@@ -2853,6 +2926,79 @@ describe("terminal broadcast groups", () => {
 
     unregisterA();
     unregisterB();
+  });
+
+  test("broadcast membership is scoped to the source's group", () => {
+    const a = terminalTab({ id: "term-a", title: "A" });
+    const b = terminalTab({ id: "term-b", title: "B" });
+    const c = terminalTab({ id: "term-c", title: "C", group: "foobar" });
+    const d = terminalTab({ id: "term-d", title: "D", group: "foobar" });
+    resetLayout([a, b, c, d]);
+    const tab = (id: string) =>
+      activePane().tabs.find((candidate) => candidate.id === id) as TerminalTab;
+
+    // Enable broadcast on one terminal in each group plus its peer.
+    setTerminalBroadcastEnabled(tab("term-a"), true);
+    setTerminalBroadcastEnabled(tab("term-b"), true);
+    setTerminalBroadcastEnabled(tab("term-c"), true);
+    setTerminalBroadcastEnabled(tab("term-d"), true);
+
+    // The default-group source only sees default-group members; the
+    // foobar-group source only sees foobar-group members.
+    expect(terminalBroadcastMemberIds(tab("term-a")).sort()).toEqual([
+      "term-a",
+      "term-b",
+    ]);
+    expect(terminalBroadcastMemberIds(tab("term-c")).sort()).toEqual([
+      "term-c",
+      "term-d",
+    ]);
+  });
+
+  test("broadcast fan-out does not cross group boundaries", () => {
+    const a = terminalTab({ id: "term-a", title: "A" });
+    const b = terminalTab({ id: "term-b", title: "B" });
+    const c = terminalTab({ id: "term-c", title: "C", group: "foobar" });
+    resetLayout([a, b, c]);
+    const tab = (id: string) =>
+      activePane().tabs.find((candidate) => candidate.id === id) as TerminalTab;
+    const received: string[] = [];
+    const unregisterA = registerTerminalInputSink("term-a", (data) => received.push(`a:${data}`));
+    const unregisterB = registerTerminalInputSink("term-b", (data) => received.push(`b:${data}`));
+    const unregisterC = registerTerminalInputSink("term-c", (data) => received.push(`c:${data}`));
+
+    setTerminalBroadcastEnabled(tab("term-a"), true);
+    setTerminalBroadcastEnabled(tab("term-b"), true);
+    setTerminalBroadcastEnabled(tab("term-c"), true);
+
+    // term-a (default) fans out only to its in-group peer term-b, never
+    // to term-c in the foobar group.
+    broadcastTerminalInput(tab("term-a"), "x");
+    expect(received).toEqual(["b:x"]);
+
+    unregisterA();
+    unregisterB();
+    unregisterC();
+  });
+
+  test("select-all on a grouped terminal flips only its group", () => {
+    const a = terminalTab({ id: "term-a", title: "A", group: "foobar" });
+    const b = terminalTab({ id: "term-b", title: "B", group: "foobar" });
+    const c = terminalTab({ id: "term-c", title: "C" });
+    resetLayout([a, b, c]); // term-a is the active terminal (foobar group)
+    const tab = (id: string) =>
+      activePane().tabs.find((candidate) => candidate.id === id) as TerminalTab;
+
+    toggleActiveTerminalBroadcastSelectAll();
+
+    expect(tab("term-a").broadcastEnabled).toBe(true);
+    expect(tab("term-b").broadcastEnabled).toBe(true);
+    // The default-group terminal is untouched by a foobar select-all.
+    expect(tab("term-c").broadcastEnabled).toBe(false);
+    expect(terminalBroadcastMemberIds(tab("term-a")).sort()).toEqual([
+      "term-a",
+      "term-b",
+    ]);
   });
 });
 

@@ -412,11 +412,18 @@ async fn build_app(
         }
     };
     let control_socket_path = control_socket::pick_socket_path();
+    // The terminal registry is built below (it needs control_socket_path
+    // for $CHAN_CONTROL_SOCKET), so the control socket gets an empty cell
+    // now and we fill it once the registry exists. Category-2 control
+    // requests (cs term write / list) read it.
+    let terminal_registry_cell: control_socket::TerminalRegistryCell =
+        Arc::new(std::sync::OnceLock::new());
     let control = control_socket::start(
         control_socket_path.clone(),
         state_for_bridge.clone(),
         events_tx.clone(),
         self_writes.clone(),
+        terminal_registry_cell.clone(),
     );
     let (control_socket_path, control_socket) = match control {
         Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
@@ -434,6 +441,9 @@ async fn build_app(
         control_socket_path: control_socket_path.clone(),
         terminal: server_config.terminal.clone(),
     }));
+    // Hand the live registry to the control socket so cs term write / list
+    // can resolve sessions. Set-once; ignore a second set (never happens).
+    let _ = terminal_registry_cell.set(terminal_sessions.clone());
     let terminal_pruner = terminal_sessions.clone().spawn_pruner(shutdown_rx.clone());
 
     let state = Arc::new(AppState {

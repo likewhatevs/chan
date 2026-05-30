@@ -21,9 +21,12 @@ describe("status row colon", () => {
     expect(terminal).not.toMatch(/statusDetail \? ` - \$\{statusDetail\}`/);
   });
 
-  test("Name row flows directly into status row with one visual separator", () => {
+  test("Name then Group rows precede the status row", () => {
+    // Name row, then the Group row (broadcast group, restart-gated), then
+    // the status row. The Group row's restart prompt is conditional, so
+    // allow it (or its absence) before the status comment.
     expect(terminal).toMatch(
-      /<label class="rename-row">[\s\S]{1,1400}<\/label>\s*<!-- Status reads "connected: <detail>"[\s\S]{1,200}<div class="terminal-status-row">/,
+      /<label class="rename-row">[\s\S]{1,800}<span>Name<\/span>[\s\S]{1,800}<\/label>\s*<label class="rename-row">[\s\S]{1,400}<span>Group<\/span>[\s\S]{1,1000}<\/label>[\s\S]{1,800}<!-- Status reads "connected: <detail>"[\s\S]{1,200}<div class="terminal-status-row">/,
     );
   });
 });

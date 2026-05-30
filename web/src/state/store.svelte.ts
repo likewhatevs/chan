@@ -31,6 +31,8 @@ import {
   scheduleMissingFileCheck,
   openGraphInActivePane,
   openInActivePane,
+  openTerminalInActivePane,
+  openDashboardInActivePane,
   registerDraftPromotionSink,
   restoreLayout,
   serializeLayout,
@@ -661,6 +663,27 @@ type WindowCommandFrame =
       path: string;
       select?: string | null;
       enter?: boolean | null;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "open_graph";
+      path?: string | null;
+      is_dir?: boolean | null;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "open_term_new";
+      cwd?: string | null;
+      tab_name?: string | null;
+      tab_group?: string | null;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "open_dashboard";
+      carousel_index?: number | null;
     };
 
 async function handleWindowCommand(raw: unknown): Promise<void> {
@@ -683,6 +706,47 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
       frame.select ? `selected ${frame.select}` : `opened ${frame.path || "/"}`,
     );
     scheduleSessionSave();
+    return;
+  }
+  if (frame.command === "open_graph") {
+    if (typeof frame.path === "string" && frame.path) {
+      if (frame.is_dir) openGraphForDirectory(frame.path);
+      else openGraphForFile(frame.path);
+      setTransientStatus(`graph: ${frame.path}`);
+    } else {
+      openGraphForWorkspace();
+      setTransientStatus("opened graph");
+    }
+    scheduleSessionSave();
+    return;
+  }
+  if (frame.command === "open_term_new") {
+    openTerminalInActivePane({
+      cwd: typeof frame.cwd === "string" ? frame.cwd : undefined,
+      title: typeof frame.tab_name === "string" ? frame.tab_name : undefined,
+      group: typeof frame.tab_group === "string" ? frame.tab_group : undefined,
+    });
+    setTransientStatus("opened terminal");
+    scheduleSessionSave();
+    return;
+  }
+  if (frame.command === "open_dashboard") {
+    openDashboardInActivePane();
+    // The server only sends a carousel_index; set it on the just-created
+    // dashboard tab (the active tab of the active pane). carouselSlide is
+    // a stable DashboardTab field owned by Lane A.
+    if (typeof frame.carousel_index === "number" && frame.carousel_index >= 0) {
+      const pane = layout.nodes[layout.activePaneId];
+      if (pane && pane.kind === "leaf") {
+        const tab = pane.tabs.find((t) => t.id === pane.activeTabId);
+        if (tab && tab.kind === "dashboard") {
+          tab.carouselSlide = Math.floor(frame.carousel_index);
+        }
+      }
+    }
+    setTransientStatus("opened dashboard");
+    scheduleSessionSave();
+    return;
   }
 }
 

@@ -160,6 +160,9 @@ export type TerminalSpawnResponse = {
 
 export type TerminalRestartRequest = {
   name?: string;
+  /// Broadcast group for the respawned shell. Sets `$CHAN_TAB_GROUP`
+  /// and the registry's per-session `tab_group`. Defaults to "default".
+  group?: string;
   window_id?: string;
   /// Optional command override for the restarted PTY. When set,
   /// the new shell runs this command instead of the original
