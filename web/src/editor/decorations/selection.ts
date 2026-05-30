@@ -4,7 +4,7 @@
 //
 //   selectionInRange(sel, from, to)
 //     true if any selection range touches [from, to]. Boundary equality
-//     counts as intersection — caret AT a marker's edge reveals the
+//     counts as intersection - caret AT a marker's edge reveals the
 //     marker. This is the rule for inline marks (bold, italic, strike,
 //     code, link/image markers, wikilink brackets).
 //

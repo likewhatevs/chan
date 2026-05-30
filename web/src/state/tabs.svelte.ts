@@ -244,7 +244,7 @@ export type FileMissingState = {
   /// missing-file suggest-reopen lookup. Set when a basename
   /// search returns a unique match at a different path; null
   /// when the lookup ran and found 0 or 2+ candidates (ambiguous
-  /// — let the user use Find).
+  /// - let the user use Find).
   suggestedPath?: string | null;
 };
 
@@ -281,7 +281,7 @@ export type GraphFilters = {
   language: boolean;
   img: boolean;
   folder: boolean;
-  /// FileBucket toggles — mirrors the `GraphFilters` shape in
+  /// FileBucket toggles - mirrors the `GraphFilters` shape in
   /// `state/store.svelte.ts`. Both files declare a local `GraphFilters`
   /// (one for the per-tab state here, one for the overlay state in
   /// store); they stay in lockstep when extended.
@@ -371,7 +371,7 @@ export type TeamWorkState = {
   /// margin reactor reads this in preference to `heightPx` so the
   /// reserved space tracks both the expanded drag-resize AND the collapse
   /// transition (where the prompt shrinks to header-only and `heightPx`
-  /// is stale). Not persisted to SerTab — repopulated on every mount.
+  /// is stale). Not persisted to SerTab - repopulated on every mount.
   measuredHeightPx?: number;
   /// Actual rendered width (px) of the team-work root, written by the
   /// same ResizeObserver. Feeds the per-prompt page-width clamp on the
@@ -379,7 +379,7 @@ export type TeamWorkState = {
   /// painted width, not the pane's editor wrapper. Not persisted.
   measuredWidthPx?: number;
   /// Per-prompt page-width ratio in (0.25, 1.0]. `1.0` (or absent) reads
-  /// as "no cap" — the composer fills the prompt's painted width. Set via
+  /// as "no cap" - the composer fills the prompt's painted width. Set via
   /// the slider in the team-work context menu. Decouples the prompt's
   /// line width from the global `pageWidth.ratio` so narrowing the editor
   /// in one tile does not cascade onto a sibling tile's prompt.
@@ -398,7 +398,7 @@ export type TeamWorkState = {
   agentTarget?: "none" | "claude" | "codex" | "gemini";
 };
 
-/// Dashboard tab — read-only surface hosting the shortcut table and
+/// Dashboard tab - read-only surface hosting the shortcut table and
 /// info panels. No per-tab state today; the placeholder fields keep the
 /// discriminated union symmetric with the other tab kinds and let future
 /// additions include view state without re-walking the persistence layer.
@@ -479,7 +479,7 @@ export type BrowserLabelCtx = {
   selectedIsDir?: boolean;
 };
 
-/// Short display label for a tab — the file's basename so the tab
+/// Short display label for a tab - the file's basename so the tab
 /// strip stays scannable even when paths are deeply nested. The
 /// full path is reachable via `tabTooltip` for disambiguation.
 export function tabLabel(t: Tab, ctx?: BrowserLabelCtx): string {
@@ -586,7 +586,7 @@ export function tabTooltip(t: Tab): string {
     // viewing the same scope with different focal nodes, or two with
     // the same selection under different scopes.
     if (t.selectedNodeId) {
-      return `Graph: ${t.scopeId} · ${t.selectedNodeId}`;
+      return `Graph: ${t.scopeId} - ${t.selectedNodeId}`;
     }
     return `Graph: ${t.scopeId}`;
   }
@@ -1109,8 +1109,7 @@ export function openBrowserInActivePane(
 /// find the highest "Files" / "Files N" number, return next. The
 /// title is what `browserTabLabel`'s fallback path uses when the
 /// workspace context isn't wired (unit tests, edge surfaces) AND it
-/// also matters when two unselected FB tabs sit side-by-side —
-/// numbering disambiguates them in the tab strip.
+/// also matters when two unselected FB tabs sit side-by-side - /// numbering disambiguates them in the tab strip.
 function nextBrowserTitle(): string {
   let max = 0;
   let hasUnnumbered = false;
@@ -3027,8 +3026,7 @@ export function toggleActiveFileTabMode(): void {
 }
 
 /// Tab-state mutators. These exist so child components (FileEditorTab
-/// etc.) don't write tab.X = ... directly on a non-bindable prop —
-/// Svelte 5's ownership tracking warns about that pattern. Centralizing
+/// etc.) don't write tab.X = ... directly on a non-bindable prop - /// Svelte 5's ownership tracking warns about that pattern. Centralizing
 /// the writes here also gives us one place to add side-effects
 /// (persistence, telemetry) later.
 export function setTabCaret(tab: FileTab, from: number, to: number): void {
@@ -3727,7 +3725,7 @@ export function serializeLayout(opts: SerializeLayoutOptions = {}): SerNode | nu
 
 /// Replace the live layout with the deserialized tree, then kick off a
 /// content load for every tab. The DOM updates as content arrives;
-/// tabs initially appear in a "loading…" state.
+/// tabs initially appear in a "loading..." state.
 export async function restoreLayout(
   s: SerNode,
   sessionLayout: SerNode | null = null,
@@ -3898,7 +3896,7 @@ export async function restoreLayout(
           // once the file fetches.
           repoRoot: null,
           // Restore the user-toggled read mode if it was persisted.
-          // fsWritable is NOT carried in the session payload — it's
+          // fsWritable is NOT carried in the session payload - it's
           // a disk property; the first loadTabContent refreshes it
           // (and an `!fsWritable` will dominate even if readMode is
           // false, so we don't need to fake it here).
@@ -4171,7 +4169,7 @@ async function resolveMissingFileCheck(
     }
     return;
   }
-  // Clean buffer — full reload is safe. loadTabContent fires
+  // Clean buffer - full reload is safe. loadTabContent fires
   // markFileMissing on a genuine 404 in its catch branch.
   await loadTabContent(found.paneId, tabId, path);
   if (tab.fileMissing) {
@@ -4310,7 +4308,7 @@ export function tabsForPath(path: string): { paneId: string; tabId: string }[] {
 /// Rewrite tab paths in place after a rename/move. Handles both
 /// the single-file rename (exact path match) and the directory
 /// rename (every tab whose path starts with `from/`). Editor state
-/// — buffer, cursor, dirty flag, savedMtime — is preserved so the
+/// - buffer, cursor, dirty flag, savedMtime - is preserved so the
 /// rename feels like a relabel rather than a close+reopen. The
 /// server already moved the bytes atomically; mtime stays valid
 /// for the moved file, so the next save's CAS check still works.

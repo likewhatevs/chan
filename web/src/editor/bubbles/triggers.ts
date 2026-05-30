@@ -13,7 +13,7 @@
 //     trigger char (so `foo#bar` and `email@domain.com` don't open
 //     bubbles).
 //   - Skip when the caret is inside an InlineCode / FencedCode
-//     syntax range — those characters are literal source.
+//     syntax range - those characters are literal source.
 //
 // Multiple patterns can never overlap (their trigger characters are
 // disjoint) so we check in order: wiki > image > contact > tag. The
@@ -53,7 +53,7 @@ export function computeBubbleSpec(state: EditorState): BubbleSpec | null {
     };
   }
   // Same idea for an existing Link's URL portion (the `[label](path)`
-  // form). The wiki bubble takes over in raw mode — commit replaces
+  // form). The wiki bubble takes over in raw mode - commit replaces
   // just the URL, leaves the surrounding `[label](`...`)` intact.
   const linkUrl = linkUrlAtCaret(state, pos);
   if (linkUrl !== null) {
@@ -216,7 +216,7 @@ function linkUrlAtCaret(
 
 /// Walk up from pos looking for a WikiLink syntax node. When found
 /// returns the OUTER node range (covering `[[`...`]]`) plus a query
-/// extracted from the body up to the caret — what the user has typed
+/// extracted from the body up to the caret - what the user has typed
 /// so far inside the existing pill. The bubble then replaces the
 /// whole node on commit instead of just the prefix-before-caret.
 function wikiLinkAtCaret(

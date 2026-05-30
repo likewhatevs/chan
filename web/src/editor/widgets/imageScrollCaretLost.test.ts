@@ -18,7 +18,7 @@ describe("image-load scroll restore", () => {
 
   test("viewport-visibility gate preserved (no disturbance when caret already visible)", () => {
     // The `cb.top >= sb.top && cb.bottom <= sb.bottom` check must
-    // stay — it's the "deliberate position" safeguard. When the
+    // stay - it's the "deliberate position" safeguard. When the
     // caret is on-screen, we don't dispatch.
     expect(imageModule).toMatch(
       /if \(cb\.top >= sb\.top && cb\.bottom <= sb\.bottom\) return;/,

@@ -13,7 +13,7 @@
 //   - `Mod`   → Cmd on macOS, Ctrl on Linux / Windows.
 //   - `Cmd`   → literal Command / Meta (used for browser fallbacks
 //               where Ctrl would collide with an existing chord).
-//   - `Ctrl`  → literal Ctrl (used for the `Ctrl+Alt+…` web fallbacks
+//   - `Ctrl`  → literal Ctrl (used for the `Ctrl+Alt+...` web fallbacks
 //               that mean the actual Control key on every platform).
 //   - `Alt`   → Alt / Option.
 //   - `Shift` → Shift.
@@ -34,7 +34,7 @@ export type Chord = string;
 export type Platform = "web" | "native";
 
 /// OS only affects how `Mod` is rendered (Cmd vs Ctrl). The keymap
-/// itself doesn't branch on OS — only the printable label does.
+/// itself doesn't branch on OS - only the printable label does.
 export type OS = "mac" | "linux" | "windows";
 
 export type ShortcutGroup =
@@ -52,7 +52,7 @@ export type Shortcut = {
   /// Human-readable description for the table.
   label: string;
   /// Chord on the web fallback set. Omit when the action is not
-  /// reachable via a chord in the browser (e.g. Cmd+S — browser
+  /// reachable via a chord in the browser (e.g. Cmd+S - browser
   /// shows the save-page dialog; chan can't preventDefault that on
   /// every browser reliably).
   web?: Chord;
@@ -62,7 +62,7 @@ export type Shortcut = {
   native?: Chord;
   group: ShortcutGroup;
   /// Optional trailing parenthetical for the table (e.g. "browser
-  /// owns this chord — handled natively").
+  /// owns this chord - handled natively").
   note?: string;
   /// When true, `handleTerminalKeyEvent` in `TerminalTab.svelte`
   /// returns `false` for this chord so the event bubbles out of
@@ -337,7 +337,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+1..9",
     group: "Tabs",
   },
-  // Find on page — browser owns Cmd+F/G/Shift+G in the web build.
+  // Find on page - browser owns Cmd+F/G/Shift+G in the web build.
   {
     id: "app.find.open",
     label: "Find on page",
@@ -550,7 +550,7 @@ export function currentPlatform(): Platform {
 /// each group as an underlined subheader followed by `label  chord`
 /// rows. Column gap auto-derived from the longest label.
 ///
-/// No box-drawing, no Unicode — matches the project's writing rules.
+/// No box-drawing, no Unicode - matches the project's writing rules.
 /// Output is intended for the empty-pane background AND the
 /// `chan serve --help` text; resync the latter via the
 /// `web/scripts/shortcuts-table.mjs` helper.

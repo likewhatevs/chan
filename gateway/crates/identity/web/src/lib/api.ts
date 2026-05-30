@@ -19,13 +19,12 @@ export type User = {
 export type Workspace = {
   /// Workspace slug, used as the path on `{user}.workspace.chan.app`.
   workspace: string;
-  /// Display label. Defaults to the slug until per-tunnel labels
-  /// land in the chan-tunnel Hello frame.
+  /// Display label. Currently always the slug; the chan-tunnel Hello
+  /// frame does not carry a per-tunnel label.
   label: string;
   public: boolean;
   /// "online" while the tunnel registration is live. workspace-proxy
-  /// only reports online workspaces today; future health states
-  /// ("degraded", "offline") land here.
+  /// only reports online workspaces, so this is the only value.
   status: "online";
 };
 

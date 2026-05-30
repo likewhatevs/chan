@@ -192,7 +192,7 @@
     opacity: 0.85;
     letter-spacing: 0.01em;
   }
-  /* 5-up grid (New Draft + Terminal / FB / RP / Graph). Width caps
+  /* 5-up grid (New Draft + Terminal / FB / Team Work / Graph). Width caps
      + tile shape keep the spawn tiles visually consistent across
      the welcome surface. */
   .spawn-row {

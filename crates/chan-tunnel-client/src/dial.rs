@@ -8,7 +8,7 @@
 //! When the URL scheme is `http://` we skip TLS and run h2 in
 //! cleartext (h2c) directly over the TCP socket. The server side
 //! (chan-tunnel-server) is already h2c-only in production: nginx
-//! terminates TLS at drive.chan.app and `grpc_pass`-es `/v1/tunnel`
+//! terminates TLS at workspace.chan.app and `grpc_pass`-es `/v1/tunnel`
 //! as h2c into workspace-proxy's tunnel listener. The h2c branch exists
 //! so a local stack can dial the workspace-proxy h2c port without
 //! standing up a TLS terminator.
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn normalize_tunnel_url_preserves_explicit_canonical_path() {
-        let original = Url::parse("https://drive.chan.app/v1/tunnel").unwrap();
+        let original = Url::parse("https://workspace.chan.app/v1/tunnel").unwrap();
         let normalized = normalize_tunnel_url(&original);
         assert_eq!(normalized.as_str(), original.as_str());
     }
@@ -321,7 +321,7 @@ mod tests {
         // A typo like /v2/tunnel is kept so the resulting 404 is
         // visible at the operator level rather than being silently
         // corrected.
-        let typo = Url::parse("https://drive.chan.app/v2/tunnel").unwrap();
+        let typo = Url::parse("https://workspace.chan.app/v2/tunnel").unwrap();
         let normalized = normalize_tunnel_url(&typo);
         assert_eq!(normalized.as_str(), typo.as_str());
     }

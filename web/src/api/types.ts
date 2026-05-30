@@ -339,7 +339,7 @@ export type LinkEdge = {
 };
 
 /// Graph edge as returned by /api/backlinks/{path}. Mirrors
-/// chan-core's graph::Edge: `kind` is "link" / "mention" / "tag";
+/// chan-workspace's graph::Edge: `kind` is "link" / "mention" / "tag";
 /// `anchor` is the heading slug or block id (with leading `^`)
 /// when the link points inside a file, else null.
 export type GraphEdge = {
@@ -356,7 +356,7 @@ export type GraphSnapshot = {
 };
 
 /// Typed nodes returned by GET /api/graph. The discriminated union
-/// matches `chan-core::link_index::GraphNode`; `path` is only present
+/// matches `chan-workspace::graph::GraphNode`; `path` is only present
 /// on file nodes (clicking them opens the file in the active pane).
 export type GraphViewNode =
   | {
@@ -634,7 +634,7 @@ export type WatchEvent =
   | { kind: "deleted"; path: string };
 
 /// One heading row from GET /api/headings/{path}. Mirrors
-/// chan-core's graph::HeadingRow: `anchor` is the slug used in
+/// chan-workspace's graph::HeadingRow: `anchor` is the slug used in
 /// `[link](file.md#anchor)` markdown URLs.
 export type HeadingRow = {
   level: number;
@@ -644,7 +644,7 @@ export type HeadingRow = {
 };
 
 /// Snapshot returned by GET /api/index/status. Field set matches
-/// chan-core::index::indexer::IndexStatus.
+/// chan-server::indexer::IndexStatus.
 export type IndexStatus =
   | { state: "idle"; indexed_docs: number; indexed_vectors: number; model: string }
   | { state: "building"; current: number; total: number; file: string }
@@ -734,14 +734,14 @@ export type SemanticModelRegistry = {
 };
 
 /// Workspace reset modes, in increasing destructiveness. See
-/// `crates/chan-core/src/storage.rs` for the per-mode contract.
+/// `crates/chan-server/src/routes/storage.rs` for the per-mode contract.
 export type ResetMode = "workspace" | "everything";
 
 export type ResetResponse = {
   removed_entries: number;
 };
 
-/// chan-report shapes. Mirror `crates/chan-core/crates/chan-report/src/summary.rs`
+/// chan-report shapes. Mirror `crates/chan-report/src/summary.rs`
 /// and the server's `routes::report::PrefixReport`. The file
 /// inspector renders the per-file row; the directory inspector renders
 /// the prefix roll-up (totals + by_language + COCOMO).

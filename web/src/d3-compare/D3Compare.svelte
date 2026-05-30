@@ -269,7 +269,7 @@
     canvas.height = Math.round(r.height * dpr);
     const ctx = canvas.getContext("2d");
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    // forceCenter targets a fixed centre — re-seat it on resize so
+    // forceCenter targets a fixed centre - re-seat it on resize so
     // the cluster doesn't drift toward a stale midpoint.
     if (sim) {
       const cx = r.width / 2, cy = r.height / 2;
@@ -425,8 +425,8 @@
       <code>127.0.0.1:8787</code>.
     </p>
     <p class="stat">
-      {#if loading}loading…{:else if error}<span class="err">{error}</span>
-      {:else}{stats.nodes} nodes · {stats.edges} edges{/if}
+      {#if loading}loading...{:else if error}<span class="err">{error}</span>
+      {:else}{stats.nodes} nodes - {stats.edges} edges{/if}
     </p>
     <button onclick={fetchGraph}>refetch</button>
     <button onclick={restart}>restart sim</button>
@@ -482,8 +482,7 @@
       onwheel={onWheel}
     ></canvas>
     <div class="hud">
-      {stats.fps} fps · drag a node to nudge · drag empty space to pan ·
-      scroll to zoom
+      {stats.fps} fps - drag a node to nudge - drag empty space to pan -       scroll to zoom
     </div>
   </main>
 </div>

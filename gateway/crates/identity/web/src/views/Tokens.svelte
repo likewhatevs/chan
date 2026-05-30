@@ -109,7 +109,7 @@
   }
 
   function fmt(ts: string | null): string {
-    if (!ts) return "—";
+    if (!ts) return "-";
     return new Date(ts).toLocaleString();
   }
 
@@ -148,8 +148,8 @@
             <span class="status {status(t)}">{status(t)}</span>
             <span class="muted small">
               created {fmt(t.created_at)}
-              {#if t.expires_at} · expires {fmt(t.expires_at)}{/if}
-              {#if t.last_used_at} · last used {fmt(t.last_used_at)}{/if}
+              {#if t.expires_at} - expires {fmt(t.expires_at)}{/if}
+              {#if t.last_used_at} - last used {fmt(t.last_used_at)}{/if}
             </span>
             <span class="actions">
               <button onclick={() => toggleAudit(t.id)}>
@@ -178,8 +178,8 @@
                       <tr>
                         <td>{fmt(row.ts)}</td>
                         <td>{row.action}</td>
-                        <td>{row.ip ?? "—"}</td>
-                        <td class="ua">{row.user_agent ?? "—"}</td>
+                        <td>{row.ip ?? "-"}</td>
+                        <td class="ua">{row.user_agent ?? "-"}</td>
                       </tr>
                     {/each}
                     {#if (auditOpen[t.id] as AuditEntry[]).length === 0}

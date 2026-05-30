@@ -115,7 +115,7 @@
        the menu level. -->
 
   {#if !graphData.view && graphData.loading}
-    <div class="muted">loading references…</div>
+    <div class="muted">loading references...</div>
   {:else if graphData.error}
     <div class="err">references unavailable: {graphData.error}</div>
   {:else if documents.length === 0}

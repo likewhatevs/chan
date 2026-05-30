@@ -33,7 +33,7 @@ for any byte-level detail.
 ## 1. Problem and scope
 
 A chan user wants their local workspace reachable on a public URL
-(`drive.chan.app/{user}/{workspace}/...`) without opening a port,
+(`workspace.chan.app/{user}/{workspace}/...`) without opening a port,
 configuring DNS, or running a TURN/STUN stack. The constraint is
 "works through corporate NAT and HTTP-only egress." The shape that
 fits both is one long-lived HTTPS request.

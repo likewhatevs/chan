@@ -1,6 +1,6 @@
 // Format commands for the StyleToolbar contract.
 //
-// All commands operate on the markdown SOURCE directly — no
+// All commands operate on the markdown SOURCE directly - no
 // PM-command-object indirection. Mark toggles wrap/unwrap markers;
 // block toggles add/remove line prefixes; isActive walks the syntax
 // tree.
@@ -52,7 +52,7 @@ function toggleMark(view: EditorView, spec: MarkSpec): void {
     // Unwrap: remove the open and close markers and keep inner content.
     // The marker positions are the first and last children of `inner`
     // (per lezer's mark layout: open EmphasisMark, content, close
-    // EmphasisMark — same shape for Strong/Strike/InlineCode).
+    // EmphasisMark - same shape for Strong/Strike/InlineCode).
     const cursor = inner.cursor();
     if (!cursor.firstChild()) return;
     const openFrom = cursor.from;
@@ -149,7 +149,7 @@ export function setBlockKind(view: EditorView, kind: BlockKind): void {
     });
     return;
   }
-  // "normal" — strip prefixes only.
+  // "normal" - strip prefixes only.
   view.dispatch({
     changes: { from: line.from, to: line.to, insert: text },
   });
@@ -162,7 +162,7 @@ export function setBlockKind(view: EditorView, kind: BlockKind): void {
 ///   - from === startLine.from && to === endLine.from with
 ///     endLine.number > startLine.number (selection extends into the
 ///     next line's start, so the last fully-selected line is the
-///     one BEFORE endLine — this is what dragging from line N start
+///     one BEFORE endLine - this is what dragging from line N start
 ///     to line N+M start produces)
 /// Returns null when the selection is empty, partial, or invalid.
 /// Used by the multi-line quote / unquote chords below; passing
@@ -215,16 +215,16 @@ function isCaretInsideFenceAtDocEnd(view: EditorView): boolean {
   if (!sel.empty) return false;
   // Find the enclosing FencedCode (if any). Use side=-1 because the
   // caret most often sits at the END of the fence's content (last
-  // body line, no text after) — at that boundary side=0 resolves to
+  // body line, no text after) - at that boundary side=0 resolves to
   // the parent Document and we'd miss the fence entirely.
   const fence = enclosingFence(view.state, sel.head);
   if (!fence) return false;
   // The block must extend to (or beyond, modulo a trailing newline)
-  // the end of the doc — otherwise there's content after the closer
+  // the end of the doc - otherwise there's content after the closer
   // and the user can just ArrowDown into it.
   if (fence.to < view.state.doc.length - 1) return false;
   // Caret must be on the actual last line of the doc. If there's
-  // any line below — even the closer fence — ArrowDown should keep
+  // any line below - even the closer fence - ArrowDown should keep
   // its default behaviour (just move down by one). We only insert
   // a fresh line when standing on the closer with nowhere to go,
   // so we don't grow the file uninvited.
@@ -233,13 +233,13 @@ function isCaretInsideFenceAtDocEnd(view: EditorView): boolean {
 }
 
 function exitFenceAtDocEnd(view: EditorView): boolean {
-  // Always exit past the closer, not at the caret's line — when the
+  // Always exit past the closer, not at the caret's line - when the
   // caret is on the last body line, splicing at line.to would inject
   // a newline INSIDE the block. Anchor the insertion at doc.length
   // so the new line lands after the closing fence regardless of
   // whether the caret was on a body line or the closer itself.
   //
-  // When the fence is UNCLOSED (no `\`\`\`` line yet — the user
+  // When the fence is UNCLOSED (no `\`\`\`` line yet - the user
   // typed an opener and started writing), appending a bare `\n`
   // just extends the unclosed fence, so the next ArrowDown is
   // still trapped. Insert the closer first in that case so the
@@ -258,7 +258,7 @@ function exitFenceAtDocEnd(view: EditorView): boolean {
 /// We check the doc text rather than walking the syntax tree because
 /// @lezer/markdown happily extends an unclosed FencedCode all the
 /// way to doc end and reports both the open and close CodeMark on
-/// the same opener line — making the syntax tree alone unreliable
+/// the same opener line - making the syntax tree alone unreliable
 /// for this question.
 function isFenceClosedAtDocEnd(view: EditorView): boolean {
   const doc = view.state.doc;
@@ -272,7 +272,7 @@ function isFenceClosedAtDocEnd(view: EditorView): boolean {
   }
   const lastLine = doc.line(lastLineNumber);
   if (!CLOSER_FENCE_RE.test(lastLine.text)) return false;
-  // The closer can't be the same line as the opener — if the doc
+  // The closer can't be the same line as the opener - if the doc
   // is just "```" on its own, that's an opener with no body, no
   // closer.
   return lastLineNumber > 1;
@@ -306,7 +306,7 @@ export function escapeFenceOnEnterAtCloser(view: EditorView): boolean {
 
 /// Mod-Enter from anywhere inside a fenced code block: append a
 /// blank line just past the block end and park the caret on it.
-/// This is the always-on escape hatch — independent of where the
+/// This is the always-on escape hatch - independent of where the
 /// block sits in the doc, whether the caret is on the opener / a
 /// body line / the closer, and whether the block is closed at all.
 ///
@@ -348,7 +348,7 @@ function isFenceNodeClosed(
   const fenceEndLine = state.doc.lineAt(
     Math.min(fence.to, state.doc.length),
   );
-  // The closer must be on a different line from the opener — a
+  // The closer must be on a different line from the opener - a
   // single-line `\`\`\`` is just an opener with no body / no
   // closer.
   if (fenceEndLine.from <= fence.from) return false;
@@ -393,7 +393,7 @@ export function tabInFence(view: EditorView): boolean {
 /// `<` chord: strip one level of `> ` (or `>` alone) from every
 /// line in a multi-line full-line selection. Falls through if no
 /// line has a quote prefix (so an unrelated `<` stays a literal
-/// character). Single-level only — pressing `<` twice on a
+/// character). Single-level only - pressing `<` twice on a
 /// `> > foo` line peels both levels in sequence.
 export function unquoteLines(view: EditorView): boolean {
   const range = blockLineRange(view);
@@ -422,7 +422,7 @@ function toggleLinePrefix(view: EditorView, target: string): void {
   const existing = m ? m[0] : "";
   const inner = m ? text.slice(existing.length) : text;
   if (existing === target) {
-    // Already this prefix — strip it.
+    // Already this prefix - strip it.
     view.dispatch({
       changes: { from: line.from, to: line.to, insert: inner },
     });
@@ -471,7 +471,7 @@ export function insertImage(view: EditorView): void {
 }
 
 /// Apply a Link mark. Without an explicit URL, asks the user through
-/// the in-house PromptModal (uiPrompt) — never a `window.prompt`,
+/// the in-house PromptModal (uiPrompt) - never a `window.prompt`,
 /// which fails silently inside Chan.app's WKWebView. Returns early if
 /// the user cancels.
 export async function toggleLink(view: EditorView, url?: string): Promise<void> {

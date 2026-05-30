@@ -3,7 +3,7 @@
 // `@@name` mirrors chan-workspace's mention extractor: prev char must
 // not be a word char (so emails like `foo@@bar.com` don't trip it),
 // `name` is `[A-Za-z0-9_-]+`, no slash. Inside code spans / fenced
-// blocks the source is literal — skip those ranges.
+// blocks the source is literal - skip those ranges.
 //
 // Click delegation: a single `mousedown` + `click` pair on the
 // content DOM walks up to the matched span. Mousedown prevents
@@ -65,7 +65,7 @@ export interface MentionOptions {
 
 /// Cache resolved `@@name -> path` lookups for the editor's
 /// lifetime so repeat clicks on the same mention don't re-fetch.
-/// Null entries mean "no such contact" — also cached so we don't
+/// Null entries mean "no such contact" - also cached so we don't
 /// loop the network on a stale mention.
 const resolveCache = new Map<string, string | null>();
 

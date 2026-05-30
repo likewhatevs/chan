@@ -95,14 +95,14 @@
     if (!s) return null;
     if (s.state === "building") {
       if (s.total > 0) return `indexing ${s.current}/${s.total}`;
-      return "indexing…";
+      return "indexing...";
     }
-    if (s.state === "reindexing") return "reindexing…";
+    if (s.state === "reindexing") return "reindexing...";
     if (s.state === "error") return "index error";
     return null;
   });
 
-  // ---- slide 2 — indexing graph (read-only spine) ------------------------
+  // ---- slide 2 - indexing graph (read-only spine) ------------------------
 
   /// Indexing state response cache. Re-fetched whenever slide 2
   /// becomes active and again every 3 s while it stays active so
@@ -239,7 +239,7 @@
   /// path. `directoryId(path)` is the canonical mapping that
   /// generates the ids fed to GraphCanvas; this is its inverse.
   /// Returns null when nothing is selected or the id doesn't
-  /// match a known folder node (defensive — the canvas only
+  /// match a known folder node (defensive - the canvas only
   /// emits folder ids from the indexing spine).
   const selectedIndexPath = $derived.by<string | null>(() => {
     if (selectedIndexId === null) return null;
@@ -526,7 +526,7 @@
           </div>
         {:else if !indexing && indexingLoading}
           <div class="indexing-stub">
-            <p>Loading indexing state…</p>
+            <p>Loading indexing state...</p>
           </div>
         {:else if !indexing}
           <div class="indexing-stub">

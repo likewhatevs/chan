@@ -118,7 +118,7 @@ const MEDIUM: DateFormatDef = {
   },
 };
 
-/// "13 April 2024" — British long form. Day first, full month name,
+/// "13 April 2024" - British long form. Day first, full month name,
 /// no comma. `\d{1,2}` to accept both "2 April 2024" and "02 April
 /// 2024" since either reads naturally in prose.
 const BRITISH_LONG: DateFormatDef = {
@@ -139,7 +139,7 @@ const BRITISH_LONG: DateFormatDef = {
   },
 };
 
-/// "13th April 2024" — British with ordinal day. The ordinal suffix
+/// "13th April 2024" - British with ordinal day. The ordinal suffix
 /// keeps this distinct from `british-long` so the two coexist; the
 /// matcher emits whichever the user actually typed.
 const BRITISH_ORD: DateFormatDef = {
@@ -160,7 +160,7 @@ const BRITISH_ORD: DateFormatDef = {
   },
 };
 
-/// "April 13, 2024" — American long form. Month first, comma after
+/// "April 13, 2024" - American long form. Month first, comma after
 /// the day. `\d{1,2}` to accept "April 5, 2024" as well as the
 /// zero-padded variant.
 const AMERICAN_LONG: DateFormatDef = {
@@ -181,7 +181,7 @@ const AMERICAN_LONG: DateFormatDef = {
   },
 };
 
-/// "13/04/2024" — British numeric (day-month-year). Shares the same
+/// "13/04/2024" - British numeric (day-month-year). Shares the same
 /// regex shape as MDY but parses with day first; the parser rejects
 /// impossible months (>12) so a clearly-DMY string with day > 12
 /// still pills correctly even if MDY is the user's preference.
@@ -201,7 +201,7 @@ const DMY_SLASH: DateFormatDef = {
   },
 };
 
-/// "04/13/2024" — American numeric (month-day-year). Same regex
+/// "04/13/2024" - American numeric (month-day-year). Same regex
 /// shape as DMY; parser rejects impossible days (>31) and months
 /// (>12). For the genuinely ambiguous middle range (both day and
 /// month <= 12) the user's preferred format wins; see

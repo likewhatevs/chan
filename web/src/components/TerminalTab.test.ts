@@ -204,7 +204,7 @@ describe("TerminalTab menu", () => {
       );
       // Sanity check: the menu actually rendered.
       expect(labels.length).toBeGreaterThan(0);
-      // From-$CWD band — full set.
+      // From-$CWD band - full set.
       expect(labels).toContain("New File");
       expect(labels).toContain("New Terminal");
       expect(labels).toContain("New File Browser");

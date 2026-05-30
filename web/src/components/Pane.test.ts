@@ -272,7 +272,7 @@ describe("Pane right-click menus", () => {
     await tick();
 
     // No menu should be open after a plain left-click on the
-    // empty-pane background — the welcome menu is right-click only.
+    // empty-pane background - the welcome menu is right-click only.
     // The hamburger trigger (in the tabs strip) renders its own
     // button without opening a popover, so any `.hamburger-menu`
     // node in the DOM means the welcome popover actually opened.
@@ -394,7 +394,7 @@ describe("Pane back-side configuration view", () => {
     };
     const target = await renderPane(pane, { paneMode: false });
 
-    // No specific config surface — the empty-state placeholder
+    // No specific config surface - the empty-state placeholder
     // renders instead, asking the user to open a front tab first.
     expect(target.querySelector(".back-empty")).not.toBeNull();
     expect(
@@ -517,7 +517,7 @@ describe("Pane flip UX redesign", () => {
     const t2El = tabs[1]!;
     expect(t2El.classList.contains("active")).toBe(false);
 
-    // Fire mousedown — the active-tab swap path lives there
+    // Fire mousedown - the active-tab swap path lives there
     // (the click handler is bookkeeping; the actual write to
     // `pane.activeTabId` is in onmousedown).
     t2El.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));

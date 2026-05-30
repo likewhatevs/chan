@@ -1194,8 +1194,7 @@ describe("pane state", () => {
     enterPaneMode();
     paneModeStageSpawn("terminal", { dir: "notes" });
 
-    // Draft pane should still have just the original file tab —
-    // the spawn intent is staged, not applied.
+    // Draft pane should still have just the original file tab -     // the spawn intent is staged, not applied.
     const draftPane = paneMode.draft?.nodes[seed.id];
     expect(draftPane?.kind).toBe("leaf");
     if (draftPane?.kind === "leaf") {
@@ -1244,7 +1243,7 @@ describe("pane state", () => {
     const live = layout.nodes[seed.id];
     expect(live?.kind).toBe("leaf");
     if (live?.kind === "leaf") {
-      // Browser spawned, no terminal — replacement, not stacking.
+      // Browser spawned, no terminal - replacement, not stacking.
       expect(live.tabs.filter((t) => t.kind === "terminal")).toHaveLength(0);
       expect(live.tabs.filter((t) => t.kind === "browser")).toHaveLength(1);
     }
@@ -1713,7 +1712,7 @@ describe("Hybrid flip", () => {
 
     flipHybrid(seed.id);
 
-    // Read the live pane through layout.nodes — $state proxies live
+    // Read the live pane through layout.nodes - $state proxies live
     // there, and the plain `seed` returned by resetLayout isn't the
     // reactive view.
     const live = layout.nodes[seed.id];

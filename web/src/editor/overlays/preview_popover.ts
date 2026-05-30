@@ -43,7 +43,7 @@ export interface PreviewPopoverOpts {
   fromPath?: string | null;
   /// Called when the user commits to fully opening the previewed
   /// file. `openInNewPane` is true when the user held Shift on
-  /// Cmd/Ctrl+Enter (or the Open button) — mirrors the existing
+  /// Cmd/Ctrl+Enter (or the Open button) - mirrors the existing
   /// wiki Cmd-click convention.
   onOpen: (openInNewPane: boolean) => void;
   /// Optional dismiss notifier (cleanup hooks; the popover already
@@ -88,13 +88,13 @@ export function openPreviewPopover(
 
   const body = document.createElement("div");
   body.className = "md-preview-body";
-  body.textContent = "loading…";
+  body.textContent = "loading...";
   wrap.appendChild(body);
 
   const footer = document.createElement("div");
   footer.className = "md-preview-footer";
   footer.innerHTML =
-    '<span class="md-preview-hint">⌘+Enter / Ctrl+Enter to open · Esc to close</span>';
+    '<span class="md-preview-hint">⌘+Enter / Ctrl+Enter to open - Esc to close</span>';
   wrap.appendChild(footer);
 
   positionUnderAnchor();
@@ -103,7 +103,7 @@ export function openPreviewPopover(
   if (IMAGE_EXTS.has(ext)) {
     renderImage();
   } else if (TEXT_EXTS.has(ext) || ext === "") {
-    // Treat extensionless paths as text too — chan-workspace permits .md
+    // Treat extensionless paths as text too - chan-workspace permits .md
     // / .txt only for writes, but the editor often references files
     // by stem (wiki autocomplete strips extensions on suggest); reads
     // succeed regardless.
@@ -113,7 +113,7 @@ export function openPreviewPopover(
     body.appendChild(
       Object.assign(document.createElement("div"), {
         className: "md-preview-binary",
-        textContent: "binary file — open it to view",
+        textContent: "binary file - open it to view",
       }),
     );
     positionUnderAnchor();

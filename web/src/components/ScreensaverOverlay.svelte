@@ -188,7 +188,7 @@
             onclick={submit}
             disabled={busy}
           >
-            {busy ? "Unlocking…" : "Unlock"}
+            {busy ? "Unlocking..." : "Unlock"}
           </button>
         {:else}
           <!-- No-PIN branch. Helper text promises "any input

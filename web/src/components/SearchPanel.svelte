@@ -107,7 +107,7 @@
   // Selection prefill: if the user had real text selected when they
   // hit the search shortcut, seed the input with it and run the
   // first search immediately. Capture the selection BEFORE focusing
-  // the input — focus collapses the selection, so reading it inside
+  // the input - focus collapses the selection, so reading it inside
   // the queueMicrotask would always come back empty. Gate keeps the
   // prefill quiet for the common cases where the selection isn't
   // useful (long paragraph, multi-line, focus inside another input).
@@ -119,13 +119,13 @@
     // subscribing.
     untrack(() => {
       // Three open paths converge here:
-      //   (a) URL hash restore — searchPanel.query was set by
+      //   (a) URL hash restore - searchPanel.query was set by
       //       applyOverlaysFromHash before the panel went open.
       //       Keep it as-is and run a search.
-      //   (b) Text-selection seed — query was empty, the user
+      //   (b) Text-selection seed - query was empty, the user
       //       had real text selected when they hit Cmd+K. Adopt
       //       it and run a search.
-      //   (c) Fresh empty open — wait for the user to type.
+      //   (c) Fresh empty open - wait for the user to type.
       const restored = searchPanel.query.trim();
       const seed = restored ? null : extractSearchSeed();
       if (seed) searchPanel.query = seed;
@@ -178,7 +178,7 @@
     searchPanel.open = false;
   }
 
-  /// Scope picker shape — same dropdown contract as Graph and
+  /// Scope picker shape - same dropdown contract as Graph and
   /// details pane. Re-derives whenever the layout shifts so opening a
   /// new pane or switching the visible tab refreshes the options
   /// without reopening the panel.
@@ -406,7 +406,7 @@
   /// user typed part of its title) is a different signal from a
   /// file that matches by content, and surfacing both lets the user
   /// pick whichever they were after. Contact-kind files are
-  /// excluded — they get their own row kind above. Files that also
+  /// excluded - they get their own row kind above. Files that also
   /// appear in chunk hits are deduped in the `rows` combiner so the
   /// same path doesn't render twice.
   const markdownFileRows = $derived.by<SearchRow[]>(() => {
@@ -597,7 +597,7 @@
       await openInActivePane(r.hit.path);
     } else if (r.kind === "file" || r.kind === "language_file" || r.kind === "contact") {
       // Filename / contact matches open the underlying file in the
-      // editor exactly like a chunk hit would — the path IS the
+      // editor exactly like a chunk hit would - the path IS the
       // payload, no chunk anchor to honour.
       close();
       await openInActivePane(r.path);
@@ -693,7 +693,7 @@
   }
 
   function onSearchContextMenu(e: MouseEvent): void {
-    // Bail if the right-click landed on the input — let the browser
+    // Bail if the right-click landed on the input - let the browser
     // show its native context menu (paste, spell, etc.) there.
     const t = e.target as HTMLElement | null;
     if (t?.closest("input, textarea")) return;
@@ -785,7 +785,7 @@
                 <div class="row1">
                   <KindChip kind="document" compact />
                   <span class="path">{r.hit.path}</span>
-                  {#if r.hit.heading}<span class="heading">· {r.hit.heading}</span>{/if}
+                  {#if r.hit.heading}<span class="heading"> - {r.hit.heading}</span>{/if}
                 </div>
                 <div class="snippet">{@html renderSnippet(r.hit.snippet)}</div>
               {:else if r.kind === "image"}
@@ -856,8 +856,8 @@
       </ul>
       <!-- Input row first, then the status line beneath it. The
            status reads as a footer hint anchored to the bottom of
-           the panel ("type to search · ↵ open · ↑↓ select" /
-           "12 hits (5 doc · 2 image · …)" / "no matches") so the
+           the panel ("type to search - ↵ open - ↑↓ select" /
+           "12 hits (5 doc - 2 image - ...)" / "no matches") so the
            cursor and the kbd hint live next to each other instead
            of with the results list above. -->
       <div class="head">
@@ -873,7 +873,7 @@
       </div>
       <div class="status-line">
         {#if loading}
-          <span>searching…</span>
+          <span>searching...</span>
         {:else if error}
           <span class="err">{error}</span>
         {:else if searchPanel.query.trim() && rows.length === 0}
@@ -882,14 +882,14 @@
           <span>
             {rows.length} hit{rows.length === 1 ? "" : "s"}
             {#if rowCounts.tag + rowCounts.image + rowCounts.contact + rowCounts.file + rowCounts.language > 0}
-              ({rowCounts.chunk} doc · {rowCounts.image} image · {rowCounts.tag} tag
-              {#if rowCounts.contact > 0} · {rowCounts.contact} contact{/if}
-              {#if rowCounts.file > 0} · {rowCounts.file} file{/if}
-              {#if rowCounts.language > 0} · {rowCounts.language} language{/if})
+              ({rowCounts.chunk} doc - {rowCounts.image} image - {rowCounts.tag} tag
+              {#if rowCounts.contact > 0} - {rowCounts.contact} contact{/if}
+              {#if rowCounts.file > 0} - {rowCounts.file} file{/if}
+              {#if rowCounts.language > 0} - {rowCounts.language} language{/if})
             {/if}
           </span>
         {:else}
-          <span class="muted">type to search · ↵ open · ↑↓ select</span>
+          <span class="muted">type to search - ↵ open - ↑↓ select</span>
         {/if}
       </div>
       </div>
@@ -930,7 +930,7 @@
                 close();
                 openFsGraphForFile(sel.path);
               }
-              // Mention "Set as Scope" stays unwired here — the
+              // Mention "Set as Scope" stays unwired here - the
               // search panel doesn't surface mention rows yet, so
               // resolving a contact label would never fire.
             }}

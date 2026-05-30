@@ -48,7 +48,7 @@ export function validatePath(
   // A trailing `/` normally means an unfinished basename and is
   // rejected with a name-prompt hint (file create, move/rename). But
   // when the caller is creating a directory (`allowTrailingSlash`),
-  // `foo/` is the natural way to say "make the directory foo" — the
+  // `foo/` is the natural way to say "make the directory foo" - the
   // New File or Directory dialog's caption invites exactly that. In
   // that mode we strip one trailing slash and validate the remaining
   // path as the directory name. A bare "/" (or "" after stripping)
@@ -178,7 +178,7 @@ export const DEFAULT_NEW_FILENAME_STEM = "untitled";
 /// raw typed value at the moment of suggestion: empty for top-
 /// level files, or a directory path that should end with `/` (a
 /// missing trailing slash is tolerated so callers don't have to
-/// pre-format). Always returns a path ending in `.md` — that's
+/// pre-format). Always returns a path ending in `.md` - that's
 /// the default chan-workspace considers editable text.
 export function proposeDefaultFilename(parent: string): string {
   const prefix =

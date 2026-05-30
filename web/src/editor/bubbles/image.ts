@@ -52,7 +52,7 @@ export interface ImageBubbleOpts {
   templateMode?: "wrap" | "raw";
   /// Cmd+Enter handler. Called with the selected hit's path so the
   /// host can open the image zoom modal (or do whatever "open the
-  /// image" means in context). Optional — when omitted, Cmd+Enter is
+  /// image" means in context). Optional - when omitted, Cmd+Enter is
   /// a no-op.
   onOpenLink?: (path: string) => void;
   onDismiss: () => void;
@@ -95,7 +95,7 @@ export function invalidateImageCatalog(): void {
 }
 
 export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
-  // Anchor at the START of the editable range — for raw mode that's
+  // Anchor at the START of the editable range - for raw mode that's
   // the URL slot's open boundary (just after `(`), for wrap mode
   // it's the `!` of `![`. Stable across typing inside the trigger:
   // unlike the live caret, this doesn't shift as the user edits,
@@ -135,7 +135,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
 
   // Alignment row, only visible in raw mode (editing an existing
   // image). Three buttons cycle the `#left` / `#right` fragment on
-  // the URL — commits an edit to the source URL directly (no
+  // the URL - commits an edit to the source URL directly (no
   // bubble dismiss). Center is "no fragment".
   let alignRow: HTMLDivElement | null = null;
   if (opts.templateMode === "raw") {
@@ -205,7 +205,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
   function renderPreview(): void {
     preview.innerHTML = "";
     // In raw mode (editing an existing image's URL), the preview is
-    // ALWAYS the live URL the user is editing — never a catalog hit.
+    // ALWAYS the live URL the user is editing - never a catalog hit.
     // Using `hits[selectedIndex]` here is wrong: after an align
     // toggle, the URL length changes, caret collapses to slot start,
     // query becomes "", filter() picks the first catalog image, and
@@ -222,7 +222,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
       src = hits[selectedIndex] ?? null;
     }
     if (!src) return;
-    // Raw mode passes the live doc URL through here — that text is
+    // Raw mode passes the live doc URL through here - that text is
     // authored source-relative, so resolve against currentPath.
     // Catalog hits are already workspace-rooted, so pass `null` to skip
     // the sourceDir prepend that would turn "attachments/smile.png"
@@ -259,7 +259,7 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
         status.textContent = "";
         status.classList.add("md-bubble-status-empty");
       }
-      // Still render the preview even with empty hits — in raw mode
+      // Still render the preview even with empty hits - in raw mode
       // the fallback uses the current URL slot text, so the user
       // sees the image they're editing even when the catalog
       // doesn't match.
@@ -268,8 +268,8 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
       return;
     }
     status.classList.remove("md-bubble-status-empty");
-    const openHint = opts.onOpenLink ? " · ⌘↵ open" : "";
-    status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} · ↵ insert${openHint}`;
+    const openHint = opts.onOpenLink ? " - ⌘↵ open" : "";
+    status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} - ↵ insert${openHint}`;
     for (let i = 0; i < hits.length; i++) {
       const path = hits[i]!;
       const row = document.createElement("div");

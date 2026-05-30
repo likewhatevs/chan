@@ -364,11 +364,11 @@
   /// COCOMO formatting helpers; identical shape to FileInfoBody so the
   /// dir-mode and workspace-root inspectors format the same way.
   function fmtMonths(n: number): string {
-    if (!Number.isFinite(n)) return "—";
+    if (!Number.isFinite(n)) return " - ";
     return n >= 10 ? `${Math.round(n)} mo` : `${n.toFixed(1)} mo`;
   }
   function fmtDevs(n: number): string {
-    if (!Number.isFinite(n)) return "—";
+    if (!Number.isFinite(n)) return " - ";
     return n >= 10 ? `${Math.round(n)}` : n.toFixed(1);
   }
 
@@ -459,7 +459,7 @@
             <span class="dl-line"
               >Downloading {transfer.filename}{transfer.progress !== null
                 ? ` (${Math.round(transfer.progress * 100)}%)`
-                : "…"}</span
+                : "..."}</span
             >
             {#if transfer.cancel}
               <button
@@ -565,7 +565,7 @@
       </div>
     </section>
   {:else if reportLoading}
-    <div class="refs-loading">loading report…</div>
+    <div class="refs-loading">loading report...</div>
   {:else if reportError}
     <div class="refs-error">report unavailable: {reportError}</div>
   {/if}

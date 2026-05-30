@@ -14,7 +14,7 @@
 //     starts a window-level mousemove/mouseup loop; the handle
 //     mutates `img.style.width` live during drag. On mouseup the
 //     final width commits to the source via `setImageWidth` +
-//     `view.dispatch` — the widget then re-mounts at the persisted
+//     `view.dispatch` - the widget then re-mounts at the persisted
 //     width (no visible flicker; the inline style is identical).
 //   - Click on the img (not the handle) fires `onImageClick(
 //     { src, alt, pos }`) so step 8's image-action overlay can mount
@@ -115,7 +115,7 @@ function userScrollIntentActive(scrollDOM: HTMLElement): boolean {
 /// Strict-interior selection test for image edit-mode entry.
 /// `selectionInRange` (the inline-mark helper) treats caret AT a
 /// boundary as "intersecting". That rule makes sense for bold /
-/// italic markers — touching the `*` reveals it — but for images
+/// italic markers - touching the `*` reveals it - but for images
 /// the atomic widget replaces the entire source span, so the only
 /// position the caret can EVER hold via clicks is one of the two
 /// outer boundaries (atomicRanges snaps the click). Treating those
@@ -140,7 +140,7 @@ function imageEditEntered(
   return false;
 }
 
-/// Lucide Copy + Check icons inlined as SVG strings — the widget is
+/// Lucide Copy + Check icons inlined as SVG strings - the widget is
 /// raw DOM, not Svelte, so we can't reuse lucide-svelte components.
 /// Compact 12px icons with stroke weights tuned for the image
 /// widget's small action row.
@@ -196,7 +196,7 @@ const CLEAR_AFTER_IMAGE = Decoration.line({
 export interface ImageClickArgs {
   src: string;
   alt: string;
-  /// Position of the Image node's start in the source — useful for
+  /// Position of the Image node's start in the source - useful for
   /// the action overlay (step 8) to anchor itself or trigger an
   /// edit-bubble open at the right offset.
   pos: number;
@@ -227,15 +227,14 @@ class ImageWidget extends WidgetType {
     readonly nodePos: number,
     /// True when the image is the only content on its source line
     /// (no surrounding text). Standalone images take the block-level
-    /// layout — alignment moves the image LEFT / CENTER / RIGHT
+    /// layout - alignment moves the image LEFT / CENTER / RIGHT
     /// within its own line via flex justify-content. Inline images
     /// (mixed with paragraph text) keep the existing float layout
     /// so text wraps around them.
     readonly standalone: boolean,
     /// True when the widget is rendered AS A BLOCK PREVIEW above an
     /// editable source line (caret is inside the image's source).
-    /// In edit mode the float-around-text layout doesn't apply —
-    /// the preview is a sibling to the source row, not a replacement.
+    /// In edit mode the float-around-text layout doesn't apply -     /// the preview is a sibling to the source row, not a replacement.
     readonly editing: boolean,
     /// True when the editor's `EditorView.editable` facet is on at
     /// scan time. Captured here (rather than read live inside toDOM)
@@ -246,7 +245,7 @@ class ImageWidget extends WidgetType {
     /// land before editability settles, and `eq()` would then keep the
     /// stale non-draggable DOM forever. Named `writable` (not
     /// `editable`) because `WidgetType` exposes a getter-only
-    /// `editable` member — assigning to a field of that name throws.
+    /// `editable` member - assigning to a field of that name throws.
     readonly writable: boolean,
     readonly onClick: ((args: ImageClickArgs) => void) | undefined,
   ) {
@@ -371,8 +370,7 @@ class ImageWidget extends WidgetType {
       // that happens after the user typed `![](path)` leaves the
       // caret stranded far below the viewport with no follow-up
       // scroll. Re-anchor the scroll once the image lands, but only
-      // when the caret is on or next to THIS image's source line —
-      // anywhere else means the user is editing elsewhere while a
+      // when the caret is on or next to THIS image's source line -       // anywhere else means the user is editing elsewhere while a
       // distant image streams in, and re-scrolling would fight their
       // deliberate position.
       img.addEventListener(
@@ -395,7 +393,7 @@ class ImageWidget extends WidgetType {
           // The viewport-check below already gates correctly:
           // if the caret is still visible, return (no
           // disturbance to "deliberate position"). If the
-          // caret is off-screen, restore visibility — that's
+          // caret is off-screen, restore visibility - that's
           // the desired UX regardless of distance to the
           // image.
           const cb = view.coordsAtPos(head);
@@ -426,9 +424,8 @@ class ImageWidget extends WidgetType {
       // Edit button next to the View button, or arrow-key navigation
       // INTO the image's source markers. Earlier behaviour
       // (clicking dropped the caret inside the URL and the bubble
-      // auto-opened) made every interaction with an image — picking
-      // it for zoom, taking a screenshot, just clicking past it —
-      // flip the widget into source-edit mode, which read as a bug.
+      // auto-opened) made every interaction with an image - picking
+      // it for zoom, taking a screenshot, just clicking past it -       // flip the widget into source-edit mode, which read as a bug.
       if ((e.metaKey || e.ctrlKey) && this.onClick) {
         this.onClick({ src: this.src, alt: this.alt, pos: this.nodePos });
         return;
@@ -472,7 +469,7 @@ class ImageWidget extends WidgetType {
       });
       actions.appendChild(editBtn);
     }
-    // Copy sits last in the row (Edit · View · Copy), available in
+    // Copy sits last in the row (Edit - View - Copy), available in
     // read-only too. Icon-only so the row stays compact; transient
     // Check feedback on success.
     const copyBtn = document.createElement("button");
@@ -564,7 +561,7 @@ function ensureDeselectListener(view: EditorView): void {
     const t = e.target as Node | null;
     if (!t) return;
     // Click inside an image wrap (or its hover overlay buttons)
-    // leaves selection alone — the widget's own mousedown will
+    // leaves selection alone - the widget's own mousedown will
     // re-set the ring on the clicked wrap.
     if ((t as Element).closest?.(".cm-md-image-wrap")) return;
     clearImageSelection(view);
@@ -582,7 +579,7 @@ function ensureDeselectListener(view: EditorView): void {
       _chanImg?: ImageActionPayload;
     })._chanImg;
     const hasMod = e.metaKey || e.ctrlKey;
-    // Cmd/Ctrl+Enter — same as clicking the View button (zoom modal).
+    // Cmd/Ctrl+Enter - same as clicking the View button (zoom modal).
     if (hasMod && e.key === "Enter" && !e.altKey && !e.shiftKey) {
       e.preventDefault();
       if (payload?.onClick) {
@@ -595,7 +592,7 @@ function ensureDeselectListener(view: EditorView): void {
       clearImageSelection(view);
       return;
     }
-    // Cmd/Ctrl+C — same as clicking the Copy button. We only consume
+    // Cmd/Ctrl+C - same as clicking the Copy button. We only consume
     // the key when no text range is selected, so a regular text copy
     // (range selection that happens to span an image) keeps working.
     if (
@@ -611,7 +608,7 @@ function ensureDeselectListener(view: EditorView): void {
       }
       return;
     }
-    // Plain Enter — same as clicking the Edit button.
+    // Plain Enter - same as clicking the Edit button.
     if (!hasMod && !e.altKey && !e.shiftKey && e.key === "Enter") {
       e.preventDefault();
       placeCaretInImageUrl(view, hintPos);
@@ -658,7 +655,7 @@ function imageNodeRange(
 function placeCaretInImageUrl(view: EditorView, hintPos: number): void {
   // hintPos is the Image node's start as captured when the widget
   // was constructed. Looking up via syntaxTree is more reliable than
-  // posAtDOM on the wrap — the wrap may sit at line.from when the
+  // posAtDOM on the wrap - the wrap may sit at line.from when the
   // widget renders as block-above (edit mode), where resolveInner
   // walks up through Paragraph / Document and never reaches the
   // Image node. Using the captured nodePos lands directly inside
@@ -685,7 +682,7 @@ function placeCaretInImageUrl(view: EditorView, hintPos: number): void {
   // Bias the caret to a position strictly inside the URL slot when
   // possible. Landing at urlTo (the boundary between URL and the
   // closing `)` LinkMark) is ambiguous for `resolveInner(pos, 0)` in
-  // the bubble's urlSlotAtCaret trigger — it can resolve to either
+  // the bubble's urlSlotAtCaret trigger - it can resolve to either
   // sibling node, and at least in the broken-image flow the
   // ambiguity prevents the raw-mode trigger from firing. The bubble
   // would either fall through to wrap-mode (inserting `![](new)`
@@ -693,7 +690,7 @@ function placeCaretInImageUrl(view: EditorView, hintPos: number): void {
   // at urlFrom + 1 (one char past the `(` LinkMark) sits cleanly
   // inside the URL leaf so resolveInner reaches Image without
   // boundary ambiguity. For an empty URL (`![alt]()`) there's no
-  // interior — urlFrom == urlTo — and the bubble's LinkMark-based
+  // interior - urlFrom == urlTo - and the bubble's LinkMark-based
   // fallback handles that case.
   const anchor = urlFrom < urlTo ? urlFrom + 1 : urlFrom;
   view.dispatch({ selection: { anchor } });
@@ -774,7 +771,7 @@ function commitImageWidth(
 /// Atomic ranges make arrow-key navigation jump from "before" to
 /// "after" an image in a single keystroke; we want that landing
 /// (caret at Image.from or Image.to) to visually SELECT the image
-/// — same ring the click handler lights up — so the user can then
+/// - same ring the click handler lights up - so the user can then
 /// Cmd/Ctrl+Enter into edit mode or Backspace to delete. Stepping
 /// the caret off the boundary clears the ring on the next update.
 ///
@@ -792,7 +789,7 @@ export function imageCaretRedirect(): Extension {
     let selectedPos: number | null = null;
     if (cur.empty) {
       const tree = syntaxTree(u.state);
-      // Try both bias directions — caret AT a boundary may resolve
+      // Try both bias directions - caret AT a boundary may resolve
       // to either the Image node or its sibling depending on which
       // side of the boundary `resolveInner` lands on.
       for (const bias of [-1, 1] as const) {
@@ -928,7 +925,7 @@ function scanImagesInline(view: EditorView, opts: ImageOptions): DecorationSet {
       // Editing mode: skip the inline replace so the source `![alt](url)`
       // stays as editable text. The block-above preview comes from
       // scanImagesBlock (StateField). Float-clear line decoration is
-      // also skipped — the preview is a separate block, no float.
+      // also skipped - the preview is a separate block, no float.
       if (editing) return;
       const widget = new ImageWidget(
         alt,

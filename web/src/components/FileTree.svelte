@@ -733,7 +733,7 @@
   /// Auto-scroll when the selection changes from outside (e.g.
   /// store.revealAndSelect after a successful directory create).
   /// Keyboard nav already calls queueScrollIntoView directly, so
-  /// re-scrolling here is benign — the second rAF resolves on the
+  /// re-scrolling here is benign - the second rAF resolves on the
   /// same frame without flicker. Wait one more rAF than usual to
   /// give Svelte a chance to expand any newly-uncollapsed ancestor
   /// directories so the row's DOM element exists.
@@ -969,7 +969,7 @@
   ///      drops the cursor to -1.
   ///   2. Same query, match set updated (directory expanded / collapsed
   ///      while find was open): clamp cursor into range, but DO NOT
-  ///      reset to 0 — that would fight findStep, which moves the
+  ///      reset to 0 - that would fight findStep, which moves the
   ///      cursor and triggers this effect via the findCurrentIndex
   ///      / findMatchPaths read below.
   ///

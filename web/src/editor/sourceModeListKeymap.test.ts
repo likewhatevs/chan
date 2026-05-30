@@ -80,8 +80,7 @@ afterEach(() => {
 
 describe("source-mode markdown extension", () => {
   test("with addKeymap=true (default), Enter after `1. ` auto-continues to `2. `", () => {
-    // Sanity check against the default lang-markdown behaviour —
-    // confirms the bug exists without our fix.
+    // Sanity check against the default lang-markdown behaviour -     // confirms the bug exists without our fix.
     const seed = "1. item";
     const after = runEnterAt(seed, seed.length, true);
     // Default markdownKeymap should insert "\n2. " after the

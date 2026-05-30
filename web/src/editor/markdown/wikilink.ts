@@ -16,7 +16,7 @@
 // post-`]]` position. Otherwise we return -1 so the regular `[link]` /
 // `[ref]` parsers get their chance.
 //
-// Empty bodies (`[[]]`) and bodies containing `[[` are rejected — the
+// Empty bodies (`[[]]`) and bodies containing `[[` are rejected - the
 // former would create zero-width pills with no semantic value, the latter
 // would conflict with the regular link parser's stack.
 
@@ -61,7 +61,7 @@ export const WikiLink: MarkdownConfig = {
             ch === OPEN_BRACKET &&
             cx.char(scan + 1) === OPEN_BRACKET
           ) {
-            // Nested `[[` inside the body — bail and let regular parsers
+            // Nested `[[` inside the body - bail and let regular parsers
             // try (none of them will match either, but the body would
             // confuse downstream consumers).
             return -1;

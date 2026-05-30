@@ -661,7 +661,7 @@
       <div class="swatch" style="background: {previewBg};">
         <img src={previewSvg} alt="" width="160" height="160" />
       </div>
-      <p class="hint">single sphere @ 160px — the same SVG the graph nodes render at ~26px.</p>
+      <p class="hint">single sphere @ 160px - the same SVG the graph nodes render at ~26px.</p>
     </div>
 
     <button class="copy" onclick={copySnippet}>copy values</button>
@@ -670,8 +670,7 @@
   <main class="canvas-wrap">
     <div bind:this={containerEl} class="cy"></div>
     <div class="status">
-      {stats.nodes} nodes · {stats.edges} edges · drag a node to nudge ·
-      scroll to zoom
+      {stats.nodes} nodes - {stats.edges} edges - drag a node to nudge -       scroll to zoom
     </div>
   </main>
 </div>

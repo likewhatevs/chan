@@ -115,7 +115,7 @@
           width: 10,
           height: 10,
         } },
-      // Tags: green hashtag text only — no fill, label centered
+      // Tags: green hashtag text only - no fill, label centered
       // on the node so the "#name" string IS the visual.
       { selector: 'node[kind = "tag"]',
         style: {
@@ -223,7 +223,7 @@
   // cytoscape-d3-force merges each cy element's `data()` into the
   // d3-force node/edge object (see node_modules/cytoscape-d3-force,
   // `assign(getScratch(n), n.data())`). Accessors therefore receive
-  // a plain object whose fields are the data keys directly — no
+  // a plain object whose fields are the data keys directly - no
   // `.data()` method, no `.kind` getter. Read kind/id off the bare
   // object.
   type D3Node = { kind: string; id: string; index?: number };
@@ -238,7 +238,7 @@
       // infinite=true keeps the simulation + cytoscape grab/free
       // handlers alive after the initial settle. Without it, the
       // layout calls end() once progress hits 1 and tears its event
-      // handlers down — drags after that point do nothing.
+      // handlers down - drags after that point do nothing.
       infinite: true,
       ungrabifyWhileSimulating: false,
       fixedAfterDragging: force.fixedAfterDragging,
@@ -299,7 +299,7 @@
         forceLayout.run();
 
         // cytoscape-d3-force's built-in grab/free handlers bump
-        // alphaTarget to ~0.33 and never restore it to 0 — so
+        // alphaTarget to ~0.33 and never restore it to 0 - so
         // after a single drag the simulation runs forever. Add
         // our own free/unlock handler (registered after the
         // built-in's, so it executes second) that drops the
@@ -468,8 +468,7 @@
   <main class="canvas-wrap">
     <div bind:this={containerEl} class="cy"></div>
     <div class="status">
-      {stats.nodes} nodes · {stats.edges} edges ·
-      drag a node to nudge neighbours · scroll to zoom
+      {stats.nodes} nodes - {stats.edges} edges -       drag a node to nudge neighbours - scroll to zoom
     </div>
   </main>
 </div>
@@ -501,7 +500,7 @@
   /* Light theme: cream paper background, deeper brand orange so it
      stays legible at lower brightness, slightly desaturated
      supporting hues so they don't glare against the cream. */
-  /* "Light mode" of the graph isn't actually light — a graph
+  /* "Light mode" of the graph isn't actually light - a graph
      canvas wants a dark backdrop for its colored nodes to pop.
      This variant just shifts to a neutral medium-dark grey
      (vs the warm near-black of the dark theme), keeping the

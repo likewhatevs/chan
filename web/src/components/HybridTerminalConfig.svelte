@@ -153,7 +153,7 @@
     if (!editing) return;
     if (next === CUSTOM_TERM_SENTINEL) {
       customMode = true;
-      // Don't clear the persisted value here — if the user
+      // Don't clear the persisted value here - if the user
       // toggles Custom → known → Custom, their previous custom
       // string should still be in the input. We just flip the
       // UI mode; the input becomes editable.
@@ -195,7 +195,7 @@
     editing.terminal = { ...editing.terminal, font: next };
     if (next === "source-code-pro") {
       fontDownloading = true;
-      fontStatusMessage = "Downloading Source Code Pro…";
+      fontStatusMessage = "Downloading Source Code Pro...";
       try {
         await api.fontsSourceCodeProDownload();
         fontStatusMessage = "Source Code Pro ready.";

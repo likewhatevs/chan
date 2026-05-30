@@ -185,7 +185,7 @@
     parts.push(`${model.dim}d`);
     parts.push(model.size_label);
     parts.push(model.downloaded ? "downloaded" : "not downloaded");
-    return parts.join(" · ");
+    return parts.join(" - ");
   }
 
   async function changeSemanticModel(e: Event): Promise<void> {
@@ -242,7 +242,7 @@
           chan release that includes it) to enable Hybrid search.
         </p>
       {:else if semanticState === null}
-        <p class="hint muted">Loading semantic-search state…</p>
+        <p class="hint muted">Loading semantic-search state...</p>
       {:else}
         <p class="hint">
           Hybrid search blends BM25 keyword scoring with dense-vector
@@ -264,10 +264,10 @@
         {#if semanticDownloading}
           <p class="hint muted">
             <span class="spinner" aria-hidden="true"></span>
-            Downloading model… this may take a few minutes.
+            Downloading model... this may take a few minutes.
           </p>
         {:else if semanticEnabling}
-          <p class="hint muted">Enabling…</p>
+          <p class="hint muted">Enabling...</p>
         {/if}
         <div class="grid semantic-info">
           <span class="k">Active</span>
@@ -308,7 +308,7 @@
           {:else}
             {#each semanticModels.models as model (model.id)}
               <option value={model.id}>
-                {model.label} · {formatModelMeta(model)}
+                {model.label} - {formatModelMeta(model)}
               </option>
             {/each}
           {/if}

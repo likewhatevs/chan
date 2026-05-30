@@ -348,12 +348,12 @@
                 <div class="muted small">
                   {#if d.online}
                     {#if d.public}
-                      Public &middot; anyone with the link can read
+                      Public - anyone with the link can read
                     {:else}
-                      Online &middot; only you and grantees can open
+                      Online - only you and grantees can open
                     {/if}
                   {:else}
-                    Offline &middot; start <code>chan serve --tunnel-workspace-name={d.name}</code>
+                    Offline - start <code>chan serve --tunnel-workspace-name={d.name}</code>
                   {/if}
                 </div>
               </div>
@@ -488,7 +488,7 @@
               <div class="meta">
                 <div class="label">
                   {s.workspace_name}
-                  <span class="muted small">&middot; from @{s.owner_username}</span>
+                  <span class="muted small"> - from @{s.owner_username}</span>
                 </div>
                 <div class="muted small">
                   {s.role === "editor" ? "Editor" : "Viewer"} access

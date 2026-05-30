@@ -9,7 +9,7 @@
 // Threat model is local-only (someone over-the-shoulder while
 // the user steps away) per the task body's framing. PBKDF2 +
 // SHA-256 + a fixed per-workspace salt + a moderate iteration
-// count is sufficient — argon2/scrypt would be overkill and
+// count is sufficient - argon2/scrypt would be overkill and
 // would force a new dependency.
 //
 // Salt derivation: the chan-workspace `workspace.info.root` path is
@@ -23,7 +23,7 @@
 // Iteration count: 100_000 is the OWASP "PBKDF2 for
 // password-equivalent" minimum recommendation circa 2023.
 // Browser perf on a modern laptop: ~50ms for 100k iterations
-// — imperceptible to the user typing a PIN. Don't drop below
+// - imperceptible to the user typing a PIN. Don't drop below
 // 10k.
 
 const PBKDF2_ITERATIONS = 100_000;
@@ -38,13 +38,13 @@ const PBKDF2_HASH_BITS = 256; // SHA-256 output size.
 ///
 /// `workspaceSalt` is any stable per-workspace string the caller has
 /// on hand, typically `workspace.info?.root`.
-/// Empty string falls back to a fixed default — usable for
+/// Empty string falls back to a fixed default - usable for
 /// the truly-no-workspace case but the SPA shouldn't reach this
 /// helper without a workspace loaded anyway.
 export async function hashPin(pin: string, workspaceSalt: string): Promise<string> {
   if (typeof crypto === "undefined" || !crypto.subtle) {
     throw new Error(
-      "crypto.subtle unavailable — screensaver PIN hashing requires WebCrypto",
+      "crypto.subtle unavailable - screensaver PIN hashing requires WebCrypto",
     );
   }
   const encoder = new TextEncoder();

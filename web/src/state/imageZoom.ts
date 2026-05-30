@@ -3,7 +3,7 @@
 // overlay. Click the backdrop or press Escape to dismiss; the
 // overlay cleans itself up.
 //
-// Styles are applied inline so the helper is self-contained — the
+// Styles are applied inline so the helper is self-contained - the
 // previous "CSS lives in Wysiwyg.svelte" arrangement broke during
 // the CM6 cutover when the `:global(.md-image-zoom)` block was
 // dropped, leaving the View button technically working (backdrop

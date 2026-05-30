@@ -17,11 +17,11 @@ chan-tunnel is split across three crates in `chan-writer/chan-core`:
 
 End-to-end shape: `chan serve` calls `chan_tunnel_client::run(cfg,
 router)` which dials `{tunnel-host}/v1/tunnel`. nginx terminates
-TLS at `drive.chan.app` and `grpc_pass`-es `/v1/tunnel` as h2c to
+TLS at `workspace.chan.app` and `grpc_pass`-es `/v1/tunnel` as h2c to
 `serve_tunnel_listener`. Each accepted connection becomes a yamux
 session managed by a per-tunnel driver task and indexed in the
 shared `Registry`. The wildcard router (mounted at e.g.
-`*.drive.chan.app`) parses `{user}` out of the host header, looks
+`*.workspace.chan.app`) parses `{user}` out of the host header, looks
 up the `TunnelHandle` for `(user, workspace)`, opens a fresh outbound
 substream, and runs hyper h1 client over it to forward the request
 (with WebSocket upgrade bridging).
@@ -42,7 +42,7 @@ The terminator side of chan-tunnel needs to:
 - Multiplex per-public-request substreams over the resulting yamux
   session.
 - Expose live tunnels to a public-facing axum router so the gateway
-  can route `drive.chan.app/{user}/{workspace}/...` at the registered
+  can route `workspace.chan.app/{user}/{workspace}/...` at the registered
   peer.
 - Tolerate flap (a `chan serve` restart should reclaim its workspace
   without waiting for a TCP timeout).
@@ -58,7 +58,7 @@ Out of scope:
 ## 2. Architecture overview
 
 ```
-                 nginx (drive.chan.app/v1/tunnel, TLS, grpc_pass)
+                 nginx (workspace.chan.app/v1/tunnel, TLS, grpc_pass)
                               |
                               v h2c
                  +---------------------------+
@@ -253,7 +253,7 @@ streaming works through the yamux flow-control window.
 
 ### Why h2c (not TLS) on the listener
 
-nginx is the TLS terminator at `drive.chan.app` and forwards h2c
+nginx is the TLS terminator at `workspace.chan.app` and forwards h2c
 via `grpc_pass` on the `/v1/tunnel` path only. Running rustls again
 here would duplicate trust config and complicate cert rotation. For
 local dev or other deployments the host can put any TLS layer in

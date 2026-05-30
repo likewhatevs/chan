@@ -6,8 +6,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Phase 13 round 2 (heading to v0.18.0). Builds directly on the v0.17.0
-cleanup below.
+Phase 14 round 2: a frontend pristine pass for the first public release,
+plus the tunnel domain rename.
+
+### Changed
+
+- The tunnel domain is now `workspace.chan.app` (previously
+  `drive.chan.app`). Tunnel mode dials `workspace.chan.app/v1/tunnel` and
+  publishes at `{user}.workspace.chan.app/{workspace}/`; the chan client
+  default, the chan-tunnel-* crates, chan-server, the desktop shell, the
+  manual, and the marketing copy all use the new hostname.
+- Reviewed the frontend code comments, documentation, and user-facing
+  copy so they read as a present-state snapshot rather than a development
+  history. The editor design note (`web/src/editor/design.md`) now
+  describes the current CodeMirror 6 editor without its tiptap-to-CM6
+  migration story (that history is kept in `docs/journals`); stale
+  `chan-core` crate references were corrected to the post-split crates;
+  and user-facing strings were normalized to ASCII typography (em dashes,
+  ellipses, and middle dots replaced with `-` and `...`).
+
+## [v0.18.0] - 2026-05-29
+
+Phase 13 round 2. Builds directly on the v0.17.0 cleanup below.
 
 ### Changed
 

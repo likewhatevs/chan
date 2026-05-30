@@ -11,10 +11,7 @@
 // of truth (signed updater assets + checksums), exactly the way
 // release.yml does: collect-release-assets builds the manifest, then
 // generate-release-metadata writes the static files. It does NOT read
-// the live site. The previous guard fetched https://chan.app/dl and, on
-// a single transient 404, preserved nothing, then re-published an empty
-// /dl that kept 404ing every later deploy until a release regenerated
-// it.
+// the live site.
 
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";

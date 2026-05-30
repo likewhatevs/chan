@@ -2,7 +2,7 @@
 //
 // `#word` isn't a lezer-markdown node, so this lives outside the
 // per-token walker as its own ViewPlugin. On every relevant update
-// (doc / viewport / selection — selection so the visibility rule
+// (doc / viewport / selection - selection so the visibility rule
 // matches the rest of the editor) we scan the visible viewport's text,
 // regex-match `#word`, exclude matches that fall inside InlineCode or
 // FencedCode (where the `#` is literal source, not a tag), and emit a
@@ -11,7 +11,7 @@
 // Click delegation: a single domEventHandlers handler on the editor's
 // content DOM walks up from the click target to find a `.cm-md-tag`
 // span and resolves the tag name from the text content. No per-mark
-// listener — those don't survive remounts cleanly.
+// listener - those don't survive remounts cleanly.
 //
 // Tag pattern: `(?:^|[^A-Za-z0-9_])(#[A-Za-z0-9_-]+)`. The non-capture
 // boundary prefix keeps `https://x.com#section` and `foo#bar` from
@@ -31,7 +31,7 @@ const TAG_MARK = Decoration.mark({ class: "cm-md-tag" });
 const TAG_RE = /(?:^|[^A-Za-z0-9_])(#[A-Za-z0-9_-]+)/g;
 
 /// Names of syntax nodes inside which `#word` should NOT be tagged
-/// (the `#` is literal source — code spans, code blocks, code text in
+/// (the `#` is literal source - code spans, code blocks, code text in
 /// fenced blocks). Comment / HTML nodes also count when they appear in
 /// markdown source but lezer doesn't surface them often in practice.
 const SKIP_INSIDE = new Set<string>([
@@ -73,7 +73,7 @@ export function tagDecorations(opts: TagOptions): Extension {
       // Suppress CM6's default caret-set on mousedown over a tag
       // pill. Without this, clicking on a tag drops the caret INSIDE
       // the `#word` range, which trips the bubble listener's tag-
-      // trigger detection and pops the autocomplete picker — even
+      // trigger detection and pops the autocomplete picker - even
       // though the user's intent was navigation (opens the graph
       // via the click handler below). Returning true tells CM6 we
       // handled it; preventDefault keeps the browser from giving

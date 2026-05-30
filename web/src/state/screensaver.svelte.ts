@@ -100,7 +100,7 @@ export function noteScreensaverActivity(): void {
   armInactivityTimer();
 }
 
-/// Manual lock — chord-driven OR menu-driven. Bypasses the
+/// Manual lock - chord-driven OR menu-driven. Bypasses the
 /// inactivity timer.
 export function lockNow(): void {
   if (!screensaver.loaded) return;
@@ -115,7 +115,7 @@ export function lockNow(): void {
 ///
 /// When no PIN is set on the workspace (`pin_set=false`) the screensaver
 /// still arms but the lockout is a no-op. We verify against the server
-/// anyway — the endpoint returns `verified: false` for the no-PIN case,
+/// anyway - the endpoint returns `verified: false` for the no-PIN case,
 /// so this branch is consistent. The Settings UI guards against enabling
 /// the screensaver without a PIN at the configuration step.
 export async function unlockWithPin(
@@ -139,10 +139,10 @@ export async function unlockWithPin(
 
 /// Dismiss the lock without going through the PIN verify endpoint.
 /// Called by the overlay's any-input handler when the workspace has no
-/// PIN set — the helper text promises "any input unlocks", and there is
+/// PIN set - the helper text promises "any input unlocks", and there is
 /// nothing to verify. The `pin_set === false` branch is the gate;
 /// callers MUST check before invoking. Server-side state is untouched
-/// (there is no server-side "locked" view — lock state is purely
+/// (there is no server-side "locked" view - lock state is purely
 /// client-side).
 export function unlockWithoutPin(): void {
   if (screensaver.pin_set) return;

@@ -76,7 +76,7 @@ describe("CSS palette", () => {
 
   test("folder kept distinct from binary (no visual collapse)", () => {
     // `--g-folder` stays the medium grey #8e8e93 (dark) / #6c6c70
-    // (light) — distinct from `--g-binary`'s darker greys above.
+    // (light) - distinct from `--g-binary`'s darker greys above.
     expect(app).toMatch(/--g-folder: #8e8e93/);
     expect(app).toMatch(/--g-folder: #6c6c70/);
   });

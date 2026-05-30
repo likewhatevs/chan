@@ -103,7 +103,7 @@ describe("openExternalUrl no-default-browser fallback", () => {
     expect(openUrl).toHaveBeenCalledWith("https://example.com");
     expect(writeText).toHaveBeenCalledWith("https://example.com");
     expect(notifications).toEqual([
-      "Couldn't open link in browser — URL copied to clipboard",
+      "Couldn't open link in browser - URL copied to clipboard",
     ]);
   });
 
@@ -124,7 +124,7 @@ describe("openExternalUrl no-default-browser fallback", () => {
     await expect(openExternalUrl("https://example.com")).resolves.toBe(false);
 
     expect(notifications).toEqual([
-      "Couldn't open link in browser — https://example.com",
+      "Couldn't open link in browser - https://example.com",
     ]);
   });
 

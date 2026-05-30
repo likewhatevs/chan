@@ -1,24 +1,21 @@
-# chan editor (CM6) — design
+# chan editor (CM6) - design
 
-Load-bearing reference for the new chan editor. Mirrors the role of
-`chan-core/crates/chan-workspace/design.md` for the editor surface.
+Load-bearing reference for the chan editor. Mirrors the role of
+`crates/chan-workspace/design.md` for the editor surface.
 
-## Why this exists
+## Model
 
-The previous editor (under `web/src/editor/`, tiptap/ProseMirror-based) made
-the document the *rendered* tree. Markdown source was reconstructed by
-serialization and faked in/out around the caret via expand/collapse passes
-plus per-pattern editing flags. Each new pattern (bold, italic, strike, code,
-link, wikilink, image, naked URL, ...) added another collapse/render race and
-another set of edge cases.
+The document text IS the markdown source. `view.state.doc.toString()` is the
+file on disk; there is no separate rendered tree and no serialization layer.
+The editor decorates the source in place (hide markers, render widgets) so it
+reads like rendered markdown while every character stays editable. This is the
+Live Preview model, the same architecture as Obsidian's.
 
-The recurring bug class: cannot edit `*a*` (1-char italic) although `*aa*`
-works; pending-mark heuristics flicker; markdown round-trip needs escape
+Because the source is the single source of truth, the editor sidesteps a class
+of structural bugs a rendered-tree model is prone to: editing 1-char marks
+like `*a*`, flickering pending-mark heuristics, and markdown round-trip escape
 gymnastics (NBSP for blank paragraphs, `\#` for heading prefixes, defensive
-image serializers); the autosave gate has to enumerate every active
-expansion flag. The class kept biting because it was structural.
-
-This editor flips the model. Same architecture as Obsidian's Live Preview.
+image serializers). See "Why 1-char marks work" below.
 
 ## The contract (10 invariants)
 
@@ -34,9 +31,9 @@ This editor flips the model. Same architecture as Obsidian's Live Preview.
    - **Hide markers**: `Decoration.replace({})` over `*`, `**`, `~~`, `` ` ``,
      `[`, `](`, `)`, `![`, `[[`, `]]`, ```` ``` ````, `> `, `# ` prefixes.
    - **Inline marks**: `Decoration.mark({class})` over the *content* between
-     markers — emphasis, strong, strike, inline-code, link-label.
+     markers - emphasis, strong, strike, inline-code, link-label.
    - **Atomic widgets**: `Decoration.replace({widget, block: false})` over the
-     *whole* range — wikilink, image, date, tag pill, contact pill (rendered
+     *whole* range - wikilink, image, date, tag pill, contact pill (rendered
      as a wikilink subtype). `EditorView.atomicRanges` registered for these.
 
 4. **Visibility rule (per token kind).**
@@ -55,7 +52,7 @@ This editor flips the model. Same architecture as Obsidian's Live Preview.
 5. **Atom strategy (split by token type).**
    - **Wikilinks (`[[note]]` and `[label](path)` where `path` is internal)**:
      atomic widget. Editing means caret-adjacent reveals raw text, OR click
-     pill → opens wiki bubble in edit mode.
+     pill -> opens wiki bubble in edit mode.
    - **External markdown links `[label](https://...)`**: hide markers only
      (`[`, `](`, `)`); `link` mark on label; URL stays visible-but-dimmed
      when selection intersects, hidden otherwise. URL editable in place.
@@ -70,48 +67,44 @@ This editor flips the model. Same architecture as Obsidian's Live Preview.
    `state.selection.main.head`. Debounced via transaction batching: 5
    transactions of `[[abc` produce one open bubble showing "abc". Bubble
    keymap intercepts before CM6's defaults via a high-precedence
-   `keymap.of`. Bubble must NOT call `view.focus()` mid-flow — that breaks
+   `keymap.of`. Bubble must NOT call `view.focus()` mid-flow - that breaks
    the caret-stay feel.
 
-8. **Find** uses the existing `find.ts` `scanMatches`. The `findField` and
-   `FindAdapter` shape from the legacy `Source.svelte` lifts into
-   `editor-cm6/base.ts` and is shared by both Source and WYSIWYG modes.
+8. **Find** uses `find.ts` `scanMatches`. The `findField` and `FindAdapter`
+   shape live in `base.ts` and are shared by both Source and WYSIWYG modes.
 
 9. **Fold** uses `@codemirror/language` `foldService` with a heading-level-
-   aware computer: line `^#{n} ` folds end-of-line → start of next `#{<=n}`
+   aware computer: line `^#{n} ` folds end-of-line -> start of next `#{<=n}`
    line (or doc end). `foldGutter()` for the chevron.
 
 10. **Autosave** writes `view.state.doc.toString()` on `update.docChanged` to
-    the bindable `value` prop. The existing tab-side debounced
-    `scheduleAutosave` pipeline is unchanged. No serialize step. No
-    `editing*Original` flags. The `applyingExternal` guard is preserved
-    (tab-swap external sync). The CAS contract on `PUT /api/files` is
-    unchanged.
+    the bindable `value` prop. The tab-side debounced `scheduleAutosave`
+    pipeline owns the write. No serialize step. No `editing*Original` flags.
+    The `applyingExternal` guard handles tab-swap external sync. The CAS
+    contract on `PUT /api/files` is the conflict gate.
 
-## Why this design fixes the `*a*` class
+## Why 1-char marks work
 
-Under the old model, italic on `a` produces a 1-char marked text node. The
-"caret strictly inside the mark" check has no integer position satisfying
-`from < caret < to` when `to - from == 1`. Each pattern (bold, italic,
-strike, code, link, wikilink, image) needs its own boundary patch.
-
-Under this model, `*a*` is three real characters in the doc: `*`, `a`, `*`.
-The `*` markers at `[0, 1]` and `[2, 3]` get hide-decorations whenever the
-selection does NOT intersect them. A caret at offset 1 (between `*` and `a`)
-intersects both `[0, 1]` (caret == to) and `[2, 3]` (caret == from); both
-markers reveal. No special case. Backspace deletes a real `*` character the
-user can see. Round-trip is the identity function.
+`*a*` is three real characters in the doc: `*`, `a`, `*`. The `*` markers at
+`[0, 1]` and `[2, 3]` get hide-decorations whenever the selection does NOT
+intersect them. A caret at offset 1 (between `*` and `a`) intersects both
+`[0, 1]` (caret == to) and `[2, 3]` (caret == from), so both markers reveal.
+No special case. Backspace deletes a real `*` character the user can see, and
+round-trip is the identity function. A rendered-tree model that represents
+`*a*` as a single marked node has no integer caret position satisfying
+`from < caret < to` when `to - from == 1`, which is the structural reason that
+model needs a per-pattern boundary patch and this one does not.
 
 ## Layout
 
 ```
-editor-cm6/
+editor/
 ├── design.md              this file
 ├── base.ts                shared CM6 setup: theme compartment, $bindable
 │                           sync helper, applyingExternal guard, density attr,
 │                           lineWrapping, findField + setFindEffect +
 │                           buildFindDecos + makeFindAdapter
-├── Wysiwyg.svelte         the new editor (full decoration stack + widgets +
+├── Wysiwyg.svelte         the editor (full decoration stack + widgets +
 │                           bubbles + overlays + format commands)
 ├── Source.svelte          plain CM6 source mode; reuses base.ts; no widgets
 ├── markdown/
@@ -128,19 +121,18 @@ editor-cm6/
 │   │                       fenced code (language slot inline)
 │   └── naked_url.ts       https?:// detection, link mark
 ├── widgets/
-│   ├── wikilink.ts        atom widget; replaces extensions/wikiLink.ts
-│   ├── image.ts           atom + drag-resize handle + alignment fragments;
-│   │                       replaces extensions/image.ts + imageBubble.ts
+│   ├── wikilink.ts        atom widget for [[note]] and internal links
+│   ├── image.ts           atom + drag-resize handle + alignment fragments
 │   ├── date.ts            atom + calendar popover; uses dateFormats.ts
 │   ├── tag.ts             decoration-only pill on #word
 │   └── checkbox.ts        widget on `[ ]` / `[x]` for task items
 ├── bubbles/
 │   ├── controller.ts      StateField<BubbleSpec | null> + updateListener;
 │   │                       keymap precedence
-│   ├── wiki.ts            reuses today's wikiLink bubble UI logic
-│   ├── image.ts           reuses imageBubble UI logic
-│   ├── tag.ts             reuses tagPicker UI logic
-│   └── contact.ts         reuses contactPicker UI logic
+│   ├── wiki.ts            wikiLink bubble UI
+│   ├── image.ts           image bubble UI
+│   ├── tag.ts             tag picker UI
+│   └── contact.ts         contact picker UI
 ├── overlays/
 │   └── image_action.ts    zoom + edit pills on rendered image hover
 ├── commands/
@@ -150,21 +142,20 @@ editor-cm6/
 └── fold.ts                heading-level-aware foldService
 ```
 
-## Files reused as-is from the previous tree
+## Shared support files
 
-- `editor/bubble.ts` — framework-agnostic popover shell
-- `editor/extensions/popover.ts` — viewport-watching positioner
-- `editor/dateFormats.ts` — date catalog + matcher
-- `editor/find.ts` — pure scanMatches
-- `editor/links.ts` — wikiLinkToMarkdown, normalizeHref, etc.
-- `editor/extensions/wikiBlocks.ts` — block-anchor parser
+Framework-agnostic helpers the editor builds on:
 
-These will move alongside the rewrite at cutover (step 11) but their content
-does not change.
+- `editor/bubble.ts` - popover shell
+- `editor/extensions/popover.ts` - viewport-watching positioner
+- `editor/dateFormats.ts` - date catalog + matcher
+- `editor/find.ts` - pure scanMatches
+- `editor/links.ts` - wikiLinkToMarkdown, normalizeHref, etc.
+- `editor/extensions/wikiBlocks.ts` - block-anchor parser
 
-## Server contract (unchanged)
+## Server contract
 
-The new editor calls the same endpoints as the old:
+The editor calls these endpoints:
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -179,11 +170,11 @@ The new editor calls the same endpoints as the old:
 | POST   | `/api/attachments`               | multipart upload (50MB cap) |
 | WS     | `/ws`                            | watch events (self-writes filtered) |
 
-## Out of scope (v2)
+## Out of scope
 
 - Language-aware syntax highlighting inside fenced code blocks (CM6 nested
   parsers via `@codemirror/language` + per-language packs).
-- Tables: v1 keeps them as plain source. Real grid rendering is widget work.
-- Pasting structured content from outside (HTML clipboard) — v1 pastes plain
-  markdown text; HTML→markdown conversion is v2.
-- Collaborative editing remains an explicit non-goal per `CLAUDE.md`.
+- Tables render as plain source; real grid rendering is widget work.
+- Pasting structured content from outside (HTML clipboard): paste is plain
+  markdown text; HTML to markdown conversion is not implemented.
+- Collaborative editing is an explicit non-goal per `CLAUDE.md`.

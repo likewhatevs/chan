@@ -108,7 +108,7 @@
     // reflects that an import is running even if the user steps
     // away from this modal. Detail (counts, errors) stays here on
     // the modal's "done" step.
-    importStatus.value = { label: `importing contacts from ${provider.label}…` };
+    importStatus.value = { label: `importing contacts from ${provider.label}...` };
     try {
       const r = await api.importContacts(file, destDir, {
         provider: provider.id,

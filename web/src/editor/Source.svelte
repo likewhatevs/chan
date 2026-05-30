@@ -186,7 +186,7 @@
         lineNumbers(),
         history(),
         // `indentWithTab` first so Tab inserts an indent everywhere
-        // in source mode (raw-text editing — no list / fence
+        // in source mode (raw-text editing - no list / fence
         // detection like the WYSIWYG side). Shift-Tab outdents.
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         // Chat-style send chord. High-prec so it beats defaultKeymap's
@@ -400,7 +400,7 @@
   .md-source {
     /* `flex: 1` so the wrapper always spans the full pane width
        (matches `.md-wysiwyg`). Without it, the wrapper shrinks to
-       its content's intrinsic width — and once we cap `.cm-editor`
+       its content's intrinsic width - and once we cap `.cm-editor`
        via `--chan-page-max-width`, that intrinsic width becomes
        the cap, leaving the source view left-aligned in the pane
        instead of centered within the page-width column. */
