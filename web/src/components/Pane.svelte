@@ -16,7 +16,6 @@
     moveTab,
     openInPane,
     openTerminalInPane,
-    paneFlip,
     paneMode,
     paneModeSplit,
     paneModeSetGrab,
@@ -402,21 +401,21 @@
     });
   });
 
-  /// Parallel subscription on the paneFlip bus, which `flipHybrid()`
-  /// bumps in place of the structural wobble. The rAF-double-tap
-  /// makes the keyframe re-fire across consecutive flips without the
-  /// class going stale on a single class toggle.
-  const flipVersion = $derived(paneFlip.versions[pane.id] ?? 0);
-  let flipActive = $state(false);
-  let lastFlipVersion = 0;
+  /// True two-face card: front and back are co-rendered on a
+  /// `preserve-3d` `.flip-card` that rotates via a CSS transition on
+  /// `transform`, driven directly by `showingBack`. No rAF, no version
+  /// bus, no keyframe. `paneMode` (Hybrid Nav) force-fronts the card so
+  /// its flat preview never reveals the rotated-away back face.
+  const flipped = $derived(pane.showingBack && !paneMode.active);
+
+  /// Latch: the back face mounts on the first flip and stays mounted. A
+  /// pane never flipped never mounts (and so never polls) its config
+  /// body; once flipped, the back persists so the flip-back animation
+  /// keeps it visible through the rotation. A reload into a flipped pane
+  /// initialises the latch from `showingBack`.
+  let backMounted = $state(false);
   $effect(() => {
-    if (flipVersion === lastFlipVersion) return;
-    lastFlipVersion = flipVersion;
-    if (flipVersion === 0) return;
-    flipActive = false;
-    requestAnimationFrame(() => {
-      flipActive = true;
-    });
+    if (pane.showingBack) backMounted = true;
   });
 
   /// No back-side-attention indicator: the back is a per-surface
@@ -932,7 +931,6 @@
   class="pane"
   class:focused={isFocused}
   class:wobble={wobbleActive}
-  class:flipping={flipActive}
   class:transaction-active={paneMode.transactionMode}
   class:transaction-grab={isTransactionGrab}
   class:transaction-drop-target={isTransactionDropTarget}
@@ -947,7 +945,6 @@
   onmouseup={onPaneBodyMouseUp}
   onanimationend={(e) => {
     if (e.animationName === "pane-wobble-once") wobbleActive = false;
-    if (e.animationName === "pane-flip-once") flipActive = false;
   }}
   role="region"
   aria-label="editor pane"
@@ -1244,125 +1241,139 @@
     role="group"
     aria-label="pane content"
   >
-    {#if pane.showingBack && !paneMode.active}
-      <!-- Per-surface back-side configuration view. Dispatched off
-           the type of the currently-active FRONT tab: switching the
-           front tab while flipped swaps the back's content to the
-           matching surface family. -->
-      <div class="back-side" role="region" aria-label="hybrid back side">
-        {#if active?.kind === "terminal"}
-          <HybridTerminalConfig onDone={() => flipHybrid(pane.id)} />
+    <!-- True two-face card. Front and back are co-rendered on a
+         `preserve-3d` rotor INSIDE the editor body; the tab strip above
+         is pane chrome and does not rotate. `flipped` rotates the card
+         0deg<->180deg via a CSS transition on `transform` (no keyframe,
+         no rAF, no version bus), so the flip fires in place the instant
+         `showingBack` toggles instead of waiting on focus to leave the
+         pane. Each face is `backface-visibility:hidden`; `inert` on the
+         rotated-away face blurs it, drops it from the a11y tree, and
+         stops the stacked faces from capturing input. -->
+    <div class="flip-card" class:showing-back={flipped}>
+      <div class="face front" inert={flipped}>
+        {#if paneMode.active}
+          <div class="pane-mode-preview" aria-label="Hybrid Nav preview">
+            <div class="pane-mode-title">{active ? tabLabel(active, browserCtxFor(active)) : "Empty pane"}</div>
+            <div class="pane-mode-subtitle">
+              {active?.kind === "file"
+                ? active.path
+                : active?.kind === "terminal"
+                  ? "terminal"
+                  : active?.kind === "graph"
+                    ? active.scopeId
+                    : active?.kind === "browser"
+                      ? "file browser"
+                      : active?.kind === "dashboard"
+                        ? "dashboard"
+                        : "no active tab"}
+            </div>
+          </div>
         {:else if active?.kind === "file"}
-          <HybridEditorConfig onDone={() => flipHybrid(pane.id)} />
+          <!-- `focused` gains `&& !pane.showingBack`: the editor stays
+               mounted on the (rotated-away) front face while flipped, so
+               it must not pull DOM focus from the back config. Mirrors
+               the terminal gates below; the inert front face also blocks
+               focus, this keeps the focus-follow intent explicit. -->
+          <FileEditorTab
+            tab={active}
+            focused={viewLayout.activePaneId === pane.id && !pane.showingBack}
+          />
         {:else if active?.kind === "graph"}
-          <HybridGraphConfig onDone={() => flipHybrid(pane.id)} />
+          <GraphPanel
+            tab={active}
+            onClose={() => {
+              void closeTab(pane.id, active.id);
+            }}
+            onFlip={() => flipHybrid(pane.id)}
+          />
         {:else if active?.kind === "browser"}
-          <HybridFileBrowserConfig onDone={() => flipHybrid(pane.id)} />
+          <FileBrowserSurface
+            variant="tab"
+            tab={active}
+            onClose={() => {
+              void closeTab(pane.id, active.id);
+            }}
+            onFlip={() => flipHybrid(pane.id)}
+          />
         {:else if active?.kind === "dashboard"}
-          <!-- Dashboard arm so Cmd+, on a focused Dashboard pane
-               lands on the Appearance / Screen Lock / Screensaver /
-               Metadata flip-back instead of the "Empty pane"
-               fallback. The body lives in HybridDashboardConfig.svelte
-               so the mounting point matches the other Hybrid
-               surfaces. -->
-          <HybridDashboardConfig onDone={() => flipHybrid(pane.id)} />
-        {:else}
-          <!-- Empty pane (no active front tab). Open a front tab
-               and flip again to see its configuration surface. -->
-          <div class="back-empty">
-            <h2 class="back-title">Hybrid</h2>
-            <p class="back-hint">
-              Open a tab on the front to configure its surface here.
-            </p>
+          <DashboardTab tab={active} />
+        {:else if !active}
+          <div
+            class="placeholder"
+            aria-label="no tab open"
+            role="presentation"
+          >
+            <!-- Single-pane lone-pane case renders the static welcome
+                 surface: 5-tile spawn grid + Dashboard tile + footer
+                 hint. The rotating carousel widget (About / Workspace
+                 metadata / Indexing graph) lives inside the Dashboard
+                 tab. Multi-pane empty panes keep the minimal chrome
+                 (just the chan mark). Empty panes have no right-click
+                 menu; the pane hamburger (⋮) carries every spawn entry,
+                 so right-clicking an empty pane is a no-op. -->
+            {#if !multiPane}
+              <EmptyPaneWelcome />
+            {:else}
+              <div class="placeholder-stack">
+                <div class="placeholder-mark"></div>
+              </div>
+            {/if}
+          </div>
+        {/if}
+        <!--
+          Keep terminal tabs mounted across Hybrid Nav (pane mode) and
+          flip toggles so xterm.js's 20k-line scrollback buffer survives.
+          Unmounting a terminal would dispose the EditorView and drop the
+          buffer, losing every line that had scrolled off screen. The
+          active terminal is hidden by `class:active` flipping to false
+          during pane mode / flip (the existing
+          `visibility: hidden; pointer-events: none` rule does the
+          hiding).
+        -->
+        {#each pane.tabs.filter((t) => t.kind === "terminal") as t (t.id)}
+          <TerminalTab
+            tab={t}
+            paneId={pane.id}
+            active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
+            focused={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
+          />
+        {/each}
+      </div>
+      <!-- BACK face: per-surface configuration view, mirrored 180deg so
+           it reads upright once the card is flipped. Dispatched off the
+           active FRONT tab kind; switching the front tab while flipped
+           swaps the back's content to the matching surface family.
+           Latched-mounted via `backMounted` (see the latch effect): a
+           pane never flipped never mounts its config body, while a
+           flipped pane keeps the back present through the rotation. -->
+      <div class="face back" inert={!flipped}>
+        {#if backMounted && !paneMode.active}
+          <div class="back-side" role="region" aria-label="hybrid back side">
+            {#if active?.kind === "terminal"}
+              <HybridTerminalConfig onDone={() => flipHybrid(pane.id)} />
+            {:else if active?.kind === "file"}
+              <HybridEditorConfig onDone={() => flipHybrid(pane.id)} />
+            {:else if active?.kind === "graph"}
+              <HybridGraphConfig onDone={() => flipHybrid(pane.id)} />
+            {:else if active?.kind === "browser"}
+              <HybridFileBrowserConfig onDone={() => flipHybrid(pane.id)} />
+            {:else if active?.kind === "dashboard"}
+              <HybridDashboardConfig onDone={() => flipHybrid(pane.id)} />
+            {:else}
+              <!-- Empty pane (no active front tab). Open a front tab and
+                   flip again to see its configuration surface. -->
+              <div class="back-empty">
+                <h2 class="back-title">Hybrid</h2>
+                <p class="back-hint">
+                  Open a tab on the front to configure its surface here.
+                </p>
+              </div>
+            {/if}
           </div>
         {/if}
       </div>
-    {:else if paneMode.active}
-      <div class="pane-mode-preview" aria-label="Hybrid Nav preview">
-        <div class="pane-mode-title">{active ? tabLabel(active, browserCtxFor(active)) : "Empty pane"}</div>
-        <div class="pane-mode-subtitle">
-          {active?.kind === "file"
-            ? active.path
-            : active?.kind === "terminal"
-              ? "terminal"
-              : active?.kind === "graph"
-                ? active.scopeId
-                : active?.kind === "browser"
-                  ? "file browser"
-                  : active?.kind === "dashboard"
-                    ? "dashboard"
-                    : "no active tab"}
-        </div>
-      </div>
-    {:else if active?.kind === "file"}
-      <!-- This branch only renders on the front face (not flipped, not
-           pane mode) for the active file tab, so `focused` reduces to
-           "is this the active pane". It makes the editor pull DOM focus
-           when the pane gains focus, matching the terminal surface. -->
-      <FileEditorTab
-        tab={active}
-        focused={viewLayout.activePaneId === pane.id}
-      />
-    {:else if active?.kind === "graph"}
-      <GraphPanel
-        tab={active}
-        onClose={() => {
-          void closeTab(pane.id, active.id);
-        }}
-        onFlip={() => flipHybrid(pane.id)}
-      />
-    {:else if active?.kind === "browser"}
-      <FileBrowserSurface
-        variant="tab"
-        tab={active}
-        onClose={() => {
-          void closeTab(pane.id, active.id);
-        }}
-        onFlip={() => flipHybrid(pane.id)}
-      />
-    {:else if active?.kind === "dashboard"}
-      <DashboardTab tab={active} />
-    {:else if !active}
-      <div
-        class="placeholder"
-        aria-label="no tab open"
-        role="presentation"
-      >
-        <!-- Single-pane lone-pane case renders the static welcome
-             surface: 5-tile spawn grid + Dashboard tile + footer
-             hint. The rotating carousel widget (About / Workspace
-             metadata / Indexing graph) lives inside the Dashboard
-             tab. Multi-pane empty panes keep the minimal chrome
-             (just the chan mark). Empty panes have no right-click
-             menu; the pane hamburger (⋮) carries every spawn entry,
-             so right-clicking an empty pane is a no-op. -->
-        {#if !multiPane}
-          <EmptyPaneWelcome />
-        {:else}
-          <div class="placeholder-stack">
-            <div class="placeholder-mark"></div>
-          </div>
-        {/if}
-      </div>
-    {/if}
-    <!--
-      Keep terminal tabs mounted across Hybrid Nav (pane mode)
-      toggles so xterm.js's 20k-line scrollback buffer survives.
-      Unmounting a terminal would dispose the EditorView and drop the
-      buffer, losing every line that had scrolled off screen. The
-      active terminal is hidden by `class:active` flipping to false
-      during pane mode (the existing
-      `visibility: hidden; pointer-events: none` rule does the
-      hiding), and the pane-mode-preview above renders unimpeded.
-    -->
-    {#each pane.tabs.filter((t) => t.kind === "terminal") as t (t.id)}
-      <TerminalTab
-        tab={t}
-        paneId={pane.id}
-        active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
-        focused={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
-      />
-    {/each}
+    </div>
   </div>
 </div>
 
@@ -1431,29 +1442,44 @@
         var(--pane-shadow);
     }
   }
-  /* Hybrid flip animation. The Hybrid model swaps content on
-     flipHybrid (front + back state are already siblings on the
-     LeafNode); the animation here is the visual cue that the swap
-     happened. A half-flip on the Y-axis takes the pane to edge-on at
-     ~50% (invisible because of `backface-visibility: hidden`) and
-     back to front-facing; the reactive content swap has already
-     landed by then, so the user perceives the flip as "card spins,
-     content changed". This is a single-face wobble, not a true
-     two-face card flip, so it avoids touching every reader of
-     pane.tabs across the codebase. cubic-bezier(0.4, 0, 0.2, 1) is
-     the Material standard for UI motion. */
-  .pane.flipping {
-    animation: pane-flip-once 400ms cubic-bezier(0.4, 0, 0.2, 1);
-    backface-visibility: hidden;
+  /* True two-face card flip. Front and back are co-rendered as two
+     absolutely-stacked faces on a `preserve-3d` rotor; the card itself
+     rotates 0deg<->180deg via a transition on `transform` driven by
+     `.showing-back`. Each face is `backface-visibility: hidden`, so at
+     any rotation only the viewer-facing face paints. The perspective
+     lives on `.editor-wrap` (the card's parent) so the rotation reads
+     as depth rather than a flat squash. cubic-bezier(0.4, 0, 0.2, 1) is
+     the Material standard for UI motion; 400ms matches the old wobble so
+     the cadence is unchanged. The rotated-away face also carries `inert`
+     (set in the template) so it can't be focused, clicked, or read by
+     assistive tech while it faces away. */
+  .flip-card {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
     transform-style: preserve-3d;
+    transform: rotateY(0deg);
+    transition: transform 400ms cubic-bezier(0.4, 0, 0.2, 1);
   }
-  @keyframes pane-flip-once {
-    0%   { transform: perspective(1200px) rotateY(0deg); }
-    50%  { transform: perspective(1200px) rotateY(90deg); }
-    100% { transform: perspective(1200px) rotateY(0deg); }
+  .flip-card.showing-back {
+    transform: rotateY(180deg);
+  }
+  .flip-card .face {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+  .flip-card .face.back {
+    transform: rotateY(180deg);
   }
   @media (prefers-reduced-motion: reduce) {
-    .pane.flipping { animation: none; }
+    .flip-card { transition: none; }
   }
   /* iTerm-style strip: a dark bar with no per-tab dividers. The
      active tab is a rounded pill sitting on the bar rather than a
@@ -1759,6 +1785,11 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    /* Perspective for the two-face .flip-card child: gives the Y-axis
+       rotation depth instead of a flat horizontal squash. Only the
+       flip-card is 3D-transformed; the ::after drop overlay stays a
+       flat z=0 sibling and paints normally. */
+    perspective: 1600px;
   }
   .editor-wrap::after {
     content: "";

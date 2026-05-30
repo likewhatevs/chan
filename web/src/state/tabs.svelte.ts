@@ -755,20 +755,11 @@ export function requestPaneWobble(paneId: string): void {
   paneWobble.versions[paneId] = (paneWobble.versions[paneId] ?? 0) + 1;
 }
 
-/// Separate event bus for the Hybrid pane flip animation. `paneWobble`
-/// is the structural-change cue (split / close / swap gives a scale
-/// bounce); `paneFlip` is the orientation-change cue (Hybrid flip
-/// gives a Y-axis rotation). Two distinct visual signals for two
-/// distinct kinds of state change. Same versioned-counter shape so
-/// Pane.svelte's subscription pattern works identically for both.
-export const paneFlip = $state<{ versions: Record<string, number> }>({
-  versions: {},
-});
-
-export function requestPaneFlip(paneId: string): void {
-  if (!paneId) return;
-  paneFlip.versions[paneId] = (paneFlip.versions[paneId] ?? 0) + 1;
-}
+/// The Hybrid flip no longer needs an event bus. The two-face card in
+/// Pane.svelte rotates via a CSS transition driven directly by
+/// `showingBack`, so toggling that boolean is the entire trigger. Only
+/// the structural-change cue (`paneWobble`: split / close / swap)
+/// keeps its versioned-counter bus; orientation changes do not.
 
 export function activeLayout(): LayoutState {
   return paneMode.active && paneMode.draft ? paneMode.draft : layout;
@@ -3001,10 +2992,9 @@ export function flipHybrid(paneId: string): void {
     // single per-Hybrid theme value.
     node.back = {};
   }
+  // The two-face card transitions off `showingBack` directly, so the
+  // boolean toggle is the whole flip trigger (no orientation bus).
   node.showingBack = !node.showingBack;
-  // Orientation-change cue (Y-axis rotation), distinct from the
-  // structural wobble used for split / close / swap.
-  requestPaneFlip(node.id);
 }
 
 export function setMode(tab: Tab, mode: Mode): void {

@@ -1762,21 +1762,22 @@ describe("Hybrid flip", () => {
     expect(live.theme).toBe("dark");
   });
 
-  test("flipHybrid bumps the flip bus", async () => {
-    // The flip bus triggers the orientation-change animation (Y-axis
-    // rotation), distinct from the structural wobble (scale bounce used
-    // for split/close/swap). The wobble bus must stay untouched on flip
-    // so the two signals don't compound.
+  test("flipHybrid toggles showingBack without firing the wobble bus", async () => {
+    // The two-face card rotates off `showingBack` via a CSS transition,
+    // so the flip has no event bus of its own. The structural wobble bus
+    // (scale bounce used for split/close/swap) must stay untouched on a
+    // flip so the two visual signals don't compound.
     const front = fileTab({ id: "fw", path: "wobble.md" });
     const seed = resetLayout([front]);
-    const { paneFlip, paneWobble } = await import("./tabs.svelte");
-    const beforeFlip = paneFlip.versions[seed.id] ?? 0;
+    const { paneWobble } = await import("./tabs.svelte");
     const beforeWobble = paneWobble.versions[seed.id] ?? 0;
 
     flipHybrid(seed.id);
 
-    expect(paneFlip.versions[seed.id]).toBe(beforeFlip + 1);
-    expect(paneWobble.versions[seed.id]).toBe(beforeWobble);
+    const live = layout.nodes[seed.id];
+    if (live?.kind !== "leaf") throw new Error("expected leaf");
+    expect(live.showingBack).toBe(true);
+    expect(paneWobble.versions[seed.id] ?? 0).toBe(beforeWobble);
   });
 
   test("flipHybrid no-ops when the pane id doesn't resolve to a leaf", () => {
@@ -1788,12 +1789,10 @@ describe("Hybrid flip", () => {
     expect(live.back).toBeUndefined();
   });
 
-  test("flipHybrid is a no-op on an empty pane", async () => {
-    // Guard reads `tabs.length === 0` before mutating state or bumping
-    // the flip bus, so an empty pane never animates or flips.
+  test("flipHybrid is a no-op on an empty pane", () => {
+    // Guard reads `tabs.length === 0` before mutating state, so an empty
+    // pane never flips: there is no surface to configure on the back.
     const seed = resetLayout([]);
-    const { paneFlip } = await import("./tabs.svelte");
-    const beforeFlip = paneFlip.versions[seed.id] ?? 0;
 
     flipHybrid(seed.id);
 
@@ -1802,7 +1801,6 @@ describe("Hybrid flip", () => {
     expect(live.tabs).toHaveLength(0);
     expect(live.showingBack).toBeFalsy();
     expect(live.back).toBeUndefined();
-    expect(paneFlip.versions[seed.id] ?? 0).toBe(beforeFlip);
   });
 
   test("serialize / restore round-trips theme + showingBack + back marker", async () => {

@@ -37,9 +37,14 @@ describe("FileEditorTab focus follows the active pane", () => {
     );
   });
 
-  test("Pane.svelte passes focused={activePaneId === pane.id} to FileEditorTab", () => {
+  test("Pane.svelte gates FileEditorTab focus on active pane AND front-facing", () => {
+    // The two-face card keeps the editor mounted on the rotated-away
+    // front face while flipped, so the focus gate gained `&&
+    // !pane.showingBack`: a flipped pane's editor must not pull DOM focus
+    // from the back config (it also mirrors the terminal gates and keeps
+    // the inert front face free of a focused descendant).
     expect(pane).toMatch(
-      /<FileEditorTab\s+tab=\{active\}\s+focused=\{viewLayout\.activePaneId === pane\.id\}\s*\/>/,
+      /<FileEditorTab\s+tab=\{active\}\s+focused=\{viewLayout\.activePaneId === pane\.id && !pane\.showingBack\}\s*\/>/,
     );
   });
 });
