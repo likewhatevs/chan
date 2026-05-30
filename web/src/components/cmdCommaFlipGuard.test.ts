@@ -15,11 +15,23 @@ describe("Cmd+, pane-flip modal/overlay guard", () => {
   const src = appSource.replace(/\s+/g, " ");
 
   test("paneChordBlocked checks the overlay stack and every modal", () => {
-    expect(src).toContain(
-      "function paneChordBlocked(): boolean { return ( topOverlay() !== null " +
-        "|| promptState.open || pathPromptState.open || confirmState.open " +
-        "|| draftCloseState.open );",
-    );
+    // Per-term so a new modal added to the guard (or a reordering /
+    // inline comment) doesn't force a brittle contiguous-string rewrite.
+    // Every surface that renders OVER the pane must appear here, or Cmd+,
+    // could flip a pane hidden behind it.
+    expect(src).toContain("function paneChordBlocked(): boolean {");
+    for (const term of [
+      "topOverlay() !== null",
+      "promptState.open",
+      "pathPromptState.open",
+      "confirmState.open",
+      "draftCloseState.open",
+      "teamDialogState.request !== null",
+      "conflictDialog.open",
+      "workspaceWarningsDialog.open",
+    ]) {
+      expect(src).toContain(term);
+    }
   });
 
   test("both Cmd+, flip entry points bail when a modal or overlay is active", () => {

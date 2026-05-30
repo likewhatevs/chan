@@ -8,6 +8,11 @@
   import WorkspaceWarningsModal from "./components/WorkspaceWarningsModal.svelte";
   import TeamDialog from "./components/TeamDialog.svelte";
   import { teamDialogState, openTeamDialog } from "./state/teamDialog.svelte";
+  // Modal-visibility flags read by paneChordBlocked() so Cmd+, never
+  // flips a pane hidden behind a dialog. conflictDialog drives
+  // ConflictModal; workspaceWarningsDialog drives WorkspaceWarningsModal.
+  import { conflictDialog } from "./state/tabs.svelte";
+  import { workspaceWarningsDialog } from "./state/store.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PreflightOverlay from "./components/PreflightOverlay.svelte";
@@ -372,7 +377,16 @@
       promptState.open ||
       pathPromptState.open ||
       confirmState.open ||
-      draftCloseState.open
+      draftCloseState.open ||
+      // Anything else rendered OVER the pane owns the keyboard too: the
+      // Team Work setup dialog, the file-conflict modal, and the
+      // workspace-warnings modal. Each mirrors that modal's own render
+      // condition so the guard tracks exactly when it's on screen.
+      // Flipping behind any of these would toggle a pane the user can't
+      // see.
+      teamDialogState.request !== null ||
+      conflictDialog.open ||
+      workspaceWarningsDialog.open
     );
   }
 
