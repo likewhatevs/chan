@@ -251,26 +251,23 @@ jobs:
         with:
           tool: cargo-deb
 
-      - name: Build SPA
-        # rust-embed bakes the identity SPA into the binary at compile
-        # time, so the bundle must exist before cargo build.
-        working-directory: chan/gateway
-        run: |
-          npm ci
-          npm run build --workspaces --if-present
-
       - name: Build release binaries
-        working-directory: chan/gateway
+        # Single-sourced through chan/Makefile so this and the pre-push
+        # gateway-build stay in lockstep: GATEWAY_RELEASE_CRATES fixes the
+        # crate names (a rename can no longer drift CI off the real ones)
+        # and the gateway-spa prerequisite builds the identity SPA bundle
+        # that rust-embed needs before cargo build.
+        working-directory: chan
         run: |
-          cargo build --release --target ${{ matrix.target }} \
-            -p profile -p identity -p drive-proxy -p admin
+          make gateway-build \
+            GATEWAY_CARGO_FLAGS="--release --target ${{ matrix.target }}"
 
       - name: Build .deb packages
         working-directory: chan/gateway
         run: |
           set -e
           mkdir -p release-artifacts
-          for crate in profile identity drive-proxy admin; do
+          for crate in $(make -C .. -s gateway-release-crates); do
             cargo deb --no-build --no-strip \
               --target ${{ matrix.target }} \
               -p "$crate" \

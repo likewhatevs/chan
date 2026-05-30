@@ -18,6 +18,15 @@ BIN := target/release/chan
 WEB_BUILD_STAMP := web/.chan-build-stamp
 REPO_ROOT := $(abspath .)
 
+# Gateway release crate set. Single source for the pre-push gateway
+# build (gateway-build) and the release.yml deb-packaging matrix, which
+# both read it instead of repeating the names. The drive->workspace
+# crate rename drifted release.yml off the real crate names and only
+# surfaced at release-tag time, because nothing local built the gateway.
+# Pointing every consumer here means a future rename breaks the local
+# gate, not just the published release.
+GATEWAY_RELEASE_CRATES := profile identity workspace-proxy admin
+
 .PHONY: help
 help: ## Show this help.
 	@printf "chan build and release targets\n\n"
@@ -91,6 +100,7 @@ pre-push: ## Run the local pre-push gate.
 	RUSTFLAGS="-D warnings" $(CARGO) clippy --all-targets -- -D warnings
 	RUSTFLAGS="-D warnings" $(CARGO) test --all-targets
 	RUSTFLAGS="-D warnings" $(CARGO) build --no-default-features
+	RUSTFLAGS="-D warnings" $(MAKE) gateway-build
 	$(MAKE) web-check
 	$(MAKE) web-marketing-check
 
@@ -104,6 +114,21 @@ ci-macos: ## Run the focused macOS CI validation target.
 
 .PHONY: ci-release
 ci-release: pre-push ## Run the local release validation target.
+
+.PHONY: gateway-spa
+gateway-spa: ## Build the gateway identity SPA bundle (rust-embed input).
+	cd gateway && $(NPM) install && $(NPM) run build
+
+.PHONY: gateway-build
+gateway-build: gateway-spa ## Build the gateway release crates (GATEWAY_CARGO_FLAGS adds cross/release).
+	# Depends on gateway-spa: identity embeds web/dist via rust-embed at
+	# compile time, so the bundle must exist or the derive fails to build.
+	cd gateway && $(CARGO) build $(GATEWAY_CARGO_FLAGS) \
+		$(foreach crate,$(GATEWAY_RELEASE_CRATES),-p $(crate))
+
+.PHONY: gateway-release-crates
+gateway-release-crates: ## Print the gateway release crate names on one line.
+	@echo $(GATEWAY_RELEASE_CRATES)
 
 .PHONY: web
 web: ## Build the embedded web bundle.
