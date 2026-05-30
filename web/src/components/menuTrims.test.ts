@@ -4,16 +4,13 @@ import fileBrowserSurface from "./FileBrowserSurface.svelte?raw";
 import fileTree from "./FileTree.svelte?raw";
 import graph from "./GraphPanel.svelte?raw";
 
-// fullstack-80: right-click menu trims across Terminal / FB / Graph
-// surfaces + FB click-to-inspector for tab + overlay variants.
-//
-// Rationale recap: Search is `Cmd+K f` post-`-74`; Settings is
-// `Cmd+,`. Both are global keystrokes; duplicating them in every
-// per-tab right-click menu is noise. `Show/Hide Details` becomes
-// redundant once clicking a row auto-opens the inspector in tab +
-// overlay variants (the variants where the inspector is visible).
+// Right-click menu trims across Terminal / FB / Graph + FB
+// click-to-inspector for tab + overlay variants. Search (Cmd+K f)
+// and Settings (Cmd+,) are global keystrokes and are not duplicated
+// in per-tab menus. Show/Hide Details is redundant once row-clicks
+// auto-open the inspector in tab + overlay variants.
 
-describe("fullstack-80 + fullstack-a-67d: TerminalTab right-click — Search still gone; Settings comes back as flip", () => {
+describe("TerminalTab right-click: Search still gone; Settings comes back as flip", () => {
   test("no Search menu entry (Cmd+K f is the global surface)", () => {
     expect(terminal).not.toContain('onclick={openSearch}');
     expect(terminal).not.toMatch(/<span class="mbtn-label">Search<\/span>/);
@@ -27,13 +24,9 @@ describe("fullstack-80 + fullstack-a-67d: TerminalTab right-click — Search sti
   });
 
   test("Settings (flip) entry is present and routes to flipToSettings", () => {
-    // `fullstack-a-67d`: addendum-a re-adds a Settings entry
-    // that flips the tab to its back-side config view
-    // (HybridTerminalConfig). Semantically distinct from the
-    // global Settings overlay — this is a per-tab flip, not a
-    // global shortcut duplicate. The `-80` rule is preserved
-    // (no global-Settings duplicate); the new entry uses a
-    // different handler.
+    // A Settings entry flips the tab to its back-side config view
+    // (HybridTerminalConfig). This is a per-tab flip, not a global
+    // shortcut duplicate; the no-global-duplicate rule is preserved.
     expect(terminal).toContain("onclick={flipToSettings}");
     expect(terminal).toMatch(/<span class="mbtn-label">Settings<\/span>/);
   });
@@ -44,7 +37,7 @@ describe("fullstack-80 + fullstack-a-67d: TerminalTab right-click — Search sti
   });
 });
 
-describe("fullstack-80: FileBrowserSurface menu drops Search this + Settings + Show/Hide Details", () => {
+describe("FileBrowserSurface menu drops Search this + Settings + Show/Hide Details", () => {
   test("no Search this entry", () => {
     expect(fileBrowserSurface).not.toContain('onclick={searchWorkspace}');
     expect(fileBrowserSurface).not.toContain(">Search this<");
@@ -61,7 +54,7 @@ describe("fullstack-80: FileBrowserSurface menu drops Search this + Settings + S
   });
 });
 
-describe("fullstack-80: FB row click auto-opens inspector for tab + overlay only", () => {
+describe("FB row click auto-opens inspector for tab + overlay only", () => {
   test("FileTree.selectPath no longer pokes browserOverlay.inspectorOpen directly", () => {
     // The auto-open call moved to FileBrowserSurface so it can gate
     // on variant. FileTree just emits the click via `onClickRow`.
@@ -80,7 +73,7 @@ describe("fullstack-80: FB row click auto-opens inspector for tab + overlay only
   });
 });
 
-describe("fullstack-82: FB dock menu drops the Open overlay entry", () => {
+describe("FB dock menu drops the Open overlay entry", () => {
   test("no `Open overlay` label survives in any variant", () => {
     expect(fileBrowserSurface).not.toContain(">Open overlay<");
   });
@@ -98,7 +91,7 @@ describe("fullstack-82: FB dock menu drops the Open overlay entry", () => {
   });
 });
 
-describe("fullstack-80 + fullstack-a-98: GraphPanel drops inspector/global Settings and keeps flip footer", () => {
+describe("GraphPanel drops inspector/global Settings and keeps flip footer", () => {
   test("bubble does not invoke toggleInspector", () => {
     expect(graph).not.toMatch(
       /class="tab-menu-bubble"[\s\S]*?onclick=\{toggleInspector\}/,
@@ -116,7 +109,7 @@ describe("fullstack-80 + fullstack-a-98: GraphPanel drops inspector/global Setti
     expect(graph).not.toContain('onclick={doOpenSettings}');
   });
 
-  test("Depth slider + Reload + addendum-a footer stay", () => {
+  test("Depth slider + Reload + -a footer stay", () => {
     expect(graph).toContain('class="mbtn depth-row"');
     expect(graph).toContain('onclick={reloadGraph}');
     expect(graph).toContain('onclick={flipToSettings}');

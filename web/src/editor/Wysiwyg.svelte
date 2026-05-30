@@ -2,19 +2,6 @@
   // CodeMirror 6 WYSIWYG editor. The doc IS the markdown source per
   // editor-cm6/design.md spec #1; rendered appearance is a pure
   // decoration layer built from @lezer/markdown's syntax tree.
-  //
-  // Step 4 scope: bare mount + chanMarkdown grammar + decorations for
-  // marks (bold/italic/strike/code/link/naked URL) and headings. No
-  // pills, no bubbles, no autosave wiring yet — those land in later
-  // steps. Not yet imported by App.svelte; the existing tiptap
-  // editor remains the production surface until cutover (step 11).
-  //
-  // The component's prop contract MUST eventually match the legacy
-  // editor/Wysiwyg.svelte (value, readonly, onSubmit, onSelectionChange,
-  // wikiPickerPrefix, currentPath, plus the imperative API surface)
-  // so cutover is a one-line import swap. v1 only ships `value` + the
-  // findAdapter; the rest is added as later steps fill in the
-  // corresponding behavior.
 
   import { onDestroy, onMount } from "svelte";
   import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
@@ -105,18 +92,13 @@
     highlightTrailingWhitespace?: boolean;
     initialCaret?: { from: number; to: number } | null;
     /// When false, the editor skips the mount-time `view.focus()`.
-    /// Hosts that own their own focus policy (e.g. the team work
-    /// gating focus on bubble state in `fullstack-a-14`) pass false
-    /// to keep the editor unfocused on mount; otherwise the unconditional
-    /// mount focus would race past the host's gate.
+    /// Hosts that own their own focus policy pass false to keep the
+    /// editor unfocused on mount; otherwise the unconditional mount
+    /// focus would race past the host's gate.
     autoFocus?: boolean;
-    /// `fullstack-a-89`: empty-state placeholder text. When set
-    /// the editor adds CM6's `placeholder` extension which
-    /// renders at the cursor position (so cursor + placeholder
-    /// share the exact same x/y). Previously the team work
-    /// used a CSS overlay (`-a-24`) which fought CM6's internal
-    /// coordinate system; `-a-84` + `-a-87` patched alignment
-    /// but couldn't fully close the empirical gap. Unset = no
+    /// Empty-state placeholder text. When set the editor adds CM6's
+    /// `placeholder` extension which renders at the cursor position
+    /// (cursor + placeholder share the same x/y). Unset = no
     /// placeholder.
     placeholderText?: string;
     onSubmit?: () => void;
@@ -330,19 +312,13 @@
   export function currentBlockKind(): BlockKind {
     return view ? fmt.currentBlockKind(view) : "normal";
   }
-  /// `fullstack-a-64`: focus the editor without changing the
-  /// selection. Used by FileEditorTab on chord-driven tab
-  /// switches (`Cmd+Shift+[/]`) to land the caret on the editor
-  /// surface immediately. Returns true if the view was ready;
-  /// caller can short-circuit otherwise.
-  ///
-  /// `fullstack-a-65`: also calls `requestMeasure()` to force a
-  /// viewport re-evaluation — fixes the image-as-text bug where
-  /// returning to an editor tab via Cmd+Shift+[/] showed images
-  /// as raw markdown until the user clicked or moved the cursor.
-  /// Image decorations skip rendering when the viewport
-  /// measurement is stale; requestMeasure schedules a fresh
-  /// measure cycle that re-runs the decoration pass.
+  /// Focus the editor without changing the selection. Used by
+  /// FileEditorTab on chord-driven tab switches to land the caret
+  /// on the editor surface immediately. Returns true if the view
+  /// was ready; caller can short-circuit otherwise. Also calls
+  /// `requestMeasure()` to force a viewport re-evaluation so image
+  /// decorations render even when the measure cycle is stale from
+  /// a tab switch.
   export function focus(): boolean {
     if (!view) return false;
     view.focus();
@@ -379,12 +355,10 @@
         theme.extension,
         trailingWhitespace.of(highlightTrailingWhitespace ? trailingWhitespaceHighlight() : []),
         EditorView.lineWrapping,
-        // `fullstack-a-89`: CM6's built-in placeholder. Renders
-        // at the cursor position (inside the first line) when
-        // the doc is empty + hides on first keystroke. Wired
-        // optionally because file editors don't want a
-        // placeholder; only ephemeral surfaces like the rich
-        // prompt do.
+        // CM6's built-in placeholder. Renders at the cursor position
+        // (inside the first line) when the doc is empty; hides on
+        // first keystroke. Wired optionally because file editors
+        // don't want a placeholder; only ephemeral surfaces do.
         ...(placeholderText ? [placeholder(placeholderText)] : []),
         // Replace the browser-native text selection with CM6's
         // synthetic selection layer. Browser selection rectangles
@@ -393,9 +367,7 @@
         // input), leaving stale blue rectangles around image
         // widgets visible across the canvas. The synthetic layer
         // tracks the editor's selection state directly and clears
-        // on every selection change, which fixes the
-        // image/list-block residuals reported in
-        // [frontend-2.md](../../docs/journals/phase-3/frontend-2.md).
+        // on every selection change.
         drawSelection(),
         breathingRoom(),
         listGuideVisibility(),
@@ -438,14 +410,9 @@
         // insert a newline first). Returning true consumes the event.
         Prec.high(
           keymap.of([
-            // Phase-13 r2 (B-slice 2): conventional Bold / Italic
-            // chords. The toggle commands already existed (format.ts)
-            // and were advertised in StyleToolbar tooltips; this binds
-            // them in the editor keymap. Cmd+I was freed by moving
-            // Dashboard off it (shortcuts.ts + App.svelte + the desktop
-            // KEY_BRIDGE), so it no longer double-fires. Registered in
-            // this Prec.high block so CM6 consumes them before the
-            // document-level handlers; returning true preventDefaults.
+            // Conventional Bold / Italic chords. Registered in this
+            // Prec.high block so CM6 consumes them before document-level
+            // handlers; returning true preventDefaults.
             {
               key: "Mod-b",
               run: (view) => {
@@ -524,12 +491,11 @@
             // default Enter (newline) still fires.
             { key: "Enter", run: (view) => continueListOnEnter(view) },
             // Chat-style send chord. Only active when the host wires
-            // an `onSubmit` (terminal team work today); plain file
-            // editors leave `onSubmit` unset so this entry returns
-            // false and Enter falls through to CM6 default newline.
-            // Shift+Enter is registered separately by CM6 as
-            // `"Shift-Enter"` (defaultKeymap `shift:` alt), so the
-            // newline chord is unaffected.
+            // an `onSubmit`; plain file editors leave `onSubmit` unset
+            // so this entry returns false and Enter falls through to
+            // CM6 default newline. Shift+Enter is registered separately
+            // by CM6 as `"Shift-Enter"`, so the newline chord is
+            // unaffected.
             {
               key: "Enter",
               run: () => {
@@ -555,24 +521,20 @@
     view = new EditorView({ state, parent: host });
     view.dispatch({ selection: { anchor: 0 } });
     if (autoFocus) view.focus();
-    // `fullstack-a-65`: force a viewport re-measure after mount.
-    // The editor frequently mounts while the pane is still
-    // animating in (Hybrid Nav exit, tab-switch transitions) so
-    // the initial viewport calculation runs against a zero-size
-    // or hidden host. Without this, image decorations skip
-    // rendering until the user pokes the cursor + the decoration
-    // pass re-runs.
+    // Force a viewport re-measure after mount. The editor frequently
+    // mounts while the pane is still animating in (Hybrid Nav exit,
+    // tab-switch transitions) so the initial viewport calculation
+    // runs against a zero-size or hidden host. Without this, image
+    // decorations skip rendering until the user pokes the cursor.
     view.requestMeasure();
     maybeRestoreCaret();
-    // `bug 1` (phase-13): mirror of the `bug 10` deferred focus, but
-    // unconditional on caretPending so brand-new docs (no persisted
-    // caret to restore) also re-claim focus once content has streamed
-    // in. The mount-time `view.focus()` above runs while the doc is
-    // still empty, and on the New Draft path the Cmd+N chord handler
-    // parks focus on <body> by the time content arrives, so without
-    // this rAF the editor mounts un-focused and the user has to click
-    // to type. Gated on autoFocus so hosts that own their focus policy
-    // (team work) stay unfocused.
+    // Unconditional deferred focus so brand-new docs (no persisted
+    // caret) also re-claim focus once content has streamed in. The
+    // mount-time view.focus() above runs while the doc is still
+    // empty; on the New Draft path the Cmd+N chord handler parks
+    // focus on <body> before content arrives, leaving the editor
+    // unfocused. Gated on autoFocus so hosts that own their focus
+    // policy stay unfocused.
     if (autoFocus) {
       requestAnimationFrame(() => {
         if (!view) return;
@@ -597,16 +559,13 @@
     });
     caretRestored = true;
     caretPending = null;
-    // `bug 10`: the mount-time `view.focus()` (line ~520) runs while the
-    // doc is still empty — content arrives async via the `value` prop, so
-    // by the time it lands the editor has lost focus back to <body> (the
-    // Cmd+N path opens the draft after the chord handler parks focus on
-    // body). Re-assert focus once the caret is actually placed so a
-    // freshly-opened note (New Draft, file open) is typeable immediately.
-    // Defer past the current frame so the focus lands after any
-    // same-tick blur in the open path and after layout settles (the
-    // pane may still be animating in). Gated on `autoFocus` so hosts
-    // that own their focus policy (team work) stay unfocused.
+    // The mount-time `view.focus()` runs while the doc is still
+    // empty; content arrives async so focus falls back to <body> by
+    // the time it lands. Re-assert focus once the caret is placed so
+    // a freshly-opened note is typeable immediately. Deferred past
+    // the current frame so it lands after any same-tick blur in the
+    // open path and after layout settles. Gated on `autoFocus` so
+    // hosts that own their focus policy stay unfocused.
     if (autoFocus) {
       requestAnimationFrame(() => {
         if (!view) return;
@@ -1007,18 +966,18 @@
   :global(.md-wysiwyg-cm6 .cm-md-ul-marker) {
     color: var(--text-secondary, #888);
   }
-  /* phase-13 r2 (B-slice 1): render bullet markers to match image-1
-     while keeping the source bytes intact (source mode + round-trip
-     still show the literal `-` / `*`; see blocks.ts). The literal
-     marker char is collapsed to zero width with font-size:0 and the
-     styled glyph is drawn by an IN-FLOW ::before (no positioning), so
-     the existing list-line text-indent places the glyph exactly where
-     the source char sat - at every nesting depth. (An absolute-
-     positioned overlay was tried first but text-indent does not apply
-     to out-of-flow boxes, so nested glyphs detached to the gutter.)
+  /* Render bullet markers with styled glyphs while keeping the source
+     bytes intact (source mode + round-trip still show the literal
+     `-` / `*`; see blocks.ts). The literal marker char is collapsed
+     to zero width with font-size:0 and the styled glyph is drawn by
+     an IN-FLOW ::before (no positioning), so the existing list-line
+     text-indent places the glyph exactly where the source char sat at
+     every nesting depth. (An absolute-positioned overlay was tried
+     first but text-indent does not apply to out-of-flow boxes, so
+     nested glyphs detached to the gutter.)
      Hyphen -> en-dash at all levels; star -> filled bullet at the top
      level, hollow bullet when nested. `+` keeps its literal styled
-     char via the base .cm-md-ul-marker rule (out of image-1 scope). */
+     char via the base .cm-md-ul-marker rule. */
   :global(.md-wysiwyg-cm6 .cm-md-ul-dash),
   :global(.md-wysiwyg-cm6 .cm-md-ul-bullet) {
     font-size: 0;
@@ -1032,10 +991,10 @@
     content: "\2013"; /* en-dash */
   }
   :global(.md-wysiwyg-cm6 .cm-md-ul-bullet-top::before) {
-    content: "\25CF"; /* black circle (filled) - @@Alex r2 pick */
+    content: "\25CF"; /* black circle (filled) */
   }
   :global(.md-wysiwyg-cm6 .cm-md-ul-bullet-nested::before) {
-    content: "\25EF"; /* large circle (hollow) - @@Alex r2 pick */
+    content: "\25EF"; /* large circle (hollow) */
   }
   /* Left indent and guides on every line of every list (bullet,
      ordered, task). Three-class chain matches the fence-row pattern
@@ -1069,9 +1028,8 @@
     left: 10px;
     /* One 1px-wide stripe per indent level: anchor + N stamps at
        2ch intervals = depth+1 vertical bars. repeating-linear-
-       gradient keeps the spacing exact at any depth, so the deep-
-       nesting drift seen in the old per-depth box-shadow rules
-       (capped at 6) is gone. */
+       gradient keeps the spacing exact at any depth without per-
+       depth selectors or a cap. */
     width: calc(2ch * var(--cm-md-list-depth, 0) + 1px);
     background: repeating-linear-gradient(
       to right,
@@ -1520,10 +1478,9 @@
     color: var(--text-secondary, #888);
     font-size: 12px;
   }
-  /* `fullstack-a-70`: mention-only rows surface tokens that
-     have no contact file backing them. Dimmer than the
-     contact-file rows so the user reads "this is a body-text
-     mention, not a first-class contact" at a glance. */
+  /* Mention-only rows surface tokens that have no contact file
+     backing them. Dimmer than contact-file rows so the user reads
+     "body-text mention, not a first-class contact" at a glance. */
   :global(.md-bubble .md-bubble-row-mention-only) {
     opacity: 0.7;
   }

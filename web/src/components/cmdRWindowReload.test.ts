@@ -3,11 +3,11 @@ import app from "../App.svelte?raw";
 import pane from "./Pane.svelte?raw";
 import shortcuts from "../state/shortcuts.ts?raw";
 
-// `fullstack-a-73`: Cmd+R global chord → window-level reload via
-// existing `reloadWindow()` helper. Annotates the pane right-click
-// menu's Reload entry with the chord label.
+// Cmd+R global chord → window-level reload via the `reloadWindow()`
+// helper. The pane right-click menu's Reload entry shows the chord
+// label.
 
-describe("fullstack-a-73: chord registry entry", () => {
+describe("Cmd+R chord registry entry", () => {
   test("app.window.reload chord descriptor present in shortcuts registry", () => {
     expect(shortcuts).toMatch(
       /id: "app\.window\.reload",[\s\S]*?label: "Reload window",[\s\S]*?web: "Mod\+R",[\s\S]*?native: "Mod\+R",/,
@@ -15,12 +15,11 @@ describe("fullstack-a-73: chord registry entry", () => {
   });
 });
 
-describe("fullstack-a-73: App.svelte keymap binding", () => {
+describe("App.svelte keymap binding", () => {
   test("reloadWindow imported from api/desktop", () => {
-    // `phase-12 lane-e` widened this import (isTauriDesktop +
-    // requestCloseWindow for the close-cascade tail); match
-    // reloadWindow within the named-import list rather than the exact
-    // single-name form.
+    // The desktop import also carries isTauriDesktop +
+    // requestCloseWindow, so match reloadWindow within the
+    // named-import list rather than the exact single-name form.
     expect(app).toMatch(
       /import \{[^}]*\breloadWindow\b[^}]*\} from "\.\/api\/desktop";/,
     );
@@ -33,16 +32,15 @@ describe("fullstack-a-73: App.svelte keymap binding", () => {
   });
 });
 
-describe("fullstack-a-73: Pane.svelte menu annotation", () => {
+describe("Pane.svelte menu annotation", () => {
   test("Reload menu entry renders the chord label via the registry", () => {
     expect(pane).toMatch(
       /onclick=\{doReloadPane\}[\s\S]*?<span class="menu-row-label">Reload<\/span>[\s\S]*?<span class="menu-row-chord">\{chordLabel\("app\.window\.reload"\)\}<\/span>/,
     );
   });
 
-  test("comment block documents the dual entry point + chan-desktop defense-in-depth", () => {
-    expect(pane).toMatch(
-      /`fullstack-a-73`: window-level reload, like a browser[\s\S]*?serve\.rs:1140 Tauri-side[\s\S]*?defense-in-depth fallback/,
-    );
+  test("Reload menu entry routes through reloadWindow()", () => {
+    expect(pane).toMatch(/async function doReloadPane\(\)/);
+    expect(pane).toMatch(/await reloadWindow\(\)/);
   });
 });

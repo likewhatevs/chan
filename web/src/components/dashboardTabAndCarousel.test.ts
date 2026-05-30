@@ -6,20 +6,12 @@ import dashboard from "./DashboardTab.svelte?raw";
 import app from "../App.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
-// `fullstack-a-75`: Dashboard tab kind + carousel redesign.
-// Tests pin: new tab type + helpers, the Pane.svelte render
-// branch, the carousel's spawn band changes (New Draft slot 0,
-// shortcut table dropped, Dashboard secondary band), and the
-// surface unification across the three menus (pane hamburger,
-// empty-pane right-click, carousel).
-//
-// `phase-13 lane-b`: Infographics -> Dashboard rename. The string
-// discriminator + helper names + component file all moved to
-// "dashboard"; round-1 closing slice flipped the user-visible
-// labels too (B5/B6: menu entry, shortcut label, tab title,
-// aria-label, settings shell title).
+// Dashboard tab kind and carousel coverage. Pins the tab type and
+// helpers, the Pane.svelte render branch, the carousel slide set,
+// and the surface unification across the pane hamburger, empty-pane
+// right-click, and carousel.
 
-describe("fullstack-a-75: DashboardTab type + helpers", () => {
+describe("DashboardTab type + helpers", () => {
   test("Tab union includes DashboardTab", () => {
     expect(tabs).toMatch(
       /export type DashboardTab = \{[\s\S]{1,400}kind: "dashboard";[\s\S]{1,200}id: string;[\s\S]{1,200}title: string;/,
@@ -60,7 +52,7 @@ describe("fullstack-a-75: DashboardTab type + helpers", () => {
   });
 });
 
-describe("fullstack-a-75: Pane.svelte render branch + import", () => {
+describe("Pane.svelte render branch + import", () => {
   test("DashboardTab imported", () => {
     expect(pane).toMatch(
       /import DashboardTab from "\.\/DashboardTab\.svelte";/,
@@ -68,30 +60,24 @@ describe("fullstack-a-75: Pane.svelte render branch + import", () => {
   });
 
   test("render branch matches active?.kind === \"dashboard\" and passes the live tab", () => {
-    // Round-1 closing-10 (G3): Pane.svelte now threads the live
-    // DashboardTab proxy through so the carousel slide cursor can
-    // round-trip back into tabs.svelte.ts's session serializer.
+    // The live DashboardTab proxy is threaded through so the carousel
+    // slide cursor can round-trip into the session serializer.
     expect(pane).toMatch(
       /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,200}<DashboardTab tab=\{active\} \/>/,
     );
   });
 });
 
-describe("fullstack-a-75: Dashboard command + emptyPaneExtraActions wiring", () => {
+describe("Dashboard command + spawnActions wiring", () => {
   test("app.dashboard.open command routed to openDashboardInActivePane", () => {
     expect(app).toMatch(
       /case "app\.dashboard\.open":[\s\S]{1,400}openDashboardInActivePane\(\);/,
     );
   });
 
-  test("spawnActions carries the Dashboard entry after Graph + Search (B5 + B8)", () => {
-    // Round-1 closing-2 (B8) folded the separate
-    // `emptyPaneExtraActions` list into `spawnActions` so the
-    // pane top-bar hamburger and the empty-pane right-click
-    // menu both render the same 7-entry spawn set in the same
-    // order: ..., Graph, Search, Dashboard. The user's quoted
-    // ask required Search + Dashboard to surface in the
-    // hamburger menu too, which the prior split list blocked.
+  test("spawnActions carries the Dashboard entry after Graph + Search", () => {
+    // One spawnActions list backs both the pane hamburger and the
+    // empty-pane right-click menu: ..., Graph, Search, Dashboard.
     expect(pane).toMatch(
       /const spawnActions:[\s\S]{1,2000}label: "Graph",[\s\S]{1,400}command: "app\.graph\.toggle",[\s\S]{1,400}label: "Search",[\s\S]{1,400}command: "app\.search\.toggle",[\s\S]{1,400}label: "Dashboard",[\s\S]{1,400}command: "app\.dashboard\.open",/,
     );
@@ -99,11 +85,10 @@ describe("fullstack-a-75: Dashboard command + emptyPaneExtraActions wiring", () 
   });
 });
 
-describe("fullstack-a-75: carousel slide 1 redesign", () => {
-  // `fullstack-a-75b`: spawn entries + secondary band moved
-  // OUT of the carousel and into EmptyPaneWelcome.svelte. The
-  // carousel is now a pure rotating widget hosted inside the
-  // Dashboard tab.
+describe("carousel slide 1", () => {
+  // Spawn entries + secondary band live in EmptyPaneWelcome.svelte,
+  // not the carousel. The carousel is a pure rotating widget hosted
+  // inside the Dashboard tab.
   test("spawn entries no longer surface in the carousel", () => {
     expect(carousel).not.toMatch(/const spawnEntries: SpawnRow\[\]/);
     expect(carousel).not.toMatch(/const secondaryEntries: SpawnRow\[\]/);
@@ -117,11 +102,7 @@ describe("fullstack-a-75: carousel slide 1 redesign", () => {
   });
 });
 
-describe("phase-13 slice 3b-1: carousel slide rework", () => {
-  // Slide 0 is now the About widget (version + embeddings flag +
-  // attributions + donation QR + chan.app/source links). Slice 3c
-  // retired the global Settings overlay; the carousel About widget
-  // is the sole home for the version/attribution surface now.
+describe("carousel slides", () => {
   test("slide 0 is the About widget", () => {
     expect(carousel).toMatch(
       /<div class="slide slide-about" aria-label="About">/,
@@ -130,11 +111,9 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
     expect(carousel).toMatch(/embeddings/);
     expect(carousel).toMatch(/Source Code Pro Regular/);
     expect(carousel).toMatch(/dcragusa\/MatrixScreensaver/);
-    // Round-1 closing-3 (C2): license links resolve to canonical
-    // upstream URLs instead of the embedded `/static/...` paths,
-    // which under chan-desktop's non-root mount surfaced as
-    // 127.0.0.1 links. The font lives in the adobe-fonts
-    // source-code-pro repo + the screen-lock in dcragusa's repo.
+    // License links point to canonical upstream URLs rather than
+    // embedded /static/ paths (which resolve to 127.0.0.1 under the
+    // desktop non-root mount).
     expect(carousel).toMatch(
       /href="https:\/\/github\.com\/adobe-fonts\/source-code-pro\/blob\/release\/LICENSE\.md"/,
     );
@@ -153,40 +132,33 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
   });
 
   test("About widget embeds the donation QR + Fund-the-work copy", () => {
-    // B4c: src is now wrapped in `withTokenQuery("/qr-donate.png")`
-    // so the prefix rewrite + per-launch bearer token apply under
-    // chan-desktop's non-root mount and the tunnel-mode prefix.
-    // A raw `<img src="/qr-donate.png">` bypasses both and renders
-    // a broken-image square. Match the helper wrapper, not the raw
-    // path.
+    // withTokenQuery wraps the QR image path so the bearer token and
+    // prefix rewrite apply under non-root mounts; a bare path would
+    // render broken.
     expect(carousel).toMatch(/src=\{withTokenQuery\("\/qr-donate\.png"\)\}/);
     expect(carousel).toMatch(
       /import \{[\s\S]{1,200}withTokenQuery[\s\S]{1,200}\} from "\.\.\/api\/transport"/,
     );
     expect(carousel).toMatch(/Fund the work/);
-    // Round-1 closing-3 (C3): "Share the love, cheers!" tail
-    // appended to the Fund-the-work copy.
+    // "Share the love, cheers!" tail on the Fund-the-work copy.
     expect(carousel).toMatch(
       /Chan is independent software\. Small tips help cover time[\s\S]{1,40}spent on releases, packaging, and documentation\.[\s\S]{1,40}Share the love, cheers!/,
     );
   });
 
-  test("About widget licenses block sits after the QR + the separator (C2)", () => {
-    // C2: license rows moved OUT of the top about-grid into a
-    // dedicated `.about-licenses` block, separated from the
-    // Fund-the-work surface by `.about-sep`. Chan's own Apache
-    // 2.0 license joins the section so the three runtime
-    // licenses live together.
+  test("About widget licenses block sits after the QR + the separator", () => {
+    // License rows live in `.about-licenses`, separated from the
+    // Fund-the-work surface by `.about-sep`. Chan's own Apache 2.0
+    // joins so all three runtime licenses are together.
     expect(carousel).toMatch(
       /<div class="about-fund">[\s\S]{1,2000}<div class="about-sep"[\s\S]{1,200}<div class="about-licenses">[\s\S]{1,3000}<a href="https:\/\/github\.com\/fiorix\/chan\/blob\/main\/LICENSE"[\s\S]{1,200}Apache 2\.0[\s\S]{1,400}Source Code Pro Regular[\s\S]{1,1200}dcragusa\/MatrixScreensaver/,
     );
     expect(carousel).toMatch(/\.about-licenses \{[\s\S]{1,400}grid-template-columns: max-content 1fr/);
     expect(carousel).toMatch(/\.about-sep \{[\s\S]{1,400}background: var\(--border\)/);
     // The terminal-font + matrix-screen-lock rows appear EXACTLY
-    // ONCE in the source now (inside `.about-licenses`); pre-fix
-    // they ALSO appeared inside `.about-grid`. Asserting a single
-    // occurrence prevents the prior dual-render from sneaking
-    // back.
+    // ONCE in the source (inside `.about-licenses`). Asserting a
+    // single occurrence prevents a dual-render (also inside
+    // `.about-grid`) from sneaking in.
     const fontMatches = carousel.match(/<span class="k">terminal font<\/span>/g);
     expect(fontMatches?.length ?? 0).toBe(1);
     const matrixMatches = carousel.match(/<span class="k">matrix screen lock<\/span>/g);
@@ -207,15 +179,14 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
     expect(carousel).toMatch(
       /import WorkspaceInfoBody from "\.\/WorkspaceInfoBody\.svelte";/,
     );
-    // A1 (phase-13): the Dashboard slide passes variant="dashboard"
-    // so the workspace-root inspector keeps its Notes-directories
-    // config (the inspector variant drops it).
+    // variant="dashboard" so the Notes-directories config renders
+    // (the inspector variant drops it).
     expect(carousel).toMatch(
       /<div class="slide slide-workspace" aria-label="Workspace info">[\s\S]{1,400}<WorkspaceInfoBody[\s\S]{1,200}variant="dashboard"/,
     );
   });
 
-  test("Shortcuts slide + workspace-metadata slide are retired", () => {
+  test("Shortcuts slide + workspace-metadata slide are removed", () => {
     expect(carousel).not.toMatch(/class="slide slide-shortcuts"/);
     expect(carousel).not.toMatch(/class="slide slide-metadata"/);
     expect(carousel).not.toMatch(/<pre class="shortcuts-table">/);
@@ -223,20 +194,18 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
     expect(carousel).not.toMatch(/from "\.\.\/state\/shortcuts"/);
   });
 
-  test("slide 2 stays the indexing graph and flags the slice 3b-2 deferral", () => {
+  test("slide 2 is the read-only, spine-only indexing graph", () => {
     expect(carousel).toMatch(/class="slide slide-indexing"/);
-    expect(carousel).toMatch(/slice 3b-2/);
+    // No inspector / scope picker / depth slider / filter chips; the
+    // slide is a pure status read-out.
+    expect(carousel).toMatch(/aria-label="Indexing graph"/);
   });
 
-  test("indexing slide maximises to the tab width/height with a 10px border (Bug 2)", () => {
-    // Round-1 closing-3 (Bug 2): the About + Workspace slides
-    // are text-shaped and read better in the centered 720px
-    // column; the indexing graph wants the full tab area so the
-    // spine doesn't compress to a vertical band. The wide-stage
-    // class is toggled only on slideIndex === 2 + drops the
-    // `max-width: 720px` cap, and the carousel-wide variant
-    // tightens the outer padding to ~10px so the canvas reads
-    // edge-to-edge with a reasonable breathing border.
+  test("indexing slide maximises to the tab width/height with a 10px border", () => {
+    // About + Workspace read well in the 720px column; the indexing
+    // graph needs the full tab area so the spine does not compress.
+    // slide-stage-wide drops the max-width cap; carousel-wide tightens
+    // padding to ~10px so the canvas reads edge-to-edge.
     expect(carousel).toMatch(
       /class="slide-stage" class:slide-stage-wide=\{slideIndex === 2\}/,
     );
@@ -251,12 +220,9 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
     );
   });
 
-  test("indexing slide tracks a selectedIndexId so GraphCanvas labels selection + 1-hop (B12)", () => {
-    // Phase-13 round-1 closing: clicks on the indexing graph
-    // now update a `selectedIndexId` $state and feed it into
-    // GraphCanvas.selectedId. GraphCanvas already labels the
-    // selected node + 1-hop neighbours, so this is the wiring
-    // change that surfaces the labels on the read-only spine.
+  test("indexing slide tracks a selectedIndexId so GraphCanvas labels selection + 1-hop", () => {
+    // Clicks update selectedIndexId which feeds into GraphCanvas.selectedId,
+    // labelling the selected node and its 1-hop neighbours.
     expect(carousel).toMatch(
       /let selectedIndexId = \$state<string \| null>\(null\);/,
     );
@@ -274,14 +240,12 @@ describe("phase-13 slice 3b-1: carousel slide rework", () => {
   });
 });
 
-describe("fullstack-a-75b: DashboardTab mounts the carousel", () => {
-  test("DashboardTab imports + mounts EmptyPaneCarousel + threads tab.carouselSlide (G3)", () => {
+describe("DashboardTab mounts the carousel", () => {
+  test("DashboardTab imports + mounts EmptyPaneCarousel + threads tab.carouselSlide", () => {
     expect(dashboard).toMatch(
       /import EmptyPaneCarousel from "\.\/EmptyPaneCarousel\.svelte";/,
     );
-    // Round-1 closing-10 (G3): DashboardTab passes the persisted
-    // slide cursor + a write-back callback so the carousel
-    // position survives a window reload.
+    // The persisted slide cursor + write-back callback survive a reload.
     expect(dashboard).toMatch(
       /<EmptyPaneCarousel[\s\S]{1,400}initialSlide=\{tab\.carouselSlide \?\? 0\}[\s\S]{1,200}onSlideChange=\{onCarouselSlideChange\}/,
     );
@@ -294,7 +258,7 @@ describe("fullstack-a-75b: DashboardTab mounts the carousel", () => {
     );
   });
 
-  test("static ASCII pre + Shortcuts header dropped (carousel owns the shortcut surface now)", () => {
+  test("static ASCII pre + Shortcuts header dropped", () => {
     expect(dashboard).not.toMatch(/<pre class="info-shortcuts">/);
     expect(dashboard).not.toMatch(/renderTable\(platform, os\)/);
   });
@@ -306,14 +270,11 @@ describe("fullstack-a-75b: DashboardTab mounts the carousel", () => {
   });
 });
 
-describe("phase-13 round-1 closing B3: Dashboard back-of-card lives in HybridDashboardConfig", () => {
-  test("DashboardTab right-click menu carries only Reload (Settings entry retired)", () => {
-    // After B3 the redundant local `settingsOpen` path is gone;
-    // Pane.svelte's back-side switch mounts HybridDashboardConfig
-    // directly via the `active?.kind === "dashboard"` arm, and
-    // Cmd+, is the canonical flip. The right-click menu keeps a
-    // Reload row so the affordance is still discoverable from
-    // the body.
+describe("Dashboard back-of-card lives in HybridDashboardConfig", () => {
+  test("DashboardTab right-click menu carries only Reload (no Settings entry)", () => {
+    // Pane.svelte mounts HybridDashboardConfig via the `dashboard` arm;
+    // Cmd+, is the canonical flip. The right-click menu keeps a Reload
+    // row so it is discoverable from the body.
     expect(dashboard).toMatch(/import HamburgerMenu from "\.\/HamburgerMenu\.svelte";/);
     expect(dashboard).toMatch(/function onContextMenu\(e: MouseEvent\): void/);
     expect(dashboard).toMatch(/menu\?\.openAtCursor\(e\.clientX, e\.clientY\)/);
@@ -328,7 +289,7 @@ describe("phase-13 round-1 closing B3: Dashboard back-of-card lives in HybridDas
     expect(dashboard).toMatch(
       /onclick=\{doReload\}[\s\S]{1,200}<RefreshCw[\s\S]{1,200}<span class="menu-row-label">Reload<\/span>[\s\S]{1,160}<span class="menu-row-chord">\{chordLabel\("app\.window\.reload"\)\}<\/span>/,
     );
-    // Settings entry + its supporting state retired in B3.
+    // No Settings entry + no supporting state.
     expect(dashboard).not.toMatch(/<span class="menu-row-label">Settings<\/span>/);
     expect(dashboard).not.toMatch(/let settingsOpen = \$state/);
     expect(dashboard).not.toMatch(/function openSettings\b/);
@@ -339,32 +300,22 @@ describe("phase-13 round-1 closing B3: Dashboard back-of-card lives in HybridDas
   test("HybridDashboardConfig mirrors the other Hybrid configs and lives at its own file", async () => {
     const cfg = (await import("./HybridDashboardConfig.svelte?raw"))
       .default as string;
-    // Shell wrapper carries the Dashboard title + onDone prop
-    // wiring + the surface=\"dashboard\" tag (same shape as the
-    // Terminal / Editor / Graph / FB configs).
+    // Same shell structure as Terminal / Editor / Graph / FB configs.
     expect(cfg).toMatch(
       /<HybridSurfaceConfigShell[\s\S]{1,400}title="Dashboard"[\s\S]{1,200}surface="dashboard"[\s\S]{1,400}ariaLabel="Dashboard settings"[\s\S]{1,200}\{onDone\}/,
     );
     expect(cfg).toMatch(
       /let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\);/,
     );
-    // Three sections after B3c: Appearance / Screen lock /
-    // Metadata archive. The Screensaver section was collapsed
-    // INTO the Screen lock enable gate, so its theme picker
-    // shares the lifecycle of the Screen lock toggle and no
-    // longer carries a standalone `<h3>Screensaver</h3>`.
+    // Screensaver theme picker is folded into the Screen lock section;
+    // there is no standalone <h3>Screensaver</h3>.
     expect(cfg).toMatch(/<h3>Appearance<\/h3>/);
     expect(cfg).toMatch(/<h3>Screen lock<\/h3>/);
     expect(cfg).not.toMatch(/<h3>Screensaver<\/h3>/);
     expect(cfg).toMatch(/<h3>Metadata archive<\/h3>/);
-    // App-wide appearance radio group keeps the `app-appearance`
-    // name so the rejected per-tab DashboardAppearance enum
-    // can't sneak back in via the same name.
+    // Appearance is app-wide, so the radio group uses `app-appearance`.
     expect(cfg).toMatch(/name="app-appearance"/);
     expect(cfg).not.toMatch(/name="dashboard-appearance"/);
-    // Metadata archive surfaces the typed API + the same
-    // labels + the rescan / force-SCM checkboxes the retired
-    // Settings overlay used to ship.
     expect(cfg).toMatch(/await api\.metadataExport\(\)/);
     expect(cfg).toMatch(/await api\.metadataImport\(metadataImportFile/);
     expect(cfg).toMatch(/URL\.createObjectURL\(download\.blob\)/);
@@ -372,13 +323,12 @@ describe("phase-13 round-1 closing B3: Dashboard back-of-card lives in HybridDas
     expect(cfg).toContain("Import metadata archive");
     expect(cfg).toContain("Force SCM mismatch");
     expect(cfg).toContain("Rescan after import");
-    // Screen-lock state hydration runs on mount so the back
-    // surface reads the server's current screensaver config
-    // each time the user flips into it.
+    // State hydrates on mount so each flip reads the server's current
+    // screensaver config.
     expect(cfg).toMatch(
       /onMount\(\(\) => \{[\s\S]{1,200}void loadScreenLockState\(\);/,
     );
-    // The shared shell still owns the OK button.
+    // The shared shell owns the OK button.
     expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
     );
@@ -394,43 +344,32 @@ describe("phase-13 round-1 closing B3: Dashboard back-of-card lives in HybridDas
   });
 });
 
-describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
-  test("EmptyPaneWelcome.svelte renders the 5-tile spawn grid + Dashboard tile (per -a-95: welcome-hint dropped)", async () => {
+describe("EmptyPaneWelcome static spawn surface", () => {
+  test("EmptyPaneWelcome.svelte renders the 5-tile spawn grid + Dashboard tile", async () => {
     const welcome = (await import("./EmptyPaneWelcome.svelte?raw"))
       .default as string;
     expect(welcome).toMatch(
       /const spawnEntries: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Team Work",[\s\S]{1,800}label: "Graph",/,
     );
-    // B9: secondary tile row now carries Search + Dashboard
-    // (Search first), and both render their chord hints via
-    // `chordLabel(row.chordId)` rather than a hardcoded empty
-    // `<span class="spawn-chord"></span>`. The row CSS expands
-    // to a 2-column grid.
+    // Secondary tile row: Search + Dashboard, both with chord hints
+    // via chordLabel(row.chordId), in a 2-column grid.
     expect(welcome).toMatch(
       /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,800}label: "Search",[\s\S]{1,200}command: "app\.search\.toggle",[\s\S]{1,800}label: "Dashboard",[\s\S]{1,200}command: "app\.dashboard\.open",/,
     );
     expect(welcome).toMatch(
       /import \{[\s\S]{1,200}\bSearch\b[\s\S]{1,200}\} from "lucide-svelte"/,
     );
-    // Secondary tile chord render mirrors the primary row.
     expect(welcome).toMatch(
       /spawn-row spawn-row-secondary[\s\S]{1,1000}<span class="spawn-chord">\{chordLabel\(row\.chordId\)\}<\/span>/,
     );
-    // The retired hardcoded empty chord span is gone.
     expect(welcome).not.toMatch(/<span class="spawn-chord"><\/span>/);
-    // 2-column grid for the secondary row.
     expect(welcome).toMatch(
       /\.spawn-row-secondary \{[\s\S]{1,400}grid-template-columns: repeat\(2,/,
     );
-    // `fullstack-a-95`: stale per-tab "scope for Graph" hint
-    // dropped. @@Alex flagged the concept as retired after the
-    // FS-backbone graph transition; picker-driven scope is the
-    // active mechanism, surfaced in the graph overlay's chrome.
+    // No "scope for Graph" hint in the welcome surface.
     expect(welcome).not.toMatch(/class="welcome-hint"/);
     expect(welcome).not.toMatch(/Each pane's visible tab is part of the scope/);
-    // No `<p>` paragraph rendering the retired hint in the
-    // markup (matches the user-visible surface only; the
-    // retirement comment in the source is allowed).
+    // No `<p>` paragraph rendering the hint in the markup.
     expect(welcome).not.toMatch(/<p[\s\S]{0,200}scope[\s\S]{0,40}for Graph/);
   });
 
@@ -439,17 +378,13 @@ describe("fullstack-a-75b: EmptyPaneWelcome static spawn surface", () => {
     expect(pane).toMatch(
       /import EmptyPaneWelcome from "\.\/EmptyPaneWelcome\.svelte";/,
     );
-    // Round-1 closing-2 (lane-b-empty-pane-menu): the
-    // EmptyPaneWelcome mount no longer forwards
-    // `oncontextmenu` — the empty-pane right-click menu was
-    // retired, so the welcome surface has no parent handler to
-    // forward to.
+    // EmptyPaneWelcome does not forward oncontextmenu because there
+    // is no empty-pane right-click menu.
     expect(pane).toMatch(
       /\{#if !multiPane\}[\s\S]{1,800}<EmptyPaneWelcome \/>/,
     );
     expect(pane).not.toMatch(/<EmptyPaneWelcome oncontextmenu=/);
-    // Pane.svelte no longer imports EmptyPaneCarousel directly
-    // (it's owned by DashboardTab.svelte now).
+    // EmptyPaneCarousel is owned by DashboardTab.svelte, not Pane.svelte.
     expect(pane).not.toMatch(
       /import EmptyPaneCarousel from "\.\/EmptyPaneCarousel\.svelte";/,
     );

@@ -16,6 +16,7 @@
 
   import { api } from "../api/client";
   import type {
+    FsGraphEdge,
     FsGraphNode,
     FsGraphResponse,
     GraphView,
@@ -221,38 +222,168 @@
   ///     parent already WAS the current scope that made re-rooting a
   ///     no-op (scopeId unchanged -> no reload), and the unconsumed
   ///     pendingSelectId left the inspector blank.
-  /// Round-1 closing-2 (B7a): dblclick on a graph node re-roots the
-  /// graph at that node, matching the right-click "Graph from here"
-  /// + the chord. The preceding tap (mouseup → onSelect) already
-  /// populated `selectedId`, so this reads the current selection
-  /// and routes through `graphFromHere` for path-scopable nodes
-  /// (workspace, folder, file). Non-path nodes (tag / mention /
-  /// language / contact) ignore the dblclick — switching kind needs
-  /// a different action (openGraphFor{Tag,Contact,Language}) than a
-  /// path rescope, and the user's quoted ask is path-shape:
-  /// "double click a node in the graph to 'graph from here'".
-  function dblclickRescope(): void {
+  /// Double-click a graph node. For a directory node in filesystem mode
+  /// this expands/collapses it in place (File Browser parity): expanding
+  /// reveals the directory's next degree (find -d 1), collapsing hides its
+  /// subtree, with no graph reload. Rescope ("graph from here") stays on
+  /// the inspector, right-click, and chord, not the double-click. The
+  /// preceding tap already set the selection, so this reads it directly.
+  function onGraphDoubleClick(): void {
     if (
       filesystemMode &&
       selectedFsNode &&
-      selectedFsNode.path !== undefined &&
-      (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file")
+      isFsDirectory(selectedFsNode) &&
+      selectedFsNode.path
     ) {
-      graphFromHere(selectedFsNode.path, isFsDirectory(selectedFsNode));
-      return;
+      void toggleDirExpand(selectedFsNode.path);
     }
-    if (
-      selectedNode &&
-      (selectedNode.kind === "folder" || selectedNode.kind === "file")
-    ) {
-      // Round-1 closing-3 (D2): semantic-mode folder nodes carry
-      // `id = "directory:<path>"` (workspace root is the empty
-      // string), and file nodes carry `id = <workspace-relative
-      // path>`. Passing the id to graphFromHere built
-      // `dir:directory:<path>` which the backend rejected with
-      // "no such path". The `.path` field is the canonical
-      // workspace-relative form for both kinds.
-      graphFromHere(selectedNode.path, selectedNode.kind === "folder");
+  }
+
+  /// Workspace-relative parent directory of a path ("" for a top-level
+  /// entry).
+  function parentDirOf(path: string): string {
+    const i = path.lastIndexOf("/");
+    return i < 0 ? "" : path.slice(0, i);
+  }
+
+  /// True once at least one child of `dir` is in the loaded spine, so a
+  /// re-expand can show it without another fetch.
+  function dirChildrenLoaded(dir: string): boolean {
+    return fsNodes.some((n) => n.path !== dir && parentDirOf(n.path) === dir);
+  }
+
+  /// True when every ancestor directory between the scope root and
+  /// `nodePath` is expanded. The scope root itself is always shown.
+  function ancestorsExpanded(
+    rootPath: string,
+    nodePath: string,
+    expanded: Record<string, boolean>,
+  ): boolean {
+    if (!nodePath || nodePath === rootPath) return true;
+    const rel =
+      rootPath && nodePath.startsWith(`${rootPath}/`)
+        ? nodePath.slice(rootPath.length + 1)
+        : nodePath;
+    const parts = rel.split("/");
+    let prefix = rootPath;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      prefix = prefix ? `${prefix}/${parts[i]}` : parts[i];
+      if (!expanded[prefix]) return false;
+    }
+    return true;
+  }
+
+  /// Merge a single-directory fs-graph batch into the accumulated spine
+  /// and re-project the rendered node / edge sets.
+  function mergeFsResponse(fs: FsGraphResponse): void {
+    const nodeById = new Map(fsNodes.map((n) => [n.id, n]));
+    for (const n of fs.nodes) nodeById.set(n.id, n);
+    fsNodes = [...nodeById.values()];
+    const ekey = (e: FsGraphEdge): string =>
+      `${e.source} ${e.target} ${e.kind}`;
+    const edgeByKey = new Map(fsEdgesRaw.map((e) => [ekey(e), e]));
+    for (const e of fs.edges) edgeByKey.set(ekey(e), e);
+    fsEdgesRaw = [...edgeByKey.values()];
+    const merged: FsGraphResponse = {
+      root: fs.root,
+      scope: fs.scope,
+      path: fs.path,
+      depth: fs.depth,
+      nodes: fsNodes,
+      edges: fsEdgesRaw,
+      truncated: fsTruncated,
+    };
+    nodes = mapFsNodes(merged);
+    edges = mapFsEdges(merged);
+  }
+
+  /// Per-batch node budget for cursor-paged fs-graph delivery. Within the
+  /// server's [16, 256] clamp; small enough that appending a batch plus a
+  /// low-alpha layout pass stays within a frame, large enough to keep the
+  /// round-trip count down on a big workspace.
+  const GRAPH_BATCH_NODES = 128;
+
+  /// Yield to the next animation frame between batches so the editor, file
+  /// browser, terminal, and other graphs stay interactive while a large
+  /// spine fills in.
+  function yieldToFrame(): Promise<void> {
+    return new Promise((resolve) => {
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
+  /// Fetch one directory's next degree (find -d 1), cursor-paged so a very
+  /// wide directory fills in gradually. Drops the result if a full reload
+  /// superseded it mid-flight.
+  async function fetchDirChildren(dir: string): Promise<void> {
+    const seq = graphLoadSeq;
+    let cursor: string | undefined;
+    let fs: FsGraphResponse;
+    try {
+      do {
+        fs = await api.fsGraph({
+          scope: "directory",
+          path: dir,
+          depth: 1,
+          limit: GRAPH_BATCH_NODES,
+          cursor,
+        });
+        if (seq !== graphLoadSeq) return;
+        fsTruncated = fsTruncated || fs.truncated;
+        mergeFsResponse(fs);
+        cursor = fs.cursor ?? undefined;
+        if (!fs.done && cursor) {
+          await yieldToFrame();
+          if (seq !== graphLoadSeq) return;
+        }
+      } while (!fs.done && cursor);
+    } catch {
+      // Best-effort; leave the directory as-is if a batch fails.
+    }
+  }
+
+  /// Re-establish the expanded set so every directory up to depth N is
+  /// open (find -d N). Authoritative: the depth slider drives this to
+  /// override individual expand / collapse toggles.
+  function seedExpandedToDepth(rootPath: string, depth: number): void {
+    const next: Record<string, boolean> = { "": true };
+    if (rootPath) next[rootPath] = true;
+    for (const n of fsNodes) {
+      if (
+        n.kind === "directory" &&
+        n.path &&
+        relativeDepth(rootPath, n.path) < depth
+      ) {
+        next[n.path] = true;
+      }
+    }
+    graphState.expanded = next;
+  }
+
+  /// Fetch children for any expanded directory whose degree isn't loaded
+  /// (a reload replaced the spine, or a restored snapshot opened a
+  /// directory beyond the fetched depth).
+  async function reconcileExpandedChildren(): Promise<void> {
+    const expanded = graphState.expanded;
+    for (const dir of Object.keys(expanded)) {
+      if (!expanded[dir] || dir === "") continue;
+      if (!dirChildrenLoaded(dir)) await fetchDirChildren(dir);
+    }
+  }
+
+  /// Toggle a directory node's expansion (double-click). Expanding fetches
+  /// its next degree if not already loaded; collapsing hides its subtree.
+  async function toggleDirExpand(path: string): Promise<void> {
+    if (!path) return;
+    if (graphState.expanded[path]) {
+      delete graphState.expanded[path];
+    } else {
+      graphState.expanded[path] = true;
+      if (!dirChildrenLoaded(path)) await fetchDirChildren(path);
     }
   }
 
@@ -337,7 +468,17 @@
   let nodes: RenderedNode[] = $state([]);
   let edges: RenderedEdge[] = $state([]);
   let fsNodes: FsGraphNode[] = $state([]);
+  /// Raw fs-graph edges accumulated alongside `fsNodes`, so a
+  /// single-directory expand can merge into the spine and re-project the
+  /// rendered edge set without losing already-loaded degrees.
+  let fsEdgesRaw: FsGraphEdge[] = $state([]);
   let fsTruncated = $state(false);
+  /// Trackers for the expanded-set reseed: the depth + scope the current
+  /// expanded set was established for. A depth-slider move or a rescope
+  /// re-establishes the set (find -d N); mount / watcher reloads keep it.
+  /// `null` until the first load seeds a fresh instance (no snapshot).
+  let appliedDepth: number | null = null;
+  let appliedScopeKey: string | null = null;
   let workspaceDepthProbe: FsGraphResponse | null = $state(null);
   let workspaceDepthProbeLoading = $state(false);
   /// GI-7: directory-scope depth probe. The depth slider's cap is the
@@ -672,6 +813,12 @@
   /// it'll need its own logic, but treating it as "no filter"
   /// today returns the same set as workspace since chan only knows
   /// about one workspace at a time).
+  /// The directory-spine expanded set, stored on the graph tab so it
+  /// serializes into the tab's hash / session state (File Browser tab
+  /// parity) and survives a window reload. A directory is present when its
+  /// children should show; the scope root ("") is always expanded.
+  const expandedDirs = $derived(graphState.expanded ?? { "": true });
+
   const scopedNodeIds = $derived.by<Set<string> | null>(() => {
     if (!currentScope) return null;
     // Round-1 closing-8 (F1): semantic-mode workspace + dir scope
@@ -718,19 +865,28 @@
       }
       return visible;
     }
-    // GI-9: in filesystem mode the fs-graph endpoint already returns
-    // exactly the in-scope, depth-limited containment spine (the depth
-    // slider re-fetches at the new depth via load()), so there is no
-    // larger graph to narrow here. The scope BFS below is a SEMANTIC
-    // concept: /api/graph returns the workspace's relevant subgraph and the
-    // frontend trims it to the scope + depth. Applying it to fs-mode was
-    // the bug: it seeds ONLY from `kind === "file"` nodes (see the dir
-    // branch), but a directory's shallow children are DIRECTORIES, so a
-    // dir-scope fs-graph seeded empty and every node + edge was filtered
-    // out (rendered 0/N). Returning null renders the full backend spine
-    // for ALL branches to depth; the per-kind chip filters still apply
-    // via the `hidden*Ids` sets in visibleNodeIds / visibleEdges.
-    if (filesystemMode) return null;
+    // Filesystem mode: the directory spine is shown / hidden by the
+    // expanded set (double-click a directory to reveal its next degree;
+    // File Browser parity). A node renders only when every ancestor
+    // directory up to the scope root is expanded; the depth slider seeds
+    // that set to depth N. File scope is a focused single-file view with
+    // no tree to expand, so it keeps the full unfiltered spine. The
+    // per-kind chip filters still apply downstream in visibleNodeIds /
+    // visibleEdges.
+    if (filesystemMode) {
+      if (currentScope.kind === "file") return null;
+      const fsRoot = currentScope.kind === "dir" ? currentScope.path : "";
+      const expanded = expandedDirs;
+      const visible = new Set<string>();
+      for (const n of nodes) {
+        if (n.kind !== "file" && n.kind !== "folder") {
+          visible.add(n.id);
+          continue;
+        }
+        if (ancestorsExpanded(fsRoot, n.path, expanded)) visible.add(n.id);
+      }
+      return visible;
+    }
     // Tag scope: seed with the tag node itself; BFS expands across
     // every doc that references it (depth 1) and further along
     // those docs' edges (depth 2+). No path resolution needed —
@@ -1549,24 +1705,61 @@
           currentScope.kind === "dir" || currentScope.kind === "file"
             ? currentScope.path
             : "";
-        const fs = await api.fsGraph({
-          scope: fsScope,
-          path: fsPath,
-          depth: graphState.depth,
-        });
-        if (seq !== graphLoadSeq) return;
-        fsNodes = fs.nodes;
-        fsTruncated = fs.truncated;
-        nodes = mapFsNodes(fs);
-        edges = mapFsEdges(fs);
+        // Cursor-paged delivery: reset the spine, then pull bounded
+        // batches and append each so a large scope (e.g. /tmp/linux) fills
+        // in gradually instead of arriving as one blocking payload, with a
+        // frame yield between batches to keep every surface interactive.
+        fsNodes = [];
+        fsEdgesRaw = [];
+        nodes = [];
+        edges = [];
+        let cursor: string | undefined;
+        let fs: FsGraphResponse;
+        do {
+          fs = await api.fsGraph({
+            scope: fsScope,
+            path: fsPath,
+            depth: graphState.depth,
+            limit: GRAPH_BATCH_NODES,
+            cursor,
+          });
+          if (seq !== graphLoadSeq) return;
+          fsTruncated = fs.truncated;
+          mergeFsResponse(fs);
+          cursor = fs.cursor ?? undefined;
+          if (!fs.done && cursor) {
+            await yieldToFrame();
+            if (seq !== graphLoadSeq) return;
+          }
+        } while (!fs.done && cursor);
+        if (currentScope.kind !== "file") {
+          // The expanded set is restored with the tab (or defaults to the
+          // root for a fresh depth-1 graph), so the first load trusts it.
+          // A later depth-slider move or rescope re-establishes the set to
+          // depth N (authoritative; overrides individual expand/collapse).
+          const fsRoot = currentScope.kind === "dir" ? currentScope.path : "";
+          const scopeKey = graphState.scopeId;
+          if (appliedDepth === null) {
+            appliedDepth = graphState.depth;
+            appliedScopeKey = scopeKey;
+          } else if (
+            graphState.depth !== appliedDepth ||
+            scopeKey !== appliedScopeKey
+          ) {
+            seedExpandedToDepth(fsRoot, graphState.depth);
+            appliedDepth = graphState.depth;
+            appliedScopeKey = scopeKey;
+          }
+        }
         const pending = graphState.pendingSelectId;
-        if (pending && fs.nodes.some((n) => n.id === pending)) {
+        if (pending && fsNodes.some((n) => n.id === pending)) {
           selectedId = pending;
           graphState.inspectorOpen = true;
-        } else if (!selectedId || !fs.nodes.some((n) => n.id === selectedId)) {
+        } else if (!selectedId || !fsNodes.some((n) => n.id === selectedId)) {
           selectedId = fs.path;
         }
         graphState.pendingSelectId = null;
+        void reconcileExpandedChildren();
         return;
       }
       fsNodes = [];
@@ -2109,7 +2302,7 @@
         {selectedId}
         onSelect={setSelected}
         onContextMenu={onGraphContextMenu}
-        onSetAsScope={dblclickRescope}
+        onSetAsScope={onGraphDoubleClick}
       />
     </div>
   </div>

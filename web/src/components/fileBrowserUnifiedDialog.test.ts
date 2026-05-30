@@ -4,15 +4,12 @@ import store from "../state/store.svelte.ts?raw";
 import tree from "./FileTree.svelte?raw";
 import surface from "./FileBrowserSurface.svelte?raw";
 
-// `fullstack-a-67e` slice 2: unified "New File or Directory"
-// dialog + FileTree Settings flip. Slice 1 lifted the in-tree
-// menu structure; slice 2 collapses the separate New File +
-// New Directory entries into a single dialog that detects
-// file-vs-dir from the path's trailing slash, and pipes the
-// `onFlip` callback down from FBSurface so the Settings entry
-// at the foot of the in-tree menu calls `flipHybrid(pane.id)`.
+// Unified "New File or Directory" dialog and FileTree Settings flip.
+// The dialog detects file-vs-dir from the path's trailing slash.
+// `onFlip` is piped from FBSurface so the in-tree Settings entry
+// calls `flipHybrid(pane.id)`.
 
-describe("fullstack-a-67e slice 2: PathPromptKind union extension", () => {
+describe("PathPromptKind union extension", () => {
   test("PathPromptKind union accepts \"either\"", () => {
     expect(store).toMatch(
       /export type PathPromptKind = "file" \| "folder" \| "either";/,
@@ -20,7 +17,7 @@ describe("fullstack-a-67e slice 2: PathPromptKind union extension", () => {
   });
 });
 
-describe("fullstack-a-67e slice 2: PathPromptModal handles \"either\"", () => {
+describe("PathPromptModal handles \"either\"", () => {
   test("isEitherDir helper detects trailing slash", () => {
     expect(modal).toMatch(
       /function isEitherDir\(trimmed: string\): boolean \{[\s\S]{1,200}return trimmed\.endsWith\("\/"\);/,
@@ -56,7 +53,7 @@ describe("fullstack-a-67e slice 2: PathPromptModal handles \"either\"", () => {
   });
 });
 
-describe("fullstack-a-67e slice 2: fileOps.createFileOrDir helper", () => {
+describe("fileOps.createFileOrDir helper", () => {
   test("createFileOrDir opens the prompt with kind: \"either\"", () => {
     expect(store).toMatch(
       /async createFileOrDir\(parentPath: string\): Promise<void> \{[\s\S]{1,800}kind: "either",/,
@@ -76,7 +73,7 @@ describe("fullstack-a-67e slice 2: fileOps.createFileOrDir helper", () => {
   });
 });
 
-describe("fullstack-a-67e slice 2: FileTree wiring", () => {
+describe("FileTree wiring", () => {
   test("FileTree exposes onFlip prop alongside onClickRow", () => {
     expect(tree).toMatch(
       /onFlip\?: \(\) => void;/,
@@ -108,7 +105,7 @@ describe("fullstack-a-67e slice 2: FileTree wiring", () => {
   });
 });
 
-describe("fullstack-a-67e slice 2: FileBrowserSurface pipes onFlip down to FileTree (tab variant only)", () => {
+describe("FileBrowserSurface pipes onFlip down to FileTree (tab variant only)", () => {
   test("FileTree onFlip={isTab ? onFlip : undefined}", () => {
     expect(surface).toMatch(
       /<FileTree[\s\S]{1,400}onFlip=\{isTab \? onFlip : undefined\}/,

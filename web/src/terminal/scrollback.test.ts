@@ -54,9 +54,9 @@ describe("scrollbackLinesFromMb", () => {
     expect(lines).toBe(expected);
   });
 
-  it("default budget gives more lines than the pre-fullstack-b-11 20k baseline", () => {
+  it("default budget gives more lines than the 20k baseline", () => {
     // Acceptance criterion: users who haven't changed the setting
-    // get strictly better scrollback than the hardcoded 20k cap.
+    // get strictly better scrollback than the previous hardcoded cap.
     expect(scrollbackLinesFromMb(SCROLLBACK_MB_DEFAULT)).toBeGreaterThan(20_000);
   });
 

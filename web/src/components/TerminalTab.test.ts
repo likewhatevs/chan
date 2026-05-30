@@ -3,13 +3,10 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-// Static top-level component import (not a per-test `await import(...)`).
-// The flake was the dynamic import inside `renderTerminal` timing out
-// (30s) under the full parallel suite (contended Svelte transform/import
-// across workers), not an xterm-mock or shared-state race. The `vi.mock`
-// calls below are hoisted by vitest above ALL imports, so this static
-// import still sees the mocked xterm modules. Matches the non-flaky
-// TerminalTeamWork.test.ts pattern.
+// Static top-level import avoids per-test dynamic import timeouts under
+// the full parallel suite (contended Svelte transform/import across
+// workers). The vi.mock calls are hoisted above all imports, so this
+// static import still sees the mocked xterm modules.
 import TerminalTab from "./TerminalTab.svelte";
 import terminalSource from "./TerminalTab.svelte?raw";
 import type { TerminalTab as TerminalTabState } from "../state/tabs.svelte";
@@ -192,12 +189,9 @@ describe("TerminalTab menu", () => {
   test(
     "kebab menu renders the From-$CWD spawn band including New Terminal",
     async () => {
-      // `fullstack-a-67d`: addendum-a's Terminal spec re-introduces
-      // a "From $CWD" section containing New File / New Terminal /
-      // New File Browser / New Graph. Earlier `-a-32` had pruned
-      // "New Terminal" from this menu when the empty-pane carousel
-      // owned the spawn surface; the addendum brings it back as a
-      // CWD-rooted affordance.
+      // The "From $CWD" section contains New File / New Terminal /
+      // New File Browser / New Graph. New Terminal is a CWD-rooted
+      // affordance distinct from the top-level spawn surface.
       const tab = terminalTab({ terminalSessionId: "term-session-1" });
       const { target } = await renderTerminal(tab, true);
 
@@ -215,8 +209,7 @@ describe("TerminalTab menu", () => {
       expect(labels).toContain("New Terminal");
       expect(labels).toContain("New File Browser");
       expect(labels).toContain("New Graph");
-      // Restart is the canonical destructive neighbour; addendum
-      // moves it up next to MCP env.
+      // Restart sits next to MCP env in the menu.
       expect(labels).toContain("Restart");
     },
   );
@@ -240,19 +233,15 @@ describe("TerminalTab menu", () => {
 });
 
 describe("TerminalTab Team Work revamp (source contract)", () => {
-  // Phase-13 round-2: the Team Work prompt and bubble overlay were
-  // rewritten. These pin the load-bearing structural changes that
-  // the runtime tests above don't reach (the prompt component is
-  // owned by another lane, so we assert the mount contract + the
-  // submit-reset behavior at the source level).
+  // The Team Work prompt and bubble overlay were rewritten. These pin
+  // the load-bearing structural changes at the source level (the prompt
+  // component is not mounted in the runtime tests above).
 
   test("submitTeamWork unconditionally resets the draft buffer to empty", () => {
-    // Roadmap: every Cmd+Enter submit resets the draft back to
-    // empty. The pre-revamp build cleared the buffer only after a
-    // workspace-archive write confirmed; that path is gone.
+    // Every submit resets the draft to empty immediately rather than
+    // waiting on a workspace-archive write confirmation.
     expect(terminalSource).toMatch(/function submitTeamWork\(source: string\): void/);
     expect(terminalSource).toMatch(/tab\.teamWork\.buffer = "";/);
-    // The conditional clear (`rp.buffer === bufferAtSubmit`) is gone.
     expect(terminalSource).not.toMatch(/rp\.buffer === bufferAtSubmit/);
   });
 
@@ -264,12 +253,11 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
     expect(terminalSource).toMatch(/source\.endsWith\("\\n"\) \? source : `\$\{source\}\\n`/);
   });
 
-  test("the TeamWork mount passes exactly the frozen three props", () => {
+  test("the TeamWork mount passes exactly the three required props", () => {
     expect(terminalSource).toMatch(/<TeamWork\b/);
     expect(terminalSource).toMatch(/prompt=\{tab\.teamWork\}/);
     expect(terminalSource).toMatch(/onSubmit=\{submitTeamWork\}/);
     expect(terminalSource).toMatch(/terminalSessionId=\{tab\.terminalSessionId\}/);
-    // Dropped props from the old TerminalTeamWork mount.
     expect(terminalSource).not.toMatch(/watcherPath=/);
     expect(terminalSource).not.toMatch(/onSpawned=/);
     expect(terminalSource).not.toMatch(/\{bubbleCount\}/);

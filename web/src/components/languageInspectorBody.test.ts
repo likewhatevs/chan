@@ -3,13 +3,11 @@ import inspector from "./InspectorBody.svelte?raw";
 import languageBody from "./LanguageInfoBody.svelte?raw";
 import panel from "./GraphPanel.svelte?raw";
 
-// Phase-13 A3: language bubbles previously had no inspector. The
-// dispatcher fell through to TagInfoBody with a null selection, so
-// the panel rendered the empty placeholder. These `?raw` pins lock
-// the new language arm + body + GraphPanel wiring at source level
+// Language bubbles have a dedicated inspector arm. These `?raw` pins
+// lock the language arm + body + GraphPanel wiring at source level
 // (the wiring is reactive Svelte, not pure functions).
 
-describe("A3: InspectorBody dispatches a language arm", () => {
+describe("InspectorBody dispatches a language arm", () => {
   test("InspectorSelection grows a language variant", () => {
     expect(inspector).toMatch(
       /kind: "language";\s*language: string;\s*label: string;\s*files\?: number;\s*code\?: number;/,
@@ -24,7 +22,7 @@ describe("A3: InspectorBody dispatches a language arm", () => {
   });
 });
 
-describe("A3: LanguageInfoBody renders name + file/code stats + Graph from here", () => {
+describe("LanguageInfoBody renders name + file/code stats + Graph from here", () => {
   test("the body shows the language chip + title", () => {
     expect(languageBody).toMatch(/<span class="kind-chip language">language<\/span>/);
     expect(languageBody).toMatch(/<h3 class="title" title=\{language\}>\{label\}<\/h3>/);
@@ -42,7 +40,7 @@ describe("A3: LanguageInfoBody renders name + file/code stats + Graph from here"
   });
 });
 
-describe("A3: GraphPanel maps a language node to the language selection", () => {
+describe("GraphPanel maps a language node to the language selection", () => {
   test("inspectorSelection has a language branch carrying files + code", () => {
     expect(panel).toMatch(
       /selectedNode\.kind === "language"[\s\S]*?kind: "language",\s*language: selectedNode\.language,\s*label: selectedNode\.label,\s*files: selectedNode\.files,\s*code: selectedNode\.code,/,

@@ -1,18 +1,13 @@
-// Locks in the list-mode trigger semantics from fullstack-45.
+// Locks in the list-mode trigger semantics.
 //
-// @@Alex flagged a perceived "one keystroke delay" before the
-// editor recognizes a list when the user types `- ` at the start
-// of a line. The audit reached `@lezer/markdown` and the
-// `cm-md-list-line` line decoration; neither has a programmed
-// delay. CommonMark explicitly allows a "blank list item" — a
-// marker followed by space and nothing else — and lezer-markdown
-// emits the `BulletList` / `OrderedList` node on the trailing
-// whitespace.
+// CommonMark explicitly allows a "blank list item" -- a marker
+// followed by space and nothing else -- and lezer-markdown emits the
+// `BulletList` / `OrderedList` node on the trailing whitespace.
 //
 // This test guards against a future regression that would re-
-// introduce a "content past marker required" check on the
-// trigger path. We exercise the parser directly (no DOM) so the
-// test runs fast in the standard Vitest pool.
+// introduce a "content past marker required" check on the trigger
+// path. We exercise the parser directly (no DOM) so the test runs
+// fast in the standard Vitest pool.
 
 import { describe, expect, test } from "vitest";
 import { parser } from "@lezer/markdown";
@@ -34,7 +29,7 @@ function hasNode(input: string, nodeName: string): boolean {
   return found;
 }
 
-describe("list-mode trigger (fullstack-45)", () => {
+describe("list-mode trigger", () => {
   test("`- ` alone yields a BulletList on the first space", () => {
     expect(hasNode("- ", "BulletList")).toBe(true);
     expect(hasNode("- ", "ListItem")).toBe(true);

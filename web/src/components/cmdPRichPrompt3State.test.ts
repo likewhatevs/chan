@@ -13,7 +13,7 @@ import graph from "./GraphPanel.svelte?raw";
 //    a `[max]` suffix so the user sees the slider is already at
 //    max without needing to drag.
 
-describe("Phase 13 r2 Cmd+P Team Work lead terminal", () => {
+describe("Phase 13 Cmd+P Team Work lead terminal", () => {
   test("createTeamWorkLeadTerminal opens a fresh terminal in the active pane and returns it", () => {
     expect(tabs).toMatch(
       /export function createTeamWorkLeadTerminal\([\s\S]*?opts: OpenTerminalOptions = \{\},[\s\S]*?\): TerminalTab \| null \{[\s\S]*?const p = activePane\(\);[\s\S]*?openTerminalInPane\(p\.id, opts\);[\s\S]*?openActiveTeamWork\(\);[\s\S]*?return tab;/,
@@ -26,7 +26,7 @@ describe("Phase 13 r2 Cmd+P Team Work lead terminal", () => {
   });
 });
 
-describe("fullstack-a-56 depth-slider shallow-scope cue", () => {
+describe("depth-slider shallow-scope cue", () => {
   test("derived depthShallow gate: only for non-language non-disabled scopes where depthCap <= 1", () => {
     // Hoisted as a top-level `$derived.by` so it can workspace both
     // the `disabled` attribute on the slider AND the markup

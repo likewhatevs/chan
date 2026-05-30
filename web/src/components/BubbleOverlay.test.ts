@@ -11,11 +11,10 @@ import {
 } from "../state/bubbleStub.svelte";
 import BubbleOverlay from "./BubbleOverlay.svelte";
 
-// Phase-13 round-2 Team Work revamp: BubbleOverlay is a
-// frontend-only STATIC EXAMPLE. There is no watcher, no session id,
-// no reply / refresh round-trip. Visibility is driven by the
-// bubbleStub rune; clicking anything dismisses the example with no
-// network and no filesystem.
+// BubbleOverlay is a frontend-only STATIC EXAMPLE. There is no
+// watcher, no session id, no reply / refresh round-trip. Visibility
+// is driven by the bubbleStub rune; clicking anything dismisses the
+// example with no network and no filesystem.
 
 const mounted: Array<Record<string, any>> = [];
 

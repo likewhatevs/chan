@@ -87,14 +87,13 @@ export type ScopeOption =
       enabled?: boolean;
     }
   | {
-      /// Phase-13 round-1 KIND slice 2b: contact lens. The seed is
-      /// a file node (contact-kind .md frontmatter or a workspace
-      /// file referenced via `@@mention`); the graph lens centers
-      /// on this file and expands BIDIRECTIONALLY so the resulting
-      /// subgraph contains every doc that references the contact
-      /// (backlinks) plus everything the contact's own file links
-      /// out to. Slice 2a's `openGraphForContact(relPath)` sets
-      /// scopeId = `contact:<rel_path>`; the GraphPanel maps that
+      /// Contact lens. The seed is a file node (contact-kind .md
+      /// frontmatter or a workspace file referenced via a mention);
+      /// the graph lens centers on this file and expands
+      /// BIDIRECTIONALLY so the resulting subgraph contains every doc
+      /// that references the contact (backlinks) plus everything the
+      /// contact's own file links out to. `openGraphForContact(relPath)`
+      /// sets scopeId = `contact:<rel_path>`; the GraphPanel maps that
       /// to this option.
       id: string;
       kind: "contact";
@@ -103,11 +102,10 @@ export type ScopeOption =
       enabled?: boolean;
     }
   | {
-      /// Phase-13 round-1 KIND slice 2b: language lens. The seed
-      /// is the language bubble node (id = `language:<lang>`); the
-      /// graph lens shows the bubble plus its direct neighbours
-      /// (every file of that language). Depth doesn't apply per
-      /// the roadmap — the lens is always 1-hop.
+      /// Language lens. The seed is the language bubble node
+      /// (id = `language:<lang>`); the graph lens shows the bubble
+      /// plus its direct neighbours (every file of that language).
+      /// The lens is always 1-hop; depth does not apply.
       id: string;
       kind: "language";
       label: string;
@@ -185,8 +183,7 @@ function pathIsReadOnly(path: string): boolean {
 /// (dock or tab), or `null` when there's no selection or the
 /// selection is a file rather than a directory. Workspaces the
 /// `dir:<path>` scope option and `defaultScopeId`'s browser-aware
-/// branch. (The browser overlay was retired; the shared
-/// `browserSelection` is the selection signal now.)
+/// branch. The shared `browserSelection` is the selection signal.
 export function selectedDirPath(): string | null {
   const path = browserSelection.path;
   if (!path) return null;

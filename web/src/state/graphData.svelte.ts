@@ -110,8 +110,7 @@ export function reloadGraph(): Promise<void> {
   return ensureGraphLoaded();
 }
 
-/// Outgoing-edge groupings for a file path. Mirrors the inline
-/// derivation that previously lived in GraphPanel.svelte. Returns
+/// Outgoing-edge groupings for a file path. Returns
 /// empty arrays if the graph hasn't loaded yet or the file has no
 /// node in the graph (e.g. non-markdown files).
 export function selectionEdgesFor(path: string): {

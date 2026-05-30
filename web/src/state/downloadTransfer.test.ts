@@ -1,6 +1,5 @@
-// Bug 2b: the desktop-native download-progress store the inspector
-// (owned by @@LaneA) binds its indicator to. These tests pin the
-// lifecycle so the wiring contract @@LaneA consumes stays stable.
+// Desktop-native download-progress store that the inspector's indicator
+// binds to. Tests pin the lifecycle so the wiring contract stays stable.
 
 import { afterEach, describe, expect, test } from "vitest";
 import {

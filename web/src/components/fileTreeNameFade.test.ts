@@ -1,17 +1,14 @@
 import { describe, expect, test } from "vitest";
 import source from "./FileTree.svelte?raw";
 
-// `fullstack-a-62`: docked file browser rows fade long filenames
-// at the edge (linear-gradient mask) instead of wrapping to a
-// second line. Mirrors `Pane.svelte`'s tab-name mask pattern.
-// Right-dock variant flips the fade direction (right → left).
+// Docked file browser rows fade long filenames at the edge using a
+// linear-gradient mask instead of wrapping. Mirrors the Pane.svelte
+// tab-name mask pattern. Right-dock flips the fade direction.
 
-describe("fullstack-a-62: FileTree .name fade-mask", () => {
+describe("FileTree .name fade-mask", () => {
   test(".name keeps content on a single line", () => {
-    // Pin the load-bearing whitespace + overflow rules: `nowrap`
-    // prevents the second-line wrap @@Alex flagged; `overflow:
-    // hidden` clips beyond the row's width so the mask has
-    // something to fade.
+    // `nowrap` prevents second-line wrap; `overflow: hidden` clips
+    // beyond the row's width so the gradient mask has something to fade.
     expect(source).toMatch(/\.name \{[\s\S]*?white-space: nowrap;[\s\S]*?overflow: hidden;/);
   });
 

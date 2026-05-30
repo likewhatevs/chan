@@ -1,16 +1,12 @@
 import { describe, expect, test } from "vitest";
 import tab from "./TerminalTab.svelte?raw";
 
-// `fullstack-b-29`: the xterm.js default DOM renderer renders
-// box-drawing + block-element characters via the system font,
-// which (under chan's `lineHeight: 1.2`) leaves vertical gaps
-// between cell corners. The WebGL renderer fires xterm.js's
-// built-in customGlyphs path that draws pixel-perfect glyphs
-// filling the entire cell rectangle including the line-height
-// padding. These pins guard the WebGL wiring so a future
-// refactor can't silently revert to DOM + reintroduce the gap.
+// TerminalTab uses the WebGL renderer. The DOM renderer renders
+// box-drawing characters via the system font, leaving vertical gaps at
+// lineHeight: 1.2. The WebGL renderer's customGlyphs path fills the
+// entire cell including line-height padding. These pins guard the wiring.
 
-describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
+describe("TerminalTab WebGL renderer", () => {
   test("imports WebglAddon from @xterm/addon-webgl", () => {
     expect(tab).toMatch(/from\s+"@xterm\/addon-webgl"/);
     expect(tab).toMatch(/import\s*\{\s*WebglAddon\s*\}/);
@@ -22,59 +18,45 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
   });
 
   test("registers onContextLoss handler to dispose the addon", () => {
-    // WebGL contexts can be lost (GPU reset, tab backgrounding
-    // on some platforms). The handler disposes the addon so
-    // xterm.js falls back to its DOM rendering for that
-    // session instead of crashing.
+    // GPU reset or tab backgrounding can lose the WebGL context.
+    // Disposing the addon lets xterm.js fall back to DOM rendering.
     expect(tab).toMatch(/webgl\.onContextLoss\(/);
     expect(tab).toMatch(/webglRendererActive\s*=\s*false/);
     expect(tab).toMatch(/webgl\.dispose\(\)/);
   });
 
   test("wraps load in try/catch with DOM-fallback warning", () => {
-    // Headless test harnesses + rare GPU setups can throw on
-    // `new WebglAddon()`. The try/catch keeps terminal mount
-    // working with the original DOM renderer rather than
-    // exploding the panel.
+    // Headless harnesses and rare GPU setups may throw on new WebglAddon().
+    // The try/catch keeps terminal mount working with the DOM renderer.
     expect(tab).toMatch(/try\s*\{[\s\S]*?new WebglAddon[\s\S]*?\}\s*catch/);
     expect(tab).toMatch(/falling back to DOM/);
   });
 
   test("keeps the event-driven row-repaint helper wired", () => {
-    // `refreshTerminalRows` is the event-driven renderer-refresh
-    // primitive (mount / focus / blur / host-resume). `desktop-fixes`
-    // dropped the companion `clearTextureAtlas` helper - see the
-    // negative pin in the next test.
+    // refreshTerminalRows is the renderer-refresh primitive for mount /
+    // focus / blur / host-resume events.
     expect(tab).toMatch(/function refreshTerminalRows\(\): void/);
     expect(tab).toMatch(/maybeRefresh\?\.call\(term, 0, Math\.max\(0, term\.rows - 1\)\)/);
   });
 
   test("never clears the shared WebGL texture atlas on a per-pane event", () => {
-    // `desktop-fixes`: clearing xterm.js's process-global TextureAtlas
-    // from one pane's focus / blur / active / wake recovery rebuilt the
-    // atlas out from under the sibling panes still on screen, garbling
-    // their glyphs when the user moved focus around the grid. The
-    // addon-webgl 0.19 renderer rebuilds the atlas itself for
-    // color / DPR / font changes, so we never call it manually anymore.
+    // Clearing the process-global TextureAtlas from one pane's focus/blur
+    // rebuilt it under sibling panes, garbling their glyphs. The renderer
+    // handles color/DPR/font changes itself, so manual clears are removed.
     expect(tab).not.toMatch(/clearTextureAtlas/);
   });
 
   test("does not clear the texture atlas per PTY data chunk", () => {
-    // `fullstack-a-97` removed: the old per-frame SGR-triggered atlas
-    // clear force-repainted every terminal pane sharing the addon's
-    // process-global TextureAtlas (~60x/sec under animated TUIs),
-    // which is itself the source of the cross-pane glyph glitches.
-    // xterm 6.0.0 / addon-webgl 0.19.0 handle color/DPR/options
-    // changes natively, so the workaround is gone. This pin keeps it
-    // from silently returning.
+    // The old per-frame SGR-triggered atlas clear force-repainted all
+    // terminal panes (~60x/sec under animated TUIs). The renderer handles
+    // changes natively, so the workaround is gone.
     expect(tab).not.toMatch(/maybeRefreshWebglAtlas/);
     expect(tab).not.toMatch(/bytesContainSgrSequence/);
   });
 
   test("passes binary terminal output to xterm without string coercion", () => {
-    // UTF-8 sequences such as U+2014 must reach xterm as bytes.
-    // Coercing ArrayBuffer or Blob output through String() before
-    // write would corrupt non-ASCII glyphs.
+    // UTF-8 sequences must reach xterm as bytes. Coercing through
+    // String() would corrupt non-ASCII glyphs.
     expect(tab).toMatch(
       /event\.data instanceof ArrayBuffer[\s\S]*?const bytes = new Uint8Array\(event\.data\);[\s\S]*?writePtyOutput\(bytes\);/,
     );
@@ -86,25 +68,19 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
 
   test("refreshes renderer on focus and after font readiness", () => {
     expect(tab).toMatch(/function refreshTerminalRenderer\(\): void/);
-    // `desktop-fixes`: repaint-only - rAF and fonts.ready each call
-    // refreshTerminalRows(); no texture-atlas clear (see the negative
-    // pin above).
+    // rAF and fonts.ready each call refreshTerminalRows(); no atlas
+    // clear (see the negative pin above).
     expect(tab).toMatch(
       /requestAnimationFrame\([\s\S]*?refreshTerminalRows\(\);[\s\S]*?\}\);/,
     );
     expect(tab).toMatch(/document\.fonts\?\.ready\.then/);
-    // `desktop-fixes`: the focus-GAIN path runs the full host-resume
-    // recovery (not a bare queueFit + refreshTerminalRenderer) so the
-    // pane focused after another was active repaints clean in WKWebView
-    // instead of showing stale glyphs.
+    // Focus-gain runs full host-resume recovery so a pane focused after
+    // another repaints clean in WKWebView rather than showing stale glyphs.
     expect(tab).toMatch(
       /if \(!focused\) return;[\s\S]*?recoverTerminalRendererAfterHostResume\(\);[\s\S]*?setTerminalActivity\(tab, false\);/,
     );
-    // `lane-c addendum-1 bug 1`: the blur effect runs the full
-    // host-resume recovery (fit + repaint + delayed re-fits), not a
-    // bare refreshTerminalRenderer, so the pane LOSING focus repaints
-    // clean in WKWebView (the desktop app) where a single refresh
-    // leaves it stale.
+    // Blur also runs full host-resume recovery so the pane LOSING focus
+    // repaints clean in WKWebView (a single refresh leaves it stale there).
     expect(tab).toMatch(
       /if \(focused\) return;[\s\S]*?recoverTerminalRendererAfterHostResume\(\);[\s\S]*?sendFocusState\(\);/,
     );
@@ -121,15 +97,12 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(/hostResumeListenerCleanup\?\.\(\)/);
   });
 
-  test("a wall-clock-gap wake probe fires recovery on sleep/wake (lane-c addendum-2 item 2)", () => {
-    // macOS sleep doesn't fire focus/pageshow/visibilitychange in
-    // WKWebView, so a coarse interval detects the wake (timers froze ->
-    // the callback fires far later than scheduled) and runs the same
-    // recovery. Source-pinned (the timer-gap is not deterministically
-    // unit-testable without mounting xterm + faking sleep).
+  test("a wall-clock-gap wake probe fires recovery on sleep/wake", () => {
+    // macOS sleep does not fire focus/pageshow/visibilitychange in
+    // WKWebView. A coarse interval detects the wake by observing that
+    // the timer callback fired far later than scheduled.
     expect(tab).toMatch(/wakeProbeTimer = setInterval\(/);
     expect(tab).toMatch(/if \(gap > WAKE_GAP_MS\) recoverTerminalRendererAfterHostResume\(\);/);
-    // Torn down with the host-resume listeners.
     expect(tab).toMatch(/clearInterval\(wakeProbeTimer\)/);
   });
 

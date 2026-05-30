@@ -44,11 +44,11 @@
           pathPromptState.mode === "create" &&
           pathPromptState.defaultValue.endsWith(`${DEFAULT_NEW_FILENAME_STEM}.md`)
         ) {
-          // `fullstack-a-15`: select the whole filename (stem + `.md`),
-          // not just the stem, so typing a name that includes the
-          // extension replaces both rather than producing `foo.md.md`.
-          // The directory prefix stays unselected so Tab-completed
-          // parents survive a one-keystroke replace.
+          // Select the whole filename (stem + `.md`), not just the
+          // stem, so typing a name that includes the extension
+          // replaces both rather than producing `foo.md.md`. The
+          // directory prefix stays unselected so Tab-completed parents
+          // survive a one-keystroke replace.
           const stemStart = pathPromptState.defaultValue.lastIndexOf("/") + 1;
           inputEl?.setSelectionRange(
             stemStart,
@@ -58,23 +58,22 @@
           pathPromptState.kind === "folder" &&
           pathPromptState.mode === "create"
         ) {
-          // `fullstack-a-65`: New Directory dialog opens with the
-          // pre-populated parent path. The user wants to type the
-          // new directory NAME at the end — selecting the whole
-          // path forces them to either delete-all first or
-          // arrow-key past the selection. Cursor-at-end matches
-          // the "ready to type" mental model @@Alex flagged.
+          // New Directory dialog opens with the pre-populated parent
+          // path and the cursor at the end. The user types the new
+          // directory NAME there; selecting the whole path would
+          // force them to delete-all or arrow past the selection
+          // first, so cursor-at-end matches the "ready to type"
+          // mental model.
           const end = pathPromptState.defaultValue.length;
           inputEl?.setSelectionRange(end, end);
         } else if (
           pathPromptState.kind === "either" &&
           pathPromptState.mode === "create"
         ) {
-          // `fullstack-a-67e` slice 2: unified "New File or
-          // Directory" dialog. Open with the cursor at end so
-          // typing a name appends to the parent path. Closer
-          // to the folder-flow mental model since the user has
-          // to decide file-vs-dir from the trailing slash.
+          // Unified "New File or Directory" dialog. Open with the
+          // cursor at end so typing a name appends to the parent
+          // path. This matches the folder-flow mental model since the
+          // user decides file-vs-dir from the trailing slash.
           const end = pathPromptState.defaultValue.length;
           inputEl?.setSelectionRange(end, end);
         } else {
@@ -90,12 +89,11 @@
   /// rename-time extension preservation in italic — same visual
   /// language for both, which keeps the user from being surprised
   /// by store-side rewrites.
-  /// `fullstack-a-67e` slice 2: when `kind === "either"`, the
-  /// modal detects file vs directory from the trailing slash:
-  /// `foo/bar/` → directory (no `.md` append); `foo/bar` →
-  /// file (`.md` append on create). Mirrors the FB selection
-  /// menu's "New File or Directory" entry; the helper is also
-  /// exposed below as `detectedEitherKind` so the placeholder /
+  /// When `kind === "either"`, the modal detects file vs directory
+  /// from the trailing slash: `foo/bar/` → directory (no `.md`
+  /// append); `foo/bar` → file (`.md` append on create). Mirrors the
+  /// FB selection menu's "New File or Directory" entry; the helper is
+  /// also exposed below as `detectedEitherKind` so the placeholder /
   /// status row can label the operation correctly.
   function isEitherDir(trimmed: string): boolean {
     return trimmed.endsWith("/");
@@ -341,9 +339,9 @@
         return { kind: "overwrites", path, isFolder: wantDir };
       }
       if (pathPromptState.mode === "attach") {
-        // `fullstack-b-3`: attaching a watcher to a directory that
-        // already exists is the common case; no overwrite warning,
-        // no ancestor preamble — just confirm the target.
+        // Attaching a watcher to a directory that already exists is
+        // the common case; no overwrite warning, no ancestor
+        // preamble, just confirm the target.
         return {
           kind: "creates",
           newAncestors: [],
@@ -358,8 +356,8 @@
       };
     }
 
-    // `fullstack-b-3`: absolute paths bypass the workspace-side tree
-    // view entirely (tree.entries only carries workspace-relative
+    // Absolute paths bypass the workspace-side tree view entirely
+    // (tree.entries only carries workspace-relative
     // paths), so we can't tell from the SPA whether the path
     // exists on disk. Show the attach intent without manufacturing
     // a "creates ancestors a/, b/, c/" preamble that wouldn't

@@ -4,13 +4,11 @@ import canvas from "./GraphCanvas.svelte?raw";
 import app from "../App.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
-// `fullstack-a-51` G6 + Task D (bundled): markdown / source /
-// binary / media colour scheme + Hybrid Graph legend grid.
-//
+// Markdown / source / binary / media colour scheme + Hybrid Graph legend grid.
 // Tests pin the wiring shape so a future refactor can't silently
 // drop the bucket split or the legend swatches.
 
-describe("fullstack-a-51 G6: file-class colour scheme", () => {
+describe("file-class colour scheme", () => {
   test("classifyFile returns the 5 buckets (doc/img/contact/source/binary)", () => {
     expect(canvas).toMatch(
       /function classifyFile\([\s\S]*?\): "doc" \| "img" \| "contact" \| "source" \| "binary"/,
@@ -64,7 +62,7 @@ describe("fullstack-a-51 G6: file-class colour scheme", () => {
   });
 });
 
-describe("fullstack-a-51 G6: CSS palette", () => {
+describe("CSS palette", () => {
   test("dark-mode declares --g-source + --g-binary", () => {
     // Dark theme :root block ships royalblue + grey.
     expect(app).toMatch(/--g-source: #4169e1/);
@@ -84,7 +82,7 @@ describe("fullstack-a-51 G6: CSS palette", () => {
   });
 });
 
-describe("fullstack-a-51 Task D: Hybrid Graph legend grid", () => {
+describe("Hybrid Graph legend grid", () => {
   test("legend renders the Files group with all 5 file kinds", () => {
     expect(source).toContain('"Markdown"');
     expect(source).toContain('"Source code"');

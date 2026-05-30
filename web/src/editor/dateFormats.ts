@@ -7,10 +7,9 @@
 // formatted string verbatim; on load the regex re-pills it).
 //
 // Year-bearing only: every catalog entry stores enough to
-// round-trip without losing the year. A previous "Mon, 18 Feb"
-// no-year variant existed and was dropped because it surprised
+// round-trip without losing the year. Year-less formats surprised
 // users when files written in one year re-pilled as a different
-// one on next open.
+// one on next open, so all catalog entries carry the year.
 //
 // Adding a new format means: extend `DATE_FORMATS`, add the
 // matching `<select>` option (auto-derived), and bump nothing.

@@ -437,20 +437,19 @@ const handleBulletList: TokenHandler = (ctx) => {
 /// `cm-md-ul-marker` styles the bullet marker (`-` / `*` / `+`) in
 /// the source. We attach the class via `Decoration.mark` instead of
 /// replacing the source text with a fixed glyph so the rendered
-/// editor reflects whatever character the author typed (bug 3 in
-/// phase-13 round 1: "even if I start a list with a dash, it
-/// changes to bullet; i know this is just rendering, but i want
-/// the rendering to reflect what's in the source code").
+/// editor reflects whatever character the author typed ("even if I
+/// start a list with a dash, it changes to bullet; i know this is
+/// just rendering, but i want the rendering to reflect what's in
+/// the source code").
 const BULLET_MARK = Decoration.mark({ class: "cm-md-ul-marker" });
 
-/// Phase-13 r2 (B-slice 1): per-image-1 marker glyphs. The class
-/// chosen here only ADDS a styling hook; the source bytes are
-/// untouched (so source mode + round-trip still show the literal
-/// `-` / `*`). The wysiwyg glyph substitution is pure CSS
-/// (Wysiwyg.svelte): `-` renders an en-dash at every level, `*`
-/// renders a filled bullet at the top level and a hollow bullet when
-/// nested. `+` (out of image-1 scope) keeps its literal styled char
-/// via the base BULLET_MARK.
+/// Per-marker glyph decorations. The class chosen here only ADDS a
+/// styling hook; the source bytes are untouched (so source mode +
+/// round-trip still show the literal `-` / `*`). The wysiwyg glyph
+/// substitution is pure CSS (Wysiwyg.svelte): `-` renders an
+/// en-dash at every level, `*` renders a filled bullet at the top
+/// level and a hollow bullet when nested. `+` keeps its literal
+/// styled char via the base BULLET_MARK.
 const BULLET_DASH = Decoration.mark({
   class: "cm-md-ul-marker cm-md-ul-dash",
 });
@@ -522,11 +521,10 @@ function decorateBulletList(
 /// `cm-md-ol-marker` styles the ordered-list marker (`1.` / `2)` /
 /// etc.) in the source. We attach the class via `Decoration.mark`
 /// instead of replacing the source text with a generated label so
-/// the rendered editor reflects whatever the author typed (bug 3 in
-/// phase-13 round 1). The old outline-style dotted chain
-/// (`1.1.1.`) is gone: it diverged from the source bytes and
-/// surprised users who expected the rendered numbers to match what
-/// they typed.
+/// the rendered editor reflects whatever the author typed. The
+/// outline-style dotted chain (`1.1.1.`) was removed: it diverged
+/// from the source bytes and surprised users who expected the
+/// rendered numbers to match what they typed.
 const ORDERED_MARK = Decoration.mark({ class: "cm-md-ol-marker" });
 
 /// Walk an OrderedList's direct ListItem children, mark each

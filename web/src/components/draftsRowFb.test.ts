@@ -9,7 +9,7 @@ describe("FileTree Drafts visibility", () => {
   });
 });
 
-describe("fullstack-a-66b: App.svelte CSS variables", () => {
+describe("App.svelte CSS variables", () => {
   test("dark mode declares --fb-drafts-fg + --fb-drafts-bg", () => {
     expect(app).toMatch(/--fb-drafts-fg: #e3b341;/);
     expect(app).toMatch(/--fb-drafts-bg: rgba\(227, 179, 65, 0\.10\);/);

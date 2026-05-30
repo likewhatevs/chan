@@ -1,15 +1,13 @@
 import { describe, expect, test } from "vitest";
 import terminal from "./TerminalTab.svelte?raw";
 
-// `fullstack-a-92`: broadcast survey-reply echo fan-out. The
-// SPA-side intercept (option 2) routes the `poke + chord`
-// payload through `sendUserInput` so the existing `-a-31`
-// broadcast layer fans the echo to selected broadcast targets.
-// Server-side `dispatch_agent_event` emits an
-// `agent_event_echo` WS frame instead of writing the bytes
-// directly to the PTY.
+// Broadcast survey-reply echo fan-out. The SPA-side intercept routes
+// the `poke + chord` payload through `sendUserInput` so the broadcast
+// layer fans the echo to selected broadcast targets. Server-side
+// `dispatch_agent_event` emits an `agent_event_echo` WS frame instead
+// of writing the bytes directly to the PTY.
 
-describe("fullstack-a-92: ServerFrame discriminator", () => {
+describe("ServerFrame discriminator", () => {
   test("ServerFrame union includes `agent_event_echo` variant", () => {
     expect(terminal).toMatch(
       /type: "agent_event_echo";[\s\S]*?seq: number;[\s\S]*?event_id: string;[\s\S]*?payload_b64: string;/,
@@ -17,13 +15,12 @@ describe("fullstack-a-92: ServerFrame discriminator", () => {
   });
 
   test("rationale comment cites the broadcast-layer reuse + base64 framing", () => {
-    expect(terminal).toMatch(/`fullstack-a-92`/);
-    expect(terminal).toMatch(/broadcast layer.*-a-31.*fans the echo/i);
+    expect(terminal).toMatch(/broadcast layer fans the echo/i);
     expect(terminal).toMatch(/base64[\s\S]{1,80}non-UTF8/i);
   });
 });
 
-describe("fullstack-a-92: WS handler routes the payload through sendUserInput", () => {
+describe("WS handler routes the payload through sendUserInput", () => {
   test("agent_event_echo branch decodes + calls sendUserInput", () => {
     expect(terminal).toMatch(
       /else if \(frame\.type === "agent_event_echo"\) \{[\s\S]*?const payload = decodeAgentEventEcho\(frame\.payload_b64\);[\s\S]*?if \(payload\) \{[\s\S]*?sendUserInput\(payload\);/,

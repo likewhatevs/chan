@@ -30,16 +30,14 @@
 
   const MIN_HEIGHT = 150;
   const TOP_GAP = 36;
-  /// `fullstack-a-89`: empty-state hint copy. Threaded as
-  /// `placeholderText` to both the Wysiwyg + Source editors
-  /// so CM6's `placeholder` extension renders it inside the
-  /// first line at the cursor position.
-  // `fullstack-a-89b`: leading space per @@Alex's literal spec
-  // `{cursor}{space}{default-text}`. The space gives a visible
-  // gap between the blinking cursor and the placeholder text so
-  // the cursor reads as a starting position rather than overlapping
-  // the first glyph. Paired with the `.cm-placeholder` CSS rule
-  // in TeamWork's style block below.
+  /// Empty-state hint copy. Threaded as `placeholderText` to both the
+  /// Wysiwyg + Source editors so CM6's `placeholder` extension
+  /// renders it inside the first line at the cursor position.
+  // Leading space (`{cursor}{space}{default-text}`) gives a visible
+  // gap between the blinking cursor and the placeholder text so the
+  // cursor reads as a starting position rather than overlapping the
+  // first glyph. Paired with the `.cm-placeholder` CSS rule in
+  // TeamWork's style block below.
   const PROMPT_PLACEHOLDER_TEXT = " Write your prompt; Enter to send, Shift+Enter for a new line";
   let rootEl: HTMLDivElement | undefined = $state();
   let wysiwygRef: Wysiwyg | undefined = $state();
@@ -49,8 +47,8 @@
   let dragging = false;
   const workspaceRow = $derived(workspaceStatus());
 
-  // `fullstack-79`: auto-focus the input on every `openActiveTeamWork`
-  // call. The `focusNonce` is bumped by the open helper even when the prompt
+  // Auto-focus the input on every `openActiveTeamWork` call. The
+  // `focusNonce` is bumped by the open helper even when the prompt
   // is already open, so re-show via Cmd+K p / Cmd+P steals focus back
   // even if the user had clicked away. `tick()` waits for the editor child's
   // `bind:this` to settle on first mount, and for the `{#key mode()}` block
@@ -67,12 +65,12 @@
     });
   });
 
-  // `fullstack-a-29` + `fullstack-a-30`: track the prompt's actual
-  // rendered height AND width so two downstream reactors stay in
-  // sync with whatever the browser painted:
+  // Track the prompt's actual rendered height AND width so two
+  // downstream reactors stay in sync with whatever the browser
+  // painted:
   //   - height feeds the terminal-host reserved-space reactor in
-  //     TerminalTab.svelte (covers the `fullstack-a-24` collapse
-  //     transition where `heightPx` is stale).
+  //     TerminalTab.svelte (covers the collapse transition where
+  //     `heightPx` is stale).
   //   - width feeds the per-prompt page-width clamp in
   //     `teamWorkPageWidthPx` below, needed so the cap is
   //     relative to THIS prompt's painted width, not the pane's
@@ -93,8 +91,8 @@
     return () => observer.disconnect();
   });
 
-  // `fullstack-a-30`: per-prompt page-width override. Computes a
-  // pixel cap relative to the prompt's current painted width and
+  // Per-prompt page-width override. Computes a pixel cap relative to
+  // the prompt's current painted width and
   // OVERRIDES the inherited `--chan-page-max-width` set by
   // Pane.svelte on the editor wrapper. Result: narrowing the
   // editor's page-width slider in pane A no longer cascades onto
@@ -143,10 +141,9 @@
   }
 
   function toolbarOpen(): boolean {
-    // `fullstack-a-24`: default-off. The toolbar is opt-in now and
-    // mounts INSIDE the prompt bubble (above the editor body) when
-    // toggled on. Previously it was default-on and sat outside the
-    // bubble. `undefined` reads as off; explicit `true` opens it.
+    // Default-off. The toolbar is opt-in and mounts INSIDE the prompt
+    // bubble (above the editor body) when toggled on. `undefined`
+    // reads as off; explicit `true` opens it.
     return prompt.styleToolbarOpen === true;
   }
 
@@ -214,11 +211,11 @@
   }
 
   function onKeydown(e: KeyboardEvent): void {
-    // `fullstack-a-20`: respect children that already handled the
-    // chord. Wysiwyg's CM6 keymap has its own Mod-Enter binding
-    // (`fullstack-a-18` threaded `onSubmit` to it), and CM's keymap
-    // runner calls `preventDefault()` when its handler returns true.
-    // Without this guard the chord triggers submit twice: once from
+    // Respect children that already handled the chord. Wysiwyg's CM6
+    // keymap has its own Mod-Enter binding (with `onSubmit` threaded
+    // to it), and CM's keymap runner calls `preventDefault()` when
+    // its handler returns true. Without this guard the chord triggers
+    // submit twice: once from
     // the CM keymap, once from the wrapper after the event bubbles,
     // `pwd` arrives in the PTY as `pwdpwd`. Source mode has no
     // Mod-Enter binding so it still reaches this wrapper unhandled
@@ -383,8 +380,8 @@
     <button type="button" class="icon-btn" onclick={submit} title="Send prompt" aria-label="Send prompt">
       <Send size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
-    <!-- `fullstack-a-24`: collapse/expand the prompt to a minimal
-         bar so chat / survey bubbles above get more vertical room.
+    <!-- Collapse/expand the prompt to a minimal bar so chat / survey
+         bubbles above get more vertical room.
          Distinct from Close (dismiss); collapse keeps the prompt
          attached, just smaller. Chevron orientation flips with the
          state, down to collapse-toward-bottom, up to expand. -->
@@ -435,23 +432,17 @@
         />
       {/if}
     {/key}
-    <!-- `fullstack-a-89`: placeholder moved from the
-         pre-fix CSS overlay (`-a-24`) into CM6's built-in
-         `placeholder` extension threaded as
-         `placeholderText` on both Wysiwyg + Source. The
-         extension renders the hint at the cursor position
-         INSIDE the editor's first line, so cursor and
-         placeholder share the exact same x/y instead of
-         living in parallel positioning systems. `-a-84`
-         (10px X-offset) + `-a-87` (line-height 1.8 match)
-         were CSS patches that couldn't fully close the
-         empirical gap because the architecture itself
-         (overlay vs in-editor) was misaligned. -->
+    <!-- The placeholder uses CM6's built-in `placeholder` extension
+         threaded as `placeholderText` on both Wysiwyg + Source. The
+         extension renders the hint at the cursor position INSIDE the
+         editor's first line, so cursor and placeholder share the
+         exact same x/y rather than living in parallel positioning
+         systems (a CSS overlay can't reliably match). -->
   </div>
   {#if menu}
     <div class="ctx" style:left={`${menu.x}px`} style:top={`${menu.y}px`} role="menu">
-      <!-- `fullstack-a-30`: per-prompt page-width slider, mirrors
-           the editor's tab-menu slider. Sets `prompt.pageWidthRatio`
+      <!-- Per-prompt page-width slider, mirrors the editor's tab-menu
+           slider. Sets `prompt.pageWidthRatio`
            directly, does not touch the global `pageWidth.ratio`,
            so narrowing this prompt does not cascade onto the
            editor's wrap or onto sibling tiles. 100 % unsets the
@@ -508,13 +499,10 @@
 </div>
 
 <style>
-  /* `fullstack-a-24`: floating-pill redesign. Previously the prompt
-     was a rectangle flush against the bottom edge (full-bleed
-     left/right/bottom, square corners, border on the top edge only).
-     @@Alex's spec: rounded corners on all sides, visible terminal
-     underneath, inset margins on every edge. The border-radius reads
-     as a chip rather than a header bar; the floating-shadow on all
-     sides replaces the prior single top-edge shadow that hinted
+  /* Floating-pill prompt: rounded corners on all sides, visible
+     terminal underneath, inset margins on every edge. The
+     border-radius reads as a chip rather than a header bar; the
+     floating-shadow on all sides keeps it from reading as
      attached-to-bottom.
 
      Collapsed state (`.team-work.collapsed`): clamps the prompt to
@@ -654,38 +642,28 @@
     position: relative;
     --editor-top-pad: 16px;
   }
-  /* `fullstack-a-89`: removed `.prompt-placeholder` CSS
-     overlay (-a-24 / -a-84 / -a-87). CM6's `placeholder`
-     extension threaded via `placeholderText` on Wysiwyg +
-     Source now handles the empty-state hint. */
-  /* `fullstack-a-89b`: empirical fix for the cursor/placeholder
-     Y-misalignment that survived `-a-89`. Measured in browser
-     devtools (cursor: top 717.5, bottom 736.5, height 19;
-     placeholder default: top 713, bottom 741.8, height 28.8 →
-     ~4.5px cursor-above-text-top delta).
-     Root cause: CM6 sizes the cursor from the font's natural
-     line-box (~1.2 × font-size = 19.2px for 16px font), but the
-     placeholder span inherits `.cm-line`'s `line-height: 1.8`
-     (28.8px) and vertically aligns to `top`, so its text
-     glyphs sit lower than the cursor's bounding box.
-     Fix: collapse the placeholder's box to match the cursor's
-     natural line-box (`line-height: 1.2`) + center-align vertically
-     so the placeholder text top aligns with the cursor top. The
-     leading space character in `PROMPT_PLACEHOLDER_TEXT` adds the
-     `{cursor}{space}{default-text}` gap @@Alex's literal spec
-     calls for.
+  /* CM6's `placeholder` extension (threaded via `placeholderText`
+     on Wysiwyg + Source) handles the empty-state hint; there is no
+     CSS overlay.
+
+     Aligns the placeholder with the text cursor. CM6 sizes the
+     cursor from the font's natural line-box (~1.2 × font-size), but
+     the placeholder span inherits `.cm-line`'s `line-height: 1.8`
+     and vertically aligns to `top`, so its glyphs sit ~4.5px below
+     the cursor's bounding box. Collapsing the placeholder box to the
+     cursor's natural line-box (`line-height: 1.2`) + center-aligning
+     vertically lines the placeholder text top up with the cursor top.
      Scope is the prompt area only; the `:global` chain pins to
-     `.team-work` (the root of this component) so the rule
-     doesn't leak to other CM6 editors in the app. */
+     `.team-work` (the root of this component) so the rule doesn't
+     leak to other CM6 editors in the app. */
   :global(.team-work .cm-placeholder) {
     line-height: 1.2;
     vertical-align: middle;
   }
-  /* `fullstack-a-8`: easeOutBack bubble-pop matching every other
-     right-click surface (HamburgerMenu, TerminalTab / GraphPanel
-     tab-menu bubbles). Origin sits at top-left because the
-     bubble is anchored at the cursor position via `style:left`
-     / `style:top`. */
+  /* easeOutBack bubble-pop matching every other right-click surface
+     (HamburgerMenu, TerminalTab / GraphPanel tab-menu bubbles).
+     Origin sits at top-left because the bubble is anchored at the
+     cursor position via `style:left` / `style:top`. */
   .ctx {
     position: fixed;
     z-index: 26000;
@@ -729,9 +707,9 @@
     margin: 4px 0;
     background: var(--separator, var(--border));
   }
-  /* `fullstack-a-30`: per-prompt page-width slider in the
-     context menu. Same shape as the editor's tab-menu slider in
-     FileEditorTab.svelte so both surfaces read alike. */
+  /* Per-prompt page-width slider in the context menu. Same shape as
+     the editor's tab-menu slider in FileEditorTab.svelte so both
+     surfaces read alike. */
   .page-width-row {
     display: flex;
     align-items: center;

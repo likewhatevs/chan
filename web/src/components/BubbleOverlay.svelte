@@ -4,16 +4,14 @@
   import { workspace } from "../state/store.svelte";
   import { bubbleStubVisible, hideBubbleStub } from "../state/bubbleStub.svelte";
 
-  // Phase-13 round-2 Team Work revamp: the overlay is now a
-  // frontend-only STATIC EXAMPLE. The live agent-event watcher +
-  // survey-reply round-trip is gone, so this component carries no
+  // The overlay is a frontend-only STATIC EXAMPLE. It carries no
   // watcher state, no session id, and no reply / refresh callbacks.
   // It reads two reactive inputs only:
   //   1. `bubbleStubVisible()` - whether the example is showing
   //      (flipped by the Team Work right-click menu via
   //      `showBubbleStub()` in state/bubbleStub.svelte.ts).
   //   2. the persisted `bubble_overlay_mode` preference - stack vs
-  //      tray LAYOUT, preserved from the pre-revamp overlay.
+  //      tray LAYOUT.
   // Clicking anything dismisses the example (`hideBubbleStub()`);
   // there is no network and no filesystem.
 
@@ -22,10 +20,9 @@
   );
   const visible = $derived(bubbleStubVisible());
 
-  // Local "tray expanded" view state. The pre-revamp overlay stored
-  // this on the watcher object; with no watcher, the example owns it
-  // in a plain rune. Defaults to collapsed in tray mode so the chip
-  // demonstrates the tray affordance.
+  // Local "tray expanded" view state, owned in a plain rune.
+  // Defaults to collapsed in tray mode so the chip demonstrates the
+  // tray affordance.
   let trayExpanded = $state(false);
   const collapsed = $derived(mode === "tray" && !trayExpanded);
 
@@ -201,12 +198,9 @@
     width: min(520px, 100%);
     padding: 10px 12px;
     border: 1px solid var(--border);
-    /* `fullstack-a-24`: round the chat / survey bubbles to match
-       the Team Work prompt's floating-pill redesign. The previous
-       6 px read as square cards adjacent to a square prompt; with
-       the prompt now at 14 px and floating with margin, the bubbles
-       want a matching softer corner (12 px) so the column of
-       floating chips reads as one design language. */
+    /* Round the chat / survey bubbles to match the Team Work
+       prompt's floating-pill (14 px, floating with margin) so the
+       column of floating chips reads as one design language. */
     border-radius: 12px;
     background: color-mix(in srgb, var(--bg-card) 88%, transparent);
     color: var(--text);

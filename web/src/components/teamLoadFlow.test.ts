@@ -13,10 +13,9 @@ import {
 import { resizeTeamMembers } from "../state/teamDialog.svelte";
 import { layout, type LeafNode, type TerminalTab } from "../state/tabs.svelte";
 
-// phase-13-r2 `lane-a-A3`: the path-based New/Load config flow. Load
-// reads an existing chan-team.toml back via readTeamConfigFile,
-// prepopulates the (still-editable) form via wireToDialog, and
-// re-saves the edited config via writeTeamConfigFile on Bootstrap.
+// Path-based New/Load config flow. Load reads an existing chan-team.toml
+// back via readTeamConfigFile, prepopulates the (still-editable) form
+// via wireToDialog, and re-saves the edited config on Bootstrap.
 
 describe("api client: path-based team-config read/write", () => {
   test("readTeamConfigFile POSTs /api/team-config/read with { path }", () => {

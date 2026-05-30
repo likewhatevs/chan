@@ -1,13 +1,12 @@
 import { describe, expect, test } from "vitest";
 import store from "./store.svelte.ts?raw";
 
-// `fullstack-a-85`: move-success toast should auto-dismiss
-// like every other action confirmation. Pre-fix the success
-// branch wrote `ui.status =` directly (persistent shape)
-// instead of using `setTransientStatus(msg)` which clears at
-// `TRANSIENT_STATUS_DEFAULT_MS` (3s).
+// Move-success toast must auto-dismiss like every other action
+// confirmation. The success branch uses `setTransientStatus(msg)`
+// (clears at TRANSIENT_STATUS_DEFAULT_MS) rather than a direct
+// `ui.status =` (persistent shape).
 
-describe("fullstack-a-85: move success uses setTransientStatus", () => {
+describe("move success uses setTransientStatus", () => {
   test("success branch routes the moveMsg through setTransientStatus", () => {
     expect(store).toMatch(
       /const moveMsg =[\s\S]*?if \(moveMsg\) \{[\s\S]*?setTransientStatus\(moveMsg\);/,
@@ -27,9 +26,9 @@ describe("fullstack-a-85: move success uses setTransientStatus", () => {
   });
 
   test("pre-fix sticky shape gone (no direct ui.status = `Moved...` assignment in success branch)", () => {
-    // Pin the absence of the pre-`-a-85` shape:
+    // Pin the absence of the old shape:
     //   ui.status = linkBits.length > 0 ? `Moved '${...}' (...)`: null;
-    // The new shape uses a `moveMsg` local + setTransientStatus.
+    // The current shape uses a `moveMsg` local + setTransientStatus.
     expect(store).not.toMatch(
       /ui\.status =\s*\n\s*linkBits\.length > 0\s*\n\s*\? `Moved/,
     );

@@ -1,4 +1,4 @@
-// Desktop-native download progress store (bug 2b).
+// Desktop-native download progress store.
 //
 // The browser's Download button hands the file to the browser's own
 // download manager (progress + Downloads folder + reveal, all native).
@@ -6,11 +6,7 @@
 // (api/desktop.ts) fetches the file over the loopback connection with
 // XHR progress and saves it through the `save_file_to_downloads` Tauri
 // command. This store carries the in-app indicator state the inspector
-// (owned by @@LaneA) renders to mimic the browser's progress UI.
-//
-// Lane B owns this module so wiring it does not touch the shared
-// store.svelte.ts surface. @@LaneA imports `downloadTransfer` +
-// `runDesktopDownload` and binds an indicator to the live `value`.
+// renders to mimic the browser's progress UI.
 
 /// `progress` is 0..1 while a content-length is known, or null for an
 /// indeterminate transfer (server sent no Content-Length). `cancel`

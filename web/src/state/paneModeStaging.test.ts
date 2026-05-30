@@ -2,12 +2,12 @@ import { describe, expect, test } from "vitest";
 import tabs from "./tabs.svelte.ts?raw";
 import pane from "../components/Pane.svelte?raw";
 
-// `fullstack-a-68 slice 2`: Hybrid Nav transactional staging.
-// T / O / P / G / N stage additions into the draft layout
-// (and `stagedDraftEditors` queue for N); Enter materializes,
-// Esc discards. Tests pin the state machine + helper shape.
+// Hybrid Nav transactional staging. T / O / P / G / N stage
+// additions into the draft layout (and `stagedDraftEditors`
+// queue for N); Enter materializes, Esc discards. Tests pin
+// the state machine + helper shape.
 
-describe("fullstack-a-68 slice 2: paneMode state extended with stagedDraftEditors", () => {
+describe("paneMode state: stagedDraftEditors field", () => {
   test("paneMode singleton carries stagedDraftEditors as an array field", () => {
     expect(tabs).toMatch(
       /stagedDraftEditors: \{ paneId: string \}\[\];[\s\S]{1,400}stagedDraftEditors: \[\],/,
@@ -33,7 +33,7 @@ describe("fullstack-a-68 slice 2: paneMode state extended with stagedDraftEditor
   });
 });
 
-describe("fullstack-a-68 slice 2: spawn helpers", () => {
+describe("paneMode staging: spawn helpers", () => {
   test("paneModeOpenTeamWorkTerminal pushes a TerminalTab with teamWork armed", () => {
     expect(tabs).toMatch(
       /export function paneModeOpenTeamWorkTerminal\(ctx\?: SpawnContext\): void \{[\s\S]{1,2000}teamWork: \{[\s\S]{1,400}open: true,/,
@@ -53,7 +53,7 @@ describe("fullstack-a-68 slice 2: spawn helpers", () => {
   });
 });
 
-describe("fullstack-a-68 slice 2: ghost-tab rendering in Pane.svelte", () => {
+describe("paneMode staging: ghost-tab rendering in Pane.svelte", () => {
   test("Pane imports paneModeStagedTabIds + derives a Set", () => {
     expect(pane).toMatch(/paneModeStagedTabIds,/);
     expect(pane).toMatch(

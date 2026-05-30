@@ -1,11 +1,10 @@
-// Per-File-Browser-instance scoped /ws subscription manager (phase-11
-// Slice E).
+// Per-File-Browser-instance scoped /ws subscription manager.
 //
-// Slice A built the client-side registry (`fbTreeInstances`,
-// `fbDirSubscriberCount`) and the transport (`watchSubscription()` with
-// `subscribeDir` / `unsubscribeDir`). Slice C built the server-side
+// The client-side registry (`fbTreeInstances`, `fbDirSubscriberCount`)
+// and transport (`watchSubscription()` with `subscribeDir` /
+// `unsubscribeDir`) live in store.svelte. The server maintains a
 // per-socket `ScopeRegistry` with its own authoritative refcount. This
-// module is the glue: it lets each File Browser / Graph surface workspace
+// module is the glue: it lets each File Browser / Graph surface manage
 // scope subscriptions through the instance registry so that
 //
 //   * on open, an instance subscribes to the workspace root (`""`) and the

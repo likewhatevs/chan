@@ -111,8 +111,8 @@
       {/if}
     </div>
   {/if}
-  <!-- `fullstack-42` refined: inspector "Graph from here" stays;
-       only the redundant menu-level copies were dropped. -->
+  <!-- "Graph from here" lives in the inspector, not duplicated at
+       the menu level. -->
 
   {#if !graphData.view && graphData.loading}
     <div class="muted">loading references…</div>

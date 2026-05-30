@@ -4,15 +4,12 @@ import carousel from "./EmptyPaneCarousel.svelte?raw";
 import graphPanel from "./GraphPanel.svelte?raw";
 import fbSurface from "./FileBrowserSurface.svelte?raw";
 
-// A1 (phase-13 round-1 closing item): the workspace-root inspector now
-// behaves "like any other directory". It gains the standard directory
-// action row in the default `inspector` variant, and the
-// Notes-directories config section is gated to a `dashboard`-only
-// variant (the user wants Notes-dirs only in the Dashboard, not the
-// inspector). These ?raw source-pattern pins lock the variant split,
-// the action row, the config gating, and the host wiring.
+// Workspace-root inspector behaves like any other directory. The
+// `inspector` variant renders the standard directory action row; the
+// `dashboard` variant renders the Notes-directories config. Source-level
+// pins lock the variant split, action row, config gating, and host wiring.
 
-describe("A1: WorkspaceInfoBody variant split + directory action row", () => {
+describe("WorkspaceInfoBody variant split + directory action row", () => {
   test("a `variant` prop selects inspector vs dashboard", () => {
     // The prop is declared with the two-value union and defaults to
     // "inspector" so legacy callers get the directory-style body.
@@ -72,10 +69,9 @@ describe("A1: WorkspaceInfoBody variant split + directory action row", () => {
     expect(workspaceInfo).toContain("scheduleSave");
   });
 
-  test("closing-3: the Notes-directories section carries the divider", () => {
-    // @@Alex asked explicitly for a separator between COCOMO and NOTES
-    // DIRECTORIES. The section gets a `.notes-dirs` class with a dashed
-    // top border (matching the COCOMO divider idiom).
+  test("the Notes-directories section carries the divider", () => {
+    // A dashed top border separates COCOMO from Notes directories,
+    // matching the COCOMO divider idiom.
     expect(workspaceInfo).toMatch(
       /<section class="refs notes-dirs">[\s\S]*?<h4>Notes directories<\/h4>/,
     );
@@ -95,14 +91,11 @@ describe("A1: WorkspaceInfoBody variant split + directory action row", () => {
   });
 });
 
-// A5 + A6 (phase-13 round-1 closing-2): the workspace inspector reaches
-// parity with FileInfoBody's clickable Languages + Contacts. A5 swaps
-// the plain language <span> for a graph-opening <button>; A6 adds a
-// Contacts section derived from the shared semantic graph snapshot.
-// These ?raw pins lock the button swap, the contactPills derivation,
-// the Contacts render, and the prop wiring at all three mount sites.
+// Workspace inspector parity with FileInfoBody: clickable Languages
+// (graph-opening <button>) and a Contacts section derived from the
+// shared semantic graph snapshot.
 
-describe("A5: clickable Languages in the workspace inspector", () => {
+describe("clickable Languages in the workspace inspector", () => {
   test("an onLanguageClick prop is declared, defaulting to the store helper", () => {
     expect(workspaceInfo).toMatch(
       /onLanguageClick\?\: \(language: string\) => void;/,
@@ -111,12 +104,11 @@ describe("A5: clickable Languages in the workspace inspector", () => {
   });
 
   test("each language row renders a <button> that fires onLanguageClick", () => {
-    // The lang-name is a <button> (not a <span>) wired to onLanguageClick
-    // with the language name, mirroring FileInfoBody's language rows.
+    // Mirrors FileInfoBody's language rows: a <button> rather than a
+    // plain <span>, wired to onLanguageClick.
     expect(workspaceInfo).toMatch(
       /<button[\s\S]*?class="lang-name"[\s\S]*?title="open in graph \(scoped to this language\)"[\s\S]*?onclick=\{\(\) => onLanguageClick\(lang\.name\)\}/,
     );
-    // The old plain-span form is gone.
     expect(workspaceInfo).not.toMatch(
       /<span class="lang-name" title=\{lang\.name\}>/,
     );
@@ -129,7 +121,7 @@ describe("A5: clickable Languages in the workspace inspector", () => {
   });
 });
 
-describe("A6: Contacts section in the workspace inspector", () => {
+describe("Contacts section in the workspace inspector", () => {
   test("an onContactNavigate prop is declared", () => {
     expect(workspaceInfo).toMatch(
       /onContactNavigate\?\: \(path: string\) => void;/,

@@ -1,13 +1,11 @@
 import { describe, expect, test } from "vitest";
 import fileInfo from "./FileInfoBody.svelte?raw";
 
-// Phase 13 round 1 lane-a slice 4b: contact + language chip
-// wiring. Source-pattern checks complement the runtime KindChip
-// test; FileInfoBody itself has no jsdom mount harness, so we
-// pin the exact wiring strings here. Browser smoke at slice
-// integration per feedback_svelte_static_gate_misses_runtime.
+// Contact + language chip wiring in FileInfoBody. Source-pattern checks
+// complement the runtime KindChip test; FileInfoBody has no jsdom mount
+// harness so the exact wiring strings are pinned here.
 
-describe("slice 4b: FileInfoBody language + contact wiring", () => {
+describe("FileInfoBody language + contact wiring", () => {
   test("imports openGraphForContact and openGraphForLanguage", () => {
     expect(fileInfo).toMatch(/openGraphForContact,/);
     expect(fileInfo).toMatch(/openGraphForLanguage,/);

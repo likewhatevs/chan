@@ -1,13 +1,12 @@
 import { describe, expect, test } from "vitest";
 import paneModeHelp from "./PaneModeHelp.svelte?raw";
 
-// fullstack-63: every key-cap in the Hybrid NAV help overlay is a
-// clickable button that dispatches a synthetic KeyboardEvent. The
-// existing onWindowKey listener routes the event through the same
-// `handlePaneModeKey` dispatcher that handles real keystrokes, so
-// keyboard and mouse share one switch.
+// Every key-cap in the Hybrid NAV help overlay is a clickable button
+// that dispatches a synthetic KeyboardEvent. The onWindowKey listener
+// routes it through the same `handlePaneModeKey` dispatcher as real
+// keystrokes, so keyboard and mouse share one switch.
 
-describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
+describe("PaneModeHelp key-caps are clickable buttons", () => {
   test("dispatchKey synthesises a KeyboardEvent on the document", () => {
     expect(paneModeHelp).toContain("function dispatchKey(key: string): void");
     expect(paneModeHelp).toContain(
@@ -30,11 +29,9 @@ describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
   });
 
   test("data carries the dispatch key for every clickable spawn / move / split cap", () => {
-    // `fullstack-a-68 slice 2` reshaped the Spawn group into a
-    // Stage group: T / O / P / G / E stage additions into the
-    // draft; Enter materializes; Esc discards. `v` no longer
-    // surfaces in the cheatsheet (still aliased in the keymap
-    // for muscle memory).
+    // The Spawn group is now Stage: T/O/P/G/E stage into the draft;
+    // Enter materializes; Esc discards. `v` is a keymap alias only,
+    // not shown in the cheatsheet.
     expect(paneModeHelp).toContain('key: "ArrowUp"');
     expect(paneModeHelp).toContain('key: "ArrowLeft"');
     expect(paneModeHelp).toContain('key: "ArrowDown"');
@@ -48,14 +45,14 @@ describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
     expect(paneModeHelp).toContain('key: "Escape"');
     expect(paneModeHelp).toContain('key: "Enter"');
     expect(paneModeHelp).toContain('key: "h"');
-    // Numeric caps still gone (pre-`-a-32` cleanup).
+    // Numeric caps are not in the cheatsheet.
     expect(paneModeHelp).not.toMatch(/key:\s*"1"/);
     expect(paneModeHelp).not.toMatch(/key:\s*"2"/);
     expect(paneModeHelp).not.toMatch(/key:\s*"3"/);
     expect(paneModeHelp).not.toMatch(/key:\s*"4"/);
   });
 
-  test("fullstack-a-68 slice 2: spawn group renames to Stage (Enter to commit, Esc to discard)", () => {
+  test("spawn group renames to Stage (Enter to commit, Esc to discard)", () => {
     // Group title surfaces the transactional model; row labels
     // start with "Stage …".
     expect(paneModeHelp).toContain(

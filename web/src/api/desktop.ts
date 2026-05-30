@@ -51,10 +51,9 @@ export async function tauriInvoke<T = unknown>(
 }
 
 /// Reload the chan window. On chan-desktop calls the
-/// `reload_window` IPC (see `fullstack-b-17`) which fires
-/// `WebviewWindow::reload()`. On web (or if the IPC call fails)
-/// falls back to `window.location.reload()` so the user still
-/// gets the reload they asked for.
+/// `reload_window` IPC which fires `WebviewWindow::reload()`.
+/// Falls back to `window.location.reload()` on web or on IPC
+/// failure so the user still gets the reload they asked for.
 export async function reloadWindow(): Promise<void> {
   if (isTauriDesktop()) {
     try {
@@ -70,12 +69,12 @@ export async function reloadWindow(): Promise<void> {
   window.location.reload();
 }
 
-/// `phase-12 lane-e` (addendum-2 Q6): close-cascade tail. Close the
-/// current workspace window and return focus to the launcher (the
-/// native-desktop workspace list). Called when the last tab and then
-/// the last empty pane are closed. No-op off-desktop - the browser
-/// owns its own window/tab lifecycle. Best-effort: a failed IPC logs
-/// and leaves the window as-is rather than throwing into the keymap.
+/// Close the current workspace window and return focus to the
+/// launcher (the native-desktop workspace list). Called when the
+/// last tab and then the last empty pane are closed. No-op
+/// off-desktop: the browser owns its own window/tab lifecycle.
+/// Best-effort: a failed IPC logs and leaves the window as-is
+/// rather than throwing into the keymap.
 export async function requestCloseWindow(): Promise<void> {
   if (!isTauriDesktop()) return;
   try {
@@ -86,9 +85,9 @@ export async function requestCloseWindow(): Promise<void> {
 }
 
 /// Open the platform's web inspector. On chan-desktop calls the
-/// `open_devtools` IPC (see `fullstack-b-17`). On web returns
-/// false so the caller can surface a hint pointing the user at
-/// the browser's built-in DevTools.
+/// `open_devtools` IPC. On web returns false so the caller can
+/// surface a hint pointing the user at the browser's built-in
+/// DevTools.
 export async function openWebInspector(): Promise<boolean> {
   if (!isTauriDesktop()) return false;
   try {
@@ -100,13 +99,13 @@ export async function openWebInspector(): Promise<boolean> {
   }
 }
 
-/// Bug 2b: the desktop-native download capability the inspector's
-/// Download button calls when running under chan-desktop. The browser
-/// hands `<a download>` to its own download manager; the desktop
-/// webview has none, so this fetches the file over the loopback
-/// connection with XHR progress (driving the `downloadTransfer` store
-/// for the in-app indicator) and writes it to the user's Downloads
-/// folder via the `save_file_to_downloads` Tauri command.
+/// Desktop-native download for the inspector's Download button.
+/// The browser hands `<a download>` to its own download manager;
+/// the desktop webview has none, so this fetches the file over
+/// the loopback connection with XHR progress (driving the
+/// `downloadTransfer` store for the in-app indicator) and writes
+/// it to the user's Downloads folder via the
+/// `save_file_to_downloads` Tauri command.
 ///
 /// `url` is the absolute tokenized download URL (the caller computes it
 /// from `api.downloadUrl(path)` resolved against `window.location`).

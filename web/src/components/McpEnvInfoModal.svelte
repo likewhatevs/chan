@@ -1,10 +1,7 @@
 <script lang="ts">
-  // `fullstack-a-67d` slice 2: MCP env info dialog. Replaces the
-  // inline toggle popover that the slice-1 menu inherited from
-  // pre-`-a-67d` per addendum-a's "the info button should bring
-  // up a dialog like the New File one" framing. Same width as
-  // PathPromptModal (min-width 420px); modal-with-backdrop
-  // pattern matches PathPromptModal / ConfirmModal.
+  // MCP env info dialog. Same width as PathPromptModal (min-width
+  // 420px); modal-with-backdrop pattern matches PathPromptModal /
+  // ConfirmModal.
   //
   // The dialog hosts the explanation + a single CTA: "Show MCP
   // env in terminal". The CTA fires `onShowInTerminal` and
@@ -96,8 +93,7 @@
     justify-content: center;
     z-index: 26000;
   }
-  /* `fullstack-a-67d` slice 2: width-match with PathPromptModal
-     ("dialog like the New File one"). */
+  /* Width-match with PathPromptModal. */
   .mcp-modal {
     background: var(--bg-elev);
     color: var(--text);

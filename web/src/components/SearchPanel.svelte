@@ -136,11 +136,11 @@
       // Make sure the graph is loaded so tag hits work on the
       // first query of the session.
       void ensureGraphLoaded();
-      // `fullstack-a-6`: wait a Svelte tick before focusing so
-      // the OverlayShell child block has mounted and `inputEl`
-      // is bound. A bare `queueMicrotask` ran before Svelte
-      // flushed the open-transition DOM updates, leaving
-      // `inputEl` undefined and the focus call a silent no-op.
+      // Wait a Svelte tick before focusing so the OverlayShell child
+      // block has mounted and `inputEl` is bound. A bare
+      // `queueMicrotask` runs before Svelte flushes the
+      // open-transition DOM updates, leaving `inputEl` undefined and
+      // the focus call a silent no-op.
       void tick().then(() => {
         inputEl?.focus();
         if (seed || restored) inputEl?.select();
@@ -942,10 +942,9 @@
 </OverlayShell>
 
 {#snippet menuItems()}
-  <!-- Section order matches the rest of the right-click menus:
-       view toggles, (no content/navigation actions here — search is
-       read-only), Reload footer. The Settings entry was retired with
-       the global Settings overlay (phase-13 lane-b slice 3c). -->
+  <!-- Section order matches the rest of the right-click menus: view
+       toggles, then the Reload footer. No content/navigation actions
+       (search is read-only) and no Settings entry. -->
   <li>
     <button role="menuitem" onclick={toggleInspector}>
       {#if searchPanel.inspectorOpen}

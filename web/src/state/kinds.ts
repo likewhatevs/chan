@@ -8,12 +8,11 @@
 //     markdown bodies); no file backing.
 //   - ContainerKind: the lone "folder" kind for directory rows.
 //
-// After phase 2 of the editor widening, the server projects a
-// `kind` discriminator on every regular file in `/api/files`. The
-// path-only fallback below only runs for paths held outside the
-// tree listing (graph ghost rows, broken-link targets). It mirrors
-// chan-workspace's classifier via `classifyPath` so the editor and the
-// workspace agree on what counts as text.
+// The server projects a `kind` discriminator on every regular file in
+// `/api/files`. The path-only fallback below only runs for paths held
+// outside the tree listing (graph ghost rows, broken-link targets). It
+// mirrors chan-workspace's classifier via `classifyPath` so the editor
+// and the workspace agree on what counts as text.
 
 import { FileText, User, FileCode, Image, File, Hash, Calendar, Folder } from "lucide-svelte";
 
@@ -66,17 +65,16 @@ export function labelFor(kind: Kind): string {
 /// because the two share the document hue family until we pick a
 /// separate tone (the visual distinction is icon + label, not hue).
 ///
-/// Per phase-3 request.md the kind palette is now:
-///   document/text -> orange  (--g-doc)
-///   contact/mention -> yellow (--warn-text)
-///   media -> purple (--g-img)
-///   tag -> green (--g-tag)
-///   binary -> FILE blue (--g-binary)
-///   folder -> grey (--g-folder)
-///   date -> grey (--text-secondary, low-emphasis neutral)
-/// These flow through every surface (file tree, inspector, search,
-/// graph) via this single switch instead of being hardcoded per
-/// component.
+/// Kind palette:
+///   document/text    -> orange  (--g-doc)
+///   contact/mention  -> yellow  (--warn-text)
+///   media            -> purple  (--g-img)
+///   tag              -> green   (--g-tag)
+///   binary           -> blue    (--g-binary)
+///   folder           -> grey    (--g-folder)
+///   date             -> grey    (--text-secondary, low-emphasis neutral)
+/// Flows through every surface (file tree, inspector, search, graph)
+/// via this single switch instead of being hardcoded per component.
 export function colorVarFor(kind: Kind): string {
   switch (kind) {
     case "document":

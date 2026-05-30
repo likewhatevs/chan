@@ -4,15 +4,11 @@ import fileInfo from "./FileInfoBody.svelte?raw";
 import graphPanel from "./GraphPanel.svelte?raw";
 import apiClient from "../api/client.ts?raw";
 
-// I3 (inspector consistency + layout, inspector-spec.md): the graph
-// folder inspector must render the SAME body as the File Browser folder
-// inspector. The drift was that `directory` selections routed to a
-// separate `DirectoryInfoBody` while the File Browser used FileInfoBody.
-// I3 retires DirectoryInfoBody and routes BOTH surfaces' folder
-// selections through FileInfoBody's is_dir branch, so there is one
-// folder inspector. These pins lock the unified routing.
+// The graph folder inspector and the File Browser folder inspector must
+// render the same body. Both surfaces route through FileInfoBody's is_dir
+// branch; there is no separate DirectoryInfoBody. These pins lock the routing.
 
-describe("I3: folder inspector parity (graph == File Browser)", () => {
+describe("folder inspector parity (graph == File Browser)", () => {
   test("InspectorBody routes `directory` selections to FileInfoBody", () => {
     expect(inspector).toMatch(
       /\{:else if selection\.kind === "directory"\}[\s\S]*?<FileInfoBody/,
@@ -36,9 +32,8 @@ describe("I3: folder inspector parity (graph == File Browser)", () => {
   });
 
   test("FileInfoBody dir report prefers the O(1) report/dir cache", () => {
-    // Prefer api.reportDir (the cache the graph folder inspector used)
-    // and fall back to api.reportPrefix on a 404 so the folder gets the
-    // same cheap path on every surface.
+    // Prefer api.reportDir (the directory cache) and fall back to
+    // api.reportPrefix on a 404 so all surfaces share the cheap path.
     expect(fileInfo).toMatch(
       /target\.is_dir[\s\S]*?api\.reportDir\(target\.path\)\.catch/,
     );
@@ -47,9 +42,7 @@ describe("I3: folder inspector parity (graph == File Browser)", () => {
     );
   });
 
-  test("api.reportDir still calls the /api/report/dir cache endpoint", () => {
-    // Preserved from the retired DirectoryInfoBody.test.ts: the cache
-    // endpoint is now consumed by FileInfoBody's dir branch.
+  test("api.reportDir calls the /api/report/dir cache endpoint", () => {
     expect(apiClient).toMatch(
       /reportDir: \(path: string\) =>[\s\S]*?\/api\/report\/dir\?path=\$\{encodeURIComponent\(path\)\}/,
     );
@@ -57,9 +50,8 @@ describe("I3: folder inspector parity (graph == File Browser)", () => {
   });
 
   test("GraphPanel maps `folder` selected nodes to the directory selection", () => {
-    // Preserved from the retired DirectoryInfoBody.test.ts. The folder
-    // node still becomes a `directory` selection; it now lands on
-    // FileInfoBody via the unified InspectorBody routing.
+    // The folder node becomes a `directory` selection; InspectorBody
+    // routes it to FileInfoBody's is_dir branch.
     expect(graphPanel).toMatch(
       /selectedNode\.kind === "folder"[\s\S]*?kind: "directory",[\s\S]*?path: selectedNode\.path/,
     );

@@ -1,5 +1,5 @@
-// phase-13-r2 `lane-a-A3`: chan-team.toml path helpers shared by the
-// Team Work dialog (New/Load form) and the bootstrap orchestrator.
+// chan-team.toml path helpers shared by the Team Work dialog
+// (New/Load form) and the bootstrap orchestrator.
 
 /// Default path the New form prefills. The config + its sibling team
 /// management files live under `/tmp/new-team-1` by design (app-level

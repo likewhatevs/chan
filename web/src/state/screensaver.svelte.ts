@@ -1,36 +1,32 @@
-// `fullstack-a-77` slice 2: screensaver state machine.
+// Screensaver state machine. Singleton `screensaver` state + inactivity
+// timer.
 //
-// Singleton `screensaver` state + inactivity timer.
-//
-// Distinct from `idle.svelte.ts` (which fades the floating
-// pills after 5s of UI-pointer-quiet): the screensaver
-// tracker uses a longer window (default 5 min, configurable
-// per-workspace via the chan-workspace `screensaver_timeout_secs`
-// field), and watches a wider event set (keydown + scroll +
-// pointer events — anything that says "user is at the
-// keyboard"). The idle tracker deliberately ignores those.
+// Distinct from `idle.svelte.ts` (which fades the floating pills after
+// 5s of UI-pointer-quiet): the screensaver tracker uses a longer window
+// (default 5 min, configurable per-workspace via the chan-workspace
+// `screensaver_timeout_secs` field), and watches a wider event set
+// (keydown + scroll + pointer events). The idle tracker deliberately
+// ignores those.
 //
 // Lifecycle:
 //
-// 1. App boot calls `loadScreensaverState()` once. Fetches
-//    the per-workspace enabled/timeout/pin_set view from
-//    `systacean-40`'s `/api/screensaver/state` endpoint;
-//    populates the singleton; arms the inactivity timer if
-//    enabled.
-// 2. User events (keydown, click, mousedown, touchstart,
-//    scroll, wheel) reset the timer via
-//    `noteScreensaverActivity()`.
-// 3. On timeout fire, the timer flips `locked=true`. The
-//    overlay component (mounted in App.svelte) watches the
-//    flag and renders the full-window cover when locked.
-// 4. The user types a PIN; `unlockWithPin(pin)` hashes via
-//    `hashPin` (slice 1) + posts to `/verify`. On success,
-//    `locked=false`; the activity timer rearms.
+// 1. App boot calls `loadScreensaverState()` once. Fetches the
+//    per-workspace enabled/timeout/pin_set view from
+//    `/api/screensaver/state`; populates the singleton; arms the
+//    inactivity timer if enabled.
+// 2. User events (keydown, click, mousedown, touchstart, scroll, wheel)
+//    reset the timer via `noteScreensaverActivity()`.
+// 3. On timeout fire, the timer flips `locked=true`. The overlay
+//    component (mounted in App.svelte) watches the flag and renders the
+//    full-window cover when locked.
+// 4. The user types a PIN; `unlockWithPin(pin)` hashes via `hashPin`
+//    + posts to `/verify`. On success, `locked=false`; the activity
+//    timer rearms.
 //
-// Pause for modals: caller-side. Settings overlay or any
-// active modal can call `pauseScreensaverTimer()` while open
-// to keep the screensaver from firing mid-config. Mirrors the
-// `pinAccessory()` pattern from `idle.svelte.ts`.
+// Pause for modals: caller-side. Any active modal can call
+// `pauseScreensaverTimer()` while open to keep the screensaver from
+// firing mid-config. Mirrors the `pinAccessory()` pattern from
+// `idle.svelte.ts`.
 
 import { api } from "../api/client";
 import {
@@ -117,13 +113,11 @@ export function lockNow(): void {
 /// returns false on mismatch (caller surfaces shake / error
 /// feedback).
 ///
-/// When no PIN is set on the workspace (`pin_set=false`) the
-/// task body's framing is "screensaver still arms but the
-/// lockout is moot." We verify against the server anyway —
-/// `systacean-40` returns `verified: false` for the no-PIN
-/// case, so this branch is consistent. The Settings UI
-/// guards against enabling screensaver without a PIN at
-/// the configuration step.
+/// When no PIN is set on the workspace (`pin_set=false`) the screensaver
+/// still arms but the lockout is a no-op. We verify against the server
+/// anyway — the endpoint returns `verified: false` for the no-PIN case,
+/// so this branch is consistent. The Settings UI guards against enabling
+/// the screensaver without a PIN at the configuration step.
 export async function unlockWithPin(
   pin: string,
   workspaceSalt: string,
@@ -143,15 +137,13 @@ export async function unlockWithPin(
   }
 }
 
-/// `fullstack-a-77c`: dismiss the lock without going
-/// through the PIN verify endpoint. Called by the
-/// overlay's any-input handler when the workspace has no
-/// PIN set — the helper text already promises "any
-/// input unlocks", and there's nothing to verify. The
-/// `pin_set === false` branch is the gate; callers MUST
-/// check before invoking. Server-side state is
-/// untouched (there is no server-side "locked" view —
-/// lock state is purely client-side).
+/// Dismiss the lock without going through the PIN verify endpoint.
+/// Called by the overlay's any-input handler when the workspace has no
+/// PIN set — the helper text promises "any input unlocks", and there is
+/// nothing to verify. The `pin_set === false` branch is the gate;
+/// callers MUST check before invoking. Server-side state is untouched
+/// (there is no server-side "locked" view — lock state is purely
+/// client-side).
 export function unlockWithoutPin(): void {
   if (screensaver.pin_set) return;
   screensaver.locked = false;

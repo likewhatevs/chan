@@ -42,11 +42,10 @@ interface Contact {
   aliases?: string[];
 }
 
-/// `fullstack-a-70`: mention-only hit. Represents a `@@<Name>`
-/// token observed in the body text of indexed markdown that
-/// has no corresponding contact file. Surfaces in the bubble
-/// below the contact-file rows so the user can still complete
-/// to it.
+/// Mention-only hit. Represents a `@@<Name>` token observed in
+/// the body text of indexed markdown that has no corresponding
+/// contact file. Surfaces in the bubble below the contact-file
+/// rows so the user can still complete to it.
 interface MentionHit {
   /// Label WITH the `@@` sigil (the server-side route composes
   /// it). The commit path inserts this verbatim into the
@@ -76,16 +75,13 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
   let reqSeq = 0;
   let debounceTimer: number | undefined;
   let alive = true;
-  /// Phase-13 A4: mention-corpus completion is surfaced under BOTH
-  /// triggers. The single-`@` (wiki) trigger used to show only
-  /// contact files; users typing `@name` expected the broader
-  /// `@@<Name>` corpus (handles referenced in markdown bodies that
-  /// have no contact file) to be searchable too. Both modes now
-  /// merge contact-file hits first, then mention-only tokens from
-  /// `api.mentions`. The insertion shape still follows the picked
-  /// row's kind, not the trigger: a contact-file hit commits a
-  /// wiki-link under `@` (`commit`), a mention-only hit commits
-  /// `@@<Name>` under either trigger (`commitMention`).
+  /// Mention-corpus completion is surfaced under BOTH triggers.
+  /// Both modes merge contact-file hits first, then mention-only
+  /// tokens from `api.mentions`. The insertion shape follows the
+  /// picked row's kind, not the trigger: a contact-file hit
+  /// commits a wiki-link under `@` (`commit`), a mention-only
+  /// hit commits `@@<Name>` under either trigger
+  /// (`commitMention`).
   const mode: ContactBubbleMode = opts.mode ?? "wiki";
   const includeMentions = true;
 
@@ -100,12 +96,10 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
     if (debounceTimer !== undefined) clearTimeout(debounceTimer);
     const seq = ++reqSeq;
     debounceTimer = window.setTimeout(() => {
-      // `fullstack-a-70`: fan-out two queries in mention mode
-      // (contacts + mentions); single query in wiki mode. Both
-      // routes share `PAGE_LIMIT` so the combined result is
-      // capped at 2*PAGE_LIMIT before the dedup pass; the dedup
-      // (next pass) typically collapses common-name overlap
-      // back under PAGE_LIMIT.
+      // Fan-out contacts + mentions in parallel. Both routes share
+      // `PAGE_LIMIT` so the combined result is capped at
+      // 2*PAGE_LIMIT before the dedup pass; the dedup typically
+      // collapses common-name overlap back under PAGE_LIMIT.
       const contactsP = api.contacts(query, PAGE_LIMIT);
       const mentionsP = includeMentions
         ? api.mentions(query, PAGE_LIMIT).catch(() => [] as MentionHit[])
@@ -125,17 +119,15 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
     }, FETCH_DEBOUNCE_MS);
   }
 
-  /// `fullstack-a-70`: merge contact-file hits + mention-only
-  /// tokens. Contact files come first (they carry richer
-  /// context — emails, aliases — so they're the higher-signal
-  /// match). Mention-only tokens come below + are filtered
-  /// against the contact-file set + their aliases so the
-  /// dropdown doesn't show the same name twice (once as a
-  /// contact, once as a mention).
+  /// Merge contact-file hits + mention-only tokens. Contact files
+  /// come first (richer context: emails, aliases). Mention-only
+  /// tokens come below and are filtered against the contact-file
+  /// set and their aliases so the dropdown doesn't show the same
+  /// name twice.
   ///
   /// Dedup key: lowercased name with the `@@` sigil stripped.
-  /// A contact file with alias `@@alex` AND the mention corpus's
-  /// `@@Alex` collapse to one row (the contact-file row).
+  /// A contact file with alias `@@alex` and the corpus's `@@Alex`
+  /// collapse to one row (the contact-file row).
   function mergeSuggestions(
     contactRows: Contact[],
     mentionRows: MentionHit[],
@@ -180,10 +172,9 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
       row.className = "md-bubble-row";
       if (i === selectedIndex) row.classList.add("md-bubble-row-selected");
       if (hit.kind === "mention") {
-        // `fullstack-a-70`: mention-only rows are dimmer than
-        // contact-file rows so the user reads "this name has no
-        // contact file backing it; you're completing to a
-        // body-text-only reference."
+        // Mention-only rows are dimmer than contact-file rows so
+        // the user can tell this name has no contact file backing
+        // it (body-text-only reference).
         row.classList.add("md-bubble-row-mention-only");
       }
       const label = document.createElement("div");
@@ -221,12 +212,11 @@ export function openContactBubble(opts: ContactBubbleOpts): ContactBubbleHandle 
     shell.reposition();
   }
 
-  /// `fullstack-a-70`: mention-only commit. The `@@Name` token
-  /// arrives with its sigil already attached (the server-side
-  /// route composes it), so the insert path is a straight
-  /// substitution. Distinct from `commit(contact)` because
-  /// there's no path / alias resolution to do — the user picked
-  /// a mention token, we splice the token in.
+  /// Mention-only commit. The `@@Name` token arrives with its
+  /// sigil already attached (the server-side route composes it),
+  /// so the insert path is a straight substitution. Distinct from
+  /// `commit(contact)` because there is no path / alias resolution
+  /// to do.
   function commitMention(m: MentionHit): void {
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert: m.label },

@@ -1,5 +1,5 @@
-// Bug 2b: pin the desktop download capability's shape so the contract
-// @@LaneA wires the inspector Download button to stays stable. Source
+// Pin the desktop download capability's shape so the contract
+// the inspector Download button relies on stays stable. Source
 // asserts (`?raw`) mirror the repo's other capability-shape tests.
 
 import { describe, expect, test } from "vitest";

@@ -2,19 +2,11 @@ import { describe, expect, test } from "vitest";
 import source from "./HybridFileBrowserConfig.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
-// `fullstack-a-48` Task F (option B): Search / Indexing / Reports
-// settings UI migrated out of the (since-retired) global Settings
-// overlay into HybridFileBrowserConfig. Three toggles ship in v1:
-// Semantic search (moved verbatim from `-a-21`), multi-model
-// picker placeholder (Round-3 Track 2 future slot), chan-reports
-// through the per-workspace reports endpoints.
-//
-// `phase-13 lane-b` slice 3c: the global Settings overlay was
-// retired; the migration-direction assertions that used to pin
-// "X is gone from the old overlay" are dropped (the file no
-// longer exists).
+// Search / Indexing / Reports settings in HybridFileBrowserConfig.
+// Semantic search, the embedding-model picker, and chan-reports toggles
+// are the live controls (no separate global Settings overlay).
 
-describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
+describe("HybridFileBrowserConfig wiring", () => {
   test("warning copy distinguishes workspace-wide scope from per-FB-pane", () => {
     expect(source).toMatch(
       /These settings apply to ALL file-browser surfaces/,
@@ -29,7 +21,6 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
     expect(source).toMatch(/api\.semanticDownload\(\)/);
     expect(source).toMatch(/api\.semanticDisable\(\)/);
     expect(source).toMatch(/api\.semanticState\(\)/);
-    // Polling cadence preserved verbatim from the retired global Settings overlay.
     expect(source).toMatch(/SEMANTIC_POLL_INTERVAL_MS\s*=\s*3000/);
   });
 
@@ -44,7 +35,7 @@ describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
     );
   });
 
-  test("formatModelSize helper carries over from the retired global Settings overlay", () => {
+  test("formatModelSize helper formats model byte counts", () => {
     expect(source).toMatch(
       /function formatModelSize\(bytes: number \| null \| undefined\)/,
     );

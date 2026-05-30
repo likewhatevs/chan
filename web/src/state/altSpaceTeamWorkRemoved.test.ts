@@ -3,20 +3,14 @@ import app from "../App.svelte?raw";
 import terminal from "../components/TerminalTab.svelte?raw";
 import shortcuts from "./shortcuts.ts?raw";
 
-// `fullstack-a-90`: the legacy `Alt+Space` team-work chord
-// is removed. Cmd+P (native), Cmd+Alt+P (web Mac), and
-// `Mod+. p` (Hybrid NAV) cover every entry point.
+// The legacy `Alt+Space` team-work chord is removed. Cmd+P (native),
+// Cmd+Alt+P (web Mac), and `Mod+. p` (Hybrid Nav) cover every entry
+// point.
 
-describe("fullstack-a-90: Alt+Space chord removed from App.svelte", () => {
+describe("Alt+Space chord removed from App.svelte", () => {
   test("no `altKey + Space` keymap branch for team-work spawn", () => {
     expect(app).not.toMatch(
       /if \(e\.altKey && !meta && !e\.shiftKey && e\.code === "Space"\) \{[\s\S]*?spawnTeamWorkFromContext\(\);/,
-    );
-  });
-
-  test("removal-rationale comment present", () => {
-    expect(app).toMatch(
-      /`fullstack-a-90`:[\s\S]*?removed the legacy `Alt\+Space` team-work/i,
     );
   });
 
@@ -25,17 +19,18 @@ describe("fullstack-a-90: Alt+Space chord removed from App.svelte", () => {
   });
 });
 
-describe("fullstack-a-90: Alt+Space chord removed from TerminalTab.svelte", () => {
+describe("Alt+Space chord removed from TerminalTab.svelte", () => {
   test("no secondary `altKey + Space` handler firing `openTeamWork`", () => {
     expect(terminal).not.toMatch(
       /if \(e\.altKey && !e\.ctrlKey && !e\.metaKey && !e\.shiftKey && e\.code === "Space"\) \{[\s\S]*?openTeamWork\(\);/,
     );
   });
 
-  test("removal-rationale comment present", () => {
+  test("team-work entry-point comment present (no Alt+Space)", () => {
     expect(terminal).toMatch(
-      /`fullstack-a-90`:[\s\S]*?removed the legacy `Alt\+Space` team-work/i,
+      /Team-work entry points are Cmd\+P[\s\S]*?Mod\+\. p/i,
     );
+    expect(terminal).not.toMatch(/Alt\+Space/);
   });
 
   test("hamburger-menu comment no longer references Alt+Space as live", () => {
@@ -43,14 +38,8 @@ describe("fullstack-a-90: Alt+Space chord removed from TerminalTab.svelte", () =
   });
 });
 
-describe("fullstack-a-90: shortcuts registry note updated", () => {
+describe("shortcuts registry note updated for Alt+Space removal", () => {
   test("registry note no longer mentions Alt+Space", () => {
     expect(shortcuts).not.toMatch(/legacy Alt\+Space alias still bound/);
-  });
-
-  test("`-a-90` retire comment present in registry block", () => {
-    expect(shortcuts).toMatch(
-      /`fullstack-a-90`[\s\S]*?retired[\s\S]*?Alt\+Space/i,
-    );
   });
 });

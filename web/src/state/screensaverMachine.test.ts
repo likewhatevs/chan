@@ -3,13 +3,11 @@ import source from "./screensaver.svelte.ts?raw";
 import overlay from "../components/ScreensaverOverlay.svelte?raw";
 import app from "../App.svelte?raw";
 
-// `fullstack-a-77` slice 2: screensaver state machine +
-// overlay component. Tests pin the architectural shape;
-// behavioral testing of the inactivity timer happens via
-// @@WebtestA's empirical walk + a follow-up integration
-// pin in slice 3 if needed.
+// Screensaver state machine + overlay component. Tests pin the
+// architectural shape; behavioral testing of the inactivity timer
+// happens via empirical walk.
 
-describe("fullstack-a-77 slice 2: state singleton shape", () => {
+describe("screensaver: state singleton shape", () => {
   test("singleton declared with the 5 expected fields", () => {
     expect(source).toMatch(
       /export const screensaver = \$state<ScreensaverState>\(\{[\s\S]*?enabled: false,[\s\S]*?timeout_secs: SCREENSAVER_DEFAULT_TIMEOUT_SECS,[\s\S]*?theme: SCREENSAVER_DEFAULT_THEME,[\s\S]*?pin_set: false,[\s\S]*?locked: false,[\s\S]*?loaded: false,/,
@@ -21,7 +19,7 @@ describe("fullstack-a-77 slice 2: state singleton shape", () => {
   });
 });
 
-describe("fullstack-a-77 slice 2: state machine helpers", () => {
+describe("screensaver: state machine helpers", () => {
   test("loadScreensaverState calls api.screensaverState + arms the timer", () => {
     expect(source).toMatch(
       /export async function loadScreensaverState\(\): Promise<void> \{[\s\S]*?const s = await api\.screensaverState\(\);[\s\S]*?screensaver\.loaded = true;[\s\S]*?armInactivityTimer\(\);/,
@@ -65,16 +63,15 @@ describe("fullstack-a-77 slice 2: state machine helpers", () => {
   });
 });
 
-describe("fullstack-a-77 slice 2: overlay component", () => {
+describe("screensaver: overlay component", () => {
   test("renders only when screensaver.locked is true", () => {
     expect(overlay).toMatch(/\{#if screensaver\.locked\}/);
   });
 
   test("overlay has aria-modal + role=dialog", () => {
-    // `fullstack-a-77c`: backdrop now carries any-input
-    // dismiss handlers (onkeydown/onclick/tabindex) for the
-    // no-PIN branch. Match the role + aria attrs without
-    // pinning the rest of the opening tag.
+    // The backdrop carries any-input dismiss handlers
+    // (onkeydown/onclick/tabindex) for the no-PIN branch.
+    // Match role + aria attrs without pinning the full opening tag.
     expect(overlay).toMatch(
       /class="screensaver-backdrop"[\s\S]{0,400}role="dialog"[\s\S]{0,80}aria-modal="true"[\s\S]{0,80}aria-label="Screen locked"/,
     );
@@ -138,7 +135,7 @@ describe("fullstack-a-77 slice 2: overlay component", () => {
   });
 });
 
-describe("fullstack-a-77 slice 2: App.svelte wiring", () => {
+describe("screensaver: App.svelte wiring", () => {
   test("App imports installScreensaverTracker + loadScreensaverState", () => {
     expect(app).toMatch(
       /import \{[\s\S]*?installScreensaverTracker,[\s\S]*?loadScreensaverState,[\s\S]*?\} from "\.\/state\/screensaver\.svelte";/,

@@ -3,18 +3,14 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test } from "vitest";
 
-// Static top-level import (not a per-test `await import(...)`). The
-// historical flake here was NOT the carousel's 5000ms auto-rotate
-// mutating `slideIndex` mid-assertion; it was the dynamic
-// `await import("./EmptyPaneCarousel.svelte")` INSIDE the render helper
-// timing out (30s) under the full parallel suite, where Svelte-component
-// transform + import is heavily contended across workers. Resolving the
-// module once at module-eval (the same pattern the non-flaky
-// TerminalTeamWork.test.ts uses) removes the import latency from every
-// timed test body. The auto-rotate stays harmless: each nav assertion
-// workspaces the slide synchronously and awaits a microtask `tick`, well
-// under the 5s interval, and a default-slide assertion runs immediately
-// after mount.
+// Static top-level import (not a per-test `await import(...)`).
+// Resolving the Svelte component once at module-eval keeps the
+// component transform + import latency out of every timed test body,
+// which would otherwise contend across workers and time out (30s)
+// under the full parallel suite. The carousel's 5000ms auto-rotate
+// stays harmless: each nav assertion drives the slide synchronously
+// and awaits a microtask `tick`, well under the 5s interval, and a
+// default-slide assertion runs immediately after mount.
 import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
 
 const mounted: Array<Record<string, any>> = [];
@@ -35,22 +31,22 @@ async function renderCarousel() {
 
 describe("EmptyPaneCarousel", () => {
   test("renders the About slide by default with three dots", async () => {
-    // Phase-13 slice 3b-1: slide 0 is the new About widget
-    // (version + attributions + donation QR + project links).
-    // Slide 1 hosts WorkspaceInfoBody; slide 2 is still the
-    // indexing graph (deferred to slice 3b-2).
+    // Slide 0 is the About widget (version + attributions +
+    // donation QR + project links). Slide 1 hosts
+    // WorkspaceInfoBody; slide 2 is the indexing graph.
     const target = await renderCarousel();
 
     expect(target.querySelectorAll(".dot-btn").length).toBe(3);
     expect(target.querySelector(".slide-about")).not.toBeNull();
     expect(target.querySelector(".slide-workspace")).toBeNull();
     expect(target.querySelector(".slide-indexing")).toBeNull();
-    // Old slide bodies must not coexist with the new ones.
+    // Shortcuts / metadata slide bodies are not part of the
+    // carousel.
     expect(target.querySelector(".slide-shortcuts")).toBeNull();
     expect(target.querySelector(".slide-metadata")).toBeNull();
     expect(target.querySelector(".shortcuts-table")).toBeNull();
-    // Welcome chrome (logo + dashboard stats + spawn buttons)
-    // no longer renders inside the carousel.
+    // Welcome chrome (logo + dashboard stats + spawn buttons) does
+    // not render inside the carousel.
     expect(target.querySelector(".placeholder-mark")).toBeNull();
     expect(target.querySelector(".dashboard-stats")).toBeNull();
     expect(target.querySelector(".spawn-row")).toBeNull();
@@ -76,13 +72,10 @@ describe("EmptyPaneCarousel", () => {
     expect(target.querySelector(".slide-about")).not.toBeNull();
   });
 
-  test("no longer carries an oncontextmenu forwarder prop (lane-b-empty-pane-menu)", async () => {
-    // Round-1 closing-2 (lane-b-empty-pane-menu): the empty-pane
-    // right-click menu was retired; the carousel's
-    // `oncontextmenu` forwarder was a vestige from the prior
-    // mount site (Pane.svelte's placeholder body) and is gone.
-    // The carousel is now hosted inside DashboardTab; right-
-    // clicks fall through to the tab strip's own context menu.
+  test("carries no oncontextmenu forwarder prop", async () => {
+    // The carousel is hosted inside DashboardTab and carries no
+    // `oncontextmenu` forwarder; right-clicks fall through to the
+    // tab strip's own context menu.
     const raw = (await import("./EmptyPaneCarousel.svelte?raw"))
       .default as string;
     expect(raw).not.toMatch(/oncontextmenu\?:/);
@@ -108,11 +101,11 @@ describe("EmptyPaneCarousel", () => {
     expect(target.querySelector(".slide-about")).not.toBeNull();
   });
 
-  // `fullstack-85`: the carousel's own `:focus-visible` inset ring
-  // was painting on top of `.pane.focused`'s inset ring, making the
-  // empty-pane body look like it had a thicker border than the top
-  // bar. Source-grep sentinel: the rule must be gone.
-  test("does not paint its own inset focus ring (fullstack-85)", async () => {
+  // The carousel must not paint its own `:focus-visible` inset ring;
+  // `.pane.focused` already draws the focus indicator, and a second
+  // ring would make the empty-pane body look thicker-bordered than
+  // the top bar. Source-grep sentinel: the rule must be absent.
+  test("does not paint its own inset focus ring", async () => {
     const raw = (await import("./EmptyPaneCarousel.svelte?raw"))
       .default as string;
     expect(raw).not.toMatch(

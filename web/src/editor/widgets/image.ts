@@ -382,16 +382,15 @@ class ImageWidget extends WidgetType {
           installUserScrollIntentTracker(view.scrollDOM);
           if (userScrollIntentActive(view.scrollDOM)) return;
           const head = view.state.selection.main.head;
-          // `fullstack-a-71`: the original gate
-          // `Math.abs(headLine - imgLine) > 1 return` was too
-          // restrictive. The assumption was "if user is editing
-          // far from the image, the image load won't move
-          // their position." But a tall image rendering ABOVE
-          // the caret pushes the entire layout down — the
-          // caret moves off-screen even though the user hasn't
-          // touched anything. @@Alex's repro: list-at-bottom
-          // + image above → image renders → list pushes down
-          // → caret vanishes from viewport.
+          // The old gate `Math.abs(headLine - imgLine) > 1 return`
+          // was too restrictive. The assumption was "if user is
+          // editing far from the image, the image load won't move
+          // their position." But a tall image rendering ABOVE the
+          // caret pushes the entire layout down -- the caret moves
+          // off-screen even though the user hasn't touched
+          // anything. Repro: list-at-bottom
+          // + image above -> image renders -> list pushes down
+          // -> caret vanishes from viewport.
           //
           // The viewport-check below already gates correctly:
           // if the caret is still visible, return (no

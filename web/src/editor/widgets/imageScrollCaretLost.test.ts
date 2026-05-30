@@ -1,14 +1,13 @@
 import { describe, expect, test } from "vitest";
 import imageModule from "./image.ts?raw";
 
-// `fullstack-a-71`: editor auto-scroll cursor-lost when image
-// renders above the caret + pushes layout down. The pre-`-a-71`
-// gate `Math.abs(headLine - imgLine) > 1 return` was too
-// restrictive — assumed far-away images don't disturb the
-// caret, but a tall image above the caret line still pushes
-// the caret off-screen via layout-shift.
+// Image-load scroll restore: when an image renders above the caret
+// and pushes layout down, the viewport must scroll to keep the
+// caret visible. The previous distance-gate assumed far-away images
+// don't disturb the caret, but a tall image above any caret line
+// still pushes the caret off-screen via layout-shift.
 
-describe("fullstack-a-71: image-load scroll restore", () => {
+describe("image-load scroll restore", () => {
   test("removes the headline-distance gate (no early-return on distant images)", () => {
     // The pre-fix `if (Math.abs(headLine - imgLine) > 1) return;`
     // must NOT appear in the load handler. Pin its absence.
@@ -41,10 +40,9 @@ describe("fullstack-a-71: image-load scroll restore", () => {
     );
   });
 
-  test("rationale comment cites @@Alex's repro pattern", () => {
-    // The new comment block documents the "list at bottom + image
-    // above" repro so future readers know why the gate was
-    // dropped.
+  test("rationale comment documents the list-at-bottom + image-above repro", () => {
+    // The comment block explains why the headline-distance gate
+    // was dropped.
     expect(imageModule).toMatch(
       /list-at-bottom[\s\S]*?image above[\s\S]*?caret vanishes from viewport/i,
     );

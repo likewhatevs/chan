@@ -176,13 +176,14 @@ export function moveImageSource(
     delFrom = srcLine.from;
     delTo = Math.min(srcLine.to + 1, doc.length);
   } else {
-    // `lane-c addendum-2 item 3`: the image is embedded in a row with
-    // other text (`text ![](..) text`) or inside a bullet item. Move the
-    // ENTIRE row - the surrounding text + image + any list marker - as
-    // its own line so they travel together, instead of stranding the
-    // text and relocating only the atom. Exactly one source line:
-    // multi-line prose paragraphs are out of scope. Dropping anywhere on
-    // the source line itself is a no-op (a row can't move onto itself).
+    // The image is embedded in a row with other text
+    // (`text ![](..) text`) or inside a bullet item. Move the
+    // ENTIRE row - the surrounding text + image + any list marker
+    // - as its own line so they travel together, instead of
+    // stranding the text and relocating only the atom. Exactly one
+    // source line: multi-line prose paragraphs are out of scope.
+    // Dropping anywhere on the source line itself is a no-op (a
+    // row can't move onto itself).
     if (dropPos >= srcLine.from && dropPos <= srcLine.to) return;
     insertText = `${lineText}\n`;
     delFrom = srcLine.from;
@@ -263,11 +264,10 @@ function uploadAndInsertAll(
         view.dispatch({
           changes: { from: cursor, to: cursor, insert },
           selection: { anchor: cursor + insert.length },
-          // `fullstack-a-5`: scroll the doc so the new caret stays
-          // in view. Pasting / dropping at the bottom previously
-          // pushed the cursor off-screen and the editor refused to
-          // roll until the next keystroke — `scrollIntoView: true`
-          // tells CM6 to do that work now.
+          // Scroll the doc so the new caret stays in view.
+          // Pasting / dropping at the bottom can push the cursor
+          // off-screen; `scrollIntoView: true` tells CM6 to
+          // correct that immediately.
           scrollIntoView: true,
         });
         cursor += insert.length;

@@ -302,11 +302,8 @@ function workspaceWarningStatusLabel(warnings: WorkspaceWarning[]): string {
 }
 
 export function workspaceWarningLabel(warning: WorkspaceWarning): string {
-  // phase-13 r2 (merge-gate cleanup): the `broken_team_work` warning
-  // kind is gone - the Team Work revamp deleted the team-work
-  // workspace archival, so the backend never emits it anymore (0 refs
-  // in crates/). Dropped the dead branch + its "Broken Team Work"
-  // label rather than renaming it.
+  // Only `broken_draft` is a known warning kind today; the backend
+  // does not emit any other kinds.
   const prefix =
     warning.kind === "broken_draft" ? "Broken draft" : "Workspace warning";
   return `${prefix} ${warning.path}: ${warning.message}`;
@@ -594,12 +591,8 @@ export function onWatchEvent(e: unknown): void {
   //      path so the editor view doesn't drift behind disk. Dirty
   //      buffers are left alone; the next save's CAS check surfaces
   //      the conflict via ConflictModal.
-  // `fullstack-b-6`: scope the FB tree refresh to the path that
-  // changed instead of re-fetching the root listing on every
-  // event. The previous unconditional `refreshTree()` reassigned
-  // `tree.entries` for activity anywhere on the workspace, which
-  // re-rendered every open File Browser even when the user's
-  // selection was in an unrelated subtree. Each FB instance now
+  // Scope the FB tree refresh to the path that changed instead of
+  // re-fetching the root listing on every event. Each FB instance
   // contributes a scope (from its selection); we touch the tree
   // only when an event lands inside at least one active scope,
   // and we touch only the affected dir.
@@ -653,10 +646,10 @@ export function onWatchEvent(e: unknown): void {
       }
       // A Created / Modified frame after a missing-check was
       // scheduled means the file is back; cancel the pending check.
-      // Do NOT silently reload the open doc - that replaced the buffer
-      // and snapped the caret to line 1, col 1 mid-edit. Flag the
+      // Do NOT silently reload the open doc: that replaces the buffer
+      // and snaps the caret to line 1, col 1 mid-edit. Flag the
       // external change so the editor shows the dismissable "changed on
-      // disk" banner instead (`lane-c addendum-2 item 1`).
+      // disk" banner instead.
       cancelMissingFileCheck(tabId);
       flagExternalChange(tabId);
     }
@@ -908,14 +901,13 @@ function mergeDirEntries(
   return [...byPath.values()];
 }
 
-// ---- FB watcher scope (fullstack-b-6) -----------------------------------
+// ---- FB watcher scope -------------------------------------------------------
 //
 // The chan-server WS stream is single-channel and unscoped (every
-// fs event for the workspace arrives at every connected SPA). Per the
-// phase-8 spec we narrow the FB's reaction to events that land
-// inside its current scope so unrelated workspace activity (e.g. an
-// indexer pass over `crates/`) stops shaking the tree when the
-// user is only looking at `tasks/`.
+// fs event for the workspace arrives at every connected SPA). We narrow
+// the FB's reaction to events that land inside its current scope so
+// unrelated workspace activity stops shaking the tree when the user
+// is only looking at a specific directory.
 //
 // "Scope" is derived from the FB instance's selection:
 //   * no selection (workspace root)   → "" (watch everything)
@@ -925,8 +917,7 @@ function mergeDirEntries(
 // One FB overlay + N per-pane browser tabs contribute their scopes
 // to the union. An event refreshes the tree iff at least one
 // scope contains its path. Per-FB rerender isolation is bounded by
-// the shared `tree.entries` state (a true per-FB tree would be a
-// much larger refactor); the immediate win is "no flicker when
+// the shared `tree.entries` state; the win is "no flicker when
 // the FB scope and the event path don't intersect".
 
 function fbScopeForSelection(selected: string | null | undefined): string {
@@ -965,10 +956,8 @@ export function pathInAnyScope(path: string, scopes: string[]): boolean {
 
 /// Re-fetch the listing for the parent dir of `path` and merge it
 /// into `tree.entries`. No-op when the parent dir isn't currently
-/// loaded (nothing visible would change). Replaces the previous
-/// "always refresh the root listing" behaviour from before
-/// `fullstack-b-6`; that path lives on as `refreshTree` for
-/// callers that genuinely need a full re-fetch.
+/// loaded (nothing visible would change). Use `refreshTree` when
+/// a full root re-fetch is needed.
 export async function refreshTreeForPath(path: string): Promise<void> {
   if (isDraftsPath(path)) return;
   const parent = nearestLoadedParentDir(path);
@@ -1091,16 +1080,12 @@ const HASH_LAYOUT = "s";
 const HASH_SIDEBAR = "c"; // "1" if collapsed, absent if expanded
 const HASH_SEARCH = "search";
 const HASH_SEARCH_SCOPE = "search_scope";
-// The legacy `settings` overlay hash key was RETIRED by `phase-13 lane-b`
-// slice 3c (global Settings overlay deleted; Cmd+, now flips the focused
-// Hybrid). Old `settings=1` bookmarks degrade gracefully — the key is
-// not in HASH_KEYS so dropUnknownHashKeys strips it on the next write.
-// The legacy `files` (browser) and `graph` per-overlay keys are RETIRED by
-// the scope-concept wipe (W5): graph + browser surfaces are first-class tabs
-// and persist via the layout `s` key, so the per-overlay hash is redundant.
-// Old `files=` / `graph=` bookmarks degrade gracefully - they are not in
-// HASH_KEYS, so applyOverlaysFromHash ignores them and dropUnknownHashKeys
-// strips them the next time the app writes the URL.
+// The `settings`, `files`, and `graph` overlay hash keys are no longer
+// active. Cmd+, flips the focused Hybrid (no global Settings overlay);
+// graph and browser surfaces are first-class tabs that persist via the
+// layout `s` key. Old bookmarks with these keys degrade gracefully:
+// they are not in HASH_KEYS so dropUnknownHashKeys strips them on the
+// next write.
 const HASH_KEYS = new Set([
   HASH_LAYOUT,
   HASH_SEARCH,
@@ -1162,11 +1147,9 @@ function splitInspectorBit(raw: string): [boolean | null, string] {
 /// missing means "overlay stays closed".
 function applyOverlaysFromHash(): void {
   const params = hashParams();
-  // W5: the legacy `files` (browser) and `graph` keys are retired - those
-  // surfaces are first-class tabs restored via the layout `s` key. Only the
-  // still-overlay surfaces (search, settings) read their hash key here; old
-  // `files=` / `graph=` bookmarks are simply ignored (and stripped on the
-  // next write by dropUnknownHashKeys).
+  // Graph and browser surfaces are first-class tabs restored via the
+  // layout `s` key; only search reads its hash key here. Old `files=`
+  // and `graph=` bookmarks are ignored and stripped on next write.
   if (params.has(HASH_SEARCH)) {
     // Encoding: `<inspectorBit>:<query>`. Both fields optional.
     // Scope rides in a sibling `HASH_SEARCH_SCOPE` key so user
@@ -1203,9 +1186,8 @@ export function persistStateToHash(): void {
   // saved URL hash so it doesn't sit there forever.
   params.delete(HASH_SIDEBAR);
   // ---- overlay keys: presence = open ------------------------
-  // Only search + settings remain overlay surfaces; the graph + browser
-  // `graph=` / `files=` keys are retired (W5) - those tabs persist via the
-  // layout `s` key above.
+  // Only search is an overlay surface; graph and browser tabs persist via
+  // the layout `s` key above.
   if (searchPanel.open) {
     const ins = searchPanel.inspectorOpen ? "1" : "0";
     params.set(HASH_SEARCH, `${ins}:${searchPanel.query ?? ""}`);
@@ -1310,9 +1292,8 @@ async function restoreSession(p: SessionPayload): Promise<void> {
 /// bootstrap path (which owns the layout but not the personal UI
 /// prefs) can still load these from session.json. The hash is meant
 /// to be shareable; directory open/closed state stays in session.json
-/// regardless of where the layout came from. (The graph/browser
-/// overlay scope was retired with the overlay state - graph + browser
-/// are tabs persisted in the layout now.)
+/// regardless of where the layout came from. Graph + browser surfaces
+/// are tabs persisted in the layout, not overlay-scope fields.
 function applySessionSidecars(p: SessionPayload): void {
   if (p.treeExpanded && typeof p.treeExpanded === "object") {
     restoreTreeExpandedMap(p.treeExpanded);
@@ -1575,12 +1556,12 @@ export type GraphFilters = {
   /// nodes often crowd a whole-workspace graph; the toggle lets the
   /// user collapse them for a cleaner view.
   folder: boolean;
-  /// `fullstack-a-57` G6/G7 FileBucket toggles. Markdown chip hides
-  /// file nodes with `classifyFile === "doc"` (.md / .txt); source
-  /// chip hides file nodes with `classifyFile === "source"` (any
-  /// recognized code / config extension). Binary file nodes don't
-  /// have their own chip — they ride the absence of a more specific
-  /// classification and always render. Mirrors the SPA-side
+  /// FileBucket toggles. Markdown chip hides file nodes with
+  /// `classifyFile === "doc"` (.md / .txt); source chip hides file
+  /// nodes with `classifyFile === "source"` (any recognized code /
+  /// config extension). Binary file nodes don't have their own chip
+  /// (they ride the absence of a more specific classification and
+  /// always render). Mirrors the SPA-side
   /// classification scheme established in `-a-51`'s G6 colour
   /// rework; consumes the same `classifyFile` helper.
   markdown: boolean;
@@ -1614,16 +1595,14 @@ export function openGraph(): void {
   scheduleSessionSave();
 }
 
-/** `fullstack-a-32`: spawn a graph tab rooted at the focused
- *  surface's context. Mirrors `paneModeOpenGraph` (which targets
- *  the Hybrid Nav draft); this variant spawns in the live layout
- *  for top-level chords (`Cmd+Shift+M`, `chan:command
- *  app.graph.toggle`). `fullstack-a-33` makes "from here" the
- *  default rendering mode, so passing `file:` / `dir:` here lands
- *  the new graph already scoped + the breadcrumb above the
- *  inspector body renders the ancestor chain.
- *
- *  Falls back to workspace scope when no context is available. */
+/** Spawn a graph tab rooted at the focused surface's context.
+ *  Mirrors `paneModeOpenGraph` (which targets the Hybrid Nav draft);
+ *  this variant spawns in the live layout for top-level chords
+ *  (`Cmd+Shift+M`, `chan:command app.graph.toggle`). Passing a
+ *  `file:` or `dir:` scope lands the new graph already scoped and
+ *  the breadcrumb above the inspector body renders the ancestor
+ *  chain. Falls back to workspace scope when no context is
+ *  available. */
 export function openGraphWithContext(ctx: SpawnContext): void {
   const scopeId = ctx.file
     ? `file:${ctx.file}`
@@ -1669,7 +1648,7 @@ export function openLanguageGraphForWorkspace(): void {
  *  Used by tag/mention/date chips outside the graph (file browser
  *  inspector today; conceivably the editor margin later). Workspace
  *  scope guarantees the node is in the rendered set regardless of
- *  the previously-saved scope. */
+ *  prior scope. */
 export function openGraphAtNode(nodeId: string): void {
   const tab = openGraphInActivePane({
     mode: "semantic",
@@ -1771,14 +1750,11 @@ export function openGraphForTag(nodeId: string, _label: string): void {
   scheduleSessionSave();
 }
 
-/** Phase-13 round-1 KIND slice 2a: open the graph scoped to a
- *  contact (a Contact-kind note OR a workspace file referenced by
- *  `@@mention`). Lane A's Inspector contact chips dispatch to this
- *  helper; the lens semantics (subgraph centered on the contact
- *  with edges to every doc referencing it) land in slice 2b on
- *  the backend - until then the graph renders the workspace view
- *  with the contact tab title pinned. Title formatting flows
- *  through `graphTitle()` via the `contact:` scopeId prefix. */
+/** Open the graph scoped to a contact (a Contact-kind note or a
+ *  workspace file referenced by a mention). The lens centers on
+ *  the contact file with edges to every doc referencing it.
+ *  Title formatting flows through `graphTitle()` via the
+ *  `contact:` scopeId prefix. */
 export function openGraphForContact(relPath: string): void {
   openGraphInActivePane({
     mode: "semantic",
@@ -1789,12 +1765,10 @@ export function openGraphForContact(relPath: string): void {
   scheduleSessionSave();
 }
 
-/** Phase-13 round-1 KIND slice 2a: open the graph scoped to a
- *  language. The language node is a bubble (no edge to a
- *  directory) connected to every file of that language; depth
- *  doesn't apply to language lenses, so `depth: 0` matches the
- *  existing language-overview convention. Lane A's Inspector
- *  language chips dispatch here. Backend lens lands in slice 2b. */
+/** Open the graph scoped to a language. The language node is a
+ *  bubble connected to every file of that language; depth does not
+ *  apply to language lenses, so `depth: 0` matches the
+ *  language-overview convention. */
 export function openGraphForLanguage(language: string): void {
   openGraphInActivePane({
     mode: "semantic",
@@ -1807,12 +1781,8 @@ export function openGraphForLanguage(language: string): void {
 
 // ---- search-status overlay ---------------------------------------------
 //
-// `phase-13 lane-b` slice 3c: the global Settings overlay was
-// retired. The Appearance + Screen Lock + Screensaver controls
-// moved into DashboardTab.svelte's back-of-card (flipHybrid).
-// Cmd+, no longer opens an overlay; it flips the focused Hybrid.
-// `settingsOverlay`, `openSettings`, and `settingsDisabled` were
-// deleted with the overlay.
+// Cmd+, flips the focused Hybrid to its back-of-card config (Appearance,
+// Screen Lock, Screensaver). It does not open a global Settings overlay.
 
 export const searchStatusOverlay = $state<{ open: boolean }>({ open: false });
 
@@ -1860,13 +1830,10 @@ function focusExistingBrowserTab(): BrowserTab | null {
 /// tab renders; the `treeExpanded` singleton is also primed so a dock
 /// instance landing on the same scope agrees.
 ///
-/// Always opens a TAB - it never focuses/targets the docked File Browser
-/// (@@Alex: "when we have a docked file browser, never focus from other
-/// tabs to it; always open a file browser tab"). The previous body went
-/// through the overlay-era `openBrowser()`, which prefers
-/// `focusExistingBrowserTab()` and was coupled to `browserOverlay`; from
-/// a graph tab that reveal opened no visible tab (GI-8). This uses the
-/// same `openBrowserInActivePane` primitive the File Browser's own "Open
+/// Always opens a TAB. It never focuses/targets the docked File Browser,
+/// because the docked pane is not a valid reveal target (a reveal from a
+/// graph tab would produce no visible tab). Uses the same
+/// `openBrowserInActivePane` primitive the File Browser's own "Open
 /// in File Browser" uses.
 export function revealPathInBrowser(
   path: string,
@@ -1897,8 +1864,8 @@ export function revealPathInBrowser(
   return tab;
 }
 
-/// `fullstack-43`: derive the spawn anchor for Cmd+K 1/2/3/4 from
-/// the focused tab. The returned shape (parent dir + optional
+/// Derive the spawn anchor from the focused tab. The returned shape
+/// (parent dir + optional
 /// file) is what `paneModeOpenTerminal/Browser/Graph` consume so a
 /// new terminal lands on the source doc's parent directory and a
 /// new Graph tab can pre-select the source node.
@@ -1929,8 +1896,8 @@ export function resolveSpawnContext(): SpawnContext {
     case "graph":
       return resolveGraphSpawnContext(tab.scopeId);
     case "dashboard":
-      // `fullstack-a-75`: read-only tab carries no path context.
-      // Spawn from here lands at workspace root.
+      // Dashboard carries no path context; spawn from here lands at
+      // workspace root.
       return { dir: "" };
   }
 }
@@ -1967,12 +1934,8 @@ function resolveGraphSpawnContext(scopeId: string): SpawnContext {
 
 // ---- overlay z-order stack ----------------------------------------------
 //
-// Window-level overlays (files / search / graph / settings)
-// can stack: opening a second overlay while another is up should put the
-// newcomer on top, and Escape should pop just the topmost, returning to
-// the one underneath. The previous setup had every OverlayShell binding
-// its own window-level Escape listener, which closed every open overlay
-// at once.
+// Window-level overlays can stack: opening a second overlay while another
+// is up puts the newcomer on top; Escape pops only the topmost.
 //
 // `overlayStack.ids` is the active z-order (last = top). App.svelte owns
 // a single $effect that watches each overlay's `.open` flag and diffs
@@ -1980,8 +1943,8 @@ function resolveGraphSpawnContext(scopeId: string): SpawnContext {
 // (so the most-recently-opened sits on top). OverlayShell renders with
 // `z-index = 25000 + depth * 10` so paint order matches the stack.
 //
-// Escape lives in App.svelte too and only closes `topOverlay()`. The
-// per-shell click-on-scrim still closes that shell directly; since only
+// Escape lives in App.svelte and only closes `topOverlay()`. The
+// per-shell click-on-scrim closes that shell directly; since only
 // the topmost overlay is visually accessible, the scrim target is
 // naturally the same as the stack top.
 
@@ -2075,10 +2038,7 @@ export const browserSidePanes = $state<{
   left: boolean;
   right: boolean;
 }>({
-  // `fullstack-a-88`: docked FB on left by default. The
-  // pre-`-a-88` default was `{left: false, right: false}`
-  // paired with a first-boot openBrowser() tab spawn in
-  // App.svelte. Now: docked FB on left is the launch surface.
+  // Docked FB on left by default: the launch surface for first-boot.
   // chan-server's `BrowserSidePanes::default()` matches this
   // shape, so a fresh preferences.toml lands here cleanly.
   left: true,
@@ -2352,32 +2312,23 @@ export const treeExpanded = $state<{ map: Record<string, boolean> }>({
 });
 
 // ---------------------------------------------------------------------------
-// Per-File-Browser-instance tree metadata (phase-11 Slice A scaffolding).
+// Per-File-Browser-instance tree metadata.
 //
-// The round-1 ask: "expanding/collapsing in one instance must not affect
-// others." Today `treeExpanded` above is a single window-shared singleton; two
-// simultaneously-visible File Browser instances (a dock pane plus an overlay,
-// or two split panes) fight over it. The per-tab snapshot/restore in
-// `FileBrowserSurface.svelte` (fullstack-58) only swaps the singleton on tab
-// activation, so it does not cover concurrently-visible instances.
-//
-// This registry is the keyed structure those instances will own. Each File
-// Browser instance gets its own `FbTreeInstance` keyed by a stable id; the
-// instance owns its expand/collapse map, selection, scroll, and the set of
-// directory scopes it has subscribed to over `/ws`. Slice E (File Browser)
-// migrates `FileTree.svelte` / `FileBrowserSurface.svelte` off the singleton
-// onto these instances and workspaces the scope subscriptions; Slice F (Graph)
-// reuses the same instance + subscription mechanism. The legacy
-// `treeExpanded` singleton stays as the back-compat default until that
-// migration lands, so this addition is structural only and changes no
-// current behavior.
+// Expanding/collapsing in one instance must not affect others. The
+// `treeExpanded` singleton above is window-shared; two simultaneously-visible
+// File Browser instances (a dock pane plus another pane) fight over it. This
+// registry is the keyed structure those instances own. Each File Browser
+// instance gets its own `FbTreeInstance` keyed by a stable id; the instance
+// owns its expand/collapse map, selection, scroll, and the set of directory
+// scopes it has subscribed to over `/ws`. The `treeExpanded` singleton
+// stays as a session-persistence mirror.
 //
 // Subscription refcounting: each instance records the dirs IT subscribed to
 // in `subscribedDirs`. The client-side cross-instance refcount (so the second
 // instance to expand a dir reuses the subscription and the last to collapse
 // it unsubscribes) is derived from the union of all instances'
 // `subscribedDirs`; the server keeps its own authoritative per-socket
-// refcount in the `ScopeRegistry` (Slice C). See `fbDirSubscriberCount`.
+// refcount in the `ScopeRegistry`. See `fbDirSubscriberCount`.
 
 /// Per-instance File Browser / Graph tree metadata. Owned by exactly one
 /// instance id; never shared. The workspace root (`""`) is always conceptually
@@ -2525,7 +2476,7 @@ export function persistTreeExpanded(): void {
   scheduleSessionSave();
 }
 
-// ---- per-instance reload persistence (phase-12 Slice E) -----------------
+// ---- per-instance reload persistence ----------------------------------------
 //
 // FileTree.svelte renders off the per-instance `expanded` map, so the
 // global reload snapshot above no longer feeds it. Each surface gets its
@@ -2712,7 +2663,7 @@ export function isFullyExpanded(): boolean {
   return true;
 }
 
-// ---- per-instance expansion helpers (phase-12 Slice E) ------------------
+// ---- per-instance expansion helpers ------------------------------------------
 //
 // FileTree.svelte renders + toggles off the per-instance `expanded` map in
 // `fbTreeInstances` so two visible File Browser surfaces (a dock side + a
@@ -2773,16 +2724,11 @@ function expandAncestorsInAllInstances(path: string, includeSelf: boolean): void
 /// slow when idle (so we still pick up CLI-driven `chan index` runs
 /// in the background without hammering the server every second).
 ///
-/// Round-1 closing-3 (Bug 1): single-file watcher reindexes are
-/// server-side visible for ~10ms (`Reindexing` set -> apply ->
-/// `Idle`). The previous 1500ms fast cadence let the
-/// "reindexing Drafts/<...>" pill linger for up to 1.5s after the
-/// server had already returned to idle, which under sustained
-/// editing read as "the pill never clears". The transient cadence
-/// catches the post-reindex idle within a fraction of a second so
-/// the pill clears in real time; the full-build (multi-file)
-/// cadence stays slower since those passes legitimately take
-/// seconds and per-tick UI churn isn't useful.
+/// Single-file watcher reindexes are server-side visible for ~10ms
+/// (`Reindexing` -> `Idle`). The transient cadence catches the
+/// post-reindex idle within a fraction of a second so the pill clears
+/// in real time; the full-build (multi-file) cadence stays slower
+/// since those passes legitimately take seconds.
 const FAST_POLL_MS = 1500;
 const TRANSIENT_POLL_MS = 250;
 const SLOW_POLL_MS = 10_000;
@@ -2890,15 +2836,14 @@ export function resolvePrompt(value: string | null): void {
 //     fire a separate uiConfirm before performing the destructive
 //     action.
 
-/// `fullstack-a-67e` slice 2: `"either"` lets the unified
-/// "New File or Directory" prompt accept both shapes. The
-/// modal detects file-vs-dir from the path's trailing slash:
-/// `foo/bar/` → directory, `foo/bar` (or with an extension)
-/// → file. Callers resolve the returned path against the
-/// chosen kind via `pathPromptKind()` below.
+/// `"either"` lets the unified "New File or Directory" prompt accept
+/// both shapes. The modal detects file-vs-dir from the path's trailing
+/// slash: `foo/bar/` is a directory, `foo/bar` (or with an extension)
+/// is a file. Callers resolve the returned path against the chosen kind
+/// via `pathPromptKind()` below.
 export type PathPromptKind = "file" | "folder" | "either";
-/// `attach` (added per `fullstack-b-3`) is the watcher-dialog mode:
-/// the user picks a path to attach a long-running watcher to,
+/// `attach` is the watcher-dialog mode: the user picks a path to
+/// attach a long-running watcher to,
 /// which is neither "create the entity" nor "move into it". The
 /// modal status row treats an existing directory as a normal
 /// attach (no overwrite warning) and a missing path as "create
@@ -3077,13 +3022,9 @@ async function performMove(path: string, target: string): Promise<void> {
         `${resp.conflicts.length} conflict${resp.conflicts.length === 1 ? "" : "s"}`,
       );
     }
-    // `fullstack-a-85`: success toast was sticky pre-fix
-    // because the success branch wrote `ui.status =` directly
-    // (persistent shape). Other success confirmations use
-    // `setTransientStatus(msg)` which auto-dismisses at
-    // `TRANSIENT_STATUS_DEFAULT_MS` (3s). Move the success
-    // branch to the transient helper; error path stays
-    // persistent so the user notices failures.
+    // Route the success message through the transient helper so
+    // it auto-dismisses. Error path stays persistent so the user
+    // notices failures.
     const moveMsg =
       linkBits.length > 0
         ? `Moved '${target}' (${linkBits.join(", ")})`
@@ -3146,12 +3087,12 @@ export const fileOps = {
   /// Inspector Download action. In the browser the native download
   /// manager handles progress + the Downloads folder + reveal, so we
   /// keep the `<a download>` path. chan-desktop's webview has no such
-  /// manager, so on desktop we route through @@LaneB's
-  /// `runDesktopDownload` capability (api/desktop.ts): it fetches over
-  /// the loopback connection with XHR progress and saves through a
-  /// Tauri command, driving the shared `downloadTransfer` store the
-  /// inspector indicator binds to. Fire-and-forget: the store carries
-  /// progress / error / savedPath so callers don't await.
+  /// manager, so on desktop we route through `runDesktopDownload`
+  /// (api/desktop.ts): it fetches over the loopback connection with
+  /// XHR progress and saves through a Tauri command, driving the shared
+  /// `downloadTransfer` store the inspector indicator binds to.
+  /// Fire-and-forget: the store carries progress / error / savedPath
+  /// so callers don't await.
   downloadPathWithProgress(path: string, isDir: boolean): void {
     if (isTauriDesktop()) {
       const url = new URL(
@@ -3367,17 +3308,14 @@ export const fileOps = {
       ui.status = `create failed: ${(e as Error).message}`;
     }
   },
-  /// `fullstack-a-67e` slice 2: unified "New File or Directory"
-  /// dialog. Opens a single PathPromptModal with `kind: "either"`;
-  /// the user types a path ending in `/` for a directory or
-  /// without the trailing slash for a file. On submit, dispatches
-  /// to the underlying API + UI flow that matches the detected
-  /// kind: directories get `revealAndSelect`'d (matches the
-  /// `createDir` flow); files get `.md` auto-appended + opened in
-  /// the active pane (matches `createFile`). The dialog itself
-  /// owns the kind detection via `effectiveKind` — this caller
-  /// re-detects on the resolved path so the dispatch matches what
-  /// the modal validated against.
+  /// Unified "New File or Directory" dialog. Opens a single
+  /// PathPromptModal with `kind: "either"`; the user types a path
+  /// ending in `/` for a directory or without the trailing slash for a
+  /// file. On submit, dispatches to the API + UI flow that matches the
+  /// detected kind: directories get `revealAndSelect`'d; files get
+  /// `.md` auto-appended + opened in the active pane. The dialog owns
+  /// kind detection via `effectiveKind`; this caller re-detects on the
+  /// resolved path so the dispatch matches what the modal validated.
   async createFileOrDir(parentPath: string): Promise<void> {
     const defaultValue = parentPath ? `${parentPath}/` : "";
     const next = await uiPathPrompt({
@@ -3443,12 +3381,11 @@ export const fileOps = {
   async moveTo(from: string, to: string): Promise<void> {
     await performMove(from, to);
   },
-  /// `fullstack-a-35`: inline-rename entry point for the
-  /// FileEditorTab's header-band UX. Same `performMove` machinery
-  /// (overwrite confirm, link rewrite, tab rekey, watcher
-  /// suppression) as `rename` above; just bypasses the modal so the
-  /// header band can workspace the input directly. Preserves the source
-  /// extension when `next` lacks one — matches `fileOps.rename`.
+  /// Inline-rename entry point for the FileEditorTab's header-band UX.
+  /// Same `performMove` machinery (overwrite confirm, link rewrite, tab
+  /// rekey, watcher suppression) as `rename` above; just bypasses the
+  /// modal so the header band can drive the input directly. Preserves
+  /// the source extension when `next` lacks one.
   async renameInPlace(path: string, next: string, isDir = false): Promise<void> {
     const trimmed = next.trim();
     if (!trimmed || trimmed === path) return;

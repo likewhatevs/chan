@@ -1,23 +1,13 @@
 import { describe, expect, test } from "vitest";
 import editor from "./FileEditorTab.svelte?raw";
 
-// `fullstack-a-67f`: FileEditorTab right-click menu revamp per
-// addendum-a's verbatim Editor spec. Slice 1 covers:
-//
-// * Menu-top editable Name input (mirror of Workspace name in FB +
-//   Terminal name).
-// * Show Source Code + Collapse Code Blocks band.
-// * View-toggles + cleanup utilities (Outline / Details / Style
-//   Toolbar / Syntax Highlight / Highlight TW / Remove TW) kept
-//   against spec — orphan risk; flagged in journal.
-// * Search / Find / Copy path to file / Copy path to $CWD band.
-// * "From $CWD" spawn band (Duplicate / New File / New Terminal /
-//   New File Browser / New Graph).
-// * Settings (flipHybrid) + Reopen Closed Tab + Close foot.
-// * Reload Window / Open Inspector tail dropped (handled in
-//   tabMenuReloadInspector.test.ts).
+// FileEditorTab right-click menu. Pins: menu-top editable Name input;
+// Show Source Code + Collapse Code Blocks; Find / Copy paths; From-$CWD
+// spawn band (Duplicate, New File, New Terminal, New File Browser, New
+// Graph); Settings (flipHybrid) + Reopen + Close foot. Reload + Open
+// Inspector dropped (see tabMenuReloadInspector.test.ts).
 
-describe("fullstack-a-67f: menu-top Name input", () => {
+describe("menu-top Name input", () => {
   test("name-row + name-input + name-label rendered inside the action-list", () => {
     expect(editor).toMatch(
       /<div class="action-list">[\s\S]{1,800}<label class="name-row">[\s\S]{1,400}<span class="name-label">[\s\S]{1,400}<input[\s\S]{1,800}class="name-input"/,
@@ -45,7 +35,7 @@ describe("fullstack-a-67f: menu-top Name input", () => {
   });
 });
 
-describe("fullstack-a-67f: Show Source Code + Collapse Code Blocks", () => {
+describe("Show Source Code + Collapse Code Blocks", () => {
   test("Show Source Code toggle present (via doToggleMode); label switches based on mode", () => {
     expect(editor).toMatch(
       /onclick=\{doToggleMode\}[\s\S]{1,800}\{inSource \? renderedLabel : "Show Source Code"\}/,
@@ -59,7 +49,7 @@ describe("fullstack-a-67f: Show Source Code + Collapse Code Blocks", () => {
   });
 });
 
-describe("fullstack-a-67f: From-$CWD spawn band", () => {
+describe("From-$CWD spawn band", () => {
   test("from-cwd-label rendered above the spawn buttons", () => {
     expect(editor).toMatch(/class="from-cwd-label">From \$CWD/);
   });
@@ -101,7 +91,7 @@ describe("fullstack-a-67f: From-$CWD spawn band", () => {
   });
 });
 
-describe("fullstack-a-67f: Find / Copy paths", () => {
+describe("Find / Copy paths", () => {
   test("doFind opens the per-tab find bar via openFind(tab.id)", () => {
     expect(editor).toMatch(
       /function doFind\(\): void \{[\s\S]{1,200}closeTabMenu\(\);[\s\S]{1,200}openFind\(tab\.id\)/,
@@ -122,7 +112,7 @@ describe("fullstack-a-67f: Find / Copy paths", () => {
     expect(editor).not.toContain("printMarkdownDocument");
   });
 
-  test("Copy path to file (renamed) + Copy path to $CWD (new) entries", () => {
+  test("Copy path to file + Copy path to $CWD entries", () => {
     expect(editor).toMatch(
       /<span class="mbtn-label">Copy path to file<\/span>/,
     );
@@ -132,17 +122,15 @@ describe("fullstack-a-67f: Find / Copy paths", () => {
   });
 
   test("doCopyCwdPath helper writes the parent-dir path to clipboard", () => {
-    // Phase-13 slice 3: routes the Clipboard API call through the
-    // shared copyTextToClipboard helper (state/store.svelte.ts) so the
-    // editor menu's copy buttons, the inspector's COPY button, and the
-    // warnings dialog all share one writeText + fallback path.
+    // Routes through copyTextToClipboard so the editor, inspector COPY,
+    // and warnings dialog all share one writeText + fallback path.
     expect(editor).toMatch(
       /async function doCopyCwdPath\(\): Promise<void> \{[\s\S]{1,400}lastIndexOf\("\/"\)[\s\S]{1,400}copyTextToClipboard\(cwd/,
     );
   });
 });
 
-describe("fullstack-a-67f: Settings (flipHybrid) + Reopen + Close foot", () => {
+describe("Settings (flipHybrid) + Reopen + Close foot", () => {
   test("flipToSettings calls flipHybrid via paneIdForTab", () => {
     expect(editor).toMatch(
       /function flipToSettings\(\): void \{[\s\S]{1,400}const paneId = paneIdForTab\(\);[\s\S]{1,200}if \(paneId\) flipHybrid\(paneId\)/,
@@ -163,7 +151,7 @@ describe("fullstack-a-67f: Settings (flipHybrid) + Reopen + Close foot", () => {
   });
 });
 
-describe("fullstack-a-67f: dropped entries", () => {
+describe("dropped entries", () => {
   test("Close others / Close all entries dropped (per spec)", () => {
     expect(editor).not.toMatch(/<span class="mbtn-label">Close others<\/span>/);
     expect(editor).not.toMatch(/<span class="mbtn-label">Close all<\/span>/);
@@ -179,12 +167,12 @@ describe("fullstack-a-67f: dropped entries", () => {
     );
   });
 
-  test("\"Copy File Path\" renamed to \"Copy path to file\"", () => {
+  test("\"Copy File Path\" is gone (replaced by \"Copy path to file\")", () => {
     expect(editor).not.toMatch(/<span class="mbtn-label">Copy File Path<\/span>/);
   });
 });
 
-describe("fullstack-a-67f: imports", () => {
+describe("imports", () => {
   test("flipHybrid + openFind imported from tabs.svelte", () => {
     expect(editor).toMatch(
       /import \{[\s\S]{1,2000}flipHybrid,[\s\S]{1,800}\} from "\.\.\/state\/tabs\.svelte";/,

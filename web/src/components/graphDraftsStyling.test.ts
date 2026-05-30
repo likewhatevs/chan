@@ -2,10 +2,9 @@ import { describe, expect, test } from "vitest";
 import canvas from "./GraphCanvas.svelte?raw";
 import types from "../api/types.ts?raw";
 
-// `fullstack-a-66` slice e: Graph Drafts root styling +
-// `drafts_link` edge. Closes the -a-66 umbrella.
+// Graph Drafts root styling + `drafts_link` edge.
 
-describe("fullstack-a-66 slice e: GraphViewEdgeKind union extended", () => {
+describe("GraphViewEdgeKind union extended", () => {
   test("`drafts_link` is in the GraphViewEdgeKind union", () => {
     expect(types).toMatch(
       /export type GraphViewEdgeKind =[\s\S]*?\| "drafts_link";/,
@@ -13,7 +12,7 @@ describe("fullstack-a-66 slice e: GraphViewEdgeKind union extended", () => {
   });
 });
 
-describe("fullstack-a-66 slice e: GraphCanvas RenderedEdgeKind", () => {
+describe("GraphCanvas RenderedEdgeKind", () => {
   test("`drafts_link` is in the RenderedEdgeKind union", () => {
     expect(canvas).toMatch(
       /type RenderedEdgeKind =[\s\S]*?\| "drafts_link";/,
@@ -26,10 +25,9 @@ describe("fullstack-a-66 slice e: GraphCanvas RenderedEdgeKind", () => {
     );
   });
 
-  // `phase-11` Slice F split `link` edges into their own
-  // per-source-document-kind pass, so the single-stroke-per-kind
-  // iteration no longer lists `link`; `drafts_link` still rides this
-  // loop.
+  // `link` edges have their own per-source-document-kind pass, so the
+  // single-stroke-per-kind iteration does not list `link`;
+  // `drafts_link` rides this loop.
   test("kind-iteration order includes `drafts_link`", () => {
     expect(canvas).toMatch(
       /\["tag", "mention", "contains", "language", "group", "drafts_link"\] as const/,
@@ -37,16 +35,16 @@ describe("fullstack-a-66 slice e: GraphCanvas RenderedEdgeKind", () => {
   });
 });
 
-describe("fullstack-a-66 slice e: drafts_link edge styling", () => {
+describe("drafts_link edge styling", () => {
   test("strokeStyle for `drafts_link` maps to theme.drafts", () => {
     expect(canvas).toMatch(
       /kind === "drafts_link" \? theme\.drafts/,
     );
   });
 
-  // `phase-11` Slice F relocated the alpha bump into the `strokePass`
-  // call: drafts_link is the one kind passed 0.4 instead of the 0.18
-  // base, preserving the category-boundary emphasis.
+  // The alpha bump lives in the `strokePass` call: drafts_link is the
+  // one kind passed 0.4 instead of the 0.18 base, preserving the
+  // category-boundary emphasis.
   test("alpha is bumped from 0.18 to 0.4 for `drafts_link`", () => {
     expect(canvas).toMatch(
       /strokePass\(edgesByKind\[kind\], strokeForKind\(kind\), kind === "drafts_link" \? 0\.4 : 0\.18\);/,
@@ -54,7 +52,7 @@ describe("fullstack-a-66 slice e: drafts_link edge styling", () => {
   });
 });
 
-describe("fullstack-a-66 slice e: theme.drafts wiring", () => {
+describe("theme.drafts wiring", () => {
   test("ThemeColors interface declares `drafts: string`", () => {
     expect(canvas).toMatch(/\bdrafts: string;/);
   });
@@ -70,7 +68,7 @@ describe("fullstack-a-66 slice e: theme.drafts wiring", () => {
   });
 });
 
-describe("fullstack-a-66 slice e: Drafts directory node tinted", () => {
+describe("Drafts directory node tinted", () => {
   test("isDraftsRoot derived from `n.kind === 'folder' && n.id === 'directory:Drafts'`", () => {
     expect(canvas).toMatch(
       /const isDraftsRoot = n\.kind === "folder" && n\.id === "directory:Drafts";/,
@@ -78,13 +76,12 @@ describe("fullstack-a-66 slice e: Drafts directory node tinted", () => {
   });
 
   test("fill branch routes isDraftsRoot to theme.drafts before the regular folder fallback", () => {
-    // Phase-13 slice 3b-2 slipped an `indexFill ?? (...)` between
-    // the ghost guard and the regular-fill cascade so the
-    // Dashboard indexing slide can override folder colours with
-    // the indexing palette. The Drafts tint still wins over the
-    // standard folder fall-back inside the parenthesised cascade;
-    // pin both halves so a future refactor can't accidentally
-    // re-order them.
+    // An `indexFill ?? (...)` sits between the ghost guard and the
+    // regular-fill cascade so the Dashboard indexing slide can
+    // override folder colours with the indexing palette. The Drafts
+    // tint wins over the standard folder fall-back inside the
+    // parenthesised cascade; pin both halves so a future refactor
+    // can't accidentally re-order them.
     expect(canvas).toMatch(
       /isGhost\s*\?\s*theme\.bgCard\s*:\s*indexFill \?\? \(\s*isDraftsRoot \? theme\.drafts/,
     );
@@ -92,7 +89,7 @@ describe("fullstack-a-66 slice e: Drafts directory node tinted", () => {
 
   test("rationale comment cites cross-surface consistency (FB row + inspector chip)", () => {
     expect(canvas).toMatch(
-      /fullstack-a-66[\s\S]*?slice e[\s\S]*?Drafts yellow[\s\S]*?FB row \+ the inspector chip/i,
+      /Drafts yellow[\s\S]*?FB row \+ the inspector chip/i,
     );
   });
 });

@@ -12,13 +12,12 @@ import {
   type TerminalTab,
 } from "../state/tabs.svelte";
 
-// phase-13-r2 `lane-a-A3`: lead-first bootstrap chain. The Team
-// Work Lead terminal ALREADY EXISTS (created at Cmd+P); the
-// orchestrator runs against it. These tests pin: config written,
-// lead launched FIRST into the existing tab (restart, no
-// respawn/close), workers spawned into new tabs, identity prompt
-// primed in the lead's embedded editor, and the final broadcast
-// membership set == {lead, workers} exactly.
+// Lead-first bootstrap chain. The Team Work Lead terminal already
+// exists (created at Cmd+P); the orchestrator runs against it.
+// These tests pin: config written, lead launched FIRST into the
+// existing tab (restart, no respawn/close), workers spawned into
+// new tabs, identity prompt primed in the lead's embedded editor,
+// and the final broadcast membership set == {lead, workers} exactly.
 
 function leadTerminalTab(partial: Partial<TerminalTab> = {}): TerminalTab {
   return {

@@ -311,8 +311,7 @@ describe("tab close confirmation", () => {
       writable: true,
     });
 
-    // `new-file-and-draft-spec.md` item 3: a lone draft.md routes
-    // through the SAME PathPromptModal as New File, in file mode
+    // A lone draft.md routes through the PathPromptModal in file mode
     // (kind "file"), defaulting to `<name>.md`.
     const save = saveDraftTabToWorkspace(tab);
     await vi.waitFor(() => expect(pathPromptState.open).toBe(true));
@@ -435,15 +434,12 @@ describe("tab close confirmation", () => {
     expect(activePane().activeTabId).toBe(reopened.id);
   });
 
-  test("closing the last front tab clears the flip (phase-13 r2 @@Alex Cmd+, audit)", async () => {
-    // Phase-13 r2 supersedes the earlier `fullstack-a-11` behaviour
-    // (which kept showingBack=true after the last front tab closed).
-    // Per @@Alex's Cmd+, audit, the flip is strictly tied to panes
-    // with >= 1 tab: a 0-tab pane is never flipped. Closing the last
-    // front tab while flipped therefore drops the flip and lands the
-    // pane on its empty front (welcome), instead of a stuck back-
-    // config surface the flip chord can't undo (flipHybrid's empty-
-    // pane guard would block re-flipping it).
+  test("closing the last front tab clears the flip", async () => {
+    // The flip is strictly tied to panes with >= 1 tab: a 0-tab pane
+    // is never flipped. Closing the last front tab while flipped drops
+    // the flip and lands the pane on its empty front (welcome), instead
+    // of a stuck back-config surface the flip chord can't undo
+    // (flipHybrid's empty-pane guard would block re-flipping it).
     const front = fileTab({ id: "front", path: "notes/front.md" });
     const seed = resetLayout([front]);
     flipHybrid(seed.id);
@@ -460,12 +456,10 @@ describe("tab close confirmation", () => {
     expect(live.activeTabId).toBeNull();
   });
 
-  test("closing the last tab in a Hybrid pane leaves the pane in place (fullstack-a-5)", async () => {
-    // Pre-`fullstack-a-5`, an empty non-root pane auto-collapsed
-    // into its sibling: the Hybrid structure disappeared on the
-    // close. Per @@Alex's phase-8 ask, closing the last tab in a
-    // Hybrid pane should leave the pane standing with the
-    // empty-pane landing instead.
+  test("closing the last tab in a Hybrid pane leaves the pane in place", async () => {
+    // Closing the last tab in a non-root pane should leave the pane
+    // standing with the empty-pane landing instead of auto-collapsing
+    // the Hybrid structure into the sibling.
     const left = fileTab({ id: "left", path: "notes/left.md" });
     const right = fileTab({ id: "right", path: "notes/right.md" });
     const leftPane = resetLayout([left]);
@@ -681,14 +675,10 @@ describe("pane state", () => {
     expect(left.tabs.map((tab) => tab.id)).toEqual(["term-a"]);
   });
 
-  test("detachTabToPaneEdge moves a browser or graph tab end-to-end (fullstack-47)", () => {
-    // The DnD machinery from `fullstack-15` is tab-kind agnostic
-    // but earlier dedup logic on File Browser / Graph spawns meant
-    // users could never actually have two of them in the same
-    // window — so the cross-pane DnD path went untested for those
-    // kinds. Now that dedup is gone, lock in the contract:
-    // detaching a Browser tab and a Graph tab via edge-drop
-    // produces a new pane each, just like file tabs do.
+  test("detachTabToPaneEdge moves a browser or graph tab end-to-end", () => {
+    // The DnD machinery is tab-kind agnostic. Lock in the contract:
+    // detaching a Browser tab and a Graph tab via edge-drop produces
+    // a new pane each, just like file tabs do.
     const file = fileTab({ id: "file-host", path: "notes/host.md" });
     const pane = resetLayout([file]);
     const browser = openBrowserInActivePane();
@@ -804,7 +794,7 @@ describe("pane state", () => {
     expect(restoredBrowser.inspectorOpen).toBe(true);
   });
 
-  test("round-trips per-tab BrowserTab view state (fullstack-58)", async () => {
+  test("round-trips per-tab BrowserTab view state", async () => {
     resetLayout([]);
     const browser = openBrowserInActivePane();
     browser.selected = "notes/today.md";
@@ -827,7 +817,7 @@ describe("pane state", () => {
     expect(restored.showWorkspace ?? false).toBe(false);
   });
 
-  test("two BrowserTab records carry independent state without leakage (fullstack-58)", () => {
+  test("two BrowserTab records carry independent state without leakage", () => {
     resetLayout([]);
     const tab1 = openBrowserInActivePane();
     const tab2 = openBrowserInActivePane();
@@ -853,7 +843,7 @@ describe("pane state", () => {
     expect(tab2.showWorkspace).toBe(true);
   });
 
-  test("hash round-trips both BrowserTab records' per-tab state (fullstack-58)", async () => {
+  test("hash round-trips both BrowserTab records' per-tab state", async () => {
     resetLayout([]);
     const tab1 = openBrowserInActivePane();
     const tab2 = openBrowserInActivePane();
@@ -876,7 +866,7 @@ describe("pane state", () => {
     expect(tabs[1].scroll).toBe(100);
   });
 
-  test("hash round-trips a Dashboard tab (B1c)", async () => {
+  test("hash round-trips a Dashboard tab", async () => {
     resetLayout([]);
     openDashboardInActivePane();
     expect(activePane().tabs.map((t) => t.kind)).toEqual(["dashboard"]);
@@ -894,10 +884,10 @@ describe("pane state", () => {
     expect(activePane().activeTabId).toBe(first.id);
   });
 
-  test("hash round-trips a Dashboard tab's carousel slide cursor (G3)", async () => {
-    // Round-1 closing-10 (G3): the user-visible expectation is "the
-    // slide I left the carousel on is the slide it opens to after a
-    // window reload". The persisted field is `cs` in SerTab.
+  test("hash round-trips a Dashboard tab's carousel slide cursor", async () => {
+    // The user-visible expectation is "the slide I left the carousel
+    // on is the slide it opens to after a window reload". The
+    // persisted field is `cs` in SerTab.
     resetLayout([]);
     openDashboardInActivePane();
     const live = activePane().tabs[0];
@@ -913,7 +903,7 @@ describe("pane state", () => {
     expect(restored.carouselSlide).toBe(2);
   });
 
-  test("Dashboard tab with carouselSlide=0 omits the cs field in the hash (G3)", () => {
+  test("Dashboard tab with carouselSlide=0 omits the cs field in the hash", () => {
     // Default-slide tabs keep the hash compact; the field only
     // emits when the user has moved off the About slide.
     resetLayout([]);
@@ -923,7 +913,7 @@ describe("pane state", () => {
     expect(json).not.toMatch(/"cs":/);
   });
 
-  test("two BrowserTab records carry independent inspectorWidth (fullstack-84)", () => {
+  test("two BrowserTab records carry independent inspectorWidth", () => {
     resetLayout([]);
     const tab1 = openBrowserInActivePane();
     const tab2 = openBrowserInActivePane();
@@ -933,7 +923,7 @@ describe("pane state", () => {
     expect(tab2.inspectorWidth).toBe(420);
   });
 
-  test("hash round-trips per-tab inspectorWidth on browser + graph + file (fullstack-84)", async () => {
+  test("hash round-trips per-tab inspectorWidth on browser + graph + file", async () => {
     resetLayout([]);
     const browser1 = openBrowserInActivePane();
     const browser2 = openBrowserInActivePane();
@@ -1102,13 +1092,9 @@ describe("pane state", () => {
     expect(terminals.every((tab) => tab.teamWork?.open === true)).toBe(true);
   });
 
-  test("File Browser and Graph spawns always add a new tab (fullstack-47)", () => {
-    // Earlier behaviour deduplicated browser and graph spawns
-    // against existing tabs in the same pane so pressing Cmd+K 2
-    // or Cmd+K 3 twice would focus the first one. Per
-    // `fullstack-47` every spawn affordance now creates a fresh
-    // tab with its own state so users can compare two
-    // browser/graph views side-by-side.
+  test("File Browser and Graph spawns always add a new tab", () => {
+    // Every spawn affordance creates a fresh tab with its own state
+    // so users can compare two browser/graph views side-by-side.
     const tab = fileTab({ id: "f", path: "notes/x.md" });
     const pane = resetLayout([tab]);
     openBrowserInActivePane();
@@ -1135,7 +1121,7 @@ describe("pane state", () => {
     expect(new Set(graphs.map((t) => t.id)).size).toBe(2);
   });
 
-  test("paneModeOpenTerminal/Browser/Graph honor a SpawnContext (fullstack-43)", () => {
+  test("paneModeOpenTerminal/Browser/Graph honor a SpawnContext", () => {
     const f = fileTab({ id: "f", path: "notes/sub/a.md" });
     resetLayout([f]);
 
@@ -1164,7 +1150,7 @@ describe("pane state", () => {
     }
   });
 
-  test("paneModeOpenGraph with a dir-only context scopes to dir:* (fullstack-43)", () => {
+  test("paneModeOpenGraph with a dir-only context scopes to dir:*", () => {
     const f = fileTab({ id: "f", path: "notes/x.md" });
     resetLayout([f]);
 
@@ -1176,13 +1162,12 @@ describe("pane state", () => {
     expect(graph?.kind).toBe("graph");
     if (graph?.kind === "graph") {
       expect(graph.scopeId).toBe("dir:notes");
-      // Per fullstack-32 "Graph from here" rule, the dir is itself
-      // the pre-selected node so the inspector pops on mount.
+      // The dir is itself the pre-selected node so the inspector pops on mount.
       expect(graph.pendingSelectId).toBe("notes");
     }
   });
 
-  test("paneModeOpen* with empty context preserves workspace-root defaults (fullstack-43)", () => {
+  test("paneModeOpen* with empty context preserves workspace-root defaults", () => {
     const f = fileTab({ id: "f", path: "notes/x.md" });
     resetLayout([f]);
 
@@ -1202,7 +1187,7 @@ describe("pane state", () => {
     }
   });
 
-  test("paneModeStageSpawn stores intent without modifying the draft (fullstack-72)", () => {
+  test("paneModeStageSpawn stores intent without modifying the draft", () => {
     const f = fileTab({ id: "f", path: "notes/x.md" });
     const seed = resetLayout([f]);
 
@@ -1225,7 +1210,7 @@ describe("pane state", () => {
     cancelPaneMode();
   });
 
-  test("staged spawn fires on commit and lands on the focused pane (fullstack-72)", () => {
+  test("staged spawn fires on commit and lands on the focused pane", () => {
     const f = fileTab({ id: "f", path: "notes/x.md" });
     const seed = resetLayout([f]);
 
@@ -1247,7 +1232,7 @@ describe("pane state", () => {
     expect(paneMode.spawnIntent).toBeNull();
   });
 
-  test("staging a second key replaces the intent (fullstack-72)", () => {
+  test("staging a second key replaces the intent", () => {
     const f = fileTab({ id: "f", path: "notes/x.md" });
     const seed = resetLayout([f]);
 
@@ -1265,7 +1250,7 @@ describe("pane state", () => {
     }
   });
 
-  test("Esc / cancel discards a staged spawn (fullstack-72)", () => {
+  test("Esc / cancel discards a staged spawn", () => {
     const f = fileTab({ id: "f", path: "notes/x.md" });
     const seed = resetLayout([f]);
     const initialTabCount = (layout.nodes[seed.id] as LeafNode).tabs.length;
@@ -1283,7 +1268,7 @@ describe("pane state", () => {
     expect(paneMode.spawnIntent).toBeNull();
   });
 
-  test("paneModeStageSpawn is a no-op outside Pane Mode (fullstack-72)", () => {
+  test("paneModeStageSpawn is a no-op outside Pane Mode", () => {
     resetLayout([fileTab({ id: "f", path: "notes/x.md" })]);
     paneModeStageSpawn("terminal", { dir: "" });
     expect(paneMode.spawnIntent).toBeNull();
@@ -1366,15 +1351,13 @@ describe("pane state", () => {
     expect(created?.id).toBe(spawned.id);
   });
 
-  test("openActiveTeamWork blurs the focused xterm helper textarea (fullstack-b-8)", () => {
-    // The race: between the Team Work chord (Cmd+P / Cmd+Alt+P /
-    // Hybrid NAV `p`) and the Team Work editor child
-    // mounting + focusing, xterm-helper-textarea still owns focus.
-    // Keystrokes typed in that window fire `term.onData` and reach
-    // the live PTY, leaving the dispatched buffer short its first
-    // character. Blurring the helper textarea up front parks focus
-    // on `<body>` so the racing keystroke is dropped on the floor
-    // instead of going to the shell.
+  test("openActiveTeamWork blurs the focused xterm helper textarea", () => {
+    // Between the Team Work chord and the editor child mounting +
+    // focusing, xterm-helper-textarea still owns focus. Keystrokes
+    // typed there fire `term.onData` and reach the live PTY, leaving
+    // the dispatched buffer short its first character. Blurring the
+    // helper textarea parks focus on `<body>` so the racing keystroke
+    // is dropped instead of going to the shell.
     const terminal: TerminalTab = {
       kind: "terminal",
       id: "term-blur",
@@ -1405,7 +1388,7 @@ describe("pane state", () => {
     document.body.removeChild(xtermRoot);
   });
 
-  test("openActiveTeamWork leaves non-xterm focus alone (fullstack-b-8)", () => {
+  test("openActiveTeamWork leaves non-xterm focus alone", () => {
     // The blur is scoped to xterm-owned elements. A user invoking
     // the prompt from a code editor or any other input keeps their
     // focus until the editor child takes over; we don't want to
@@ -1433,7 +1416,7 @@ describe("pane state", () => {
     document.body.removeChild(someInput);
   });
 
-  test("repeated openBrowserInActivePane / openGraphInActivePane stack (fullstack-47)", () => {
+  test("repeated openBrowserInActivePane / openGraphInActivePane stack", () => {
     const tab = fileTab({ id: "g", path: "notes/y.md" });
     resetLayout([tab]);
 
@@ -1447,7 +1430,7 @@ describe("pane state", () => {
     const g1 = openGraphInActivePane({ scopeId: "dir:notes" });
     const g2 = openGraphInActivePane({ scopeId: "dir:notes" });
     expect(g1.id).not.toBe(g2.id);
-    // Same scope is fine — each instance keeps its own filters
+    // Same scope is fine; each instance keeps its own filters
     // and pending-select state.
     expect(g1.scopeId).toBe(g2.scopeId);
     expect(
@@ -1455,7 +1438,7 @@ describe("pane state", () => {
     ).toHaveLength(2);
   });
 
-  test("openBrowserInActivePane assigns enumerated titles (fullstack-a-39)", () => {
+  test("openBrowserInActivePane assigns enumerated titles", () => {
     resetLayout([]);
 
     const first = openBrowserInActivePane();
@@ -1467,7 +1450,7 @@ describe("pane state", () => {
     expect(third.title).toBe("Files 3");
   });
 
-  test("openBrowserInActivePane threads the select option into the new tab (fullstack-a-39)", () => {
+  test("openBrowserInActivePane threads the select option into the new tab", () => {
     resetLayout([]);
 
     const tab = openBrowserInActivePane({ select: "notes/x.md" });
@@ -1549,7 +1532,7 @@ describe("pane state", () => {
   });
 });
 
-describe("Hybrid NAV transaction mode (fullstack-a-44)", () => {
+describe("Hybrid NAV transaction mode", () => {
   function setupTwoPanes(): { leftPane: LeafNode; rightPane: LeafNode } {
     const left = fileTab({ id: "left", path: "notes/left.md" });
     const right = fileTab({ id: "right", path: "notes/right.md" });
@@ -1564,7 +1547,7 @@ describe("Hybrid NAV transaction mode (fullstack-a-44)", () => {
     return { leftPane, rightPane };
   }
 
-  test("enterPaneModeTransaction with grab activates transaction mode + sets grab pane (Entry A)", () => {
+  test("enterPaneModeTransaction with grab activates transaction mode + sets grab pane", () => {
     const { leftPane } = setupTwoPanes();
 
     enterPaneModeTransaction(leftPane.id);
@@ -1578,7 +1561,7 @@ describe("Hybrid NAV transaction mode (fullstack-a-44)", () => {
     cancelPaneMode();
   });
 
-  test("enterPaneModeTransaction(null) activates transaction mode with no grab (Entry B)", () => {
+  test("enterPaneModeTransaction(null) activates transaction mode with no grab", () => {
     setupTwoPanes();
 
     enterPaneModeTransaction(null);
@@ -1697,13 +1680,11 @@ describe("splitPane side preservation", () => {
     expect(newPane.back).toBeUndefined();
   });
 
-  test("splitting a flipped pane yields a clean, unflipped new pane (phase-13 r2 @@Alex Cmd+, audit)", () => {
-    // Supersedes fullstack-a-43 ("the new pane inherits the back
-    // side"). The new pane is born empty, and flip is strictly tied to
-    // panes with >= 1 tab, so it must NOT inherit showingBack/back -
-    // copying the flip onto the empty new pane was a root cause of the
-    // @@Alex-reported Cmd+, bug (a flipped 0-tab pane the flip chord
-    // could not undo, whose orientation then leaked across panes).
+  test("splitting a flipped pane yields a clean, unflipped new pane", () => {
+    // The new pane is born empty, and flip is strictly tied to panes
+    // with >= 1 tab, so it must NOT inherit showingBack/back. Copying
+    // the flip onto an empty new pane creates a stuck 0-tab pane the
+    // flip chord cannot undo, whose orientation leaks across panes.
     const seed = resetLayout([fileTab({ id: "f", path: "a.md" })]);
     flipHybrid(seed.id);
     const live = layout.nodes[seed.id];
@@ -1724,8 +1705,8 @@ describe("splitPane side preservation", () => {
   });
 });
 
-describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fullstack-a-47)", () => {
-  test("first flip materialises back marker; pane.theme is preserved (fullstack-a-47)", () => {
+describe("Hybrid flip", () => {
+  test("first flip materialises back marker; pane.theme is preserved", () => {
     const front = fileTab({ id: "front", path: "notes/front.md" });
     const seed = resetLayout([front]);
     expect(seed.back).toBeUndefined();
@@ -1739,21 +1720,19 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     expect(live?.kind).toBe("leaf");
     if (live?.kind !== "leaf") return;
     expect(live.showingBack).toBe(true);
-    // `-a-43`: `pane.tabs` always describes the FRONT — flipping no
-    // longer swaps tab collections.
+    // `pane.tabs` always describes the FRONT; flipping does not swap
+    // tab collections.
     expect(live.tabs.map((t) => t.id)).toEqual(["front"]);
     expect(live.activeTabId).toBe("front");
-    // `-a-47`: the per-side theme split collapsed; flip no longer
-    // inverts pane.theme. Theme stays at the user's last explicit
-    // choice (undefined here, since the pane was just created).
+    // `pane.theme` is a single per-Hybrid value; flip does not invert it.
+    // Theme stays at the user's last explicit choice (undefined here).
     expect(live.theme).toBeUndefined();
-    // back is materialised as an empty marker so future menu
-    // gating (`pane.back !== undefined`) can identify this as a
-    // Hybrid pane.
+    // back is materialised as an empty marker so menu gating
+    // (`pane.back !== undefined`) can identify this as a Hybrid pane.
     expect(live.back).toEqual({});
   });
 
-  test("flipping back round-trips showingBack; pane.theme is single + stable (fullstack-a-47)", () => {
+  test("flipping back round-trips showingBack; pane.theme is single + stable", () => {
     const front = fileTab({ id: "f1", path: "a.md" });
     const seed = resetLayout([front]);
 
@@ -1761,9 +1740,8 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     let live = layout.nodes[seed.id];
     if (live?.kind !== "leaf") throw new Error("expected leaf");
     expect(live.showingBack).toBe(true);
-    // Per `-a-47`, pane.theme is a SINGLE per-Hybrid value shared
-    // by both sides. The user picks dark; the same value is in
-    // force when the pane flips back to the front.
+    // pane.theme is a single per-Hybrid value shared by both sides.
+    // The user picks dark; the same value is in force after flipping back.
     live.theme = "dark";
 
     flipHybrid(seed.id);
@@ -1773,8 +1751,8 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     expect(live.tabs.map((t) => t.id)).toEqual(["f1"]);
     // Theme is unchanged across the flip.
     expect(live.theme).toBe("dark");
-    // The `back` marker survives across flips (it just signals
-    // "Hybrid"); its shape is empty under `-a-47`.
+    // The `back` marker survives across flips; it signals "Hybrid" and
+    // its shape is an empty object.
     expect(live.back).toEqual({});
 
     flipHybrid(seed.id);
@@ -1785,12 +1763,11 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     expect(live.theme).toBe("dark");
   });
 
-  test("flipHybrid bumps the flip bus (fullstack-a-22)", async () => {
-    // `fullstack-a-22` switched the post-flip cue from the
-    // structural wobble (scale bounce, used for split / close /
-    // swap) to the orientation-change flip (Y-axis rotation).
-    // The wobble bus stays untouched on flip so the two visual
-    // signals don't compound into a single muddled animation.
+  test("flipHybrid bumps the flip bus", async () => {
+    // The flip bus triggers the orientation-change animation (Y-axis
+    // rotation), distinct from the structural wobble (scale bounce used
+    // for split/close/swap). The wobble bus must stay untouched on flip
+    // so the two signals don't compound.
     const front = fileTab({ id: "fw", path: "wobble.md" });
     const seed = resetLayout([front]);
     const { paneFlip, paneWobble } = await import("./tabs.svelte");
@@ -1812,11 +1789,9 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     expect(live.back).toBeUndefined();
   });
 
-  test("flipHybrid is a no-op on an empty pane (B4)", async () => {
-    // Round-1 smoke: Cmd+, on an empty pane animated the whole
-    // pane even though there's no surface to flip. Guard reads
-    // `tabs.length === 0` before mutating state or bumping the
-    // flip bus.
+  test("flipHybrid is a no-op on an empty pane", async () => {
+    // Guard reads `tabs.length === 0` before mutating state or bumping
+    // the flip bus, so an empty pane never animates or flips.
     const seed = resetLayout([]);
     const { paneFlip } = await import("./tabs.svelte");
     const beforeFlip = paneFlip.versions[seed.id] ?? 0;
@@ -1831,7 +1806,7 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     expect(paneFlip.versions[seed.id] ?? 0).toBe(beforeFlip);
   });
 
-  test("serialize / restore round-trips theme + showingBack + back marker (fullstack-a-47)", async () => {
+  test("serialize / restore round-trips theme + showingBack + back marker", async () => {
     const front = fileTab({ id: "front", path: "front.md" });
     const seed = resetLayout([front]);
 
@@ -1846,12 +1821,12 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     const json = JSON.stringify(snapshot);
     expect(json).toContain("\"sb\":1");
     expect(json).toContain("\"ht\":\"d\"");
-    // `-a-43`: no `bt` (back-side tabs) emitted any more.
+    // No `bt` (back-side tabs) emitted.
     expect(json).not.toContain("\"bt\":");
-    // `-a-47`: no `hb` (back-side theme) emitted any more.
+    // No `hb` (back-side theme) emitted.
     expect(json).not.toContain("\"hb\":");
-    // `-a-47`: a flipped pane emits `bm` so the back marker
-    // survives the round-trip even without a per-side theme.
+    // A flipped pane emits `bm` so the back marker survives the
+    // round-trip even without a per-side theme.
     expect(json).toContain("\"bm\":1");
 
     await restoreLayout(snapshot);
@@ -1860,18 +1835,16 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     expect(restored.showingBack).toBe(true);
     expect(restored.theme).toBe("dark");
     expect(restored.tabs.map((t) => t.kind)).toEqual(["file"]);
-    // `bm` round-trips the Hybrid-materialised marker; menu
-    // gating reads `pane.back !== undefined`, so we assert it's
-    // set on restore.
+    // `bm` round-trips the Hybrid marker; menu gating reads
+    // `pane.back !== undefined`, so we assert it's set on restore.
     expect(restored.back).toEqual({});
   });
 
-  test("legacy `hb` payload is accepted on rehydrate and dropped (fullstack-a-47)", async () => {
-    // Old serializers (pre-`-a-47`) emitted both `ht` (front) and
-    // `hb` (back) per-side theme overrides. The `-a-47` migration
-    // spec picks the front-side as canonical: `ht` survives,
-    // `hb` is dropped. The presence of `hb` also implies the
-    // pane WAS a Hybrid, so the back marker materialises.
+  test("legacy `hb` payload is accepted on rehydrate and dropped", async () => {
+    // Old serializers emitted both `ht` (front) and `hb` (back)
+    // per-side theme overrides. The front-side is canonical: `ht`
+    // survives, `hb` is dropped. The presence of `hb` also implies
+    // the pane was a Hybrid, so the back marker materialises.
     const front = fileTab({ id: "legacy-front", path: "legacy.md" });
     resetLayout([front]);
 
@@ -1897,19 +1870,15 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     // Front-side theme wins; back-side `hb` ignored.
     expect(restored.theme).toBe("dark");
     expect(restored.showingBack).toBe(true);
-    // Materialised back marker (hb's presence is a strong
-    // signal the pane is a Hybrid).
+    // Back marker materialises because the pane was a Hybrid.
     expect(restored.back).toEqual({});
   });
 
-  test("focus changes never touch any pane's flip; flips are per-pane (phase-13 r2 @@Alex Cmd+, audit)", () => {
-    // Phase-13 r2 supersedes round-1 closing-2 (B2c), which cleared
-    // the previous pane's showingBack on focus-move. That coupling was
-    // the @@Alex-reported bug: switching pane focus visibly flipped
-    // sibling tabs. The flip is now a strictly per-pane boolean that
-    // ONLY flipHybrid writes; setActivePane leaves every pane's flip
-    // untouched, so two panes can be independently flipped and focus
-    // moves between them preserve both states.
+  test("focus changes never touch any pane's flip; flips are per-pane", () => {
+    // The flip is a strictly per-pane boolean that ONLY flipHybrid
+    // writes; setActivePane leaves every pane's flip untouched, so two
+    // panes can be independently flipped and focus moves between them
+    // preserve both states.
     const left = fileTab({ id: "left", path: "notes/left.md" });
     const right = fileTab({ id: "right", path: "notes/right.md" });
     const leftPane = resetLayout([left]);
@@ -1919,8 +1888,8 @@ describe("Hybrid flip (fullstack-48 phase A; revisited by fullstack-a-43 + fulls
     const rightPaneId = root.b;
     const rightPane = layout.nodes[rightPaneId];
     if (rightPane?.kind !== "leaf") throw new Error("expected leaf");
-    // The split's new pane is born clean - NOT flipped, even though
-    // it was created while the focus was on a (would-be) flipped pane.
+    // The split's new pane is born clean: NOT flipped, even though
+    // it was created while the focus was on a flipped pane.
     expect(rightPane.showingBack).toBeFalsy();
     rightPane.tabs.push(right);
     rightPane.activeTabId = right.id;
@@ -2188,10 +2157,10 @@ describe("terminal session serialization", () => {
     expect(tab.teamWork?.submissionSequence).toBe(3);
   });
 
-  test("round-trips Team Work submitMode via SerTab.rpsm (fullstack-b-13)", async () => {
+  test("round-trips Team Work submitMode via SerTab.rpsm", async () => {
     // Per-prompt shell-vs-agent toggle survives session restore.
     // Agent mode emits the short-form "a"; shell mode omits the
-    // field entirely so the persisted shape stays clean.
+    // field entirely so the persisted shape stays compact.
     resetLayout([
       terminalTab({
         terminalSessionId: "term_rpsm",
@@ -2243,11 +2212,9 @@ describe("terminal session serialization", () => {
     expect(tab.teamWork?.submitMode).toBe("agent");
   });
 
-  test("omits rpsm from SerTab when submitMode is shell or absent (fullstack-b-13)", async () => {
+  test("omits rpsm from SerTab when submitMode is shell or absent", async () => {
     // Shell is the default; omitting the field keeps the persisted
-    // shape compact and lets a future per-agent encoding map land
-    // additively without breaking the absence-reads-as-shell
-    // contract.
+    // shape compact. Absence reads as shell.
     resetLayout([
       terminalTab({
         terminalSessionId: "term_rpsm_default",
@@ -2280,10 +2247,10 @@ describe("terminal session serialization", () => {
     expect(JSON.stringify(sessionSnapshot2)).not.toContain("\"rpsm\"");
   });
 
-  test("round-trips per-prompt page-width via SerTab.rppw (fullstack-a-30)", async () => {
+  test("round-trips per-prompt page-width via SerTab.rppw", async () => {
     // Each Team Work prompt carries its own page-width ratio so
     // narrowing one prompt does not cascade onto a sibling tile.
-    // Value persists across session restore.
+    // The value persists across session restore.
     resetLayout([
       terminalTab({
         terminalSessionId: "term_rppw",
@@ -2311,8 +2278,8 @@ describe("terminal session serialization", () => {
     expect(tab.teamWork?.pageWidthRatio).toBe(0.55);
   });
 
-  test("omits rppw from SerTab when pageWidthRatio is unset or 100% (fullstack-a-30)", async () => {
-    // 100% / 1.0 is the "no cap" sentinel; rounds to absent so
+  test("omits rppw from SerTab when pageWidthRatio is unset or 100%", async () => {
+    // 1.0 is the "no cap" sentinel; it rounds to absent so
     // the persisted shape stays short for the common case.
     resetLayout([
       terminalTab({
@@ -2731,7 +2698,7 @@ describe("terminal broadcast groups", () => {
     expect(tab("term-c").broadcastEnabled).toBe(true);
   });
 
-  test("addendum-3: select-all toggle flips the whole group on the active terminal", () => {
+  test("select-all toggle flips the whole group on the active terminal", () => {
     const a = terminalTab({ id: "term-a", title: "A" });
     const b = terminalTab({ id: "term-b", title: "B" });
     const c = terminalTab({ id: "term-c", title: "C" });
@@ -2892,7 +2859,7 @@ describe("terminal broadcast groups", () => {
   });
 });
 
-describe("truncateTabTitle (fullstack-66)", () => {
+describe("truncateTabTitle", () => {
   test("empty string passes through", () => {
     expect(truncateTabTitle("")).toBe("");
   });
@@ -2937,10 +2904,9 @@ describe("truncateTabTitle (fullstack-66)", () => {
   });
 });
 
-describe("graphTitle (fullstack-64 + phase-13 KIND slice 2a)", () => {
-  // Phase-13 round-1 KIND slice 2a: titles carry a `kind=` prefix
-  // (`path=` / `tag=` / `contact=` / `lang=`) so the tab strip
-  // surfaces the lens shape next to the payload.
+describe("graphTitle", () => {
+  // Titles carry a `kind=` prefix (`path=` / `tag=` / `contact=` / `lang=`)
+  // so the tab strip surfaces the lens shape next to the payload.
   test("workspace scope reads as 'path=workspace'", () => {
     expect(graphTitle("semantic", "workspace")).toBe("path=workspace");
     expect(graphTitle("filesystem", "workspace")).toBe("path=workspace");
@@ -2994,7 +2960,7 @@ describe("graphTitle (fullstack-64 + phase-13 KIND slice 2a)", () => {
   });
 });
 
-describe("browserTabLabel (fullstack-a-1)", () => {
+describe("browserTabLabel", () => {
   function browserTab(overrides: Partial<BrowserTab> = {}): BrowserTab {
     return {
       kind: "browser",
@@ -3078,7 +3044,7 @@ describe("browserTabLabel (fullstack-a-1)", () => {
   });
 });
 
-describe("graphTabLabel (fullstack-81)", () => {
+describe("graphTabLabel", () => {
   function graphTab(overrides: Partial<GraphTab> = {}): GraphTab {
     return {
       kind: "graph",
@@ -3087,6 +3053,7 @@ describe("graphTabLabel (fullstack-81)", () => {
       mode: "semantic",
       scopeId: "workspace",
       depth: 1,
+      expanded: { "": true },
       filters: {
         link: true,
         tag: true,
@@ -3111,8 +3078,8 @@ describe("graphTabLabel (fullstack-81)", () => {
   });
 
   test("selection label wins over the scope title", () => {
-    // Titles without an `=` (legacy bare-string shape used in this
-    // unit test) fall back to the raw selectedNodeLabel.
+    // Titles without an `=` (bare-string shape) fall back to the raw
+    // selectedNodeLabel.
     expect(
       graphTabLabel(
         graphTab({
@@ -3133,11 +3100,10 @@ describe("graphTabLabel (fullstack-81)", () => {
     ).toBe("#search");
   });
 
-  test("kind= prefix from graphTitle survives node selection (B1)", () => {
-    // Phase-13 round-1 closing B1: tab strip must keep showing
-    // path= / tag= / contact= / lang= even after the user has
-    // tapped a node. graphTitle() seeds tab.title with that
-    // prefix; graphTabLabel preserves it.
+  test("kind= prefix from graphTitle survives node selection", () => {
+    // The tab strip keeps showing path= / tag= / contact= / lang=
+    // even after the user taps a node. graphTitle() seeds tab.title
+    // with that prefix; graphTabLabel preserves it.
     expect(
       graphTabLabel(
         graphTab({
@@ -3198,7 +3164,7 @@ describe("graphTabLabel (fullstack-81)", () => {
   });
 });
 
-describe("lane-c addendum-3: terminal unseen-output dot pulse", () => {
+describe("terminal unseen-output dot pulse", () => {
   test("pulse tracks active output; output stop holds the dot solid; seeing clears both", () => {
     const tab = terminalTab();
     // Output arriving at an unfocused terminal: dot shows + pulses.

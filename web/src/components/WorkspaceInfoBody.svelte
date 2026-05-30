@@ -35,26 +35,26 @@
     clearDownloadTransfer,
   } from "../state/downloadTransfer.svelte";
 
-  /// `fullstack-73`: optional "Graph from here" callback. Consumers
-  /// that host this body alongside an existing inspector convention
-  /// pass it; surfaces that don't (legacy callers) leave it unset
-  /// and the button doesn't render. The action's semantic differs
-  /// per consumer — FileBrowserSurface SPAWNS a new Graph tab while
-  /// GraphPanel's own inspector RE-SCOPES the current tab — so the
-  /// consumer wires the function and this body is callback-agnostic.
+  /// Optional "Graph from here" callback. Consumers that host this
+  /// body alongside an existing inspector convention pass it;
+  /// surfaces that don't leave it unset and the button doesn't
+  /// render. The action's semantic differs per consumer
+  /// (FileBrowserSurface SPAWNS a new Graph tab while GraphPanel's own
+  /// inspector RE-SCOPES the current tab), so the consumer wires the
+  /// function and this body is callback-agnostic.
   ///
-  /// A1 (phase-13): the workspace root now behaves like any other
-  /// directory inspector. `variant` selects between the two surfaces:
+  /// The workspace root behaves like any other directory inspector.
+  /// `variant` selects between the two surfaces:
   ///   - "inspector" (default): render the standard directory ACTION
   ///     ROW (Upload / Download / Show in File Browser / Graph from
   ///     here). The Notes-directories config does NOT render here.
-  ///   - "dashboard": render the Notes-directories config exactly as
-  ///     before. The action row does NOT render.
+  ///   - "dashboard": render the Notes-directories config. The action
+  ///     row does NOT render.
   /// The aggregate stats grid, File Kinds, and Code/COCOMO sections
   /// render in both variants. `onReveal` wires the "Show in File
   /// Browser" button (inspector variant only).
-  /// A5 + A6 (phase-13 closing-2): the workspace inspector reaches
-  /// parity with FileInfoBody's clickable Languages + Contacts.
+  /// The workspace inspector matches FileInfoBody's clickable
+  /// Languages + Contacts:
   ///   - `onLanguageClick`: fired when a language row is clicked;
   ///     opens that language's graph lens. Mirrors FileInfoBody's
   ///     `openGraphForLanguage(lang.name)` wiring.
@@ -303,7 +303,7 @@
       : 0,
   );
 
-  /// A6 (phase-13 closing-2): Contacts section at the workspace root.
+  /// Contacts section at the workspace root.
   /// FileInfoBody's contact pills derive from a single file's outgoing
   /// edges (`selectionEdgesFor(path)`); the workspace ROOT has no
   /// single-file refs, so the workspace-level "every contact in the
@@ -390,12 +390,11 @@
   </div>
 
   {#if variant === "inspector"}
-    <!-- A1 (phase-13): the workspace root gets the standard directory
-         action row, mirroring FileInfoBody's is_dir branch. The row
-         operates on the workspace ROOT (relative path ""). Upload +
-         Download are self-contained; "Show in File Browser" and "Graph
-         from here" are gated on their host callbacks. The "Graph from
-         here" button (formerly standalone above) now lives in this row. -->
+    <!-- The workspace root gets the standard directory action row,
+         mirroring FileInfoBody's is_dir branch. The row operates on
+         the workspace ROOT (relative path ""). Upload + Download are
+         self-contained; "Show in File Browser" and "Graph from here"
+         are gated on their host callbacks. -->
     <div class="action-buttons">
       <div class="transfer-actions">
         <button
@@ -571,10 +570,10 @@
     <div class="refs-error">report unavailable: {reportError}</div>
   {/if}
 
-  <!-- A6 (phase-13 closing-2): Contacts section, mirroring
-       FileInfoBody's contact pill list. Renders in both variants
-       whenever the workspace graph holds contact / mention nodes so
-       the workspace root reads like any other folder inspector. -->
+  <!-- Contacts section, mirroring FileInfoBody's contact pill list.
+       Renders in both variants whenever the workspace graph holds
+       contact / mention nodes so the workspace root reads like any
+       other folder inspector. -->
   {#if contactPills.length > 0}
     <section class="refs">
       <h4>Contacts</h4>
@@ -595,14 +594,13 @@
   {/if}
 
   {#if variant === "dashboard"}
-  <!-- A1 (phase-13): the Notes-directories config is Dashboard-only.
-       The inspector variant drops it (the workspace root reads as a
-       plain directory there); the Dashboard keeps the full
-       globalConfig/save/autosave plumbing unchanged.
-       Closing-3: `.notes-dirs` adds an explicit divider above the
-       heading so the COCOMO / Code content (or Contacts) above is
-       visually separated from the Notes-directories config, per
-       @@Alex's repeated ask. -->
+  <!-- The Notes-directories config is Dashboard-only. The inspector
+       variant drops it (the workspace root reads as a plain directory
+       there); the Dashboard carries the full
+       globalConfig/save/autosave plumbing. `.notes-dirs` adds an
+       explicit divider above the heading so the COCOMO / Code content
+       (or Contacts) above is visually separated from the
+       Notes-directories config. -->
   <section class="refs notes-dirs">
     <h4>Notes directories</h4>
     <p class="hint">
@@ -701,9 +699,8 @@
     text-align: left;
   }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  /* `fullstack-73`: mirrors the FileInfoBody `.open` styling so the
-     "Graph from here" affordance reads consistently across every
-     inspector body. */
+  /* Mirrors the FileInfoBody `.open` styling so the "Graph from here"
+     affordance reads consistently across every inspector body. */
   .open {
     width: 100%;
     background: var(--btn-bg);
@@ -721,8 +718,8 @@
     cursor: default;
   }
   .open:disabled:hover { border-color: var(--btn-border); }
-  /* A1 (phase-13): directory action row, copied from FileInfoBody so
-     the workspace-root inspector reads identically to a regular folder
+  /* Directory action row, mirroring FileInfoBody so the
+     workspace-root inspector reads identically to a regular folder
      inspector. The flex `gap` owns vertical spacing between buttons. */
   .action-buttons {
     display: flex;
@@ -823,9 +820,9 @@
     color: var(--text-secondary);
     margin: 0 0 0.25rem 0;
   }
-  /* A6 (phase-13 closing-2): Contacts pill list, mirroring
-     FileInfoBody's `.refs ul` + `.ref.contact` so the workspace
-     inspector's contacts read identically to a file inspector's. */
+  /* Contacts pill list, mirroring FileInfoBody's `.refs ul` +
+     `.ref.contact` so the workspace inspector's contacts read
+     identically to a file inspector's. */
   .refs ul {
     list-style: none;
     padding: 0;
@@ -987,11 +984,10 @@
     font-size: 13px;
     align-items: baseline;
   }
-  /* A5 (phase-13 closing-2): promoted to a <button> so the language
-     name routes to the Graph (scoped to this language). Strip default
-     button chrome, left-align, add hover + focus affordance. Stays a
-     grid cell at column 1; no layout shift vs. the prior <span>.
-     Mirrors FileInfoBody's `.lang-name`. */
+  /* A <button> so the language name routes to the Graph (scoped to
+     this language). Strip default button chrome, left-align, add
+     hover + focus affordance. Stays a grid cell at column 1. Mirrors
+     FileInfoBody's `.lang-name`. */
   .lang-name {
     color: var(--text);
     word-break: break-word;
@@ -1028,11 +1024,11 @@
     padding: 0;
   }
   .see-more:hover { text-decoration: underline; }
-  /* Closing-3: divider between the Code/COCOMO (or Contacts) content
-     above and the Notes-directories config below. Matches the dashed
-     rule the COCOMO block uses so the dashboard inspector reads as
-     cleanly sectioned. The `.refs` margin-top supplies the gap above
-     the rule; padding-top spaces the heading below it. */
+  /* Divider between the Code/COCOMO (or Contacts) content above and
+     the Notes-directories config below. Matches the dashed rule the
+     COCOMO block uses so the dashboard inspector reads as cleanly
+     sectioned. The `.refs` margin-top supplies the gap above the
+     rule; padding-top spaces the heading below it. */
   .notes-dirs {
     padding-top: 0.7rem;
     border-top: 1px dashed var(--border);

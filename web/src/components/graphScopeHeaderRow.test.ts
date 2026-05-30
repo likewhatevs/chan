@@ -1,13 +1,10 @@
 import { describe, expect, test } from "vitest";
 import graph from "./GraphPanel.svelte?raw";
 
-// `fullstack-a-67` slice (Graph surface only): right-click menu
-// gets a path-header row showing the current scope's path + a
-// kind-appropriate icon. Click wiring → inspector deferred to a
-// follow-up slice; this commit lands the display-only row to
-// match the @@Alex addendum spec.
+// Graph right-click menu scope-header row: shows the current scope's
+// path + a kind-appropriate icon. Click wiring opens the inspector.
 
-describe("fullstack-a-67 (Graph slice): scope-header row", () => {
+describe("(Graph slice): scope-header row", () => {
   test("Lucide icons imported (FileText / Folder / HardDrive / Hash)", () => {
     expect(graph).toMatch(
       /import \{[\s\S]*?\bFileText,[\s\S]*?\bFolder,[\s\S]*?\bHardDrive,[\s\S]*?\bHash,[\s\S]*?\} from "lucide-svelte";/,
@@ -26,7 +23,6 @@ describe("fullstack-a-67 (Graph slice): scope-header row", () => {
     expect(graph).toMatch(/currentScope\.kind === "dir"[\s\S]*?<Folder/);
     expect(graph).toMatch(/currentScope\.kind === "tag"[\s\S]*?<Hash/);
     // The remaining live scope kind (file) falls through to FileText.
-    // (global / git_repo / group were retired by the scope-concept wipe.)
     expect(graph).toMatch(/<FileText/);
   });
 
@@ -43,7 +39,7 @@ describe("fullstack-a-67 (Graph slice): scope-header row", () => {
   });
 });
 
-describe("fullstack-a-67 (slice 1b): scope-header click → inspector", () => {
+describe("scope-header click → inspector", () => {
   test("row is a <button> with onclick handler", () => {
     expect(graph).toMatch(
       /<button[\s\S]*?class="mbtn graph-scope-row"[\s\S]*?onclick=\{openScopeHeaderInspector\}/,

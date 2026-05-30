@@ -1,10 +1,9 @@
-/// Phase-13 round-2 Team Work revamp: the survey/poke "bubble"
-/// overlay no longer carries live watcher data (the agent-event
-/// watcher + survey-reply round-trip was deleted with the
-/// team-work-workspace plumbing). The overlay is now a
-/// frontend-only static EXAMPLE so the bubble layout (stack vs
-/// tray) and the survey shapes chan supports stay demonstrable
-/// without any network or filesystem traffic.
+/// The survey/poke "bubble" overlay is a frontend-only static
+/// EXAMPLE: the agent-event watcher + survey-reply round-trip
+/// were removed with the team-work-workspace plumbing. The
+/// overlay stays to demonstrate the bubble layout (stack vs tray)
+/// and the survey shapes chan supports, without network or
+/// filesystem traffic.
 ///
 /// This module owns the single piece of reactive visibility the
 /// overlay reads. A6's Team Work right-click menu calls

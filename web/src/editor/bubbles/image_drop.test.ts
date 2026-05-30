@@ -1,8 +1,6 @@
-// Bug 5: a pasted image landed at document offset 0 (the first row,
-// above the title) when the editor was freshly opened and the user had
-// not clicked into the body yet. `pasteInsertPos` gates the caret on
-// `view.hasFocus`: trust the caret only when the editor is focused,
-// otherwise append at the end of the document so the paste never
+// `pasteInsertPos` gates the caret on `view.hasFocus`: trust the
+// caret only when the editor is focused, otherwise append at the
+// end of the document so a paste into an unfocused editor never
 // clobbers the first row.
 
 import { describe, expect, test } from "vitest";
@@ -28,7 +26,7 @@ function viewWith(doc: string, head: number, hasFocus: boolean): EditorView {
   return view;
 }
 
-describe("pasteInsertPos (bug 5)", () => {
+describe("pasteInsertPos", () => {
   const doc = "# Title\n\nbody line\n";
 
   test("focused editor: insert at the caret", () => {
@@ -132,7 +130,7 @@ describe("moveImageSource (image drag across rows)", () => {
     view.destroy();
   });
 
-  test("image embedded in a text row moves the ENTIRE row (lane-c addendum-2 item 3)", () => {
+  test("image embedded in a text row moves the ENTIRE row", () => {
     // `text ![](..) text`: the surrounding text must travel with the
     // image, not be stranded while only the atom relocates.
     const md = "before ![](x.png#w=250) after\n\nlast line\n";
@@ -148,7 +146,7 @@ describe("moveImageSource (image drag across rows)", () => {
     view.destroy();
   });
 
-  test("image in a bullet item moves the entire bullet line (lane-c addendum-2 item 3)", () => {
+  test("image in a bullet item moves the entire bullet line", () => {
     const md = "- task ![](y.png) done\n\nlast\n";
     const view = plainView(md);
     const imgFrom = md.indexOf("![](");

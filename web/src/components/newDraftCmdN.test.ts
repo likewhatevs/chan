@@ -4,10 +4,10 @@ import client from "../api/client.ts?raw";
 import shortcuts from "../state/shortcuts.ts?raw";
 import tabs from "../state/tabs.svelte.ts?raw";
 
-// `fullstack-a-66` slice 1: SPA Cmd+N → /api/drafts/new →
-// open in active pane.
+// SPA Cmd+N creates a draft via /api/drafts/new and opens it in the
+// active pane.
 
-describe("fullstack-a-66 slice 1: api.createDraft helper", () => {
+describe("api.createDraft helper", () => {
   test("createDraft posts to /api/drafts/new + returns { path, name }", () => {
     expect(client).toMatch(
       /createDraft: \(\) =>[\s\S]*?req<\{ path: string; name: string \}>\("POST", "\/api\/drafts\/new"\)/,
@@ -15,7 +15,7 @@ describe("fullstack-a-66 slice 1: api.createDraft helper", () => {
   });
 });
 
-describe("fullstack-a-66 slice 1: app.draft.new shortcut registry", () => {
+describe("app.draft.new shortcut registry", () => {
   test("app.draft.new bound to Mod+N (web + native)", () => {
     expect(shortcuts).toMatch(
       /id: "app\.draft\.new",[\s\S]*?label: "New draft",[\s\S]*?web: "Mod\+N",[\s\S]*?native: "Mod\+N",/,
@@ -23,7 +23,7 @@ describe("fullstack-a-66 slice 1: app.draft.new shortcut registry", () => {
   });
 });
 
-describe("fullstack-a-66 slice 1: Cmd+N keymap branch", () => {
+describe("Cmd+N keymap branch", () => {
   test("App.svelte keymap intercepts bare Cmd+N (no shift/alt/ctrl)", () => {
     expect(app).toMatch(
       /if \(meta && !e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyN"\) \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?void createDraftAndOpen\(\);/,

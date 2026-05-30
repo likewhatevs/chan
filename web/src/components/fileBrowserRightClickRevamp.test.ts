@@ -2,13 +2,12 @@ import { describe, expect, test } from "vitest";
 import surface from "./FileBrowserSurface.svelte?raw";
 import pane from "./Pane.svelte?raw";
 
-// `fullstack-a-67e`: File Browser right-click / hamburger menu
-// revamp per addendum-a's verbatim spec. Slice 1 covers the FB
-// tab right-click + hamburger surface (FileBrowserSurface.svelte).
-// The in-tree selection menu (FileTree.svelte row right-click)
-// is a sibling slice — separate pins land with that change.
+// File Browser right-click / hamburger menu revamp covering the
+// FileBrowserSurface tab right-click and hamburger. The in-tree
+// selection menu (FileTree.svelte row right-click) pins are in
+// fileTreeSelectionMenu.test.ts.
 
-describe("fullstack-a-67e: FBSurface menu header — path-derived workspace label + path row", () => {
+describe("FBSurface menu header: path-derived workspace label + path row", () => {
   test("workspace-label-row renders the API label without an editable input", () => {
     expect(surface).toMatch(/<li class="workspace-label-row" role="none" title=\{workspace\.info\?\.root\}>/);
     expect(surface).toMatch(/class="workspace-label-text">\{workspace\.info\?\.label \?\? ""\}/);
@@ -24,14 +23,14 @@ describe("fullstack-a-67e: FBSurface menu header — path-derived workspace labe
     expect(surface).toMatch(
       /class="workspace-path-text">\{workspace\.info\?\.root \?\? ""\}/,
     );
-    // The fade pattern from `-a-67 slice 1b` (Graph) ports over.
+    // Same fade pattern as the Graph scope-header row.
     expect(surface).toMatch(
       /\.workspace-path-text\)[\s\S]{1,800}mask-image: linear-gradient\(to right, black calc\(100% - 1\.25rem\), transparent\);/,
     );
   });
 });
 
-describe("fullstack-a-67e: FBSurface menu body — dock / expand / reload / import in order", () => {
+describe("FBSurface menu body: dock / expand / reload / import in order", () => {
   test("dock variant can open a File Browser tab for current selection or workspace", () => {
     expect(surface).toMatch(
       /function openCurrentInFileBrowser\(\): void \{[\s\S]{1,300}const path = browserSelection\.path;[\s\S]{1,200}const tab = openBrowserInActivePane\(path \? \{ select: path \} : \{\}\);[\s\S]{1,200}tab\.inspectorOpen = true;/,
@@ -69,7 +68,7 @@ describe("fullstack-a-67e: FBSurface menu body — dock / expand / reload / impo
   });
 });
 
-describe("fullstack-a-67e: FBSurface menu foot — Settings / Reopen / Close (tab variant only)", () => {
+describe("FBSurface menu foot: Settings / Reopen / Close (tab variant only)", () => {
   test("Settings (flip) entry gated on isTab + onFlip", () => {
     expect(surface).toMatch(
       /\{#if isTab && onFlip\}[\s\S]{1,800}onclick=\{flipToSettings\}/,
@@ -95,7 +94,7 @@ describe("fullstack-a-67e: FBSurface menu foot — Settings / Reopen / Close (ta
   });
 });
 
-describe("fullstack-a-67e: dropped entries", () => {
+describe("dropped entries", () => {
   test("Rename workspace... (modal) entry no longer rendered", () => {
     expect(surface).not.toMatch(/<span class="menu-row-label">Rename workspace\.\.\.<\/span>/);
   });
@@ -111,7 +110,7 @@ describe("fullstack-a-67e: dropped entries", () => {
   });
 });
 
-describe("fullstack-a-67e: Pane.svelte wires onFlip into the tab variant", () => {
+describe("Pane.svelte wires onFlip into the tab variant", () => {
   test("Pane passes onFlip={() => flipHybrid(pane.id)} to FileBrowserSurface", () => {
     expect(pane).toMatch(
       /<FileBrowserSurface[\s\S]{1,400}onFlip=\{\(\) => flipHybrid\(pane\.id\)\}/,

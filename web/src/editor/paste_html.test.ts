@@ -1,8 +1,8 @@
-// `fullstack-a-34`: pasted markdown source should land as
-// markdown, not as escaped literals. Default turndown emits
-// `\*bold\*` for an `<span>*bold*</span>` source; we override
-// `td.escape` with identity so the asterisks survive the
-// conversion and the Wysiwyg parser renders them as emphasis.
+// Pasted markdown source should land as markdown, not as escaped
+// literals. Default turndown emits `\*bold\*` for a
+// `<span>*bold*</span>` source; we override `td.escape` with
+// identity so the asterisks survive the conversion and the
+// Wysiwyg parser renders them as emphasis.
 //
 // The test exercises the converter directly (htmlToMarkdown is
 // exported for this purpose); a behavioural test through the
@@ -12,12 +12,12 @@
 import { describe, expect, test } from "vitest";
 import { htmlToMarkdown } from "./paste_html";
 
-describe("fullstack-a-34: pasted markdown is NOT escaped", () => {
+describe("pasted markdown is NOT escaped", () => {
   test("asterisk emphasis survives the conversion", async () => {
     // Xcode-style copy of `*bold*` plain text lands on the
-    // clipboard with a span wrapper. Pre-fix the escape
-    // pass produced `\*bold\*`; the override leaves it as
-    // `*bold*` so the Wysiwyg parser renders emphasis.
+    // clipboard with a span wrapper. The escape override
+    // leaves asterisks verbatim so the Wysiwyg parser
+    // renders them as emphasis.
     const md = await htmlToMarkdown("<span>*bold*</span>");
     expect(md).toContain("*bold*");
     expect(md).not.toContain("\\*");
@@ -49,8 +49,8 @@ describe("fullstack-a-34: pasted markdown is NOT escaped", () => {
   });
 
   test("heading hash survives at line start", async () => {
-    // Xcode-shaped `<p># Heading</p>` paste. Pre-fix:
-    // `\# Heading`. Post-fix: `# Heading` → renders as h1.
+    // Xcode-shaped `<p># Heading</p>` paste; escape override
+    // keeps the `#` verbatim so it renders as h1.
     const md = await htmlToMarkdown("<p># Heading</p>");
     expect(md).toContain("# Heading");
     expect(md).not.toContain("\\#");

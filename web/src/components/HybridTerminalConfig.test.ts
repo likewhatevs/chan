@@ -2,16 +2,10 @@ import { describe, expect, test } from "vitest";
 import source from "./HybridTerminalConfig.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
-// `fullstack-a-45` (Task B): the Terminal preferences UI migrated
-// out of the (since-retired) global Settings overlay into
-// HybridTerminalConfig. These pins carry over the wiring
-// guarantees the original `fullstack-b-11` terminal-section test
-// enforced (scrollback range / number / clamp; TERM dropdown
-// ships the known terminfo entries plus Custom sentinel; custom
-// input renders only when the sentinel is active) and adds new
-// pins for the warning copy required by `-a-45`.
+// Terminal preferences: scrollback range/clamp, TERM dropdown with a
+// Custom sentinel, and device-wide warning copy.
 
-describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
+describe("HybridTerminalConfig wiring", () => {
   test("warning copy distinguishes device-wide settings from body theme scope", () => {
     expect(source).toMatch(
       /Scrollback, TERM, and font apply to ALL terminals on this\s+device/,
@@ -51,10 +45,9 @@ describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
   });
 
   test("save path re-fetches global config before PATCH to avoid clobbering parallel edits", () => {
-    // The merge-with-current-server pattern is the safety net for
-    // another back-of-card surface running an autosave in
-    // parallel. The PATCH body must overlay only the terminal
-    // subtree onto whatever the server currently has.
+    // Re-fetching before PATCH is the safety net for a parallel
+    // autosave from another back-of-card surface. The PATCH body
+    // overlays only the terminal subtree.
     expect(source).toMatch(/const current = await api\.config\(\)/);
     expect(source).toMatch(
       /preferences: \{ \.\.\.current\.preferences, terminal: editing\.terminal \}/,
@@ -63,9 +56,9 @@ describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
   });
 
   test("normalizeTerminal backfills missing fields with the defaults", () => {
-    // Pre-fullstack-b-11 servers don't ship scrollback_mb /
-    // default_term; the normalization is the single seam that
-    // keeps the form dirty()-stable after the post-save re-clone.
+    // Older servers may omit scrollback_mb or default_term; the
+    // normalization keeps the form dirty()-stable after the post-save
+    // re-clone.
     expect(source).toMatch(
       /p\.terminal\.scrollback_mb = clampScrollbackMb\(p\.terminal\.scrollback_mb\)/,
     );
@@ -73,11 +66,8 @@ describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
   });
 
   test("dirty check is scoped to the terminal subtree", () => {
-    // The dirty comparator must NOT compare the whole Preferences
-    // object — that would react to edits owned by other
-    // back-of-card surfaces and fire a spurious PATCH (worse: a
-    // PATCH from this surface could clobber theme / editor /
-    // date edits another surface hadn't yet flushed).
+    // Comparing the whole Preferences object would trigger spurious
+    // PATCHes and clobber edits owned by other back-of-card surfaces.
     expect(source).toMatch(/function terminalDirty\(\): boolean/);
     expect(source).toMatch(
       /JSON\.stringify\(editing\.terminal \?\? null\)[\s\S]*?JSON\.stringify\(server \?\? null\)/,
@@ -85,7 +75,7 @@ describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
   });
 });
 
-describe("fullstack-a-53: HybridTerminalConfig surface theme + custom-TERM fix", () => {
+describe("HybridTerminalConfig surface theme + custom-TERM fix", () => {
   test("top-bar body theme is delegated to the shared surface shell", () => {
     expect(source).toMatch(
       /<HybridSurfaceConfigShell[\s\S]{1,160}title="Hybrid Terminal"[\s\S]{1,120}surface="terminal"/,
@@ -100,23 +90,21 @@ describe("fullstack-a-53: HybridTerminalConfig surface theme + custom-TERM fix",
     );
   });
 
-  test("custom-TERM fix: customMode state tracks dropdown choice (-a-53)", () => {
-    // The `-a-45` PARTIAL: setting default_term="" after picking
-    // "Custom..." collapsed back to DEFAULT_TERM via the
-    // currentTerm fallback, snapping termSelectValue to a known
-    // entry and hiding the custom input. The fix tracks
-    // "user chose Custom" in a separate state slot.
+  test("customMode state tracks dropdown choice independently from default_term", () => {
+    // Setting default_term="" after picking "Custom..." collapsed back
+    // to DEFAULT_TERM via the currentTerm fallback, hiding the custom
+    // input. Tracking "user chose Custom" in a separate state slot
+    // prevents that collapse.
     expect(source).toMatch(/let customMode = \$state\(false\)/);
     expect(source).toMatch(
       /termSelectValue = \$derived\([\s\S]*?customMode\s*\?\s*CUSTOM_TERM_SENTINEL/,
     );
   });
 
-  test("setTermSelection routes Custom selection through customMode (-a-53)", () => {
-    // setTermSelection("__custom__") must flip customMode = true
-    // and leave the persisted default_term ALONE (don't seed it
-    // to "" the way the old code did — that's what triggered the
-    // PARTIAL).
+  test("setTermSelection routes Custom selection through customMode", () => {
+    // Choosing Custom must flip customMode = true and leave the
+    // persisted default_term unchanged; seeding it to "" would trigger
+    // the collapse bug.
     expect(source).toMatch(
       /if \(next === CUSTOM_TERM_SENTINEL\)\s*\{\s*customMode = true/,
     );
@@ -126,17 +114,15 @@ describe("fullstack-a-53: HybridTerminalConfig surface theme + custom-TERM fix",
   });
 
   test("custom-TERM input renders when termSelectValue is the sentinel", () => {
-    // Pinning the markup wiring — the {#if termSelectValue ===
-    // CUSTOM_TERM_SENTINEL} block stays the conditional gate on
-    // the custom input. Fix shape is in setTermSelection +
-    // customMode, NOT in the markup.
+    // The {#if termSelectValue === CUSTOM_TERM_SENTINEL} block is the
+    // gate. The fix lives in setTermSelection + customMode, not here.
     expect(source).toMatch(
       /\{#if termSelectValue === CUSTOM_TERM_SENTINEL\}[\s\S]*?class="custom-term"/,
     );
   });
 });
 
-describe("fullstack-b-30 slice b: terminal-font dropdown + download flow", () => {
+describe("terminal-font dropdown + download flow", () => {
   test("dropdown carries both choices with the OS default as the leading option", () => {
     expect(source).toMatch(
       /<select[\s\S]*?id="hybrid-terminal-font"[\s\S]*?<option value="os-default">OS default \(mono\)<\/option>[\s\S]*?<option value="source-code-pro">Source Code Pro<\/option>/,
@@ -144,16 +130,14 @@ describe("fullstack-b-30 slice b: terminal-font dropdown + download flow", () =>
   });
 
   test("setFontChoice fires the download endpoint when user opts into SCP", () => {
-    // Slice b's user-facing piece: choosing Source Code Pro
-    // triggers the POST endpoint that fetches the woff2 + OFL
+    // Choosing Source Code Pro triggers the POST that fetches the woff2
     // into <user-config>/chan/fonts/.
     expect(source).toMatch(/api\.fontsSourceCodeProDownload\(\)/);
   });
 
   test("download failure rolls the preference back to os-default", () => {
-    // The SPA never claims SCP is active while the user-config
-    // file is missing — failure rolls back so the next reload
-    // mounts the OS-default chain.
+    // Failure must roll back so the next session mounts the OS-default
+    // font chain rather than claiming SCP when its file is missing.
     expect(source).toMatch(
       /editing\.terminal = \{[^}]*?font: "os-default"[^}]*?\};/,
     );
@@ -191,17 +175,13 @@ describe("Wave 4: Terminal back-side controls", () => {
   });
 });
 
-describe("round-1 closing-3 (C1): post-save effect_update_depth_exceeded guard", () => {
-  // The hydration $effect used to reassign `editing` to a
-  // content-identical clone on every workspace.info change, which
-  // replaced the $state proxy and re-fired the effect on its own
-  // write -> Svelte 5 trips
-  // https://svelte.dev/e/effect_update_depth_exceeded. Repro: flip
-  // the Hybrid terminal back, change font; the save() reassigns
-  // workspace.info, the effect cycles, the UI freezes.
-  //
-  // Fix tracks the JSON of the server's `preferences.terminal`
-  // slice and bails when the slice hasn't actually changed.
+describe("post-save effect_update_depth_exceeded guard", () => {
+  // The hydration $effect must not reassign `editing` to a
+  // content-identical clone on every workspace.info change.
+  // That replaces the $state proxy and re-fires the effect ->
+  // Svelte 5 trips effect_update_depth_exceeded (UI freeze).
+  // The fix tracks the JSON of the server's `preferences.terminal`
+  // slice and bails when the slice is unchanged.
   test("tracks lastSyncedServerSnap across workspace.info refreshes", () => {
     expect(source).toMatch(
       /let lastSyncedServerSnap: string \| null = null;/,

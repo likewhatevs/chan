@@ -1,12 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { AGENT_SUBMIT_CHORD, encodeForAgentSubmit } from "./submitMode";
 
-describe("submitMode (fullstack-b-13)", () => {
+describe("submitMode", () => {
   test("AGENT_SUBMIT_CHORD matches the probe-pinned Claude Code chord", () => {
-    // Claude Code v2.1.145 accepts this byte sequence as the
-    // "submit" chord (xterm modifyOtherKeys CSI for Cmd+Enter).
-    // Probed live 2026-05-20; full data table at
-    // docs/journals/phase-8/fullstack-b/fullstack-b-13.md.
+    // Claude Code accepts this byte sequence as the "submit" chord
+    // (xterm modifyOtherKeys CSI for Cmd+Enter). Probed live
+    // 2026-05-20.
     expect(AGENT_SUBMIT_CHORD).toBe("\x1b[27;9;13~");
   });
 

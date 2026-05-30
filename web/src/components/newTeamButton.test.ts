@@ -7,10 +7,9 @@ import {
   validateTeamConfig,
 } from "../state/teamDialog.svelte";
 
-// phase-13-r2 `lane-a-A3`: the redesigned Team Work dialog. Pins
-// the New/Load path-config control, the 1-9 dropdown (no slider),
-// the "drag-me" chip rename, the removed copy/paste buttons, and
-// the default-state contract (host name "Neo", New mode).
+// Team Work dialog. Pins the New/Load path-config control, the 1-9
+// dropdown (no slider), the "drag-me" chip label, the removed
+// copy/paste buttons, and the default-state contract (host "Neo", New mode).
 
 describe("default config contract", () => {
   test("host name defaults to Neo, New mode, one lead agent", () => {

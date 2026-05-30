@@ -68,22 +68,21 @@
     syntaxHighlight?: boolean;
     highlightTrailingWhitespace?: boolean;
     initialCaret?: { from: number; to: number } | null;
-    /// When false, skip the mount-time `view.focus()`. Mirrors the
-    /// same prop on `Wysiwyg.svelte` so the team-work's bubble-gated
-    /// focus policy in `fullstack-a-14` works in source mode too.
+    /// When false, skip the mount-time `view.focus()`. Hosts
+    /// that own their own focus policy pass false to keep the
+    /// editor unfocused on mount; otherwise the unconditional
+    /// mount focus would race past the host's gate.
     autoFocus?: boolean;
-    /// `fullstack-a-89`: empty-state placeholder text. Mirrors
-    /// the same prop on `Wysiwyg.svelte` so the team work's
-    /// source-mode placeholder works identically to wysiwyg
-    /// mode. Unset = no placeholder (the file editor's source
-    /// view doesn't want one).
+    /// Empty-state placeholder text. Mirrors the same prop on
+    /// `Wysiwyg.svelte` so a mode-toggle keeps the placeholder
+    /// visible in either mode. Unset = no placeholder (the file
+    /// editor's source view doesn't want one).
     placeholderText?: string;
     onCaretChange?: (from: number, to: number) => void;
     /// Chat-style send chord. When wired, plain Enter calls this
-    /// (Shift+Enter still inserts a newline via CM6 default). Only
-    /// the terminal team work threads it today; the file editor's
-    /// source view leaves it unset so Enter keeps inserting a
-    /// newline.
+    /// (Shift+Enter still inserts a newline via CM6 default). The
+    /// file editor's source view leaves it unset so Enter keeps
+    /// inserting a newline.
     onSubmit?: () => void;
   } = $props();
 
@@ -139,16 +138,12 @@
     view.focus();
   }
 
-  /// `fullstack-a-64`: focus the editor without changing the
-  /// selection. Used by FileEditorTab on chord-driven tab
-  /// switches (`Cmd+Shift+[/]`) to land the caret on the editor
-  /// surface immediately. Returns true if the view was ready;
-  /// caller can short-circuit otherwise.
-  ///
-  /// `fullstack-a-65`: same `requestMeasure()` parity as
-  /// Wysiwyg's `focus()` — keeps the two modes in sync so
-  /// source-mode tab switches don't surface a different stale-
-  /// render symptom.
+  /// Focus the editor without changing the selection. Used by
+  /// FileEditorTab on chord-driven tab switches to land the
+  /// caret on the editor surface immediately. Returns true if
+  /// the view was ready; caller can short-circuit otherwise.
+  /// Also calls `requestMeasure()` for viewport parity with
+  /// Wysiwyg's `focus()`.
   export function focus(): boolean {
     if (!view) return false;
     view.focus();
@@ -218,10 +213,10 @@
         readOnlyCompartment.of(EditorState.readOnly.of(readonly)),
         theme.extension,
         EditorView.lineWrapping,
-        // `fullstack-a-89`: optional empty-state placeholder.
-        // Same shape as Wysiwyg.svelte's wiring; both modes
-        // need the prop so the team work's mode-toggle
-        // (`-a-4`) keeps the placeholder visible in either.
+        // Optional empty-state placeholder. Same shape as
+        // Wysiwyg.svelte's wiring; both modes expose the prop
+        // so a mode-toggle keeps the placeholder visible in
+        // either.
         ...(placeholderText ? [placeholder(placeholderText)] : []),
         breathingRoom(),
         findField,
@@ -243,14 +238,13 @@
     view.dispatch({ selection: { anchor: 0 } });
     if (autoFocus) view.focus();
     maybeRestoreCaret();
-    // `bug 1` (phase-13): mirror of the `bug 10` deferred focus in
-    // maybeRestoreCaret, but unconditional on caretPending so brand-
-    // new docs (no persisted caret) also re-claim focus once content
-    // has streamed in. The mount-time view.focus() above runs while
-    // the doc is still empty, and on the New Draft path the chord
-    // handler parks focus on <body> before content arrives, so the
-    // editor would otherwise mount un-focused. Gated on autoFocus so
-    // hosts that own their focus policy stay unfocused.
+    // Unconditional deferred focus so brand-new docs (no persisted
+    // caret) also re-claim focus once content has streamed in. The
+    // mount-time view.focus() above runs while the doc is still
+    // empty; by the time content arrives the New Draft chord handler
+    // has parked focus on <body>, leaving the editor unfocused.
+    // Gated on autoFocus so hosts that own their focus policy stay
+    // unfocused.
     if (autoFocus) {
       requestAnimationFrame(() => {
         if (!view) return;
@@ -335,13 +329,13 @@
     });
     caretRestored = true;
     caretPending = null;
-    // `bug 10` (mirror of Wysiwyg): the mount-time `view.focus()` runs on
-    // an empty doc; content arrives async so focus has fallen back to
-    // <body> by the time it lands. Re-assert focus once the caret is
-    // placed so a freshly-opened source-mode file is typeable right away.
-    // Deferred past the current frame so it lands after any same-tick
-    // blur in the open path. Gated on `autoFocus` to respect hosts that
-    // own their focus policy.
+    // The mount-time `view.focus()` runs on an empty doc; content
+    // arrives async so focus falls back to <body> by the time it
+    // lands. Re-assert focus once the caret is placed so a freshly-
+    // opened source-mode file is typeable right away. Deferred past
+    // the current frame so it lands after any same-tick blur in the
+    // open path. Gated on `autoFocus` to respect hosts that own
+    // their focus policy.
     if (autoFocus) {
       requestAnimationFrame(() => {
         if (!view) return;

@@ -2,12 +2,10 @@ import { describe, expect, test } from "vitest";
 import { renderTable } from "./shortcuts";
 
 describe("shortcut table", () => {
-  // `fullstack-42` dropped the standalone Terminal chord in favour
-  // of Pane Mode (Cmd+K 1). `fullstack-b-2` brought it back under
-  // a distinct label ("New terminal") so power users can spawn a
-  // terminal with one chord without entering Pane Mode first.
-  // Cmd+T on native everywhere; Cmd+Alt+T on web (macOS only —
-  // Ctrl+Alt+T on Win/Linux web is owned by tab.reopenClosed).
+  // "New terminal" is a direct chord so power users can spawn a
+  // terminal without entering Pane Mode. Cmd+T on native;
+  // Cmd+Alt+T on web-Mac (Ctrl+Alt+T on Win/Linux web is owned
+  // by tab.reopenClosed).
   test("advertises New terminal under Cmd+Alt+T (web mac)", () => {
     const table = renderTable("web", "mac");
     expect(table).toMatch(/^New terminal +Cmd\+Alt\+T\b/m);
@@ -18,10 +16,9 @@ describe("shortcut table", () => {
     expect(table).toMatch(/^New terminal +Cmd\+T\b/m);
   });
 
-  // Sibling label `Team Work` (phase-13 r2 rename of "Terminal rich
-  // prompt") shouldn't ever sit under the bare-Terminal regex; the
-  // guards below anchor to that exact word to catch an accidental
-  // rename or duplicate entry.
+  // The sibling label `Team Work` must not match the bare-Terminal
+  // regex; these guards anchor to that exact word to catch an
+  // accidental rename or duplicate entry.
   test("does not advertise a bare 'Terminal' row (web)", () => {
     const table = renderTable("web", "mac");
     expect(table).not.toMatch(/^Terminal +Cmd\+Alt\+T\b/m);
@@ -36,26 +33,23 @@ describe("shortcut table", () => {
   });
 
   test("advertises Hybrid Nav (Cmd+.) as the canonical spawn surface", () => {
-    // Chord swapped to Cmd+. per `fullstack-a-7` so Cmd+, can own
-    // Settings (macOS convention). `fullstack-a-68 slice 1` +
-    // `slice 1b` demoted the label from all-caps "NAV" to
-    // title-case "Nav".
+    // Mod+. avoids the browser-reserved Mod+, (Settings) and is
+    // not reserved by any browser, surviving both web + native.
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
     expect(web).toMatch(/^Enter Hybrid Nav\s+Cmd\+\.$/m);
     expect(native).toMatch(/^Enter Hybrid Nav\s+Cmd\+\.$/m);
   });
 
-  test("close-tab chord is Ctrl+D on both platforms (per fullstack-41)", () => {
+  test("close-tab chord is Ctrl+D on both platforms", () => {
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
     expect(web).toMatch(/^Close tab\s+Ctrl\+D/m);
     expect(native).toMatch(/^Close tab\s+Ctrl\+D/m);
   });
 
-  // `phase-12 lane-e` (addendum-2 Q5): pane nav splits per platform.
-  // The web build uses Alt+[/] (Cmd+[/] is browser back/forward there);
-  // desktop-native keeps Cmd+[/].
+  // Pane nav splits per platform: web uses Alt+[/] because Cmd+[/]
+  // is browser back/forward; desktop-native keeps Cmd+[/].
   test("advertises pane nav: web Alt+[/], native Cmd+[/]", () => {
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");
@@ -65,16 +59,15 @@ describe("shortcut table", () => {
     expect(native).toMatch(/^Next pane\s+Cmd\+\]/m);
   });
 
-  // `phase-12 lane-e` (addendum-2): Cmd+S = workspace-wide search,
-  // reclaimed after fullstack-56 dropped it.
+  // Cmd+S = workspace-wide search; autosave is the canonical write
+  // path so this chord is free.
   test("advertises Cmd+S search on both platforms", () => {
     expect(renderTable("web", "mac")).toMatch(/^Search\s+Cmd\+S/m);
     expect(renderTable("native", "mac")).toMatch(/^Search\s+Cmd\+S/m);
   });
 
-  // Phase-13 r2 (B-slice 2): Cmd+I moved from Dashboard to the editor
-  // italic chord. Dashboard is now Hybrid-Nav-only (`Cmd+. i`); Cmd+I
-  // advertises Italic and Cmd+B advertises Bold under the Editor group.
+  // Dashboard has no direct chord (Cmd+I is the editor italic
+  // binding); it is reachable only via Hybrid Nav `Cmd+. i`.
   test("advertises Dashboard via Hybrid Nav (no direct Cmd+I)", () => {
     expect(renderTable("web", "mac")).toMatch(/^Dashboard\s+Cmd\+\. i/m);
     expect(renderTable("native", "mac")).toMatch(/^Dashboard\s+Cmd\+\. i/m);
@@ -87,10 +80,10 @@ describe("shortcut table", () => {
     expect(renderTable("native", "mac")).toMatch(/^Italic\s+Cmd\+I/m);
   });
 
-  // `phase-12 lane-e` (addendum-2): splits are desktop-native only
-  // (web reaches them via Hybrid Nav `/` `?`), so they render in the
-  // native table but not the web one. `desktop-fixes`: split-bottom is
-  // Cmd+Shift+/, not Cmd+\ (1Password owns the global Cmd+\ hotkey).
+  // Splits are desktop-native only (web reaches them via Hybrid Nav
+  // `/` `?`). Split-bottom is Cmd+Shift+/, not Cmd+\, because
+  // 1Password registers Cmd+\ as a system-wide macOS hotkey that
+  // the OS dispatches before the keystroke reaches chan's webview.
   test("advertises splits on native only", () => {
     const web = renderTable("web", "mac");
     const native = renderTable("native", "mac");

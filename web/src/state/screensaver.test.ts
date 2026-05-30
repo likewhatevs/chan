@@ -8,11 +8,9 @@ import {
 import clientSource from "../api/client.ts?raw";
 import sourceText from "./screensaver.ts?raw";
 
-// `fullstack-a-77` slice 1: SPA client methods + PBKDF2
-// PIN-hash helper. State machine + overlay component +
-// Settings UI defer to slice 2 / 3.
+// Screensaver SPA client methods + PBKDF2 PIN-hash helper.
 
-describe("fullstack-a-77 slice 1: api.screensaver* client methods", () => {
+describe("screensaver: api.screensaver* client methods", () => {
   test("screensaverState hits GET /api/screensaver/state", () => {
     expect(clientSource).toMatch(
       /screensaverState: \(\) =>[\s\S]*?req<\{ enabled: boolean; timeout_secs: number; theme: "plain" \| "matrix"; pin_set: boolean \}>\([\s\S]*?"GET",[\s\S]*?"\/api\/screensaver\/state"/,
@@ -43,14 +41,9 @@ describe("fullstack-a-77 slice 1: api.screensaver* client methods", () => {
     );
   });
 
-  test("doc-comment cross-references systacean-40 + hash-on-wire shape", () => {
-    expect(clientSource).toMatch(/`fullstack-a-77`/);
-    expect(clientSource).toMatch(/`systacean-40`/);
-    expect(clientSource).toMatch(/pin_set: bool/);
-  });
 });
 
-describe("fullstack-a-77 slice 1: PBKDF2 hashPin helper", () => {
+describe("screensaver: PBKDF2 hashPin helper", () => {
   test("hashPin produces a deterministic base64 digest for same inputs", async () => {
     const a = await hashPin("1234", "/tmp/workspace-a");
     const b = await hashPin("1234", "/tmp/workspace-a");
@@ -77,7 +70,7 @@ describe("fullstack-a-77 slice 1: PBKDF2 hashPin helper", () => {
   });
 });
 
-describe("fullstack-a-77 slice 1: timeout constants", () => {
+describe("screensaver: timeout constants", () => {
   test("default matches the chan-workspace 300s default", () => {
     expect(SCREENSAVER_DEFAULT_TIMEOUT_SECS).toBe(300);
   });
@@ -96,7 +89,7 @@ describe("Wave 3: plain screen-lock theme", () => {
   });
 });
 
-describe("fullstack-a-77 slice 1: rationale documented in source", () => {
+describe("screensaver: rationale documented in source", () => {
   test("module doc-comment cites the threat-model + iteration choice", () => {
     expect(sourceText).toMatch(/local-only/);
     expect(sourceText).toMatch(/PBKDF2 \+[\s\S]{1,30}SHA-256/);

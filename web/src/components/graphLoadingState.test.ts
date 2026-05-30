@@ -1,14 +1,13 @@
 import { describe, expect, test } from "vitest";
 import graph from "./GraphPanel.svelte?raw";
 
-// graph-loading-state-spec slice 1: the graph must signal an in-flight
-// index so a not-yet-complete semantic graph (dead-end "missing" nodes
-// that may simply be unindexed) is not read as final. Slice 1 wires the
-// workspace-global `indexStatus` into the graph + shows an "indexing" cue in
-// the status bar; the per-scope ghost pull-back + parent-dir pulse is the
-// follow-up slice.
+// The graph must signal an in-flight index so a not-yet-complete
+// semantic graph (dead-end "missing" nodes that may simply be
+// unindexed) is not read as final. The workspace-global `indexStatus`
+// is wired into the graph to show an "indexing" cue in the status bar;
+// per-scope ghost pull-back + parent-dir pulse is a follow-up.
 
-describe("graph loading-state slice 1: indexing cue", () => {
+describe("graph loading-state: indexing cue", () => {
   test("GraphPanel imports indexStatus from the store", () => {
     expect(graph).toMatch(/import \{[\s\S]*?\bindexStatus\b[\s\S]*?\} from "\.\.\/state\/store\.svelte"/);
   });
@@ -29,11 +28,11 @@ describe("graph loading-state slice 1: indexing cue", () => {
   });
 });
 
-// graph-loading-state slice 2: while the index is building, dead-end
-// ("missing") nodes may just be not-yet-indexed link targets, so they are
-// pulled back (with their edges) until the index settles; once idle they
-// render as real broken links (the established dashed-ghost styling).
-describe("graph loading-state slice 2: pull back dead-ends while indexing", () => {
+// While the index is building, dead-end ("missing") nodes may just be
+// not-yet-indexed link targets, so they are pulled back (with their
+// edges) until the index settles; once idle they render as real
+// broken links (the established dashed-ghost styling).
+describe("graph loading-state: pull back dead-ends while indexing", () => {
   test("hiddenMissingIds collects missing file nodes only while indexBuilding", () => {
     expect(graph).toMatch(
       /const hiddenMissingIds = \$derived\.by\(\(\) => \{[\s\S]*?if \(!indexBuilding\) return ids;[\s\S]*?n\.kind === "file" && n\.missing/,

@@ -1,12 +1,11 @@
 import { describe, expect, test } from "vitest";
 import tab from "./TerminalTab.svelte?raw";
 
-// `fullstack-b-11`: TerminalTab must read its xterm.js scrollback
-// cap from the persisted MB setting at construction time, not the
-// pre-fix 20_000-line constant. A future regression that re-hardcodes
-// the cap (or accidentally drops the spawn-time read) shows up here.
+// TerminalTab reads its xterm.js scrollback cap from the persisted
+// MB setting at construction time. A regression that re-hardcodes
+// the cap or drops the spawn-time read shows up here.
 
-describe("fullstack-b-11: TerminalTab scrollback wiring", () => {
+describe("TerminalTab scrollback wiring", () => {
   test("scrollback line cap is held on the component, not inline-literal in the xterm config", () => {
     expect(tab).toMatch(/let scrollbackLines = scrollbackLinesFromMb\(/);
     expect(tab).toMatch(/scrollback: scrollbackLines,/);

@@ -10,6 +10,7 @@
   import { teamDialogState, openTeamDialog } from "./state/teamDialog.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
+  import PreflightOverlay from "./components/PreflightOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
   import PaneModeHelp from "./components/PaneModeHelp.svelte";
   import PromptModal from "./components/PromptModal.svelte";
@@ -117,16 +118,10 @@
     to: "# Draft".length,
   };
   let bootstrapped = $state(false);
-  // `fullstack-42`: `h` inside Pane Mode toggles a cheatsheet
-  // overlay that lists every Cmd+K binding. The flag stays inside
-  // App.svelte because Pane Mode itself is global (one transaction
-  // per Cmd+K press) — no per-pane scoping needed.
+  // `h` inside Pane Mode toggles a cheatsheet overlay listing every
+  // Cmd+K binding. The flag lives in App.svelte because Pane Mode is
+  // global (one transaction per Cmd+K press), no per-pane scoping needed.
   let paneModeHelpVisible = $state(false);
-  // `fullstack-a-3`: the centre-window "H for help" flash that
-  // landed in `fullstack-61` is gone. The status-bar Hybrid
-  // label already telegraphs `H help`, and the PaneModeHelp
-  // cheatsheet covers discovery — the mid-screen flash was
-  // visual noise on every Cmd+K entry.
   $effect(() => {
     // Touch enough of the layout to trip reactivity on common
     // mutations (URL persistence) AND watch every file tab's content
@@ -160,10 +155,9 @@
           } else if (t.kind === "browser") {
             void t.inspectorOpen;
           } else {
-            // `fullstack-a-75`: dashboard tab carries no
-            // reactivity-relevant state today (title is
-            // immutable + id is stable). Touch the id so the
-            // effect still observes tab-list mutations cleanly.
+            // Dashboard tab carries no reactivity-relevant state
+            // (title is immutable, id is stable). Touch the id so
+            // the effect still observes tab-list mutations cleanly.
             void t.id;
           }
           continue;
@@ -263,34 +257,27 @@
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();
-    // `fullstack-a-77` slice 2: screensaver inactivity
-    // tracker. Different cadence (default 5 min, per-workspace
-    // configurable) + wider event set (keydown + scroll +
-    // pointer move; opposite of `installIdleTracker`'s
-    // short-window trigger set). Tracker installs the
-    // listeners regardless of `enabled` state so a later
-    // /api/screensaver/state load doesn't need a re-install
-    // pass; the lock fires only when `enabled=true`.
+    // Screensaver inactivity tracker. Runs at a different cadence
+    // (default 5 min, per-workspace configurable) with a wider event
+    // set (keydown + scroll + pointer move) than the idle-pill tracker.
+    // Listeners install unconditionally so a later /api/screensaver/state
+    // load doesn't need a re-install pass; the lock fires only when
+    // `enabled=true`.
     installScreensaverTracker();
     // Hook pagehide BEFORE bootstrap so a fast reload during the
     // initial load still flushes any in-flight session changes.
     installSessionFlushHook();
     await bootstrap();
-    // `fullstack-a-88`: replaced first-boot "spawn FB tab when
-    // layout empty" with "boot with docked FB on left by
-    // default." The default lives in chan-server's
-    // `BrowserSidePanes::default()` so a brand-new
-    // preferences.toml ships with `left: true`. SPA respects
-    // any user toggle (the load path reads server preferences
-    // before this point). Empty pane stays empty; the carousel
-    // + shortcut hints carry the empty-state UX.
+    // The docked FB default lives in chan-server's
+    // `BrowserSidePanes::default()` so a new preferences.toml ships
+    // with `left: true`. SPA respects any user toggle; the load path
+    // reads server preferences before this point. Empty pane stays
+    // empty; the carousel + shortcut hints carry the empty-state UX.
     bootstrapped = true;
-    // `fullstack-a-77` slice 2: fire-and-forget load of the
-    // per-workspace screensaver state. Tracker is already
-    // installed above; the load populates the singleton with
-    // the server-side enabled/timeout/pin_set view. Failure
-    // is non-fatal (the singleton stays in its default
-    // disarmed state).
+    // Fire-and-forget load of the per-workspace screensaver state.
+    // Populates the singleton with the server-side enabled/timeout/
+    // pin_set view. Failure is non-fatal (the singleton stays in its
+    // default disarmed state).
     void loadScreensaverState();
     // Visibility-change resume hook. Browsers throttle / suspend
     // backgrounded tabs and the WebSocket reconnect can stretch
@@ -311,15 +298,10 @@
     document.addEventListener("visibilitychange", onVisibility);
   });
 
-  /// `fullstack-a-32`: context-aware spawn helpers shared by every
-  /// chord entry path (top-level chords on `onWindowKey`, Hybrid
-  /// NAV cases in `handlePaneModeKey`, and `chan:command` events
-  /// fired from chan-desktop's KEY_BRIDGE_JS). Each helper resolves
-  /// the focused surface's context (parent dir of a focused doc;
-  /// cwd of a focused terminal; scope path of a focused graph)
-  /// through `resolveSpawnContext` and threads it into the matching
-  /// spawn API. Single source of truth means the four surfaces
-  /// (chord / Hybrid Nav / hamburger menu / right-click) all
+  /// Context-aware spawn helpers shared by all chord entry paths (top-level
+  /// chords, Hybrid Nav, and `chan:command` events from chan-desktop).
+  /// Each resolves the focused surface's context via `resolveSpawnContext`
+  /// so all entry points (chord / Hybrid Nav / hamburger / right-click)
   /// behave identically.
   function spawnTerminalFromContext(): void {
     const ctx = resolveSpawnContext();
@@ -332,26 +314,18 @@
     // Prime the expanded-dirs map + browserSelection so the new
     // tab's tree opens with the context path visible.
     if (select) revealAndSelect(select);
-    // `fullstack-a-39`: always spawn a new FB tab. Bypass
-    // `openBrowser()`'s `focusExistingBrowserTab` fall-through so
-    // the chord stays consistent with the other spawn chords
-    // (Cmd+T new terminal every press; Cmd+Shift+M new graph every
-    // press). The `select` arg threads the context path into the
-    // tab's `selected` field directly so `restoreFromTab`'s mount
-    // wipe doesn't clobber the prime.
+    // Always spawn a new FB tab so this chord stays consistent with the
+    // other spawn chords (Cmd+T = new terminal every press; Cmd+Shift+M
+    // = new graph every press). The `select` arg threads the context
+    // path into the tab's `selected` field directly so `restoreFromTab`'s
+    // mount wipe doesn't clobber the prime.
     openBrowserInActivePane({ select });
     scheduleSessionSave();
   }
-  /// Phase 13 round 2 Team Work flow: Cmd+P (and Cmd+Alt+P, and the
-  /// Hybrid hamburger "Team Work" item, all on the stable chord id
-  /// `app.terminal.teamWork`) now instantiate the Team Work Lead
-  /// Terminal FIRST (a fresh terminal with the markdown editor armed
-  /// open, like Cmd+N embedded at the bottom), then open the
-  /// Spawn-agents dialog OVER it. The dialog owns Cancel (deletes the
-  /// exact lead tab) and Bootstrap (lead-first orchestrator). The
-  /// pane-mode "P" picker keeps its own plain Team Work terminal spawn
-  /// (paneModeOpenTeamWorkTerminal); only this top-level entry opens
-  /// the dialog.
+  /// Team Work entry: instantiates the Lead Terminal (fresh terminal with
+  /// the markdown editor armed) then opens the Spawn-agents dialog over it.
+  /// The dialog owns Cancel (deletes the lead tab) and Bootstrap. The
+  /// pane-mode "P" key spawns a plain Team Work terminal without the dialog.
   function spawnTeamWorkFromContext(): void {
     const ctx = resolveSpawnContext();
     const lead = createTeamWorkLeadTerminal({ cwd: ctx.dir });
@@ -364,12 +338,9 @@
     openGraphWithContext(ctx);
   }
 
-  /// App-level keyboard shortcuts. Layout follows VS Code where
-  /// possible so users carry intuition in from any code editor.
+  /// App-level keyboard shortcuts. Layout follows VS Code where possible.
   ///
-  /// `fullstack-a-32` spawn-chord family (each context-aware via
-  /// `resolveSpawnContext`):
-  ///
+  /// Context-aware spawn chords (each resolves focused surface context):
   ///   Cmd+T          -> Terminal (native; Cmd+Alt+T on web Mac)
   ///   Cmd+O          -> File Browser (native; Cmd+Alt+O on web Mac)
   ///   Cmd+P          -> Team Work (native; Cmd+Alt+P on web Mac)
@@ -377,33 +348,34 @@
   ///   Mod+. t/o/p/v  -> universal aliases via Hybrid Nav
   ///
   /// Other app chords:
-  ///
-  ///   Cmd/Ctrl+,             -> Settings (open)
+  ///   Cmd/Ctrl+,             -> flip focused Hybrid surface
   ///   Cmd+. L                -> Lock screen
-  ///   Alt+Shift+[ / ]        -> previous / next tab       (web fallback)
-  ///   Ctrl+Alt+1..9          -> jump to tab N             (web fallback)
+  ///   Alt+Shift+[ / ]        -> previous / next tab  (web fallback)
+  ///   Ctrl+Alt+1..9          -> jump to tab N        (web fallback)
   ///
-  /// Native (chan-desktop) layers VS Code's browser-reserved chords
-  /// on top via its init script: Cmd+T / Cmd+` (terminal), Cmd+W (close tab), Cmd+N (new),
-  /// Cmd+Shift+[/] (tab nav), Cmd+1..9 (jump), Cmd+F/G/Shift+G
-  /// (find / next / prev — find-on-page lives in chan but no chord
-  /// is bound in the browser; users have the browser's native find).
-  ///
-  /// Mac note: bare-Alt chords are off-limits for letters / digits
-  /// because Option is a dead-key for special characters there
-  /// (Alt+G prints `©`, Alt+L prints `¬`, Alt+1 prints `¡`, etc.).
-  /// All letter / digit chords therefore use Cmd/Ctrl-based combos
-  /// or Ctrl+Alt; Alt+Shift+[/] is kept only because we match by
-  /// `e.code` (which is layout-independent) and preventDefault
-  /// suppresses the typed `«` / `»` before they reach the editor.
+  /// Mac note: bare-Alt chords are off-limits for letters/digits because
+  /// Option is a dead-key for special characters (Alt+G prints `c`, etc.).
+  /// All letter/digit chords use Cmd/Ctrl-based combos or Ctrl+Alt.
+  /// Alt+Shift+[/] is kept only because we match by `e.code` and
+  /// preventDefault suppresses the typed glyph before it reaches the editor.
   ///
   /// Browser-reserved chord notes:
-  ///   - Cmd+P (browser print) -> preventDefault wins in Chrome /
-  ///     Safari / Firefox; tolerable cost for matching VS Code.
-  ///   - Cmd+W / Cmd+N / Cmd+Shift+[/] / Cmd+1..9 are OS-level
-  ///     reserved in browsers — preventDefault doesn't win. Hence
-  ///     the Alt+Shift / Ctrl+Alt fallbacks above; native binds
-  ///     the VS Code-shaped chords directly.
+  ///   Cmd+P (browser print) -> preventDefault wins in Chrome/Safari/Firefox.
+  ///   Cmd+W / Cmd+N / Cmd+Shift+[/] / Cmd+1..9 are OS-level reserved in
+  ///   browsers; native binds the VS Code-shaped chords directly.
+  ///
+  /// True when a modal or search overlay owns the keyboard. The Cmd+, pane
+  /// flip must bail in this case to avoid flipping a pane hidden behind a dialog.
+  function paneChordBlocked(): boolean {
+    return (
+      topOverlay() !== null ||
+      promptState.open ||
+      pathPromptState.open ||
+      confirmState.open ||
+      draftCloseState.open
+    );
+  }
+
   function onWindowKey(e: KeyboardEvent): void {
     const meta = e.metaKey || e.ctrlKey;
     if (paneMode.active) {
@@ -412,22 +384,17 @@
       handlePaneModeKey(e);
       return;
     }
-    // `fullstack-a-7`: swap the Hybrid Nav entry chord from
-    // Cmd+K to Cmd+. so Cmd+, can own Settings (macOS
-    // app-preferences convention; already wired via
-    // `app.settings.toggle` in `shortcuts.ts`). Cmd+. is not
-    // browser-reserved on macOS (Safari + Chrome both let JS
-    // intercept it), so the same chord works on the web SPA
-    // and the desktop shell. Cmd+K no longer triggers Hybrid.
+    // Cmd+. enters Hybrid Nav. Cmd+, is reserved for the focused-Hybrid
+    // flip (macOS app-preferences convention). Cmd+. is not
+    // browser-reserved on macOS (Safari + Chrome both let JS intercept
+    // it), so the same chord works on the web SPA and the desktop shell.
     if (meta && !e.shiftKey && !e.altKey && e.code === "Period") {
       e.preventDefault();
       enterPaneMode();
       return;
     }
     // Escape: pop just the topmost overlay so a stack of open
-    // surfaces unwinds one at a time. Previously each OverlayShell
-    // owned its own window keydown listener and they all fired in
-    // parallel, closing every open overlay on a single press.
+    // surfaces unwinds one at a time.
     if (e.key === "Escape" && !meta && !e.altKey && !e.shiftKey) {
       const top = topOverlay();
       if (top) {
@@ -441,25 +408,19 @@
     const large = e.shiftKey ? 0.1 : 0.02;
     switch (e.key) {
       case "Enter": {
-        // `fullstack-72`: prime the module-level browserSelection
-        // before commit when a browser spawn is staged so the new
-        // tab's tree lands already expanded to + selecting the
-        // contextual node. Peek the intent before commitPaneMode
-        // clears it. revealAndSelect is a no-op for empty paths.
+        // Prime browserSelection before commit when a browser spawn is staged
+        // so the new tab's tree opens with the context path visible.
+        // Peek the intent before commitPaneMode clears it.
+        // revealAndSelect is a no-op for empty paths.
         const intent = paneMode.spawnIntent;
         if (intent && intent.kind === "browser") {
           if (intent.ctx.file) revealAndSelect(intent.ctx.file);
           else if (intent.ctx.dir) revealAndSelect(intent.ctx.dir);
         }
-        // `fullstack-a-68 slice 2`: materialize any staged "new
-        // draft editor" intents BEFORE commitPaneMode promotes
-        // the draft to live. Each staged entry pins the target
-        // paneId at press time; createDraft is async, so we kick
-        // off the round-trip in parallel and let each one open
-        // the resulting file in its pinned pane. Commit doesn't
-        // wait — the draft layout already reflects T / O / P /
-        // G additions, and the new-draft files will land in
-        // their panes when the round-trips resolve.
+        // Materialize staged draft-editor intents BEFORE commitPaneMode promotes
+        // the draft to live. Each staged entry pins the target paneId at press
+        // time; createDraft is async so round-trips run in parallel. Commit
+        // doesn't wait — new-draft files land in their panes when resolved.
         materializeStagedDraftEditors();
         commitPaneMode();
         scheduleSessionSave();
@@ -467,18 +428,15 @@
         return;
       }
       case "Escape":
-        // `fullstack-a-68 slice 2`: discard staged drafts. The
-        // T / O / P / G additions live inside the draft layout
-        // and disappear automatically when commitPaneMode does
-        // not run. The Esc path bails before
-        // materializeStagedDraftEditors fires, so no orphan
-        // drafts get created.
+        // Discard staged drafts. T / O / P / G additions live inside the
+        // draft layout and disappear automatically when commitPaneMode does
+        // not run. Esc bails before materializeStagedDraftEditors fires,
+        // so no orphan drafts are created.
         cancelPaneMode();
         paneModeHelpVisible = false;
         return;
-      // @@Alex's mental model: arrows navigate (move focus),
-      // WASD moves stuff (swap tiles). `fullstack-40` swapped
-      // these from the `fullstack-16` defaults.
+      // Arrows navigate (move focus); WASD moves tiles (swap).
+      // Intentionally asymmetric: arrow = focus, letter = move.
       case "ArrowUp":
         paneModeMoveFocus("up");
         return;
@@ -499,9 +457,7 @@
       case "A":
         paneModeSwap("left");
         return;
-      // `fullstack-74`: `s` / `S` rejoin the WASD swap-tile group
-      // (previously case-sensitive: lowercase opened Search,
-      // uppercase swapped). Search moved to `f` / `F` below.
+      // `s` / `S` are in the WASD swap-tile group; search lives on `f` / `F`.
       case "s":
       case "S":
         paneModeSwap("down");
@@ -525,15 +481,10 @@
       case "0":
         paneModeEqualize();
         return;
-      // `fullstack-a-68 slice 2`: Hybrid Nav T / O / P / G / E
-      // chords STAGE additions into the draft layout instead of
-      // committing immediately. Multiple presses stack — three
-      // T's queue three terminals on the focused pane. Enter
-      // materializes the draft; Esc discards. Per addendum-a's
-      // "back to transactional mode" framing. Pre-`-a-68 slice
-      // 2` behavior (`fullstack-a-32` + `fullstack-50`):
-      // immediate commit on T / O / V / P. `v` stays aliased to
-      // `g` so muscle memory survives the rename.
+      // Hybrid Nav T / O / P / G / E chords STAGE additions into the draft
+      // layout instead of committing immediately. Multiple presses stack.
+      // Enter materializes; Esc discards. `v` is aliased to `g` for
+      // compatibility.
       case "t":
       case "T":
         paneModeOpenTerminal(resolveSpawnContext());
@@ -552,21 +503,17 @@
       case "V":
         paneModeOpenGraph(resolveSpawnContext());
         return;
-      // Search lives in an OverlayShell, not a tab type. Open the
-      // overlay outside the transaction so it can capture keyboard
-      // input cleanly; commit the draft first so any layout edits
-      // the user already made don't get dropped. `fullstack-74`:
-      // moved from `s` to `f` so WASD (any case) can fully own
-      // the swap-tile group; `s` / `S` now both swap-down.
+      // Search lives in an OverlayShell, not a tab type. Open the overlay
+      // outside the transaction so it can capture keyboard input cleanly;
+      // commit the draft first so layout edits aren't dropped.
       case "f":
       case "F":
         commitPaneMode();
         scheduleSessionSave();
         searchPanel.open = true;
         return;
-      // `h` toggles the Cmd+K help cheatsheet. It does NOT commit
-      // the draft — the user is still shaping their layout; the
-      // overlay just describes the available keys.
+      // `h` toggles the Cmd+K help cheatsheet without committing the draft;
+      // the user is still shaping their layout.
       case "h":
       case "H":
         paneModeHelpVisible = !paneModeHelpVisible;
@@ -581,10 +528,8 @@
         paneModeHelpVisible = false;
         lockNow();
         return;
-      // `phase-12 lane-e` (addendum-2 Q8): `i` opens a Dashboard
-      // tab in the active pane. Same commit-then-act shape as Search /
-      // Lock so layout edits the user already made aren't dropped.
-      // Pairs with the top-level Cmd+I chord (both open the tab).
+      // `i` opens a Dashboard tab. Same commit-then-act shape as Search /
+      // Lock so layout edits aren't dropped.
       case "i":
       case "I":
         commitPaneMode();
@@ -592,35 +537,25 @@
         paneModeHelpVisible = false;
         openDashboardInActivePane();
         return;
-      // `fullstack-a-68 slice 2`: `P` now stages a fresh smart-
-      // prompt terminal (a terminal tab with the team-work
-      // overlay armed open) instead of toggling the overlay on
-      // the focused pane's existing terminal. Phase 9 applies
-      // the same fresh-terminal rule to top-level Cmd+P.
+      // `P` stages a fresh Team Work terminal (the overlay opens on the
+      // new tab, not on whatever terminal is currently focused).
       case "p":
       case "P":
         paneModeOpenTeamWorkTerminal(resolveSpawnContext());
         return;
-      // `fullstack-a-68 slice 2`: `N` stages a new draft editor —
-      // mirrors the top-level Cmd+N "new draft" chord (the
-      // mnemonic the user already has in muscle memory).
-      // Drafts are server-side (`api.createDraft()` mints the
-      // file), so the intent queues onto
-      // `paneMode.stagedDraftEditors` pinned to the pane that
-      // was focused at press time. `materializeStagedDraftEditors`
-      // resolves the queue on Enter commit; Esc bails the queue
-      // before the round-trips fire so no orphan drafts get
-      // created.
+      // `N` stages a new draft editor. The intent queues onto
+      // `paneMode.stagedDraftEditors` pinned to the focused pane; Enter
+      // resolves the queue via materializeStagedDraftEditors, Esc bails
+      // before the round-trips fire so no orphan drafts are created.
       case "n":
       case "N":
         paneModeStageDraftEditor();
         return;
-      // `fullstack-69`: Cmd+K < and > toggle the docked file
-      // browsers. Mapping per @@Alex's verbatim spec — the arrow
-      // direction is opposite to the dock side it controls:
-      //   `<` (less-than) → right dock toggle
-      //   `>` (greater-than) → left dock toggle
-      // Same exit semantics as the spawn keys (commit then act).
+      // `<` / `>` toggle the docked file browsers. Arrow direction is
+      // intentionally opposite to the dock side:
+      //   `<` (less-than) -> right dock toggle
+      //   `>` (greater-than) -> left dock toggle
+      // Same commit-then-act semantics as the other exit keys.
       case "<":
         commitPaneMode();
         scheduleSessionSave();
@@ -631,33 +566,26 @@
         scheduleSessionSave();
         toggleBrowserSidePane("left");
         return;
-      // `fullstack-48`: Tab flips the focused Hybrid. Stays inside
-      // the pane-mode transaction so Esc can roll the flip back if
-      // the user changes their mind. The flipHybrid action targets
-      // whichever side is currently visible on the focused pane;
-      // calling it twice toggles back to where the user started.
+      // Tab flips the focused Hybrid inside the transaction so Esc can roll
+      // it back. flipHybrid targets whichever side is currently visible;
+      // two presses toggle back.
       case "Tab":
         flipHybrid(paneMode.draft?.activePaneId ?? layout.activePaneId);
         return;
-      // Split keybinds reuse the right/down constraint from
-      // `fullstack-21`'s hamburger menu. New pane lands as the focus
-      // so subsequent edits inside the same transaction target it.
-      // `desktop-fixes`: split-bottom is `?` (Shift+/), not `\`, so the
-      // `/` (right) + `?` (bottom) pair mirrors the top-level Cmd+/ /
-      // Cmd+Shift+/ chords and dodges 1Password's global Cmd+\ hotkey.
+      // Split right (`/`) and split bottom (`?` = Shift+/) mirror the
+      // top-level Cmd+/ / Cmd+Shift+/ chords. New pane lands as the focus
+      // so subsequent transaction edits target it. `?` avoids 1Password's
+      // global Cmd+\ hotkey.
       case "/":
         paneModeSplit("row");
         return;
       case "?":
         paneModeSplit("column");
         return;
-      // Close-all / kill-pane reuse the existing affordances and
-      // their terminal-confirmation modal. Commit the draft first so
-      // the confirmation runs against the layout the user just
-      // shaped; the modal needs the normal app keyboard context.
-      // `fullstack-77`: kill-pane moved from `k` / `K` to
-      // `Backspace` — backspace = delete is the intuitive shape
-      // for "delete this pane" and frees `k` for a future binding.
+      // Close-all / kill-pane reuse the existing affordances and their
+      // terminal-confirmation modal. Commit first so the confirmation runs
+      // against the layout the user just shaped.
+      // Backspace = delete is the intuitive mapping for kill-pane.
       case "x":
       case "X":
         commitPaneMode();
@@ -669,54 +597,33 @@
         return;
     }
   }
-    // `fullstack-42` pruned every standalone shortcut now covered by
-    // Pane Mode (`Cmd+K`): Cmd+P (Files), Cmd+Shift+F (Search),
-    // Cmd+Shift+M (Graph), Cmd+Alt+T (Terminal), Cmd+Alt+[ / ]
-    // (Prev/Next pane), and Ctrl+Alt+N (New file). Each is reachable
-    // via Pane Mode now — the keymap stops shipping two chords for
-    // the same action. The native shell's `KEY_BRIDGE_JS` was
-    // updated in lockstep.
-    // `phase-13 lane-b` slice 3c: Cmd+, no longer opens the
-    // (retired) global Settings overlay; it flips the focused
-    // Hybrid (Terminal / Editor / Graph / FB / Dashboard) to its
-    // back-of-card. Cmd+, again flips back.
-    //
-    // Phase-13 round-1 closing (B2): match on `e.code === "Comma"`
-    // (layout-independent) ahead of `e.key === ","` so AZERTY /
-    // QWERTZ users who get a different `e.key` for Cmd+Comma
-    // still hit this handler. preventDefault + stopImmediate-
-    // Propagation defends against duplicate handlers ever
-    // toggling `showingBack` twice in a row, which previously
-    // surfaced as a "second press is a no-op" regression.
+    // Cmd+, flips the focused Hybrid (Terminal / Editor / Graph / FB /
+    // Dashboard) to its back-of-card; Cmd+, again flips back.
+    // Match `e.code === "Comma"` (layout-independent) ahead of `e.key`
+    // so AZERTY/QWERTZ keyboards still land here. stopImmediatePropagation
+    // prevents duplicate handlers from toggling showingBack twice.
     if (
       meta &&
       !e.shiftKey &&
       !e.altKey &&
       (e.code === "Comma" || e.key === ",")
     ) {
+      // A modal or the search overlay owns the keyboard: let it keep
+      // the key rather than flipping the pane hidden behind it.
+      if (paneChordBlocked()) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       flipHybrid(layout.activePaneId);
       return;
     }
-    // `fullstack-a-90`: removed the legacy `Alt+Space` team-work
-    // chord. Team Work is now Cmd+P (native) + Cmd+Alt+P (web Mac
-    // fallback) + `Mod+. p` (Hybrid Nav). `-a-32`'s muscle-memory
-    // bridge expired.
-    // `fullstack-a-32`: spawn-chord family. Each Cmd+Alt+<letter>
-    // chord is the macOS web fallback for the matching native
-    // Cmd+<letter> chord that browsers reserve at the OS level
-    // (Cmd+T new tab, Cmd+O open file, Cmd+P print). Chan-desktop's
-    // KEY_BRIDGE_JS intercepts the native chords and replays them
-    // as `chan:command` events, which `runCommand` below routes
-    // through the same context-aware helpers.
+    // Spawn-chord family. Each Cmd+Alt+<letter> is the macOS web fallback
+    // for the matching native Cmd+<letter> that browsers reserve at the OS
+    // level (Cmd+T new tab, Cmd+O open file, Cmd+P print). Chan-desktop's
+    // KEY_BRIDGE_JS intercepts native chords and replays them as
+    // `chan:command` events routed through the same context-aware helpers.
     //
-    // Mac-only: require metaKey explicitly (not the `meta` shorthand
-    // that includes Ctrl) so Ctrl+Alt+<letter> on Win/Linux stays
-    // free for other bindings (`Ctrl+Alt+T` is owned by
-    // `app.tab.reopenClosed`; Ctrl+Alt+O / P aren't used yet but
-    // we don't want to claim them either). Hybrid Nav `o`/`p`/`v`
-    // is the universal fallback on every platform.
+    // Mac-only: require metaKey explicitly (not the `meta` shorthand that
+    // includes Ctrl) so Ctrl+Alt+<letter> on Win/Linux stays free.
     if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyT") {
       e.preventDefault();
       spawnTerminalFromContext();
@@ -732,23 +639,18 @@
       spawnTeamWorkFromContext();
       return;
     }
-    // `fullstack-a-32`: Cmd+Shift+M spawns a context-aware graph on
-    // both web and native. Browsers don't reserve this chord, so
-    // no Cmd+Alt+M fallback is needed. KEY_BRIDGE_JS still fires
-    // `app.graph.toggle` on native Cmd+Shift+M for parity with
-    // the chan-desktop chord catalog.
+    // Cmd+Shift+M spawns a context-aware graph on both web and native.
+    // Browsers don't reserve this chord so no Cmd+Alt+M fallback is needed.
     if (e.metaKey && !e.altKey && e.shiftKey && !e.ctrlKey && e.code === "KeyM") {
       e.preventDefault();
       spawnGraphFromContext();
       return;
     }
-    // `phase-12 lane-e` (addendum-2 Q5): WEB pane nav is Alt+[/].
-    // Cmd+[/] is browser back/forward on web, so the web build moves
-    // pane nav onto Alt (desktop keeps Cmd+[/] via KEY_BRIDGE_JS,
-    // which stopImmediatePropagation's before this handler ever runs,
-    // so this branch is web-only). Match by `e.code` and preventDefault
-    // the Option-mangled glyph, exactly like the Alt+Shift+[/] tab
-    // handler below. `!e.shiftKey` keeps Alt+Shift+[/] (tab nav) out.
+    // Web-only pane nav: Cmd+[/] is browser back/forward so the web build
+    // moves pane nav onto Alt+[/]. Desktop handles this via KEY_BRIDGE_JS
+    // with stopImmediatePropagation before this handler runs. Match by
+    // `e.code` to prevent Option-mangled glyphs; `!e.shiftKey` keeps
+    // Alt+Shift+[/] (tab nav) separate.
     if (e.altKey && !e.shiftKey && !meta && e.code === "BracketLeft") {
       e.preventDefault();
       selectPrevPane();
@@ -759,13 +661,11 @@
       selectNextPane();
       return;
     }
-    // `phase-12 lane-e` (addendum-2): Cmd+S (Ctrl+S non-Mac) opens
-    // workspace-wide search. Reclaims the chord dropped in fullstack-56
-    // (save went autosave-only). @@Alex Q5 explicitly authorizes
-    // preventDefault here to suppress the browser save-page dialog.
-    // On chan-desktop KEY_BRIDGE_JS replays Cmd+S as app.search.toggle
-    // (and stops propagation), so this branch is web-only. Excludes
-    // Shift (Cmd+Shift+S strikethrough is the editor's).
+    // Cmd+S (Ctrl+S non-Mac) opens workspace-wide search on web. Save is
+    // autosave-only so this chord is safe to claim; preventDefault suppresses
+    // the browser save-page dialog. Desktop routes this via KEY_BRIDGE_JS
+    // (stops propagation before this handler). Excludes Shift; Cmd+Shift+S
+    // is strikethrough in the editor.
     if (meta && !e.altKey && !e.shiftKey && e.code === "KeyS") {
       e.preventDefault();
       searchPanel.open = !searchPanel.open;
@@ -807,57 +707,33 @@
         return;
       }
     }
-    // `fullstack-a-73`: Cmd+R (Ctrl+R on non-Mac) — window-level
-    // reload, mirroring the browser's default Cmd+R. The pane
-    // right-click menu's Reload entry calls the same
-    // `reloadWindow()` helper. preventDefault suppresses the
-    // browser-default reload on web so we don't get a double-fire
-    // (SPA handler + browser default). On chan-desktop the
-    // serve.rs:1140 Tauri-side binding still routes through the
-    // same IPC; the dual path is idempotent.
+    // Cmd+R (Ctrl+R non-Mac) reloads the window. preventDefault suppresses
+    // the browser-default reload so the SPA handler and browser don't both
+    // fire. Desktop routes through the same reloadWindow() IPC.
     if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyR") {
       e.preventDefault();
       void reloadWindow();
       return;
     }
-    // `fullstack-a-66`: Cmd+N (Ctrl+N on non-Mac) — New Draft.
-    // Calls /api/drafts/new which creates a fresh
-    // `Drafts/<untitled-N>/draft.md` via chan-workspace's
-    // unified-path API + indexes it. The returned unified path
-    // opens in the active pane like any other file (post-`-26`
-    // the editor's read/write goes through the same Drafts/-
-    // prefix-routing). chan-desktop's `-b-27` moved its
-    // "New Window" accelerator to Cmd+Shift+N to free plain
-    // Cmd+N for this handler.
-    //
-    // Cmd+Shift+N falls through to chan-desktop's Tauri menu
-    // (or browser's New Incognito on web); we only intercept
-    // bare Cmd+N here.
+    // Cmd+N (Ctrl+N non-Mac) creates a new Draft via /api/drafts/new and
+    // opens the resulting path in the active pane. Cmd+Shift+N falls
+    // through to the desktop's New Window (or browser's New Incognito);
+    // only bare Cmd+N is intercepted here.
     if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyN") {
       e.preventDefault();
       void createDraftAndOpen();
       return;
     }
-    // `fullstack-a-67f` slice 2: Mod+E (Obsidian-style "Show
-    // Source Code") flips the active file tab's mode between
-    // source and the rendered surface. No-op when the active
-    // tab isn't a file tab. chan-desktop's KEY_BRIDGE_JS
-    // replays Cmd+E natively as `chan:command
-    // app.editor.toggleMode` — both paths converge on the
-    // runCommand switch.
+    // Mod+E (Obsidian-style "Show Source Code") flips the active file tab
+    // between source and rendered views. No-op when no file tab is active.
     if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyE") {
       e.preventDefault();
       toggleActiveFileTabMode();
       return;
     }
-    // `phase-13 r2` (B-slice 2): Cmd+I no longer opens Dashboard.
-    // @@Alex moved Dashboard off the direct chord so the editor can
-    // claim Cmd+I for italic (bound in Wysiwyg.svelte's CM6 keymap).
-    // There is intentionally no `KeyI` branch here: when the editor is
-    // focused its keymap toggles italic; otherwise Cmd+I is inert.
-    // Dashboard stays reachable via Hybrid Nav `Cmd+. i` and the
-    // Dashboard hamburger item. The desktop KEY_BRIDGE (serve.rs) drops
-    // its matching Cmd+I -> app.dashboard.open mapping in the same slice.
+    // No `KeyI` branch here: the editor claims Cmd+I for italic
+    // (Wysiwyg.svelte's CM6 keymap); outside the editor Cmd+I is inert.
+    // Dashboard is reachable via Hybrid Nav `Cmd+. i` and the hamburger.
   }
 
   async function createDraftAndOpen(): Promise<void> {
@@ -873,15 +749,11 @@
     }
   }
 
-  /// `fullstack-a-68 slice 2`: walk the queue of staged "new
-  /// draft editor" intents and resolve each one. Snapshot the
-  /// queue up-front because `commitPaneMode` clears it (the
-  /// callsite calls commit immediately after this returns).
-  /// Each round-trip opens the resulting file in the paneId
-  /// pinned at press time so a focus change mid-Nav doesn't
-  /// redirect the materialization. createDraft + openInPane
-  /// failures log + bail per-entry so one bad draft can't
-  /// poison the rest of the queue.
+  /// Walk the queue of staged draft-editor intents and resolve each one.
+  /// Snapshot the queue up-front because the callsite calls commitPaneMode
+  /// immediately after this returns (which clears it). Each round-trip opens
+  /// the file in the paneId pinned at press time so a mid-Nav focus change
+  /// doesn't redirect the result. Failures log and bail per-entry.
   function materializeStagedDraftEditors(): void {
     const queue = paneMode.stagedDraftEditors.slice();
     for (const entry of queue) {
@@ -917,14 +789,10 @@
   function closeActiveEmptyPane(): boolean {
     const p = activePane();
     if (p.tabs.length !== 0) return false;
-    // `phase-12 lane-e` (addendum-2 Q6): close-cascade tail. The last
-    // empty pane has nothing left to close, so the window itself
-    // closes and focus returns to the native-desktop workspace list.
-    // Desktop only - the browser owns its own window/tab lifecycle on
-    // web, where this stays a no-op (Cmd+W falls through to the
-    // browser). request_close_window shows the launcher, then closes
-    // this workspace window (the launcher's CloseRequested hides rather
-    // than destroys it, so re-showing is instant).
+    // The last empty pane triggers window close on desktop, returning focus
+    // to the workspace launcher. Web stays a no-op (Cmd+W falls through to
+    // the browser). The launcher's CloseRequested hides rather than destroys,
+    // so re-showing is instant.
     if (leafPaneCount() <= 1) {
       if (isTauriDesktop()) {
         void requestCloseWindow();
@@ -938,14 +806,11 @@
   onMount(() => document.addEventListener("keydown", onWindowKey));
   onDestroy(() => document.removeEventListener("keydown", onWindowKey));
 
-  /// Ctrl+D: close the focused non-terminal tab. Per `fullstack-41`,
-  /// the keystroke is canonical "close current tab" for Files / Graph
-  /// / doc tabs; terminal tabs forward Ctrl+D to the shell as EOF
-  /// and we deliberately stay out of that path. The listener fires
-  /// at the document's CAPTURE phase so it pre-empts CodeMirror's
-  /// default `selectNextOccurrence` multi-cursor binding inside a
-  /// focused doc tab — the alternative (bubble) loses the race and
-  /// leaves a stale multi-selection behind every close.
+  /// Ctrl+D: close the focused non-terminal tab. Terminal tabs forward
+  /// Ctrl+D to the shell as EOF; this handler stays out of that path.
+  /// The listener fires at CAPTURE phase to pre-empt CodeMirror's
+  /// `selectNextOccurrence` binding; bubble phase loses the race and
+  /// leaves a stale multi-selection on every close.
   function onCtrlDCapture(e: KeyboardEvent): void {
     if (!e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
     // e.key is lowercase "d" or uppercase "D" depending on
@@ -982,25 +847,22 @@
   onMount(() => document.addEventListener("keydown", onCtrlDCapture, true));
   onDestroy(() => document.removeEventListener("keydown", onCtrlDCapture, true));
 
-  /// Host-driven command bridge. Native wrappers (chan-desktop) and
-  /// other embeddings dispatch a `chan:command` window event to
-  /// trigger an app action by string id without depending on any
-  /// in-app key chord. Names are stable; payload (if any) goes in
-  /// `detail`. Unknown ids are a no-op so hosts can ship ahead of
-  /// chan adding the command.
+  /// Host-driven command bridge. Native wrappers dispatch a `chan:command`
+  /// window event to trigger actions by stable string id without depending
+  /// on any in-app key chord. Unknown ids are a no-op so hosts can ship
+  /// ahead of chan adding the command.
   function runCommand(name: string, detail: Record<string, unknown>): void {
     switch (name) {
       case "app.settings.toggle":
-        // `phase-13 lane-b` slice 3c: command id unchanged so
-        // chan-desktop's KEY_BRIDGE_JS + command-bus callers keep
-        // working, but the action is now "flip focused Hybrid"
-        // (Settings overlay retired).
+        // Command id used by chan-desktop KEY_BRIDGE_JS (native Cmd+,);
+        // the action is the focused-Hybrid flip. Same guard as the web
+        // chord so the native key can't flip from under a dialog.
+        if (paneChordBlocked()) return;
         flipHybrid(layout.activePaneId);
         return;
-      // `fullstack-a-32`: chan-desktop's KEY_BRIDGE_JS fires these
-      // ids on native Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M. Route
-      // them through the same context-aware helpers the web
-      // chords use so native + web behave identically.
+      // chan-desktop's KEY_BRIDGE_JS fires these ids on native Cmd+T /
+      // Cmd+O / Cmd+P / Cmd+Shift+M. Same context-aware helpers as the
+      // web chords so both platforms behave identically.
       case "app.files.toggle":
         spawnBrowserFromContext();
         return;
@@ -1019,35 +881,25 @@
       case "app.terminal.broadcastToggle":
         toggleActiveTerminalBroadcastSelectAll();
         return;
-      // `fullstack-a-67` slice 2: New Draft is now a hamburger
-      // menu entry too. Route the command through
-      // `createDraftAndOpen` so the menu + the Cmd+N chord +
-      // chan-desktop's native menu all converge on a single
-      // handler.
+      // Route through createDraftAndOpen so the hamburger menu, Cmd+N chord,
+      // and desktop native menu all converge on a single handler.
       case "app.draft.new":
         void createDraftAndOpen();
         return;
-      // `fullstack-a-77` slice 3: manual screensaver lock.
-      // Routes command-event callers through the same handler as
-      // Hybrid Nav `L`. Plain Cmd+L is deliberately not claimed by
-      // App.svelte so the browser location bar keeps working.
+      // Plain Cmd+L is deliberately not claimed by App.svelte so the
+      // browser location bar keeps working; lock is only via this command
+      // or Hybrid Nav `L`.
       case "app.screensaver.lock":
         lockNow();
         return;
-      // `fullstack-a-75`: open the new Dashboard tab in the
-      // active pane. Surface unification: same command from the
-      // pane hamburger, the empty-pane right-click menu, and
-      // the empty-pane carousel slide-1 button.
+      // Open Dashboard in the active pane. Same command from the pane
+      // hamburger, empty-pane right-click menu, and carousel slide-1 button.
       case "app.dashboard.open":
         openDashboardInActivePane();
         return;
-      // `fullstack-a-67f` slice 2: Obsidian-style Mod+E "Show
-      // Source Code" toggle. The chord fires
-      // `dispatchEditorToggleMode()` which finds the active file
-      // tab and flips its mode between source and the rendered
-      // surface (wysiwyg / pretty / table). No-op when the
-      // active tab isn't a file tab — keeps the chord harmless
-      // outside the editor.
+      // Obsidian-style Mod+E "Show Source Code" toggle. Flips the active
+      // file tab's mode between source and rendered surface. No-op when
+      // no file tab is active.
       case "app.editor.toggleMode":
         toggleActiveFileTabMode();
         return;
@@ -1063,10 +915,9 @@
       case "app.pane.kill":
         killActivePane();
         return;
-      // `phase-12 lane-e` (addendum-2): top-level split chords
-      // (desktop Cmd+/ right, Cmd+Shift+/ bottom via KEY_BRIDGE_JS).
-      // row = split right, column = split bottom - same direction
-      // mapping as Hybrid Nav `/` and `?`.
+      // Top-level split chords (desktop Cmd+/ right, Cmd+Shift+/ bottom via
+      // KEY_BRIDGE_JS). row = split right, column = split bottom, matching
+      // the Hybrid Nav `/` and `?` keybinds.
       case "app.pane.splitRight":
         splitActive("row");
         return;
@@ -1090,8 +941,7 @@
         else closeActiveEmptyPane();
         return;
       }
-      // `fullstack-56`: dropped `app.save` — autosave covers the
-      // write path; the keystroke + action surface is gone.
+      // `app.save` is intentionally absent: autosave covers the write path.
       case "app.file.new":
         void fileOps.createFile("");
         return;
@@ -1135,39 +985,26 @@
   onMount(() => window.addEventListener("chan:command", onChanCommand));
   onDestroy(() => window.removeEventListener("chan:command", onChanCommand));
 
-  // `fullstack-a-72`: prune stale + over-cap editor-buffer
-  // entries from localStorage at app load. Background task; the
-  // synchronous read/write paths in editorBuffer.svelte.ts also
-  // self-prune on quota-exceeded but doing a sweep here keeps
-  // localStorage tidy for users with long-lived sessions.
+  // Prune stale or over-cap editor-buffer entries from localStorage at app
+  // load. editorBuffer self-prunes on quota-exceeded too, but an up-front
+  // sweep keeps storage tidy for long-lived sessions.
   onMount(() => {
     pruneEditorBuffers();
   });
 
-  // `fullstack-a-74`: synchronously flush any in-flight
-  // debounced editor-buffer writes before the page tears down.
-  // The pre-`-a-74` mechanism relied on Svelte component-
-  // cleanup callbacks to flush, but `window.location.reload()`
-  // (Cmd+R / browser refresh / chan-desktop reload IPC) DOES
-  // NOT trigger component cleanup — so the last 500ms of edits
-  // silently vanished. `beforeunload` + `pagehide` both fire
-  // reliably before the page tears down; `pagehide` is the
-  // canonical mobile-safe variant + `beforeunload` covers
-  // desktop reloads, so we register both.
-  //
-  // The handlers are deliberately tiny + synchronous — async
-  // work in beforeunload is unreliable across browsers, and a
-  // synchronous localStorage write is fine.
+  // Synchronously flush in-flight debounced editor-buffer writes before the
+  // page tears down. window.location.reload() does NOT trigger Svelte
+  // component cleanup, so the last ~500ms of edits would be lost without
+  // this. `beforeunload` + `pagehide` both fire reliably; pagehide is the
+  // mobile-safe variant, beforeunload covers desktop reloads.
+  // Handlers are deliberately synchronous — async work in beforeunload is
+  // unreliable, and a synchronous localStorage write is fine.
   function onUnloadFlushBuffers(): void {
     flushPendingBufferWrites();
-    // `lane-c addendum-2 item 1` facet C: window.location.reload()
-    // (Cmd+R / browser refresh / desktop reload IPC) does NOT run
-    // component cleanup, and the caret is only mirrored into the URL
-    // hash on layout changes - not on every selection move. Flush the
-    // layout (which serializes each tab's caret as the `c` field) here
-    // so a full reload restores the EXACT caret position. The editor's
-    // maybeRestoreCaret then re-asserts keyboard focus on that caret,
-    // so @@Alex lands back exactly where he was, focused + ready to type.
+    // The caret is only mirrored into the URL hash on layout changes, not
+    // on every selection move. Flush the layout here (which serializes each
+    // tab's caret as the `c` field) so a reload restores the exact caret
+    // position. maybeRestoreCaret then re-asserts keyboard focus.
     persistLayoutToHash();
   }
   onMount(() => {
@@ -1179,28 +1016,20 @@
     window.removeEventListener("pagehide", onUnloadFlushBuffers);
   });
 
-  /// `fullstack-a-59` pane-focus-click restore: when chan-desktop is
-  /// unfocused and the user clicks back onto the window, the first
-  /// click should ALSO select the Hybrid pane under the cursor (not
-  /// stay on the previously-focused pane). Critical disambiguation:
-  /// only on the mousedown-driven focus restore. Cmd+Tab keyboard
-  /// refocus must NOT change pane selection (focus event without an
-  /// adjacent mousedown).
+  /// Pane-focus-click restore: when chan-desktop is unfocused and the user
+  /// clicks back, the first click should also select the pane under the
+  /// cursor (not stay on the previously-focused pane). Cmd+Tab keyboard
+  /// refocus must NOT change pane selection (focus event without mousedown).
   ///
-  /// Detection: track the last `window` focus event timestamp +
-  /// listen for `mousedown` at the window level. If a mousedown
-  /// fires within `FOCUS_CLICK_WINDOW_MS` of a focus event, walk the
-  /// target's DOM ancestry looking for the nearest `.pane[data-pane-
-  /// id]`. If found, call `setActivePane` on that pane id. Clear
-  /// the timestamp after the first matching mousedown so subsequent
-  /// clicks fall back to the existing per-pane `onmousedown` handler
-  /// in `Pane.svelte` (which already calls `setActivePane`).
+  /// Detection: track the last `window` focus event timestamp and listen for
+  /// mousedown at the window level. If a mousedown fires within
+  /// `FOCUS_CLICK_WINDOW_MS` of a focus event, walk the DOM to find the
+  /// nearest `.pane[data-pane-id]` and call `setActivePane`. Clear the
+  /// timestamp after the first matching mousedown.
   ///
-  /// Why this matters: on macOS / Tauri the first mousedown after a
-  /// window-focus restore is sometimes consumed by the OS for the
-  /// window-activation gesture and doesn't reach the per-pane
-  /// handler. Without this top-level catch, the previously-focused
-  /// pane stays active even though the user just clicked elsewhere.
+  /// On macOS/Tauri the first mousedown after window-focus restore is sometimes
+  /// consumed by the OS for the activation gesture and doesn't reach Pane.svelte's
+  /// per-pane handler; this top-level catch covers that case.
   const FOCUS_CLICK_WINDOW_MS = 50;
   let focusRestoreAt = 0;
   function onWindowFocus(): void {
@@ -1281,11 +1110,11 @@
      SPA shell without the launch token, so /api 401s and the app
      is unusable until they reopen the original URL. -->
 <MissingTokenOverlay />
-<!-- `fullstack-a-77` slice 2: screensaver cover. Mounts at App
-     root so z-index sits above every chan overlay
-     (`screensaver-backdrop` uses z=2000). The component
-     renders nothing while `screensaver.locked === false`;
-     when locked it covers the SPA + accepts PIN entry. -->
+<PreflightOverlay />
+<!-- Screensaver cover. Mounts at App root so z-index sits above every
+     chan overlay (screensaver-backdrop uses z=2000). Renders nothing
+     while screensaver.locked === false; when locked it covers the SPA
+     and accepts PIN entry. -->
 <ScreensaverOverlay />
 
 <style>
@@ -1351,34 +1180,27 @@
     --pane-focus: #388bfd;
     --bubble-bg: #2a2a2c;
     --bubble-right-bg: rgba(88, 166, 255, 0.28);
-    /* Graph palette: only doc / image / tag are rendered now,
-       matching the chan brand's warm orange primary plus a
-       hue-separated supporting pair (purple for images, green
-       for tag hashtag labels). */
+    /* Graph palette: doc / image / tag share the chan brand warm-orange
+       primary plus hue-separated pairs (purple for images, green for tags). */
     --g-doc: #ff8a3d;
     --g-img: #b07dff;
     --g-tag: #6cd07a;
     --chan-color-language: #ff4db8;
     --chan-color-code: var(--chan-color-language);
     --g-language: var(--chan-color-language);
-    /* `fullstack-a-51` G6 colour scheme: markdown / source / binary
-       / media split.
-       * `--g-doc` (above) → orange for markdown (.md, .txt).
-       * `--g-source` (royalblue) → code + config text files (.rs,
-         .py, .ts, etc.). Pre-`-a-51` had this hue assigned to
-         `--g-binary`; the rename clarifies the bucket.
-       * `--g-binary` (grey, darker than `--g-folder`) → opaque files
-         (archives, executables, fonts, etc.).
-       * `--g-img` (above) → purple for media (image / pdf).
-       * `--g-folder` (medium grey) → directory nodes; distinct from
-         binary's darker grey so the two don't visually collapse. */
+    /* Graph node-type colour scheme: markdown / source / binary / media.
+       --g-doc (above) -> orange for markdown (.md, .txt).
+       --g-source (royalblue) -> code + config text files (.rs, .py, .ts, ...).
+       --g-binary (dark grey) -> opaque files (archives, executables, fonts).
+       --g-img (above) -> purple for media (image / pdf).
+       --g-folder (medium grey) -> directory nodes; darker than binary so
+         the two don't visually collapse. */
     --g-source: #4169e1;
     --g-binary: #5e5e62;
     --g-folder: #8e8e93;
-    /* `fullstack-a-66b`: Drafts folder distinct yellow tone.
-       Sits at the top of the FB tree as the synthetic "Drafts"
-       entry. Background uses a low-alpha tint so the row reads
-       as a category marker without dominating the panel. */
+    /* Drafts folder: distinct yellow tone. Sits at the top of the FB tree
+       as the synthetic "Drafts" entry. Low-alpha background tint marks the
+       row as a category without dominating the panel. */
     --fb-drafts-fg: #e3b341;
     --fb-drafts-bg: rgba(227, 179, 65, 0.10);
     /* Inline editor pills (wiki link, image, tag, contact, date,
@@ -1452,13 +1274,11 @@
     --chan-color-language: #c71585;
     --chan-color-code: var(--chan-color-language);
     --g-language: var(--chan-color-language);
-    /* `fullstack-a-51` G6 light-mode counterparts: deeper hues
-       balanced against the bright bg. */
+    /* Light-mode graph node colours: deeper hues balanced against the bright bg. */
     --g-source: #2851c4;
     --g-binary: #4e4e54;
     --g-folder: #6c6c70;
-    /* `fullstack-a-66b` light-mode counterparts — deeper yellow
-       for contrast against the bright page bg. */
+    /* Light-mode Drafts folder: deeper yellow for contrast against the bright bg. */
     --fb-drafts-fg: #9a6700;
     --fb-drafts-bg: rgba(154, 103, 0, 0.08);
     /* Light-mode pill palette. Same canonical mapping as dark

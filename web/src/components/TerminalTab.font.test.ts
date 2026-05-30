@@ -8,27 +8,15 @@ import main from "../main.ts?raw";
 // from disk relative to the vitest cwd (= web/) instead.
 const fonts = readFileSync("src/fonts.css", "utf8");
 
-// `fullstack-b-12`: chan ships Source Code Pro Regular for the
-// in-app terminal and pins xterm.js to non-blinking block cursor +
-// 14 pt to match iTerm2's defaults. The pinned-source assertions
-// guard the wiring so a future refactor can't silently drop the
-// bundled face or revert the cursor defaults.
-//
-// `fullstack-b-30` slice a: per-OS native mono now leads the
-// fontFamily chain; Source Code Pro stays in the chain but only
-// kicks in when the user opts in via Settings (slice b
-// follow-up). The "SCP before fallbacks" pin from `-b-12` is
-// inverted accordingly — SCP must now appear AFTER the OS-native
-// faces. The font + OFL pins below stay (the face still ships
-// when `embed-font` is on; the @font-face declaration still
-// renders the loadable face URL).
+// TerminalTab ships Source Code Pro Regular and pins xterm.js to a
+// non-blinking block cursor at 14 pt. Per-OS native mono leads the
+// fontFamily chain; SCP appears after the OS-native faces and activates
+// only when the user opts in via Settings.
 
-describe("fullstack-b-12 + fullstack-b-30: TerminalTab font + cursor parity", () => {
+describe("TerminalTab font + cursor parity", () => {
   test("OS-default font chain leads with per-OS native mono and trails with Source Code Pro", () => {
-    // `fullstack-b-30` slice b: literal fontFamily inlined string
-    // moved into a named constant (`FONT_CHAIN_OS_DEFAULT`) so the
-    // pref-driven swap can pick between two chains. Pin the
-    // constant body rather than the prior inline `fontFamily:`.
+    // The literal fontFamily string lives in a named constant so the
+    // pref-driven swap can pick between two chains.
     expect(tab).toMatch(
       /FONT_CHAIN_OS_DEFAULT\s*=\s*'"SF Mono",[^']*?"Cascadia Code"[^']*?"DejaVu Sans Mono"[^']*?"Source Code Pro"/,
     );
@@ -41,9 +29,8 @@ describe("fullstack-b-12 + fullstack-b-30: TerminalTab font + cursor parity", ()
   });
 
   test("fontFamily reads the persisted preference at spawn time", () => {
-    // Spawn-time read of `workspace.info.preferences.terminal.font`
-    // mirrors `-b-11`'s scrollback contract: existing terminals
-    // keep their font until session restart.
+    // The preference is read once at spawn; existing terminals keep
+    // their font until session restart.
     expect(tab).toMatch(
       /workspace\.info\?\.preferences\?\.terminal\?\.font\s*\?\?\s*"os-default"/,
     );

@@ -150,10 +150,9 @@ describe("TeamWork", () => {
   });
 
   test("Shift+Enter never submits (chat-style newline chord)", async () => {
-    // Phase-13 bug 4: Shift+Enter must insert a newline in the
-    // editor, never submit the prompt. The wrapper short-circuits
-    // before the submit guard so a stray Shift+Enter that bubbles
-    // up (e.g. editor not focused) cannot reach `submit()`.
+    // Shift+Enter inserts a newline. The wrapper short-circuits before
+    // the submit guard so a stray Shift+Enter that bubbles up cannot
+    // reach submit().
     const prompt: TeamWorkState = {
       buffer: "draft",
       heightPx: 320,
@@ -176,10 +175,9 @@ describe("TeamWork", () => {
   });
 
   test("plain Enter submits the prompt at the wrapper fallback path", async () => {
-    // Phase-13 bug 4: chat-style send chord. The CM6-level handler
-    // in Wysiwyg / Source claims the keystroke first when the editor
-    // has focus; this test exercises the wrapper fallback that fires
-    // when the keydown bubbles up unhandled (defaultPrevented=false).
+    // The CM6-level handler claims Enter when the editor has focus.
+    // This exercises the wrapper fallback that fires when the keydown
+    // bubbles up unhandled (defaultPrevented=false).
     const prompt: TeamWorkState = {
       buffer: "hi",
       heightPx: 320,
@@ -200,15 +198,10 @@ describe("TeamWork", () => {
     expect(onSubmit).toHaveBeenCalledWith("hi");
   });
 
-  test("Cmd+Enter with defaultPrevented does NOT re-submit (fullstack-a-20)", async () => {
-    // `fullstack-a-18` threaded `onSubmit={submit}` to the Wysiwyg
-    // child. Wysiwyg's CM6 keymap has its own Mod-Enter binding that
-    // calls `submit()` and returns true; CM's keymap runner then
-    // calls `preventDefault()` on the DOM event. Pre-`-a-20` the
-    // wrapper's `onKeydown` ignored `defaultPrevented` and called
-    // `submit()` again — `pwd` reached the PTY as `pwdpwd`. The
-    // wrapper now bails on `defaultPrevented`; source mode is
-    // unaffected because Source has no Mod-Enter binding.
+  test("Cmd+Enter with defaultPrevented does NOT re-submit", async () => {
+    // Wysiwyg's CM6 keymap calls submit() and sets preventDefault().
+    // The wrapper bails on defaultPrevented to avoid a double-submit
+    // (e.g. `pwd` reaching the PTY as `pwdpwd`).
     const prompt: TeamWorkState = {
       buffer: "pwd",
       heightPx: 320,
@@ -266,11 +259,8 @@ describe("TeamWork", () => {
   });
 
   test("mode toggle stores source/render state on the terminal prompt", async () => {
-    // `fullstack-a-24`: the style toolbar's mode-toggle button
-    // (aria-label="show rendered" / "show source") is the surface
-    // the test clicks. Toolbar default flipped to off in -a-24, so
-    // explicitly open it here — this test is exercising the mode-
-    // toggle, not the toolbar's default visibility.
+    // The style toolbar is off by default, so it is opened explicitly here
+    // to exercise the mode-toggle, not the toolbar's default visibility.
     const prompt: TeamWorkState = {
       buffer: "draft",
       heightPx: 320,
@@ -287,8 +277,7 @@ describe("TeamWork", () => {
   });
 
   test("mounted terminal prompts keep draft and submit state isolated", async () => {
-    // Same `styleToolbarOpen: true` rationale as the mode-toggle
-    // test above — `fullstack-a-24` default-off the toolbar.
+    // Same styleToolbarOpen: true rationale as the mode-toggle test.
     const first: TeamWorkState = {
       buffer: "first draft",
       heightPx: 260,
@@ -319,9 +308,8 @@ describe("TeamWork", () => {
   });
 
   test("action menu drops prompt-local file, watcher, and spawn controls", async () => {
-    // Phase-13 r2: the right-click menu lost the agent-spawn entry
-    // points (Spawn agent / Spawn agents) and the copy-config helpers
-    // alongside the older file/watcher controls.
+    // Agent-spawn entry points, copy-config helpers, and older
+    // file/watcher controls are all gone from the right-click menu.
     const prompt: TeamWorkState = {
       buffer: "# reusable prompt\n\nbody",
       heightPx: 320,
@@ -343,7 +331,7 @@ describe("TeamWork", () => {
     expect(target.querySelector("button[aria-label='Close']")).toBeNull();
   });
 
-  test("action menu lists the Phase-13 r2 items in order", async () => {
+  test("action menu lists the items in order", async () => {
     const prompt: TeamWorkState = {
       buffer: "draft",
       heightPx: 320,

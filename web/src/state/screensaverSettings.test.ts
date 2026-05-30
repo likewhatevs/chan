@@ -3,22 +3,12 @@ import shortcuts from "./shortcuts.ts?raw";
 import app from "../App.svelte?raw";
 import dashboard from "../components/HybridDashboardConfig.svelte?raw";
 
-// `fullstack-a-77` slice 3: Settings UI + Hybrid Nav lock chord.
-// Tests pin the architectural shape; behavioral testing of
-// the timeout slider + PIN flow happens via @@WebtestA's
-// empirical walk.
-//
-// `phase-13 lane-b` slice 3c: the global Settings overlay was
-// retired; the Screen Lock + Screensaver controls moved into
-// the Dashboard's back-of-card (flipHybrid).
-//
-// Phase-13 round-1 closing (B3): the back-of-card body was
-// extracted out of DashboardTab.svelte into a dedicated
-// HybridDashboardConfig.svelte component so Pane.svelte mounts
-// it via the canonical `active?.kind === "dashboard"` arm.
-// Assertions rebased against HybridDashboardConfig.svelte.
+// Screensaver Settings UI + Hybrid Nav lock chord. Tests pin the
+// architectural shape. The global Settings overlay is gone; Screen Lock
+// + Screensaver controls live on the Dashboard's back-of-card
+// (HybridDashboardConfig.svelte).
 
-describe("fullstack-a-77 slice 3: Hybrid Nav lock chord", () => {
+describe("Hybrid Nav lock chord", () => {
   test("shortcut registry advertises only Cmd+. L for screen lock", () => {
     expect(shortcuts).toMatch(
       /id: "app\.screensaver\.lock",[\s\S]{1,60}label: "Lock screen",[\s\S]{1,200}web: "Mod\+\. L",[\s\S]{1,80}native: "Mod\+\. L",/,
@@ -55,7 +45,7 @@ describe("fullstack-a-77 slice 3: Hybrid Nav lock chord", () => {
   });
 });
 
-describe("phase-13 lane-b slice 3c: Screen lock + Screensaver UI on Dashboard back-of-card", () => {
+describe("Screen lock + Screensaver UI on Dashboard back-of-card", () => {
   test("Dashboard imports hashPin + bounds + lock helpers", () => {
     expect(dashboard).toMatch(
       /import \{[\s\S]{1,400}hashPin,[\s\S]{1,200}SCREENSAVER_MAX_TIMEOUT_SECS,[\s\S]{1,80}SCREENSAVER_MIN_TIMEOUT_SECS,[\s\S]{1,40}\} from "\.\.\/state\/screensaver";/,
@@ -96,10 +86,9 @@ describe("phase-13 lane-b slice 3c: Screen lock + Screensaver UI on Dashboard ba
   });
 
   test("Test button reloads state and locks immediately (no overlay open/close dance)", () => {
-    // `phase-13 lane-b` slice 3c: the back-of-card flip survives
-    // the screensaver cover, so the retired `returnToSettingsAfterTest`
-    // dance is gone. testScreenLock simply reloads state +
-    // calls lockNow; unlocking returns to the same flipped view.
+    // The back-of-card flip survives the screensaver cover, so
+    // testScreenLock simply reloads state + calls lockNow; unlocking
+    // returns to the same flipped view. No returnToSettingsAfterTest.
     expect(dashboard).toMatch(
       /async function testScreenLock\(\): Promise<void> \{[\s\S]{1,400}await loadScreensaverState\(\);[\s\S]{1,200}if \(!screensaver\.loaded\) \{[\s\S]{1,200}screen lock state unavailable[\s\S]{1,200}lockNow\(\);/,
     );
@@ -150,13 +139,12 @@ describe("phase-13 lane-b slice 3c: Screen lock + Screensaver UI on Dashboard ba
     expect(dashboard).toMatch(/onclick=\{clearPin\}/);
   });
 
-  test("Theme picker renders INSIDE the screen lock enabled gate (B3c)", () => {
-    // B3c: screensaver theme picker must live inside the
+  test("Theme picker renders INSIDE the screen lock enabled gate", () => {
+    // The screensaver theme picker must live inside the
     // `{#if screensaverEnabled === true}` block within
-    // `<section class="screen-lock">`, NOT as a standalone
+    // `<section class="screen-lock">`, not as a standalone
     // `<section class="screensaver">` sibling. Toggling Screen
-    // lock OFF hides the theme picker (and the timeout/PIN
-    // controls) together.
+    // lock OFF hides the theme picker and timeout/PIN controls together.
     expect(dashboard).toMatch(
       /<section class="screen-lock">[\s\S]{1,4000}\{#if screensaverEnabled === true\}[\s\S]{1,4000}bind:value=\{screensaverTheme\}[\s\S]{1,4000}\{\/if\}[\s\S]{1,200}<\/section>/,
     );

@@ -62,10 +62,10 @@
   } from "../state/store.svelte";
   import { notify } from "../state/notify.svelte";
 
-  // `fullstack-a-10`: full filesystem path for a tree entry,
-  // for the row hover tooltip. Falls back to the workspace-relative
-  // path when the server hasn't surfaced a root (tunnel-public
-  // mode) so the title is never empty.
+  // Full filesystem path for a tree entry, for the row hover
+  // tooltip. Falls back to the workspace-relative path when the
+  // server hasn't surfaced a root (tunnel-public mode) so the title
+  // is never empty.
   function fullPath(relPath: string): string {
     const root = workspace.info?.root?.replace(/\/+$/, "") ?? "";
     if (!root) return relPath;
@@ -90,18 +90,17 @@
     /// surfaces don't share expansion state.
     instanceId: string;
     dockSide?: "left" | "right";
-    /// `fullstack-80`: surface-owned hook fired when the user clicks
-    /// a row. Lets the surface decide whether to auto-open the
-    /// DETAILS inspector (tab + overlay variants do; dock variants
-    /// don't). Keyboard navigation writes to `browserSelection`
-    /// directly without firing this hook.
+    /// Surface-owned hook fired when the user clicks a row. Lets the
+    /// surface decide whether to auto-open the DETAILS inspector (tab
+    /// + overlay variants do; dock variants don't). Keyboard
+    /// navigation writes to `browserSelection` directly without
+    /// firing this hook.
     onClickRow?: (path: string) => void;
-    /// `fullstack-a-67e` slice 2: surface-owned hook for the
-    /// Settings (flip) entry in the in-tree selection menu.
-    /// FBSurface passes this through from its own `onFlip`
-    /// (which Pane.svelte wires to `flipHybrid(pane.id)`); dock
-    /// + overlay variants don't pass it so the Settings entry
-    /// hides for those variants.
+    /// Surface-owned hook for the Settings (flip) entry in the
+    /// in-tree selection menu. FBSurface passes this through from its
+    /// own `onFlip` (which Pane.svelte wires to
+    /// `flipHybrid(pane.id)`); dock + overlay variants don't pass it
+    /// so the Settings entry hides for those variants.
     onFlip?: () => void;
   } = $props();
   const rightDock = $derived(dockSide === "right");
@@ -130,17 +129,15 @@
     return safe;
   }
 
-  // Bug 2 / round-1: File Browser native drag IN and OUT is removed.
-  // The macOS native drag-out crashed and Linux/Windows were already
-  // no-ops; the user now exports via the Download button and imports
-  // via the Upload button. So `onFileDragStart` no longer writes the
-  // `DownloadURL` / `text/uri-list` browser drag-out payload, does NOT
-  // invoke the (now removed) desktop native drag-out Tauri command, and
-  // the row drop handlers no longer accept external OS files. What
-  // stays is the APP-INTERNAL
-  // drag: tree-move (relocate a node within the tree) and the
-  // file-into-editor-pane open. Those never cross the OS boundary and
-  // never hit the crashing native path.
+  // File Browser native drag IN and OUT is not supported (the macOS
+  // native drag-out crashed and other platforms were no-ops): the
+  // user exports via the Download button and imports via the Upload
+  // button. So `onFileDragStart` does not write the `DownloadURL` /
+  // `text/uri-list` browser drag-out payload, does not invoke a
+  // desktop native drag-out Tauri command, and the row drop handlers
+  // do not accept external OS files. Only the APP-INTERNAL drag is
+  // supported: tree-move (relocate a node within the tree) and the
+  // file-into-editor-pane open. Those never cross the OS boundary.
   function onFileDragStart(e: DragEvent, path: string, isDir: boolean): void {
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "move";
@@ -522,9 +519,9 @@
   /// metadata pane to surface the selection. If they explicitly
   /// closed the inspector earlier and then click another row, the
   /// click takes precedence (and reopens it on next reload via the
-  /// URL hash). `fullstack-80`: the inspector-open call moved
-  /// behind `onClickRow` so the surface can gate it per variant
-  /// (tab + overlay auto-open; dock doesn't).
+  /// URL hash). The inspector-open call sits behind `onClickRow` so
+  /// the surface can gate it per variant (tab + overlay auto-open;
+  /// dock doesn't).
   function selectPath(path: string, ev?: MouseEvent): void {
     // Desktop-file-browser click semantics:
     //   - cmd/ctrl+click toggles one entry in the set.
@@ -551,12 +548,10 @@
     menu = { x: ev.clientX, y: ev.clientY, path, isDir };
   }
 
-  /// `fullstack-a-67e` slice 2: unified "New File or
-  /// Directory" entry. Opens a single PathPromptModal with
-  /// `kind: "either"`; trailing slash → dir, otherwise →
-  /// file. The legacy `newFile` / `newDir` helpers are no
-  /// longer wired to the menu but kept exported in `fileOps`
-  /// for callers that want the kind-specific variants.
+  /// Unified "New File or Directory" entry. Opens a single
+  /// PathPromptModal with `kind: "either"`; trailing slash → dir,
+  /// otherwise → file. The kind-specific `newFile` / `newDir`
+  /// helpers stay exported in `fileOps` for callers that want them.
   async function newFileOrDir(parentPath: string): Promise<void> {
     menu = null;
     await fileOps.createFileOrDir(parentPath);
@@ -584,31 +579,23 @@
     browserSelection.showWorkspace = false;
     menu = null;
   }
-  /// Settings (flip) — routes through the surface-supplied
-  /// `onFlip` callback (FBSurface → Pane.svelte →
-  /// `flipHybrid(pane.id)`). Gated on `onFlip` existence so
-  /// dock + overlay variants don't surface the entry.
+  /// Settings (flip), routes through the surface-supplied `onFlip`
+  /// callback (FBSurface → Pane.svelte → `flipHybrid(pane.id)`).
+  /// Gated on `onFlip` existence so dock + overlay variants don't
+  /// surface the entry.
   function flipFromMenu(): void {
     menu = null;
     onFlip?.();
   }
 
-  /// `fullstack-a-80` slice 1: detect `Drafts/team-{name}/`
-  /// directories. The team workspace primitive
-  /// (`systacean-30`) puts every team under `Drafts/team-<name>/`
-  /// with a `config.toml` at the root; this helper just
-  /// matches the path shape since the `config.toml` check
-  /// would need a tree-lookup that isn't currently cheap from
-  /// here. False positives (any `Drafts/team-foo/` dir without
-  /// a config) gracefully fall through: the server's
-  /// `team_events_dir` returns a not-found error which the
-  /// caller surfaces.
-  /// `fullstack-a-67e` slice 2: dropped the legacy `newFile` /
-  /// `newDir` local helpers along with the menu's separate New
-  /// File / New Directory entries. The unified `newFileOrDir`
-  /// above is the only menu surface; `fileOps.createFile` /
-  /// `createDir` remain on the store for callers that need the
-  /// kind-specific variants.
+  /// Detect `Drafts/team-{name}/` directories. The team workspace
+  /// primitive puts every team under `Drafts/team-<name>/` with a
+  /// `config.toml` at the root; this helper matches the path shape
+  /// only, since the `config.toml` check would need a tree-lookup
+  /// that isn't cheap from here. False positives (any
+  /// `Drafts/team-foo/` dir without a config) fall through
+  /// gracefully: the server's `team_events_dir` returns a not-found
+  /// error which the caller surfaces.
   async function rename(path: string, isDir: boolean): Promise<void> {
     await fileOps.rename(path, isDir);
     menu = null;
@@ -1251,13 +1238,13 @@
           {#if expanded[node.path]}
             <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
           {:else if rightDock}
-            <!-- `fullstack-49`: when the tree sits in the right-docked
-                 side pane the rows mirror (text right-aligned, icons +
-                 chevron on the rightmost edge), so the collapsed
-                 chevron also mirrors. Children "open inward" toward
-                 the editor pane on the left, hence the left-facing
-                 glyph. Expanded chevron stays ChevronDown -- it's
-                 already symmetric on the horizontal axis. -->
+            <!-- When the tree sits in the right-docked side pane the
+                 rows mirror (text right-aligned, icons + chevron on
+                 the rightmost edge), so the collapsed chevron also
+                 mirrors. Children "open inward" toward the editor
+                 pane on the left, hence the left-facing glyph. The
+                 expanded chevron stays ChevronDown (already symmetric
+                 on the horizontal axis). -->
             <ChevronLeft size={14} strokeWidth={1.75} aria-hidden="true" />
           {:else}
             <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" />
@@ -1374,22 +1361,17 @@
 
 {#if menu}
   <div class="ctx" use:portal use:clampMenu={{ x: menu.x, y: menu.y }}>
-    <!-- `fullstack-a-67e`: in-tree selection menu reshape per
-         addendum-a's File Browser spec. Section label first
-         ("From selection"), workflow entries (New File / New
-         Dir / Search / New Terminal / New Graph), then row ops.
-         Addendum-a doesn't explicitly list Copy Path / Rename
-         / Delete; keeping them avoids regressing destructive +
-         path ops with no other surface. Flag in journal.
-         `fullstack-a-67e` slice 2: unified "New File or
-         Directory" entry replaces the separate New File +
-         New Directory rows; the modal detects file-vs-dir
-         from the path's trailing slash. Settings (flip)
-         entry added at the foot when `onFlip` is wired
-         (tab variant only; dock + overlay variants pass no
-         onFlip so the entry hides). Transfer rows are docked
-         only because tab and overlay variants expose the shared
-         inspector actions. -->
+    <!-- In-tree selection menu. Section label first ("From
+         selection"), workflow entries (New File or Directory /
+         Search / New Terminal / New Graph), then row ops (Copy Path
+         / Rename / Delete, kept here since this is the only surface
+         for destructive + path ops). The unified "New File or
+         Directory" entry detects file-vs-dir from the path's
+         trailing slash. A Settings (flip) entry renders at the foot
+         when `onFlip` is wired (tab variant only; dock + overlay
+         variants pass no onFlip so the entry hides). Transfer rows
+         are docked only because tab and overlay variants expose the
+         shared inspector actions. -->
     <div class="from-selection-label">From selection</div>
     {#if menu.isDir}
       <button onclick={() => newFileOrDir(menu!.path)}>
@@ -1567,13 +1549,13 @@
     flex: 1;
     color: inherit;
     font: inherit;
-    /* `fullstack-a-62`: fade long filenames at the edge instead of
-       wrapping to a second line. Same pattern as Pane.svelte's
-       tab-name mask: keep `nowrap` + `overflow: hidden` so the row
-       stays one line, then apply a linear-gradient mask that fades
-       the last 1.25rem of width to transparent. Mask is keyed off
-       the row's own width so FB column resize automatically widens
-       or narrows the visible portion. */
+    /* Fade long filenames at the edge instead of wrapping to a
+       second line. Same pattern as Pane.svelte's tab-name mask: keep
+       `nowrap` + `overflow: hidden` so the row stays one line, then
+       apply a linear-gradient mask that fades the last 1.25rem of
+       width to transparent. Mask is keyed off the row's own width so
+       FB column resize automatically widens or narrows the visible
+       portion. */
     display: block;
     white-space: nowrap;
     overflow: hidden;
@@ -1591,10 +1573,10 @@
   }
   .tree.right-dock .name {
     text-align: right;
-    /* `fullstack-a-62`: in right-dock the text right-aligns, so the
-       fade flips direction — the LEFT edge fades (where the long
-       part of the filename gets truncated). Mirrors Pane.svelte's
-       right-dock tab-name handling. */
+    /* In right-dock the text right-aligns, so the fade flips
+       direction: the LEFT edge fades (where the long part of the
+       filename gets truncated). Mirrors Pane.svelte's right-dock
+       tab-name handling. */
     mask-image: linear-gradient(to left, black calc(100% - 1.25rem), transparent);
     -webkit-mask-image: linear-gradient(to left, black calc(100% - 1.25rem), transparent);
   }
@@ -1710,9 +1692,8 @@
     display: flex;
     flex-direction: column;
     min-width: 180px;
-    /* `fullstack-a-8`: easeOutBack bubble-pop matching the rest
-       of the chrome (HamburgerMenu, tab-menu bubbles). The
-       phase-7 right-click rework dropped the wobble here. */
+    /* easeOutBack bubble-pop matching the rest of the chrome
+       (HamburgerMenu, tab-menu bubbles). */
     transform-origin: top left;
     animation: ctx-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
     transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -1770,8 +1751,8 @@
     opacity: 0;
     pointer-events: none;
   }
-  /* `fullstack-a-67e`: "From selection" section label.
-     Subdued style mirroring TerminalTab's `.from-cwd-label`. */
+  /* "From selection" section label. Subdued style mirroring
+     TerminalTab's `.from-cwd-label`. */
   .from-selection-label {
     padding: 4px 8px 2px;
     color: var(--text-secondary);

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import canvas from "./GraphCanvas.svelte?raw";
 import panel from "./GraphPanel.svelte?raw";
 
-// Phase-11 Slice F edge palette (round-1 spec):
+// Graph edge palette:
 //   * directory->directory and directory->file containment edges stay
 //     GREY (the `contains` kind, stroked in theme.folder),
 //   * every OTHER edge matches its document type honouring the Graph
@@ -10,11 +10,10 @@ import panel from "./GraphPanel.svelte?raw";
 //     `link` (wiki/markdown reference) edge is coloured by the SOURCE
 //     document's kind (markdown orange --g-doc, source royalblue
 //     --g-source, etc.).
-// These are source-pinning assertions in the same style as the existing
-// graphDraftsStyling tests; the canvas paint context isn't unit-testable
-// directly, so we pin the colour-resolution structure.
+// The canvas paint context isn't unit-testable directly, so these are
+// source-pinning assertions on the colour-resolution structure.
 
-describe("Slice F: contains (dir->dir / dir->file) edges stay grey", () => {
+describe("contains (dir->dir / dir->file) edges stay grey", () => {
   test("contains maps to theme.folder (grey)", () => {
     expect(canvas).toMatch(/kind === "contains" \? theme\.folder/);
   });
@@ -26,10 +25,9 @@ describe("Slice F: contains (dir->dir / dir->file) edges stay grey", () => {
   });
 });
 
-describe("Slice F: link edges coloured by source document type", () => {
+describe("link edges coloured by source document type", () => {
   test("fileKindColor resolves the palette hue per node kind", () => {
     expect(canvas).toMatch(/function fileKindColor\(kind: DKind\): string/);
-    // Markdown documents are orange (--g-doc); the round-1 example.
     expect(canvas).toMatch(/case "doc":\s*\n\s*return theme\.doc;/);
     // Source files royalblue (--g-source).
     expect(canvas).toMatch(/case "source":\s*\n\s*return theme\.source;/);
@@ -47,7 +45,7 @@ describe("Slice F: link edges coloured by source document type", () => {
   });
 });
 
-describe("Slice F: non-document edges keep their palette hue", () => {
+describe("non-document edges keep their palette hue", () => {
   test("tag green / mention / language retain their own colours", () => {
     expect(canvas).toMatch(/kind === "tag" \? theme\.tag/);
     expect(canvas).toMatch(/kind === "mention" \? theme\.mention/);
@@ -55,7 +53,7 @@ describe("Slice F: non-document edges keep their palette hue", () => {
   });
 });
 
-describe("Slice F: Graph reuses the FB per-directory pub/sub", () => {
+describe("Graph reuses the FB per-directory pub/sub", () => {
   test("GraphPanel imports the fbWatch manager", () => {
     expect(panel).toMatch(/fbWatchRegister/);
     expect(panel).toMatch(/fbWatchReconcile/);
