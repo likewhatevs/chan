@@ -14,7 +14,6 @@
   import {
     ArrowLeft,
     ArrowRight,
-    Database,
     Maximize2,
     Minimize2,
     RotateCw,
@@ -34,7 +33,6 @@
   } from "../state/graphData.svelte";
   import { openInActivePane } from "../state/tabs.svelte";
   import {
-    availableSearchScopes,
     loadTreeDir,
     openFsGraphForFile,
     openGraphForTag,
@@ -42,10 +40,8 @@
     persistPaneWidths,
     revealPathInBrowser,
     searchPanel,
-    searchStatusOverlay,
     tree,
   } from "../state/store.svelte";
-  import { type ScopeOption, defaultScopeId } from "../state/scope.svelte";
   import { chordFor } from "../state/shortcuts";
   import Bubble from "./Bubble.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
@@ -97,7 +93,6 @@
   let queryToken = 0;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let hitsResizeObs: ResizeObserver | null = null;
-  let lastSearchedScopeId = "";
   const reportCache = new Map<string, ReportFileStats | null>();
 
   // Reset transient state when the panel reopens so a stale set
@@ -178,75 +173,6 @@
     searchPanel.open = false;
   }
 
-  /// Scope picker shape - same dropdown contract as Graph and
-  /// details pane. Re-derives whenever the layout shifts so opening a
-  /// new pane or switching the visible tab refreshes the options
-  /// without reopening the panel.
-  const scopeOptions = $derived<ScopeOption[]>(availableSearchScopes());
-  const currentScope = $derived<ScopeOption | null>(
-    scopeOptions.find((o) => o.id === searchPanel.scopeId) ?? null,
-  );
-
-  /// If a saved/direct scope no longer resolves, snap back to the
-  /// whole workspace. Direct file/directory scopes opened from the File
-  /// Browser are injected by `availableSearchScopes()` so they remain
-  /// valid even when the item is not open in a pane.
-  $effect(() => {
-    if (!searchPanel.open) return;
-    if (currentScope) return;
-    untrack(() => {
-      searchPanel.scopeId = "workspace";
-    });
-  });
-
-  /// Changing the scope changes both the client-side row filter and
-  /// the server query limit. Re-run the async search path when the
-  /// panel is already open so direct File Browser "Search this"
-  /// actions do not inherit stale whole-workspace results.
-  $effect(() => {
-    const scopeId = searchPanel.scopeId;
-    const open = searchPanel.open;
-    const scope = currentScope;
-    if (!open) {
-      lastSearchedScopeId = scopeId;
-      return;
-    }
-    if (!scope || scopeId === lastSearchedScopeId) return;
-    lastSearchedScopeId = scopeId;
-    untrack(() => {
-      if (searchPanel.query.trim()) {
-        scheduleSearch();
-      } else {
-        chunkHits = [];
-        languageHits = [];
-        active = 0;
-      }
-    });
-  });
-
-  /// Predicate: does `path` belong to the active scope? Content
-  /// search still asks the server workspace-wide and filters returned
-  /// rows here; filename/report/tag rows are filtered locally from
-  /// the same predicate.
-  function pathInScope(path: string): boolean {
-    const s = currentScope;
-    if (!s) return true;
-    if (s.kind === "workspace" || s.kind === "global") return true;
-    if (s.kind === "file") return path === s.path;
-    if (s.kind === "dir") {
-      if (!s.path) return true;
-      return path === s.path || path.startsWith(`${s.path}/`);
-    }
-    if (s.kind === "git_repo") {
-      if (!s.root) return true;
-      return path === s.root || path.startsWith(`${s.root}/`);
-    }
-    if (s.kind === "group") {
-      return s.paths.includes(path);
-    }
-    return true;
-  }
-
   function scheduleSearch(): void {
     if (debounceTimer) clearTimeout(debounceTimer);
     const q = searchPanel.query.trim();
@@ -256,8 +182,7 @@
       loading = false;
       return;
     }
-    const scoped = currentScope?.kind !== "workspace" && currentScope?.kind !== "global";
-    const limit = scoped ? 100 : 25;
+    const limit = 25;
     queryToken += 1;
     const myToken = queryToken;
     loading = true;
@@ -315,7 +240,7 @@
 
   async function searchLanguage(language: string): Promise<SearchRow[]> {
     await loadSearchTree();
-    const files = tree.entries.filter((e) => !e.is_dir && pathInScope(e.path));
+    const files = tree.entries.filter((e) => !e.is_dir);
     const out: SearchRow[] = [];
     let next = 0;
     const workers = Array.from({ length: Math.min(8, files.length) }, async () => {
@@ -435,29 +360,18 @@
 
 
   /// Tag hits: tag-kind nodes whose label contains the typed query.
-  /// Doc counts are SCOPE-aware: when the scope narrows to a file /
-  /// dir / repo / group, we count only edges whose source doc is in
-  /// scope, and a tag with zero in-scope refs is dropped. Workspace /
-  /// global scopes count everything. Surfacing the count lets the
-  /// user pick the more active tag when several near-matches share
-  /// a prefix.
+  /// Each tag's doc count is its total tag-edge count across the
+  /// workspace; a tag with zero refs is dropped. Surfacing the count
+  /// lets the user pick the more active tag when several near-matches
+  /// share a prefix.
   const tagRows = $derived.by<SearchRow[]>(() => {
     const q = searchPanel.query.trim().toLowerCase();
     if (!q) return [];
     const view = graphData.view;
     if (!view) return [];
-    // Map node id -> file path so we can scope-test the edge source.
-    // The graph view emits file nodes with `kind: "file"` carrying a
-    // path; tag / mention / date nodes don't.
-    const filePath = new Map<string, string>();
-    for (const n of view.nodes) {
-      if (n.kind === "file" && n.path) filePath.set(n.id, n.path);
-    }
     const docCounts = new Map<string, number>();
     for (const e of view.edges) {
       if (e.kind !== "tag") continue;
-      const src = filePath.get(e.source);
-      if (src && !pathInScope(src)) continue;
       docCounts.set(e.target, (docCounts.get(e.target) ?? 0) + 1);
     }
     const out: SearchRow[] = [];
@@ -465,9 +379,7 @@
       if (n.kind !== "tag") continue;
       if (!n.label.toLowerCase().includes(q)) continue;
       const refs = docCounts.get(n.id) ?? 0;
-      // Drop tags that don't touch the current scope. workspace / global
-      // scopes leave every tag with a positive count so nothing is
-      // hidden there.
+      // Drop tags with no referencing documents.
       if (refs === 0) continue;
       out.push({
         kind: "tag",
@@ -490,33 +402,22 @@
   /// then contacts (people get top billing among file-name matches),
   /// images, markdown filename matches, and finally content chunks
   /// (the long tail). Each row has a stable key for the {#each}.
-  /// The scope predicate filters file-bearing kinds by path; tags
-  /// fall through unfiltered (a tag is a graph node, not a file,
-  /// and the document-count column already gives the user a sense
-  /// of breadth). Markdown filename matches are deduped against
-  /// chunk hits so a file that surfaces under both shows once.
+  /// Markdown filename matches are deduped against chunk hits so a
+  /// file that surfaces under both shows once.
   const rows = $derived.by<SearchRow[]>(() => {
     const out: SearchRow[] = [];
     const chunkPaths = new Set<string>();
     for (const h of chunkHits) chunkPaths.add(h.path);
     out.push(...tagRows);
     out.push(...languageHits);
-    for (const r of contactRows) {
-      if (r.kind === "contact" && !pathInScope(r.path)) continue;
-      out.push(r);
-    }
-    for (const r of imageRows) {
-      if (r.kind === "image" && !pathInScope(r.path)) continue;
-      out.push(r);
-    }
+    for (const r of contactRows) out.push(r);
+    for (const r of imageRows) out.push(r);
     for (const r of markdownFileRows) {
       if (r.kind !== "file") continue;
-      if (!pathInScope(r.path)) continue;
       if (chunkPaths.has(r.path)) continue;
       out.push(r);
     }
     for (const h of chunkHits) {
-      if (!pathInScope(h.path)) continue;
       out.push({ kind: "chunk", hit: h, key: `chunk:${h.path}#${h.chunk_id}` });
     }
     return out;
@@ -688,10 +589,6 @@
     }
   }
 
-  function openSearchStatus(): void {
-    searchStatusOverlay.open = true;
-  }
-
   function onSearchContextMenu(e: MouseEvent): void {
     // Bail if the right-click landed on the input - let the browser
     // show its native context menu (paste, spell, etc.) there.
@@ -722,30 +619,6 @@
         {:else}
           <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
         {/if}
-      </button>
-      <span class="title">Scope</span>
-      <select
-        class="scope-select"
-        value={searchPanel.scopeId}
-        onchange={(e) => {
-          searchPanel.scopeId = (e.currentTarget as HTMLSelectElement).value;
-        }}
-        title="search scope"
-      >
-        {#each scopeOptions as opt (opt.id)}
-          <option value={opt.id} disabled={opt.enabled === false}>
-            {opt.label}
-          </option>
-        {/each}
-      </select>
-      <button
-        type="button"
-        class="chrome-btn"
-        onclick={openSearchStatus}
-        title="Show search index status"
-        aria-label="Show search index status"
-      >
-        <Database size={14} strokeWidth={1.75} aria-hidden="true" />
       </button>
       <HamburgerMenu
         bind:this={menu}
@@ -1005,18 +878,9 @@
     color: var(--text-heading);
     flex-shrink: 0;
   }
-  header .title {
-    flex-shrink: 0;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-  /* SCOPE label + select sit on the left; the hamburger gets
-     margin-left: auto via the wrapping :global() rule below so it
-     pins to the right edge, just before the close-button chrome. */
-  header { gap: 0.5rem; }
+  /* The hamburger gets margin-left: auto so it pins to the right
+     edge, just before the close-button chrome; the maximize button
+     stays at the far left. */
   header :global(.hamburger-trigger) { margin-left: auto; }
   /* Window-manager chrome: maximize/restore lives at the far left
      of the header, close at the far right. Matches the
@@ -1061,20 +925,6 @@
     outline: none;
   }
   .head input:focus { border-color: var(--link); }
-  header .scope-select {
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 4px 6px;
-    font: inherit;
-    font-size: 13px;
-    max-width: 220px;
-    cursor: pointer;
-    flex-shrink: 1;
-    min-width: 0;
-  }
-  header .scope-select:focus { outline: none; border-color: var(--link); }
   .status-line {
     padding: 4px 10px;
     font-size: 13px;

@@ -16,7 +16,6 @@
     FolderOpen,
     Network,
     Pencil,
-    Search,
     Settings2,
     Terminal as TerminalIcon,
     Trash2,
@@ -53,8 +52,6 @@
     loadTreeDir,
     openFsGraphForDirectory,
     openFsGraphForFile,
-    openSearchForDirectory,
-    openSearchForFile,
     ensureFbTreeInstance,
     fbTreeInstance,
     persistFbTreeInstanceExpansion,
@@ -651,12 +648,6 @@
     menu = null;
     if (isDir) openFsGraphForDirectory(path);
     else openFsGraphForFile(path);
-  }
-
-  function searchThis(path: string, isDir: boolean): void {
-    menu = null;
-    if (isDir) openSearchForDirectory(path);
-    else openSearchForFile(path);
   }
 
   function terminalFromHere(path: string, isDir: boolean): void {
@@ -1363,7 +1354,7 @@
   <div class="ctx" use:portal use:clampMenu={{ x: menu.x, y: menu.y }}>
     <!-- In-tree selection menu. Section label first ("From
          selection"), workflow entries (New File or Directory /
-         Search / New Terminal / New Graph), then row ops (Copy Path
+         New Terminal / New Graph), then row ops (Copy Path
          / Rename / Delete, kept here since this is the only surface
          for destructive + path ops). The unified "New File or
          Directory" entry detects file-vs-dir from the path's
@@ -1379,10 +1370,6 @@
         <span>New File or Directory</span>
       </button>
     {/if}
-    <button onclick={() => searchThis(menu!.path, menu!.isDir)}>
-      <Search size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>Search</span>
-    </button>
     <button onclick={() => terminalFromHere(menu!.path, menu!.isDir)}>
       <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
       <span>New Terminal</span>

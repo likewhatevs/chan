@@ -76,7 +76,6 @@ afterEach(() => {
   searchPanel.open = false;
   searchPanel.inspectorOpen = false;
   searchPanel.query = "";
-  searchPanel.scopeId = "workspace";
   graphReloadSignal.nonce = 0;
   browserSelection.path = null;
   browserSelection.showWorkspace = false;
@@ -340,7 +339,6 @@ describe("legacy overlay hash retirement", () => {
     searchPanel.open = true;
     searchPanel.query = "hello";
     searchPanel.inspectorOpen = true;
-    searchPanel.scopeId = "workspace";
 
     persistStateToHash();
 

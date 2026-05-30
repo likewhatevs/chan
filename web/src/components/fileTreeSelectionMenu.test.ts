@@ -2,8 +2,9 @@ import { describe, expect, test } from "vitest";
 import tree from "./FileTree.svelte?raw";
 
 // FileTree in-tree selection menu: "From selection" header, New Graph
-// entry, label updates (Search, New Terminal), separator between
-// workflow and per-row ops, and unified "New File or Directory" dialog.
+// entry, label updates (New Terminal), Search entry removed (search is
+// workspace-wide via Cmd+K), separator between workflow and per-row
+// ops, and unified "New File or Directory" dialog.
 
 describe("FileTree selection menu header + new entries", () => {
   test("From-selection label rendered at the top of the ctx menu", () => {
@@ -12,8 +13,8 @@ describe("FileTree selection menu header + new entries", () => {
     );
   });
 
-  test("Search label relabelled (was \"Search this\")", () => {
-    expect(tree).toMatch(/<span>Search<\/span>/);
+  test("Search entry removed (search is workspace-wide via Cmd+K)", () => {
+    expect(tree).not.toMatch(/<span>Search<\/span>/);
     expect(tree).not.toMatch(/<span>Search this<\/span>/);
   });
 

@@ -45,11 +45,7 @@ import {
   proposeDefaultFilename,
 } from "./pathValidate";
 import { setNotifyHandler } from "./notify.svelte";
-import {
-  availableScopeOptions,
-  defaultScopeId,
-  type ScopeOption,
-} from "./scope.svelte";
+import { defaultScopeId } from "./scope.svelte";
 import {
   clearTabError,
   flagExternalChange,
@@ -1079,17 +1075,15 @@ export function scheduleWorkspaceRefresh(): void {
 const HASH_LAYOUT = "s";
 const HASH_SIDEBAR = "c"; // "1" if collapsed, absent if expanded
 const HASH_SEARCH = "search";
-const HASH_SEARCH_SCOPE = "search_scope";
-// The `settings`, `files`, and `graph` overlay hash keys are no longer
-// active. Cmd+, flips the focused Hybrid (no global Settings overlay);
-// graph and browser surfaces are first-class tabs that persist via the
-// layout `s` key. Old bookmarks with these keys degrade gracefully:
-// they are not in HASH_KEYS so dropUnknownHashKeys strips them on the
-// next write.
+// The `settings`, `files`, `graph`, and `search_scope` overlay hash
+// keys are no longer active. Cmd+, flips the focused Hybrid (no global
+// Settings overlay); graph and browser surfaces are first-class tabs
+// that persist via the layout `s` key; search is workspace-wide with
+// no scope. Old bookmarks with these keys degrade gracefully: they are
+// not in HASH_KEYS so dropUnknownHashKeys strips them on the next write.
 const HASH_KEYS = new Set([
   HASH_LAYOUT,
   HASH_SEARCH,
-  HASH_SEARCH_SCOPE,
 ]);
 
 function hashParams(): URLSearchParams {
@@ -1152,14 +1146,9 @@ function applyOverlaysFromHash(): void {
   // and `graph=` bookmarks are ignored and stripped on next write.
   if (params.has(HASH_SEARCH)) {
     // Encoding: `<inspectorBit>:<query>`. Both fields optional.
-    // Scope rides in a sibling `HASH_SEARCH_SCOPE` key so user
-    // queries can contain any character (`|`, `:`, `,`) without
-    // colliding with the encoding separators.
     const [ins, query] = splitInspectorBit(params.get(HASH_SEARCH) ?? "");
     if (ins !== null) searchPanel.inspectorOpen = ins;
     searchPanel.query = query;
-    const scope = params.get(HASH_SEARCH_SCOPE);
-    if (scope) searchPanel.scopeId = scope;
     searchPanel.open = true;
   }
 }
@@ -1191,17 +1180,8 @@ export function persistStateToHash(): void {
   if (searchPanel.open) {
     const ins = searchPanel.inspectorOpen ? "1" : "0";
     params.set(HASH_SEARCH, `${ins}:${searchPanel.query ?? ""}`);
-    // Sibling scope key. Omit on the workspace default so common URLs
-    // stay short; presence overrides the default on restore.
-    const scope = searchPanel.scopeId;
-    if (scope && scope !== "workspace") {
-      params.set(HASH_SEARCH_SCOPE, scope);
-    } else {
-      params.delete(HASH_SEARCH_SCOPE);
-    }
   } else {
     params.delete(HASH_SEARCH);
-    params.delete(HASH_SEARCH_SCOPE);
   }
   const next = params.toString();
   url.hash = next ? `#${next}` : "";
@@ -1467,75 +1447,16 @@ export const searchPanel = $state<{
   /// component so it round-trips through the URL hash: copy-paste of
   /// a chan URL with `search=foo` lands on the same query.
   query: string;
-  /// Selected scope id (file:<path> / dir:<path> / git_repo:<root> /
-  /// group:<key> / workspace / global). Matches the same scope picker
-  /// shape Graph uses, fed by availableScopeOptions().
-  /// Today the server-side /api/search/content has no scope param,
-  /// so the SearchPanel filters hits client-side against this id;
-  /// `workspace` and `global` mean "no filter".
-  scopeId: string;
 }>({
   open: false,
   inspectorOpen: false,
   query: "",
-  scopeId: "workspace",
 });
 
 // ---- graph overlay -----------------------------------------------------
 //
 // Open + scope picker state, plus a `depth` knob for how far the
 // file/group scopes expand into their neighbors in the link graph.
-
-/** Build the dropdown options for the search overlay. Server-side
- *  content search is still workspace-wide, so SearchPanel applies these
- *  scopes as a client-side result filter. File Browser "Search this"
- *  can inject direct file/directory scopes even when the item is not
- *  open in a pane. */
-export function availableSearchScopes(): ScopeOption[] {
-  const out = availableScopeOptions({
-    workspaceLabel: "Whole workspace",
-    global: { label: "All workspaces (cross-workspace, coming soon)", enabled: false },
-  });
-
-  function addDirScope(path: string, labelPrefix = "directory"): void {
-    if (!path || out.some((o) => o.id === `dir:${path}`)) return;
-    const slash = path.lastIndexOf("/");
-    const name = slash >= 0 ? path.slice(slash + 1) : path;
-    out.unshift({
-      id: `dir:${path}`,
-      kind: "dir",
-      label: `${labelPrefix}: ${name}/`,
-      path,
-    });
-  }
-
-  if (searchPanel.scopeId.startsWith("file:")) {
-    const path = searchPanel.scopeId.slice("file:".length);
-    if (path && !out.some((o) => o.id === searchPanel.scopeId)) {
-      out.unshift({
-        id: searchPanel.scopeId,
-        kind: "file",
-        label: path,
-        path,
-        readOnly: false,
-      });
-    }
-  }
-  if (searchPanel.scopeId.startsWith("dir:")) {
-    addDirScope(searchPanel.scopeId.slice("dir:".length));
-  }
-  return out;
-}
-
-export function openSearchForFile(path: string): void {
-  searchPanel.scopeId = `file:${path}`;
-  searchPanel.open = true;
-}
-
-export function openSearchForDirectory(path: string): void {
-  searchPanel.scopeId = `dir:${path}`;
-  searchPanel.open = true;
-}
 
 /** Edge-kind / node-kind chip toggles on the graph. `link`, `tag`,
  *  `mention` are edge-kind filters (their edges plus any node only

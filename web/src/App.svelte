@@ -203,10 +203,6 @@
     if (!bootstrapped) return;
     void searchPanel.open;
     void searchPanel.query;
-    // search_scope= sibling key in the hash captures this; bumping
-    // it here ensures the persistence effect reruns when the user
-    // narrows the search to a directory / file / repo.
-    void searchPanel.scopeId;
     void searchPanel.inspectorOpen;
     void browserSidePanes.left;
     void browserSidePanes.right;
