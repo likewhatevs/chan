@@ -62,8 +62,10 @@ describe("Pane.svelte render branch + import", () => {
   test("render branch matches active?.kind === \"dashboard\" and passes the live tab", () => {
     // The live DashboardTab proxy is threaded through so the carousel
     // slide cursor can round-trip into the session serializer.
+    // `frontActive={!pane.showingBack}` force-pauses the carousel while
+    // the two-face card is flipped to its config back.
     expect(pane).toMatch(
-      /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,200}<DashboardTab tab=\{active\} \/>/,
+      /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,400}<DashboardTab tab=\{active\} frontActive=\{!pane\.showingBack\} \/>/,
     );
   });
 });
@@ -246,8 +248,11 @@ describe("DashboardTab mounts the carousel", () => {
       /import EmptyPaneCarousel from "\.\/EmptyPaneCarousel\.svelte";/,
     );
     // The persisted slide cursor + write-back callback survive a reload.
+    // The carousel is controlled now (`slide` prop, not a one-shot
+    // `initialSlide` snapshot) so the front dots and the flip-back slot
+    // picker share tab.carouselSlide as the single source of truth.
     expect(dashboard).toMatch(
-      /<EmptyPaneCarousel[\s\S]{1,400}initialSlide=\{tab\.carouselSlide \?\? 0\}[\s\S]{1,200}onSlideChange=\{onCarouselSlideChange\}/,
+      /<EmptyPaneCarousel[\s\S]{1,400}slide=\{tab\.carouselSlide \?\? 0\}[\s\S]{1,200}onSlideChange=\{onCarouselSlideChange\}/,
     );
     expect(dashboard).toMatch(
       /import \{[\s\S]{1,400}scheduleSessionSave[\s\S]{1,200}\} from "\.\.\/state\/store\.svelte"/,

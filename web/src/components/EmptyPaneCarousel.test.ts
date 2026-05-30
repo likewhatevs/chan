@@ -20,10 +20,10 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function renderCarousel() {
+async function renderCarousel(props: Record<string, any> = {}) {
   const target = document.createElement("div");
   document.body.append(target);
-  const component = mount(EmptyPaneCarousel, { target, props: {} });
+  const component = mount(EmptyPaneCarousel, { target, props });
   mounted.push(component);
   await tick();
   return target;
@@ -52,24 +52,27 @@ describe("EmptyPaneCarousel", () => {
     expect(target.querySelector(".spawn-row")).toBeNull();
   });
 
-  test("clicking a dot navigates to that slide", async () => {
-    const target = await renderCarousel();
+  test("clicking a dot requests that slide via onSlideChange", async () => {
+    // The carousel is controlled now: a dot click does not mutate
+    // internal state, it asks the parent (DashboardTab ->
+    // tab.carouselSlide) to move the shared cursor. The cursor is the
+    // single source of truth so the flip-back slot picker stays in
+    // sync, so the contract under test is the request, not a
+    // self-driven re-render. The `slide` prop stays 0 here (no parent
+    // feeding it back), so each request is computed from slide 0.
+    const calls: number[] = [];
+    const target = await renderCarousel({
+      slide: 0,
+      onSlideChange: (i: number) => calls.push(i),
+    });
 
     const dots = [...target.querySelectorAll<HTMLButtonElement>(".dot-btn")];
     expect(dots.length).toBe(3);
 
     dots[1]?.click();
-    await tick();
-    expect(target.querySelector(".slide-workspace")).not.toBeNull();
-    expect(target.querySelector(".slide-about")).toBeNull();
-
     dots[2]?.click();
-    await tick();
-    expect(target.querySelector(".slide-indexing")).not.toBeNull();
-
     dots[0]?.click();
-    await tick();
-    expect(target.querySelector(".slide-about")).not.toBeNull();
+    expect(calls).toEqual([1, 2, 0]);
   });
 
   test("carries no oncontextmenu forwarder prop", async () => {
@@ -82,8 +85,15 @@ describe("EmptyPaneCarousel", () => {
     expect(raw).not.toMatch(/\{oncontextmenu\}/);
   });
 
-  test("right and left arrow keys nudge the active slide", async () => {
-    const target = await renderCarousel();
+  test("right and left arrow keys request prev/next via onSlideChange", async () => {
+    // Mounted on slide 1 (Workspace) with a fixed `slide` prop, so
+    // ArrowRight requests 2 and ArrowLeft requests 0, both relative to
+    // the controlled cursor the parent owns.
+    const calls: number[] = [];
+    const target = await renderCarousel({
+      slide: 1,
+      onSlideChange: (i: number) => calls.push(i),
+    });
 
     const carousel = target.querySelector<HTMLDivElement>(".carousel");
     expect(carousel).not.toBeNull();
@@ -91,14 +101,10 @@ describe("EmptyPaneCarousel", () => {
     carousel?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
     );
-    await tick();
-    expect(target.querySelector(".slide-workspace")).not.toBeNull();
-
     carousel?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
     );
-    await tick();
-    expect(target.querySelector(".slide-about")).not.toBeNull();
+    expect(calls).toEqual([2, 0]);
   });
 
   // The carousel must not paint its own `:focus-visible` inset ring;

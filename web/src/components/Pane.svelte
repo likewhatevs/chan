@@ -1297,7 +1297,11 @@
             onFlip={() => flipHybrid(pane.id)}
           />
         {:else if active?.kind === "dashboard"}
-          <DashboardTab tab={active} />
+          <!-- `frontActive={!pane.showingBack}`: the two-face card keeps
+               this front carousel mounted while flipped to the config
+               back, so tell it to force-pause auto-rotate + the indexing
+               poll until it faces front again. -->
+          <DashboardTab tab={active} frontActive={!pane.showingBack} />
         {:else if !active}
           <div
             class="placeholder"

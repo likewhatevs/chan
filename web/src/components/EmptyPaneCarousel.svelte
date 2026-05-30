@@ -133,6 +133,18 @@
     }
   }
 
+  /// Which directory states are actually present right now. The Search
+  /// front legend always shows "indexed" (the steady state) but only
+  /// surfaces "indexing" / "pending" while at least one directory is in
+  /// that state, so a fully-indexed workspace reads as one clean legend
+  /// entry instead of two dead ones.
+  const hasIndexingNodes = $derived(
+    indexing?.nodes.some((n) => n.state === "indexing") ?? false,
+  );
+  const hasPendingNodes = $derived(
+    indexing?.nodes.some((n) => n.state === "pending") ?? false,
+  );
+
   function basename(path: string): string {
     if (path === "") return "/";
     const slash = path.lastIndexOf("/");
@@ -272,36 +284,30 @@
   /// its DashboardTab.carouselSlide field so subsequent reloads keep
   /// the position aligned. Both props default to no-op for
   /// non-DashboardTab hosts.
+  // DashboardTab passes the live slide cursor in (sourced from
+  // tab.carouselSlide) plus `onSlideChange` to write moves back. The
+  // carousel is CONTROLLED: tab.carouselSlide is the single source of
+  // truth, so the front dots and the flip-back slot picker stay in
+  // sync with no snapshot to drift. `active` is false while the pane is
+  // flipped to its config back; the front then force-pauses auto-rotate
+  // and the indexing poll, so a back-side slot pick is not yanked out
+  // from under the user and the rotated-away carousel does not tick
+  // invisibly.
   type Props = {
-    initialSlide?: number;
+    slide?: number;
     onSlideChange?: (slide: number) => void;
+    active?: boolean;
   };
-  let { initialSlide = 0, onSlideChange }: Props = $props();
+  let { slide = 0, onSlideChange, active = true }: Props = $props();
 
   const slideCount = 3;
-  // Capture the initial prop value into a `$state` cell exactly
-  // once at mount. Subsequent prop changes don't fight the user's
-  // live navigation: the parent's tab.carouselSlide value is the
-  // SOURCE for THIS mount; once mounted, the carousel owns its
-  // own cursor and writes back via `onSlideChange`.
-  function clampInitialSlide(raw: number): number {
-    return Math.min(Math.max(0, Math.floor(raw)), 2);
-  }
-  // One-shot snapshot of the persisted slide cursor. The
-  // `state_referenced_locally` lint warns that a $state init
-  // expression only sees the initial prop value, which is the exact
-  // semantic we want here: a derived live link would have the parent
-  // yank the cursor back as it observes its own writes during
-  // navigation.
-  // svelte-ignore state_referenced_locally
-  let slideIndex = $state(clampInitialSlide(initialSlide));
-  // Fire the parent callback whenever the cursor moves. The
-  // tab.carouselSlide update is idempotent (the DashboardTab
-  // handler short-circuits when the value already matches) so an
-  // initial-mount fire is a no-op when the prop already matched.
-  $effect(() => {
-    onSlideChange?.(slideIndex);
-  });
+  // Clamp the controlled cursor to range. Keeping the name `slideIndex`
+  // lets the template read the current slot unchanged; it is a derived
+  // view of the prop now, not local state, so there is nothing to keep
+  // in sync.
+  const slideIndex = $derived(
+    Math.min(Math.max(0, Math.floor(slide)), slideCount - 1),
+  );
   let hovering = $state(false);
   let focused = $state(false);
   /// `cycling` is the explicit, persisted preference. `hovering` /
@@ -311,7 +317,7 @@
   const cycling = $derived<boolean>(
     workspace.info?.preferences?.empty_pane_carousel_cycling ?? true,
   );
-  const paused = $derived(hovering || focused || !cycling);
+  const paused = $derived(hovering || focused || !cycling || !active);
   let containerEl: HTMLDivElement | undefined = $state();
 
   /// Auto-rotate while neither hovered nor focused AND the user
@@ -323,7 +329,7 @@
     void slideIndex;
     if (paused) return;
     const handle = window.setInterval(() => {
-      slideIndex = (slideIndex + 1) % slideCount;
+      onSlideChange?.((slideIndex + 1) % slideCount);
     }, 5000);
     return () => window.clearInterval(handle);
   });
@@ -347,13 +353,13 @@
   }
 
   function prev(): void {
-    slideIndex = (slideIndex - 1 + slideCount) % slideCount;
+    onSlideChange?.((slideIndex - 1 + slideCount) % slideCount);
   }
   function next(): void {
-    slideIndex = (slideIndex + 1) % slideCount;
+    onSlideChange?.((slideIndex + 1) % slideCount);
   }
   function goTo(i: number): void {
-    slideIndex = ((i % slideCount) + slideCount) % slideCount;
+    onSlideChange?.(((i % slideCount) + slideCount) % slideCount);
   }
   function onKeyDown(e: KeyboardEvent): void {
     if (e.key === "ArrowLeft") {
@@ -371,7 +377,7 @@
   /// cleanup clears the timer on slide change / unmount so we
   /// never hammer the server in the background.
   $effect(() => {
-    if (slideIndex !== 2) return;
+    if (slideIndex !== 2 || !active) return;
     void refreshIndexing();
     const handle = window.setInterval(() => {
       void refreshIndexing();
@@ -526,7 +532,11 @@
            picker / depth slider / filter chips): the slide is purely
            a status read-out. -->
       <div class="slide slide-indexing" aria-label="Indexing graph">
-        <div class="slide-title">Indexing</div>
+        <!-- Slot relabelled "Search" per the phase-15 Dashboard redesign:
+             this front slot pairs with a Search config back (index status
+             + semantic + embedding). The graph itself is still the
+             indexing spine, so its aria-label stays "Indexing graph". -->
+        <div class="slide-title">Search</div>
         {#if indexingError}
           <div class="indexing-stub">
             <p>Couldn't load indexing state.</p>
@@ -596,14 +606,18 @@
               <span class="dot" style="background: var(--accent);"></span>
               indexed
             </span>
-            <span class="legend-pair">
-              <span class="dot pulse" style="background: var(--g-doc);"></span>
-              indexing
-            </span>
-            <span class="legend-pair">
-              <span class="dot" style="background: var(--text-secondary);"></span>
-              pending
-            </span>
+            {#if hasIndexingNodes}
+              <span class="legend-pair">
+                <span class="dot pulse" style="background: var(--g-doc);"></span>
+                indexing
+              </span>
+            {/if}
+            {#if hasPendingNodes}
+              <span class="legend-pair">
+                <span class="dot" style="background: var(--text-secondary);"></span>
+                pending
+              </span>
+            {/if}
           </div>
         {/if}
       </div>

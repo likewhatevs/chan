@@ -3,7 +3,7 @@
   // this tab (the welcome surface is a static spawn grid via
   // EmptyPaneWelcome.svelte). The full carousel widget (rotation +
   // play/pause + pagination + 3 slides: About / Workspace
-  // metadata / Indexing graph) renders here.
+  // metadata / Search) renders here.
   //
   // Cmd+, on a focused Hybrid surface flips it to its back-side;
   // Cmd+, again flips back.
@@ -34,9 +34,12 @@
   // cursor persists across window reloads. The tab is a $state
   // proxy from tabs.svelte.ts; mutating `tab.carouselSlide`
   // reactively updates the layout snapshot the next session save
-  // observes.
-  type Props = { tab: DashboardTab };
-  let { tab }: Props = $props();
+  // observes. `frontActive` is false while the pane is flipped to its
+  // config back (the two-face card keeps this front face mounted but
+  // rotated away); the carousel then force-pauses so it does not
+  // auto-rotate invisibly or yank a back-side slot pick.
+  type Props = { tab: DashboardTab; frontActive?: boolean };
+  let { tab, frontActive = true }: Props = $props();
 
   function onCarouselSlideChange(i: number): void {
     if (tab.carouselSlide === i) return;
@@ -102,8 +105,9 @@
   </HamburgerMenu>
 
   <EmptyPaneCarousel
-    initialSlide={tab.carouselSlide ?? 0}
+    slide={tab.carouselSlide ?? 0}
     onSlideChange={onCarouselSlideChange}
+    active={frontActive}
   />
 </div>
 
