@@ -8,11 +8,12 @@
   // Cmd+, on a focused Hybrid surface flips it to its back-side;
   // Cmd+, again flips back.
   //
-  // The back-of-card body lives in `HybridDashboardConfig.svelte`
-  // so Pane.svelte's back-side switch mounts it via the canonical
-  // `active?.kind === "dashboard"` arm (same shape as the Terminal
-  // / Editor / Graph / File Browser arms). DashboardTab renders
-  // only the FRONT (the carousel) plus a right-click Reload row.
+  // The back-of-card body is per-slot now: Pane.svelte's back-side
+  // switch mounts `dashboard/DashboardSlotBack.svelte` on the
+  // `active?.kind === "dashboard"` arm, which mirrors the carousel's
+  // current slot (About / Workspace / Search) and shows that slot's
+  // config body. DashboardTab renders only the FRONT (the carousel)
+  // plus a right-click Reload row.
 
   import { RefreshCw } from "lucide-svelte";
   import { reloadWindow } from "../api/desktop";
@@ -94,7 +95,7 @@
          tab strip. Both entry points route through `reloadWindow()`
          the same way Cmd+R does. No Settings entry here: Cmd+, is
          the canonical flip and Pane.svelte's back-side switch
-         mounts HybridDashboardConfig directly. -->
+         mounts the per-slot DashboardSlotBack directly. -->
     <li>
       <button role="menuitem" onclick={doReload}>
         <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />

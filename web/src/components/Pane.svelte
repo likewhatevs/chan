@@ -61,7 +61,7 @@
   import HybridEditorConfig from "./HybridEditorConfig.svelte";
   import HybridGraphConfig from "./HybridGraphConfig.svelte";
   import HybridFileBrowserConfig from "./HybridFileBrowserConfig.svelte";
-  import HybridDashboardConfig from "./HybridDashboardConfig.svelte";
+  import DashboardSlotBack from "./dashboard/DashboardSlotBack.svelte";
   import EmptyPaneWelcome from "./EmptyPaneWelcome.svelte";
   import FileEditorTab from "./FileEditorTab.svelte";
   import DashboardTab from "./DashboardTab.svelte";
@@ -1363,7 +1363,14 @@
             {:else if active?.kind === "browser"}
               <HybridFileBrowserConfig onDone={() => flipHybrid(pane.id)} />
             {:else if active?.kind === "dashboard"}
-              <HybridDashboardConfig onDone={() => flipHybrid(pane.id)} />
+              <!-- Per-slot Dashboard back: mirrors the front carousel's
+                   current slot (About / Workspace / Search) and shows
+                   that slot's config body, with a force-paused slot
+                   picker. Replaces the monolithic HybridDashboardConfig. -->
+              <DashboardSlotBack
+                tab={active}
+                onDone={() => flipHybrid(pane.id)}
+              />
             {:else}
               <!-- Empty pane (no active front tab). Open a front tab and
                    flip again to see its configuration surface. -->

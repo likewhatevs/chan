@@ -5,6 +5,9 @@ import carousel from "./EmptyPaneCarousel.svelte?raw";
 import dashboard from "./DashboardTab.svelte?raw";
 import app from "../App.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
+import dashboardBack from "./dashboard/DashboardSlotBack.svelte?raw";
+import aboutSlot from "./dashboard/AboutSlotConfig.svelte?raw";
+import workspaceSlot from "./dashboard/WorkspaceSlotConfig.svelte?raw";
 
 // Dashboard tab kind and carousel coverage. Pins the tab type and
 // helpers, the Pane.svelte render branch, the carousel slide set,
@@ -275,7 +278,7 @@ describe("DashboardTab mounts the carousel", () => {
   });
 });
 
-describe("Dashboard back-of-card lives in HybridDashboardConfig", () => {
+describe("Dashboard back-of-card is per-slot (DashboardSlotBack)", () => {
   test("DashboardTab right-click menu carries only Reload (no Settings entry)", () => {
     // Pane.svelte mounts HybridDashboardConfig via the `dashboard` arm;
     // Cmd+, is the canonical flip. The right-click menu keeps a Reload
@@ -302,49 +305,53 @@ describe("Dashboard back-of-card lives in HybridDashboardConfig", () => {
     expect(dashboard).not.toMatch(/import HybridSurfaceConfigShell/);
   });
 
-  test("HybridDashboardConfig mirrors the other Hybrid configs and lives at its own file", async () => {
-    const cfg = (await import("./HybridDashboardConfig.svelte?raw"))
-      .default as string;
-    // Same shell structure as Terminal / Editor / Graph / FB configs.
-    expect(cfg).toMatch(
-      /<HybridSurfaceConfigShell[\s\S]{1,400}title="Dashboard"[\s\S]{1,200}surface="dashboard"[\s\S]{1,400}ariaLabel="Dashboard settings"[\s\S]{1,200}\{onDone\}/,
+  test("DashboardSlotBack wraps the shared shell + dispatches one body per slot", () => {
+    // Same shell every other Hybrid back uses, titled by the active
+    // slot, mounting one of the three slot bodies off tab.carouselSlide.
+    expect(dashboardBack).toMatch(
+      /<HybridSurfaceConfigShell[\s\S]{1,200}title=\{SLOTS\[slot\]\}[\s\S]{1,120}surface="dashboard"[\s\S]{1,200}ariaLabel="Dashboard settings"[\s\S]{1,120}\{onDone\}/,
     );
-    expect(cfg).toMatch(
-      /let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\);/,
+    expect(dashboardBack).toMatch(
+      /const SLOTS = \["About", "Workspace", "Search"\] as const;/,
     );
-    // Screensaver theme picker is folded into the Screen lock section;
-    // there is no standalone <h3>Screensaver</h3>.
-    expect(cfg).toMatch(/<h3>Appearance<\/h3>/);
-    expect(cfg).toMatch(/<h3>Screen lock<\/h3>/);
-    expect(cfg).not.toMatch(/<h3>Screensaver<\/h3>/);
-    expect(cfg).toMatch(/<h3>Metadata archive<\/h3>/);
-    // Appearance is app-wide, so the radio group uses `app-appearance`.
-    expect(cfg).toMatch(/name="app-appearance"/);
-    expect(cfg).not.toMatch(/name="dashboard-appearance"/);
-    expect(cfg).toMatch(/await api\.metadataExport\(\)/);
-    expect(cfg).toMatch(/await api\.metadataImport\(metadataImportFile/);
-    expect(cfg).toMatch(/URL\.createObjectURL\(download\.blob\)/);
-    expect(cfg).toContain("Export metadata archive");
-    expect(cfg).toContain("Import metadata archive");
-    expect(cfg).toContain("Force SCM mismatch");
-    expect(cfg).toContain("Rescan after import");
-    // State hydrates on mount so each flip reads the server's current
-    // screensaver config.
-    expect(cfg).toMatch(
-      /onMount\(\(\) => \{[\s\S]{1,200}void loadScreenLockState\(\);/,
+    expect(dashboardBack).toMatch(
+      /\{#if slot === 0\}[\s\S]{1,80}<AboutSlotConfig \/>[\s\S]{1,160}<WorkspaceSlotConfig \/>[\s\S]{1,120}<SearchSlotConfig \/>/,
     );
-    // The shared shell owns the OK button.
+    // Picking a slot moves the shared carousel cursor so the front
+    // carousel lands on the same slot on flip-back.
+    expect(dashboardBack).toMatch(/tab\.carouselSlide = i;/);
+    // The shared shell still owns the OK button.
     expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
     );
   });
 
-  test("Pane.svelte back-side switch mounts HybridDashboardConfig on the dashboard arm", () => {
+  test("About slot owns Appearance + Screen lock; Workspace slot owns chan-reports + Metadata archive", () => {
+    // The monolithic HybridDashboardConfig split per slot: Appearance +
+    // Screen lock to the About body, Metadata archive (plus chan-reports
+    // lifted from the former File Browser config) to the Workspace body.
+    expect(aboutSlot).toMatch(/<h3>Appearance<\/h3>/);
+    expect(aboutSlot).toMatch(/<h3>Screen lock<\/h3>/);
+    expect(aboutSlot).toMatch(/name="app-appearance"/);
+    expect(aboutSlot).toMatch(
+      /onMount\(\(\) => \{[\s\S]{1,200}void loadScreenLockState\(\);/,
+    );
+    expect(workspaceSlot).toMatch(/<h3>chan-reports<\/h3>/);
+    expect(workspaceSlot).toMatch(/<h3>Metadata archive<\/h3>/);
+    expect(workspaceSlot).toMatch(/await api\.metadataExport\(\)/);
+    expect(workspaceSlot).toMatch(/await api\.metadataImport\(metadataImportFile/);
+    expect(workspaceSlot).toContain("Export metadata archive");
+    expect(workspaceSlot).toContain("Import metadata archive");
+    expect(workspaceSlot).toMatch(/bind:checked=\{metadataImportRescan\}/);
+    expect(workspaceSlot).toMatch(/bind:checked=\{metadataImportForceScm\}/);
+  });
+
+  test("Pane.svelte back-side switch mounts DashboardSlotBack on the dashboard arm", () => {
     expect(pane).toMatch(
-      /import HybridDashboardConfig from "\.\/HybridDashboardConfig\.svelte";/,
+      /import DashboardSlotBack from "\.\/dashboard\/DashboardSlotBack\.svelte";/,
     );
     expect(pane).toMatch(
-      /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,600}<HybridDashboardConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
+      /\{:else if active\?\.kind === "dashboard"\}[\s\S]{1,600}<DashboardSlotBack[\s\S]{1,160}tab=\{active\}[\s\S]{1,160}onDone=\{\(\) => flipHybrid\(pane\.id\)\}/,
     );
   });
 });

@@ -1,12 +1,13 @@
 import { describe, expect, test } from "vitest";
 import shortcuts from "./shortcuts.ts?raw";
 import app from "../App.svelte?raw";
-import dashboard from "../components/HybridDashboardConfig.svelte?raw";
+import dashboard from "../components/dashboard/AboutSlotConfig.svelte?raw";
 
 // Screensaver Settings UI + Hybrid Nav lock chord. Tests pin the
 // architectural shape. The global Settings overlay is gone; Screen Lock
-// + Screensaver controls live on the Dashboard's back-of-card
-// (HybridDashboardConfig.svelte).
+// + Screensaver controls live on the Dashboard's back-of-card, in the
+// About slot body (dashboard/AboutSlotConfig.svelte) since the phase-15
+// per-slot redesign split the monolithic HybridDashboardConfig.
 
 describe("Hybrid Nav lock chord", () => {
   test("shortcut registry advertises only Cmd+. L for screen lock", () => {
@@ -48,10 +49,10 @@ describe("Hybrid Nav lock chord", () => {
 describe("Screen lock + Screensaver UI on Dashboard back-of-card", () => {
   test("Dashboard imports hashPin + bounds + lock helpers", () => {
     expect(dashboard).toMatch(
-      /import \{[\s\S]{1,400}hashPin,[\s\S]{1,200}SCREENSAVER_MAX_TIMEOUT_SECS,[\s\S]{1,80}SCREENSAVER_MIN_TIMEOUT_SECS,[\s\S]{1,40}\} from "\.\.\/state\/screensaver";/,
+      /import \{[\s\S]{1,400}hashPin,[\s\S]{1,200}SCREENSAVER_MAX_TIMEOUT_SECS,[\s\S]{1,80}SCREENSAVER_MIN_TIMEOUT_SECS,[\s\S]{1,40}\} from "\.\.\/\.\.\/state\/screensaver";/,
     );
     expect(dashboard).toMatch(
-      /import \{[\s\S]{1,200}loadScreensaverState,[\s\S]{1,80}lockNow,[\s\S]{1,80}screensaver,[\s\S]{1,40}\} from "\.\.\/state\/screensaver\.svelte";/,
+      /import \{[\s\S]{1,200}loadScreensaverState,[\s\S]{1,80}lockNow,[\s\S]{1,80}screensaver,[\s\S]{1,40}\} from "\.\.\/\.\.\/state\/screensaver\.svelte";/,
     );
   });
 
@@ -81,7 +82,7 @@ describe("Screen lock + Screensaver UI on Dashboard back-of-card", () => {
       /async function commitScreensaverTheme\(e: Event\): Promise<void> \{[\s\S]{1,700}api\.screensaverPatch\(\{ theme \}\);[\s\S]{1,300}await loadScreensaverState\(\);/,
     );
     expect(dashboard).toMatch(
-      /<select[\s\S]{1,300}bind:value=\{screensaverTheme\}[\s\S]{1,200}onchange=\{commitScreensaverTheme\}[\s\S]{1,300}<option value="plain">Plain<\/option>[\s\S]{1,120}<option value="matrix">Matrix<\/option>/,
+      /<select[\s\S]{1,300}bind:value=\{screensaverTheme\}[\s\S]{1,200}onchange=\{commitScreensaverTheme\}[\s\S]{1,300}<option value="plain">Default<\/option>[\s\S]{1,120}<option value="matrix">Matrix<\/option>/,
     );
   });
 
