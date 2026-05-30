@@ -25,6 +25,7 @@
   import WorkspaceInfoBody from "./WorkspaceInfoBody.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import ImportContactsModal from "./ImportContactsModal.svelte";
+  import { markPaneModalOpen } from "../state/paneModalGuard.svelte";
   import { tabMenu } from "../state/tabMenu.svelte";
   import { chordFor } from "../state/shortcuts";
   import { isEditableText } from "../state/fileTypes";
@@ -167,6 +168,14 @@
   let menu: HamburgerMenu | undefined = $state();
   let menuOpen = $state(false);
   let importContactsOpen = $state(false);
+  // The import-contacts wizard renders OVER this file-browser pane and
+  // owns the keyboard. Register with the shared pane-modal guard so
+  // Cmd+, doesn't flip the pane hidden behind it (App.svelte's
+  // paneChordBlocked()).
+  $effect(() => {
+    if (!importContactsOpen) return;
+    return markPaneModalOpen();
+  });
 
   /// Per-tab File Browser view state.
   /// When this surface renders for a tab (variant === "tab"), the

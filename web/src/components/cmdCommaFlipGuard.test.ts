@@ -29,6 +29,7 @@ describe("Cmd+, pane-flip modal/overlay guard", () => {
       "teamDialogState.request !== null",
       "conflictDialog.open",
       "workspaceWarningsDialog.open",
+      "paneModalGuard.openCount > 0",
     ]) {
       expect(src).toContain(term);
     }

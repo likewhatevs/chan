@@ -88,6 +88,7 @@
   } from "../state/tabMenu.svelte";
   import BubbleOverlay from "./BubbleOverlay.svelte";
   import McpEnvInfoModal from "./McpEnvInfoModal.svelte";
+  import { markPaneModalOpen } from "../state/paneModalGuard.svelte";
   import TeamWork from "./TeamWork.svelte";
 
   let {
@@ -154,6 +155,14 @@
   let findOpen = $state(false);
   let findQuery = $state("");
   let mcpInfoOpen = $state(false);
+  // While the MCP-env info dialog is up it renders OVER this terminal
+  // pane and owns the keyboard. Register with the shared pane-modal
+  // guard so App.svelte's paneChordBlocked() bails on Cmd+, instead of
+  // flipping the pane hidden behind the dialog.
+  $effect(() => {
+    if (!mcpInfoOpen) return;
+    return markPaneModalOpen();
+  });
   let sawSessionControl = false;
   let pendingPromptSeed = "";
   let promptSeedSent = false;

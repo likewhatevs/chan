@@ -13,6 +13,9 @@
   // ConflictModal; workspaceWarningsDialog drives WorkspaceWarningsModal.
   import { conflictDialog } from "./state/tabs.svelte";
   import { workspaceWarningsDialog } from "./state/store.svelte";
+  // Open-count of pane-LOCAL modals (MCP-env info, import-contacts) whose
+  // visibility lives in component state App.svelte can't otherwise see.
+  import { paneModalGuard } from "./state/paneModalGuard.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PreflightOverlay from "./components/PreflightOverlay.svelte";
@@ -386,7 +389,11 @@
       // see.
       teamDialogState.request !== null ||
       conflictDialog.open ||
-      workspaceWarningsDialog.open
+      workspaceWarningsDialog.open ||
+      // Pane-local modals (MCP-env info in a terminal pane, the
+      // import-contacts wizard in a file-browser pane) register here
+      // while open since their visibility isn't an app-root flag.
+      paneModalGuard.openCount > 0
     );
   }
 
