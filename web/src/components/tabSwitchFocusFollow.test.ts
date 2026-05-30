@@ -6,19 +6,16 @@ import pane from "./Pane.svelte?raw";
 import source from "../editor/Source.svelte?raw";
 import wysiwyg from "../editor/Wysiwyg.svelte?raw";
 
-// `fullstack-a-64` CRITICAL: chord-driven tab switch
-// (Cmd+Shift+[/], Ctrl+Alt+1..9) leaves keyboard focus on the
-// PREVIOUS tab, causing typed/pasted keystrokes to damage the doc
-// when the user thought they had switched to a terminal.
-//
-// Fix: introduce a global `tabFocusPulse` $state that all
-// `select*TabInActivePane` helpers bump. Each tab-kind component
-// has a $effect that depends on the pulse + re-focuses its
-// surface. `bumpTabFocusPulse` also blurs the currently-focused
-// element so the prior tab's contenteditable releases DOM focus
-// before the new tab's focus call lands.
+// Chord-driven tab switch (Cmd+Shift+[/], Ctrl+Alt+1..9) must
+// move keyboard focus to the new tab so keystrokes go to the
+// correct surface. The `tabFocusPulse` $state mechanism drives
+// this: helpers bump the pulse, and each tab-kind component
+// re-focuses its surface in a $effect that tracks it.
+// `bumpTabFocusPulse` also blurs the current element so the
+// prior contenteditable releases DOM focus before the new
+// tab's focus call lands.
 
-describe("fullstack-a-64: tabFocusPulse mechanism", () => {
+describe("tabFocusPulse mechanism", () => {
   test("tabFocusPulse exported from tabs.svelte.ts", () => {
     expect(tabs).toMatch(/export const tabFocusPulse = \$state\(\{ value: 0 \}\);/);
   });
@@ -48,7 +45,7 @@ describe("fullstack-a-64: tabFocusPulse mechanism", () => {
   });
 });
 
-describe("fullstack-a-101: tab header click refocuses input-capable tabs", () => {
+describe("tab header click refocuses input-capable tabs", () => {
   test("Pane imports bumpTabFocusPulse for tab-strip clicks", () => {
     expect(pane).toMatch(/import \{[\s\S]*?\bbumpTabFocusPulse,[\s\S]*?\} from "\.\.\/state\/tabs\.svelte";/);
   });
@@ -60,7 +57,7 @@ describe("fullstack-a-101: tab header click refocuses input-capable tabs", () =>
   });
 });
 
-describe("fullstack-a-64: TerminalTab reacts to pulse", () => {
+describe("TerminalTab reacts to pulse", () => {
   test("TerminalTab imports tabFocusPulse", () => {
     expect(terminalTab).toMatch(/tabFocusPulse,/);
   });
@@ -72,7 +69,7 @@ describe("fullstack-a-64: TerminalTab reacts to pulse", () => {
   });
 });
 
-describe("fullstack-a-64: FileEditorTab reacts to pulse", () => {
+describe("FileEditorTab reacts to pulse", () => {
   test("FileEditorTab imports tabFocusPulse", () => {
     expect(fileEditorTab).toMatch(/tabFocusPulse,/);
   });
@@ -84,7 +81,7 @@ describe("fullstack-a-64: FileEditorTab reacts to pulse", () => {
   });
 });
 
-describe("fullstack-a-64: editor refs expose focus()", () => {
+describe("editor refs expose focus", () => {
   test("Source.svelte exports focus()", () => {
     expect(source).toMatch(
       /export function focus\(\): boolean \{[\s\S]*?if \(!view\) return false;[\s\S]*?view\.focus\(\);[\s\S]*?return true;/,

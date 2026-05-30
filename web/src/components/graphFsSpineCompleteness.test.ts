@@ -23,7 +23,7 @@ import graph from "./GraphPanel.svelte?raw";
 // existing graphParentEdgeInvariant / graphDirInspectorHotfix `?raw`
 // pins. The behavioural side is verified in-browser per the journal.
 
-describe("GI-9: filesystem-mode graph spine visibility", () => {
+describe("filesystem-mode graph spine visibility", () => {
   test("filesystem mode filters by the expanded set, not the file-seed BFS", () => {
     // Its own branch: directory / workspace scope render via
     // `ancestorsExpanded`; file scope keeps the unfiltered spine.
@@ -51,7 +51,7 @@ describe("GI-9: filesystem-mode graph spine visibility", () => {
     );
   });
 
-  test("round-1 closing-8 (F1): workspace + dir semantic scope use find -d N depth filter", () => {
+  test("(F1): workspace + dir semantic scope use find -d N depth filter", () => {
     // Workspace + dir scope in SEMANTIC mode filter nodes by filesystem
     // depth relative to the scope root (find -d N semantics). depth >=
     // depthCap lifts the filter; the workspace-root anchor is always kept

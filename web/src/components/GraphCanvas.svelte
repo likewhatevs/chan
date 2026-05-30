@@ -1,8 +1,7 @@
 <script lang="ts">
-  // Canvas + d3-force renderer for the chan graph. Replaces the
-  // cytoscape view that used to live inside GraphPanel.svelte.
+  // Canvas + d3-force renderer for the chan graph.
   //
-  // Why: cytoscape's per-frame pipeline (style-selector resolution,
+  // Why d3-force over cytoscape: cytoscape's per-frame pipeline (style-selector resolution,
   // SVG-icon bitmap compositing, scenegraph hit-testing) sits above
   // the d3-force simulation it wraps, and chews enough budget that
   // a 90-node graph never matches the Observable d3-force example's
@@ -47,9 +46,9 @@
     | "contains"
     | "language"
     | "group"
-    /// `fullstack-a-66` slice e: workspace-root → Drafts-root edge.
-    /// Styled distinctly in the canvas to read as a "different
-    /// category" connector with the shared Drafts tint.
+    /// Workspace-root → Drafts-root edge. Styled distinctly in the
+    /// canvas to read as a "different category" connector with the
+    /// shared Drafts tint.
     | "drafts_link";
   type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
   type RenderedNode = Extract<
@@ -69,8 +68,8 @@
     selectedId: string | null;
     onSelect: (id: string | null) => void;
     onContextMenu?: (e: MouseEvent) => void;
-    /// Round-1 closing-2 (B7a): double-clicking a node fires the
-    /// "graph from here" action. The canvas only signals intent;
+    /// Double-clicking a node fires the "graph from here" action.
+    /// The canvas only signals intent;
     /// the parent owns the rescope (it has access to the current
     /// selection's `path` / `isDir` and to `graphFromHere`).
     onSetAsScope?: () => void;
@@ -108,20 +107,19 @@
     missing: boolean;
     isFocal: boolean;
     radius: number;
-    /// `fullstack-a-49` (G2): filesystem-hierarchy spine. `depth`
-    /// is the path-segment count from the workspace root (workspace root
-    /// = 0, top-level dirs / root files = 1, nested = 2+). Non-
-    /// hierarchical nodes (tag / mention / language) get depth =
-    /// -1 and are exempt from the depth-based forceY anchor —
-    /// they continue to float on the existing center force.
+    /// Filesystem-hierarchy spine. `depth` is the path-segment count
+    /// from the workspace root (workspace root = 0, top-level dirs /
+    /// root files = 1, nested = 2+). Non-hierarchical nodes (tag /
+    /// mention / language) get depth = -1 and are exempt from the
+    /// depth-based forceY anchor; they float on the center force.
     /// `parentId` is the id of the parent directory node (the
     /// workspace-root marker is "" per chan-server's
     /// `directory_node_id("")`); `null` for the workspace root or
     /// for non-hierarchical nodes.
     depth: number;
     parentId: string | null;
-    /// Phase-13 slice 3b-2: per-directory indexing status surfaced by
-    /// the Dashboard indexing slide. When set on a `folder` node the
+    /// Per-directory indexing status surfaced by the Dashboard
+    /// indexing slide. When set on a `folder` node the
     /// paint pass overrides the standard folder fill with the
     /// indexing palette (green/grey/pulsing-orange). Undefined for
     /// normal Graph-tab views.
@@ -147,37 +145,29 @@
   /// is applied on top in `renderRadius`.
   const RADIUS_BASE = 5;
   const RADIUS_DOC = 7;
-  /// GI-4: directory nodes sit a notch above the leaf base (but below
-  /// the doc/workspace hub size) so they read as clearly clickable folder
+  /// Directory nodes sit a notch above the leaf base (but below the
+  /// doc/workspace hub size) so they read as clearly clickable folder
   /// targets without dominating the graph. Slightly bigger, not much.
   const RADIUS_DIR = 6;
   const RADIUS_HUB_SCALE = 1.4;
-  /// Round-1 closing-4 (E2) + closing-9 (E2 fix-up): the workspace-
-  /// root anchor stays clearly 1.5x larger than any other directory,
-  /// INCLUDING dirs that the backlink ramp has already pushed to
-  /// `RADIUS_DIR * RADIUS_HUB_SCALE`. Pre-fix `RADIUS_WORKSPACE =
-  /// RADIUS_DIR * 1.5 = 9` only beat a base-radius leaf folder
-  /// (6 -> 9, 1.5x), but a hub-scaled top-level dir reached
-  /// `6 * 1.4 = 8.4` and the workspace looked the same size next
-  /// to it. Compute against the worst-case dir radius so the 1.5x
-  /// gap survives the backlink ramp, and exempt workspace from the
-  /// ramp itself so the hub stays exactly this size regardless of
-  /// how many things link to it.
+  /// The workspace-root anchor stays clearly 1.5x larger than any
+  /// other directory, INCLUDING dirs that the backlink ramp has
+  /// already pushed to `RADIUS_DIR * RADIUS_HUB_SCALE`. Compute
+  /// against the worst-case dir radius so the 1.5x gap survives the
+  /// backlink ramp, and exempt workspace from the ramp itself so the
+  /// hub stays exactly this size regardless of how many things link
+  /// to it.
   const RADIUS_WORKSPACE = RADIUS_DIR * RADIUS_HUB_SCALE * 1.5;
 
   /// Icon glyph occupies this fraction of the rendered diameter.
-  /// Matches the cytoscape value so the visual mass of icons doesn't
-  /// shift in the cutover.
   const ICON_FRACTION = 0.6;
 
-  /// d3-force tuning. Values mirror the d3-compare demo defaults so
-  /// the cutover lands in the same regime the user has already been
-  /// looking at; tweak here, not in the per-call layout configs.
-  /// `fullstack-a-49` (G2): added `hierarchyYSpacing` +
-  /// `hierarchyYStrength` for the filesystem-spine forceY +
-  /// `parentXStrength` for the parent-anchored forceX so each file
-  /// node sits below its directory and siblings cluster horizontally
-  /// under the same parent.
+  /// d3-force tuning. Tweak here, not in the per-call layout configs.
+  /// `hierarchyYSpacing` + `hierarchyYStrength` drive the
+  /// filesystem-spine forceY, and `parentXStrength` drives the
+  /// parent-anchored forceX, so each file node sits below its
+  /// directory and siblings cluster horizontally under the same
+  /// parent.
   const FORCE = {
     chargeStrength: -120,
     linkDistance: 70,
@@ -223,16 +213,16 @@
   /// for transform; null = no easing in flight.
   let refitUntil = 0;
   let fitTarget: { x: number; y: number; k: number } | null = null;
-  /// Round-1 closing-4 (E3): once the user has manually panned,
-  /// zoomed, or dragged a node, the view belongs to them. Periodic
-  /// re-renders of the same node set (e.g., the Dashboard indexing
-  /// slide polling `/api/indexing/state` every 3s, which produces
-  /// fresh array references with no structural change) must not
-  /// snap the view back to fit-content. The flag stays set until
-  /// the node SET genuinely differs from what's on screen - then
-  /// it's clearly a new dataset and a refit IS the right thing.
+  /// Once the user has manually panned, zoomed, or dragged a node,
+  /// the view belongs to them. Periodic re-renders of the same node
+  /// set (e.g., the Dashboard indexing slide polling
+  /// `/api/indexing/state` every 3s, which produces fresh array
+  /// references with no structural change) must not snap the view
+  /// back to fit-content. The flag stays set until the node SET
+  /// genuinely differs from what's on screen, which is clearly a new
+  /// dataset where a refit IS the right thing.
   let userInteracted = false;
-  /// B12: when `start()` runs before the host has been measured
+  /// When `start()` runs before the host has been measured
   /// (carousel mounts GraphCanvas before slide 2 is visible, so
   /// the first `resize()` clamps the canvas to 0x0), the initial
   /// `fitToContent` returns null and the view stays at the
@@ -336,12 +326,11 @@
     loadIcon(iconImages, "mention", svgStrokeIcon(PATH_CONTACT, bg));
     loadIcon(iconImages, "language", svgTextIcon("{ }", bg));
     loadIcon(iconImages, "folder", svgStrokeIcon(PATH_FOLDER, bg));
-    // `fullstack-a-51` G6: source + binary file-class buckets.
-    // Source code uses the same doc/file glyph rendered against the
-    // royalblue fill — the chrome reads as "file" while the colour
-    // discriminates the class. Binary uses the same glyph against
-    // the grey fill so users see "yes it's a file but it's not
-    // editable" via colour alone.
+    // Source + binary file-class buckets. Source code uses the same
+    // doc/file glyph rendered against the royalblue fill: the chrome
+    // reads as "file" while the colour discriminates the class.
+    // Binary uses the same glyph against the grey fill so users see
+    // "yes it's a file but it's not editable" via colour alone.
     loadIcon(iconImages, "source", svgStrokeIcon(PATH_DOC, bg));
     loadIcon(iconImages, "binary", svgStrokeIcon(PATH_DOC, bg));
     // Workspace root: stroke against the dark fill so the glyph still
@@ -379,23 +368,16 @@
     accent: string;
     /// Directory node fill (filesystem graph mode).
     folder: string;
-    /// `fullstack-a-51` G6: source-code file fill. Royalblue; the
-    /// pre-`-a-51` palette had this hue assigned to `--g-binary`,
-    /// but @@Alex's G6 framing reserves binary for grey + introduces
-    /// source as its own bucket so the markdown / source / binary /
-    /// media split reads clearly.
+    /// Source-code file fill. Royalblue; source is its own bucket
+    /// (distinct from binary's grey) so the markdown / source /
+    /// binary / media split reads clearly.
     source: string;
-    /// `fullstack-a-51` G6: binary file fill. Grey (darker than
-    /// --g-folder so binary nodes don't visually collapse into
-    /// directory nodes). Pre-`-a-51` this slot was royalblue
-    /// (matching the inspector FILE chip); the new palette
-    /// reassigns binary to grey + introduces a separate source
-    /// hue for code files.
+    /// Binary file fill. Grey (darker than --g-folder so binary
+    /// nodes don't visually collapse into directory nodes).
     binary: string;
-    /// `fullstack-a-66` slice e: Drafts directory node fill +
-    /// drafts_link edge stroke. Pulls from --fb-drafts-fg so
-    /// the graph + the FB row + the inspector header all
-    /// render the same yellow tint.
+    /// Drafts directory node fill + drafts_link edge stroke. Pulls
+    /// from --fb-drafts-fg so the graph + the FB row + the inspector
+    /// header all render the same yellow tint.
     drafts: string;
   };
 
@@ -414,14 +396,13 @@
       language: v("--g-language", "#ff4db8"),
       accent: v("--accent", "#3fb950"),
       folder: v("--g-folder", "#8e8e93"),
-      // `fullstack-a-51` G6 colour scheme: source vs binary split.
-      // Markdown stays orange (--g-doc); source code (royalblue);
-      // binary (darker grey distinct from --g-folder); media stays
-      // purple (--g-img).
+      // Colour scheme: source vs binary split. Markdown is orange
+      // (--g-doc); source code royalblue; binary darker grey
+      // (distinct from --g-folder); media purple (--g-img).
       source: v("--g-source", "#4169e1"),
       binary: v("--g-binary", "#5e5e62"),
-      // `fullstack-a-66` slice e: Drafts tint pulled from the
-      // same CSS variable as the FB row + the inspector chip.
+      // Drafts tint pulled from the same CSS variable as the FB row +
+      // the inspector chip.
       drafts: v("--fb-drafts-fg", "#e3b341"),
     };
   }
@@ -433,8 +414,8 @@
     source: "#4169e1", binary: "#5e5e62", drafts: "#e3b341",
   });
 
-  /// Phase-13 slice 3b-2: track `prefers-reduced-motion` so the
-  /// indexing-state pulse can fall back to a flat mid-strength
+  /// Track `prefers-reduced-motion` so the indexing-state pulse can
+  /// fall back to a flat mid-strength
   /// alpha for users who opt out of motion. Initialised in
   /// `onMount` so SSR-style first paint stays neutral.
   let reduceMotion = $state(false);
@@ -475,13 +456,11 @@
 
   // ---- node classification + data assembly -----------------------------
 
-  /// `fullstack-a-51` G6 file-class buckets. Markdown / source /
-  /// binary / media split per @@Alex's palette correction; client-
-  /// side classification via extension regex while `systacean-16`
-  /// (server-side bucket field) is queued. Conceptually mirrors
-  /// `chan_workspace::FileClass` (EditableText / Text / Image / Pdf /
-  /// Other) but routes Pdf into media + Other into binary so the
-  /// SPA's bucket set matches the G6 framing.
+  /// File-class buckets: markdown / source / binary / media.
+  /// Classified client-side via extension regex. Conceptually
+  /// mirrors `chan_workspace::FileClass` (EditableText / Text / Image
+  /// / Pdf / Other) but routes Pdf into media + Other into binary so
+  /// the SPA's bucket set matches the four-way colour split.
   ///
   /// Media + contact stay separate: media via extension regex
   /// (image / pdf), contact via the indexer's `node_kind: "contact"`
@@ -501,7 +480,7 @@
     if (nodeKind === "contact") return "contact";
     if (MARKDOWN_EXT_RE.test(path)) return "doc";
     if (SOURCE_EXT_RE.test(path)) return "source";
-    // Anything else (archives, executables, fonts, etc.) — binary.
+    // Anything else (archives, executables, fonts, etc.) is binary.
     return "binary";
   }
 
@@ -541,12 +520,11 @@
           : kind === "folder"
             ? RADIUS_DIR
             : RADIUS_BASE;
-    // Round-1 closing-9 (E2 fix-up): workspace skips the backlink
-    // ramp. RADIUS_WORKSPACE already accounts for the max-scaled
-    // dir size, so further inflating it via backlinks (which the
-    // workspace root always has the most of) would dominate the
-    // canvas. Pin workspace to the base; the 1.5x gap stays
-    // visible at every backlink density.
+    // Workspace skips the backlink ramp. RADIUS_WORKSPACE already
+    // accounts for the max-scaled dir size, so further inflating it
+    // via backlinks (which the workspace root always has the most of)
+    // would dominate the canvas. Pin workspace to the base; the 1.5x
+    // gap stays visible at every backlink density.
     if (kind === "workspace") return base;
     if (maxBacklinks <= 0) return base;
     const bl = backlinks.get(id) ?? 0;
@@ -561,8 +539,8 @@
   /// DNodes when ids match (preserves position + velocity through a
   /// scope/depth tick); creates fresh ones for newly-visible ids and
   /// drops any whose id left the visible set.
-  /// `fullstack-a-49` (G2): derive a node's filesystem depth +
-  /// parent-directory id from its kind + path. Workspace root (folder
+  /// Derive a node's filesystem depth + parent-directory id from its
+  /// kind + path. Workspace root (folder
   /// id "") sits at depth 0; top-level files / directories at
   /// depth 1; nested at depth = parent depth + 1. Non-hierarchical
   /// node kinds (tag / mention / language) return `depth: -1` so
@@ -623,9 +601,9 @@
       const isFocal = focalSet.has(n.id);
       const radius = renderRadius(kind, n.id);
       const { depth, parentId } = nodeHierarchy(n);
-      // Phase-13 slice 3b-2: only folder nodes carry an
-      // indexState; everything else gets undefined and the paint
-      // pass falls back to the standard kind-fill.
+      // Only folder nodes carry an indexState; everything else gets
+      // undefined and the paint pass falls back to the standard
+      // kind-fill.
       const indexState = n.kind === "folder" ? n.indexState : undefined;
       if (existing) {
         existing.label = n.label;
@@ -751,15 +729,15 @@
         forceCollide<DNode>().radius((d) => d.radius + FORCE.collidePad),
       )
       .force("x", forceX<DNode>(0).strength(FORCE.centerStrength))
-      // `fullstack-a-49` (G2) filesystem-hierarchy spine + GI-10:
+      // Filesystem-hierarchy spine:
       //   * Hierarchical nodes (file / folder / media) get a
       //     depth-anchored forceY pulling each toward
       //     `-depth * hierarchyYSpacing` so the layout reads
       //     bottom-to-top as workspace-root → top-level dirs → nested
-      //     dirs → files. GI-10: the workspace root (depth 0) settles at
+      //     dirs → files. The workspace root (depth 0) settles at
       //     the BOTTOM and the containment spine grows UPWARD from it.
       //     Non-hierarchical nodes (tag / mention / language;
-      //     depth = -1) keep the existing weak center force.
+      //     depth = -1) keep the weak center force.
       //   * A custom parent-anchored forceX pulls each
       //     hierarchical node toward its parent directory's X
       //     position, so siblings under the same parent cluster
@@ -771,7 +749,7 @@
         "y",
         forceY<DNode>((d) => {
           if (d.depth < 0) return 0;
-          // GI-10: negative pull so deeper nodes rise ABOVE their
+          // Negative pull so deeper nodes rise ABOVE their
           // ancestors; the workspace root (depth 0) anchors the bottom.
           return -d.depth * FORCE.hierarchyYSpacing;
         }).strength((d) =>
@@ -788,8 +766,8 @@
       .on("tick", () => {});
   }
 
-  /// `fullstack-a-49` (G2): parent-anchored X force. Each
-  /// hierarchical node (depth >= 0) with a known parent gets
+  /// Parent-anchored X force. Each hierarchical node (depth >= 0)
+  /// with a known parent gets
   /// pulled toward its parent's current X position. The pull is
   /// proportional to `strength * alpha` so the simulation
   /// converges as alpha decays. Non-hierarchical nodes + nodes
@@ -845,12 +823,11 @@
     canvas.style.height = `${r.height}px`;
     // setTransform inside paint() applies the DPR scaling along
     // with the user's pan/zoom, so we don't bake it here.
-    // B12: the carousel hosts GraphCanvas inside a slide that is
-    // hidden when slide 2 isn't active; the first resize() runs
-    // against a 0x0 rect so the initial fit at the end of
-    // start() returned null. Replay the fit + schedule a refit
-    // window now that the host has a real size, so the spine
-    // ends up framed in the viewport without a manual zoom.
+    // When GraphCanvas is hosted inside a hidden carousel slide, the
+    // first resize() runs against a 0x0 rect and start()'s initial
+    // fit returns null. Replay the fit now that the host has a real
+    // size so the spine ends up framed in the viewport without a
+    // manual zoom.
     if (pendingInitialFit && r.width > 0 && r.height > 0) {
       pendingInitialFit = false;
       transform = { x: r.width / 2, y: r.height / 2, k: 1 };
@@ -868,12 +845,12 @@
     };
   }
 
-  /// `fullstack-a-60` forgiving-clicks: separate drag-detect from
-  /// click-to-select hit radii. The drag/pan disambiguation uses a
-  /// tight 4px slack (so clicking on empty canvas near a node still
-  /// reads as "pan", not "grab"). The click-to-select tap uses a
-  /// wider 10px slack so users don't need to zoom in to register
-  /// clicks on small nodes — matches the typical UX pattern
+  /// Forgiving-clicks: separate drag-detect from click-to-select hit
+  /// radii. The drag/pan disambiguation uses a tight 4px slack (so
+  /// clicking on empty canvas near a node still reads as "pan", not
+  /// "grab"). The click-to-select tap uses a wider 10px slack so
+  /// users don't need to zoom in to register clicks on small nodes,
+  /// matching the typical UX pattern
   /// `hitRadius = strokeRadius + 8-12px`. Same `pickNode` covers
   /// both via the `slack` parameter; closer hits always win when
   /// several discs overlap (`d2 < bestD2`).
@@ -952,8 +929,8 @@
     // Edges first so nodes paint on top. Group by kind so we only
     // change strokeStyle once per kind.
     //
-    // `phase-11` Slice F edge palette (round-1 spec): directory->dir
-    // and directory->file containment edges stay GREY (the `contains`
+    // Edge palette: directory->dir and directory->file containment
+    // edges stay GREY (the `contains`
     // kind, stroked in `theme.folder`); every other edge matches its
     // DOCUMENT TYPE rather than a single connector colour. `tag`,
     // `mention`, and `language` already carry their own palette hue;
@@ -1053,15 +1030,15 @@
       // mention happens to fuzzy-match a contact file shows up
       // in the inspector ("Open"), not the graph.
       const isGhost = n.missing;
-      // `fullstack-a-66` slice e: tint the Drafts directory node
-      // with the Drafts yellow so the graph reads consistent with
-      // the FB row + the inspector chip. Match by node id — the
-      // chan-server `synthesize_drafts_layer` emits this node as
-      // `directory_node_id("Drafts")` → `"directory:Drafts"`.
-      // DNode doesn't carry the raw path (the canvas only needs
-      // id + label + kind), so we key on the id literal instead.
+      // Tint the Drafts directory node with the Drafts yellow so the
+      // graph reads consistent with the FB row + the inspector chip.
+      // Match by node id: the chan-server `synthesize_drafts_layer`
+      // emits this node as `directory_node_id("Drafts")` →
+      // `"directory:Drafts"`. DNode doesn't carry the raw path (the
+      // canvas only needs id + label + kind), so we key on the id
+      // literal instead.
       const isDraftsRoot = n.kind === "folder" && n.id === "directory:Drafts";
-      // Phase-13 slice 3b-2: indexing palette override. When a
+      // Indexing palette override. When a
       // folder/workspace node carries `indexState` (the Dashboard
       // indexing slide feeds this; the main graph leaves it
       // undefined), paint the disc in the indexing colour and let
@@ -1215,7 +1192,7 @@
       n.fy = n.y;
       sim?.alphaTarget(0.3).restart();
       cancelRefit();
-      // E3: drag is user interaction; subsequent same-set data
+      // Drag is user interaction; subsequent same-set data
       // refreshes must not snap the view back.
       userInteracted = true;
     } else {
@@ -1241,10 +1218,10 @@
       transform.y = panStart.ty + (e.clientY - panStart.y);
       return;
     }
-    // Cheap hover update. `-a-60`: match the wider click slack so
-    // the cursor preview (`hoverId` → "pointer" CSS) reads the same
-    // hit-target the user will actually tap. Drag-detect (onMouseDown)
-    // uses the tighter slack to keep pan-on-empty usable.
+    // Cheap hover update. Match the wider click slack so the cursor
+    // preview (`hoverId` → "pointer" CSS) reads the same hit-target
+    // the user will actually tap. Drag-detect (onMouseDown) uses the
+    // tighter slack to keep pan-on-empty usable.
     const h = pickNode(p.x, p.y, PICK_SLACK_CLICK_PX);
     hoverId = h?.id ?? null;
   }
@@ -1264,11 +1241,11 @@
       sim?.alphaTarget(0);
       dragId = null;
       if (!moved) {
-        // A tap on a node (no drag movement) selects it. `-a-60`:
-        // use the wider click slack here so the user doesn't need
-        // to zoom in for small targets. The drag-detect path above
-        // (onMouseDown's pickNode call) still uses the tight 4px
-        // slack so pan-on-empty-space stays usable.
+        // A tap on a node (no drag movement) selects it. Use the
+        // wider click slack so the user doesn't need to zoom in for
+        // small targets. The drag-detect path (onMouseDown's pickNode
+        // call) still uses the tight 4px slack so pan-on-empty-space
+        // stays usable.
         const tapped = pickNode(p.x, p.y, PICK_SLACK_CLICK_PX);
         onSelect(tapped ? tapped.id : null);
       }
@@ -1282,8 +1259,8 @@
     downAt = null;
   }
 
-  /// Round-1 closing-2 (B7a): a double-click on a node calls
-  /// `onSetAsScope` so the parent re-roots the graph at that node
+  /// A double-click on a node calls `onSetAsScope` so the parent
+  /// re-roots the graph at that node
   /// (`graphFromHere`). The preceding two single-clicks already
   /// fired onSelect for the parent, so the parent's selectedId
   /// reflects the dblclicked node when this handler runs; the
@@ -1313,8 +1290,8 @@
     const factor = Math.exp(-e.deltaY * SENSITIVITY);
     const k2 = Math.min(6, Math.max(0.15, transform.k * factor));
     cancelRefit();
-    // E3: zoom is user interaction; subsequent same-set data
-    // refreshes must not snap the view back.
+    // Zoom is user interaction; subsequent same-set data refreshes
+    // must not snap the view back.
     userInteracted = true;
     // Zoom toward the cursor: the world point under the cursor
     // must stay anchored across the transform. Solve for the new
@@ -1351,10 +1328,11 @@
     // firing the rAF loop, so the first painted frame already shows
     // a fitted cluster instead of nodes flying out from the origin.
     if (sim) sim.tick(300);
-    // B12: defer the initial fit when the host hasn't been measured
-    // yet (carousel mounts GraphCanvas before slide 2 is visible,
-    // so the first `resize()` clamps the canvas to 0x0). `resize()`
-    // re-runs the fit the moment the host reports nonzero dims.
+    // Defer the initial fit when the host hasn't been measured yet
+    // (the carousel mounts GraphCanvas before its slide is visible,
+    // so the first `resize()` may clamp the canvas to 0x0).
+    // `resize()` re-runs the fit the moment the host reports nonzero
+    // dims.
     const cw = canvas?.clientWidth ?? 0;
     const ch = canvas?.clientHeight ?? 0;
     if (cw > 0 && ch > 0) {
@@ -1430,13 +1408,12 @@
   /// view eases toward the moving target without snapping, and stays
   /// active until both the window expires and the easing converges.
   function scheduleRefit(ms: number): void {
-    // E3: skip auto-refit once the user has panned, zoomed, or
-    // dragged a node. The view belongs to them; periodic data
-    // refreshes (e.g., Dashboard indexing polling) must not snap
-    // back to fit-content. The interaction flag resets when the
-    // node SET actually differs from the current dNodes (scope /
-    // depth change, first load), so genuine dataset swaps still
-    // re-frame the cluster.
+    // Skip auto-refit once the user has panned, zoomed, or dragged a
+    // node. The view belongs to them; periodic data refreshes (e.g.,
+    // Dashboard indexing polling) must not snap back to fit-content.
+    // The interaction flag resets when the node SET actually differs
+    // from the current dNodes (scope/depth change, first load), so
+    // genuine dataset swaps still re-frame the cluster.
     if (userInteracted) return;
     refitUntil = performance.now() + ms;
   }
@@ -1477,8 +1454,8 @@
         attributes: true, attributeFilter: ["data-theme"],
       });
     }
-    // Phase-13 slice 3b-2: track reduced-motion for the indexing
-    // pulse. Listener stays subscribed while the canvas is mounted
+    // Track reduced-motion for the indexing pulse. Listener stays
+    // subscribed while the canvas is mounted
     // so the user toggling the OS preference takes effect on the
     // next paint without a reload.
     const reduceMotionQuery = window.matchMedia(
@@ -1522,17 +1499,14 @@
     void nodes;
     void edges;
     if (!sim) return;
-    // Round-1 closing-3 (D5): the Dashboard indexing slide polls
-    // /api/indexing/state every 3s, which produces a new
-    // (content-identical) `nodes`/`edges` array reference each
-    // tick. Pre-fix that re-fired `scheduleRefit(1200)` and the
-    // canvas zoomed back to fit-content, overriding the user's
-    // manual pan/zoom. When the node id SET hasn't changed (only
-    // node fields like `indexState` colour have refreshed), this
-    // is a content-update tick, not a structural change - skip
-    // the refit so the user's view stays put. Scope / depth /
-    // first-load swaps still refit because the set actually
-    // differs.
+    // The Dashboard indexing slide polls /api/indexing/state every
+    // 3s, which produces a new (content-identical) `nodes`/`edges`
+    // array reference each tick. When the node id SET hasn't changed
+    // (only node fields like `indexState` colour have refreshed),
+    // this is a content-update tick, not a structural change: skip
+    // the refit so the user's view stays put rather than zooming
+    // back to fit-content. Scope / depth / first-load swaps still
+    // refit because the set actually differs.
     const nextIds = new Set<string>();
     for (const n of nodes) nextIds.add(n.id);
     let overlap = 0;
@@ -1541,36 +1515,34 @@
       dNodes.length > 0 &&
       dNodes.length === nextIds.size &&
       overlap === dNodes.length;
-    // Round-1 closing-6 (E3 fix-up): pick the simulation re-warm
-    // alpha by structural delta, not by a binary "same set vs
-    // not". The Dashboard indexing slide adds nodes one at a time
-    // as files appear on disk - alpha=1 (the prior "full swap"
-    // strength) yanks every node toward the layout origin and
-    // looks more like a scope change than a fluid file-browser
-    // update. Treat anything with >=50% overlap as incremental
-    // (gentle alpha so existing nodes barely move and the new
-    // ones ease in); zero-or-low overlap reads as a real scope
-    // swap and warrants the strong re-warm.
+    // Pick the simulation re-warm alpha by structural delta, not by
+    // a binary "same set vs not". The Dashboard indexing slide adds
+    // nodes one at a time as files appear on disk; alpha=1 (full-swap
+    // strength) would yank every node toward the layout origin and
+    // look more like a scope change than a fluid file-browser update.
+    // Treat anything with >=50% overlap as incremental (gentle alpha
+    // so existing nodes barely move and the new ones ease in);
+    // zero-or-low overlap reads as a real scope swap and warrants the
+    // strong re-warm.
     const incremental = !sameSet && dNodes.length > 0 && overlap * 2 >= dNodes.length;
     rebuildAdjacency();
     rebuildWorkingSet();
     const alpha = sameSet ? 0.05 : incremental ? 0.2 : 1;
     rewarmSim(alpha);
-    // E3: scheduleRefit is itself gated on `userInteracted`, so
-    // calling it on a structural change is a no-op once the user
-    // has taken control of the view. First-load (userInteracted
-    // false) still gets the auto-fit. We no longer reset the
-    // interaction flag on set changes - the file-browser-style
-    // expectation is that new nodes appear in place while the
-    // user's chosen viewport stays put.
+    // scheduleRefit is itself gated on `userInteracted`, so calling
+    // it on a structural change is a no-op once the user has taken
+    // control of the view. First-load (userInteracted false) still
+    // gets the auto-fit. The interaction flag is never reset on set
+    // changes: the file-browser-style expectation is that new nodes
+    // appear in place while the user's chosen viewport stays put.
     if (!sameSet) {
       scheduleRefit(1200);
     }
   });
 
   /// Visibility change without a full data swap: scope / depth /
-  /// chip filters moved. Incremental rebuild — preserves existing
-  /// node positions, seeds new arrivals near a visible neighbour,
+  /// chip filters moved. Incremental rebuild that preserves existing
+  /// node positions, seeds new arrivals near a visible neighbour, and
   /// re-warms with a small alpha so the cluster relaxes around the
   /// edit instead of jumping.
   $effect(() => {
@@ -1579,25 +1551,20 @@
     void focalIds;
     if (!sim) return;
     const { added, removed } = rebuildWorkingSet();
-    // Round-1 closing-4 (E3): the Dashboard indexing slide re-
-    // derives its `visibleNodeIds` (a new Set ref) + `visibleEdges`
-    // (a new array ref) every 3s poll, which used to fire
-    // `scheduleRefit(400)` even when nothing structurally
-    // changed - the view snapped back on every tick. When the
-    // working set is unchanged (no nodes added or removed), this
-    // is a content-only re-render; skip the refit + the alpha
-    // bump so the canvas stays still.
+    // The Dashboard indexing slide re-derives its `visibleNodeIds`
+    // (a new Set ref) + `visibleEdges` (a new array ref) every 3s
+    // poll. When the working set is unchanged (no nodes added or
+    // removed), this is a content-only re-render: skip the refit +
+    // the alpha bump so the canvas stays still.
     //
-    // Round-1 closing-6 (E3 fix-up): the previous shape early-
-    // returned BEFORE re-binding the d3-force link force to the
+    // The same-set path still rebinds the d3-force link force to the
     // freshly-rebuilt `dEdges` (rebuildWorkingSet replaces it on
-    // every call). Skipping `rewarmSim` orphaned the link force
-    // pointing at stale DEdge objects, and the render walked the
-    // new `visibleEdgeRefs` whose endpoints had never been
-    // resolved -> the canvas painted no edges. The same-set path
-    // now rebinds the link force directly (no alpha bump, no
-    // refit) so edges keep rendering while the user's view stays
-    // put.
+    // every call). Skipping that rebind would orphan the link force
+    // pointing at stale DEdge objects, and the render would walk the
+    // new `visibleEdgeRefs` whose endpoints were never resolved, so
+    // the canvas would paint no edges. The rebind happens with no
+    // alpha bump and no refit so edges keep rendering while the
+    // user's view stays put.
     if (added.length === 0 && removed.length === 0) {
       sim.nodes(dNodes);
       const link = sim.force("link") as unknown as {

@@ -2,16 +2,13 @@ import { describe, expect, test } from "vitest";
 import source from "./HybridTerminalConfig.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
-// `fullstack-a-45` (Task B): the Terminal preferences UI migrated
-// out of the (since-retired) global Settings overlay into
-// HybridTerminalConfig. These pins carry over the wiring
-// guarantees the original `fullstack-b-11` terminal-section test
-// enforced (scrollback range / number / clamp; TERM dropdown
-// ships the known terminfo entries plus Custom sentinel; custom
-// input renders only when the sentinel is active) and adds new
-// pins for the warning copy required by `-a-45`.
+// The Terminal preferences UI lives in HybridTerminalConfig. These
+// pins enforce the wiring guarantees (scrollback range / number /
+// clamp; TERM dropdown ships the known terminfo entries plus a Custom
+// sentinel; custom input renders only when the sentinel is active)
+// plus the device-wide warning copy.
 
-describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
+describe("HybridTerminalConfig wiring", () => {
   test("warning copy distinguishes device-wide settings from body theme scope", () => {
     expect(source).toMatch(
       /Scrollback, TERM, and font apply to ALL terminals on this\s+device/,
@@ -85,7 +82,7 @@ describe("fullstack-a-45: HybridTerminalConfig wiring", () => {
   });
 });
 
-describe("fullstack-a-53: HybridTerminalConfig surface theme + custom-TERM fix", () => {
+describe("HybridTerminalConfig surface theme + custom-TERM fix", () => {
   test("top-bar body theme is delegated to the shared surface shell", () => {
     expect(source).toMatch(
       /<HybridSurfaceConfigShell[\s\S]{1,160}title="Hybrid Terminal"[\s\S]{1,120}surface="terminal"/,
@@ -136,7 +133,7 @@ describe("fullstack-a-53: HybridTerminalConfig surface theme + custom-TERM fix",
   });
 });
 
-describe("fullstack-b-30 slice b: terminal-font dropdown + download flow", () => {
+describe("terminal-font dropdown + download flow", () => {
   test("dropdown carries both choices with the OS default as the leading option", () => {
     expect(source).toMatch(
       /<select[\s\S]*?id="hybrid-terminal-font"[\s\S]*?<option value="os-default">OS default \(mono\)<\/option>[\s\S]*?<option value="source-code-pro">Source Code Pro<\/option>/,
@@ -191,7 +188,7 @@ describe("Wave 4: Terminal back-side controls", () => {
   });
 });
 
-describe("round-1 closing-3 (C1): post-save effect_update_depth_exceeded guard", () => {
+describe("(C1): post-save effect_update_depth_exceeded guard", () => {
   // The hydration $effect used to reassign `editing` to a
   // content-identical clone on every workspace.info change, which
   // replaced the $state proxy and re-fired the effect on its own

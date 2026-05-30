@@ -272,9 +272,7 @@
     // when present (graph overlay: select the contact's node on the
     // canvas, matching how documents behave there). When absent, fall
     // back to opening a contact-scoped graph (bidirectional BFS lens
-    // around the contact). Slice 4b promoted this from the
-    // workspace-graph-with-pin fallback to the dedicated contact lens
-    // now that openGraphForContact exists.
+    // around the contact) via openGraphForContact.
     const navigateContact = onContactNavigate
       ? (p: string) => onContactNavigate(p)
       : (p: string) => openGraphForContact(p);
@@ -383,12 +381,11 @@
     uploadInput?.click();
   }
 
-  /// A3-iii: Export to PDF moved here from the editor's right-click menu.
-  /// Shown for markdown files. The selected file is not necessarily open
-  /// in an editor, so fetch its content from disk (the editor autosaves,
-  /// so disk == the live document) and route through the same print
-  /// helper. No editor element to source theme CSS from; the print frame
-  /// falls back to its embedded styles.
+  /// Export to PDF for markdown files. The selected file is not necessarily
+  /// open in an editor, so its content is fetched from disk (the editor
+  /// autosaves, so disk == the live document) and routed through the same
+  /// print helper. No editor element to source theme CSS from; the print
+  /// frame falls back to its embedded styles.
   async function doExportPdf(): Promise<void> {
     if (!entry || entry.is_dir) return;
     try {
@@ -418,15 +415,15 @@
 
   function downloadSelection(): void {
     if (!entry) return;
-    // Desktop routes through @@LaneB's progress-tracked capability
-    // (downloadTransfer store workspaces the indicator below); the browser
+    // Desktop routes through the progress-tracked capability
+    // (downloadTransfer store drives the indicator below); the browser
     // hands off to its native download manager.
     fileOps.downloadPathWithProgress(entry.path, entry.is_dir);
   }
 
-  /// Live desktop-download indicator (browser path leaves this null --
-  /// the browser's own download manager owns the progress UI). Mirrors
-  /// the shape @@LaneB's store exposes: progress 0..1 or null
+  /// Live desktop-download indicator (browser path leaves this null;
+  /// the browser's own download manager owns the progress UI). The
+  /// downloadTransfer store shape: progress 0..1 or null
   /// (indeterminate), savedPath on success, error on failure.
   const transfer = $derived(downloadTransfer.value);
   const downloadBusy = $derived(downloadTransferActive());
@@ -589,8 +586,8 @@
 
 <!-- Desktop-download indicator. Browser downloads hand off to the
      native download manager (no in-app indicator); on desktop
-     @@LaneB's runDesktopDownload workspaces the downloadTransfer store and
-     this snippet mirrors its progress / success / error. Rendered once
+     runDesktopDownload drives the downloadTransfer store and this
+     snippet mirrors its progress / success / error. Rendered once
      per body branch via {@render downloadIndicator()}. -->
 {#snippet downloadIndicator()}
   {#if transfer}
@@ -763,9 +760,8 @@
   <div class="info">
     <header class="head">
       {#if entry.path === "Drafts"}
-        <!-- `fullstack-a-66` slice c (follow-up): keep the
-             file-inspector Drafts copy aligned with the graph
-             directory inspector in case a caller passes the
+        <!-- Keep the file-inspector Drafts copy aligned with the
+             graph directory inspector in case a caller passes the
              metadata-backed Drafts root through this component. -->
         <span class="kind-chip drafts-chip">DRAFTS</span>
       {:else}
@@ -776,8 +772,7 @@
       {label || basename(entry.path) || workspace.info?.label || "(root)"}
     </h3>
     {#if entry.path === "Drafts"}
-      <!-- `fullstack-a-66` slice c (follow-up): "outside workspace's
-           root" notice. Mirrors the copy added to
+      <!-- "outside workspace's root" notice. Mirrors the copy in
            DirectoryInfoBody. -->
       <div class="drafts-notice" role="note">
         <strong>Drafts lives outside the workspace's root.</strong>
@@ -881,9 +876,6 @@
     {:else if reportError}
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
-    <!-- Actions moved up to the actionsSection directly under the
-         filename (inspector-spec.md). Show Directory / Graph from here /
-         Upload / Download all live there now. -->
   </div>
 {:else}
   {@const editable = isEditableText(entry.path)}
@@ -983,9 +975,6 @@
     {:else if reportError}
       <div class="refs-error">report unavailable: {reportError}</div>
     {/if}
-    <!-- Actions (Open / View+Zoom / Upload / Download / Show File /
-         Graph from here) moved up to the actionsSection directly under
-         the filename header (inspector-spec.md). -->
     {#if showRefs}
       {#if !graphData.view && graphData.loading}
         <div class="refs-loading">loading references…</div>
@@ -1133,10 +1122,9 @@
     gap: 0.4rem;
     margin-bottom: 0.4rem;
   }
-  /* `fullstack-a-66` slice c (follow-up): Drafts chip + notice
-     mirror the DirectoryInfoBody styling so the FB-selected
-     Drafts row renders identically to the graph-side dir node
-     inspector. */
+  /* Drafts chip + notice mirror the DirectoryInfoBody styling so
+     the FB-selected Drafts row renders identically to the graph-side
+     dir node inspector. */
   .kind-chip.drafts-chip {
     flex: 1;
     color: #fff;
@@ -1322,11 +1310,9 @@
     cursor: pointer;
     font: inherit;
     /* Own the spacing above the button so it doesn't matter whether
-       the preceding element has a bottom margin (file: standalone
-       .meta-grid keeps 0.6rem; directory: the cocomo grid zeroes its
-       margin and used to leave the button flush against
-       "developers"). Adjacent buttons collapse to a tighter gap so
-       a group of actions reads as a single block. */
+       the preceding element has a bottom margin. Adjacent buttons
+       collapse to a tighter gap so a group of actions reads as a
+       single block. */
     margin-top: 0.6rem;
   }
   .open + .open { margin-top: 0.35rem; }
@@ -1564,10 +1550,9 @@
     font-size: 13px;
     align-items: baseline;
   }
-  /* Promoted to a <button> in slice 4b so the language name routes
-     to the Graph (scoped to this language). Strip default button
-     chrome, left-align, and add hover + focus affordance. Stays a
-     grid cell at column 1; no layout shift vs. the prior <span>. */
+  /* A <button> so the language name routes to the Graph (scoped to
+     this language). Strip default button chrome, left-align, and add
+     hover + focus affordance. Stays a grid cell at column 1. */
   .lang-name {
     color: var(--text);
     word-break: break-word;

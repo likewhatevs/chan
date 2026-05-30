@@ -76,48 +76,6 @@ export type Shortcut = {
 
 /// The complete chord registry. Order in this list is the order the
 /// table renders rows within each group.
-///
-/// `fullstack-42` (2026-05-19) pruned every chord whose action is
-/// now covered by Pane Mode (`Cmd+K` …) so the keymap stops
-/// shipping two shortcuts for the same action. Removed at the
-/// time:
-///
-///   app.files.toggle    (was Mod+P)              → Cmd+K 2
-///   app.search.toggle   (was Mod+Shift+F)        → Cmd+K f
-///                                                  (was `Cmd+K s` post-fullstack-42;
-///                                                   moved to `f` per fullstack-74 so
-///                                                   WASD can fully own swap-tile)
-///   app.graph.toggle    (was Mod+Shift+M)        → Cmd+K 3
-///   app.terminal.toggle (was Cmd+Alt+T / Mod+T)  → Cmd+K 1
-///   app.file.new        (was Ctrl+Alt+N / Mod+N) → Cmd+K 4
-///   app.pane.prev/next  (was Mod+Alt+[ / ])      → Cmd+K ← / →
-///
-/// `fullstack-b-9` (2026-05-19) brought `app.terminal.toggle`
-/// back as a direct chord (Cmd+T native / Cmd+Alt+T web Mac /
-/// universal `Mod+. t` via Hybrid Nav).
-///
-/// `fullstack-a-32` (2026-05-20) re-adds `app.files.toggle`,
-/// `app.graph.toggle`, and updates `app.terminal.teamWork` to
-/// the consistent spawn-chord shape:
-///
-///   app.files.toggle           Cmd+O native / Cmd+Alt+O web Mac / Mod+. o universal
-///   app.graph.toggle           Cmd+Shift+M native + web        / Mod+. v universal
-///   app.terminal.teamWork    Cmd+P native / Cmd+Alt+P web Mac / Mod+. p universal
-///
-/// Inside Hybrid Nav, the numeric `1/2/3/4` cases drop (they
-/// duplicated the new mnemonic chords); `t/T`, `o/O`, `p/P`,
-/// `v/V` cover the same actions with first-letter mnemonics.
-/// `f/F` (Search) and `h/H` (Help) stay. The Cmd+K entry chord
-/// itself was already swapped to Cmd+. by `fullstack-a-7`.
-///
-/// Track C wires `app.pane.prev/next` back as direct `Mod+[` /
-/// `Mod+]` commands because the Hybrid hamburger exposes those
-/// labels and users expect the labels to fire.
-///
-/// `app.tab.close` was rewired to `Ctrl+D` on both web and native
-/// (a different action than Pane Mode's `x` / `k`, per
-/// `fullstack-41`); the native `Mod+W` fallback still fires through
-/// `KEY_BRIDGE_JS` in `desktop/src-tauri/src/serve.rs`.
 export const SHORTCUTS: readonly Shortcut[] = [
   // App-level navigation
   //

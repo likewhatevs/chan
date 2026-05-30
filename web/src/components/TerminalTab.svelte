@@ -118,15 +118,13 @@
     | { type: "closed"; reason: CloseReason }
     | { type: "exit"; code: number }
     | { type: "error"; message?: string; reason?: string }
-    /// `fullstack-a-92`: server-side `dispatch_agent_event` no
-    /// longer writes the `poke + chord` echo directly to the
-    /// agent session's PTY. It emits this frame instead; the
-    /// SPA routes the payload through `sendUserInput` so the
-    /// existing broadcast layer (`-a-31`) fans the echo to
-    /// every selected broadcast target. Payload is base64 of
-    /// the raw bytes (chord may include non-UTF8 bytes per
-    /// `fullstack-b-13`'s submit-mode chord; base64 round-trips
-    /// the whole sequence without escape-string contortions).
+    /// Server-side `dispatch_agent_event` emits this frame rather
+    /// than writing the `poke + chord` echo directly to the agent
+    /// session's PTY. The SPA routes the payload through
+    /// `sendUserInput` so the broadcast layer fans the echo to every
+    /// selected broadcast target. Payload is base64 of the raw bytes
+    /// (the chord may include non-UTF8 bytes; base64 round-trips the
+    /// whole sequence without escape-string contortions).
     | {
         type: "agent_event_echo";
         seq: number;
@@ -142,11 +140,10 @@
   let fit: FitAddon | null = null;
   let search: SearchAddon | null = null;
   let serialize: SerializeAddon | null = null;
-  // `fullstack-b-11`: scrollback line cap captured at construction
-  // time from the persisted MB budget so xterm.js gets a stable
-  // number. Held on the component so the "copy scrollback" actions
-  // can serialize the same window that's actually in memory rather
-  // than the pre-fix 20k constant.
+  // Scrollback line cap captured at construction time from the
+  // persisted MB budget so xterm.js gets a stable number. Held on
+  // the component so the "copy scrollback" actions serialize the same
+  // window that's actually in memory.
   let scrollbackLines = scrollbackLinesFromMb(SCROLLBACK_MB_DEFAULT);
   let ws: WebSocket | null = null;
   let resizeObserver: ResizeObserver | null = null;
@@ -168,18 +165,19 @@
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
   const keyboardProtocol = createTerminalKeyboardProtocolState();
   let hostResumeListenerCleanup: (() => void) | null = null;
-  // `lane-c addendum-2 item 2`: wall-clock-gap sleep/wake detector. See
+  // Wall-clock-gap sleep/wake detector. See
   // installHostResumeListeners for why focus/pageshow/visibilitychange
   // miss a macOS display/system sleep in WKWebView.
   let wakeProbeTimer: ReturnType<typeof setInterval> | null = null;
   let lastWakeProbe = 0;
-  // Probe every 2s; a gap past 6s (several missed ticks) means JS timers
-  // froze - the machine slept - and the probe is firing late on wake.
+  // Probe every 2s; a gap past 6s (several missed ticks) means JS
+  // timers froze (the machine slept) and the probe is firing late on
+  // wake.
   const WAKE_PROBE_MS = 2000;
   const WAKE_GAP_MS = 6000;
-  // `lane-c addendum-3`: while output arrives at an unfocused terminal the
-  // unseen-output dot pulses; this timer flips it solid once output has
-  // been quiet for ACTIVITY_PULSE_QUIET_MS.
+  // While output arrives at an unfocused terminal the unseen-output
+  // dot pulses; this timer flips it solid once output has been quiet
+  // for ACTIVITY_PULSE_QUIET_MS.
   let activityPulseTimer: ReturnType<typeof setTimeout> | null = null;
   const ACTIVITY_PULSE_QUIET_MS = 700;
   let lastSessionSave = 0;
@@ -190,12 +188,11 @@
     if (!a) return { x: 0, y: 0 };
     return { x: Math.round(a.left), y: Math.round(a.bottom + 4) };
   });
-  // `fullstack-a-31`: self appears at the top of the broadcast
-  // target list with a "self" marker. Checking the self row sets
-  // `broadcastEnabled` (this tab joins the broadcast group);
-  // other rows route to `setTerminalBroadcastTarget`. The
-  // umbrella "Broadcast Input On/Off" button is gone — the self
-  // row is the only knob that controls THIS tab's participation.
+  // Self appears at the top of the broadcast target list with a
+  // "self" marker. Checking the self row sets `broadcastEnabled`
+  // (this tab joins the broadcast group); other rows route to
+  // `setTerminalBroadcastTarget`. The self row is the only knob that
+  // controls THIS tab's participation (no umbrella on/off button).
   const broadcastTargets = $derived(
     allTerminalTabs().sort((a, b) => {
       if (a.id === tab.id) return -1;
@@ -204,8 +201,8 @@
     }),
   );
   const selectedBroadcastTargets = $derived(new Set(terminalBroadcastMemberIds(tab)));
-  // `fullstack-a-31`: "Select All" walks every row INCLUDING self
-  // so the bulk action stays consistent with the per-row UI.
+  // "Select All" walks every row INCLUDING self so the bulk action
+  // stays consistent with the per-row UI.
   const allBroadcastTargetsSelected = $derived(
     broadcastTargets.length > 0 &&
       broadcastTargets.every((target) =>
@@ -235,33 +232,32 @@
 
   $effect(() => {
     if (!focused) return;
-    // `fullstack-a-64`: read the global tab-focus pulse so this
-    // effect re-runs on chord-driven tab switches (Cmd+Shift+[/],
-    // Ctrl+Alt+1..9). Without this dep, switching FROM another
-    // tab IN to the terminal via chord doesn't pull keyboard
-    // focus reliably — the editor's contenteditable retains the
-    // DOM focus and the next keystroke damages the doc.
+    // Read the global tab-focus pulse so this effect re-runs on
+    // chord-driven tab switches (Cmd+Shift+[/], Ctrl+Alt+1..9).
+    // Without this dep, switching FROM another tab IN to the terminal
+    // via chord doesn't pull keyboard focus reliably: the editor's
+    // contenteditable retains the DOM focus and the next keystroke
+    // damages the doc.
     tabFocusPulse.value;
-    // `desktop-fixes`: the pane gaining focus runs the same fit + repaint
-    // recovery the blur / active-flip paths use so WKWebView redraws any
-    // rows left stale by the visibility flip. Crucially this no longer
-    // CLEARS the shared texture atlas (see refreshTerminalRenderer): the
-    // old per-focus atlas clear is what garbled the sibling panes when the
-    // user moved focus around the grid. recoverTerminalRendererAfterHost-
-    // Resume() subsumes the queueFit() this used to call.
+    // The pane gaining focus runs the same fit + repaint recovery the
+    // blur / active-flip paths use so WKWebView redraws any rows left
+    // stale by the visibility flip. It does NOT clear the shared
+    // texture atlas (see refreshTerminalRenderer): a per-focus atlas
+    // clear would garble the sibling panes when the user moves focus
+    // around the grid.
     recoverTerminalRendererAfterHostResume();
     setTerminalActivity(tab, false);
     sendFocusState();
     queueMicrotask(() => {
-      // `fullstack-a-17`: when the Team Work prompt is open it owns
-      // the keyboard. Cmd+K p on a pane without a terminal spawns one
-      // and opens the prompt in the same Svelte tick; without this
-      // gate, xterm's mount-time focus races past the prompt's focus
-      // effect and steals the caret. Bump `focusNonce` so the
-      // prompt's open-effect re-runs and lands the caret on the
-      // editor — covers both the Cmd+K p race AND the user returning
-      // to a pane whose prompt was already open (no focusNonce bump
-      // would otherwise fire there).
+      // When the Team Work prompt is open it owns the keyboard. Cmd+K
+      // p on a pane without a terminal spawns one and opens the
+      // prompt in the same Svelte tick; without this gate, xterm's
+      // mount-time focus races past the prompt's focus effect and
+      // steals the caret. Bump `focusNonce` so the prompt's
+      // open-effect re-runs and lands the caret on the editor. This
+      // covers both the Cmd+K p race AND the user returning to a pane
+      // whose prompt was already open (no focusNonce bump would
+      // otherwise fire there).
       if (tab.teamWork?.open) {
         if (tab.teamWork) {
           tab.teamWork.focusNonce = (tab.teamWork.focusNonce ?? 0) + 1;
@@ -272,23 +268,23 @@
     });
   });
 
-  // `lane-c addendum-1 bug 1`: when focus moves AWAY from this terminal
-  // to another pane, the pane losing focus can paint stale in the
-  // desktop app's WKWebView - its WebGL renderer leaves the canvas
-  // half-updated and a single refresh does not always correct it. So run
-  // the SAME recovery the host-resume / active-flip (Bug 6) paths use -
-  // fit + repaint + delayed re-fits - on blur too. The size is unchanged
-  // on a focus switch, so the fit is a dimensional no-op; the value is
-  // the deferred repaint pass WebKit needs. `desktop-fixes`: that
-  // recovery no longer clears the shared texture atlas (the per-focus
-  // clear corrupted sibling panes); it only repaints.
+  // When focus moves AWAY from this terminal to another pane, the
+  // pane losing focus can paint stale in the desktop app's WKWebView:
+  // its WebGL renderer leaves the canvas half-updated and a single
+  // refresh does not always correct it. So run the SAME recovery the
+  // host-resume / active-flip paths use (fit + repaint + delayed
+  // re-fits) on blur too. The size is unchanged on a focus switch, so
+  // the fit is a dimensional no-op; the value is the deferred repaint
+  // pass WebKit needs. That recovery does NOT clear the shared
+  // texture atlas (a per-focus clear would corrupt sibling panes); it
+  // only repaints.
   $effect(() => {
     if (focused) return;
     recoverTerminalRendererAfterHostResume();
     sendFocusState();
   });
 
-  // Bug 6: an idle terminal (visible in its pane but NOT focused, or a
+  // An idle terminal (visible in its pane but NOT focused, or a
   // tab just switched to in a non-active pane) renders garbled until
   // the user clicks or resizes it. The tab uses `visibility: hidden`
   // (not `display: none`) while inactive, so the host keeps layout
@@ -389,19 +385,15 @@
     maybeRefresh?.call(term, 0, Math.max(0, term.rows - 1));
   }
 
-  // `desktop-fixes`: repaint the visible rows; do NOT clear the texture
-  // atlas. xterm.js's WebGL renderer shares ONE process-global
-  // TextureAtlas across every terminal pane (`fullstack-a-97` already
-  // named that share "the source of the cross-pane glyph glitches" when
-  // it removed the per-PTY-chunk clear). The focus / blur / active-flip /
-  // wake recovery used to clear that shared atlas via xterm's clear API;
-  // clearing it from the pane the user just moved to rebuilt the atlas
-  // out from under the SIBLING panes still on screen, which is what
-  // produced the garbled glyphs when moving focus between panes. The
-  // addon-webgl 0.19 renderer rebuilds the atlas itself for color / DPR /
-  // font / options changes, so these events only need a row repaint -
-  // term.refresh() redraws from the existing good atlas with no
-  // cross-pane fallout.
+  // Repaint the visible rows; do NOT clear the texture atlas.
+  // xterm.js's WebGL renderer shares ONE process-global TextureAtlas
+  // across every terminal pane, so clearing it from the pane the user
+  // just moved to would rebuild the atlas out from under the SIBLING
+  // panes still on screen and garble their glyphs. The addon-webgl
+  // 0.19 renderer rebuilds the atlas itself for color / DPR / font /
+  // options changes, so the focus / blur / active-flip / wake
+  // recovery only needs a row repaint: term.refresh() redraws from
+  // the existing good atlas with no cross-pane fallout.
   function refreshTerminalRenderer(): void {
     if (!term) return;
     requestAnimationFrame(() => {
@@ -445,13 +437,13 @@
     window.addEventListener("focus", onHostResume);
     window.addEventListener("pageshow", onHostResume);
     document.addEventListener("visibilitychange", onVisibility);
-    // `lane-c addendum-2 item 2`: macOS screensaver / display + system
-    // sleep does NOT fire focus / pageshow / visibilitychange in the
-    // desktop app's WKWebView (the window stays "visible" + focused
-    // through the sleep), so the listeners above never fire on wake -
-    // the WebGL renderer stays glitchy until the user RESIZES a window
-    // (ResizeObserver -> queueFit -> recovery; @@Alex's clue). Detect
-    // the wake directly: a coarse interval whose callback fires far
+    // macOS screensaver / display + system sleep does NOT fire focus
+    // / pageshow / visibilitychange in the desktop app's WKWebView
+    // (the window stays "visible" + focused through the sleep), so the
+    // listeners above never fire on wake and the WebGL renderer stays
+    // glitchy until the user RESIZES a window (ResizeObserver ->
+    // queueFit -> recovery). Detect the wake directly: a coarse
+    // interval whose callback fires far
     // later than scheduled means the wall clock jumped while JS timers
     // were frozen (the machine slept), so run the same recovery the
     // resize path proves works. One interval per terminal so EVERY pane
@@ -477,16 +469,15 @@
     };
   }
 
-  // `webgl-context-loss`: the live WebGL context can be lost long
-  // after mount (GPU reset, display sleep, a DPR change when the
-  // window moves between Retina and non-Retina displays, tab
-  // backgrounding). WKWebView / WebKitGTK (chan-desktop) drop it far
-  // more readily than Chrome. The previous handler disposed the
-  // renderer and stayed on DOM for the rest of the session, so a
-  // single transient loss permanently re-introduced the box-drawing
-  // gap bug (`fullstack-b-29`) with no recovery. Recreate the
-  // renderer on loss instead, bounded by a small retry budget so a
-  // genuinely dead GPU settles on DOM rather than thrashing recreate.
+  // The live WebGL context can be lost long after mount (GPU reset,
+  // display sleep, a DPR change when the window moves between Retina
+  // and non-Retina displays, tab backgrounding). WKWebView /
+  // WebKitGTK (chan-desktop) drop it far more readily than Chrome.
+  // Disposing the renderer and staying on the DOM renderer for the
+  // rest of the session would permanently re-introduce the
+  // box-drawing gap, so instead recreate the renderer on loss,
+  // bounded by a small retry budget so a genuinely dead GPU settles
+  // on the DOM renderer rather than thrashing recreate.
   const WEBGL_MAX_CONTEXT_LOSS_RETRIES = 3;
 
   function enableWebglRenderer(): void {
@@ -530,43 +521,31 @@
 
   function start(): void {
     if (!host || term) return;
-    // `fullstack-b-11`: scrollback honors the Settings MB budget.
-    // Read once here so a settings change after spawn doesn't reach
-    // through and resize the existing xterm.js buffer; the hint copy
-    // under the slider names this spawn-time-only contract.
+    // Scrollback honors the Settings MB budget. Read once here so a
+    // settings change after spawn doesn't reach through and resize
+    // the existing xterm.js buffer; the hint copy under the slider
+    // names this spawn-time-only contract.
     scrollbackLines = scrollbackLinesFromMb(
       clampScrollbackMb(workspace.info?.preferences?.terminal?.scrollback_mb),
     );
-    // `fullstack-b-2`: lineHeight bumped from 1.0 to 1.2 so
-    // multi-row ASCII glyphs (e.g. the Claude Code splash cube,
-    // figlet output, nethack tiles) render with the row separation
-    // a user gets from iTerm. xterm.js's 1.0 default packs ascender
-    // glyphs against the next row's descenders; visible regression
-    // captured in `docs/journals/phase-8/attachments/image-{3,4}.png`.
-    // `fullstack-b-12`: visual parity with iTerm2's defaults.
-    // Source Code Pro Regular at 14 pt is bundled with chan
-    // (rust-embed via /static/fonts) so the family resolves to a
-    // known face on every install; the fallback chain catches the
-    // case where the @font-face load is still in flight or the
-    // browser declines woff2. Cursor goes to a non-blinking block,
-    // matching iTerm's defaults captured in the task spec.
-    // `fullstack-b-30` slice a: per-OS native-mono default. The
-    // chain leads with the OS's installed mono face (SF Mono /
-    // Cascadia / DejaVu) so the lean default build (no
-    // `--features embed-font`) doesn't 404 on a missing woff2.
-    // Source Code Pro stays in the chain but only kicks in when
-    // the user opts in via Settings (slice b) — the download flow
-    // writes the woff2 to `<user-config>/chan/fonts/` and the SPA
-    // reorders the chain to lead with SCP.
+    // lineHeight is 1.2 (not xterm.js's 1.0 default) so multi-row
+    // ASCII glyphs (e.g. the Claude Code splash cube, figlet output,
+    // nethack tiles) render with the row separation a user gets from
+    // iTerm; the 1.0 default packs ascender glyphs against the next
+    // row's descenders. Cursor is a non-blinking block, matching
+    // iTerm's defaults.
     //
-    // `fullstack-b-30` slice b: honour the persisted font
-    // preference. "source-code-pro" reorders the chain to lead
-    // with SCP; the browser still falls back gracefully if the
-    // face hasn't loaded yet (or if the user-config-dir copy is
-    // missing on a non-embed-font build). "os-default" keeps
-    // the slice-a per-OS native lead. Spawn-time-only — mirrors
-    // -b-11's scrollback contract; existing terminals keep
-    // their current font until session restart.
+    // Font chain: by default it leads with the OS's installed mono
+    // face (SF Mono / Cascadia / DejaVu) so the lean default build
+    // (no `--features embed-font`) doesn't 404 on a missing woff2.
+    // Source Code Pro stays in the chain but only leads when the user
+    // opts in via Settings: that download flow writes the woff2 to
+    // `<user-config>/chan/fonts/` and the SPA reorders the chain to
+    // lead with SCP. The browser still falls back gracefully if the
+    // face hasn't loaded yet (or the user-config-dir copy is missing
+    // on a non-embed-font build). Spawn-time-only, like the
+    // scrollback contract: existing terminals keep their current font
+    // until session restart.
     const FONT_CHAIN_OS_DEFAULT =
       '"SF Mono", SFMono-Regular, "Cascadia Code", "DejaVu Sans Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", "Source Code Pro", monospace';
     const FONT_CHAIN_SOURCE_CODE_PRO =
@@ -599,13 +578,12 @@
     term.loadAddon(serialize);
     term.loadAddon(new WebLinksAddon());
     term.open(host);
-    // `fullstack-b-29`: WebGL renderer makes xterm.js's built-in
-    // customGlyphs path actually fire — under the default DOM
-    // renderer, box-drawing + block-element characters fall
-    // through to the system font which (with lineHeight: 1.2)
-    // renders with vertical gaps between cells. The WebglAddon
-    // draws pixel-perfect glyphs into the cell rectangle
-    // including the line-height padding, so ASCII tables +
+    // The WebGL renderer makes xterm.js's built-in customGlyphs path
+    // fire: under the default DOM renderer, box-drawing +
+    // block-element characters fall through to the system font which
+    // (with lineHeight: 1.2) renders with vertical gaps between
+    // cells. The WebglAddon draws pixel-perfect glyphs into the cell
+    // rectangle including the line-height padding, so ASCII tables +
     // pixel-art mascots render gap-free.
     //
     // WebGL initialisation throws on contexts where the browser
@@ -726,19 +704,16 @@
         statusDetail = detail;
         term?.writeln(`\r\nterminal error: ${detail}`);
       } else if (frame.type === "agent_event_echo") {
-        // `fullstack-a-92`: server-side `dispatch_agent_event`
-        // (`terminal_sessions.rs`) emits this frame instead of
-        // writing the `poke + chord` bytes directly to the
-        // PTY. Routing the payload through `sendUserInput`
-        // does two things at once:
+        // Server-side `dispatch_agent_event` (`terminal_sessions.rs`)
+        // emits this frame instead of writing the `poke + chord`
+        // bytes directly to the PTY. Routing the payload through
+        // `sendUserInput` does two things at once:
         //   1. Hits `sendInput` → server writes to the local
-        //      PTY (preserving today's "the agent sees `poke`
-        //      as if typed" UX).
-        //   2. Hits `broadcastTerminalInput` (the existing
-        //      `-a-31` fan-out) — when broadcast input is ON
-        //      for this session, the same bytes ALSO go to
-        //      every selected broadcast target. When OFF, the
-        //      fan-out is a no-op + behaviour matches today.
+        //      PTY (the agent sees `poke` as if typed).
+        //   2. Hits `broadcastTerminalInput` (the fan-out): when
+        //      broadcast input is ON for this session, the same bytes
+        //      ALSO go to every selected broadcast target. When OFF,
+        //      the fan-out is a no-op.
         // Single source of truth on broadcast targeting:
         // `tab.broadcastEnabled` + the broadcast-member set
         // that the SPA already owns.
@@ -774,8 +749,8 @@
   function recordOutputBytes(bytes: number): void {
     advanceTerminalSeq(tab, bytes);
     scheduleTerminalSessionSave();
-    // `lane-c addendum-3`: output arriving at an UNFOCUSED terminal is
-    // unseen - show the dot and PULSE it while chunks keep coming. A
+    // Output arriving at an UNFOCUSED terminal is unseen: show the
+    // dot and PULSE it while chunks keep coming. A
     // focused terminal is being watched, so no dot / pulse. Re-arm a
     // quiet-timer on every chunk; when output stops (no chunk within the
     // quiet window) the dot stops pulsing and goes SOLID, still unseen,
@@ -846,12 +821,12 @@
     }
   }
 
-  /// `fullstack-a-92`: decode a base64 agent-event payload
-  /// into the string `sendUserInput` expects. Returns null on
-  /// malformed base64 so the WS handler can short-circuit
-  /// without raising — a malformed echo would still pass the
-  /// JSON parse + the type discriminator, so the decoder must
-  /// fail soft. The decoded string carries the raw byte
+  /// Decode a base64 agent-event payload into the string
+  /// `sendUserInput` expects. Returns null on malformed base64 so
+  /// the WS handler can short-circuit without raising: a malformed
+  /// echo would still pass the JSON parse + the type discriminator,
+  /// so the decoder must fail soft. The decoded string carries the
+  /// raw byte
   /// sequence (including any modifyOtherKeys chord that the
   /// server picked per the session's submit-mode); the WS
   /// `input` frame on the inbound leg accepts string verbatim
@@ -890,11 +865,10 @@
         // xterm throws if fit runs before dimensions settle.
       }
     });
-    // `fullstack-a-93`: trailing-edge fit. ResizeObserver
-    // sometimes misses or swallows the FINAL resize event of a
-    // drag gesture (browser quirk — observer batches + can
-    // collapse intermediate sizes when the host element
-    // transitions through layout-thrashing states like
+    // Trailing-edge fit. ResizeObserver sometimes misses or swallows
+    // the FINAL resize event of a drag gesture (a browser quirk: the
+    // observer batches and can collapse intermediate sizes when the
+    // host element transitions through layout-thrashing states like
     // `display: none` ↔ visible on tab switch). Without a
     // trailing-edge fit, the terminal stays at the size from
     // the FIRST observed resize tick instead of the FINAL pane
@@ -907,8 +881,8 @@
     scheduleTrailingFit();
   }
 
-  /// `fullstack-a-93`: trailing-edge fit scheduler. Coalesces
-  /// rapid ResizeObserver fires (pane-divider drag = dozens per
+  /// Trailing-edge fit scheduler. Coalesces rapid ResizeObserver
+  /// fires (pane-divider drag = dozens per
   /// second) into a single fit 120ms after the last fire. 120ms
   /// matches the perception threshold for "the user has stopped
   /// dragging" + leaves room for one more frame of paint.
@@ -947,9 +921,9 @@
       sessionSaveTimer = null;
     }
     if (trailingFitTimer) {
-      // `fullstack-a-93`: clear the trailing-edge fit timer so a
-      // resize-during-teardown rAF doesn't race against the
-      // `term?.dispose()` below + throw at fit-time.
+      // Clear the trailing-edge fit timer so a resize-during-teardown
+      // rAF doesn't race against the `term?.dispose()` below + throw
+      // at fit-time.
       clearTimeout(trailingFitTimer);
       trailingFitTimer = null;
     }
@@ -1034,12 +1008,6 @@
     term?.focus();
   }
 
-  /// `fullstack-a-67d`: dropped `doReloadWindow` + `doOpenInspector`
-  /// helpers. The Terminal right-click menu no longer carries the
-  /// `-b-26` Reload / Open Inspector tail entries per addendum-a's
-  /// verbatim spec; Cmd+R + the pane hamburger remain the canonical
-  /// surfaces for window-level reload + devtools.
-
   async function pasteClipboard(): Promise<void> {
     closeTabMenu();
     const text = await navigator.clipboard?.readText();
@@ -1060,16 +1028,14 @@
     void fileOps.createFile(cwd);
   }
 
-  /// `fullstack-a-67d`: From-$CWD spawn entries on the terminal
-  /// right-click menu. Each routes through the same
-  /// `chan:command` event the keymap layer uses, so the menu
-  /// click + the chord both arrive at `runCommand` in
-  /// App.svelte. Toggle commands open the surface in a fresh
-  /// pane / tab; the originating terminal's $CWD context isn't
-  /// passed through (terminal spawn already inherits the
-  /// terminal's CWD via the broker, but the FB / Graph toggles
-  /// open at the workspace root — accepted deviation, matches the
-  /// existing empty-pane spawn-grid behavior).
+  /// From-$CWD spawn entries on the terminal right-click menu. Each
+  /// routes through the same `chan:command` event the keymap layer
+  /// uses, so the menu click + the chord both arrive at `runCommand`
+  /// in App.svelte. Toggle commands open the surface in a fresh
+  /// pane / tab; the originating terminal's $CWD context isn't passed
+  /// through (terminal spawn already inherits the terminal's CWD via
+  /// the broker, but the FB / Graph toggles open at the workspace
+  /// root, matching the empty-pane spawn-grid behavior).
   function dispatchChanCommand(id: string): void {
     window.dispatchEvent(
       new CustomEvent("chan:command", { detail: { name: id } }),
@@ -1088,17 +1054,15 @@
     dispatchChanCommand("app.graph.toggle");
   }
 
-  /// `fullstack-a-67d`: Settings (toggle) → flip to the hybrid
-  /// back-side config view (HybridTerminalConfig). Mirrors the
-  /// pane hamburger's Flip entry.
+  /// Settings (toggle) flips to the hybrid back-side config view
+  /// (HybridTerminalConfig). Mirrors the pane hamburger's Flip entry.
   function flipToSettings(): void {
     closeTabMenu();
     flipHybrid(paneId);
   }
 
-  /// `fullstack-a-67d`: Close — explicit menu entry per the
-  /// addendum spec. `force: true` matches the chord path
-  /// (`closeExitedTabFromKey`); the dirty-prompt path lives on
+  /// Close, an explicit menu entry. `force: true` matches the chord
+  /// path (`closeExitedTabFromKey`); the dirty-prompt path lives on
   /// the file editor, not here.
   function closeFromMenu(): void {
     closeTabMenu();
@@ -1142,12 +1106,6 @@
     term?.focus();
   }
 
-  // `fullstack-42` dropped the "Show Dir" and "Graph dir" menu
-  // entries. Their click handlers (`showTerminalCwd` /
-  // `graphTerminalCwd`) lived here; they came back as dead code so
-  // the section is gone. `fullstack-43`'s context-aware spawn will
-  // re-read the terminal's CWD through a centralised helper.
-
   function ensureTeamWork(): NonNullable<TerminalTabState["teamWork"]> {
     if (!tab.teamWork) {
       tab.teamWork = {
@@ -1190,13 +1148,13 @@
   }
 
   function submitTeamWork(source: string): void {
-    // `fullstack-b-13`: when the prompt is in Agent submit-mode,
-    // strip any trailing newline the editor left on the buffer
-    // and append the agent-submit chord. Claude Code v2.1.145
-    // reads `\x1b[27;9;13~` (xterm modifyOtherKeys Cmd+Enter)
-    // as submit; a stray `\n` before the chord would land as a
-    // newline in the agent's multi-line draft. Shell mode appends
-    // a missing trailing newline so the command actually executes.
+    // When the prompt is in Agent submit-mode, strip any trailing
+    // newline the editor left on the buffer and append the
+    // agent-submit chord. Claude Code reads `\x1b[27;9;13~` (xterm
+    // modifyOtherKeys Cmd+Enter) as submit; a stray `\n` before the
+    // chord would land as a newline in the agent's multi-line draft.
+    // Shell mode appends a missing trailing newline so the command
+    // actually executes.
     if (teamWorkUsesAgentSubmit()) {
       const stripped = source.replace(/\n+$/, "");
       sendUserInput(stripped + AGENT_SUBMIT_CHORD);
@@ -1204,17 +1162,13 @@
       sendUserInput(source.endsWith("\n") ? source : `${source}\n`);
     }
     scheduleTerminalSessionSave();
-    // Phase-13 round-2: every submit to the lead terminal resets
-    // the draft back to empty. The pre-revamp build cleared the
-    // buffer only after the team-work-workspace archive write
-    // confirmed (and only when the buffer was unchanged); the
-    // archival path is gone, so the reset is now unconditional.
+    // Every submit to the lead terminal resets the draft back to
+    // empty unconditionally.
     if (tab.teamWork) {
       tab.teamWork.buffer = "";
-      // `fullstack-a-4`: caret stays in the prompt after Cmd+Enter
-      // so consecutive prompts are fluid. Previously we refocused
-      // the terminal here, which forced the user to click back into
-      // the prompt for every entry.
+      // Caret stays in the prompt after Cmd+Enter so consecutive
+      // prompts are fluid; refocusing the terminal here would force
+      // the user to click back into the prompt for every entry.
       tab.teamWork.focusNonce = (tab.teamWork.focusNonce ?? 0) + 1;
     }
   }
@@ -1270,16 +1224,9 @@
 
   function handleTerminalKeyEvent(e: KeyboardEvent): boolean {
     if (closeExitedTabFromKey(e)) return false;
-    // `fullstack-a-94`: removed the third Alt+Space handler.
-    // `-a-90` swept the two keymap-driven branches but missed
-    // THIS one — the xterm `customKeyEventHandler` translation
-    // layer registered at line ~424. Caught empirically by
-    // @@WebtestA (`aed06ef`); audit-grep needs to include
-    // `attachCustomKeyEventHandler` chord paths going forward.
-    //
-    // `fullstack-a-91`: chord-escape registry. When the
-    // incoming event matches a shortcut flagged
-    // `escapeTerminal: true` in shortcuts.ts, return false so
+    // Chord-escape registry. When the incoming event matches a
+    // shortcut flagged `escapeTerminal: true` in shortcuts.ts, return
+    // false so
     // xterm doesn't consume the keystroke (the contract
     // `attachCustomKeyEventHandler` reads: false = let the
     // browser dispatch it). App.svelte's window-level keymap
@@ -1295,9 +1242,8 @@
     if (closeExitedTabFromKey(e)) {
       return;
     }
-    // `fullstack-a-90`: removed the legacy `Alt+Space` team-work
-    // chord. Cmd+P (native), Cmd+Alt+P (web Mac), and `Mod+. p`
-    // (Hybrid Nav) cover the team-work entry points.
+    // Team-work entry points are Cmd+P (native), Cmd+Alt+P (web
+    // Mac), and `Mod+. p` (Hybrid Nav).
     if (
       (e.metaKey || e.ctrlKey) &&
       !e.shiftKey &&
@@ -1347,12 +1293,11 @@
     term?.focus();
   }
 
-  /// `fullstack-a-67d` slice 2: open / close the MCP env info
-  /// modal. Closing the menu when the modal opens keeps the
-  /// chrome from stacking — the modal sits at z=26000 above the
-  /// menu bubble, but the bubble visually competes for
-  /// attention; collapsing it on open keeps the dialog the only
-  /// focus.
+  /// Open / close the MCP env info modal. Closing the menu when the
+  /// modal opens keeps the chrome from stacking: the modal sits at
+  /// z=26000 above the menu bubble, but the bubble would visually
+  /// compete for attention, so collapsing it on open keeps the dialog
+  /// the only focus.
   function openMcpInfoModal(): void {
     closeTabMenu();
     mcpInfoOpen = true;
@@ -1413,8 +1358,7 @@
           }}
         />
       </label>
-      <!-- `fullstack-a-67d`: status reads "connected: <detail>"
-           per addendum-a (colon, not em dash). -->
+      <!-- Status reads "connected: <detail>" (colon, not em dash). -->
       <div class="terminal-status-row">
         <span class:connected={status === "connected"} class="terminal-status">
           {status}{statusDetail ? `: ${statusDetail}` : ""}
@@ -1433,18 +1377,14 @@
           <button type="button" onclick={() => dismissTerminalEnvNamePrompt(tab)}>Later</button>
         </div>
       {/if}
-      <!-- `fullstack-a-67d`: menu reshape per addendum-a Terminal
-           spec. Header (Name → SEP → status colon → MCP-env +
-           Restart) lands ahead of the find/copy band; the new
-           "From $CWD" section gathers New File / New Terminal /
-           New File Browser / New Graph; the broadcast section
-           keeps its slice-1 shape (Terminals dropdown + Jitter
-           is deferred to a follow-up — backend gap on Jitter
-           persistence); Settings (flipHybrid) + Reopen + Close
-           anchor the foot. `Reload Window` and `Open Inspector`
-           tail entries (originally added by `-b-26`) dropped per
-           the addendum's verbatim spec; Cmd+R and the pane
-           hamburger still surface them. -->
+      <!-- Terminal right-click menu. Header (Name → SEP → status
+           colon → MCP-env + Restart) lands ahead of the find/copy
+           band; the "From $CWD" section gathers New File / New
+           Terminal / New File Browser / New Graph; the broadcast
+           section carries the Terminals dropdown; Settings
+           (flipHybrid) + Reopen + Close anchor the foot. No `Reload
+           Window` / `Open Inspector` entries; Cmd+R and the pane
+           hamburger surface them. -->
       <div class="action-list">
         {#if sessionClosedReason}
           <button class="mbtn" onclick={() => void restart()}>
@@ -1455,12 +1395,10 @@
             <span class="mbtn-chord"></span>
           </button>
         {/if}
-        <!-- `fullstack-a-67d` slice 2: info button opens a
-             modal dialog (McpEnvInfoModal.svelte) per
-             addendum-a's "dialog like the New File one" spec.
-             The standalone "Show MCP env in terminal" button
-             moved INTO the dialog as its primary CTA; the menu
-             row now just carries the toggle + the info button. -->
+        <!-- Info button opens a modal dialog
+             (McpEnvInfoModal.svelte). The "Show MCP env in terminal"
+             button is the dialog's primary CTA; the menu row carries
+             only the toggle + the info button. -->
         <div class="mcp-env-row">
           <button class="mbtn" class:on={mcpEnvOn} onclick={toggleMcpEnv}>
             <span class="mbtn-icon">
@@ -1523,12 +1461,11 @@
           <span class="mbtn-chord"></span>
         </button>
         <div class="msep" role="separator"></div>
-        <!-- `fullstack-a-67d`: "From $CWD" spawn band. New File
-             uses the existing `openNewFile` which seeds the
-             dialog with `$CWD/untitled.md`. New Terminal / FB /
-             Graph fire the same `chan:command` events the
-             chord-routing layer + the empty-pane carousel use,
-             so handlers stay singular. -->
+        <!-- "From $CWD" spawn band. New File uses `openNewFile`
+             which seeds the dialog with `$CWD/untitled.md`. New
+             Terminal / FB / Graph fire the same `chan:command` events
+             the chord-routing layer + the empty-pane carousel use, so
+             handlers stay singular. -->
         <div class="from-cwd-label">From $CWD</div>
         <button class="mbtn" onclick={openNewFile}>
           <span class="mbtn-icon">
@@ -1571,18 +1508,10 @@
           </span>
         </button>
         <div class="msep" role="separator"></div>
-        <!-- `fullstack-a-31`: per-tab broadcast selector. Drops
-             the umbrella "Broadcast Input On/Off" rocker — the
-             per-row checkboxes are the only controls. Self
-             appears at the top of the list with a "self"
-             marker.
-             `fullstack-a-67d`: addendum-a calls for wrapping
-             the per-target list inside a "Terminals" expander
-             dropdown with a Jitter slider at the top of the
-             dropdown. The Jitter persistence + broadcast-delay
-             logic is a chan-server gap; scope-poked as a
-             follow-up. Section UI kept as-is until the backend
-             lands. -->
+        <!-- Per-tab broadcast selector. There is no umbrella
+             "Broadcast Input On/Off" rocker; the per-row checkboxes
+             are the only controls. Self appears at the top of the
+             list with a "self" marker. -->
         <div class="broadcast-section-label">
           <span class="mbtn-icon">
             <Radio size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1673,12 +1602,12 @@
       />
     </div>
   {/if}
-  <!-- Phase-13 round-2: the bubble overlay is a self-contained
-       static example. It reads its own visibility (the bubbleStub
-       rune, flipped by the Team Work right-click menu) and the
-       persisted stack/tray layout preference, so it carries no
-       props and is mounted unconditionally rather than gated on the
-       Team Work prompt being open. -->
+  <!-- The bubble overlay is a self-contained static example. It
+       reads its own visibility (the bubbleStub rune, flipped by the
+       Team Work right-click menu) and the persisted stack/tray layout
+       preference, so it carries no props and is mounted
+       unconditionally rather than gated on the Team Work prompt being
+       open. -->
   <BubbleOverlay />
   {#if tab.teamWork?.open}
     <TeamWork
@@ -1687,23 +1616,22 @@
       terminalSessionId={tab.terminalSessionId}
     />
   {/if}
-  <!-- `fullstack-a-4`: when the Team Work prompt is open we reserve
-       space at the bottom of the terminal-host equal to the
-       prompt's current height plus the resize-handle gap. The
-       xterm ResizeObserver picks the new size up and calls
-       `fit()`, so the bottom-most rendered line stays visible
-       above the prompt instead of being painted over.
+  <!-- When the Team Work prompt is open we reserve space at the
+       bottom of the terminal-host equal to the prompt's current
+       height plus the resize-handle gap. The xterm ResizeObserver
+       picks the new size up and calls `fit()`, so the bottom-most
+       rendered line stays visible above the prompt instead of being
+       painted over.
 
-       `fullstack-a-29`: prefer the prompt's measured runtime
-       height (written by a ResizeObserver in the Team Work editor)
-       over the user-resized `heightPx` so the reactor tracks the
-       `fullstack-a-24` collapse transition. When collapsed the
-       CSS `height: auto` branch shrinks the prompt to header-
-       only (~44 px) but `heightPx` stays at the expanded value;
-       reading `measuredHeightPx` collapses the reserved space
-       in lockstep with the visible pill. Falls back to
-       `heightPx` for the brief mount window before the first
-       observer tick fires. -->
+       Prefer the prompt's measured runtime height (written by a
+       ResizeObserver in the Team Work editor) over the user-resized
+       `heightPx` so the reserved space tracks the collapse
+       transition. When collapsed the CSS `height: auto` branch
+       shrinks the prompt to header-only (~44 px) but `heightPx` stays
+       at the expanded value; reading `measuredHeightPx` collapses the
+       reserved space in lockstep with the visible pill. Falls back to
+       `heightPx` for the brief mount window before the first observer
+       tick fires. -->
   <div
     class="terminal-host"
     bind:this={host}
@@ -1937,15 +1865,14 @@
       transform: none;
     }
   }
-  /* `fullstack-a-67d`: destructive hint for Restart per
-     addendum-a spec. Color-only; no background change so the
-     hover affordance still reads. */
+  /* Destructive hint for Restart. Color-only; no background change
+     so the hover affordance still reads. */
   .mbtn.destructive {
     color: var(--danger-text, #d33);
   }
-  /* `fullstack-a-67d`: "From $CWD" section label. Subdued
-     style matching the .terminal-status row's secondary
-     text — telegraphs section grouping, not actionable. */
+  /* "From $CWD" section label. Subdued style matching the
+     .terminal-status row's secondary text; telegraphs section
+     grouping, not actionable. */
   .from-cwd-label {
     padding: 4px 8px 2px;
     color: var(--text-secondary);
@@ -1981,10 +1908,6 @@
     background: var(--hover-bg);
     color: var(--text);
   }
-  /* `fullstack-a-67d` slice 2: dropped `.info-btn[aria-expanded]`
-     + `.mcp-info` selectors along with the inline popover; the
-     info button now opens McpEnvInfoModal.svelte (modal sits
-     at z=26000 above the menu bubble). */
   .mbtn-label,
   .target-name {
     flex: 1;
@@ -2004,9 +1927,9 @@
     background: var(--separator, var(--border));
     margin: 4px 2px;
   }
-  /* `fullstack-a-31`: section label above the broadcast row list.
-     Same icon row + secondary text shape as other menu sections;
-     the label is informational, not interactive. */
+  /* Section label above the broadcast row list. Same icon row +
+     secondary text shape as other menu sections; the label is
+     informational, not interactive. */
   .broadcast-section-label {
     display: flex;
     align-items: center;

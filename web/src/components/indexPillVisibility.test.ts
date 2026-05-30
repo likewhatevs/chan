@@ -1,11 +1,9 @@
 // @vitest-environment jsdom
 
-// Phase-11 Slice G: the index/build progress pill stays visible while
-// the indexer is working and CLEARS the moment it reports idle. This is
-// the UI half of the bug-9 fix (Slice D made the server-side status
-// actually reach idle through the embed phase + on cancel/reset; this
-// test locks the AppStatusBar visibility rule so a future status-flow
-// change can't silently re-strand the pill).
+// The index/build progress pill stays visible while the indexer is
+// working and CLEARS the moment it reports idle. This test locks the
+// AppStatusBar visibility rule so a future status-flow change can't
+// silently strand the pill.
 //
 // AppStatusBar derives `indexVisible` from the shared `indexStatus`
 // store; we workspace the store directly and assert the same predicate, plus
@@ -28,7 +26,7 @@ afterEach(() => {
   indexStatus.value = null;
 });
 
-describe("Slice G: index progress pill visibility", () => {
+describe("index progress pill visibility", () => {
   test("hidden before the first poll reply (null)", () => {
     indexStatus.value = null;
     expect(indexVisible(indexStatus.value)).toBe(false);
@@ -69,7 +67,7 @@ describe("Slice G: index progress pill visibility", () => {
   });
 });
 
-describe("Slice G: AppStatusBar source keeps the idle-hide rule", () => {
+describe("AppStatusBar source keeps the idle-hide rule", () => {
   test("indexVisible derivation hides on idle and null", () => {
     expect(statusBar).toMatch(
       /indexStatus\.value !== null && indexStatus\.value\.state !== "idle"/,
@@ -81,7 +79,7 @@ describe("Slice G: AppStatusBar source keeps the idle-hide rule", () => {
     expect(statusBar).toMatch(/\{s\.current\}\/\{s\.total\}/);
   });
 
-  test("counter hides during the embedding-sentinel sub-phase (Round-1 closing-12)", () => {
+  test("counter hides during the embedding-sentinel sub-phase", () => {
     // The IndexFile / GraphRebuild stages set current/total to
     // "files indexed / total files" - readable. The EmbedBatch
     // stage (sentinel `s.file === "embedding"`) instead reports

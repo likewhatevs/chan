@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Empty-pane visual-experimentation surface (fullstack-35).
+  // Dashboard carousel surface.
   //
   // The carousel sits inside the Dashboard tab. It auto-rotates
   // every 5 s. Pointer hover and focus-within pause auto-rotate so
@@ -7,25 +7,21 @@
   // the timer resumes when both signals clear. Left / right arrow
   // keys nudge manually when the carousel container has focus.
   //
-  // Round-1 closing-2 (lane-b-empty-pane-menu): the legacy
-  // `oncontextmenu` forwarder prop was removed. The carousel is
-  // hosted inside the Dashboard tab (per `fullstack-a-75b`) and
-  // DashboardTab does NOT wire a right-click handler through it;
-  // right-clicks fall through to the tab strip's own context menu.
+  // No `oncontextmenu` forwarder prop: DashboardTab does NOT wire a
+  // right-click handler through the carousel, so right-clicks fall
+  // through to the tab strip's own context menu.
   //
-  // Phase-13 slice 3b-1: slides 0 + 1 retooled into the new
-  // Dashboard widget set. Slide 0 is an About widget (version,
-  // attributions, donation QR, project links). Slide 1 mounts
-  // `WorkspaceInfoBody` so the workspace-root inspector lives
-  // alongside the file-browser inspector surface.
+  // Slide 0 is an About widget (version, attributions, donation QR,
+  // project links). Slide 1 mounts `WorkspaceInfoBody` so the
+  // workspace-root inspector lives alongside the file-browser
+  // inspector surface.
   //
-  // Phase-13 slice 3b-2: slide 2 (the search/indexing graph) was
-  // a custom radial-tree SVG. It is now a read-only mount of
-  // `GraphCanvas`, the same renderer the main Graph tab uses,
-  // fed a synthesized directory-only spine + per-directory
-  // `indexState` for the green/grey/pulsing-orange palette. The
-  // depth slider, inspector, filter chips and scope picker stay
-  // out — this surface is purely a status read-out.
+  // Slide 2 is a read-only mount of `GraphCanvas`, the same
+  // renderer the main Graph tab uses, fed a synthesized
+  // directory-only spine + per-directory `indexState` for the
+  // green/grey/pulsing-orange palette. No depth slider, inspector,
+  // filter chips or scope picker: this surface is purely a status
+  // read-out.
 
   import { onDestroy, onMount } from "svelte";
   import { api } from "../api/client";
@@ -74,12 +70,9 @@
   type CanvasEdge = GraphViewEdge & { kind: CanvasEdgeKind };
 
 
-  // ---- About slide (slice 3b-1) ------------------------------------------
+  // ---- About slide -------------------------------------------------------
   //
-  // Sole home for the version / embeddings flag / attribution surface
-  // now that slice 3c retired the global Settings overlay. The shape
-  // mirrors the retired overlay's `<section class="about">` block
-  // verbatim so muscle memory survives the move.
+  // Sole home for the version / embeddings flag / attribution surface.
 
   let buildInfo = $state<BuildInfo | null>(null);
 
@@ -171,22 +164,20 @@
     const known = new Set<string>();
     for (const n of data.nodes) known.add(n.path);
     for (const n of data.nodes) {
-      // Round-1 closing-7 (E1): omit `indexState` for the
-      // workspace-root node so GraphCanvas's `indexFill` override
-      // does NOT replace the workspace's standard `bgCard` disc
-      // fill. The hard-drive icon is stroked in text-secondary to
-      // read against `bgCard`; against an indexFill (accent /
-      // doc / textSec) the same stroke colour disappears into the
-      // fill and the workspace looks like a plain undrawn node.
-      // Matching the main Graph tab's appearance is the user-
-      // visible ask. Children directories keep their indexState
-      // (that's what drives the indexing legend on this slide).
+      // Omit `indexState` for the workspace-root node so
+      // GraphCanvas's `indexFill` override does NOT replace the
+      // workspace's standard `bgCard` disc fill. The hard-drive icon
+      // is stroked in text-secondary to read against `bgCard`;
+      // against an indexFill (accent / doc / textSec) the same
+      // stroke colour disappears into the fill and the workspace
+      // looks like a plain undrawn node, unlike the main Graph tab.
+      // Children directories keep their indexState (that's what
+      // drives the indexing legend on this slide).
       //
-      // Round-1 closing-10 (G4): label the workspace root with the
-      // workspace name (or "workspace" as the steady-state
-      // fallback) the same way the main Graph tab does, instead of
-      // the literal "/" basename. Matches the user-facing label in
-      // the file browser title bar.
+      // Label the workspace root with the workspace name (or
+      // "workspace" as the steady-state fallback) the same way the
+      // main Graph tab and the file browser title bar do, instead of
+      // the literal "/" basename.
       const isWorkspaceRoot = n.path === "";
       const label = isWorkspaceRoot
         ? (workspace.info?.label ?? "workspace")
@@ -230,17 +221,16 @@
   /// at origin).
   const indexingFocal = ["" as string];
 
-  /// B12: clicks toggle the selected node so GraphCanvas surfaces
-  /// the clicked node's label plus its 1-hop neighbours (siblings
-  /// + parent + children), matching the main Graph tab's
+  /// Clicks toggle the selected node so GraphCanvas surfaces the
+  /// clicked node's label plus its 1-hop neighbours (siblings +
+  /// parent + children), matching the main Graph tab's
   /// selection-labeling rule.
   ///
-  /// Round-1 closing-3 (D3): selection now ALSO surfaces a
-  /// directory inspector on the right side of the slide (same
-  /// FileInfoBody the File Browser + Graph tab use for folder
-  /// rows). Clicking the canvas background clears the selection
-  /// and dismisses the inspector. Clicking the inspector's close
-  /// affordance does the same.
+  /// Selection ALSO surfaces a directory inspector on the right
+  /// side of the slide (same FileInfoBody the File Browser + Graph
+  /// tab use for folder rows). Clicking the canvas background clears
+  /// the selection and dismisses the inspector. Clicking the
+  /// inspector's close affordance does the same.
   let selectedIndexId = $state<string | null>(null);
   function onIndexingSelect(id: string | null): void {
     selectedIndexId = id;
@@ -267,15 +257,13 @@
 
   // ---- carousel state ----------------------------------------------------
 
-  /// Round-1 closing-10 (G3): DashboardTab passes the persisted
-  /// slide cursor in (via the tabs.svelte.ts serialization round-
-  /// trip) so a window reload restores the carousel to the slide
-  /// the user was last on. `onSlideChange` lets the parent write
-  /// the live cursor back to its DashboardTab.carouselSlide field
-  /// so subsequent reloads keep the position aligned. Both props
-  /// default to no-op for non-DashboardTab hosts (today there
-  /// aren't any; the prop shape leaves room for one without
-  /// touching the carousel's internals).
+  /// DashboardTab passes the persisted slide cursor in (via the
+  /// tabs.svelte.ts serialization round-trip) so a window reload
+  /// restores the carousel to the slide the user was last on.
+  /// `onSlideChange` lets the parent write the live cursor back to
+  /// its DashboardTab.carouselSlide field so subsequent reloads keep
+  /// the position aligned. Both props default to no-op for
+  /// non-DashboardTab hosts.
   type Props = {
     initialSlide?: number;
     onSlideChange?: (slide: number) => void;
@@ -285,18 +273,18 @@
   const slideCount = 3;
   // Capture the initial prop value into a `$state` cell exactly
   // once at mount. Subsequent prop changes don't fight the user's
-  // live navigation - the parent's tab.carouselSlide value is the
+  // live navigation: the parent's tab.carouselSlide value is the
   // SOURCE for THIS mount; once mounted, the carousel owns its
   // own cursor and writes back via `onSlideChange`.
   function clampInitialSlide(raw: number): number {
     return Math.min(Math.max(0, Math.floor(raw)), 2);
   }
-  // One-shot snapshot of the persisted slide cursor (Round-1
-  // closing-10 / G3). The `state_referenced_locally` lint warns
-  // that a $state init expression only sees the initial prop
-  // value, which is the exact semantic we want here - a derived
-  // live link would have the parent yank the cursor back as it
-  // observes its own writes during navigation.
+  // One-shot snapshot of the persisted slide cursor. The
+  // `state_referenced_locally` lint warns that a $state init
+  // expression only sees the initial prop value, which is the exact
+  // semantic we want here: a derived live link would have the parent
+  // yank the cursor back as it observes its own writes during
+  // navigation.
   // svelte-ignore state_referenced_locally
   let slideIndex = $state(clampInitialSlide(initialSlide));
   // Fire the parent callback whenever the cursor moves. The
@@ -308,12 +296,10 @@
   });
   let hovering = $state(false);
   let focused = $state(false);
-  /// `cycling` is the explicit, persisted preference from
-  /// `fullstack-44`. `hovering` / `focused` form the transient
-  /// pause that lets users finish reading a slide; both axes
-  /// independently suppress the timer. Server-default true so
-  /// `undefined` (older servers without the field) reads as
-  /// "auto-rotate on".
+  /// `cycling` is the explicit, persisted preference. `hovering` /
+  /// `focused` form the transient pause that lets users finish
+  /// reading a slide; both axes independently suppress the timer.
+  /// Defaults to true so `undefined` reads as "auto-rotate on".
   const cycling = $derived<boolean>(
     workspace.info?.preferences?.empty_pane_carousel_cycling ?? true,
   );
@@ -409,20 +395,16 @@
   onfocusout={() => (focused = false)}
   onkeydown={onKeyDown}
 >
-  <!-- Round-1 closing-3 (Bug 2): the indexing slide drops the
-       720px stage cap so the graph fills the tab width/height
-       (minus a 10px breathing border). The About + Workspace
-       slides keep the centered column - their content is
-       text-shaped and centered reads better there. -->
+  <!-- The indexing slide drops the 720px stage cap so the graph
+       fills the tab width/height (minus a 10px breathing border).
+       The About + Workspace slides keep the centered column: their
+       content is text-shaped and centered reads better there. -->
   <div class="slide-stage" class:slide-stage-wide={slideIndex === 2}>
     {#if slideIndex === 0}
-      <!-- Phase-13 slice 3b-1: slide 0 is the About widget. It
-           mirrors the (retired) global Settings overlay's about
-           section verbatim and adds a "Fund the work" CTA with the
-           donation QR + the website / source links so the user has
-           one self-contained surface to learn what chan is and how
-           to support it. Slice 3c retired the overlay; the About
-           widget here is the sole home for this surface now. -->
+      <!-- Slide 0 is the About widget: version + attributions plus
+           a "Fund the work" CTA with the donation QR + the website
+           / source links, so the user has one self-contained
+           surface to learn what chan is and how to support it. -->
       <div class="slide slide-about" aria-label="About">
         <div class="slide-title">About</div>
         <div class="about-grid">
@@ -482,14 +464,12 @@
           />
         </div>
 
-        <!-- Round-1 closing-3 (C2): licenses / attribution
-             section moved BELOW the QR + a separator. The prior
-             SIL OFL and MIT links pointed at the embedded
-             `/static/...` paths, which under chan-desktop's
-             non-root mount resolved against 127.0.0.1; the
-             user-facing expectation is a canonical upstream URL.
-             Chan's own Apache 2 license joins the section so the
-             three runtime licenses sit together in one place. -->
+        <!-- Licenses / attribution section sits BELOW the QR + a
+             separator. The SIL OFL and MIT links point at canonical
+             upstream URLs, not embedded `/static/...` paths (those
+             resolve against 127.0.0.1 under chan-desktop's non-root
+             mount). Chan's own Apache 2 license joins the section so
+             the three runtime licenses sit together in one place. -->
         <div class="about-sep" role="separator" aria-hidden="true"></div>
         <div class="about-licenses">
           <span class="k">chan</span>
@@ -513,12 +493,11 @@
         </div>
       </div>
     {:else if slideIndex === 1}
-      <!-- Phase-13 slice 3b-1: slide 1 hosts `WorkspaceInfoBody`,
-           the same inspector body the file browser shows when the
-           workspace-root row is selected. Folder-mode parity plus
-           the Notes directories config. `WorkspaceInfoBody` owns
-           its own scroll affordance via the slide's `overflow:
-           auto`. -->
+      <!-- Slide 1 hosts `WorkspaceInfoBody`, the same inspector body
+           the file browser shows when the workspace-root row is
+           selected. Folder-mode parity plus the Notes directories
+           config. `WorkspaceInfoBody` owns its own scroll affordance
+           via the slide's `overflow: auto`. -->
       <div class="slide slide-workspace" aria-label="Workspace info">
         <div class="slide-title">Workspace</div>
         <div class="workspace-info-host">
@@ -530,14 +509,14 @@
         </div>
       </div>
     {:else}
-      <!-- Phase-13 slice 3b-2: slide 2 is the read-only, spine-only
-           indexing graph. We synthesize a directory-only
-           `folder`-node spine from `/api/indexing/state` and feed
-           it to the same `GraphCanvas` the main Graph tab uses;
-           the per-directory `indexState` drives the green / grey /
-           pulsing-orange palette inside the canvas. No chrome
-           (inspector / scope picker / depth slider / filter chips)
-           - the slide is purely a status read-out. -->
+      <!-- Slide 2 is the read-only, spine-only indexing graph. We
+           synthesize a directory-only `folder`-node spine from
+           `/api/indexing/state` and feed it to the same
+           `GraphCanvas` the main Graph tab uses; the per-directory
+           `indexState` drives the green / grey / pulsing-orange
+           palette inside the canvas. No chrome (inspector / scope
+           picker / depth slider / filter chips): the slide is purely
+           a status read-out. -->
       <div class="slide slide-indexing" aria-label="Indexing graph">
         <div class="slide-title">Indexing</div>
         {#if indexingError}
@@ -574,12 +553,12 @@
                 onSelect={onIndexingSelect}
               />
             </div>
-            <!-- Round-1 closing-3 (D3): selecting a directory node
-                 surfaces the same FileInfoBody (via InspectorBody's
-                 directory arm) that the File Browser + Graph tab
-                 use for folder rows. Clicking the canvas background
-                 calls onSelect(null) which clears
-                 `selectedIndexId`; the inspector collapses with it. -->
+            <!-- Selecting a directory node surfaces the same
+                 FileInfoBody (via InspectorBody's directory arm)
+                 that the File Browser + Graph tab use for folder
+                 rows. Clicking the canvas background calls
+                 onSelect(null) which clears `selectedIndexId`; the
+                 inspector collapses with it. -->
             {#if selectedIndexPath !== null}
               <div class="indexing-inspector" role="complementary" aria-label="directory details">
                 <div class="indexing-inspector-head">
@@ -653,12 +632,11 @@
     >
       <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
-    <!-- Persisted cycle toggle (fullstack-44). Sits to the right
-         of the dots so it doesn't compete with the navigation
-         affordances; the icon mirrors the standard
-         play/pause-while-cycling convention. Pointer-hover-pause
-         and focus-pause stay independent — those are transient,
-         this one is the explicit user choice. -->
+    <!-- Persisted cycle toggle. Sits to the right of the dots so it
+         doesn't compete with the navigation affordances; the icon
+         mirrors the standard play/pause-while-cycling convention.
+         Pointer-hover-pause and focus-pause stay independent (those
+         are transient, this one is the explicit user choice). -->
     <button
       class="cycle-toggle"
       type="button"
@@ -677,12 +655,12 @@
 
 <style>
   .carousel {
-    /* `phase-13 slice 3b-1`: the carousel must size to its tab
-       host. `flex: 1` + `min-height: 0` lets it fill the Dashboard
-       tab's flex column without trapping overflow at the carousel
-       root. Slide-level scroll handles content that overflows the
-       current size; resizing the host tab reflows naturally because
-       the slide-stage uses the parent's box. */
+    /* The carousel must size to its tab host. `flex: 1` +
+       `min-height: 0` lets it fill the Dashboard tab's flex column
+       without trapping overflow at the carousel root. Slide-level
+       scroll handles content that overflows the current size;
+       resizing the host tab reflows naturally because the
+       slide-stage uses the parent's box. */
     flex: 1;
     min-height: 0;
     min-width: 0;
@@ -693,10 +671,10 @@
     outline: none;
     gap: 1rem;
   }
-  /* Slides themselves keep the old placeholder rhythm (centered
-     stack, soft type, secondary color). The stage fills the
-     remaining vertical space inside the carousel; each slide
-     scrolls independently when its content exceeds the stage. */
+  /* Slides use a centered-stack rhythm (soft type, secondary
+     color). The stage fills the remaining vertical space inside the
+     carousel; each slide scrolls independently when its content
+     exceeds the stage. */
   .slide-stage {
     display: flex;
     flex-direction: column;
@@ -706,14 +684,13 @@
     width: 100%;
     max-width: 720px;
   }
-  /* Bug 2: indexing slide variant. The graph slide needs the
-     full tab width/height to read; the column cap that suits
-     About + Workspace text content makes the spine look
-     constrained to a vertical band. `max-width: none` drops the
-     720px cap; the carousel-wide variant tightens the carousel's
-     own padding so the breathing border around the canvas reads
-     as ~10px instead of the 16-32px the About/Workspace slides
-     want. */
+  /* Indexing slide variant. The graph slide needs the full tab
+     width/height to read; the column cap that suits About +
+     Workspace text content makes the spine look constrained to a
+     vertical band. `max-width: none` drops the 720px cap; the
+     carousel-wide variant tightens the carousel's own padding so the
+     breathing border around the canvas reads as ~10px instead of the
+     16-32px the About/Workspace slides want. */
   .slide-stage-wide {
     max-width: none;
   }
@@ -729,10 +706,10 @@
     flex: 1;
     min-height: 0;
     width: 100%;
-    /* Carousel resize spec (phase-13 slice 3b-1): slide owns the
-       vertical overflow so the inspector / about content stays
-       scrollable when the tab shrinks. Horizontal stays hidden so
-       the dot/nav row below the stage never wraps. */
+    /* Slide owns the vertical overflow so the inspector / about
+       content stays scrollable when the tab shrinks. Horizontal
+       stays hidden so the dot/nav row below the stage never
+       wraps. */
     overflow-y: auto;
     overflow-x: hidden;
   }
@@ -902,14 +879,12 @@
     color: var(--warn-text);
     font-size: 12px;
   }
-  /* Phase-13 slice 3b-2: GraphCanvas fills its host. The host
-     itself flex-grows inside the slide so the spine renders into
-     the full available area and reflows with the Dashboard tab
-     resize, just like the main Graph tab.
-     Round-1 closing-3 (D3): `.indexing-row` wraps the canvas
-     host + the inline inspector side-by-side; the host flex-
-     grows so the inspector slides in without pushing the graph
-     off-screen. */
+  /* GraphCanvas fills its host. The host itself flex-grows inside
+     the slide so the spine renders into the full available area and
+     reflows with the Dashboard tab resize, just like the main Graph
+     tab. `.indexing-row` wraps the canvas host + the inline
+     inspector side-by-side; the host flex-grows so the inspector
+     slides in without pushing the graph off-screen. */
   .indexing-row {
     flex: 1;
     min-height: 0;
@@ -1065,12 +1040,11 @@
     opacity: 0.9;
     transform: scale(1.2);
   }
-  /* `fullstack-85`: dropped the inset focus ring here. The
-     surrounding `.pane.focused` style (Pane.svelte) already draws
-     the focus indicator around the entire pane in the multi-pane
-     case; stacking a second 2px ring around just the carousel
-     body painted the empty pane with a visibly thicker border on
+  /* No inset focus ring here. The surrounding `.pane.focused` style
+     (Pane.svelte) already draws the focus indicator around the
+     entire pane in the multi-pane case; a second 2px ring around
+     just the carousel body would paint a visibly thicker border on
      the body than along the top-bar chrome. Single-pane empty
-     carousels have no indicator either way — there's only one
-     pane to be focused. */
+     carousels have no indicator either way (there's only one pane to
+     be focused). */
 </style>

@@ -120,12 +120,9 @@
     closeTabMenu,
     openTabMenu,
   } from "../state/tabMenu.svelte";
-  // `fullstack-a-67f`: dropped `isTauriDesktop` / `openWebInspector`
-  // / `reloadWindow` + the `notify` import. The Editor right-click
-  // menu no longer carries the `-b-26` Reload / Open Inspector
-  // tail entries per addendum-a's verbatim spec; Cmd+R + the pane
-  // hamburger remain the canonical surfaces. Same drop pattern as
-  // `-a-67d` (Terminal).
+  // The Editor right-click menu carries no Reload / Open Inspector
+  // entries; Cmd+R + the pane hamburger are the canonical surfaces
+  // for those.
 
   let { tab }: { tab: FileTab } = $props();
   let editorTabEl: HTMLDivElement | undefined = $state();
@@ -136,15 +133,14 @@
   let wysiwygRef: Wysiwyg | undefined = $state();
   let sourceRef: Source | undefined = $state();
 
-  // `fullstack-a-64`: when the user switches into this editor tab
-  // via Cmd+Shift+[ / Cmd+Shift+] / Ctrl+Alt+1..9, the chord
-  // handler bumps `tabFocusPulse`. FileEditorTab only mounts when
-  // it's the active tab, so any pulse increment during our
-  // lifetime means we just became the focus target. Re-focus the
-  // appropriate editor ref via the `focus()` export we added to
-  // Source/Wysiwyg in this task. queueMicrotask defers past the
-  // synchronous chord-handler stack so the editor view has had a
-  // tick to take the activeElement back from `<body>` (which
+  // When the user switches into this editor tab via Cmd+Shift+[ /
+  // Cmd+Shift+] / Ctrl+Alt+1..9, the chord handler bumps
+  // `tabFocusPulse`. FileEditorTab only mounts when it's the active
+  // tab, so any pulse increment during our lifetime means we just
+  // became the focus target. Re-focus the appropriate editor ref via
+  // the `focus()` export on Source/Wysiwyg. queueMicrotask defers
+  // past the synchronous chord-handler stack so the editor view has
+  // had a tick to take the activeElement back from `<body>` (which
   // `bumpTabFocusPulse` parks us on by blurring the prior focus).
   $effect(() => {
     tabFocusPulse.value;
@@ -357,11 +353,6 @@
     if (paneId) void closeTab(paneId, tab.id);
   }
 
-  /// `fullstack-a-67f`: dropped `doCloseOthers` + `doCloseAll`.
-  /// Addendum-a's Editor menu spec lists only "Close" + "Reopen
-  /// last tab" in the foot. Close-others / close-all aren't
-  /// listed; trivial to restore if Alex routes a follow-up.
-
   function parentPath(path: string): string {
     const slash = path.lastIndexOf("/");
     return slash < 0 ? "" : path.slice(0, slash);
@@ -370,8 +361,7 @@
   async function doCopyPath(): Promise<void> {
     closeTabMenu();
     await copyTextToClipboard(tab.path, {
-      // `fullstack-a-86`: success toast auto-dismisses (3s)
-      // — same shape as `-a-85`'s move-success fix.
+      // Success toast auto-dismisses (3s).
       onSuccess: () => setTransientStatus("Copied file path"),
       onError: (msg) => (ui.status = `copy failed: ${msg}`),
     });
@@ -382,20 +372,11 @@
     void fileOps.duplicateFile(tab.path);
   }
 
-  // `fullstack-a-35`: inline-rename header band. Replaces the
-  // modal-driven rename (`fileOps.rename`) with the terminal
-  // tab's "trigger from the right-click menu, commit inline"
-  // shape. The band sits above the editor's page-width-capped
-  // content (no `--chan-page-max-width` constraint), Enter commits,
-  // Esc cancels.
-  /// `fullstack-a-67f`: in-menu inline rename per addendum-a's
-  /// "Name, editable like Terminal's" spec. The legacy `-a-35`
-  /// full-width inline rename band above the editor body is
-  /// dropped; the menu input replaces it. Commits on Enter +
-  /// blur (NOT every keystroke — file rename is destructive +
-  /// cross-tree, can't fire on each character). Uses
-  /// `fileOps.renameInPlace` which handles path traversal
-  /// (`../other/dir/`), extension preservation, and link
+  /// In-menu inline rename (an editable Name input in the
+  /// right-click menu). Commits on Enter + blur, NOT every keystroke
+  /// (file rename is destructive + cross-tree, can't fire on each
+  /// character). Uses `fileOps.renameInPlace` which handles path
+  /// traversal (`../other/dir/`), extension preservation, and link
   /// rewriting.
   let nameDraft = $state("");
   const isDraftEditorTab = $derived(
@@ -523,24 +504,16 @@
     await reloadTabFromDisk(tab.id);
   }
 
-  /// `fullstack-a-67f`: dropped `doReloadWindow` + `doOpenInspector`
-  /// helpers. Same drop pattern as `-a-67d` (Terminal). Cmd+R + the
-  /// pane hamburger remain the canonical surfaces.
-
-  /// `fullstack-a-67f`: replaced direct `openSettings()` (global
-  /// Settings overlay) with `flipToSettings()` (per-tab back-side
-  /// flip). Mirrors the addendum-a spec ("Settings (toggle that
-  /// flips the terminal to show settings)") which the
-  /// FBSurface (`-a-67e`) + TerminalTab (`-a-67d`) menus already
-  /// adopted.
+  /// Settings is a per-tab back-side flip (a toggle that flips the
+  /// editor to show settings), matching the FBSurface + TerminalTab
+  /// menus.
   function flipToSettings(): void {
     closeTabMenu();
     const paneId = paneIdForTab();
     if (paneId) flipHybrid(paneId);
   }
 
-  /// `fullstack-a-67f`: "From $CWD" spawn entries. Mirror of the
-  /// `-a-67d` Terminal pattern — each closes the menu + fires the
+  /// "From $CWD" spawn entries. Each closes the menu + fires the
   /// canonical `chan:command` event so the chord layer + the
   /// empty-pane carousel + this menu converge on one handler.
   function dispatchChanCommand(id: string): void {
@@ -561,10 +534,10 @@
     dispatchChanCommand("app.graph.toggle");
   }
 
-  /// `fullstack-a-67f`: "Copy path to $CWD" — addendum-a wants
-  /// the editor menu to expose both the file path and the
-  /// parent-directory path. Parent dir is `tab.path` up to the
-  /// last `/`; for root-level files the CWD is the workspace root.
+  /// "Copy path to $CWD": the editor menu exposes both the file path
+  /// and the parent-directory path. Parent dir is `tab.path` up to
+  /// the last `/`; for root-level files the CWD is the workspace
+  /// root.
   async function doCopyCwdPath(): Promise<void> {
     closeTabMenu();
     const slash = tab.path.lastIndexOf("/");
@@ -574,9 +547,8 @@
     });
   }
 
-  /// `fullstack-a-67f`: Find — opens the per-tab find bar via the
-  /// existing `openFind(tabId)` helper that the `app.find.open`
-  /// chord already routes to.
+  /// Find opens the per-tab find bar via the `openFind(tabId)`
+  /// helper that the `app.find.open` chord also routes to.
   function doFind(): void {
     closeTabMenu();
     openFind(tab.id);
@@ -696,10 +668,10 @@
     </div>
   {/if}
   {#if tab.externalChange}
-    <!-- `lane-c addendum-2 item 1`: an external (non-self) write to this
-         file landed on disk while the tab is open. We never auto-reload
-         (that replaced the buffer and snapped the caret to 1:1 mid-edit);
-         the user opts into the reload here or keeps typing (their next
+    <!-- An external (non-self) write to this file landed on disk
+         while the tab is open. We never auto-reload (that would
+         replace the buffer and snap the caret to 1:1 mid-edit); the
+         user opts into the reload here or keeps typing (their next
          save hits the 409 conflict modal). Reuses the recovery-banner
          palette + layout. -->
     <div class="recovery-banner" role="alert">
@@ -737,17 +709,13 @@
       use:clampMenu={menuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
-      <!-- `fullstack-a-67f`: Editor right-click menu reshape per
-           addendum-a's verbatim spec. Header: editable Name
-           input. Body: Show Source Code + Collapse Code Blocks
-           band, then a View-toggles band (kept against spec
-           since dropping the side-panel toggles + cleanup
-           utilities would orphan the features — flagged in the
-           journal), find/copy band, From-$CWD spawn band.
-           Foot: Settings (flipHybrid) + Reopen Closed Tab +
-           Close. Reload Window / Open Inspector tail dropped
-           per the addendum spec; Cmd+R + pane hamburger still
-           cover them. -->
+      <!-- Editor right-click menu. Header: editable Name input.
+           Body: Show Source Code + Collapse Code Blocks band, then a
+           View-toggles band (side-panel toggles + cleanup
+           utilities), find/copy band, From-$CWD spawn band. Foot:
+           Settings (flipHybrid) + Reopen Closed Tab + Close. No
+           Reload Window / Open Inspector entries; Cmd+R + pane
+           hamburger cover them. -->
       <div class="action-list">
         {#if isDraftEditorTab}
           <button class="mbtn" type="button" onclick={doSaveDraftToWorkspace}>
@@ -757,10 +725,10 @@
             <span class="mbtn-label">Save to Workspace</span>
           </button>
         {:else}
-          <!-- Editable Name input (addendum: "editable like
-               Terminal's"). Commits on Enter/blur via
-               fileOps.renameInPlace which handles path traversal,
-               extension preservation, and link rewriting. -->
+          <!-- Editable Name input, like the Terminal tab's. Commits
+               on Enter/blur via fileOps.renameInPlace which handles
+               path traversal, extension preservation, and link
+               rewriting. -->
           <label class="name-row">
             <span class="name-label">
               <Pencil size={15} strokeWidth={1.75} aria-hidden="true" />
@@ -799,9 +767,8 @@
           />
           <span class="page-width-value">{Math.round(pageWidth.ratio * 100)}%</span>
         </div>
-        <!-- Show Source Code: addendum spec's primary toggle.
-             Hidden for plain text tabs that have no structured
-             renderer. -->
+        <!-- Show Source Code: the menu's primary toggle. Hidden for
+             plain text tabs that have no structured renderer. -->
         {#if hasRenderedMode}
           {@const inSource = tab.mode === "source"}
           {@const renderedLabel =
@@ -843,14 +810,11 @@
             <span class="mbtn-chord"></span>
           </button>
         {/if}
-        <!-- `fullstack-a-67f`: View toggles + cleanup utilities
-             kept against spec. Addendum-a's Editor menu does
-             NOT list Outline / Details / Style Toolbar /
-             Syntax Highlight / Trailing Whitespace toggles +
-             the destructive Remove-TW button. Dropping them
-             without a chord alternative would orphan the
-             features. Flagged for Alex review in the journal;
-             trivial to drop if requested. -->
+        <!-- View toggles + cleanup utilities band: Outline /
+             Details / Style Toolbar / Syntax Highlight / Trailing
+             Whitespace toggles + the destructive Remove-TW button.
+             This menu is the only surface for these features (no
+             chord alternative). -->
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={doToggleOutline} class:on={tab.outlineOpen}>
           <span class="mbtn-icon">
@@ -963,9 +927,8 @@
         <!-- A3-iii: PDF export moved out of this menu and into the file
              Inspector (FileInfoBody), shown for markdown files. -->
         <div class="msep" role="separator"></div>
-        <!-- `fullstack-a-67f`: From-$CWD spawn band per addendum-a.
-             Mirror of the `-a-67d` Terminal pattern: New File
-             uses the existing dialog; New Terminal / New File
+        <!-- From-$CWD spawn band, matching the Terminal tab: New
+             File uses the existing dialog; New Terminal / New File
              Browser / New Graph fire chan:command events. -->
         <div class="from-cwd-label">From $CWD</div>
         <button class="mbtn" onclick={doDuplicate}>
@@ -1030,19 +993,10 @@
           <span class="mbtn-label">Close</span>
           <span class="mbtn-chord">{chordLabel("app.tab.close")}</span>
         </button>
-        <!-- `fullstack-a-67f`: Reload Window + Open Inspector
-             tail entries dropped per spec consistency with
-             `-a-67d`. Cmd+R + the pane hamburger still surface
-             window-level reload + devtools. -->
       </div>
     </div>
   {/if}
 
-  <!-- `fullstack-a-67f`: dropped the `-a-35` inline rename band.
-       Addendum-a moves the rename surface into the menu top as
-       a "Name, editable like Terminal's" input. The new in-menu
-       input commits on Enter/blur via `fileOps.renameInPlace`
-       (same chan-workspace rename + link-rewrite pass as before). -->
   {#if tab.fileMissing}
     <div class="editor-toolbar missing-toolbar">
       <span>File moved or deleted</span>
@@ -1154,12 +1108,11 @@
             }}
           />
           {#if tab.styleToolbarOpen}
-            <!-- `fullstack-a-26`: parity with the team-work
-                 toolbar — separator + rendered/source toggle next
-                 to the formatting buttons. `mode` + `onModeToggle`
-                 are passed through to the shared StyleToolbar
-                 component (which already supports the toggle, gated
-                 on these props being defined). The toggle calls
+            <!-- Parity with the team-work toolbar: separator +
+                 rendered/source toggle next to the formatting
+                 buttons. `mode` + `onModeToggle` pass through to the
+                 shared StyleToolbar component (the toggle is gated on
+                 these props being defined). The toggle calls
                  `doToggleMode()` which swaps between source and the
                  tab's rendered mode (wysiwyg / pretty / table). -->
             <StyleToolbar
@@ -1226,17 +1179,16 @@
             onCaretChange={(from, to) => setTabCaret(tab, from, to)}
           />
           {#if tab.styleToolbarOpen && hasRenderedMode}
-            <!-- `fullstack-a-26`: also mount the StyleToolbar in
-                 source mode so the rendered/source toggle stays
-                 reachable from inside source mode. `disabled` is
-                 on (the formatting row collapses) but the toggle
-                 sits OUTSIDE the formatting row (per the
-                 StyleToolbar's own design comment around its
-                 `.fbtn-row`) and stays clickable. Only mount for
-                 tabs with a rendered mode (markdown / JSON /
-                 CSV) — plain `.py` / `.toml` source has no
-                 rendered counterpart, so there's no useful
-                 toggle direction. -->
+            <!-- Also mount the StyleToolbar in source mode so the
+                 rendered/source toggle stays reachable from inside
+                 source mode. `disabled` is on (the formatting row
+                 collapses) but the toggle sits OUTSIDE the formatting
+                 row (see the StyleToolbar's own design comment around
+                 its `.fbtn-row`) and stays clickable. Only mount for
+                 tabs with a rendered mode (markdown / JSON / CSV);
+                 plain `.py` / `.toml` source has no rendered
+                 counterpart, so there's no useful toggle
+                 direction. -->
             <StyleToolbar
               wysiwyg={undefined}
               selVer={selVer}
@@ -1298,12 +1250,12 @@
     background: var(--bg);
     color: var(--text);
   }
-  /* `fullstack-a-72` hang-recovery banner. Sits at the very top
-     of the editor-tab body, above the menu bubble + the editor
-     host. Uses the existing `--warn-text` palette so it reads as
-     an attention-needed affordance without competing with the
-     editor's content area below. Stays compact (single row) so
-     it doesn't push the document down dramatically. */
+  /* Hang-recovery banner. Sits at the very top of the editor-tab
+     body, above the menu bubble + the editor host. Uses the
+     `--warn-text` palette so it reads as an attention-needed
+     affordance without competing with the editor's content area
+     below. Stays compact (single row) so it doesn't push the
+     document down dramatically. */
   .recovery-banner {
     display: flex;
     align-items: center;
@@ -1514,10 +1466,7 @@
     font: inherit;
     cursor: pointer;
   }
-  /* `fullstack-a-67f`: the `-a-35` `.rename-band` styles
-     dropped along with the full-width inline rename band.
-     The menu-top `.name-row` input replaces it (styles
-     below). */
+  /* Menu-top inline rename input. */
   .name-row {
     display: flex;
     align-items: center;
@@ -1550,8 +1499,8 @@
     outline: none;
     border-color: var(--accent);
   }
-  /* `fullstack-a-67f`: "From $CWD" section label. Mirrors
-     TerminalTab's `.from-cwd-label` styling. */
+  /* "From $CWD" section label. Mirrors TerminalTab's
+     `.from-cwd-label` styling. */
   .from-cwd-label {
     padding: 4px 8px 2px;
     color: var(--text-secondary);

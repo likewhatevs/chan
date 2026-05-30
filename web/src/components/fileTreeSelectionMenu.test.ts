@@ -10,7 +10,7 @@ import tree from "./FileTree.svelte?raw";
 // detects file vs dir) is deferred to slice 2 — needs a
 // `kind: "either"` extension to PathPromptModal.
 
-describe("fullstack-a-67e: FileTree selection menu header + new entries", () => {
+describe("FileTree selection menu header + new entries", () => {
   test("From-selection label rendered at the top of the ctx menu", () => {
     expect(tree).toMatch(
       /\{#if menu\}[\s\S]{1,2000}<div class="from-selection-label">From selection<\/div>/,
@@ -55,7 +55,7 @@ describe("fullstack-a-67e: FileTree selection menu header + new entries", () => 
   });
 });
 
-describe("fullstack-a-67e: transfer rows gated, per-row ops kept", () => {
+describe("transfer rows gated, per-row ops kept", () => {
   test("Open in File Browser / Upload / Download are docked-only and row ops stay available", () => {
     expect(tree).toMatch(/\{#if docked\}[\s\S]{1,1000}<span>Open in File Browser<\/span>/);
     expect(tree).toMatch(/\{#if docked\}[\s\S]{1,1000}<span>Upload<\/span>/);

@@ -10,8 +10,8 @@ import panel from "./GraphPanel.svelte?raw";
 // `?raw` pins (the handlers live inside the Svelte component and the bugs
 // were reactive wiring, not pure functions, so the pin is on the wiring).
 
-describe("GI-5: Show Directory reveals + ENTERS the directory in the File Browser", () => {
-  test("revealSelectedFsEntry opens a File Browser TAB, expanding the dir itself (GI-5 + GI-8)", () => {
+describe("Show Directory reveals + ENTERS the directory in the File Browser", () => {
+  test("revealSelectedFsEntry opens a File Browser TAB, expanding the dir itself", () => {
     // GI-5 was a visual no-op; GI-8 then showed the overlay-era reveal
     // (revealPathInBrowser + close) opened no visible tab from a graph
     // tab. Now revealSelectedFsEntry routes through revealPathInBrowserTab
@@ -31,7 +31,7 @@ describe("GI-5: Show Directory reveals + ENTERS the directory in the File Browse
   });
 });
 
-describe("GI-6: Graph from here on a directory re-roots at the dir itself + keeps it selected", () => {
+describe("Graph from here on a directory re-roots at the dir itself + keeps it selected", () => {
   test("graphFromHere takes an isDir flag and re-roots dirs to the dir itself, files to the parent", () => {
     // Directory: scope to `dir:<path>` (the dir itself), not its parent.
     // The old parent rule made re-rooting a child folder onto its already-
@@ -62,7 +62,7 @@ describe("GI-6: Graph from here on a directory re-roots at the dir itself + keep
   });
 });
 
-describe("GI-7: depth slider holds its dragged value via a full-depth dir probe", () => {
+describe("depth slider holds its dragged value via a full-depth dir probe", () => {
   test("a dirDepthProbe state mirrors the workspaceDepthProbe pattern", () => {
     expect(panel).toMatch(/let dirDepthProbe: FsGraphResponse \| null = \$state\(null\);/);
     expect(panel).toMatch(/let dirDepthProbeLoading = \$state\(false\);/);

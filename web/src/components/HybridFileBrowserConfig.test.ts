@@ -14,7 +14,7 @@ import shell from "./HybridSurfaceConfigShell.svelte?raw";
 // "X is gone from the old overlay" are dropped (the file no
 // longer exists).
 
-describe("fullstack-a-48: HybridFileBrowserConfig wiring", () => {
+describe("HybridFileBrowserConfig wiring", () => {
   test("warning copy distinguishes workspace-wide scope from per-FB-pane", () => {
     expect(source).toMatch(
       /These settings apply to ALL file-browser surfaces/,

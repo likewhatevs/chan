@@ -11,7 +11,7 @@ import { describe, expect, test } from "vitest";
 import fileEditor from "./FileEditorTab.svelte?raw";
 import store from "../state/store.svelte.ts?raw";
 
-describe("fullstack-a-67f: menu-top Name input replaces the inline rename band", () => {
+describe("menu-top Name input replaces the inline rename band", () => {
   test("legacy doRename / renameActive / renameDraft state dropped", () => {
     expect(fileEditor).not.toMatch(/function doRename\(\): void/);
     expect(fileEditor).not.toMatch(/renameActive = \$state\(false\)/);
@@ -55,7 +55,7 @@ describe("fullstack-a-67f: menu-top Name input replaces the inline rename band",
   });
 });
 
-describe("fullstack-a-67f: store.svelte renameInPlace unchanged (still the canonical commit path)", () => {
+describe("store.svelte renameInPlace unchanged (still the canonical commit path)", () => {
   test("fileOps.renameInPlace still calls performMove + preserveExtension", () => {
     expect(store).toContain(
       "async renameInPlace(path: string, next: string, isDir = false)",

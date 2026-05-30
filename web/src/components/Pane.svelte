@@ -100,12 +100,10 @@
 
   const active = $derived(pane.tabs.find((t) => t.id === pane.activeTabId) ?? null);
 
-  // `fullstack-a-55` removed the `hybridFamilyName` derived (was
-  // introduced by `-a-54` to render a "HYBRID X" label inside the
-  // tab strip's dead-zone slot). @@Alex's design correction: the
-  // family-name title already lives at the top of the back-side
-  // config view component (`HybridXConfig.svelte` stubs from
-  // `-a-43`); the tab-strip-level duplicate was unwanted chrome.
+  // No "HYBRID X" label in the tab strip's dead-zone slot: the
+  // family-name title lives at the top of the back-side config view
+  // component (`HybridXConfig.svelte`), so a tab-strip-level
+  // duplicate would be redundant chrome.
 
   /// Per-row is_dir lookup for the active tree, keyed by path. Workspaces
   /// the File-Browser tab title which needs to render "the parent
@@ -146,14 +144,12 @@
 
   /// Empty-pane right-click menu, arranged into the canonical
   /// sections shared by every chan menu: content actions, then
-  /// navigation, then pane controls. The Settings footer entry
-  /// retired with the SettingsPanel OverlayShell in phase-13
-  /// slice 3c — Cmd+, now flips the focused Hybrid surface
-  /// (Dashboard hosts the Appearance / Screen Lock /
-  /// Screensaver / Metadata controls on its back-of-card).
-  /// Each row carries an icon and (optionally) the keyboard chord
-  /// for the same action — the empty pane is also the discovery
-  /// surface for shortcuts, so we keep the chord hint visible.
+  /// navigation, then pane controls. No Settings footer entry: Cmd+,
+  /// flips the focused Hybrid surface (Dashboard hosts the Appearance
+  /// / Screen Lock / Screensaver / Metadata controls on its
+  /// back-of-card). Each row carries an icon and (optionally) the
+  /// keyboard chord for the same action, since the empty pane is also
+  /// the discovery surface for shortcuts.
   /// `chordId` is a SHORTCUTS registry id; rows whose chord isn't
   /// registered on the current platform render with a blank chord
   /// column rather than disappearing.
@@ -169,26 +165,13 @@
     chord: string;
     action: () => void;
   };
-  // `fullstack-a-32`: unified spawn entries. Same four first-class
-  // items + ordering across the empty-pane right-click menu, the
-  // pane hamburger menu, and the empty-pane carousel slide 1.
-  // Anything else (Search etc.) lives below the separator inside
-  // each menu surface — these four are the first-class spawn set.
+  // Unified spawn entries. Same items + ordering across the
+  // empty-pane right-click menu, the pane hamburger menu, and the
+  // empty-pane carousel slide 1. A single `spawnActions` list backs
+  // all three surfaces so they stay in lockstep (same 7 entries in
+  // the same order). New Draft is the first entry (Cmd+N opens a
+  // fresh `Drafts/untitled-N/draft.md`).
   const spawnActions: EmptyMenuRow[] = [
-    // `fullstack-a-67` slice 2: addendum-a Hybrid hamburger spec
-    // adds New Draft as the first spawn surface (Cmd+N opens a
-    // fresh `Drafts/untitled-N/draft.md` per `-a-66 slice a`).
-    // Shared across the empty-pane right-click + the pane
-    // hamburger + the empty-pane carousel slide 1 so all three
-    // surfaces gain the same affordance.
-    //
-    // Round-1 closing-2 (B8): Search + Dashboard were previously
-    // gated to the empty-pane right-click menu via a separate
-    // `emptyPaneExtraActions` list. @@Alex's smoke wanted them
-    // in the pane top-bar hamburger too (after Graph). Folding
-    // the two lists into a single `spawnActions` keeps both menu
-    // surfaces in lockstep — the right-click and the hamburger
-    // now offer the same 7 entries in the same order.
     {
       label: "New Draft",
       icon: FilePlus,
@@ -208,8 +191,7 @@
       chordId: "app.files.toggle",
     },
     {
-      // phase-13 r2: Team Work -> Team Work (label from @@LaneA);
-      // chord id app.terminal.teamWork stays stable.
+      // Label "Team Work"; chord id is app.terminal.teamWork.
       label: "Team Work",
       icon: MessageSquare,
       command: "app.terminal.teamWork",
@@ -243,15 +225,10 @@
     return formatChord(chord, os);
   }
 
-  /// Round-1 closing-2 (lane-b-empty-pane-menu): the empty-pane
-  /// right-click context menu was retired. The pane hamburger (⋮)
-  /// already lists every entry the right-click menu used to render
-  /// (B8 folded Search + Dashboard into `spawnActions`), so the
-  /// duplicate right-click affordance was a redundant surface that
-  /// also diverged from the hamburger ordering. The empty-pane
-  /// HamburgerMenu component, its handle/open state, the
-  /// `openEmptyPaneMenuAt` helper, and the `onEmptyPaneContextMenu`
-  /// dispatcher are all gone; right-clicking an empty pane is a
+  /// Empty panes have no right-click context menu. The pane
+  /// hamburger (⋮) lists every spawn entry, so a duplicate
+  /// right-click affordance would be redundant and risk diverging
+  /// from the hamburger ordering. Right-clicking an empty pane is a
   /// no-op (the browser default action is suppressed by parent
   /// surfaces, not by the pane).
 
@@ -300,7 +277,7 @@
     enterPaneMode();
   }
 
-  /// `fullstack-a-44`: transaction-mode (mouse-driven NAV) handlers.
+  /// Transaction-mode (mouse-driven NAV) handlers.
   ///
   /// Two entry paths target the same dead zone on the top bar (the
   /// stretch between the last tab and the hamburger). Entry A is a
@@ -398,10 +375,10 @@
       paneMode.hoverPaneId === pane.id,
   );
 
-  /// `fullstack-a-68 slice 2`: ids of tabs added by the T/O/P/G/E
-  /// chords during the current pane-mode session. Each entry is
-  /// a "ghost tab" — visible in the draft layout but not yet
-  /// committed to the live one. Empty when pane mode is inactive.
+  /// Ids of tabs added by the T/O/P/G/E chords during the current
+  /// pane-mode session. Each entry is a "ghost tab": visible in the
+  /// draft layout but not yet committed to the live one. Empty when
+  /// pane mode is inactive.
   /// Derived so the tab strip rerenders the dimmed class as
   /// chords land and as commit / cancel clear the set.
   const paneModeStagedSet = $derived(paneModeStagedTabIds());
@@ -426,10 +403,10 @@
     });
   });
 
-  /// `fullstack-a-22`: parallel subscription on the paneFlip bus,
-  /// which `flipHybrid()` bumps in place of the structural wobble.
-  /// Same rAF-double-tap so the keyframe re-fires across consecutive
-  /// flips without the class going stale on a single class toggle.
+  /// Parallel subscription on the paneFlip bus, which `flipHybrid()`
+  /// bumps in place of the structural wobble. The rAF-double-tap
+  /// makes the keyframe re-fire across consecutive flips without the
+  /// class going stale on a single class toggle.
   const flipVersion = $derived(paneFlip.versions[pane.id] ?? 0);
   let flipActive = $state(false);
   let lastFlipVersion = 0;
@@ -443,11 +420,10 @@
     });
   });
 
-  /// `fullstack-a-43` removed the back-side-attention indicator
-  /// (originally `fullstack-48` Phase C). Under the new model the
-  /// back is a per-surface configuration view, not a content tab
-  /// collection — there is no "unread" or "activity" signal on a
-  /// settings surface to attend to.
+  /// No back-side-attention indicator: the back is a per-surface
+  /// configuration view, not a content tab collection, so there is no
+  /// "unread" or "activity" signal on a settings surface to attend
+  /// to.
 
   function closePaneMenus(): void {
     paneMenu?.close();
@@ -508,9 +484,9 @@
       label: "Split right",
       icon: ArrowRight,
       command: "app.pane.splitRight",
-      // phase-13 r2 (B-slice 4): show the direct global chord
-      // (Cmd+/ , Cmd+?) instead of the Pane-Mode `Cmd+. /` prefix.
-      // The desktop KEY_BRIDGE fires app.pane.splitRight on Slash and
+      // Show the direct global chord (Cmd+/ , Cmd+?) instead of the
+      // Pane-Mode `Cmd+. /` prefix. The desktop KEY_BRIDGE fires
+      // app.pane.splitRight on Slash and
       // app.pane.splitDown on Shift+Slash; the label is a display
       // mnemonic for the same physical key (Shift+/ reads as `?`).
       chord: formatChord("Mod+/", os),
@@ -592,12 +568,10 @@
   /// already-active tab (only the latter pops the menu).
   let tabMouseDownPrevActive: string | null = null;
 
-  // `fullstack-56`: removed `onSave()` + the Cmd+S keystroke
-  // interception. Autosave (debounced on idle + tab-close +
-  // visibility hooks) is the canonical write path; the explicit
-  // shortcut + action don't pull their weight. Cmd+Shift+S
-  // strikethrough is owned by the editor and unaffected since the
-  // plain-S gate is gone.
+  // No Cmd+S save keystroke. Autosave (debounced on idle +
+  // tab-close + visibility hooks) is the canonical write path, so an
+  // explicit save shortcut wouldn't pull its weight. Cmd+Shift+S
+  // strikethrough is owned by the editor.
 
   function onKeyDown(e: KeyboardEvent): void {
     if (e.key === "Escape" && (paneMenuOpen || paneContextMenuOpen)) {
@@ -979,17 +953,14 @@
   role="region"
   aria-label="editor pane"
 >
-  <!-- `fullstack-a-43`: tab strip was hidden when flipped to the
-       back-side configuration view.
-       `fullstack-a-54` keeps the tab strip visible on the back
-       side per @@Alex's design correction — tabs render mirrored
-       (`scaleX(-1)`), hamburger swaps to the opposite end via
-       `order: -1`, and the family-name title ("Hybrid Terminal" /
-       "Hybrid Editor" / "Hybrid Graph" / "Hybrid File Browser")
-       lives inside the dead-zone slot. Tabs stay clickable —
-       clicking a mirrored tab swaps the active front-tab + the
-       back-side dispatch follows. Flip back via the `Cmd+. Tab`
-       chord or the hamburger Flip entry. -->
+  <!-- The tab strip stays visible on the back-side configuration
+       view: tabs render mirrored (`scaleX(-1)`), the hamburger swaps
+       to the opposite end via `order: -1`, and the family-name title
+       ("Hybrid Terminal" / "Hybrid Editor" / "Hybrid Graph" /
+       "Hybrid File Browser") lives inside the dead-zone slot. Tabs
+       stay clickable: clicking a mirrored tab swaps the active
+       front-tab and the back-side dispatch follows. Flip back via the
+       `Cmd+. Tab` chord or the hamburger Flip entry. -->
   <!-- svelte-ignore a11y_interactive_supports_focus -->
   <div
     class="tabs"
@@ -1001,9 +972,8 @@
     ondrop={onDrop}
     oncontextmenu={(e) => {
       if ((e.target as Element | null)?.closest(".tab, .actions")) return;
-      // Round-1 closing-2 (lane-b-empty-pane-menu): empty panes
-      // no longer surface a right-click menu; only non-empty
-      // panes get the Reload / Open Inspector context menu.
+      // Empty panes have no right-click menu; only non-empty panes
+      // get the Reload / Open Inspector context menu.
       if (pane.tabs.length === 0) return;
       openPaneContextAt(e);
     }}
@@ -1139,8 +1109,8 @@
     {#if dropIndicator === pane.tabs.length}
       <div class="drop-bar" aria-hidden="true"></div>
     {/if}
-    <!-- `fullstack-a-44`: top-bar dead zone. The empty stretch
-         between the last tab and the hamburger actions captures
+    <!-- Top-bar dead zone. The empty stretch between the last tab
+         and the hamburger actions captures
          mousedown + double-click to enter Hybrid Nav in transaction
          mode. Manual mousedown + threshold tracking (not HTML5
          dragstart) avoids stomping the per-tab inter-pane DnD that
@@ -1164,8 +1134,8 @@
         height={420}
         onBeforeOpen={closePaneContextMenus}
       >
-        <!-- `fullstack-a-32`: first-class spawn entries unified
-             across the pane hamburger, empty-pane right-click,
+        <!-- First-class spawn entries unified across the pane
+             hamburger, empty-pane right-click,
              and the empty-pane carousel slide 1. Click any row
              to spawn the matching surface in the active pane;
              chord hints reflect the canonical chord for each
@@ -1240,12 +1210,12 @@
         onBeforeOpen={closePaneHamburgerMenu}
       >
         <li>
-          <!-- `fullstack-a-73`: window-level reload, like a browser
-               Cmd+R. The SPA-level chord in App.svelte and this
-               menu entry both route through `reloadWindow()` so
-               the affordance reads as "one action, two entry
-               points". chan-desktop's serve.rs:1140 Tauri-side
-               binding stays as a defense-in-depth fallback. -->
+          <!-- Window-level reload, like a browser Cmd+R. The
+               SPA-level chord in App.svelte and this menu entry both
+               route through `reloadWindow()` so the affordance reads
+               as "one action, two entry points". chan-desktop's
+               Tauri-side binding stays as a defense-in-depth
+               fallback. -->
           <button role="menuitem" onclick={doReloadPane}>
             <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
             <span class="menu-row-label">Reload</span>
@@ -1276,12 +1246,10 @@
     aria-label="pane content"
   >
     {#if pane.showingBack && !paneMode.active}
-      <!-- `fullstack-a-43`: per-surface back-side configuration
-           view. Dispatched off the type of the currently-active
-           FRONT tab — switching the front tab while flipped swaps
-           the back's content to the matching surface family.
-           Tasks B / C / D / F populate each component body;
-           Task A ships title-band stubs. -->
+      <!-- Per-surface back-side configuration view. Dispatched off
+           the type of the currently-active FRONT tab: switching the
+           front tab while flipped swaps the back's content to the
+           matching surface family. -->
       <div class="back-side" role="region" aria-label="hybrid back side">
         {#if active?.kind === "terminal"}
           <HybridTerminalConfig onDone={() => flipHybrid(pane.id)} />
@@ -1292,13 +1260,12 @@
         {:else if active?.kind === "browser"}
           <HybridFileBrowserConfig onDone={() => flipHybrid(pane.id)} />
         {:else if active?.kind === "dashboard"}
-          <!-- Phase-13 round-1 closing (B3): dashboard arm so
-               Cmd+, on a focused Dashboard pane lands on the
-               Appearance / Screen Lock / Screensaver / Metadata
-               flip-back instead of the "Empty pane" fallback.
-               The body was extracted out of DashboardTab.svelte
-               into HybridDashboardConfig.svelte so the mounting
-               point matches the other Hybrid surfaces. -->
+          <!-- Dashboard arm so Cmd+, on a focused Dashboard pane
+               lands on the Appearance / Screen Lock / Screensaver /
+               Metadata flip-back instead of the "Empty pane"
+               fallback. The body lives in HybridDashboardConfig.svelte
+               so the mounting point matches the other Hybrid
+               surfaces. -->
           <HybridDashboardConfig onDone={() => flipHybrid(pane.id)} />
         {:else}
           <!-- Empty pane (no active front tab). Open a front tab
@@ -1355,20 +1322,14 @@
         aria-label="no tab open"
         role="presentation"
       >
-        <!-- `fullstack-a-75b`: single-pane lone-pane case renders
-             the static welcome surface — 5-tile spawn grid +
-             Dashboard tile + footer hint. The rotating
-             carousel widget (About / Workspace metadata /
-             Indexing graph) lives inside the Dashboard tab
-             now per @@Alex's route on the `-a-75` walk.
-             Multi-pane empty panes keep the minimal chrome
-             (just the chan mark).
-             Round-1 closing-2 (lane-b-empty-pane-menu): the
-             empty-pane right-click menu was retired; the pane
-             hamburger (⋮) now carries every spawn entry the
-             right-click menu used to render, so the duplicate
-             surface was removed. Right-clicking an empty pane
-             is a no-op. -->
+        <!-- Single-pane lone-pane case renders the static welcome
+             surface: 5-tile spawn grid + Dashboard tile + footer
+             hint. The rotating carousel widget (About / Workspace
+             metadata / Indexing graph) lives inside the Dashboard
+             tab. Multi-pane empty panes keep the minimal chrome
+             (just the chan mark). Empty panes have no right-click
+             menu; the pane hamburger (⋮) carries every spawn entry,
+             so right-clicking an empty pane is a no-op. -->
         {#if !multiPane}
           <EmptyPaneWelcome />
         {:else}
@@ -1379,14 +1340,12 @@
       </div>
     {/if}
     <!--
-      `fullstack-b-2`: keep terminal tabs mounted across Hybrid Nav
-      (pane mode) toggles so xterm.js's 20k-line scrollback buffer
-      survives. Previously the outer `{#if !paneMode.active}` wrapper
-      unmounted every terminal on Cmd+K entry, disposing the
-      EditorView and dropping the buffer; re-entering pane mode
-      after a long session lost every line that had scrolled off
-      screen. Now the active terminal is hidden by `class:active`
-      flipping to false during pane mode (the existing
+      Keep terminal tabs mounted across Hybrid Nav (pane mode)
+      toggles so xterm.js's 20k-line scrollback buffer survives.
+      Unmounting a terminal would dispose the EditorView and drop the
+      buffer, losing every line that had scrolled off screen. The
+      active terminal is hidden by `class:active` flipping to false
+      during pane mode (the existing
       `visibility: hidden; pointer-events: none` rule does the
       hiding), and the pane-mode-preview above renders unimpeded.
     -->
@@ -1466,20 +1425,17 @@
         var(--pane-shadow);
     }
   }
-  /* `fullstack-a-22`: Hybrid flip animation. The Hybrid model
-     swaps content on flipHybrid (front + back state are already
-     siblings on the LeafNode); the animation here is the visual
-     cue that the swap happened. A half-flip on the Y-axis takes
-     the pane to edge-on at ~50% (invisible because of
-     `backface-visibility: hidden`) and back to front-facing — the
-     reactive content swap has already landed by then, so the
-     user perceives the flip as "card spins, content changed".
-     Not a true two-face card flip (the architect's spec
-     allowed for either a structural refactor or a single-face
-     wobble; we picked the latter to avoid touching every reader
-     of pane.tabs across the codebase). Y-axis matches the
-     reference style; cubic-bezier(0.4, 0, 0.2, 1) is the
-     Material standard for UI motion. */
+  /* Hybrid flip animation. The Hybrid model swaps content on
+     flipHybrid (front + back state are already siblings on the
+     LeafNode); the animation here is the visual cue that the swap
+     happened. A half-flip on the Y-axis takes the pane to edge-on at
+     ~50% (invisible because of `backface-visibility: hidden`) and
+     back to front-facing; the reactive content swap has already
+     landed by then, so the user perceives the flip as "card spins,
+     content changed". This is a single-face wobble, not a true
+     two-face card flip, so it avoids touching every reader of
+     pane.tabs across the codebase. cubic-bezier(0.4, 0, 0.2, 1) is
+     the Material standard for UI motion. */
   .pane.flipping {
     animation: pane-flip-once 400ms cubic-bezier(0.4, 0, 0.2, 1);
     backface-visibility: hidden;
@@ -1510,26 +1466,23 @@
   .tabs.drop-active {
     box-shadow: inset 0 0 0 2px var(--pane-focus);
   }
-  /* `fullstack-a-54` flipped chrome, revised by `-a-55`:
+  /* Flipped chrome:
      * Tab CONTENT mirrors via per-child `scaleX(-1)` so each
        tab's icon + path + dirty marker reads as if viewed from
        behind. The `.tab` element ITSELF stays un-transformed so
        its click target lives in natural coordinates and the
        mousedown handler (which writes `pane.activeTabId`) fires
-       cleanly. `-a-54` applied the transform to the whole `.tab`,
-       which broke click routing on the back-side per
-       `webtest-a-5`'s check #6 PARTIAL.
+       cleanly. Transforming the whole `.tab` would break click
+       routing on the back side.
      * `.tabs.flipped` uses `flex-direction: row-reverse` so the
-       tabs flow from the right edge (@@Alex 2026-05-21: "when we
-       flip, the tabs must be aligned to the right.. not to the
-       left, because we flipped"). The `.actions` container
-       (hamburger) gets `order: 1` so it ends up on the LEFT
-       under row-reverse ordering.
-     * The family-name title from `-a-54`'s dead-zone slot is
-       gone — the back-side config component owns its own title.
-       The dead-zone's drag-to-NAV cursor reverts to default on
-       the back (the rearrangement semantic doesn't apply when
-       flipped). */
+       tabs flow from the right edge (aligned right when flipped,
+       not left). The `.actions` container (hamburger) gets
+       `order: 1` so it ends up on the LEFT under row-reverse
+       ordering.
+     * No family-name title in the dead-zone slot: the back-side
+       config component owns its own title. The dead-zone's
+       drag-to-NAV cursor reverts to default on the back (the
+       rearrangement semantic doesn't apply when flipped). */
   .tabs.flipped {
     flex-direction: row-reverse;
   }
@@ -1587,8 +1540,8 @@
     font-weight: 500;
     box-shadow: 0 0 0 1px var(--border);
   }
-  /* `fullstack-a-68 slice 2`: ghost tab styling for the T/O/P/G/E
-     spawn staging inside Hybrid Nav. Tabs added to the draft
+  /* Ghost tab styling for the T/O/P/G/E spawn staging inside Hybrid
+     Nav. Tabs added to the draft
      layout but not yet committed render with a dashed border +
      reduced opacity so the user can scan the staged additions
      before pressing Enter to materialize. Class lifts on commit
@@ -1643,9 +1596,9 @@
   .dirty.activity {
     color: var(--warn-text, #d29922);
   }
-  /* `lane-c addendum-3`: the unseen-output dot PULSES while output is
-     actively arriving, then holds SOLID once it stops (still unseen). A
-     smooth opacity breathe, distinct from the steppy watcher blink. */
+  /* The unseen-output dot PULSES while output is actively arriving,
+     then holds SOLID once it stops (still unseen). A smooth opacity
+     breathe, distinct from the steppy watcher blink. */
   .dirty.activity.pulsing {
     animation: terminal-activity-pulse 1100ms ease-in-out infinite;
   }
@@ -1658,11 +1611,10 @@
       opacity: 0.35;
     }
   }
-  /* `fullstack-a-10`: Chrome-style tab-name fade. Replace the
-     phase-7 `fullstack-66` middle-elision (`head[..]tail`) with
-     a CSS mask gradient at the right edge — the visible text
-     fades into transparency when it overflows, no `[..]` /
-     ellipsis character. The tooltip on the parent `<button>`
+  /* Chrome-style tab-name fade. A CSS mask gradient at the right
+     edge fades the visible text into transparency when it overflows,
+     with no `[..]` / ellipsis character. The tooltip on the parent
+     `<button>`
      (`title={tabTooltip(t)}`) still surfaces the full path on
      hover so truncation never costs the user disambiguation.
      `max-width` caps the visible width without forcing a hard
@@ -1698,8 +1650,8 @@
     flex-shrink: 0;
   }
   .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; padding-left: 4px; }
-  /* `fullstack-a-44`: dead zone on the top bar — the stretch between
-     the last tab and the hamburger. mousedown + drag past 5 px
+  /* Dead zone on the top bar: the stretch between the last tab and
+     the hamburger. mousedown + drag past 5 px
      enters transaction-mode NAV (Entry A, drag-with-payload);
      dblclick enters transaction-mode NAV with no originating grab
      (Entry B). flex: 1 fills any remaining horizontal space; the
@@ -1717,8 +1669,8 @@
   .pane.transaction-active .dead-zone {
     cursor: grabbing;
   }
-  /* `fullstack-a-44`: transaction-mode visual cues.
-     `.transaction-active` is set on every pane while transaction
+  /* Transaction-mode visual cues. `.transaction-active` is set on
+     every pane while transaction
      mode is in flight; the body cursor flips to `grabbing` so the
      mouse-grab affordance reads from anywhere in the pane.
      `.transaction-grab` outlines the pane currently held; the
@@ -1741,15 +1693,12 @@
     background: color-mix(in srgb, var(--pane-focus) 8%, transparent);
     z-index: 5;
   }
-  /* `fullstack-a-43` removed the back-side-attention indicator
-     (originally `fullstack-48` Phase C). Under the new back-side
-     model — a per-surface configuration view scoped to the active
-     front-tab type — there is no "unread" or "activity" signal on
-     the back to flag. The chrome stayed lean as a result. */
-  /* `fullstack-a-43`: back-side surface wrapper. The HybridXConfig
-     stubs (Task A) each carry their own title band; this wrapper
-     just fills the editor-wrap so the body reads as a single
-     config page. Tasks B / C / D / F replace the empty bodies. */
+  /* Back-side surface wrapper. The back is a per-surface
+     configuration view scoped to the active front-tab type, so there
+     is no "unread" or "activity" signal on it to flag and the chrome
+     stays lean. Each HybridXConfig carries its own title band; this
+     wrapper fills the editor-wrap so the body reads as a single
+     config page. */
   .back-side {
     display: flex;
     flex-direction: column;
@@ -1780,10 +1729,6 @@
     margin: 0;
     font-size: 13px;
   }
-  /* `fullstack-a-27` removed the standalone `.pane-theme-toggle`
-     chrome button (per `fullstack-59`); the theme toggle now lives
-     as a hamburger menu entry on Hybrid panes. The button CSS
-     went with it. */
   :global(.hamburger-menu .menu-label) {
     display: flex;
     align-items: center;

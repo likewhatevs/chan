@@ -24,7 +24,7 @@ import tabs from "../state/tabs.svelte.ts?raw";
 // - Chip iteration sites carry the new kinds.
 // - classifyFile dispatches doc / source / binary buckets.
 
-describe("fullstack-a-57: GraphFilters shape (both modules)", () => {
+describe("GraphFilters shape (both modules)", () => {
   test("store.svelte.ts GraphFilters has markdown + source bits", () => {
     expect(store).toMatch(
       /export type GraphFilters = \{[\s\S]*?markdown: boolean;[\s\S]*?source: boolean;/,
@@ -55,7 +55,7 @@ describe("fullstack-a-57: GraphFilters shape (both modules)", () => {
 // the `graph=` overlay hash is retired. The live filter codec is the
 // layout-`s` graph-tab encoder in tabs.svelte.ts, locked by the block below.
 
-describe("fullstack-a-57: SerTab encoder version sentinel", () => {
+describe("SerTab encoder version sentinel", () => {
   test("encoder prefixes payload with version sentinel '2'", () => {
     expect(tabs).toMatch(
       /function encodeGraphTabFilters\(f: GraphFilters\): string \{[\s\S]*?"2",[\s\S]*?f\.markdown \? "d" : "",[\s\S]*?f\.source \? "s" : "",/,
@@ -73,7 +73,7 @@ describe("fullstack-a-57: SerTab encoder version sentinel", () => {
   });
 });
 
-describe("fullstack-a-57: FilterKind + FILTER_COLORS extension", () => {
+describe("FilterKind + FILTER_COLORS extension", () => {
   test("FilterKind union includes markdown + source", () => {
     expect(graph).toMatch(/\| "markdown"/);
     expect(graph).toMatch(/\| "source"/);
@@ -94,7 +94,7 @@ describe("fullstack-a-57: FilterKind + FILTER_COLORS extension", () => {
   });
 });
 
-describe("fullstack-a-57: hidden-id derived sets + visibility", () => {
+describe("hidden-id derived sets + visibility", () => {
   test("hiddenMarkdownIds set scoped to doc-class file nodes when chip OFF", () => {
     expect(graph).toMatch(
       /const hiddenMarkdownIds = \$derived\.by\([\s\S]*?if \(show\.markdown\) return ids;[\s\S]*?classifyFile\(n\.path, n\.node_kind\) === "doc"/,
@@ -120,7 +120,7 @@ describe("fullstack-a-57: hidden-id derived sets + visibility", () => {
   });
 });
 
-describe("fullstack-a-57: chip iteration sites + counts", () => {
+describe("chip iteration sites + counts", () => {
   test("the chip iteration site includes markdown + source", () => {
     // Scope-concept wipe (lane-a A1) removed the overlay-bar
     // `filterChips` snippet, leaving the tab-menu bubble as the SINGLE

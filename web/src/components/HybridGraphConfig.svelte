@@ -1,8 +1,7 @@
 <script lang="ts">
-  // `fullstack-a-51` Task D (bundled with G6): legend grid for the
-  // Hybrid Graph back-side. Renders the G6 colour palette as
-  // `[label] [colour swatch]` rows. Each swatch reads its colour
-  // from the central CSS palette so light / dark mode and the
+  // Legend grid for the Hybrid Graph back-side. Renders the colour
+  // palette as `[label] [colour swatch]` rows. Each swatch reads its
+  // colour from the central CSS palette so light / dark mode and the
   // Graph body theme override cascade through automatically.
   //
   // Source of truth for the palette is `App.svelte`'s `:root` (and

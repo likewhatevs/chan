@@ -9,13 +9,13 @@ import pane from "./Pane.svelte?raw";
 // disambiguation: focus event without an adjacent mousedown
 // (Cmd+Tab path) must NOT change pane selection.
 
-describe("fullstack-a-59: pane data-pane-id attribute", () => {
+describe("pane data-pane-id attribute", () => {
   test("Pane root carries data-pane-id={pane.id} so the window-level mousedown handler can map a click target to a pane", () => {
     expect(pane).toMatch(/data-pane-id=\{pane\.id\}/);
   });
 });
 
-describe("fullstack-a-59: window-level focus + mousedown wiring", () => {
+describe("window-level focus + mousedown wiring", () => {
   test("FOCUS_CLICK_WINDOW_MS constant defines the click/focus correlation window", () => {
     // 50ms aligns with the bug body's recommendation; small enough
     // to avoid false-positive click-to-focus assignments on idle

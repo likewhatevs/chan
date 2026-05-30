@@ -118,16 +118,10 @@
     to: "# Draft".length,
   };
   let bootstrapped = $state(false);
-  // `fullstack-42`: `h` inside Pane Mode toggles a cheatsheet
-  // overlay that lists every Cmd+K binding. The flag stays inside
-  // App.svelte because Pane Mode itself is global (one transaction
-  // per Cmd+K press) — no per-pane scoping needed.
+  // `h` inside Pane Mode toggles a cheatsheet overlay listing every
+  // Cmd+K binding. The flag lives in App.svelte because Pane Mode is
+  // global (one transaction per Cmd+K press), no per-pane scoping needed.
   let paneModeHelpVisible = $state(false);
-  // `fullstack-a-3`: the centre-window "H for help" flash that
-  // landed in `fullstack-61` is gone. The status-bar Hybrid
-  // label already telegraphs `H help`, and the PaneModeHelp
-  // cheatsheet covers discovery — the mid-screen flash was
-  // visual noise on every Cmd+K entry.
   $effect(() => {
     // Touch enough of the layout to trip reactivity on common
     // mutations (URL persistence) AND watch every file tab's content
@@ -161,10 +155,9 @@
           } else if (t.kind === "browser") {
             void t.inspectorOpen;
           } else {
-            // `fullstack-a-75`: dashboard tab carries no
-            // reactivity-relevant state today (title is
-            // immutable + id is stable). Touch the id so the
-            // effect still observes tab-list mutations cleanly.
+            // Dashboard tab carries no reactivity-relevant state
+            // (title is immutable, id is stable). Touch the id so
+            // the effect still observes tab-list mutations cleanly.
             void t.id;
           }
           continue;
@@ -264,34 +257,27 @@
     // Idle tracker: after 2.5s without scroll/click/keypress, the
     // floating pills fade. Any input flips them back on.
     installIdleTracker();
-    // `fullstack-a-77` slice 2: screensaver inactivity
-    // tracker. Different cadence (default 5 min, per-workspace
-    // configurable) + wider event set (keydown + scroll +
-    // pointer move; opposite of `installIdleTracker`'s
-    // short-window trigger set). Tracker installs the
-    // listeners regardless of `enabled` state so a later
-    // /api/screensaver/state load doesn't need a re-install
-    // pass; the lock fires only when `enabled=true`.
+    // Screensaver inactivity tracker. Runs at a different cadence
+    // (default 5 min, per-workspace configurable) with a wider event
+    // set (keydown + scroll + pointer move) than the idle-pill tracker.
+    // Listeners install unconditionally so a later /api/screensaver/state
+    // load doesn't need a re-install pass; the lock fires only when
+    // `enabled=true`.
     installScreensaverTracker();
     // Hook pagehide BEFORE bootstrap so a fast reload during the
     // initial load still flushes any in-flight session changes.
     installSessionFlushHook();
     await bootstrap();
-    // `fullstack-a-88`: replaced first-boot "spawn FB tab when
-    // layout empty" with "boot with docked FB on left by
-    // default." The default lives in chan-server's
-    // `BrowserSidePanes::default()` so a brand-new
-    // preferences.toml ships with `left: true`. SPA respects
-    // any user toggle (the load path reads server preferences
-    // before this point). Empty pane stays empty; the carousel
-    // + shortcut hints carry the empty-state UX.
+    // The docked FB default lives in chan-server's
+    // `BrowserSidePanes::default()` so a new preferences.toml ships
+    // with `left: true`. SPA respects any user toggle; the load path
+    // reads server preferences before this point. Empty pane stays
+    // empty; the carousel + shortcut hints carry the empty-state UX.
     bootstrapped = true;
-    // `fullstack-a-77` slice 2: fire-and-forget load of the
-    // per-workspace screensaver state. Tracker is already
-    // installed above; the load populates the singleton with
-    // the server-side enabled/timeout/pin_set view. Failure
-    // is non-fatal (the singleton stays in its default
-    // disarmed state).
+    // Fire-and-forget load of the per-workspace screensaver state.
+    // Populates the singleton with the server-side enabled/timeout/
+    // pin_set view. Failure is non-fatal (the singleton stays in its
+    // default disarmed state).
     void loadScreensaverState();
     // Visibility-change resume hook. Browsers throttle / suspend
     // backgrounded tabs and the WebSocket reconnect can stretch
@@ -312,15 +298,14 @@
     document.addEventListener("visibilitychange", onVisibility);
   });
 
-  /// `fullstack-a-32`: context-aware spawn helpers shared by every
-  /// chord entry path (top-level chords on `onWindowKey`, Hybrid
-  /// NAV cases in `handlePaneModeKey`, and `chan:command` events
-  /// fired from chan-desktop's KEY_BRIDGE_JS). Each helper resolves
-  /// the focused surface's context (parent dir of a focused doc;
-  /// cwd of a focused terminal; scope path of a focused graph)
-  /// through `resolveSpawnContext` and threads it into the matching
-  /// spawn API. Single source of truth means the four surfaces
-  /// (chord / Hybrid Nav / hamburger menu / right-click) all
+  /// Context-aware spawn helpers shared by every chord entry path
+  /// (top-level chords on `onWindowKey`, Hybrid Nav cases in
+  /// `handlePaneModeKey`, and `chan:command` events from
+  /// chan-desktop's KEY_BRIDGE_JS). Each helper resolves the focused
+  /// surface's context (parent dir of a focused doc; cwd of a focused
+  /// terminal; scope path of a focused graph) via `resolveSpawnContext`
+  /// and threads it into the matching spawn API. Single source of truth
+  /// means all entry points (chord / Hybrid Nav / hamburger / right-click)
   /// behave identically.
   function spawnTerminalFromContext(): void {
     const ctx = resolveSpawnContext();
@@ -333,26 +318,22 @@
     // Prime the expanded-dirs map + browserSelection so the new
     // tab's tree opens with the context path visible.
     if (select) revealAndSelect(select);
-    // `fullstack-a-39`: always spawn a new FB tab. Bypass
-    // `openBrowser()`'s `focusExistingBrowserTab` fall-through so
-    // the chord stays consistent with the other spawn chords
-    // (Cmd+T new terminal every press; Cmd+Shift+M new graph every
-    // press). The `select` arg threads the context path into the
-    // tab's `selected` field directly so `restoreFromTab`'s mount
-    // wipe doesn't clobber the prime.
+    // Always spawn a new FB tab so this chord stays consistent with the
+    // other spawn chords (Cmd+T = new terminal every press; Cmd+Shift+M
+    // = new graph every press). The `select` arg threads the context
+    // path into the tab's `selected` field directly so `restoreFromTab`'s
+    // mount wipe doesn't clobber the prime.
     openBrowserInActivePane({ select });
     scheduleSessionSave();
   }
-  /// Phase 13 round 2 Team Work flow: Cmd+P (and Cmd+Alt+P, and the
-  /// Hybrid hamburger "Team Work" item, all on the stable chord id
-  /// `app.terminal.teamWork`) now instantiate the Team Work Lead
-  /// Terminal FIRST (a fresh terminal with the markdown editor armed
-  /// open, like Cmd+N embedded at the bottom), then open the
-  /// Spawn-agents dialog OVER it. The dialog owns Cancel (deletes the
-  /// exact lead tab) and Bootstrap (lead-first orchestrator). The
-  /// pane-mode "P" picker keeps its own plain Team Work terminal spawn
-  /// (paneModeOpenTeamWorkTerminal); only this top-level entry opens
-  /// the dialog.
+  /// Team Work entry point: Cmd+P (and Cmd+Alt+P, and the Hybrid
+  /// hamburger "Team Work" item, all on chord id `app.terminal.teamWork`)
+  /// instantiates the Team Work Lead Terminal first (a fresh terminal
+  /// with the markdown editor armed), then opens the Spawn-agents dialog
+  /// over it. The dialog owns Cancel (deletes the lead tab) and Bootstrap
+  /// (lead-first orchestrator). The pane-mode "P" key has its own plain
+  /// Team Work terminal spawn (paneModeOpenTeamWorkTerminal); only this
+  /// top-level entry opens the dialog.
   function spawnTeamWorkFromContext(): void {
     const ctx = resolveSpawnContext();
     const lead = createTeamWorkLeadTerminal({ cwd: ctx.dir });
@@ -368,8 +349,8 @@
   /// App-level keyboard shortcuts. Layout follows VS Code where
   /// possible so users carry intuition in from any code editor.
   ///
-  /// `fullstack-a-32` spawn-chord family (each context-aware via
-  /// `resolveSpawnContext`):
+  /// Context-aware spawn chords (each resolves the focused surface's
+  /// directory/file/scope via `resolveSpawnContext`):
   ///
   ///   Cmd+T          -> Terminal (native; Cmd+Alt+T on web Mac)
   ///   Cmd+O          -> File Browser (native; Cmd+Alt+O on web Mac)
@@ -379,7 +360,7 @@
   ///
   /// Other app chords:
   ///
-  ///   Cmd/Ctrl+,             -> Settings (open)
+  ///   Cmd/Ctrl+,             -> flip focused Hybrid surface
   ///   Cmd+. L                -> Lock screen
   ///   Alt+Shift+[ / ]        -> previous / next tab       (web fallback)
   ///   Ctrl+Alt+1..9          -> jump to tab N             (web fallback)
@@ -429,22 +410,17 @@
       handlePaneModeKey(e);
       return;
     }
-    // `fullstack-a-7`: swap the Hybrid Nav entry chord from
-    // Cmd+K to Cmd+. so Cmd+, can own Settings (macOS
-    // app-preferences convention; already wired via
-    // `app.settings.toggle` in `shortcuts.ts`). Cmd+. is not
-    // browser-reserved on macOS (Safari + Chrome both let JS
-    // intercept it), so the same chord works on the web SPA
-    // and the desktop shell. Cmd+K no longer triggers Hybrid.
+    // Cmd+. enters Hybrid Nav. Cmd+, is reserved for the focused-Hybrid
+    // flip (macOS app-preferences convention). Cmd+. is not
+    // browser-reserved on macOS (Safari + Chrome both let JS intercept
+    // it), so the same chord works on the web SPA and the desktop shell.
     if (meta && !e.shiftKey && !e.altKey && e.code === "Period") {
       e.preventDefault();
       enterPaneMode();
       return;
     }
     // Escape: pop just the topmost overlay so a stack of open
-    // surfaces unwinds one at a time. Previously each OverlayShell
-    // owned its own window keydown listener and they all fired in
-    // parallel, closing every open overlay on a single press.
+    // surfaces unwinds one at a time.
     if (e.key === "Escape" && !meta && !e.altKey && !e.shiftKey) {
       const top = topOverlay();
       if (top) {

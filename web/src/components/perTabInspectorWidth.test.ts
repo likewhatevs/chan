@@ -10,7 +10,7 @@ import fileEditorTab from "./FileEditorTab.svelte?raw";
 // value as default; once the user resizes one tab, that tab carries
 // its own width and others stay put.
 
-describe("fullstack-84: FileBrowserSurface binds inspector width per-tab", () => {
+describe("FileBrowserSurface binds inspector width per-tab", () => {
   test("inspector width getter/setter pair routes through tab state", () => {
     expect(fileBrowserSurface).toContain(
       "() => browserState.inspectorWidth ?? paneWidths.browser",
@@ -32,7 +32,7 @@ describe("fullstack-84: FileBrowserSurface binds inspector width per-tab", () =>
   });
 });
 
-describe("fullstack-84: GraphPanel binds inspector width per-tab", () => {
+describe("GraphPanel binds inspector width per-tab", () => {
   test("graph inspector width getter/setter pair routes through tab state", () => {
     expect(graphPanel).toContain(
       "() => graphState.inspectorWidth ?? paneWidths.graph",
@@ -48,7 +48,7 @@ describe("fullstack-84: GraphPanel binds inspector width per-tab", () => {
   });
 });
 
-describe("fullstack-84: FileEditorTab binds inspector + outline widths per-tab", () => {
+describe("FileEditorTab binds inspector + outline widths per-tab", () => {
   test("inspector width pair routes through tab state", () => {
     expect(fileEditorTab).toContain(
       "() => tab.inspectorWidth ?? paneWidths.inspector",

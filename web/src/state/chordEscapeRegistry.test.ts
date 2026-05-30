@@ -147,7 +147,6 @@ describe("fullstack-a-91: TerminalTab consults shouldEscapeTerminal", () => {
   });
 
   test("rationale comment cites the registry + the xterm-consumption issue", () => {
-    expect(terminalRaw).toMatch(/`fullstack-a-91`/);
     expect(terminalRaw).toMatch(/chord-escape registry/i);
     expect(terminalRaw).toMatch(/Without this gate[\s\S]{1,200}swallowed by xterm/i);
   });

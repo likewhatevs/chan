@@ -22,9 +22,8 @@
         nodeId: string;
         label: string;
       }
-    // Phase-13 A3: language bubbles get a dedicated body (name +
-    // file/code stats + "Graph from here"). Previously a language
-    // node had no arm and rendered the empty placeholder.
+    // Language bubbles get a dedicated body (name + file/code stats +
+    // "Graph from here").
     | {
         kind: "language";
         language: string;
@@ -108,9 +107,9 @@
     {onNavigate}
   />
 {:else if selection.kind === "language"}
-  <!-- Phase-13 A3: language bubble inspector. `onSetAsScope` is the
-       "Graph from here" affordance (graph host re-scopes to the
-       language lens). -->
+  <!-- Language bubble inspector. `onSetAsScope` is the "Graph from
+       here" affordance (graph host re-scopes to the language
+       lens). -->
   <LanguageInfoBody
     language={selection.language}
     label={selection.label}

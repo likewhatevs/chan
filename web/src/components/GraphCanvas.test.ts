@@ -17,7 +17,7 @@ import source from "./GraphCanvas.svelte?raw";
 // Tests pin the wiring shape so a future refactor can't silently
 // drop the hierarchy backbone.
 
-describe("fullstack-a-49: filesystem-hierarchy layout shape", () => {
+describe("filesystem-hierarchy layout shape", () => {
   test("DNode carries depth + parentId fields", () => {
     expect(source).toMatch(
       /type DNode = \{[\s\S]*?depth: number;\s*\n\s*parentId: string \| null;/,
@@ -112,7 +112,7 @@ describe("fullstack-a-49: filesystem-hierarchy layout shape", () => {
   });
 });
 
-describe("round-1 closing-2 (B7a): dblclick = graph from here", () => {
+describe("(B7a): dblclick = graph from here", () => {
   test("Props expose an optional onSetAsScope callback", () => {
     expect(source).toMatch(
       /type Props = \{[\s\S]{1,2000}onSetAsScope\?: \(\) => void;/,

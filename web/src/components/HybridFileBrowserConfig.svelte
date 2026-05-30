@@ -1,23 +1,17 @@
 <script lang="ts">
-  // `fullstack-a-48` Task F (option B): Search / Indexing /
-  // Reports settings migrated from the (since-retired) global
-  // Settings overlay's Semantic search section into the Hybrid FB
-  // back-side mount point introduced by `-a-43` Task A. Three
-  // toggles in v1:
+  // Search / Indexing / Reports settings on the Hybrid FB back-side
+  // mount point. Three toggles:
   //
-  // 1. Semantic search (moved verbatim from -a-21; same state
-  //    machine, same polling cadence, same enable/download/
-  //    disable flow).
+  // 1. Semantic search (enable/download/disable flow with a polled
+  //    state machine).
   // 2. Workspace-wide multi-model picker backed by the semantic model
   //    registry endpoints.
   // 3. chan-reports toggle backed by the per-workspace reports
-  //    endpoints. The stale server-wide Preferences.reports path
-  //    was removed in Track A because IndexConfig.reports_enabled
-  //    is the source of truth.
+  //    endpoints. IndexConfig.reports_enabled is the source of truth.
   //
   // Reports writes are immediate per-workspace endpoint calls; semantic
-  // search and model selection keep their existing endpoint-owned
-  // state machines.
+  // search and model selection keep their endpoint-owned state
+  // machines.
 
   import { onDestroy, onMount } from "svelte";
   import { api } from "../api/client";
@@ -85,11 +79,9 @@
     }
   }
 
-  // Semantic search state, same shape as the `-a-21` original
-  // (lived in the retired global Settings overlay back then).
-  // Endpoints are stateful POSTs on the server;
-  // the SPA owns the downloading + enabling spinners (we don't
-  // round-trip those flags through preferences).
+  // Semantic search state. Endpoints are stateful POSTs on the server;
+  // the SPA owns the downloading + enabling spinners (those flags are
+  // not round-tripped through preferences).
   let buildInfo = $state<BuildInfo | null>(null);
   let semanticState = $state<SemanticState | null>(null);
   let semanticDownloading = $state(false);
@@ -240,8 +232,7 @@
       to all Hybrid File Browser tab bodies.
     </p>
 
-    <!-- `fullstack-a-21` semantic-search opt-in (migrated from
-         the retired global Settings overlay by `-a-48`). -->
+    <!-- Semantic-search opt-in. -->
     <section>
       <h3>Semantic search</h3>
       {#if buildInfo && !buildInfo.features.embeddings}
@@ -330,8 +321,7 @@
       {/if}
     </section>
 
-    <!-- Track A: chan-reports uses the per-workspace reports endpoints.
-         ServerConfig.reports.enabled was removed as stale config. -->
+    <!-- chan-reports: per-workspace reports endpoints. -->
     <section>
       <h3>chan-reports</h3>
       <p class="hint">
@@ -381,9 +371,9 @@
   .hint.muted { color: var(--text-secondary); font-style: italic; }
   .hint.err { color: #d33; }
   .hint.sub-hint { font-size: 11.5px; margin: 0; }
-  /* `.theme-opt` chip + `.strip-toggle` checkbox affordance
-     carried over from `-a-45` / `-a-46` so the toggles in this
-     back-side surface match the rest of the Hybrid back chrome. */
+  /* `.theme-opt` chip + `.strip-toggle` checkbox affordance so the
+     toggles in this back-side surface match the rest of the Hybrid
+     back chrome. */
   .theme-opt {
     display: inline-flex;
     align-items: center;
@@ -410,7 +400,7 @@
     cursor: not-allowed;
     opacity: 0.7;
   }
-  /* Model picker. Same shape as `-a-46`'s Date pills layout. */
+  /* Model picker. Same layout shape as the Date pills row. */
   .font-row {
     display: flex;
     align-items: center;
@@ -426,9 +416,7 @@
     padding: 5px 7px;
     font: inherit;
   }
-  /* Semantic-search info grid carried over verbatim from the
-     retired global Settings overlay so the Active / Stored-at
-     rows render with the same affordances. */
+  /* Semantic-search info grid for the Active / Stored-at rows. */
   .grid {
     display: grid;
     grid-template-columns: 7em 1fr;

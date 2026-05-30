@@ -23,7 +23,7 @@ const fonts = readFileSync("src/fonts.css", "utf8");
 // when `embed-font` is on; the @font-face declaration still
 // renders the loadable face URL).
 
-describe("fullstack-b-12 + fullstack-b-30: TerminalTab font + cursor parity", () => {
+describe("TerminalTab font + cursor parity", () => {
   test("OS-default font chain leads with per-OS native mono and trails with Source Code Pro", () => {
     // `fullstack-b-30` slice b: literal fontFamily inlined string
     // moved into a named constant (`FONT_CHAIN_OS_DEFAULT`) so the

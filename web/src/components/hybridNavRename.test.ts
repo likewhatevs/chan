@@ -26,7 +26,7 @@ function stripCommentsAndCss(src: string): string {
   return noStyle;
 }
 
-describe("fullstack-a-68 slice 1: Pane Mode → Hybrid Nav user-facing rename", () => {
+describe("Pane Mode → Hybrid Nav user-facing rename", () => {
   test("Pane.svelte hamburger entry reads Enter Hybrid Nav", () => {
     expect(pane).toContain(">Enter Hybrid Nav<");
   });

@@ -1,17 +1,14 @@
 <script lang="ts">
-  // `fullstack-a-46` Task C: Editor settings migrated out of the
-  // (since-retired) global Settings overlay into the Hybrid
-  // back-side mount point introduced by `-a-43` Task A. Four
+  // Editor settings on the Hybrid back-side mount point. Four
   // sections live here: Editor theme, Layout (line spacing), Date
   // pills (date format), On save (strip trailing whitespace).
-  // Appearance lives on the Dashboard back-of-card (phase-13
-  // lane-b slice 3c) as the global default. This back side only
-  // offers the top-bar body theme switch shared by all Hybrid
-  // Editor tabs.
+  // Appearance lives on the Dashboard back-of-card as the global
+  // default; this back side only offers the top-bar body theme switch
+  // shared by all Hybrid Editor tabs.
   //
-  // Same self-contained / merge-against-current-server save shape
-  // as `HybridTerminalConfig.svelte` (-a-45). The dirty comparator
-  // is scoped to the editor-related preference fields so a
+  // Same self-contained / merge-against-current-server save shape as
+  // `HybridTerminalConfig.svelte`. The dirty comparator is scoped to
+  // the editor-related preference fields so a
   // parallel save elsewhere (HybridFileBrowserConfig's
   // semantic-search etc.) doesn't trigger a spurious PATCH from
   // here, and vice versa.
@@ -46,15 +43,14 @@
   let inflight = false;
   let lastSentSnapshot: string | null = null;
   let failedSaveSnap: string | null = null;
-  /// Round-1 closing-3 (C1): tracks the JSON snapshot of the
-  /// server's editor-related preference slice the last time we
-  /// re-synced `editing` from it. Without this guard the
-  /// hydration effect reassigned `editing` to a content-identical
-  /// clone on every workspace.info change (including the one
-  /// triggered by our own save), producing a new $state proxy
-  /// each pass and re-firing the effect on its own write -
-  /// Svelte 5 throws `effect_update_depth_exceeded` when that
-  /// runaway exceeds the safety limit.
+  /// Tracks the JSON snapshot of the server's editor-related
+  /// preference slice the last time we re-synced `editing` from it.
+  /// Without this guard the hydration effect would reassign `editing`
+  /// to a content-identical clone on every workspace.info change
+  /// (including the one triggered by our own save), producing a new
+  /// $state proxy each pass and re-firing the effect on its own
+  /// write, which Svelte 5 rejects with
+  /// `effect_update_depth_exceeded`.
   let lastSyncedServerSnap: string | null = null;
 
   function clone(p: Preferences): Preferences {
@@ -71,11 +67,10 @@
     });
   }
 
-  /// Normalize editor-related fields. The line_spacing migration
-  /// from "tight" → "compact" + the fallback to "standard" carry
-  /// over from the retired global Settings overlay's
-  /// `normalizePrefs`; date_format falls through to the catalog
-  /// default when the persisted id has been retired. Keeps the
+  /// Normalize editor-related fields. Migrates "tight" → "compact"
+  /// and falls back to "standard" for any unrecognized line_spacing
+  /// value. date_format falls through to the catalog default when
+  /// the persisted id is no longer in the known set. Keeps the
   /// dirty() comparison stable across a server re-fetch.
   function normalizeEditor(p: Preferences): Preferences {
     if (p.line_spacing === "tight") p.line_spacing = "compact";
@@ -100,16 +95,13 @@
     });
   }
 
-  /// Round-1 closing-3 (C1): the prior body ran
-  /// `editing = normalize(...)` every time the effect fired,
-  /// which replaced the $state proxy with a content-identical
-  /// clone after a save (workspace.info changes -> effect
-  /// re-fires -> editing reassigned -> effect re-fires on its
-  /// own write -> ...) and tripped Svelte 5's
-  /// `effect_update_depth_exceeded` guard. The fix tracks the
-  /// JSON of the server's editor slice and bails when it
-  /// hasn't actually changed, so the proxy identity stays
-  /// stable post-save.
+  /// This effect bails when the server's editor slice JSON hasn't
+  /// actually changed, so the $state proxy identity stays stable
+  /// post-save. Reassigning `editing = normalize(...)` on every fire
+  /// would replace the proxy with a content-identical clone after a
+  /// save (workspace.info changes -> effect re-fires -> editing
+  /// reassigned -> effect re-fires on its own write -> ...) and trip
+  /// Svelte 5's `effect_update_depth_exceeded` guard.
   $effect(() => {
     const info = workspace.info;
     if (!info) return;
@@ -130,8 +122,7 @@
 
   /// Live-apply the editor-theme attribute on every change so the
   /// editor in the background re-skins instantly, without waiting
-  /// for the 500 ms autosave + server round-trip. Carry-over from
-  /// the retired global Settings overlay.
+  /// for the 500 ms autosave + server round-trip.
   $effect(() => {
     if (!editing) return;
     document.documentElement.setAttribute(
@@ -140,8 +131,8 @@
     );
   });
 
-  /// `fullstack-a-25` carry-over: keep the local editor-tools
-  /// snapshot in sync with `editing.strip_trailing_whitespace_on_save`
+  /// Keep the local editor-tools snapshot in sync with
+  /// `editing.strip_trailing_whitespace_on_save`
   /// so save() in the editor (which reads editorToolsPrefs)
   /// observes the new value the moment the user toggles it here.
   $effect(() => {
@@ -174,12 +165,10 @@
     }, AUTOSAVE_DELAY_MS);
   }
 
-  /// Save the editor-related slice. Mirrors `-a-45`'s
-  /// merge-against-current-server pattern: fetch the latest
-  /// GlobalConfig from the server first, overlay only the
-  /// editor-related fields, then PATCH. Parallel autosaves from
-  /// other back-of-card surfaces (semantic-search, etc.) can not
-  /// be clobbered.
+  /// Save the editor-related slice. Fetches the latest GlobalConfig
+  /// from the server first, overlays only the editor-related fields,
+  /// then PATCHes. Parallel autosaves from other back-of-card surfaces
+  /// (semantic-search, etc.) cannot be clobbered.
   async function save(): Promise<void> {
     if (!editing || inflight) return;
     if (!editorDirty()) return;
@@ -388,12 +377,10 @@
     border-color: var(--link);
     background: var(--hover-bg);
   }
-  /* `fullstack-a-25` carry-over: trailing-whitespace toggle reuses
-     the chip pill from the radio rows. The class was renamed
-     `strip-toggle` to keep the class semantics tied to its
-     content (it was once `.semantic-toggle` when these controls
-     lived on a now-retired surface; that name no longer fits
-     since semantic-search lives in HybridFileBrowserConfig). */
+  /* Trailing-whitespace toggle reuses the chip pill from the radio
+     rows. The `strip-toggle` class name keeps the semantics tied to
+     its content so it doesn't collide with semantic-search controls
+     in HybridFileBrowserConfig. */
   .strip-toggle input[type="checkbox"]:disabled,
   .strip-toggle:has(input[type="checkbox"]:disabled) {
     cursor: not-allowed;

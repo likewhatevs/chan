@@ -9,7 +9,7 @@
 import { describe, expect, test } from "vitest";
 import app from "../App.svelte?raw";
 
-describe("Cmd+K pane mode keymap (fullstack-40 inversion)", () => {
+describe("Cmd+K pane mode keymap (inversion)", () => {
   test("arrow keys move focus", () => {
     expect(app).toContain('case "ArrowUp":\n        paneModeMoveFocus("up");');
     expect(app).toContain('case "ArrowLeft":\n        paneModeMoveFocus("left");');
@@ -34,7 +34,7 @@ describe("Cmd+K pane mode keymap (fullstack-40 inversion)", () => {
 // commits immediately and routes through the same context-aware
 // helper as the matching top-level chord. `f/F` (Search) and
 // `h/H` (Help) are unchanged.
-describe("Cmd+K pane mode keymap (fullstack-a-68 slice 2 — transactional staging)", () => {
+describe("Cmd+K pane mode keymap (transactional staging)", () => {
   test("g / G writes directly to the draft layout (no immediate commit)", () => {
     expect(app).toMatch(
       /case "g":\s*\n\s*case "G":\s*\n?\s*case "v":\s*\n\s*case "V":[\s\S]*?paneModeOpenGraph\(resolveSpawnContext\(\)\);[\s\S]*?return;/,
@@ -64,7 +64,7 @@ describe("Cmd+K pane mode keymap (fullstack-a-68 slice 2 — transactional stagi
   });
 });
 
-describe("Cmd+K pane mode transactional staging (fullstack-a-68 slice 2)", () => {
+describe("Cmd+K pane mode transactional staging", () => {
   test("t / T stages a terminal write into the draft (no immediate commit)", () => {
     expect(app).toMatch(
       /case "t":\s*\n\s*case "T":\s*\n?\s*paneModeOpenTerminal\(resolveSpawnContext\(\)\);\s*\n\s*return;/,
@@ -116,7 +116,7 @@ describe("Cmd+K pane mode transactional staging (fullstack-a-68 slice 2)", () =>
   });
 });
 
-describe("Cmd+T / O / P / Cmd+Shift+M top-level chords (fullstack-a-32)", () => {
+describe("Cmd+T / O / P / Cmd+Shift+M top-level chords", () => {
   test("Cmd+Alt+T (web Mac) routes through context-aware spawn helper", () => {
     // pre-`-a-32` handler called `openTerminalInActivePane()` with
     // no args. -a-32 routes through `spawnTerminalFromContext`
@@ -165,7 +165,7 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords (fullstack-a-32)", () => 
   });
 });
 
-describe("Cmd+K pane mode Team Work binding (phase-13 r2)", () => {
+describe("Cmd+K pane mode Team Work binding", () => {
   test("p inside Hybrid Nav stages a plain Team Work terminal (no commit, no dialog)", () => {
     // Hybrid Nav `P` stages a fresh Team Work terminal (terminal +
     // embedded editor) into the draft. It does NOT open the
@@ -194,7 +194,7 @@ describe("Cmd+K pane mode Team Work binding (phase-13 r2)", () => {
   });
 });
 
-describe("Cmd+K Backspace kill-pane (fullstack-77)", () => {
+describe("Cmd+K Backspace kill-pane", () => {
   test("Backspace closes the focused pane; k no longer bound to kill-pane", () => {
     // `fullstack-77`: kill-pane moved from `k` / `K` to
     // `Backspace`. The old letter is unbound (not repurposed) so
@@ -247,7 +247,7 @@ describe("Track C pane shortcut wiring", () => {
   });
 });
 
-describe("Cmd+K dock toggles (fullstack-69)", () => {
+describe("Cmd+K dock toggles", () => {
   test("< toggles the right-side file browser dock", () => {
     // Mapping per @@Alex's verbatim spec: less-than (right-facing
     // arrow when read as an opening tag) toggles the right dock.
@@ -263,7 +263,7 @@ describe("Cmd+K dock toggles (fullstack-69)", () => {
   });
 });
 
-describe("Pane Mode entry flash removed (fullstack-a-3)", () => {
+describe("Pane Mode entry flash removed", () => {
   test("no centre-window 'H for help' flash on Pane Mode entry", () => {
     // `fullstack-61` introduced the flash; `fullstack-a-3` removes
     // it as visual noise — the status-bar Hybrid pill already

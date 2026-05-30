@@ -12,7 +12,7 @@ import surface from "./FileBrowserSurface.svelte?raw";
 // `onFlip` callback down from FBSurface so the Settings entry
 // at the foot of the in-tree menu calls `flipHybrid(pane.id)`.
 
-describe("fullstack-a-67e slice 2: PathPromptKind union extension", () => {
+describe("PathPromptKind union extension", () => {
   test("PathPromptKind union accepts \"either\"", () => {
     expect(store).toMatch(
       /export type PathPromptKind = "file" \| "folder" \| "either";/,
@@ -20,7 +20,7 @@ describe("fullstack-a-67e slice 2: PathPromptKind union extension", () => {
   });
 });
 
-describe("fullstack-a-67e slice 2: PathPromptModal handles \"either\"", () => {
+describe("PathPromptModal handles \"either\"", () => {
   test("isEitherDir helper detects trailing slash", () => {
     expect(modal).toMatch(
       /function isEitherDir\(trimmed: string\): boolean \{[\s\S]{1,200}return trimmed\.endsWith\("\/"\);/,
@@ -56,7 +56,7 @@ describe("fullstack-a-67e slice 2: PathPromptModal handles \"either\"", () => {
   });
 });
 
-describe("fullstack-a-67e slice 2: fileOps.createFileOrDir helper", () => {
+describe("fileOps.createFileOrDir helper", () => {
   test("createFileOrDir opens the prompt with kind: \"either\"", () => {
     expect(store).toMatch(
       /async createFileOrDir\(parentPath: string\): Promise<void> \{[\s\S]{1,800}kind: "either",/,
@@ -76,7 +76,7 @@ describe("fullstack-a-67e slice 2: fileOps.createFileOrDir helper", () => {
   });
 });
 
-describe("fullstack-a-67e slice 2: FileTree wiring", () => {
+describe("FileTree wiring", () => {
   test("FileTree exposes onFlip prop alongside onClickRow", () => {
     expect(tree).toMatch(
       /onFlip\?: \(\) => void;/,
@@ -108,7 +108,7 @@ describe("fullstack-a-67e slice 2: FileTree wiring", () => {
   });
 });
 
-describe("fullstack-a-67e slice 2: FileBrowserSurface pipes onFlip down to FileTree (tab variant only)", () => {
+describe("FileBrowserSurface pipes onFlip down to FileTree (tab variant only)", () => {
   test("FileTree onFlip={isTab ? onFlip : undefined}", () => {
     expect(surface).toMatch(
       /<FileTree[\s\S]{1,400}onFlip=\{isTab \? onFlip : undefined\}/,

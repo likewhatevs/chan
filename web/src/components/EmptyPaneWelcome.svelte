@@ -1,9 +1,8 @@
 <script lang="ts">
-  // `fullstack-a-75b`: static welcome surface for empty single-
-  // pane lone-pane layouts. Carousel widget moved to the
-  // Dashboard tab (per @@Alex's `d4a3fc8` route); this
-  // surface now renders a fixed spawn grid + Dashboard tile
-  // + footer hint — no rotation, no slides, no play/pause.
+  // Static welcome surface for empty single-pane lone-pane layouts.
+  // Renders a fixed spawn grid + Dashboard tile + footer hint (no
+  // rotation, no slides, no play/pause; the rotating carousel lives
+  // in the Dashboard tab).
   //
   // Spawn rows mirror `Pane.svelte::spawnActions` so the user
   // sees the same set + ordering whether they enter from the
@@ -28,11 +27,9 @@
   } from "../state/shortcuts";
   import { workspace } from "../state/store.svelte";
 
-  // Round-1 closing-2 (lane-b-empty-pane-menu): the empty-pane
-  // right-click menu was retired. EmptyPaneWelcome no longer
-  // forwards `oncontextmenu` to a parent handler; the welcome
-  // surface is purely the click-driven spawn grid + the pane
-  // hamburger (⋮) covers menu-style access.
+  // EmptyPaneWelcome does not forward `oncontextmenu` to a parent
+  // handler; the welcome surface is purely the click-driven spawn
+  // grid + the pane hamburger (⋮) covers menu-style access.
 
   const platform = currentPlatform();
   const os = currentOS();
@@ -73,8 +70,7 @@
       chordId: "app.files.toggle",
     },
     {
-      // phase-13 r2: Team Work -> Team Work (label from @@LaneA);
-      // chord id app.terminal.teamWork stays stable.
+      // Label "Team Work"; chord id is app.terminal.teamWork.
       label: "Team Work",
       icon: MessageSquare,
       command: "app.terminal.teamWork",
@@ -88,14 +84,9 @@
     },
   ];
   const secondaryEntries: SpawnRow[] = [
-    // Phase-13 round-1 closing (B5): renamed from "Infographics"
-    // to "Dashboard" so the welcome surface matches the right-
-    // click menu + the canonical Dashboard tab title.
-    //
-    // Round-1 closing-2 (B9): Search joins the secondary row so
-    // the welcome surface carries every chord-bound spawn entry
-    // a pane offers; Dashboard's chord hint is no longer
-    // suppressed.
+    // The secondary row carries every chord-bound spawn entry a pane
+    // offers (Search + Dashboard) so the welcome surface matches the
+    // right-click menu and the pane hamburger.
     {
       label: "Search",
       icon: Search,
@@ -162,13 +153,10 @@
       </button>
     {/each}
   </div>
-  <!-- `fullstack-a-95`: per-tab-contributes-Graph-scope
-       welcome hint dropped. @@Alex 2026-05-23: "we no longer
-       have the concept of scope since we transitioned to
-       using the filesystem as the backbone of the graph".
-       Picker-driven scope (workspace / dir / file / tag /
-       git_repo) is the active concept; that picker lives in
-       the graph overlay's chrome, not the welcome surface. -->
+  <!-- No per-tab graph-scope hint here. Graph scope is
+       picker-driven (workspace / dir / file / tag / git_repo) and
+       that picker lives in the graph overlay's chrome, not the
+       welcome surface. -->
 </div>
 
 <style>
@@ -204,11 +192,9 @@
     opacity: 0.85;
     letter-spacing: 0.01em;
   }
-  /* `fullstack-a-32` + `-a-67 slice 2`: 5-up grid (New Draft +
-     Terminal / FB / RP / Graph). Width caps + tile shape mirror
-     the carousel's old spawn-row so the visual reads identically
-     across the welcome + the (now Dashboard-tab-hosted)
-     carousel slide 1's prior look. */
+  /* 5-up grid (New Draft + Terminal / FB / RP / Graph). Width caps
+     + tile shape keep the spawn tiles visually consistent across
+     the welcome surface. */
   .spawn-row {
     display: grid;
     grid-template-columns: repeat(5, minmax(96px, 1fr));
@@ -270,6 +256,4 @@
     justify-content: center;
     width: min(320px, 80%);
   }
-  /* `fullstack-a-95`: `.welcome-hint` styles dropped along
-     with the stale "scope for Graph" paragraph. */
 </style>

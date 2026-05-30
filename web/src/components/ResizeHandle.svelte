@@ -38,9 +38,8 @@
     /// (the 4 px hit area + drag behaviour stay; hover still paints
     /// the discovery cue). Default `true` preserves the visible
     /// separator the other consumers (file editor inspector, graph
-    /// details) already rely on. `fullstack-a-23`: FB dock opts out
-    /// because the visible vertical line read as visual noise next
-    /// to the editor.
+    /// details) rely on. The FB dock opts out because the visible
+    /// vertical line reads as visual noise next to the editor.
     idleVisible?: boolean;
     onChange?: (w: number) => void;
   } = $props();
@@ -107,8 +106,8 @@
     width: 6px;
     background: var(--separator-hover);
   }
-  /* `fullstack-a-23`: idle-invisible variant. The 4 px hit area,
-     `cursor: col-resize`, and drag semantics all stay; only the
+  /* Idle-invisible variant. The 4 px hit area, `cursor: col-resize`,
+     and drag semantics all stay; only the
      `var(--separator)` paint goes. Hover still paints the
      6 px + `--separator-hover` cue so the user can still find the
      handle on intent. */

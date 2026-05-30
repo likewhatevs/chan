@@ -1,17 +1,16 @@
 <script lang="ts">
   // Hybrid Nav cheatsheet. Shown while `h` is toggled inside Hybrid
-  // NAV (entered via `Cmd+.` per `fullstack-a-7`). Each key-cap is a
-  // clickable <button> in addition to the
-  // visible label, so the cheatsheet doubles as a mouse-driveable
-  // command palette (per `fullstack-63`). Clicks dispatch a synthetic
+  // NAV (entered via `Cmd+.`). Each key-cap is a clickable <button>
+  // in addition to the visible label, so the cheatsheet doubles as a
+  // mouse-driveable command palette. Clicks dispatch a synthetic
   // KeyboardEvent on the document; App.svelte's onWindowKey listener
   // picks it up and routes through the same `handlePaneModeKey`
-  // dispatcher that handles real keystrokes — keystroke and click are
-  // two trigger surfaces over one switch.
+  // dispatcher that handles real keystrokes, so keystroke and click
+  // are two trigger surfaces over one switch.
   //
-  // Visual style: small, dense, TUI-density per `fullstack-42`. Not
-  // an OverlayShell to keep the focus / Escape semantics inside
-  // App.svelte; this is purely a passive informational panel.
+  // Visual style: small, dense, TUI-density. Not an OverlayShell, to
+  // keep the focus / Escape semantics inside App.svelte; this is
+  // purely a passive informational panel.
 
   type Cap = {
     /// Visible label on the kbd-shaped button (e.g. "↑", "W", "Tab").
@@ -54,10 +53,9 @@
           caps: [
             { label: "W", key: "w" },
             { label: "A", key: "a" },
-            // `fullstack-74` reunified `s` / `S` onto swap-down — Search
-            // moved to `f` (see Spawn section), so the case-split
-            // workaround the comment used to defend is gone. Cap dispatch
-            // can match the W / A / D lowercase-key pattern again.
+            // `s` / `S` both map to swap-down (Search is on `f`, see
+            // Spawn section), so cap dispatch matches the W / A / D
+            // lowercase-key pattern with no case-split.
             { label: "S", key: "s" },
             { label: "D", key: "d" },
           ],
@@ -66,12 +64,10 @@
       ],
     },
     {
-      // `fullstack-a-68 slice 2`: spawn chords STAGE additions
-      // into the draft layout. Multiple presses stack — three
-      // T's queue three terminals on the focused pane. Enter
-      // materializes; Esc discards. Per addendum-a's "back to
-      // transactional mode" framing. `v` stays aliased to `g`
-      // so muscle memory survives the V→G rename.
+      // Spawn chords STAGE additions into the draft layout.
+      // Multiple presses stack: three T's queue three terminals on
+      // the focused pane. Enter materializes; Esc discards. `v` is
+      // aliased to `g` (legacy muscle-memory key).
       title: "Stage (Enter to commit, Esc to discard)",
       rows: [
         { caps: [{ label: "t", key: "t" }], action: "Stage Terminal" },
@@ -90,9 +86,9 @@
       ],
     },
     {
-      // `fullstack-69`: arrow direction is opposite to the dock
-      // side it toggles, per @@Alex's verbatim spec — `<` opens
-      // the dock on the right, `>` opens the dock on the left.
+      // Arrow direction is opposite to the dock side it toggles:
+      // `<` opens the dock on the right, `>` opens the dock on the
+      // left.
       title: "Dock",
       rows: [
         { caps: [{ label: "<", key: "<" }], action: "Toggle right-side file browser dock" },
@@ -103,16 +99,15 @@
       title: "Close",
       rows: [
         { caps: [{ label: "x", key: "x" }], action: "Close all tabs in pane" },
-        // `fullstack-77`: kill-pane moved from `k` to Backspace
-        // (delete-shaped key for the delete-shaped action).
+        // Kill-pane is Backspace (a delete-shaped key for the
+        // delete-shaped action).
         { caps: [{ label: "⌫", key: "Backspace" }], action: "Kill pane" },
       ],
     },
     {
-      // `fullstack-a-9`: `[` / `]` shift the divider in the
-      // direction the bracket points (regardless of which side
-      // of the split the focused pane sits on). `-` / `=`
-      // mirror it on the vertical axis.
+      // `[` / `]` shift the divider in the direction the bracket
+      // points (regardless of which side of the split the focused
+      // pane sits on). `-` / `=` mirror it on the vertical axis.
       title: "Resize",
       rows: [
         {
@@ -193,12 +188,10 @@
 </div>
 
 <style>
-  /* `fullstack-a-8`: restore the easeOutBack bubble-pop the rest
-     of the chrome uses (OverlayShell, HamburgerMenu, tab-menu
-     bubbles). Phase-7 right-click rework dropped the wobble
-     here; @@Alex never asked for that. The transform-origin
-     stays on the centre so the centred panel scales out of its
-     own midpoint rather than pivoting on a corner. */
+  /* easeOutBack bubble-pop matching the rest of the chrome
+     (OverlayShell, HamburgerMenu, tab-menu bubbles). The
+     transform-origin stays on the centre so the centred panel scales
+     out of its own midpoint rather than pivoting on a corner. */
   .pane-mode-help {
     position: fixed;
     top: 50%;

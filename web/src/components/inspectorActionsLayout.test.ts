@@ -1,15 +1,13 @@
 import { describe, expect, test } from "vitest";
 import fileInfo from "./FileInfoBody.svelte?raw";
 
-// I2 (inspector consistency + layout, inspector-spec.md): the inspector
-// renders one consistent layout on every surface --
-//   header -> ACTIONS section -> lazy content (report / refs).
+// The inspector renders one consistent layout on every surface:
+//   header -> actions section -> lazy content (report / refs).
 // The actions (Open / View+Zoom / Upload / Download / Show / Graph from
-// here) move UP directly under the filename, from their old scattered
-// bottom-of-body placement, plus a full-path toggle. These source pins
-// lock that ordering so the layout can't silently drift back.
+// here) sit directly under the filename, plus a full-path toggle. These
+// source pins lock that ordering so the layout can't silently drift.
 
-describe("I2: shared actions section under the filename", () => {
+describe("shared actions section under the filename", () => {
   test("defines a reusable actionsSection snippet", () => {
     expect(fileInfo).toMatch(/\{#snippet actionsSection\(\)\}/);
     expect(fileInfo).toMatch(/<div class="actions-section">/);
@@ -52,10 +50,9 @@ describe("I2: shared actions section under the filename", () => {
     );
   });
 
-  test("A3-iii: Export to PDF shows for markdown files + routes through the print helper", () => {
-    // Moved from the editor right-click menu (A3-iii). Gated on markdown
-    // files; the selection isn't necessarily open in an editor, so the
-    // handler fetches the file content and prints it.
+  test("Export to PDF shows for markdown files + routes through the print helper", () => {
+    // Gated on markdown files; the selection isn't necessarily open in an
+    // editor, so the handler fetches the file content and prints it.
     expect(fileInfo).toMatch(/\{@const markdown = !isDir && isMarkdown\(entry\.path\)\}/);
     expect(fileInfo).toMatch(/\{#if markdown\}[\s\S]*?onclick=\{doExportPdf\}[\s\S]*?Export to PDF/);
     expect(fileInfo).toMatch(
@@ -87,15 +84,12 @@ describe("I2: shared actions section under the filename", () => {
     expect(sizeGrid).toBeGreaterThan(lastActions);
   });
 
-  test("the old bottom-of-body action blocks are gone", () => {
-    // No standalone bottom Open/Show/Graph buttons outside the snippet:
-    // the body comments record the move; the only Open/Download/
-    // Graph-from-here button markup now lives in actionsSection.
-    expect(fileInfo).toMatch(
-      /Actions moved up to the actionsSection directly under/,
-    );
-    expect(fileInfo).toMatch(
-      /Actions \(Open \/ View\+Zoom \/ Upload \/ Download \/ Show File \//,
-    );
+  test("actions live only in the reusable section, not standalone bottom blocks", () => {
+    // The action buttons are defined once inside actionsSection and
+    // rendered via {@render actionsSection()}; there is no separate
+    // bottom-of-body action block to drift out of sync.
+    const sectionDefs = fileInfo.match(/<div class="actions-section">/g) ?? [];
+    expect(sectionDefs.length).toBe(1);
+    expect(fileInfo).toMatch(/\{@render actionsSection\(\)\}/);
   });
 });

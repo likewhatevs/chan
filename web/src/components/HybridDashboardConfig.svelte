@@ -1,12 +1,8 @@
 <script lang="ts">
-  // Phase-13 round-1 closing (B3): Dashboard back-of-card config
-  // extracted out of DashboardTab.svelte so Pane.svelte's
-  // back-side switch can mount it via the same `active?.kind ===
-  // "dashboard"` arm the other Hybrid surfaces use. The state +
-  // markup are the body @@Alex's slice 3c moved here from the
-  // retired global Settings overlay; only the mounting point
-  // moves. Sections (Appearance / Screen Lock / Screensaver /
-  // Metadata archive) and their behaviour are unchanged.
+  // Dashboard back-of-card config. Pane.svelte's back-side switch
+  // mounts it via the same `active?.kind === "dashboard"` arm the
+  // other Hybrid surfaces use. Sections: Appearance / Screen Lock /
+  // Screensaver / Metadata archive.
 
   import { onMount } from "svelte";
   import { Download, Upload } from "lucide-svelte";
@@ -44,10 +40,8 @@
 
   // Screen-lock state mirrors the screensaver singleton so the
   // form controls track the server's authoritative state. The
-  // back-of-card flip survives the screensaver cover (no need
-  // to re-open anything after unlock) so the test-then-restore
-  // dance the retired global Settings overlay used to perform
-  // is gone.
+  // back-of-card flip survives the screensaver cover, so no
+  // test-then-restore cycle is needed after unlock.
   let screensaverEnabled = $state<boolean | null>(null);
   let screensaverTimeoutSecs = $state<number>(300);
   let screensaverTheme = $state<ScreensaverTheme>("plain");

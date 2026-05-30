@@ -17,7 +17,7 @@ import editor from "./FileEditorTab.svelte?raw";
 // * Reload Window / Open Inspector tail dropped (handled in
 //   tabMenuReloadInspector.test.ts).
 
-describe("fullstack-a-67f: menu-top Name input", () => {
+describe("menu-top Name input", () => {
   test("name-row + name-input + name-label rendered inside the action-list", () => {
     expect(editor).toMatch(
       /<div class="action-list">[\s\S]{1,800}<label class="name-row">[\s\S]{1,400}<span class="name-label">[\s\S]{1,400}<input[\s\S]{1,800}class="name-input"/,
@@ -45,7 +45,7 @@ describe("fullstack-a-67f: menu-top Name input", () => {
   });
 });
 
-describe("fullstack-a-67f: Show Source Code + Collapse Code Blocks", () => {
+describe("Show Source Code + Collapse Code Blocks", () => {
   test("Show Source Code toggle present (via doToggleMode); label switches based on mode", () => {
     expect(editor).toMatch(
       /onclick=\{doToggleMode\}[\s\S]{1,800}\{inSource \? renderedLabel : "Show Source Code"\}/,
@@ -59,7 +59,7 @@ describe("fullstack-a-67f: Show Source Code + Collapse Code Blocks", () => {
   });
 });
 
-describe("fullstack-a-67f: From-$CWD spawn band", () => {
+describe("From-$CWD spawn band", () => {
   test("from-cwd-label rendered above the spawn buttons", () => {
     expect(editor).toMatch(/class="from-cwd-label">From \$CWD/);
   });
@@ -101,7 +101,7 @@ describe("fullstack-a-67f: From-$CWD spawn band", () => {
   });
 });
 
-describe("fullstack-a-67f: Find / Copy paths", () => {
+describe("Find / Copy paths", () => {
   test("doFind opens the per-tab find bar via openFind(tab.id)", () => {
     expect(editor).toMatch(
       /function doFind\(\): void \{[\s\S]{1,200}closeTabMenu\(\);[\s\S]{1,200}openFind\(tab\.id\)/,
@@ -142,7 +142,7 @@ describe("fullstack-a-67f: Find / Copy paths", () => {
   });
 });
 
-describe("fullstack-a-67f: Settings (flipHybrid) + Reopen + Close foot", () => {
+describe("Settings (flipHybrid) + Reopen + Close foot", () => {
   test("flipToSettings calls flipHybrid via paneIdForTab", () => {
     expect(editor).toMatch(
       /function flipToSettings\(\): void \{[\s\S]{1,400}const paneId = paneIdForTab\(\);[\s\S]{1,200}if \(paneId\) flipHybrid\(paneId\)/,
@@ -163,7 +163,7 @@ describe("fullstack-a-67f: Settings (flipHybrid) + Reopen + Close foot", () => {
   });
 });
 
-describe("fullstack-a-67f: dropped entries", () => {
+describe("dropped entries", () => {
   test("Close others / Close all entries dropped (per spec)", () => {
     expect(editor).not.toMatch(/<span class="mbtn-label">Close others<\/span>/);
     expect(editor).not.toMatch(/<span class="mbtn-label">Close all<\/span>/);
@@ -184,7 +184,7 @@ describe("fullstack-a-67f: dropped entries", () => {
   });
 });
 
-describe("fullstack-a-67f: imports", () => {
+describe("imports", () => {
   test("flipHybrid + openFind imported from tabs.svelte", () => {
     expect(editor).toMatch(
       /import \{[\s\S]{1,2000}flipHybrid,[\s\S]{1,800}\} from "\.\.\/state\/tabs\.svelte";/,

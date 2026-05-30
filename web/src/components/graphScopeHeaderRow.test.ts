@@ -7,7 +7,7 @@ import graph from "./GraphPanel.svelte?raw";
 // follow-up slice; this commit lands the display-only row to
 // match the @@Alex addendum spec.
 
-describe("fullstack-a-67 (Graph slice): scope-header row", () => {
+describe("(Graph slice): scope-header row", () => {
   test("Lucide icons imported (FileText / Folder / HardDrive / Hash)", () => {
     expect(graph).toMatch(
       /import \{[\s\S]*?\bFileText,[\s\S]*?\bFolder,[\s\S]*?\bHardDrive,[\s\S]*?\bHash,[\s\S]*?\} from "lucide-svelte";/,
@@ -43,7 +43,7 @@ describe("fullstack-a-67 (Graph slice): scope-header row", () => {
   });
 });
 
-describe("fullstack-a-67 (slice 1b): scope-header click → inspector", () => {
+describe("scope-header click → inspector", () => {
   test("row is a <button> with onclick handler", () => {
     expect(graph).toMatch(
       /<button[\s\S]*?class="mbtn graph-scope-row"[\s\S]*?onclick=\{openScopeHeaderInspector\}/,

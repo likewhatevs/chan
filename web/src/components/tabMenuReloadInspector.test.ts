@@ -15,7 +15,7 @@ import terminalSource from "./TerminalTab.svelte?raw";
 // REQUIRE to FORBID so a regression that re-adds them gets
 // caught. Cmd+R + the pane hamburger still surface window-level
 // reload + devtools.
-describe("fullstack-a-67f: file-editor tab right-click — Reload + Open Inspector dropped", () => {
+describe("file-editor tab right-click: Reload + Open Inspector dropped", () => {
   test("no Reload entry in the editor menu", () => {
     expect(fileEditorSource).not.toMatch(
       /<span class="mbtn-label">Reload<\/span>/,
@@ -46,7 +46,7 @@ describe("fullstack-a-67f: file-editor tab right-click — Reload + Open Inspect
 // pins flip from REQUIRE to FORBID so a regression that
 // re-adds them gets caught. Cmd+R and the pane hamburger
 // still surface window-level reload + devtools.
-describe("fullstack-a-67d: terminal-tab right-click — Reload + Open Inspector dropped", () => {
+describe("terminal-tab right-click: Reload + Open Inspector dropped", () => {
   test("no Reload entry in the terminal menu", () => {
     expect(terminalSource).not.toMatch(
       /<span class="mbtn-label">Reload<\/span>/,

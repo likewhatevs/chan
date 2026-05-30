@@ -22,7 +22,7 @@ import graph from "./GraphPanel.svelte?raw";
 //   confirmation as a follow-up (couldn't run a test server
 //   against the seed at task time).
 
-describe("fullstack-a-58: parent-edge invariant", () => {
+describe("parent-edge invariant", () => {
   test("scopedNodeIds derive includes a parent-pull pass on contains edges", () => {
     // Iterate to a fixed point adding `e.source` for every
     // contains edge whose `e.target` is already in scope.

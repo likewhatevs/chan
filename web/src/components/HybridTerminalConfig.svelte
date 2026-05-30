@@ -1,9 +1,5 @@
 <script lang="ts">
-  // `fullstack-a-45` Task B: Terminal settings migrated out of
-  // the (since-retired) global Settings overlay into the Hybrid
-  // back-side mount point introduced by `-a-43` Task A. Settings
-  // storage shape is unchanged; only the UI mounting point
-  // moves.
+  // Terminal settings on the Hybrid back-side mount point.
 
   import { api } from "../api/client";
   import type { GlobalConfig, Preferences } from "../api/types";
@@ -18,13 +14,10 @@
 
   let { onDone }: { onDone?: () => void } = $props();
 
-  /// `fullstack-b-11` TERM dropdown set. Known terminfo entries
-  /// most users either want by default or fall back to from a
-  /// custom environment; the "Custom..." escape hatch toggles a
-  /// free-text input for exotic values (alacritty-direct, kitty,
-  /// vt100, etc.). Mirrors the constant set that lived on the
-  /// retired global Settings overlay before `-a-45` moved this
-  /// section.
+  /// TERM dropdown set. Known terminfo entries most users either
+  /// want by default or fall back to from a custom environment; the
+  /// "Custom..." escape hatch toggles a free-text input for exotic
+  /// values (alacritty-direct, kitty, vt100, etc.).
   const KNOWN_TERM_VALUES = [
     "xterm-256color",
     "xterm",
@@ -53,16 +46,15 @@
   let inflight = false;
   let lastSentSnapshot: string | null = null;
   let failedSaveSnap: string | null = null;
-  /// Round-1 closing-3 (C1): tracks the JSON snapshot of the
-  /// server's `preferences.terminal` slice the last time we
-  /// re-synced `editing` from it. The hydration effect below
-  /// would otherwise reassign `editing` to a content-identical
-  /// clone on every workspace.info change (including the one
-  /// triggered by our own save), producing a new $state proxy on
-  /// each pass and re-firing the effect on its own write —
-  /// Svelte 5 throws `effect_update_depth_exceeded` when that
-  /// runaway exceeds the safety limit. Bail when the server's
-  /// terminal slice hasn't actually changed.
+  /// Tracks the JSON snapshot of the server's `preferences.terminal`
+  /// slice the last time we re-synced `editing` from it. The
+  /// hydration effect below would otherwise reassign `editing` to a
+  /// content-identical clone on every workspace.info change
+  /// (including the one triggered by our own save), producing a new
+  /// $state proxy on each pass and re-firing the effect on its own
+  /// write, which Svelte 5 rejects with
+  /// `effect_update_depth_exceeded`. Bail when the server's terminal
+  /// slice hasn't actually changed.
   let lastSyncedServerSnap: string | null = null;
 
   function clone(p: Preferences): Preferences {
@@ -88,15 +80,13 @@
   /// save we deliberately re-sync so the form reflects the
   /// server's authoritative state.
   ///
-  /// Round-1 closing-3 (C1): the prior body ran `editing = normalize(...)`
-  /// every time the effect fired, which replaced the $state proxy
-  /// with a content-identical clone after a save (workspace.info
-  /// changes -> effect re-fires -> editing reassigned -> effect
-  /// re-fires on its own write -> ...) and tripped Svelte 5's
-  /// `effect_update_depth_exceeded` guard. The fix tracks the
-  /// JSON of the server's terminal slice and bails when it
-  /// hasn't actually changed, so the proxy identity stays
-  /// stable post-save.
+  /// This effect bails when the server's terminal slice JSON hasn't
+  /// actually changed, so the $state proxy identity stays stable
+  /// post-save. Reassigning `editing = normalize(...)` on every fire
+  /// would replace the proxy with a content-identical clone after a
+  /// save (workspace.info changes -> effect re-fires -> editing
+  /// reassigned -> effect re-fires on its own write -> ...) and trip
+  /// Svelte 5's `effect_update_depth_exceeded` guard.
   $effect(() => {
     const info = workspace.info;
     if (!info) return;
@@ -119,17 +109,12 @@
   const scrollbackMb = $derived(
     clampScrollbackMb(editing?.terminal?.scrollback_mb),
   );
-  /// Raw persisted value WITHOUT the empty → DEFAULT_TERM
-  /// collapse. The previous derivation
-  /// (`(default_term ?? DEFAULT_TERM).trim() || DEFAULT_TERM`)
-  /// over-coerced empty values, which is what produced the
-  /// `-a-45` custom-TERM PARTIAL surfaced by `webtest-a-4` —
-  /// after the user picked "Custom..." (seeding default_term=""),
-  /// the derivation snapped back to DEFAULT_TERM, isKnownTerm
-  /// went true, and the custom input never appeared. `-a-53`
-  /// fix: track "user picked Custom" in a separate
-  /// `customMode` state so the input renders even when the
-  /// persisted value is empty.
+  /// Raw persisted value WITHOUT the empty → DEFAULT_TERM collapse.
+  /// Coercing an empty value to DEFAULT_TERM would make isKnownTerm
+  /// true and hide the custom input right after the user picks
+  /// "Custom..." (which seeds default_term=""). The separate
+  /// `customMode` state tracks "user picked Custom" so the input
+  /// renders even when the persisted value is empty.
   const persistedTerm = $derived(
     (editing?.terminal?.default_term ?? "").trim(),
   );
@@ -183,9 +168,9 @@
     editing.terminal = { ...editing.terminal, default_term: raw };
   }
 
-  /// `fullstack-b-30` slice b: terminal-font preference. Default
-  /// "os-default" leans on the per-OS native mono chain from
-  /// slice a; "source-code-pro" opts the user into SCP. When the
+  /// Terminal-font preference. Default "os-default" leans on the
+  /// per-OS native mono chain; "source-code-pro" opts the user into
+  /// SCP. When the
   /// build doesn't ship the rust-embed bundle (`embed-font` off),
   /// flipping to SCP fires the download endpoint to fetch the
   /// woff2 + OFL.txt into `<user-config>/chan/fonts/`. Failures
@@ -320,11 +305,10 @@
   saveStatus={saveStatus}
   {onDone}
 >
-    <!-- `fullstack-a-45`: warning copy carried over from the
-         round-2-plan Hybrid back-side scope note. These settings
-         are device-wide, not per-pane; every terminal in the
-         workspace picks them up on next spawn. The top-bar body theme
-         applies to every terminal body on this device. -->
+    <!-- Warning copy: these settings are device-wide, not per-pane;
+         every terminal in the workspace picks them up on next spawn.
+         The top-bar body theme applies to every terminal body on this
+         device. -->
     <p class="hint warning">
       Scrollback, TERM, and font apply to ALL terminals on this
       device. The top-bar theme switch applies to ALL terminal
@@ -442,10 +426,9 @@
 </HybridSurfaceConfigShell>
 
 <style>
-  /* `fullstack-a-45`: warning copy that distinguishes this surface
-     from per-pane settings. The warning class adds a subtle
-     border-left + tinted background so the all-terminals scope
-     reads at a glance. */
+  /* Warning copy that distinguishes this surface from per-pane
+     settings. The warning class adds a subtle border-left + tinted
+     background so the all-terminals scope reads at a glance. */
   .hint {
     margin: 0;
     color: var(--text-secondary);
@@ -457,10 +440,8 @@
     background: color-mix(in srgb, var(--accent, #f97316) 6%, transparent);
     border-radius: 4px;
   }
-  /* `fullstack-b-11` Terminal field layout carried over from the
-     retired global Settings overlay; the .terminal-* scope
-     keeps the styles local to this component now that the old
-     section is gone. */
+  /* Terminal field layout. The .terminal-* scope keeps these styles
+     local to this component. */
   .terminal-field {
     display: flex;
     flex-direction: column;

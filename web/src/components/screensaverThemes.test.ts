@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import matrix from "./screensaver/MatrixRain.svelte?raw";
 
-describe("fullstack-a-99: screensaver canvas themes", () => {
+describe("screensaver canvas themes", () => {
   test("MatrixRain is a full-bleed canvas with reduced-motion handling", () => {
     expect(matrix).toMatch(/<canvas bind:this=\{canvas\} class="matrix-rain"/);
     expect(matrix).toMatch(/prefers-reduced-motion: reduce/);

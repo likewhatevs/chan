@@ -32,10 +32,11 @@ describe("fullstack-a-90: Alt+Space chord removed from TerminalTab.svelte", () =
     );
   });
 
-  test("removal-rationale comment present", () => {
+  test("team-work entry-point comment present (no Alt+Space)", () => {
     expect(terminal).toMatch(
-      /`fullstack-a-90`:[\s\S]*?removed the legacy `Alt\+Space` team-work/i,
+      /Team-work entry points are Cmd\+P[\s\S]*?Mod\+\. p/i,
     );
+    expect(terminal).not.toMatch(/Alt\+Space/);
   });
 
   test("hamburger-menu comment no longer references Alt+Space as live", () => {

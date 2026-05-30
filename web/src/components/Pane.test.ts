@@ -225,7 +225,7 @@ describe("Pane right-click menus", () => {
     );
   });
 
-  test("empty pane right-click opens NO menu (lane-b-empty-pane-menu)", async () => {
+  test("empty pane right-click opens NO menu (empty-pane-menu)", async () => {
     // Round-1 closing-2 (lane-b-empty-pane-menu): the empty-pane
     // right-click context menu was retired. The pane hamburger
     // (⋮) now carries every spawn entry the right-click menu
@@ -312,7 +312,7 @@ describe("Pane right-click menus", () => {
   // back has no "unread" or "activity" surface to flag.
 });
 
-describe("Pane back-side configuration view (fullstack-a-43)", () => {
+describe("Pane back-side configuration view", () => {
   test("passes the flip callback into every back-side config OK button", () => {
     expect(paneSource).toMatch(
       /<HybridTerminalConfig onDone=\{\(\) => flipHybrid\(pane\.id\)\} \/>/,
@@ -411,7 +411,7 @@ describe("Pane back-side configuration view (fullstack-a-43)", () => {
     ).not.toBeNull();
   });
 
-  test("front-tab content does not render while showingBack=true (fullstack-a-43 + -a-54)", async () => {
+  test("front-tab content does not render while showingBack=true (a-54)", async () => {
     const front = terminalTab({ id: "front-term" });
     const pane: LeafNode = {
       kind: "leaf",
@@ -433,7 +433,7 @@ describe("Pane back-side configuration view (fullstack-a-43)", () => {
   });
 });
 
-describe("Pane flip UX redesign (fullstack-a-54 + fullstack-a-55)", () => {
+describe("Pane flip UX redesign", () => {
   test("family-name title is NOT rendered in the tab strip (-a-55)", async () => {
     const front = {
       kind: "file" as const,
@@ -543,7 +543,7 @@ describe("Pane flip UX redesign (fullstack-a-54 + fullstack-a-55)", () => {
   });
 });
 
-describe("Pane Hybrid NAV transaction mode (fullstack-a-44)", () => {
+describe("Pane Hybrid NAV transaction mode", () => {
   test("renders dead-zone hit area between last tab and actions", async () => {
     const pane: LeafNode = {
       kind: "leaf",

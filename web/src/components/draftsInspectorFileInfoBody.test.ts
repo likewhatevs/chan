@@ -1,12 +1,11 @@
 import { describe, expect, test } from "vitest";
 import fileInfo from "./FileInfoBody.svelte?raw";
 
-// `fullstack-a-66` slice c follow-up: keep FileInfoBody's
-// Drafts copy aligned with DirectoryInfoBody in case a caller
-// passes the metadata-backed Drafts root through the file
-// inspector path.
+// FileInfoBody's Drafts copy stays aligned with DirectoryInfoBody in
+// case a caller passes the metadata-backed Drafts root through the
+// file inspector path.
 
-describe("fullstack-a-66 slice c follow-up: FileInfoBody Drafts header", () => {
+describe("FileInfoBody Drafts header", () => {
   test("dir branch renders DRAFTS chip when entry.path === 'Drafts'", () => {
     expect(fileInfo).toMatch(
       /\{#if entry\.path === "Drafts"\}[\s\S]*?<span class="kind-chip drafts-chip">DRAFTS<\/span>/,
@@ -26,9 +25,8 @@ describe("fullstack-a-66 slice c follow-up: FileInfoBody Drafts header", () => {
   });
 
   test("notice references the Cmd+N draft path pattern", () => {
-    // phase-13 r2 (merge-gate cleanup): the Team Work revamp deleted the
-    // team-work-workspace archival, so the stale "Team Work
-    // submissions persist as Drafts/team-work-N/" clause was removed.
+    // The notice references the Cmd+N draft path and carries no
+    // Team Work / team-work-workspace archival copy.
     expect(fileInfo).toMatch(/Drafts\/untitled-N/);
     expect(fileInfo).not.toMatch(/Drafts\/team-work-N/);
     expect(fileInfo).not.toMatch(/Team Work/);
@@ -45,7 +43,7 @@ describe("fullstack-a-66 slice c follow-up: FileInfoBody Drafts header", () => {
 
   test("rationale comment explains why FileInfoBody keeps Drafts copy", () => {
     expect(fileInfo).toMatch(
-      /file-inspector Drafts copy aligned with the graph[\s\S]*?directory inspector/i,
+      /file-inspector Drafts copy aligned with the[\s\S]*?graph[\s\S]*?directory inspector/i,
     );
   });
 });

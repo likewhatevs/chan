@@ -10,7 +10,7 @@ import graphPanel from "./GraphPanel.svelte?raw";
 // fix is a BIDIRECTIONAL BFS, same shape the contact arm has
 // shipped since slice 2b. This file pins the contract.
 
-describe("phase-13 round-1 closing B8: tag lens BFS is bidirectional", () => {
+describe("closing B8: tag lens BFS is bidirectional", () => {
   test("tag arm walks edges in both directions", () => {
     // Match the body of the `currentScope.kind === \"tag\"` arm,
     // then assert both the forward (`e.source` -> `e.target`)
@@ -24,7 +24,7 @@ describe("phase-13 round-1 closing B8: tag lens BFS is bidirectional", () => {
     );
   });
 
-  test("tag arm no longer carries the forward-only fullstack-a-52 G9 comment", () => {
+  test("tag arm no longer carries the forward-only G9 comment", () => {
     // The old forward-only rationale comment ("forward-only BFS
     // (outgoing edges only)") would mislead a future reader now
     // that the BFS is bidirectional; the bidirectional rationale

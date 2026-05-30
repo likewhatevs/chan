@@ -10,7 +10,7 @@ import pane from "./Pane.svelte?raw";
 // edit that re-introduces the outer `{#if !paneMode.active}`
 // wrapper around the terminal each-block trips the test.
 
-describe("fullstack-b-2: TerminalTabs survive Hybrid NAV toggles", () => {
+describe("TerminalTabs survive Hybrid NAV toggles", () => {
   test("terminal each-block does not sit under a {#if !paneMode.active}", () => {
     // The pre-fix pattern was: `{#if !paneMode.active}` immediately
     // followed by the terminal each-block, with only whitespace and

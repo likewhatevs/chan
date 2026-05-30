@@ -14,7 +14,7 @@ import fileBrowserSurface from "./FileBrowserSurface.svelte?raw";
 // surface header (close + maximize + kebab — the maximize
 // affordance has nowhere else to live).
 
-describe("fullstack-67 + fullstack-71: FileBrowserSurface header is overlay-only", () => {
+describe("FileBrowserSurface header is overlay-only", () => {
   test("header is wrapped in {#if isOverlay}", () => {
     expect(fileBrowserSurface).toMatch(/{\s*#if\s+isOverlay\s*}[\s\S]*?<header>/);
   });

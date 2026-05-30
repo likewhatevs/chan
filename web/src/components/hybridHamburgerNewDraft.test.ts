@@ -2,13 +2,12 @@ import { describe, expect, test } from "vitest";
 import pane from "./Pane.svelte?raw";
 import app from "../App.svelte?raw";
 
-// `fullstack-a-67` slice 2: Hybrid hamburger gets New Draft as
-// its first spawn surface per addendum-a. Shared across the
-// empty-pane right-click + the pane hamburger + the empty-pane
-// carousel slide 1 so all three surfaces gain the same
-// affordance.
+// New Draft is the first spawn surface in the Hybrid hamburger.
+// Shared across the empty-pane right-click menu, the pane hamburger,
+// and the empty-pane carousel slide 1 so all three surfaces offer the
+// same affordance.
 
-describe("fullstack-a-67 slice 2: spawnActions includes New Draft first", () => {
+describe("spawnActions includes New Draft first", () => {
   test("`New Draft` entry sits at slot 0 of spawnActions", () => {
     expect(pane).toMatch(
       /const spawnActions: EmptyMenuRow\[\] = \[[\s\S]*?label: "New Draft",[\s\S]*?icon: FilePlus,[\s\S]*?command: "app\.draft\.new",[\s\S]*?chordId: "app\.draft\.new",/,
@@ -21,23 +20,24 @@ describe("fullstack-a-67 slice 2: spawnActions includes New Draft first", () => 
     );
   });
 
-  test("rationale comment cites the addendum-a Hybrid hamburger spec + the three shared surfaces", () => {
-    expect(pane).toMatch(/`fullstack-a-67` slice 2/);
-    expect(pane).toMatch(/addendum-a Hybrid hamburger spec/i);
-    expect(pane).toMatch(/empty-pane right-click \+ the pane[\s\S]*?hamburger \+ the empty-pane carousel/i);
+  test("rationale comment cites the three shared spawn surfaces", () => {
+    expect(pane).toMatch(
+      /empty-pane right-click menu[\s\S]*?pane hamburger[\s\S]*?empty-pane carousel/i,
+    );
+    expect(pane).toMatch(/single `spawnActions` list backs[\s\S]{1,20}all three surfaces/i);
   });
 
   test("the existing 4 spawn entries are preserved in order (Terminal/FB/Team Work/Graph)", () => {
-    // phase-13 r2: the Team Work entry was relabelled "Team Work"
-    // (chord id app.terminal.teamWork stays stable).
+    // The Team Work entry is labelled "Team Work" with chord id
+    // app.terminal.teamWork.
     expect(pane).toMatch(
       /label: "Terminal",[\s\S]*?label: "File Browser",[\s\S]*?label: "Team Work",[\s\S]*?label: "Graph",/,
     );
   });
 });
 
-describe("fullstack-a-98: Hybrid hamburger removes stale theme/flip rows", () => {
-  test("old Light mode / Flip pane handlers and labels are gone", () => {
+describe("Hybrid hamburger carries no theme/flip rows", () => {
+  test("Light mode / Flip pane handlers and labels are absent", () => {
     expect(pane).not.toContain("togglePaneTheme");
     expect(pane).not.toContain("paneThemeTooltip");
     expect(pane).not.toContain("paneEffectiveTheme");
@@ -49,18 +49,17 @@ describe("fullstack-a-98: Hybrid hamburger removes stale theme/flip rows", () =>
     expect(pane).not.toContain("Sun");
   });
 
-  test("Settings footer retired from the Hybrid pane menu (phase-13 slice 3c)", () => {
-    // The Cmd+, rebind moves Settings off the empty-pane menu and
-    // onto the Dashboard back-of-card via flipHybrid. The pane
-    // menu must no longer carry a Settings row that dispatches
-    // app.settings.toggle.
+  test("no Settings footer in the Hybrid pane menu", () => {
+    // Cmd+, opens Settings via the Dashboard back-of-card
+    // (flipHybrid), so the pane menu carries no Settings row that
+    // dispatches app.settings.toggle.
     expect(pane).not.toMatch(
       /onclick=\{\(\) => dispatchCommand\("app\.settings\.toggle"\)\}[\s\S]*?<span class="menu-row-label">Settings<\/span>/,
     );
   });
 });
 
-describe("fullstack-a-67 slice 2: App.svelte runCommand routes app.draft.new", () => {
+describe("App.svelte runCommand routes app.draft.new", () => {
   test("runCommand switch dispatches `app.draft.new` to createDraftAndOpen", () => {
     expect(app).toMatch(
       /case "app\.draft\.new":[\s\S]*?void createDraftAndOpen\(\);[\s\S]*?return;/,

@@ -18,7 +18,7 @@ import canvas from "./GraphCanvas.svelte?raw";
 // `currentScope` to an equal-but-new object, and re-fired the reload.
 // The fix anchors the reload effect on a stable value key.
 
-describe("GI-1/GI-2: graph reload is anchored on scope/depth/mode, not layout churn", () => {
+describe("graph reload is anchored on scope/depth/mode, not layout churn", () => {
   test("a stable loadKey derives from scopeId + depth + mode only", () => {
     // The key the reload effect tracks. It must NOT include the
     // layout-derived `currentScope` object, whose identity changes
@@ -44,7 +44,7 @@ describe("GI-1/GI-2: graph reload is anchored on scope/depth/mode, not layout ch
   });
 });
 
-describe("GI-1: Open routes to the editor, not a graph reload", () => {
+describe("Open routes to the editor, not a graph reload", () => {
   test("openSelectedFile opens the selected file in the active pane", () => {
     expect(panel).toMatch(
       /function openSelectedFile\(\): void \{[\s\S]*?openInActivePane\(selectedNode\.path\)/,
@@ -69,7 +69,7 @@ describe("GI-1: Open routes to the editor, not a graph reload", () => {
   });
 });
 
-describe("GI-2: Show File reveals in the File Browser, not a graph reload", () => {
+describe("Show File reveals in the File Browser, not a graph reload", () => {
   test("revealSelectedFile reveals + selects the path in a browser tab", () => {
     // GI-8: reveal now routes through the tab-world revealPathInBrowserTab
     // (opens a File Browser tab via openBrowserInActivePane), not the
@@ -96,7 +96,7 @@ describe("GI-2: Show File reveals in the File Browser, not a graph reload", () =
   });
 });
 
-describe("GI-4: directory nodes are slightly bigger than leaf nodes", () => {
+describe("directory nodes are slightly bigger than leaf nodes", () => {
   test("RADIUS_DIR sits between the leaf base and the doc/workspace hub size", () => {
     expect(canvas).toMatch(/const RADIUS_BASE = 5;/);
     expect(canvas).toMatch(/const RADIUS_DIR = 6;/);

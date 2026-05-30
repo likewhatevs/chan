@@ -1,37 +1,18 @@
 import { describe, expect, test } from "vitest";
 import graph from "./GraphPanel.svelte?raw";
 
-// `fullstack-a-52` G9 + G10 (minimum cut):
-//
-// * G9: BFS converted from bidirectional to forward-only so the
-//   depth slider reveals OUTGOING nodes from the root. Previously
-//   `frontier.has(e.source) || frontier.has(e.target)` walked
-//   both directions, which hid the "expand from the root" mental
-//   model @@Alex flagged in the depth-slider bug.
-// * G10: `link` filter dropped from the chip set. Link edges
-//   always render now — visibility is implicit (edge visible iff
-//   both endpoints visible under the node-type filters + depth).
-//   The `link` slot on `GraphFilters` (store.svelte.ts) stays for
-//   URL-hash back-compat but isn't consumed by the UI.
-//
-// Node-type-dependent depth semantic + filter toolbar UI
-// restructure flagged as follow-up; this commit lands the
-// load-bearing fix-the-broken-slider + drop-the-confusing-chip
-// piece + leaves the dispatch shape ready for the per-root-type
-// reveal logic.
+// BFS is forward-only so the depth slider reveals OUTGOING nodes
+// from the root. Previously the bidirectional walk hid the
+// "expand from the root" mental model encoded in the depth slider.
+// The `link` filter is dropped from the chip set: link edges always
+// render, and visibility is implicit (edge visible iff both
+// endpoints are visible under the node-type filters + depth).
 
-describe("fullstack-a-52 G9: forward-only BFS", () => {
+describe("forward-only BFS", () => {
   test("BFS does NOT walk the reverse edge direction", () => {
-    // Old shape:
-    //   if (frontier.has(e.source) && !visited.has(e.target)) {
-    //     ...
-    //   } else if (frontier.has(e.target) && !visited.has(e.source)) {
-    //     ...
-    //   }
     // Forward-only collapse: only the source-direction branch
     // survives at both BFS sites (tag-scope + general-scope).
-    // Strip line comments first so the historical-shape comment
-    // block that documents the removal doesn't trip the guard.
+    // Strip line comments so context comments don't trip the guard.
     const stripped = graph
       .split("\n")
       .filter((line) => !line.trim().startsWith("//"))
@@ -52,12 +33,19 @@ describe("fullstack-a-52 G9: forward-only BFS", () => {
     expect(matches!.length).toBeGreaterThanOrEqual(2);
   });
 
-  test("BFS comment documents the forward-only direction", () => {
-    expect(graph).toMatch(/forward-only BFS|outgoing edges only|edges emanate from the root/i);
+  test("BFS uses next.add(e.target) from the source side, not visited.add(e.source)", () => {
+    // The general-scope BFS only adds e.target when frontier contains
+    // e.source. Confirm the next.add call sites are for e.target only
+    // (no e.source additions in a next.add call within the general BFS).
+    // This is a distinct structural invariant from the reverse-check
+    // absence above.
+    expect(graph).toMatch(
+      /frontier\.has\(e\.source\) && !visited\.has\(e\.target\)[\s\S]*?next\.add\(e\.target\)/,
+    );
   });
 });
 
-describe("fullstack-a-52 G10: link filter dropped", () => {
+describe("link filter dropped", () => {
   test("FilterKind union no longer includes 'link'", () => {
     // `-a-52` dropped link from FilterKind; subsequent tasks
     // (`-a-57`) extend FilterKind with new bucket kinds. Pin the
@@ -80,12 +68,9 @@ describe("fullstack-a-52 G10: link filter dropped", () => {
   });
 
   test("chip iteration no longer ships a 'link' entry", () => {
-    // The scope-concept wipe (lane-a A1) removed the overlay-bar
-    // `filterChips` snippet, so the tab-menu bubble is now the SINGLE
-    // chip-iteration site. `-a-57` extended the array with additional
-    // bucket kinds; pin the load-bearing absence (link) + the leading-
-    // kind shape (starts with tag) so the guard tolerates future-
-    // extension additions.
+    // The tab-menu bubble is the single chip-iteration site. Pin
+    // the load-bearing absence (link) + the leading-kind shape
+    // (starts with tag) so the guard tolerates future additions.
     const matches = graph.match(/\["tag", "mention"[^\]]*\] as const/g);
     expect(matches).not.toBeNull();
     expect(matches!.length).toBe(1);
@@ -114,7 +99,7 @@ describe("fullstack-a-52 G10: link filter dropped", () => {
   });
 });
 
-describe("round-1 closing-2 (B7b): depth slider works in workspace path-scope", () => {
+describe("depth slider works in workspace path-scope", () => {
   test("depthDisabled no longer pins workspace path-scope to disabled", () => {
     // Pre-fix shape was:
     //   `!languageMode && (!currentScope || currentScope.kind === "workspace")`
@@ -140,15 +125,11 @@ describe("round-1 closing-2 (B7b): depth slider works in workspace path-scope", 
   });
 });
 
-describe("round-1 closing-8 (F1): find -d N depth semantics in semantic mode", () => {
+describe("find -d N depth semantics in semantic mode", () => {
   test("workspace + dir scope filter by filesystem depth (relativeDepth)", () => {
-    // Per @@Alex's chord smoke: Cmd+Shift+M at the workspace root with
-    // depth=1 should show only the first level; cranking the slider to
-    // its max should show the full graph. The filter replaces the
-    // pre-F1 workspace `return null` (no narrowing) and the dir-scope
-    // hop-based BFS. Tag / mention / language meta-nodes always pass
-    // through; the workspace-root anchor is unconditional so the spine
-    // has a root.
+    // Depth=1 shows only the first level; max depth shows the full
+    // graph. Tag / mention / language meta-nodes always pass through;
+    // the workspace-root anchor is unconditional so the spine has a root.
     expect(graph).toMatch(
       /import \{[\s\S]{1,400}relativeDepth[\s\S]{1,40}\} from "\.\.\/graph\/depth"/,
     );

@@ -7,7 +7,7 @@ import paneModeHelp from "./PaneModeHelp.svelte?raw";
 // `handlePaneModeKey` dispatcher that handles real keystrokes, so
 // keyboard and mouse share one switch.
 
-describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
+describe("PaneModeHelp key-caps are clickable buttons", () => {
   test("dispatchKey synthesises a KeyboardEvent on the document", () => {
     expect(paneModeHelp).toContain("function dispatchKey(key: string): void");
     expect(paneModeHelp).toContain(
@@ -55,7 +55,7 @@ describe("fullstack-63: PaneModeHelp key-caps are clickable buttons", () => {
     expect(paneModeHelp).not.toMatch(/key:\s*"4"/);
   });
 
-  test("fullstack-a-68 slice 2: spawn group renames to Stage (Enter to commit, Esc to discard)", () => {
+  test("spawn group renames to Stage (Enter to commit, Esc to discard)", () => {
     // Group title surfaces the transactional model; row labels
     // start with "Stage …".
     expect(paneModeHelp).toContain(

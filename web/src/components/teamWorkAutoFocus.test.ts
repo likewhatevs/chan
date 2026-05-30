@@ -9,7 +9,7 @@ import tabsModule from "../state/tabs.svelte.ts?raw";
 // to grab focus. Re-show via Cmd+K p / Cmd+P steals focus
 // back even when `open` was already true.
 
-describe("fullstack-79: Team Work auto-focus on entry", () => {
+describe("Team Work auto-focus on entry", () => {
   test("TeamWorkState declares a focusNonce field", () => {
     expect(tabsModule).toContain("focusNonce?: number");
   });

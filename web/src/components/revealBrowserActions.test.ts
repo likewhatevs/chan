@@ -15,7 +15,7 @@ describe("file-browser reveal actions", () => {
     expect(terminal).not.toContain("function graphTerminalCwd()");
   });
 
-  test("graph inspector reveal buttons reveal in a browser TAB (GI-8)", () => {
+  test("graph inspector reveal buttons reveal in a browser TAB", () => {
     // GI-8: the graph is a tab now, so reveal opens a File Browser TAB
     // (via the tab-world `openBrowserInActivePane` primitive, the same
     // one the File Browser's own "Open in File Browser" uses) and the
@@ -131,7 +131,7 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).toMatch(/onSetAsScope=\{\(\) => graphFromHere\(fsPath, fsIsDir\)\}/);
   });
 
-  test("graphFromHere re-roots in place: dir to itself, file to its parent (I4/GI-6)", () => {
+  test("graphFromHere re-roots in place: dir to itself, file to its parent (I4)", () => {
     // GI-6: a directory re-roots to `dir:<path>` (the dir itself, workspace
     // root for the empty path); a file re-roots to its parent dir. The
     // old always-parent rule made re-rooting a child folder onto its
@@ -218,7 +218,7 @@ describe("no inline close affordance on first-class surfaces", () => {
 // (the `/private/tmp/...` row that duplicated the tab-strip context).
 // The chrome row collapses to a slim strip with the kebab on the
 // right; no path text in any variant.
-describe("fullstack-54: no path-display header on FileBrowserSurface", () => {
+describe("no path-display header on FileBrowserSurface", () => {
   test('no <span class="name"> in the header', () => {
     expect(fileBrowserSurface).not.toContain('class="name"');
   });

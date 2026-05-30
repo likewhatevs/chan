@@ -10,7 +10,7 @@ import graphCanvas from "./GraphCanvas.svelte?raw";
 // nonzero dimensions so the spine ends up framed in the viewport
 // automatically.
 
-describe("phase-13 round-1 closing B12: GraphCanvas pending-initial-fit", () => {
+describe("closing B12: GraphCanvas pending-initial-fit", () => {
   test("pendingInitialFit flag is declared with the auto-fit state", () => {
     expect(graphCanvas).toMatch(/let pendingInitialFit = false;/);
   });

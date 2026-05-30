@@ -32,9 +32,9 @@
 
   let collapsed = $state(false);
 
-  // `fullstack-a-2`: status-bar sections are ambient state. Only
-  // statuses that carry an explicit typed action become buttons;
-  // generic status text stays passive.
+  // Status-bar sections are ambient state. Only statuses that carry
+  // an explicit typed action become buttons; generic status text
+  // stays passive.
 
   /// Indexer section: hidden when idle (steady state should be
   /// quiet) and when the poller hasn't replied yet (`null`).
@@ -86,7 +86,7 @@
               class:err={s.state === "error"}
             ></span>
             {#if s.state === "building"}
-              <!-- Round-1 closing-12: the `IndexFile` / `GraphRebuild`
+              <!-- The `IndexFile` / `GraphRebuild`
                    stages set `s.current / s.total` to "files
                    indexed / total files" - readable. The
                    `EmbedBatch` stage (sentinel `s.file === "embedding"`)
@@ -156,9 +156,7 @@
           <span class="sep">·</span>
         {/if}
         {#if paneModeVisible}
-          <!-- `fullstack-a-3`: status-bar label for Hybrid Nav
-               (Cmd+K). Per the phase-8 bug list the wording is
-               `Hybrid ☯ Enter commit, Esc discard, H help`; the
+          <!-- Status-bar label for Hybrid Nav (Cmd+K). The
                spawn-intent chip stays because 1/2/3 still stage
                a tab spawn before commit. -->
           <span class="section pane-mode-pill" aria-label="Hybrid Nav active">

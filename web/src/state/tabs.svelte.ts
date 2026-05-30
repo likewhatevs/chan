@@ -124,8 +124,8 @@ export function makeFindState(): FindState {
 }
 
 /// File-content tab: holds the editable buffer for any text-class
-/// file (markdown documents, contact notes, and post-phase-3 also
-/// arbitrary source / config text like .py, .json, .yaml).
+/// file (markdown documents, contact notes, and arbitrary source /
+/// config text like .py, .json, .yaml).
 export type FileTab = {
   kind: "file";
   /// File-kind discriminator inside the tab. Mirrors the wire kind
@@ -189,11 +189,11 @@ export type FileTab = {
   /// toggle so the user can't try to write a file the OS won't
   /// accept. The watcher refreshes this when permissions change.
   fsWritable: boolean;
-  /// `lane-c addendum-2 item 1`: an external (non-self) write to this
-  /// file's path landed on disk while the tab is open. The editor shows
-  /// a dismissable "changed on disk" banner and does NOT auto-reload, so
-  /// the caret never jumps to 1:1 mid-edit. Set by `flagExternalChange`
-  /// from the watcher; cleared on reload (loadTabContent) or dismiss.
+  /// An external (non-self) write to this file's path landed on disk
+  /// while the tab is open. The editor shows a dismissable "changed on
+  /// disk" banner and does NOT auto-reload, so the caret never jumps to
+  /// 1:1 mid-edit. Set by `flagExternalChange` from the watcher; cleared
+  /// on reload (loadTabContent) or dismiss.
   /// Ephemeral - not serialized into the URL hash / session.json.
   externalChange?: boolean;
   /// Whether the floating style toolbar (top-left of the editor
@@ -265,10 +265,10 @@ export type TerminalTab = {
   lastSeq?: number;
   lastAgentEchoSeq?: number;
   terminalActivity?: boolean;
-  /// `lane-c addendum-3`: refines terminalActivity. True while output is
-  /// actively ARRIVING at this unfocused terminal (the unseen-output dot
-  /// PULSES); flips false once output stops but is still unseen (the dot
-  /// goes SOLID). Cleared with terminalActivity when the user sees it.
+  /// Refines terminalActivity. True while output is actively ARRIVING at
+  /// this unfocused terminal (the unseen-output dot PULSES); flips false
+  /// once output stops but is still unseen (the dot goes SOLID). Cleared
+  /// with terminalActivity when the user sees it.
   terminalActivityPulsing?: boolean;
   cwd?: string;
   seedInput?: string;
@@ -282,12 +282,10 @@ export type GraphFilters = {
   language: boolean;
   img: boolean;
   folder: boolean;
-  /// `fullstack-a-57` FileBucket toggles — mirrors the
-  /// `GraphFilters` shape in `state/store.svelte.ts`. Both files
-  /// declare a local `GraphFilters` (one for the per-tab state
-  /// here, one for the overlay state in store); they stay in
-  /// lockstep when extended. Future cleanup task could unify
-  /// them through a shared module.
+  /// FileBucket toggles — mirrors the `GraphFilters` shape in
+  /// `state/store.svelte.ts`. Both files declare a local `GraphFilters`
+  /// (one for the per-tab state here, one for the overlay state in
+  /// store); they stay in lockstep when extended.
   markdown: boolean;
   source: boolean;
 };
@@ -307,17 +305,15 @@ export type GraphTab = {
   filters: GraphFilters;
   inspectorOpen: boolean;
   pendingSelectId: string | null;
-  /// `fullstack-81`: live selection state. `selectedNodeId` is the
-  /// graph node id the user clicked (kept here, not just in
-  /// `GraphPanel.svelte`'s component state, so the tab title can
-  /// peek it from outside the panel). `selectedNodeLabel` is the
-  /// human-readable label cached at click time so the tab strip
-  /// can render the title before the graph data has finished
+  /// Live selection state. `selectedNodeId` is the graph node id the
+  /// user clicked (kept here, not just in `GraphPanel.svelte`'s component
+  /// state, so the tab title can peek it from outside the panel).
+  /// `selectedNodeLabel` is the human-readable label cached at click time
+  /// so the tab strip can render the title before graph data finishes
   /// reloading on restore.
   selectedNodeId?: string | null;
   selectedNodeLabel?: string | null;
-  /// `fullstack-84`: per-tab inspector width. Falls back to
-  /// `paneWidths.graph` when unset.
+  /// Per-tab inspector width. Falls back to `paneWidths.graph` when unset.
   inspectorWidth?: number;
 };
 
@@ -326,11 +322,10 @@ export type BrowserTab = {
   id: string;
   title: string;
   inspectorOpen: boolean;
-  /// `fullstack-58`: per-tab view state so two File Browser tabs in
-  /// the same pane don't share selection / scroll / expansion via
-  /// the module-level `browserSelection` + `treeExpanded` singletons.
-  /// Populated by `FileBrowserSurface.svelte` on tab activate (mount /
-  /// `tab.id` swap) and snapshot-back on deactivate.
+  /// Per-tab view state so two File Browser tabs in the same pane don't
+  /// share selection / scroll / expansion via module-level singletons.
+  /// Populated by `FileBrowserSurface.svelte` on tab activate and
+  /// snapshot-back on deactivate.
   selected?: string | null;
   /// Multi-selection set (FB capabilities: shift/cmd-click, shift+arrows,
   /// cmd+A, rubber-band). Per-tab alongside `selected` (the active
@@ -340,9 +335,8 @@ export type BrowserTab = {
   showWorkspace?: boolean;
   expanded?: string[];
   scroll?: number;
-  /// `fullstack-84`: per-tab inspector width so two FB tabs can
-  /// carry different inspector sizes. Falls back to
-  /// `paneWidths.browser` for backwards compatibility when unset.
+  /// Per-tab inspector width so two FB tabs can carry different inspector
+  /// sizes. Falls back to `paneWidths.browser` when unset.
   inspectorWidth?: number;
 };
 
@@ -363,75 +357,60 @@ export type TeamWorkState = {
   workspaceError?: string | null;
   mode?: "wysiwyg" | "source";
   styleToolbarOpen?: boolean;
-  /// `fullstack-79`: bumped on every `openActiveTeamWork`
-  /// call so the prompt component re-focuses its input even when
-  /// `open` was already true. Mirrors the find-bar `focusNonce`
-  /// pattern at line 95.
+  /// Bumped on every `openActiveTeamWork` call so the prompt component
+  /// re-focuses its input even when `open` was already true. Mirrors the
+  /// find-bar `focusNonce` pattern.
   focusNonce?: number;
-  /// `fullstack-a-24`: collapse the prompt to a minimal-height bar
-  /// (just enough room for the placeholder / first line + the
-  /// control row) so the chat / survey bubbles above gain
-  /// vertical real estate. Sticks across close → re-open within
-  /// the same session via the serialized payload. Default
+  /// Collapse the prompt to a minimal-height bar (just enough room for
+  /// the placeholder / first line + the control row) so the bubbles
+  /// above gain vertical real estate. Sticks across close / re-open
+  /// within the same session via the serialized payload. Default
   /// expanded (`undefined` reads as `false`).
   collapsed?: boolean;
-  /// `fullstack-a-29`: actual rendered height (px) of the
-  /// Team Work root, written by a ResizeObserver in the Team
-  /// Work editor component. The terminal-host margin
-  /// reactor reads this in preference to `heightPx` so the
-  /// reserved space tracks both the expanded drag-resize AND
-  /// the `fullstack-a-24` collapse transition (where the prompt
-  /// shrinks to header-only and `heightPx` is stale). Not
-  /// persisted to SerTab — repopulated on every mount.
+  /// Actual rendered height (px) of the Team Work root, written by a
+  /// ResizeObserver in the Team Work editor component. The terminal-host
+  /// margin reactor reads this in preference to `heightPx` so the
+  /// reserved space tracks both the expanded drag-resize AND the collapse
+  /// transition (where the prompt shrinks to header-only and `heightPx`
+  /// is stale). Not persisted to SerTab — repopulated on every mount.
   measuredHeightPx?: number;
-  /// `fullstack-a-30`: actual rendered width (px) of the
-  /// team-work root, written by the same ResizeObserver. Feeds
-  /// the per-prompt page-width clamp on the composer-editor so
-  /// the cap is computed relative to THIS prompt's painted
-  /// width, not the pane's editor wrapper. Not persisted.
+  /// Actual rendered width (px) of the team-work root, written by the
+  /// same ResizeObserver. Feeds the per-prompt page-width clamp on the
+  /// composer-editor so the cap is computed relative to this prompt's
+  /// painted width, not the pane's editor wrapper. Not persisted.
   measuredWidthPx?: number;
-  /// `fullstack-a-30`: per-prompt page-width ratio in (0.25, 1.0].
-  /// `1.0` (or absent) reads as "no cap" — the composer fills
-  /// the prompt's painted width. Set via the slider in the
-  /// team-work context menu. Decouples the prompt's line width
-  /// from the global `pageWidth.ratio` so narrowing the editor
+  /// Per-prompt page-width ratio in (0.25, 1.0]. `1.0` (or absent) reads
+  /// as "no cap" — the composer fills the prompt's painted width. Set via
+  /// the slider in the team-work context menu. Decouples the prompt's
+  /// line width from the global `pageWidth.ratio` so narrowing the editor
   /// in one tile does not cascade onto a sibling tile's prompt.
   pageWidthRatio?: number;
-  /// `fullstack-b-13`: per-prompt shell-vs-agent submit-mode
-  /// toggle. `"shell"` (default; absent reads as shell) keeps
-  /// today's behaviour: Cmd+Enter sends the buffer with a
-  /// trailing `\n`. `"agent"` sends Claude Code's xterm
-  /// modifyOtherKeys Cmd+Enter chord (`\x1b[27;9;13~`) so the
-  /// buffer submits inside an agent (Claude Code / codex /
-  /// gemini) running in the terminal. Persisted on `SerTab.rpsm`;
-  /// the same toggle workspaces the server-side `dispatch_agent_event`
-  /// path via `PUT /api/terminal/:session/submit-mode` so survey-
-  /// reply echoes ("poke" notifications) also pick the right
-  /// trailing bytes.
+  /// Per-prompt shell-vs-agent submit-mode toggle. `"shell"` (default;
+  /// absent reads as shell) sends the buffer with a trailing `\n`.
+  /// `"agent"` sends the xterm modifyOtherKeys Cmd+Enter chord
+  /// (`\x1b[27;9;13~`) so the buffer submits inside an agent (Claude
+  /// Code / codex / gemini) running in the terminal. Persisted on
+  /// `SerTab.rpsm`; the server-side `dispatch_agent_event` path via
+  /// `PUT /api/terminal/:session/submit-mode` also reads this toggle so
+  /// survey-reply echoes pick the right trailing bytes.
   submitMode?: "shell" | "agent";
-  /// Phase 9 agent picker. `"none"` maps to shell submit-mode;
-  /// named agents map to agent submit-mode while preserving which
-  /// runtime the user selected.
+  /// Agent picker. `"none"` maps to shell submit-mode; named agents map
+  /// to agent submit-mode while preserving which runtime was selected.
   agentTarget?: "none" | "claude" | "codex" | "gemini";
 };
 
-/// `fullstack-a-75`: Dashboard tab — read-only surface that
-/// hosts the ASCII shortcut table (lifted out of the empty-pane
-/// carousel slide 1) + future info panels. No per-tab state today;
-/// the placeholder fields keep the discriminated union symmetric
-/// with the other tab kinds and let later slices add view state
-/// without re-walking the persistence layer.
+/// Dashboard tab — read-only surface hosting the shortcut table and
+/// info panels. No per-tab state today; the placeholder fields keep the
+/// discriminated union symmetric with the other tab kinds and let future
+/// additions include view state without re-walking the persistence layer.
 export type DashboardTab = {
   kind: "dashboard";
   id: string;
   title: string;
-  /// Round-1 closing-10 (G3): persisted carousel slide index so a
-  /// reload restores the user to the slide they were last on. 0 is
-  /// the About slide; 1 is Workspace; 2 is the Indexing graph. The
-  /// carousel's play/pause is server-persisted via
-  /// `empty_pane_carousel_cycling` so the auto-rotate preference
-  /// already survives a reload; the local slide cursor is what
-  /// needed wiring up.
+  /// Persisted carousel slide index so a reload restores the user to the
+  /// slide they were last on. 0 is the About slide; 1 is Workspace; 2 is
+  /// the Indexing graph. The carousel's play/pause is server-persisted so
+  /// the auto-rotate preference survives a reload independently.
   carouselSlide?: number;
 };
 
@@ -447,20 +426,19 @@ type ClosedTab = {
   tab: Tab;
 };
 
-/// `fullstack-66`: middle-elision for tab strip titles. Targets a
-/// 15-code-point cap as `head[..]tail` (6 + 4 + 5). The bias toward
-/// the tail keeps extensions visible for the common cases
-/// (`.md`, `.ts`, `.svelte`, `.json`).
+/// Middle-elision for tab strip titles. Targets a 15-code-point cap as
+/// `head[..]tail` (6 + 4 + 5). The bias toward the tail keeps extensions
+/// visible for the common cases (`.md`, `.ts`, `.svelte`, `.json`).
 ///
-/// Counts code points via `Array.from` so a surrogate pair never
-/// splits in the middle (emoji, CJK supplementary, etc.). Strings
-/// ≤ 15 code points render as-is; the dirty marker (`●`) lives
-/// outside the label string in the tab strip render so the rule
-/// applies cleanly to the visible name only.
+/// Counts code points via `Array.from` so a surrogate pair never splits
+/// in the middle (emoji, CJK supplementary, etc.). Strings <= 15 code
+/// points render as-is; the dirty marker (filled circle) lives outside
+/// the label string in the tab strip render so the rule applies cleanly
+/// to the visible name only.
 ///
 /// Callers that present the truncated label should keep the full
-/// untruncated value in the surrounding `title="..."` HTML
-/// attribute (typically via `tabTooltip()`) so hover reveals it.
+/// untruncated value in the surrounding `title="..."` HTML attribute
+/// (typically via `tabTooltip()`) so hover reveals it.
 export const TAB_TITLE_MAX_LENGTH = 15;
 const TAB_TITLE_HEAD = 6;
 const TAB_TITLE_TAIL = 5;

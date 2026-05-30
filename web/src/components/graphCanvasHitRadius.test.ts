@@ -7,7 +7,7 @@ import canvas from "./GraphCanvas.svelte?raw";
 // users no longer need to zoom in to register clicks on small
 // nodes.
 
-describe("fullstack-a-60: hit-radius slack constants", () => {
+describe("hit-radius slack constants", () => {
   test("PICK_SLACK_DRAG_PX = 4 (tight drag-vs-pan disambiguation)", () => {
     expect(canvas).toMatch(/const PICK_SLACK_DRAG_PX = 4;/);
   });
@@ -17,7 +17,7 @@ describe("fullstack-a-60: hit-radius slack constants", () => {
   });
 });
 
-describe("fullstack-a-60: pickNode accepts a slack parameter", () => {
+describe("pickNode accepts a slack parameter", () => {
   test("pickNode signature has a slackPx parameter defaulting to PICK_SLACK_DRAG_PX", () => {
     expect(canvas).toMatch(
       /function pickNode\([\s\S]*?slackPx: number = PICK_SLACK_DRAG_PX,?\s*\)/,
@@ -33,7 +33,7 @@ describe("fullstack-a-60: pickNode accepts a slack parameter", () => {
   });
 });
 
-describe("fullstack-a-60: call-site slack selection", () => {
+describe("call-site slack selection", () => {
   test("onMouseUp tap-to-select uses the WIDER click slack", () => {
     expect(canvas).toMatch(
       /A tap on a node \(no drag movement\) selects it\.[\s\S]*?pickNode\(p\.x, p\.y, PICK_SLACK_CLICK_PX\)/,
@@ -57,7 +57,7 @@ describe("fullstack-a-60: call-site slack selection", () => {
   });
 });
 
-describe("fullstack-a-60: nearest-centroid tie-break preserved", () => {
+describe("nearest-centroid tie-break preserved", () => {
   test("closer hits win when several discs overlap (`d2 < bestD2`)", () => {
     // The pre-existing tie-break logic; preserved across the
     // slack-parameter refactor.

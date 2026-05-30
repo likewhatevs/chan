@@ -82,11 +82,10 @@
     side?: Side;
     tab?: BrowserTab;
     onClose?: () => void;
-    // `fullstack-a-67e`: parent (Pane.svelte) supplies the flip
-    // callback for the tab variant. Dock + overlay variants
-    // don't pass one — the Settings (flip) entry hides for
-    // those variants since there's no Hybrid back-side to flip
-    // to.
+    // Parent (Pane.svelte) supplies the flip callback for the tab
+    // variant. Dock + overlay variants don't pass one; the Settings
+    // (flip) entry hides for those variants since there's no Hybrid
+    // back-side to flip to.
     onFlip?: () => void;
   } = $props();
 
@@ -97,9 +96,8 @@
   /// The dock variant does NOT render the inspector (`isWideSurface` is
   /// false for docks), so its inspectorOpen / inspectorWidth are
   /// write-only and unread; it uses this minimal local state. The tab
-  /// variant uses its tab. The browser overlay variant + its shared
-  /// `browserOverlay` singleton were retired by the scope-concept wipe
-  /// (A5/W6), so non-tab surfaces fall back to the local dock state.
+  /// variant uses its tab. Non-tab surfaces fall back to the local
+  /// dock state.
   const dockBrowserState = $state<{ inspectorOpen: boolean; inspectorWidth?: number }>(
     { inspectorOpen: false },
   );
@@ -114,7 +112,7 @@
     return isFullyExpandedForInstance(instanceId);
   });
 
-  // ---- per-instance scoped /ws subscriptions (phase-11 Slice E) ----------
+  // ---- per-instance scoped /ws subscriptions -----------------------------
   //
   // Each File Browser surface is one watcher-scope instance. A stable id
   // keys its subscription bookkeeping in the `fbTreeInstances` registry:
@@ -170,10 +168,10 @@
   let menuOpen = $state(false);
   let importContactsOpen = $state(false);
 
-  /// `fullstack-58`: per-tab File Browser view state.
+  /// Per-tab File Browser view state.
   /// When this surface renders for a tab (variant === "tab"), the
   /// active tab "owns" the module-level `browserSelection` singleton +
-  /// the treeWrap scroll, and (Slice E) its OWN per-instance expansion
+  /// the treeWrap scroll, plus its OWN per-instance expansion
   /// map keyed by `fb-tab-<id>`. On tab swap the surface unmounts, which
   /// disposes the tab's instance; on (re)activation we snapshot the live
   /// state onto the tab record and restore it back, so the activating
@@ -257,13 +255,13 @@
     tab.scroll = top > 0 ? Math.round(top) : undefined;
   }
 
-  // `fullstack-67`: in tab variant the on-surface header is gone, so
-  // the FB hamburger has no visible trigger. Tab-strip right-click in
+  // In tab variant there is no on-surface header, so the FB
+  // hamburger has no visible trigger. Tab-strip right-click in
   // `Pane.svelte` sets `tabMenu.openForTabId` + `tabMenu.anchor`;
   // this effect mirrors that signal back into `menu.openAtCursor()`
   // so the FB-specific menu items still render at the cursor for
   // active Files tabs. Dock + overlay variants ignore the effect
-  // (they have on-surface headers per `-54`).
+  // (they have on-surface headers).
   $effect(() => {
     if (!isTab || !tab) return;
     const open = tabMenu.openForTabId;
@@ -366,9 +364,9 @@
     menu?.openAtCursor(x, y);
   }
 
-  // `fullstack-80`: tab + overlay variants auto-open the DETAILS
-  // inspector on row click; dock variants do not (the dock has no
-  // inspector pane anyway, and `isWideSurface` is false there).
+  // Tab + overlay variants auto-open the DETAILS inspector on row
+  // click; dock variants do not (the dock has no inspector pane
+  // anyway, and `isWideSurface` is false there).
   function onRowClicked(_path: string): void {
     if (isTab || isOverlay) browserState.inspectorOpen = true;
   }
@@ -388,13 +386,10 @@
     await refreshTree();
   }
 
-  /// `fullstack-a-67e`: dropped `newFileHere` / `newDirHere` /
-  /// `graphWorkspace` / `renameWorkspace` (modal) — the addendum-a spec
-  /// moves New File / New Dir to the selection menu (where they
-  /// can root under the selected directory) and replaces the
-  /// modal "Rename workspace..." entry with a path row in the menu
-  /// header. `openGraphForWorkspace` is still
-  /// reachable via the empty-pane spawn grid + Cmd+Shift+M.
+  /// New File / New Dir live in the selection menu (where they can
+  /// root under the selected directory); workspace rename is a path
+  /// row in the menu header rather than a modal. Graph-from-workspace
+  /// is reachable via the empty-pane spawn grid + Cmd+Shift+M.
 
   function showWorkspaceInfo(): void {
     if (isDock) {
@@ -438,28 +433,26 @@
     browserSelection.showWorkspace = true;
   }
 
-  /// `fullstack-a-67e`: flip to back-side config view. Routes
-  /// through the `onFlip` callback the tab variant's parent
-  /// (Pane.svelte) supplies. The menu entry is gated on
-  /// `isTab && onFlip` so dock + overlay variants don't render
-  /// a Settings entry that would no-op.
+  /// Flip to back-side config view. Routes through the `onFlip`
+  /// callback the tab variant's parent (Pane.svelte) supplies. The
+  /// menu entry is gated on `isTab && onFlip` so dock + overlay
+  /// variants don't render a Settings entry that would no-op.
   function flipToSettings(): void {
     menu?.close();
     onFlip?.();
   }
 
-  /// `fullstack-a-67e`: Reopen Closed Tab — parity with the
-  /// terminal + editor menus. Available regardless of variant
-  /// since the closed-tab stack is window-global; the entry
-  /// disables when the stack is empty.
+  /// Reopen Closed Tab, parity with the terminal + editor menus.
+  /// Available regardless of variant since the closed-tab stack is
+  /// window-global; the entry disables when the stack is empty.
   function doReopenClosedTab(): void {
     menu?.close();
     reopenClosedTab();
   }
 
-  /// `fullstack-a-67e`: Close — only renders in the tab variant
-  /// where there's a tab to close. Routes through `onClose`
-  /// (which Pane.svelte wires to `closeTab(pane.id, tab.id)`).
+  /// Close, only renders in the tab variant where there's a tab to
+  /// close. Routes through `onClose` (which Pane.svelte wires to
+  /// `closeTab(pane.id, tab.id)`).
   function closeFromMenu(): void {
     menu?.close();
     onClose?.();
@@ -516,14 +509,14 @@
       </HamburgerMenu>
     </header>
   {:else}
-    <!-- `fullstack-67`/`fullstack-71`: tab + dock variants both drop
-         the on-surface header. Tab variant relies on the pane Hybrid
-         kebab (right-click on the Files tab → tabMenu state →
-         menu.openAtCursor via the $effect above). Dock variant
-         relies on the `oncontextmenu={onBrowserContextMenu}` handler
-         on the `.browser` root, which calls `menu.openAtCursor`
-         directly. Both share the same triggerless HamburgerMenu
-         mounted here. -->
+    <!-- Tab + dock variants have no on-surface header. Tab variant
+         relies on the pane Hybrid kebab (right-click on the Files
+         tab → tabMenu state → menu.openAtCursor via the $effect
+         above). Dock variant relies on the
+         `oncontextmenu={onBrowserContextMenu}` handler on the
+         `.browser` root, which calls `menu.openAtCursor` directly.
+         Both share the same triggerless HamburgerMenu mounted
+         here. -->
     <HamburgerMenu
       bind:this={menu}
       bind:open={menuOpen}
@@ -603,12 +596,12 @@
         onClose={() => (browserState.inspectorOpen = false)}
       >
         {#if browserSelection.showWorkspace && !browserSelection.path}
-          <!-- `fullstack-73`: parity with the file/dir inspector
-               surfaces. Click spawns a new Graph tab scoped to
-               workspace root via `openFsGraphForDirectory("")` (matches
-               the convention `graphSelection()` uses for non-workspace
-               selections — `openFsGraphForDirectory` / `openFsGraphForFile`
-               both spawn a fresh tab, never re-scope). -->
+          <!-- Parity with the file/dir inspector surfaces. Click
+               spawns a new Graph tab scoped to workspace root via
+               `openFsGraphForDirectory("")` (matches the convention
+               `graphSelection()` uses for non-workspace selections;
+               `openFsGraphForDirectory` / `openFsGraphForFile` both
+               spawn a fresh tab, never re-scope). -->
           <WorkspaceInfoBody
             onSetAsScope={() => openFsGraphForDirectory("")}
             onLanguageClick={openGraphForLanguage}
@@ -846,10 +839,6 @@
     mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
   }
-  /* `fullstack-a-67e`: `.folder-text` / `.folder-label` /
-     `.folder-path` / `.mono` selectors dropped along with the
-     "Rename workspace..." + "Directory" rows they styled. The current
-     workspace label + path rows have their own selectors above. */
   .body {
     flex: 1;
     display: flex;

@@ -11,7 +11,7 @@ import carousel from "./EmptyPaneCarousel.svelte?raw";
 // have lived in the wrong surface (terminal font is a terminal
 // concern, not a workspace-meta concern).
 
-describe("phase-13 round-1 closing B10: Source Code Pro toggle placement", () => {
+describe("closing B10: Source Code Pro toggle placement", () => {
   test("Terminal back-of-card carries the Source Code Pro option + setFontChoice wiring", () => {
     expect(terminal).toMatch(/<option value="source-code-pro">Source Code Pro<\/option>/);
     expect(terminal).toMatch(/<option value="os-default">OS default \(mono\)<\/option>/);

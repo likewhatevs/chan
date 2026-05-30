@@ -72,7 +72,7 @@ describe("A1: WorkspaceInfoBody variant split + directory action row", () => {
     expect(workspaceInfo).toContain("scheduleSave");
   });
 
-  test("closing-3: the Notes-directories section carries the divider", () => {
+  test("the Notes-directories section carries the divider", () => {
     // @@Alex asked explicitly for a separator between COCOMO and NOTES
     // DIRECTORIES. The section gets a `.notes-dirs` class with a dashed
     // top border (matching the COCOMO divider idiom).

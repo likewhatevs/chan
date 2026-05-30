@@ -7,7 +7,7 @@ import fileInfo from "./FileInfoBody.svelte?raw";
 // pin the exact wiring strings here. Browser smoke at slice
 // integration per feedback_svelte_static_gate_misses_runtime.
 
-describe("slice 4b: FileInfoBody language + contact wiring", () => {
+describe("FileInfoBody language + contact wiring", () => {
   test("imports openGraphForContact and openGraphForLanguage", () => {
     expect(fileInfo).toMatch(/openGraphForContact,/);
     expect(fileInfo).toMatch(/openGraphForLanguage,/);

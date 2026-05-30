@@ -6,7 +6,7 @@ import source from "./FileTree.svelte?raw";
 // second line. Mirrors `Pane.svelte`'s tab-name mask pattern.
 // Right-dock variant flips the fade direction (right → left).
 
-describe("fullstack-a-62: FileTree .name fade-mask", () => {
+describe("FileTree .name fade-mask", () => {
   test(".name keeps content on a single line", () => {
     // Pin the load-bearing whitespace + overflow rules: `nowrap`
     // prevents the second-line wrap @@Alex flagged; `overflow:

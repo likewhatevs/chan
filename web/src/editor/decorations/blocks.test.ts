@@ -24,9 +24,8 @@ describe("listDepth", () => {
     expect(listDepth("\t- child")).toBe(1);
   });
 
-  test("walks past the old 6-level cap without losing alignment", () => {
-    // 14 spaces = 7 visual levels. Previously clamped to 6, which
-    // caused the deep-nesting guide drift fullstack-33 fixes.
+  test("walks past 6 levels without losing alignment", () => {
+    // 14 spaces = 7 visual levels.
     expect(listDepth("              - level 7")).toBe(7);
     // 22 spaces = 11 levels, still depth-agnostic.
     expect(listDepth("                      - level 11")).toBe(11);
@@ -68,9 +67,8 @@ describe("listLineClass", () => {
     );
   });
 
-  test("emits a unique class per indent level past the legacy cap", () => {
-    // The 20-level smoke target from fullstack-33's acceptance
-    // criteria: each level renders one guide line.
+  test("emits a unique class per indent level up to the 20-level cap", () => {
+    // Each depth level renders one guide line.
     for (let depth = 0; depth <= 20; depth++) {
       const text = " ".repeat(depth * 2) + "- level";
       expect(listLineClass(text)).toBe(
@@ -80,21 +78,19 @@ describe("listLineClass", () => {
   });
 });
 
-describe("list marker rendering (phase-13 bug 3: source-faithful)", () => {
+describe("list marker rendering (source-faithful)", () => {
   test("classes the source marker without replacing the character", () => {
     expect(blocksSource).toContain("cm-md-ul-marker");
     expect(blocksSource).toContain("cm-md-ol-marker");
     expect(wysiwygSource).toContain(".cm-md-ul-marker");
     expect(wysiwygSource).toContain(".cm-md-ol-marker");
-    // The old replace-widgets are gone: list markers render as the
-    // authored character (-, *, +, 1., 2)) instead of being swapped
-    // for a glyph (•) or a dotted-outline chain (1.1.1.).
+    // List markers render as the authored character (-, *, +, 1., 2))
+    // rather than being swapped for a glyph; no replace-widgets.
     expect(blocksSource).not.toContain("BulletMarkerWidget");
     expect(blocksSource).not.toContain("OrderedMarkerWidget");
-    // Phase-13 r2 (B-slice 1): the bullet marker gains a char/depth
-    // styling hook (dash vs filled-top vs hollow-nested). The source
-    // char is still kept in the doc; the glyph is a CSS ::before
-    // substitution in Wysiwyg.svelte, not a doc replacement.
+    // The bullet marker has a char/depth styling hook (dash vs
+    // filled-top vs hollow-nested). The source char stays in the doc;
+    // the glyph is a CSS ::before substitution in Wysiwyg.svelte.
     expect(blocksSource).toContain("cm-md-ul-dash");
     expect(blocksSource).toContain("cm-md-ul-bullet-top");
     expect(blocksSource).toContain("cm-md-ul-bullet-nested");
@@ -115,9 +111,9 @@ describe("list marker rendering (phase-13 bug 3: source-faithful)", () => {
       }),
     });
 
-    // Phase-13 r2 (B-slice 1): the wysiwyg glyph is an en-dash via CSS
-    // ::before, but the doc + textContent stay the literal `-` (the
-    // bug-3 source-faithful guarantee). The dash class is the CSS hook.
+    // The wysiwyg glyph is an en-dash via CSS ::before, but the doc
+    // + textContent stay the literal `-` (source-faithful). The dash
+    // class is the CSS hook.
     const marker = parent.querySelector(".cm-md-ul-marker");
     expect(marker?.textContent).toBe("-");
     expect(marker?.classList.contains("cm-md-ul-dash")).toBe(true);
@@ -168,7 +164,7 @@ describe("list marker rendering (phase-13 bug 3: source-faithful)", () => {
     const nested = markers.find((m) =>
       m.classList.contains("cm-md-ul-bullet-nested"),
     );
-    // Filled top, hollow nested - both keep their literal `*`.
+    // Filled top, hollow nested -- both keep their literal `*`.
     expect(top?.textContent).toBe("*");
     expect(nested?.textContent).toBe("*");
     expect(view.state.doc.toString()).toBe("* top\n    * nested");

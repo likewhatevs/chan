@@ -10,7 +10,7 @@ import editor from "./FileEditorTab.svelte?raw";
 // toggleActiveFileTabMode helper + the chord-hint surface in
 // the editor menu.
 
-describe("fullstack-a-67f slice 2: shortcut registry entry", () => {
+describe("shortcut registry entry", () => {
   test("app.editor.toggleMode entry exists with Mod+E (web + native)", () => {
     expect(shortcuts).toMatch(
       /id: "app\.editor\.toggleMode",[\s\S]{1,200}label: "Show Source Code \(toggle rendered\/source\)",[\s\S]{1,200}native: "Mod\+E",[\s\S]{1,80}web: "Mod\+E",/,
@@ -28,7 +28,7 @@ describe("fullstack-a-67f slice 2: shortcut registry entry", () => {
   });
 });
 
-describe("fullstack-a-67f slice 2: keymap + runCommand routing", () => {
+describe("keymap + runCommand routing", () => {
   test("Mod+E hotkey in onWindowKey calls toggleActiveFileTabMode", () => {
     expect(app).toMatch(
       /if \(meta && !e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyE"\) \{[\s\S]{1,400}toggleActiveFileTabMode\(\);/,
@@ -48,7 +48,7 @@ describe("fullstack-a-67f slice 2: keymap + runCommand routing", () => {
   });
 });
 
-describe("fullstack-a-67f slice 2: store-side helper", () => {
+describe("store-side helper", () => {
   test("toggleActiveFileTabMode flips between source and wysiwyg on the active file tab", () => {
     expect(tabs).toMatch(
       /export function toggleActiveFileTabMode\(\): void \{[\s\S]{1,800}if \(!tab \|\| tab\.kind !== "file"\) return;[\s\S]{1,200}tab\.mode = tab\.mode === "source" \? "wysiwyg" : "source";/,
@@ -62,7 +62,7 @@ describe("fullstack-a-67f slice 2: store-side helper", () => {
   });
 });
 
-describe("fullstack-a-67f slice 2: chord hint in the editor menu", () => {
+describe("chord hint in the editor menu", () => {
   test("Show Source Code button surfaces the Mod+E chord via chordLabel", () => {
     expect(editor).toMatch(
       /\{inSource \? renderedLabel : "Show Source Code"\}[\s\S]{1,400}<span class="mbtn-chord">\{chordLabel\("app\.editor\.toggleMode"\)\}<\/span>/,

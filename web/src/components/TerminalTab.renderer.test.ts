@@ -10,7 +10,7 @@ import tab from "./TerminalTab.svelte?raw";
 // padding. These pins guard the WebGL wiring so a future
 // refactor can't silently revert to DOM + reintroduce the gap.
 
-describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
+describe("TerminalTab WebGL renderer", () => {
   test("imports WebglAddon from @xterm/addon-webgl", () => {
     expect(tab).toMatch(/from\s+"@xterm\/addon-webgl"/);
     expect(tab).toMatch(/import\s*\{\s*WebglAddon\s*\}/);
@@ -121,7 +121,7 @@ describe("fullstack-b-29: TerminalTab WebGL renderer", () => {
     expect(tab).toMatch(/hostResumeListenerCleanup\?\.\(\)/);
   });
 
-  test("a wall-clock-gap wake probe fires recovery on sleep/wake (lane-c addendum-2 item 2)", () => {
+  test("a wall-clock-gap wake probe fires recovery on sleep/wake (item 2)", () => {
     // macOS sleep doesn't fire focus/pageshow/visibilitychange in
     // WKWebView, so a coarse interval detects the wake (timers froze ->
     // the callback fires far later than scheduled) and runs the same

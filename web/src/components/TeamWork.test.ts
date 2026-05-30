@@ -200,7 +200,7 @@ describe("TeamWork", () => {
     expect(onSubmit).toHaveBeenCalledWith("hi");
   });
 
-  test("Cmd+Enter with defaultPrevented does NOT re-submit (fullstack-a-20)", async () => {
+  test("Cmd+Enter with defaultPrevented does NOT re-submit", async () => {
     // `fullstack-a-18` threaded `onSubmit={submit}` to the Wysiwyg
     // child. Wysiwyg's CM6 keymap has its own Mod-Enter binding that
     // calls `submit()` and returns true; CM's keymap runner then
@@ -343,7 +343,7 @@ describe("TeamWork", () => {
     expect(target.querySelector("button[aria-label='Close']")).toBeNull();
   });
 
-  test("action menu lists the Phase-13 r2 items in order", async () => {
+  test("action menu lists the items in order", async () => {
     const prompt: TeamWorkState = {
       buffer: "draft",
       heightPx: 320,

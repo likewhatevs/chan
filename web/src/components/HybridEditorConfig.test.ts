@@ -19,7 +19,7 @@ import shell from "./HybridSurfaceConfigShell.svelte?raw";
 // the file no longer exists, so there's nothing left to regress
 // against.
 
-describe("fullstack-a-46: HybridEditorConfig wiring", () => {
+describe("HybridEditorConfig wiring", () => {
   test("warning copy distinguishes device-wide settings from body theme scope", () => {
     expect(source).toMatch(
       /Most settings here apply to ALL editors on this device/,
@@ -145,7 +145,7 @@ describe("Wave 4: Editor back-side controls", () => {
   });
 });
 
-describe("round-1 closing-3 (C1): post-save effect_update_depth_exceeded guard", () => {
+describe("(C1): post-save effect_update_depth_exceeded guard", () => {
   // The hydration $effect used to reassign `editing` to a
   // content-identical clone on every workspace.info change, which
   // replaced the $state proxy and re-fired the effect on its own

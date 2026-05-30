@@ -13,7 +13,7 @@ import graph from "./GraphPanel.svelte?raw";
 // distinctive enough to pin via regex without bringing the full
 // Svelte runtime into the unit-test environment.
 
-describe("fullstack-a-63: chip count loop is node-tally", () => {
+describe("chip count loop is node-tally", () => {
   test("counts derive iterates `nodes` not `edges` for chip totals", () => {
     // Pre-`-a-63` shape (gone): `for (const e of edges) { ...
     // c[kind]++; }` — pin the absence.

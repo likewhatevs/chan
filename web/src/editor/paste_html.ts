@@ -75,17 +75,15 @@ export async function htmlToMarkdown(html: string): Promise<string> {
     strongDelimiter: "**",
     linkStyle: "inlined",
   });
-  // `fullstack-a-34`: turndown's default text-node escape inserts a
-  // backslash before every markdown special character (`*` / `_` /
-  // `[` / `]` / `` ` `` / `#` / etc.) so a pasted "*bold*" arrives
-  // as literal `\*bold\*` in the editor instead of rendering as
-  // **bold**. @@Alex's reference behaviour: macOS Notes parses
-  // pasted markdown as markdown. Override the escape with identity
-  // so pasted text round-trips verbatim through the parser. The
-  // accepted side effect — literal stray asterisks in pasted plain
-  // text now trigger emphasis — is fine for the markdown-pipeline
-  // workflow that prompted the fix; users who need the escaped
-  // shape can flip to source mode (`fullstack-a-26`) before pasting.
+  // Turndown's default text-node escape inserts a backslash before
+  // every markdown special character (`*` / `_` / `[` / `]` /
+  // `` ` `` / `#` / etc.) so a pasted "*bold*" arrives as literal
+  // `\*bold\*` in the editor instead of rendering as **bold**.
+  // Override the escape with identity so pasted text round-trips
+  // verbatim through the parser. The accepted side effect -- literal
+  // stray asterisks in pasted plain text now trigger emphasis -- is
+  // fine for the markdown-pipeline workflow; users who need the
+  // escaped shape can flip to source mode before pasting.
   td.escape = (s: string) => s;
   // Strikethrough rule: turndown's default doesn't include strike;
   // GFM has it via ~~text~~.

@@ -1,16 +1,13 @@
 import { describe, expect, test } from "vitest";
 import terminal from "./TerminalTab.svelte?raw";
 
-// `fullstack-a-93`: terminal columns don't widen after a
-// pane/window resize (bug-list root cause: FIRST resize
-// transition's ResizeObserver fire is missed/swallowed, so
-// the terminal stays at the size from the leading-edge fit).
-// Palliative-first fix: add a trailing-edge debounced fit that
-// converges on the steady-state size 120ms after the last
-// observed change. Leading-edge rAF stays for snappy initial
-// response.
+// A trailing-edge debounced fit converges on the steady-state size
+// 120ms after the last observed resize, covering the case where the
+// FIRST resize transition's ResizeObserver fire is missed/swallowed
+// (which would otherwise leave the terminal at the leading-edge size).
+// The leading-edge rAF stays for snappy initial response.
 
-describe("fullstack-a-93: trailing-edge fit converges after resize", () => {
+describe("trailing-edge fit converges after resize", () => {
   test("queueFit schedules both the leading rAF fit AND the trailing fit", () => {
     expect(terminal).toMatch(
       /function queueFit\(\): void \{[\s\S]*?requestAnimationFrame\(\(\) => \{[\s\S]*?fit\?\.fit\(\)[\s\S]*?scheduleTrailingFit\(\);/,
@@ -42,13 +39,12 @@ describe("fullstack-a-93: trailing-edge fit converges after resize", () => {
   });
 
   test("rationale comment explains the leading vs trailing split + idempotence", () => {
-    expect(terminal).toMatch(/fullstack-a-93/);
     expect(terminal).toMatch(/trailing-edge fit/i);
     expect(terminal).toMatch(/Idempotent[\s\S]{1,80}size hasn't drifted/i);
   });
 });
 
-describe("fullstack-a-93: PTY resize propagation preserved", () => {
+describe("PTY resize propagation preserved", () => {
   test("xterm onResize still sends `{ type: 'resize', cols, rows }` to chan-server", () => {
     expect(terminal).toMatch(
       /term\.onResize\(\(\{ cols, rows \}\) => send\(\{ type: "resize", cols, rows \}\)\);/,

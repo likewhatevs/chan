@@ -5,9 +5,9 @@ import client from "../api/client.ts?raw";
 import store from "../state/store.svelte.ts?raw";
 
 describe("File Browser upload via the Upload button", () => {
-  // Bug 2 / round-1: external OS file drops (drag-IN) are no longer
-  // accepted by the tree; importing files is now the Upload button's
-  // job. The drop handlers only resolve the app-internal tree-move.
+  // External OS file drops (drag-IN) are no longer accepted by the
+  // tree; importing files is the Upload button's job. The drop
+  // handlers only resolve the app-internal tree-move.
   test("FileTree no longer routes external file drops to upload", () => {
     expect(tree).not.toContain('types.includes("Files")');
     expect(tree).not.toContain("fileOps.uploadFilesTo(destDir, files)");

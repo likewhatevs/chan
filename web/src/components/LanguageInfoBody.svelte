@@ -1,12 +1,9 @@
 <script lang="ts">
   // Language inspector body. Shown when a language bubble
   // (`kind: "language"`, id `language:<lang>`) is selected in the
-  // graph. Phase-13 A3: language nodes previously had no inspector
-  // at all (InspectorBody's dispatcher fell through to the tag body
-  // with a null selection, so the panel rendered the empty
-  // placeholder). This body mirrors the other inspector bodies'
-  // chrome: a kind chip, the language name, a small stats grid
-  // (files + lines of code), and a "Graph from here" affordance.
+  // graph. Mirrors the other inspector bodies' chrome: a kind chip,
+  // the language name, a small stats grid (files + lines of code),
+  // and a "Graph from here" affordance.
   //
   // The action's semantic is host-decided (the callback-agnostic
   // pattern WorkspaceInfoBody / FileInfoBody already use): the graph

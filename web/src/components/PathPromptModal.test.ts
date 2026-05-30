@@ -14,7 +14,7 @@ import teamWork from "./TeamWork.svelte?raw";
 // branch, or accidentally routes the watcher dialog back through
 // `mode: "move"`, trips the test.
 
-describe("fullstack-b-3: PathPromptModal attach mode", () => {
+describe("PathPromptModal attach mode", () => {
   test("modal renders 'attach watcher to' label in attach mode", () => {
     expect(modal).toMatch(/status\.mode === "attach"[\s\S]{0,40}attach watcher to/);
   });

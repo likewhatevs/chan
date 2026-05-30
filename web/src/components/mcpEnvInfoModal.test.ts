@@ -9,7 +9,7 @@ import terminal from "./TerminalTab.svelte?raw";
 // "Show MCP env in terminal" CTA moved INTO the modal; the
 // inline popover dropped).
 
-describe("fullstack-a-67d slice 2: McpEnvInfoModal component", () => {
+describe("McpEnvInfoModal component", () => {
   test("modal renders gated on the `open` prop with dialog role + aria-modal", () => {
     expect(modal).toMatch(/\{#if open\}/);
     expect(modal).toMatch(
@@ -49,7 +49,7 @@ describe("fullstack-a-67d slice 2: McpEnvInfoModal component", () => {
   });
 });
 
-describe("fullstack-a-67d slice 2: TerminalTab wiring", () => {
+describe("TerminalTab wiring", () => {
   test("McpEnvInfoModal imported + mounted", () => {
     expect(terminal).toMatch(
       /import McpEnvInfoModal from "\.\/McpEnvInfoModal\.svelte";/,

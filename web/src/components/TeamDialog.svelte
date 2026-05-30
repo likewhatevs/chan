@@ -24,8 +24,8 @@
   } from "../state/teamDialog.svelte";
   import { runTeamBootstrap, wireToDialog } from "../state/teamOrchestrator.svelte";
 
-  /// phase-13-r2 `lane-a-A3`: Team Work dialog. Opens over the
-  /// already-created Team Work Lead terminal (the dialog request
+  /// Team Work dialog. Opens over the already-created Team Work Lead
+  /// terminal (the dialog request
   /// carries that tab + pane id). Cancel deletes the lead tab;
   /// Bootstrap runs the lead-first orchestrator against it.
 

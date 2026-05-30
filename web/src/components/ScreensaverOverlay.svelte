@@ -1,7 +1,6 @@
 <script lang="ts">
-  // `fullstack-a-77` slice 2: full-window screensaver overlay
-  // + PIN entry. Mounted at App root + gated on
-  // `screensaver.locked`. While locked:
+  // Full-window screensaver overlay + PIN entry. Mounted at App root
+  // + gated on `screensaver.locked`. While locked:
   //
   // * The entire workspace view sits behind an opaque overlay.
   // * PIN input is the only focusable surface (the overlay's
@@ -79,8 +78,8 @@
     });
   });
 
-  /// `fullstack-a-77c`: no-PIN branch. Dismiss on any
-  /// key / pointer event anywhere on the backdrop. The
+  /// No-PIN branch. Dismiss on any key / pointer event anywhere on
+  /// the backdrop. The
   /// `pin_set` gate inside `unlockWithoutPin()` makes
   /// this safe to wire unconditionally. When a PIN is
   /// set the helper bails out + the existing PIN form
@@ -116,9 +115,8 @@
     const ok = await unlockWithPin(pin, salt);
     busy = false;
     if (!ok) {
-      // `fullstack-a-77`: wrong-PIN feedback. Shake the
-      // overlay + clear the input. No rate limiting per the
-      // task body's local-only framing.
+      // Wrong-PIN feedback. Shake the overlay + clear the input.
+      // No rate limiting (local-only).
       shake = true;
       errorMessage = screensaver.pin_set
         ? "Wrong PIN"
@@ -193,9 +191,9 @@
             {busy ? "Unlocking…" : "Unlock"}
           </button>
         {:else}
-          <!-- `fullstack-a-77c`: no-PIN branch. Helper text
-               promises "any input unlocks"; after the wake input,
-               the backdrop's onkeydown + onclick handlers fulfill it. -->
+          <!-- No-PIN branch. Helper text promises "any input
+               unlocks"; after the wake input, the backdrop's
+               onkeydown + onclick handlers fulfill it. -->
           <p class="screensaver-sub">
             No PIN set on this workspace. Press any key or click to
             unlock.
@@ -295,10 +293,9 @@
     opacity: 0.6;
     cursor: not-allowed;
   }
-  /* `fullstack-a-77`: shake feedback on wrong PIN. 400ms
-     duration matches the timer that clears the `shake`
-     flag; the CSS animation re-runs on each fresh
-     `class:shake` toggle. */
+  /* Shake feedback on wrong PIN. 400ms duration matches the timer
+     that clears the `shake` flag; the CSS animation re-runs on each
+     fresh `class:shake` toggle. */
   .screensaver-card.shake {
     animation: screensaver-shake 0.4s ease-in-out;
   }
