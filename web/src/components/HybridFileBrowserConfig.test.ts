@@ -2,108 +2,33 @@ import { describe, expect, test } from "vitest";
 import source from "./HybridFileBrowserConfig.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
-// Search / Indexing / Reports settings in HybridFileBrowserConfig.
-// Semantic search, the embedding-model picker, and chan-reports toggles
-// are the live controls (no separate global Settings overlay).
+// After the phase-15 Dashboard redesign the File Browser back-side keeps
+// no settings of its own: Search, the embedding-model picker and
+// chan-reports moved to the Dashboard's Search + Workspace slot backs
+// (covered by dashboardTabAndCarousel.test.ts). This surface is now a
+// placeholder so Cmd+, on a File Browser still lands on a config shell.
 
-describe("HybridFileBrowserConfig wiring", () => {
-  test("warning copy distinguishes workspace-wide scope from per-FB-pane", () => {
+describe("HybridFileBrowserConfig is a placeholder", () => {
+  test("onDone prop is accepted and the shared shell owns OK", () => {
     expect(source).toMatch(
-      /These settings apply to ALL file-browser surfaces/,
+      /let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\)/,
     );
-    expect(source).toMatch(/class="hint warning"/);
-  });
-
-  test("Semantic search section ships the same state machine as -a-21", () => {
-    expect(source).toMatch(/let semanticState = \$state<SemanticState \| null>/);
-    expect(source).toMatch(/async function semanticToggle\(next: boolean\)/);
-    expect(source).toMatch(/api\.semanticEnable\(\)/);
-    expect(source).toMatch(/api\.semanticDownload\(\)/);
-    expect(source).toMatch(/api\.semanticDisable\(\)/);
-    expect(source).toMatch(/api\.semanticState\(\)/);
-    expect(source).toMatch(/SEMANTIC_POLL_INTERVAL_MS\s*=\s*3000/);
-  });
-
-  test("Semantic search guards the feature flag from BuildInfo", () => {
-    expect(source).toMatch(/buildInfo && !buildInfo\.features\.embeddings/);
-    expect(source).toContain("--features embed-model");
-  });
-
-  test("Semantic search toggle disables during downloading + enabling", () => {
     expect(source).toMatch(
-      /disabled=\{semanticDownloading \|\| semanticEnabling\}/,
-    );
-  });
-
-  test("formatModelSize helper formats model byte counts", () => {
-    expect(source).toMatch(
-      /function formatModelSize\(bytes: number \| null \| undefined\)/,
-    );
-    expect(source).toMatch(/bytes == null \|\| !Number\.isFinite\(bytes\)/);
-    expect(source).toMatch(/\.toFixed\(1\)/);
-  });
-
-  test("Multi-model picker renders the loaded registry as an enabled workspace-wide picker", () => {
-    expect(source).toMatch(/<h3>Embedding model<\/h3>/);
-    expect(source).toMatch(/let semanticModels = \$state<SemanticModelRegistry \| null>\(null\)/);
-    expect(source).toMatch(/api\.semanticModels\(\)/);
-    expect(source).toMatch(/api\.semanticModelPatch\(model\)/);
-    expect(source).toMatch(
-      /<select[\s\S]{1,160}class="config-select family"[\s\S]{1,200}disabled=\{semanticModels === null \|\| semanticModelBusy \|\| semanticDownloading \|\| semanticEnabling\}[\s\S]{1,200}value=\{semanticModels\?\.current_model \?\? ""\}[\s\S]{1,160}onchange=\{changeSemanticModel\}[\s\S]{1,120}aria-label="Embedding model picker"/,
-    );
-    expect(source).toMatch(/\{#each semanticModels\.models as model \(model\.id\)\}/);
-    expect(source).toMatch(/formatModelMeta\(model\)/);
-    expect(source).not.toMatch(/Picker placeholder/);
-    expect(source).not.toMatch(/backend ships a model registry/);
-  });
-
-  test("chan-reports toggle uses per-workspace reports endpoints", () => {
-    expect(source).toMatch(/<h3>chan-reports<\/h3>/);
-    expect(source).toMatch(/function setReportsEnabled\(next: boolean\)/);
-    expect(source).toMatch(/api\.reportsEnable\(\)/);
-    expect(source).toMatch(/api\.reportsDisable\(\)/);
-    expect(source).toMatch(/checked=\{reportsEnabled\}/);
-  });
-
-  test("chan-reports state loads independently from /api/config", () => {
-    expect(source).toMatch(/let reportsState = \$state<\{ enabled: boolean \} \| null>/);
-    expect(source).toMatch(/async function loadReportsState\(\)/);
-    expect(source).toMatch(/reportsState = await api\.reportsState\(\)/);
-    expect(source).not.toMatch(/reportsDirty/);
-    expect(source).not.toMatch(/api\.updateConfig\(cfgBody\)/);
-  });
-
-  test("polling timer is cleaned up on destroy", () => {
-    expect(source).toMatch(/onDestroy\(\(\) => \{\s*stopSemanticPoll\(\)/);
-  });
-
-  test("enable flow refreshes model registry after download", () => {
-    expect(source).toMatch(/semanticState = await api\.semanticDownload\(\)/);
-    expect(source).toMatch(/await refreshSemanticSearchState\(\)/);
-    expect(source).toMatch(/semanticState = await api\.semanticEnable\(\)/);
-  });
-
-  test("model label metadata includes dimensions, size, and download state", () => {
-    expect(source).toMatch(/function formatModelMeta\(model: SemanticModelRegistry\["models"\]\[number\]\): string/);
-    expect(source).toMatch(/`\$\{model\.dim\}d`/);
-    expect(source).toMatch(/model\.size_label/);
-    expect(source).toMatch(/model\.downloaded \? "downloaded" : "not downloaded"/);
-  });
-});
-
-describe("Wave 4: File Browser back-side controls", () => {
-  test("onDone prop is accepted and OK button routes through it", () => {
-    expect(source).toMatch(/let \{ onDone \}: \{ onDone\?: \(\) => void \} = \$props\(\)/);
-    expect(source).toMatch(
-      /<HybridSurfaceConfigShell[\s\S]{1,180}title="Hybrid File Browser"[\s\S]{1,120}surface="browser"[\s\S]*?\{onDone\}/,
+      /<HybridSurfaceConfigShell[\s\S]{1,180}title="Hybrid File Browser"[\s\S]{1,160}surface="browser"[\s\S]*?\{onDone\}/,
     );
     expect(shell).toMatch(
       /<button type="button" class="config-ok" onclick=\{\(\) => onDone\?\.\(\)\}>OK<\/button>/,
     );
   });
 
-  test("model dropdown uses the polished config-select style", () => {
-    expect(source).toMatch(/class="config-select family"/);
-    expect(source).toMatch(/\.config-select \{[\s\S]{1,300}border: 1px solid var\(--border\)/);
+  test("carries the placeholder copy and none of the moved settings", () => {
+    expect(source).toMatch(/No settings here, cheers\./);
+    // The moved controls must be gone from this surface (they live in the
+    // Dashboard Search + Workspace slot backs now).
+    expect(source).not.toMatch(/<h3>Semantic search<\/h3>/);
+    expect(source).not.toMatch(/<h3>Embedding model<\/h3>/);
+    expect(source).not.toMatch(/<h3>chan-reports<\/h3>/);
+    expect(source).not.toMatch(/api\.semanticEnable\(\)/);
+    expect(source).not.toMatch(/api\.reportsEnable\(\)/);
   });
 });
