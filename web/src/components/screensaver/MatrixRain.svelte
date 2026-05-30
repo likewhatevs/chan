@@ -1,28 +1,31 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import {
+    BODY_COLOR,
+    COLUMN_SPACING_PX,
+    drawStaticMatrix as drawStaticFrame,
+    HEAD_COLOR,
+    LEAD_COLOR,
+    MID_COLOR,
+    RAIN_FONT_SIZE_PX,
+    randInt,
+    randomChar,
+    ROW_SPACING_PX,
+  } from "./matrixRain";
 
   // High-fidelity Svelte adaptation of the MIT-licensed
   // dcragusa/MatrixScreensaver project:
   // https://github.com/dcragusa/MatrixScreensaver
   // License notice: /static/matrix/LICENSE-MatrixScreensaver.txt
-  const MATRIX_ALPHABET =
-    "abcdefghijklmnopqrstuvwxyz123456789890~!#$%^&*()-_=+[]{};:'\",.<>/?\\|".split("");
   const INTRO_MESSAGES = ["Wake up, Neo...", "The Matrix has you..."] as const;
   const INTRO_START_DELAY_MS = 500;
   const INTRO_HOLD_MS = 2000;
   const TYPE_DELAY_SLOW_MS = 300;
   const TYPE_DELAY_FAST_MS = 100;
   const DRAW_INTERVAL_MS = 40;
-  const COLUMN_SPACING_PX = 11;
-  const ROW_SPACING_PX = 19;
   const INTRO_FONT_SIZE_PX = 22;
-  const RAIN_FONT_SIZE_PX = 20;
   const RAIN_DENSITY = 4;
   const INTRO_COLOR = "#7bff8d";
-  const HEAD_COLOR = "#f6f6f4";
-  const LEAD_COLOR = "#c9cfb9";
-  const MID_COLOR = "#95a297";
-  const BODY_COLOR = "#2cb231";
 
   type Column = {
     chars: string[];
@@ -47,19 +50,11 @@
     let drawTimer: ReturnType<typeof setInterval> | null = null;
     const timeouts: ReturnType<typeof setTimeout>[] = [];
 
-    function randInt(max: number): number {
-      return Math.floor(Math.random() * max);
-    }
-
     function sleep(milliseconds: number): Promise<void> {
       return new Promise((resolve) => {
         const timeout = setTimeout(resolve, milliseconds);
         timeouts.push(timeout);
       });
-    }
-
-    function randomChar(): string {
-      return MATRIX_ALPHABET[randInt(MATRIX_ALPHABET.length)] ?? "0";
     }
 
     function randomChars(count: number): string[] {
@@ -208,28 +203,11 @@
       }
     }
 
+    // Delegates to the shared static-frame renderer so the screensaver and the
+    // config-panel preview never drift. The shared helper clears its own grid
+    // extent before drawing, so no separate clearScreen() call is needed.
     function drawStaticMatrix(): void {
-      clearScreen();
-      ctx.font = `${RAIN_FONT_SIZE_PX}px matrix_code`;
-      for (let colIndex = 0; colIndex < numCols; colIndex += 1) {
-        for (let rowIndex = 0; rowIndex < numChars; rowIndex += 1) {
-          const roll = Math.random();
-          if (roll < 0.04) {
-            ctx.fillStyle = HEAD_COLOR;
-          } else if (roll < 0.08) {
-            ctx.fillStyle = LEAD_COLOR;
-          } else if (roll < 0.12) {
-            ctx.fillStyle = MID_COLOR;
-          } else {
-            ctx.fillStyle = BODY_COLOR;
-          }
-          outputChar(
-            randomChar(),
-            colIndex * COLUMN_SPACING_PX,
-            rowIndex * ROW_SPACING_PX + ROW_SPACING_PX,
-          );
-        }
-      }
+      drawStaticFrame(ctx, numCols, numChars);
     }
 
     function startRain(): void {
