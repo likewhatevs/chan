@@ -69,7 +69,7 @@ pub struct HelloAckOk {
     pub protocol: ProtocolVersion,
     /// Public path prefix on the gateway's wildcard subdomain.
     /// Shape: `/{workspace}` (one leading slash, no trailing slash).
-    /// The username lives in the host (`{user}.drive.chan.app`),
+    /// The username lives in the host (`{user}.workspace.chan.app`),
     /// not in the path; chan-server uses this value as
     /// `<meta name="chan-prefix">` so the SPA's relative URLs
     /// resolve under that workspace.

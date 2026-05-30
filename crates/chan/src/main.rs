@@ -254,12 +254,12 @@ enum Command {
         no_settings: bool,
         /// Tunnel endpoint URL. With --tunnel-token, chan serve
         /// dials this instead of binding a local listener.
-        #[arg(long, default_value = "https://drive.chan.app/v1/tunnel")]
+        #[arg(long, default_value = "https://workspace.chan.app/v1/tunnel")]
         tunnel_url: String,
         /// Personal access token (chan_pat_*) from id.chan.app.
         /// Setting this enables tunnel mode: chan serve does not
         /// bind a local TCP listener and instead publishes the
-        /// workspace at {user}.drive.chan.app/{workspace}/*. Prefer the
+        /// workspace at {user}.workspace.chan.app/{workspace}/*. Prefer the
         /// CHAN_TUNNEL_TOKEN env var so the secret does not appear
         /// in `ps`.
         #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
@@ -271,7 +271,7 @@ enum Command {
         #[arg(long)]
         tunnel_workspace_name: Option<String>,
         /// Expose the tunneled workspace without an OAuth gate. By
-        /// default, `{user}.drive.chan.app/{workspace}/` 404s anonymous
+        /// default, `{user}.workspace.chan.app/{workspace}/` 404s anonymous
         /// visitors; the workspace owner opens it from id.chan.app's
         /// dashboard via a short-lived workspace-gate handoff. With
         /// --tunnel-public, anyone with the URL can reach the workspace
@@ -780,7 +780,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 }
 
 /// Pick the URL-safe workspace name to publish under
-/// `{user}.drive.chan.app/<name>`. This is a tunnel URL concern,
+/// `{user}.workspace.chan.app/<name>`. This is a tunnel URL concern,
 /// separate from local path-keyed workspace metadata.
 ///
 /// - With `--tunnel-workspace-name`: validate it; bail with a clear
@@ -1119,7 +1119,7 @@ async fn cmd_serve(
         if tunnel_public {
             eprintln!(
                 "WARNING: --public exposes this workspace at \
-                 drive.chan.app/<user>/{workspace_name} with no auth gate. \
+                 workspace.chan.app/<user>/{workspace_name} with no auth gate. \
                  Anyone with the URL has read/write access."
             );
         }

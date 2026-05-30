@@ -95,7 +95,7 @@ pub struct ClientConfig {
     pub client_version: String,
     /// Expose the workspace to anonymous visitors. When false (the
     /// default), only the workspace owner's signed-in id.chan.app
-    /// session can reach `drive.chan.app/{user}/{workspace}`. When
+    /// session can reach `workspace.chan.app/{user}/{workspace}`. When
     /// true, the workspace-proxy auth gate skips the OAuth bounce.
     pub public: bool,
     /// Initial reconnect backoff. Doubled up to `max_backoff`.
@@ -135,7 +135,7 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            tunnel_url: Url::parse("https://drive.chan.app/v1/tunnel")
+            tunnel_url: Url::parse("https://workspace.chan.app/v1/tunnel")
                 .expect("hard-coded url is valid"),
             token: String::new(),
             workspace: String::new(),

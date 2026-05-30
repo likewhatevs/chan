@@ -27,7 +27,7 @@
 //! same-origin policy treats `http://127.0.0.1:A/` and
 //! `http://127.0.0.1:B/` as different origins, so JS served by
 //! tenant A cannot fetch from tenant B. This is the localhost
-//! analogue of `*.drive.chan.app` subdomain isolation in prod.
+//! analogue of `*.workspace.chan.app` subdomain isolation in prod.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

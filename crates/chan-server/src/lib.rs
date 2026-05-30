@@ -234,16 +234,16 @@ fn should_open_browser(open_browser: bool) -> bool {
 }
 
 /// True iff the tunnel dial endpoint points at the production
-/// `drive.chan.app` terminator. On that path chan-serve can predict
+/// `workspace.chan.app` terminator. On that path chan-serve can predict
 /// the public visitor URL (wildcard subdomain shape); anywhere else
 /// the terminator (chan-desktop, dev gateway, third-party host)
 /// owns the URL scheme so we can't fabricate one. The QR and
 /// browser-open paths key on this so we never advertise a
-/// hallucinated `tunnel.drive.chan.app`-style URL for a dial that
+/// hallucinated `tunnel.workspace.chan.app`-style URL for a dial that
 /// went to a local loopback or an unrelated host.
 fn is_production_tunnel_url(tunnel_url: &str) -> bool {
     url::Url::parse(tunnel_url)
-        .map(|u| u.scheme() == "https" && u.host_str() == Some("drive.chan.app"))
+        .map(|u| u.scheme() == "https" && u.host_str() == Some("workspace.chan.app"))
         .unwrap_or(false)
 }
 
@@ -579,7 +579,7 @@ pub async fn serve(
 /// substreams with our router until the future is dropped.
 ///
 /// Tunnel mode forces `no_token=true`: the gateway in front of
-/// drive.chan.app is the trust boundary, and the per-launch bearer
+/// workspace.chan.app is the trust boundary, and the per-launch bearer
 /// would otherwise have to be embedded in any URL the user shares.
 ///
 /// `public` is forwarded to workspace-proxy via the Hello frame. When
@@ -677,7 +677,7 @@ pub async fn serve_via_tunnel(
     let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(8);
     // Capture for the spawned task: the hostname / scheme of the
     // tunnel dial endpoint decides whether we know the public URL
-    // shape on the visitor side. The production `drive.chan.app`
+    // shape on the visitor side. The production `workspace.chan.app`
     // gateway uses wildcard subdomains; any other terminator
     // (embedded chan-tunnel-server, local dev, third-party host)
     // owns its own URL scheme and chan-serve has no way to predict
@@ -705,14 +705,14 @@ pub async fn serve_via_tunnel(
                         }
                     }
                     if production_public {
-                        // Wildcard-subdomain shape on drive.chan.app:
-                        // `{user}.drive.chan.app/{workspace}/`. User is in
+                        // Wildcard-subdomain shape on workspace.chan.app:
+                        // `{user}.workspace.chan.app/{workspace}/`. User is in
                         // the host; reg.prefix is `/{workspace}`. Trailing
                         // slash matches the canonical form so the chan
                         // SPA's vite `base: "./"` resolves asset URLs
                         // relative to the workspace.
                         let public_url = format!(
-                            "https://{user}.drive.chan.app{prefix}/",
+                            "https://{user}.workspace.chan.app{prefix}/",
                             user = reg.user,
                             prefix = reg.prefix,
                         );

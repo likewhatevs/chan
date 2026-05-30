@@ -7,7 +7,7 @@
 //! matches the rest of the app.
 //!
 //! Tunnel mode forces the gate off (`AppState::token == None`); the
-//! drive.chan.app gateway is the trust boundary in that path.
+//! workspace.chan.app gateway is the trust boundary in that path.
 
 use std::path::Path;
 use std::sync::atomic::Ordering;

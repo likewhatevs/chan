@@ -30,7 +30,7 @@ itself lives in chan-tunnel-proto's design.md.
 ## 1. Problem and scope
 
 A user running `chan serve` on a laptop wants their workspace at
-`drive.chan.app/{user}/{workspace}` without opening a port or
+`workspace.chan.app/{user}/{workspace}` without opening a port or
 configuring DNS. The constraint is "dial out only, HTTPS only."
 The shape that fits is one long-lived `POST /v1/tunnel` carrying
 yamux frames after a short handshake.
@@ -174,7 +174,7 @@ pub struct ClientConfig {
     pub proxy: Option<Url>,
     pub max_concurrent_substreams: usize,
 }
-impl Default for ClientConfig { /* drive.chan.app/v1/tunnel */ }
+impl Default for ClientConfig { /* workspace.chan.app/v1/tunnel */ }
 
 pub struct Registration {
     pub prefix: String,

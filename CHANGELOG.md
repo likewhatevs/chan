@@ -6,12 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Phase 14 round 2: a frontend pristine pass for the first public release.
-No behavior change; code comments, documentation, and user-facing copy
-only.
+Phase 14 round 2: a frontend pristine pass for the first public release,
+plus the tunnel domain rename.
 
 ### Changed
 
+- The tunnel domain is now `workspace.chan.app` (previously
+  `drive.chan.app`). Tunnel mode dials `workspace.chan.app/v1/tunnel` and
+  publishes at `{user}.workspace.chan.app/{workspace}/`; the chan client
+  default, the chan-tunnel-* crates, chan-server, the desktop shell, the
+  manual, and the marketing copy all use the new hostname.
 - Reviewed the frontend code comments, documentation, and user-facing
   copy so they read as a present-state snapshot rather than a development
   history. The editor design note (`web/src/editor/design.md`) now

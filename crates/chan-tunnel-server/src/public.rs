@@ -1,5 +1,5 @@
 //! Public router: serves `/{user}/{workspace}/*rest` on
-//! `drive.chan.app`.
+//! `workspace.chan.app`.
 //!
 //! For each request, looks up the corresponding `TunnelHandle`,
 //! opens a fresh yamux substream, runs an HTTP/1.1 client over it
@@ -66,8 +66,8 @@ pub struct PublicConfig {
     /// misconfiguration). Empty (default) disables the check and
     /// trusts the upstream routing layer.
     ///
-    /// Match is by ASCII suffix: `[".drive.chan.app"]` matches
-    /// `alice.drive.chan.app` but not `drive.chan.app` itself; add
+    /// Match is by ASCII suffix: `[".workspace.chan.app"]` matches
+    /// `alice.workspace.chan.app` but not `workspace.chan.app` itself; add
     /// the bare hostname too if that should be allowed.
     pub allowed_host_suffixes: Vec<String>,
     /// Wall-clock cap on the upstream (chan-serve) handshake +
@@ -639,7 +639,7 @@ mod tests {
     fn untrusted_xff_is_replaced_with_connect_ip() {
         let req = req_with(
             &[("x-forwarded-for", "1.2.3.4")],
-            Some("alice.drive.chan.app"),
+            Some("alice.workspace.chan.app"),
         );
         let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
         assert_eq!(hv(&out, "x-forwarded-for"), Some("10.0.0.1"));
@@ -649,7 +649,7 @@ mod tests {
     fn trusted_xff_is_appended_to_existing_chain() {
         let req = req_with(
             &[("x-forwarded-for", "1.2.3.4")],
-            Some("alice.drive.chan.app"),
+            Some("alice.workspace.chan.app"),
         );
         let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), true).unwrap();
         assert_eq!(hv(&out, "x-forwarded-for"), Some("1.2.3.4, 10.0.0.1"));
@@ -662,7 +662,7 @@ mod tests {
                 ("forwarded", "for=1.2.3.4;proto=http"),
                 ("x-real-ip", "1.2.3.4"),
             ],
-            Some("alice.drive.chan.app"),
+            Some("alice.workspace.chan.app"),
         );
         let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
         assert!(out.headers().get("forwarded").is_none());
@@ -676,7 +676,7 @@ mod tests {
                 ("proxy-authorization", "Basic AAA"),
                 ("proxy-authenticate", "Basic"),
             ],
-            Some("alice.drive.chan.app"),
+            Some("alice.workspace.chan.app"),
         );
         let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), true).unwrap();
         assert!(out.headers().get("proxy-authorization").is_none());
@@ -691,7 +691,7 @@ mod tests {
                 ("cookie", "sid=attacker"),
                 ("set-cookie", "sid=attacker"),
             ],
-            Some("alice.drive.chan.app"),
+            Some("alice.workspace.chan.app"),
         );
         let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
         assert!(out.headers().get("authorization").is_none());
@@ -703,7 +703,7 @@ mod tests {
     fn forwarded_proto_is_always_https() {
         let req = req_with(
             &[("x-forwarded-proto", "http")],
-            Some("alice.drive.chan.app"),
+            Some("alice.workspace.chan.app"),
         );
         let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
         assert_eq!(hv(&out, "x-forwarded-proto"), Some("https"));
@@ -713,15 +713,15 @@ mod tests {
     fn forwarded_host_comes_from_host_header() {
         let req = req_with(
             &[("x-forwarded-host", "evil.example")],
-            Some("alice.drive.chan.app"),
+            Some("alice.workspace.chan.app"),
         );
         let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
-        assert_eq!(hv(&out, "x-forwarded-host"), Some("alice.drive.chan.app"));
+        assert_eq!(hv(&out, "x-forwarded-host"), Some("alice.workspace.chan.app"));
     }
 
     #[test]
     fn rest_is_used_as_path() {
-        let req = req_with(&[], Some("alice.drive.chan.app"));
+        let req = req_with(&[], Some("alice.workspace.chan.app"));
         let out = build_forwarded("inner/path".into(), req, Some("10.0.0.1"), false).unwrap();
         assert_eq!(out.uri().path(), "/inner/path");
     }
@@ -734,26 +734,26 @@ mod tests {
 
     #[test]
     fn host_allowed_matches_suffix_case_insensitive() {
-        let allow = vec![".drive.chan.app".to_string()];
-        assert!(host_allowed(Some("alice.drive.chan.app"), &allow));
-        assert!(host_allowed(Some("ALICE.Drive.Chan.App"), &allow));
-        assert!(host_allowed(Some("alice.drive.chan.app:8443"), &allow));
+        let allow = vec![".workspace.chan.app".to_string()];
+        assert!(host_allowed(Some("alice.workspace.chan.app"), &allow));
+        assert!(host_allowed(Some("ALICE.Workspace.Chan.App"), &allow));
+        assert!(host_allowed(Some("alice.workspace.chan.app:8443"), &allow));
         assert!(!host_allowed(Some("evil.example"), &allow));
-        assert!(!host_allowed(Some("drive.chan.app"), &allow)); // bare apex not in suffix
+        assert!(!host_allowed(Some("workspace.chan.app"), &allow)); // bare apex not in suffix
         assert!(!host_allowed(None, &allow));
         assert!(!host_allowed(Some(""), &allow));
     }
 
     #[test]
     fn host_allowed_multiple_suffixes() {
-        let allow = vec![".drive.chan.app".to_string(), "drive.chan.app".to_string()];
-        assert!(host_allowed(Some("alice.drive.chan.app"), &allow));
-        assert!(host_allowed(Some("drive.chan.app"), &allow));
+        let allow = vec![".workspace.chan.app".to_string(), "workspace.chan.app".to_string()];
+        assert!(host_allowed(Some("alice.workspace.chan.app"), &allow));
+        assert!(host_allowed(Some("workspace.chan.app"), &allow));
     }
 
     #[test]
     fn empty_rest_becomes_root() {
-        let req = req_with(&[], Some("alice.drive.chan.app"));
+        let req = req_with(&[], Some("alice.workspace.chan.app"));
         let out = build_forwarded(String::new(), req, Some("10.0.0.1"), false).unwrap();
         assert_eq!(out.uri().path(), "/");
     }

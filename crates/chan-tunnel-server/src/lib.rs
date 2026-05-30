@@ -2,7 +2,7 @@
 //!
 //! The eventual entry point is an `axum::Router` exposing
 //! `POST /v1/tunnel`; nginx (`grpc_pass`) forwards h2c from
-//! `drive.chan.app/v1/tunnel` to workspace-proxy's tunnel listener.
+//! `workspace.chan.app/v1/tunnel` to workspace-proxy's tunnel listener.
 //! After the Hello/HelloAck handshake the duplex is handed to
 //! yamux, the registered workspace is inserted into the shared
 //! `Registry`, and the server side opens new substreams to forward
@@ -151,11 +151,11 @@ pub trait Validator: Send + Sync + 'static {
 }
 
 /// Public path prefix shape: `/{workspace}`. The fronting proxy now
-/// uses wildcard subdomains (`{user}.drive.chan.app`), so the
+/// uses wildcard subdomains (`{user}.workspace.chan.app`), so the
 /// username lives in the host header, not in the path. The path
 /// prefix is exactly the workspace segment so chan-server's
 /// `<meta name="chan-prefix">` makes the SPA's relative URLs
-/// resolve correctly under `{user}.drive.chan.app/{workspace}/...`. No
+/// resolve correctly under `{user}.workspace.chan.app/{workspace}/...`. No
 /// trailing slash; rest of the path is the workspace-relative request.
 fn make_prefix(_username: &str, workspace: &str) -> String {
     format!("/{workspace}")
