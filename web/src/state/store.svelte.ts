@@ -1764,13 +1764,6 @@ export function openGraphForLanguage(language: string): void {
   scheduleSessionSave();
 }
 
-// ---- search-status overlay ---------------------------------------------
-//
-// Cmd+, flips the focused Hybrid to its back-of-card config (Appearance,
-// Screen Lock, Screensaver). It does not open a global Settings overlay.
-
-export const searchStatusOverlay = $state<{ open: boolean }>({ open: false });
-
 // ---- file browser overlay ----------------------------------------------
 //
 // The file browser is a window-level overlay (not a tab), so its
@@ -1933,7 +1926,7 @@ function resolveGraphSpawnContext(scopeId: string): SpawnContext {
 // the topmost overlay is visually accessible, the scrim target is
 // naturally the same as the stack top.
 
-export type OverlayId = "search" | "search-status";
+export type OverlayId = "search";
 
 export const overlayStack = $state<{ ids: OverlayId[] }>({ ids: [] });
 
@@ -1959,13 +1952,10 @@ export function closeOverlay(id: OverlayId): void {
     case "search":
       searchPanel.open = false;
       return;
-    case "search-status":
-      searchStatusOverlay.open = false;
-      return;
   }
 }
 
-/// Diff the five overlay `.open` flags into `overlayStack.ids`:
+/// Diff the overlay `.open` flags into `overlayStack.ids`:
 /// remove ids whose overlay is closed, append ids that opened since
 /// the last run. Append-only for newcomers means the most-recently
 /// opened overlay always lands on top, which matches user intent
@@ -1974,7 +1964,6 @@ export function closeOverlay(id: OverlayId): void {
 export function syncOverlayStack(): void {
   const open = new Set<OverlayId>();
   if (searchPanel.open) open.add("search");
-  if (searchStatusOverlay.open) open.add("search-status");
   // Drop closed entries while preserving the existing relative
   // order of those that remain.
   const kept = overlayStack.ids.filter((id) => open.has(id));

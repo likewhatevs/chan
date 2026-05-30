@@ -23,7 +23,6 @@
   import PaneModeHelp from "./components/PaneModeHelp.svelte";
   import PromptModal from "./components/PromptModal.svelte";
   import SearchPanel from "./components/SearchPanel.svelte";
-  import SearchStatusOverlay from "./components/SearchStatusOverlay.svelte";
   import Workspace from "./components/Workspace.svelte";
   import {
     applyInitialTheme,
@@ -46,7 +45,6 @@
     resolveSpawnContext,
     revealAndSelect,
     scheduleSessionSave,
-    searchStatusOverlay,
     searchPanel,
     setTransientStatus,
     syncOverlayStack,
@@ -243,7 +241,6 @@
   // back through reactive paths.
   $effect(() => {
     void searchPanel.open;
-    void searchStatusOverlay.open;
     syncOverlayStack();
   });
 
@@ -1106,7 +1103,6 @@
 <DraftCloseModal />
 <WorkspaceWarningsModal />
 <SearchPanel />
-<SearchStatusOverlay />
 <!-- CAS conflict prompt: surfaces when a save returns 409. Mounted
      once per window so any pane can trigger it; the dialog itself
      keys off `conflictDialog.tabId`. -->
