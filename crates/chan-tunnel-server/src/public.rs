@@ -716,7 +716,10 @@ mod tests {
             Some("alice.workspace.chan.app"),
         );
         let out = build_forwarded("foo".into(), req, Some("10.0.0.1"), false).unwrap();
-        assert_eq!(hv(&out, "x-forwarded-host"), Some("alice.workspace.chan.app"));
+        assert_eq!(
+            hv(&out, "x-forwarded-host"),
+            Some("alice.workspace.chan.app")
+        );
     }
 
     #[test]
@@ -746,7 +749,10 @@ mod tests {
 
     #[test]
     fn host_allowed_multiple_suffixes() {
-        let allow = vec![".workspace.chan.app".to_string(), "workspace.chan.app".to_string()];
+        let allow = vec![
+            ".workspace.chan.app".to_string(),
+            "workspace.chan.app".to_string(),
+        ];
         assert!(host_allowed(Some("alice.workspace.chan.app"), &allow));
         assert!(host_allowed(Some("workspace.chan.app"), &allow));
     }
