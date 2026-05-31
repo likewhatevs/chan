@@ -74,17 +74,20 @@ question - there is none.
    chat. @@Architect consolidates to @@Host.
 8. **Self-document.** Write full context into your task file + a journal entry
    as you go; don't rely on @@Architect to relay context between lanes.
-9. **Completion protocol (new).** When you finish a task, do **both**:
-   (a) append the completion to your event file as today, and
-   (b) poke the target so it picks the event up immediately:
-   `cs term write --tab-name=<target> 'poke from <agent>: check <path-to-event>\n'`.
-   This works now (`cs term write` shipped in v0.20.0; the `cs terminal`
-   rename is a round-2 item). When the target is **@@Host**, the poke is meant
-   to surface as a survey bubble over the Lead terminal (feature 2.3, being
-   built this round); until 2.3 lands, route Host-targeted pokes through the
-   event file + @@Architect. Delivery into a *running agent's* stdin depends on
-   the agent-submit fix (the shift+Enter bug in `round-2-part-2.md`); a bare
-   `\n` will not submit to an agent until that lands.
+9. **Completion protocol.** When you finish a task, do **both**:
+   (a) append the completion to your event file, and
+   (b) poke the target so it picks the event up immediately. CK-SUBMIT resolved
+   how a poke submits into a *running agent*: Shift+Enter now inserts a newline
+   (`\n`) by design, so a poke must append the agent submit chord to actually
+   submit. Use:
+   `cs term write --tab-name=<target> $'poke from <agent>: check <path>\x1b[27;9;13~'`
+   (the trailing `\x1b[27;9;13~` is the Meta+Enter submit chord; a bare `\n` only
+   inserts a newline, a bare `\r` is unreliable). NOTE: the live session runs the
+   installed v0.20.0 app, so the running CLI is still `cs term`; the CK-RENAME
+   `cs terminal` name ships in v0.21.0 and only applies once the app rebuilds.
+   When the target is **@@Host**, the survey-bubble surface (feature 2.3) is
+   deferred to round-3, so route Host-targeted pokes through the event file +
+   @@Architect for now.
 
 ## Test server
 
