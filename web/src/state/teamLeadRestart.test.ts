@@ -53,6 +53,7 @@ function config(): TeamDialogConfig {
     hostName: "Neo",
     configMode: "new",
     configPath: "/tmp/solo/chan-team.toml",
+    tabGroup: "chan-team",
     size: 1,
     autoPrefix: true,
     members: [{ name: "Lead", command: "claude --resume", env: "DEBUG=1", isLead: true }],

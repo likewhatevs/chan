@@ -29,6 +29,7 @@ import {
   type TerminalTab,
 } from "./tabs.svelte";
 import type { TeamDialogConfig, TeamMemberDraft } from "./teamDialog.svelte";
+import { defaultTabGroupFromPath } from "./teamDialog.svelte";
 
 /// Context the dialog hands the orchestrator: the EXISTING Team Work
 /// Lead terminal tab + the pane it lives in. The lead is never
@@ -109,6 +110,7 @@ export function translateConfig(config: TeamDialogConfig): TeamConfigWire {
     team_name: teamNameFromPath(config.configPath),
     host_name: config.hostName,
     host_handle: hostHandle,
+    tab_group: config.tabGroup,
     auto_prefix_at: config.autoPrefix,
     created_at: new Date().toISOString(),
     members,
@@ -180,6 +182,7 @@ export function wireToDialog(
     hostName: wire.host_name,
     configMode: "load",
     configPath,
+    tabGroup: wire.tab_group ?? defaultTabGroupFromPath(configPath),
     size,
     autoPrefix: wire.auto_prefix_at,
     members,

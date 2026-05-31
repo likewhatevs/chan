@@ -1122,6 +1122,10 @@ export interface TeamConfigWire {
   team_name: string;
   host_name: string;
   host_handle: string;
+  /// Terminal tab-group every team terminal joins ($CHAN_TAB_GROUP),
+  /// persisted in chan-team.toml. Default derived from the config
+  /// filename; the orchestrator resolves a -N suffix at Bootstrap.
+  tab_group: string;
   auto_prefix_at: boolean;
   created_at: string;
   members: TeamMemberWire[];

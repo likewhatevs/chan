@@ -62,6 +62,7 @@ function tabsConfig(): TeamDialogConfig {
     hostName: "Neo",
     configMode: "new",
     configPath: "/tmp/new-team-1/chan-team.toml",
+    tabGroup: "chan-team",
     size: 3,
     autoPrefix: true,
     members: [

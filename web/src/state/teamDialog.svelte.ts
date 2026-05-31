@@ -117,6 +117,11 @@ export interface TeamDialogConfig {
   /// written. Load: where it is read from. Defaults to
   /// `/tmp/new-team-1/chan-team.toml`.
   configPath: string;
+  /// Terminal tab-group every team terminal joins ($CHAN_TAB_GROUP).
+  /// Defaults to the config filename (via `defaultTabGroupFromPath`); the
+  /// orchestrator resolves a `-N` suffix at Bootstrap if it collides with
+  /// a live group, so the dialog just carries the desired base name.
+  tabGroup: string;
   /// Total agents (lead + workers). 1-9.
   size: number;
   /// When true, all member names render with `@@` prefix.
@@ -153,6 +158,15 @@ export function closeTeamDialog(): void {
 export const TEAM_MIN_SIZE = 1;
 export const TEAM_MAX_SIZE = 9;
 
+/// Derive the default terminal tab-group name from a config path: the
+/// filename without its `.toml` extension
+/// (`/tmp/new-team-1/chan-team.toml` -> `chan-team`). Falls back to
+/// `chan-team` when the path has no usable basename.
+export function defaultTabGroupFromPath(configPath: string): string {
+  const base = configPath.split("/").pop() ?? "";
+  return base.replace(/\.toml$/i, "") || "chan-team";
+}
+
 /// Default team config used as the dialog's initial state. One lead
 /// member, auto-prefix on, New mode, real estate defaults to tabs.
 export function defaultTeamConfig(): TeamDialogConfig {
@@ -160,6 +174,7 @@ export function defaultTeamConfig(): TeamDialogConfig {
     hostName: "Neo",
     configMode: "new",
     configPath: TEAM_CONFIG_DEFAULT_PATH,
+    tabGroup: defaultTabGroupFromPath(TEAM_CONFIG_DEFAULT_PATH),
     size: TEAM_MIN_SIZE,
     autoPrefix: true,
     members: [{ name: "Lead", command: "claude", env: "", isLead: true }],
@@ -178,6 +193,7 @@ export function validateTeamConfig(cfg: TeamDialogConfig): string | null {
   if (!cfg.configPath.trim().startsWith("/")) {
     return "Path to configuration must be absolute";
   }
+  if (!cfg.tabGroup.trim()) return "Terminal tab group name required";
   if (cfg.size < TEAM_MIN_SIZE) {
     return `agent count must be at least ${TEAM_MIN_SIZE}`;
   }

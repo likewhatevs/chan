@@ -86,6 +86,7 @@ describe("translateConfig", () => {
       hostName: "Alice",
       configMode: "new",
       configPath: "/tmp/demo/chan-team.toml",
+      tabGroup: "chan-team",
       size: 2,
       autoPrefix: true,
       members: [
@@ -168,6 +169,7 @@ describe("wireToDialog", () => {
       team_name: "demo",
       host_name: "Alice",
       host_handle: "@@Alice",
+      tab_group: "demo",
       auto_prefix_at: true,
       created_at: "2026-05-29T08:00:00.000Z",
       members: [
@@ -256,6 +258,7 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
       hostName: "Neo",
       configMode: "new",
       configPath: "/tmp/round/chan-team.toml",
+      tabGroup: "chan-team",
       size: 3,
       autoPrefix: true,
       members: [

@@ -7,6 +7,7 @@
   import {
     assignMemberToCell,
     closeTeamDialog,
+    defaultTabGroupFromPath,
     defaultTeamConfig,
     gridShapesForSize,
     reshapeSplitGrid,
@@ -39,6 +40,13 @@
   // single-shot capture is intended.
   // svelte-ignore state_referenced_locally
   let config: TeamDialogConfig = $state(defaultTeamConfig());
+  // Tracks the last auto-derived tab-group so editing the config path
+  // keeps the group in sync UNTIL the user hand-edits it: while
+  // `config.tabGroup` still equals this last auto value it is re-derived
+  // from the new path; once the user types their own group it diverges
+  // and stays put. (Sync logic lives in `syncTabGroupToPath`.)
+  // svelte-ignore state_referenced_locally
+  let lastAutoTabGroup = $state(config.tabGroup);
   let busy = $state(false);
   let submitError = $state<string | null>(null);
   // Load-mode path validation. `loadStatus` shows the resolved
@@ -56,6 +64,16 @@
   // Info line for New mode: the dir the team management files land
   // in, derived from the config path.
   const configDir = $derived(teamConfigDir(config.configPath));
+
+  /// Keep the tab-group name following the config filename as the user
+  /// edits the path, but only while they have not hand-edited the group
+  /// (tracked via `lastAutoTabGroup`). Called on every config-path input.
+  function syncTabGroupToPath(): void {
+    const prevAuto = lastAutoTabGroup;
+    const nextAuto = defaultTabGroupFromPath(config.configPath);
+    lastAutoTabGroup = nextAuto;
+    if (config.tabGroup === prevAuto) config.tabGroup = nextAuto;
+  }
 
   function setMemberField<K extends keyof TeamMemberDraft>(
     idx: number,
@@ -285,6 +303,7 @@
             type="text"
             placeholder="/tmp/new-team-1/chan-team.toml"
             autocomplete="off"
+            oninput={syncTabGroupToPath}
             onchange={() => {
               if (config.configMode === "load") void validateAndLoad();
             }}
@@ -304,6 +323,21 @@
               Enter a path to an existing <code>chan-team.toml</code> to load it.
             </span>
           {/if}
+        </label>
+
+        <label class="team-field">
+          <span class="team-field-label">Terminal tab group name</span>
+          <input
+            bind:value={config.tabGroup}
+            type="text"
+            placeholder="chan-team"
+            autocomplete="off"
+          />
+          <span class="team-field-hint">
+            Every team terminal joins this tab group. Defaults to the config
+            filename; a <code>-N</code> suffix is added at bootstrap if the name
+            is already in use.
+          </span>
         </label>
       </fieldset>
 

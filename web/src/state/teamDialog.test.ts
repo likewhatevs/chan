@@ -3,6 +3,7 @@ import {
   assignMemberToCell,
   closeTeamDialog,
   defaultGridForSize,
+  defaultTabGroupFromPath,
   defaultTeamConfig,
   emptySlotsForGrid,
   gridShapesForSize,
@@ -33,6 +34,28 @@ describe("defaultTeamConfig", () => {
     expect(cfg.autoPrefix).toBe(true);
     expect(cfg.realEstate).toEqual({ kind: "tabs" });
   });
+
+  test("seeds tabGroup from the default config filename", () => {
+    const cfg = defaultTeamConfig();
+    expect(cfg.tabGroup).toBe(defaultTabGroupFromPath(cfg.configPath));
+    expect(cfg.tabGroup).toBeTruthy();
+  });
+});
+
+describe("defaultTabGroupFromPath", () => {
+  test("strips the dir + .toml extension", () => {
+    expect(defaultTabGroupFromPath("/tmp/new-team-1/chan-team.toml")).toBe(
+      "chan-team",
+    );
+    expect(defaultTabGroupFromPath("/a/b/squad.TOML")).toBe("squad");
+  });
+  test("keeps a filename with no .toml extension as-is", () => {
+    expect(defaultTabGroupFromPath("/x/myteam")).toBe("myteam");
+  });
+  test("falls back to chan-team when there is no usable basename", () => {
+    expect(defaultTabGroupFromPath("")).toBe("chan-team");
+    expect(defaultTabGroupFromPath("/path/to/.toml")).toBe("chan-team");
+  });
 });
 
 describe("validateTeamConfig", () => {
@@ -49,6 +72,15 @@ describe("validateTeamConfig", () => {
     expect(
       validateTeamConfig({ ...defaultTeamConfig(), configPath: "rel/x.toml" }),
     ).toBe("Path to configuration must be absolute");
+  });
+
+  test("requires a non-empty terminal tab group name", () => {
+    expect(validateTeamConfig({ ...defaultTeamConfig(), tabGroup: "" })).toBe(
+      "Terminal tab group name required",
+    );
+    expect(
+      validateTeamConfig({ ...defaultTeamConfig(), tabGroup: "  " }),
+    ).toBe("Terminal tab group name required");
   });
 
   test("rejects size below TEAM_MIN_SIZE", () => {
