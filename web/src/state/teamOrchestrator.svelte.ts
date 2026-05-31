@@ -4,7 +4,8 @@
 // runs (App.svelte created it at Cmd+P via `createTeamWorkLeadTerminal`,
 // and the dialog handed us its tab + pane id). Bootstrap:
 //
-//   1. Save/update the chan-team.toml at the dialog's config path.
+//   1. Save/update the team config inside the workspace at the
+//      dialog's `{teamDir}/config.toml`.
 //   2. Launch the LEAD agent FIRST into the existing lead tab, then
 //      the workers into new tabs (split-pane or tabs-in-Hybrid per
 //      the dialog's real estate).
@@ -15,7 +16,7 @@
 
 import { api, type TeamConfigWire, type TeamMemberWire } from "../api/client";
 import { notify } from "./notify.svelte";
-import { teamConfigDir } from "./teamConfigPath";
+import { teamNameFromDir } from "./teamConfigPath";
 import {
   allTerminalTabs,
   buildSplitGrid,
@@ -74,8 +75,8 @@ export function memberHandle(member: TeamMemberDraft, autoPrefix: boolean): stri
 }
 
 /// Translate the SPA's camelCase `TeamDialogConfig` into the
-/// snake_case `TeamConfigWire` shape persisted to chan-team.toml.
-/// `created_at` is the call time (ISO 8601 UTC). Each member's env
+/// snake_case `TeamConfigWire` shape persisted to the team's
+/// config.toml. `created_at` is the call time (ISO 8601 UTC). Each member's env
 /// is parsed into a Record; `CHAN_TAB_NAME=<handle>` is auto-injected
 /// unless the user supplied an override (the per-tab env var IS the
 /// agent's identity inside the PTY).
@@ -109,7 +110,7 @@ export function translateConfig(config: TeamDialogConfig): TeamConfigWire {
     return member;
   });
   return {
-    team_name: teamNameFromPath(config.configPath),
+    team_name: teamNameFromDir(config.teamDir),
     host_name: config.hostName,
     host_handle: hostHandle,
     tab_group: config.tabGroup,
@@ -142,21 +143,11 @@ function memberPositions(
   return out;
 }
 
-/// chan-team.toml carries `team_name`; derive a stable name from the
-/// config's directory (e.g. `/tmp/new-team-1/chan-team.toml` ->
-/// `new-team-1`). Keeps the persisted config self-describing without
-/// re-adding a "Team name" field to the dialog.
-export function teamNameFromPath(path: string): string {
-  const dir = teamConfigDir(path);
-  const lastSlash = dir.lastIndexOf("/");
-  const base = lastSlash >= 0 ? dir.slice(lastSlash + 1) : dir;
-  return base.trim() || "team";
-}
-
 /// Inverse of `translateConfig`: map the snake_case wire shape back
 /// into the dialog's camelCase `TeamDialogConfig` so the Load flow
-/// opens the dialog populated from chan-team.toml. The user edits,
-/// hits Bootstrap, and the config is re-saved with their changes.
+/// opens the dialog populated from the team's config.toml. The user
+/// edits, hits Bootstrap, and the config is re-saved with their
+/// changes.
 ///
 /// `env` Records serialise back to "KEY=VALUE\n" lines;
 /// `CHAN_TAB_NAME` is dropped from the visible env field
@@ -165,7 +156,7 @@ export function teamNameFromPath(path: string): string {
 /// from member positions.
 export function wireToDialog(
   wire: TeamConfigWire,
-  configPath: string,
+  dir: string,
 ): TeamDialogConfig {
   const members: TeamMemberDraft[] = wire.members.map((m) => {
     const envText = Object.entries(m.env)
@@ -183,8 +174,8 @@ export function wireToDialog(
   return {
     hostName: wire.host_name,
     configMode: "load",
-    configPath,
-    tabGroup: wire.tab_group ?? defaultTabGroupFromPath(configPath),
+    teamDir: dir,
+    tabGroup: wire.tab_group ?? defaultTabGroupFromPath(dir),
     size,
     autoPrefix: wire.auto_prefix_at,
     members,
@@ -229,12 +220,16 @@ function realEstateFromWire(
 /// embedded editor. `$CHAN_TAB_NAME` is intentionally NOT escaped:
 /// the lead's shell expands it to the env-var value when the agent
 /// reads the prompt. The team size, host handle, lead handle, and
-/// worker handles substitute in literally.
+/// worker handles substitute in literally. The trailing line points
+/// every agent at the generated team bootstrap doc (`bootstrapPath`,
+/// e.g. `{teamDir}/bootstrap.md`) so they read the shared process
+/// before starting.
 export function identityPrompt(
   size: number,
   hostHandle: string,
   leadHandle: string,
   workerHandles: string[],
+  bootstrapPath: string,
 ): string {
   const bullets =
     workerHandles.length > 0
@@ -246,7 +241,9 @@ export function identityPrompt(
     `is ${leadHandle}.\n` +
     `You are $CHAN_TAB_NAME. Identify yourself and get ready to work with\n` +
     `the rest of the team:\n` +
-    bullets
+    bullets +
+    `\n` +
+    `Read the team process at ${bootstrapPath} before you start.`
   );
 }
 
@@ -338,10 +335,12 @@ export async function runTeamBootstrap(
 ): Promise<void> {
   const wire = translateConfig(config);
 
-  // 1. Save/update the chan-team.toml at the user's config path.
-  //    This is app-level orchestration config written outside the
-  //    workspace sandbox (see api.writeTeamConfigFile).
-  await api.writeTeamConfigFile(config.configPath, wire);
+  // 1. Save/update the team config inside the workspace at
+  //    `{teamDir}/config.toml`. The backend writes it (plus the
+  //    generated bootstrap.md + the tasks/journals/followups dirs)
+  //    through the Workspace sandbox: atomic, path-sandboxed,
+  //    special-file refusal (see api.writeTeamConfig).
+  await api.writeTeamConfig(config.teamDir, wire);
 
   const leadEntry = wire.members.find((m) => m.is_lead);
   if (!leadEntry) throw new Error("config has no lead member");
@@ -387,11 +386,16 @@ export async function runTeamBootstrap(
 
   // 3 + 4. Place the identity prompt in the lead's embedded editor.
   //    `$CHAN_TAB_NAME` is each agent's identity (env var, step 3).
+  //    The prompt's trailing line points agents at the generated
+  //    `{teamDir}/bootstrap.md`; strip any trailing slash so the path
+  //    reads cleanly.
+  const bootstrapPath = `${config.teamDir.replace(/\/+$/, "")}/bootstrap.md`;
   const prompt = identityPrompt(
     wire.members.length,
     wire.host_handle,
     leadEntry.handle,
     workerEntries.map((m) => m.handle),
+    bootstrapPath,
   );
   primeTeamWork(leadTab, prompt);
 

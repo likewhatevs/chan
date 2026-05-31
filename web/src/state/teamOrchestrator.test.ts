@@ -3,10 +3,10 @@ import {
   identityPrompt,
   memberHandle,
   parseEnvLines,
-  teamNameFromPath,
   translateConfig,
   wireToDialog,
 } from "./teamOrchestrator.svelte";
+import { teamNameFromDir } from "./teamConfigPath";
 import type { TeamDialogConfig } from "./teamDialog.svelte";
 import type { TeamConfigWire } from "../api/client";
 
@@ -66,17 +66,15 @@ describe("memberHandle", () => {
   });
 });
 
-describe("teamNameFromPath", () => {
-  test("derives the team name from the config dir", () => {
-    expect(teamNameFromPath("/tmp/new-team-1/chan-team.toml")).toBe("new-team-1");
+describe("teamNameFromDir", () => {
+  test("derives the team name from the team-dir basename", () => {
+    expect(teamNameFromDir("new-team-1")).toBe("new-team-1");
+    expect(teamNameFromDir("teams/alpha")).toBe("alpha");
   });
 
-  test("uses the file name when the path has no parent dir segment", () => {
-    // `/chan-team.toml` has no intermediate dir, so the derived
-    // team name is the file base. The default flow always nests
-    // under a team dir (e.g. /tmp/new-team-1/...), so this is an
-    // edge case rather than the common path.
-    expect(teamNameFromPath("/chan-team.toml")).toBe("chan-team.toml");
+  test("strips a trailing slash; falls back to team for an empty basename", () => {
+    expect(teamNameFromDir("new-team-1/")).toBe("new-team-1");
+    expect(teamNameFromDir("")).toBe("team");
   });
 });
 
@@ -85,7 +83,7 @@ describe("translateConfig", () => {
     return {
       hostName: "Alice",
       configMode: "new",
-      configPath: "/tmp/demo/chan-team.toml",
+      teamDir: "demo",
       tabGroup: "chan-team",
       size: 2,
       autoPrefix: true,
@@ -100,7 +98,7 @@ describe("translateConfig", () => {
 
   test("maps camelCase -> snake_case shape", () => {
     const out = translateConfig(sample());
-    // team_name comes from the config path's directory.
+    // team_name comes from the team-dir basename.
     expect(out.team_name).toBe("demo");
     expect(out.host_name).toBe("Alice");
     expect(out.host_handle).toBe("@@Alice");
@@ -191,10 +189,10 @@ describe("wireToDialog", () => {
   }
 
   test("inverse of translateConfig: snake_case -> camelCase round-trip", () => {
-    const dialog = wireToDialog(wire(), "/tmp/demo/chan-team.toml");
+    const dialog = wireToDialog(wire(), "demo");
     expect(dialog.hostName).toBe("Alice");
     expect(dialog.configMode).toBe("load");
-    expect(dialog.configPath).toBe("/tmp/demo/chan-team.toml");
+    expect(dialog.teamDir).toBe("demo");
     expect(dialog.autoPrefix).toBe(true);
     expect(dialog.size).toBe(2);
     expect(dialog.members).toEqual([
@@ -204,13 +202,13 @@ describe("wireToDialog", () => {
   });
 
   test("strips CHAN_TAB_NAME from the visible env field", () => {
-    const dialog = wireToDialog(wire(), "/tmp/demo/chan-team.toml");
+    const dialog = wireToDialog(wire(), "demo");
     expect(dialog.members[0].env).not.toContain("CHAN_TAB_NAME");
     expect(dialog.members[1].env).not.toContain("CHAN_TAB_NAME");
   });
 
   test("no member position -> real estate is tabs", () => {
-    const dialog = wireToDialog(wire(), "/tmp/demo/chan-team.toml");
+    const dialog = wireToDialog(wire(), "demo");
     expect(dialog.realEstate).toEqual({ kind: "tabs" });
   });
 
@@ -234,7 +232,7 @@ describe("wireToDialog", () => {
           },
         ],
       }),
-      "/tmp/demo/chan-team.toml",
+      "demo",
     );
     expect(dialog.realEstate.kind).toBe("split");
     if (dialog.realEstate.kind === "split") {
@@ -244,10 +242,7 @@ describe("wireToDialog", () => {
   });
 
   test("preserves auto_prefix_at when false", () => {
-    const dialog = wireToDialog(
-      wire({ auto_prefix_at: false }),
-      "/tmp/demo/chan-team.toml",
-    );
+    const dialog = wireToDialog(wire({ auto_prefix_at: false }), "demo");
     expect(dialog.autoPrefix).toBe(false);
   });
 });
@@ -257,7 +252,7 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
     const original: TeamDialogConfig = {
       hostName: "Neo",
       configMode: "new",
-      configPath: "/tmp/round/chan-team.toml",
+      teamDir: "round",
       tabGroup: "chan-team",
       size: 3,
       autoPrefix: true,
@@ -273,7 +268,7 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
       },
     };
     const wireOut = translateConfig(original);
-    const back = wireToDialog(wireOut, "/tmp/round/chan-team.toml");
+    const back = wireToDialog(wireOut, "round");
     expect(back.realEstate.kind).toBe("split");
     if (back.realEstate.kind === "split") {
       // Cells 0..2 hold the three members in order; the grid is
@@ -287,26 +282,33 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
 });
 
 describe("identityPrompt", () => {
-  test("renders the # Team work prompt with size / host / lead + worker bullets", () => {
-    const out = identityPrompt(3, "@@Neo", "@@Lead", ["@@Worker1", "@@Worker2"]);
+  test("renders the # Team work prompt with size / host / lead + worker bullets + bootstrap line", () => {
+    const out = identityPrompt(
+      3,
+      "@@Neo",
+      "@@Lead",
+      ["@@Worker1", "@@Worker2"],
+      "new-team-1/bootstrap.md",
+    );
     expect(out).toBe(
       "# Team work\n" +
         "We are a team of 3. Our host is @@Neo and the team lead is @@Lead.\n" +
         "You are $CHAN_TAB_NAME. Identify yourself and get ready to work with\n" +
         "the rest of the team:\n" +
         "- @@Worker1\n" +
-        "- @@Worker2",
+        "- @@Worker2\n" +
+        "Read the team process at new-team-1/bootstrap.md before you start.",
     );
   });
 
   test("does NOT escape $CHAN_TAB_NAME (agents read it as a live env-var)", () => {
-    const out = identityPrompt(2, "@@Neo", "@@Lead", ["@@Worker1"]);
+    const out = identityPrompt(2, "@@Neo", "@@Lead", ["@@Worker1"], "t/bootstrap.md");
     expect(out).toContain("$CHAN_TAB_NAME");
     expect(out).not.toContain("\\$CHAN_TAB_NAME");
   });
 
   test("solo lead (no workers) renders a placeholder bullet", () => {
-    const out = identityPrompt(1, "@@Neo", "@@Lead", []);
+    const out = identityPrompt(1, "@@Neo", "@@Lead", [], "t/bootstrap.md");
     expect(out).toContain("- (no other agents)");
   });
 });

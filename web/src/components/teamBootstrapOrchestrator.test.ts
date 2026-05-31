@@ -70,7 +70,7 @@ function tabsConfig(): TeamDialogConfig {
   return {
     hostName: "Neo",
     configMode: "new",
-    configPath: "/tmp/new-team-1/chan-team.toml",
+    teamDir: "new-team-1",
     tabGroup: "chan-team",
     size: 3,
     autoPrefix: true,
@@ -91,7 +91,7 @@ function mockApi(): {
   spawn: ReturnType<typeof vi.spyOn>;
 } {
   const write = vi
-    .spyOn(api, "writeTeamConfigFile")
+    .spyOn(api, "writeTeamConfig")
     .mockResolvedValue(undefined as unknown as void);
   const restart = vi
     .spyOn(api, "restartTerminal")
@@ -110,7 +110,7 @@ afterEach(() => {
 });
 
 describe("runTeamBootstrap: lead-first flow", () => {
-  test("writes the chan-team.toml to the dialog's config path", async () => {
+  test("writes the team config to the dialog's team dir", async () => {
     resetLayoutWithLead(leadTerminalTab());
     const { write } = mockApi();
     await runTeamBootstrap(tabsConfig(), {
@@ -118,7 +118,7 @@ describe("runTeamBootstrap: lead-first flow", () => {
       leadPaneId: "pane-test",
     });
     expect(write).toHaveBeenCalledTimes(1);
-    expect(write.mock.calls[0][0]).toBe("/tmp/new-team-1/chan-team.toml");
+    expect(write.mock.calls[0][0]).toBe("new-team-1");
   });
 
   test("launches the LEAD agent by spawning a fresh session (not restart-in-place)", async () => {

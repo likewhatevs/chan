@@ -3,7 +3,6 @@
   import { onMount } from "svelte";
   import { api } from "../api/client";
   import { closeTab } from "../state/tabs.svelte";
-  import { teamConfigDir } from "../state/teamConfigPath";
   import {
     assignMemberToCell,
     closeTeamDialog,
@@ -61,16 +60,17 @@
 
   const issue = $derived<string | null>(validateTeamConfig(config));
 
-  // Info line for New mode: the dir the team management files land
-  // in, derived from the config path.
-  const configDir = $derived(teamConfigDir(config.configPath));
+  // Info line for New mode: the workspace-relative dir the team files
+  // land in (the value the user typed, trailing slash trimmed).
+  const teamDir = $derived(config.teamDir.replace(/\/+$/, ""));
 
-  /// Keep the tab-group name following the config filename as the user
-  /// edits the path, but only while they have not hand-edited the group
-  /// (tracked via `lastAutoTabGroup`). Called on every config-path input.
+  /// Keep the tab-group name following the team-dir basename as the
+  /// user edits the dir, but only while they have not hand-edited the
+  /// group (tracked via `lastAutoTabGroup`). Called on every team-dir
+  /// input.
   function syncTabGroupToPath(): void {
     const prevAuto = lastAutoTabGroup;
-    const nextAuto = defaultTabGroupFromPath(config.configPath);
+    const nextAuto = defaultTabGroupFromPath(config.teamDir);
     lastAutoTabGroup = nextAuto;
     if (config.tabGroup === prevAuto) config.tabGroup = nextAuto;
   }
@@ -107,21 +107,22 @@
     loadError = null;
   }
 
-  /// Load mode: on path entry, read + validate the chan-team.toml
-  /// via the backend. On success, prepopulate the form from the
-  /// loaded config (the user is now in a pre-populated New form,
-  /// still editable). On failure, surface the 400 message inline.
+  /// Load mode: on team-dir entry, read + validate the team's
+  /// config.toml via the backend. On success, prepopulate the form
+  /// from the loaded config (the user is now in a pre-populated New
+  /// form, still editable). On failure, surface the 400 message
+  /// inline.
   async function validateAndLoad(): Promise<void> {
     loadStatus = null;
     loadError = null;
-    const path = config.configPath.trim();
+    const path = config.teamDir.trim();
     if (!path) {
-      loadError = "Path to configuration required";
+      loadError = "Team directory required";
       return;
     }
     busy = true;
     try {
-      const wire = await api.readTeamConfigFile(path);
+      const wire = await api.readTeamConfig(path);
       const loaded = wireToDialog(wire, path);
       config = resizeTeamMembers(loaded);
       loadStatus = `Loaded "${wire.team_name}"`;
@@ -297,11 +298,11 @@
         </div>
 
         <label class="team-field">
-          <span class="team-field-label">Path to configuration</span>
+          <span class="team-field-label">Team directory (in workspace)</span>
           <input
-            bind:value={config.configPath}
+            bind:value={config.teamDir}
             type="text"
-            placeholder="/tmp/new-team-1/chan-team.toml"
+            placeholder="new-team-1"
             autocomplete="off"
             oninput={syncTabGroupToPath}
             onchange={() => {
@@ -310,7 +311,7 @@
           />
           {#if config.configMode === "new"}
             <span class="team-field-hint">
-              team management files will be created in <code>{configDir}</code>
+              Team files will be created in <code>&lt;workspace&gt;/{teamDir}/</code>
             </span>
           {:else if loadError}
             <span class="team-field-hint team-load-error" role="alert">
@@ -320,7 +321,7 @@
             <span class="team-field-hint" role="status">{loadStatus}</span>
           {:else}
             <span class="team-field-hint">
-              Enter a path to an existing <code>chan-team.toml</code> to load it.
+              Enter the directory of an existing team in the workspace to load it.
             </span>
           {/if}
         </label>
@@ -334,9 +335,9 @@
             autocomplete="off"
           />
           <span class="team-field-hint">
-            Every team terminal joins this tab group. Defaults to the config
-            filename; a <code>-N</code> suffix is added at bootstrap if the name
-            is already in use.
+            Every team terminal joins this tab group. Defaults to the team
+            directory name; a <code>-N</code> suffix is added at bootstrap if the
+            name is already in use.
           </span>
         </label>
       </fieldset>

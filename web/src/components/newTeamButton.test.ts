@@ -7,7 +7,7 @@ import {
   validateTeamConfig,
 } from "../state/teamDialog.svelte";
 
-// Team Work dialog. Pins the New/Load path-config control, the 1-9
+// Team Work dialog. Pins the New/Load team-dir control, the 1-9
 // dropdown (no slider), the "drag-me" chip label, the removed
 // copy/paste buttons, and the default-state contract (host "Neo", New mode).
 
@@ -16,18 +16,20 @@ describe("default config contract", () => {
     const cfg = defaultTeamConfig();
     expect(cfg.hostName).toBe("Neo");
     expect(cfg.configMode).toBe("new");
-    expect(cfg.configPath).toBe("/tmp/new-team-1/chan-team.toml");
+    expect(cfg.teamDir).toBe("new-team-1");
     expect(cfg.size).toBe(TEAM_MIN_SIZE);
     expect(cfg.members).toHaveLength(1);
     expect(cfg.members[0].isLead).toBe(true);
     expect(cfg.autoPrefix).toBe(true);
   });
 
-  test("validate requires an absolute config path (no team name)", () => {
-    const cfg = { ...defaultTeamConfig(), configPath: "relative/x.toml" };
-    expect(validateTeamConfig(cfg)).toBe("Path to configuration must be absolute");
-    const empty = { ...defaultTeamConfig(), configPath: "" };
-    expect(validateTeamConfig(empty)).toBe("Path to configuration required");
+  test("validate requires a workspace-relative team dir (no team name)", () => {
+    const cfg = { ...defaultTeamConfig(), teamDir: "/tmp/new-team-1" };
+    expect(validateTeamConfig(cfg)).toBe(
+      "Team directory must be a path inside the workspace",
+    );
+    const empty = { ...defaultTeamConfig(), teamDir: "" };
+    expect(validateTeamConfig(empty)).toBe("Team directory required");
     expect(validateTeamConfig(defaultTeamConfig())).toBeNull();
   });
 });
@@ -55,17 +57,17 @@ describe("TeamDialog component shell", () => {
     expect(dialog).not.toMatch(/bind:value=\{config\.teamName\}/);
   });
 
-  test("Path to configuration field binds config.configPath", () => {
-    expect(dialog).toMatch(/Path to configuration/);
-    expect(dialog).toMatch(/bind:value=\{config\.configPath\}/);
+  test("Team directory field binds config.teamDir", () => {
+    expect(dialog).toMatch(/Team directory \(in workspace\)/);
+    expect(dialog).toMatch(/bind:value=\{config\.teamDir\}/);
   });
 
-  test("New mode shows the team-management-dir info line", () => {
-    expect(dialog).toMatch(/team management files will be created in/);
+  test("New mode shows the team-dir info line", () => {
+    expect(dialog).toMatch(/Team files will be created in/);
   });
 
-  test("Load mode auto-validates the path via readTeamConfigFile", () => {
-    expect(dialog).toMatch(/api\.readTeamConfigFile/);
+  test("Load mode auto-validates the dir via readTeamConfig", () => {
+    expect(dialog).toMatch(/api\.readTeamConfig/);
     expect(dialog).toMatch(/void validateAndLoad\(\)/);
   });
 

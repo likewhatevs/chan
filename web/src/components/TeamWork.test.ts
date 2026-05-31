@@ -4,7 +4,6 @@ import { mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import TeamWork from "./TeamWork.svelte";
-import { api } from "../api/client";
 import {
   layout,
   type LeafNode,
@@ -93,14 +92,6 @@ async function renderPrompt(prompt: TeamWorkState) {
 function button(target: ParentNode, label: string): HTMLButtonElement {
   const el = target.querySelector<HTMLButtonElement>(`button[aria-label='${label}']`);
   if (!el) throw new Error(`button not found: ${label}`);
-  return el;
-}
-
-function buttonByText(target: ParentNode, text: string): HTMLButtonElement {
-  const el = [...target.querySelectorAll<HTMLButtonElement>("button")].find((btn) =>
-    btn.textContent?.includes(text),
-  );
-  if (!el) throw new Error(`button text not found: ${text}`);
   return el;
 }
 
@@ -349,31 +340,7 @@ describe("TeamWork", () => {
     expect(labels).toEqual([
       "Show source code",
       "Show style toolbar",
-      "Bubble stack",
-      "Bubble tray",
       "Collapse prompt",
     ]);
-  });
-
-  test("Bubble stack / tray set the workspace layout preference", async () => {
-    // The handler also calls `showBubbleStub()` (from the A4-owned
-    // `bubbleStub.svelte`) to surface the example bubble; that side
-    // effect is verified at integration. Here we pin the surviving
-    // layout-preference round-trip.
-    const setMode = vi.spyOn(api, "setBubbleOverlayMode").mockResolvedValue(undefined);
-    const prompt: TeamWorkState = {
-      buffer: "",
-      heightPx: 320,
-      open: true,
-      mode: "source",
-    };
-    const { target } = await renderPrompt(prompt);
-
-    button(target, "Team Work actions").click();
-    await tick();
-    buttonByText(target, "Bubble tray").click();
-    await tick();
-
-    expect(setMode).toHaveBeenCalledWith("tray");
   });
 });

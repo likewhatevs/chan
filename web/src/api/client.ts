@@ -1092,18 +1092,20 @@ export const api = {
       "/api/fonts/source-code-pro/download",
     ),
 
-  /// Path-based chan-team.toml read/write backing the Team Work
-  /// dialog's New/Load flow. The config lives at a user-chosen
-  /// absolute path, deliberately OUTSIDE the workspace sandbox:
-  /// it is app-level dev-orchestration config, not notes content
+  /// Dir-based team-config read/write backing the Team Work dialog's
+  /// New/Load flow. The config lives INSIDE the workspace under a
+  /// workspace-relative `{dir}/config.toml`, written through the
+  /// Workspace sandbox (atomic, path-sandboxed, special-file refusal);
+  /// the backend also generates `{dir}/bootstrap.md` and the team's
+  /// tasks/journals/followups dirs on write
   /// (see crates/chan-server/src/routes/team_config.rs).
-  /// `readTeamConfigFile` backs the Load auto-validate (400 on
-  /// missing / invalid TOML); `writeTeamConfigFile` re-saves the
+  /// `readTeamConfig` backs the Load auto-validate (400 on
+  /// missing / invalid TOML); `writeTeamConfig` re-saves the
   /// (possibly edited) config on Bootstrap.
-  readTeamConfigFile: (path: string) =>
-    req<TeamConfigWire>("POST", "/api/team-config/read", { path }),
-  writeTeamConfigFile: (path: string, config: TeamConfigWire) =>
-    req<void>("POST", "/api/team-config/write", { path, config }),
+  readTeamConfig: (dir: string) =>
+    req<TeamConfigWire>("POST", "/api/team-config/read", { dir }),
+  writeTeamConfig: (dir: string, config: TeamConfigWire) =>
+    req<void>("POST", "/api/team-config/write", { dir, config }),
 };
 
 /// Wire shape for `Workspace::create_team` /
@@ -1123,8 +1125,9 @@ export interface TeamConfigWire {
   host_name: string;
   host_handle: string;
   /// Terminal tab-group every team terminal joins ($CHAN_TAB_GROUP),
-  /// persisted in chan-team.toml. Default derived from the config
-  /// filename; the orchestrator resolves a -N suffix at Bootstrap.
+  /// persisted in the team's config.toml. Default derived from the
+  /// team-dir basename; the orchestrator resolves a -N suffix at
+  /// Bootstrap.
   tab_group: string;
   auto_prefix_at: boolean;
   created_at: string;

@@ -17,10 +17,10 @@ import {
   validateTeamConfig,
 } from "./teamDialog.svelte";
 
-// Pins the validation contract (path-based, no team name), the
-// resize semantics (lead preservation + Worker-N filling), the
-// open/close bus shape (leadTabId/leadPaneId), and the real-estate
-// grid helpers.
+// Pins the validation contract (workspace-relative team dir, no team
+// name), the resize semantics (lead preservation + Worker-N filling),
+// the open/close bus shape (leadTabId/leadPaneId), and the
+// real-estate grid helpers.
 
 describe("defaultTeamConfig", () => {
   test("default config: Neo host, New mode, one lead agent", () => {
@@ -35,26 +35,24 @@ describe("defaultTeamConfig", () => {
     expect(cfg.realEstate).toEqual({ kind: "tabs" });
   });
 
-  test("seeds tabGroup from the default config filename", () => {
+  test("seeds tabGroup from the default team-dir basename", () => {
     const cfg = defaultTeamConfig();
-    expect(cfg.tabGroup).toBe(defaultTabGroupFromPath(cfg.configPath));
+    expect(cfg.tabGroup).toBe(defaultTabGroupFromPath(cfg.teamDir));
     expect(cfg.tabGroup).toBeTruthy();
   });
 });
 
 describe("defaultTabGroupFromPath", () => {
-  test("strips the dir + .toml extension", () => {
-    expect(defaultTabGroupFromPath("/tmp/new-team-1/chan-team.toml")).toBe(
-      "chan-team",
-    );
-    expect(defaultTabGroupFromPath("/a/b/squad.TOML")).toBe("squad");
+  test("uses the team-dir basename", () => {
+    expect(defaultTabGroupFromPath("new-team-1")).toBe("new-team-1");
+    expect(defaultTabGroupFromPath("teams/alpha")).toBe("alpha");
   });
-  test("keeps a filename with no .toml extension as-is", () => {
-    expect(defaultTabGroupFromPath("/x/myteam")).toBe("myteam");
+  test("strips a trailing slash", () => {
+    expect(defaultTabGroupFromPath("new-team-1/")).toBe("new-team-1");
   });
   test("falls back to chan-team when there is no usable basename", () => {
     expect(defaultTabGroupFromPath("")).toBe("chan-team");
-    expect(defaultTabGroupFromPath("/path/to/.toml")).toBe("chan-team");
+    expect(defaultTabGroupFromPath("/")).toBe("chan-team");
   });
 });
 
@@ -65,13 +63,17 @@ describe("validateTeamConfig", () => {
     );
   });
 
-  test("requires a non-empty, absolute config path", () => {
-    expect(validateTeamConfig({ ...defaultTeamConfig(), configPath: "" })).toBe(
-      "Path to configuration required",
+  test("requires a non-empty, workspace-relative team dir", () => {
+    expect(validateTeamConfig({ ...defaultTeamConfig(), teamDir: "" })).toBe(
+      "Team directory required",
     );
+    // A relative dir is valid; an absolute path is rejected.
     expect(
-      validateTeamConfig({ ...defaultTeamConfig(), configPath: "rel/x.toml" }),
-    ).toBe("Path to configuration must be absolute");
+      validateTeamConfig({ ...defaultTeamConfig(), teamDir: "teams/alpha" }),
+    ).toBeNull();
+    expect(
+      validateTeamConfig({ ...defaultTeamConfig(), teamDir: "/tmp/new-team-1" }),
+    ).toBe("Team directory must be a path inside the workspace");
   });
 
   test("requires a non-empty terminal tab group name", () => {

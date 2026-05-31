@@ -13,6 +13,13 @@ pub struct TeamConfig {
     pub team_name: String,
     pub host_name: String,
     pub host_handle: String,
+    // Terminal tab group the team's tabs are grouped under. The SPA's
+    // `TeamConfigWire` always carries this; `#[serde(default)]` keeps a
+    // hand-edited config.toml that predates the field from 400-ing on
+    // read (an empty group is harmless), rather than forcing a manual
+    // edit on every pre-existing config.
+    #[serde(default)]
+    pub tab_group: String,
     #[serde(default = "default_auto_prefix_at")]
     pub auto_prefix_at: bool,
     pub created_at: String,

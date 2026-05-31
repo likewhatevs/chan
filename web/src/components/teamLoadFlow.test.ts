@@ -13,27 +13,28 @@ import {
 import { resizeTeamMembers } from "../state/teamDialog.svelte";
 import { layout, type LeafNode, type TerminalTab } from "../state/tabs.svelte";
 
-// Path-based New/Load config flow. Load reads an existing chan-team.toml
-// back via readTeamConfigFile, prepopulates the (still-editable) form
-// via wireToDialog, and re-saves the edited config on Bootstrap.
+// Dir-based New/Load config flow. Load reads an existing team's
+// config.toml back via readTeamConfig, prepopulates the
+// (still-editable) form via wireToDialog, and re-saves the edited
+// config on Bootstrap.
 
-describe("api client: path-based team-config read/write", () => {
-  test("readTeamConfigFile POSTs /api/team-config/read with { path }", () => {
+describe("api client: dir-based team-config read/write", () => {
+  test("readTeamConfig POSTs /api/team-config/read with { dir }", () => {
     expect(client).toMatch(
-      /readTeamConfigFile: \(path: string\) =>[\s\S]{1,200}req<TeamConfigWire>\("POST", "\/api\/team-config\/read", \{ path \}\)/,
+      /readTeamConfig: \(dir: string\) =>[\s\S]{1,200}req<TeamConfigWire>\("POST", "\/api\/team-config\/read", \{ dir \}\)/,
     );
   });
 
-  test("writeTeamConfigFile POSTs /api/team-config/write with { path, config }", () => {
+  test("writeTeamConfig POSTs /api/team-config/write with { dir, config }", () => {
     expect(client).toMatch(
-      /writeTeamConfigFile: \(path: string, config: TeamConfigWire\) =>[\s\S]{1,200}req<void>\("POST", "\/api\/team-config\/write", \{ path, config \}\)/,
+      /writeTeamConfig: \(dir: string, config: TeamConfigWire\) =>[\s\S]{1,200}req<void>\("POST", "\/api\/team-config\/write", \{ dir, config \}\)/,
     );
   });
 });
 
 describe("TeamDialog Load flow", () => {
   test("Load populates the form from wireToDialog + stays editable (resizeTeamMembers)", () => {
-    expect(dialog).toMatch(/const wire = await api\.readTeamConfigFile\(path\);/);
+    expect(dialog).toMatch(/const wire = await api\.readTeamConfig\(path\);/);
     expect(dialog).toMatch(/const loaded = wireToDialog\(wire, path\);/);
     expect(dialog).toMatch(/config = resizeTeamMembers\(loaded\);/);
   });
@@ -95,7 +96,7 @@ afterEach(() => {
 
 describe("Load -> edit -> Bootstrap re-saves the config", () => {
   test("a loaded config round-trips into an editable dialog config", () => {
-    const cfg = resizeTeamMembers(wireToDialog(loadedWire(), "/tmp/x/chan-team.toml"));
+    const cfg = resizeTeamMembers(wireToDialog(loadedWire(), "saved-team"));
     expect(cfg.configMode).toBe("load");
     expect(cfg.hostName).toBe("Trinity");
     expect(cfg.members.map((m) => m.name)).toEqual(["@@Lead", "@@Worker1"]);
@@ -106,20 +107,20 @@ describe("Load -> edit -> Bootstrap re-saves the config", () => {
     expect(back.members.map((m) => m.handle)).toEqual(["@@Lead", "@@Worker1"]);
   });
 
-  test("Bootstrap writes the (edited) config back to the path", async () => {
+  test("Bootstrap writes the (edited) config back to the team dir", async () => {
     const lead = leadTab();
     setLayout(lead);
     const write = vi
-      .spyOn(api, "writeTeamConfigFile")
+      .spyOn(api, "writeTeamConfig")
       .mockResolvedValue(undefined as unknown as void);
     vi.spyOn(api, "restartTerminal").mockResolvedValue(undefined as unknown as void);
     vi.spyOn(api, "spawnTerminal").mockResolvedValue({ session: "w", tab_label: "w" });
 
-    const cfg = resizeTeamMembers(wireToDialog(loadedWire(), "/tmp/x/chan-team.toml"));
+    const cfg = resizeTeamMembers(wireToDialog(loadedWire(), "saved-team"));
     await runTeamBootstrap(cfg, { leadTabId: "lead-tab", leadPaneId: "pane-test" });
 
     expect(write).toHaveBeenCalledTimes(1);
-    expect(write.mock.calls[0][0]).toBe("/tmp/x/chan-team.toml");
+    expect(write.mock.calls[0][0]).toBe("saved-team");
     // The persisted wire carries the loaded host name.
     expect(write.mock.calls[0][1]).toMatchObject({ host_name: "Trinity" });
   });

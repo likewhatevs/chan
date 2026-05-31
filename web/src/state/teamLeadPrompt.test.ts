@@ -55,7 +55,7 @@ function config(): TeamDialogConfig {
   return {
     hostName: "Neo",
     configMode: "new",
-    configPath: "/tmp/new-team-1/chan-team.toml",
+    teamDir: "new-team-1",
     tabGroup: "chan-team",
     size: 3,
     autoPrefix: true,
@@ -69,7 +69,7 @@ function config(): TeamDialogConfig {
 }
 
 function mockApi(): void {
-  vi.spyOn(api, "writeTeamConfigFile").mockResolvedValue(undefined as unknown as void);
+  vi.spyOn(api, "writeTeamConfig").mockResolvedValue(undefined as unknown as void);
   vi.spyOn(api, "restartTerminal").mockResolvedValue(undefined as unknown as void);
   let n = 0;
   vi.spyOn(api, "spawnTerminal").mockImplementation(async () => {

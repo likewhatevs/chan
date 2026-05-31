@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { ChevronDown, ChevronUp, Code2, GripHorizontal, Layers, Pilcrow, Plus, Send, Type } from "lucide-svelte";
+  import { ChevronDown, ChevronUp, Code2, GripHorizontal, Pilcrow, Plus, Send, Type } from "lucide-svelte";
   import {
     PAGE_WIDTH_MAX_PCT,
     PAGE_WIDTH_MIN_PCT,
@@ -10,13 +10,10 @@
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import StyleToolbar from "./StyleToolbar.svelte";
   import type { TeamWorkState } from "../state/tabs.svelte";
-  import { api } from "../api/client";
   import {
-    workspace,
     setTransientStatus,
     ui,
   } from "../state/store.svelte";
-  import { showBubbleStub } from "../state/bubbleStub.svelte";
 
   let {
     prompt,
@@ -295,25 +292,6 @@
     menu = null;
   }
 
-  // "Bubble stack" / "Bubble tray" set the workspace-level layout
-  // preference (which way the survey bubbles stack above the prompt)
-  // and then surface the static example bubble in the chosen layout
-  // via `showBubbleStub()` so the user sees the effect immediately.
-  async function setBubbleMode(mode: "stack" | "tray"): Promise<void> {
-    menu = null;
-    if (workspace.info) {
-      workspace.info = {
-        ...workspace.info,
-        preferences: { ...workspace.info.preferences, bubble_overlay_mode: mode },
-      };
-    }
-    showBubbleStub();
-    try {
-      await api.setBubbleOverlayMode(mode);
-    } catch (err) {
-      ui.status = `bubble mode failed: ${(err as Error).message}`;
-    }
-  }
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
@@ -474,15 +452,6 @@
       <button type="button" onclick={toggleToolbar}>
         <Type size={15} strokeWidth={1.75} aria-hidden="true" />
         <span>{toolbarOpen() ? "Hide style toolbar" : "Show style toolbar"}</span>
-      </button>
-      <div class="ctx-separator" role="separator"></div>
-      <button type="button" onclick={() => void setBubbleMode("stack")}>
-        <Layers size={15} strokeWidth={1.75} aria-hidden="true" />
-        <span>Bubble stack</span>
-      </button>
-      <button type="button" onclick={() => void setBubbleMode("tray")}>
-        <Layers size={15} strokeWidth={1.75} aria-hidden="true" />
-        <span>Bubble tray</span>
       </button>
       <div class="ctx-separator" role="separator"></div>
       <button type="button" onclick={toggleCollapsed}>
@@ -699,9 +668,8 @@
   .ctx button:hover {
     background: var(--hover-bg);
   }
-  /* Divider between the editor-display group, the bubble-layout
-     group, and the trailing collapse action so the three blocks
-     read as distinct. */
+  /* Divider between the editor-display group and the trailing
+     collapse action so the two blocks read as distinct. */
   .ctx-separator {
     height: 1px;
     margin: 4px 0;

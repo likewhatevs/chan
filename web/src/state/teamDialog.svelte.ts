@@ -13,7 +13,7 @@
 //   * Bootstrap runs the lead-first orchestrator against the EXISTING
 //     lead tab (it is never respawned).
 
-import { TEAM_CONFIG_DEFAULT_PATH } from "./teamConfigPath";
+import { TEAM_DIR_DEFAULT } from "./teamConfigPath";
 
 /// One agent in the team being bootstrapped. Position in
 /// `TeamDialogConfig.members` is stable (positional id used by the
@@ -103,24 +103,25 @@ export function emptySlotsForGrid(grid: GridShape): number[][] {
 
 /// The two Team configuration modes the dialog toggles between.
 /// `new` starts from a blank/default config persisted to a fresh
-/// path; `load` reads an existing chan-team.toml back to prepopulate
-/// the form (after which the user is editing a pre-populated New
-/// form).
+/// team directory; `load` reads an existing team's config.toml back
+/// to prepopulate the form (after which the user is editing a
+/// pre-populated New form).
 export type TeamConfigMode = "new" | "load";
 
 export interface TeamDialogConfig {
   hostName: string;
   /// Team configuration source mode: "new" or "load". Controls whether
-  /// the dialog writes or reads chan-team.toml.
+  /// the dialog writes or reads the team's config.toml.
   configMode: TeamConfigMode;
-  /// Absolute path to the chan-team.toml. New: where it will be
-  /// written. Load: where it is read from. Defaults to
-  /// `/tmp/new-team-1/chan-team.toml`.
-  configPath: string;
+  /// Workspace-relative team directory (e.g. `new-team-1`). New: where
+  /// the team files are created. Load: where the config is read from.
+  /// Defaults to `TEAM_DIR_DEFAULT`. The config lives inside the
+  /// workspace at `{teamDir}/config.toml`.
+  teamDir: string;
   /// Terminal tab-group every team terminal joins ($CHAN_TAB_GROUP).
-  /// Defaults to the config filename (via `defaultTabGroupFromPath`); the
-  /// orchestrator resolves a `-N` suffix at Bootstrap if it collides with
-  /// a live group, so the dialog just carries the desired base name.
+  /// Defaults to the team-dir basename (via `defaultTabGroupFromPath`);
+  /// the orchestrator resolves a `-N` suffix at Bootstrap if it collides
+  /// with a live group, so the dialog just carries the desired base name.
   tabGroup: string;
   /// Total agents (lead + workers). 1-9.
   size: number;
@@ -158,13 +159,14 @@ export function closeTeamDialog(): void {
 export const TEAM_MIN_SIZE = 1;
 export const TEAM_MAX_SIZE = 9;
 
-/// Derive the default terminal tab-group name from a config path: the
-/// filename without its `.toml` extension
-/// (`/tmp/new-team-1/chan-team.toml` -> `chan-team`). Falls back to
-/// `chan-team` when the path has no usable basename.
-export function defaultTabGroupFromPath(configPath: string): string {
-  const base = configPath.split("/").pop() ?? "";
-  return base.replace(/\.toml$/i, "") || "chan-team";
+/// Derive the default terminal tab-group name from a team directory:
+/// its last path segment (basename). A trailing slash is stripped
+/// (`new-team-1/` -> `new-team-1`; `teams/alpha` -> `alpha`). Falls
+/// back to `chan-team` when the dir has no usable basename.
+export function defaultTabGroupFromPath(teamDir: string): string {
+  const trimmed = teamDir.replace(/\/+$/, "");
+  const base = trimmed.split("/").pop() ?? "";
+  return base || "chan-team";
 }
 
 /// Default team config used as the dialog's initial state. One lead
@@ -173,8 +175,8 @@ export function defaultTeamConfig(): TeamDialogConfig {
   return {
     hostName: "Neo",
     configMode: "new",
-    configPath: TEAM_CONFIG_DEFAULT_PATH,
-    tabGroup: defaultTabGroupFromPath(TEAM_CONFIG_DEFAULT_PATH),
+    teamDir: TEAM_DIR_DEFAULT,
+    tabGroup: defaultTabGroupFromPath(TEAM_DIR_DEFAULT),
     size: TEAM_MIN_SIZE,
     autoPrefix: true,
     members: [{ name: "Lead", command: "claude", env: "", isLead: true }],
@@ -189,9 +191,11 @@ export function validateTeamConfig(cfg: TeamDialogConfig): string | null {
   // Copy uses the dialog-visible labels so the user knows which
   // input to fix.
   if (!cfg.hostName.trim()) return "Your name required";
-  if (!cfg.configPath.trim()) return "Path to configuration required";
-  if (!cfg.configPath.trim().startsWith("/")) {
-    return "Path to configuration must be absolute";
+  if (!cfg.teamDir.trim()) return "Team directory required";
+  // The team dir is workspace-relative; reject a leading `/` so the
+  // config lands inside the workspace sandbox, not at an absolute path.
+  if (cfg.teamDir.trim().startsWith("/")) {
+    return "Team directory must be a path inside the workspace";
   }
   if (!cfg.tabGroup.trim()) return "Terminal tab group name required";
   if (cfg.size < TEAM_MIN_SIZE) {

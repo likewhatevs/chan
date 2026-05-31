@@ -7,7 +7,9 @@ import terminal from "./TerminalTab.svelte?raw";
 // across surfaces. Error paths and directive surfaces stay persistent.
 // The Team Work revamp removed the Spawn-agents-config copy, the
 // per-terminal submit-mode flip, and the agent-event watcher, so
-// their toast assertions are gone.
+// their toast assertions are gone. Wave-1 also removed the bubble-mode
+// flip (the rich-prompt / bubble-stub is rebuilt in Wave 2), so its
+// "bubble mode failed" toast assertion is gone too.
 
 describe("confirmed same-shape success swaps", () => {
   test("Team Work Copy path uses setTransientStatus", () => {
@@ -38,10 +40,6 @@ describe("error paths stay persistent", () => {
     expect(fileEditor).toMatch(
       /onError: \(msg\) => \(ui\.status = `copy failed: \$\{msg\}`\),?/,
     );
-  });
-
-  test("Team Work bubble-mode-failed stays persistent", () => {
-    expect(teamWork).toMatch(/ui\.status = `bubble mode failed:/);
   });
 });
 
