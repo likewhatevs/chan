@@ -448,6 +448,11 @@ enum ShellAction {
         /// land on the default slide.
         #[arg(long = "carousel-index")]
         carousel_index: Option<u32>,
+        /// Open with carousel auto-rotation OFF (the new tab's
+        /// `autoRotate` is false). Default leaves rotation on. Spelled
+        /// one-r to match `--carousel-index`.
+        #[arg(long = "carousel-off")]
+        carousel_off: bool,
     },
     /// Terminal operations against the current window's live sessions.
     ///
@@ -1917,6 +1922,7 @@ enum ControlRequest {
         window_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         carousel_index: Option<u32>,
+        carousel_off: bool,
     },
     // Category 2: act on / inspect live PTY sessions the server owns. No
     // window_id; the server resolves sessions through its registry.
@@ -2047,13 +2053,17 @@ async fn cmd_shell(action: ShellAction) -> Result<()> {
             eprintln!("{message}");
             Ok(())
         }
-        ShellAction::Dashboard { carousel_index } => {
+        ShellAction::Dashboard {
+            carousel_index,
+            carousel_off,
+        } => {
             let env = open_env()?;
             let message = send_control_request(
                 &env.control_socket,
                 ControlRequest::OpenDashboard {
                     window_id: env.window_id,
                     carousel_index,
+                    carousel_off,
                 },
             )
             .await?;

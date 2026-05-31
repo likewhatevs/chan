@@ -684,6 +684,7 @@ type WindowCommandFrame =
       window_id: string;
       command: "open_dashboard";
       carousel_index?: number | null;
+      carousel_off?: boolean;
     };
 
 async function handleWindowCommand(raw: unknown): Promise<void> {
@@ -732,15 +733,19 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
   }
   if (frame.command === "open_dashboard") {
     openDashboardInActivePane();
-    // The server only sends a carousel_index; set it on the just-created
-    // dashboard tab (the active tab of the active pane). carouselSlide is
-    // a stable DashboardTab field owned by Lane A.
-    if (typeof frame.carousel_index === "number" && frame.carousel_index >= 0) {
-      const pane = layout.nodes[layout.activePaneId];
-      if (pane && pane.kind === "leaf") {
-        const tab = pane.tabs.find((t) => t.id === pane.activeTabId);
-        if (tab && tab.kind === "dashboard") {
+    // Apply the server's carousel_index and/or carousel_off to the
+    // just-created dashboard tab (the active tab of the active pane).
+    // carouselSlide + autoRotate are stable DashboardTab fields owned by
+    // Lane B; --carousel-off maps to autoRotate=false.
+    const pane = layout.nodes[layout.activePaneId];
+    if (pane && pane.kind === "leaf") {
+      const tab = pane.tabs.find((t) => t.id === pane.activeTabId);
+      if (tab && tab.kind === "dashboard") {
+        if (typeof frame.carousel_index === "number" && frame.carousel_index >= 0) {
           tab.carouselSlide = Math.floor(frame.carousel_index);
+        }
+        if (frame.carousel_off === true) {
+          tab.autoRotate = false;
         }
       }
     }

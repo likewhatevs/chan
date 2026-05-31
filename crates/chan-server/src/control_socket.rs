@@ -57,6 +57,8 @@ pub enum ControlRequest {
         window_id: String,
         #[serde(default)]
         carousel_index: Option<u32>,
+        #[serde(default)]
+        carousel_off: bool,
     },
     // Category 2: act on / inspect live PTY sessions via the registry.
     TermWrite {
@@ -127,6 +129,8 @@ enum WindowCommand {
     OpenDashboard {
         #[serde(skip_serializing_if = "Option::is_none")]
         carousel_index: Option<u32>,
+        #[serde(skip_serializing_if = "is_false")]
+        carousel_off: bool,
     },
 }
 
@@ -318,11 +322,17 @@ fn handle_request(
         ControlRequest::OpenDashboard {
             window_id,
             carousel_index,
+            carousel_off,
         } => {
             if let Err(message) = require_window_id(&window_id) {
                 return ControlResponse::Error { message };
             }
-            into_response(open_dashboard(&window_id, carousel_index, events_tx))
+            into_response(open_dashboard(
+                &window_id,
+                carousel_index,
+                carousel_off,
+                events_tx,
+            ))
         }
         ControlRequest::TermWrite {
             tab_name,
@@ -556,11 +566,15 @@ fn open_term_new(
 fn open_dashboard(
     window_id: &str,
     carousel_index: Option<u32>,
+    carousel_off: bool,
     events_tx: &broadcast::Sender<String>,
 ) -> Result<String, String> {
     send_window_command(
         window_id,
-        WindowCommand::OpenDashboard { carousel_index },
+        WindowCommand::OpenDashboard {
+            carousel_index,
+            carousel_off,
+        },
         events_tx,
     )?;
     Ok("dashboard request queued".into())
@@ -942,12 +956,26 @@ mod tests {
     fn open_dashboard_carries_the_carousel_index() {
         let (tx, mut rx) = broadcast::channel(4);
 
-        open_dashboard("window-a", Some(2), &tx).expect("open dashboard");
+        open_dashboard("window-a", Some(2), false, &tx).expect("open dashboard");
 
         let frame: Value = serde_json::from_str(&rx.try_recv().expect("window command"))
             .expect("window command json");
         assert_eq!(frame["command"], "open_dashboard");
         assert_eq!(frame["carousel_index"], 2);
+        // carousel_off omitted from the wire when false (is_false skip).
+        assert_eq!(frame["carousel_off"], Value::Null);
+    }
+
+    #[test]
+    fn open_dashboard_carries_carousel_off_when_set() {
+        let (tx, mut rx) = broadcast::channel(4);
+
+        open_dashboard("window-a", None, true, &tx).expect("open dashboard");
+
+        let frame: Value = serde_json::from_str(&rx.try_recv().expect("window command"))
+            .expect("window command json");
+        assert_eq!(frame["command"], "open_dashboard");
+        assert_eq!(frame["carousel_off"], true);
     }
 
     #[test]
