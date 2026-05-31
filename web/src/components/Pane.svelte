@@ -90,6 +90,7 @@
     currentOS,
     currentPlatform,
     formatChord,
+    osChord,
   } from "../state/shortcuts";
   import { openTabMenu, tabMenu } from "../state/tabMenu.svelte";
   import { onDestroy, onMount } from "svelte";
@@ -219,7 +220,7 @@
     if (!id) return "";
     const s = SHORTCUTS.find((x) => x.id === id);
     if (!s) return "";
-    const chord = s[platform];
+    const chord = osChord(s, platform, os);
     if (!chord) return "";
     return formatChord(chord, os);
   }

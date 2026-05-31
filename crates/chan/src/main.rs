@@ -75,17 +75,17 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
 
   App
   ---
-  Settings                                     Cmd+,
-  Terminal team work                         Cmd+Alt+P   (macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav))
+  Flip focused Hybrid                          Cmd+,
+  Team Work                                    Cmd+Alt+P   (macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav))
   File browser                                 Cmd+Alt+O   (macOS web + native everywhere; all platforms via Mod+. o (Hybrid Nav))
   Graph                                        Cmd+Shift+M   (or Mod+. v (Hybrid Nav))
   New terminal                                 Cmd+Alt+T   (macOS web + native everywhere; all platforms via Mod+. t (Hybrid Nav))
-  Reload window                                Cmd+R
+  Reload window                                Cmd+R   (Ctrl+Shift+R on Linux / Windows)
   New draft                                    Cmd+N
   Lock screen                                  Cmd+. L
   Dismiss overlay                              Esc
   Search                                       Cmd+S
-  Infographics                                 Cmd+I   (or Mod+. i (Hybrid Nav))
+  Dashboard                                    Cmd+. i
   
   Panes
   -----
@@ -107,6 +107,8 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   Editor
   ------
   Show Source Code (toggle rendered/source)    Cmd+E
+  Bold                                         Cmd+B
+  Italic                                       Cmd+I
 ";
 
 #[derive(Parser, Debug)]
@@ -443,14 +445,14 @@ enum ShellAction {
         carousel_index: Option<u32>,
     },
     /// Terminal operations against the current window's live sessions.
-    Term {
+    Terminal {
         #[command(subcommand)]
-        action: TermAction,
+        action: TerminalAction,
     },
 }
 
 #[derive(Subcommand, Debug)]
-enum TermAction {
+enum TerminalAction {
     /// Open a new terminal tab in the current window.
     New {
         /// Working directory for the new terminal (workspace-relative or
@@ -466,8 +468,8 @@ enum TermAction {
         tab_group: Option<String>,
     },
     /// Write raw bytes to live terminal session(s), selected by name
-    /// and/or group. No newline is appended: `cs term write $'ls\n'`
-    /// runs; `cs term write ls` only types. At least one selector is
+    /// and/or group. No newline is appended: `cs terminal write $'ls\n'`
+    /// runs; `cs terminal write ls` only types. At least one selector is
     /// required.
     Write {
         /// Literal bytes to write. Omit with --stdin to stream instead.
@@ -696,8 +698,8 @@ enum ReportsAction {
 
 /// Parse argv with the `cs` alias rewrite. When the binary is invoked
 /// through a `cs` symlink (argv[0] basename == "cs"), the remaining args
-/// parse as `chan shell <args>`, so `cs term list` == `chan shell term
-/// list`. The symlink is the user's to create (documented in
+/// parse as `chan shell <args>`, so `cs terminal list` == `chan shell
+/// terminal list`. The symlink is the user's to create (documented in
 /// `chan shell --help`); the build never ships one.
 fn parse_cli() -> Cli {
     let mut argv = std::env::args_os();
@@ -1915,8 +1917,8 @@ fn open_env() -> Result<OpenEnv> {
     )
 }
 
-/// Resolve just the control socket, for category-2 actions (`cs term
-/// write` / `term list`) that act on the server's live sessions and so do
+/// Resolve just the control socket, for category-2 actions (`cs terminal
+/// write` / `terminal list`) that act on the server's live sessions and so do
 /// not need a window to target.
 fn control_socket_env() -> Result<PathBuf> {
     let socket = std::env::var("CHAN_CONTROL_SOCKET")
@@ -1998,13 +2000,13 @@ async fn cmd_shell(action: ShellAction) -> Result<()> {
             eprintln!("{message}");
             Ok(())
         }
-        ShellAction::Term { action } => cmd_shell_term(action).await,
+        ShellAction::Terminal { action } => cmd_shell_terminal(action).await,
     }
 }
 
-async fn cmd_shell_term(action: TermAction) -> Result<()> {
+async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
     match action {
-        TermAction::New {
+        TerminalAction::New {
             path,
             tab_name,
             tab_group,
@@ -2024,14 +2026,14 @@ async fn cmd_shell_term(action: TermAction) -> Result<()> {
             eprintln!("{message}");
             Ok(())
         }
-        TermAction::Write {
+        TerminalAction::Write {
             cmd,
             stdin,
             tab_name,
             tab_group,
         } => {
             if tab_name.is_none() && tab_group.is_none() {
-                anyhow::bail!("cs term write needs --tab-name and/or --tab-group");
+                anyhow::bail!("cs terminal write needs --tab-name and/or --tab-group");
             }
             // Raw bytes, no implicit newline (@@Alex decision). --stdin
             // reads this process's stdin to EOF; otherwise the literal
@@ -2042,9 +2044,9 @@ async fn cmd_shell_term(action: TermAction) -> Result<()> {
                 std::io::stdin()
                     .read_to_end(&mut buf)
                     .context("reading stdin")?;
-                String::from_utf8(buf).context("stdin must be UTF-8 for cs term write")?
+                String::from_utf8(buf).context("stdin must be UTF-8 for cs terminal write")?
             } else {
-                cmd.ok_or_else(|| anyhow::anyhow!("cs term write needs a command or --stdin"))?
+                cmd.ok_or_else(|| anyhow::anyhow!("cs terminal write needs a command or --stdin"))?
             };
             let socket = control_socket_env()?;
             let message = send_control_request(
@@ -2059,7 +2061,7 @@ async fn cmd_shell_term(action: TermAction) -> Result<()> {
             eprintln!("{message}");
             Ok(())
         }
-        TermAction::List => {
+        TerminalAction::List => {
             let socket = control_socket_env()?;
             // The registry JSON goes to stdout so it pipes cleanly.
             let json = send_control_request(&socket, ControlRequest::TermList).await?;

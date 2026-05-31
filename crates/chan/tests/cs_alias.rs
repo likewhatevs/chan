@@ -17,22 +17,22 @@ fn cs_symlink() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[test]
-fn cs_term_list_dispatches_to_shell() {
+fn cs_terminal_list_dispatches_to_shell() {
     let (_dir, cs) = cs_symlink();
-    // Outside a chan terminal there is no control socket, so `cs term
-    // list` errors for the missing $CHAN_CONTROL_SOCKET. That the `term`
-    // subcommand parses AT ALL proves the `cs -> shell` rewrite: plain
-    // `chan term list` would be an unknown subcommand instead.
+    // Outside a chan terminal there is no control socket, so `cs terminal
+    // list` errors for the missing $CHAN_CONTROL_SOCKET. That the
+    // `terminal` subcommand parses AT ALL proves the `cs -> shell`
+    // rewrite: plain `chan terminal list` would be an unknown subcommand.
     let output = Command::new(&cs)
-        .args(["term", "list"])
+        .args(["terminal", "list"])
         .env_remove("CHAN_CONTROL_SOCKET")
         .env_remove("CHAN_WINDOW_ID")
         .output()
-        .expect("run cs term list");
+        .expect("run cs terminal list");
 
     assert!(
         !output.status.success(),
-        "cs term list should fail without a control socket"
+        "cs terminal list should fail without a control socket"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -45,7 +45,7 @@ fn cs_term_list_dispatches_to_shell() {
 fn cs_help_shows_shell_subcommands() {
     let (_dir, cs) = cs_symlink();
     // `cs --help` is `chan shell --help`, so its usage lists the shell
-    // actions (term / graph / dashboard), not the top-level commands.
+    // actions (terminal / graph / dashboard), not the top-level commands.
     let output = Command::new(&cs)
         .arg("--help")
         .output()
@@ -54,8 +54,8 @@ fn cs_help_shows_shell_subcommands() {
     assert!(output.status.success(), "cs --help should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("term"),
-        "shell help should list `term`: {stdout}"
+        stdout.contains("terminal"),
+        "shell help should list `terminal`: {stdout}"
     );
     assert!(
         stdout.contains("dashboard"),
@@ -69,15 +69,15 @@ fn cs_help_shows_shell_subcommands() {
 }
 
 #[test]
-fn plain_chan_rejects_term_subcommand() {
-    // Control: WITHOUT the `cs` rewrite, `chan term` is unknown. This is
-    // what makes the rewrite load-bearing.
+fn plain_chan_rejects_terminal_subcommand() {
+    // Control: WITHOUT the `cs` rewrite, `chan terminal` is unknown. This
+    // is what makes the rewrite load-bearing.
     let output = Command::new(env!("CARGO_BIN_EXE_chan"))
-        .args(["term", "list"])
+        .args(["terminal", "list"])
         .output()
-        .expect("run chan term list");
+        .expect("run chan terminal list");
 
-    assert!(!output.status.success(), "chan term list should fail");
+    assert!(!output.status.success(), "chan terminal list should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("unrecognized subcommand") || stderr.contains("unexpected"),

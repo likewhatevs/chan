@@ -610,7 +610,13 @@ const KEY_BRIDGE_JS: &str = r#"
     }
     if (!shift) {
       switch (code) {
-        case 'KeyR': invokeIpc(e, 'reload_window'); return;
+        // Reload. macOS binds Cmd+R (metaKey); Linux/Windows moves to
+        // Ctrl+Shift+R (shift branch below) so plain Ctrl+R reaches a
+        // focused terminal's shell reverse-search. Gating on metaKey
+        // here leaves Linux/macOS plain Ctrl+R untouched (no
+        // preventDefault -> falls through to xterm), mirroring the
+        // Cmd+W idiom below.
+        case 'KeyR': if (e.metaKey) invokeIpc(e, 'reload_window'); return;
         case 'KeyT': fire(e, 'app.terminal.toggle'); return;
         case 'KeyO': fire(e, 'app.files.toggle');    return;
         case 'KeyP': fire(e, 'app.terminal.teamWork'); return;
@@ -650,6 +656,11 @@ const KEY_BRIDGE_JS: &str = r#"
       }
     } else {
       switch (code) {
+        // Reload on Linux/Windows: Ctrl+Shift+R. Gate on !metaKey so
+        // macOS Cmd+Shift+R does NOT reload (macOS reloads on Cmd+R in
+        // the !shift branch above); the !metaKey form fires only for the
+        // Ctrl+Shift+R that Linux/Windows users press.
+        case 'KeyR': if (!e.metaKey) invokeIpc(e, 'reload_window'); return;
         case 'KeyG':         fire(e, 'app.find.prev');     return;
         case 'KeyT':         fire(e, 'app.tab.reopenClosed'); return;
         case 'KeyM':         fire(e, 'app.graph.toggle');  return;
@@ -1021,7 +1032,13 @@ mod tests {
         // names and the case-label they're bound from.
         assert!(KEY_BRIDGE_JS.contains("invokeIpc(e, 'reload_window')"));
         assert!(KEY_BRIDGE_JS.contains("invokeIpc(e, 'open_devtools')"));
-        assert!(KEY_BRIDGE_JS.contains("case 'KeyR': invokeIpc"));
+        // Reload is per-OS: Cmd+R (metaKey, no-shift branch) on macOS and
+        // Ctrl+Shift+R (!metaKey, shift branch) on Linux/Windows, so plain
+        // Ctrl+R is never claimed and reaches the terminal's reverse-search.
+        assert!(KEY_BRIDGE_JS.contains("case 'KeyR': if (e.metaKey) invokeIpc(e, 'reload_window')"));
+        assert!(
+            KEY_BRIDGE_JS.contains("case 'KeyR': if (!e.metaKey) invokeIpc(e, 'reload_window')")
+        );
         assert!(KEY_BRIDGE_JS.contains("code === 'KeyI'"));
     }
 

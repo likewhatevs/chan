@@ -276,4 +276,17 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
     expect(terminalSource).not.toMatch(/readWatcherEvents/);
     expect(terminalSource).not.toMatch(/watcherPollTimer/);
   });
+
+  test("terminal links route clicks through openExternalUrl (LINKS)", () => {
+    // WebLinksAddon gets a custom handler instead of its default
+    // window.open(_blank), which is inert / opens in-app under the
+    // chan-desktop Tauri webview. openExternalUrl gives a real browser
+    // tab on web and the OS default browser on desktop.
+    expect(terminalSource).toMatch(
+      /new WebLinksAddon\(\(_event, uri\) => \{[\s\S]*?void openExternalUrl\(uri\);/,
+    );
+    expect(terminalSource).toMatch(
+      /import \{ openExternalUrl \} from "\.\.\/editor\/external_links";/,
+    );
+  });
 });

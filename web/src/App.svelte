@@ -99,6 +99,7 @@
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import { flushPendingBufferWrites, pruneEditorBuffers } from "./state/editorBuffer";
   import { isTauriDesktop, reloadWindow, requestCloseWindow } from "./api/desktop";
+  import { currentOS } from "./state/shortcuts";
   import { api } from "./api/client";
   import {
     applyInitialPageWidth,
@@ -721,10 +722,18 @@
         return;
       }
     }
-    // Cmd+R (Ctrl+R non-Mac) reloads the window. preventDefault suppresses
-    // the browser-default reload so the SPA handler and browser don't both
-    // fire. Desktop routes through the same reloadWindow() IPC.
-    if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyR") {
+    // Window reload. macOS: Cmd+R. Linux/Windows: Ctrl+Shift+R, so plain
+    // Ctrl+R falls through to a focused terminal's shell (reverse-search) -
+    // claiming Ctrl+R here is exactly what the old `Mod+R` binding did and
+    // what regressed reverse-search. Branch per-OS (the desktop bridge and
+    // shouldEscapeTerminal apply the same Cmd-vs-Ctrl+Shift rule).
+    // preventDefault suppresses the browser default (soft reload via
+    // reloadWindow / the desktop IPC).
+    const reloadChord =
+      currentOS() === "mac"
+        ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyR"
+        : e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey && e.code === "KeyR";
+    if (reloadChord) {
       e.preventDefault();
       void reloadWindow();
       return;

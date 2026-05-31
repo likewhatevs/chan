@@ -174,12 +174,20 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // through `reloadWindow()` (chan-desktop IPC or
   // `window.location.reload()` on web). The Tauri-side binding
   // in chan-desktop's serve.rs is defense-in-depth.
+  //
+  // The stored chord is the macOS form (`Mod+R` -> Cmd+R). On
+  // Linux/Windows plain Ctrl+R is the shell's reverse-search, so
+  // reload diverges to Ctrl+Shift+R there. That divergence is real
+  // (a different chord, not just a different label), so it lives in
+  // `osChord` rather than the `Mod` token; the note documents it in
+  // the macOS-rendered help table.
   {
     id: "app.window.reload",
     label: "Reload window",
     web: "Mod+R",
     native: "Mod+R",
     group: "App",
+    note: "Ctrl+Shift+R on Linux / Windows",
     escapeTerminal: true,
   },
   // New Draft: creates a fresh draft dir under chan-workspace's
@@ -410,6 +418,28 @@ export function formatChord(chord: Chord, os: OS): string {
   return chord.replaceAll(/\bMod\b/g, MOD_LABEL[os]);
 }
 
+/// The one shortcut whose chord diverges by OS, not just by label.
+const RELOAD_SHORTCUT_ID = "app.window.reload";
+
+/// Resolve a shortcut's chord for a platform with chan's single
+/// OS-level chord override applied. Reload binds Cmd+R on macOS, but on
+/// Linux/Windows plain Ctrl+R is the shell's reverse-search, so reload
+/// moves to Ctrl+Shift+R there. The registry stores the macOS form
+/// (`Mod+R`); this is the ONE place that diverges it, so the escape
+/// matcher, the on-screen labels, and the help table all agree.
+/// App.svelte's keymap and chan-desktop's KEY_BRIDGE_JS branch on the
+/// same rule (Cmd vs Ctrl+Shift) at the raw-event layer.
+export function osChord(
+  s: Shortcut,
+  platform: Platform,
+  os: OS,
+): Chord | undefined {
+  const chord = s[platform];
+  if (!chord) return undefined;
+  if (s.id === RELOAD_SHORTCUT_ID && os !== "mac") return "Mod+Shift+R";
+  return chord;
+}
+
 export function currentOS(): OS {
   if (typeof navigator === "undefined") return "linux";
   const ua = navigator.userAgent;
@@ -426,9 +456,10 @@ export function currentOS(): OS {
 export function chordFor(id: string): string | null {
   const s = SHORTCUTS.find((x) => x.id === id);
   if (!s) return null;
-  const chord = s[currentPlatform()];
+  const os = currentOS();
+  const chord = osChord(s, currentPlatform(), os);
   if (!chord) return null;
-  return formatChord(chord, currentOS());
+  return formatChord(chord, os);
 }
 
 /// Derive the platform-resolved chord from a raw `KeyboardEvent`.
@@ -505,7 +536,7 @@ export function shouldEscapeTerminal(e: KeyboardEvent): boolean {
   const platform = currentPlatform();
   for (const s of SHORTCUTS) {
     if (!s.escapeTerminal) continue;
-    const registryChord = s[platform];
+    const registryChord = osChord(s, platform, currentOS());
     if (!registryChord) continue;
     if (sameChord(eventTokens, canonicalChordTokens(registryChord))) {
       return true;
@@ -578,7 +609,7 @@ export function renderTable(platform: Platform, os: OS): string {
     lines.push("-".repeat(name.length));
     for (const s of arr) {
       const label = s.label.padEnd(labelW);
-      const chord = formatChord(s[platform]!, os);
+      const chord = formatChord(osChord(s, platform, os)!, os);
       const suffix = s.note ? `   (${s.note})` : "";
       lines.push(`${label}${gap}${chord}${suffix}`);
     }

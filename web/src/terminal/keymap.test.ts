@@ -38,8 +38,13 @@ describe("terminal meta key mapping", () => {
     expect(terminalMetaKeyBytes(keyEvent({ type: "keyup", key: "ArrowLeft", altKey: true }))).toBeNull();
   });
 
-  test("leaves modified Enter to xterm until an app enables enhanced keyboard reporting", () => {
-    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }))).toBeNull();
+  test("Shift+Enter falls back to LF when no enhanced keyboard reporting is active (SUBMIT)", () => {
+    // The "agent already running, never observed negotiating" case:
+    // nothing negotiated, nothing restored. Shift+Enter must insert a
+    // newline (a bare LF: newline in an agent draft, harmless submit in a
+    // plain shell), NOT fall through to xterm's submit `\r`. Cmd/Ctrl+Enter
+    // keep falling through so their submit semantics are preserved.
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }))).toBe("\n");
     expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", ctrlKey: true }))).toBeNull();
     expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", metaKey: true }))).toBeNull();
   });
@@ -83,7 +88,9 @@ describe("terminal meta key mapping", () => {
     const protocol = createTerminalKeyboardProtocolState();
     applyKittyKeyboardProtocol(protocol, "push", [1]);
 
-    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBeNull();
+    // Disambiguate-only (flag 1, not REPORT_ALL_KEYS 8) must not emit the
+    // CSI-u report-all sequence; it falls to the Shift+Enter LF fallback.
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBe("\n");
   });
 
   test("sends matched bytes and suppresses xterm default handling", () => {
@@ -104,9 +111,18 @@ describe("terminal meta key mapping", () => {
     expect(ev.defaultPrevented).toBe(false);
   });
 
-  test("passes modified Enter through when no foreground app requested it", () => {
+  test("Shift+Enter sends the LF fallback and suppresses xterm submit", () => {
     const sendInput = vi.fn();
     const ev = keyEvent({ key: "Enter", shiftKey: true });
+
+    expect(handleTerminalMetaKey(ev, sendInput)).toBe(false);
+    expect(sendInput).toHaveBeenCalledWith("\n");
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  test("passes Cmd/Ctrl+Enter through to xterm when no foreground app requested it", () => {
+    const sendInput = vi.fn();
+    const ev = keyEvent({ key: "Enter", ctrlKey: true });
 
     expect(handleTerminalMetaKey(ev, sendInput)).toBe(true);
     expect(sendInput).not.toHaveBeenCalled();
@@ -120,7 +136,9 @@ describe("terminal meta key mapping", () => {
     expect(queryXtermModifierKeys(protocol, [4])).toBe("\x1b[>4;2m");
     disableXtermModifierKeys(protocol, [4]);
     expect(queryXtermModifierKeys(protocol, [4])).toBe("\x1b[>4;0m");
-    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBeNull();
+    // modifyOtherKeys back off -> Shift+Enter drops to the LF fallback
+    // (no longer the `\x1b[27;2;13~` sequence), not a submit `\r`.
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBe("\n");
   });
 
   test("kitty keyboard protocol push, pop, and flag edits are scoped to the active screen", () => {
@@ -132,17 +150,20 @@ describe("terminal meta key mapping", () => {
     );
 
     protocol.kitty.screen = "alternate";
-    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBeNull();
+    // No report-all on the alternate screen -> Shift+Enter LF fallback.
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBe("\n");
     applyKittyKeyboardProtocol(protocol, "set", [8, 2]);
     expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBe(
       "\x1b[13;2u",
     );
     applyKittyKeyboardProtocol(protocol, "set", [8, 3]);
-    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBeNull();
+    // Flag 8 cleared on the alternate screen -> back to the LF fallback.
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBe("\n");
 
     protocol.kitty.screen = "main";
     applyKittyKeyboardProtocol(protocol, "pop", []);
-    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBeNull();
+    // Popped back to the pristine main-screen flags -> LF fallback.
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBe("\n");
   });
 
   test("terminal reset clears negotiated keyboard modes", () => {
@@ -153,7 +174,8 @@ describe("terminal meta key mapping", () => {
     resetTerminalKeyboardProtocolState(protocol);
 
     expect(queryXtermModifierKeys(protocol, [4])).toBe("\x1b[>4;0m");
-    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBeNull();
+    // Reset wipes every negotiated mode -> Shift+Enter LF fallback.
+    expect(terminalMetaKeyBytes(keyEvent({ key: "Enter", shiftKey: true }), protocol)).toBe("\n");
   });
 
   test("default state serializes to null (plain shell keeps the hash clean)", () => {

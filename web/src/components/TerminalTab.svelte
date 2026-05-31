@@ -27,6 +27,7 @@
   import { WebglAddon } from "@xterm/addon-webgl";
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
+  import { openExternalUrl } from "../editor/external_links";
   import { chordFor, shouldEscapeTerminal } from "../state/shortcuts";
   import {
     advanceTerminalSeq,
@@ -610,7 +611,18 @@
     term.loadAddon(fit);
     term.loadAddon(search);
     term.loadAddon(serialize);
-    term.loadAddon(new WebLinksAddon());
+    // Route terminal link clicks through the editor's external-open
+    // path: a new browser tab on web, the OS default browser under
+    // chan-desktop's Tauri webview. The default WebLinksAddon handler
+    // is window.open(_blank), which under WKWebView either no-ops or
+    // opens inside the app shell, so links highlighted on hover but the
+    // click never reached a real browser. openExternalUrl also gates on
+    // the scheme (http/https/mailto/tel).
+    term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        void openExternalUrl(uri);
+      }),
+    );
     term.open(host);
     // The WebGL renderer makes xterm.js's built-in customGlyphs path
     // fire: under the default DOM renderer, box-drawing +

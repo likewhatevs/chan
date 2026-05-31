@@ -57,6 +57,21 @@ export function terminalMetaKeyBytes(
       if ((currentKittyFlags(protocol) & KITTY_REPORT_ALL_KEYS) !== 0) {
         return `\x1b[13;${modifier}u`;
       }
+      // Fallback for Shift+Enter when no enhanced keyboard protocol is
+      // active. This is the "agent already running, never observed
+      // negotiating" case: the agent enabled modifyOtherKeys/kitty before
+      // this tab attached, so the negotiation is neither in the reattach
+      // replay nor in the serialized snapshot, and the branches above see
+      // a pristine state. Without this, Shift+Enter falls through to
+      // xterm's plain `\r` and SUBMITS to the agent instead of inserting a
+      // newline. A bare LF is the safe default across both foreground
+      // programs: a plain shell's line discipline accepts `\n` exactly like
+      // Enter (it submits the line, no stray bytes on the prompt), while
+      // Claude Code reads `\n` as a newline inside its multi-line draft
+      // (live-probed; the inverse of AGENT_SUBMIT_CHORD in submitMode.ts).
+      // Scoped to Shift+Enter only: Cmd/Ctrl+Enter (modifiers 9/5) keep
+      // falling through to `\r` so their submit semantics are preserved.
+      if (modifier === 2) return "\n";
     }
   }
   if (!ev.altKey || ev.ctrlKey || ev.metaKey) return null;
