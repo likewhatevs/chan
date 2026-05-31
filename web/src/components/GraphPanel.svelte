@@ -391,6 +391,12 @@
     let scopeId: string;
     if (isDir) {
       scopeId = path ? `dir:${path}` : "workspace";
+      // BUG-GRAPH: switch into filesystem mode for a directory re-scope,
+      // matching openFsGraphForDirectory. Without this the re-scope keeps
+      // the current (semantic) mode, so it plots the markdown link
+      // neighbourhood instead of the directory's files and the
+      // double-click expand (gated on filesystemMode) stays a no-op.
+      graphState.mode = "filesystem";
     } else {
       const slash = path.lastIndexOf("/");
       const parent = slash > 0 ? path.slice(0, slash) : "";
