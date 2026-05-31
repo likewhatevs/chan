@@ -654,12 +654,14 @@ export type IndexStatus =
       indexed_docs: number;
       indexed_vectors: number;
       model: string;
-      /// Present while embeddings are still being generated in the
-      /// background after the index reached BM25-ready (preflight unlocks
-      /// on idle regardless). Absent once embedding settles. The status
-      /// bar renders this as a passive "embedding done/total" chip, never
-      /// the active reindexing pill.
-      embedding?: { done: number; total: number };
+      /// Background embedding progress, per the IDX wire-shape contract
+      /// (idx-wire-shape.md). A `{done,total}` object (done <= total)
+      /// while embeddings are still generating after the index reached
+      /// BM25-ready - preflight unlocks on idle regardless - and `null`
+      /// (the backend emits an explicit null) or absent once settled. The
+      /// status bar renders it as a passive "embedding done/total" chip,
+      /// never the active reindexing pill.
+      embedding?: { done: number; total: number } | null;
     }
   | { state: "building"; current: number; total: number; file: string }
   | { state: "reindexing"; file: string }
