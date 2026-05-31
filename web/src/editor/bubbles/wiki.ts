@@ -28,6 +28,7 @@ import { createCaretAnchor } from "./anchor";
 import { api } from "../../api/client";
 import type { LinkTarget } from "../../api/types";
 import { indexStatus } from "../../state/store.svelte";
+import { relativizePath, wikiLinkToMarkdown } from "../links";
 import {
   filterBlocks,
   insertBlockAnchor,
@@ -35,7 +36,11 @@ import {
   parseBlocks,
   type ParsedBlock,
 } from "../extensions/wikiBlocks";
-import { completionEmptyState, renderBubbleEmptyState } from "./empty_state";
+import {
+  completionEmptyState,
+  indexInProgress,
+  renderBubbleEmptyState,
+} from "./empty_state";
 
 export interface WikiBubbleOpts {
   view: EditorView;
@@ -50,6 +55,12 @@ export interface WikiBubbleOpts {
   /// "raw": commit inserts just `path`. Used when the caret is inside
   /// an existing `[label](path)` URL portion (the brackets stay).
   templateMode?: "wrap" | "raw";
+  /// Path of the file being edited (workspace-rooted POSIX, no leading
+  /// slash), or null when there is no source file (chat bubble, unsaved
+  /// draft). Used to relativize the inserted link target so notes stay
+  /// portable across project layouts. Null falls back to a workspace-
+  /// rooted target.
+  fromPath?: string | null;
   /// Cmd+Enter handler. Called with the currently-selected hit's
   /// target (or the trigger's parsed target if no hit is selected).
   /// Returns the navigation surface to the host (FileEditorTab calls
@@ -62,6 +73,15 @@ const SEARCH_LIMIT = 5;
 const HEADING_LIMIT = 8;
 const BLOCK_LIMIT = 8;
 const FETCH_DEBOUNCE_MS = 60;
+// Poll interval for the index-completion watch (see startIndexWatch).
+const INDEX_WATCH_MS = 200;
+
+/// Matches a COMPLETE wiki link `[[...]]` anywhere in the doc. Used to
+/// pick a file's link style: a file that already contains one keeps
+/// emitting wiki links; every other file emits relative markdown. The
+/// in-progress `[[query` trigger has no closing `]]`, so it never
+/// matches and a fresh file stays in markdown mode while authoring.
+const WIKI_LINK_RE = /\[\[[^[\]\n]+\]\]/;
 
 interface HeadingHit {
   level: number;
@@ -131,7 +151,14 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   let selectedIndex = 0;
   let reqSeq = 0;
   let debounceTimer: number | undefined;
+  let indexWatch: number | undefined;
   let alive = true;
+
+  // Per-file link style, snapshotted when the bubble opens. A file that
+  // already uses wiki links keeps the `[[...]]` form on commit so its
+  // style stays consistent; every other file (the default now) commits
+  // relative markdown `[stem](./path#anchor)`.
+  const fileUsesWikiLinks = WIKI_LINK_RE.test(opts.view.state.doc.toString());
 
   const list = document.createElement("div");
   list.className = "md-bubble-list";
@@ -152,9 +179,18 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     const hits = activeHits();
     if (hits.length === 0) {
       if (mode.kind === "file") {
-        renderBubbleEmptyState(list, completionEmptyState(query, indexStatus.value));
+        const empty = completionEmptyState(query, indexStatus.value);
+        renderBubbleEmptyState(list, empty);
         status.textContent = "";
         status.classList.add("md-bubble-status-empty");
+        // The empty state reads the shared index status at render time,
+        // but the bubble only re-renders on a keystroke or a fetch
+        // result. When a watcher reindex finishes while the user sits on
+        // the "Indexing..." state, nothing re-runs the fetch, so the
+        // bubble would otherwise pin "Indexing... 0 documents" until the
+        // next keystroke. Watch the shared status and re-fetch on
+        // completion so results replace the stale empty state.
+        if (empty.kind === "indexing") startIndexWatch();
       } else if (mode.kind === "heading") {
         status.textContent = headingTarget === mode.target
           ? "No matching headings"
@@ -345,6 +381,32 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     }
   }
 
+  /// Re-run the active mode's fetch once the index finishes building.
+  /// Only started while the bubble is showing the "Indexing..." empty
+  /// state; the global poller flips indexStatus to idle when the
+  /// reindex completes, but nothing else re-runs our fetch, so without
+  /// this the bubble stays pinned on "Indexing...". One-shot: it tears
+  /// itself down on the first non-indexing tick and re-fetches.
+  function startIndexWatch(): void {
+    if (indexWatch !== undefined) return;
+    indexWatch = window.setInterval(() => {
+      if (!alive) {
+        stopIndexWatch();
+        return;
+      }
+      if (indexInProgress(indexStatus.value)) return;
+      stopIndexWatch();
+      refetchForMode();
+    }, INDEX_WATCH_MS);
+  }
+
+  function stopIndexWatch(): void {
+    if (indexWatch !== undefined) {
+      clearInterval(indexWatch);
+      indexWatch = undefined;
+    }
+  }
+
   function commit(hit: LinkTarget | HeadingHit | ParsedBlock): void {
     const raw = opts.templateMode === "raw";
     if (mode.kind === "block") {
@@ -357,12 +419,20 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     }
     let insert: string;
     if (mode.kind === "heading") {
+      // Explicit `#` heading mode commits the user-typed target
+      // verbatim. That target may be a title/stem rather than a
+      // resolvable workspace path, so relativizing it into markdown is
+      // unsafe here (the markdown resolver is path-based, not title-
+      // based). The file-mode branch below carries a real path and is
+      // where relative markdown is emitted; Wave-2 resolves the typed
+      // target to a path before converting this branch.
       const h = hit as HeadingHit;
       const ref = `${mode.target}#${h.anchor}`;
       insert = raw ? ref : `[[${ref}]]`;
     } else {
-      const ref = linkTargetRef(hit as LinkTarget);
-      insert = raw ? ref : `[[${ref}]]`;
+      const lt = hit as LinkTarget;
+      const anchor = lt.kind === "Heading" ? (lt.anchor ?? null) : null;
+      insert = fileLinkInsert(lt.path, anchor, raw);
     }
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert },
@@ -371,11 +441,33 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     dismiss();
   }
 
-  function linkTargetRef(hit: LinkTarget): string {
-    if (hit.kind === "Heading" && hit.anchor) {
-      return `${hit.path}#${hit.anchor}`;
+  /// Format an on-disk file link for a resolved (path, anchor). `path`
+  /// is a workspace-rooted POSIX path (no leading slash). Three forms:
+  ///   raw mode       -> bare path filling the URL slot of an existing
+  ///                     `[label](...)` (the brackets stay); relativized
+  ///                     so a note outside the workspace root resolves.
+  ///   wiki-mode file -> `[[path#anchor]]`, preserving the file's
+  ///                     existing wiki-link style.
+  ///   default        -> relative markdown `[stem](./path#anchor)`.
+  function fileLinkInsert(
+    path: string,
+    anchor: string | null,
+    raw: boolean,
+  ): string {
+    if (raw) {
+      const rel = opts.fromPath ? relativizePath(path, opts.fromPath) : path;
+      return anchor ? `${rel}#${anchor}` : rel;
     }
-    return hit.path;
+    if (fileUsesWikiLinks) {
+      const ref = anchor ? `${path}#${anchor}` : path;
+      return `[[${ref}]]`;
+    }
+    return wikiLinkToMarkdown(
+      path,
+      undefined,
+      anchor ?? undefined,
+      opts.fromPath ?? undefined,
+    );
   }
 
   async function commitBlock(
@@ -451,6 +543,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     if (!alive) return;
     alive = false;
     if (debounceTimer !== undefined) clearTimeout(debounceTimer);
+    stopIndexWatch();
     shell.dismiss();
     anchor.dismiss();
     opts.onDismiss();

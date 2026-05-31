@@ -206,6 +206,7 @@
         initialQuery: spec.query,
         prefix: wikiPickerPrefix,
         templateMode: spec.templateMode ?? "wrap",
+        fromPath: currentPath,
         onOpenLink: (target, anchor) =>
           onWikiClick({
             target,

@@ -22,9 +22,22 @@ describe("wiki file completion uses graph link targets", () => {
     expect(wiki).not.toMatch(/\.filter\(\(hit\) => hit\.kind === "File"\)/);
   });
 
-  test("heading link-target hits insert anchored wiki links", () => {
+  test("file-mode commit extracts the heading anchor and defers to fileLinkInsert", () => {
     expect(wiki).toMatch(
-      /function linkTargetRef\(hit: LinkTarget\): string \{[\s\S]*?if \(hit\.kind === "Heading" && hit\.anchor\) \{[\s\S]*?return `\$\{hit\.path\}#\$\{hit\.anchor\}`;/,
+      /const lt = hit as LinkTarget;[\s\S]*?const anchor = lt\.kind === "Heading" \? \(lt\.anchor \?\? null\) : null;[\s\S]*?insert = fileLinkInsert\(lt\.path, anchor, raw\);/,
     );
+  });
+
+  test("fileLinkInsert emits relative markdown by default and keeps wiki links only in a wiki-mode file", () => {
+    // Default (markdown-mode file): relative markdown via links.ts.
+    expect(wiki).toMatch(
+      /return wikiLinkToMarkdown\(\s*path,\s*undefined,\s*anchor \?\? undefined,\s*opts\.fromPath \?\? undefined,\s*\);/,
+    );
+    // Wiki-mode file: preserve the `[[path#anchor]]` form.
+    expect(wiki).toMatch(
+      /if \(fileUsesWikiLinks\) \{[\s\S]*?const ref = anchor \? `\$\{path\}#\$\{anchor\}` : path;[\s\S]*?return `\[\[\$\{ref\}\]\]`;/,
+    );
+    // The per-file style snapshot is a complete `[[...]]` match.
+    expect(wiki).toMatch(/const fileUsesWikiLinks = WIKI_LINK_RE\.test\(/);
   });
 });

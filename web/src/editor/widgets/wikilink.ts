@@ -122,6 +122,19 @@ export function parseWikiBody(body: string): ParsedWikiLink {
   return { target, label: displayLabel, anchor, wasAbs };
 }
 
+/// Percent-decode a URL path, mirroring pulldown-cmark's destination
+/// decoding on the backend. Returns the input unchanged when it carries
+/// no escapes or when an escape is malformed (decodeURIComponent throws
+/// on a stray `%`), so a literal path is never corrupted.
+function decodePercent(s: string): string {
+  if (!s.includes("%")) return s;
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 /// Detect whether a markdown link URL is internal (workspace-relative or
 /// workspace-rooted, no scheme prefix). Returns the parsed parts on
 /// success, null otherwise.
@@ -137,9 +150,17 @@ export function parseInternalLink(
   if (url.startsWith("#")) return null;
   // Split anchor (everything after the first `#` in the URL portion).
   const hashIdx = url.indexOf("#");
-  const path = hashIdx >= 0 ? url.slice(0, hashIdx) : url;
+  const rawPath = hashIdx >= 0 ? url.slice(0, hashIdx) : url;
   const anchor = hashIdx >= 0 ? url.slice(hashIdx + 1) : "";
-  if (!path) return null;
+  if (!rawPath) return null;
+  // Percent-decode the destination before resolving. On disk we write
+  // relative-markdown URLs with the path percent-encoded (a filename
+  // with a space becomes `Brazilian%20Rice.md`), and the backend graph
+  // scanner (pulldown-cmark) decodes the destination before resolving.
+  // The editor must decode too or the pill resolves `Brazilian%20Rice`
+  // (no such file) and renders as a broken link even though the on-disk
+  // edge is valid. Malformed escapes fall back to the raw path.
+  const path = decodePercent(rawPath);
   const sourceDir = fromPath ? fromPath.split("/").slice(0, -1).join("/") : "";
   const target = normalizeHref(path, sourceDir);
   if (target === null) return null;
