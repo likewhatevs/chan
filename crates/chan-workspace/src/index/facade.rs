@@ -457,11 +457,39 @@ impl Index {
         }
     }
 
+    /// C-CAP file-count threshold: a cold full build over this many
+    /// indexable files skips the embed pass (BM25-only). Tunable; 2000
+    /// is the headline @@Host set. Typical notes workspaces sit well
+    /// under it; large source trees (this repo is ~4k files) sit above
+    /// and skip the multi-minute CPU embed.
+    #[cfg(feature = "embeddings")]
+    const EMBED_FILE_CAP: usize = 2000;
+
+    /// Whether a build over `file_count` indexable files skips
+    /// embeddings. Pure + standalone so the cap policy is unit-tested
+    /// without a multi-thousand-file fixture. `include_vectors == false`
+    /// (the BM25-only build) is never "capped" - it just was not
+    /// embedding to begin with.
+    #[cfg(feature = "embeddings")]
+    fn embeddings_capped_for(include_vectors: bool, file_count: usize) -> bool {
+        include_vectors && file_count > Self::EMBED_FILE_CAP
+    }
+
     /// Walk the workspace and re-index everything from scratch. If
     /// `cancel` is set to true mid-build, returns `Cancelled` without
     /// calling `commit()` so tantivy discards every pending write
     /// queued in this run; the on-disk index is left as it was at
     /// the start.
+    ///
+    /// C-CAP (phase-15 round-2): a cold full build SKIPS the embedding
+    /// pass when the workspace has more than `EMBED_FILE_CAP` indexable
+    /// files. The embed forward-pass is O(chunks) on CPU and dominates
+    /// wall-clock; on a multi-thousand-file source tree it runs for many
+    /// minutes. BM25 stays authoritative (search works), and per-file
+    /// edits through `index_one` still embed, so individual notes keep
+    /// semantic vectors. The cap is on FILE COUNT, not chunks: chunk
+    /// totals are only known per-file during the drain, so the file
+    /// count is the only signal available before the build starts.
     pub fn build_all(
         &self,
         opts: BuildOptions,
@@ -501,8 +529,23 @@ impl Index {
         // do. Accumulate chunks across files and flush in
         // `EMBED_BATCH_CHUNKS`-sized groups so each forward pass
         // gets enough work to fill the device.
+        // C-CAP: skip the embed pass for an oversized cold full build.
+        // do_vectors gates every embed branch below, so this single line
+        // turns the build BM25-only without touching the drain loop.
         #[cfg(feature = "embeddings")]
-        let do_vectors = opts.include_vectors;
+        let embeddings_capped = Self::embeddings_capped_for(opts.include_vectors, total);
+        #[cfg(feature = "embeddings")]
+        let do_vectors = opts.include_vectors && !embeddings_capped;
+        #[cfg(feature = "embeddings")]
+        if embeddings_capped {
+            tracing::info!(
+                files = total,
+                cap = Self::EMBED_FILE_CAP,
+                "C-CAP: skipping embeddings for this cold full build (workspace \
+                 exceeds the file cap); BM25 stays authoritative and per-file \
+                 edits still embed"
+            );
+        }
         #[cfg(not(feature = "embeddings"))]
         let _ = opts.include_vectors;
         #[cfg(feature = "embeddings")]
@@ -1658,6 +1701,27 @@ mod tests {
         assert_eq!(cfg_after.schema_version, config::SCHEMA_VERSION);
         assert_eq!(cfg_after.vectors_model, None);
         assert_eq!(cfg_after.vectors_dim, None);
+    }
+
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn embeddings_capped_for_respects_file_cap() {
+        // At or under the cap, embeddings run; strictly above, they skip.
+        assert!(!Index::embeddings_capped_for(true, Index::EMBED_FILE_CAP));
+        assert!(!Index::embeddings_capped_for(
+            true,
+            Index::EMBED_FILE_CAP - 1
+        ));
+        assert!(Index::embeddings_capped_for(
+            true,
+            Index::EMBED_FILE_CAP + 1
+        ));
+        // A BM25-only build (include_vectors == false) is never "capped":
+        // it was not embedding to begin with.
+        assert!(!Index::embeddings_capped_for(
+            false,
+            Index::EMBED_FILE_CAP + 1
+        ));
     }
 
     #[test]
