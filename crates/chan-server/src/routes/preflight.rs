@@ -100,10 +100,26 @@ struct PreflightError {
     message: String,
 }
 
-/// Map the indexer's status onto the `index` readiness step. Only
-/// `Idle` is `done`; `Building`/`Reindexing` are `running` (not ready),
-/// and a backend `Error` fails the step so the shell can surface it.
-fn index_step(status: &IndexStatus) -> PreflightStep {
+/// Map the indexer's status onto the `index` readiness step.
+///
+/// The boot overlay is a FIRST-boot gate (see the module docs): it exists
+/// to keep the editor from opening onto a half-built index on a brand-new
+/// workspace, so the ONLY state that may lock it is one where nothing is
+/// searchable yet. `indexed_docs` is the live BM25 doc count.
+///
+///   - `Building` + `indexed_docs == 0`: the cold initial build, nothing
+///     committed yet, so the index is unsearchable -> Running (locked).
+///     This is the sole locking state.
+///   - `Building` + `indexed_docs > 0`: a mid-session full rebuild (e.g. a
+///     VCS burst over the coalesce threshold) runs over the already-
+///     committed index, which stays searchable -> Done. Re-locking a
+///     booted session here is the RELOAD-HANG bug class.
+///   - `Reindexing`: one incremental watcher re-index, always over a built
+///     index -> Done. Mapping this to Running was the reported Cmd+R hang:
+///     a session/layout write triggers a watcher reindex, and a reload
+///     caught mid-reindex hard-locked the whole UI until it settled.
+///   - `Idle` -> Done; `Error` -> Failed so the shell can surface it.
+fn index_step(status: &IndexStatus, indexed_docs: u64) -> PreflightStep {
     let base = PreflightStep {
         id: "index",
         label: "Build search index",
@@ -113,17 +129,19 @@ fn index_step(status: &IndexStatus) -> PreflightStep {
         decision: None,
     };
     match status {
-        IndexStatus::Building { current, total, .. } => PreflightStep {
+        IndexStatus::Building { current, total, .. } if indexed_docs == 0 => PreflightStep {
             state: StepState::Running,
             current: Some(*current),
             total: Some(*total),
             ..base
         },
-        IndexStatus::Reindexing { .. } => PreflightStep {
-            state: StepState::Running,
-            ..base
-        },
-        IndexStatus::Idle { .. } => PreflightStep {
+        // A warm Building (rebuild over an existing index) and an
+        // incremental Reindexing both run over a searchable index, so they
+        // map to Done exactly like Idle: a reindex must never re-lock a
+        // booted session.
+        IndexStatus::Building { .. }
+        | IndexStatus::Reindexing { .. }
+        | IndexStatus::Idle { .. } => PreflightStep {
             state: StepState::Done,
             ..base
         },
@@ -200,7 +218,14 @@ fn build_snapshot(
     workspace: &chan_workspace::Workspace,
     status: &IndexStatus,
 ) -> PreflightSnapshot {
-    let mut steps = vec![index_step(status)];
+    // Live BM25 doc count: the "is anything searchable yet" signal that
+    // decides whether a `Building` status is a cold first build (lock) or a
+    // warm rebuild over an existing index (don't lock). A stats read error
+    // means we cannot prove the index is populated, so fall back to 0
+    // (treat as cold) and keep the overlay locked rather than risk opening
+    // onto an unbuilt index.
+    let indexed_docs = workspace.index_stats().map(|s| s.indexed_docs).unwrap_or(0);
+    let mut steps = vec![index_step(status, indexed_docs)];
     if let Some(step) = model_step(workspace) {
         steps.push(step);
     }
@@ -382,6 +407,62 @@ mod tests {
         assert_eq!(index.state, StepState::Running);
         assert_eq!(index.current, Some(3));
         assert_eq!(index.total, Some(10));
+    }
+
+    #[test]
+    fn reindexing_never_locks() {
+        // RELOAD-HANG regression: an incremental watcher reindex maps to a
+        // ready (unlocked) step regardless of doc count. Mapping it to
+        // Running was what hard-locked the boot overlay on Cmd+R while a
+        // session/layout write was being reindexed.
+        let file = || "note-490.md".to_string();
+        assert_eq!(
+            index_step(&IndexStatus::Reindexing { file: file() }, 0).state,
+            StepState::Done
+        );
+        assert_eq!(
+            index_step(&IndexStatus::Reindexing { file: file() }, 1200).state,
+            StepState::Done
+        );
+    }
+
+    #[test]
+    fn cold_build_locks_but_warm_rebuild_does_not() {
+        let building = || IndexStatus::Building {
+            current: 3,
+            total: 10,
+            file: "a.md".into(),
+        };
+        // Cold initial build: nothing committed yet -> locked, with the
+        // progress counters the overlay's bar reads.
+        let cold = index_step(&building(), 0);
+        assert_eq!(cold.state, StepState::Running);
+        assert_eq!(cold.current, Some(3));
+        assert_eq!(cold.total, Some(10));
+        // Warm rebuild over an existing index (mid-session full rebuild,
+        // e.g. a VCS burst): the prior index stays searchable, so it must
+        // not re-lock a booted session.
+        assert_eq!(index_step(&building(), 42).state, StepState::Done);
+    }
+
+    #[test]
+    fn reindexing_keeps_preflight_unlocked() {
+        let (_c, _r, ws) = workspace();
+        // End-to-end through build_snapshot: a fresh BM25 workspace whose
+        // status reads Reindexing must report phase Ready / locked:false.
+        let snap = build_snapshot(
+            &ws,
+            &IndexStatus::Reindexing {
+                file: "n.md".into(),
+            },
+        );
+        assert_eq!(snap.phase, Phase::Ready);
+        assert!(
+            !snap.locked,
+            "an incremental reindex must not lock the boot overlay"
+        );
+        let index = snap.steps.iter().find(|s| s.id == "index").unwrap();
+        assert_eq!(index.state, StepState::Done);
     }
 
     #[test]
