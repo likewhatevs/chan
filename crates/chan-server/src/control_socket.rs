@@ -73,6 +73,15 @@ pub enum ControlRequest {
         #[serde(default)]
         tab_group: Option<String>,
     },
+    // Category 2: run the same content search the UI does and return the
+    // results on the connection (like `term list`). The CLI formats the
+    // JSON it gets back: markdown by default, compact `--json`, indented
+    // `--json --pretty`.
+    Search {
+        query: String,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
 }
 
 #[cfg(unix)]
@@ -355,6 +364,13 @@ fn handle_request(
                 tab_group.as_deref(),
             ))
         }
+        ControlRequest::Search { query, limit } => {
+            let workspace = match workspace_from_cell(workspace_cell) {
+                Ok(workspace) => workspace,
+                Err(message) => return ControlResponse::Error { message },
+            };
+            into_response(search_workspace(&workspace, &query, limit))
+        }
     }
 }
 
@@ -373,6 +389,53 @@ fn into_response(result: Result<String, String>) -> ControlResponse {
         Ok(message) => ControlResponse::Ok { message },
         Err(message) => ControlResponse::Error { message },
     }
+}
+
+/// `cs search`: run the same content search the UI does (`Workspace::search`,
+/// the `/api/search/content` path) and return the results as JSON on the
+/// connection, like `term list`. One row per file (best-ranked hit),
+/// score-descending. The CLI side formats this JSON: markdown by default,
+/// compact `--json`, indented `--json --pretty`.
+#[cfg(unix)]
+fn search_workspace(
+    workspace: &Workspace,
+    query: &str,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    let limit = limit.filter(|n| *n > 0).unwrap_or(20);
+    // Widen the candidate fetch like the route does so the per-file
+    // collapse still fills `limit` rows when a file owns several chunks.
+    let opts = chan_workspace::SearchOpts {
+        limit: limit.saturating_mul(8).min(limit.max(200)),
+        ..Default::default()
+    };
+    let results = workspace
+        .search(query, &opts)
+        .map_err(|e| format!("search: {e}"))?;
+    let mut hits: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for hit in results.hits {
+        if !seen.insert(hit.path.clone()) {
+            continue;
+        }
+        hits.push(serde_json::json!({
+            "path": hit.path,
+            "heading": hit.heading,
+            "start_line": hit.start_line,
+            "snippet": hit.snippet,
+            "score": hit.score,
+        }));
+        if hits.len() >= limit as usize {
+            break;
+        }
+    }
+    let payload = serde_json::json!({
+        "ready": results.ready,
+        "mode": results.mode,
+        "query": query,
+        "hits": hits,
+    });
+    serde_json::to_string(&payload).map_err(|e| format!("serialize: {e}"))
 }
 
 #[cfg(unix)]

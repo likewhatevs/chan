@@ -458,6 +458,24 @@ enum ShellAction {
         #[command(subcommand)]
         action: TerminalAction,
     },
+    /// Run the same content search the UI does, against the running
+    /// window's workspace. Prints a markdown table by default; `--json`
+    /// emits compact machine output and `--json --pretty` indents it.
+    Search {
+        /// Query string. Multiple words are joined with spaces.
+        #[arg(required = true, num_args = 1..)]
+        query: Vec<String>,
+        /// Maximum number of result rows (one per file). Default 20.
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Emit JSON instead of the markdown table. Compact by default.
+        #[arg(long)]
+        json: bool,
+        /// With --json, pretty-print (indent) the JSON. Ignored without
+        /// --json.
+        #[arg(long)]
+        pretty: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1916,6 +1934,11 @@ enum ControlRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         tab_group: Option<String>,
     },
+    Search {
+        query: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    },
 }
 
 #[cfg(unix)]
@@ -2038,7 +2061,87 @@ async fn cmd_shell(action: ShellAction) -> Result<()> {
             Ok(())
         }
         ShellAction::Terminal { action } => cmd_shell_terminal(action).await,
+        ShellAction::Search {
+            query,
+            limit,
+            json,
+            pretty,
+        } => cmd_shell_search(query.join(" "), limit, json, pretty).await,
     }
+}
+
+/// `cs search <query>`: run the workspace content search on the running
+/// server (the same `Workspace::search` the UI's `/api/search/content`
+/// uses) and print the results. Markdown table by default; `--json`
+/// compact, `--json --pretty` indented. Mirrors the `cs terminal list`
+/// output convention.
+async fn cmd_shell_search(
+    query: String,
+    limit: Option<u32>,
+    json: bool,
+    pretty: bool,
+) -> Result<()> {
+    let socket = control_socket_env()?;
+    let raw = send_control_request(&socket, ControlRequest::Search { query, limit }).await?;
+    if json {
+        // Compact by default; --pretty re-indents. Both go to stdout so
+        // the output pipes cleanly.
+        if pretty {
+            let value: serde_json::Value =
+                serde_json::from_str(&raw).context("parsing search JSON")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).context("formatting search JSON")?
+            );
+        } else {
+            println!("{raw}");
+        }
+    } else {
+        print!("{}", render_search_markdown(&raw)?);
+    }
+    Ok(())
+}
+
+/// Render the `cs search` result JSON
+/// (`{ready, mode, query, hits: [{path, heading, start_line, snippet,
+/// score}]}`) as a markdown list. This is the default human output;
+/// `--json` emits the raw payload instead. No hits yields a short line
+/// rather than an empty list.
+fn render_search_markdown(raw: &str) -> Result<String> {
+    let value: serde_json::Value = serde_json::from_str(raw).context("parsing search JSON")?;
+    let hits = value
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .ok_or_else(|| anyhow::anyhow!("search JSON missing `hits`"))?;
+    if hits.is_empty() {
+        return Ok("No matches.\n".to_string());
+    }
+    let str_field = |h: &serde_json::Value, key: &str| {
+        h.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let mut out = String::new();
+    for h in hits {
+        let path = str_field(h, "path");
+        let heading = str_field(h, "heading");
+        let line = h.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0);
+        // `path:line` locator, then the best heading, then the snippet on
+        // an indented continuation so the list stays scannable.
+        if heading.is_empty() {
+            out.push_str(&format!("- {path}:{line}\n"));
+        } else {
+            out.push_str(&format!("- {path}:{line} - {heading}\n"));
+        }
+        let snippet = str_field(h, "snippet");
+        if !snippet.is_empty() {
+            // Collapse newlines so one hit stays on one logical block.
+            let flat = snippet.replace('\n', " ");
+            out.push_str(&format!("  {}\n", flat.trim()));
+        }
+    }
+    Ok(out)
 }
 
 async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
