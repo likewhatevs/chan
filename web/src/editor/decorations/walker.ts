@@ -85,7 +85,24 @@ export function decorationWalker(handlers: HandlerRegistry): Extension {
       }
 
       update(u: ViewUpdate): void {
-        if (u.docChanged || u.viewportChanged || u.selectionSet) {
+        // `geometryChanged` covers the tab-switch remount case: editor
+        // tabs are unmounted/remounted on switch (unlike terminals), so
+        // the EditorView is reconstructed and the constructor walks the
+        // INITIAL (pre-layout) viewport - only the top portion. The
+        // post-layout measure settles the real viewport but does not
+        // reliably fire `viewportChanged`, leaving the lower blocks showing
+        // raw markers until a caret move or scroll. Recomputing on
+        // `geometryChanged` re-decorates over the corrected viewport once
+        // the geometry settles. The walk is viewport-bounded, so the extra
+        // recompute stays cheap. (The race manifests under chan-desktop's
+        // WKWebView, not Blink/Chrome, so it browser-smokes clean either
+        // way; verified no Chrome regression, desktop confirmation pending.)
+        if (
+          u.docChanged ||
+          u.viewportChanged ||
+          u.selectionSet ||
+          u.geometryChanged
+        ) {
           this.decorations = computeDecorations(u.view, handlers);
         }
       }
