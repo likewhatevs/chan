@@ -70,3 +70,29 @@ every cs command breaks at runtime (gate-blind wire trap - needs a wire-smoke of
 every cs command, not just a green build). ~0.5-1 focused day; a good fresh
 round-3 opener. No user blocked (cs works via the chan binary meanwhile).
 DESKTOP-OPEN (the double-click path) is independent and SHIPS in v0.21.0.
+
+## Per-agent submit-encoding map (round-3, @@Host: "we absolutely need this")
+
+`cs terminal write --submit` + the SPA team-work submit currently append the
+Claude-only chord `\x1b[27;9;13~` (Cmd+Enter, xterm modifyOtherKeys), so codex +
+gemini agents do NOT auto-submit (codex ignores the chord and submits on `\r`;
+gemini untested). Multi-agent teams need per-agent support. Design
+(@@Host-directed 2026-05-31):
+- **Default `cs terminal write` writes PURE BYTES** - no implicit submit/chord.
+  This is already the default (submit=false is raw passthrough, no `\n` strip);
+  keep + enforce it.
+- **Submission is opt-in via a per-agent flag** carrying the right encoding:
+  - claude -> `\x1b[27;9;13~` (the current `--submit`).
+  - codex  -> `\r` (plain CR; codex ignores the Claude chord silently, per the
+    submitMode.ts comment).
+  - gemini -> TBD: probe live in a chan terminal (as claude was probed 2026-05-20).
+  Shape: `--submit=<agent>` (claude|codex|gemini) is cleaner than separate
+  per-agent flags; unset = pure bytes (the default).
+- **Three consumers must share one map:** `cs terminal write`
+  (main.rs `apply_submit_chord`), the server-side
+  `terminal_sessions.rs::SubmitMode::submit_chord`, and the SPA team-work submit
+  (`submitMode.ts` `encodeForAgentSubmit`).
+- **Team Work plumbing:** the bootstrap/dialog needs each member's agent TYPE to
+  send the right submit (a per-member or team-wide agent field on the team
+  config). Couples to the Team Work surface.
+- `submitMode.ts` already flags it: "Per-agent encoding map is deferred."
