@@ -41,6 +41,8 @@
     onNavigate,
     onContactNavigate,
     onSetAsScope,
+    onNewTerminal,
+    allowUpload = true,
     showRefs = true,
     documentsOverride,
   }: {
@@ -66,6 +68,14 @@
     /// path doesn't make sense to scope from search, so the search
     /// host leaves it unbound for file selections).
     onSetAsScope?: () => void;
+    /// Forwarded to FileInfoBody's directory branch. The dashboard
+    /// Search slot binds it to open a terminal rooted at the selected
+    /// directory; other hosts leave it absent.
+    onNewTerminal?: () => void;
+    /// Forwarded to FileInfoBody. Default true; the dashboard Search
+    /// slot passes false to suppress Upload on its read-only index
+    /// view (Download stays).
+    allowUpload?: boolean;
     showRefs?: boolean;
     /// Forwarded to TagInfoBody. GraphPanel uses this to keep the
     /// tag inspector scoped to docs visible in the rendered subgraph.
@@ -87,6 +97,7 @@
     {onNavigate}
     {onContactNavigate}
     {onSetAsScope}
+    {allowUpload}
     {showRefs}
   />
 {:else if selection.kind === "directory"}
@@ -103,6 +114,8 @@
     label={selection.label}
     {onReveal}
     {onSetAsScope}
+    {onNewTerminal}
+    {allowUpload}
     {onClose}
     {onNavigate}
   />

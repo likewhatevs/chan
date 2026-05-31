@@ -15,7 +15,7 @@
   // config body. DashboardTab renders only the FRONT (the carousel)
   // plus a right-click Reload row.
 
-  import { RefreshCw } from "lucide-svelte";
+  import { Check, RefreshCw, Settings2 } from "lucide-svelte";
   import { reloadWindow } from "../api/desktop";
   import {
     SHORTCUTS,
@@ -27,9 +27,17 @@
     scheduleSessionSave,
     surfaceThemeOverride,
   } from "../state/store.svelte";
-  import { type DashboardTab } from "../state/tabs.svelte";
+  import {
+    type DashboardTab,
+    dashboardSlotEnabled,
+    firstEnabledSlot,
+    flipHybrid,
+    layout,
+    toggleDashboardSlot,
+  } from "../state/tabs.svelte";
   import EmptyPaneCarousel from "./EmptyPaneCarousel.svelte";
   import HamburgerMenu from "./HamburgerMenu.svelte";
+  import { closeTabMenu, tabMenu } from "../state/tabMenu.svelte";
 
   // The parent passes the live DashboardTab so the carousel slide
   // cursor persists across window reloads. The tab is a $state
@@ -73,6 +81,48 @@
     menu?.close();
     await reloadWindow();
   }
+
+  // Slot labels mirror the carousel slide titles + DashboardSlotBack's
+  // SLOTS list; the array index is the slide identity (0 About, 1
+  // Workspace, 2 Search).
+  const SLOTS = ["About", "Workspace", "Search"] as const;
+
+  function onSlotToggle(i: number): void {
+    toggleDashboardSlot(tab, i);
+    // If the active slide just got switched off, move the cursor to the
+    // first still-enabled slot so the persisted slide stays valid;
+    // otherwise persist the toggled set on its own.
+    if (!dashboardSlotEnabled(tab, tab.carouselSlide ?? 0)) {
+      onCarouselSlideChange(firstEnabledSlot(tab));
+    } else {
+      scheduleSessionSave();
+    }
+  }
+
+  function doSettings(): void {
+    menu?.close();
+    // Mirror the global Cmd+, (app.settings.toggle in App.svelte): flip
+    // the active pane's Hybrid surface to its per-slot config back.
+    flipHybrid(layout.activePaneId);
+  }
+
+  // Tab-title right-click parity (A3): Pane.svelte routes every tab kind
+  // through the shared `tabMenu` state. Translate a request targeting
+  // this dashboard tab into opening its HamburgerMenu at the click point,
+  // so the slot toggles + Settings + Reload are reachable from the tab
+  // title (not only the body). Reuses the same menu rows.
+  $effect(() => {
+    if (tabMenu.openForTabId !== tab.id || !tabMenu.anchor) return;
+    // Wait until the menu instance is bound (it renders unconditionally,
+    // so this only matters on the activate-and-open-in-one-tick path).
+    if (!menu) return;
+    const { left, top } = tabMenu.anchor;
+    // Consume the request first so the effect settles in one pass (it
+    // reads openForTabId); the HamburgerMenu owns the open + dismiss
+    // state from here.
+    closeTabMenu();
+    menu.openAtCursor(left, top);
+  });
 </script>
 
 <div
@@ -87,15 +137,39 @@
     bind:open={menuOpen}
     showTrigger={false}
     width={220}
-    height={58}
+    height={200}
   >
-    <!-- Reload mirrors the pane-top-bar paneContextMenu in
-         Pane.svelte so the widget refresh affordance is reachable
-         from the Dashboard body's own context menu, not just the
-         tab strip. Both entry points route through `reloadWindow()`
-         the same way Cmd+R does. No Settings entry here: Cmd+, is
-         the canonical flip and Pane.svelte's back-side switch
-         mounts the per-slot DashboardSlotBack directly. -->
+    <!-- Right-click menu for the Dashboard tab: a per-slot on/off
+         checkbox row for each carousel slide (at least one stays on,
+         enforced in toggleDashboardSlot); unchecked slots drop out of
+         auto-rotation and the dots. A separator, then Settings (Cmd+,)
+         which flips to the per-slot config back via flipHybrid (same
+         path as the global Cmd+,), then Reload. -->
+    {#each SLOTS as label, i}
+      <li>
+        <button
+          role="menuitemcheckbox"
+          aria-checked={dashboardSlotEnabled(tab, i)}
+          onclick={() => onSlotToggle(i)}
+        >
+          {#if dashboardSlotEnabled(tab, i)}
+            <Check size={16} strokeWidth={2} aria-hidden="true" />
+          {:else}
+            <span class="slot-check-spacer" aria-hidden="true"></span>
+          {/if}
+          <span class="menu-row-label">{label}</span>
+          <span class="menu-row-chord"></span>
+        </button>
+      </li>
+    {/each}
+    <li class="sep" role="separator"></li>
+    <li>
+      <button role="menuitem" onclick={doSettings}>
+        <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
+        <span class="menu-row-label">Settings</span>
+        <span class="menu-row-chord">{chordLabel("app.settings.toggle")}</span>
+      </button>
+    </li>
     <li>
       <button role="menuitem" onclick={doReload}>
         <RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -109,6 +183,8 @@
     slide={tab.carouselSlide ?? 0}
     onSlideChange={onCarouselSlideChange}
     active={frontActive}
+    disabledSlots={tab.disabledSlots ?? []}
+    autoRotate={tab.autoRotate ?? true}
   />
 </div>
 
@@ -121,5 +197,11 @@
     flex-direction: column;
     background: var(--bg);
     color: var(--text);
+  }
+  /* Keeps an unchecked slot row's label aligned with the checked rows'
+     (the Check icon is 14px via the shared .hamburger-menu svg rule). */
+  .slot-check-spacer {
+    width: 14px;
+    flex-shrink: 0;
   }
 </style>

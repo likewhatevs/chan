@@ -31,6 +31,7 @@
     workspace,
   } from "../../state/store.svelte";
   import MatrixRainPreview from "../screensaver/MatrixRainPreview.svelte";
+  import PlainScreensaverPreview from "../screensaver/PlainScreensaverPreview.svelte";
 
   // No external props. Like the original, this body reads its own
   // state straight from `api` + the screensaver singleton; the shell
@@ -341,16 +342,24 @@
   </div>
 </section>
 
-<!-- Screensaver preview: static Matrix frame for the Matrix lock
-     theme. The back face is always mounted, so animated is left off
-     (static = zero timers). The Default (plain) theme preview is
-     DashboardSlotBack's job; this slot only previews Matrix. -->
+<!-- Screensaver preview: a static frame matching the selected theme so
+     the dropdown choice is visible before locking. The back face is
+     always mounted, so both previews are static (zero timers): Matrix
+     renders a single frame, Default the enso mark on a dark backdrop. -->
 <section class="screensaver-preview">
   <h3>Screensaver preview</h3>
   <div class="preview-box">
-    <MatrixRainPreview width={320} height={180} />
+    {#if screensaverTheme === "matrix"}
+      <MatrixRainPreview width={320} height={180} />
+    {:else}
+      <PlainScreensaverPreview width={320} height={180} />
+    {/if}
   </div>
-  <p class="hint">Static preview of the Matrix lock theme.</p>
+  <p class="hint">
+    Static preview of the {screensaverTheme === "matrix"
+      ? "Matrix"
+      : "Default"} lock theme.
+  </p>
 </section>
 
 <style>

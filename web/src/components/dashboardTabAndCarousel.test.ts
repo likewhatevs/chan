@@ -8,6 +8,8 @@ import shell from "./HybridSurfaceConfigShell.svelte?raw";
 import dashboardBack from "./dashboard/DashboardSlotBack.svelte?raw";
 import aboutSlot from "./dashboard/AboutSlotConfig.svelte?raw";
 import workspaceSlot from "./dashboard/WorkspaceSlotConfig.svelte?raw";
+import fileInfo from "./FileInfoBody.svelte?raw";
+import inspector from "./InspectorBody.svelte?raw";
 
 // Dashboard tab kind and carousel coverage. Pins the tab type and
 // helpers, the Pane.svelte render branch, the carousel slide set,
@@ -151,19 +153,31 @@ describe("carousel slides", () => {
     );
   });
 
-  test("About widget licenses block sits after the QR + the separator", () => {
-    // License rows live in `.about-licenses`, separated from the
-    // Fund-the-work surface by `.about-sep`. Chan's own Apache 2.0
-    // joins so all three runtime licenses are together.
+  test("A6: chan's Apache 2.0 sits on the version row; licenses block keeps only the third-party attributions", () => {
+    // A6 moved chan's own Apache 2.0 link off the `.about-licenses`
+    // block and onto the version row (`chan version {version}
+    // Apache 2.0`). The third-party font + screensaver attributions stay
+    // in the block below the Fund-the-work QR + the `.about-sep`.
     expect(carousel).toMatch(
-      /<div class="about-fund">[\s\S]{1,2000}<div class="about-sep"[\s\S]{1,200}<div class="about-licenses">[\s\S]{1,3000}<a href="https:\/\/github\.com\/fiorix\/chan\/blob\/main\/LICENSE"[\s\S]{1,200}Apache 2\.0[\s\S]{1,400}Source Code Pro Regular[\s\S]{1,1200}dcragusa\/MatrixScreensaver/,
+      /<span class="k">chan version<\/span>[\s\S]{1,260}class="version-license"[\s\S]{1,160}Apache 2\.0<\/a>/,
     );
+    // The licenses block still sits after the QR + separator and still
+    // carries the two third-party attributions, in order.
+    expect(carousel).toMatch(
+      /<div class="about-fund">[\s\S]{1,2000}<div class="about-sep"[\s\S]{1,200}<div class="about-licenses">[\s\S]{1,1400}Source Code Pro Regular[\s\S]{1,1200}dcragusa\/MatrixScreensaver/,
+    );
+    // The chan / Apache 2.0 row no longer renders inside about-licenses
+    // ("chan version" on the grid does not match this exact-text span).
+    expect(carousel).not.toMatch(/<span class="k">chan<\/span>/);
+    // The LICENSE anchor appears exactly once now (only the version row).
+    const apacheMatches = carousel.match(
+      /href="https:\/\/github\.com\/fiorix\/chan\/blob\/main\/LICENSE"/g,
+    );
+    expect(apacheMatches?.length ?? 0).toBe(1);
     expect(carousel).toMatch(/\.about-licenses \{[\s\S]{1,400}grid-template-columns: max-content 1fr/);
     expect(carousel).toMatch(/\.about-sep \{[\s\S]{1,400}background: var\(--border\)/);
-    // The terminal-font + matrix-screen-lock rows appear EXACTLY
-    // ONCE in the source (inside `.about-licenses`). Asserting a
-    // single occurrence prevents a dual-render (also inside
-    // `.about-grid`) from sneaking in.
+    // The terminal-font + matrix-screen-lock rows still appear EXACTLY
+    // ONCE in the source (inside `.about-licenses`).
     const fontMatches = carousel.match(/<span class="k">terminal font<\/span>/g);
     expect(fontMatches?.length ?? 0).toBe(1);
     const matrixMatches = carousel.match(/<span class="k">matrix screen lock<\/span>/g);
@@ -279,30 +293,49 @@ describe("DashboardTab mounts the carousel", () => {
 });
 
 describe("Dashboard back-of-card is per-slot (DashboardSlotBack)", () => {
-  test("DashboardTab right-click menu carries only Reload (no Settings entry)", () => {
-    // Pane.svelte mounts HybridDashboardConfig via the `dashboard` arm;
-    // Cmd+, is the canonical flip. The right-click menu keeps a Reload
-    // row so it is discoverable from the body.
+  test("A3: DashboardTab right-click menu lists slot toggles + Settings + Reload", () => {
+    // A3 reverses the round-1 "only Reload" lock-out: the body
+    // right-click menu now carries a per-slot on/off checkbox row, a
+    // separator, a Settings (Cmd+,) row that flips to the config back,
+    // and Reload.
     expect(dashboard).toMatch(/import HamburgerMenu from "\.\/HamburgerMenu\.svelte";/);
     expect(dashboard).toMatch(/function onContextMenu\(e: MouseEvent\): void/);
     expect(dashboard).toMatch(/menu\?\.openAtCursor\(e\.clientX, e\.clientY\)/);
     expect(dashboard).toMatch(
       /import \{[^}]*\bRefreshCw\b[^}]*\} from "lucide-svelte"/,
     );
+    // Slot helpers + flipHybrid come from tabs.svelte.
+    expect(dashboard).toMatch(
+      /import \{[\s\S]{1,400}dashboardSlotEnabled,[\s\S]{1,200}toggleDashboardSlot,[\s\S]{1,120}\} from "\.\.\/state\/tabs\.svelte"/,
+    );
+    expect(dashboard).toMatch(
+      /import \{[\s\S]{1,400}\bflipHybrid\b[\s\S]{1,200}\} from "\.\.\/state\/tabs\.svelte"/,
+    );
+    // One checkbox row per carousel slide, driven by the tab helpers.
+    expect(dashboard).toMatch(
+      /const SLOTS = \["About", "Workspace", "Search"\] as const;/,
+    );
+    expect(dashboard).toMatch(
+      /\{#each SLOTS as label, i\}[\s\S]{1,400}role="menuitemcheckbox"[\s\S]{1,160}aria-checked=\{dashboardSlotEnabled\(tab, i\)\}[\s\S]{1,160}onclick=\{\(\) => onSlotToggle\(i\)\}/,
+    );
+    expect(dashboard).toMatch(
+      /function onSlotToggle\(i: number\): void \{[\s\S]{1,200}toggleDashboardSlot\(tab, i\);/,
+    );
+    // Settings flips the active pane via flipHybrid (the Cmd+, path).
+    expect(dashboard).toMatch(
+      /function doSettings\(\): void \{[\s\S]{1,200}flipHybrid\(layout\.activePaneId\);/,
+    );
+    expect(dashboard).toMatch(
+      /onclick=\{doSettings\}[\s\S]{1,200}<span class="menu-row-label">Settings<\/span>[\s\S]{1,200}chordLabel\("app\.settings\.toggle"\)/,
+    );
+    // Reload stays.
     expect(dashboard).toMatch(
       /import \{\s*reloadWindow\s*\} from "\.\.\/api\/desktop";/,
     );
     expect(dashboard).toMatch(/async function doReload\(\): Promise<void>/);
-    expect(dashboard).toMatch(/await reloadWindow\(\)/);
     expect(dashboard).toMatch(
       /onclick=\{doReload\}[\s\S]{1,200}<RefreshCw[\s\S]{1,200}<span class="menu-row-label">Reload<\/span>[\s\S]{1,160}<span class="menu-row-chord">\{chordLabel\("app\.window\.reload"\)\}<\/span>/,
     );
-    // No Settings entry + no supporting state.
-    expect(dashboard).not.toMatch(/<span class="menu-row-label">Settings<\/span>/);
-    expect(dashboard).not.toMatch(/let settingsOpen = \$state/);
-    expect(dashboard).not.toMatch(/function openSettings\b/);
-    expect(dashboard).not.toMatch(/function closeSettings\b/);
-    expect(dashboard).not.toMatch(/import HybridSurfaceConfigShell/);
   });
 
   test("DashboardSlotBack wraps the shared shell + dispatches one body per slot", () => {
@@ -400,5 +433,164 @@ describe("EmptyPaneWelcome static spawn surface", () => {
     expect(pane).not.toMatch(
       /import EmptyPaneCarousel from "\.\/EmptyPaneCarousel\.svelte";/,
     );
+  });
+});
+
+describe("Dashboard slot on/off helpers + persistence (A3)", () => {
+  test("DashboardTab carries an optional disabledSlots set", () => {
+    expect(tabs).toMatch(/disabledSlots\?: number\[\];/);
+  });
+
+  test("DASHBOARD_SLOT_COUNT + slot helpers are exported", () => {
+    expect(tabs).toMatch(/export const DASHBOARD_SLOT_COUNT = 3;/);
+    expect(tabs).toMatch(
+      /export function dashboardSlotEnabled\(tab: DashboardTab, i: number\): boolean \{[\s\S]{1,200}!\(tab\.disabledSlots \?\? \[\]\)\.includes\(i\)/,
+    );
+    expect(tabs).toMatch(
+      /export function firstEnabledSlot\(tab: DashboardTab\): number/,
+    );
+    expect(tabs).toMatch(
+      /export function nextEnabledSlot\(tab: DashboardTab, from: number\): number/,
+    );
+  });
+
+  test("toggleDashboardSlot refuses the last enabled slot + clears when all-on", () => {
+    expect(tabs).toMatch(
+      /export function toggleDashboardSlot\(tab: DashboardTab, i: number\): void \{[\s\S]{1,400}if \(DASHBOARD_SLOT_COUNT - disabled\.size <= 1\) return;[\s\S]{1,160}disabled\.add\(i\);/,
+    );
+    expect(tabs).toMatch(
+      /tab\.disabledSlots = next\.length > 0 \? next : undefined;/,
+    );
+  });
+
+  test("serializer emits ds only when the disabled set is non-empty", () => {
+    expect(tabs).toMatch(/ds\?: number\[\];/);
+    expect(tabs).toMatch(
+      /if \(t\.kind === "dashboard"\) \{[\s\S]{1,600}\.\.\.\(t\.disabledSlots && t\.disabledSlots\.length > 0[\s\S]{1,80}\? \{ ds: t\.disabledSlots \}/,
+    );
+  });
+
+  test("restore reads ds + clamps carouselSlide off a disabled slot", () => {
+    expect(tabs).toMatch(
+      /if \(kind === "d"\) \{[\s\S]{1,1400}dashboardSlotEnabled\(tab, want\)[\s\S]{1,80}\? want[\s\S]{1,80}: firstEnabledSlot\(tab\)/,
+    );
+  });
+
+  test("carousel skips disabled slots in auto-rotate + dots", () => {
+    expect(carousel).toMatch(/disabledSlots = \[\],/);
+    expect(carousel).toMatch(/function nextEnabled\(from: number\): number/);
+    // Auto-rotate advances to the next ENABLED slot.
+    expect(carousel).toMatch(
+      /setInterval\(\(\) => \{[\s\S]{1,120}onSlideChange\?\.\(nextEnabled\(slideIndex\)\);/,
+    );
+    // Pagination dots iterate the enabled slot set, not a fixed range.
+    expect(carousel).toMatch(/\{#each enabledSlots as i \(i\)\}/);
+    // slideIndex clamps off a disabled slot to the first enabled one.
+    expect(carousel).toMatch(
+      /const slideIndex = \$derived\.by\(\(\) => \{[\s\S]{1,240}slotEnabled\(clamped\) \? clamped : firstEnabled\(\)/,
+    );
+    // DashboardTab threads the per-tab set into the carousel.
+    expect(dashboard).toMatch(/disabledSlots=\{tab\.disabledSlots \?\? \[\]\}/);
+  });
+});
+
+describe("Search-slot directory inspector actions (A4)", () => {
+  test("FileInfoBody gates Upload on allowUpload + adds a directory New Terminal", () => {
+    expect(fileInfo).toMatch(/onNewTerminal\?: \(\) => void;/);
+    expect(fileInfo).toMatch(/allowUpload\?: boolean;/);
+    expect(fileInfo).toMatch(/allowUpload = true,/);
+    // Upload is gated behind allowUpload; Download stays unconditional.
+    expect(fileInfo).toMatch(
+      /\{#if allowUpload\}[\s\S]{1,200}onclick=\{triggerUpload\}[\s\S]{1,80}Upload<\/button[\s\S]{1,160}\{\/if\}[\s\S]{1,200}onclick=\{downloadSelection\}/,
+    );
+    // New Terminal renders for directories only when the handler is bound.
+    expect(fileInfo).toMatch(
+      /\{#if onNewTerminal && isDir\}[\s\S]{1,200}onclick=\{onNewTerminal\}[\s\S]{1,40}New Terminal/,
+    );
+  });
+
+  test("InspectorBody forwards onNewTerminal + allowUpload to the directory body", () => {
+    expect(inspector).toMatch(/onNewTerminal,/);
+    expect(inspector).toMatch(/allowUpload = true,/);
+    // Directory arm forwards both; file arm forwards allowUpload.
+    expect(inspector).toMatch(
+      /\{onSetAsScope\}\s*\n\s*\{onNewTerminal\}\s*\n\s*\{allowUpload\}/,
+    );
+    expect(inspector).toMatch(/\{onSetAsScope\}\s*\n\s*\{allowUpload\}\s*\n\s*\{showRefs\}/);
+  });
+
+  test("index-graph slide binds the dir helpers + suppresses Upload", () => {
+    expect(carousel).toMatch(/allowUpload=\{false\}/);
+    expect(carousel).toMatch(
+      /onReveal=\{\(\) => \{[\s\S]{1,200}revealPathInBrowser\(selectedIndexPath, \{/,
+    );
+    expect(carousel).toMatch(
+      /onSetAsScope=\{\(\) => \{[\s\S]{1,200}openFsGraphForDirectory\(selectedIndexPath\)/,
+    );
+    expect(carousel).toMatch(
+      /onNewTerminal=\{\(\) => \{[\s\S]{1,260}terminalFromHereTarget\(selectedIndexPath, true\)/,
+    );
+    // The helpers are imported from their owning modules.
+    expect(carousel).toMatch(
+      /import \{ layout, openTerminalInPane \} from "\.\.\/state\/tabs\.svelte";/,
+    );
+    expect(carousel).toMatch(
+      /import \{ terminalFromHereTarget \} from "\.\.\/terminal\/fromHere";/,
+    );
+  });
+});
+
+describe("About-back screensaver preview reacts to theme (A7)", () => {
+  test("preview switches on screensaverTheme; hint tracks the theme", () => {
+    expect(aboutSlot).toMatch(
+      /import PlainScreensaverPreview from "\.\.\/screensaver\/PlainScreensaverPreview\.svelte";/,
+    );
+    expect(aboutSlot).toMatch(
+      /\{#if screensaverTheme === "matrix"\}[\s\S]{1,160}<MatrixRainPreview[\s\S]{1,80}\{:else\}[\s\S]{1,160}<PlainScreensaverPreview/,
+    );
+    expect(aboutSlot).toMatch(
+      /Static preview of the \{screensaverTheme === "matrix"[\s\S]{1,80}\? "Matrix"[\s\S]{1,80}: "Default"\} lock theme/,
+    );
+    // No longer hardcoded to a Matrix-only preview + hint.
+    expect(aboutSlot).not.toMatch(/Static preview of the Matrix lock theme\./);
+  });
+
+  test("PlainScreensaverPreview renders the enso mark on a dark backdrop", async () => {
+    const plain = (
+      await import("./screensaver/PlainScreensaverPreview.svelte?raw")
+    ).default as string;
+    expect(plain).toMatch(/chan-mark\.png/);
+    expect(plain).toMatch(/background: var\(--bg\)/);
+  });
+});
+
+describe("Per-tab auto-rotate opt-out (CK-CAROUSEL)", () => {
+  test("DashboardTab carries optional autoRotate; serializer round-trips it as ar", () => {
+    expect(tabs).toMatch(/autoRotate\?: boolean;/);
+    expect(tabs).toMatch(/ar\?: boolean;/);
+    expect(tabs).toMatch(
+      /\.\.\.\(t\.autoRotate === false \? \{ ar: false \} : \{\}\)/,
+    );
+    expect(tabs).toMatch(/if \(sertab\.ar === false\) tab\.autoRotate = false;/);
+  });
+
+  test("carousel pauses auto-advance when autoRotate is false", () => {
+    expect(carousel).toMatch(/autoRotate = true,/);
+    expect(carousel).toMatch(/!active \|\| !autoRotate/);
+    expect(dashboard).toMatch(/autoRotate=\{tab\.autoRotate \?\? true\}/);
+  });
+});
+
+describe("Dashboard slot menu reachable from the tab title (A3)", () => {
+  test("DashboardTab opens its menu from the shared tabMenu state", () => {
+    // Pane.svelte's tab-title right-click routes every kind through
+    // openTabMenu; DashboardTab translates a request targeting its tab
+    // into opening the same HamburgerMenu at the click point.
+    expect(dashboard).toMatch(
+      /import \{ closeTabMenu, tabMenu \} from "\.\.\/state\/tabMenu\.svelte";/,
+    );
+    expect(dashboard).toMatch(/\$effect\(\(\) => \{/);
+    expect(dashboard).toMatch(/tabMenu\.openForTabId !== tab\.id/);
+    expect(dashboard).toMatch(/closeTabMenu\(\);[\s\S]{1,80}menu\.openAtCursor\(left, top\)/);
   });
 });

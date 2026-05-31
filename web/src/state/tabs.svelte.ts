@@ -440,7 +440,66 @@ export type DashboardTab = {
   /// the Indexing graph. The carousel's play/pause is server-persisted so
   /// the auto-rotate preference survives a reload independently.
   carouselSlide?: number;
+  /// Slide indices the user switched off via the Dashboard tab's
+  /// right-click menu. Disabled slots are skipped in auto-rotation and
+  /// hidden from the pagination dots. Absent / empty means all slots are
+  /// enabled (the default); at least one slot always stays enabled
+  /// (enforced in `toggleDashboardSlot`).
+  disabledSlots?: number[];
+  /// Whether this tab's carousel auto-rotates. Absent / true = on (the
+  /// default); `cs dashboard --carousel-off` creates the tab with this
+  /// false. Distinct from the global `empty_pane_carousel_cycling`
+  /// preference: a per-tab opt-out so one static dashboard does not stop
+  /// every dashboard from rotating.
+  autoRotate?: boolean;
 };
+
+/// Carousel slot count, shared by the on/off helpers below and the
+/// restore-time clamp. The carousel template renders exactly these three
+/// slides (About / Workspace / Search); keeping the count here lets the
+/// helpers reason about "the last enabled slot" without importing the
+/// component.
+export const DASHBOARD_SLOT_COUNT = 3;
+
+/// Whether slide `i` is currently shown for this Dashboard tab.
+export function dashboardSlotEnabled(tab: DashboardTab, i: number): boolean {
+  return !(tab.disabledSlots ?? []).includes(i);
+}
+
+/// Toggle slide `i` on/off. Refuses to disable the last enabled slot so
+/// the carousel never goes blank. The disabled set is stored sorted and
+/// cleared entirely when every slot is back on (pre-release: omit the
+/// field rather than persist an empty array).
+export function toggleDashboardSlot(tab: DashboardTab, i: number): void {
+  const disabled = new Set(tab.disabledSlots ?? []);
+  if (disabled.has(i)) {
+    disabled.delete(i);
+  } else {
+    if (DASHBOARD_SLOT_COUNT - disabled.size <= 1) return;
+    disabled.add(i);
+  }
+  const next = [...disabled].sort((a, b) => a - b);
+  tab.disabledSlots = next.length > 0 ? next : undefined;
+}
+
+/// First enabled slide index. Falls back to 0, which the min-one-enabled
+/// invariant makes unreachable.
+export function firstEnabledSlot(tab: DashboardTab): number {
+  for (let i = 0; i < DASHBOARD_SLOT_COUNT; i++) {
+    if (dashboardSlotEnabled(tab, i)) return i;
+  }
+  return 0;
+}
+
+/// Next enabled slide index after `from`, wrapping. Used by the carousel
+/// auto-rotate + arrow nav so they step over disabled slots.
+export function nextEnabledSlot(tab: DashboardTab, from: number): number {
+  for (let step = 1; step <= DASHBOARD_SLOT_COUNT; step++) {
+    const cand = (from + step) % DASHBOARD_SLOT_COUNT;
+    if (dashboardSlotEnabled(tab, cand)) return cand;
+  }
+  return from;
+}
 
 export type Tab =
   | FileTab
@@ -2270,6 +2329,16 @@ function cloneTab(src: Tab): Tab {
       kind: "dashboard",
       id: src.id,
       title: src.title,
+      // Preserve the per-tab carousel cursor + slot on/off set across a
+      // clone (split / move). Only emit them when set so a default
+      // Dashboard tab clones to the same minimal shape as before.
+      ...(typeof src.carouselSlide === "number"
+        ? { carouselSlide: src.carouselSlide }
+        : {}),
+      ...(src.disabledSlots && src.disabledSlots.length > 0
+        ? { disabledSlots: [...src.disabledSlots] }
+        : {}),
+      ...(src.autoRotate === false ? { autoRotate: false } : {}),
     };
   }
   return {
@@ -3499,6 +3568,12 @@ type SerTab = {
   /// DashboardTab carousel slide cursor. 0 (the About slide, the
   /// default) is omitted to keep the hash compact.
   cs?: number;
+  /// DashboardTab disabled slot indices. Omitted when empty (all slots
+  /// enabled, the default).
+  ds?: number[];
+  /// DashboardTab auto-rotate flag. Omitted when true (the default);
+  /// emitted as false when the tab opted out of auto-rotation.
+  ar?: boolean;
 };
 type SerFocusColor = "o" | "g" | "p";
 type SerHybridTheme = "d" | "l";
@@ -3718,6 +3793,12 @@ function serializeTab(
       ...(typeof t.carouselSlide === "number" && t.carouselSlide > 0
         ? { cs: t.carouselSlide }
         : {}),
+      // Persist the disabled slot set; omit when empty (all-on default).
+      ...(t.disabledSlots && t.disabledSlots.length > 0
+        ? { ds: t.disabledSlots }
+        : {}),
+      // Persist the auto-rotate opt-out; omit when on (the default).
+      ...(t.autoRotate === false ? { ar: false } : {}),
       ...active,
     };
   }
@@ -3944,16 +4025,39 @@ export async function restoreLayout(
           continue;
         }
         if (kind === "d") {
+          // Sanitize the disabled-slot set to in-range indices; ignore
+          // it entirely if it would leave no slot enabled (malformed
+          // hash) so the carousel can never restore blank.
+          const rawDs = Array.isArray(sertab.ds)
+            ? [...new Set(sertab.ds)]
+                .filter(
+                  (n) =>
+                    Number.isInteger(n) && n >= 0 && n < DASHBOARD_SLOT_COUNT,
+                )
+                .sort((a, b) => a - b)
+            : [];
+          const disabledSlots =
+            rawDs.length > 0 && rawDs.length < DASHBOARD_SLOT_COUNT
+              ? rawDs
+              : [];
           const tab: DashboardTab = {
             kind: "dashboard",
             id: id("dashboard"),
             title: "Dashboard",
-            // Restore the carousel slide when the hash carries one.
-            // Absence falls back to the About slide (the default).
-            ...(typeof sertab.cs === "number" && sertab.cs > 0
-              ? { carouselSlide: Math.max(0, Math.floor(sertab.cs)) }
-              : {}),
+            ...(disabledSlots.length > 0 ? { disabledSlots } : {}),
           };
+          // Restore the carousel slide when the hash carries one, clamping
+          // off a disabled slot to the first enabled one. Absence falls
+          // back to the About slide (slot 0) unless that slot is disabled.
+          if (typeof sertab.cs === "number" && sertab.cs > 0) {
+            const want = Math.max(0, Math.floor(sertab.cs));
+            tab.carouselSlide = dashboardSlotEnabled(tab, want)
+              ? want
+              : firstEnabledSlot(tab);
+          } else if (!dashboardSlotEnabled(tab, 0)) {
+            tab.carouselSlide = firstEnabledSlot(tab);
+          }
+          if (sertab.ar === false) tab.autoRotate = false;
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
           continue;

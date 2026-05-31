@@ -38,7 +38,11 @@
     ui,
     openGraphForContact,
     openGraphForLanguage,
+    revealPathInBrowser,
+    openFsGraphForDirectory,
   } from "../state/store.svelte";
+  import { layout, openTerminalInPane } from "../state/tabs.svelte";
+  import { terminalFromHereTarget } from "../terminal/fromHere";
   import { indexingCache } from "../state/indexingStatus.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
   import InspectorBody from "./InspectorBody.svelte";
@@ -297,17 +301,57 @@
     slide?: number;
     onSlideChange?: (slide: number) => void;
     active?: boolean;
+    /// Slide indices the user switched off in the Dashboard tab menu
+    /// (A3). Auto-rotate and arrow nav skip these, and the dots hide
+    /// them. Empty (the default) means every slot participates.
+    disabledSlots?: number[];
+    /// Per-tab auto-rotate opt-out (CK-CAROUSEL). False suppresses
+    /// auto-advance for this tab even when the global cycling pref is on;
+    /// manual nav (arrows / dots) still works. Default true.
+    autoRotate?: boolean;
   };
-  let { slide = 0, onSlideChange, active = true }: Props = $props();
+  let {
+    slide = 0,
+    onSlideChange,
+    active = true,
+    disabledSlots = [],
+    autoRotate = true,
+  }: Props = $props();
 
   const slideCount = 3;
-  // Clamp the controlled cursor to range. Keeping the name `slideIndex`
-  // lets the template read the current slot unchanged; it is a derived
-  // view of the prop now, not local state, so there is nothing to keep
-  // in sync.
-  const slideIndex = $derived(
-    Math.min(Math.max(0, Math.floor(slide)), slideCount - 1),
+  function slotEnabled(i: number): boolean {
+    return !disabledSlots.includes(i);
+  }
+  /// Enabled slide indices in order; backs the pagination dots so a
+  /// disabled slot never gets a dot to click.
+  const enabledSlots = $derived(
+    Array.from({ length: slideCount }, (_, i) => i).filter(slotEnabled),
   );
+  function firstEnabled(): number {
+    return enabledSlots[0] ?? 0;
+  }
+  function nextEnabled(from: number): number {
+    for (let step = 1; step <= slideCount; step++) {
+      const cand = (from + step) % slideCount;
+      if (slotEnabled(cand)) return cand;
+    }
+    return from;
+  }
+  function prevEnabled(from: number): number {
+    for (let step = 1; step <= slideCount; step++) {
+      const cand = (from - step + slideCount) % slideCount;
+      if (slotEnabled(cand)) return cand;
+    }
+    return from;
+  }
+  // Clamp the controlled cursor to range, then off any disabled slot to
+  // the first enabled one. Keeping the name `slideIndex` lets the
+  // template read the current slot unchanged; it is a derived view of the
+  // prop now, not local state, so there is nothing to keep in sync.
+  const slideIndex = $derived.by(() => {
+    const clamped = Math.min(Math.max(0, Math.floor(slide)), slideCount - 1);
+    return slotEnabled(clamped) ? clamped : firstEnabled();
+  });
   let hovering = $state(false);
   let focused = $state(false);
   /// `cycling` is the explicit, persisted preference. `hovering` /
@@ -317,7 +361,9 @@
   const cycling = $derived<boolean>(
     workspace.info?.preferences?.empty_pane_carousel_cycling ?? true,
   );
-  const paused = $derived(hovering || focused || !cycling || !active);
+  const paused = $derived(
+    hovering || focused || !cycling || !active || !autoRotate,
+  );
   let containerEl: HTMLDivElement | undefined = $state();
 
   /// Auto-rotate while neither hovered nor focused AND the user
@@ -327,9 +373,10 @@
   /// doesn't lose the next-tick budget.
   $effect(() => {
     void slideIndex;
+    void disabledSlots;
     if (paused) return;
     const handle = window.setInterval(() => {
-      onSlideChange?.((slideIndex + 1) % slideCount);
+      onSlideChange?.(nextEnabled(slideIndex));
     }, 5000);
     return () => window.clearInterval(handle);
   });
@@ -353,12 +400,13 @@
   }
 
   function prev(): void {
-    onSlideChange?.((slideIndex - 1 + slideCount) % slideCount);
+    onSlideChange?.(prevEnabled(slideIndex));
   }
   function next(): void {
-    onSlideChange?.((slideIndex + 1) % slideCount);
+    onSlideChange?.(nextEnabled(slideIndex));
   }
   function goTo(i: number): void {
+    if (!slotEnabled(i)) return;
     onSlideChange?.(((i % slideCount) + slideCount) % slideCount);
   }
   function onKeyDown(e: KeyboardEvent): void {
@@ -423,7 +471,14 @@
         <div class="slide-title">About</div>
         <div class="about-grid">
           <span class="k">chan version</span>
-          <span class="v mono">{buildInfo?.version ?? "n/a"}</span>
+          <span class="v mono">
+            {buildInfo?.version ?? "n/a"}
+            <a
+              class="version-license"
+              href="https://github.com/fiorix/chan/blob/main/LICENSE"
+              target="_blank"
+              rel="noopener">Apache 2.0</a>
+          </span>
           <span class="k">embeddings</span>
           <span class="v">
             {#if buildInfo === null}
@@ -482,14 +537,11 @@
              separator. The SIL OFL and MIT links point at canonical
              upstream URLs, not embedded `/static/...` paths (those
              resolve against 127.0.0.1 under chan-desktop's non-root
-             mount). Chan's own Apache 2 license joins the section so
-             the three runtime licenses sit together in one place. -->
+             mount). Chan's own Apache 2.0 license moved up to the
+             version row (A6); only the third-party font + screensaver
+             attributions remain here. -->
         <div class="about-sep" role="separator" aria-hidden="true"></div>
         <div class="about-licenses">
-          <span class="k">chan</span>
-          <span class="v">
-            <a href="https://github.com/fiorix/chan/blob/main/LICENSE" target="_blank" rel="noopener">Apache 2.0</a>
-          </span>
           <span class="k">terminal font</span>
           <span class="v">
             Source Code Pro Regular
@@ -589,6 +641,12 @@
                   >×</button>
                 </div>
                 <div class="indexing-inspector-body">
+                  <!-- A4: this index-graph inspector is directory-only and
+                       read-only. Suppress Upload (allowUpload=false) and bind
+                       the same dir helpers the File Browser tree menu uses, so
+                       it offers Show Directory / Graph from here / New Terminal
+                       (Download stays). Each guards on selectedIndexPath; the
+                       block is already gated on it being non-null. -->
                   <InspectorBody
                     selection={{
                       kind: "directory",
@@ -596,6 +654,25 @@
                       label: selectedIndexLabel,
                     }}
                     showRefs={false}
+                    allowUpload={false}
+                    onReveal={() => {
+                      if (selectedIndexPath === null) return;
+                      revealPathInBrowser(selectedIndexPath, {
+                        enter: true,
+                        inspectorOpen: true,
+                      });
+                    }}
+                    onSetAsScope={() => {
+                      if (selectedIndexPath === null) return;
+                      openFsGraphForDirectory(selectedIndexPath);
+                    }}
+                    onNewTerminal={() => {
+                      if (selectedIndexPath === null) return;
+                      openTerminalInPane(
+                        layout.activePaneId,
+                        terminalFromHereTarget(selectedIndexPath, true),
+                      );
+                    }}
                   />
                 </div>
               </div>
@@ -634,7 +711,7 @@
       <ChevronLeft size={16} strokeWidth={1.75} aria-hidden="true" />
     </button>
     <div class="dots" role="tablist" aria-label="carousel slides">
-      {#each Array.from({ length: slideCount }) as _, i}
+      {#each enabledSlots as i (i)}
         <button
           type="button"
           class="dot-btn"
@@ -775,6 +852,13 @@
   }
   .about-grid .ok {
     color: var(--accent, var(--text));
+  }
+  /* A6: chan's own license sits on the version row, spaced from the
+     version string and styled as a link rather than mono text. */
+  .about-grid .version-license {
+    margin-left: 0.6rem;
+    color: var(--link, var(--text));
+    text-decoration: underline;
   }
   .about-links {
     display: flex;

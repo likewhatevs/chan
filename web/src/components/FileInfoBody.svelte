@@ -89,6 +89,8 @@
     onNavigate,
     onContactNavigate,
     onSetAsScope,
+    onNewTerminal,
+    allowUpload = true,
   }: {
     path: string | null;
     /// Optional display name for the header. The graph passes the
@@ -127,6 +129,15 @@
     /// re-pin it as the focal node). Other hosts leave it absent so
     /// the button doesn't render outside the graph.
     onSetAsScope?: () => void;
+    /// "New Terminal" button for directory selections, opening a
+    /// terminal with the directory as cwd. The dashboard Search slot
+    /// binds this; other hosts leave it absent so the button doesn't
+    /// render (directory-only, gated on `isDir`).
+    onNewTerminal?: () => void;
+    /// Whether the Upload button renders. Default true so the File
+    /// Browser / editor / Graph-tab inspectors keep it; the dashboard
+    /// Search slot passes false (read-only index view: Download only).
+    allowUpload?: boolean;
   } = $props();
 
   const entryByPath = $derived(
@@ -704,12 +715,14 @@
           >
         {/if}
         <div class="transfer-actions">
-          <button
-            class="open"
-            type="button"
-            onclick={triggerUpload}
-            title={uploadTitle}>Upload</button
-          >
+          {#if allowUpload}
+            <button
+              class="open"
+              type="button"
+              onclick={triggerUpload}
+              title={uploadTitle}>Upload</button
+            >
+          {/if}
           <button
             class="open"
             type="button"
@@ -731,6 +744,11 @@
         {#if onSetAsScope}
           <button class="open" type="button" onclick={onSetAsScope}
             >Graph from here</button
+          >
+        {/if}
+        {#if onNewTerminal && isDir}
+          <button class="open" type="button" onclick={onNewTerminal}
+            >New Terminal</button
           >
         {/if}
       </div>
