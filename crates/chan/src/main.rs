@@ -509,6 +509,14 @@ enum TerminalAction {
         /// Read the bytes from this process's stdin instead of `cmd`.
         #[arg(long)]
         stdin: bool,
+        /// After the bytes, append the agent submit chord so a running
+        /// agent (Claude Code) submits the input hands-free - the
+        /// completion-poke path. Trailing newlines are stripped first.
+        /// Without it the bytes land in the agent's compose box
+        /// unsubmitted (a bare newline is a newline to an agent, not a
+        /// submit).
+        #[arg(long)]
+        submit: bool,
         /// Target every session with this tab name.
         #[arg(long = "tab-name")]
         tab_name: Option<String>,
@@ -2154,6 +2162,26 @@ fn render_search_markdown(raw: &str) -> Result<String> {
     Ok(out)
 }
 
+/// xterm modifyOtherKeys CSI for Cmd+Enter. Claude Code reads this as
+/// its "submit" chord (live-probed); a bare newline lands as a newline in
+/// its multi-line draft, not a submit. Mirrors `AGENT_SUBMIT_CHORD` in
+/// `web/src/terminal/submitMode.ts` (and the server-side `SubmitMode`).
+/// `cs terminal write --submit` appends it so a completion poke submits
+/// into a running agent. codex diverges (submits on `\r`); single-chord
+/// (Claude encoding) per the round-1 decision.
+const AGENT_SUBMIT_CHORD: &str = "\x1b[27;9;13~";
+
+/// `cs terminal write --submit`: strip trailing newlines from the bytes
+/// then append the agent submit chord, so a running agent submits the
+/// input hands-free. Without `--submit` the bytes are written verbatim.
+fn apply_submit_chord(data: String, submit: bool) -> String {
+    if submit {
+        format!("{}{AGENT_SUBMIT_CHORD}", data.trim_end_matches('\n'))
+    } else {
+        data
+    }
+}
+
 async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
     match action {
         TerminalAction::New {
@@ -2179,6 +2207,7 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
         TerminalAction::Write {
             cmd,
             stdin,
+            submit,
             tab_name,
             tab_group,
         } => {
@@ -2198,6 +2227,11 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             } else {
                 cmd.ok_or_else(|| anyhow::anyhow!("cs terminal write needs a command or --stdin"))?
             };
+            // --submit: strip trailing newlines then append the agent
+            // submit chord so a running agent submits the input
+            // hands-free (the completion poke). Mirrors
+            // `encodeForAgentSubmit` in web/src/terminal/submitMode.ts.
+            let data = apply_submit_chord(data, submit);
             let socket = control_socket_env()?;
             let message = send_control_request(
                 &socket,
@@ -3202,6 +3236,21 @@ fn print_import_summary(summary: &chan_workspace::ImportSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submit_chord_strips_trailing_newlines_and_appends() {
+        assert_eq!(
+            apply_submit_chord("poke\n\n".into(), true),
+            format!("poke{AGENT_SUBMIT_CHORD}")
+        );
+        // No newline to strip -> chord appended directly.
+        assert_eq!(
+            apply_submit_chord("poke".into(), true),
+            format!("poke{AGENT_SUBMIT_CHORD}")
+        );
+        // Without --submit the bytes are verbatim (no chord, newline kept).
+        assert_eq!(apply_submit_chord("poke\n".into(), false), "poke\n");
+    }
 
     fn ipv4(s: &str) -> IpAddr {
         s.parse().unwrap()
