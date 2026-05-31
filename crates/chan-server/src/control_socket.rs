@@ -11,7 +11,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 #[cfg(unix)]
 use chan_workspace::Workspace;
 #[cfg(unix)]
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 #[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(unix)]
@@ -30,69 +30,12 @@ use crate::terminal_sessions::Registry as TerminalRegistry;
 /// (`cs term write` / `term list`) read it.
 pub type TerminalRegistryCell = Arc<OnceLock<Arc<TerminalRegistry>>>;
 
+// The control-socket wire contract (request + response) is shared with
+// the `cs` client through chan-shell, so a tag/field rename moves in
+// lockstep instead of silently breaking one side. The server only touches
+// these types on unix (the listener is unix-only).
 #[cfg(unix)]
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ControlRequest {
-    // Category 1: open a UI tab in the originating window.
-    OpenPath {
-        window_id: String,
-        path: PathBuf,
-    },
-    OpenGraph {
-        window_id: String,
-        #[serde(default)]
-        path: Option<PathBuf>,
-    },
-    OpenTermNew {
-        window_id: String,
-        #[serde(default)]
-        path: Option<PathBuf>,
-        #[serde(default)]
-        tab_name: Option<String>,
-        #[serde(default)]
-        tab_group: Option<String>,
-    },
-    OpenDashboard {
-        window_id: String,
-        #[serde(default)]
-        carousel_index: Option<u32>,
-        #[serde(default)]
-        carousel_off: bool,
-    },
-    // Category 2: act on / inspect live PTY sessions via the registry.
-    TermWrite {
-        #[serde(default)]
-        tab_name: Option<String>,
-        #[serde(default)]
-        tab_group: Option<String>,
-        data: String,
-    },
-    TermList,
-    TermRestart {
-        #[serde(default)]
-        tab_name: Option<String>,
-        #[serde(default)]
-        tab_group: Option<String>,
-    },
-    // Category 2: run the same content search the UI does and return the
-    // results on the connection (like `term list`). The CLI formats the
-    // JSON it gets back: markdown by default, compact `--json`, indented
-    // `--json --pretty`.
-    Search {
-        query: String,
-        #[serde(default)]
-        limit: Option<u32>,
-    },
-}
-
-#[cfg(unix)]
-#[derive(Debug, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum ControlResponse {
-    Ok { message: String },
-    Error { message: String },
-}
+pub use chan_shell::{ControlRequest, ControlResponse};
 
 #[cfg(unix)]
 #[derive(Debug, Serialize)]

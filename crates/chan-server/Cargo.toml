@@ -48,6 +48,10 @@ chan-workspace = { workspace = true, default-features = false }
 tar = { workspace = true }
 zstd = { workspace = true, optional = true }
 chan-llm = { workspace = true, features = ["mcp"] }
+# Wire types only: the workspace dep sets default-features = false, so the
+# clap-backed `cs` client is dropped here. control_socket.rs deserializes
+# ControlRequest + serializes ControlResponse.
+chan-shell = { workspace = true }
 chan-tunnel-client = { workspace = true }
 chan-tunnel-proto = { workspace = true }
 anyhow = { workspace = true }

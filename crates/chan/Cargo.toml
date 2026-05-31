@@ -43,6 +43,10 @@ chan-server = { workspace = true, default-features = false }
 # the v2 ClaudeCli wiring (issue chan-llm#1) into the single static
 # binary instead of shipping a separate `chan-llm-mcp` companion.
 chan-llm = { workspace = true, features = ["mcp"] }
+# The `cs` control-socket client (ShellAction/TerminalAction, dispatch,
+# the agent submit map, the unified wire types). The workspace dep sets
+# default-features = false, so opt the `client` feature back in here.
+chan-shell = { workspace = true, features = ["client"] }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 anyhow = { workspace = true }

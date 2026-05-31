@@ -1,0 +1,29 @@
+[package]
+name = "chan-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "chan: the `cs` control-socket client shared by chan and chan-desktop."
+
+[features]
+# The `cs` CLIENT (clap surface + control-socket dispatch + the agent
+# submit map). On by default for the `chan` / `chan-desktop` binaries;
+# chan-server turns it OFF and pulls only the wire types
+# (`ControlRequest` / `ControlResponse`), so the server does not link
+# clap or the client transport.
+default = ["client"]
+client = ["dep:clap", "dep:tokio", "dep:serde_json", "dep:anyhow"]
+
+[dependencies]
+# The wire types are always available (serde only); everything else is
+# behind the `client` feature so chan-server stays clap-free.
+serde = { workspace = true }
+clap = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

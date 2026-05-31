@@ -935,6 +935,7 @@ dependencies = [
  "anyhow",
  "chan-llm",
  "chan-server",
+ "chan-shell",
  "chan-workspace",
  "clap 4.6.1",
  "clap_complete",
@@ -1031,6 +1032,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chan-llm",
+ "chan-shell",
  "chan-tunnel-client",
  "chan-tunnel-proto",
  "chan-workspace",
@@ -1058,6 +1060,17 @@ dependencies = [
  "tracing",
  "url",
  "zstd",
+]
+
+[[package]]
+name = "chan-shell"
+version = "0.21.0"
+dependencies = [
+ "anyhow",
+ "clap 4.6.1",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
