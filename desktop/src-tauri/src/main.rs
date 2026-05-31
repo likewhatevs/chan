@@ -1532,24 +1532,9 @@ fn run_hidden_mcp_proxy_if_requested() -> Result<bool, String> {
 
 #[cfg(unix)]
 async fn run_mcp_proxy(socket: PathBuf) -> Result<(), String> {
-    use tokio::io::{stdin, stdout};
-    let stream = tokio::net::UnixStream::connect(&socket)
+    chan_server::run_mcp_stdio_proxy(socket)
         .await
-        .map_err(|e| format!("connecting to MCP socket {}: {e}", socket.display()))?;
-    let (mut read_sock, mut write_sock) = stream.into_split();
-    let mut stdin = stdin();
-    let mut stdout = stdout();
-    let to_socket = tokio::io::copy(&mut stdin, &mut write_sock);
-    let from_socket = tokio::io::copy(&mut read_sock, &mut stdout);
-    tokio::select! {
-        r = to_socket => {
-            r.map_err(|e| format!("piping stdin to MCP socket: {e}"))?;
-        }
-        r = from_socket => {
-            r.map_err(|e| format!("piping MCP socket to stdout: {e}"))?;
-        }
-    }
-    Ok(())
+        .map_err(|e| format!("running MCP proxy: {e}"))
 }
 
 fn main() {
@@ -2009,6 +1994,7 @@ mod tests {
         assert!(MAIN_RS.contains("\"__mcp-proxy\""));
         assert!(MAIN_RS.contains("run_hidden_mcp_proxy_if_requested"));
         assert!(MAIN_RS.contains("run_mcp_proxy(socket)"));
+        assert!(MAIN_RS.contains("chan_server::run_mcp_stdio_proxy"));
     }
 
     #[test]

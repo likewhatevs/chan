@@ -2110,91 +2110,9 @@ async fn send_control_request(_socket: &Path, _request: ControlRequest) -> Resul
 /// either direction closes, which is the normal end of a session.
 #[cfg(unix)]
 async fn cmd_mcp_proxy(socket: PathBuf) -> Result<()> {
-    use tokio::io::{stdin, stdout};
-    let stream = connect_mcp_socket(&socket)
+    chan_server::run_mcp_stdio_proxy(socket)
         .await
-        .with_context(|| format!("connecting to mcp socket {}", socket.display()))?;
-    let (mut read_sock, mut write_sock) = stream.into_split();
-    let mut stdin = stdin();
-    let mut stdout = stdout();
-    // Two simultaneous copies; the first to finish ends the session.
-    // tokio::io::copy_bidirectional doesn't fit here because stdin /
-    // stdout aren't a single duplex stream.
-    let to_socket = tokio::io::copy(&mut stdin, &mut write_sock);
-    let from_socket = tokio::io::copy(&mut read_sock, &mut stdout);
-    tokio::select! {
-        r = to_socket => { r.context("piping stdin to mcp socket")?; }
-        r = from_socket => { r.context("piping mcp socket to stdout")?; }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-async fn connect_mcp_socket(socket: &Path) -> Result<tokio::net::UnixStream, std::io::Error> {
-    connect_mcp_socket_in(socket, &std::env::temp_dir()).await
-}
-
-#[cfg(unix)]
-async fn connect_mcp_socket_in(
-    socket: &Path,
-    fallback_dir: &Path,
-) -> Result<tokio::net::UnixStream, std::io::Error> {
-    match tokio::net::UnixStream::connect(socket).await {
-        Ok(stream) => Ok(stream),
-        Err(primary) if should_try_mcp_socket_fallback(&primary) => {
-            for candidate in mcp_socket_fallback_candidates_in(fallback_dir, socket) {
-                match tokio::net::UnixStream::connect(&candidate).await {
-                    Ok(stream) => {
-                        tracing::warn!(
-                            configured = %socket.display(),
-                            fallback = %candidate.display(),
-                            "configured MCP socket is stale; using live fallback"
-                        );
-                        return Ok(stream);
-                    }
-                    Err(_) => continue,
-                }
-            }
-            Err(primary)
-        }
-        Err(primary) => Err(primary),
-    }
-}
-
-#[cfg(unix)]
-fn should_try_mcp_socket_fallback(err: &std::io::Error) -> bool {
-    matches!(
-        err.kind(),
-        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-    )
-}
-
-#[cfg(unix)]
-fn mcp_socket_fallback_candidates_in(dir: &Path, preferred: &Path) -> Vec<PathBuf> {
-    let read_dir = match std::fs::read_dir(dir) {
-        Ok(read_dir) => read_dir,
-        Err(_) => return Vec::new(),
-    };
-    let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = read_dir
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path == preferred {
-                return None;
-            }
-            let name = path.file_name()?.to_str()?;
-            if !name.starts_with("chan-mcp-") || !name.ends_with(".sock") {
-                return None;
-            }
-            let modified = entry
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            Some((modified, path))
-        })
-        .collect();
-    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    candidates.into_iter().map(|(_, path)| path).collect()
+        .context("running MCP proxy")
 }
 
 /// Windows stub: chan's MCP bridge runs over Unix-domain sockets; the
@@ -3151,24 +3069,6 @@ mod tests {
         .unwrap();
         assert_eq!(env.window_id, "win");
         assert_eq!(env.control_socket, PathBuf::from("/tmp/chan-control.sock"));
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn mcp_proxy_connect_falls_back_to_live_socket_when_configured_socket_is_stale() {
-        let dir = tempfile::tempdir().unwrap();
-        let preferred = dir.path().join("chan-mcp-stale.sock");
-        let live = dir
-            .path()
-            .join(format!("chan-mcp-{}-fallback.sock", std::process::id()));
-        let listener = tokio::net::UnixListener::bind(&live).unwrap();
-        let accept = tokio::spawn(async move {
-            let _ = listener.accept().await.unwrap();
-        });
-
-        let stream = connect_mcp_socket_in(&preferred, dir.path()).await.unwrap();
-        drop(stream);
-        accept.await.unwrap();
     }
 
     #[test]

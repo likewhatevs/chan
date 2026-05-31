@@ -43,6 +43,8 @@ mod util;
 pub use config::ServerConfig;
 pub use error::Error;
 pub use host::{HostedWorkspace, WorkspaceHost};
+#[cfg(unix)]
+pub use mcp_bridge::run_stdio_proxy as run_mcp_stdio_proxy;
 pub use preferences::{
     BrowserSidePanes, EditorPrefs, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths,
     SurfaceThemeChoice, ThemeChoice,
