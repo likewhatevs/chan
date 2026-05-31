@@ -37,9 +37,14 @@
   // stays passive.
 
   /// Indexer section: hidden when idle (steady state should be
-  /// quiet) and when the poller hasn't replied yet (`null`).
+  /// quiet) and when the poller hasn't replied yet (`null`). The one
+  /// idle case that still shows is background embedding (idle + a set
+  /// `embedding`): the index is BM25-ready, so we surface a passive
+  /// progress chip rather than an active pill.
   const indexVisible = $derived(
-    indexStatus.value !== null && indexStatus.value.state !== "idle",
+    indexStatus.value !== null &&
+      (indexStatus.value.state !== "idle" ||
+        indexStatus.value.embedding != null),
   );
   const importVisible = $derived(importStatus.value !== null);
   const transferVisible = $derived(fileTransferStatus.value !== null);
@@ -82,7 +87,7 @@
           >
             <span
               class="dot"
-              class:working={s.state !== "error"}
+              class:working={s.state !== "error" && s.state !== "idle"}
               class:err={s.state === "error"}
             ></span>
             {#if s.state === "building"}
@@ -106,6 +111,15 @@
               reindexing <span class="muted">{s.file}</span>
             {:else if s.state === "error"}
               index error: <span class="muted">{s.message}</span>
+            {:else if s.state === "idle" && s.embedding}
+              <!-- BM25-ready, embeddings still generating in the
+                   background (preflight already unlocked). Passive chip:
+                   the dot is static (no `working` pulse) so this reads as
+                   quiet progress, not the active reindexing pill. The
+                   done/total here are real chunk counts, not the building
+                   phase's misleading EmbedBatch sentinel. -->
+              embedding
+              <span class="num">{s.embedding.done}/{s.embedding.total}</span>
             {/if}
           </span>
         {/if}

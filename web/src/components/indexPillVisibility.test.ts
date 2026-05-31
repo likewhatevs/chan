@@ -17,9 +17,14 @@ import type { IndexStatus } from "../api/types";
 
 /// The exact predicate AppStatusBar uses for `indexVisible`. Kept here
 /// as the spec; the source-pinning test below guards that the component
-/// still computes it this way.
+/// still computes it this way. Idle hides EXCEPT when a background
+/// `embedding` is set (BM25-ready, embeddings still generating) - that
+/// surfaces a passive chip.
 function indexVisible(value: IndexStatus | null): boolean {
-  return value !== null && value.state !== "idle";
+  return (
+    value !== null &&
+    (value.state !== "idle" || value.embedding != null)
+  );
 }
 
 afterEach(() => {
@@ -52,7 +57,7 @@ describe("index progress pill visibility", () => {
     expect(indexVisible(indexStatus.value)).toBe(true);
   });
 
-  test("CLEARS the moment the indexer reports idle (bug 9)", () => {
+  test("CLEARS the moment the indexer reports settled idle (bug 9)", () => {
     indexStatus.value = {
       state: "building",
       current: 99,
@@ -61,16 +66,42 @@ describe("index progress pill visibility", () => {
     } as IndexStatus;
     expect(indexVisible(indexStatus.value)).toBe(true);
 
-    // Slice D guarantees the status reaches idle; the pill must hide.
+    // Slice D guarantees the status reaches idle; with no background
+    // embedding left, the pill must hide.
     indexStatus.value = { state: "idle" } as IndexStatus;
     expect(indexVisible(indexStatus.value)).toBe(false);
   });
+
+  test("STAYS visible on idle while background embedding runs (passive chip)", () => {
+    // BM25-ready (preflight unlocked) but embeddings still generating in
+    // the background -> a passive progress chip, not a hidden pill.
+    indexStatus.value = {
+      state: "idle",
+      indexed_docs: 10,
+      indexed_vectors: 4,
+      model: "BAAI/bge-small-en-v1.5",
+      embedding: { done: 4, total: 10 },
+    } as IndexStatus;
+    expect(indexVisible(indexStatus.value)).toBe(true);
+  });
 });
 
-describe("AppStatusBar source keeps the idle-hide rule", () => {
-  test("indexVisible derivation hides on idle and null", () => {
+describe("AppStatusBar source keeps the idle-hide rule (except embedding)", () => {
+  test("indexVisible derivation hides on idle/null but shows idle+embedding", () => {
     expect(statusBar).toMatch(
-      /indexStatus\.value !== null && indexStatus\.value\.state !== "idle"/,
+      /indexStatus\.value !== null &&[\s\S]{1,40}indexStatus\.value\.state !== "idle" \|\|[\s\S]{1,60}indexStatus\.value\.embedding != null/,
+    );
+  });
+
+  test("idle+embedding renders a passive chip: static dot + embedding count", () => {
+    expect(statusBar).toMatch(/s\.state === "idle" && s\.embedding/);
+    expect(statusBar).toMatch(
+      /\{s\.embedding\.done\}\/\{s\.embedding\.total\}/,
+    );
+    // Passive: the dot does NOT pulse (`working`) on idle, only on the
+    // active building / reindexing states.
+    expect(statusBar).toMatch(
+      /class:working=\{s\.state !== "error" && s\.state !== "idle"\}/,
     );
   });
 

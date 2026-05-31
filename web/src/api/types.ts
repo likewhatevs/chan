@@ -649,7 +649,18 @@ export type HeadingRow = {
 /// Snapshot returned by GET /api/index/status. Field set matches
 /// chan-server::indexer::IndexStatus.
 export type IndexStatus =
-  | { state: "idle"; indexed_docs: number; indexed_vectors: number; model: string }
+  | {
+      state: "idle";
+      indexed_docs: number;
+      indexed_vectors: number;
+      model: string;
+      /// Present while embeddings are still being generated in the
+      /// background after the index reached BM25-ready (preflight unlocks
+      /// on idle regardless). Absent once embedding settles. The status
+      /// bar renders this as a passive "embedding done/total" chip, never
+      /// the active reindexing pill.
+      embedding?: { done: number; total: number };
+    }
   | { state: "building"; current: number; total: number; file: string }
   | { state: "reindexing"; file: string }
   | { state: "error"; message: string };
