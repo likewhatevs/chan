@@ -27,6 +27,7 @@ import {
   setActivePane,
   setTerminalBroadcastEnabled,
   setTerminalBroadcastTarget,
+  terminalTabGroup,
   type TerminalTab,
 } from "./tabs.svelte";
 import type { TeamDialogConfig, TeamMemberDraft } from "./teamDialog.svelte";
@@ -261,18 +262,35 @@ export function identityPrompt(
 /// lead agent never came up while workers (fresh spawns) did. A fresh
 /// spawn yields a fresh `TerminalTab` mount bound to the new session, so
 /// the lead agent launches exactly like a worker's.
+/// Resolve the team's tab group against the LIVE terminal groups at
+/// Bootstrap, appending `-N` until unique so a new team never collides
+/// with an existing group. `allTerminalTabs().map(terminalTabGroup)`
+/// mirrors what the registry / `cs terminal list` reads.
+function resolveTeamGroup(base: string): string {
+  const live = new Set(allTerminalTabs().map(terminalTabGroup));
+  if (!live.has(base)) return base;
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = `${base}-${n}`;
+    if (!live.has(candidate)) return candidate;
+  }
+  return base;
+}
+
 async function launchLead(
   ctx: TeamBootstrapContext,
   lead: TeamMemberWire,
+  group: string,
 ): Promise<TerminalTab> {
   const response = await api.spawnTerminal({
     name: lead.handle,
     command: lead.command,
     env: lead.env,
+    group,
   });
   const tab = openTerminalInPane(ctx.leadPaneId, {
     sessionId: response.session,
     title: response.tab_label,
+    group,
   });
   if (!tab) throw new Error("failed to open the lead terminal");
   renameTerminalTab(tab, lead.handle);
@@ -329,9 +347,15 @@ export async function runTeamBootstrap(
   if (!leadEntry) throw new Error("config has no lead member");
   const workerEntries = wire.members.filter((m) => !m.is_lead);
 
+  // Resolve the team's tab group once (with a -N suffix on collision)
+  // so every team terminal - lead + workers - joins the same group
+  // server-side ($CHAN_TAB_GROUP + cs terminal list) and SPA-side
+  // (group-scoped broadcast).
+  const group = resolveTeamGroup(config.tabGroup);
+
   // 2a. Launch the LEAD FIRST: spawn a fresh agent session into the
   //     lead's pane and drop the Cmd+P placeholder (same path as workers).
-  const leadTab = await launchLead(ctx, leadEntry);
+  const leadTab = await launchLead(ctx, leadEntry, group);
 
   // 2b. Resolve real estate + spawn the workers into new tabs.
   const workerPanes = resolveWorkerPanes(config, ctx.leadPaneId);
@@ -344,11 +368,13 @@ export async function runTeamBootstrap(
         name: m.handle,
         command: m.command,
         env: m.env,
+        group,
       });
       const paneId = workerPanes[i] ?? ctx.leadPaneId;
       const tab = openTerminalInPane(paneId, {
         sessionId: response.session,
         title: response.tab_label,
+        group,
       });
       if (tab) {
         renameTerminalTab(tab, m.handle);

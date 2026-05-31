@@ -150,6 +150,10 @@ export type TerminalSpawnRequest = {
   name: string;
   command: string;
   env?: Record<string, string>;
+  /// Broadcast group the new session joins ($CHAN_TAB_GROUP + the
+  /// registry tab_group). Used by the Team Work bootstrap so every team
+  /// terminal joins the team's group.
+  group?: string;
   orchestrator_session?: string;
 };
 

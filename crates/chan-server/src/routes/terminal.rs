@@ -44,6 +44,12 @@ pub struct CreateTerminalBody {
     command: String,
     #[serde(default)]
     env: BTreeMap<String, String>,
+    /// Broadcast group the new session joins (sets `$CHAN_TAB_GROUP` and
+    /// the registry's per-session `tab_group`). Absent / "default" leaves
+    /// it ungrouped. Used by the Team Work bootstrap so every team
+    /// terminal joins the team's group.
+    #[serde(default)]
+    group: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -223,7 +229,7 @@ pub async fn api_create_terminal(
     let opts = CreateOptions {
         size: pty_size(None, None),
         tab_name: Some(name.clone()),
-        tab_group: None,
+        tab_group: body.group.as_deref().and_then(normalize_tab_group),
         window_id: None,
         mcp_env: true,
         cwd: None,
@@ -843,6 +849,7 @@ mod tests {
             name: "@@Spawned".into(),
             command: command.into(),
             env: BTreeMap::new(),
+            group: None,
         }
     }
 
@@ -884,6 +891,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_create_terminal_joins_the_requested_group() {
+        // The Team Work bootstrap spawns each team terminal with a group;
+        // it must land on the session's registry tab_group (and so
+        // $CHAN_TAB_GROUP + cs terminal list grouping).
+        let state = crate::state::test_support::make_test_state(false, false);
+        let mut body = create_terminal_body("sleep 1");
+        body.group = Some("team-x".into());
+        let response = api_create_terminal(State(state.clone()), Ok(Json(body))).await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let summaries = state.terminal_sessions.session_summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].tab_group, "team-x");
+        state
+            .terminal_sessions
+            .close(&summaries[0].session_id, CloseReason::Explicit);
+    }
+
+    #[tokio::test]
     async fn api_create_terminal_rejects_missing_command() {
         let state = crate::state::test_support::make_test_state(false, false);
         let response = api_create_terminal(
@@ -892,6 +918,7 @@ mod tests {
                 name: "@@Spawned".into(),
                 command: " ".into(),
                 env: BTreeMap::new(),
+                group: None,
             })),
         )
         .await;
