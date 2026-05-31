@@ -361,6 +361,7 @@ mod tests {
             indexed_docs: 0,
             indexed_vectors: 0,
             model: "m".into(),
+            embedding: None,
         }
     }
 

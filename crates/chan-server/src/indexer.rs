@@ -31,6 +31,18 @@ use tokio::task::JoinHandle;
 
 const VCS_BURST_REBUILD_THRESHOLD: usize = 64;
 
+/// Background embedding progress carried on `IndexStatus::Idle`. File-
+/// based and monotonic: `done` is the number of files drained so far,
+/// `total` the workspace file count. `done <= total` always (the
+/// producer's per-batch chunk counters overshoot, so we report file
+/// progress instead). Serialized camelCase to match the SPA.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbedProgress {
+    pub done: u32,
+    pub total: u32,
+}
+
 /// Snapshot of indexer state. Returned verbatim by
 /// `/api/index/status` (the frontend's IndexStatus tagged union).
 #[derive(Debug, Clone, Serialize)]
@@ -46,10 +58,20 @@ pub enum IndexStatus {
     /// One incremental re-index after a watcher event.
     Reindexing { file: String },
     /// Steady state. Counters mirror `Workspace::index_stats`.
+    ///
+    /// `embedding` is `Some` while the search index is BM25-ready (so
+    /// preflight unlocks and search answers) but the background embedding
+    /// pass is still running; `None` once fully settled. This is the
+    /// Option-A split: a heavy cold reindex reaches Idle as soon as BM25
+    /// is searchable, and the slow embed forward-pass finishes in the
+    /// background (search upgrades bm25 -> hybrid as vectors land) instead
+    /// of pinning the status at `Building` for minutes.
     Idle {
         indexed_docs: u64,
         indexed_vectors: u64,
         model: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        embedding: Option<EmbedProgress>,
     },
     /// The last operation failed; users are still allowed to query
     /// (over the previous index state).
@@ -149,6 +171,7 @@ impl Indexer {
             indexed_docs: stats.indexed_docs,
             indexed_vectors: stats.indexed_vectors,
             model: stats.model.clone(),
+            embedding: None,
         }));
         let telemetry = Arc::new(Mutex::new(IndexerTelemetry {
             queue_depth: 0,
@@ -312,10 +335,13 @@ fn spawn_coordinator(
                 total: 0,
                 file: String::new(),
             };
+            let workspace_weak = Arc::downgrade(&workspace_w);
             let result = tokio::task::spawn_blocking(move || {
                 let progress = StatusUpdater {
                     status: status_w,
                     forward: progress_w,
+                    workspace: workspace_weak,
+                    embed: Mutex::new(EmbedPhaseState::default()),
                 };
                 workspace_w.reindex_with_aggression(Some(&cancel_w), &progress, aggression)
             })
@@ -789,52 +815,101 @@ fn update_queue_depth(
 struct StatusUpdater {
     status: Arc<Mutex<IndexStatus>>,
     forward: Arc<dyn ProgressCallback>,
+    /// Live workspace handle for reading index stats when we flip to
+    /// Idle mid-build (the Option-A background-embed state). Weak so the
+    /// updater never keeps the workspace alive past reset/shutdown.
+    workspace: Weak<Workspace>,
+    /// Latch + last file progress for the background-embed flip. Once the
+    /// first EmbedBatch fires in a pass, BM25 is committed and searchable
+    /// (facade.rs commits before each embed flush), so we report
+    /// Idle{embedding:Some} and stop reverting to Building on the
+    /// interleaved IndexFile ticks.
+    embed: Mutex<EmbedPhaseState>,
+}
+
+#[derive(Default)]
+struct EmbedPhaseState {
+    started: bool,
+    files_done: u32,
+    files_total: u32,
 }
 
 impl ProgressCallback for StatusUpdater {
     fn on_progress(&self, event: ProgressEvent) {
         match event.stage {
             ProgressStage::GraphRebuild | ProgressStage::IndexFile => {
-                let file = event.label.clone().unwrap_or_default();
-                let current = event.current as usize;
+                // Clamp so the pill never shows current > total. Display-only.
                 let total = event.total as usize;
-                if let Ok(mut s) = self.status.lock() {
-                    *s = IndexStatus::Building {
-                        current,
-                        total,
-                        file,
-                    };
+                let current = (event.current as usize).min(total);
+                // Keep the file-progress counters fresh for the background-
+                // embed chip, and read the latch.
+                let started = {
+                    let mut p = self.embed.lock().unwrap();
+                    p.files_done = current as u32;
+                    p.files_total = total as u32;
+                    p.started
+                };
+                // Before the first embed flush this is the foreground
+                // BM25/graph pass, which legitimately gates preflight ->
+                // Building. After it, BM25 is searchable and embeddings are
+                // a background refinement, so we leave the status at
+                // Idle{embedding} (set in the EmbedBatch arm) and only keep
+                // the counters above fresh; reverting to Building here would
+                // re-lock preflight on every interleaved IndexFile tick.
+                if !started {
+                    let file = event.label.clone().unwrap_or_default();
+                    if let Ok(mut s) = self.status.lock() {
+                        *s = IndexStatus::Building {
+                            current,
+                            total,
+                            file,
+                        };
+                    }
                 }
             }
-            // Bug 9: the embed phase runs AFTER every IndexFile tick has
-            // fired (read+chunk+BM25-enqueue first, then the cross-file
-            // embedding flushes, then the final commit). Without
-            // reflecting EmbedBatch here the pill froze on the last
-            // IndexFile label (`total-1/total`) for the entire embed
-            // phase, which on a large workspace is minutes and looks exactly
-            // like a stuck reindex. Surface the embed progress so the
-            // pill keeps moving until the build actually finishes and
-            // `set_idle` clears it. `current/total` here are chunk
-            // counts within a batch; the label carries the file context
-            // (`files=N last=...`). We keep `total` as the batch's
-            // chunk total so the bar reads as ongoing work rather than
-            // a frozen file counter.
+            // Option A: the embed phase runs AFTER BM25 indexing. The first
+            // EmbedBatch means BM25 has been committed and is searchable
+            // (facade.rs commits before each embed flush), so flip the
+            // status to Idle now. preflight maps Idle -> ready, so the
+            // overlay unlocks and the slow embed forward-pass finishes in
+            // the background instead of pinning Building for minutes (the
+            // original heavy-drive wedge). `embedding: Some` carries
+            // file-based progress for a passive status chip; reconcile_idle
+            // clears it to None when the pass returns.
             ProgressStage::EmbedBatch => {
-                // The pill template wraps `file` in parens, so keep the
-                // embed label a bare phrase ("embedding") rather than
-                // re-wrapping the producer's `files=N last=...` blob
-                // (which would render as nested parens). The chunk
-                // counters still animate the bar; the phrase tells the
-                // user this is the embed phase, not a stuck file
-                // counter.
-                let current = event.current as usize;
-                let total = event.total as usize;
+                let (done, total) = {
+                    let mut p = self.embed.lock().unwrap();
+                    p.started = true;
+                    (p.files_done, p.files_total)
+                };
+                let embedding = Some(EmbedProgress { done, total });
+                // Read live stats so the chip shows the growing index. If
+                // the workspace is gone (reset/shutdown) fall back to a
+                // zeroed Idle rather than dropping the embedding signal.
+                let idle = match self.workspace.upgrade() {
+                    Some(ws) => match ws.index_stats() {
+                        Ok(st) => IndexStatus::Idle {
+                            indexed_docs: st.indexed_docs,
+                            indexed_vectors: st.indexed_vectors,
+                            model: st.model,
+                            embedding,
+                        },
+                        Err(_) => IndexStatus::Idle {
+                            indexed_docs: 0,
+                            indexed_vectors: 0,
+                            model: chan_workspace::DEFAULT_MODEL.to_owned(),
+                            embedding,
+                        },
+                    },
+                    None => IndexStatus::Idle {
+                        indexed_docs: 0,
+                        indexed_vectors: 0,
+                        model: chan_workspace::DEFAULT_MODEL.to_owned(),
+                        embedding,
+                    },
+                };
                 if let Ok(mut s) = self.status.lock() {
-                    *s = IndexStatus::Building {
-                        current,
-                        total,
-                        file: "embedding".to_owned(),
-                    };
+                    *s = idle;
                 }
             }
             // Model load, contact import, reset, rename rewrite,
@@ -869,6 +944,7 @@ fn reconcile_idle(
                     indexed_docs: 0,
                     indexed_vectors: 0,
                     model: chan_workspace::DEFAULT_MODEL.to_owned(),
+                    embedding: None,
                 };
             }
         }
@@ -886,6 +962,7 @@ fn set_idle(
                 indexed_docs: s.indexed_docs,
                 indexed_vectors: s.indexed_vectors,
                 model: s.model,
+                embedding: None,
             };
             let mut telemetry = telemetry.lock().unwrap();
             telemetry.last_settled_at = Some(now_unix());
@@ -1129,6 +1206,7 @@ mod tests {
             indexed_docs: 3,
             indexed_vectors: 0,
             model: "bm25".to_string(),
+            embedding: None,
         };
         let mut telemetry = IndexerTelemetry {
             queue_depth: 0,
@@ -1196,41 +1274,70 @@ mod tests {
     }
 
     #[test]
-    fn embed_batch_progress_keeps_the_pill_moving() {
-        // Bug 9: the embed phase fires AFTER the last IndexFile tick.
-        // Pre-fix it hit the `_ => {}` arm so the status froze at the
-        // final `IndexFile` label (`total-1/total`) for the whole embed
-        // pass, which looks like a stuck reindex. The fix maps
-        // EmbedBatch onto `Building` so the pill animates until the
-        // build resolves to Idle.
+    fn embed_batch_flips_to_idle_background_embedding() {
+        // Option A: BM25 is committed before the embed flush (facade.rs),
+        // so the first EmbedBatch flips the status from Building to
+        // Idle{embedding:Some}. preflight maps Idle -> ready, so the
+        // overlay unlocks while the slow embed pass finishes in the
+        // background instead of pinning Building for minutes. File-progress
+        // for the chip comes from the preceding IndexFile ticks.
         let status = Arc::new(Mutex::new(IndexStatus::Building {
-            current: 1999,
-            total: 2000,
-            file: "notes/note-999.md".to_owned(),
+            current: 0,
+            total: 0,
+            file: String::new(),
         }));
         let updater = StatusUpdater {
             status: status.clone(),
             forward: Arc::new(chan_workspace::NoProgress),
+            // No live workspace: the EmbedBatch arm falls back to a zeroed
+            // Idle but still carries the embedding signal.
+            workspace: Weak::new(),
+            embed: Mutex::new(EmbedPhaseState::default()),
         };
+        // A foreground IndexFile tick gates preflight (Building) and seeds
+        // the file counters.
+        updater.on_progress(progress_event(
+            ProgressStage::IndexFile,
+            120,
+            512,
+            "notes/note-120.md",
+        ));
+        assert!(matches!(
+            &*status.lock().unwrap(),
+            IndexStatus::Building {
+                current: 120,
+                total: 512,
+                ..
+            }
+        ));
+        // The first EmbedBatch means BM25 is ready: flip to Idle+embedding.
         updater.on_progress(progress_event(
             ProgressStage::EmbedBatch,
             4096,
             8192,
-            "files=512 last=notes/note-1999.md",
+            "files=512 last=notes/note-511.md",
         ));
-        let snapshot = status.lock().unwrap().clone();
-        match snapshot {
-            IndexStatus::Building {
-                current,
-                total,
-                file,
+        match status.lock().unwrap().clone() {
+            IndexStatus::Idle {
+                embedding: Some(p), ..
             } => {
-                assert_eq!(current, 4096);
-                assert_eq!(total, 8192);
-                assert_eq!(file, "embedding", "embed phase label");
+                assert_eq!(p.done, 120, "file-based embed progress, not chunk count");
+                assert_eq!(p.total, 512);
             }
-            other => panic!("expected Building during embed, got {other:?}"),
+            other => panic!("expected Idle+embedding after EmbedBatch, got {other:?}"),
         }
+        // A later interleaved IndexFile tick must NOT revert to Building
+        // (preflight must stay unlocked); it only advances the counters.
+        updater.on_progress(progress_event(
+            ProgressStage::IndexFile,
+            300,
+            512,
+            "notes/note-300.md",
+        ));
+        assert!(
+            matches!(&*status.lock().unwrap(), IndexStatus::Idle { .. }),
+            "interleaved IndexFile after embed start must stay Idle"
+        );
     }
 
     #[test]
@@ -1245,6 +1352,8 @@ mod tests {
         let updater = StatusUpdater {
             status: status.clone(),
             forward: Arc::new(chan_workspace::NoProgress),
+            workspace: Weak::new(),
+            embed: Mutex::new(EmbedPhaseState::default()),
         };
         updater.on_progress(progress_event(ProgressStage::ModelLoad, 1, 3, "resolve"));
         assert!(matches!(

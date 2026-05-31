@@ -638,6 +638,21 @@ impl Index {
                     let rel_for_label = msg.rel.clone();
                     pending.push((msg.rel, chunks));
                     if pending_chunks >= budget.embed_batch_chunks {
+                        // Commit + reload BM25 BEFORE the (slow, CPU-bound)
+                        // embed forward pass. The embed flush can run for
+                        // minutes on a large workspace; without this commit
+                        // BM25 stays invisible to search the whole time and
+                        // the server (which reports BM25-ready at the first
+                        // EmbedBatch so preflight unlocks) would answer
+                        // queries with an empty index. Committing here makes
+                        // every file indexed so far searchable, and frees the
+                        // BM25 writer so a concurrent draft edit's index_one
+                        // is not starved behind the embed pass. Embeddings
+                        // remain a background refinement (bm25 -> hybrid once
+                        // vectors land). Emit the EmbedBatch progress event
+                        // AFTER the commit so the status snapshot reads the
+                        // freshly-committed doc count (not a stale zero).
+                        self.bm25.commit()?;
                         progress.on_progress(ProgressEvent {
                             stage: ProgressStage::EmbedBatch,
                             current: pending_chunks as u64,
@@ -676,6 +691,12 @@ impl Index {
                 }
             }
             let last = pending.last().map(|(r, _)| r.clone()).unwrap_or_default();
+            // By the tail flush the drain loop has BM25-indexed every file;
+            // commit so the FULL BM25 index is searchable before the final
+            // (slow) embed batch runs (same rationale as the in-loop commit
+            // above), and emit the progress event after the commit so the
+            // status reads the final committed doc count.
+            self.bm25.commit()?;
             progress.on_progress(ProgressEvent {
                 stage: ProgressStage::EmbedBatch,
                 current: pending_chunks as u64,
