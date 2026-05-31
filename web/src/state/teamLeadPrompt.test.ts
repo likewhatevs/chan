@@ -10,10 +10,14 @@ import { layout, type LeafNode, type TerminalTab } from "./tabs.svelte";
 // its tabs, so the orchestrator mutates the PROXY, not the raw
 // object passed to resetLayout. Re-read the lead tab from the
 // layout to observe those mutations (mirrors tabs.test.ts).
+// After the consolidate the lead is a freshly-spawned terminal (the
+// Cmd+P "lead-tab" placeholder is closed), so find the surviving terminal
+// tab rather than the placeholder id. In tabs mode the lead is the first
+// terminal in the pane.
 function leadFromLayout(): TerminalTab {
   const node = layout.nodes["pane-test"];
   if (!node || node.kind !== "leaf") throw new Error("no lead pane");
-  const tab = node.tabs.find((t) => t.id === "lead-tab");
+  const tab = node.tabs.find((t) => t.kind === "terminal");
   if (!tab || tab.kind !== "terminal") throw new Error("no lead tab");
   return tab;
 }

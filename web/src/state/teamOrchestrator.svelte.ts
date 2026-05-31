@@ -19,6 +19,7 @@ import { teamConfigDir } from "./teamConfigPath";
 import {
   allTerminalTabs,
   buildSplitGrid,
+  closeTab,
   layout,
   openTerminalInPane,
   primeTeamWork,
@@ -248,38 +249,38 @@ export function identityPrompt(
   );
 }
 
-/// Locate a terminal tab by id within a specific pane. Used to pin
-/// the existing Team Work Lead tab the dialog handed us.
-function leadTabIn(paneId: string, tabId: string): TerminalTab | null {
-  const node = layout.nodes[paneId];
-  if (!node || node.kind !== "leaf") return null;
-  const tab = node.tabs.find((t) => t.id === tabId);
-  return tab && tab.kind === "terminal" ? tab : null;
-}
-
-/// Launch the lead agent INTO the existing lead tab. The tab already
-/// holds a shell PTY from Cmd+P; restart it with the lead's command +
-/// env so the agent runs in place. When the PTY hasn't attached yet
-/// (no session id), best-effort renames the tab so its
-/// `CHAN_TAB_NAME` is correct when the WS handshake eventually
-/// spawns the shell, the orchestrator's restart is skipped and the
-/// user re-runs the command if needed.
+/// Launch the lead agent by spawning a FRESH session running the agent
+/// into the lead's pane and dropping the Cmd+P placeholder shell - the
+/// SAME spawn+mount path the workers use (one create path, TEAM-CONSOLIDATE).
+///
+/// We do NOT restart the placeholder in place. The orchestrator's
+/// external `api.restartTerminal` closes the lead's session but never
+/// flips the lead `TerminalTab` to "connecting" (only a component-
+/// initiated restart does, e.g. the UI restart button), so the SPA shows
+/// "session ended (explicit)" and never reattaches - smoke-confirmed: the
+/// lead agent never came up while workers (fresh spawns) did. A fresh
+/// spawn yields a fresh `TerminalTab` mount bound to the new session, so
+/// the lead agent launches exactly like a worker's.
 async function launchLead(
-  leadTab: TerminalTab,
+  ctx: TeamBootstrapContext,
   lead: TeamMemberWire,
-): Promise<void> {
-  renameTerminalTab(leadTab, lead.handle);
-  if (!leadTab.terminalSessionId) {
-    // No PTY yet: the rename is enough; the agent command can't be
-    // injected without a session. This is an edge case (the user
-    // would have to Bootstrap faster than the WS handshake).
-    return;
-  }
-  await api.restartTerminal(leadTab.terminalSessionId, {
+): Promise<TerminalTab> {
+  const response = await api.spawnTerminal({
     name: lead.handle,
     command: lead.command,
     env: lead.env,
   });
+  const tab = openTerminalInPane(ctx.leadPaneId, {
+    sessionId: response.session,
+    title: response.tab_label,
+  });
+  if (!tab) throw new Error("failed to open the lead terminal");
+  renameTerminalTab(tab, lead.handle);
+  // Drop the Cmd+P placeholder shell + its session. Force-close so no
+  // confirm modal blocks the bootstrap; done AFTER opening the fresh lead
+  // so the lead pane is never momentarily empty.
+  await closeTab(ctx.leadPaneId, ctx.leadTabId, { force: true });
+  return tab;
 }
 
 /// Resolve the target pane for each worker (by member index) +
@@ -328,10 +329,9 @@ export async function runTeamBootstrap(
   if (!leadEntry) throw new Error("config has no lead member");
   const workerEntries = wire.members.filter((m) => !m.is_lead);
 
-  // 2a. Launch the LEAD FIRST into the existing lead tab.
-  const leadTab = leadTabIn(ctx.leadPaneId, ctx.leadTabId);
-  if (!leadTab) throw new Error("lead terminal not found");
-  await launchLead(leadTab, leadEntry);
+  // 2a. Launch the LEAD FIRST: spawn a fresh agent session into the
+  //     lead's pane and drop the Cmd+P placeholder (same path as workers).
+  const leadTab = await launchLead(ctx, leadEntry);
 
   // 2b. Resolve real estate + spawn the workers into new tabs.
   const workerPanes = resolveWorkerPanes(config, ctx.leadPaneId);

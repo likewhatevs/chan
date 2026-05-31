@@ -57,6 +57,15 @@ function tabFromLayout(id: string): TerminalTab {
   return tab;
 }
 
+// After the consolidate the lead is a freshly-spawned terminal (the
+// Cmd+P "lead-tab" placeholder is closed), identified as the terminal
+// whose Team Work editor the orchestrator primed.
+function leadFromLayout(): TerminalTab {
+  const tab = allTerminalTabs().find((t) => t.teamWork?.open === true);
+  if (!tab) throw new Error("no lead tab (teamWork-primed terminal)");
+  return tab;
+}
+
 function tabsConfig(): TeamDialogConfig {
   return {
     hostName: "Neo",
@@ -112,37 +121,37 @@ describe("runTeamBootstrap: lead-first flow", () => {
     expect(write.mock.calls[0][0]).toBe("/tmp/new-team-1/chan-team.toml");
   });
 
-  test("launches the LEAD agent into the existing tab via restart (no close/respawn)", async () => {
+  test("launches the LEAD agent by spawning a fresh session (not restart-in-place)", async () => {
     resetLayoutWithLead(leadTerminalTab());
-    const { restart } = mockApi();
-    const close = vi.spyOn(api, "closeTerminal");
+    const { restart, spawn } = mockApi();
     await runTeamBootstrap(tabsConfig(), {
       leadTabId: "lead-tab",
       leadPaneId: "pane-test",
     });
-    // Lead is launched by restarting the EXISTING session with the
-    // lead command + env, never closed/respawned.
-    expect(restart).toHaveBeenCalledWith(
-      "lead-session",
-      expect.objectContaining({ name: "@@Lead", command: "claude" }),
-    );
-    expect(close).not.toHaveBeenCalled();
-    // The lead tab is renamed in place (same tab id).
-    expect(tabFromLayout("lead-tab").title).toBe("@@Lead");
+    // The lead spawns FRESH (first spawn call) with its command + env -
+    // the worker path - never restart-in-place (the broken reattach).
+    expect(restart).not.toHaveBeenCalled();
+    expect(spawn.mock.calls[0][0]).toMatchObject({ name: "@@Lead", command: "claude" });
+    // The Cmd+P placeholder is dropped; the fresh lead tab is named the
+    // lead handle.
+    expect(allTerminalTabs().some((t) => t.id === "lead-tab")).toBe(false);
+    expect(leadFromLayout().title).toBe("@@Lead");
   });
 
-  test("spawns one new tab per worker", async () => {
+  test("spawns one fresh tab for the lead and each worker (one create path)", async () => {
     resetLayoutWithLead(leadTerminalTab());
     const { spawn } = mockApi();
     await runTeamBootstrap(tabsConfig(), {
       leadTabId: "lead-tab",
       leadPaneId: "pane-test",
     });
-    expect(spawn).toHaveBeenCalledTimes(2);
-    expect(spawn.mock.calls[0][0]).toMatchObject({ name: "@@Worker1" });
-    expect(spawn.mock.calls[1][0]).toMatchObject({ name: "@@Worker2" });
-    // Lead tab + two worker tabs all live in the active pane (tabs
-    // real estate).
+    // Lead spawns first, then the two workers - the consolidated path.
+    expect(spawn).toHaveBeenCalledTimes(3);
+    expect(spawn.mock.calls[0][0]).toMatchObject({ name: "@@Lead" });
+    expect(spawn.mock.calls[1][0]).toMatchObject({ name: "@@Worker1" });
+    expect(spawn.mock.calls[2][0]).toMatchObject({ name: "@@Worker2" });
+    // Fresh lead tab + two worker tabs in the active pane (the Cmd+P
+    // placeholder is dropped), so still three terminals.
     expect(allTerminalTabs()).toHaveLength(3);
   });
 
@@ -153,7 +162,7 @@ describe("runTeamBootstrap: lead-first flow", () => {
       leadTabId: "lead-tab",
       leadPaneId: "pane-test",
     });
-    const lead = tabFromLayout("lead-tab");
+    const lead = leadFromLayout();
     expect(lead.teamWork?.open).toBe(true);
     expect(lead.teamWork?.buffer).toContain("# Team work");
     expect(lead.teamWork?.buffer).toContain("We are a team of 3");
@@ -170,11 +179,12 @@ describe("runTeamBootstrap: lead-first flow", () => {
       leadTabId: "lead-tab",
       leadPaneId: "pane-test",
     });
-    const members = new Set(terminalBroadcastMemberIds(tabFromLayout("lead-tab")));
+    const lead = leadFromLayout();
+    const members = new Set(terminalBroadcastMemberIds(lead));
     const all = allTerminalTabs();
-    const workerIds = all.filter((t) => t.id !== "lead-tab").map((t) => t.id);
+    const workerIds = all.filter((t) => t.id !== lead.id).map((t) => t.id);
     // Lead + both workers are broadcast members; nothing else.
-    expect(members).toEqual(new Set(["lead-tab", ...workerIds]));
+    expect(members).toEqual(new Set([lead.id, ...workerIds]));
     // Every team tab reads back as broadcast-enabled.
     for (const tab of all) {
       expect(tab.broadcastEnabled).toBe(true);
@@ -212,18 +222,7 @@ describe("runTeamBootstrap: lead-first flow", () => {
     });
     // The stray is no longer in any broadcast group.
     expect(tabFromLayout("stray").broadcastEnabled).toBe(false);
-    const members = new Set(terminalBroadcastMemberIds(tabFromLayout("lead-tab")));
+    const members = new Set(terminalBroadcastMemberIds(leadFromLayout()));
     expect(members.has("stray")).toBe(false);
-  });
-
-  test("throws when the lead tab is missing (so the dialog surfaces the error)", async () => {
-    resetLayoutWithLead(leadTerminalTab());
-    mockApi();
-    await expect(
-      runTeamBootstrap(tabsConfig(), {
-        leadTabId: "does-not-exist",
-        leadPaneId: "pane-test",
-      }),
-    ).rejects.toThrow(/lead terminal not found/);
   });
 });
