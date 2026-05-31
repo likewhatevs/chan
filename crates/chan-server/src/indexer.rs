@@ -852,10 +852,9 @@ impl ProgressCallback for StatusUpdater {
                 // Before the first embed flush this is the foreground
                 // BM25/graph pass, which legitimately gates preflight ->
                 // Building. After it, BM25 is searchable and embeddings are
-                // a background refinement, so we leave the status at
-                // Idle{embedding} (set in the EmbedBatch arm) and only keep
-                // the counters above fresh; reverting to Building here would
-                // re-lock preflight on every interleaved IndexFile tick.
+                // a background refinement, so we must NOT revert to Building
+                // (that would re-lock preflight on every interleaved
+                // IndexFile tick).
                 if !started {
                     let file = event.label.clone().unwrap_or_default();
                     if let Ok(mut s) = self.status.lock() {
@@ -864,6 +863,25 @@ impl ProgressCallback for StatusUpdater {
                             total,
                             file,
                         };
+                    }
+                } else if let Ok(mut s) = self.status.lock() {
+                    // CHIP UX: post-embed-start IndexFile ticks fire between
+                    // the (slow, infrequent) embed flushes. Refresh the chip
+                    // progress in place so it ADVANCES per file during the
+                    // fast drain windows instead of only stepping on each
+                    // embed flush (which on a big workspace are minutes
+                    // apart and made the chip look frozen). Free: no extra
+                    // index_stats read, just the counter the IndexFile tick
+                    // already carries. Cap `done` below `total` so the chip
+                    // never reads "done" (total/total) while the tail embed
+                    // is still running; reconcile_idle clears it to None when
+                    // the pass actually returns.
+                    if let IndexStatus::Idle { embedding, .. } = &mut *s {
+                        let done = current.min(total.saturating_sub(1)) as u32;
+                        *embedding = Some(EmbedProgress {
+                            done,
+                            total: total as u32,
+                        });
                     }
                 }
             }
