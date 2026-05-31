@@ -2203,8 +2203,14 @@ fn render_search_markdown(raw: &str) -> Result<String> {
         }
         let snippet = str_field(h, "snippet");
         if !snippet.is_empty() {
-            // Collapse newlines so one hit stays on one logical block.
-            let flat = snippet.replace('\n', " ");
+            // The BM25 snippet highlights matches with `<b>...</b>` (the
+            // markup the frontend renders); convert to markdown `**bold**`
+            // for this markdown output. Collapse newlines so one hit stays
+            // on one logical block.
+            let flat = snippet
+                .replace('\n', " ")
+                .replace("<b>", "**")
+                .replace("</b>", "**");
             out.push_str(&format!("  {}\n", flat.trim()));
         }
     }
@@ -3323,6 +3329,16 @@ mod tests {
             pick_workspace_root(roots, Path::new("/tmp/elsewhere/x.md")),
             None
         );
+    }
+
+    #[test]
+    fn search_markdown_converts_bold_highlight_and_locator() {
+        let raw = r#"{"hits":[{"path":"a.md","start_line":3,"heading":"H","snippet":"the <b>fox</b> ran"}]}"#;
+        let out = render_search_markdown(raw).expect("render");
+        assert!(out.contains("- a.md:3 - H"), "locator: {out}");
+        // <b>...</b> highlight -> markdown **bold**.
+        assert!(out.contains("the **fox** ran"), "bold: {out}");
+        assert!(!out.contains("<b>"), "no raw html: {out}");
     }
 
     fn ipv4(s: &str) -> IpAddr {
