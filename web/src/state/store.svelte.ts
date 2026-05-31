@@ -1616,18 +1616,6 @@ export function openGraphForWorkspace(): void {
   scheduleSessionSave();
 }
 
-export function openLanguageGraphForWorkspace(): void {
-  const tab = openGraphInActivePane({
-    mode: "language",
-    scopeId: "workspace",
-    depth: 0,
-    pendingSelectId: null,
-    title: "Languages",
-  });
-  tab.filters.language = true;
-  scheduleSessionSave();
-}
-
 /** Open the graph overlay at workspace scope and pre-select the given
  *  node so its connections render in the inspector immediately.
  *  Used by tag/mention/date chips outside the graph (file browser

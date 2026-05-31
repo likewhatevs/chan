@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { commonAncestor, parentDir, scopeKey } from "./scope.svelte";
+import { parentDir, scopeKey } from "./scope.svelte";
 
 describe("scopeKey", () => {
   test("sorts and joins with pipe", () => {
@@ -34,35 +34,5 @@ describe("parentDir", () => {
 
   test("folder with trailing path component", () => {
     expect(parentDir("notes/2024")).toBe("notes");
-  });
-});
-
-describe("commonAncestor", () => {
-  test("empty input → empty string", () => {
-    expect(commonAncestor([])).toBe("");
-  });
-
-  test("single file → that file's parent dir", () => {
-    expect(commonAncestor(["notes/today.md"])).toBe("notes");
-  });
-
-  test("two siblings → their parent", () => {
-    expect(commonAncestor(["notes/a.md", "notes/b.md"])).toBe("notes");
-  });
-
-  test("two cousins → grandparent", () => {
-    expect(commonAncestor(["a/x/1.md", "a/y/2.md"])).toBe("a");
-  });
-
-  test("disjoint top-level files → empty string", () => {
-    expect(commonAncestor(["one.md", "two.md"])).toBe("");
-  });
-
-  test("mixed depth shares deepest common dir", () => {
-    expect(commonAncestor(["a/b/c.md", "a/b/d/e.md"])).toBe("a/b");
-  });
-
-  test("paths under different top-level dirs → empty", () => {
-    expect(commonAncestor(["docs/intro.md", "notes/today.md"])).toBe("");
   });
 });
