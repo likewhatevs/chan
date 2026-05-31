@@ -67,6 +67,12 @@ pub enum ControlRequest {
         data: String,
     },
     TermList,
+    TermRestart {
+        #[serde(default)]
+        tab_name: Option<String>,
+        #[serde(default)]
+        tab_group: Option<String>,
+    },
 }
 
 #[cfg(unix)]
@@ -334,6 +340,21 @@ fn handle_request(
             };
             into_response(term_list(registry))
         }
+        ControlRequest::TermRestart {
+            tab_name,
+            tab_group,
+        } => {
+            let Some(registry) = terminal_registry else {
+                return ControlResponse::Error {
+                    message: "terminal registry unavailable".into(),
+                };
+            };
+            into_response(term_restart(
+                registry,
+                tab_name.as_deref(),
+                tab_group.as_deref(),
+            ))
+        }
     }
 }
 
@@ -500,6 +521,30 @@ fn term_write(
         return Err("no live terminal session matched".into());
     }
     Ok(format!("wrote to {written} terminal session(s)"))
+}
+
+/// Category 2: restart the matching live PTY sessions, preserving each
+/// session's spawn command + env (so an agent relaunches). At least one
+/// selector is required, mirroring `term_write`. This is the out-of-band
+/// server path the Team Work self-restart needs: the bootstrap script
+/// runs `cs terminal restart` against its own tab, and the server
+/// respawns that session because a shell cannot restart itself.
+#[cfg(unix)]
+fn term_restart(
+    registry: &TerminalRegistry,
+    tab_name: Option<&str>,
+    tab_group: Option<&str>,
+) -> Result<String, String> {
+    if tab_name.is_none() && tab_group.is_none() {
+        return Err("term restart needs a tab name and/or group selector".into());
+    }
+    let restarted = registry
+        .restart_matching(tab_name, tab_group)
+        .map_err(|e| format!("restart failed: {e}"))?;
+    if restarted == 0 {
+        return Err("no live terminal session matched".into());
+    }
+    Ok(format!("restarted {restarted} terminal session(s)"))
 }
 
 /// Category 2: list live terminal sessions as JSON, grouped by group.
@@ -862,5 +907,19 @@ mod tests {
         let json = term_list(&registry).expect("term list");
         let value: Value = serde_json::from_str(&json).expect("json");
         assert_eq!(value["groups"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn term_restart_requires_a_selector() {
+        let (_root, registry) = empty_registry();
+        let err = term_restart(&registry, None, None).expect_err("no selector");
+        assert!(err.contains("selector"), "got: {err}");
+    }
+
+    #[test]
+    fn term_restart_reports_no_match_on_an_empty_registry() {
+        let (_root, registry) = empty_registry();
+        let err = term_restart(&registry, Some("nope"), None).expect_err("no match");
+        assert!(err.contains("no live terminal session"), "got: {err}");
     }
 }

@@ -397,6 +397,54 @@ impl Registry {
         written
     }
 
+    /// Restart every live session matching the given tab name and/or
+    /// group, for `cs terminal restart`. Same selector semantics as
+    /// `write_input_matching` (a `None` axis matches all; both narrow to
+    /// the intersection). Returns how many sessions were restarted.
+    ///
+    /// Passing `None` for every `restart()` override preserves each
+    /// session's spawn command + env, so a session launched with an agent
+    /// startup command relaunches that agent. This is the out-of-band
+    /// server path the Team Work self-restart needs: a shell cannot
+    /// restart the very shell running its own bootstrap script, but the
+    /// server can. Ids are collected under the lock and restarted after it
+    /// is dropped, since `restart()` re-locks the registry internally.
+    pub fn restart_matching(
+        &self,
+        tab_name: Option<&str>,
+        tab_group: Option<&str>,
+    ) -> Result<usize, CreateError> {
+        let ids: Vec<String> = {
+            let sessions = self.sessions.lock().expect("terminal registry poisoned");
+            sessions
+                .values()
+                .filter(|session| !session.closed.load(Ordering::Relaxed))
+                .filter(|session| match tab_name {
+                    Some(name) => session.tab_name.as_deref() == Some(name),
+                    None => true,
+                })
+                .filter(|session| match tab_group {
+                    Some(group) => {
+                        session
+                            .tab_group
+                            .as_deref()
+                            .unwrap_or(DEFAULT_TERMINAL_GROUP)
+                            == group
+                    }
+                    None => true,
+                })
+                .map(|session| session.id.clone())
+                .collect()
+        };
+        let mut restarted = 0;
+        for id in &ids {
+            if self.restart(id, None, None, None, None, None)? {
+                restarted += 1;
+            }
+        }
+        Ok(restarted)
+    }
+
     pub fn close_all(&self, reason: CloseReason) {
         let sessions: Vec<Arc<Session>> = self
             .sessions

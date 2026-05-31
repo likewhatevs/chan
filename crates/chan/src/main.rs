@@ -170,6 +170,11 @@ enum Command {
     /// To enable the short `cs` name, symlink it onto your PATH once:
     ///   ln -s "$(command -v chan)" ~/.local/bin/cs
     /// chan ships no symlink; this is the only setup it needs.
+    ///
+    /// iproute2-style prefix matching: the cs actions disambiguate on
+    /// their first letter, so `cs o` / `cs g` / `cs d` / `cs t` resolve
+    /// to open / graph / dashboard / terminal.
+    #[command(infer_subcommands = true)]
     Shell {
         #[command(subcommand)]
         action: ShellAction,
@@ -445,6 +450,10 @@ enum ShellAction {
         carousel_index: Option<u32>,
     },
     /// Terminal operations against the current window's live sessions.
+    ///
+    /// Prefix matching applies here too: `cs t n` / `cs t w` / `cs t l`
+    /// resolve to terminal new / write / list.
+    #[command(infer_subcommands = true)]
     Terminal {
         #[command(subcommand)]
         action: TerminalAction,
@@ -484,8 +493,30 @@ enum TerminalAction {
         #[arg(long = "tab-group")]
         tab_group: Option<String>,
     },
-    /// List live terminal sessions as JSON, grouped by group.
-    List,
+    /// List live terminal sessions, grouped by group. Markdown by
+    /// default; `--json` for compact machine output, `--json --pretty`
+    /// for indented JSON.
+    List {
+        /// Emit machine-readable JSON instead of the markdown table.
+        #[arg(long)]
+        json: bool,
+        /// Indent the JSON output. Only meaningful with `--json`.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Restart live terminal session(s) selected by name and/or group,
+    /// preserving each session's spawn command and env so an agent
+    /// relaunches. At least one selector is required. Used by the Team
+    /// Work bootstrap to restart its own terminal (a shell cannot restart
+    /// the shell running its own script; the server does it out of band).
+    Restart {
+        /// Restart every session with this tab name.
+        #[arg(long = "tab-name")]
+        tab_name: Option<String>,
+        /// Restart every session in this group.
+        #[arg(long = "tab-group")]
+        tab_group: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1879,6 +1910,12 @@ enum ControlRequest {
         data: String,
     },
     TermList,
+    TermRestart {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tab_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tab_group: Option<String>,
+    },
 }
 
 #[cfg(unix)]
@@ -2061,14 +2098,89 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             eprintln!("{message}");
             Ok(())
         }
-        TerminalAction::List => {
+        TerminalAction::List { json, pretty } => {
             let socket = control_socket_env()?;
-            // The registry JSON goes to stdout so it pipes cleanly.
-            let json = send_control_request(&socket, ControlRequest::TermList).await?;
-            println!("{json}");
+            let raw = send_control_request(&socket, ControlRequest::TermList).await?;
+            if json {
+                // Compact by default; --pretty re-indents. Both go to
+                // stdout so the output pipes cleanly.
+                if pretty {
+                    let value: serde_json::Value =
+                        serde_json::from_str(&raw).context("parsing terminal list JSON")?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&value)
+                            .context("formatting terminal list JSON")?
+                    );
+                } else {
+                    println!("{raw}");
+                }
+            } else {
+                print!("{}", render_terminal_list_markdown(&raw)?);
+            }
+            Ok(())
+        }
+        TerminalAction::Restart {
+            tab_name,
+            tab_group,
+        } => {
+            if tab_name.is_none() && tab_group.is_none() {
+                anyhow::bail!("cs terminal restart needs --tab-name and/or --tab-group");
+            }
+            let socket = control_socket_env()?;
+            let message = send_control_request(
+                &socket,
+                ControlRequest::TermRestart {
+                    tab_name,
+                    tab_group,
+                },
+            )
+            .await?;
+            eprintln!("{message}");
             Ok(())
         }
     }
+}
+
+/// Render the `cs terminal list` registry JSON
+/// (`{groups: {group: [{name, session_id, cwd}]}}`) as a markdown table
+/// grouped by terminal group. This is the default human output; `--json`
+/// emits the raw payload instead. An empty registry yields a short line
+/// rather than a blank table.
+fn render_terminal_list_markdown(raw: &str) -> Result<String> {
+    let value: serde_json::Value =
+        serde_json::from_str(raw).context("parsing terminal list JSON")?;
+    let groups = value
+        .get("groups")
+        .and_then(|g| g.as_object())
+        .ok_or_else(|| anyhow::anyhow!("terminal list JSON missing `groups`"))?;
+    if groups.is_empty() {
+        return Ok("No live terminal sessions.\n".to_string());
+    }
+    let str_field = |s: &serde_json::Value, key: &str| {
+        s.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("-")
+            .to_string()
+    };
+    let mut out = String::new();
+    for (group, sessions) in groups {
+        out.push_str(&format!("## {group}\n\n"));
+        out.push_str("| name | session | cwd |\n");
+        out.push_str("| --- | --- | --- |\n");
+        if let Some(arr) = sessions.as_array() {
+            for s in arr {
+                out.push_str(&format!(
+                    "| {} | {} | {} |\n",
+                    str_field(s, "name"),
+                    str_field(s, "session_id"),
+                    str_field(s, "cwd"),
+                ));
+            }
+        }
+        out.push('\n');
+    }
+    Ok(out)
 }
 
 #[cfg(unix)]
