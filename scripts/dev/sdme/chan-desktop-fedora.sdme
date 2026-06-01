@@ -1,0 +1,69 @@
+# chan-desktop-fedora (dev): Fedora base carrying the Tauri build deps and
+# the Rust toolchain, for building the chan-desktop AppImage/.rpm locally on
+# Linux and on macOS (via lima-vm hosting sdme). The Fedora sibling of
+# chan-desktop-ubuntu.sdme; same structure, dnf package names instead of apt.
+#
+# Prerequisite: the base `fedora` rootfs must be imported once (the driver
+# only builds chan-desktop-fedora from this template, it does not import the
+# base):
+#   limactl shell default sudo sdme fs import fedora docker.io/fedora
+#
+# Build: limactl shell default sudo sdme fs build chan-desktop-fedora \
+#          chan-desktop-fedora.sdme    (-f to rebuild over an existing one)
+# Used by: make linux-chan-desktop DISTRO=fedora (root Makefile).
+#
+# tauri-cli is NOT baked here: desktop/Makefile installs it per-build into
+# the seeded repo's target/, so it tracks the repo's pin instead of going
+# stale in the rootfs. The pinned compiler (rust-toolchain.toml) likewise
+# auto-installs on the first cargo call against the seeded repo; baking the
+# rustup default keeps cargo ready without coupling the rootfs to the pin.
+#
+# Apple Silicon note: on an aarch64 host this rootfs and the emitted
+# AppImage are aarch64. That is enough to de-risk the bundler and verify
+# the cs -> chan-desktop symlink dispatch; CI's x86_64 runner owns the
+# canonical x86_64 desktop build.
+
+FROM fedora
+
+# The Fedora base ships no /etc/resolv.conf, and the `sdme fs build` RUN
+# environment does not have systemd-resolved running to populate one, so dnf
+# cannot resolve mirrors.fedoraproject.org (the Ubuntu base avoids this by
+# shipping a static resolv.conf). Write a public resolver before the first dnf
+# call. The build container has network egress (the base import pulled OCI
+# layers); only name resolution is missing. Public resolvers are reachable on
+# both the lima (gVisor slirp) and native-Linux host paths.
+RUN printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+
+# Tauri Linux build deps (webkit2gtk4.1, appindicator-gtk3, librsvg2, soup3)
+# + node/npm for the embedded web bundle + the C toolchain + patchelf
+# (linuxdeploy rewrites rpaths). Fedora 44 names diverge from Ubuntu's:
+#   - the webkit dev package is webkit2gtk4.1-devel (4.0 was dropped);
+#   - libsoup3 is libsoup3-devel (no separate -3.0- suffix);
+#   - node is a versioned stream package (bare `nodejs` does not exist):
+#     nodejs20 ships node, nodejs20-npm ships npm.
+# The AppImage tooling needs three extra host tools: file (linuxdeploy
+# probes file types), desktop-file-utils (validates the .desktop entry),
+# and xdg-utils (the appimage plugin shells out to xdg-mime; without it the
+# bundle fails at the very end with "xdg-mime binary not found"). curl is
+# preinstalled in the Fedora base, so it is not listed (rustup uses it).
+RUN dnf install -y \
+        gcc gcc-c++ make pkgconf-pkg-config ca-certificates git file \
+        desktop-file-utils xdg-utils patchelf \
+        nodejs20 nodejs20-npm \
+        webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel \
+        librsvg2-devel libsoup3-devel openssl-devel && \
+    dnf clean all
+
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal && \
+    echo '. "$HOME/.cargo/env"' >> /root/.bashrc
+
+# linuxdeploy (the AppImage tooling Tauri downloads) bundles its own ancient
+# `strip` (binutils from its 2024 build). Fedora 44's shared libraries carry
+# the modern .relr.dyn relocation section, which that old strip cannot parse:
+# every strip call dies with "unknown type [0x13] section `.relr.dyn'" and the
+# AppImage step aborts after the deb + rpm already built. NO_STRIP=1 tells
+# linuxdeploy to skip stripping entirely (the libs are release-stripped by the
+# Rust build anyway). It is exported via /root/.cargo/env because the build
+# driver sources that file before `make chan-desktop`; the var is inert for
+# every tool except linuxdeploy, so a build-shell-global export is safe.
+RUN echo 'export NO_STRIP=1' >> /root/.cargo/env

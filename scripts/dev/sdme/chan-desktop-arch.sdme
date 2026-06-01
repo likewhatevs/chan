@@ -1,0 +1,83 @@
+# chan-desktop-arch (dev): Arch base carrying the Tauri build deps and the
+# Rust toolchain, for building the chan-desktop AppImage/.pkg.tar.zst locally
+# on Linux and on macOS (via lima-vm hosting sdme). The Arch sibling of
+# chan-desktop-ubuntu.sdme; same structure, pacman package names instead of
+# apt.
+#
+# Prerequisite: the base `arch` rootfs must be imported once (the driver only
+# builds chan-desktop-arch from this template, it does not import the base).
+# On an aarch64 host (Apple Silicon via lima) upstream Arch has no arm64
+# image, so use Arch Linux ARM, which is the same pacman userland:
+#   limactl shell default sudo sdme fs import arch docker.io/menci/archlinuxarm
+# On an x86_64 Linux host import the upstream image instead:
+#   sudo sdme fs import arch docker.io/archlinux
+#
+# Build: limactl shell default sudo sdme fs build chan-desktop-arch \
+#          chan-desktop-arch.sdme    (-f to rebuild over an existing one)
+# Used by: make linux-chan-desktop DISTRO=arch (root Makefile).
+#
+# tauri-cli is NOT baked here: desktop/Makefile installs it per-build into
+# the seeded repo's target/, so it tracks the repo's pin instead of going
+# stale in the rootfs. The pinned compiler (rust-toolchain.toml) auto-installs
+# on the first cargo call against the seeded repo; baking the rustup default
+# keeps cargo ready without coupling the rootfs to the pin. rustup (not Arch's
+# packaged `rust`) is used deliberately: the shared driver sources
+# /root/.cargo/env before `make chan-desktop`, which only exists under a
+# rustup install, so this matches ubuntu/fedora exactly.
+#
+# Apple Silicon note: on an aarch64 host this rootfs and the emitted AppImage
+# are aarch64. That is enough to de-risk the bundler and verify the cs ->
+# chan-desktop symlink dispatch; CI's x86_64 runner owns the canonical x86_64
+# desktop build.
+
+FROM arch
+
+# The `sdme fs build` RUN environment has no systemd-resolved running to
+# populate /etc/resolv.conf, so pacman cannot resolve the mirror hosts. Write
+# a public resolver before the first pacman call. The build container has
+# network egress (the base import pulled OCI layers); only name resolution is
+# missing. Public resolvers are reachable on both the lima (gVisor slirp) and
+# native-Linux host paths.
+RUN printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+
+# Tauri Linux build deps (webkit2gtk-4.1, ayatana-appindicator, librsvg,
+# soup3) + node/npm for the embedded web bundle + base-devel (gcc/make/etc.)
+# + patchelf (linuxdeploy rewrites rpaths). Rust comes from rustup below, not
+# from Arch's `rust` package. Arch names diverge from Ubuntu's:
+#   - the webkit dev headers live in the runtime package webkit2gtk-4.1
+#     (Arch does not split -dev/-devel);
+#   - the appindicator is libayatana-appindicator (the maintained fork Tauri 2
+#     links, matching ubuntu's libayatana-appindicator3-dev);
+#   - librsvg / libsoup3 carry no version suffix.
+# The AppImage tooling needs three extra host tools: file (linuxdeploy probes
+# file types), desktop-file-utils (validates the .desktop entry), and
+# xdg-utils (the appimage plugin shells out to xdg-mime; without it the bundle
+# fails at the very end with "xdg-mime binary not found").
+#
+# `pacman -Syu` first to avoid a partial-upgrade mismatch (Arch is rolling and
+# the base image's package db may lag the current mirrors).
+RUN pacman -Syu --noconfirm --needed \
+        base-devel pkgconf ca-certificates git file \
+        desktop-file-utils xdg-utils patchelf \
+        curl wget nodejs npm \
+        webkit2gtk-4.1 gtk3 libayatana-appindicator \
+        librsvg libsoup3 openssl && \
+    pacman -Scc --noconfirm
+
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal && \
+    echo '. "$HOME/.cargo/env"' >> /root/.bashrc
+
+# linuxdeploy bundles an old `strip` that cannot parse the modern .relr.dyn
+# relocation section (see chan-desktop-fedora.sdme for the full note). Arch is
+# rolling (gcc 16 / binutils 2.46), so it carries .relr.dyn too; NO_STRIP=1 is
+# required for the same reason fedora needs it.
+RUN echo 'export NO_STRIP=1' >> /root/.cargo/env
+
+# VALIDATION STATUS (phase-15 round-4): the .deb and .rpm bundles build + are
+# validated headless on aarch64. The AppImage step still fails at "failed to
+# run linuxdeploy" even with NO_STRIP=1 (tauri swallows linuxdeploy's stderr,
+# so the underlying cause is undiagnosed - likely an arch-specific
+# linuxdeploy-plugin-gtk or FUSE/extract-and-run gap). Capturing the real
+# error needs running linuxdeploy directly with verbose logging. Tracked as a
+# round-5 backlog item; the AppImage is redundant anyway (ubuntu + fedora both
+# emit the universal aarch64 AppImage).
