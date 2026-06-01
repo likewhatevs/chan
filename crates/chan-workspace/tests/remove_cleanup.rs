@@ -134,12 +134,25 @@ fn remove_directory_cascades_through_graph_and_index() {
         .unwrap();
     workspace.reindex(None).unwrap();
 
-    // Sanity: every editable-text node present, backlink to image exists.
+    // Sanity: every Markdown node present, backlink to image exists.
     let g = workspace.graph().unwrap();
     let files0 = g.files().unwrap();
     assert!(files0.iter().any(|p| p == "outside.md"));
     assert!(files0.iter().any(|p| p == "notes/inner.md"));
-    assert!(files0.iter().any(|p| p == "notes/other.txt"));
+    // .txt is editable + BM25-searchable but not a graph document, so it
+    // has no node; its removal/restore is verified through search below.
+    assert!(
+        !files0.iter().any(|p| p == "notes/other.txt"),
+        ".txt must not be a graph node: {files0:?}",
+    );
+    assert!(
+        !workspace
+            .search("sourdough", &SearchOpts::default())
+            .unwrap()
+            .hits
+            .is_empty(),
+        ".txt content should be BM25-searchable before removal",
+    );
     let img_back = g.backlinks("notes/media/diagram.png").unwrap();
     assert_eq!(img_back.len(), 1, "outside.md should backlink the image");
 
@@ -147,12 +160,12 @@ fn remove_directory_cascades_through_graph_and_index() {
     workspace.remove("notes").unwrap();
 
     let files1 = g.files().unwrap();
-    for gone in ["notes/inner.md", "notes/other.txt"] {
-        assert!(
-            !files1.iter().any(|p| p == gone),
-            "node {gone} still present after dir remove: {files1:?}",
-        );
-    }
+    // .txt was never a graph node; the Markdown node must be gone (the
+    // .txt's BM25 removal is asserted via search below).
+    assert!(
+        !files1.iter().any(|p| p == "notes/inner.md"),
+        "node notes/inner.md still present after dir remove: {files1:?}",
+    );
     assert!(
         files1.iter().any(|p| p == "outside.md"),
         "outside.md must survive a sibling-dir remove",
@@ -192,12 +205,12 @@ fn remove_directory_cascades_through_graph_and_index() {
     let id = workspace.trash_list().unwrap()[0].id.clone();
     workspace.trash_restore(&id).unwrap();
     let files2 = workspace.graph().unwrap().files().unwrap();
-    for back in ["notes/inner.md", "notes/other.txt"] {
-        assert!(
-            files2.iter().any(|p| p == back),
-            "{back} did not return to graph after restore: {files2:?}",
-        );
-    }
+    // The Markdown node returns to the graph; the .txt returns to BM25
+    // only (it is not a graph document), verified via search below.
+    assert!(
+        files2.iter().any(|p| p == "notes/inner.md"),
+        "notes/inner.md did not return to graph after restore: {files2:?}",
+    );
     assert!(!workspace
         .search("Unique-inner-token", &SearchOpts::default())
         .unwrap()

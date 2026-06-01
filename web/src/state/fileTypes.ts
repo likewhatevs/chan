@@ -12,9 +12,12 @@
 // previews before the watcher has indexed the new path).
 //
 // Three sets:
-//   - MARKDOWN_EXTENSIONS: .md / .txt. Markdown-class. Indexed by
-//     chan-workspace, parsed for graph edges + tokens. Maps to
-//     `FileClass::EditableText`.
+//   - MARKDOWN_EXTENSIONS: .md / .txt. Markdown-class, editable +
+//     BM25-searchable; maps to `FileClass::EditableText`. NOTE only
+//     Markdown (.md) is a graph "document" (graphed + wikilinked, the
+//     `document` wire kind); .txt is the `text` kind. classifyPath
+//     reflects that split; `isMarkdown` stays .md/.txt because the
+//     editor still renders both as markdown.
 //   - TEXT_EXTENSIONS: source code, configs, shell, markup, data.
 //     Maps to `FileClass::Text`. Editable through the UTF-8 gate
 //     but not indexed (false positives like `#include` looking
@@ -232,8 +235,14 @@ export function classifyPath(
   const ext = extOf(path);
   if (ext !== null) {
     if (IMAGE_EXTENSIONS.has(ext) || ext === "pdf") return "media";
-    if (MARKDOWN_EXTENSIONS.has(ext)) return "document";
-    if (TEXT_EXTENSIONS.has(ext)) return "text";
+    // Only Markdown (.md) is a graph "document". .txt is editable +
+    // searchable text but not a document node, so it rides the "text"
+    // wire kind -- mirroring the server's project_kind and
+    // chan-workspace's is_markdown_file. (.txt stays in
+    // MARKDOWN_EXTENSIONS because the editor still renders it as
+    // markdown via isMarkdown; that's a separate, editor-only concern.)
+    if (ext === "md") return "document";
+    if (MARKDOWN_EXTENSIONS.has(ext) || TEXT_EXTENSIONS.has(ext)) return "text";
   }
   if (TEXT_BASENAMES.has(basenameOf(path))) return "text";
   return "binary";

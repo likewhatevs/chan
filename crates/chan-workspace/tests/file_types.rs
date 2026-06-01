@@ -146,14 +146,18 @@ fn file_type_policy_end_to_end() {
         }
     }
 
-    // Graph: nodes are .md + .txt only; images/pdfs do NOT get a
-    // node row. The graph DOES carry edges that point at them
-    // (e.g. an `![]()` embed), so the backlink-from-media query
-    // still works.
+    // Graph: document nodes are Markdown (.md) only. .txt is editable +
+    // BM25-searchable (asserted above) but NOT a graph document, and
+    // images/pdfs do NOT get a node row. The graph DOES carry edges that
+    // point at media (e.g. an `![]()` embed), so the backlink-from-media
+    // query still works.
     let g = workspace.graph().unwrap();
     let files = g.files().unwrap();
     assert!(files.iter().any(|p| p == "notes/intro.md"));
-    assert!(files.iter().any(|p| p == "notes/notes.txt"));
+    assert!(
+        !files.iter().any(|p| p == "notes/notes.txt"),
+        ".txt must not appear in graph nodes; found {files:?}",
+    );
     assert!(
         !files.iter().any(|p| p == "media/diagram.png"),
         "image must not appear in graph nodes; found {files:?}",
@@ -201,12 +205,13 @@ fn file_type_policy_end_to_end() {
             .any(|e| e.kind == EdgeKind::Mention && e.dst == "@@teammate"),
         "Markdown @@mention edge missing; neighbors = {neighbors:?}",
     );
+    // .txt is not a graph document, so it has no node and therefore no
+    // outgoing edges at all: its #plain-text / @@ignored tokens never
+    // reach the graph.
     assert!(
-        !g.neighbors("notes/notes.txt")
-            .unwrap()
-            .iter()
-            .any(|e| e.kind == EdgeKind::Mention && e.dst == "@@ignored"),
-        ".txt @@mention should not be indexed as a graph mention",
+        g.neighbors("notes/notes.txt").unwrap().is_empty(),
+        ".txt must have no graph edges; found {:?}",
+        g.neighbors("notes/notes.txt").unwrap(),
     );
 
     let tags = g.tags().unwrap();

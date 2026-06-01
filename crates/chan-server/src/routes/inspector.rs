@@ -245,9 +245,12 @@ fn file_kind_label(path: &str, is_contact: bool) -> &'static str {
     if is_contact {
         return "contact";
     }
+    // Only Markdown (.md) is a "document"; .txt is editable + searchable
+    // text but not a graph document, so it labels as "text". Mirrors
+    // `routes::files::project_kind` and the graph ingest gate.
     match chan_workspace::fs_ops::classify(path) {
-        FileClass::EditableText => "document",
-        FileClass::Text => "text",
+        FileClass::EditableText if chan_workspace::fs_ops::is_markdown_file(path) => "document",
+        FileClass::EditableText | FileClass::Text => "text",
         FileClass::Image | FileClass::Pdf => "media",
         FileClass::Other => "binary",
     }
@@ -257,6 +260,18 @@ fn file_kind_label(path: &str, is_contact: bool) -> &'static str {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// `file_kind_label` must agree with `routes::files::project_kind`:
+    /// only Markdown (.md) is `document`; .txt is `text`.
+    #[test]
+    fn file_kind_label_marks_only_markdown_as_document() {
+        assert_eq!(file_kind_label("notes/a.md", false), "document");
+        assert_eq!(file_kind_label("notes/plain.txt", false), "text");
+        assert_eq!(file_kind_label("src/main.rs", false), "text");
+        assert_eq!(file_kind_label("logo.png", false), "media");
+        assert_eq!(file_kind_label("archive.zip", false), "binary");
+        assert_eq!(file_kind_label("contacts/alex.md", true), "contact");
+    }
 
     fn put(root: &std::path::Path, rel: &str, body: &[u8]) {
         let path = root.join(rel);

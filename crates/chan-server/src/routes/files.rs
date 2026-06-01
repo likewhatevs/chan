@@ -36,7 +36,8 @@ enum ReadFileResult {
 ///
 /// Mapping (see `project_kind` below):
 ///   - `FileClass::EditableText` + contact frontmatter -> `contact`
-///   - `FileClass::EditableText`                       -> `document`
+///   - `FileClass::EditableText` + Markdown (`.md`)     -> `document`
+///   - `FileClass::EditableText` non-Markdown (`.txt`)  -> `text`
 ///   - `FileClass::Text`                               -> `text`
 ///   - `FileClass::Image` / `FileClass::Pdf`           -> `media`
 ///   - `FileClass::Other`                              -> `binary`
@@ -69,8 +70,17 @@ fn project_kind(path: &str, is_dir: bool, is_contact: bool) -> Option<&'static s
         return Some("contact");
     }
     Some(match chan_workspace::fs_ops::classify(path) {
-        chan_workspace::FileClass::EditableText => "document",
-        chan_workspace::FileClass::Text => "text",
+        // Only Markdown (.md) is a graph "document" (graphed + wikilinked).
+        // .txt stays editable + BM25-searchable but is not a document node,
+        // so it rides the "text" wire kind alongside source/config text.
+        // Keyed off `is_markdown_file` to stay in lockstep with the graph
+        // ingest gate (`Workspace::rebuild_graph` / `index_file_inner`).
+        chan_workspace::FileClass::EditableText
+            if chan_workspace::fs_ops::is_markdown_file(path) =>
+        {
+            "document"
+        }
+        chan_workspace::FileClass::EditableText | chan_workspace::FileClass::Text => "text",
         chan_workspace::FileClass::Image | chan_workspace::FileClass::Pdf => "media",
         chan_workspace::FileClass::Other => "binary",
     })
@@ -1630,6 +1640,25 @@ pub async fn api_fs_transfer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only Markdown (.md) is the `document` wire kind; .txt is editable +
+    /// searchable but rides `text` alongside source/config files. Contacts
+    /// and directories take their own branches ahead of the classifier.
+    #[test]
+    fn project_kind_marks_only_markdown_as_document() {
+        assert_eq!(project_kind("notes/a.md", false, false), Some("document"));
+        assert_eq!(project_kind("notes/plain.txt", false, false), Some("text"));
+        assert_eq!(project_kind("src/main.rs", false, false), Some("text"));
+        assert_eq!(project_kind("logo.png", false, false), Some("media"));
+        assert_eq!(project_kind("archive.zip", false, false), Some("binary"));
+        // Contact frontmatter wins over the .md document mapping.
+        assert_eq!(
+            project_kind("contacts/alex.md", false, true),
+            Some("contact")
+        );
+        // Directories carry no wire kind.
+        assert_eq!(project_kind("notes", true, false), None);
+    }
 
     #[test]
     fn file_response_serializes_path_class_for_inspector_payload() {

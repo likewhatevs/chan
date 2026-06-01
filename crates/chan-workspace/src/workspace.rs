@@ -2323,9 +2323,14 @@ impl Workspace {
         // shape at the end.
         let graph = self.graph()?;
         let entries = fs_ops::list_tree_filtered(self.root(), &self.walk_filter)?;
+        // The graph is Markdown-only: only `.md` files become document
+        // nodes (and contribute wikilink / heading / token edges). `.txt`
+        // stays editable + BM25-searchable (the search pass in `build_all`
+        // still keys off the wider `is_indexable_text`) but is not a graph
+        // document, so the staging walk filters on `is_markdown_file`.
         let total: u64 = entries
             .iter()
-            .filter(|e| !e.is_dir && fs_ops::is_indexable_text(&e.path))
+            .filter(|e| !e.is_dir && fs_ops::is_markdown_file(&e.path))
             .count() as u64;
 
         // Resume-or-fresh decision. A non-empty cursor means a
@@ -2343,7 +2348,7 @@ impl Workspace {
             );
             let live: std::collections::HashMap<String, (Option<i64>, Option<i64>)> = entries
                 .iter()
-                .filter(|e| !e.is_dir && fs_ops::is_indexable_text(&e.path))
+                .filter(|e| !e.is_dir && fs_ops::is_markdown_file(&e.path))
                 .map(|e| (e.path.clone(), (e.mtime, Some(e.size as i64))))
                 .collect();
             let purged = graph.sanitize_staging_against_live(&live, true)?;
@@ -2378,7 +2383,7 @@ impl Workspace {
                     return Err(ChanError::Cancelled);
                 }
             }
-            if e.is_dir || !fs_ops::is_indexable_text(&e.path) {
+            if e.is_dir || !fs_ops::is_markdown_file(&e.path) {
                 continue;
             }
             // Resume skip: the walk is sorted, so a strictly-
@@ -2647,7 +2652,6 @@ impl Workspace {
         #[cfg(test)]
         index_file_between_stat_and_read_hook();
         let content = self.read_text(rel)?;
-        let (title, node_kind, headings, edges, emails, aliases) = parse_for_graph(rel, &content);
         // Graph first, then search index. The graph is what the
         // editor consults for backlinks and link-autocomplete on
         // every keystroke; a stale graph is the more user-visible
@@ -2660,17 +2664,28 @@ impl Workspace {
         // (search-then-graph) made backlinks the silent victim.
         // The journal entry covers either ordering: the replay
         // path re-runs both so an asymmetric crash converges.
-        self.graph()?.replace_file(
-            rel,
-            title.as_deref(),
-            mtime,
-            size,
-            node_kind,
-            &edges,
-            &headings,
-            emails.as_deref(),
-            aliases.as_deref(),
-        )?;
+        //
+        // Graph is Markdown-only: only `.md` becomes a document node.
+        // A non-Markdown indexable file (`.txt`) is still BM25-indexed
+        // below but carries no graph node; evict any stale node (e.g. a
+        // `.md` renamed to `.txt`) so the graph never holds a `.txt`.
+        if fs_ops::is_markdown_file(rel) {
+            let (title, node_kind, headings, edges, emails, aliases) =
+                parse_for_graph(rel, &content);
+            self.graph()?.replace_file(
+                rel,
+                title.as_deref(),
+                mtime,
+                size,
+                node_kind,
+                &edges,
+                &headings,
+                emails.as_deref(),
+                aliases.as_deref(),
+            )?;
+        } else {
+            self.graph()?.forget_file(rel)?;
+        }
         // Hand the already-read content to the index so the read
         // goes through the Workspace sandbox exactly once.
         self.index()?.index_one(rel, &content)?;
@@ -2821,23 +2836,30 @@ impl Workspace {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64);
         let size = i64::try_from(meta.len()).ok();
-        let (title, node_kind, headings, edges, emails, aliases) = parse_for_graph(rel, &content);
-        self.graph()?.replace_file(
-            rel,
-            title.as_deref(),
-            mtime,
-            size,
-            node_kind,
-            &edges,
-            &headings,
-            emails.as_deref(),
-            aliases.as_deref(),
-        )?;
+        // Graph is Markdown-only (see `index_file_inner`): a `.txt` draft
+        // is BM25-searchable but never a graph document node.
+        if fs_ops::is_markdown_file(rel) {
+            let (title, node_kind, headings, edges, emails, aliases) =
+                parse_for_graph(rel, &content);
+            self.graph()?.replace_file(
+                rel,
+                title.as_deref(),
+                mtime,
+                size,
+                node_kind,
+                &edges,
+                &headings,
+                emails.as_deref(),
+                aliases.as_deref(),
+            )?;
+        } else {
+            self.graph()?.forget_file(rel)?;
+        }
         self.index()?.index_one(rel, &content)?;
         tracing::debug!(
             rel,
             content_len = content.len(),
-            "index_draft_file: wrote graph + BM25"
+            "index_draft_file: wrote graph (md only) + BM25"
         );
         Ok(())
     }
@@ -6660,6 +6682,77 @@ mod tests {
         std::fs::write(root.path().join("intro.txt"), "plain\n").unwrap();
         let r = workspace.resolve_link("intro").unwrap();
         assert_eq!(r.path, "intro.md");
+    }
+
+    // ---- .txt is searchable but not a graph document ----
+
+    /// Only Markdown (.md) is a graph document; .txt stays editable +
+    /// BM25-searchable but is never a graph node. A full reindex must
+    /// stage the .md node and skip the .txt, while BM25 still indexes the
+    /// .txt content so a shared token finds both files.
+    #[test]
+    fn reindex_txt_searchable_but_not_a_graph_document() {
+        let (_cfg, root, workspace) = fixture();
+        std::fs::write(root.path().join("note.md"), "# Note\n\nzebraword\n").unwrap();
+        std::fs::write(root.path().join("plain.txt"), "zebraword in plain text\n").unwrap();
+        workspace.reindex(None).unwrap();
+
+        let graph_files = workspace.graph().unwrap().files().unwrap();
+        assert!(
+            graph_files.iter().any(|p| p == "note.md"),
+            "markdown must be a graph document: {graph_files:?}"
+        );
+        assert!(
+            !graph_files.iter().any(|p| p == "plain.txt"),
+            ".txt must not be a graph document: {graph_files:?}"
+        );
+
+        let opts = crate::workspace::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 100,
+            scope: None,
+        };
+        let hits: Vec<String> = workspace
+            .search("zebraword", &opts)
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        assert!(
+            hits.iter().any(|p| p == "plain.txt"),
+            ".txt must stay BM25-searchable: {hits:?}"
+        );
+        assert!(
+            hits.iter().any(|p| p == "note.md"),
+            ".md must stay BM25-searchable: {hits:?}"
+        );
+    }
+
+    /// The incremental per-file path keeps the same split: `index_file`
+    /// on a .md creates a graph node, on a .txt it does not (but BM25
+    /// still indexes it).
+    #[test]
+    fn index_file_txt_skips_graph_node() {
+        let (_cfg, _root, workspace) = fixture();
+        workspace
+            .write_text("a.md", "# A\n\nmarkertoken\n")
+            .unwrap();
+        workspace
+            .write_text("b.txt", "markertoken in plain text\n")
+            .unwrap();
+        workspace.index_file("a.md").unwrap();
+        workspace.index_file("b.txt").unwrap();
+
+        let graph_files = workspace.graph().unwrap().files().unwrap();
+        assert!(
+            graph_files.iter().any(|p| p == "a.md"),
+            "markdown must be a graph node: {graph_files:?}"
+        );
+        assert!(
+            !graph_files.iter().any(|p| p == "b.txt"),
+            ".txt must not be a graph node: {graph_files:?}"
+        );
     }
 
     #[test]
