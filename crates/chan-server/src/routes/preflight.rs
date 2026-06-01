@@ -53,6 +53,33 @@ struct PreflightSnapshot {
     /// gate.
     #[serde(skip_serializing_if = "Option::is_none")]
     cs_link: Option<CsLink>,
+    /// Post-open workspace facts for the SPA onboarding surface (P2,
+    /// open-then-configure). Cleanly SEPARATED from the lock gate: it carries
+    /// no readiness signal and never feeds `phase` / `locked`. `build_snapshot`
+    /// leaves it `None`; the route handlers attach it only once the workspace
+    /// is `Ready`, which is exactly when the onboarding card consumes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<Summary>,
+}
+
+/// Workspace facts the onboarding card renders to confirm "this is the folder
+/// I meant" and to offer the optional layers. Derived entirely from data that
+/// is already free post-open (the index stats, the workspace's own config
+/// flags, and a read-only VCS-marker probe at the sandboxed root), so it adds
+/// no walk and no new server plumbing.
+#[derive(Debug, Clone, Serialize)]
+struct Summary {
+    /// BM25-indexed chunk count from `index_stats`. A coarse "there is content
+    /// here" signal for the confirmation, not a file count.
+    indexed_docs: u64,
+    /// Detected source-control kind at the workspace root ("git" / "hg" /
+    /// "svn"), or `None`. Helps the user confirm the folder is what they meant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scm: Option<String>,
+    /// Current optional-layer state, so the card renders the enable prompts
+    /// against the truth rather than assuming both are off.
+    semantic_enabled: bool,
+    reports_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -256,9 +283,9 @@ fn build_snapshot(
         locked: phase != Phase::Ready,
         error: index_error(status),
         steps,
-        // Attached by the route handlers (owner-gated); never gates the
-        // boot overlay.
+        // Attached by the route handlers; neither gates the boot overlay.
         cs_link: None,
+        summary: None,
     }
 }
 
@@ -267,6 +294,32 @@ fn build_snapshot(
 /// leaves both flags false, so the offer shows on a plain `chan serve`.
 fn cs_link_allowed(state: &AppState) -> bool {
     !state.settings_disabled && !state.tunnel_public
+}
+
+/// Source-control kind at the workspace root, mirroring chan's own walk: a
+/// read-only existence probe on the well-known VCS marker dir, no climb above
+/// the root. This is a metadata check at the sandboxed root, not a content
+/// read or write, so it stays clear of the workspace write boundary.
+fn detect_scm(root: &std::path::Path) -> Option<String> {
+    for (kind, dir) in [("git", ".git"), ("hg", ".hg"), ("svn", ".svn")] {
+        if root.join(dir).exists() {
+            return Some(kind.to_string());
+        }
+    }
+    None
+}
+
+/// Assemble the onboarding `summary` from data that is already free post-open.
+/// Every read degrades to a benign default on error so a transient stats /
+/// config read never turns an otherwise-ready snapshot into a failure.
+fn workspace_summary(workspace: &chan_workspace::Workspace) -> Summary {
+    let indexed_docs = workspace.index_stats().map(|s| s.indexed_docs).unwrap_or(0);
+    Summary {
+        indexed_docs,
+        scm: detect_scm(workspace.root()),
+        semantic_enabled: workspace.semantic_enabled().unwrap_or(false),
+        reports_enabled: workspace.reports_enabled().unwrap_or(false),
+    }
 }
 
 pub async fn api_preflight(State(state): State<Arc<AppState>>) -> Response {
@@ -286,6 +339,11 @@ pub async fn api_preflight(State(state): State<Arc<AppState>>) -> Response {
         let status = indexer.snapshot();
         let mut snapshot = build_snapshot(&workspace, &status);
         snapshot.cs_link = cs_link::detect(allow_cs);
+        // The onboarding summary describes an OPEN workspace, so attach it only
+        // once ready (also keeps the per-poll work off the cold-build path).
+        if snapshot.phase == Phase::Ready {
+            snapshot.summary = Some(workspace_summary(&workspace));
+        }
         snapshot
     })
     .await
@@ -380,6 +438,9 @@ async fn model_decision(state: &Arc<AppState>, choice: &str) -> Response {
         let status = indexer.snapshot();
         let mut snapshot = build_snapshot(&workspace, &status);
         snapshot.cs_link = cs_link::detect(allow_cs);
+        if snapshot.phase == Phase::Ready {
+            snapshot.summary = Some(workspace_summary(&workspace));
+        }
         Ok(snapshot)
     })
     .await
@@ -414,6 +475,35 @@ mod tests {
             model: "m".into(),
             embedding: None,
         }
+    }
+
+    #[test]
+    fn detect_scm_finds_git_then_none() {
+        let dir = TempDir::new().unwrap();
+        assert_eq!(detect_scm(dir.path()), None);
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        assert_eq!(detect_scm(dir.path()).as_deref(), Some("git"));
+    }
+
+    #[test]
+    fn summary_reflects_a_fresh_bm25_workspace() {
+        let (_c, _r, ws) = workspace();
+        let s = workspace_summary(&ws);
+        // Fresh workspace defaults: BM25-only, reports off, no VCS in the
+        // tempdir root.
+        assert!(!s.semantic_enabled);
+        assert!(!s.reports_enabled);
+        assert_eq!(s.scm, None);
+    }
+
+    #[test]
+    fn build_snapshot_leaves_summary_for_the_handler() {
+        // The summary is an onboarding concern attached by the route handler
+        // once ready, never by the gate logic. build_snapshot must leave it
+        // None so the phase/locked derivation stays free of it.
+        let (_c, _r, ws) = workspace();
+        let snap = build_snapshot(&ws, &idle());
+        assert!(snap.summary.is_none());
     }
 
     #[test]
