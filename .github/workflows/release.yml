@@ -282,11 +282,30 @@ jobs:
           if-no-files-found: error
 
   linux-desktop-artifacts:
-    name: linux desktop packages
+    name: linux desktop packages (${{ matrix.package_arch }})
+    # GitHub-hosted runners are ubuntu-only, so CI ships the UNIVERSAL
+    # AppImage plus the debian-family .deb and the fedora-family .rpm that
+    # Tauri targets:"all" already emits, on amd64 AND arm64 (matching the
+    # CLI + gateway matrix jobs). The per-distro sdme rootfs templates under
+    # scripts/dev/sdme/chan-desktop-{ubuntu,fedora,arch}.sdme own the LOCAL
+    # multi-distro dev/QA build path (build from macOS via lima); they are
+    # not consumable by GH Actions, so CI leans on the universal AppImage +
+    # the .rpm rather than literal fedora/arch container jobs (which would
+    # re-list distro deps = the single-source drift that killed v0.19.0).
     needs:
       - context
       - linux-validate
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            package_arch: amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            package_arch: arm64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -294,6 +313,8 @@ jobs:
 
       - run: cp chan/rust-toolchain.toml ./rust-toolchain.toml
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: chan
@@ -324,15 +345,20 @@ jobs:
 
       - name: Stage Linux desktop artifacts
         working-directory: chan
-        env:
-          VERSION: ${{ needs.context.outputs.version }}
         run: |
           set -e
           mkdir -p release-artifacts
-          for name in "Chan_${VERSION}_amd64.AppImage" "Chan_${VERSION}_amd64.deb"; do
-            file=$(find target/release/bundle -name "$name" -type f | head -1)
+          # Tauri targets:"all" emits one AppImage + one .deb + one .rpm per
+          # arch under these dirs; glob each format dir so the arch-specific
+          # filename skew (AppImage amd64/aarch64 vs deb amd64/arm64 vs rpm
+          # x86_64/aarch64) needs no per-arch bookkeeping.
+          for dir_glob in \
+            "target/release/bundle/appimage/*.AppImage" \
+            "target/release/bundle/deb/*.deb" \
+            "target/release/bundle/rpm/*.rpm"; do
+            file=$(find "$(dirname "$dir_glob")" -name "$(basename "$dir_glob")" -type f | head -1)
             if [ -z "$file" ]; then
-              echo "::error::missing desktop artifact: $name"
+              echo "::error::missing desktop artifact: $dir_glob"
               find target/release/bundle -type f || true
               exit 1
             fi
@@ -342,7 +368,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-linux-desktop
+          name: release-linux-desktop-${{ matrix.package_arch }}
           path: chan/release-artifacts/*
           if-no-files-found: error
 
