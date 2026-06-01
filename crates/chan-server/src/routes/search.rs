@@ -3,8 +3,9 @@
 //! `/api/search/files` is a server-side substring scan of `list_tree`
 //! (chan-workspace has no built-in filename index; the cost is linear and
 //! the workspace size budget is small). `/api/search/content` defers to
-//! `Workspace::search` (BM25 today, hybrid when the `embeddings` feature
-//! is on). `/api/index/status` and `/api/index/rebuild` surface the
+//! `Workspace::search`: BM25, or hybrid (BM25 + dense, RRF-fused) when
+//! the workspace opted in via `semantic_enabled` and the embedding model
+//! is on disk. `/api/index/status` and `/api/index/rebuild` surface the
 //! background indexer's state machine.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,7 +15,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chan_workspace::{classify, fs_ops, FileClass, NodeKind, SearchOpts, TreeEntry};
+use chan_workspace::{classify, fs_ops, FileClass, NodeKind, SearchMode, SearchOpts, TreeEntry};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{err_from, err_state};
@@ -147,9 +148,11 @@ struct ContentSearchResponse {
     /// open; kept as an explicit field so a future "rebuilding"
     /// state can land without a contract break.
     ready: bool,
-    /// Mode actually used. "bm25" today (chan-workspace's tantivy
-    /// search); "hybrid" / "semantic" reserved for the dense
-    /// retrieval that lands with the embeddings feature.
+    /// Mode actually used: "bm25" (tantivy) or "hybrid" (BM25 + dense,
+    /// RRF-fused). Hybrid is selected when the workspace opted in via
+    /// `semantic_enabled` and the embedding model is on disk; otherwise
+    /// the query is BM25-only. The value is the mode the facade actually
+    /// ran, which collapses to "bm25" on a build without `embeddings`.
     mode: &'static str,
     hits: Vec<ContentHit>,
 }
@@ -164,28 +167,69 @@ struct ContentHit {
     score: f32,
 }
 
+/// Decide the content-search retrieval mode from the two gating inputs.
+/// Hybrid (BM25 + dense, RRF-fused) only when the workspace opted in via
+/// `semantic_enabled` AND the embedding model is on disk; otherwise
+/// BM25. A flipped-on flag with no model still serves BM25 - `enable`
+/// refuses that shape, but a model removed out from under us would
+/// otherwise mis-route. Pure so the truth table is unit-testable
+/// without a model on disk; the live probe lives in `resolve_search_mode`.
+#[cfg(feature = "embeddings")]
+fn select_search_mode(semantic_enabled: bool, model_present: bool) -> SearchMode {
+    if semantic_enabled && model_present {
+        SearchMode::Hybrid
+    } else {
+        SearchMode::Bm25
+    }
+}
+
+/// Probe the workspace's semantic opt-in + model presence and pick the
+/// query mode (see `select_search_mode`). Mirrors
+/// `routes/index::build_state` so the `/api/index/semantic/state`
+/// snapshot and the live query agree on the mode.
+#[cfg(feature = "embeddings")]
+fn resolve_search_mode(workspace: &chan_workspace::Workspace) -> SearchMode {
+    use chan_workspace::index::embeddings::resolve_model;
+    let enabled = workspace.semantic_enabled().unwrap_or(false);
+    let model_present = workspace
+        .semantic_model()
+        .map(|m| resolve_model(&m).is_ok())
+        .unwrap_or(false);
+    select_search_mode(enabled, model_present)
+}
+
+/// Without the `embeddings` feature the dense stack is compiled out, so
+/// the facade would collapse Hybrid to BM25 anyway; request BM25
+/// directly.
+#[cfg(not(feature = "embeddings"))]
+fn resolve_search_mode(_workspace: &chan_workspace::Workspace) -> SearchMode {
+    SearchMode::Bm25
+}
+
 pub async fn api_search_content(
     State(state): State<Arc<AppState>>,
     Query(p): Query<ContentSearchParams>,
 ) -> Response {
+    let workspace = state.workspace();
+    // Hybrid (BM25 + dense, RRF-fused) only when the workspace opted in
+    // via `semantic_enabled` and the model is on disk; otherwise BM25.
+    // Resolve it once so the empty-query short-circuit and a real query
+    // report the same mode.
+    let mode = resolve_search_mode(&workspace);
     if p.q.trim().is_empty() {
         return Json(ContentSearchResponse {
             ready: true,
-            mode: "hybrid",
+            mode: mode.label(),
             hits: Vec::new(),
         })
         .into_response();
     }
     let response_limit = normalized_content_limit(p.limit);
     let opts = SearchOpts {
+        mode,
         limit: expanded_content_candidate_limit(response_limit),
         scope: p.scope.clone(),
-        // Mode defaults to Hybrid via SearchOpts::default; the
-        // facade's BM25 fallback kicks in when the binary is built
-        // without `embeddings`.
-        ..Default::default()
     };
-    let workspace = state.workspace();
     let query = p.q;
     blocking_response(
         move || {
@@ -861,5 +905,65 @@ mod tests {
             )
         }));
         assert!(nodes.iter().all(|node| node["children_count"].is_u64()));
+    }
+
+    /// The mode decision is Hybrid only when the workspace opted in AND
+    /// the model is on disk; every other combination is BM25. Pure truth
+    /// table so it holds whether or not a model is downloaded on the test
+    /// host.
+    #[cfg(feature = "embeddings")]
+    #[test]
+    fn select_search_mode_requires_flag_and_model() {
+        assert_eq!(select_search_mode(true, true), SearchMode::Hybrid);
+        assert_eq!(select_search_mode(true, false), SearchMode::Bm25);
+        assert_eq!(select_search_mode(false, true), SearchMode::Bm25);
+        assert_eq!(select_search_mode(false, false), SearchMode::Bm25);
+    }
+
+    /// `route_test_app` builds a fresh workspace, so `semantic_enabled`
+    /// defaults to false: the route must request (and report) bm25 for a
+    /// real query regardless of whether a model is cached on the host.
+    #[tokio::test]
+    async fn content_search_reports_bm25_when_semantic_disabled() {
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let request = Request::builder()
+            .uri("/api/search/content?q=done")
+            .header(header::AUTHORIZATION, "Bearer secret")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["mode"], "bm25");
+    }
+
+    /// The empty-query short-circuit previously hardcoded mode:"hybrid";
+    /// it must now report the same mode a real query would run. With
+    /// semantic disabled that is bm25, and the hit list stays empty.
+    #[tokio::test]
+    async fn content_search_empty_query_reports_flag_mode() {
+        let app = route_test_app();
+        let router = crate::router(app.state);
+        let request = Request::builder()
+            .uri("/api/search/content?q=")
+            .header(header::AUTHORIZATION, "Bearer secret")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["mode"], "bm25");
+        assert_eq!(json["hits"].as_array().unwrap().len(), 0);
     }
 }

@@ -52,7 +52,7 @@ use chan_server::{
 use chan_shell::ShellAction;
 use chan_workspace::{
     EdgeKind, KnownWorkspace, Library, MetadataExportOptions, MetadataImportOptions,
-    SearchAggression, SearchOpts,
+    SearchAggression, SearchMode, SearchOpts,
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
@@ -1776,11 +1776,39 @@ async fn cmd_mcp_proxy(_socket: PathBuf) -> Result<()> {
     anyhow::bail!("__mcp-proxy is unix-only");
 }
 
+/// Pick the CLI content-search mode, mirroring the `/api/search/content`
+/// route: Hybrid (BM25 + dense, RRF-fused) only when the workspace opted
+/// in via `semantic_enabled` AND the embedding model is on disk;
+/// otherwise BM25. Keeping the CLI and the route on the same rule means
+/// `chan search` and the editor's search panel agree on what ran.
+#[cfg(feature = "embeddings")]
+fn resolve_search_mode(workspace: &chan_workspace::Workspace) -> SearchMode {
+    use chan_workspace::index::embeddings::resolve_model;
+    let enabled = workspace.semantic_enabled().unwrap_or(false);
+    let model_present = workspace
+        .semantic_model()
+        .map(|m| resolve_model(&m).is_ok())
+        .unwrap_or(false);
+    if enabled && model_present {
+        SearchMode::Hybrid
+    } else {
+        SearchMode::Bm25
+    }
+}
+
+/// Without the `embeddings` feature the dense stack is compiled out, so
+/// the facade collapses Hybrid to BM25 anyway; request BM25 directly.
+#[cfg(not(feature = "embeddings"))]
+fn resolve_search_mode(_workspace: &chan_workspace::Workspace) -> SearchMode {
+    SearchMode::Bm25
+}
+
 fn cmd_search(path: PathBuf, query: String, limit: u32) -> Result<()> {
     let lib = library()?;
     ensure_workspace_registered(&lib, &path)?;
     let workspace = lib.open_workspace(&path)?;
     let opts = SearchOpts {
+        mode: resolve_search_mode(&workspace),
         limit,
         ..Default::default()
     };
