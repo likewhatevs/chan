@@ -796,10 +796,32 @@ fn init_tracing(verbosity: u8) {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level)),
+                .unwrap_or_else(|_| fallback_filter(level)),
         )
         .with_writer(std::io::stderr)
         .init();
+}
+
+/// tokei (pulled in transitively by chan-report for the language-count
+/// lens) logs `Unknown extension: <ext>` at WARN through tokei's own
+/// `LanguageType::from_path` for every file it can't classify. chan-report
+/// is default-off (`IndexConfig::reports_enabled = false`), so on a source
+/// tree with reports enabled this is pure console noise with no downstream
+/// effect (the graph language lens already degrades when a bucket is
+/// absent). Cap tokei at ERROR so the spam disappears but genuine tokei
+/// errors still surface.
+///
+/// Applied to the FALLBACK filter only (`RUST_LOG` parses first via
+/// `try_from_default_env`), so anyone who explicitly wants tokei detail
+/// keeps full control by setting `RUST_LOG`.
+const TOKEI_LOG_DIRECTIVE: &str = "tokei=error";
+
+fn fallback_filter(level: &str) -> tracing_subscriber::EnvFilter {
+    tracing_subscriber::EnvFilter::new(level).add_directive(
+        TOKEI_LOG_DIRECTIVE
+            .parse()
+            .expect("static tokei log directive parses"),
+    )
 }
 
 fn library() -> Result<Library> {
@@ -2661,6 +2683,21 @@ mod tests {
     }
     fn ipv6(s: &str) -> IpAddr {
         s.parse().unwrap()
+    }
+
+    /// The fallback filter must (1) parse the static tokei directive
+    /// without panicking at startup for every verbosity level and (2)
+    /// actually carry the tokei cap. A malformed directive would panic
+    /// the binary on launch; a dropped directive would let the spam back.
+    #[test]
+    fn fallback_filter_caps_tokei_for_every_level() {
+        for level in ["warn", "info", "debug", "trace"] {
+            let rendered = fallback_filter(level).to_string();
+            assert!(
+                rendered.contains("tokei"),
+                "level {level} filter dropped the tokei directive: {rendered}"
+            );
+        }
     }
 
     #[test]
