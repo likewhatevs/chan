@@ -9,7 +9,7 @@
 //! drift breaks commands at runtime with a green build. Wire-smoke every
 //! `cs` command after touching this file, not just `cargo build`.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -678,7 +678,7 @@ async fn cmd_shell_team(action: TeamAction) -> Result<()> {
             let config_toml = read_team_config_input(config, stdin)?;
             (
                 ControlRequest::TerminalTeam {
-                    dir,
+                    dir: resolve_team_dir(&dir)?,
                     op: TeamOp::New,
                     config_toml: Some(config_toml),
                     script,
@@ -688,7 +688,7 @@ async fn cmd_shell_team(action: TeamAction) -> Result<()> {
         }
         TeamAction::Load { dir, script } => (
             ControlRequest::TerminalTeam {
-                dir,
+                dir: resolve_team_dir(&dir)?,
                 op: TeamOp::Load,
                 config_toml: None,
                 script,
@@ -729,6 +729,97 @@ fn read_team_config_input(config: Option<PathBuf>, stdin: bool) -> Result<String
             anyhow::bail!("cs terminal team new needs a config: --config <file> or --stdin")
         }
     }
+}
+
+/// Resolve a user-typed `cs terminal team` dir to a WORKSPACE-relative dir,
+/// against the caller's current directory. `cs` runs inside a chan terminal,
+/// so `$CHAN_WORKSPACE_PATH` names the served workspace root and the process
+/// cwd locates the caller within it. This gives `team new` / `team load` the
+/// same cwd-awareness as `cs open` (a bare name, `.`, a relative path, or an
+/// absolute path under the workspace all resolve) while keeping the wire
+/// `dir` workspace-relative, so the server, the `--script` generator, and the
+/// `/api/team-config` route stay unchanged. The env lookups live here; the
+/// pure resolution is [`resolve_team_dir_in`] (the `open_env_from` split).
+fn resolve_team_dir(dir: &str) -> Result<String> {
+    let workspace = std::env::var("CHAN_WORKSPACE_PATH").ok();
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    resolve_team_dir_in(dir, workspace.as_deref(), &cwd)
+}
+
+/// The pure dir resolution: anchor `dir` to `workspace` (the served root)
+/// via `cwd`. Resolution is LEXICAL (the target is never canonicalized) so a
+/// `team new` dir that does not exist yet still resolves; `cwd` and the
+/// workspace root, which do exist, ARE canonicalized so a symlinked prefix
+/// (macOS `/tmp` -> `/private/tmp`) does not break the prefix match. With no
+/// `workspace` (running outside a chan terminal, where the control socket is
+/// missing too), the dir passes through unchanged, preserving the prior
+/// workspace-relative contract.
+fn resolve_team_dir_in(dir: &str, workspace: Option<&str>, cwd: &Path) -> Result<String> {
+    let trimmed = dir.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("team directory is required");
+    }
+    let Some(workspace) = workspace.map(str::trim).filter(|w| !w.is_empty()) else {
+        return Ok(trimmed.to_string());
+    };
+    let ws_root = canonical_or(Path::new(workspace));
+    let input = Path::new(trimmed);
+    // An absolute input stands on its own; a relative one (including ".")
+    // joins the caller's cwd.
+    let abs = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        canonical_or(cwd).join(input)
+    };
+    let normalized = lexical_normalize(&abs);
+    let rel = normalized.strip_prefix(&ws_root).map_err(|_| {
+        anyhow::anyhow!(
+            "team directory {trimmed:?} is outside the workspace ({})",
+            ws_root.display()
+        )
+    })?;
+    let rel = path_to_posix(rel);
+    if rel.is_empty() {
+        anyhow::bail!("team directory resolves to the workspace root; name a subdirectory");
+    }
+    Ok(rel)
+}
+
+/// Canonicalize `path`, falling back to the path verbatim when it cannot be
+/// resolved (e.g. it does not exist). Used on the cwd + workspace root, which
+/// normally exist, so the fallback is just defensive.
+fn canonical_or(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Resolve `.` and `..` components lexically, without touching the
+/// filesystem, so a not-yet-existing `team new` dir still normalizes. A `..`
+/// that would climb above the accumulated path just pops the last component.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Join a relative path's `Normal` components with `/` for the workspace-
+/// relative wire string. Mirrors the server's `path_to_posix`; defined here
+/// so the CLI does not depend on a server-private helper.
+fn path_to_posix(path: &Path) -> String {
+    path.components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// The parsed `cs terminal survey` arguments, grouped so the dispatch does
@@ -1017,6 +1108,61 @@ mod tests {
             }
             other => panic!("unexpected parse: {other:?}"),
         }
+    }
+
+    #[test]
+    fn resolve_team_dir_joins_relative_against_cwd_under_workspace() {
+        // A bare name resolves cwd-relative within the workspace; "." is the
+        // cwd's own workspace-relative path; a "../" normalizes lexically.
+        // Synthetic non-existent paths exercise the canonicalize fallback, so
+        // the test is filesystem-free and deterministic.
+        assert_eq!(
+            resolve_team_dir_in("alpha", Some("/ws"), Path::new("/ws/a/b")).unwrap(),
+            "a/b/alpha"
+        );
+        assert_eq!(
+            resolve_team_dir_in(".", Some("/ws"), Path::new("/ws/teams/x")).unwrap(),
+            "teams/x"
+        );
+        assert_eq!(
+            resolve_team_dir_in("../y", Some("/ws"), Path::new("/ws/teams/x")).unwrap(),
+            "teams/y"
+        );
+    }
+
+    #[test]
+    fn resolve_team_dir_accepts_absolute_under_workspace_and_keeps_root_name() {
+        assert_eq!(
+            resolve_team_dir_in("/ws/teams/alpha", Some("/ws"), Path::new("/ws/elsewhere"))
+                .unwrap(),
+            "teams/alpha"
+        );
+        // A bare name at the workspace root stays that name.
+        assert_eq!(
+            resolve_team_dir_in("alpha", Some("/ws"), Path::new("/ws")).unwrap(),
+            "alpha"
+        );
+    }
+
+    #[test]
+    fn resolve_team_dir_rejects_outside_workspace_and_bare_root() {
+        // Escapes the workspace -> error.
+        assert!(resolve_team_dir_in("/etc", Some("/ws"), Path::new("/ws")).is_err());
+        assert!(resolve_team_dir_in("../../etc", Some("/ws"), Path::new("/ws")).is_err());
+        // "." at the root resolves to the workspace root itself -> error (a
+        // team needs a subdirectory; the server rejects an empty dir too).
+        assert!(resolve_team_dir_in(".", Some("/ws"), Path::new("/ws")).is_err());
+        assert!(resolve_team_dir_in("   ", Some("/ws"), Path::new("/ws")).is_err());
+    }
+
+    #[test]
+    fn resolve_team_dir_passes_through_without_a_workspace_env() {
+        // Outside a chan terminal ($CHAN_WORKSPACE_PATH unset) the dir is sent
+        // verbatim, preserving the prior workspace-relative contract.
+        assert_eq!(
+            resolve_team_dir_in("teams/alpha", None, Path::new("/anywhere")).unwrap(),
+            "teams/alpha"
+        );
     }
 
     #[test]

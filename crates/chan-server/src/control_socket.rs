@@ -497,19 +497,29 @@ async fn handle_team(
                     message: generate_bootstrap_script(dir, &config),
                 };
             }
-            let lead = config
-                .members
-                .iter()
-                .find(|m| m.is_lead)
-                .map(|m| m.handle.as_str())
-                .unwrap_or("?");
-            ControlResponse::Ok {
-                message: format!(
-                    "team {:?} at {dir}: {} member(s), lead {lead}",
-                    config.team_name,
-                    config.members.len()
-                ),
-            }
+            // Load now brings the saved team UP, not just summarizes it: read
+            // + validate `{dir}/config.toml`, then spawn lead-first and
+            // identity-poke each agent, exactly like `new` does after its
+            // write (it shares spawn_and_poke_team, so a freshly-written and a
+            // reloaded team come up identically). Without a terminal registry
+            // there is nothing to spawn into, so fall back to a read-only
+            // summary.
+            let Some(registry) = terminal_registry else {
+                let lead = config
+                    .members
+                    .iter()
+                    .find(|m| m.is_lead)
+                    .map(|m| m.handle.as_str())
+                    .unwrap_or("?");
+                return ControlResponse::Ok {
+                    message: format!(
+                        "team {:?} at {dir}: {} member(s), lead {lead}; no terminal registry to spawn into",
+                        config.team_name,
+                        config.members.len()
+                    ),
+                };
+            };
+            spawn_and_poke_team(registry, dir, &config).await
         }
     }
 }
@@ -1709,6 +1719,93 @@ is_lead = false
             ControlResponse::Error { message } => panic!("unexpected error: {message}"),
         }
         assert_eq!(registry.session_summaries().len(), 2);
+    }
+
+    /// A workspace cell with a SHELL_TEAM_TOML team already written under
+    /// `dir`, for the `handle_team` Load tests. The indexer is real (the cell
+    /// requires one) but never used here; both shell members spawn without an
+    /// agent binary on PATH.
+    fn bound_cell_with_shell_team(
+        dir: &str,
+    ) -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        Arc<RwLock<Option<WorkspaceCell>>>,
+    ) {
+        use crate::routes::team_config::write_team_config;
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace root");
+        let lib =
+            chan_workspace::Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path())
+            .expect("register workspace");
+        let workspace = lib.open_workspace(root.path()).expect("open workspace");
+        let config: TeamConfig = toml::from_str(SHELL_TEAM_TOML).expect("valid shell team");
+        write_team_config(&workspace, dir, &config).expect("write team");
+        let (index_tx, index_rx) = broadcast::channel::<chan_workspace::WatchEvent>(1);
+        // Keep the channel open for the indexer's lifetime; the test never
+        // sends on it.
+        std::mem::forget(index_tx);
+        let indexer = Arc::new(crate::indexer::Indexer::spawn(
+            workspace.clone(),
+            index_rx,
+            false,
+            chan_workspace::SearchAggression::Conservative,
+            Arc::new(chan_workspace::NoProgress),
+        ));
+        let cell = Arc::new(RwLock::new(Some(WorkspaceCell {
+            workspace,
+            watch_handle: None,
+            indexer,
+        })));
+        (cfg, root, cell)
+    }
+
+    #[tokio::test]
+    async fn handle_team_load_spawns_the_saved_team() {
+        // C1(b): `cs terminal team load` brings the saved team UP, not just
+        // summarizes it. The two shell members come live in the registry.
+        let (_cfg, _root, cell) = bound_cell_with_shell_team("saved-team");
+        let (_rroot, registry) = empty_registry();
+        let registry = Arc::new(registry);
+        match handle_team(
+            &cell,
+            Some(&registry),
+            "saved-team",
+            TeamOp::Load,
+            None,
+            false,
+        )
+        .await
+        {
+            ControlResponse::Ok { message } => {
+                assert!(message.contains("spawned"), "load spawns: {message}");
+                assert!(message.contains("2 member(s) up"), "{message}");
+            }
+            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+        }
+        assert_eq!(
+            registry.session_summaries().len(),
+            2,
+            "both shell members are live after a load"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_team_load_without_registry_falls_back_to_a_summary() {
+        // A server with terminals disabled has nothing to spawn into, so Load
+        // still validates + summarizes instead of erroring.
+        let (_cfg, _root, cell) = bound_cell_with_shell_team("saved-team");
+        match handle_team(&cell, None, "saved-team", TeamOp::Load, None, false).await {
+            ControlResponse::Ok { message } => {
+                assert!(
+                    message.contains("no terminal registry to spawn into"),
+                    "{message}"
+                );
+                assert!(message.contains("2 member(s)"), "{message}");
+            }
+            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+        }
     }
 
     #[test]
