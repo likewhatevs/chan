@@ -29,12 +29,18 @@ destructive + touches coordination docs, so it is an @@Host-sequenced item
 cleanup. Not release-blocking: the citations are already broken, so leaving
 phase-8 raw is no regression.
 
+
+@@Alex: OK, proceed
+
 ## Desktop: real AppImage `cs` re-exec verify (deferred from round-3, @@LaneD)
 
 The `cs_install` unit tests pass on HEAD, but the Linux AppImage argv[0]
 re-exec path could not be exercised in this environment (no AppImage build).
 Verify on a built AppImage. The macOS desktop-as-`cs` path IS verified
 (round-3, against the real desktop control socket).
+
+
+@@Alex: check our own contributing guidelines for how we can use sdme containers from the macOS (my machine) via lima-vm. We must be able to build all of the linux components from a macOS machine, including the AppImage. We will not be able to launch the AppImage because of no graphical interface (we may consider qemu or similar, later), but for the purpose of creating a symlink `cs` -> `chan-desktop` this environment must work. Our makefile should already have a 'dev' target to build this linux chan-desktop from a macOS machine, and if not, let's create one. We will use the same procedure for building the `gateway/` components. For the chan-desktop we must support ubuntu (debian), fedora (centos, almalinux), archlinux (cachyos).
 
 ## IDX: investigate the Metal hang + re-enable GPU as default (Theme-5, @@Host)
 
@@ -61,6 +67,8 @@ opt-in gate, or invert it to `CHAN_DISABLE_GPU`). Needs a Mac with Metal +
 a workspace large enough to trigger the multi-batch embed pass. The Theme-5
 in-flush freeze fix (smaller batch, shipped round-3) helps CPU UX meanwhile.
 
+@@Alex: Let's NOT do this during this round, and instead leave a backlog item for next phase.
+
 ## Product/scope question for @@Host (surfaced by the round-3 search PROBE)
 
 Semantic (BGE) search is BUILT and stored on every reindex but NEVER queried:
@@ -69,3 +77,9 @@ compute for retrieval nothing reads. Decide a direction: flip hybrid on by
 default, gate it behind the existing `semantic_enabled` opt-in and wire it
 into the route, or drop the dense-vector build. Out of round-3's Theme-4
 (mentions/paths) scope; raised for a deliberate call.
+
+
+@@Alex: Gate behind the existing `semantic_enabled` opt-in.
+
+## New `cs terminal team` subcommand
+In the same way we can Cmd+P from the UI and get a dialog to setup a team, or load one from a file, we will create the equivalent command line tool. We need subcommands for new team and to load an existing team config.
