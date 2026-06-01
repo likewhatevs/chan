@@ -28,3 +28,12 @@ web/pkg/
 # the tree so build.rs and include_bytes! resolve cleanly.
 crates/chan-server/resources/models.tar.zst
 crates/chan-server/resources/models/
+
+# Claude Code local state (machine-local, not shared)
+.claude/settings.local.json
+.claude/worktrees/
+
+# Team Work session scaffolding (local multi-agent sessions; the dir
+# name is chosen at spawn time, so add new ones here as needed)
+/new-team-1/
+/web-team/
