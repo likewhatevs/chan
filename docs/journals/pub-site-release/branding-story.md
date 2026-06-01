@@ -2,12 +2,40 @@
 
 Author: Claude (for @@Alex)
 Date: 2026-06-01
-Status: DIRECTION DECIDED 2026-06-01. @@Alex picked the spine in a
-four-question pass (recorded below). Mission spine, tagline primary,
-audience altitude, and where the founder story lives are all locked;
-the exact mission WORDING is still iterating. Nothing on the website,
-README, manual, or in the app has been changed yet. The "Apply plan"
-(section 14) lists what gets touched in the staged apply pass.
+Status: DIRECTION REVISED 2026-06-01 (see banner below). The earlier
+four-question pass is preserved for history, but @@Alex re-steered the
+positioning after it; where this doc and the revision banner disagree,
+the banner wins. README/design/manual/CLAUDE/AGENTS have been updated to
+the revised line; the in-app About slide and the marketing site follow
+via @@LaneB / @@LaneC.
+
+## REVISION 2026-06-01: re-steered positioning
+
+@@Alex re-steered the brand after the four-question pass. Net changes to
+the spine:
+
+- Lead with the AI ENGINE + MULTI-AGENT story, not sovereignty. Modern
+  engineers drive projects in MARKDOWN (design docs, specs, tasks); AI
+  agents create, review, refine, and harden that work and then execute.
+  Chan is a HYBRID, MULTI-AGENT environment where multiple agents (Claude,
+  Codex, Gemini) run in the terminal and COORDINATE WITH EACH OTHER via
+  `cs` + the MCP server. This promotes the old Pillar 2 to the lead.
+- Positioning line: "AI-native IDE for the modern engineer" (was "for
+  plain files"). Keep "AI-native".
+- "keyboard-first": DROPPED from all copy.
+- "local-first" / "plain files" (the sovereignty pillar): DEMOTED to a
+  light trust fact (loopback default, opt-in tunnel, files on disk), no
+  longer a pillar or a headline. The sovereignty VALUE still lives in the
+  mission + founder note, just not in the pitch.
+- Editor is MARKDOWN-FIRST. Section 6's "edits source code too" is walked
+  back: the editor is "meh" for source; do not sell source editing.
+- "first / unique / first-of-a-kind": SHOW, DON'T CLAIM (the section 6
+  "first" retire stands and now covers the superlative generally).
+- "sigma": stays retired in copy; it is @@Alex's rationale only.
+- Motif "Simple stroke. Powerful engine." STAYS; "powerful engine" now
+  reads as the AI engine.
+- Section 9 pillars are rewritten below; section 13 records these as
+  resolved.
 
 The four decisions:
 
@@ -334,6 +362,29 @@ where it shows up. These four become the site's feature grid, the
 README feature list, and the app's About carousel, all from one
 source.
 
+REVISED 2026-06-01: the pillars are reordered and relabeled. AI + the
+multi-agent fleet now lead; the old "Plain files, local-first" pillar is
+demoted to a light trust fact (not a pillar). Shipped wording lives in
+execution-plan.md; the headline set is now:
+
+```
+1. AI is the engine       agents create/review/refine/harden/execute the
+                          Markdown docs and tasks that drive the project.
+                          (Markdown-first.)
+2. A fleet that works     Claude, Codex, Gemini run in the terminal and
+   together               coordinate with EACH OTHER via cs + MCP. You
+                          conduct; they collaborate. No in-app chatbot.
+3. One hybrid workspace   editor, terminal, Team Work, file browser,
+                          graph, dashboard as tiling tabs/panes.
+4. Knows your workspace   hybrid BM25 + embedding search, live graph,
+                          code reports (SLOC, COCOMO).
+```
+
+The PILLAR 1-4 blocks below are retained for their evidence notes, but
+where they say "keyboard-first" or treat plain-files/local-first as a
+headline pillar, the revision above wins. The old Pillar 2 ("we stopped
+hiding the agents") is the spirit of the new #1 and #2.
+
 PILLAR 1 - One hybrid UI, one workspace
 
 ```
@@ -628,6 +679,25 @@ RESOLVED 2026-06-01 (the four-question pass):
 6. Story        First-person founder note (founder-note.md) + the six
                 motivations as a sourced appendix; the /story page
                 publishes from the draft. (Section 15)
+```
+
+RESOLVED 2026-06-01 (re-steer, supersedes parts of the above):
+
+```
+7.  Position    "AI-native IDE for the modern engineer" (not "for plain
+                files"). Keep "AI-native". (Banner, sec 2/5)
+8.  Lead story  AI is the engine + multi-agent fleet coordinating in the
+                terminal; Markdown-driven work. Old Pillar 2 leads.
+9.  keyboard    DROP "keyboard-first" from all copy.
+10. local/plain DEMOTE local-first/plain-files to a light trust fact; no
+                longer a pillar. Sovereignty value lives in mission +
+                founder note only.
+11. Editor      MARKDOWN-FIRST; do not sell source editing (sec 6 "edits
+                source too" walked back; editor is "meh" for source).
+12. first/uniq  SHOW, DON'T CLAIM; no "first/unique" superlative.
+13. sigma       Stays retired in copy; rationale only.
+14. Screenshots Team Work shots staged in web-marketing/assets/; stale
+                editor-*.png deleted.
 ```
 
 STILL OPEN:

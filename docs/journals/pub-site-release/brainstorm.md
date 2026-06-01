@@ -2,8 +2,6 @@
 Author: @@Alex
 2026-05-31 
 
-**Agents**: Do not use, this is a draft.
-
 Ideas for the launching of the website. We currently have the website published but it's the auto-generated one with content and screenshots from the early versions of Chan, totally innacurate.
 What we probably want to highlight:
 - Mission: make the world move faster with artificial intelligence
@@ -68,6 +66,9 @@ Dashboard / Search (indexing of the workspace):
 Search:
 ![](./image-6.png#w=250)
 Team Work:
+![](./image-14.png#w=250)
+![](./image-15.png#w=250)
+More team work:
 ![](./image-13.png#w=250)
 ![](./image-12.png#w=250)
 

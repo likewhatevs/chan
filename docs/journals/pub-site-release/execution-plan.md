@@ -6,10 +6,39 @@ Status: READY for a later implementation session. The brand direction is
 locked in branding-story.md; this is the agent-facing "how to apply it"
 to the shipped surfaces. Entry point for agents: read bootstrap.md first.
 
-This applies the locked positioning (chan is an AI-native IDE for plain
-files, not a "notes app for markdown workspaces") across README, design,
-manual, the agent-contract files, the in-app About slide, and the
-marketing site, and publishes a first-person founder /story page.
+This applies the locked positioning (chan is an AI-native IDE for the
+modern engineer) across README, design, manual, the agent-contract
+files, the in-app About slide, and the marketing site, and publishes a
+first-person founder /story page.
+
+
+## DIRECTION REVISED 2026-06-01 (read this first)
+
+@@Alex re-steered the positioning. The copy below was updated to match.
+If any older block still says otherwise, this banner wins.
+
+- Lead story: AI is the engine. Modern engineers drive projects in
+  MARKDOWN (design docs, specs, tasks); AI agents create, review, refine,
+  and harden that work and then execute it. Chan is a HYBRID, MULTI-AGENT
+  environment: editor tabs + terminal tabs, with multiple agents (Claude,
+  Codex, Gemini) running in the terminal and COORDINATING WITH EACH OTHER
+  through `cs` tooling and the in-process MCP server.
+- Positioning line: "AI-native IDE for the modern engineer" (NOT "for
+  plain files"). Keep "AI-native".
+- DROP "keyboard-first" everywhere.
+- DEMOTE "local-first" / "plain files" to a light trust fact only
+  (loopback default, opt-in tunnel, files on disk), never a headline or a
+  pillar.
+- Editor is MARKDOWN-FIRST. Do NOT sell source-code editing (it is "meh"
+  for source); syntax highlight + code reports are supporting features.
+- "first / unique / first-of-a-kind": SHOW, DON'T CLAIM. Describe the
+  multi-agent-in-terminal differentiator concretely; no superlative.
+- "sigma" stays retired in copy (rationale only, never printed).
+- The "Simple stroke. Powerful engine." motif STAYS ("powerful engine"
+  now maps to the AI engine).
+- Team Work screenshots are staged in web-marketing/assets/
+  (team-work-fleet.png, team-work-spawn.png, team-work-session.png). The
+  old editor-*.png shots were DELETED (stale); USE the Team Work shots.
 
 
 ## How this runs: 3 lanes, 2 waves
@@ -64,12 +93,24 @@ Lane     Wave  Owns (no file overlap)                     Build/verify
 8. The exact NEW copy below is derived from branding-story.md (the
    locked source). If anything reads wrong in context, prefer
    branding-story.md and flag it to @@Alex rather than improvising.
+9. POSITIONING (revised 2026-06-01, see top banner): lead with AI-engine
+   + multi-agent + Markdown; "AI-native IDE for the modern engineer";
+   DROP "keyboard-first"; DEMOTE local-first/plain-files to a light fact;
+   editor is Markdown-first (do not sell source editing); first/unique =
+   show don't claim; sigma stays out of copy. Use the Team Work
+   screenshots in web-marketing/assets/.
 
 
 ## WAVE 1
 
 
 ### @@LaneA - positioning text (no build needed)
+
+REVISED + DONE 2026-06-01: @@LaneA already applied the re-steered copy
+(see the top banner) to README.md, design.md, docs/manual/index.md,
+CLAUDE.md, AGENTS.md. The verbatim blocks further down are the original
+pre-revision draft, kept for record only; the live files reflect the
+banner.
 
 Five tiny factual swaps plus a doc sync. The one-liner must be identical
 across design.md, CLAUDE.md, and AGENTS.md, which is why one lane owns
@@ -189,8 +230,9 @@ secondary text color, small size; mirror neighboring classes):
 Simple stroke. Powerful engine.
 ```
 ```
-An AI-native IDE for plain files: your editor, terminal, and AI agents
-in one keyboard-first workspace. Local-first by default.
+An AI-native IDE for the modern engineer. Drive your project in Markdown
+and put AI to work on it: agents create, review, and refine your docs and
+tasks, and run alongside you in the terminal.
 ```
 
 Keep it minimal and factual; this is the lowest-sell surface. Do NOT
@@ -207,12 +249,14 @@ still cycles through all 3 slides with no Svelte runtime error in the
 console. Tear the test server down.
 
 
-## WAVE 2 (GATED on @@Alex's new Team Work + refreshed screenshots)
+## WAVE 2 (gate satisfied 2026-06-01: Team Work shots staged)
 
 ### @@LaneC - marketing site + founder /story page
 
-GATE: confirm the new Team Work + refreshed screenshots are in
-web-marketing/assets/ before starting. If not, STOP; this wave is gated.
+GATE (satisfied): Team Work screenshots are staged in
+web-marketing/assets/ (team-work-fleet.png, team-work-spawn.png,
+team-work-session.png) and the stale editor-*.png shots were deleted.
+You are cleared to start. Read the top "DIRECTION REVISED" banner first.
 
 Brand voice is allowed here. Motif to stamp once near the hero:
 "Simple stroke. Powerful engine."
@@ -220,60 +264,68 @@ Brand voice is allowed here. Motif to stamp once near the hero:
 --- web-marketing/src/pages/home.html ---
 
 Hero (lines 1-19):
-- eyebrow (l.3): `local-first markdown workspaces` -> `the AI-native IDE`
+- eyebrow (l.3): `local-first markdown workspaces` ->
+  `the AI-native IDE for the modern engineer`
 - h1 (l.4): keep `chan`
 - lede (l.5-8) NEW:
 ```
-An IDE that moves at the speed of thought, and gets out of your way. One
-keyboard-first workspace for your editor, terminal, and AI agents,
-powerful underneath with hybrid search, a live graph, and code reports.
-Local-first by default, and your files stay ordinary files on disk.
+An IDE that moves at the speed of thought. Drive your projects in
+Markdown and put a fleet of AI agents to work: they create, review,
+refine, and harden your design docs and tasks, then execute,
+coordinating with each other right in the terminal. Your editor, your
+terminal, and your agents in one hybrid workspace.
 ```
+- hero shot (l.16): the old editor screenshot was deleted; point the hero
+  `<img>` at `/assets/team-work-fleet.png` (alt: "Four AI agents running
+  side by side in Chan's Team Work").
 - image caption (l.18): `Chan running against a local notes workspace.`
-  -> `Chan running against a local workspace.`
+  -> `Chan running a fleet of agents in one workspace.`
 - Stamp the motif once near the hero (a small line under the lede or as
-  the feature-grid eyebrow).
+  the feature-grid eyebrow): `Simple stroke. Powerful engine.`
 
 Feature grid (lines 21-50): keep the 4-card markup/classes; rewrite the
-4 cards to the 4 pillars:
+4 cards to the revised pillars (AI + multi-agent lead; local/plain-files
+demoted out of the grid):
 
 ```
-1. One hybrid UI
-   One keyboard-first workspace instead of ten windows. Tiling tabs and
-   panes for editor, terminal, Team Work, file browser, graph, and
-   dashboard, each with command-line tooling.
+1. AI is the engine
+   Put agents to work on the docs and tasks that drive your project:
+   create, review, refine, harden, execute. Markdown-first, where your
+   project's thinking lives.
 
-2. Bring your own fleet
-   Team Work orchestrates multi-agent terminal sessions with the agents
-   you already trust: Claude, Codex, Gemini. The MCP server lets them
-   read and write the workspace; you conduct the fleet from the terminal.
+2. A fleet that works together
+   Run Claude, Codex, and Gemini side by side in the terminal and let
+   them coordinate with each other through Chan's cs tooling (poke,
+   broadcast, groups) and the MCP server. You conduct; they collaborate.
    No in-app chatbot.
 
-3. Plain files, local-first
-   Markdown and source stay ordinary files under the workspace folder,
-   with nothing left behind in your project. Loopback by default; an
-   opt-in tunnel publishes the same workspace for cross-device access.
+3. One hybrid workspace
+   Editor, terminal, Team Work, file browser, graph, and dashboard as
+   tiling tabs and panes, each with command-line tooling.
 
-4. It understands your workspace
-   Hybrid BM25 and embedding search, a multi-layer graph over links,
-   tags, and mentions, and per-file and per-directory code reports
-   (SLOC, COCOMO), all built in.
+4. Knows your workspace
+   Hybrid BM25 and embedding search, a live graph over links, tags, and
+   mentions, and per-file and per-directory code reports (SLOC, COCOMO),
+   built in.
 ```
 
-Keep the existing install split, local-first split, and support section.
-Once the Team Work screenshot exists, optionally add a dedicated
-"we stopped hiding the agents" image-split (pillar 2) using it; otherwise
-pillar 2 lives in the grid card only.
+Add a dedicated "a fleet that works together" image-split for pillar 2
+using the staged Team Work shots: `/assets/team-work-fleet.png` as the
+primary, with `/assets/team-work-spawn.png` (composing a team) and
+`/assets/team-work-session.png` (agents mid-work) as options. Keep the
+install split and support section. DEMOTE the existing "Local by default,
+tunnel by choice" split: keep it but move it below the fold; it is the
+light trust fact now, not a hero pillar.
 
 --- web-marketing/scripts/build.mjs ---
 
 - Home `<title>` (l.61): `chan - local-first markdown editor`
-  -> `chan - the AI-native IDE`
+  -> `chan - the AI-native IDE for the modern engineer`
 - Home description (l.62-63) NEW:
 ```
-Chan is an AI-native IDE for plain files: a keyboard-first workspace for
-your editor, terminal, and AI agents, with hybrid search, a live graph,
-and code reports. Local-first by default.
+Chan is an AI-native IDE for the modern engineer: drive your projects in
+Markdown and put a fleet of AI agents to work, coordinating in the
+terminal. Hybrid search, a live graph, and code reports built in.
 ```
 - Register the new story page: add it to requiredInputs and add a
   writePage call (active key "story", its own title/description), mirror
@@ -293,11 +345,13 @@ conventions used by src/pages/install.html. This ships @@Alex's draft;
 he may do a voice pass on the live copy afterward.
 
 @@LaneC verification: `cd web-marketing && npm run check` (builds dist +
-smokes). Confirm the home page renders the new hero/grid + the new
-screenshots, the /story page builds and is linked in the nav, and the
+smokes). Confirm the home page renders the new hero/grid, the Team Work
+image-split shows /assets/team-work-fleet.png (and no old editor-*.png
+refs remain), the /story page builds and is linked in the nav, and the
 page title/description are updated. Grep the built site for "sigma",
-"100x", "first IDE", "notes app", "markdown workspaces" and confirm zero
-hits.
+"100x", "first IDE", "unique", "keyboard-first", "notes app", "markdown
+workspaces", "plain files" and confirm zero hits (local/plain-files may
+appear only in the demoted trust split).
 
 
 ## Source docs (read for context)
