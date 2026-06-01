@@ -28,7 +28,7 @@ const requiredInputs = [
   path.join(srcRoot, "install.sh"),
   path.join(srcRoot, "styles.css"),
   path.join(srcRoot, "site.js"),
-  path.join(siteRoot, "favicon.ico"),
+  path.join(siteRoot, "chan-favicon.png"),
   path.join(siteRoot, "chan-mark.png"),
   path.join(siteRoot, "qr-donate.png"),
   path.join(manualRoot, "index.md"),
@@ -111,7 +111,7 @@ async function readWorkspaceVersion() {
 }
 
 async function copyStaticAssets() {
-  await fs.copyFile(path.join(siteRoot, "favicon.ico"), path.join(distRoot, "favicon.ico"));
+  await fs.copyFile(path.join(siteRoot, "chan-favicon.png"), path.join(distRoot, "chan-favicon.png"));
   await fs.copyFile(path.join(siteRoot, "chan-mark.png"), path.join(distRoot, "chan-mark.png"));
   await fs.copyFile(path.join(siteRoot, "qr-donate.png"), path.join(distRoot, "qr-donate.png"));
   await fs.copyFile(path.join(srcRoot, "styles.css"), path.join(distRoot, "assets", "site.css"));

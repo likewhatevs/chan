@@ -89,7 +89,7 @@ async function stageBundle(staging) {
     "manual/install/index.html",
     "assets/site.css",
     "assets/site.js",
-    "favicon.ico",
+    "chan-favicon.png",
     "chan-mark.png",
   ];
   for (const relative of required) {
@@ -105,7 +105,10 @@ async function stageBundle(staging) {
   await fs.cp(path.join(distRoot, "assets"), path.join(staging, "assets"), {
     recursive: true,
   });
-  await fs.copyFile(path.join(distRoot, "favicon.ico"), path.join(staging, "favicon.ico"));
+  await fs.copyFile(
+    path.join(distRoot, "chan-favicon.png"),
+    path.join(staging, "chan-favicon.png"),
+  );
   await fs.copyFile(path.join(distRoot, "chan-mark.png"), path.join(staging, "chan-mark.png"));
 }
 
@@ -122,7 +125,7 @@ function validateBundleEntries(entries) {
     "./manual/install/index.html",
     "./assets/site.css",
     "./assets/site.js",
-    "./favicon.ico",
+    "./chan-favicon.png",
     "./chan-mark.png",
   ];
   for (const entry of required) {

@@ -18,8 +18,8 @@ web-marketing/
 |   `-- templates/
 |       `-- base.html
 +-- assets/                public image assets copied to dist/assets/
++-- chan-favicon.png
 +-- chan-mark.png
-+-- favicon.ico
 `-- qr-donate.png
 ```
 
