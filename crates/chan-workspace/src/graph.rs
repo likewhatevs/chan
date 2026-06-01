@@ -25,8 +25,13 @@
 //   edges(src      TEXT NOT NULL,    -- node rel_path
 //         dst      TEXT NOT NULL,    -- node rel_path
 //         kind     TEXT NOT NULL,    -- "link" | "mention" | "tag"
-//         anchor   TEXT,             -- optional heading anchor on dst
-//         PRIMARY KEY (src, dst, kind))
+//         anchor   TEXT NOT NULL DEFAULT '',  -- heading/block anchor on
+//                                       dst; '' (never NULL) when none
+//         PRIMARY KEY (src, dst, kind, anchor))
+//                                    -- anchor is in the PK so one file
+//                                       can link the SAME target via two
+//                                       distinct anchors (heading + block)
+//                                       without the rows colliding
 //
 //   headings(rel_path TEXT NOT NULL,
 //            level    INTEGER NOT NULL,
@@ -369,8 +374,8 @@ impl GraphView {
                     src    TEXT NOT NULL,
                     dst    TEXT NOT NULL,
                     kind   TEXT NOT NULL,
-                    anchor TEXT,
-                    PRIMARY KEY (src, dst, kind)
+                    anchor TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (src, dst, kind, anchor)
                 );
                 CREATE INDEX IF NOT EXISTS edges_dst_idx ON edges(dst);
                 CREATE TABLE IF NOT EXISTS headings (
@@ -498,8 +503,8 @@ impl GraphView {
                     src    TEXT NOT NULL,
                     dst    TEXT NOT NULL,
                     kind   TEXT NOT NULL,
-                    anchor TEXT,
-                    PRIMARY KEY (src, dst, kind)
+                    anchor TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (src, dst, kind, anchor)
                 );
                 CREATE INDEX IF NOT EXISTS staging_edges_dst_idx ON staging_edges(dst);
                 CREATE TABLE IF NOT EXISTS staging_headings (
@@ -578,7 +583,11 @@ impl GraphView {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
+                // '' (the NOT NULL no-anchor sentinel) reads back as None
+                // so Edge.anchor keeps its "Some(x) iff a real anchor"
+                // contract for callers.
+                row.get::<_, String>(2)
+                    .map(|a| (!a.is_empty()).then_some(a))?,
             ))
         })?;
         let mut out = Vec::new();
@@ -607,7 +616,11 @@ impl GraphView {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
+                // '' (the NOT NULL no-anchor sentinel) reads back as None
+                // so Edge.anchor keeps its "Some(x) iff a real anchor"
+                // contract for callers.
+                row.get::<_, String>(2)
+                    .map(|a| (!a.is_empty()).then_some(a))?,
             ))
         })?;
         let mut out = Vec::new();
@@ -755,7 +768,14 @@ impl GraphView {
                 "INSERT OR IGNORE INTO edges(src, dst, kind, anchor) VALUES (?, ?, ?, ?)",
             )?;
             for e in outgoing {
-                ins_edge.execute(params![rel, e.dst, e.kind.as_str(), e.anchor])?;
+                // anchor is NOT NULL DEFAULT ''; bind '' for the no-anchor
+                // case so the (src,dst,kind,anchor) PK dedups correctly.
+                ins_edge.execute(params![
+                    rel,
+                    e.dst,
+                    e.kind.as_str(),
+                    e.anchor.as_deref().unwrap_or("")
+                ])?;
             }
             let mut ins_heading = tx.prepare_cached(
                 "INSERT INTO headings(rel_path, level, text, anchor, ord) VALUES (?, ?, ?, ?, ?)",
@@ -885,7 +905,12 @@ impl GraphView {
                 "INSERT OR IGNORE INTO staging_edges(src, dst, kind, anchor) VALUES (?, ?, ?, ?)",
             )?;
             for e in fg.edges {
-                ins_edge.execute(params![fg.rel, e.dst, e.kind.as_str(), e.anchor])?;
+                ins_edge.execute(params![
+                    fg.rel,
+                    e.dst,
+                    e.kind.as_str(),
+                    e.anchor.as_deref().unwrap_or("")
+                ])?;
             }
             let mut ins_heading = tx.prepare_cached(
                 "INSERT INTO staging_headings(rel_path, level, text, anchor, ord) \
@@ -1090,7 +1115,12 @@ impl GraphView {
                     fg.size,
                 ])?;
                 for e in fg.edges {
-                    ins_edge.execute(params![fg.rel, e.dst, e.kind.as_str(), e.anchor])?;
+                    ins_edge.execute(params![
+                        fg.rel,
+                        e.dst,
+                        e.kind.as_str(),
+                        e.anchor.as_deref().unwrap_or("")
+                    ])?;
                 }
                 for h in fg.headings {
                     let anchor = markdown::heading_anchor(&h.text);
@@ -1724,6 +1754,79 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn replace_file_keeps_two_anchors_to_the_same_target() {
+        // EDGES-PK (phase-15 round-3, @@LaneB's finding): a file that
+        // links the SAME target via two different anchors must keep BOTH
+        // edges. The old PK (src, dst, kind) collapsed them on INSERT OR
+        // IGNORE, keeping only the first; anchor is now in the PK.
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        let link = |anchor: &str| Edge {
+            src: "notes/a.md".to_string(),
+            dst: "notes/b.md".to_string(),
+            kind: EdgeKind::Link,
+            anchor: Some(anchor.to_string()),
+        };
+        g.replace_file(
+            "notes/a.md",
+            None,
+            Some(1),
+            None,
+            NodeKind::File,
+            &[link("section-one"), link("section-two")],
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
+
+        let mut anchors: Vec<Option<String>> = g
+            .neighbors("notes/a.md")
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.dst == "notes/b.md")
+            .map(|e| e.anchor)
+            .collect();
+        anchors.sort();
+        assert_eq!(
+            anchors,
+            vec![
+                Some("section-one".to_string()),
+                Some("section-two".to_string())
+            ],
+            "both anchors to the same target must survive the PK dedup"
+        );
+    }
+
+    #[test]
+    fn replace_file_no_anchor_edge_reads_back_as_none() {
+        // The NOT NULL '' sentinel must surface as anchor: None so the
+        // Edge contract ("Some iff a real anchor") holds for callers.
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+        g.replace_file(
+            "notes/a.md",
+            None,
+            Some(1),
+            None,
+            NodeKind::File,
+            &[Edge {
+                src: "notes/a.md".to_string(),
+                dst: "notes/b.md".to_string(),
+                kind: EdgeKind::Link,
+                anchor: None,
+            }],
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
+        let edges = g.neighbors("notes/a.md").unwrap();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].anchor, None);
     }
 
     fn populate(g: &GraphView, files: &[(&str, Option<&str>, Option<i64>)]) {
