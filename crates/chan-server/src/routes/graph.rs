@@ -1601,9 +1601,10 @@ fn build_graph_view(
     // nodes per #tag; mention nodes per distinct @@name. Image
     // file nodes for any image actually referenced by an edge (the
     // indexer skips images, so they aren't in `files` even when
-    // they exist on disk). Ghost file nodes for unresolved link
-    // targets so the graph shows broken links as dangling muted
-    // nodes.
+    // they exist on disk). Unresolved link targets are NOT rendered:
+    // a `[[...]]` / `[](...)` whose dst exists neither in the index
+    // nor on disk produces no node (and its edge is dropped below), so
+    // graphing chan's own source shows no ghost clutter.
     //
     // systacean-22 (filter): contact-frontmatter files that AREN'T
     // referenced by any `@@mention` resolution are skipped. The
@@ -1720,20 +1721,14 @@ fn build_graph_view(
             },
         );
     }
-    for ghost in &ghost_set {
-        nodes.insert(
-            ghost.clone(),
-            GraphNodeView::File {
-                id: ghost.clone(),
-                label: file_label(ghost),
-                path: ghost.clone(),
-                path_class: None,
-                node_kind: None,
-                bucket: None,
-                missing: true,
-            },
-        );
-    }
+    // No ghost nodes. We used to synthesize a muted `File { missing:
+    // true }` per unresolved link target; @@Host asked that graphing
+    // chan's own source show no ghost nodes (they were pure clutter,
+    // never navigable). `ghost_set` now ONLY drives the edge drop in
+    // the filter below, so a broken link contributes neither a node nor
+    // a dangling edge. (Indexed files that vanished from disk still
+    // render as `missing` via the `files` loop above; that is a stale-
+    // index signal, distinct from an unresolved link target.)
 
     // systacean-25: synthesize the special Drafts root + the
     // distinguished `drafts_link` edge from workspace-root → Drafts-
@@ -1769,6 +1764,13 @@ fn build_graph_view(
             // They have no node to point at after the ghost-set
             // guard above.
             if matches!(e.kind, EdgeKind::Link) && disk_dirs.contains(&e.dst) {
+                return false;
+            }
+            // Drop link edges to unresolved targets. We no longer
+            // synthesize ghost nodes for them, so the edge would
+            // otherwise dangle against a node we never created (and
+            // Cytoscape errors on an edge to a missing node id).
+            if matches!(e.kind, EdgeKind::Link) && ghost_set.contains(&e.dst) {
                 return false;
             }
             true
@@ -2515,6 +2517,49 @@ mod tests {
         let response = api_graph_sync(workspace, params);
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn unresolved_link_target_produces_no_ghost_node_or_edge() {
+        // @@Host (phase-15 round-3): graphing chan's own source should
+        // show no ghost nodes. A markdown link whose target exists
+        // neither in the index nor on disk must contribute NEITHER a
+        // `File { missing: true }` node NOR a dangling edge.
+        let (_cfg, _root, workspace) = open_workspace();
+        workspace
+            .write_text(
+                "notes/intro.md",
+                "# Intro\n\nsee [the void](does-not-exist.md)\n",
+            )
+            .unwrap();
+        workspace.index_file("notes/intro.md").unwrap();
+
+        let params = GraphParams {
+            scope: GraphScope::Workspace,
+            path: String::new(),
+            depth: 6,
+        };
+        let mut emit = None;
+        let view = build_graph_view(workspace, params, &mut emit).unwrap();
+
+        // Positive control: the real authored file IS a node, so the
+        // graph genuinely built (the assertion below is not vacuous).
+        assert!(
+            view.nodes.iter().any(|n| matches!(
+                n,
+                GraphNodeView::File { path, .. } if path == "notes/intro.md"
+            )),
+            "intro.md should be a graph node"
+        );
+        // The unresolved target appears nowhere. Serialize the whole
+        // view and assert the dst string is absent, robust against which
+        // node/edge variant might otherwise carry it.
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(
+            !json.contains("does-not-exist"),
+            "unresolved link target must not surface as a ghost node or a \
+             dangling edge: {json}"
+        );
     }
 
     #[tokio::test]
