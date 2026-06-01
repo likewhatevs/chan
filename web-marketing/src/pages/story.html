@@ -10,8 +10,16 @@
     Code and design docs at work, and cooking recipes and family trip
     plans at home. For years I kept switching tools depending on which of
     those I was doing and which machine I was on. In 2026 I wanted to stop.
-    I wanted one editor I could trust everywhere: on my laptop, and on a
-    remote machine over HTTP, reachable inbound or outbound through a tunnel.
+    I wanted one editor I could trust everywhere, and for it to feel the
+    same whether the files were on my laptop or on a machine across the
+    network. Today I run chan across three at once, and all three feel
+    local. One workspace is the laptop itself. The second is a Linux VM on
+    that same Mac, which the desktop app reaches by dialing out to its
+    <code>chan serve</code> over HTTP/2. The third lives on a VPS that comes
+    the other way: it tunnels out to chan's own gateway, and I reach it by
+    connecting to that gateway. The two remote ones are as immediate as the
+    one in front of me; I stop thinking about where the workspace actually
+    runs.
     That is the first reason chan exists.
   </p>
   <p>
