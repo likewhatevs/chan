@@ -91,6 +91,14 @@ enum WindowCommand {
     OpenSurvey {
         survey: SurveySpec,
     },
+    // `cs pane` layout query: the server asks the window for its current
+    // tab/pane layout. The SPA reads its `layout` and POSTs the snapshot to
+    // `POST /api/window/reply` echoing `request_id`, which fires the parked
+    // window-bus oneshot. Not an `open_*` command (it queries, it does not
+    // open a tab), hence the non-`Open` name and the `pane_query` wire tag.
+    PaneQuery {
+        request_id: String,
+    },
 }
 
 #[cfg(unix)]
@@ -147,6 +155,7 @@ pub fn start(
     self_writes: Arc<crate::self_writes::SelfWrites>,
     terminal_registry: TerminalRegistryCell,
     survey_bus: Arc<crate::survey::SurveyBus>,
+    window_bus: Arc<crate::window_bus::WindowBus>,
 ) -> std::io::Result<ControlHandle> {
     let _ = std::fs::remove_file(&socket_path);
     let listener = UnixListener::bind(&socket_path)?;
@@ -166,6 +175,7 @@ pub fn start(
             let self_writes = self_writes.clone();
             let terminal_registry = terminal_registry.clone();
             let survey_bus = survey_bus.clone();
+            let window_bus = window_bus.clone();
             tokio::spawn(async move {
                 let (read, mut write) = stream.into_split();
                 let mut reader = BufReader::new(read);
@@ -183,6 +193,7 @@ pub fn start(
                                 &self_writes,
                                 terminal_registry.get(),
                                 &survey_bus,
+                                &window_bus,
                             )
                             .await
                         }
@@ -216,6 +227,7 @@ pub fn start(
     _self_writes: Arc<crate::self_writes::SelfWrites>,
     _terminal_registry: TerminalRegistryCell,
     _survey_bus: Arc<crate::survey::SurveyBus>,
+    _window_bus: Arc<crate::window_bus::WindowBus>,
 ) -> std::io::Result<ControlHandle> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -233,6 +245,7 @@ async fn handle_request(
     self_writes: &crate::self_writes::SelfWrites,
     terminal_registry: Option<&Arc<TerminalRegistry>>,
     survey_bus: &Arc<crate::survey::SurveyBus>,
+    window_bus: &Arc<crate::window_bus::WindowBus>,
 ) -> ControlResponse {
     match req {
         ControlRequest::OpenPath { window_id, path } => {
@@ -388,6 +401,12 @@ async fn handle_request(
                 script,
             )
             .await
+        }
+        ControlRequest::PaneQuery { window_id } => {
+            if let Err(message) = require_window_id(&window_id) {
+                return ControlResponse::Error { message };
+            }
+            handle_pane_query(&window_id, events_tx, window_bus).await
         }
     }
 }
@@ -778,6 +797,64 @@ fn format_survey_reply(reply: &SurveyReply) -> String {
         SurveyReply::Option { option_label, .. } => option_label.clone(),
         SurveyReply::Followup { followup_path, .. } => {
             format!("new follow up file created: {followup_path}")
+        }
+    }
+}
+
+/// How long `cs pane` waits for the SPA to answer a layout query before
+/// giving up. The SPA replies in milliseconds (no user interaction, unlike a
+/// survey), so this only fires when the target window is not actually
+/// connected (e.g. the browser tab was closed while the terminal lived on),
+/// keeping `cs pane` from blocking forever in that case.
+#[cfg(unix)]
+const PANE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The blocking `cs pane` layout-query path: mint a request id, push a
+/// `pane_query` window_command to the originating window, park a oneshot on
+/// the window bus, and AWAIT the SPA's reply (delivered by `POST
+/// /api/window/reply` -> `WindowBus::complete`). The returned message is the
+/// layout snapshot JSON the CLI formats. Mirrors `handle_survey`'s register
+/// -> push -> await shape, with a timeout since no user is in the loop.
+#[cfg(unix)]
+async fn handle_pane_query(
+    window_id: &str,
+    events_tx: &broadcast::Sender<String>,
+    window_bus: &Arc<crate::window_bus::WindowBus>,
+) -> ControlResponse {
+    // Park the oneshot BEFORE pushing the command so a fast reply cannot
+    // arrive before the request is registered.
+    let (request_id, rx) = window_bus.register();
+    if let Err(message) = send_window_command(
+        window_id,
+        WindowCommand::PaneQuery {
+            request_id: request_id.clone(),
+        },
+        events_tx,
+    ) {
+        window_bus.cancel(&request_id);
+        return ControlResponse::Error { message };
+    }
+    // Block until the reply route fires the oneshot, or the timeout elapses
+    // (the window never answered). Cancel the parked entry on either failure
+    // so it does not leak.
+    match tokio::time::timeout(PANE_QUERY_TIMEOUT, rx).await {
+        Ok(Ok(payload)) => match serde_json::to_string(&payload) {
+            Ok(json) => ControlResponse::Ok { message: json },
+            Err(e) => ControlResponse::Error {
+                message: format!("encode pane layout: {e}"),
+            },
+        },
+        Ok(Err(_)) => {
+            window_bus.cancel(&request_id);
+            ControlResponse::Error {
+                message: "pane query cancelled before a reply".into(),
+            }
+        }
+        Err(_elapsed) => {
+            window_bus.cancel(&request_id);
+            ControlResponse::Error {
+                message: "no layout reply from the window (is it open in a browser?)".into(),
+            }
         }
     }
 }
@@ -1206,6 +1283,7 @@ mod tests {
         let self_writes = crate::self_writes::SelfWrites::new();
         let (tx, _) = broadcast::channel(1);
         let survey_bus = Arc::new(crate::survey::SurveyBus::new());
+        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
 
         let response = handle_request(
             ControlRequest::OpenPath {
@@ -1217,6 +1295,7 @@ mod tests {
             &self_writes,
             None,
             &survey_bus,
+            &window_bus,
         )
         .await;
 

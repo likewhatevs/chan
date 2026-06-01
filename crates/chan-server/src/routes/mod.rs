@@ -34,6 +34,7 @@ mod survey;
 // config write/read + bootstrap generation instead of duplicating it.
 pub(crate) mod team_config;
 mod terminal;
+mod window;
 mod workspace;
 mod ws;
 
@@ -81,6 +82,7 @@ pub use team_config::{api_team_config_read, api_team_config_write};
 pub use terminal::{
     api_create_terminal, api_delete_terminal, api_restart_terminal, api_terminal_ws,
 };
+pub use window::api_window_reply;
 pub use workspace::{
     api_cloud_workspaces, api_get_workspace, api_patch_workspace, api_workspace_bootstrap,
 };

@@ -123,6 +123,12 @@ pub struct AppState {
     /// gated-green ahead of C's. Drop the allow when the reply route exists.
     #[allow(dead_code)]
     pub survey_bus: Arc<crate::survey::SurveyBus>,
+    /// `cs pane` blocked-transport registry. Same shape + lifecycle as
+    /// `survey_bus`: the control socket parks a oneshot here per in-flight
+    /// `cs pane` query and awaits it; the SPA reply route (`POST
+    /// /api/window/reply`) completes it with the layout snapshot. Shared so
+    /// both ends reach the same map; transient in-memory state.
+    pub window_bus: Arc<crate::window_bus::WindowBus>,
 }
 
 /// Workspace + its notify watcher. Replaced wholesale by /api/storage/
@@ -261,6 +267,7 @@ pub(crate) mod test_support {
             shutdown_rx,
             scope_registry: Arc::new(crate::bus::ScopeRegistry::new()),
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),
+            window_bus: Arc::new(crate::window_bus::WindowBus::new()),
         })
     }
 

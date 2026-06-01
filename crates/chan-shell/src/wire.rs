@@ -89,6 +89,16 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<u32>,
     },
+    // Category 3 (blocking round-trip): query the originating SPA window's
+    // tab/pane LAYOUT. The layout lives only in the frontend, so the server
+    // pushes a `pane` window_command keyed by `window_id`, parks a oneshot
+    // (the window bus), and BLOCKS until the SPA replies with the layout
+    // snapshot via `POST /api/window/reply`. The CLI prints it (markdown by
+    // default, `--json` for machine output). `window_id` is the caller's own
+    // window ($CHAN_WINDOW_ID), like the `open_*` commands.
+    PaneQuery {
+        window_id: String,
+    },
     // Category 2 (blocking): raise a survey overlay on the SPA window(s)
     // that own the matching terminal tab(s) and BLOCK until the user
     // answers. The server resolves the selector to those windows, mints
@@ -358,6 +368,21 @@ mod survey_wire_tests {
         let raw = serde_json::to_string(&req).unwrap();
         let back: ControlRequest = serde_json::from_str(&raw).unwrap();
         assert!(matches!(back, ControlRequest::TermScrollback { .. }));
+    }
+
+    #[test]
+    fn pane_query_request_tag_and_field() {
+        // Wire tag `pane_query`, a required `window_id`. A Rust rename that
+        // drifts either breaks the server's decode with a green build.
+        let req = ControlRequest::PaneQuery {
+            window_id: "window-a".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "pane_query");
+        assert_eq!(v["window_id"], "window-a");
+        let raw = serde_json::to_string(&req).unwrap();
+        let back: ControlRequest = serde_json::from_str(&raw).unwrap();
+        assert!(matches!(back, ControlRequest::PaneQuery { .. }));
     }
 
     #[test]

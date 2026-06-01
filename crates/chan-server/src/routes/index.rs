@@ -451,6 +451,7 @@ mod tests {
             shutdown_rx,
             scope_registry: std::sync::Arc::new(crate::bus::ScopeRegistry::new()),
             survey_bus: std::sync::Arc::new(crate::survey::SurveyBus::new()),
+            window_bus: std::sync::Arc::new(crate::window_bus::WindowBus::new()),
         });
 
         RouteTestApp {

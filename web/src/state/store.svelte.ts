@@ -39,7 +39,9 @@ import {
   restoreLayout,
   serializeLayout,
   type BrowserTab,
+  type LeafNode,
   type SpawnContext,
+  type Tab,
 } from "./tabs.svelte";
 import { isEditableText } from "./fileTypes";
 import { isTauriDesktop, runDesktopDownload } from "../api/desktop";
@@ -693,7 +695,65 @@ type WindowCommandFrame =
       window_id: string;
       command: "open_survey";
       survey: SurveySpec;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "pane_query";
+      request_id: string;
     };
+
+/// Build a `cs pane` snapshot of one tab: its kind + title, whether it is
+/// the pane's active tab, and the close-blocker flags the CLI surfaces
+/// (`dirty` for an unsaved file, `live` for a running terminal). A file
+/// tab's title is its basename; every other kind carries an explicit
+/// `title`.
+function paneQueryTab(
+  tab: Tab,
+  activeTabId: string | null,
+): { id: string; kind: string; title: string; active: boolean; dirty?: boolean; live?: boolean } {
+  const snap: {
+    id: string;
+    kind: string;
+    title: string;
+    active: boolean;
+    dirty?: boolean;
+    live?: boolean;
+  } = {
+    id: tab.id,
+    kind: tab.kind,
+    title: tab.kind === "file" ? (tab.path.split("/").pop() ?? tab.path) : tab.title,
+    active: tab.id === activeTabId,
+  };
+  if (tab.kind === "file") snap.dirty = tab.content !== tab.saved;
+  if (tab.kind === "terminal") snap.live = !!tab.terminalSessionId;
+  return snap;
+}
+
+/// Answer a `cs pane` layout query: serialize the live `layout` (every leaf
+/// pane, its tabs, which pane/tab is selected) and POST it to
+/// `/api/window/reply`, which unblocks the waiting CLI. Read-only - no tab
+/// or pane mutation, so no session save. The CLI may have already timed out
+/// (5s) or disconnected, in which case the reply route 404s the stale id;
+/// there is nothing to surface in the UI for a query, so swallow it.
+async function respondPaneQuery(requestId: string): Promise<void> {
+  const panes = Object.values(layout.nodes)
+    .filter((n): n is LeafNode => n.kind === "leaf")
+    .map((pane) => ({
+      id: pane.id,
+      active: pane.id === layout.activePaneId,
+      activeTabId: pane.activeTabId,
+      tabs: pane.tabs.map((tab) => paneQueryTab(tab, pane.activeTabId)),
+    }));
+  try {
+    await api.windowReply({
+      requestId,
+      payload: { activePaneId: layout.activePaneId, panes },
+    });
+  } catch {
+    // Stale/timed-out request id -> the route 404s; nothing to do.
+  }
+}
 
 async function handleWindowCommand(raw: unknown): Promise<void> {
   const frame = raw as Partial<WindowCommandFrame> | null;
@@ -766,6 +826,12 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     // overlay. The reply round-trip (POST /api/survey/reply) unblocks the
     // waiting CLI. No session save: a survey is transient, not layout.
     showSurvey(frame.survey);
+    return;
+  }
+  if (frame.command === "pane_query" && typeof frame.request_id === "string") {
+    // `cs pane` asked this window for its tab/pane layout; serialize it and
+    // POST it back to unblock the waiting CLI. Read-only, no session save.
+    await respondPaneQuery(frame.request_id);
     return;
   }
 }

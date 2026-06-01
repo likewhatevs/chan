@@ -100,6 +100,20 @@ pub enum ShellAction {
         #[arg(long)]
         pretty: bool,
     },
+    /// Report the current window's tab/pane layout: every pane, its tabs
+    /// (kind, title, whether a file tab is unsaved or a terminal tab is
+    /// live), and which pane is selected. Prints a markdown table per pane
+    /// by default; `--json` emits compact machine output and `--json
+    /// --pretty` indents it. Queries the running SPA window over the control
+    /// socket, so it needs `$CHAN_WINDOW_ID` (a chan terminal).
+    Pane {
+        /// Emit machine-readable JSON instead of the markdown tables.
+        #[arg(long)]
+        json: bool,
+        /// Indent the JSON output. Only meaningful with `--json`.
+        #[arg(long)]
+        pretty: bool,
+    },
 }
 
 /// Worked examples appended to `cs terminal survey --help`. Each case
@@ -432,6 +446,7 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
             json,
             pretty,
         } => cmd_shell_search(query.join(" "), limit, json, pretty).await,
+        ShellAction::Pane { json, pretty } => cmd_pane(json, pretty).await,
     }
 }
 
@@ -511,6 +526,112 @@ fn render_search_markdown(raw: &str) -> Result<String> {
                 .replace("</b>", "**");
             out.push_str(&format!("  {}\n", flat.trim()));
         }
+    }
+    Ok(out)
+}
+
+/// `cs pane`: query the running window's tab/pane layout over the control
+/// socket (the server pushes a `pane_query` to the SPA, which replies with a
+/// layout snapshot) and print it. Markdown table per pane by default;
+/// `--json` compact, `--json --pretty` indented. Mirrors the `cs terminal
+/// list` output convention. Needs `$CHAN_WINDOW_ID` (a chan terminal), like
+/// `cs open`, since the layout is a property of one SPA window.
+async fn cmd_pane(json: bool, pretty: bool) -> Result<()> {
+    let env = open_env()?;
+    let raw = send_control_request(
+        &env.control_socket,
+        ControlRequest::PaneQuery {
+            window_id: env.window_id,
+        },
+    )
+    .await?;
+    if json {
+        // Compact by default; --pretty re-indents. Both go to stdout so the
+        // output pipes cleanly.
+        if pretty {
+            let value: serde_json::Value =
+                serde_json::from_str(&raw).context("parsing pane layout JSON")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).context("formatting pane layout JSON")?
+            );
+        } else {
+            println!("{raw}");
+        }
+    } else {
+        print!("{}", render_pane_layout_markdown(&raw)?);
+    }
+    Ok(())
+}
+
+/// Render the `cs pane` layout snapshot JSON as one markdown table per pane.
+/// Shape (the SPA's `handleWindowCommand` pane responder builds it):
+/// `{activePaneId, panes: [{id, active, activeTabId, tabs: [{id, kind,
+/// title, active, dirty?, live?}]}]}`. The active pane is flagged in its
+/// heading; per tab, a `*` marks the pane's active tab and the `flags`
+/// column carries `dirty` (unsaved file) / `live` (running terminal). An
+/// empty layout yields a short line rather than a blank table.
+fn render_pane_layout_markdown(raw: &str) -> Result<String> {
+    let value: serde_json::Value = serde_json::from_str(raw).context("parsing pane layout JSON")?;
+    let panes = value
+        .get("panes")
+        .and_then(|p| p.as_array())
+        .ok_or_else(|| anyhow::anyhow!("pane layout JSON missing `panes`"))?;
+    if panes.is_empty() {
+        return Ok("No panes.\n".to_string());
+    }
+    let active_pane = value.get("activePaneId").and_then(|v| v.as_str());
+    let str_field = |v: &serde_json::Value, key: &str| {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let mut out = String::new();
+    for pane in panes {
+        let id = str_field(pane, "id");
+        let is_active = pane
+            .get("active")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| active_pane == Some(id.as_str()));
+        let active_tab = pane.get("activeTabId").and_then(|v| v.as_str());
+        if is_active {
+            out.push_str(&format!("## pane {id} (active)\n\n"));
+        } else {
+            out.push_str(&format!("## pane {id}\n\n"));
+        }
+        let tabs = pane.get("tabs").and_then(|t| t.as_array());
+        let empty = tabs.map(|t| t.is_empty()).unwrap_or(true);
+        if empty {
+            out.push_str("(empty)\n\n");
+            continue;
+        }
+        out.push_str("| tab | kind | title | flags |\n");
+        out.push_str("| --- | --- | --- | --- |\n");
+        for tab in tabs.into_iter().flatten() {
+            let tab_id = str_field(tab, "id");
+            let kind = str_field(tab, "kind");
+            let title = str_field(tab, "title");
+            // `*` marks the active tab (either the explicit `active` flag or
+            // a match against the pane's activeTabId).
+            let is_active_tab = tab
+                .get("active")
+                .and_then(|v| v.as_bool())
+                .unwrap_or_else(|| active_tab == Some(tab_id.as_str()));
+            let marker = if is_active_tab { "*" } else { "" };
+            let mut flags: Vec<&str> = Vec::new();
+            if tab.get("dirty").and_then(|v| v.as_bool()).unwrap_or(false) {
+                flags.push("dirty");
+            }
+            if tab.get("live").and_then(|v| v.as_bool()).unwrap_or(false) {
+                flags.push("live");
+            }
+            out.push_str(&format!(
+                "| {tab_id}{marker} | {kind} | {title} | {} |\n",
+                flags.join(", ")
+            ));
+        }
+        out.push('\n');
     }
     Ok(out)
 }
@@ -1039,6 +1160,50 @@ mod tests {
     fn terminal_list_markdown_empty_is_short_line() {
         let out = render_terminal_list_markdown(r#"{"groups":{}}"#).expect("render");
         assert_eq!(out, "No live terminal sessions.\n");
+    }
+
+    #[test]
+    fn parses_pane_json_pretty() {
+        let cli = CsCli::parse_from(["cs", "pane", "--json", "--pretty"]);
+        match cli.action {
+            ShellAction::Pane { json, pretty } => {
+                assert!(json);
+                assert!(pretty);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pane_layout_markdown_renders_panes_tabs_and_flags() {
+        let raw = r#"{
+            "activePaneId": "p1",
+            "panes": [
+                { "id": "p1", "active": true, "activeTabId": "t3", "tabs": [
+                    { "id": "t3", "kind": "file", "title": "notes.md", "active": true, "dirty": true },
+                    { "id": "t4", "kind": "terminal", "title": "@@LaneA", "live": true }
+                ] },
+                { "id": "p2", "active": false, "activeTabId": null, "tabs": [] }
+            ]
+        }"#;
+        let out = render_pane_layout_markdown(raw).expect("render");
+        // Active pane is flagged; the inactive one is not.
+        assert!(out.contains("## pane p1 (active)"), "active heading: {out}");
+        assert!(
+            out.contains("## pane p2\n") && !out.contains("## pane p2 (active)"),
+            "inactive heading: {out}"
+        );
+        // The active tab carries the `*` marker; flags carry dirty + live.
+        assert!(out.contains("| t3* | file | notes.md | dirty |"), "{out}");
+        assert!(out.contains("| t4 | terminal | @@LaneA | live |"), "{out}");
+        // An empty pane renders `(empty)`, not a header-only table.
+        assert!(out.contains("(empty)"), "empty pane: {out}");
+    }
+
+    #[test]
+    fn pane_layout_markdown_empty_is_short_line() {
+        let out = render_pane_layout_markdown(r#"{"activePaneId":"","panes":[]}"#).expect("render");
+        assert_eq!(out, "No panes.\n");
     }
 
     #[test]

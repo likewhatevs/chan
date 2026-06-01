@@ -1120,6 +1120,14 @@ export const api = {
   /// minted path through the bus).
   surveyReply: (reply: SurveyReplyRequest) =>
     req<void>("POST", "/api/survey/reply", reply),
+
+  /// Reply to a `cs pane` window query. The server pushed a `pane_query`
+  /// window_command with a minted `requestId`; the SPA built the layout
+  /// snapshot and POSTs it here, which completes the parked window-bus
+  /// oneshot and unblocks the waiting CLI. 404 if the request already
+  /// timed out / was answered (caller ignores it: a query has no UI).
+  windowReply: (reply: WindowReplyRequest) =>
+    req<void>("POST", "/api/window/reply", reply),
 };
 
 /// Wire shape for `Workspace::create_team` /
@@ -1190,6 +1198,15 @@ export type SurveyReplyRequest =
       title?: string | null;
       bodyMarkdown: string;
     };
+
+/// Body of `POST /api/window/reply` (the `cs pane` reply). camelCase to match
+/// the server's `WindowReplyRequest`. `payload` is opaque to the server (the
+/// CLI formats it); for a `cs pane` query it is the layout snapshot the SPA
+/// built from `layout`.
+export type WindowReplyRequest = {
+  requestId: string;
+  payload: unknown;
+};
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`
 /// raw so axum's `*path` capture works.
