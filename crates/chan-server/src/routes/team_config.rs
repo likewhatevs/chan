@@ -92,7 +92,35 @@ fn validate_team_config(config: &TeamConfig) -> Result<(), String> {
     if config.members.iter().any(|m| m.handle.trim().is_empty()) {
         return Err("every member must have a non-empty handle".into());
     }
+    // When present, the agent type must be one the submit map knows, so the
+    // generated poke chord + the lead composer's submit mode resolve. A shell
+    // member carries no agent (None), which is valid.
+    for m in &config.members {
+        if let Some(agent) = m.agent.as_deref() {
+            if !matches!(agent, "claude" | "codex" | "gemini") {
+                return Err(format!(
+                    "member {} has an unknown agent {agent:?} (want claude, codex, or gemini)",
+                    m.handle
+                ));
+            }
+        }
+    }
     Ok(())
+}
+
+/// The submit chord a member's agent reads as "submit this buffer", as a
+/// human-readable escape literal for the bootstrap poke note. Mirrors the
+/// shared submit map (`chan_shell::SubmitAgent::submit_chord` /
+/// submitMode.ts AGENT_SUBMIT_CHORDS): claude uses the xterm modifyOtherKeys
+/// Cmd+Enter CSI; codex / gemini submit on a bare CR.
+fn submit_chord_literal(agent: Option<&str>) -> &'static str {
+    match agent {
+        Some("codex") | Some("gemini") => "\\r",
+        // claude is the default chord for any agent member; a shell member
+        // (None) is not poked as an agent, so it falls through to the claude
+        // literal only as a harmless default in the note.
+        _ => "\\x1b[27;9;13~",
+    }
 }
 
 /// `POST /api/team-config/read` - read `{dir}/config.toml`, parse +
@@ -257,11 +285,19 @@ fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> String {
          task file you point to.\n\n",
     );
     out.push_str(
-        "    cs terminal write --tab-name=<target> $'poke from <me>: <1-line>; read <path>\\x1b[27;9;13~'\n\n",
+        "    cs terminal write --tab-name=<target> --submit=<target-agent> \\\n\
+        \x20       $'poke from <me>: <1-line>; read <path>'\n\n",
     );
     out.push_str(
-        "The trailing \\x1b[27;9;13~ is the Meta+Enter submit chord; a bare newline\n\
-         parks the poke unsubmitted in the target's compose box.\n\n",
+        "`--submit=<target-agent>` appends the submit chord the TARGET agent reads,\n\
+         so the poke fires instead of parking in the compose box. Use the target's\n\
+         `agent` from the roster above:\n\n",
+    );
+    out.push_str(&render_poke_chords(config));
+    out.push_str(
+        "A shell member is not an agent: drop --submit and the buffer's trailing\n\
+         newline submits it. Without --submit the poke parks unsubmitted in an\n\
+         agent's compose box.\n\n",
     );
 
     out.push_str("## Files\n\n");
@@ -280,61 +316,97 @@ fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> String {
     out
 }
 
-/// Render the roster as a pure-ASCII table (handle | command | role),
-/// columns padded to content width, targeting <=80 cols. One row per
-/// member; role is "lead" or "worker".
+/// Render the roster as a pure-ASCII table (handle | command | agent | role),
+/// columns padded to content width, targeting <=80 cols. One row per member;
+/// role is "lead" or "worker"; agent is the submit-encoding type ("shell" when
+/// the member carries no agent) so members know which chord pokes each peer.
 fn render_roster(config: &TeamConfig) -> String {
     const H_HANDLE: &str = "handle";
     const H_COMMAND: &str = "command";
+    const H_AGENT: &str = "agent";
     const H_ROLE: &str = "role";
 
-    let rows: Vec<(String, String, &'static str)> = config
+    let rows: Vec<(String, String, String, &'static str)> = config
         .members
         .iter()
         .map(|m| {
             let role = if m.is_lead { "lead" } else { "worker" };
-            (m.handle.clone(), m.command.clone(), role)
+            let agent = m.agent.clone().unwrap_or_else(|| "shell".to_string());
+            (m.handle.clone(), m.command.clone(), agent, role)
         })
         .collect();
 
     let w_handle = rows
         .iter()
-        .map(|(h, _, _)| h.len())
+        .map(|(h, _, _, _)| h.len())
         .chain(std::iter::once(H_HANDLE.len()))
         .max()
         .unwrap_or(H_HANDLE.len());
     let w_command = rows
         .iter()
-        .map(|(_, c, _)| c.len())
+        .map(|(_, c, _, _)| c.len())
         .chain(std::iter::once(H_COMMAND.len()))
         .max()
         .unwrap_or(H_COMMAND.len());
+    let w_agent = rows
+        .iter()
+        .map(|(_, _, a, _)| a.len())
+        .chain(std::iter::once(H_AGENT.len()))
+        .max()
+        .unwrap_or(H_AGENT.len());
     let w_role = rows
         .iter()
-        .map(|(_, _, r)| r.len())
+        .map(|(_, _, _, r)| r.len())
         .chain(std::iter::once(H_ROLE.len()))
         .max()
         .unwrap_or(H_ROLE.len());
 
     let border = format!(
-        "+{}+{}+{}+\n",
+        "+{}+{}+{}+{}+\n",
         "-".repeat(w_handle + 2),
         "-".repeat(w_command + 2),
+        "-".repeat(w_agent + 2),
         "-".repeat(w_role + 2),
     );
 
     let mut out = String::new();
     out.push_str(&border);
     out.push_str(&format!(
-        "| {H_HANDLE:<w_handle$} | {H_COMMAND:<w_command$} | {H_ROLE:<w_role$} |\n"
+        "| {H_HANDLE:<w_handle$} | {H_COMMAND:<w_command$} | {H_AGENT:<w_agent$} | {H_ROLE:<w_role$} |\n"
     ));
     out.push_str(&border);
-    for (handle, command, role) in &rows {
+    for (handle, command, agent, role) in &rows {
         out.push_str(&format!(
-            "| {handle:<w_handle$} | {command:<w_command$} | {role:<w_role$} |\n"
+            "| {handle:<w_handle$} | {command:<w_command$} | {agent:<w_agent$} | {role:<w_role$} |\n"
         ));
     }
     out.push_str(&border);
+    out
+}
+
+/// Bullet list of `--submit=<agent>` -> chord for each distinct agent on the
+/// roster, so a poker knows which encoding the target reads. Only the agent
+/// types actually present are listed (a shell-only team gets the claude
+/// default line so the doc still names the common chord).
+fn render_poke_chords(config: &TeamConfig) -> String {
+    let mut agents: Vec<&str> = config
+        .members
+        .iter()
+        .filter_map(|m| m.agent.as_deref())
+        .collect();
+    agents.sort_unstable();
+    agents.dedup();
+    if agents.is_empty() {
+        agents.push("claude");
+    }
+    let mut out = String::new();
+    for agent in agents {
+        out.push_str(&format!(
+            "- {agent}: --submit={agent} (chord {})\n",
+            submit_chord_literal(Some(agent))
+        ));
+    }
+    out.push('\n');
     out
 }
 
@@ -361,6 +433,7 @@ mod tests {
                     )]),
                     is_lead: true,
                     position: None,
+                    agent: Some("claude".into()),
                 },
                 Member {
                     handle: "@@LaneA".into(),
@@ -368,6 +441,7 @@ mod tests {
                     env: std::collections::BTreeMap::new(),
                     is_lead: false,
                     position: None,
+                    agent: Some("codex".into()),
                 },
             ],
         }
@@ -449,10 +523,51 @@ mod tests {
                 env: std::collections::BTreeMap::new(),
                 is_lead: i == 0,
                 position: None,
+                agent: Some("claude".into()),
             })
             .collect();
         let err = validate_team_config(&config).unwrap_err();
         assert!(err.contains("between 1 and 9"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_agent() {
+        let mut config = sample_config();
+        config.members[1].agent = Some("copilot".into());
+        let err = validate_team_config(&config).unwrap_err();
+        assert!(err.contains("unknown agent"), "got: {err}");
+        // A shell member (None) is valid.
+        config.members[1].agent = None;
+        assert!(validate_team_config(&config).is_ok());
+    }
+
+    #[test]
+    fn bootstrap_roster_shows_agent_and_per_agent_poke_chords() {
+        let (_cfg, _root, workspace) = test_workspace();
+        write_team_config(&workspace, "new-team-1", &sample_config()).unwrap();
+        let bootstrap = workspace.read_text("new-team-1/bootstrap.md").unwrap();
+
+        // Roster carries the agent column + each member's agent value.
+        assert!(bootstrap.contains("agent"), "roster agent column header");
+        assert!(bootstrap.contains("codex"), "codex member agent in roster");
+
+        // The poke section teaches the agent-correct --submit form with the
+        // chord per the two distinct agents on the sample roster.
+        assert!(
+            bootstrap.contains("--submit=<target-agent>"),
+            "poke uses --submit"
+        );
+        assert!(
+            bootstrap.contains("--submit=claude (chord \\x1b[27;9;13~)"),
+            "claude chord line"
+        );
+        assert!(
+            bootstrap.contains("--submit=codex (chord \\r)"),
+            "codex chord line"
+        );
+        // Still pure ASCII, no em dashes.
+        assert!(bootstrap.is_ascii(), "bootstrap must be pure ASCII");
+        assert!(!bootstrap.contains('\u{2014}'), "no em dashes");
     }
 
     #[test]

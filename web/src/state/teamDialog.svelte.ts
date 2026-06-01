@@ -15,6 +15,26 @@
 
 import { TEAM_DIR_DEFAULT } from "./teamConfigPath";
 
+/// Submit-encoding target for a member's terminal. `"none"` is a shell
+/// member (no submit chord, plain Enter); the named values map to the
+/// shared submit map (`terminal/submitMode.ts` AGENT_SUBMIT_CHORDS) so a
+/// poke or the lead composer appends that agent's submit chord. Mirrors
+/// the picker type in TeamWork.svelte; the wire form drops `"none"` and
+/// omits the field entirely (`TeamMemberWire.agent?`).
+export type AgentTarget = "none" | "claude" | "codex" | "gemini";
+
+/// Sniff the default agent from a spawn command's first word so the
+/// dialog can seed the picker without the user re-stating it. The
+/// command is the source of truth the user already typed; anything that
+/// is not a known agent runtime falls back to `"none"` (shell member).
+export function agentForCommand(command: string): AgentTarget {
+  const first = command.trim().split(/\s+/)[0] ?? "";
+  if (first === "claude") return "claude";
+  if (first === "codex") return "codex";
+  if (first === "gemini") return "gemini";
+  return "none";
+}
+
 /// One agent in the team being bootstrapped. Position in
 /// `TeamDialogConfig.members` is stable (positional id used by the
 /// airplane-grid for drag&drop slot assignment).
@@ -33,6 +53,12 @@ export interface TeamMemberDraft {
   /// Exactly one member must be flagged as lead; the lead lands on
   /// the existing Team Work Lead terminal, the others on new tabs.
   isLead: boolean;
+  /// Submit-encoding target for this member's terminal. Optional only so
+  /// hand-built drafts (and the wire round-trip, where a shell member
+  /// omits the field) stay terse; producers always populate it and
+  /// consumers read a missing value as `"none"`. `"none"` is a shell
+  /// member; named agents drive the poke/composer submit chord.
+  agent?: AgentTarget;
 }
 
 /// The pane real-estate strategy for the team's terminals.
@@ -179,7 +205,9 @@ export function defaultTeamConfig(): TeamDialogConfig {
     tabGroup: defaultTabGroupFromPath(TEAM_DIR_DEFAULT),
     size: TEAM_MIN_SIZE,
     autoPrefix: true,
-    members: [{ name: "Lead", command: "claude", env: "", isLead: true }],
+    members: [
+      { name: "Lead", command: "claude", env: "", isLead: true, agent: "claude" },
+    ],
     realEstate: { kind: "tabs" },
   };
 }
@@ -297,6 +325,9 @@ export function resizeTeamMembers(cfg: TeamDialogConfig): TeamDialogConfig {
       command: "claude",
       env: "",
       isLead: false,
+      // New workers default to the claude command, so the picker seeds to
+      // claude too (keeps command + agent consistent out of the box).
+      agent: "claude",
     });
   }
   while (out.members.length > out.size) {

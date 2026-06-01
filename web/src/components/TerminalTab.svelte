@@ -89,7 +89,6 @@
     openTabMenu,
     tabMenu,
   } from "../state/tabMenu.svelte";
-  import BubbleOverlay from "./BubbleOverlay.svelte";
   import McpEnvInfoModal from "./McpEnvInfoModal.svelte";
   import { markPaneModalOpen } from "../state/paneModalGuard.svelte";
   import TeamWork from "./TeamWork.svelte";
@@ -1690,13 +1689,6 @@
       />
     </div>
   {/if}
-  <!-- The bubble overlay is a self-contained static example. It
-       reads its own visibility (the bubbleStub rune, flipped by the
-       Team Work right-click menu) and the persisted stack/tray layout
-       preference, so it carries no props and is mounted
-       unconditionally rather than gated on the Team Work prompt being
-       open. -->
-  <BubbleOverlay />
   {#if tab.teamWork?.open}
     <TeamWork
       prompt={tab.teamWork}

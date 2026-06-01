@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  agentForCommand,
   assignMemberToCell,
   closeTeamDialog,
   defaultGridForSize,
@@ -33,6 +34,12 @@ describe("defaultTeamConfig", () => {
     expect(cfg.members[0].isLead).toBe(true);
     expect(cfg.autoPrefix).toBe(true);
     expect(cfg.realEstate).toEqual({ kind: "tabs" });
+  });
+
+  test("lead defaults to the claude agent (matches its claude command)", () => {
+    const cfg = defaultTeamConfig();
+    expect(cfg.members[0].command).toBe("claude");
+    expect(cfg.members[0].agent).toBe("claude");
   });
 
   test("seeds tabGroup from the default team-dir basename", () => {
@@ -120,6 +127,25 @@ describe("validateTeamConfig", () => {
   });
 });
 
+describe("agentForCommand", () => {
+  test("sniffs the command's first word into the agent target", () => {
+    expect(agentForCommand("claude")).toBe("claude");
+    expect(agentForCommand("codex")).toBe("codex");
+    expect(agentForCommand("gemini")).toBe("gemini");
+  });
+
+  test("ignores flags after the first word", () => {
+    expect(agentForCommand("claude --resume")).toBe("claude");
+    expect(agentForCommand("  codex   --foo  ")).toBe("codex");
+  });
+
+  test("unknown commands fall back to none (shell member)", () => {
+    expect(agentForCommand("bash")).toBe("none");
+    expect(agentForCommand("")).toBe("none");
+    expect(agentForCommand("claude-wrapper")).toBe("none");
+  });
+});
+
 describe("resizeTeamMembers", () => {
   test("grow: appends fresh Worker-N entries", () => {
     const out = resizeTeamMembers({ ...defaultTeamConfig(), size: 4 });
@@ -127,6 +153,12 @@ describe("resizeTeamMembers", () => {
     expect(out.members[2].name).toBe("Worker2");
     expect(out.members[3].name).toBe("Worker3");
     expect(out.members.filter((m) => m.isLead)).toHaveLength(1);
+  });
+
+  test("grow: new WorkerN entries default to the claude agent", () => {
+    const out = resizeTeamMembers({ ...defaultTeamConfig(), size: 3 });
+    expect(out.members[1].agent).toBe("claude");
+    expect(out.members[2].agent).toBe("claude");
   });
 
   test("shrink: truncates from the end", () => {

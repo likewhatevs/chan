@@ -32,6 +32,12 @@ toml = { workspace = true }
 dirs = { workspace = true }
 chan-workspace = { workspace = true, default-features = false }
 chan-server = { workspace = true, features = ["embeddings"] }
+# The `cs` control-socket client, so chan-desktop dispatches `cs` when
+# invoked through a `cs` name (argv[0]) without a `chan` binary on PATH.
+# The workspace dep is `default-features = false` (chan-server pulls it
+# wire-only), so chan-desktop must opt INTO `client` explicitly to get the
+# clap surface + transport. Cargo unifies to one build with `client` on.
+chan-shell = { workspace = true, features = ["client"] }
 notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 keyring = { workspace = true }

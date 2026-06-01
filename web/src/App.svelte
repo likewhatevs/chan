@@ -19,6 +19,7 @@
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PreflightOverlay from "./components/PreflightOverlay.svelte";
+  import BubbleOverlay from "./components/BubbleOverlay.svelte";
   import PathPromptModal from "./components/PathPromptModal.svelte";
   import PaneModeHelp from "./components/PaneModeHelp.svelte";
   import PromptModal from "./components/PromptModal.svelte";
@@ -1133,6 +1134,11 @@
      is unusable until they reopen the original URL. -->
 <MissingTokenOverlay />
 <PreflightOverlay />
+<!-- Survey overlay: window-level modal raised by `cs terminal survey`. One
+     mount per window, driven by the singleton surveyState; renders nothing
+     when no survey is active. Mounted at App root (not per terminal tab) so
+     a window-targeted survey shows exactly once. -->
+<BubbleOverlay />
 <!-- Screensaver cover. Mounts at App root so z-index sits above every
      chan overlay (screensaver-backdrop uses z=2000). Renders nothing
      while screensaver.locked === false; when locked it covers the SPA

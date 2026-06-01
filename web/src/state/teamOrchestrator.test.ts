@@ -159,6 +159,45 @@ describe("translateConfig", () => {
     expect(out.members[0].position).toEqual({ row: 0, col: 0 });
     expect(out.members[1].position).toEqual({ row: 0, col: 1 });
   });
+
+  test("named agents survive onto the wire member", () => {
+    const out = translateConfig(
+      sample({
+        members: [
+          { name: "Lead", command: "claude", env: "", isLead: true, agent: "claude" },
+          { name: "Worker1", command: "codex", env: "", isLead: false, agent: "codex" },
+        ],
+      }),
+    );
+    expect(out.members[0].agent).toBe("claude");
+    expect(out.members[1].agent).toBe("codex");
+  });
+
+  test("a shell member (none) omits the wire agent field entirely", () => {
+    const out = translateConfig(
+      sample({
+        members: [
+          { name: "Lead", command: "claude", env: "", isLead: true, agent: "claude" },
+          { name: "Worker1", command: "bash", env: "", isLead: false, agent: "none" },
+        ],
+      }),
+    );
+    expect(out.members[1].agent).toBeUndefined();
+    expect("agent" in out.members[1]).toBe(false);
+  });
+
+  test("an unset draft agent also omits the wire field", () => {
+    const out = translateConfig(
+      sample({
+        members: [
+          { name: "Lead", command: "claude", env: "", isLead: true },
+          { name: "Worker1", command: "claude", env: "", isLead: false },
+        ],
+      }),
+    );
+    expect(out.members[0].agent).toBeUndefined();
+    expect(out.members[1].agent).toBeUndefined();
+  });
 });
 
 describe("wireToDialog", () => {
@@ -196,8 +235,10 @@ describe("wireToDialog", () => {
     expect(dialog.autoPrefix).toBe(true);
     expect(dialog.size).toBe(2);
     expect(dialog.members).toEqual([
-      { name: "@@Lead", command: "claude", env: "FOO=bar", isLead: true },
-      { name: "@@Worker1", command: "claude", env: "", isLead: false },
+      // The wire members carry no `agent`, so each reads back as a shell
+      // member ("none").
+      { name: "@@Lead", command: "claude", env: "FOO=bar", isLead: true, agent: "none" },
+      { name: "@@Worker1", command: "claude", env: "", isLead: false, agent: "none" },
     ]);
   });
 
@@ -245,6 +286,32 @@ describe("wireToDialog", () => {
     const dialog = wireToDialog(wire({ auto_prefix_at: false }), "demo");
     expect(dialog.autoPrefix).toBe(false);
   });
+
+  test("a named wire agent maps back onto the draft", () => {
+    const dialog = wireToDialog(
+      wire({
+        members: [
+          { handle: "@@Lead", command: "claude", env: {}, is_lead: true, agent: "claude" },
+          { handle: "@@Worker1", command: "codex", env: {}, is_lead: false, agent: "codex" },
+        ],
+      }),
+      "demo",
+    );
+    expect(dialog.members[0].agent).toBe("claude");
+    expect(dialog.members[1].agent).toBe("codex");
+  });
+
+  test("an omitted wire agent reads back as none (shell member)", () => {
+    const dialog = wireToDialog(
+      wire({
+        members: [
+          { handle: "@@Lead", command: "bash", env: {}, is_lead: true },
+        ],
+      }),
+      "demo",
+    );
+    expect(dialog.members[0].agent).toBe("none");
+  });
 });
 
 describe("translateConfig <-> wireToDialog round-trips real estate", () => {
@@ -278,6 +345,25 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
       expect(back.realEstate.slots[1]).toEqual([1]);
       expect(back.realEstate.slots[2]).toEqual([2]);
     }
+  });
+
+  test("agent targets survive a full save -> load round-trip", () => {
+    const original: TeamDialogConfig = {
+      hostName: "Neo",
+      configMode: "new",
+      teamDir: "round",
+      tabGroup: "chan-team",
+      size: 3,
+      autoPrefix: true,
+      members: [
+        { name: "Lead", command: "claude", env: "", isLead: true, agent: "claude" },
+        { name: "Worker1", command: "gemini", env: "", isLead: false, agent: "gemini" },
+        { name: "Worker2", command: "bash", env: "", isLead: false, agent: "none" },
+      ],
+      realEstate: { kind: "tabs" },
+    };
+    const back = wireToDialog(translateConfig(original), "round");
+    expect(back.members.map((m) => m.agent)).toEqual(["claude", "gemini", "none"]);
   });
 });
 

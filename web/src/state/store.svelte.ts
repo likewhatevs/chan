@@ -17,9 +17,11 @@ import {
   openWatchSocket,
   sessionPath,
   sessionWindowId,
+  type SurveySpec,
   type WatchSubscription,
   type WsStatus,
 } from "../api/client";
+import { showSurvey } from "./survey.svelte";
 import {
   activeLayout,
   closeTab,
@@ -685,6 +687,12 @@ type WindowCommandFrame =
       command: "open_dashboard";
       carousel_index?: number | null;
       carousel_off?: boolean;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "open_survey";
+      survey: SurveySpec;
     };
 
 async function handleWindowCommand(raw: unknown): Promise<void> {
@@ -751,6 +759,13 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     }
     setTransientStatus("opened dashboard");
     scheduleSessionSave();
+    return;
+  }
+  if (frame.command === "open_survey" && frame.survey) {
+    // `cs terminal survey` raised a survey on this window; render the modal
+    // overlay. The reply round-trip (POST /api/survey/reply) unblocks the
+    // waiting CLI. No session save: a survey is transient, not layout.
+    showSurvey(frame.survey);
     return;
   }
 }

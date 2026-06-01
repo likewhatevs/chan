@@ -959,6 +959,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chan-server",
+ "chan-shell",
  "chan-tunnel-client",
  "chan-tunnel-proto",
  "chan-tunnel-server",

@@ -110,6 +110,19 @@ pub struct AppState {
     /// the rebuilt bridge re-references the same registry so live
     /// subscriptions keep flowing onto the new workspace's events.
     pub scope_registry: Arc<crate::bus::ScopeRegistry>,
+    /// `cs terminal survey` blocked-transport registry. The control
+    /// socket parks a oneshot here per in-flight survey and awaits it;
+    /// the SPA reply route (`POST /api/survey/reply`) completes it. Shared
+    /// so both ends reach the same map. Survives nothing in particular: a
+    /// survey is in-memory and transient by nature.
+    ///
+    /// Read only by @@LaneC's `POST /api/survey/reply` route (the seam in
+    /// round-3-survey-contract.md). The producer side (the control socket's
+    /// `register`/`cancel`) gets its own clone in `build_app`, so until C's
+    /// route lands this field is write-only here; the allow keeps D's half
+    /// gated-green ahead of C's. Drop the allow when the reply route exists.
+    #[allow(dead_code)]
+    pub survey_bus: Arc<crate::survey::SurveyBus>,
 }
 
 /// Workspace + its notify watcher. Replaced wholesale by /api/storage/
@@ -247,6 +260,7 @@ pub(crate) mod test_support {
             })),
             shutdown_rx,
             scope_registry: Arc::new(crate::bus::ScopeRegistry::new()),
+            survey_bus: Arc::new(crate::survey::SurveyBus::new()),
         })
     }
 

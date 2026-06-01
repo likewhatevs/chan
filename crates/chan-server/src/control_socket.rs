@@ -1,7 +1,7 @@
 //! First-party control socket for local `chan` CLI helpers.
 //!
 //! MCP stays scoped to workspace tools for external agents. This socket is
-//! for UI commands from chan-spawned terminals, such as `chan open`,
+//! for UI commands from chan-spawned terminals, such as `cs open`,
 //! where the command must target one frontend window in the already
 //! running server process.
 
@@ -36,6 +36,10 @@ pub type TerminalRegistryCell = Arc<OnceLock<Arc<TerminalRegistry>>>;
 // these types on unix (the listener is unix-only).
 #[cfg(unix)]
 pub use chan_shell::{ControlRequest, ControlResponse};
+// The survey types are part of the same shared wire module; the handler
+// pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
+#[cfg(unix)]
+use chan_shell::{SurveyReply, SurveySpec};
 
 #[cfg(unix)]
 #[derive(Debug, Serialize)]
@@ -74,6 +78,13 @@ enum WindowCommand {
         carousel_index: Option<u32>,
         #[serde(skip_serializing_if = "is_false")]
         carousel_off: bool,
+    },
+    // Raise the `cs terminal survey` overlay. The SurveySpec nests under
+    // `survey` (it is camelCase, unlike the snake_case sibling fields, so
+    // nesting keeps the two conventions from mixing in one object). The SPA
+    // reads `frame.survey` and POSTs a SurveyReply to the reply route.
+    OpenSurvey {
+        survey: SurveySpec,
     },
 }
 
@@ -130,6 +141,7 @@ pub fn start(
     events_tx: broadcast::Sender<String>,
     self_writes: Arc<crate::self_writes::SelfWrites>,
     terminal_registry: TerminalRegistryCell,
+    survey_bus: Arc<crate::survey::SurveyBus>,
 ) -> std::io::Result<ControlHandle> {
     let _ = std::fs::remove_file(&socket_path);
     let listener = UnixListener::bind(&socket_path)?;
@@ -148,6 +160,7 @@ pub fn start(
             let events_tx = events_tx.clone();
             let self_writes = self_writes.clone();
             let terminal_registry = terminal_registry.clone();
+            let survey_bus = survey_bus.clone();
             tokio::spawn(async move {
                 let (read, mut write) = stream.into_split();
                 let mut reader = BufReader::new(read);
@@ -157,13 +170,17 @@ pub fn start(
                         message: "empty control request".into(),
                     },
                     Ok(_) => match serde_json::from_str::<ControlRequest>(&line) {
-                        Ok(req) => handle_request(
-                            req,
-                            &workspace_cell,
-                            &events_tx,
-                            &self_writes,
-                            terminal_registry.get(),
-                        ),
+                        Ok(req) => {
+                            handle_request(
+                                req,
+                                &workspace_cell,
+                                &events_tx,
+                                &self_writes,
+                                terminal_registry.get(),
+                                &survey_bus,
+                            )
+                            .await
+                        }
                         Err(e) => ControlResponse::Error {
                             message: format!("invalid control request: {e}"),
                         },
@@ -193,6 +210,7 @@ pub fn start(
     _events_tx: broadcast::Sender<String>,
     _self_writes: Arc<crate::self_writes::SelfWrites>,
     _terminal_registry: TerminalRegistryCell,
+    _survey_bus: Arc<crate::survey::SurveyBus>,
 ) -> std::io::Result<ControlHandle> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -200,13 +218,16 @@ pub fn start(
     ))
 }
 
+// Async because of the one blocking variant (`TermSurvey`); every other
+// arm returns synchronously without awaiting.
 #[cfg(unix)]
-fn handle_request(
+async fn handle_request(
     req: ControlRequest,
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
     events_tx: &broadcast::Sender<String>,
     self_writes: &crate::self_writes::SelfWrites,
     terminal_registry: Option<&Arc<TerminalRegistry>>,
+    survey_bus: &Arc<crate::survey::SurveyBus>,
 ) -> ControlResponse {
     match req {
         ControlRequest::OpenPath { window_id, path } => {
@@ -323,6 +344,106 @@ fn handle_request(
                 Err(message) => return ControlResponse::Error { message },
             };
             into_response(search_workspace(&workspace, &query, limit))
+        }
+        ControlRequest::TermSurvey {
+            tab_name,
+            tab_group,
+            spec,
+        } => {
+            handle_survey(
+                spec,
+                tab_name.as_deref(),
+                tab_group.as_deref(),
+                events_tx,
+                survey_bus,
+                terminal_registry,
+            )
+            .await
+        }
+    }
+}
+
+/// The blocking `cs terminal survey` path: resolve the tab selector to the
+/// owning SPA window(s), mint a survey id, push the `open_survey` overlay to
+/// each, park a oneshot, and AWAIT the SPA's reply (delivered by C's
+/// `POST /api/survey/reply` -> `SurveyBus::complete_survey`). The returned
+/// message is what the CLI prints to stdout: the chosen option label, or the
+/// followup-file path the UI created on `[F]`.
+#[cfg(unix)]
+async fn handle_survey(
+    mut spec: SurveySpec,
+    tab_name: Option<&str>,
+    tab_group: Option<&str>,
+    events_tx: &broadcast::Sender<String>,
+    survey_bus: &Arc<crate::survey::SurveyBus>,
+    terminal_registry: Option<&Arc<TerminalRegistry>>,
+) -> ControlResponse {
+    if tab_name.is_none() && tab_group.is_none() {
+        return ControlResponse::Error {
+            message: "survey needs a tab name and/or group selector".into(),
+        };
+    }
+    // Mirror the CLI-side cap so a malformed direct request is rejected too.
+    if spec.options.is_empty() || spec.options.len() > 4 {
+        return ControlResponse::Error {
+            message: format!("survey needs 1..=4 options (got {})", spec.options.len()),
+        };
+    }
+    let Some(registry) = terminal_registry else {
+        return ControlResponse::Error {
+            message: "terminal registry unavailable".into(),
+        };
+    };
+    let windows = registry.window_ids_matching(tab_name, tab_group);
+    if windows.is_empty() {
+        return ControlResponse::Error {
+            message: "no live terminal session matched".into(),
+        };
+    }
+    // Park the oneshot (and stamp its id onto the spec) BEFORE pushing the
+    // overlay, so a fast reply cannot arrive before the survey is
+    // registered.
+    let (survey_id, rx) = survey_bus.register();
+    spec.survey_id = survey_id.clone();
+    // Fan the overlay out to every owning window. First reply wins; later
+    // ones find the id already removed and no-op. A send failure is fatal
+    // (the SPA will never see the overlay), so cancel and report it.
+    for window_id in &windows {
+        if let Err(message) = send_window_command(
+            window_id,
+            WindowCommand::OpenSurvey {
+                survey: spec.clone(),
+            },
+            events_tx,
+        ) {
+            survey_bus.cancel(&survey_id);
+            return ControlResponse::Error { message };
+        }
+    }
+    // Block until C's reply route fires the oneshot. A receive error means
+    // the sender was dropped without a reply (server shutdown); the entry is
+    // gone, but cancel defensively in case register/await ever diverge.
+    match rx.await {
+        Ok(reply) => ControlResponse::Ok {
+            message: format_survey_reply(&reply),
+        },
+        Err(_) => {
+            survey_bus.cancel(&survey_id);
+            ControlResponse::Error {
+                message: "survey cancelled before a reply".into(),
+            }
+        }
+    }
+}
+
+/// The stdout line the CLI prints for a completed survey: the bare chosen
+/// option label, or the `new follow up file created: ...` line on `[F]`.
+#[cfg(unix)]
+fn format_survey_reply(reply: &SurveyReply) -> String {
+    match reply {
+        SurveyReply::Option { option_label, .. } => option_label.clone(),
+        SurveyReply::Followup { followup_path, .. } => {
+            format!("new follow up file created: {followup_path}")
         }
     }
 }
@@ -636,7 +757,7 @@ fn open_path(
             .map_err(|e| format!("create {rel}: {e}"))?;
         WindowCommand::OpenFile { path: rel.clone() }
     } else {
-        return Err("file does not exist; chan open creates `.md` files only".into());
+        return Err("file does not exist; cs open creates `.md` files only".into());
     };
 
     let frame = WindowCommandFrame {
@@ -714,8 +835,8 @@ mod tests {
         assert_eq!(parent_rel("notes/a.png"), "notes");
     }
 
-    #[test]
-    fn handle_request_reports_poisoned_workspace_cell() {
+    #[tokio::test]
+    async fn handle_request_reports_poisoned_workspace_cell() {
         let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
         let poisoned = workspace_cell.clone();
         let _ = std::thread::spawn(move || {
@@ -725,6 +846,7 @@ mod tests {
         .join();
         let self_writes = crate::self_writes::SelfWrites::new();
         let (tx, _) = broadcast::channel(1);
+        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
 
         let response = handle_request(
             ControlRequest::OpenPath {
@@ -735,7 +857,9 @@ mod tests {
             &tx,
             &self_writes,
             None,
-        );
+            &survey_bus,
+        )
+        .await;
 
         match response {
             ControlResponse::Error { message } => {

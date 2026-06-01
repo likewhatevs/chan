@@ -152,16 +152,6 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Open a path. Inside a chan terminal: opens it in the current
-    /// window. Outside one (the OS file-association entry): opens the
-    /// owning registered workspace in a running chan-desktop, or guides
-    /// you to register one.
-    Open {
-        /// File or directory path. Relative paths resolve against
-        /// the shell's current working directory.
-        #[arg(value_hint = clap::ValueHint::AnyPath)]
-        path: PathBuf,
-    },
     /// Drive the current chan window from its terminal (the `cs` alias).
     ///
     /// Reached as `chan shell <action>` or, via a `cs -> chan` symlink
@@ -669,13 +659,6 @@ fn main() -> Result<()> {
             reports,
         } => cmd_add(path, semantic_search, reports),
         Command::List { json } => cmd_list(json),
-        Command::Open { path } => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .context("building tokio runtime")?;
-            rt.block_on(cmd_open(path))
-        }
         Command::Shell { action } => {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -1773,67 +1756,6 @@ async fn cmd_mcp(path: PathBuf) -> Result<()> {
         .context("running MCP server")
 }
 
-async fn cmd_open(path: PathBuf) -> Result<()> {
-    let abs = chan_shell::absolutize(path)?;
-    // Inside a chan terminal ($CHAN_CONTROL_SOCKET + $CHAN_WINDOW_ID set):
-    // open the file in the originating window, the same as `cs open`.
-    if let Ok(env) = chan_shell::open_env() {
-        let message = chan_shell::send_control_request(
-            &env.control_socket,
-            chan_shell::ControlRequest::OpenPath {
-                window_id: env.window_id,
-                path: abs,
-            },
-        )
-        .await?;
-        eprintln!("{message}");
-        return Ok(());
-    }
-    // Outside a chan terminal: this is the OS file-association entry (a
-    // double-click / `open` handoff). Assess the path against the
-    // workspace registry, then hand the owning workspace off to a running
-    // chan-desktop, or guide the user. (Distinct from `cs open`, which
-    // only targets an existing chan window.)
-    let lib = library()?;
-    let Some(root) = workspace_root_for(&lib, &abs) else {
-        anyhow::bail!(
-            "{} is not inside a registered chan workspace.\n\
-             Register one first:  chan add <directory>",
-            abs.display()
-        );
-    };
-    match maybe_handoff_to_desktop(&root).await {
-        Some(outcome) => outcome,
-        None => {
-            eprintln!(
-                "{} is in workspace {}, but no running chan-desktop was found \
-                 to open it.\nOpen the workspace with:  chan serve {}",
-                abs.display(),
-                root.display(),
-                root.display()
-            );
-            Ok(())
-        }
-    }
-}
-
-/// The registered workspace whose root contains `path`, or `None`. Backs
-/// `chan open <path>` when run outside a chan terminal (the OS
-/// file-association entry).
-fn workspace_root_for(lib: &Library, path: &Path) -> Option<PathBuf> {
-    pick_workspace_root(lib.list_workspaces().into_iter().map(|w| w.root_path), path)
-}
-
-/// Longest-prefix match of `path` against the registered workspace roots
-/// so a nested workspace beats its parent. Pure over the root list for
-/// testability.
-fn pick_workspace_root(roots: impl IntoIterator<Item = PathBuf>, path: &Path) -> Option<PathBuf> {
-    roots
-        .into_iter()
-        .filter(|root| path.starts_with(root))
-        .max_by_key(|root| root.components().count())
-}
-
 /// Bridge between the agent subprocess and the MCP server hosted in
 /// chan-server. Connects to the Unix-domain socket and pipes
 /// stdin -> socket and socket -> stdout concurrently. Returns when
@@ -2705,30 +2627,6 @@ fn print_import_summary(summary: &chan_workspace::ImportSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pick_workspace_root_longest_prefix_wins() {
-        let roots = vec![
-            PathBuf::from("/tmp/ws"),
-            PathBuf::from("/tmp/ws/nested"),
-            PathBuf::from("/tmp/other"),
-        ];
-        // A file in the nested workspace -> the nested root (longest prefix).
-        assert_eq!(
-            pick_workspace_root(roots.clone(), Path::new("/tmp/ws/nested/a.md")),
-            Some(PathBuf::from("/tmp/ws/nested"))
-        );
-        // A file only under the parent -> the parent root.
-        assert_eq!(
-            pick_workspace_root(roots.clone(), Path::new("/tmp/ws/top.md")),
-            Some(PathBuf::from("/tmp/ws"))
-        );
-        // A file under no registered root -> None.
-        assert_eq!(
-            pick_workspace_root(roots, Path::new("/tmp/elsewhere/x.md")),
-            None
-        );
-    }
 
     fn ipv4(s: &str) -> IpAddr {
         s.parse().unwrap()

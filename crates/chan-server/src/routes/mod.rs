@@ -27,6 +27,7 @@ mod screensaver;
 mod search;
 mod sessions;
 mod storage;
+mod survey;
 mod team_config;
 mod terminal;
 mod workspace;
@@ -70,6 +71,7 @@ pub use search::{
 };
 pub use sessions::{api_delete_session, api_get_session, api_list_sessions, api_put_session};
 pub use storage::api_storage_reset;
+pub use survey::api_survey_reply;
 pub use team_config::{api_team_config_read, api_team_config_write};
 pub use terminal::{
     api_create_terminal, api_delete_terminal, api_restart_terminal, api_terminal_ws,

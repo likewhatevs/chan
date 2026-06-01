@@ -36,6 +36,7 @@ mod signal;
 mod state;
 mod static_assets;
 mod store;
+mod survey;
 mod terminal_sessions;
 mod tunnel_guard;
 mod util;
@@ -67,8 +68,9 @@ use routes::{
     api_reports_disable, api_reports_enable, api_reports_state, api_resolve_link,
     api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
-    api_search_files, api_storage_reset, api_team_config_read, api_team_config_write,
-    api_terminal_ws, api_upload_file, api_workspace_bootstrap, api_write_file, ws_upgrade,
+    api_search_files, api_storage_reset, api_survey_reply, api_team_config_read,
+    api_team_config_write, api_terminal_ws, api_upload_file, api_workspace_bootstrap,
+    api_write_file, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -420,12 +422,18 @@ async fn build_app(
     // requests (cs term write / list) read it.
     let terminal_registry_cell: control_socket::TerminalRegistryCell =
         Arc::new(std::sync::OnceLock::new());
+    // Survey bus: shared between the control socket (the blocked
+    // `cs terminal survey` side) and AppState (the SPA reply route's
+    // `complete_survey` side). Created before the control socket so the
+    // accept loop can park surveys, and cloned onto AppState below.
+    let survey_bus = Arc::new(survey::SurveyBus::new());
     let control = control_socket::start(
         control_socket_path.clone(),
         state_for_bridge.clone(),
         events_tx.clone(),
         self_writes.clone(),
         terminal_registry_cell.clone(),
+        survey_bus.clone(),
     );
     let (control_socket_path, control_socket) = match control {
         Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
@@ -465,6 +473,7 @@ async fn build_app(
         terminal_sessions,
         shutdown_rx,
         scope_registry,
+        survey_bus,
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
@@ -901,6 +910,9 @@ fn router(state: Arc<AppState>) -> Router {
         // default /tmp); see routes/team_config.rs module docs.
         .route("/api/team-config/read", post(api_team_config_read))
         .route("/api/team-config/write", post(api_team_config_write))
+        // cs terminal survey reply: completes the parked survey oneshot on
+        // D's survey bus (round-3-survey-contract.md). Owned by @@LaneC.
+        .route("/api/survey/reply", post(api_survey_reply))
         .route(
             "/api/files/*path",
             get(api_read_file)

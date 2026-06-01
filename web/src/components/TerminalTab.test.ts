@@ -263,10 +263,12 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
     expect(terminalSource).not.toMatch(/\{bubbleCount\}/);
   });
 
-  test("the BubbleOverlay is mounted self-contained with no watcher props", () => {
-    expect(terminalSource).toMatch(/<BubbleOverlay \/>/);
-    expect(terminalSource).not.toMatch(/watcher=\{tab\.watcher\}/);
-    expect(terminalSource).not.toMatch(/onWatcherDetached=/);
+  test("the survey overlay is no longer mounted per terminal tab", () => {
+    // The rebuilt survey overlay (BubbleOverlay) is a window-level modal
+    // mounted once at App root and driven by the singleton surveyState, so
+    // a window-targeted `cs terminal survey` shows exactly once instead of
+    // once per visible terminal tab.
+    expect(terminalSource).not.toMatch(/BubbleOverlay/);
   });
 
   test("the deleted watcher + team-work-workspace plumbing is gone", () => {

@@ -2,6 +2,7 @@
 
 mod auth;
 mod config;
+mod cs_install;
 mod default_workspace;
 mod download;
 mod embedded;
@@ -1530,6 +1531,36 @@ fn run_hidden_mcp_proxy_if_requested() -> Result<bool, String> {
     Ok(false)
 }
 
+/// When chan-desktop is invoked through a `cs` name (a `~/.local/bin/cs`
+/// wrapper or symlink, argv[0] stem == "cs"), behave as the `cs` control
+/// client and EXIT instead of launching the GUI. This is what lets desktop
+/// users get `cs` (and the MCP discovery it carries) without a separate
+/// `chan` binary on PATH. Mirrors `run_hidden_mcp_proxy_if_requested`: a
+/// pre-GUI argv probe that short-circuits `main`. Returns `Ok(true)` when
+/// it handled the invocation (caller returns), `Ok(false)` for a normal
+/// GUI launch.
+fn run_as_cs_if_requested() -> Result<bool, String> {
+    let mut argv = std::env::args_os();
+    let Some(arg0) = argv.next() else {
+        return Ok(false);
+    };
+    if !chan_shell::invoked_as_cs(&arg0) {
+        return Ok(false);
+    }
+    // The `cs` client is a single round-trip over the control socket, so a
+    // current-thread runtime is enough (matches the `chan` binary's `cs`
+    // path). clap parses + dispatches; it prints help/usage and exits on a
+    // parse error, so a bad `cs` invocation never falls through to the GUI.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("building cs runtime: {e}"))?;
+    let args = std::iter::once(arg0).chain(argv);
+    rt.block_on(chan_shell::run_cs(args))
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(true)
+}
+
 #[cfg(unix)]
 async fn run_mcp_proxy(socket: PathBuf) -> Result<(), String> {
     chan_server::run_mcp_stdio_proxy(socket)
@@ -1546,7 +1577,25 @@ fn main() {
             std::process::exit(1);
         }
     }
+    // `cs` alias dispatch (argv[0] stem == "cs"): run the control client
+    // and exit, before any GUI / runtime / config setup below.
+    match run_as_cs_if_requested() {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
     init_tracing();
+    // AppImage-only, best-effort: drop a `~/.local/bin/cs` wrapper so a
+    // desktop-only Linux user gets the `cs` control client without a
+    // separate `chan` binary. No-op off an AppImage; never fatal.
+    match cs_install::install_appimage_cs_wrapper() {
+        Ok(true) => tracing::info!("installed cs wrapper into ~/.local/bin"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!(error = %e, "installing cs wrapper failed"),
+    }
     let default_workspace_boot = match default_workspace::ensure_fresh_default_workspace() {
         Ok(created) => created,
         Err(e) => {

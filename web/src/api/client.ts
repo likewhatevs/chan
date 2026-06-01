@@ -1106,6 +1106,16 @@ export const api = {
     req<TeamConfigWire>("POST", "/api/team-config/read", { dir }),
   writeTeamConfig: (dir: string, config: TeamConfigWire) =>
     req<void>("POST", "/api/team-config/write", { dir, config }),
+
+  /// Reply to a survey raised by `cs terminal survey`. The blocked CLI is
+  /// awaiting on the server's survey bus keyed by `surveyId`; this POST
+  /// completes that oneshot so the CLI prints the result and exits. The
+  /// route owns followup-file creation server-side (see
+  /// crates/chan-server/src/routes/survey.rs); for a followup the SPA sends
+  /// the echoed-back context and the route returns nothing (the CLI gets the
+  /// minted path through the bus).
+  surveyReply: (reply: SurveyReplyRequest) =>
+    req<void>("POST", "/api/survey/reply", reply),
 };
 
 /// Wire shape for `Workspace::create_team` /
@@ -1118,6 +1128,11 @@ export interface TeamMemberWire {
   env: Record<string, string>;
   is_lead: boolean;
   position?: { row: number; col: number };
+  /// Submit-encoding agent type for this member's terminal, feeding the
+  /// bootstrap poke chord + the lead composer's submit mode. Maps to the
+  /// shared submit map (submitMode.ts AGENT_SUBMIT_CHORDS). Omitted for a
+  /// shell member ("none" in the dialog), which has no submit chord.
+  agent?: "claude" | "codex" | "gemini";
 }
 
 export interface TeamConfigWire {
@@ -1133,6 +1148,44 @@ export interface TeamConfigWire {
   created_at: string;
   members: TeamMemberWire[];
 }
+
+/// A survey pushed from the server to the SPA in an `open_survey` window
+/// command. Mirrors `chan_shell::wire::SurveySpec` (camelCase) byte-for-byte;
+/// the Rust half is the source of truth (round-3-survey-contract.md). The SPA
+/// renders the body as markdown, numbers the options [1]..[4], and echoes
+/// `surveyId` back in the reply.
+export interface SurveySpec {
+  surveyId: string;
+  title?: string | null;
+  bodyMarkdown: string;
+  options: string[];
+  allowFollowup: boolean;
+  /// Followup context (team-dir + from/to) for the `[F]` affordance. Present
+  /// only when the survey was raised with `--followup`; the reply route uses
+  /// it to create `{dir}/followups/followup-{from}-{to}-{n}.md`. Optional
+  /// pending the C<->D contract addendum (see round-3-part-2-lane-c.md).
+  followup?: SurveyFollowupContext | null;
+}
+
+export interface SurveyFollowupContext {
+  dir: string;
+  from: string;
+  to: string;
+}
+
+/// The reply body the SPA POSTs to `/api/survey/reply`. Distinct from
+/// `chan_shell::wire::SurveyReply`: for a followup the SPA cannot know the
+/// minted path, so it sends the echoed-back context and the route creates the
+/// file + synthesizes the path before completing the bus oneshot.
+export type SurveyReplyRequest =
+  | { surveyId: string; kind: "option"; optionIndex: number; optionLabel: string }
+  | {
+      surveyId: string;
+      kind: "followup";
+      followup: SurveyFollowupContext;
+      title?: string | null;
+      bodyMarkdown: string;
+    };
 
 /// Encode a path as a sequence of percent-encoded segments. We keep `/`
 /// raw so axum's `*path` capture works.

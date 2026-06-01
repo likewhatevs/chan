@@ -14,7 +14,7 @@
 //!     `chan` / `chan-desktop` binaries enable it; chan-server does not.
 
 mod wire;
-pub use wire::{ControlRequest, ControlResponse};
+pub use wire::{ControlRequest, ControlResponse, SurveyFollowup, SurveyReply, SurveySpec};
 
 #[cfg(feature = "client")]
 mod cli;
@@ -24,7 +24,7 @@ mod control;
 mod submit;
 
 #[cfg(feature = "client")]
-pub use cli::{dispatch, ShellAction, TerminalAction};
+pub use cli::{dispatch, run_cs, ShellAction, TerminalAction};
 #[cfg(feature = "client")]
 pub use control::{
     absolutize, control_socket_env, open_env, open_env_from, send_control_request, OpenEnv,

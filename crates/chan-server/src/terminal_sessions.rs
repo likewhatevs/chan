@@ -445,6 +445,50 @@ impl Registry {
         Ok(restarted)
     }
 
+    /// The DISTINCT window ids that own a live session matching the given
+    /// tab name and/or group, for `cs terminal survey`. Same selector
+    /// semantics as `write_input_matching` (a `None` axis matches all; both
+    /// narrow to the intersection). A survey overlay is an SPA-window
+    /// affordance, not a PTY one, so the survey transport resolves the tab
+    /// selector to the window(s) hosting those tabs and pushes the overlay
+    /// there. Sessions with no `window_id` (rare: a session created outside
+    /// a browser window) contribute nothing. Order is unspecified; callers
+    /// fan the overlay out to each.
+    pub fn window_ids_matching(
+        &self,
+        tab_name: Option<&str>,
+        tab_group: Option<&str>,
+    ) -> Vec<String> {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for session in sessions.values() {
+            if session.closed.load(Ordering::Relaxed) {
+                continue;
+            }
+            if let Some(name) = tab_name {
+                if session.tab_name.as_deref() != Some(name) {
+                    continue;
+                }
+            }
+            if let Some(group) = tab_group {
+                let resolved = session
+                    .tab_group
+                    .as_deref()
+                    .unwrap_or(DEFAULT_TERMINAL_GROUP);
+                if resolved != group {
+                    continue;
+                }
+            }
+            if let Some(window_id) = session.window_id.as_deref() {
+                if seen.insert(window_id.to_string()) {
+                    out.push(window_id.to_string());
+                }
+            }
+        }
+        out
+    }
+
     pub fn close_all(&self, reason: CloseReason) {
         let sessions: Vec<Arc<Session>> = self
             .sessions

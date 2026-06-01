@@ -105,6 +105,10 @@ export function translateConfig(config: TeamDialogConfig): TeamConfigWire {
       env,
       is_lead: m.isLead,
     };
+    // A shell member ("none", or an unset draft) carries no submit
+    // chord, so the wire form omits `agent` entirely; only a named
+    // agent round-trips the field.
+    if (m.agent && m.agent !== "none") member.agent = m.agent;
     const pos = positions[idx];
     if (pos) member.position = pos;
     return member;
@@ -168,6 +172,9 @@ export function wireToDialog(
       command: m.command,
       env: envText,
       isLead: m.is_lead,
+      // An omitted wire `agent` is a shell member; read it back as
+      // "none" so the dialog's picker shows the right selection.
+      agent: m.agent ?? "none",
     };
   });
   const size = Math.max(members.length, 1);
@@ -398,6 +405,20 @@ export async function runTeamBootstrap(
     bootstrapPath,
   );
   primeTeamWork(leadTab, prompt);
+
+  // Seed the lead tab's Team Work composer submit mode from the lead
+  // member's agent. The composer is the surface that pokes/drives the
+  // lead agent, so it must submit with THAT agent's chord (claude's
+  // Cmd+Enter CSI vs codex/gemini's plain CR); a shell lead ("none")
+  // stays in shell mode (plain Enter). `primeTeamWork` above guarantees
+  // `leadTab.teamWork` exists, so we mutate it directly (the
+  // orchestrator already owns this tab's reactive state). Mirrors
+  // TeamWork.svelte's setAgentTarget: agentTarget !== "none" => "agent".
+  const leadAgent = leadEntry.agent ?? "none";
+  if (leadTab.teamWork) {
+    leadTab.teamWork.agentTarget = leadAgent;
+    leadTab.teamWork.submitMode = leadAgent === "none" ? "shell" : "agent";
+  }
 
   // Restore focus to the lead's pane so the editor lands there.
   setActivePane(ctx.leadPaneId);

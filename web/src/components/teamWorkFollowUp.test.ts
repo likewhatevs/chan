@@ -1,22 +1,29 @@
 import { describe, expect, test } from "vitest";
 import bubble from "./BubbleOverlay.svelte?raw";
 import terminal from "./TerminalTab.svelte?raw";
+import app from "../App.svelte?raw";
 
-// BubbleOverlay is a Wave-1 placeholder that renders nothing; the real
-// reply-capable survey overlay is rebuilt in Wave 2. The old F-follow-up
-// feature (surveyAsQuoteMarkdown / quoteSurveyToPrompt quoting a live
-// survey into the team-work buffer) is gone along with the watcher data
-// it depended on, and the gutted placeholder carries no example markup.
+// The old F-follow-up feature (surveyAsQuoteMarkdown / quoteSurveyToPrompt
+// quoting a live survey into the team-work buffer) is gone along with the
+// watcher data it depended on. The rebuilt survey overlay (BubbleOverlay)
+// replies through POST /api/survey/reply instead, and is mounted once at the
+// App root rather than per terminal tab.
 
 describe("Team Work revamp: survey-quote plumbing stays removed", () => {
-  test("the F-key handler / quote-to-prompt plumbing is removed from BubbleOverlay", () => {
+  test("the old quote-to-prompt plumbing is absent from BubbleOverlay", () => {
     // No survey-to-markdown quoting helper.
     expect(bubble).not.toMatch(/function surveyAsQuoteMarkdown\b/);
     expect(bubble).not.toMatch(/function quoteSurveyToPrompt\b/);
-    // No window keydown handler quoting on F.
     expect(bubble).not.toMatch(/quoteSurveyToPrompt\(/);
     // No onQuoteToPrompt prop / callback.
     expect(bubble).not.toMatch(/onQuoteToPrompt/);
+  });
+
+  test("the rebuilt overlay replies via the survey store, not a quote prop", () => {
+    // The reply round-trip lives in the survey store (pickOption /
+    // requestFollowup); the overlay carries no quote-into-prompt callback.
+    expect(bubble).toMatch(/from "\.\.\/state\/survey\.svelte"/);
+    expect(bubble).toMatch(/pickOption|requestFollowup/);
   });
 
   test("TerminalTab no longer carries the quoteIntoTeamWork callback", () => {
@@ -24,9 +31,9 @@ describe("Team Work revamp: survey-quote plumbing stays removed", () => {
     expect(terminal).not.toMatch(/onQuoteToPrompt/);
   });
 
-  test("the BubbleOverlay mount in TerminalTab passes no watcher props", () => {
-    // Self-contained placeholder: mounted with no props at all.
-    expect(terminal).toMatch(/<BubbleOverlay \/>/);
-    expect(terminal).not.toMatch(/watcher=\{tab\.watcher\}/);
+  test("the survey overlay is mounted once at App root, not per terminal tab", () => {
+    // Window-level modal: a single mount at App root, none per terminal tab.
+    expect(app).toMatch(/<BubbleOverlay \/>/);
+    expect(terminal).not.toMatch(/BubbleOverlay/);
   });
 });
