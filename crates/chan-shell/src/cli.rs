@@ -265,6 +265,17 @@ pub enum TerminalAction {
         #[arg(long = "tab-group")]
         tab_group: Option<String>,
     },
+    /// Dump a live terminal session's scrollback (its replay ring) by tab
+    /// name, printing the raw bytes to stdout. Exactly one session must
+    /// match the name: zero is an error, and more than one is ambiguous
+    /// (there is no group axis, since scrollback reads one terminal's
+    /// history). Used by the lead process to read a worker's terminal.
+    Scrollback {
+        /// Tab name of the session to read. Required; must match exactly
+        /// one live session.
+        #[arg(long = "tab-name")]
+        tab_name: String,
+    },
     /// Raise a survey over the SPA window(s) that own the matching
     /// terminal tab(s) and BLOCK until the user answers. Prints the chosen
     /// option label to stdout, or (on `[F]`) the path of the followup file
@@ -606,6 +617,16 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             )
             .await?;
             eprintln!("{message}");
+            Ok(())
+        }
+        TerminalAction::Scrollback { tab_name } => {
+            let socket = control_socket_env()?;
+            let raw =
+                send_control_request(&socket, ControlRequest::TermScrollback { tab_name }).await?;
+            // The scrollback is the captured artifact, so it goes to stdout
+            // (pipes cleanly into a file or a pager). No trailing newline is
+            // added: the ring already carries the session's own line breaks.
+            print!("{raw}");
             Ok(())
         }
         TerminalAction::Survey {
@@ -961,6 +982,24 @@ mod tests {
             }
             other => panic!("unexpected parse: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_terminal_scrollback_tab_name() {
+        let cli = CsCli::parse_from(["cs", "terminal", "scrollback", "--tab-name", "@@LaneB"]);
+        match cli.action {
+            ShellAction::Terminal {
+                action: TerminalAction::Scrollback { tab_name },
+            } => assert_eq!(tab_name, "@@LaneB"),
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn terminal_scrollback_requires_tab_name() {
+        // `--tab-name` is a required clap arg (the field is a plain String),
+        // so omitting it is a parse error, not a runtime one.
+        assert!(CsCli::try_parse_from(["cs", "terminal", "scrollback"]).is_err());
     }
 
     #[test]

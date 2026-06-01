@@ -343,6 +343,14 @@ async fn handle_request(
                 tab_group.as_deref(),
             ))
         }
+        ControlRequest::TermScrollback { tab_name } => {
+            let Some(registry) = terminal_registry else {
+                return ControlResponse::Error {
+                    message: "terminal registry unavailable".into(),
+                };
+            };
+            into_response(term_scrollback(registry, &tab_name))
+        }
         ControlRequest::Search { query, limit } => {
             let workspace = match workspace_from_cell(workspace_cell) {
                 Ok(workspace) => workspace,
@@ -1004,6 +1012,31 @@ fn term_restart(
     Ok(format!("restarted {restarted} terminal session(s)"))
 }
 
+/// Category 2: dump the full replay ring of the single live session whose
+/// tab name is `tab_name`, for `cs terminal scrollback`. Requires exactly
+/// one match: zero is "no session", more than one is ambiguous (scrollback
+/// reads one terminal's history, so there is no group fan-out). The bytes
+/// are the raw PTY stream (the same a WS attach replays), UTF-8 decoded
+/// lossily for the text transport.
+#[cfg(unix)]
+fn term_scrollback(registry: &TerminalRegistry, tab_name: &str) -> Result<String, String> {
+    let tab_name = tab_name.trim();
+    if tab_name.is_empty() {
+        return Err("scrollback needs a tab name".into());
+    }
+    let mut matches = registry.scrollback_matching(tab_name);
+    match matches.len() {
+        0 => Err("no live terminal session matched".into()),
+        1 => {
+            let (_id, bytes) = matches.pop().expect("one match");
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        }
+        n => Err(format!(
+            "{n} live sessions match tab name {tab_name:?}; scrollback needs a single match"
+        )),
+    }
+}
+
 /// Category 2: list live terminal sessions as JSON, grouped by group.
 #[cfg(unix)]
 fn term_list(registry: &TerminalRegistry) -> Result<String, String> {
@@ -1372,6 +1405,20 @@ mod tests {
     fn term_write_reports_no_match_on_an_empty_registry() {
         let (_root, registry) = empty_registry();
         let err = term_write(&registry, Some("nope"), None, "ls").expect_err("no match");
+        assert!(err.contains("no live terminal session"), "got: {err}");
+    }
+
+    #[test]
+    fn term_scrollback_requires_a_tab_name() {
+        let (_root, registry) = empty_registry();
+        let err = term_scrollback(&registry, "   ").expect_err("blank name");
+        assert!(err.contains("needs a tab name"), "got: {err}");
+    }
+
+    #[test]
+    fn term_scrollback_reports_no_match_on_an_empty_registry() {
+        let (_root, registry) = empty_registry();
+        let err = term_scrollback(&registry, "@@Nope").expect_err("no match");
         assert!(err.contains("no live terminal session"), "got: {err}");
     }
 

@@ -72,6 +72,14 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_group: Option<String>,
     },
+    // Category 2: dump one live session's replay ring (its scrollback) by
+    // tab name and return the decoded bytes on the connection (like `term
+    // list`). No group axis: scrollback reads exactly ONE terminal's
+    // history, so `tab_name` is required and the server rejects a zero- or
+    // multi-match. The CLI prints the raw bytes to stdout.
+    TermScrollback {
+        tab_name: String,
+    },
     // Category 2: run the same content search the UI does and return the
     // results on the connection (like `term list`). The CLI formats the
     // JSON it gets back: markdown by default, compact `--json`, indented
@@ -333,6 +341,23 @@ mod survey_wire_tests {
         let raw = serde_json::to_string(&req).unwrap();
         let back: ControlRequest = serde_json::from_str(&raw).unwrap();
         assert!(matches!(back, ControlRequest::TermSurvey { .. }));
+    }
+
+    #[test]
+    fn term_scrollback_request_tag_and_field() {
+        // The wire tag is `term_scrollback` and `tab_name` is a plain
+        // required string (no group axis, no skip). A Rust rename that
+        // drifts either breaks the server's decode with a green build.
+        let req = ControlRequest::TermScrollback {
+            tab_name: "@@LaneB".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "term_scrollback");
+        assert_eq!(v["tab_name"], "@@LaneB");
+        // Decodes back into the same variant (the server's path).
+        let raw = serde_json::to_string(&req).unwrap();
+        let back: ControlRequest = serde_json::from_str(&raw).unwrap();
+        assert!(matches!(back, ControlRequest::TermScrollback { .. }));
     }
 
     #[test]

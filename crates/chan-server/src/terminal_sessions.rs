@@ -397,6 +397,23 @@ impl Registry {
         written
     }
 
+    /// Full replay-ring snapshots of every live session whose tab name is
+    /// `tab_name`, as `(session_id, bytes)`, for `cs terminal scrollback`.
+    /// The bytes are the raw PTY stream the WS attach replays (ANSI and
+    /// all), so a reader sees exactly what is on screen. There is no group
+    /// axis: scrollback targets one terminal, and the control socket
+    /// enforces the single-match policy, so this stays a thin selector like
+    /// `write_input_matching`.
+    pub fn scrollback_matching(&self, tab_name: &str) -> Vec<(String, Vec<u8>)> {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        sessions
+            .values()
+            .filter(|session| !session.closed.load(Ordering::Relaxed))
+            .filter(|session| session.tab_name.as_deref() == Some(tab_name))
+            .map(|session| (session.id.clone(), session.scrollback()))
+            .collect()
+    }
+
     /// Restart every live session matching the given tab name and/or
     /// group, for `cs terminal restart`. Same selector semantics as
     /// `write_input_matching` (a `None` axis matches all; both narrow to
@@ -871,6 +888,21 @@ impl Session {
         self.last_activity
             .store(now_unix_secs() as i64, Ordering::Relaxed);
         let _ = self.command_tx.send(PtyCommand::Input(data.to_vec()));
+    }
+
+    /// The full replay ring, flattened, for `cs terminal scrollback`.
+    /// `snapshot_since(None)` returns every chunk currently held (no
+    /// `missed`, since we ask from the ring's own start), so this is the
+    /// whole scrollback the ring still has, raw PTY bytes and all. Unlike
+    /// `attach`, this does not special-case the alt screen: a scrollback
+    /// dump wants whatever bytes the ring holds, including a live TUI draw.
+    fn scrollback(&self) -> Vec<u8> {
+        let (chunks, _missed) = self
+            .ring
+            .lock()
+            .expect("terminal ring poisoned")
+            .snapshot_since(None);
+        chunks.concat()
     }
 
     fn resize(&self, size: PtySize) {
@@ -1417,6 +1449,37 @@ mod tests {
         let (replay, missed) = ring.snapshot_since(Some(0));
         assert_eq!(missed, 3);
         assert_eq!(replay.concat(), b"def");
+    }
+
+    #[test]
+    fn scrollback_flattens_the_whole_ring() {
+        let session = test_session_with_ring(1024);
+        session.record_output(b"hello\n");
+        session.record_output(b"world\n");
+        // The full ring, in order, raw bytes and all.
+        assert_eq!(session.scrollback(), b"hello\nworld\n");
+    }
+
+    #[test]
+    fn scrollback_matching_selects_exactly_the_named_tab() {
+        let registry = Registry::new(test_config(4096, 4, 60));
+        let handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("@@LaneB".into()),
+                tab_group: None,
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+            })
+            .unwrap();
+        // One session owns the tab name; a different name matches none. The
+        // count is what the control socket's single-match policy gates on.
+        assert_eq!(registry.scrollback_matching("@@LaneB").len(), 1);
+        assert!(registry.scrollback_matching("@@Nope").is_empty());
+        registry.close(handle.id(), CloseReason::Explicit);
     }
 
     #[test]
