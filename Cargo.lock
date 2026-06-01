@@ -958,7 +958,6 @@ version = "0.22.0"
 dependencies = [
  "async-trait",
  "axum",
- "block2",
  "chan-server",
  "chan-shell",
  "chan-tunnel-client",

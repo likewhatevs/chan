@@ -311,8 +311,9 @@ function pdfFilenameFor(path: string): string {
 
 /// Native macOS PDF export. The browser's `window.print()` is a no-op
 /// inside Tauri's WKWebView, so on macOS desktop we render the same
-/// themed print HTML to a vector PDF via the `export_pdf_macos` command
-/// (WKWebView `createPDF`) and save it to Downloads through the existing
+/// themed print HTML to a paginated PDF via the `export_pdf_macos` command
+/// (WKWebView's native print pipeline, which honors `@page` and page
+/// breaks) and save it to Downloads through the existing
 /// `save_file_to_downloads` path. Throws on IPC / save failure so the
 /// caller can surface a notice.
 async function exportPdfNative(opts: PrintMarkdownOptions): Promise<void> {

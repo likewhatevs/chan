@@ -64,16 +64,21 @@ rust-embed = "8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSResponder", "NSView", "NSWindow"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSGeometry", "NSString", "objc2-core-foundation"] }
-# Vector PDF export from the desktop shell. `win.print()` is a no-op
-# in WKWebView, so chan-desktop captures the themed print HTML through
-# WKWebView's native `createPDF` instead (see src/pdf.rs). block2
-# bridges the async completion handler; objc2-core-foundation pumps the
-# main run loop while the capture is in flight.
-objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "WKWebView", "WKWebViewConfiguration", "WKPDFConfiguration", "WKNavigation", "block2", "objc2-app-kit"] }
+# `NSPrintInfo` + `NSPrintOperation` drive the silent save-to-PDF print
+# job (see src/pdf.rs). The other features cover the offscreen NSWindow the
+# webview is parented in for layout.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSResponder", "NSView", "NSWindow", "NSPrintInfo", "NSPrintOperation"] }
+# `NSURL` builds the destination file URL and `NSDictionary` inserts it
+# into the print info's attributes dictionary under `NSPrintJobSavingURL`.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSDictionary", "NSGeometry", "NSObject", "NSString", "NSURL", "objc2-core-foundation"] }
+# Paginating PDF export from the desktop shell. `win.print()` is a no-op
+# in WKWebView, so chan-desktop renders the themed print HTML through
+# WKWebView's native print pipeline (`printOperationWithPrintInfo:`, see
+# src/pdf.rs), which honors `@page`, CSS auto-pagination, and page breaks.
+# The `objc2-app-kit` feature exposes that method and the NSPrint* types;
+# objc2-core-foundation pumps the main run loop while the page loads.
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "WKWebView", "WKWebViewConfiguration", "WKNavigation", "objc2-app-kit"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFRunLoop", "CFDate"] }
-block2 = "0.6"
 
 [dev-dependencies]
 chan-tunnel-client = { workspace = true }

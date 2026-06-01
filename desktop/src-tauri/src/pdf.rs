@@ -1,12 +1,21 @@
-// Native vector PDF export for the desktop shell (macOS only).
+// Native paginating PDF export for the desktop shell (macOS only).
 //
 // In the browser, "Export to PDF" builds a self-contained themed HTML
 // document and calls `window.print()`, which hands off to the browser's
-// print-to-PDF pipeline. `window.print()` is a no-op inside Tauri's
-// WKWebView, so the same path silently does nothing on desktop. WKWebView
-// exposes `createPDF(configuration:completionHandler:)`, which renders the
-// page to a real vector PDF; this module drives that API from an offscreen
-// webview so chan-desktop produces the same themed PDF the browser would.
+// print-to-PDF pipeline. That pipeline honors `@page`, CSS auto-
+// pagination, and explicit `.chan-page-break` rules, so a long note spans
+// multiple pages and the editor's `@pagebreak` feature lands a real page
+// break. `window.print()` is a no-op inside Tauri's WKWebView, so the same
+// path silently does nothing on desktop.
+//
+// WKWebView exposes two capture routes. `createPDF` is a SCREEN capture:
+// it rasterizes the laid-out page and does NOT run the print pipeline, so
+// it ignores `@page`, auto-pagination, and page breaks. A long note clips
+// to roughly one page. `printOperationWithPrintInfo:` instead returns an
+// `NSPrintOperation` that drives the real macOS print pipeline; run
+// silently to a PDF file it produces the same paginated output the browser
+// would, page breaks included. This module uses the print route so the
+// native export matches the browser export.
 //
 // The frontend gates the call: only macOS desktop reaches here. Linux /
 // Windows hide the button entirely (no native equivalent wired), so this
@@ -18,12 +27,15 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use block2::RcBlock;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
+use objc2_app_kit::{
+    NSBackingStoreType, NSPrintInfo, NSPrintJobSavingURL, NSPrintSaveJob, NSWindow,
+    NSWindowStyleMask,
+};
 use objc2_core_foundation::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopRunResult};
-use objc2_foundation::{NSData, NSError, NSPoint, NSRect, NSSize, NSString};
-use objc2_web_kit::{WKPDFConfiguration, WKWebView, WKWebViewConfiguration};
+use objc2_foundation::{NSCopying, NSPoint, NSRect, NSSize, NSString, NSURL};
+use objc2_web_kit::{WKWebView, WKWebViewConfiguration};
 use tauri::AppHandle;
 
 /// Upper bound on how long the offscreen webview may take to finish
@@ -32,19 +44,15 @@ use tauri::AppHandle;
 /// a normal-path delay.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Upper bound on the `createPDF` completion callback. Same rationale:
-/// the capture is fast, this only guards against a callback that never
-/// fires.
-const CAPTURE_TIMEOUT: Duration = Duration::from_secs(15);
-
 /// How long to wait for the worker thread to hear back from the main
-/// thread. The main-thread work itself is bounded by the two timeouts
-/// above, so this only needs headroom over their sum.
+/// thread. The main-thread work itself is bounded by the load timeout
+/// above plus a synchronous print run, so this only needs headroom over
+/// their sum.
 const DISPATCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One slice of the main run loop, in seconds. We pump the loop in short
-/// slices so WebKit's internal sources (navigation, the PDF completion
-/// block) can progress while we wait synchronously on the main thread.
+/// slices so WebKit's internal navigation sources can progress while we
+/// wait synchronously on the main thread for the load to settle.
 const RUNLOOP_SLICE: f64 = 0.02;
 
 /// Standard letter width in points (8.5in * 72) used as the offscreen page
@@ -52,13 +60,12 @@ const RUNLOOP_SLICE: f64 = 0.02;
 /// editor uses to shrink content maps to a fraction of this.
 const LETTER_WIDTH_PT: f64 = 612.0;
 
-/// A generous offscreen page height. WKWebView lays out the full document
-/// height regardless of the window height, and `createPDF` paginates the
-/// captured content, so this only needs to be a plausible viewport, not
-/// the true document height.
-const OFFSCREEN_HEIGHT_PT: f64 = 1056.0;
+/// Standard letter height in points (11in * 72). Used as the offscreen
+/// window height and the print paper height.
+const LETTER_HEIGHT_PT: f64 = 792.0;
 
-/// Render `html` to a vector PDF via WKWebView and return the bytes.
+/// Render `html` to a paginated PDF via WKWebView's print pipeline and
+/// return the bytes.
 ///
 /// `page_width_px` is the CSS pixel width the SPA used when it built the
 /// print document (the editor's page-width control). We size the offscreen
@@ -79,7 +86,8 @@ pub fn export_pdf_macos(
     app.run_on_main_thread(move || {
         // `run_on_main_thread` guarantees this closure runs on the main
         // thread, so the marker is sound. Without a valid marker the
-        // WKWebView / NSWindow constructors below would be unsound.
+        // WKWebView / NSWindow / NSPrintOperation constructors below would
+        // be unsound.
         let mtm = MainThreadMarker::new()
             .expect("run_on_main_thread closure must execute on the main thread");
         let result = render_pdf_on_main(mtm, &html, page_width_px);
@@ -101,7 +109,8 @@ pub fn export_pdf_macos(
 }
 
 /// Main-thread body: build an offscreen webview, load the HTML, wait for
-/// the load to settle, capture the PDF, and return the bytes.
+/// the load to settle, run the print pipeline to a PDF, and return the
+/// bytes.
 fn render_pdf_on_main(
     mtm: MainThreadMarker,
     html: &str,
@@ -114,13 +123,13 @@ fn render_pdf_on_main(
     };
     let frame = NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(page_width, OFFSCREEN_HEIGHT_PT),
+        NSSize::new(page_width, LETTER_HEIGHT_PT),
     );
 
     // SAFETY: every call here is a main-thread-only WebKit / AppKit API
     // and we hold a valid `MainThreadMarker`. The objects live until the
-    // end of this function (and the run-loop pumping below keeps their
-    // pending work serviced), so no callback outlives its captured state.
+    // end of this function (and the run-loop pumping below keeps the
+    // navigation serviced), so nothing outlives its captured state.
     unsafe {
         let config = WKWebViewConfiguration::new(mtm);
         let webview = WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), frame, &config);
@@ -146,7 +155,7 @@ fn render_pdf_on_main(
             return Err("PDF export timed out loading the document".to_string());
         }
 
-        capture_pdf(mtm, &webview, page_width)
+        capture_pdf(&webview)
     }
 }
 
@@ -176,66 +185,110 @@ unsafe fn wait_until_loaded(webview: &WKWebView) -> bool {
     }
 }
 
-/// Capture the currently-loaded page to a PDF sized to `page_width` points.
-/// Bridges the async completion handler to this thread over a channel and
-/// pumps the run loop until it fires or `CAPTURE_TIMEOUT` elapses.
-unsafe fn capture_pdf(
-    mtm: MainThreadMarker,
-    webview: &WKWebView,
-    page_width: f64,
-) -> Result<Vec<u8>, String> {
-    let pdf_config = WKPDFConfiguration::new(mtm);
-    // The PDF rect is the capture region in the page's coordinate space.
-    // Width matches the offscreen layout width; the tall height lets WebKit
-    // capture the full document, which it then paginates.
-    pdf_config.setRect(NSRect::new(
-        NSPoint::new(0.0, 0.0),
-        NSSize::new(page_width, OFFSCREEN_HEIGHT_PT),
-    ));
+/// Run the macOS print pipeline on the loaded page to a temp PDF file and
+/// return its bytes.
+///
+/// Why the print pipeline (not `createPDF`): `printOperationWithPrintInfo:`
+/// runs WebKit's real print path, which honors `@page`, CSS auto-
+/// pagination, and `.chan-page-break`. `createPDF` is a screen capture that
+/// ignores all three, so a long note would clip to one page.
+///
+/// Why silent: an `NSPrintOperation` defaults to showing the print panel
+/// and a progress panel. We disable both on the operation, and set the
+/// print info's job disposition to `NSPrintSaveJob` with a destination URL
+/// in its attributes dictionary, so the operation writes straight to that
+/// file with no UI.
+///
+/// Why a temp file (not in-memory data): the silent save-to-PDF path keys
+/// off `NSPrintJobSavingURL`, a file URL. There is no public main-thread
+/// API to save the print job's PDF directly into an `NSData`, so we round-
+/// trip through a temp file and read it back.
+unsafe fn capture_pdf(webview: &WKWebView) -> Result<Vec<u8>, String> {
+    let dest = unique_temp_pdf_path();
+    let dest_str = dest.to_string_lossy().into_owned();
 
-    let (tx, rx) = mpsc::channel::<Result<Vec<u8>, String>>();
-    // The completion handler is an `Fn` block (it may, in principle, be
-    // invoked more than once by the framework), so it captures a cloneable
-    // `Sender` rather than moving an owned value. A second send after the
-    // receiver is gone is harmless.
-    let handler = RcBlock::new(move |data: *mut NSData, error: *mut NSError| {
-        let result = if !data.is_null() {
-            // SAFETY: WebKit hands us a +0 autoreleased NSData that is valid
-            // for the duration of the callback; copying it out immediately
-            // is sound.
-            let bytes = unsafe { (*data).to_vec() };
-            Ok(bytes)
-        } else if !error.is_null() {
-            let message = unsafe { (*error).localizedDescription() };
-            Err(format!("WKWebView createPDF failed: {message}"))
-        } else {
-            Err("WKWebView createPDF returned no data".to_string())
-        };
-        let _ = tx.send(result);
-    });
+    let info = NSPrintInfo::new();
 
-    webview.createPDFWithConfiguration_completionHandler(Some(&pdf_config), &handler);
+    // US Letter paper. The CSS print document targets a letter-equivalent
+    // page width, so the paper size matches the layout the SPA built.
+    info.setPaperSize(NSSize::new(LETTER_WIDTH_PT, LETTER_HEIGHT_PT));
 
-    let deadline = Instant::now() + CAPTURE_TIMEOUT;
-    loop {
-        match rx.try_recv() {
-            Ok(result) => return result,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                return Err("PDF export capture channel closed unexpectedly".to_string());
-            }
-            Err(mpsc::TryRecvError::Empty) => {}
-        }
-        if Instant::now() >= deadline {
-            return Err("PDF export timed out capturing the document".to_string());
-        }
-        pump_run_loop_once();
+    // Zero the NSPrintInfo margins. The print HTML already supplies page
+    // margins through `@page { margin: 0.65in }`, which the print pipeline
+    // honors. Leaving the default NSPrintInfo margins in place would stack
+    // on top of the CSS margin and double-inset the content, so we drive
+    // the margins purely from CSS and keep the paper edge-to-edge here.
+    info.setLeftMargin(0.0);
+    info.setRightMargin(0.0);
+    info.setTopMargin(0.0);
+    info.setBottomMargin(0.0);
+
+    // Save-to-PDF: write the job to a file instead of spooling to a
+    // printer or showing the save panel.
+    info.setJobDisposition(NSPrintSaveJob);
+
+    // The destination file URL goes in the print info's attributes
+    // dictionary under `NSPrintJobSavingURL`. This is the documented key
+    // for a headless save-to-PDF job.
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&dest_str));
+    // SAFETY: `dictionary()` returns the print info's mutable attributes
+    // dictionary; inserting an NSURL value under the AppKit-defined
+    // `NSPrintJobSavingURL` key is the documented, type-correct use. The
+    // key is an NSString (which conforms to NSCopying); the value is an
+    // NSURL erased to AnyObject as the dictionary's object type expects.
+    let attrs = info.dictionary();
+    let url_obj: &AnyObject = url.as_ref();
+    let key: &ProtocolObject<dyn NSCopying> = ProtocolObject::from_ref(NSPrintJobSavingURL);
+    attrs.setObject_forKey(url_obj, key);
+
+    let print_op = webview.printOperationWithPrintInfo(&info);
+
+    // Headless: never raise the print panel or the progress panel.
+    print_op.setShowsPrintPanel(false);
+    print_op.setShowsProgressPanel(false);
+
+    // `runOperation` is synchronous: it returns only after the job has been
+    // fully written (or failed), so unlike `createPDF` there is no async
+    // completion handler to await and no run-loop pumping needed here. We
+    // hold the main thread for the duration, which is fine for a notes-
+    // scale document.
+    let ok = print_op.runOperation();
+    if !ok {
+        let _ = std::fs::remove_file(&dest);
+        return Err("WKWebView print operation failed".to_string());
     }
+
+    let bytes = std::fs::read(&dest)
+        .map_err(|e| format!("reading the exported PDF from {dest_str} failed: {e}"))?;
+    // Best-effort cleanup; a leftover temp file is harmless but we remove
+    // it on the success path so the temp dir does not accumulate exports.
+    let _ = std::fs::remove_file(&dest);
+
+    if bytes.is_empty() {
+        return Err("the print operation produced an empty PDF".to_string());
+    }
+    Ok(bytes)
+}
+
+/// Build a unique temp file path for one export. We never reuse a fixed
+/// name so two near-simultaneous exports cannot clobber each other's
+/// output before the read-back.
+fn unique_temp_pdf_path() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("chan-export-{pid}-{nanos}-{n}.pdf"))
 }
 
 /// Run the current (main) run loop for one short slice so WebKit's pending
-/// sources can advance. `return_after_source_handled = false` lets the loop
-/// process whatever is ready within the slice rather than bailing after the
-/// first source.
+/// navigation sources can advance. `return_after_source_handled = false`
+/// lets the loop process whatever is ready within the slice rather than
+/// bailing after the first source.
 fn pump_run_loop_once() {
     // SAFETY: reading the `kCFRunLoopDefaultMode` extern static is sound;
     // it is a process-lifetime constant CFString set up by CoreFoundation.
