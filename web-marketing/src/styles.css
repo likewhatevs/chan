@@ -126,11 +126,10 @@ code {
   color: var(--muted);
   cursor: pointer;
   display: inline-flex;
-  font: 600 0.72rem var(--mono);
   height: 34px;
   justify-content: center;
-  min-width: 48px;
-  padding: 0 10px;
+  width: 34px;
+  padding: 0;
 }
 
 .theme-button:hover {
@@ -138,13 +137,23 @@ code {
   color: var(--accent);
 }
 
-.theme-moon,
-[data-mode="dark"] .theme-sun {
+.theme-sun,
+.theme-moon {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+/* Show the icon for the theme you switch TO: moon while light (tap
+   for dark), sun while dark (tap for light). Matches chan-desktop
+   and the SPA per-surface toggle. */
+.theme-sun,
+[data-mode="dark"] .theme-moon {
   display: none;
 }
 
-[data-mode="dark"] .theme-moon {
-  display: inline;
+[data-mode="dark"] .theme-sun {
+  display: block;
 }
 
 .hero {

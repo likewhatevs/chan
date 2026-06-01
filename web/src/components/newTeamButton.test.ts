@@ -126,4 +126,15 @@ describe("TeamDialog component shell", () => {
       /function onKeydown\(e: KeyboardEvent\): void \{[\s\S]*?if \(e\.key === "Escape" && !busy\) \{[\s\S]*?onCancel\(\);/,
     );
   });
+
+  test("Escape listens in capture phase + stops propagation (TW3)", () => {
+    // The dialog opens over a freshly-spawned lead terminal that grabs
+    // focus; a bubble-phase listener was swallowed by the terminal. The
+    // window listener must be capture-phase and the handler must
+    // stopPropagation so Escape reaches the dialog, not the terminal.
+    expect(dialog).toContain("<svelte:window onkeydowncapture={onKeydown} />");
+    expect(dialog).toMatch(
+      /if \(e\.key === "Escape" && !busy\) \{[\s\S]*?e\.stopPropagation\(\);/,
+    );
+  });
 });

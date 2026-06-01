@@ -996,11 +996,18 @@
   :global(.md-wysiwyg-cm6 .cm-md-ul-dash::before) {
     content: "\2013"; /* en-dash */
   }
+  /* The geometric circle glyphs fill nearly the full em box at body size,
+     so they read much larger than a normal list bullet. Scale them down to
+     bullet proportions (the en-dash above stays at body size). The hollow
+     nested circle is outline-only, so it needs a touch more size than the
+     filled top circle to stay visible. */
   :global(.md-wysiwyg-cm6 .cm-md-ul-bullet-top::before) {
     content: "\25CF"; /* black circle (filled) */
+    font-size: calc(var(--chan-editor-body-size, 11pt) * 0.6);
   }
   :global(.md-wysiwyg-cm6 .cm-md-ul-bullet-nested::before) {
     content: "\25EF"; /* large circle (hollow) */
+    font-size: calc(var(--chan-editor-body-size, 11pt) * 0.72);
   }
   /* Left indent and guides on every line of every list (bullet,
      ordered, task). Three-class chain matches the fence-row pattern

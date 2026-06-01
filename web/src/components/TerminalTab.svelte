@@ -1473,6 +1473,56 @@
            Window` / `Open Inspector` entries; Cmd+R and the pane
            hamburger surface them. -->
       <div class="action-list">
+        <!-- Per-tab broadcast selector (F3: moved to the top of the menu,
+             right after the Group row). There is no umbrella "Broadcast
+             Input On/Off" rocker; the per-row checkboxes are the only
+             controls. Self appears at the top of the list with a "self"
+             marker. -->
+        <div class="broadcast-section-label">
+          <span class="mbtn-icon">
+            <Radio size={16} strokeWidth={1.75} aria-hidden="true" />
+          </span>
+          <span>broadcast input on/off</span>
+        </div>
+        <button class="mbtn" onclick={toggleAllBroadcastTargets}>
+          <span class="mbtn-icon"></span>
+          <span class="mbtn-label">
+            {allBroadcastTargetsSelected ? "Deselect All" : "Select All"}
+          </span>
+          <span class="mbtn-chord"></span>
+        </button>
+        {#each broadcastTargets as target (target.id)}
+          {@const isSelf = target.id === tab.id}
+          {@const isChecked = isSelf
+            ? tab.broadcastEnabled
+            : selectedBroadcastTargets.has(target.id)}
+          <label class="target-row">
+            <span class="target-check">
+              <input
+                type="checkbox"
+                checked={isChecked}
+                onchange={(e) => {
+                  const next = (e.currentTarget as HTMLInputElement).checked;
+                  if (isSelf) {
+                    setTerminalBroadcastEnabled(tab, next);
+                  } else {
+                    setTerminalBroadcastTarget(tab, target.id, next);
+                  }
+                }}
+              />
+              {#if isChecked}
+                <Check size={13} strokeWidth={2} aria-hidden="true" />
+              {/if}
+            </span>
+            <span class="target-name">
+              {terminalTabName(target)}
+              {#if isSelf}
+                <span class="target-self">(self)</span>
+              {/if}
+            </span>
+          </label>
+        {/each}
+        <div class="msep" role="separator"></div>
         {#if sessionClosedReason}
           <button class="mbtn" onclick={() => void restart()}>
             <span class="mbtn-icon">
@@ -1594,55 +1644,6 @@
             {chordFor("app.terminal.teamWork") ?? ""}
           </span>
         </button>
-        <div class="msep" role="separator"></div>
-        <!-- Per-tab broadcast selector. There is no umbrella
-             "Broadcast Input On/Off" rocker; the per-row checkboxes
-             are the only controls. Self appears at the top of the
-             list with a "self" marker. -->
-        <div class="broadcast-section-label">
-          <span class="mbtn-icon">
-            <Radio size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span>broadcast input on/off</span>
-        </div>
-        <button class="mbtn" onclick={toggleAllBroadcastTargets}>
-          <span class="mbtn-icon"></span>
-          <span class="mbtn-label">
-            {allBroadcastTargetsSelected ? "Deselect All" : "Select All"}
-          </span>
-          <span class="mbtn-chord"></span>
-        </button>
-        {#each broadcastTargets as target (target.id)}
-          {@const isSelf = target.id === tab.id}
-          {@const isChecked = isSelf
-            ? tab.broadcastEnabled
-            : selectedBroadcastTargets.has(target.id)}
-          <label class="target-row">
-            <span class="target-check">
-              <input
-                type="checkbox"
-                checked={isChecked}
-                onchange={(e) => {
-                  const next = (e.currentTarget as HTMLInputElement).checked;
-                  if (isSelf) {
-                    setTerminalBroadcastEnabled(tab, next);
-                  } else {
-                    setTerminalBroadcastTarget(tab, target.id, next);
-                  }
-                }}
-              />
-              {#if isChecked}
-                <Check size={13} strokeWidth={2} aria-hidden="true" />
-              {/if}
-            </span>
-            <span class="target-name">
-              {terminalTabName(target)}
-              {#if isSelf}
-                <span class="target-self">(self)</span>
-              {/if}
-            </span>
-          </label>
-        {/each}
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={flipToSettings}>
           <span class="mbtn-icon">

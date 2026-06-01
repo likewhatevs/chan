@@ -222,13 +222,20 @@
 
   function onKeydown(e: KeyboardEvent): void {
     if (e.key === "Escape" && !busy) {
+      // Capture phase + stopPropagation: Cmd+P opens this dialog OVER a
+      // freshly-spawned lead terminal whose xterm (and the Team Work
+      // compose box) grabs focus, so a bubble-phase Escape was consumed
+      // by the terminal before reaching the window. Listening in capture
+      // runs this first, and stopPropagation keeps the keystroke out of
+      // the terminal behind the modal.
       e.preventDefault();
+      e.stopPropagation();
       onCancel();
     }
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydowncapture={onKeydown} />
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -671,14 +678,19 @@
     opacity: 0.6;
   }
   .team-member-cell-badge {
+    /* `font-family: inherit` (not the `font` shorthand, which would reset
+       font-size back to the larger inherited value) so the 0.7rem below
+       sticks; nowrap keeps the badge a single-line pill rather than wrapping
+       into a circle under border-radius: 999px. */
+    font-family: inherit;
     font-size: 0.7rem;
+    white-space: nowrap;
     padding: 2px 6px;
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--text-secondary);
     cursor: pointer;
-    font: inherit;
   }
   .team-member-cell-badge.unassigned {
     cursor: default;

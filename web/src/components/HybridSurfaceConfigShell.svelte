@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { Moon, Sun } from "lucide-svelte";
+  import ThemeToggleButton from "./ThemeToggleButton.svelte";
   import type { HybridSurfaceKind, SurfaceThemeChoice } from "../api/types";
   import {
     effectiveHybridSurfaceTheme,
@@ -45,28 +45,11 @@
         <span class="err" title={saveStatus.error}>save failed</span>
       {/if}
     </div>
-    <div class="theme-switch" role="group" aria-label={`${title} body theme`}>
-      <button
-        type="button"
-        class:on={activeTheme === "dark"}
-        onclick={() => setTheme("dark")}
-        title={`${title} dark body theme`}
-        aria-label={`${title} dark body theme`}
-      >
-        <Moon size={15} strokeWidth={1.85} aria-hidden="true" />
-        <span>Dark</span>
-      </button>
-      <button
-        type="button"
-        class:on={activeTheme === "light"}
-        onclick={() => setTheme("light")}
-        title={`${title} light body theme`}
-        aria-label={`${title} light body theme`}
-      >
-        <Sun size={15} strokeWidth={1.85} aria-hidden="true" />
-        <span>Light</span>
-      </button>
-    </div>
+    <ThemeToggleButton
+      theme={activeTheme}
+      label={`${title} body`}
+      onToggle={() => setTheme(activeTheme === "dark" ? "light" : "dark")}
+    />
   </header>
   <div class="config-body">
     {#if children}
@@ -116,39 +99,6 @@
   }
   .save-status .muted {
     color: var(--text-secondary);
-  }
-  .theme-switch {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 2px;
-    border: 1px solid var(--btn-border);
-    border-radius: 5px;
-    background: var(--bg);
-    flex-shrink: 0;
-  }
-  .theme-switch button {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    min-height: 28px;
-    padding: 3px 8px;
-    border: 0;
-    border-radius: 3px;
-    background: transparent;
-    color: var(--text-secondary);
-    font: inherit;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  .theme-switch button:hover {
-    color: var(--text);
-    background: var(--hover-bg);
-  }
-  .theme-switch button.on {
-    color: var(--text);
-    background: var(--bg-card);
-    box-shadow: inset 0 0 0 1px var(--border);
   }
   .config-body {
     flex: 1;

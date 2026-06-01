@@ -1141,6 +1141,22 @@
     padding: 0.6rem 0.7rem 0.8rem 0.7rem;
     font-size: 12.5px;
   }
+  /* F2: hairline dividers between the inspector's top-level sections
+     (buttons / file size / code / references). Target DIRECT children of
+     `.info` so the nested COCOMO meta-grid (inside `.refs`) keeps its own
+     dashed sub-divider and doesn't pick up a section rule. Each top-level
+     block owns the line above it; the identity header (.head/.title/
+     .badge-row/.image-preview/.drafts-notice) stays divider-free so the
+     first rule sits above the actions section. */
+  .info > .actions-section,
+  .info > .meta-grid,
+  .info > .refs,
+  .info > .refs-loading,
+  .info > .refs-error {
+    border-top: 1px solid var(--separator);
+    margin-top: 0.6rem;
+    padding-top: 0.6rem;
+  }
   .empty {
     text-align: center;
     color: var(--text-secondary);
