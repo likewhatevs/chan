@@ -215,9 +215,12 @@ impl Bm25Index {
         let snippet_gen = SnippetGenerator::create(&searcher, &*snippet_query, self.fields.body)?;
         // Lowercase prefixes pulled out of the user's query for the
         // manual fallback highlighter below. Empty when we routed
-        // through the QueryParser path (operators / phrases).
+        // through the QueryParser path (operators / phrases). Use the
+        // same subtokens we matched on so a mention/path query bolds
+        // the indexed words (handle, file, md) rather than the raw
+        // unmatchable token (@@handle, file.md).
         let prefix_terms: Vec<String> = if prefix_query.is_some() {
-            q.split_whitespace().map(|t| t.to_lowercase()).collect()
+            query_subtokens(q)
         } else {
             Vec::new()
         };
@@ -309,14 +312,24 @@ impl Bm25Index {
         if tokens.iter().any(|t| has_operator(t)) {
             return Ok(None);
         }
-        let mut top: Vec<(Occur, Box<dyn Query>)> = Vec::with_capacity(tokens.len());
-        for tok in tokens {
-            // Lowercase to match the index's default tokenizer
-            // output. Escape regex metachars so a token like "c++"
-            // (which has_operator would let through if we relaxed
-            // the operator set later) doesn't blow up.
-            let lc = tok.to_lowercase();
-            let pattern = format!("{}.*", regex_escape(&lc));
+        // Split each whitespace token into the alphanumeric subtokens
+        // the default tokenizer produced from the indexed text, so a
+        // mention (@@handle), a path (a/b/c), or a filename (file.md)
+        // matches the stripped index terms (handle / a,b,c / file,md)
+        // instead of building a literal-punctuation regex that can
+        // never match a stored term. A bare word yields exactly one
+        // subtoken, leaving ordinary queries unchanged.
+        let subtokens = query_subtokens(q);
+        if subtokens.is_empty() {
+            // An all-punctuation query (e.g. "@@") has nothing to
+            // prefix-match; let the QueryParser path handle it.
+            return Ok(None);
+        }
+        let mut top: Vec<(Occur, Box<dyn Query>)> = Vec::with_capacity(subtokens.len());
+        for sub in &subtokens {
+            // Escape regex metachars defensively; subtokens are
+            // alphanumeric by construction, so this is a no-op today.
+            let pattern = format!("{}.*", regex_escape(sub));
             let mut field_clauses: Vec<(Occur, Box<dyn Query>)> = Vec::with_capacity(2);
             for &field in &[self.fields.body, self.fields.heading] {
                 let rq = RegexQuery::from_pattern(&pattern, field)?;
@@ -460,6 +473,21 @@ fn regex_escape(s: &str) -> String {
     out
 }
 
+/// Split a query into the lowercased alphanumeric subtokens that
+/// tantivy's default tokenizer would have produced from the indexed
+/// text. Splitting on every non-alphanumeric boundary mirrors how the
+/// body/heading fields were tokenized, so a mention (`@@handle`), a
+/// path (`a/b/c`), or a filename (`file.md`) lines up with the stored
+/// terms instead of carrying punctuation a prefix regex could never
+/// match. A bare word yields a single subtoken (ordinary queries are
+/// untouched); an all-punctuation query yields none.
+fn query_subtokens(q: &str) -> Vec<String> {
+    q.split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
 fn bm25_dir(index_dir: &Path) -> PathBuf {
     index_dir.join("bm25")
 }
@@ -594,6 +622,91 @@ mod tests {
         let hits = idx.search("beet", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, "recipes/beetroot.md");
+    }
+
+    #[test]
+    fn query_subtokens_splits_on_punctuation() {
+        assert_eq!(query_subtokens("@@LaneA"), vec!["lanea".to_string()]);
+        assert_eq!(
+            query_subtokens("a/b/c"),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+        assert_eq!(
+            query_subtokens("file.md"),
+            vec!["file".to_string(), "md".to_string()]
+        );
+        // A bare word and a plain multi-word query are untouched.
+        assert_eq!(query_subtokens("plain"), vec!["plain".to_string()]);
+        assert_eq!(
+            query_subtokens("two words"),
+            vec!["two".to_string(), "words".to_string()]
+        );
+        // All-punctuation yields nothing.
+        assert!(query_subtokens("@@").is_empty());
+    }
+
+    #[test]
+    fn mention_query_matches_handle_word() {
+        // BM25 strips the leading @@, so a query typed as "@@LaneA"
+        // must still find the note mentioning @@LaneA (indexed as the
+        // bare term "lanea"). Before the subtoken split this returned
+        // nothing because the regex carried the literal @@.
+        let (_tmp, idx) = fresh();
+        idx.index_file(
+            "team/roster.md",
+            "# Roster\nThe architect is @@LaneA and the host is @@Host.\n",
+            &Chunking::Headings,
+        )
+        .unwrap();
+        idx.index_file(
+            "team/process.md",
+            "# Process\nThe architect coordinates the round.\n",
+            &Chunking::Headings,
+        )
+        .unwrap();
+        idx.commit().unwrap();
+        let hits = idx.search("@@LaneA", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "team/roster.md");
+    }
+
+    #[test]
+    fn path_query_ands_all_segments() {
+        // A slash path (no hyphen, so it stays on the prefix path)
+        // ANDs its segments: the note naming the file is found, the
+        // note missing a segment is not.
+        let (_tmp, idx) = fresh();
+        idx.index_file(
+            "docs/paths.md",
+            "# Paths\nThe handler lives in src/routes/search.rs today.\n",
+            &Chunking::Headings,
+        )
+        .unwrap();
+        idx.index_file(
+            "docs/other.md",
+            "# Other\nThis note mentions routes and a search box.\n",
+            &Chunking::Headings,
+        )
+        .unwrap();
+        idx.commit().unwrap();
+        let hits = idx.search("src/routes/search.rs", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "docs/paths.md");
+    }
+
+    #[test]
+    fn filename_query_matches_stem_and_extension() {
+        let (_tmp, idx) = fresh();
+        idx.index_file(
+            "docs/files.md",
+            "# Files\nEvery team dir carries a bootstrap.md file.\n",
+            &Chunking::Headings,
+        )
+        .unwrap();
+        idx.commit().unwrap();
+        let hits = idx.search("bootstrap.md", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "docs/files.md");
     }
 
     #[test]
