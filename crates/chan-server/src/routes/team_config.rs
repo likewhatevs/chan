@@ -330,6 +330,40 @@ pub(crate) fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> Stri
     out
 }
 
+/// The team's terminal group base: the explicit `tab_group`, else the team
+/// name (matching the dialog's `defaultTabGroupFromPath` fallback intent).
+/// Shared by the `--script` generator and the server-side spawner so both
+/// agree on the base group; the spawner additionally resolves a live
+/// collision by appending `-N`.
+pub(crate) fn team_base_group(config: &TeamConfig) -> &str {
+    if config.tab_group.trim().is_empty() {
+        config.team_name.as_str()
+    } else {
+        config.tab_group.as_str()
+    }
+}
+
+/// The lead-first spawn order: the lead, then the remaining members in roster
+/// order, mirroring `teamOrchestrator.svelte.ts runTeamBootstrap`. Shared by
+/// the `--script` generator (renders each member to shell) and the
+/// server-side spawner (brings each up via the terminal registry) so both
+/// reproduce the same team. Falls back to plain roster order when no member
+/// is flagged lead (validation guarantees exactly one, but a direct caller
+/// that skipped the gate must not panic).
+pub(crate) fn lead_first_order(config: &TeamConfig) -> Vec<&Member> {
+    let lead_idx = config.members.iter().position(|m| m.is_lead);
+    let mut order: Vec<&Member> = Vec::with_capacity(config.members.len());
+    if let Some(i) = lead_idx {
+        order.push(&config.members[i]);
+    }
+    for (i, m) in config.members.iter().enumerate() {
+        if Some(i) != lead_idx {
+            order.push(m);
+        }
+    }
+    order
+}
+
 /// Generate a paste-and-run bootstrap shell script for `config`, rooted at
 /// the workspace-relative `team_dir`. This is the `--script` form of the
 /// team bootstrap: run from a chan terminal at the workspace root it
@@ -349,13 +383,11 @@ pub(crate) fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> Stri
 /// ASCII only, no em dashes.
 pub(crate) fn generate_bootstrap_script(team_dir: &str, config: &TeamConfig) -> String {
     let dir = team_dir.trim_end_matches('/');
-    // The team's terminal group: the explicit tab_group, else the team name
-    // (matching the dialog's `defaultTabGroupFromPath` fallback intent).
-    let group = if config.tab_group.trim().is_empty() {
-        config.team_name.as_str()
-    } else {
-        config.tab_group.as_str()
-    };
+    // The team's terminal group base. The `--script` form uses it verbatim
+    // (a shell script cannot cheaply query the live registry); the
+    // server-side spawner resolves collisions against it (-N). Shared so the
+    // two paths agree on the base group.
+    let group = team_base_group(config);
     let config_toml = toml::to_string_pretty(config)
         .unwrap_or_else(|e| format!("# failed to serialize team config: {e}\n"));
     let bootstrap_md = generate_bootstrap_md(dir, config);
@@ -403,17 +435,9 @@ pub(crate) fn generate_bootstrap_script(team_dir: &str, config: &TeamConfig) -> 
 
     // Spawn order: lead first, then the rest in roster order, mirroring
     // runTeamBootstrap (the lead's pane is never momentarily empty in the
-    // UI; the CLI just spawns fresh tabs in the same order).
-    let lead_idx = config.members.iter().position(|m| m.is_lead);
-    let mut order: Vec<&Member> = Vec::with_capacity(config.members.len());
-    if let Some(i) = lead_idx {
-        order.push(&config.members[i]);
-    }
-    for (i, m) in config.members.iter().enumerate() {
-        if Some(i) != lead_idx {
-            order.push(m);
-        }
-    }
+    // UI; the CLI just spawns fresh tabs in the same order). Shared with the
+    // server-side spawner so both bring the team up in the same order.
+    let order = lead_first_order(config);
 
     out.push_str("# 4. Spawn the team, lead first. Each tab's $CHAN_TAB_NAME is its handle.\n");
     for &m in &order {
@@ -463,8 +487,10 @@ pub(crate) fn generate_bootstrap_script(team_dir: &str, config: &TeamConfig) -> 
 /// and the lead, telling the agent who it is, and pointing it at the
 /// generated `bootstrap.md` for the full roster + process. Personalized per
 /// member (the CLI pokes each tab individually, unlike the SPA's single
-/// lead-editor prompt). ASCII only.
-fn identity_prompt(config: &TeamConfig, team_dir: &str, member: &Member) -> String {
+/// lead-editor prompt). ASCII only. Shared by the `--script` generator and
+/// the server-side spawner (the latter appends the agent's submit chord via
+/// `apply_submit_chord`, the same bytes the script's `--submit` produces).
+pub(crate) fn identity_prompt(config: &TeamConfig, team_dir: &str, member: &Member) -> String {
     let lead_handle = config
         .members
         .iter()
@@ -940,6 +966,32 @@ mod tests {
             worker_prompt.contains("wait for @@Lead"),
             "worker waits for the lead"
         );
+    }
+
+    #[test]
+    fn team_base_group_prefers_tab_group_then_team_name() {
+        let mut config = sample_config();
+        assert_eq!(team_base_group(&config), "alpha", "explicit tab_group wins");
+        config.tab_group = "   ".into();
+        assert_eq!(
+            team_base_group(&config),
+            "alpha",
+            "blank tab_group falls back to team_name"
+        );
+        config.team_name = "squad".into();
+        assert_eq!(team_base_group(&config), "squad");
+    }
+
+    #[test]
+    fn lead_first_order_puts_the_lead_first() {
+        // sample_config has @@LaneA (worker) first by index but @@Lead is the
+        // lead, so the lead must come out front.
+        let mut config = sample_config();
+        config.members.reverse(); // worker now at index 0, lead at index 1
+        let order = lead_first_order(&config);
+        assert_eq!(order[0].handle, "@@Lead", "lead first regardless of index");
+        assert_eq!(order[1].handle, "@@LaneA");
+        assert_eq!(order.len(), config.members.len());
     }
 
     #[test]

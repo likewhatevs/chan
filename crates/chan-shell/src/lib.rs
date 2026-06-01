@@ -20,7 +20,10 @@ pub use wire::{ControlRequest, ControlResponse, SurveyFollowup, SurveyReply, Sur
 mod cli;
 #[cfg(feature = "client")]
 mod control;
-#[cfg(feature = "client")]
+// The submit map is always compiled (serde-free, clap-free): chan-server's
+// server-side team spawner reads the agent submit chords without pulling the
+// `client` feature (clap). Only the `ValueEnum` parse impl for the
+// `--submit` flag is `client`-gated, inside the module.
 mod submit;
 
 #[cfg(feature = "client")]
@@ -29,7 +32,6 @@ pub use cli::{dispatch, run_cs, ShellAction, TerminalAction};
 pub use control::{
     absolutize, control_socket_env, open_env, open_env_from, send_control_request, OpenEnv,
 };
-#[cfg(feature = "client")]
 pub use submit::{apply_submit_chord, SubmitAgent};
 
 /// Whether this process was invoked through a `cs` name (a `cs -> chan`

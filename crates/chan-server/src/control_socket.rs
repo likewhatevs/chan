@@ -11,6 +11,8 @@ use std::sync::{Arc, OnceLock, RwLock};
 #[cfg(unix)]
 use chan_workspace::{TeamConfig, Workspace};
 #[cfg(unix)]
+use portable_pty::PtySize;
+#[cfg(unix)]
 use serde::Serialize;
 #[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -21,6 +23,8 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::state::WorkspaceCell;
+#[cfg(unix)]
+use crate::terminal_sessions::CreateOptions;
 use crate::terminal_sessions::Registry as TerminalRegistry;
 
 /// Settable handle to the terminal registry. The registry is built after
@@ -40,7 +44,7 @@ pub use chan_shell::{ControlRequest, ControlResponse};
 // pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
 // TeamOp tags the `cs terminal team` op (new | load).
 #[cfg(unix)]
-use chan_shell::{SurveyReply, SurveySpec, TeamOp};
+use chan_shell::{apply_submit_chord, SubmitAgent, SurveyReply, SurveySpec, TeamOp};
 
 #[cfg(unix)]
 #[derive(Debug, Serialize)]
@@ -366,7 +370,17 @@ async fn handle_request(
             op,
             config_toml,
             script,
-        } => handle_team(workspace_cell, &dir, op, config_toml, script),
+        } => {
+            handle_team(
+                workspace_cell,
+                terminal_registry,
+                &dir,
+                op,
+                config_toml,
+                script,
+            )
+            .await
+        }
     }
 }
 
@@ -374,14 +388,20 @@ async fn handle_request(
 /// config.toml text, stamps `created_at` when omitted, validates, then
 /// either emits the paste-and-run bootstrap script (`--script`) or writes
 /// `config.toml` + the regenerated `bootstrap.md` + the dir tree through
-/// the Workspace sandbox. `load` reads + validates `{dir}/config.toml`,
-/// then emits the script (`--script`) or a one-line summary. All the
-/// config logic lives in `routes::team_config` so the CLI path and the
-/// HTTP route share one source of truth (the bootstrap is never
-/// regenerated client-side).
+/// the Workspace sandbox AND brings the team up server-side via the
+/// terminal registry (lead first). `load` reads + validates
+/// `{dir}/config.toml`, then emits the script (`--script`) or a one-line
+/// summary. All the config logic lives in `routes::team_config` so the CLI
+/// path and the HTTP route share one source of truth (the bootstrap is
+/// never regenerated client-side).
+///
+/// async because the non-`--script` `new` spawns the team then blocks a
+/// boot grace before poking each agent's identity prompt (the same
+/// sequence the `--script` form runs inline with `sleep 3`).
 #[cfg(unix)]
-fn handle_team(
+async fn handle_team(
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
+    terminal_registry: Option<&Arc<TerminalRegistry>>,
     dir: &str,
     op: TeamOp,
     config_toml: Option<String>,
@@ -438,16 +458,22 @@ fn handle_team(
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
-            match write_team_config(&workspace, dir, &config) {
-                Ok(()) => ControlResponse::Ok {
+            if let Err(message) = write_team_config(&workspace, dir, &config) {
+                return ControlResponse::Error { message };
+            }
+            // The config + bootstrap.md + tree are on disk. Without a
+            // terminal registry (a server with terminals disabled) there is
+            // nothing to spawn into, so report the write and stop.
+            let Some(registry) = terminal_registry else {
+                return ControlResponse::Ok {
                     message: format!(
-                        "team {:?} written to {dir} ({} member(s))",
+                        "team {:?} written to {dir} ({} member(s)); no terminal registry to spawn into",
                         config.team_name,
                         config.members.len()
                     ),
-                },
-                Err(message) => ControlResponse::Error { message },
-            }
+                };
+            };
+            spawn_and_poke_team(registry, dir, &config).await
         }
         TeamOp::Load => {
             let workspace = match workspace_from_cell(workspace_cell) {
@@ -478,6 +504,179 @@ fn handle_team(
             }
         }
     }
+}
+
+/// Boot grace between spawning the team's agents and poking their compose
+/// boxes. Matches the `--script` form's inline `sleep 3`: a freshly-spawned
+/// agent needs a moment before its compose box accepts input, else the
+/// identity poke lands mid-startup and is lost. This is the one magic number
+/// in the spawn path; the Wave-2 live smoke validates it.
+#[cfg(unix)]
+const TEAM_SPAWN_POKE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// What a server-side team spawn produced: the resolved group, the handles
+/// that came up, the ones that failed (with the spawn error), and the
+/// per-agent identity pokes to deliver after the boot grace.
+#[cfg(unix)]
+struct TeamSpawn {
+    group: String,
+    spawned: Vec<String>,
+    failed: Vec<(String, String)>,
+    /// `(handle, payload)` for each AGENT member; the payload is the
+    /// identity prompt with the agent's submit chord already appended.
+    pokes: Vec<(String, String)>,
+}
+
+/// Resolve the team's terminal group against the LIVE registry, appending
+/// `-N` until unique so a new team never joins an existing group. Mirrors
+/// the SPA's `resolveTeamGroup` (teamOrchestrator.svelte.ts): it reads the
+/// same resolved-group set `cs terminal list` shows.
+#[cfg(unix)]
+fn resolve_team_group(registry: &TerminalRegistry, base: &str) -> String {
+    let live: std::collections::HashSet<String> = registry
+        .session_summaries()
+        .into_iter()
+        .map(|s| s.tab_group)
+        .collect();
+    if !live.contains(base) {
+        return base.to_string();
+    }
+    for n in 2..1000 {
+        let candidate = format!("{base}-{n}");
+        if !live.contains(&candidate) {
+            return candidate;
+        }
+    }
+    base.to_string()
+}
+
+/// Bring the team up via the terminal registry: resolve the group, spawn
+/// lead-first (full command + env + tab-name + group), and compute the
+/// per-agent identity pokes. The poke payload is built with the SAME
+/// `identity_prompt` + `apply_submit_chord` the `--script` form emits, so
+/// the direct `new` reproduces the script's bytes. Shell members (no agent)
+/// spawn but get no poke. A member whose command fails to start is recorded
+/// in `failed` and does not abort the rest of the team (mirrors
+/// runTeamBootstrap's per-worker try/catch). This step is synchronous (the
+/// boot-grace wait + poke delivery happen in `spawn_and_poke_team`).
+#[cfg(unix)]
+fn spawn_team(registry: &TerminalRegistry, dir: &str, config: &TeamConfig) -> TeamSpawn {
+    use crate::routes::team_config::{identity_prompt, lead_first_order, team_base_group};
+
+    let group = resolve_team_group(registry, team_base_group(config));
+    let mut spawned = Vec::new();
+    let mut failed = Vec::new();
+    let mut pokes = Vec::new();
+    for m in lead_first_order(config) {
+        // A blank command runs the member's default login shell (a shell
+        // member); a named command (claude/codex/...) is the PTY program.
+        let command = {
+            let trimmed = m.command.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        };
+        let opts = CreateOptions {
+            // No client is attached at spawn time; a real attach resizes via
+            // the WS Resize frame. 80x24 is the standard default.
+            size: PtySize {
+                cols: 80,
+                rows: 24,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+            tab_name: Some(m.handle.clone()),
+            tab_group: Some(group.clone()),
+            window_id: None,
+            mcp_env: true,
+            cwd: None,
+            command,
+            env: m.env.clone(),
+        };
+        match registry.create(opts) {
+            Ok(_handle) => {
+                // Drop the attach handle: the session stays in the registry
+                // map, and the boot-grace poke re-resolves it by
+                // tab-name + group.
+                spawned.push(m.handle.clone());
+                if let Some(agent) = m.agent.as_deref().and_then(SubmitAgent::from_agent_name) {
+                    let payload = apply_submit_chord(identity_prompt(config, dir, m), Some(agent));
+                    pokes.push((m.handle.clone(), payload));
+                }
+            }
+            Err(e) => failed.push((m.handle.clone(), e.to_string())),
+        }
+    }
+    TeamSpawn {
+        group,
+        spawned,
+        failed,
+        pokes,
+    }
+}
+
+/// The non-`--script` `new` spawn path: bring the team up, wait the boot
+/// grace, then deliver each agent's identity poke. Blocks for the grace so
+/// the CLI returns only once the pokes are delivered (the same inline
+/// ordering the `--script` form runs: spawn -> sleep 3 -> poke). Returns a
+/// summary, or an error when nothing came up.
+#[cfg(unix)]
+async fn spawn_and_poke_team(
+    registry: &Arc<TerminalRegistry>,
+    dir: &str,
+    config: &TeamConfig,
+) -> ControlResponse {
+    let spawn = spawn_team(registry, dir, config);
+
+    // Let the agents come up before poking their compose boxes, then deliver
+    // each agent its identity prompt + submit chord. A shell member has no
+    // compose box, so it has no poke entry; an all-shell team (or a fully
+    // failed spawn) skips the wait entirely.
+    if !spawn.spawned.is_empty() && !spawn.pokes.is_empty() {
+        tokio::time::sleep(TEAM_SPAWN_POKE_GRACE).await;
+        for (handle, payload) in &spawn.pokes {
+            registry.write_input_matching(Some(handle), Some(&spawn.group), payload.as_bytes());
+        }
+    }
+
+    team_spawn_summary(&config.team_name, &spawn)
+}
+
+/// Render the CLI-facing response for a completed `spawn_team`: an error when
+/// nothing came up, else a one-line summary of the spawned + poked + failed
+/// counts. Pure (no I/O) so the wording is unit-tested without the boot-grace
+/// wait.
+#[cfg(unix)]
+fn team_spawn_summary(team_name: &str, spawn: &TeamSpawn) -> ControlResponse {
+    if spawn.spawned.is_empty() {
+        return ControlResponse::Error {
+            message: format!(
+                "team {team_name:?}: no member could be spawned: {}",
+                fmt_spawn_failures(&spawn.failed)
+            ),
+        };
+    }
+    let mut message = format!(
+        "team {team_name:?} spawned in group {:?}: {} member(s) up, poked {} agent(s)",
+        spawn.group,
+        spawn.spawned.len(),
+        spawn.pokes.len(),
+    );
+    if !spawn.failed.is_empty() {
+        message.push_str(&format!(
+            "; {} failed: {}",
+            spawn.failed.len(),
+            fmt_spawn_failures(&spawn.failed)
+        ));
+    }
+    ControlResponse::Ok { message }
+}
+
+#[cfg(unix)]
+fn fmt_spawn_failures(failed: &[(String, String)]) -> String {
+    failed
+        .iter()
+        .map(|(handle, err)| format!("{handle} ({err})"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The blocking `cs terminal survey` path: resolve the tab selector to the
@@ -1223,16 +1422,16 @@ agent = "codex"
         Arc::new(RwLock::new(None))
     }
 
-    #[test]
-    fn handle_team_rejects_empty_and_absolute_dir() {
+    #[tokio::test]
+    async fn handle_team_rejects_empty_and_absolute_dir() {
         let cell = empty_cell();
-        match handle_team(&cell, "   ", TeamOp::New, None, false) {
+        match handle_team(&cell, None, "   ", TeamOp::New, None, false).await {
             ControlResponse::Error { message } => {
                 assert!(message.contains("required"), "{message}")
             }
             ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
         }
-        match handle_team(&cell, "/abs/team", TeamOp::Load, None, false) {
+        match handle_team(&cell, None, "/abs/team", TeamOp::Load, None, false).await {
             ControlResponse::Error { message } => {
                 assert!(message.contains("workspace-relative"), "{message}")
             }
@@ -1240,10 +1439,10 @@ agent = "codex"
         }
     }
 
-    #[test]
-    fn handle_team_new_requires_a_config() {
+    #[tokio::test]
+    async fn handle_team_new_requires_a_config() {
         let cell = empty_cell();
-        match handle_team(&cell, "new-team-1", TeamOp::New, None, false) {
+        match handle_team(&cell, None, "new-team-1", TeamOp::New, None, false).await {
             ControlResponse::Error { message } => {
                 assert!(message.contains("needs a config"), "{message}")
             }
@@ -1251,18 +1450,21 @@ agent = "codex"
         }
     }
 
-    #[test]
-    fn handle_team_new_script_emits_bootstrap_without_a_workspace() {
+    #[tokio::test]
+    async fn handle_team_new_script_emits_bootstrap_without_a_workspace() {
         // `--script` is a pure generator: it returns the script even with
         // no workspace cell bound (no filesystem I/O on this path).
         let cell = empty_cell();
         match handle_team(
             &cell,
+            None,
             "new-team-1",
             TeamOp::New,
             Some(SAMPLE_TEAM_TOML.into()),
             true,
-        ) {
+        )
+        .await
+        {
             ControlResponse::Ok { message } => {
                 assert!(message.starts_with("#!/usr/bin/env bash"), "{message}");
                 assert!(message.contains("--tab-name='@@Lead'"), "{message}");
@@ -1272,16 +1474,19 @@ agent = "codex"
         }
     }
 
-    #[test]
-    fn handle_team_new_rejects_invalid_toml() {
+    #[tokio::test]
+    async fn handle_team_new_rejects_invalid_toml() {
         let cell = empty_cell();
         match handle_team(
             &cell,
+            None,
             "new-team-1",
             TeamOp::New,
             Some("this is not = = toml".into()),
             true,
-        ) {
+        )
+        .await
+        {
             ControlResponse::Error { message } => {
                 assert!(message.contains("invalid team config TOML"), "{message}")
             }
@@ -1289,8 +1494,8 @@ agent = "codex"
         }
     }
 
-    #[test]
-    fn handle_team_new_rejects_a_config_that_fails_validation() {
+    #[tokio::test]
+    async fn handle_team_new_rejects_a_config_that_fails_validation() {
         // Valid TOML, but zero members -> validation fails before any write.
         let cell = empty_cell();
         let toml_text = r#"
@@ -1301,13 +1506,197 @@ created_at = "2026-05-29T00:00:00Z"
 "#;
         match handle_team(
             &cell,
+            None,
             "new-team-1",
             TeamOp::New,
             Some(toml_text.into()),
             true,
-        ) {
+        )
+        .await
+        {
             ControlResponse::Error { message } => {
                 assert!(message.contains("between 1 and 9"), "{message}")
+            }
+            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+        }
+    }
+
+    // A team whose members run a benign shell (blank command -> default
+    // login shell), so `spawn_team` brings them up in CI without needing the
+    // real agent binaries on PATH. Lead @@Lead (claude submit chord), worker
+    // @@LaneA (codex), plus a shell member @@Shell (no agent -> no poke).
+    const SPAWNABLE_TEAM_TOML: &str = r#"
+team_name = "spawnme"
+host_name = "Neo"
+host_handle = "@@Neo"
+tab_group = "spawnme"
+created_at = "2026-05-29T00:00:00Z"
+
+[[members]]
+handle = "@@LaneA"
+command = ""
+is_lead = false
+agent = "codex"
+
+[[members]]
+handle = "@@Lead"
+command = ""
+is_lead = true
+agent = "claude"
+
+[[members]]
+handle = "@@Shell"
+command = ""
+is_lead = false
+"#;
+
+    fn spawnable_config() -> TeamConfig {
+        toml::from_str(SPAWNABLE_TEAM_TOML).expect("valid spawnable team config")
+    }
+
+    #[test]
+    fn resolve_team_group_appends_suffix_on_collision() {
+        let (_root, registry) = empty_registry();
+        assert_eq!(
+            resolve_team_group(&registry, "alpha"),
+            "alpha",
+            "no live group -> base verbatim"
+        );
+        // Bring up a session in group "alpha"; the next resolve must dodge it.
+        let _h = registry
+            .create(CreateOptions {
+                size: PtySize {
+                    cols: 80,
+                    rows: 24,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                tab_name: Some("@@x".into()),
+                tab_group: Some("alpha".into()),
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+            })
+            .expect("spawn collision session");
+        assert_eq!(resolve_team_group(&registry, "alpha"), "alpha-2");
+    }
+
+    #[test]
+    fn spawn_team_brings_up_lead_first_and_pokes_only_agents() {
+        let (_root, registry) = empty_registry();
+        let config = spawnable_config();
+        let spawn = spawn_team(&registry, "new-team-1", &config);
+
+        // Lead first, then roster order: @@Lead, @@LaneA, @@Shell.
+        assert_eq!(spawn.spawned, vec!["@@Lead", "@@LaneA", "@@Shell"]);
+        assert!(
+            spawn.failed.is_empty(),
+            "no spawn failed: {:?}",
+            spawn.failed
+        );
+        assert_eq!(spawn.group, "spawnme");
+
+        // Only the two AGENT members get an identity poke; the shell member
+        // (no agent) does not. Lead's poke carries claude's chord, the
+        // worker's carries codex's CR.
+        assert_eq!(spawn.pokes.len(), 2, "agents only: {:?}", spawn.pokes);
+        assert_eq!(spawn.pokes[0].0, "@@Lead");
+        assert!(
+            spawn.pokes[0].1.ends_with("\x1b[27;9;13~"),
+            "lead poke ends with claude chord: {:?}",
+            spawn.pokes[0].1
+        );
+        assert!(
+            spawn.pokes[0].1.contains("You are @@Lead"),
+            "lead poke names the lead: {:?}",
+            spawn.pokes[0].1
+        );
+        assert_eq!(spawn.pokes[1].0, "@@LaneA");
+        assert!(
+            spawn.pokes[1].1.ends_with('\r') && !spawn.pokes[1].1.ends_with("\x1b[27;9;13~"),
+            "worker poke ends with codex CR: {:?}",
+            spawn.pokes[1].1
+        );
+
+        // All three sessions live in the resolved group.
+        let summaries = registry.session_summaries();
+        assert_eq!(summaries.len(), 3);
+        assert!(summaries.iter().all(|s| s.tab_group == "spawnme"));
+    }
+
+    // A team of two shell members (one lead, neither an agent). spawn_and_
+    // poke_team brings them up but pokes nobody, so it skips the boot-grace
+    // wait and returns immediately - exercises the spawn path end-to-end
+    // without a 3s sleep in the test.
+    const SHELL_TEAM_TOML: &str = r#"
+team_name = "shellsquad"
+host_name = "Neo"
+host_handle = "@@Neo"
+tab_group = "shellsquad"
+created_at = "2026-05-29T00:00:00Z"
+
+[[members]]
+handle = "@@Boss"
+command = ""
+is_lead = true
+
+[[members]]
+handle = "@@Hand"
+command = ""
+is_lead = false
+"#;
+
+    #[tokio::test]
+    async fn spawn_and_poke_team_with_shell_members_skips_the_poke_wait() {
+        let (_root, registry) = empty_registry();
+        let registry = Arc::new(registry);
+        let config: TeamConfig = toml::from_str(SHELL_TEAM_TOML).expect("valid shell team");
+        match spawn_and_poke_team(&registry, "new-team-1", &config).await {
+            ControlResponse::Ok { message } => {
+                assert!(message.contains("shellsquad"), "{message}");
+                assert!(message.contains("2 member(s) up"), "{message}");
+                assert!(message.contains("poked 0 agent(s)"), "{message}");
+            }
+            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+        }
+        assert_eq!(registry.session_summaries().len(), 2);
+    }
+
+    #[test]
+    fn team_spawn_summary_counts_up_poked_and_failed() {
+        let spawn = TeamSpawn {
+            group: "alpha".into(),
+            spawned: vec!["@@Lead".into(), "@@A".into()],
+            failed: vec![("@@B".into(), "no such file".into())],
+            pokes: vec![("@@Lead".into(), "hi\x1b[27;9;13~".into())],
+        };
+        match team_spawn_summary("alpha", &spawn) {
+            ControlResponse::Ok { message } => {
+                assert!(message.contains("2 member(s) up"), "{message}");
+                assert!(message.contains("poked 1 agent(s)"), "{message}");
+                assert!(
+                    message.contains("1 failed: @@B (no such file)"),
+                    "{message}"
+                );
+            }
+            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+        }
+    }
+
+    #[test]
+    fn team_spawn_summary_errors_when_nothing_came_up() {
+        let spawn = TeamSpawn {
+            group: "alpha".into(),
+            spawned: vec![],
+            failed: vec![("@@Lead".into(), "boom".into())],
+            pokes: vec![],
+        };
+        match team_spawn_summary("alpha", &spawn) {
+            ControlResponse::Error { message } => {
+                assert!(message.contains("no member could be spawned"), "{message}");
+                assert!(message.contains("@@Lead (boom)"), "{message}");
             }
             ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
         }
