@@ -825,6 +825,39 @@
   /// children should show; the scope root ("") is always expanded.
   const expandedDirs = $derived(graphState.expanded ?? { "": true });
 
+  /// Pull every in-scope node's directory spine up to the workspace
+  /// root. `contains` edges point parent -> child (directory -> file
+  /// and directory -> subdirectory), so a node's ancestors sit
+  /// UPSTREAM of it: add the `source` of every contains edge whose
+  /// `target` is already in scope, iterating to a fixed point. The
+  /// contains subgraph is a forest (one parent per node) so this
+  /// settles in O(depth) passes.
+  ///
+  /// G1: the tag / contact / language lenses BFS only along semantic
+  /// edges (tag / mention / language), so their file nodes used to
+  /// render with no edge up to a directory ("edgeless files"). The
+  /// spine already ships in the unified /api/graph payload (the
+  /// filesystem layer emits the contains edges to root); this just
+  /// re-includes it in the lens's visible set so every file lands on
+  /// its spine, matching the workspace / file-scope shape. Folder-
+  /// filter hiding is still handled later by `hiddenFolderIds`.
+  function pullContainsSpine(visited: Set<string>): void {
+    let pulled = true;
+    while (pulled) {
+      pulled = false;
+      for (const e of edges) {
+        if (
+          e.kind === "contains" &&
+          visited.has(e.target) &&
+          !visited.has(e.source)
+        ) {
+          visited.add(e.source);
+          pulled = true;
+        }
+      }
+    }
+  }
+
   const scopedNodeIds = $derived.by<Set<string> | null>(() => {
     if (!currentScope) return null;
     // Round-1 closing-8 (F1): semantic-mode workspace + dir scope
@@ -925,6 +958,9 @@
         if (next.size === 0) break;
         frontier = next;
       }
+      // G1: re-anchor every file the lens surfaced to its directory
+      // spine so no file renders edgeless.
+      pullContainsSpine(visited);
       return visited;
     }
     // Phase-13 KIND slice 2b: contact lens. Seed is the contact
@@ -958,6 +994,9 @@
         if (next.size === 0) break;
         frontier = next;
       }
+      // G1: re-anchor every file the lens surfaced to its directory
+      // spine so no file renders edgeless.
+      pullContainsSpine(visited);
       return visited;
     }
     // Phase-13 KIND slice 2b: language lens. Seed is the language
@@ -973,6 +1012,9 @@
         if (e.source === seedId) visited.add(e.target);
         if (e.target === seedId) visited.add(e.source);
       }
+      // G1: re-anchor every file of this language to its directory
+      // spine so no file renders edgeless.
+      pullContainsSpine(visited);
       return visited;
     }
     // Only file scope reaches here in semantic mode:
@@ -1011,37 +1053,14 @@
       if (next.size === 0) break;
       frontier = next;
     }
-    // `fullstack-a-58` parent-edge invariant: pull each in-scope
-    // node's ancestor chain via `contains` edges. The forward-only
-    // BFS above expands DOWN from the seed; contains edges point
-    // parent→child, so the parent is UPSTREAM of the seed (the
-    // file is the target end of the parent→file contains edge).
-    // Without this pass, file-scope graphs render the file but
-    // not its parent directory + the user can't click-up via the
-    // graph. Per @@Alex's spec: "every node has an inbound
-    // contains edge from a parent directory unless folder filter
-    // is OFF" — folder filter hiding is handled later by
-    // `hiddenFolderIds` so we always include the chain here.
-    //
-    // Implementation: iterate to a fixed point, adding `source`
-    // of every contains edge whose `target` is already in scope.
-    // The contains-edge subgraph is a forest (each file/dir has
-    // at most one parent) so this terminates in at most O(depth)
-    // iterations.
-    let pulled = true;
-    while (pulled) {
-      pulled = false;
-      for (const e of edges) {
-        if (
-          e.kind === "contains" &&
-          visited.has(e.target) &&
-          !visited.has(e.source)
-        ) {
-          visited.add(e.source);
-          pulled = true;
-        }
-      }
-    }
+    // `fullstack-a-58` parent-edge invariant: every in-scope file
+    // should hang off its parent directory so the user can click up
+    // through the graph. The forward-only BFS above expands DOWN from
+    // the seed; `pullContainsSpine` walks the contains-edge forest the
+    // other way, UP to the workspace root. Folder-filter hiding is
+    // handled later by `hiddenFolderIds`, so we always include the
+    // chain here.
+    pullContainsSpine(visited);
     return visited;
   });
 
