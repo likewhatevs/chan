@@ -378,9 +378,10 @@ export type GraphViewNode =
       /// shape. Image files keep `node_kind` absent and are routed via
       /// the frontend's classifyFile extension check instead.
       node_kind?: "contact";
-      /// True for ghost nodes synthesized as the target of a broken
-      /// link. Rendered muted; clicking is a no-op (the file doesn't
-      /// exist yet).
+      /// True for an indexed file that has since vanished from disk (a
+      /// stale-index signal); rendered muted. Unresolved link targets are
+      /// NOT ghost nodes: the backend drops them (node and edge), so this
+      /// is no longer set for a broken link.
       missing?: boolean;
     }
   | {
