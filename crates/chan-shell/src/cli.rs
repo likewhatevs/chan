@@ -145,12 +145,12 @@ With an [F] follow-up (from <- $CHAN_TAB_NAME, to <- the survey target):
   cs terminal survey --tab-name @@Host \
     --option "Ship it" --option "Hold" \
     --followup --followup-dir teams/alpha \
-    "Ready to cut v0.22.0?"
+    "Ready to cut v0.23.0?"
 
   {
     "surveyId": "",
     "title": null,
-    "bodyMarkdown": "Ready to cut v0.22.0?",
+    "bodyMarkdown": "Ready to cut v0.23.0?",
     "options": ["Ship it", "Hold"],
     "allowFollowup": true,
     "followup": { "dir": "teams/alpha", "from": "@@LaneA", "to": "@@Host" }
