@@ -44,6 +44,7 @@
   import { openImageZoom } from "../state/imageZoom";
   import { headingFold } from "./fold";
   import * as fmt from "./commands/format";
+  import * as clip from "./clipboard";
   import type { BlockKind } from "./commands/format";
   import { expandDateMacro, openDateAtCaret } from "./commands/date_macros";
   import {
@@ -309,6 +310,20 @@
   }
   export function isActive(name: string): boolean {
     return view ? fmt.isActive(view, name) : false;
+  }
+  // F4 body-context clipboard entries. Keyboard Cmd+C/X/V keep their own
+  // (rich) handlers; these back the right-click menu.
+  export function selectionText(): string {
+    return view ? clip.selectionText(view) : "";
+  }
+  export function copySelection(): Promise<void> {
+    return view ? clip.copySelection(view) : Promise.resolve();
+  }
+  export function cutSelection(): Promise<void> {
+    return view ? clip.cutSelection(view) : Promise.resolve();
+  }
+  export function pasteClipboard(): Promise<void> {
+    return view ? clip.pasteClipboard(view) : Promise.resolve();
   }
   export function currentBlockKind(): BlockKind {
     return view ? fmt.currentBlockKind(view) : "normal";

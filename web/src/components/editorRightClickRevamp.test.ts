@@ -187,3 +187,36 @@ describe("imports", () => {
     expect(editor).toMatch(/Terminal as TerminalIcon,/);
   });
 });
+
+describe("F4: editor body-context vs tab-context split", () => {
+  test("body right-click opens the body source", () => {
+    expect(editor).toMatch(
+      /function onEditorContext[\s\S]{1,200}openTabMenu\([\s\S]{1,300}"body",/,
+    );
+  });
+
+  test("body menu is the tight Cut / Copy / Paste + Find set", () => {
+    expect(editor).toContain('{#if tabMenu.source === "body"}');
+    expect(editor).toMatch(
+      /tabMenu\.source === "body"[\s\S]{1,1500}onclick=\{doCutSelection\}[\s\S]{1,600}onclick=\{doCopySelection\}[\s\S]{1,600}onclick=\{doPasteClipboard\}[\s\S]{1,600}onclick=\{doFind\}/,
+    );
+  });
+
+  test("Cut / Copy gate on a selection (disabled when empty)", () => {
+    expect(editor).toMatch(
+      /onclick=\{doCutSelection\}[\s\S]{1,120}disabled=\{!bodyHasSelection\}/,
+    );
+    expect(editor).toMatch(
+      /onclick=\{doCopySelection\}[\s\S]{1,120}disabled=\{!bodyHasSelection\}/,
+    );
+  });
+
+  test("clipboard actions route to the active editor ref", () => {
+    expect(editor).toMatch(
+      /function activeEditorRef\(\)[\s\S]{1,200}tab\.mode === "source" \? sourceRef : wysiwygRef/,
+    );
+    expect(editor).toMatch(/activeEditorRef\(\)\?\.cutSelection\(\)/);
+    expect(editor).toMatch(/activeEditorRef\(\)\?\.copySelection\(\)/);
+    expect(editor).toMatch(/activeEditorRef\(\)\?\.pasteClipboard\(\)/);
+  });
+});

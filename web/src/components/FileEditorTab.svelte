@@ -24,6 +24,8 @@
     ArrowLeft,
     ArrowRight,
     Braces,
+    Clipboard,
+    ClipboardPaste,
     Code2,
     Copy,
     Eraser,
@@ -36,6 +38,7 @@
     Pilcrow,
     RotateCw,
     Save,
+    Scissors,
     Search as SearchIcon,
     Settings2,
     Square,
@@ -513,6 +516,37 @@
     );
   }
 
+  /// The editor instance for the active mode. Source and Wysiwyg expose
+  /// the same clipboard surface; the body menu routes to whichever is
+  /// rendered.
+  function activeEditorRef(): Wysiwyg | Source | undefined {
+    return tab.mode === "source" ? sourceRef : wysiwygRef;
+  }
+
+  /// Selection text in the active editor, sampled whenever the body menu
+  /// (re)opens (tabMenu.anchor changes per open) and whenever the
+  /// Wysiwyg selection moves (selVer). Gates the body-context Cut / Copy
+  /// / Search entries.
+  const bodySelectionText = $derived.by(() => {
+    void selVer;
+    void tabMenu.anchor;
+    return activeEditorRef()?.selectionText() ?? "";
+  });
+  const bodyHasSelection = $derived(bodySelectionText.trim().length > 0);
+
+  function doCopySelection(): void {
+    closeTabMenu();
+    void activeEditorRef()?.copySelection();
+  }
+  function doCutSelection(): void {
+    closeTabMenu();
+    void activeEditorRef()?.cutSelection();
+  }
+  function doPasteClipboard(): void {
+    closeTabMenu();
+    void activeEditorRef()?.pasteClipboard();
+  }
+
   async function doReload(): Promise<void> {
     closeTabMenu();
     await reloadTabFromDisk(tab.id);
@@ -729,6 +763,62 @@
            Settings (flipHybrid) + Reopen Closed Tab + Close. No
            Reload Window / Open Inspector entries; Cmd+R + pane
            hamburger cover them. -->
+      {#if tabMenu.source === "body"}
+        <!-- F4 body-context menu (right-click in the editor body): a
+             tight, selection-aware set. Cut/Copy gate on a selection;
+             Paste is plain text (rich paste stays on Cmd+V). Find is
+             always present; Search appears only with a selection
+             (doOpenSearch auto-seeds from the highlighted text). Link
+             actions are a follow-up, held on @@Host's #3/#4. -->
+        <div class="action-list">
+          <button
+            class="mbtn"
+            onclick={doCutSelection}
+            disabled={!bodyHasSelection}
+          >
+            <span class="mbtn-icon">
+              <Scissors size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Cut</span>
+            <span class="mbtn-chord"></span>
+          </button>
+          <button
+            class="mbtn"
+            onclick={doCopySelection}
+            disabled={!bodyHasSelection}
+          >
+            <span class="mbtn-icon">
+              <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Copy</span>
+            <span class="mbtn-chord"></span>
+          </button>
+          <button class="mbtn" onclick={doPasteClipboard}>
+            <span class="mbtn-icon">
+              <ClipboardPaste size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Paste</span>
+            <span class="mbtn-chord"></span>
+          </button>
+          <div class="msep" role="separator"></div>
+          <button class="mbtn" onclick={doFind}>
+            <span class="mbtn-icon">
+              <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Find</span>
+            <span class="mbtn-chord">{chordLabel("app.find.open")}</span>
+          </button>
+          {#if bodyHasSelection}
+            <button class="mbtn" onclick={doOpenSearch}>
+              <span class="mbtn-icon">
+                <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+              </span>
+              <span class="mbtn-label">Search selection</span>
+              <span class="mbtn-chord">{chordLabel("app.search.toggle")}</span>
+            </button>
+          {/if}
+        </div>
+      {:else}
       <div class="action-list">
         {#if isDraftEditorTab}
           <button class="mbtn" type="button" onclick={doSaveDraftToWorkspace}>
@@ -902,19 +992,14 @@
           <span class="mbtn-chord"></span>
         </button>
         <div class="msep" role="separator"></div>
+        <!-- Find moved to the body-context menu (F4); the tab menu keeps
+             a plain workspace Search. -->
         <button class="mbtn" onclick={doOpenSearch}>
           <span class="mbtn-icon">
             <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
           <span class="mbtn-label">Search</span>
           <span class="mbtn-chord">{chordLabel("app.search.toggle")}</span>
-        </button>
-        <button class="mbtn" onclick={doFind}>
-          <span class="mbtn-icon">
-            <SearchIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Find</span>
-          <span class="mbtn-chord">{chordLabel("app.find.open")}</span>
         </button>
         <button class="mbtn" onclick={doCopyPath}>
           <span class="mbtn-icon">
@@ -1007,6 +1092,7 @@
           <span class="mbtn-chord">{chordLabel("app.tab.close")}</span>
         </button>
       </div>
+      {/if}
     </div>
   {/if}
 

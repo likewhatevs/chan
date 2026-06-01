@@ -34,6 +34,7 @@
     trailingWhitespaceHighlight,
   } from "./tools";
   import { rightClickNoSelect } from "./right_click_no_select";
+  import * as clip from "./clipboard";
 
   // Editor density follows the user's line_spacing pref. Same hook
   // the Wysiwyg side uses, exposed here as a `data-density` attribute
@@ -170,6 +171,21 @@
   export function toggleCodeBlocksInEditor(): boolean {
     if (!view) return false;
     return toggleCodeBlocks(view);
+  }
+
+  // F4 body-context clipboard entries (mirror Wysiwyg). Keyboard
+  // Cmd+C/X/V keep their own handlers; these back the right-click menu.
+  export function selectionText(): string {
+    return view ? clip.selectionText(view) : "";
+  }
+  export function copySelection(): Promise<void> {
+    return view ? clip.copySelection(view) : Promise.resolve();
+  }
+  export function cutSelection(): Promise<void> {
+    return view ? clip.cutSelection(view) : Promise.resolve();
+  }
+  export function pasteClipboard(): Promise<void> {
+    return view ? clip.pasteClipboard(view) : Promise.resolve();
   }
 
   onMount(() => {
