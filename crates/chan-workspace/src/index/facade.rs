@@ -1137,12 +1137,18 @@ impl Index {
     }
 }
 
-// Cross-file embedding batch size, in chunks. Tuned for candle +
-// bge-small on Metal: large enough to amortize forward-pass setup
-// over a useful work unit, small enough that working memory stays
-// modest (~12 MB at 384-dim) on big workspaces. Only used when the
-// `embeddings` feature is on; harmless otherwise.
-const EMBED_BATCH_CHUNKS: usize = 4096;
+// Cross-file embedding batch size, in chunks (the default/Balanced
+// profile). Tuned for candle + bge-small: large enough to amortize
+// forward-pass setup over a useful work unit, small enough that working
+// memory stays modest (~6 MB at 384-dim) and the progress chip un-freezes
+// between flushes. `flush_embed_batch` runs the whole batch in one blocking
+// forward pass that pins the drain loop (no chip advance during it), so a
+// smaller batch = shorter freeze window + more frequent EmbedBatch ticks.
+// Halved from 4096 (Theme-5 in-flush freeze): with GPU forced to CPU the
+// per-call kernel-launch amortization argument is weaker, so the throughput
+// cost of the smaller batch is small and the UX win is direct. Only used
+// when the `embeddings` feature is on; harmless otherwise.
+const EMBED_BATCH_CHUNKS: usize = 2048;
 
 /// One worker -> main message. The worker is responsible only for
 /// reading the file and parsing it into chunks; the writer side
