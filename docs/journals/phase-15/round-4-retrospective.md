@@ -105,3 +105,7 @@ skipped the pre-tag workflow_dispatch dry-run on @@Host's "push now").
   `actions/checkout@v4` / `setup-node@v4` / `upload-artifact@v4` run on Node 20,
   which GitHub forces to Node 24 on 2026-06-16 (removed 2026-09-16). Bump the
   action versions across `.github/workflows/*` before then. Hard date.
+- Editor UI: the unordered-list bullet glyphs are TOO BIG; shrink both the
+  filled (black) dot and the hollow (transparent) nested dot. They live in
+  `web/src/editor/Wysiwyg.svelte` ~972-990 (`.cm-md-ul-marker`: star -> filled
+  bullet at the top level, hollow bullet when nested). @@Host, 2026-06-01.
