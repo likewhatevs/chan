@@ -77,7 +77,9 @@
 
   // ---- About slide -------------------------------------------------------
   //
-  // Sole home for the version / embeddings flag / attribution surface.
+  // Sole home for the version + attribution surface. The embeddings /
+  // hybrid-search status lives in the Search dashboard slot
+  // (SearchSlotConfig), not here, so the About card stays "what + who".
 
   let buildInfo = $state<BuildInfo | null>(null);
 
@@ -479,17 +481,6 @@
               target="_blank"
               rel="noopener">Apache 2.0</a>
           </span>
-          <span class="k">embeddings</span>
-          <span class="v">
-            {#if buildInfo === null}
-              n/a
-            {:else if buildInfo.features.embeddings}
-              <span class="ok">on</span>
-              <span class="muted">(hybrid search available)</span>
-            {:else}
-              <span class="muted">off (BM25 only)</span>
-            {/if}
-          </span>
         </div>
 
         <div class="about-links">
@@ -845,13 +836,6 @@
   }
   .about-grid .v.mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  .about-grid .muted {
-    color: var(--text-secondary);
-    opacity: 0.85;
-  }
-  .about-grid .ok {
-    color: var(--accent, var(--text));
   }
   /* A6: chan's own license sits on the version row, spaced from the
      version string and styled as a link rather than mono text. */

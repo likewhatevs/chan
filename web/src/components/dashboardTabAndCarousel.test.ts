@@ -115,7 +115,12 @@ describe("carousel slides", () => {
       /<div class="slide slide-about" aria-label="About">/,
     );
     expect(carousel).toMatch(/chan version/);
-    expect(carousel).toMatch(/embeddings/);
+    // The embeddings / hybrid-search status row moved to the Search
+    // dashboard slot (SearchSlotConfig); the About card no longer renders
+    // it. Match the visible label text, not source comments that explain
+    // the move.
+    expect(carousel).not.toMatch(/>embeddings</);
+    expect(carousel).not.toMatch(/features\.embeddings/);
     expect(carousel).toMatch(/Source Code Pro Regular/);
     expect(carousel).toMatch(/dcragusa\/MatrixScreensaver/);
     // License links point to canonical upstream URLs rather than
