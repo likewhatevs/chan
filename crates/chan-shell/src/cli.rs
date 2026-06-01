@@ -102,6 +102,61 @@ pub enum ShellAction {
     },
 }
 
+/// Worked examples appended to `cs terminal survey --help`. Each case
+/// pairs the invocation with the JSON survey the SPA actually receives, so
+/// an agent can see how the flags map onto the wire `SurveySpec`. Raw
+/// string: the literal `\n` inside a body stays literal (it is what an
+/// agent types), while the layout uses real line breaks.
+const SURVEY_AFTER_HELP: &str = r#"EXAMPLES:
+Each case shows the invocation and the JSON survey the SPA receives.
+`surveyId` is empty from the CLI; the server mints it before the SPA sees
+it. The blocking call prints the chosen option label to stdout, or on [F]
+the workspace-relative path of the new followup file.
+
+Single question, two options:
+  cs terminal survey --tab-name @@LaneB \
+    --title "Merge order" --option "A first" --option "B first" \
+    "Which patch lands first?"
+
+  {
+    "surveyId": "",
+    "title": "Merge order",
+    "bodyMarkdown": "Which patch lands first?",
+    "options": ["A first", "B first"],
+    "allowFollowup": false,
+    "followup": null
+  }
+
+Four options, no title, multi-line body from stdin:
+  printf 'Pick a slot:\n\n- morning\n- evening' \
+    | cs terminal survey --tab-group leads --stdin \
+        --option Mon --option Tue --option Wed --option Thu
+
+  {
+    "surveyId": "",
+    "title": null,
+    "bodyMarkdown": "Pick a slot:\n\n- morning\n- evening",
+    "options": ["Mon", "Tue", "Wed", "Thu"],
+    "allowFollowup": false,
+    "followup": null
+  }
+
+With an [F] follow-up (from <- $CHAN_TAB_NAME, to <- the survey target):
+  cs terminal survey --tab-name @@Host \
+    --option "Ship it" --option "Hold" \
+    --followup --followup-dir teams/alpha \
+    "Ready to cut v0.22.0?"
+
+  {
+    "surveyId": "",
+    "title": null,
+    "bodyMarkdown": "Ready to cut v0.22.0?",
+    "options": ["Ship it", "Hold"],
+    "allowFollowup": true,
+    "followup": { "dir": "teams/alpha", "from": "@@LaneA", "to": "@@Host" }
+  }
+"#;
+
 #[derive(Subcommand, Debug)]
 pub enum TerminalAction {
     /// Open a new terminal tab in the current window.
@@ -173,6 +228,7 @@ pub enum TerminalAction {
     /// option label to stdout, or (on `[F]`) the path of the followup file
     /// the UI created. At least one selector is required. Used by an agent
     /// to ask @@Host a question and wait for the decision.
+    #[command(after_long_help = SURVEY_AFTER_HELP)]
     Survey {
         /// Raise the survey on the window owning this tab name.
         #[arg(long = "tab-name")]
