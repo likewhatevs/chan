@@ -44,6 +44,29 @@ describe("TeamDialog Load flow", () => {
   });
 });
 
+describe("TeamDialog Load UX (TW1)", () => {
+  test("team-dir input is backed by a directory autocomplete datalist", () => {
+    expect(dialog).toContain('list="team-dir-suggestions"');
+    expect(dialog).toMatch(
+      /<datalist id="team-dir-suggestions">[\s\S]*?dirSuggestions/,
+    );
+  });
+
+  test("autocomplete lists workspace directories only (forces a dir choice)", () => {
+    // refreshDirSuggestions lists the typed parent segment and filters to
+    // directories, so files never appear as path completions.
+    expect(dialog).toMatch(/api\.list\(parent \|\| null\)/);
+    expect(dialog).toMatch(/\.filter\(\(e\) => e\.is_dir\)/);
+  });
+
+  test("a successful load surfaces the resolved config.toml + team summary", () => {
+    expect(dialog).toMatch(
+      /loadedConfig = \{[\s\S]*?teamName: wire\.team_name,[\s\S]*?memberCount: wire\.members\.length,/,
+    );
+    expect(dialog).toContain("/config.toml");
+  });
+});
+
 function leadTab(): TerminalTab {
   return {
     kind: "terminal",

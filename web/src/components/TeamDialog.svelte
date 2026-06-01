@@ -48,14 +48,26 @@
   let lastAutoTabGroup = $state(config.tabGroup);
   let busy = $state(false);
   let submitError = $state<string | null>(null);
-  // Load-mode path validation. `loadStatus` shows the resolved
-  // config name on success; `loadError` carries the backend 400.
-  let loadStatus = $state<string | null>(null);
+  // Load-mode path validation. `loadError` carries the backend 400;
+  // the success surface lives in `loadedConfig` below.
   let loadError = $state<string | null>(null);
+  // Surfaces the config.toml found in the loaded directory so the user
+  // sees WHAT they are about to bootstrap (TW1). Cleared whenever the
+  // dir input changes or the New/Load mode flips.
+  let loadedConfig = $state<{ teamName: string; memberCount: number } | null>(
+    null,
+  );
+  // Directory autocomplete for the team-dir field (TW1). Listed one
+  // level at a time off the typed parent segment; files are excluded so
+  // the field nudges toward a directory choice. A request id drops stale
+  // responses when the user types faster than the round-trip.
+  let dirSuggestions = $state<string[]>([]);
+  let dirSuggestReq = 0;
   let nameInputEl = $state<HTMLInputElement | undefined>();
 
   onMount(() => {
     queueMicrotask(() => nameInputEl?.focus());
+    void refreshDirSuggestions(config.teamDir);
   });
 
   const issue = $derived<string | null>(validateTeamConfig(config));
@@ -103,8 +115,41 @@
   function setConfigMode(mode: TeamConfigMode): void {
     if (config.configMode === mode) return;
     config = { ...config, configMode: mode };
-    loadStatus = null;
     loadError = null;
+    loadedConfig = null;
+    void refreshDirSuggestions(config.teamDir);
+  }
+
+  /// Populate the team-dir autocomplete from the workspace. Lists the
+  /// directories directly under the typed parent segment (everything up
+  /// to the last "/"), so typing "teams/" offers "teams/alpha",
+  /// "teams/beta", etc. Files are filtered out: a team config always
+  /// lives in a directory, so the field forces a directory choice. The
+  /// request id guards against out-of-order responses.
+  async function refreshDirSuggestions(value: string): Promise<void> {
+    const slash = value.lastIndexOf("/");
+    const parent = slash >= 0 ? value.slice(0, slash) : "";
+    const req = ++dirSuggestReq;
+    try {
+      const entries = await api.list(parent || null);
+      if (req !== dirSuggestReq) return;
+      dirSuggestions = entries
+        .filter((e) => e.is_dir)
+        .map((e) => e.path)
+        .slice(0, 50);
+    } catch {
+      if (req === dirSuggestReq) dirSuggestions = [];
+    }
+  }
+
+  /// Team-dir input handler: keep the tab-group following the path,
+  /// refresh the directory autocomplete, and clear any stale load
+  /// result so the surfaced config never lags the typed path.
+  function onTeamDirInput(value: string): void {
+    syncTabGroupToPath();
+    void refreshDirSuggestions(value);
+    loadError = null;
+    loadedConfig = null;
   }
 
   /// Load mode: on team-dir entry, read + validate the team's
@@ -113,9 +158,12 @@
   /// form, still editable). On failure, surface the 400 message
   /// inline.
   async function validateAndLoad(): Promise<void> {
-    loadStatus = null;
     loadError = null;
-    const path = config.teamDir.trim();
+    loadedConfig = null;
+    // Trailing slashes are a natural artifact of directory autocomplete;
+    // strip them so `{dir}/config.toml` resolves and the field reads as a
+    // directory path.
+    const path = config.teamDir.trim().replace(/\/+$/, "");
     if (!path) {
       loadError = "Team directory required";
       return;
@@ -125,7 +173,10 @@
       const wire = await api.readTeamConfig(path);
       const loaded = wireToDialog(wire, path);
       config = resizeTeamMembers(loaded);
-      loadStatus = `Loaded "${wire.team_name}"`;
+      loadedConfig = {
+        teamName: wire.team_name,
+        memberCount: wire.members.length,
+      };
     } catch (err) {
       loadError = (err as Error).message ?? String(err);
     } finally {
@@ -311,11 +362,18 @@
             type="text"
             placeholder="new-team-1"
             autocomplete="off"
-            oninput={syncTabGroupToPath}
+            list="team-dir-suggestions"
+            oninput={(e) =>
+              onTeamDirInput((e.currentTarget as HTMLInputElement).value)}
             onchange={() => {
               if (config.configMode === "load") void validateAndLoad();
             }}
           />
+          <datalist id="team-dir-suggestions">
+            {#each dirSuggestions as d (d)}
+              <option value={d}></option>
+            {/each}
+          </datalist>
           {#if config.configMode === "new"}
             <span class="team-field-hint">
               Team files will be created in <code>&lt;workspace&gt;/{teamDir}/</code>
@@ -324,8 +382,18 @@
             <span class="team-field-hint team-load-error" role="alert">
               {loadError}
             </span>
-          {:else if loadStatus}
-            <span class="team-field-hint" role="status">{loadStatus}</span>
+          {:else if loadedConfig}
+            <!-- Surface the config.toml the dir resolved to so the user
+                 sees exactly what they are about to bootstrap (TW1). -->
+            <span class="team-load-found" role="status">
+              <code class="team-load-file"
+                >{config.teamDir.replace(/\/+$/, "")}/config.toml</code
+              >
+              <span class="team-load-meta">
+                {loadedConfig.teamName} &middot; {loadedConfig.memberCount}
+                member{loadedConfig.memberCount === 1 ? "" : "s"}
+              </span>
+            </span>
           {:else}
             <span class="team-field-hint">
               Enter the directory of an existing team in the workspace to load it.
@@ -626,6 +694,27 @@
   }
   .team-load-error {
     color: var(--danger-text);
+  }
+  /* Loaded-config surface (TW1): the resolved config.toml path plus a
+     one-line team summary, so a Load makes clear what is about to
+     bootstrap. */
+  .team-load-found {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    font-size: 0.75rem;
+  }
+  .team-load-file {
+    color: var(--accent);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .team-load-meta {
+    color: var(--text-secondary);
   }
   .team-checkbox-row {
     display: flex;
