@@ -88,10 +88,28 @@ describe("header: MCP-env + Restart above the find/copy band", () => {
 
   test("Set MCP env vars row exists above the first separator inside action-list", () => {
     // mcp-env-row → mcp-info conditional → Show MCP env in
-    // terminal → Restart → SEP → Find is the ordering. Pin the
-    // relative order.
+    // terminal → Restart → SEP → Copy path to $CWD is the ordering in
+    // the TAB menu (Find / Copy / Paste / Copy Scrollback moved to the
+    // body-context menu in F4). Pin the relative order.
     expect(terminal).toMatch(
-      /<div class="mcp-env-row">[\s\S]{1,4000}<span class="mbtn-label">Restart<\/span>[\s\S]{1,400}<div class="msep" role="separator"><\/div>[\s\S]{1,800}<span class="mbtn-label">Find<\/span>/,
+      /<div class="mcp-env-row">[\s\S]{1,4000}<span class="mbtn-label">Restart<\/span>[\s\S]{1,400}<div class="msep" role="separator"><\/div>[\s\S]{1,800}<span class="mbtn-label">Copy path to \$CWD<\/span>/,
+    );
+  });
+});
+
+describe("F4: terminal body-context vs tab-context split", () => {
+  test("body right-click opens the body source", () => {
+    expect(terminal).toMatch(
+      /function onTerminalContextMenu[\s\S]{1,200}openTabMenu\([\s\S]{1,300}"body",/,
+    );
+  });
+
+  test("body menu is the tight Find / Copy / Paste / Copy Scrollback set", () => {
+    // The body branch renders these four; the tab branch no longer
+    // carries them. Pin the branch + the four entries' presence.
+    expect(terminal).toContain('{#if tabMenu.source === "body"}');
+    expect(terminal).toMatch(
+      /tabMenu\.source === "body"[\s\S]{1,1200}onclick=\{openFind\}[\s\S]{1,400}onclick=\{copySelectionOrScrollback\}[\s\S]{1,400}onclick=\{pasteClipboard\}[\s\S]{1,400}onclick=\{copyScrollback\}/,
     );
   });
 });

@@ -1405,6 +1405,43 @@
       use:clampMenu={menuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
+      {#if tabMenu.source === "body"}
+        <!-- F4 body-context terminal menu (right-click in the terminal
+             body): Find + Copy (selection or scrollback) + Paste + Copy
+             Scrollback. Name / Group / broadcast / MCP / spawn config
+             lives on the tab-name menu. Link actions held on @@Host's
+             #3/#4. -->
+        <div class="action-list">
+          <button class="mbtn" onclick={openFind}>
+            <span class="mbtn-icon">
+              <Search size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Find</span>
+            <span class="mbtn-chord">{chordFor("app.find.open") ?? ""}</span>
+          </button>
+          <button class="mbtn" onclick={copySelectionOrScrollback}>
+            <span class="mbtn-icon">
+              <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Copy</span>
+            <span class="mbtn-chord"></span>
+          </button>
+          <button class="mbtn" onclick={pasteClipboard}>
+            <span class="mbtn-icon">
+              <ClipboardPaste size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Paste</span>
+            <span class="mbtn-chord"></span>
+          </button>
+          <button class="mbtn" onclick={copyScrollback}>
+            <span class="mbtn-icon">
+              <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">Copy Scrollback</span>
+            <span class="mbtn-chord"></span>
+          </button>
+        </div>
+      {:else}
       <label class="rename-row">
         <span class="rename-label">
           <Pencil size={15} strokeWidth={1.75} aria-hidden="true" />
@@ -1565,40 +1602,14 @@
           <span class="mbtn-label">Restart</span>
           <span class="mbtn-chord"></span>
         </button>
+        <!-- Find / Copy / Paste / Copy Scrollback live on the
+             body-context menu (F4); the tab menu keeps Copy path. -->
         <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={openFind}>
-          <span class="mbtn-icon">
-            <Search size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Find</span>
-          <span class="mbtn-chord">{chordFor("app.find.open") ?? ""}</span>
-        </button>
-        <button class="mbtn" onclick={copySelectionOrScrollback}>
-          <span class="mbtn-icon">
-            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Copy</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={pasteClipboard}>
-          <span class="mbtn-icon">
-            <ClipboardPaste size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Paste</span>
-          <span class="mbtn-chord"></span>
-        </button>
         <button class="mbtn" onclick={copyTerminalCwd}>
           <span class="mbtn-icon">
             <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
           <span class="mbtn-label">Copy path to $CWD</span>
-          <span class="mbtn-chord"></span>
-        </button>
-        <button class="mbtn" onclick={copyScrollback}>
-          <span class="mbtn-icon">
-            <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">Copy Scrollback</span>
           <span class="mbtn-chord"></span>
         </button>
         <div class="msep" role="separator"></div>
@@ -1676,6 +1687,7 @@
           <span class="mbtn-chord">{chordFor("app.tab.close") ?? ""}</span>
         </button>
       </div>
+      {/if}
     </div>
   {/if}
   {#if findOpen}
