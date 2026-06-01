@@ -107,7 +107,7 @@
 <section class="split-section">
   <div>
     <p class="eyebrow">local-first</p>
-    <h2>Local by default, tunnel by choice</h2>
+    <h2>Local by default, remote by choice</h2>
     <p>
       Local use needs no account. The HTTP server binds to loopback by
       default, and your files stay ordinary files under the workspace folder.
@@ -115,9 +115,11 @@
   </div>
   <div>
     <p>
-      Tunnel mode is opt-in and publishes the same workspace through
-      <code>workspace.chan.app</code> only when you configure it. Nothing
-      leaves your machine until you ask it to.
+      The tunnel is core to chan, not a hosted service. Opt in and the same
+      workspace is reachable from another device: Chan Desktop attaches an
+      inbound tunnel from a remote <code>chan serve</code>, or opens one
+      directly over HTTP/2. The gateway that fronts it ships in the repo for
+      you to self-host. Nothing leaves your machine until you ask it to.
     </p>
   </div>
 </section>

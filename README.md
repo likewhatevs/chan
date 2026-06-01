@@ -13,9 +13,13 @@ coordinate with each other through `chan`'s `cs` tooling and the
 in-process MCP server. Cross-file `[[wiki-link]]` autocomplete, BM25 +
 embedding hybrid search, a workspace graph, and code reports are built in.
 
-Single-user, single-machine. The HTTP server binds loopback by default;
-an opt-in tunnel publishes the same workspace at
-`https://{user}.workspace.chan.app/{workspace}/*` for cross-device access.
+Single-user, single-machine. The HTTP server binds loopback by default.
+An opt-in tunnel reaches the same workspace from another device:
+chan-desktop attaches an inbound tunnel from a remote `chan serve`, or
+connects to one directly over HTTP/2. The tunnel's server side ships in
+this repo under `gateway/`, so you can self-host the whole path; the
+maintainer's own deployment at `workspace.chan.app` is experimental, with
+sign-in off by default, and is not the product.
 
 ## Layout
 
@@ -115,29 +119,34 @@ GitHub Releases at `github.com/fiorix/chan`, with SHA-256 verification. Set
 Other subcommands: `chan list`, `chan remove`, `chan rename`, `chan
 index`, `chan search`. `chan --help` documents every flag.
 
-## Publish via tunnel
+## Reach a workspace remotely
 
-Instead of binding a local port, `chan serve` can publish a workspace
-at `https://{user}.workspace.chan.app/{workspace}/*` over an outbound
-tunnel. No inbound ports, no router config.
+The tunnel is a core part of chan, not a hosted add-on. Instead of binding
+a local port, `chan serve` can publish a workspace over an outbound tunnel
+to a gateway that reverse-proxies it back to you: no inbound ports, no
+router config. chan-desktop can also attach an inbound tunnel from a remote
+`chan serve`, or open a remote `chan serve` directly over HTTP/2.
 
 ```
-export CHAN_TUNNEL_TOKEN=chan_pat_...    # from id.chan.app/tokens
-chan serve ~/Notes
+export CHAN_TUNNEL_TOKEN=chan_pat_...     # a token your gateway issued
+chan serve ~/Notes --tunnel-url https://workspace.example.com/v1/tunnel
 ```
 
-`chan` dials `workspace.chan.app/v1/tunnel`, runs a Hello/HelloAck
-handshake that names the workspace, and serves every inbound request
-through the same axum router the local listener uses. The flag form
-`--tunnel-token <TOKEN>` works too but exposes the token in `ps`;
-prefer the env var. Override the endpoint with `--tunnel-url`,
-publish under a different name with `--tunnel-workspace-name <name>`. The
-workspace name must be lowercase `[a-z0-9-]`, 1-32 chars.
+`chan` dials the gateway's `/v1/tunnel`, runs a Hello/HelloAck handshake
+that names the workspace, and serves every inbound request through the
+same axum router the local listener uses. The flag form `--tunnel-token
+<TOKEN>` works too but exposes the token in `ps`; prefer the env var.
+`--tunnel-url` selects the gateway, `--tunnel-workspace-name <name>`
+publishes under a different name (lowercase `[a-z0-9-]`, 1-32 chars), and
+`--tunnel-public` drops the gateway's auth gate so anyone with the URL can
+reach the workspace; without it the gateway returns a 404 to anyone but the
+workspace owner (or a user it granted access).
 
-By default `{user}.workspace.chan.app/{workspace}/` returns a 404 to anyone
-without a fresh handoff from id.chan.app's dashboard; only the
-workspace owner can open the workspace from there. `--tunnel-public` makes
-the URL world-readable (no auth gate at the gateway).
+The gateway is that server side, and it lives in this repo under `gateway/`
+for you to run yourself. `--tunnel-url` defaults to
+`https://workspace.chan.app/v1/tunnel`, the maintainer's own deployment of
+that code; it is experimental, with sign-in off by default. See
+[`gateway/README.md`](gateway/README.md) to stand up your own.
 
 ## Contributing
 

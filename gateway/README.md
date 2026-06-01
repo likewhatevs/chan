@@ -1,7 +1,17 @@
 # chan-gateway
 
-Identity and profile services behind `id.chan.app` and (later)
-`workspace.chan.app`. Tracks [fiorix/chan#8][issue].
+The self-hostable server side of chan's tunnel: the identity, profile, and
+workspace-proxy services that sit behind `id.chan.app` and
+`workspace.chan.app`. A fleet of `chan serve` instances dials in over the
+tunnel and this gateway reverse-proxies each one back out at
+`{user}.workspace.chan.app/{workspace}/*`, turning them into a portable,
+multi-device workspace service you run on your own infrastructure (your own
+"Google Drive / Docs" equivalent, with chan's editor on top). `chan serve
+--tunnel-url` points at a gateway you stand up; `id.chan.app` and
+`workspace.chan.app` are the maintainer's own deployment of this code, which
+is experimental and ships with sign-in off by default (nobody can
+authenticate until an operator enrols them). It is not a hosted product.
+Tracks [fiorix/chan#8][issue].
 
 [issue]: https://github.com/fiorix/chan/issues/8
 
