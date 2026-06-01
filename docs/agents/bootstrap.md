@@ -414,8 +414,8 @@ Phase-8 standing permissions:
 
 | Agent         | Scope                                                                                              | Granted   | Recorded at |
 |---------------|----------------------------------------------------------------------------------------------------|-----------|-------------|
-| @@FullStackB  | chan-desktop runtime verification (`make run`, `npm run tauri dev`, `cargo build -p chan-desktop`, `Chan.app` launch + click cycles) against throwaway workspaces, for any -b-N task that needs empirical confirmation. Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/phase-8/alex/event-fullstack-b-alex.md`](../journals/phase-8/alex/event-fullstack-b-alex.md) "STANDING approved" |
-| @@WebtestB    | chan-desktop runtime walkthroughs (Tauri launch + UI driving via available tooling). Standard test-server-workflow tear-down required. | 2026-05-20 | [`../journals/phase-8/alex/event-webtest-b-alex.md`](../journals/phase-8/alex/event-webtest-b-alex.md) "STANDING approved" |
+| @@FullStackB  | chan-desktop runtime verification (`make run`, `npm run tauri dev`, `cargo build -p chan-desktop`, `Chan.app` launch + click cycles) against throwaway workspaces, for any -b-N task that needs empirical confirmation. Standard test-server-workflow tear-down required. | 2026-05-20 | `phase-8/raw/alex/event-fullstack-b-alex.md` (git history) "STANDING approved" |
+| @@WebtestB    | chan-desktop runtime walkthroughs (Tauri launch + UI driving via available tooling). Standard test-server-workflow tear-down required. | 2026-05-20 | `phase-8/raw/alex/event-webtest-b-alex.md` (git history) "STANDING approved" |
 
 Boundaries that ALWAYS apply (not waived by any standing
 grant):

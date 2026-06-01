@@ -3,9 +3,11 @@
 Status: closed
 Span: 2026-05-19 to 2026-05-23 (estimate; see Duration)
 
+Tags: #bugfixes #signing #release #opensource #ci #desktop #docs
+
 ## Initial asks
 
-North star, from [raw/request.md](raw/request.md): "Ship a notarized
+North star, from `raw/request.md`: "Ship a notarized
 macOS `.dmg` (plus signed Windows + Linux equivalents) that users can
 download and install without Gatekeeper / SmartScreen friction.
 Tag-triggered CI produces the signed installer artifact, hosted via the
@@ -15,8 +17,8 @@ The phase ran in three rounds (split from two so the signed-release
 pipeline could be exercised end-to-end with real keys before the repo
 went public, since opening a repo is one-way):
 
-- Round 1: close every item in
-  [raw/phase-8-bugs.md](raw/phase-8-bugs.md) (no binary cut at its end),
+- Round 1: close every item in `raw/phase-8-bugs.md` (no binary cut at
+  its end),
   plus a 2026-05-20 detour to stop embedding the BGE-small model in the
   binary (about 89 MB down to about 26 MB) and make semantic search
   opt-in.
@@ -27,8 +29,8 @@ went public, since opening a repo is one-way):
   audit, then flip public), a multi-model search picker, and a
   whole-codebase cleanup, hardening, and docs-review pass.
 
-The bug list itself ([raw/phase-8-bugs.md](raw/phase-8-bugs.md), roughly
-186 KB, 95-plus entries) is the durable per-bug ask record.
+The bug list itself (`raw/phase-8-bugs.md`, roughly 186 KB, 95-plus
+entries) is the durable per-bug ask record.
 
 ## Team, profiles, and coordination
 
@@ -64,8 +66,8 @@ per-path staging and a pre/post audit.
 
 This hand-run dispatch shape is the deliberate automation blueprint. The
 process spec pins a watcher event-file naming convention enforced across
-three filter sites, and [raw/rich-prompt/events/](raw/rich-prompt/events/)
-holds real JSON event files from a live watcher smoke test (where @@Alex
+three filter sites, and `raw/rich-prompt/events/` holds real JSON event
+files from a live watcher smoke test (where @@Alex
 pointed chan's own rich-prompt watcher at the journals directory). That
 smoke surfaced the watcher-versus-journal shape gap recorded below.
 
@@ -170,18 +172,18 @@ single-binary vision, and the chan-desktop runtime walk on the DMG.
 
 ## Raw material
 
-- Source ask and round structure: [raw/request.md](raw/request.md)
-- Process spec with the watcher naming convention:
-  [raw/process.md](raw/process.md)
-- The durable bug audit trail: [raw/phase-8-bugs.md](raw/phase-8-bugs.md)
-- The load-bearing architect journal:
-  [raw/architect/journal.md](raw/architect/journal.md)
-- The live watcher-smoke event files:
-  [raw/rich-prompt/events/](raw/rich-prompt/events/)
-- Per-lane journals, round plans, and event channels live alongside them
-  in [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.
+The load-bearing files for anyone reading that history:
+
+- Source ask and round structure: `raw/request.md`
+- Process spec with the watcher naming convention: `raw/process.md`
+- The durable bug audit trail: `raw/phase-8-bugs.md`
+- The load-bearing architect journal: `raw/architect/journal.md`
+- The live watcher-smoke event files: `raw/rich-prompt/events/`
 
 The bug list originally embedded four screenshots (a graph false-missing
 node, the spawn-agent overlay, and the iTerm-versus-chan terminal glyph
 comparison); per the journals-wide image removal each is now a short text
-note in [raw/phase-8-bugs.md](raw/phase-8-bugs.md).
+note in `raw/phase-8-bugs.md`.
