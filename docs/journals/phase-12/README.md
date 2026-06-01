@@ -4,10 +4,12 @@ Status: closed (the v0.16.0 cut was handed to a lane as a post-close
 carryover)
 Span: 2026-05-27, one day (estimate; see Duration)
 
+Tags: #refactor #graph #cli #release #desktop #bugfixes
+
 ## Initial asks
 
 Source: the carryover backlog
-[raw/phase-12-backlog.md](raw/phase-12-backlog.md), assembled from phases
+`raw/phase-12-backlog.md`, assembled from phases
 10 and 11, plus three ad-hoc request bundles. Three primary tracks:
 
 - Graph and File Browser (lane A): the overlay / scope-concept wipe ("the
@@ -145,19 +147,11 @@ backlog.
 
 ## Raw material
 
-- The opening backlog: [raw/phase-12-backlog.md](raw/phase-12-backlog.md)
-- The opening contract (roster, codemod sequencing, merge protocol):
-  [raw/bootstrap.md](raw/bootstrap.md)
-- The close-out retrospective:
-  [raw/retrospective.md](raw/retrospective.md)
-- The rename scope doc:
-  [raw/workspace-rename-spec.md](raw/workspace-rename-spec.md)
-- The orchestration log, per-lane journals, the ad-hoc request bundles,
-  and the `raw/coordination/` channels live alongside them in
-  [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.
 
 The lane C ad-hoc request bundles originally embedded four screenshots
 (the Rich Prompt bootstrap and three terminal-font-after-sleep shots);
-per the journals-wide image removal each is now a short text note in
-[raw/lane-c/addendum-1/request.md](raw/lane-c/addendum-1/request.md) and
-[raw/lane-c/addendum-2/request.md](raw/lane-c/addendum-2/request.md).
+per the journals-wide image removal each is now a short text note in its
+source request file.

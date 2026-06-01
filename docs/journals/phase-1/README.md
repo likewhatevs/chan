@@ -3,9 +3,11 @@
 Status: closed
 Span: 2026-05-16, one working day (estimate; see Duration)
 
+Tags: #features #bugfixes #reliability #graph #search #cli
+
 ## Initial asks
 
-Source: [raw/request.md](raw/request.md), titled "Chan pre-release
+Source: `raw/request.md`, titled "Chan pre-release
 roadmap". It opens: "This is my list of items that needs addressing
 before we can seal the engineering part of the release of Chan." The
 request both defines the working model (the architect coordinates via
@@ -152,11 +154,6 @@ rename. The journals say `chan-drive` and `chan-core`; that crate is
 
 ## Raw material
 
-- Source request: [raw/request.md](raw/request.md)
-- Seal / summary (with agent ranking and feedback):
-  [raw/summary.md](raw/summary.md)
-- Architect journal (dispatch table, critical path, dated log):
-  [raw/journal.md](raw/journal.md)
-- Design snapshot: [raw/design-snapshot.md](raw/design-snapshot.md)
-- Task files and the cross-agent handoff channel live alongside them in
-  [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.

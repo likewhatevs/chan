@@ -3,9 +3,11 @@
 Status: closed
 Span: 2026-05-17, one working day (estimate; see Duration)
 
+Tags: #refactor #mcp #terminal #indexing #bugfixes #release
+
 ## Initial asks
 
-Source: [raw/request.md](raw/request.md). Alex framed the phase as "a
+Source: `raw/request.md`. Alex framed the phase as "a
 multi-step move, starting from big clean up and then drilling into
 smaller bugs and feature requests", and introduced @@Systacean as a
 combined Syseng + Rustacean profile. The checklist:
@@ -142,12 +144,6 @@ are fine).
 
 ## Raw material
 
-- Source request: [raw/request.md](raw/request.md)
-- Process contract: [raw/process.md](raw/process.md)
-- Central journal (plan, checklist, dispatch, rounds 1-14):
-  [raw/journal.md](raw/journal.md)
-- Final summary (outcomes, coverage, agent ranking):
-  [raw/summary.md](raw/summary.md)
-- Terminal-persistence design memo:
-  [raw/architect-tmux-1.md](raw/architect-tmux-1.md)
-- Lane task files live alongside them in [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.

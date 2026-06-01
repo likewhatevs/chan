@@ -4,18 +4,20 @@ Status: closed (shipped v0.14.0; the deeper desktop-native charter is
 only partially landed and carried forward)
 Span: 2026-05-23 to 2026-05-24 (estimate; see Duration)
 
+Tags: #features #bugfixes #reliability #release #desktop #mcp
+
 ## Initial asks
 
 Three source documents from @@Alex (agents told not to edit them) plus
 the architect's phase request.
 
-- [raw/request.md](raw/request.md): frames the phase as inheriting the
+- `raw/request.md`: frames the phase as inheriting the
   phase-8 carry-overs plus the desktop-native vision. Headline
   carry-overs: the open-source flip, a multi-model search picker, chan
   metadata import/export, three-mode drive connection (local fork /
   attached outbound / attached inbound), and a default "Chan" drive
   lifecycle.
-- [raw/roadmap-round1.md](raw/roadmap-round1.md): "Complete outstanding
+- `raw/roadmap-round1.md`: "Complete outstanding
   work from previous phases", a bug list (terminal fonts after tab
   switch, the Codex MCP break in v0.13.0, unexpected edits to the open
   file, `[[` search mismatch, "too many open files", `---` rendering as a
@@ -23,7 +25,7 @@ the architect's phase request.
   drive's data under `~/.chan/drives/{name}/`, make `~/.chan` the
   metadata root on macOS and Linux, and embed chan-server in chan-desktop
   instead of forking the binary.
-- [raw/rich-prompt-revamp.md](raw/rich-prompt-revamp.md): "hitting Cmd+P
+- `raw/rich-prompt-revamp.md`: "hitting Cmd+P
   / Cmd+. P will always bring up a new Terminal with the Rich Prompt
   wired in", a Codex-like composer, a `spool/` directory beside
   `draft.md` (with `process.md`, `events/`, `journals/`, `tasks/`), an
@@ -166,17 +168,11 @@ active workspace model). No hard reverts were recorded in the journals.
 
 ## Raw material
 
-- Source asks (do-not-edit): [raw/request.md](raw/request.md),
-  [raw/roadmap-round1.md](raw/roadmap-round1.md),
-  [raw/rich-prompt-revamp.md](raw/rich-prompt-revamp.md)
-- The v0.14.0 release summary and the release parking lot:
-  [raw/architect/release-v0.14.0-summary.md](raw/architect/release-v0.14.0-summary.md),
-  [raw/architect/release-parking-lot.md](raw/architect/release-parking-lot.md)
-- Architect design notes and the test-lane wave reports live alongside
-  them in [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.
 
 The two roadmap source files originally embedded twelve screenshots of
 the reported bugs and the target Rich Prompt UI; per the journals-wide
-image removal each is now a short text note in
-[raw/roadmap-round1.md](raw/roadmap-round1.md) and
-[raw/rich-prompt-revamp.md](raw/rich-prompt-revamp.md).
+image removal each was already a short text note before this cleanup, in
+`raw/roadmap-round1.md` and `raw/rich-prompt-revamp.md`.

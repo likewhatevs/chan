@@ -3,11 +3,13 @@
 Status: closed (two rounds; round 1 cut v0.17.0, round 2 cut v0.18.0)
 Span: 2026-05-28 to 2026-05-29 (estimate; see Duration)
 
+Tags: #bugfixes #editor #graph #features #release #desktop
+
 ## Initial asks
 
 Two rounds, each with its own source request from @@Alex.
 
-Round 1 ([raw/roadmap-round-1.md](raw/roadmap-round-1.md)): a bug list
+Round 1 (`raw/roadmap-round-1.md`): a bug list
 (new-document cursor not ready to type, a spurious "Unsaved changes"
 notice on brand-new documents, list markers not preserving what the user
 typed, an empty-pane highlight inconsistency, missing pane hover wobble,
@@ -19,7 +21,7 @@ symlink-colored edges), and renaming Hybrid Infographics to Dashboard
 (auto-resize carousel, About/Workspace/Search widgets, Settings flip-back,
 retiring the settings overlay, rebinding Cmd+,).
 
-Round 2 ([raw/roadmap-round-2.md](raw/roadmap-round-2.md)): a desktop
+Round 2 (`raw/roadmap-round-2.md`): a desktop
 global chord for a new window of the current workspace (Cmd+Shift+N);
 renaming Rich Prompt to Team Work in the UI and the code, removing the
 Spawn-agent dialog, and "deleting the entire code and API related to
@@ -153,17 +155,9 @@ self-upgrade is data-driven from `/dl`, left as an @@Alex desktop verify.
 
 ## Raw material
 
-- Source requests: [raw/roadmap-round-1.md](raw/roadmap-round-1.md),
-  [raw/roadmap-round-2.md](raw/roadmap-round-2.md)
-- Round retrospectives:
-  [raw/retrospective-round-1.md](raw/retrospective-round-1.md),
-  [raw/retrospective-round-2.md](raw/retrospective-round-2.md)
-- @@Alex's round-1 smoke walk (the primary image source):
-  [raw/round-1-closing-tests.md](raw/round-1-closing-tests.md)
-- The release-cut tail with the /dl saga:
-  [raw/coordination/event-lane-b-alex.md](raw/coordination/event-lane-b-alex.md)
-- The bootstraps, per-lane requests and journals, and the remaining
-  channels live alongside them in [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.
 
 The roadmaps and the round-1 smoke walk originally embedded screenshots of
 the reported bugs and the target UI; per the journals-wide image removal

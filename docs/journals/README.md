@@ -7,15 +7,18 @@ backed by the raw working material.
 
 ## Layout
 
-Each `phase-N/` directory holds:
+Each closed `phase-N/` directory holds a single `README.md`: the
+synthesized report (the front door) covering the initial asks, the team
+and how they coordinated, an estimated duration, highlights and lowlights,
+constructive feedback, what shipped, was tried, and was undone, and a
+`Tags:` line of outcome hashtags.
 
-- `README.md` - the synthesized report (the front door): the initial
-  asks, the team and how they coordinated, an estimated duration,
-  highlights and lowlights, constructive feedback, and what shipped,
-  was tried, and was undone.
-- `raw/` - the original working material as provenance: the per-author
-  journals and task files, the request and roadmap files, and the
-  coordination logs.
+The raw working material (the per-author journals and task files, the
+request and roadmap files, and the coordination logs) that backed each
+report was removed from the working tree in the phase-15 docs cleanup and
+is preserved in git history under each phase's former `raw/` tree. Phase 8
+keeps its `raw/` for now, because `docs/agents/` still cites files inside
+it; it goes once those citations are repointed.
 
 Images have been removed across all journals and replaced with short
 text descriptions in brackets, so the logs read without binary
@@ -49,9 +52,14 @@ attachments.
   and the graph and File Browser carryover.
 - [Phase 13](phase-13/README.md) - closed. The Graph and Dashboard
   rework, then the Team Work revamp (v0.17.0, v0.18.0).
-- [Phase 14](phase-14/) - in progress. Gateway monorepo migration, then a
-  frontend review and pristine cleanup. The report lands when the phase
-  closes.
+- [Phase 14](phase-14/README.md) - closed. Gateway monorepo migration into
+  an isolated nested workspace, then a frontend review and pristine
+  cleanup, plus paced graph hot paths and the new-workspace pre-flight
+  relocation.
+- [Phase 15](phase-15/) - in progress. Editor link and cursor UX, search
+  for mentions and paths, Team Work in-workspace plus the survey rebuild,
+  desktop and CLI consolidation, and IDX embeddings hardening. The report
+  lands when the phase closes.
 
 ## Conventions
 

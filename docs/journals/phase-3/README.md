@@ -5,9 +5,11 @@ at REVIEW, the pre-push gate green, the working tree intentionally left
 dirty for a later commit pass)
 Span: 2026-05-16 to 2026-05-17 (estimate; see Duration)
 
+Tags: #features #bugfixes #editor #refactor #search #graph
+
 ## Initial asks
 
-Source: [raw/request.md](raw/request.md), titled "Chan pre-release phase
+Source: `raw/request.md`, titled "Chan pre-release phase
 3 request", derived from Alex's bug-fix / feature-request screenshots. It
 is a flat checklist. Representative items, as written:
 
@@ -144,9 +146,6 @@ backend enable toggle, and the test-config pollution fix.
 
 ## Raw material
 
-- Source request: [raw/request.md](raw/request.md)
-- Summary: [raw/summary.md](raw/summary.md)
-- Process contract: [raw/process.md](raw/process.md)
-- Master journal: [raw/journal.md](raw/journal.md)
-- Lane task files, decisions, and verification notes live alongside them
-  in [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.

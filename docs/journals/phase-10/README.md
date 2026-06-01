@@ -3,27 +3,29 @@
 Status: closed with named carryovers (open items migrated to phase 11)
 Span: 2026-05-24 to 2026-05-26 (estimate; see Duration)
 
+Tags: #desktop #release #docs #performance #bugfixes #terminal
+
 ## Initial asks
 
 There is no single request file; three roadmap files are the source asks.
 
-- Track A ([raw/roadmap-track-a.md](raw/roadmap-track-a.md), "Desktop
+- Track A (`raw/roadmap-track-a.md`, "Desktop
   Merge and Carryover Closure"): "embed `chan-server` in `chan-desktop`
   for normal local drives", "preserve `chan serve` as a standalone
   CLI/server path", close the desktop-native gaps that did not
   materialize in phase 9, and sweep the highest-risk phase 8/9 validation,
   docs, config, and release-hygiene gaps into named tasks.
-- Track B ([raw/roadmap-track-b.md](raw/roadmap-track-b.md), "Public
+- Track B (`raw/roadmap-track-b.md`, "Public
   Site, Manual Pages, Install Split"): make `web-marketing` the public
   site source of truth, publish `docs/manual/` as public documentation,
   and clean up the install surface now that desktop and CLI have different
   release shapes.
-- Track C ([raw/roadmap-track-c.md](raw/roadmap-track-c.md), "Hybrid Pane
+- Track C (`raw/roadmap-track-c.md`, "Hybrid Pane
   and Editor Polish"): the Hybrid pane, terminal rendering, and
   editor-close polish to land after the phase 9 validation waves.
 
 A mid-phase single-deliverable ask is recorded in
-[raw/terminal-webgl-atlas-smoothness.md](raw/terminal-webgl-atlas-smoothness.md):
+`raw/terminal-webgl-atlas-smoothness.md`:
 render rich/animated TUI output smoothly by removing the per-frame WebGL
 texture-atlas clear that force-repainted every pane about 60 times a
 second.
@@ -157,11 +159,6 @@ watcher-audit follow-ups.
 
 ## Raw material
 
-- Roadmaps: [raw/roadmap-track-a.md](raw/roadmap-track-a.md),
-  [raw/roadmap-track-b.md](raw/roadmap-track-b.md),
-  [raw/roadmap-track-c.md](raw/roadmap-track-c.md)
-- Summary and the round-3 planning index with the phase-11 migration note:
-  [raw/summary.md](raw/summary.md),
-  [raw/round-3-pending.md](raw/round-3-pending.md)
-- Per-topic implementation notes and the dispatch/review-loop handoffs
-  live alongside them in [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.

@@ -3,6 +3,8 @@
 Status: closed (a round plus a continuation round)
 Span: 2026-05-26 to 2026-05-27 (estimate; see Duration)
 
+Tags: #features #bugfixes #performance #editor #graph #release
+
 ## Initial asks
 
 There is no single request file; the phase opened from three lane plans
@@ -11,7 +13,7 @@ and a round-1 bug list.
 - Drive streaming spine (lane A): stream the drive listing so large
   drives do not block the UI, with progressive file-tree hydration.
 - Editor and desktop bug bundle (lane B): the round-1 bug list in
-  [raw/phase-11-round-1.md](raw/phase-11-round-1.md) (a trailing-slash
+  `raw/phase-11-round-1.md` (a trailing-slash
   directory reject, an idle terminal garbling, a stuck reindex pill, and
   more).
 - Graph fixes and inspector (lane C): graph inspector bugs, a loading
@@ -84,17 +86,11 @@ forward to phase 12.
 
 ## Raw material
 
-- Lane plans and kickoffs: [raw/lane-a-plan.md](raw/lane-a-plan.md),
-  [raw/lane-b-plan.md](raw/lane-b-plan.md),
-  [raw/lane-c-plan.md](raw/lane-c-plan.md)
-- The round-1 bug list: [raw/phase-11-round-1.md](raw/phase-11-round-1.md)
-- The round-close retrospective lives inside
-  [raw/architect/journal.md](raw/architect/journal.md) (there is no
-  separate retrospective file this phase).
-- The specs, round docs, per-lane journals, and the `raw/coordination/`
-  event channels live alongside them in [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.
 
 The round-1 bug list originally embedded three screenshots (a directory
 menu reject, a garbled idle terminal, and a stuck reindex pill); per the
-journals-wide image removal each is now a short text note in
-[raw/phase-11-round-1.md](raw/phase-11-round-1.md).
+journals-wide image removal each was already a short text note before this
+cleanup.

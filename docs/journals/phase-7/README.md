@@ -3,10 +3,12 @@
 Status: closed (shipped v0.10.1, then v0.11.0)
 Span: 2026-05-18 to 2026-05-19 (estimate; see Duration)
 
+Tags: #features #editor #terminal #desktop #docs #release
+
 ## Initial asks
 
-Source: [raw/request.md](raw/request.md), two rounds, plus the design
-notes in [raw/ui-exploration.md](raw/ui-exploration.md).
+Source: `raw/request.md`, two rounds, plus the design
+notes in `raw/ui-exploration.md`.
 
 Round 1 (maintenance). Project hygiene first: "create `./docs/journals`
 and move our `phase-*` directories" there, normalize agent references to
@@ -48,7 +50,7 @@ handle        role this phase                          card
 ```
 
 Coordination scheme: this is the first phase on the per-author model,
-specified in [raw/process.md](raw/process.md). It replaced the phase-6
+specified in `raw/process.md`. It replaced the phase-6
 flat-task-file model with three changes:
 
 1. One directory per author, each holding a `journal.md` plus numbered
@@ -158,21 +160,16 @@ Tried and undone:
   @@Alex (per-task green gates plus unit coverage deemed sufficient).
 
 Deferred to phase 8 (nine items in
-[raw/next-phase-backlog.md](raw/next-phase-backlog.md)), with the
+`raw/next-phase-backlog.md`), with the
 headline exit criterion: ship a notarized macOS DMG (plus signed
 Windows/Linux) installable without Gatekeeper or SmartScreen friction.
 
 ## Raw material
 
-- Source request (both rounds): [raw/request.md](raw/request.md)
-- Process spec (the new per-author/event protocol):
-  [raw/process.md](raw/process.md)
-- The Hybrid/tabs design notes:
-  [raw/ui-exploration.md](raw/ui-exploration.md)
-- Phase-8 backlog: [raw/next-phase-backlog.md](raw/next-phase-backlog.md)
-- Per-author journals, task files, and the `raw/alex/` event channel live
-  alongside them in [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.
 
 The request file originally embedded fifteen screenshots of the reported
 bugs; per the journals-wide image removal each is now a short text note in
-[raw/request.md](raw/request.md).
+the source request.

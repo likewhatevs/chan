@@ -3,9 +3,11 @@
 Status: closed
 Span: 2026-05-16, one working day (estimate; see Duration)
 
+Tags: #features #bugfixes #graph #editor #search #indexing
+
 ## Initial asks
 
-Source: [raw/request.md](raw/request.md), framed as a "list of items for
+Source: `raw/request.md`, framed as a "list of items for
 this phase of product hardening, correctness, and UX impact". The work
 items, as written:
 
@@ -130,9 +132,6 @@ Tried, decided against, or deferred:
 
 ## Raw material
 
-- Source request: [raw/request.md](raw/request.md)
-- Architect journal: [raw/journal.md](raw/journal.md)
-- Phase summary (outcomes, highlights, agent ranking, feedback):
-  [raw/summary.md](raw/summary.md)
-- The syseng pre-architect survey, lane task files, and architect handoff
-  files live alongside them in [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.

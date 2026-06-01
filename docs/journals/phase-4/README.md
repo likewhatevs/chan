@@ -3,6 +3,8 @@
 Status: sparse, never ran as a worked phase
 Span: no development span of its own (see Duration)
 
+Tags: #docs
+
 ## What phase 4 actually is
 
 Phase 4 is best described as a numbering skip with a thin bug-bounty
@@ -18,7 +20,7 @@ phases would misrepresent the history.
 ## Initial asks
 
 There is no recorded request. The closest statement of intent is the
-import note (now [raw/import-note.md](raw/import-note.md)): "Phase 4 was a
+import note (now `raw/import-note.md`): "Phase 4 was a
 bug-bounty / random-updates placeholder that never accumulated
 substantive content", and "`bugs.md` -- empty when imported; the
 bug-bounty bucket never received entries."
@@ -26,7 +28,7 @@ bug-bounty bucket never received entries."
 ## Team, profiles, and coordination
 
 No agents were assigned and no work was recorded. The imported
-[raw/process.md](raw/process.md) defines a roster and a coordination
+`raw/process.md` defines a roster and a coordination
 scheme (architect plus backend, frontend, webtest, syseng, rustacean;
 all coordination through markdown files in the phase directory, ownership
 by `@@mention`, task files named `{agent}-{n}.md`). Those are template
@@ -56,7 +58,6 @@ The work that would have happened here was absorbed into adjacent phases.
 
 ## Raw material
 
-- Import note (why the directory exists):
-  [raw/import-note.md](raw/import-note.md)
-- Early process / coordination template: [raw/process.md](raw/process.md)
-- Empty bug bucket: [raw/bugs.md](raw/bugs.md)
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.

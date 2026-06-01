@@ -4,9 +4,11 @@ Status: closed
 Span: 2026-05-17 to 2026-05-19, bulk on 2026-05-18 (estimate; see
 Duration)
 
+Tags: #features #graph #editor #terminal #bugfixes
+
 ## Initial asks
 
-Source: [raw/request.md](raw/request.md). The phase ran parallel tracks
+Source: `raw/request.md`. The phase ran parallel tracks
 over a diverse item set. The architectural block:
 
 - Make the filesystem the primary graph layer. "From now on, the primary
@@ -155,14 +157,10 @@ tab switch was added.
 
 ## Raw material
 
-- Source request: [raw/request.md](raw/request.md)
-- Process contract: [raw/process.md](raw/process.md)
-- Master journal (checklist, dispatch, decisions):
-  [raw/journal.md](raw/journal.md)
-- Final summary: [raw/summary.md](raw/summary.md)
-- Architect, backsystacean, frontend, and webtest task files live
-  alongside them in [raw/](raw/).
+Raw working material (per-author journals, task/request/roadmap files,
+coordination logs) is preserved in git history under this phase's `raw/`
+tree; it was removed from the working tree in the phase-15 docs cleanup.
 
 The request file originally embedded one screenshot of the new-file
 dialog; per the journals-wide image removal it is now a short text note
-in [raw/request.md](raw/request.md).
+in the source request.
