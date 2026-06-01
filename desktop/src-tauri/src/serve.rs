@@ -435,15 +435,39 @@ fn capture_window_config_on_close(app: &AppHandle, window_label: &str, config_ke
     let Some(window) = app.get_webview_window(window_label) else {
         return;
     };
-    let url_hash = match window.url() {
-        Ok(u) => u.fragment().unwrap_or("").to_string(),
-        Err(e) => {
-            tracing::debug!(
-                label = %window_label,
-                error = %e,
-                "could not read url for closing window; pushing empty hash",
-            );
-            String::new()
+    // Reading the URL hash is best-effort and must never crash the app on a
+    // window close. Two nil-URL failure modes trip a panic deep in the runtime
+    // (a nil/empty webview URL fails tauri-runtime-wry's `.parse().expect()` /
+    // wry's `.URL().unwrap()`); that panic runs on the event-loop thread and
+    // takes the WHOLE app down. The chan-side `match` below cannot catch it
+    // because the panic is upstream of the returned `Result`.
+    //   - Outbound windows point at a remote we do not own; when that remote is
+    //     down the WKWebView never finishes navigating and reports a nil URL.
+    //     The hash is chan-SPA restore state, meaningless for an outbound
+    //     remote, so skip the read entirely (no url() call, no panic).
+    //   - A local/tunnel window whose backend died before close can hit the
+    //     same nil-URL panic, so guard that read with catch_unwind (the release
+    //     profile unwinds, so this is catchable) and degrade to an empty hash.
+    let url_hash = if window_label.starts_with("outbound-") {
+        String::new()
+    } else {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| window.url())) {
+            Ok(Ok(u)) => u.fragment().unwrap_or("").to_string(),
+            Ok(Err(e)) => {
+                tracing::debug!(
+                    label = %window_label,
+                    error = %e,
+                    "could not read url for closing window; pushing empty hash",
+                );
+                String::new()
+            }
+            Err(_) => {
+                tracing::warn!(
+                    label = %window_label,
+                    "reading url for a closing window panicked (dead webview); pushing empty hash",
+                );
+                String::new()
+            }
         }
     };
     let state = app.state::<Arc<AppState>>();
