@@ -72,7 +72,7 @@
       rows: [
         { caps: [{ label: "t", key: "t" }], action: "Stage Terminal" },
         { caps: [{ label: "o", key: "o" }], action: "Stage File Browser" },
-        { caps: [{ label: "p", key: "p" }], action: "Stage Smart Prompt Terminal" },
+        { caps: [{ label: "p", key: "p" }], action: "Stage Team Work Terminal" },
         { caps: [{ label: "g", key: "g" }], action: "Stage Graph" },
         { caps: [{ label: "n", key: "n" }], action: "Stage New Draft" },
         { caps: [{ label: "f", key: "f" }], action: "Search overlay" },

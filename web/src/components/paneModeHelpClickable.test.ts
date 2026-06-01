@@ -65,7 +65,7 @@ describe("PaneModeHelp key-caps are clickable buttons", () => {
       /caps:\s*\[\s*\{\s*label:\s*"o",\s*key:\s*"o"\s*\}\s*\],?\s*action:\s*"Stage File Browser"/,
     );
     expect(paneModeHelp).toMatch(
-      /caps:\s*\[\s*\{\s*label:\s*"p",\s*key:\s*"p"\s*\}\s*\],?\s*action:\s*"Stage Smart Prompt Terminal"/,
+      /caps:\s*\[\s*\{\s*label:\s*"p",\s*key:\s*"p"\s*\}\s*\],?\s*action:\s*"Stage Team Work Terminal"/,
     );
     expect(paneModeHelp).toMatch(
       /caps:\s*\[\s*\{\s*label:\s*"g",\s*key:\s*"g"\s*\}\s*\],?\s*action:\s*"Stage Graph"/,
