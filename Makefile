@@ -14,6 +14,13 @@ RPM_TARGET ?= $(LINUX_TARGET)
 ARCHPKG_TARGET ?= $(LINUX_TARGET)
 CHAN_TARGET ?=
 
+# Linux chan-desktop build (AppImage/.deb) runs inside an sdme container so a
+# macOS workstation can produce Linux bundles. DISTRO selects the rootfs +
+# .sdme template; SDME is how sdme is reached (a lima VM on macOS, directly on
+# a Linux host). See scripts/dev/sdme/build-chan-desktop.sh.
+DISTRO ?= ubuntu
+SDME ?= limactl shell default sudo sdme
+
 BIN := target/release/chan
 WEB_BUILD_STAMP := web/.chan-build-stamp
 REPO_ROOT := $(abspath .)
@@ -78,6 +85,12 @@ linux-packages: ## Build all Linux packages for the current target set.
 		CHAN_REPO="$(REPO_ROOT)" CARGO="$(CARGO)" NPM="$(NPM)" \
 		DEB_TARGET="$(DEB_TARGET)" RPM_TARGET="$(RPM_TARGET)" \
 		ARCHPKG_TARGET="$(ARCHPKG_TARGET)" packages
+
+.PHONY: linux-chan-desktop
+linux-chan-desktop: ## Build the chan-desktop AppImage/.deb for DISTRO via sdme.
+	$(MAKE) -C packaging/linux \
+		CHAN_REPO="$(REPO_ROOT)" SDME="$(SDME)" DISTRO="$(DISTRO)" \
+		chan-desktop
 
 .PHONY: macos-chan-app
 macos-chan-app: ## Build and sign the macOS .app bundle.

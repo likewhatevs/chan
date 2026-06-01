@@ -9,6 +9,13 @@ DEB_TARGET ?= $(LINUX_TARGET)
 RPM_TARGET ?= $(LINUX_TARGET)
 ARCHPKG_TARGET ?= $(LINUX_TARGET)
 
+# chan-desktop Linux build. Distinct from the CLI deb/rpm/archpkg targets
+# above: those cross-compile the `chan` CLI on the host and package the binary,
+# whereas chan-desktop runs `cargo tauri build` (which bundles the AppImage)
+# inside an sdme container so a macOS host can produce Linux desktop bundles.
+DISTRO ?= ubuntu
+SDME ?= limactl shell default sudo sdme
+
 CHAN_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' "$(CHAN_REPO)/Cargo.toml" | head -1)
 TARBALL_NAME ?= chan-$(LINUX_TARGET).tar.gz
 TARBALL_STAGE := $(CHAN_REPO)/target/package/chan-$(LINUX_TARGET)
@@ -95,6 +102,11 @@ archpkg:
 		CHAN_ARCH="$(ARCHPKG_ARCH)" \
 		makepkg --force --nodeps --clean
 	@ls -1 "$(ARCHPKG_DIR)/"*.pkg.tar.*
+
+.PHONY: chan-desktop
+chan-desktop:
+	CHAN_REPO="$(abspath $(CHAN_REPO))" SDME="$(SDME)" DISTRO="$(DISTRO)" \
+		"$(abspath $(CHAN_REPO))/scripts/dev/sdme/build-chan-desktop.sh"
 
 .PHONY: packages
 packages: deb rpm archpkg

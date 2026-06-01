@@ -1,0 +1,40 @@
+# chan-desktop-ubuntu (dev): Ubuntu base carrying the Tauri build deps and
+# the Rust toolchain, for building the chan-desktop AppImage/.deb locally on
+# Linux and on macOS (via lima-vm hosting sdme). The matching CI lane is the
+# release.yml linux-desktop-artifacts job; this rootfs bakes the same apt
+# deps that job installs on its ubuntu-latest runner.
+#
+# Build: limactl shell default sudo sdme fs build chan-desktop-ubuntu \
+#          chan-desktop-ubuntu.sdme    (-f to rebuild over an existing one)
+# Used by: make linux-chan-desktop DISTRO=ubuntu (root Makefile).
+#
+# tauri-cli is NOT baked here: desktop/Makefile installs it per-build into
+# the seeded repo's target/, so it tracks the repo's pin instead of going
+# stale in the rootfs. The pinned compiler (rust-toolchain.toml) likewise
+# auto-installs on the first cargo call against the seeded repo; baking the
+# rustup default keeps cargo ready without coupling the rootfs to the pin.
+#
+# Apple Silicon note: on an aarch64 host this rootfs and the emitted
+# AppImage are aarch64. That is enough to de-risk the bundler and verify
+# the cs -> chan-desktop symlink dispatch; CI's ubuntu-latest owns the
+# canonical x86_64 desktop build.
+
+FROM ubuntu
+
+# Tauri Linux build deps (webkit2gtk-4.1, appindicator3, librsvg2, libsoup3,
+# patchelf) + node/npm for the embedded web bundle + the C toolchain. The
+# AppImage tooling needs three extra host tools: file (linuxdeploy probes
+# file types), desktop-file-utils (validates the .desktop entry), and
+# xdg-utils (the appimage plugin shells out to xdg-mime; without it the
+# bundle fails at the very end with "xdg-mime binary not found").
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential pkg-config curl ca-certificates git file \
+        desktop-file-utils xdg-utils \
+        nodejs npm \
+        libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+        librsvg2-dev libsoup-3.0-dev patchelf && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal && \
+    echo '. "$HOME/.cargo/env"' >> /root/.bashrc

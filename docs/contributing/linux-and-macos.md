@@ -84,6 +84,86 @@ after each commit you want reflected in the container. To iterate
 without rebuilding the container, `sdme cp` individual files or
 `sdme join chan-build` for an interactive shell.
 
+## Desktop: build the chan-desktop AppImage and .deb
+
+`make chan-desktop` runs `cargo tauri build` natively, so on macOS it
+produces a macOS `.app`, not Linux bundles. To build the Linux
+chan-desktop bundles (the AppImage and `.deb` that `release.yml`'s
+`linux-desktop-artifacts` job ships, plus the `.rpm` Tauri's
+`targets:"all"` emits for free) from a macOS workstation, run
+`cargo tauri build` inside an sdme container:
+
+```sh
+# one-time: import the ubuntu base (shared with the core gate above)
+limactl shell default sudo sdme fs import ubuntu docker.io/ubuntu
+
+# build the bundles for one distro (default ubuntu)
+make linux-chan-desktop DISTRO=ubuntu
+```
+
+`make linux-chan-desktop` drives
+`scripts/dev/sdme/build-chan-desktop.sh`, which:
+
+1. builds the `chan-desktop-<distro>` rootfs from
+   `scripts/dev/sdme/chan-desktop-<distro>.sdme` on first use (it bakes
+   the Tauri build deps and the Rust toolchain, so this cost is paid
+   once),
+2. creates or reuses a `chan-desktop-build-<distro>` container,
+3. seeds the committed tree (`git archive HEAD`),
+4. runs `make chan-desktop` inside it, and
+5. copies the bundles out to `target/linux-desktop/<distro>/`.
+
+The container is reused between runs so the cargo target cache
+survives (a cold compile is around 20 minutes; an incremental rebuild
+is a minute or two). Force a clean container with
+`REBUILD_CONTAINER=1 make linux-chan-desktop`.
+
+How sdme is reached is the `SDME` variable (a lima VM on macOS by
+default, `sudo sdme` directly on a Linux host):
+
+```sh
+# native Linux host
+make linux-chan-desktop SDME='sudo sdme'
+```
+
+Two container facts the driver accommodates, both worth knowing if you
+script `cargo tauri build` in sdme yourself:
+
+- sdme mounts a small (~800M) tmpfs over `/tmp`; the cold Rust +
+  tauri-cli compile overflows it. The in-container build sets
+  `TMPDIR=/var/tmp` (the disk-backed overlay).
+- the chan-desktop rootfs needs `xdg-utils` on top of the core gate's
+  Tauri deps: the AppImage plugin shells out to `xdg-mime`, and
+  without it the bundle fails at the very end with
+  `xdg-mime binary not found`.
+
+On Apple Silicon the bundles are aarch64 Linux; CI's `ubuntu-latest`
+owns the canonical x86_64 desktop build. The AppImage is built with
+`linuxdeploy` in extract-and-run mode, so no FUSE or display is needed
+in the container.
+
+### Verifying the cs alias on the AppImage
+
+chan-desktop ships a `cs` control-socket client by re-execing itself
+with `argv[0]="cs"` (the `chan_shell::invoked_as_cs` argv0 detection,
+the AppImage first-run wrapper in `desktop/src-tauri/src/cs_install.rs`).
+To check the client path on a built artifact, point the inner binary at
+a running server's control socket and confirm it runs the client, not
+the GUI:
+
+```sh
+# in the container, with a `chan serve` running and $CHAN_CONTROL_SOCKET
+# pointed at its socket:
+exec -a cs ./squashfs-root/usr/bin/chan-desktop terminal list   # rc=0, no GUI
+```
+
+Known limitation (round-4): invoking the packaged AppImage through its
+`cs` wrapper (`exec -a cs "$APPIMAGE"`) does NOT yet reach the inner
+binary as `cs`. linuxdeploy's generated `AppRun` re-execs
+`AppRun.wrapped` without preserving argv0, so the GUI launches instead.
+The AppImage runtime does export `ARGV0=cs`, which is the intended fix
+hook; tracked for a follow-up.
+
 ## Gateway: Postgres-backed tests
 
 The gateway is a separate workspace with Postgres-backed integration
