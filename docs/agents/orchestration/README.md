@@ -49,8 +49,6 @@ to integrate with that surface.
 
 ## What chan does NOT provide
 
-* Multi-user collaboration. Single-user, single-machine,
-  by design.
 * A networked event bus. Events live on the local
   filesystem; chan watches them.
 * Cross-host orchestration. The tunnel relocates the

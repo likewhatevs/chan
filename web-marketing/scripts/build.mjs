@@ -25,6 +25,7 @@ const requiredInputs = [
   path.join(srcRoot, "templates", "base.html"),
   path.join(srcRoot, "pages", "home.html"),
   path.join(srcRoot, "pages", "install.html"),
+  path.join(srcRoot, "pages", "story.html"),
   path.join(srcRoot, "install.sh"),
   path.join(srcRoot, "styles.css"),
   path.join(srcRoot, "site.js"),
@@ -42,6 +43,7 @@ async function main() {
   const baseTemplate = await fs.readFile(path.join(srcRoot, "templates", "base.html"), "utf8");
   const homeTemplate = await fs.readFile(path.join(srcRoot, "pages", "home.html"), "utf8");
   const installTemplate = await fs.readFile(path.join(srcRoot, "pages", "install.html"), "utf8");
+  const storyTemplate = await fs.readFile(path.join(srcRoot, "pages", "story.html"), "utf8");
 
   await fs.rm(distRoot, { recursive: true, force: true });
   await fs.mkdir(path.join(distRoot, "assets"), { recursive: true });
@@ -58,9 +60,9 @@ async function main() {
     renderPage(baseTemplate, {
       active: "home",
       bodyClass: "home-page",
-      title: "chan - local-first markdown editor",
+      title: "chan - the AI-native IDE for the modern engineer",
       description:
-        "Chan is a local-first markdown editor for plain-file workspaces, wiki-links, search, graph, terminal, and MCP workflows.",
+        "Chan is an AI-native IDE for the modern engineer: drive your projects in Markdown and put a fleet of AI agents to work, coordinating in the terminal. Hybrid search, a live graph, and code reports built in.",
       content: fillTemplate(homeTemplate, { version, ...releaseTemplateValues }),
     }),
   );
@@ -73,6 +75,17 @@ async function main() {
       title: "Install chan",
       description: "Install Chan Desktop or the standalone chan CLI.",
       content: fillTemplate(installTemplate, { version, ...releaseTemplateValues }),
+    }),
+  );
+
+  await writePage(
+    "story/index.html",
+    renderPage(baseTemplate, {
+      active: "story",
+      bodyClass: "story-page",
+      title: "Why I built chan",
+      description: "Why chan exists, in the maker's words.",
+      content: fillTemplate(storyTemplate, { version, ...releaseTemplateValues }),
     }),
   );
 
@@ -161,6 +174,7 @@ function renderSiteNav(active) {
     ["home", "/", "Home"],
     ["install", "/install/", "Install"],
     ["manual", "/manual/", "Manual"],
+    ["story", "/story/", "Story"],
     ["github", githubRepoUrl, "GitHub"],
   ];
   return links

@@ -177,4 +177,4 @@ The editor calls these endpoints:
 - Tables render as plain source; real grid rendering is widget work.
 - Pasting structured content from outside (HTML clipboard): paste is plain
   markdown text; HTML to markdown conversion is not implemented.
-- Collaborative editing is an explicit non-goal per `CLAUDE.md`.
+- Collaborative editing is not implemented; possible future work.

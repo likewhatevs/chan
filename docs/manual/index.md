@@ -1,7 +1,10 @@
 # Chan Manual
 
-Chan works with plain markdown workspaces. A workspace is a folder on disk that
-Chan opens through the desktop app or through the standalone `chan serve`
+Chan is an AI-native IDE for the modern engineer. You point it at a
+folder on disk (a workspace) and drive your project in Markdown (design
+docs, specs, tasks), with AI agents working alongside you in the editor
+and terminal. Edit, search, graph, run terminals, and coordinate agents
+over that tree, through the desktop app or the standalone `chan serve`
 command.
 
 Start here:

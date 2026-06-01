@@ -1,13 +1,20 @@
 # chan
 
-Notes app for plain markdown workspaces. `chan` is a single static binary
-that bundles a CLI and a local HTTP server; the server serves a
-Svelte WYSIWYG editor that the user edits notes in. Cross-file
-`[[wiki-link]]` autocomplete, BM25 + embedding hybrid search, link
-graphs, reports, and embedded terminal tabs are built in.
+An AI-native IDE for the modern engineer. `chan` is a single static
+binary that bundles a CLI and a local HTTP server; the server serves a
+hybrid workspace (editor, terminal, multi-agent Team Work, file browser,
+graph, dashboard) of tiling tabs and panes over a folder on disk.
 
-Single-user, single-machine. Loopback HTTP by default; an opt-in
-tunnel mode publishes the same workspace at
+Modern engineers drive projects in Markdown, so `chan` is built for it:
+write your design docs, specs, and tasks, then put AI to work on them.
+Agents create, review, refine, and harden that work and then execute it.
+Multiple agents (Claude, Codex, Gemini) run in the embedded terminal and
+coordinate with each other through `chan`'s `cs` tooling and the
+in-process MCP server. Cross-file `[[wiki-link]]` autocomplete, BM25 +
+embedding hybrid search, a workspace graph, and code reports are built in.
+
+Single-user, single-machine. The HTTP server binds loopback by default;
+an opt-in tunnel publishes the same workspace at
 `https://{user}.workspace.chan.app/{workspace}/*` for cross-device access.
 
 ## Layout

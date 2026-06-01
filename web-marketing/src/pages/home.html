@@ -1,52 +1,74 @@
 <section class="hero">
   <div class="hero-copy">
-    <p class="eyebrow">local-first markdown workspaces</p>
+    <p class="eyebrow">the AI-native IDE for the modern engineer</p>
     <h1>chan</h1>
     <p class="lede">
-      A desktop and CLI editor for plain markdown folders. Open a workspace,
-      write in tabs and panes, link files by path, and keep the source of
-      truth on disk.
+      An IDE that moves at the speed of thought. Drive your projects in
+      Markdown and put a fleet of AI agents to work: they create, review,
+      refine, and harden your design docs and tasks, then execute,
+      coordinating with each other right in the terminal. Your editor, your
+      terminal, and your agents in one hybrid workspace.
     </p>
+    <p class="eyebrow">Simple stroke. Powerful engine.</p>
     <div class="button-row">
       <a class="button primary" href="/install/">Install</a>
       <a class="button secondary" href="/manual/">Read the manual</a>
     </div>
   </div>
   <figure class="hero-shot">
-    <img src="/assets/editor-recipes.png" alt="Chan editor with markdown files open in several tabs" />
-    <figcaption>Chan running against a local notes workspace.</figcaption>
+    <img src="/assets/team-work-fleet.png" alt="Four AI agents running side by side in Chan's Team Work" />
+    <figcaption>Chan running a fleet of agents in one workspace.</figcaption>
   </figure>
 </section>
 
 <section class="feature-grid" aria-label="Core behavior">
   <article>
-    <h2>Plain files</h2>
+    <h2>AI is the engine</h2>
     <p>
-      Markdown files stay under the workspace folder. Edits from other tools are
-      picked up by the running app.
+      Put agents to work on the docs and tasks that drive your project:
+      create, review, refine, harden, execute. Markdown-first, where your
+      project's thinking lives.
     </p>
   </article>
   <article>
-    <h2>Path links</h2>
+    <h2>A fleet that works together</h2>
     <p>
-      Type <code>[[</code> to pick a file path from the workspace. Wiki-links
-      resolve relative paths instead of hiding data in an app database.
+      Run Claude, Codex, and Gemini side by side in the terminal and let them
+      coordinate with each other through Chan's <code>cs</code> tooling (poke,
+      broadcast, groups) and the MCP server. You conduct; they collaborate. No
+      in-app chatbot.
     </p>
   </article>
   <article>
-    <h2>Search and graph</h2>
+    <h2>One hybrid workspace</h2>
     <p>
-      Search, backlinks, tags, mentions, and graph views are built from the
-      files in the workspace.
+      Editor, terminal, Team Work, file browser, graph, and dashboard as
+      tiling tabs and panes, each with command-line tooling.
     </p>
   </article>
   <article>
-    <h2>Terminal and MCP</h2>
+    <h2>Knows your workspace</h2>
     <p>
-      Embedded terminals start at the workspace root and export
-      <code>CHAN_MCP_*</code> discovery variables for external agent CLIs.
+      Hybrid BM25 and embedding search, a live graph over links, tags, and
+      mentions, and per-file and per-directory code reports (SLOC, COCOMO),
+      built in.
     </p>
   </article>
+</section>
+
+<section class="split-section">
+  <div>
+    <p class="eyebrow">team work</p>
+    <h2>See the fleet at work</h2>
+    <p>
+      Compose a team of agents and watch them run side by side: Claude, Codex,
+      and Gemini in their own terminal sessions, coordinating through
+      <code>cs</code> and the MCP server while you conduct from one pane.
+    </p>
+  </div>
+  <figure class="inline-shot">
+    <img src="/assets/team-work-session.png" alt="AI agents coordinating in a Chan Team Work session" />
+  </figure>
 </section>
 
 <section class="split-section">
@@ -72,13 +94,16 @@
     <h2>Local by default, tunnel by choice</h2>
     <p>
       Local use needs no account. The HTTP server binds to loopback by
-      default. Tunnel mode is opt-in and publishes the workspace through
-      <code>workspace.chan.app</code> only when you configure it.
+      default, and your files stay ordinary files under the workspace folder.
     </p>
   </div>
-  <figure class="inline-shot">
-    <img src="/assets/editor-dark.png" alt="Chan editor in dark mode" />
-  </figure>
+  <div>
+    <p>
+      Tunnel mode is opt-in and publishes the same workspace through
+      <code>workspace.chan.app</code> only when you configure it. Nothing
+      leaves your machine until you ask it to.
+    </p>
+  </div>
 </section>
 
 <section class="support-section">

@@ -1,8 +1,12 @@
 # chan: design
 
-`chan` is the user-facing notes app: a CLI plus an HTTP server that
-serves a Svelte WYSIWYG editor for plain markdown workspaces. This
-document is the canonical design reference for the workspace.
+`chan` is the user-facing AI-native IDE for the modern engineer: a CLI
+plus an HTTP server that serves a hybrid workspace (editor, terminal,
+Team Work, file browser, graph, dashboard) of tiling tabs and panes
+over a folder on disk. You drive projects in Markdown and put AI to
+work on them; multiple agents run in the terminal and coordinate
+through `cs` and the in-process MCP server. This document is the
+canonical design reference for the workspace.
 Update it in the same commit as any change that affects crate
 boundaries, the module layout under `chan-server`, the on-disk
 layout, or the frontend embed / serve story.

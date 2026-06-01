@@ -5,12 +5,14 @@ working on `chan`.
 
 ## What This Project Is
 
-`chan` is the user-facing notes app: a CLI plus an HTTP server
-that serves an embedded Svelte WYSIWYG editor for plain markdown
-workspaces. The CLI subcommands manage the workspace registry, workspace
-contents, search, and the running server. The server is loopback-
-only, single-user, single-machine; multi-user collaboration is an
-explicit non-goal.
+`chan` is the user-facing AI-native IDE for the modern engineer: a CLI
+plus an HTTP server that serves an embedded hybrid workspace (editor,
+terminal, Team Work, file browser, graph, dashboard) over a folder on
+disk. You drive projects in Markdown and put AI to work on them;
+agents run in the terminal and coordinate through `cs` and the
+in-process MCP server. The CLI subcommands manage the workspace
+registry, workspace contents, search, and the running server. The
+server is loopback-only, single-user, single-machine.
 
 The release artifact is a single static binary with the frontend
 bundle embedded via rust-embed.

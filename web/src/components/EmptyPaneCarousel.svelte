@@ -471,6 +471,19 @@
            surface to learn what chan is and how to support it. -->
       <div class="slide slide-about" aria-label="About">
         <div class="slide-title">About</div>
+        <!-- Brand motif + one factual positioning line, the in-app
+             home for "Simple stroke. Powerful engine." Quiet by
+             design (secondary color, small size): the user already
+             installed, so this orients rather than sells. -->
+        <div class="about-intro">
+          <div class="about-motif">Simple stroke. Powerful engine.</div>
+          <p class="about-pitch">
+            An AI-native IDE for the modern engineer. Drive your project
+            in Markdown and put AI to work on it: agents create, review,
+            and refine your docs and tasks, and run alongside you in the
+            terminal.
+          </p>
+        </div>
         <div class="about-grid">
           <span class="k">chan version</span>
           <span class="v mono">
@@ -820,6 +833,23 @@
   }
   .slide-about .slide-title {
     align-self: center;
+  }
+  /* Brand motif + positioning line under the About title. Quiet
+     (secondary color, small size) so the lowest-sell in-app surface
+     orients rather than pitches; centered to sit under the title. */
+  .about-intro {
+    align-self: center;
+    text-align: center;
+    max-width: 420px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .about-motif {
+    letter-spacing: 0.02em;
+  }
+  .about-pitch {
+    margin: 4px 0 0;
   }
   .about-grid {
     display: grid;
