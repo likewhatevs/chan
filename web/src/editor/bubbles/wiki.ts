@@ -28,7 +28,7 @@ import { createCaretAnchor } from "./anchor";
 import { api } from "../../api/client";
 import type { LinkTarget } from "../../api/types";
 import { indexStatus } from "../../state/store.svelte";
-import { relativizePath, wikiLinkToMarkdown } from "../links";
+import { decodePercent, relativizePath, wikiLinkToMarkdown } from "../links";
 import {
   filterBlocks,
   insertBlockAnchor,
@@ -114,6 +114,22 @@ function classifyQuery(q: string): Mode {
   return { kind: "heading", target, filter };
 }
 
+/// In "raw" mode the trigger query is an existing link URL (a relative
+/// or workspace path like `../../team-x/bootstrap.md`), not something
+/// the user typed to search. `link_targets` ranks on basename/title,
+/// so searching the verbatim path matches nothing and the picker dead-
+/// ends on "No matches" - which is what a plain click on a relative-
+/// markdown link pill produced before this. Reduce the URL to its last
+/// path segment (anchor/query stripped, percent-decoded) so the linked
+/// file surfaces as a hit: the user can re-pick it (Enter) or open it
+/// (Cmd+Enter), matching the click-the-pill intent.
+function rawSearchTerm(q: string): string {
+  const noAnchor = q.split(/[#?]/)[0] ?? q;
+  const seg =
+    noAnchor.split("/").filter((s) => s !== "" && s !== "." && s !== "..").pop() ?? "";
+  return decodePercent(seg);
+}
+
 export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   // Anchor at the opening `[[` (triggerStart) so the bubble lines up
   // with where the user started the link. Visually this reads better
@@ -132,7 +148,12 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
 
   let query = opts.initialQuery;
   let triggerEnd = opts.triggerEnd;
-  let mode: Mode = classifyQuery(query);
+  // Raw mode edits an existing `[label](url)` URL slot. The `#`/`^` in
+  // a URL is the on-disk anchor, not the heading/block authoring
+  // separator, so never classify into those modes here - stay in file
+  // mode and search the URL's basename (see rawSearchTerm / fetchFile).
+  let mode: Mode =
+    opts.templateMode === "raw" ? { kind: "file" } : classifyQuery(query);
   // File-mode results.
   let fileHits: LinkTarget[] = [];
   // Heading-mode all-headings cache (keyed by target so target switch
@@ -212,7 +233,11 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     } else if (mode.kind === "block") {
       status.textContent = `${hits.length} block${hits.length === 1 ? "" : "s"} in ${mode.target} - ↵ insert${openHint}`;
     } else {
-      status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} - ↵ insert${openHint}`;
+      // Advertise the heading / block modes (type `#` or `^` after the
+      // target) while authoring a fresh `[[` link. Suppressed in raw
+      // mode, where those separators are part of the URL being edited.
+      const modeHint = opts.templateMode === "raw" ? "" : " - # heading - ^ block";
+      status.textContent = `${hits.length} result${hits.length === 1 ? "" : "s"} - ↵ insert${openHint}${modeHint}`;
     }
     for (let i = 0; i < hits.length; i++) {
       const hit = hits[i]!;
@@ -274,8 +299,9 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     if (debounceTimer !== undefined) clearTimeout(debounceTimer);
     const seq = ++reqSeq;
     debounceTimer = window.setTimeout(() => {
+      const term = opts.templateMode === "raw" ? rawSearchTerm(query) : query;
       api
-        .linkTargets(query, SEARCH_LIMIT)
+        .linkTargets(term, SEARCH_LIMIT)
         .then((results) => {
           if (!alive || seq !== reqSeq || mode.kind !== "file") return;
           fileHits = results;
@@ -369,6 +395,26 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     blockHits = filterBlocks(blockAll, mode.filter, BLOCK_LIMIT);
     if (selectedIndex >= blockHits.length) selectedIndex = 0;
     render();
+  }
+
+  /// Heading + block fetches need an EXACT rel_path (api.headings /
+  /// api.read match the stored path verbatim), but the user types a
+  /// basename then the separator (`[[Welcome#`). Map that typed target
+  /// to the matching file from the last file-mode results so `#`/`^`
+  /// reach a real file instead of dead-ending on "No matching
+  /// headings". Falls through unchanged when the target already names a
+  /// path (has a `/`) or nothing matched.
+  function resolveAnchorTarget(typed: string): string {
+    if (!typed || typed.includes("/")) return typed;
+    const stem = (p: string): string =>
+      (p.split("/").pop() ?? p).replace(/\.md$/i, "");
+    const lower = typed.toLowerCase();
+    const hit = fileHits.find(
+      (h) =>
+        h.kind !== "Heading" &&
+        (h.path.toLowerCase() === lower || stem(h.path).toLowerCase() === lower),
+    );
+    return hit ? hit.path : typed;
   }
 
   function refetchForMode(): void {
@@ -607,7 +653,13 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
       shell.reposition();
       if (q === query) return;
       query = q;
-      const newMode = classifyQuery(q);
+      const newMode: Mode =
+        opts.templateMode === "raw" ? { kind: "file" } : classifyQuery(q);
+      // Resolve a basename target (`Welcome`) to its real rel_path
+      // (`Welcome.md`) so the heading/block fetch finds the file.
+      if (newMode.kind === "heading" || newMode.kind === "block") {
+        newMode.target = resolveAnchorTarget(newMode.target);
+      }
       const modeChanged = newMode.kind !== mode.kind;
       const targetChanged =
         newMode.kind === "heading" &&

@@ -12,8 +12,24 @@ describe("wiki file completion uses graph link targets", () => {
   });
 
   test("file-mode wiki bubble calls api.linkTargets instead of api.search", () => {
-    expect(wiki).toMatch(/\.linkTargets\(query, SEARCH_LIMIT\)/);
+    expect(wiki).toMatch(/\.linkTargets\(term, SEARCH_LIMIT\)/);
     expect(wiki).not.toMatch(/\.search\(query, SEARCH_LIMIT/);
+  });
+
+  test("raw mode searches the URL basename, not the verbatim path", () => {
+    // Editing an existing `[label](url)` slot: link_targets ranks on
+    // basename/title, so the verbatim `../../x/y.md` matched nothing
+    // ("No matches"). rawSearchTerm reduces it to the last segment so
+    // the linked file surfaces and the pill is openable / re-pickable.
+    expect(wiki).toMatch(/function rawSearchTerm\(q: string\): string \{/);
+    expect(wiki).toMatch(
+      /const term = opts\.templateMode === "raw" \? rawSearchTerm\(query\) : query;/,
+    );
+    // Raw mode never enters heading/block authoring modes (the `#`/`^`
+    // there belong to the URL, not the picker).
+    expect(wiki).toMatch(
+      /opts\.templateMode === "raw" \? \{ kind: "file" \} : classifyQuery\(/,
+    );
   });
 
   test("file-mode wiki bubble keeps file and heading targets", () => {

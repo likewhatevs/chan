@@ -243,6 +243,16 @@ class WikiLinkWidget extends WidgetType {
     el.dataset.target = this.parsed.target;
     if (this.parsed.anchor) el.dataset.anchor = this.parsed.anchor;
     if (this.kind) el.dataset.refkind = this.kind;
+    // Discoverability: a pill is a clickable link, but the open gesture
+    // is not obvious. Surface the resolved target plus the gesture in a
+    // native tooltip. Write mode opens on Cmd/Ctrl-click (plain click
+    // reveals the source for editing); read mode previews on click.
+    const tgt = this.parsed.anchor
+      ? `${this.parsed.target}#${this.parsed.anchor}`
+      : this.parsed.target;
+    el.title = view.state.facet(EditorView.editable)
+      ? `${tgt} - Cmd-click to open`
+      : `${tgt} - click to preview`;
     if (this.kind === "image") {
       // Image-kind wikilinks render the actual file as an inline
       // thumbnail rather than a text pill - a `[[Recipes/photo.jpg]]`
