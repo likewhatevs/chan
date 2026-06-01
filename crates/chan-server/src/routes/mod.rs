@@ -28,7 +28,10 @@ mod search;
 mod sessions;
 mod storage;
 mod survey;
-mod team_config;
+// pub(crate) so the `cs terminal team` control-socket handler
+// (`crate::control_socket`, a sibling of `routes`) can reuse the team
+// config write/read + bootstrap generation instead of duplicating it.
+pub(crate) mod team_config;
 mod terminal;
 mod workspace;
 mod ws;

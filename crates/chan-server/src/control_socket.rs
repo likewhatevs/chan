@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
 #[cfg(unix)]
-use chan_workspace::Workspace;
+use chan_workspace::{TeamConfig, Workspace};
 #[cfg(unix)]
 use serde::Serialize;
 #[cfg(unix)]
@@ -38,8 +38,9 @@ pub type TerminalRegistryCell = Arc<OnceLock<Arc<TerminalRegistry>>>;
 pub use chan_shell::{ControlRequest, ControlResponse};
 // The survey types are part of the same shared wire module; the handler
 // pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
+// TeamOp tags the `cs terminal team` op (new | load).
 #[cfg(unix)]
-use chan_shell::{SurveyReply, SurveySpec};
+use chan_shell::{SurveyReply, SurveySpec, TeamOp};
 
 #[cfg(unix)]
 #[derive(Debug, Serialize)]
@@ -359,6 +360,122 @@ async fn handle_request(
                 terminal_registry,
             )
             .await
+        }
+        ControlRequest::TerminalTeam {
+            dir,
+            op,
+            config_toml,
+            script,
+        } => handle_team(workspace_cell, &dir, op, config_toml, script),
+    }
+}
+
+/// The `cs terminal team new|load` path. `new` parses the supplied
+/// config.toml text, stamps `created_at` when omitted, validates, then
+/// either emits the paste-and-run bootstrap script (`--script`) or writes
+/// `config.toml` + the regenerated `bootstrap.md` + the dir tree through
+/// the Workspace sandbox. `load` reads + validates `{dir}/config.toml`,
+/// then emits the script (`--script`) or a one-line summary. All the
+/// config logic lives in `routes::team_config` so the CLI path and the
+/// HTTP route share one source of truth (the bootstrap is never
+/// regenerated client-side).
+#[cfg(unix)]
+fn handle_team(
+    workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
+    dir: &str,
+    op: TeamOp,
+    config_toml: Option<String>,
+    script: bool,
+) -> ControlResponse {
+    use crate::routes::team_config::{
+        ensure_created_at, generate_bootstrap_script, read_team_config, validate_team_config,
+        write_team_config,
+    };
+
+    // Mirror the route's dir guard so a bad dir is a clean message, not a
+    // sandbox error deeper in the write path.
+    let dir = dir.trim();
+    if dir.is_empty() {
+        return ControlResponse::Error {
+            message: "team directory is required".into(),
+        };
+    }
+    if dir.starts_with('/') {
+        return ControlResponse::Error {
+            message: format!("team directory must be workspace-relative, not absolute: {dir}"),
+        };
+    }
+
+    // The workspace is resolved lazily: `new --script` is a pure generator
+    // (no filesystem I/O), so only the write (`new`) and read (`load`)
+    // paths touch the cell.
+    match op {
+        TeamOp::New => {
+            let Some(toml_text) = config_toml else {
+                return ControlResponse::Error {
+                    message: "cs terminal team new needs a config (--config <file> or --stdin)"
+                        .into(),
+                };
+            };
+            let mut config: TeamConfig = match toml::from_str(&toml_text) {
+                Ok(config) => config,
+                Err(e) => {
+                    return ControlResponse::Error {
+                        message: format!("invalid team config TOML: {e}"),
+                    }
+                }
+            };
+            ensure_created_at(&mut config);
+            if let Err(message) = validate_team_config(&config) {
+                return ControlResponse::Error { message };
+            }
+            if script {
+                return ControlResponse::Ok {
+                    message: generate_bootstrap_script(dir, &config),
+                };
+            }
+            let workspace = match workspace_from_cell(workspace_cell) {
+                Ok(workspace) => workspace,
+                Err(message) => return ControlResponse::Error { message },
+            };
+            match write_team_config(&workspace, dir, &config) {
+                Ok(()) => ControlResponse::Ok {
+                    message: format!(
+                        "team {:?} written to {dir} ({} member(s))",
+                        config.team_name,
+                        config.members.len()
+                    ),
+                },
+                Err(message) => ControlResponse::Error { message },
+            }
+        }
+        TeamOp::Load => {
+            let workspace = match workspace_from_cell(workspace_cell) {
+                Ok(workspace) => workspace,
+                Err(message) => return ControlResponse::Error { message },
+            };
+            let config = match read_team_config(&workspace, dir) {
+                Ok(config) => config,
+                Err(message) => return ControlResponse::Error { message },
+            };
+            if script {
+                return ControlResponse::Ok {
+                    message: generate_bootstrap_script(dir, &config),
+                };
+            }
+            let lead = config
+                .members
+                .iter()
+                .find(|m| m.is_lead)
+                .map(|m| m.handle.as_str())
+                .unwrap_or("?");
+            ControlResponse::Ok {
+                message: format!(
+                    "team {:?} at {dir}: {} member(s), lead {lead}",
+                    config.team_name,
+                    config.members.len()
+                ),
+            }
         }
     }
 }
@@ -1079,5 +1196,120 @@ mod tests {
         let (_root, registry) = empty_registry();
         let err = term_restart(&registry, Some("nope"), None).expect_err("no match");
         assert!(err.contains("no live terminal session"), "got: {err}");
+    }
+
+    // A valid two-member team config TOML for the handle_team tests.
+    const SAMPLE_TEAM_TOML: &str = r#"
+team_name = "alpha"
+host_name = "Neo"
+host_handle = "@@Neo"
+tab_group = "alpha"
+created_at = "2026-05-29T00:00:00Z"
+
+[[members]]
+handle = "@@Lead"
+command = "claude"
+is_lead = true
+agent = "claude"
+
+[[members]]
+handle = "@@LaneA"
+command = "codex"
+is_lead = false
+agent = "codex"
+"#;
+
+    fn empty_cell() -> Arc<RwLock<Option<WorkspaceCell>>> {
+        Arc::new(RwLock::new(None))
+    }
+
+    #[test]
+    fn handle_team_rejects_empty_and_absolute_dir() {
+        let cell = empty_cell();
+        match handle_team(&cell, "   ", TeamOp::New, None, false) {
+            ControlResponse::Error { message } => {
+                assert!(message.contains("required"), "{message}")
+            }
+            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+        }
+        match handle_team(&cell, "/abs/team", TeamOp::Load, None, false) {
+            ControlResponse::Error { message } => {
+                assert!(message.contains("workspace-relative"), "{message}")
+            }
+            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+        }
+    }
+
+    #[test]
+    fn handle_team_new_requires_a_config() {
+        let cell = empty_cell();
+        match handle_team(&cell, "new-team-1", TeamOp::New, None, false) {
+            ControlResponse::Error { message } => {
+                assert!(message.contains("needs a config"), "{message}")
+            }
+            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+        }
+    }
+
+    #[test]
+    fn handle_team_new_script_emits_bootstrap_without_a_workspace() {
+        // `--script` is a pure generator: it returns the script even with
+        // no workspace cell bound (no filesystem I/O on this path).
+        let cell = empty_cell();
+        match handle_team(
+            &cell,
+            "new-team-1",
+            TeamOp::New,
+            Some(SAMPLE_TEAM_TOML.into()),
+            true,
+        ) {
+            ControlResponse::Ok { message } => {
+                assert!(message.starts_with("#!/usr/bin/env bash"), "{message}");
+                assert!(message.contains("--tab-name='@@Lead'"), "{message}");
+                assert!(message.contains("--submit=codex"), "{message}");
+            }
+            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+        }
+    }
+
+    #[test]
+    fn handle_team_new_rejects_invalid_toml() {
+        let cell = empty_cell();
+        match handle_team(
+            &cell,
+            "new-team-1",
+            TeamOp::New,
+            Some("this is not = = toml".into()),
+            true,
+        ) {
+            ControlResponse::Error { message } => {
+                assert!(message.contains("invalid team config TOML"), "{message}")
+            }
+            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+        }
+    }
+
+    #[test]
+    fn handle_team_new_rejects_a_config_that_fails_validation() {
+        // Valid TOML, but zero members -> validation fails before any write.
+        let cell = empty_cell();
+        let toml_text = r#"
+team_name = "alpha"
+host_name = "Neo"
+host_handle = "@@Neo"
+created_at = "2026-05-29T00:00:00Z"
+"#;
+        match handle_team(
+            &cell,
+            "new-team-1",
+            TeamOp::New,
+            Some(toml_text.into()),
+            true,
+        ) {
+            ControlResponse::Error { message } => {
+                assert!(message.contains("between 1 and 9"), "{message}")
+            }
+            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
+        }
     }
 }

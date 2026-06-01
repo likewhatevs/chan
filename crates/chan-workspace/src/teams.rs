@@ -22,6 +22,12 @@ pub struct TeamConfig {
     pub tab_group: String,
     #[serde(default = "default_auto_prefix_at")]
     pub auto_prefix_at: bool,
+    // ISO 8601 UTC creation time. The SPA dialog always sends it; the CLI
+    // `cs terminal team new` lets the input config.toml omit it (a
+    // hand-written team spec should not carry a timestamp), and the server
+    // stamps the current time on write. `#[serde(default)]` (empty string)
+    // is the "not yet stamped" sentinel the server fills in.
+    #[serde(default)]
     pub created_at: String,
     #[serde(default)]
     pub members: Vec<Member>,

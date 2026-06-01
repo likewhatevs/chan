@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 
 use crate::control::{absolutize, control_socket_env, open_env, send_control_request};
 use crate::submit::{apply_submit_chord, SubmitAgent};
-use crate::wire::{ControlRequest, SurveyFollowup, SurveySpec};
+use crate::wire::{ControlRequest, SurveyFollowup, SurveySpec, TeamOp};
 
 /// Top-level `cs` parser. The `chan` binary reaches `cs` through its own
 /// `Cli` (rewriting `cs ...` into `chan shell ...` in `parse_cli`), but
@@ -157,6 +157,48 @@ With an [F] follow-up (from <- $CHAN_TAB_NAME, to <- the survey target):
   }
 "#;
 
+/// Worked examples appended to `cs terminal team --help`. Shows the input
+/// config.toml shape and the three flows (write, preview-as-script, load).
+/// Raw string so the literal escapes inside the sample stay literal.
+const TEAM_AFTER_HELP: &str = r#"EXAMPLES:
+A team is one config.toml (the on-disk `{dir}/config.toml` shape). Members
+are 1..=9, exactly one `is_lead = true`; each agent member's `agent` is
+claude / codex / gemini (omit it for a plain shell member). `created_at` is
+optional: the server stamps the current time when it is omitted.
+
+  # myteam.toml
+  team_name   = "alpha"
+  host_name   = "Neo"
+  host_handle = "@@Neo"
+  tab_group   = "alpha"
+
+  [[members]]
+  handle  = "@@Lead"
+  command = "claude"
+  is_lead = true
+  agent   = "claude"
+
+  [[members]]
+  handle  = "@@LaneA"
+  command = "codex"
+  agent   = "codex"
+
+Write the team (config.toml + the server-regenerated bootstrap.md + the
+tasks/journals/followups tree) inside the workspace at `alpha/`:
+  cs terminal team new alpha --config myteam.toml
+
+Preview the WHOLE bootstrap as a runnable shell script (mutates nothing;
+prints to stdout). Run it from a chan terminal at the workspace root to
+spawn the team:
+  cs terminal team new alpha --config myteam.toml --script
+
+Pipe the config in instead of a file:
+  cat myteam.toml | cs terminal team new alpha --stdin
+
+Emit the bootstrap script for an already-written team:
+  cs terminal team load alpha --script
+"#;
+
 #[derive(Subcommand, Debug)]
 pub enum TerminalAction {
     /// Open a new terminal tab in the current window.
@@ -271,6 +313,54 @@ pub enum TerminalAction {
         /// Omit only with `--stdin`.
         #[arg(num_args = 0..)]
         body: Vec<String>,
+    },
+    /// Create or load a Team Work team (the CLI equivalent of the Cmd+P
+    /// team setup/load dialog). A team is one `{dir}/config.toml`; `new`
+    /// writes it (plus the server-regenerated `bootstrap.md` + the
+    /// tasks/journals/followups tree), `load` reads an existing one, and
+    /// `--script` on either emits the whole bootstrap as a runnable shell
+    /// script instead of mutating anything.
+    #[command(infer_subcommands = true)]
+    #[command(after_long_help = TEAM_AFTER_HELP)]
+    Team {
+        #[command(subcommand)]
+        action: TeamAction,
+    },
+}
+
+/// The `cs terminal team` subcommands. `new` takes the config to write
+/// (a `--config <file>` path or `--stdin`); `load` takes only the existing
+/// team's `dir`. Both accept `--script` to emit the paste-and-run bootstrap
+/// instead of running the operation.
+#[derive(Subcommand, Debug)]
+pub enum TeamAction {
+    /// Validate + write a team from a config, materializing the
+    /// `{dir}/config.toml`, the server-regenerated `bootstrap.md`, and the
+    /// `tasks/journals/followups` tree inside the workspace.
+    New {
+        /// Workspace-relative team directory (the team lives at
+        /// `{dir}/config.toml`).
+        dir: String,
+        /// Path to the team config.toml to write. Omit with `--stdin`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Read the team config.toml from this process's stdin instead of
+        /// `--config`.
+        #[arg(long)]
+        stdin: bool,
+        /// Emit the paste-and-run bootstrap shell script to stdout instead
+        /// of writing the team. A pure preview: it mutates nothing.
+        #[arg(long)]
+        script: bool,
+    },
+    /// Read + validate an existing team's `{dir}/config.toml`. With
+    /// `--script`, emit its paste-and-run bootstrap shell script.
+    Load {
+        /// Workspace-relative team directory to load.
+        dir: String,
+        /// Emit the paste-and-run bootstrap shell script to stdout.
+        #[arg(long)]
+        script: bool,
     },
 }
 
@@ -544,6 +634,79 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             })
             .await
         }
+        TerminalAction::Team { action } => cmd_shell_team(action).await,
+    }
+}
+
+/// `cs terminal team new|load`: round-trip a [`ControlRequest::TerminalTeam`]
+/// so the server owns the parse / validate / write / bootstrap generation
+/// (the same path the `/api/team-config` route uses). `new` reads the input
+/// config.toml from `--config <file>` or `--stdin`; `load` carries no
+/// config. With `--script` the server returns the paste-and-run bootstrap
+/// script, which prints to STDOUT (the captured artifact); otherwise the
+/// one-line ack/summary goes to stderr like the other queueing commands.
+async fn cmd_shell_team(action: TeamAction) -> Result<()> {
+    let socket = control_socket_env()?;
+    let (request, script) = match action {
+        TeamAction::New {
+            dir,
+            config,
+            stdin,
+            script,
+        } => {
+            let config_toml = read_team_config_input(config, stdin)?;
+            (
+                ControlRequest::TerminalTeam {
+                    dir,
+                    op: TeamOp::New,
+                    config_toml: Some(config_toml),
+                    script,
+                },
+                script,
+            )
+        }
+        TeamAction::Load { dir, script } => (
+            ControlRequest::TerminalTeam {
+                dir,
+                op: TeamOp::Load,
+                config_toml: None,
+                script,
+            },
+            script,
+        ),
+    };
+    let message = send_control_request(&socket, request).await?;
+    if script {
+        // The script is the result the caller captures, so it goes to
+        // stdout (pipes cleanly into a file), matching `cs terminal survey`.
+        println!("{message}");
+    } else {
+        eprintln!("{message}");
+    }
+    Ok(())
+}
+
+/// Resolve the `cs terminal team new` config.toml input from `--config
+/// <file>` XOR `--stdin`. Bails with a clear message if both or neither is
+/// given, mirroring the `cs terminal write` / `survey` body precedence.
+fn read_team_config_input(config: Option<PathBuf>, stdin: bool) -> Result<String> {
+    match (config, stdin) {
+        (Some(_), true) => {
+            anyhow::bail!("pass either --config <file> or --stdin, not both")
+        }
+        (Some(path), false) => std::fs::read_to_string(&path)
+            .with_context(|| format!("reading team config {}", path.display())),
+        (None, true) => {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("reading team config from stdin")?;
+            Ok(buf)
+        }
+        (None, false) => {
+            anyhow::bail!("cs terminal team new needs a config: --config <file> or --stdin")
+        }
     }
 }
 
@@ -764,6 +927,65 @@ mod tests {
     fn terminal_list_markdown_empty_is_short_line() {
         let out = render_terminal_list_markdown(r#"{"groups":{}}"#).expect("render");
         assert_eq!(out, "No live terminal sessions.\n");
+    }
+
+    #[test]
+    fn parses_terminal_team_new_with_config_and_script() {
+        let cli = CsCli::parse_from([
+            "cs",
+            "terminal",
+            "team",
+            "new",
+            "alpha",
+            "--config",
+            "spec.toml",
+            "--script",
+        ]);
+        match cli.action {
+            ShellAction::Terminal {
+                action:
+                    TerminalAction::Team {
+                        action:
+                            TeamAction::New {
+                                dir,
+                                config,
+                                stdin,
+                                script,
+                            },
+                    },
+            } => {
+                assert_eq!(dir, "alpha");
+                assert_eq!(config.as_deref(), Some(std::path::Path::new("spec.toml")));
+                assert!(!stdin);
+                assert!(script);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_terminal_team_load_script() {
+        let cli = CsCli::parse_from(["cs", "terminal", "team", "load", "alpha", "--script"]);
+        match cli.action {
+            ShellAction::Terminal {
+                action:
+                    TerminalAction::Team {
+                        action: TeamAction::Load { dir, script },
+                    },
+            } => {
+                assert_eq!(dir, "alpha");
+                assert!(script);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn team_config_input_requires_exactly_one_source() {
+        // Both sources -> error; neither -> error. (The single-source happy
+        // paths read a file / stdin, exercised end-to-end by the handler.)
+        assert!(read_team_config_input(Some("a.toml".into()), true).is_err());
+        assert!(read_team_config_input(None, false).is_err());
     }
 
     #[test]

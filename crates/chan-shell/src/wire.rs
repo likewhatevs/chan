@@ -97,6 +97,45 @@ pub enum ControlRequest {
         tab_group: Option<String>,
         spec: SurveySpec,
     },
+    // Category 2: create or load a Team Work team from the CLI (`cs
+    // terminal team new|load`). `new` carries the team's config.toml text
+    // to validate + write (config.toml + the server-regenerated
+    // bootstrap.md + the tasks/journals/followups tree); `load` reads an
+    // existing `{dir}/config.toml`. With `script`, the server returns the
+    // paste-and-run bootstrap shell script instead of mutating anything.
+    // The config travels as raw TOML text (not a typed TeamConfig) so this
+    // wire module keeps its chan-workspace-free, serde-only footprint; the
+    // server owns the parse / validate / generate.
+    TerminalTeam {
+        /// Workspace-relative team directory (the team lives at
+        /// `{dir}/config.toml`).
+        dir: String,
+        /// `new` (write/generate from `config_toml`) or `load` (read
+        /// `{dir}/config.toml`).
+        op: TeamOp,
+        /// The team config.toml text for `new`; absent for `load`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_toml: Option<String>,
+        /// Emit the paste-and-run bootstrap script instead of writing
+        /// (`new`) / summarizing (`load`).
+        #[serde(default)]
+        script: bool,
+    },
+}
+
+/// Which `cs terminal team` operation a [`ControlRequest::TerminalTeam`]
+/// carries. A bare snake_case string on the wire, matching the CLI
+/// subcommand names. The explicit `rename_all` pins the wire strings so a
+/// Rust rename cannot silently drift the format the server matches on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TeamOp {
+    /// `cs terminal team new`: validate + write the config (and the dir
+    /// tree), or with `--script` emit the bootstrap script.
+    New,
+    /// `cs terminal team load`: read + validate `{dir}/config.toml`, or
+    /// with `--script` emit the bootstrap script for the stored config.
+    Load,
 }
 
 /// A survey raised over terminal tab(s) by `cs terminal survey`. Carried in
@@ -294,6 +333,51 @@ mod survey_wire_tests {
         let raw = serde_json::to_string(&req).unwrap();
         let back: ControlRequest = serde_json::from_str(&raw).unwrap();
         assert!(matches!(back, ControlRequest::TermSurvey { .. }));
+    }
+
+    #[test]
+    fn terminal_team_request_tag_and_op_strings() {
+        // `new` carries the config TOML; the wire tag is `terminal_team`
+        // and the op is the snake_case subcommand name.
+        let req = ControlRequest::TerminalTeam {
+            dir: "new-team-1".into(),
+            op: TeamOp::New,
+            config_toml: Some("team_name = \"alpha\"\n".into()),
+            script: true,
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "terminal_team");
+        assert_eq!(v["dir"], "new-team-1");
+        assert_eq!(v["op"], "new");
+        assert_eq!(v["config_toml"], "team_name = \"alpha\"\n");
+        assert_eq!(v["script"], true);
+
+        // `load` omits config_toml (skip_serializing_if) and defaults
+        // script to false.
+        let load = ControlRequest::TerminalTeam {
+            dir: "teams/alpha".into(),
+            op: TeamOp::Load,
+            config_toml: None,
+            script: false,
+        };
+        let v: serde_json::Value = serde_json::to_value(&load).unwrap();
+        assert_eq!(v["op"], "load");
+        assert!(
+            v.get("config_toml").is_none(),
+            "None config_toml is skipped"
+        );
+        assert_eq!(v["script"], false);
+
+        // Round-trips back into the same variant (the server's decode path).
+        let raw = serde_json::to_string(&load).unwrap();
+        let back: ControlRequest = serde_json::from_str(&raw).unwrap();
+        assert!(matches!(
+            back,
+            ControlRequest::TerminalTeam {
+                op: TeamOp::Load,
+                ..
+            }
+        ));
     }
 }
 

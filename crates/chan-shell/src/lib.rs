@@ -14,7 +14,7 @@
 //!     `chan` / `chan-desktop` binaries enable it; chan-server does not.
 
 mod wire;
-pub use wire::{ControlRequest, ControlResponse, SurveyFollowup, SurveyReply, SurveySpec};
+pub use wire::{ControlRequest, ControlResponse, SurveyFollowup, SurveyReply, SurveySpec, TeamOp};
 
 #[cfg(feature = "client")]
 mod cli;
