@@ -1,7 +1,21 @@
 import { renderMarkdown } from "../api/markdown";
+import {
+  isMacDesktop,
+  isTauriDesktop,
+  saveBytesToDownloads,
+  tauriInvoke,
+} from "../api/desktop";
+import { notify } from "../state/notify.svelte";
 import { parseImageSrc, resolveImageSrc } from "./extensions/image";
 
 const PRINT_FRAME_ID = "chan-print-frame";
+
+/// Offscreen page width handed to the native macOS PDF export, in CSS
+/// pixels. US Letter (8.5in) at 96dpi. The print document narrows its
+/// content to a percentage of this via `pageWidthCss`, so a fixed
+/// letter-equivalent page makes the captured PDF match what the browser's
+/// print-to-PDF would produce, regardless of the page-width ratio.
+const NATIVE_PAGE_WIDTH_PX = 816;
 
 const EDITOR_VARS = [
   "--chan-editor-body-family",
@@ -282,9 +296,50 @@ async function waitForPrintableAssets(doc: Document): Promise<void> {
   ]);
 }
 
+/// Derive the saved PDF filename from the document path: the basename
+/// with its extension swapped for `.pdf` (or `.pdf` appended when the
+/// basename has no extension). Empty paths fall back to a generic name.
+function pdfFilenameFor(path: string): string {
+  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const base = i < 0 ? path : path.slice(i + 1);
+  const trimmed = base.trim();
+  if (!trimmed) return "document.pdf";
+  const dot = trimmed.lastIndexOf(".");
+  const stem = dot > 0 ? trimmed.slice(0, dot) : trimmed;
+  return `${stem}.pdf`;
+}
+
+/// Native macOS PDF export. The browser's `window.print()` is a no-op
+/// inside Tauri's WKWebView, so on macOS desktop we render the same
+/// themed print HTML to a vector PDF via the `export_pdf_macos` command
+/// (WKWebView `createPDF`) and save it to Downloads through the existing
+/// `save_file_to_downloads` path. Throws on IPC / save failure so the
+/// caller can surface a notice.
+async function exportPdfNative(opts: PrintMarkdownOptions): Promise<void> {
+  const html = buildPrintDocumentHtml(opts);
+  const bytes = await tauriInvoke<number[]>("export_pdf_macos", {
+    html,
+    pageWidthPx: NATIVE_PAGE_WIDTH_PX,
+  });
+  await saveBytesToDownloads(Uint8Array.from(bytes), pdfFilenameFor(opts.path));
+}
+
 export async function printMarkdownDocument(
   opts: PrintMarkdownOptions,
 ): Promise<void> {
+  // Desktop branch: `window.print()` does nothing in WKWebView. macOS
+  // gets the native vector PDF path; other desktop OSes have no native
+  // export wired and hide the trigger button, so reaching here off-macOS
+  // is a defensive no-op with a notice rather than a silent failure.
+  if (isTauriDesktop()) {
+    if (await isMacDesktop()) {
+      await exportPdfNative(opts);
+    } else {
+      notify("Export to PDF is not available on this platform yet.");
+    }
+    return;
+  }
+
   document.getElementById(PRINT_FRAME_ID)?.remove();
   const frame = document.createElement("iframe");
   frame.id = PRINT_FRAME_ID;

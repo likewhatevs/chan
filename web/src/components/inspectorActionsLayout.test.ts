@@ -54,7 +54,12 @@ describe("shared actions section under the filename", () => {
     // Gated on markdown files; the selection isn't necessarily open in an
     // editor, so the handler fetches the file content and prints it.
     expect(fileInfo).toMatch(/\{@const markdown = !isDir && isMarkdown\(entry\.path\)\}/);
-    expect(fileInfo).toMatch(/\{#if markdown\}[\s\S]*?onclick=\{doExportPdf\}[\s\S]*?Export to PDF/);
+    // Gated on `markdown` AND `showExportPdf`: the latter hides the button
+    // on non-macOS desktop (Linux/Windows have no native PDF export wired);
+    // web and macOS desktop keep it.
+    expect(fileInfo).toMatch(
+      /\{#if markdown && showExportPdf\}[\s\S]*?onclick=\{doExportPdf\}[\s\S]*?Export to PDF/,
+    );
     expect(fileInfo).toMatch(
       /async function doExportPdf\(\): Promise<void> \{[\s\S]*?printMarkdownDocument\(\{[\s\S]*?markdown: file\.content/,
     );

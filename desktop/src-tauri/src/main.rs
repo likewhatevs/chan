@@ -6,6 +6,8 @@ mod cs_install;
 mod default_workspace;
 mod download;
 mod embedded;
+#[cfg(target_os = "macos")]
+mod pdf;
 mod registry;
 mod serve;
 mod tunnel;
@@ -1329,6 +1331,18 @@ fn open_tunneled_workspace(
     Ok(())
 }
 
+/// Host OS the desktop shell is running on, as `std::env::consts::OS`
+/// (`"macos"`, `"linux"`, `"windows"`, ...). The SPA branches features
+/// that only exist on one platform; "Export to PDF" uses this to keep
+/// the native WKWebView `createPDF` path on macOS and hide the button
+/// elsewhere. Sourced from the compiled-in target triple rather than a
+/// `navigator.userAgent` sniff so the answer is exact and cannot be
+/// spoofed by a webview UA string.
+#[tauri::command]
+fn platform_os() -> String {
+    std::env::consts::OS.to_string()
+}
+
 /// User's home directory as a plain string, for the Workspaces window
 /// to abbreviate paths to `~/...`. Returns an empty string when the
 /// platform can't resolve it.
@@ -1774,11 +1788,18 @@ fn main() {
             compute_workspace_preflight,
             get_config,
             home_dir,
+            platform_os,
             reveal_in_finder,
             reload_window,
             open_devtools,
             request_close_window,
             download::save_file_to_downloads,
+            // Native vector PDF export. macOS-only: WKWebView's `createPDF`
+            // has no Linux/Windows equivalent wired, and the SPA hides the
+            // "Export to PDF" button off-macOS so this is never invoked
+            // there.
+            #[cfg(target_os = "macos")]
+            pdf::export_pdf_macos,
             zoom_in,
             zoom_out,
             zoom_reset,

@@ -33,6 +33,40 @@ export function isTauriDesktop(): boolean {
   return Boolean(w.__TAURI__ || w.__TAURI_INTERNALS__);
 }
 
+/// Host OS of the chan-desktop shell, resolved once and cached.
+///
+/// `null` means "not yet resolved" or "not on desktop". We ask the
+/// Rust side (`platform_os`, which returns `std::env::consts::OS`)
+/// rather than sniffing `navigator.userAgent`: the compiled-in
+/// target triple is exact, whereas a webview UA string can be
+/// patched or spoofed and is awkward to map to a clean OS token.
+/// Resolved values: "macos" | "linux" | "windows" | other.
+let cachedDesktopOs: string | null = null;
+
+/// Resolve (and cache) the desktop host OS. Returns `null` on web
+/// (no Tauri) or if the IPC fails. Callers that need the value at
+/// mount time should `await` this once and store the result; the
+/// cache makes repeat calls cheap.
+export async function desktopOs(): Promise<string | null> {
+  if (!isTauriDesktop()) return null;
+  if (cachedDesktopOs) return cachedDesktopOs;
+  try {
+    const os = await tauriInvoke<string>("platform_os");
+    cachedDesktopOs = os;
+    return os;
+  } catch (err) {
+    console.warn("desktopOs: platform_os IPC failed", err);
+    return null;
+  }
+}
+
+/// True only inside chan-desktop running on macOS. The native PDF
+/// export path (WKWebView `createPDF`) exists only on macOS; web
+/// keeps `window.print()` and other desktop OSes hide the button.
+export async function isMacDesktop(): Promise<boolean> {
+  return (await desktopOs()) === "macos";
+}
+
 /// Thin wrapper over Tauri's invoke. Resolves whichever invoke
 /// shape the running Tauri version exposes. Throws when called
 /// outside a Tauri webview so callers can branch on
@@ -153,6 +187,40 @@ export async function runDesktopDownload(
       // Tauri serializes a Uint8Array to a number[] for a Vec<u8> arg.
       { filename, bytes: Array.from(bytes) },
     );
+    finishDownloadTransfer(saved.path);
+    return saved.path;
+  } catch (err) {
+    const message = (err as Error)?.message ?? String(err);
+    failDownloadTransfer(message);
+    throw err instanceof Error ? err : new Error(message);
+  }
+}
+
+/// Save bytes the SPA already holds in memory to the Downloads folder
+/// through the same `save_file_to_downloads` command + progress
+/// indicator that `runDesktopDownload` uses. Unlike that path there is
+/// no network fetch (the bytes are produced locally, e.g. the native PDF
+/// export), so the transfer goes straight from begin -> finish.
+///
+/// Resolves to the saved absolute path; rejects on error. Reuses the
+/// existing capability, so no new Tauri permission is required.
+export async function saveBytesToDownloads(
+  bytes: Uint8Array,
+  filename: string,
+): Promise<string> {
+  if (!isTauriDesktop()) {
+    throw new Error("saveBytesToDownloads called outside chan-desktop");
+  }
+  // The bytes already exist, so cancelling has nothing to abort; pass a
+  // null cancel and let the indicator show an indeterminate-then-done
+  // transfer.
+  beginDownloadTransfer(filename, null);
+  try {
+    const saved = await tauriInvoke<{ path: string }>("save_file_to_downloads", {
+      // Tauri serializes a Uint8Array to a number[] for a Vec<u8> arg.
+      filename,
+      bytes: Array.from(bytes),
+    });
     finishDownloadTransfer(saved.path);
     return saved.path;
   } catch (err) {

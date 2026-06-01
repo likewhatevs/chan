@@ -31,6 +31,7 @@
   import { isEditableText, isImage, isMarkdown, isPdf } from "../state/fileTypes";
   import { basename, formatMtime, formatSize } from "../state/format";
   import { printMarkdownDocument } from "../editor/print";
+  import { desktopOs, isTauriDesktop } from "../api/desktop";
   import { pageWidth } from "../state/pageWidth.svelte";
   import { notify } from "../state/notify.svelte";
   import {
@@ -392,11 +393,32 @@
     uploadInput?.click();
   }
 
+  /// Whether to show the "Export to PDF" button. Web keeps it (browser
+  /// print-to-PDF works). On desktop only macOS has a native export path
+  /// (WKWebView `createPDF`); Linux / Windows have none wired, so the
+  /// button is hidden there to avoid a dead control. Computed once: web
+  /// starts visible; desktop starts hidden and flips to visible only when
+  /// the host OS resolves to macOS (avoids a flash of the button on
+  /// non-macOS desktop before the async OS probe returns).
+  let showExportPdf = $state(!isTauriDesktop());
+  $effect(() => {
+    if (!isTauriDesktop()) return;
+    let cancelled = false;
+    void desktopOs().then((os) => {
+      if (!cancelled) showExportPdf = os === "macos";
+    });
+    return () => {
+      cancelled = true;
+    };
+  });
+
   /// Export to PDF for markdown files. The selected file is not necessarily
   /// open in an editor, so its content is fetched from disk (the editor
   /// autosaves, so disk == the live document) and routed through the same
   /// print helper. No editor element to source theme CSS from; the print
-  /// frame falls back to its embedded styles.
+  /// frame falls back to its embedded styles. On macOS desktop the helper
+  /// routes to the native WKWebView PDF path; on web it uses
+  /// `window.print()`.
   async function doExportPdf(): Promise<void> {
     if (!entry || entry.is_dir) return;
     try {
@@ -731,7 +753,7 @@
             title={downloadTitle}>Download</button
           >
         </div>
-        {#if markdown}
+        {#if markdown && showExportPdf}
           <button class="open" type="button" onclick={doExportPdf}
             >Export to PDF</button
           >

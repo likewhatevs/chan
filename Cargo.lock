@@ -958,6 +958,7 @@ version = "0.22.0"
 dependencies = [
  "async-trait",
  "axum",
+ "block2",
  "chan-server",
  "chan-shell",
  "chan-tunnel-client",
@@ -973,7 +974,9 @@ dependencies = [
  "notify-debouncer-mini",
  "objc2",
  "objc2-app-kit",
+ "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-web-kit",
  "reqwest 0.12.28",
  "rust-embed",
  "semver",
