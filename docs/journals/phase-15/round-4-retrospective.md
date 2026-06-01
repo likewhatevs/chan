@@ -101,3 +101,7 @@ skipped the pre-tag workflow_dispatch dry-run on @@Host's "push now").
 - Pre-existing broken link `skills/architect.md` in desktect.md/architect.md.
 - Validate the release.yml musl/zig CI path with a workflow_dispatch dry-run
   before the next cut (skipped this round).
+- CI: GitHub Actions Node 20 deprecation (found in the v0.23.0 release run).
+  `actions/checkout@v4` / `setup-node@v4` / `upload-artifact@v4` run on Node 20,
+  which GitHub forces to Node 24 on 2026-06-16 (removed 2026-09-16). Bump the
+  action versions across `.github/workflows/*` before then. Hard date.
