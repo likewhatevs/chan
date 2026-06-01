@@ -8,6 +8,7 @@
 mod attachments;
 mod build_info;
 mod contacts;
+mod cs_link;
 mod drafts;
 mod files;
 mod fonts;
@@ -39,6 +40,7 @@ mod ws;
 pub use attachments::api_post_attachment;
 pub use build_info::api_build_info;
 pub use contacts::{api_get_contacts, api_post_contacts_import};
+pub use cs_link::api_cs_link_create;
 pub use drafts::{api_create_draft, api_discard_draft, api_inspect_draft, api_promote_draft};
 pub use files::{
     api_create_file, api_delete_file, api_fs_transfer, api_list_files, api_move, api_read_file,

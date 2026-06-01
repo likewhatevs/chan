@@ -13,6 +13,7 @@ import type {
   FsGraphResponse,
   PreflightSnapshot,
   PreflightDecisionRequest,
+  CsLinkResult,
   GlobalConfig,
   GraphEdge,
   GraphSnapshot,
@@ -994,6 +995,9 @@ export const api = {
   preflight: () => req<PreflightSnapshot>("GET", "/api/preflight"),
   preflightDecision: (body: PreflightDecisionRequest) =>
     req<PreflightSnapshot>("POST", "/api/preflight/decision", body),
+  // Non-blocking: create the `cs` terminal alias when it is missing from the
+  // host's PATH (the pre-flight snapshot's `cs_link` offer).
+  createCsLink: () => req<CsLinkResult>("POST", "/api/preflight/cs-link"),
   spawnTerminal: (body: TerminalSpawnRequest) =>
     req<TerminalSpawnResponse>("POST", "/api/terminals", body),
   restartTerminal: (sessionId: string, body?: TerminalRestartRequest) =>

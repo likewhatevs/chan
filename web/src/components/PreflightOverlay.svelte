@@ -14,6 +14,7 @@
 
   import { onMount, onDestroy } from "svelte";
   import { api } from "../api/client";
+  import { ApiError } from "../api/errors";
   import type { PreflightSnapshot } from "../api/types";
 
   const POLL_MS = 750;
@@ -30,6 +31,72 @@
 
   // Show only while the server reports the workspace is not yet ready.
   const locked = $derived(snapshot?.locked === true);
+
+  // The non-blocking `cs` terminal-alias offer. It rides on the snapshot but
+  // never gates `locked`, so it renders as a dismissible corner card once the
+  // workspace is ready (or right away when nothing locked the boot). Dismissal
+  // is persisted machine-wide in localStorage: the alias and PATH are global,
+  // so once handled it should not nag again on the next load.
+  const CS_DISMISS_KEY = "chan.csLinkDismissed";
+  const csOffer = $derived(snapshot?.cs_link ?? null);
+  let csDismissed = $state(readCsDismissed());
+  let csBusy = $state(false);
+  let csResult = $state<string | null>(null);
+  let csError = $state<string | null>(null);
+  // Flip to the manual `ln -s` hint when one-click create is unavailable or
+  // failed (e.g. a root-owned bin dir).
+  let manualMode = $state(false);
+  const showCsCard = $derived(!!csOffer && !locked && !csDismissed);
+
+  function readCsDismissed(): boolean {
+    try {
+      return localStorage.getItem(CS_DISMISS_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+  function persistCsDismissed(): void {
+    try {
+      localStorage.setItem(CS_DISMISS_KEY, "1");
+    } catch {
+      // Private-mode / disabled storage: dismissal stays session-local.
+    }
+  }
+  function dismissCs(): void {
+    csDismissed = true;
+    persistCsDismissed();
+  }
+  function csErrorText(e: unknown): string {
+    if (e instanceof ApiError) {
+      // Some transports hand back the raw JSON body; unwrap { error }.
+      try {
+        const body = JSON.parse(e.message) as { error?: unknown };
+        if (typeof body.error === "string" && body.error.trim()) return body.error;
+      } catch {
+        // Not JSON: the message is already human-readable.
+      }
+      return e.message;
+    }
+    return e instanceof Error ? e.message : String(e);
+  }
+  async function createCsLink(): Promise<void> {
+    if (csBusy) return;
+    csBusy = true;
+    csError = null;
+    try {
+      const res = await api.createCsLink();
+      csResult = res.message;
+      // Succeeded (or already present): don't ask again on future loads.
+      if (res.resolved) persistCsDismissed();
+    } catch (e) {
+      // Non-fatal: surface why and fall back to the manual hint so the user
+      // can finish by hand, then continue.
+      csError = csErrorText(e);
+      manualMode = true;
+    } finally {
+      csBusy = false;
+    }
+  }
 
   function schedule(ms = POLL_MS): void {
     if (stopped) return;
@@ -115,6 +182,50 @@
       <p class="error">{snapshot.error.message}</p>
     {/if}
   </main>
+{/if}
+
+<!-- Non-blocking `cs` terminal-alias offer. A corner card, never modal: the
+     workspace is already usable, this just helps a fresh install set up the
+     terminal control alias. -->
+{#if showCsCard && csOffer}
+  <aside class="cs-card" role="status" aria-label="terminal shortcut setup">
+    <div class="cs-head">
+      <strong>Terminal shortcut</strong>
+      <button class="cs-x" type="button" aria-label="Dismiss" onclick={dismissCs}>×</button>
+    </div>
+    {#if csResult}
+      <p class="cs-msg done">{csResult}</p>
+      <div class="cs-actions">
+        <button type="button" class="primary" onclick={dismissCs}>Done</button>
+      </div>
+    {:else}
+      <p class="cs-body">
+        Add <code>cs</code> to your PATH to drive this window from the terminal
+        (open files, split panes, run Team Work).
+      </p>
+      {#if csError}
+        <p class="cs-msg warn">{csError}</p>
+      {/if}
+      {#if csOffer.can_create && !manualMode}
+        <div class="cs-actions">
+          <button type="button" class="primary" disabled={csBusy} onclick={createCsLink}>
+            {csBusy ? "Creating…" : "Create link"}
+          </button>
+          <button type="button" disabled={csBusy} onclick={dismissCs}>Not now</button>
+        </div>
+        <p class="cs-target">{csOffer.target}</p>
+      {:else}
+        <p class="cs-hint">Run this once in a terminal whose PATH you control:</p>
+        <code class="cs-cmd">ln -s "{csOffer.points_to}" ~/.local/bin/cs</code>
+        {#if csOffer.note}
+          <p class="cs-note">({csOffer.note})</p>
+        {/if}
+        <div class="cs-actions">
+          <button type="button" onclick={dismissCs}>Got it</button>
+        </div>
+      {/if}
+    {/if}
+  </aside>
 {/if}
 
 <style>
@@ -206,5 +317,119 @@
     max-width: 44ch;
     text-align: center;
     line-height: 1.5;
+  }
+
+  /* Non-blocking corner card. Sits above the editor but well below the
+     locked boot surface (z=40000), and only ever renders when nothing is
+     locked, so the two never overlap. */
+  .cs-card {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 9000;
+    width: min(340px, calc(100vw - 2rem));
+    box-sizing: border-box;
+    background: var(--bg-elev);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.85rem 0.95rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .cs-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+  }
+  .cs-x {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 18px;
+    line-height: 1;
+    padding: 0 0.2rem;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .cs-x:hover {
+    color: var(--text);
+  }
+  .cs-body {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .cs-body code,
+  .cs-cmd {
+    font-family: "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .cs-hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .cs-cmd {
+    display: block;
+    font-size: 11.5px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.4rem 0.5rem;
+    overflow-x: auto;
+    white-space: pre;
+    user-select: all;
+  }
+  .cs-target {
+    margin: 0;
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-family: "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow-wrap: anywhere;
+  }
+  .cs-note {
+    margin: 0;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+  .cs-msg {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .cs-msg.done {
+    color: var(--text);
+  }
+  .cs-msg.warn {
+    color: var(--warn-text);
+  }
+  .cs-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .cs-actions button {
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12.5px;
+  }
+  .cs-actions button.primary {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+  }
+  .cs-actions button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 </style>

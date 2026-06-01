@@ -539,6 +539,22 @@ export type PreflightStep = {
   decision?: PreflightDecision;
 };
 export type PreflightError = { step: string; message: string };
+// The `cs` terminal-alias offer rides on the snapshot but never feeds the
+// lock gate; present only when `cs` is missing from the host's PATH.
+export type CsLink = {
+  /// Absolute path where the `cs` link would be created: a sibling of the
+  /// running binary. The server re-derives this on create; the client never
+  /// picks it.
+  target: string;
+  /// What the link resolves to: the running chan / chan-desktop binary.
+  /// Shown in the manual `ln -s` hint.
+  points_to: string;
+  /// True when the SPA may offer one-click Create (the dir is writable and
+  /// on PATH). False -> show the manual hint + `note` instead.
+  can_create: boolean;
+  /// Why auto-create is unavailable, when `can_create` is false.
+  note?: string | null;
+};
 export type PreflightSnapshot = {
   phase: PreflightPhase;
   /// True until `phase === "ready"`. The single signal the locked surface
@@ -546,8 +562,20 @@ export type PreflightSnapshot = {
   locked: boolean;
   steps: PreflightStep[];
   error?: PreflightError | null;
+  /// Non-blocking `cs` alias offer; rendered as a dismissible card, never
+  /// part of the lock.
+  cs_link?: CsLink | null;
 };
 export type PreflightDecisionRequest = { step: string; choice: string };
+// POST /api/preflight/cs-link result.
+export type CsLinkResult = {
+  /// True when `cs` now resolves on PATH after the call.
+  resolved: boolean;
+  /// The path created (empty when nothing was created).
+  target: string;
+  /// User-facing outcome line.
+  message: string;
+};
 
 // ---------------------------------------------------------------------------
 // /ws message-type catalog.

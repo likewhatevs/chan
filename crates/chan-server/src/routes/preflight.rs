@@ -31,6 +31,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use super::cs_link::{self, CsLink};
 use crate::error::{err, err_state};
 use crate::indexer::IndexStatus;
 use crate::state::AppState;
@@ -44,6 +45,14 @@ struct PreflightSnapshot {
     steps: Vec<PreflightStep>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<PreflightError>,
+    /// The `cs` terminal-alias offer, present only when `cs` is missing
+    /// from `$PATH`. NON-BLOCKING: it never feeds `phase` / `locked`, so a
+    /// missing alias never holds the boot overlay; the SPA renders it as a
+    /// dismissible card once the workspace is ready. `build_snapshot`
+    /// leaves it `None`; the route handlers attach it behind the owner
+    /// gate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cs_link: Option<CsLink>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -247,7 +256,17 @@ fn build_snapshot(
         locked: phase != Phase::Ready,
         error: index_error(status),
         steps,
+        // Attached by the route handlers (owner-gated); never gates the
+        // boot overlay.
+        cs_link: None,
     }
+}
+
+/// The `cs` offer is owner-only: a tunneled or publicly-served workspace
+/// must not let a visitor mutate the host's PATH. The local-serve default
+/// leaves both flags false, so the offer shows on a plain `chan serve`.
+fn cs_link_allowed(state: &AppState) -> bool {
+    !state.settings_disabled && !state.tunnel_public
 }
 
 pub async fn api_preflight(State(state): State<Arc<AppState>>) -> Response {
@@ -259,11 +278,15 @@ pub async fn api_preflight(State(state): State<Arc<AppState>>) -> Response {
         Ok(i) => i,
         Err(e) => return err_state(&e),
     };
+    let allow_cs = cs_link_allowed(&state);
     // Semantic reads hit sqlite + the model resolver touches the
-    // filesystem; do the whole derivation on the blocking pool.
+    // filesystem, and the cs detection scans $PATH; do the whole
+    // derivation on the blocking pool.
     match tokio::task::spawn_blocking(move || {
         let status = indexer.snapshot();
-        build_snapshot(&workspace, &status)
+        let mut snapshot = build_snapshot(&workspace, &status);
+        snapshot.cs_link = cs_link::detect(allow_cs);
+        snapshot
     })
     .await
     {
@@ -318,6 +341,7 @@ async fn model_decision(state: &Arc<AppState>, choice: &str) -> Response {
         Err(e) => return err_state(&e),
     };
     let choice = choice.to_owned();
+    let allow_cs = cs_link_allowed(state);
     // The blocking closure carries its error as `Box<Response>` so the
     // `Result` Err variant stays pointer-sized (an axum `Response` is
     // large; clippy::result_large_err otherwise fires under -D warnings).
@@ -354,7 +378,9 @@ async fn model_decision(state: &Arc<AppState>, choice: &str) -> Response {
             }
         }
         let status = indexer.snapshot();
-        Ok(build_snapshot(&workspace, &status))
+        let mut snapshot = build_snapshot(&workspace, &status);
+        snapshot.cs_link = cs_link::detect(allow_cs);
+        Ok(snapshot)
     })
     .await
     {
