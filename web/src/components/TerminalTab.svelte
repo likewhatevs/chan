@@ -1370,12 +1370,16 @@
   function onTerminalContextMenu(e: MouseEvent): void {
     e.preventDefault();
     requestTerminalCwd();
-    openTabMenu(tab.id, {
-      left: e.clientX,
-      top: e.clientY,
-      right: e.clientX,
-      bottom: e.clientY,
-    });
+    openTabMenu(
+      tab.id,
+      {
+        left: e.clientX,
+        top: e.clientY,
+        right: e.clientX,
+        bottom: e.clientY,
+      },
+      "body",
+    );
   }
 </script>
 

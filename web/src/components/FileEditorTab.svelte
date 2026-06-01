@@ -501,12 +501,16 @@
   function onEditorContext(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-    openTabMenu(tab.id, {
-      left: e.clientX,
-      top: e.clientY,
-      right: e.clientX,
-      bottom: e.clientY,
-    });
+    openTabMenu(
+      tab.id,
+      {
+        left: e.clientX,
+        top: e.clientY,
+        right: e.clientX,
+        bottom: e.clientY,
+      },
+      "body",
+    );
   }
 
   async function doReload(): Promise<void> {

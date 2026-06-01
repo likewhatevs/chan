@@ -10,22 +10,41 @@ export type AnchorRect = {
   bottom: number;
 };
 
+// Which gesture opened the bubble (F4). The tab-strip click opens the
+// "tab" menu (rename / view config / lifecycle); a right-click in the
+// editor or terminal BODY opens the "body" menu (selection-aware
+// Cut/Copy/Paste + contextual actions). One bubble, two item sets; the
+// widget branches on this. Defaults to "tab" so any unconverted caller
+// keeps today's full menu.
+export type TabMenuSource = "tab" | "body";
+
 export const tabMenu = $state<{
   openForTabId: string | null;
   anchor: AnchorRect | null;
-}>({ openForTabId: null, anchor: null });
+  source: TabMenuSource;
+}>({ openForTabId: null, anchor: null, source: "tab" });
 
-export function openTabMenu(tabId: string, anchor: AnchorRect): void {
+export function openTabMenu(
+  tabId: string,
+  anchor: AnchorRect,
+  source: TabMenuSource = "tab",
+): void {
   tabMenu.openForTabId = tabId;
   tabMenu.anchor = anchor;
+  tabMenu.source = source;
 }
 
 export function closeTabMenu(): void {
   tabMenu.openForTabId = null;
   tabMenu.anchor = null;
+  tabMenu.source = "tab";
 }
 
-export function toggleTabMenu(tabId: string, anchor: AnchorRect): void {
+export function toggleTabMenu(
+  tabId: string,
+  anchor: AnchorRect,
+  source: TabMenuSource = "tab",
+): void {
   if (tabMenu.openForTabId === tabId) closeTabMenu();
-  else openTabMenu(tabId, anchor);
+  else openTabMenu(tabId, anchor, source);
 }
