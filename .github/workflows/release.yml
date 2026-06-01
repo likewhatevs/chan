@@ -348,7 +348,10 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libsoup-3.0-dev \
-            patchelf
+            patchelf \
+            xdg-utils \
+            desktop-file-utils \
+            file
 
       - name: Install tauri-cli
         uses: taiki-e/install-action@v2
