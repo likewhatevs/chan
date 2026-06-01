@@ -43,6 +43,15 @@ pub struct EmbedProgress {
     pub total: u32,
 }
 
+/// Background-embed progress, owned independently of `IndexStatus` (Theme-5
+/// Option B, decoupled-signal form). The cold build's embed pass writes it;
+/// `set_idle` reads it when stamping `Idle`; the coordinator clears it when
+/// the build resolves. Decoupling it from the status enum is what stops a
+/// watcher reindex (status -> Reindexing -> Idle) from clobbering the embed
+/// chip mid-pass: `set_idle` re-attaches the still-running progress instead
+/// of forcing `embedding: None`.
+type BgEmbed = Arc<Mutex<Option<EmbedProgress>>>;
+
 /// Snapshot of indexer state. Returned verbatim by
 /// `/api/index/status` (the frontend's IndexStatus tagged union).
 #[derive(Debug, Clone, Serialize)]
@@ -108,6 +117,7 @@ struct IndexerTelemetry {
 struct IndexerShared {
     status: Arc<Mutex<IndexStatus>>,
     telemetry: Arc<Mutex<IndexerTelemetry>>,
+    bg_embed: BgEmbed,
 }
 
 /// Handle to the background indexer. Drop it (or call `shutdown`)
@@ -173,6 +183,10 @@ impl Indexer {
             model: stats.model.clone(),
             embedding: None,
         }));
+        // Shared embed-progress signal (Theme-5 Option B). Lives outside the
+        // IndexStatus mutex so the watcher's Reindexing -> Idle transitions
+        // never drop the cold-build embed chip.
+        let bg_embed: BgEmbed = Arc::new(Mutex::new(None));
         let telemetry = Arc::new(Mutex::new(IndexerTelemetry {
             queue_depth: 0,
             last_event_at: None,
@@ -196,6 +210,7 @@ impl Indexer {
             workspace_weak.clone(),
             status.clone(),
             telemetry.clone(),
+            bg_embed.clone(),
             rebuild_rx,
             cancel.clone(),
             search_aggression,
@@ -252,6 +267,7 @@ impl Indexer {
             IndexerShared {
                 status: status.clone(),
                 telemetry: telemetry.clone(),
+                bg_embed: bg_embed.clone(),
             },
             watch_events,
             rebuild_tx.clone(),
@@ -306,10 +322,15 @@ impl Indexer {
 /// in real time. Without the WS forward we'd be polling
 /// `/api/index/status` at a coarse cadence; with it we get every
 /// per-file event.
+// One arg over the clippy default after threading the bg-embed signal;
+// bundling status/telemetry/bg_embed into a struct would churn the watcher
+// + coordinator call sites for no clarity win.
+#[allow(clippy::too_many_arguments)]
 fn spawn_coordinator(
     workspace: Weak<Workspace>,
     status: Arc<Mutex<IndexStatus>>,
     telemetry: Arc<Mutex<IndexerTelemetry>>,
+    bg_embed: BgEmbed,
     mut rx: mpsc::UnboundedReceiver<()>,
     cancel: Arc<AtomicBool>,
     search_aggression: SearchAggression,
@@ -329,6 +350,7 @@ fn spawn_coordinator(
             let status_w = status.clone();
             let cancel_w = cancel.clone();
             let progress_w = progress_sink.clone();
+            let bg_embed_w = bg_embed.clone();
             let aggression = search_aggression;
             *status_w.lock().unwrap() = IndexStatus::Building {
                 current: 0,
@@ -342,10 +364,17 @@ fn spawn_coordinator(
                     forward: progress_w,
                     workspace: workspace_weak,
                     embed: Mutex::new(EmbedPhaseState::default()),
+                    bg_embed: bg_embed_w,
                 };
                 workspace_w.reindex_with_aggression(Some(&cancel_w), &progress, aggression)
             })
             .await;
+            // The build has resolved (success, cancel, or error), so the
+            // embed pass is over. Clear the shared signal before reconciling
+            // so the chip drops on the next set_idle; the StatusUpdater that
+            // wrote it lived inside the now-finished blocking task, so there
+            // is no concurrent writer here.
+            *bg_embed.lock().unwrap() = None;
             // Bug 9: every resolution of a build MUST move the status
             // out of `Building`, or the status pill is stuck forever
             // (it hides only on `Idle`). The success and cancel arms
@@ -357,7 +386,7 @@ fn spawn_coordinator(
             // in-flight build that has genuinely not resolved.
             match result {
                 Ok(Ok(_summary)) => {
-                    reconcile_idle(&workspace, &status, &telemetry);
+                    reconcile_idle(&workspace, &status, &telemetry, &bg_embed);
                 }
                 Ok(Err(chan_workspace::ChanError::Cancelled)) => {
                     // Shutdown / reset path: don't surface a
@@ -366,7 +395,7 @@ fn spawn_coordinator(
                     // the pill so a cancel that leaves the process
                     // running does not park `Building` forever.
                     tracing::info!("indexer: rebuild cancelled");
-                    reconcile_idle(&workspace, &status, &telemetry);
+                    reconcile_idle(&workspace, &status, &telemetry, &bg_embed);
                 }
                 Ok(Err(e)) => {
                     *status.lock().unwrap() = IndexStatus::Error {
@@ -402,6 +431,7 @@ fn spawn_watcher_loop(
         let workspace_w = workspace.clone();
         let status_w = shared.status.clone();
         let telemetry_w = shared.telemetry.clone();
+        let bg_embed_w = shared.bg_embed.clone();
         let cancel_w = cancel.clone();
 
         // Worker: every 200 ms, drain paths whose last event is at
@@ -433,14 +463,14 @@ fn spawn_watcher_loop(
                     match result {
                         Ok(Ok(ApplyOutcome::Indexed)) => {
                             if let Some(workspace) = workspace_w.upgrade() {
-                                set_idle(&workspace, &status_w, &telemetry_w)
+                                set_idle(&workspace, &status_w, &telemetry_w, &bg_embed_w)
                             } else {
                                 return;
                             }
                         }
                         Ok(Ok(ApplyOutcome::Forgotten)) => {
                             if let Some(workspace) = workspace_w.upgrade() {
-                                set_idle(&workspace, &status_w, &telemetry_w)
+                                set_idle(&workspace, &status_w, &telemetry_w, &bg_embed_w)
                             } else {
                                 return;
                             }
@@ -454,7 +484,7 @@ fn spawn_watcher_loop(
                             // not flash "search is broken" on a
                             // legitimate watcher event.
                             if let Some(workspace) = workspace_w.upgrade() {
-                                set_idle(&workspace, &status_w, &telemetry_w);
+                                set_idle(&workspace, &status_w, &telemetry_w, &bg_embed_w);
                             } else {
                                 return;
                             }
@@ -825,6 +855,10 @@ struct StatusUpdater {
     /// Idle{embedding:Some} and stop reverting to Building on the
     /// interleaved IndexFile ticks.
     embed: Mutex<EmbedPhaseState>,
+    /// The shared embed signal this pass publishes to. set_idle (driven by
+    /// the watcher) reads it so a concurrent reindex re-attaches the chip
+    /// instead of dropping it.
+    bg_embed: BgEmbed,
 }
 
 #[derive(Default)]
@@ -864,24 +898,30 @@ impl ProgressCallback for StatusUpdater {
                             file,
                         };
                     }
-                } else if let Ok(mut s) = self.status.lock() {
+                } else {
                     // CHIP UX: post-embed-start IndexFile ticks fire between
-                    // the (slow, infrequent) embed flushes. Refresh the chip
-                    // progress in place so it ADVANCES per file during the
-                    // fast drain windows instead of only stepping on each
-                    // embed flush (which on a big workspace are minutes
-                    // apart and made the chip look frozen). Free: no extra
-                    // index_stats read, just the counter the IndexFile tick
-                    // already carries. Cap `done` below `total` so the chip
-                    // never reads "done" (total/total) while the tail embed
-                    // is still running; reconcile_idle clears it to None when
-                    // the pass actually returns.
-                    if let IndexStatus::Idle { embedding, .. } = &mut *s {
-                        let done = current.min(total.saturating_sub(1)) as u32;
-                        *embedding = Some(EmbedProgress {
-                            done,
-                            total: total as u32,
-                        });
+                    // the (slow, infrequent) embed flushes. Publish the chip
+                    // progress to the SHARED signal so it ADVANCES per file
+                    // during the fast drain windows (the embed flushes on a
+                    // big workspace are minutes apart and made the chip look
+                    // frozen) AND survives a concurrent watcher reindex. Cap
+                    // `done` below `total` so the chip never reads done==total
+                    // while the tail embed still runs; the coordinator clears
+                    // the signal when the pass returns.
+                    let done = current.min(total.saturating_sub(1)) as u32;
+                    let progress = EmbedProgress {
+                        done,
+                        total: total as u32,
+                    };
+                    *self.bg_embed.lock().unwrap() = Some(progress);
+                    // Mirror onto the live status when it is Idle (the common
+                    // case). A transient Reindexing from a concurrent watcher
+                    // event resolves back through set_idle, which re-reads the
+                    // same signal, so the chip is not lost either way.
+                    if let Ok(mut s) = self.status.lock() {
+                        if let IndexStatus::Idle { embedding, .. } = &mut *s {
+                            *embedding = Some(progress);
+                        }
                     }
                 }
             }
@@ -901,6 +941,9 @@ impl ProgressCallback for StatusUpdater {
                     (p.files_done, p.files_total)
                 };
                 let embedding = Some(EmbedProgress { done, total });
+                // Publish to the shared signal too, so a concurrent watcher
+                // reindex that lands in set_idle re-attaches this same chip.
+                *self.bg_embed.lock().unwrap() = embedding;
                 // Read live stats so the chip shows the growing index. If
                 // the workspace is gone (reset/shutdown) fall back to a
                 // zeroed Idle rather than dropping the embedding signal.
@@ -953,9 +996,10 @@ fn reconcile_idle(
     workspace: &Weak<Workspace>,
     status: &Mutex<IndexStatus>,
     telemetry: &Mutex<IndexerTelemetry>,
+    bg_embed: &Mutex<Option<EmbedProgress>>,
 ) {
     match workspace.upgrade() {
-        Some(workspace) => set_idle(&workspace, status, telemetry),
+        Some(workspace) => set_idle(&workspace, status, telemetry, bg_embed),
         None => {
             if let Ok(mut s) = status.lock() {
                 *s = IndexStatus::Idle {
@@ -973,14 +1017,20 @@ fn set_idle(
     workspace: &Workspace,
     status: &Mutex<IndexStatus>,
     telemetry: &Mutex<IndexerTelemetry>,
+    bg_embed: &Mutex<Option<EmbedProgress>>,
 ) {
+    // Read the shared embed signal rather than forcing None: if a cold-build
+    // embed pass is still running, an incremental watcher reindex that lands
+    // here must RE-ATTACH the chip, not drop it. The coordinator clears the
+    // signal when the build resolves, so a settled index reads None here.
+    let embedding = *bg_embed.lock().unwrap();
     match workspace.index_stats() {
         Ok(s) => {
             *status.lock().unwrap() = IndexStatus::Idle {
                 indexed_docs: s.indexed_docs,
                 indexed_vectors: s.indexed_vectors,
                 model: s.model,
-                embedding: None,
+                embedding,
             };
             let mut telemetry = telemetry.lock().unwrap();
             telemetry.last_settled_at = Some(now_unix());
@@ -1311,6 +1361,7 @@ mod tests {
             // Idle but still carries the embedding signal.
             workspace: Weak::new(),
             embed: Mutex::new(EmbedPhaseState::default()),
+            bg_embed: Arc::new(Mutex::new(None)),
         };
         // A foreground IndexFile tick gates preflight (Building) and seeds
         // the file counters.
@@ -1372,6 +1423,7 @@ mod tests {
             forward: Arc::new(chan_workspace::NoProgress),
             workspace: Weak::new(),
             embed: Mutex::new(EmbedPhaseState::default()),
+            bg_embed: Arc::new(Mutex::new(None)),
         };
         updater.on_progress(progress_event(ProgressStage::ModelLoad, 1, 3, "resolve"));
         assert!(matches!(
@@ -1403,7 +1455,8 @@ mod tests {
         // A Weak that never upgrades: nothing to query, but the status
         // must not stay Building.
         let dead: Weak<Workspace> = Weak::new();
-        reconcile_idle(&dead, &status, &telemetry);
+        let bg_embed: BgEmbed = Arc::new(Mutex::new(None));
+        reconcile_idle(&dead, &status, &telemetry, &bg_embed);
         assert!(matches!(&*status.lock().unwrap(), IndexStatus::Idle { .. }));
     }
 
@@ -1424,7 +1477,8 @@ mod tests {
             coalesced_rebuild: true,
         }));
         let weak = Arc::downgrade(&workspace);
-        reconcile_idle(&weak, &status, &telemetry);
+        let bg_embed: BgEmbed = Arc::new(Mutex::new(None));
+        reconcile_idle(&weak, &status, &telemetry, &bg_embed);
         let snapshot = status.lock().unwrap().clone();
         match snapshot {
             IndexStatus::Idle { indexed_docs, .. } => assert!(indexed_docs >= 1),
@@ -1432,6 +1486,48 @@ mod tests {
         }
         // set_idle also resets the coalesced-rebuild flag.
         assert!(!telemetry.lock().unwrap().coalesced_rebuild);
+    }
+
+    #[test]
+    fn set_idle_reattaches_the_embed_chip_from_the_shared_signal() {
+        // Theme-5 Option B clobber fix: an incremental reindex that lands in
+        // set_idle WHILE a cold-build embed pass is still running must
+        // RE-ATTACH the chip from the shared signal, not drop it (the old
+        // bug: set_idle hard-coded embedding: None, so any file edit during
+        // a background embed cleared the chip). With the signal cleared (the
+        // coordinator clears it when the build settles), set_idle reports
+        // embedding: None.
+        let (_cfg, dir, workspace) = setup_workspace();
+        fs::write(dir.path().join("a.md"), "# A\n\nbody token\n").unwrap();
+        apply_watch_change(&workspace, "a.md", false).unwrap();
+        let status = Arc::new(Mutex::new(IndexStatus::Reindexing {
+            file: "a.md".to_owned(),
+        }));
+        let telemetry = Arc::new(Mutex::new(IndexerTelemetry {
+            queue_depth: 0,
+            last_event_at: None,
+            last_settled_at: None,
+            coalesced_rebuild: false,
+        }));
+
+        // A cold-build embed is in flight: the shared signal carries progress.
+        let bg_embed: BgEmbed = Arc::new(Mutex::new(Some(EmbedProgress { done: 3, total: 10 })));
+        set_idle(&workspace, &status, &telemetry, &bg_embed);
+        match status.lock().unwrap().clone() {
+            IndexStatus::Idle { embedding, .. } => {
+                assert_eq!(embedding, Some(EmbedProgress { done: 3, total: 10 }));
+            }
+            other => panic!("expected Idle re-attaching the chip, got {other:?}"),
+        }
+
+        // Build settled -> the coordinator cleared the signal -> no chip.
+        *bg_embed.lock().unwrap() = None;
+        set_idle(&workspace, &status, &telemetry, &bg_embed);
+        let settled = status.lock().unwrap().clone();
+        match settled {
+            IndexStatus::Idle { embedding, .. } => assert_eq!(embedding, None),
+            other => panic!("expected settled Idle, got {other:?}"),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
