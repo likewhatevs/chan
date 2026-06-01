@@ -17,8 +17,10 @@ The raw working material (the per-author journals and task files, the
 request and roadmap files, and the coordination logs) that backed each
 report was removed from the working tree in the phase-15 docs cleanup and
 is preserved in git history under each phase's former `raw/` tree. Phase 8
-keeps its `raw/` for now, because `docs/agents/` still cites files inside
-it; it goes once those citations are repointed.
+was the last holdout (its `raw/` was kept while `docs/agents/` still cited
+files inside it) and has since been cleaned up too, so every closed phase
+now holds only its `README.md`. The remaining phase-8 `raw/` citations in
+`docs/agents/` resolve through git history until they are repointed.
 
 Images have been removed across all journals and replaced with short
 text descriptions in brackets, so the logs read without binary

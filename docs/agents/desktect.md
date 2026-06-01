@@ -27,7 +27,7 @@ but decisional traffic routes through @@Alex.
 
 ## Skills
 
-* [architect](skills/architect.md) — same skill as
+* [architect](desktect/skills/architect.md) — same skill as
   chan-core's @@Architect; role-agnostic (optimize
   for simple structure, clear boundaries,
   maintainable contracts; flag over-engineering
