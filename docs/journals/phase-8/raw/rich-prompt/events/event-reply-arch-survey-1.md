@@ -1,1 +1,0 @@
-{"id":"arch-survey-1","type":"survey-reply","from":"@@Alex","to":"@@Architect","answers":[{"question_index":0,"key":"Y"},{"question_index":1,"key":"1"}],"scope_grant":"one-shot"}
