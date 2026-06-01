@@ -353,7 +353,12 @@ pub async fn api_indexing_state(State(state): State<Arc<AppState>>) -> Response 
         Ok(indexer) => indexer,
         Err(e) => return err_state(&e),
     };
-    let current_file = current_index_file(indexer.snapshot());
+    let status = indexer.snapshot();
+    // The embed sweep reaches Idle{embedding:Some} (BM25 committed, vectors
+    // still flushing) with no per-file label, so it has to be signalled
+    // separately from `current_file`.
+    let embed_sweep = is_embedding_sweep(&status);
+    let current_file = current_index_file(status);
     blocking_response(
         move || {
             let entries =
@@ -372,6 +377,7 @@ pub async fn api_indexing_state(State(state): State<Arc<AppState>>) -> Response 
                 &entries,
                 &indexed_paths,
                 current_file.as_deref(),
+                embed_sweep,
             ))
             .into_response()
         },
@@ -387,10 +393,27 @@ fn current_index_file(status: IndexStatus) -> Option<String> {
     }
 }
 
+/// True while the background embedding pass is running: the search index
+/// flips to `Idle { embedding: Some(..) }` once BM25 is committed and
+/// searchable, then keeps re-embedding in the background for the rest of
+/// the (minutes-long, on a big workspace) sweep. `current_index_file` is
+/// `None` across that whole window, so this is the only signal the spine
+/// has to pulse the dirs that still have vectors pending.
+fn is_embedding_sweep(status: &IndexStatus) -> bool {
+    matches!(
+        status,
+        IndexStatus::Idle {
+            embedding: Some(_),
+            ..
+        }
+    )
+}
+
 fn build_indexing_state(
     entries: &[TreeEntry],
     indexed_paths: &BTreeSet<String>,
     current_file: Option<&str>,
+    embedding_sweep: bool,
 ) -> IndexingStateResponse {
     let mut dirs = BTreeMap::<String, DirectoryStateAccum>::new();
     dirs.insert(String::new(), DirectoryStateAccum::default());
@@ -420,35 +443,29 @@ fn build_indexing_state(
         }
     }
 
-    // Round-1 closing-8 (F2) + closing-9 + closing-11 (F2 fix-up
-    // 2): the indexer sets `IndexStatus::Building.file` to different
-    // values depending on what stage it's in - a real workspace-
-    // relative path during `GraphRebuild` / `IndexFile`
-    // (`crates/chan-server/src/indexer.rs:797-808`), the sentinel
-    // string `"embedding"` during `EmbedBatch` (line 822-838), and
-    // the empty string `""` in the initial Building window before
-    // the first per-file event arrives (line 310-314). Closing-8
-    // and closing-9 only detected the `"embedding"` sentinel, so:
+    // Two signals widen "one dir is indexing" into "the whole sweep is
+    // indexing", so a long pass pulses the spine instead of looking idle:
     //
-    // - During `IndexFile` the per-entry match above marks ONE
-    //   dir (the one containing the current file). Good.
-    // - During `EmbedBatch` closing-9 marked every dir with
-    //   `indexable_files > 0` via the sentinel check. Good.
-    // - During the initial Building window the per-entry match
-    //   never fires (no entry path equals `""`) AND the embedding
-    //   sentinel isn't hit either, so no dir got marked. The
-    //   dashboard read as "indexing isn't happening" even though
-    //   the pill showed otherwise.
+    // - `embedding_sweep`: the background embed phase. The indexer commits
+    //   BM25 then flips to `Idle { embedding: Some(..) }` and re-embeds for
+    //   the rest of the (minutes-long) pass with NO per-file label, so
+    //   `current_file` is `None` the whole time. Without this every dir
+    //   would read as fully Indexed (BM25 done) and nothing would pulse,
+    //   even though vectors are still landing. Mark every dir with
+    //   indexable content for the duration.
     //
-    // Closing-11 generalises: if `current_file` is `Some(_)` but
-    // didn't match any entry path during the walk above, the
-    // indexer IS building but not at a granularity we can
-    // pinpoint - that's either the initial-Building window or any
-    // future sentinel-shaped label. Treat it as a broad sweep and
-    // mark every dir with indexable content. Per-entry matches
-    // (IndexFile / Reindexing of a real file) still take the
-    // narrower one-dir path.
-    let broad_sweep = current_file.is_some() && !current_file_matched_entry;
+    // - `current_file.is_some() && !current_file_matched_entry`: the
+    //   foreground build emits `Building.file` as a real workspace-relative
+    //   path during `GraphRebuild` / `IndexFile` (matched per-entry above,
+    //   one dir) but as the empty string `""` in the initial Building
+    //   window before the first per-file event (indexer.rs:310-314). The
+    //   empty label matches no entry, so treat it (and any future
+    //   non-path label) as a broad sweep rather than letting the pre-event
+    //   window read as Idle.
+    //
+    // Per-entry matches (IndexFile / Reindexing of a real file) still take
+    // the narrower one-dir path.
+    let broad_sweep = embedding_sweep || (current_file.is_some() && !current_file_matched_entry);
     let nodes = dirs
         .into_iter()
         .map(|(path, accum)| {
@@ -602,7 +619,8 @@ mod tests {
             "indexing/live.md".to_string(),
         ]);
 
-        let response = build_indexing_state(&entries, &indexed_paths, Some("indexing/live.md"));
+        let response =
+            build_indexing_state(&entries, &indexed_paths, Some("indexing/live.md"), false);
 
         assert_eq!(response.root, "");
         assert!(response
@@ -652,16 +670,17 @@ mod tests {
         assert!(json["nodes"][0]["children_count"].is_u64());
     }
 
-    /// Round-1 closing-8 (F2) + closing-9 (F2 fix-up): during the
-    /// embedding phase the indexer sets `IndexStatus::Building.file`
-    /// to the literal sentinel `"embedding"` instead of a real file
-    /// path. The embedding phase runs AFTER BM25, so by the time the
-    /// sentinel surfaces every indexable file already shows up in
-    /// `workspace.indexed_paths()` (the BM25 index). Counting
-    /// `indexable_files > indexed_files` (closing-8's first attempt)
-    /// reads everywhere as "BM25 done" -> no orange. The right signal
-    /// is "directory contains indexable content" because embeddings
-    /// are still pending across the whole sweep.
+    /// During the background embedding phase the indexer reports
+    /// `IndexStatus::Idle { embedding: Some(..) }` (BM25 committed and
+    /// searchable, vectors still flushing) with NO per-file label, so
+    /// `current_file` is `None`. The embed phase runs AFTER BM25, so by
+    /// then every indexable file already shows up in
+    /// `workspace.indexed_paths()` (the BM25 index) - counting
+    /// `indexable_files > indexed_files` would read everywhere as "BM25
+    /// done" -> no orange. The `embedding_sweep` flag is the real signal
+    /// (mapped from `Idle.embedding` by `is_embedding_sweep`); it marks
+    /// every dir with indexable content because embeddings are still
+    /// pending across the whole sweep.
     #[test]
     fn indexing_state_marks_every_dir_with_indexable_files_during_embedding_sweep() {
         let entries = vec![
@@ -681,7 +700,9 @@ mod tests {
             "docs/another.md".to_string(),
         ]);
 
-        let response = build_indexing_state(&entries, &indexed_paths, Some("embedding"));
+        // No per-file label during the embed sweep; the embedding flag
+        // carries the signal instead.
+        let response = build_indexing_state(&entries, &indexed_paths, None, true);
 
         // Every dir with indexable text flips to Indexing during the
         // embedding sweep, even if BM25 already finished. The
@@ -740,7 +761,7 @@ mod tests {
         ];
         let indexed_paths = BTreeSet::new();
 
-        let response = build_indexing_state(&entries, &indexed_paths, Some(""));
+        let response = build_indexing_state(&entries, &indexed_paths, Some(""), false);
 
         // Empty current_file is the initial Building state; treat
         // as a broad sweep.
@@ -775,7 +796,8 @@ mod tests {
         ];
         let indexed_paths = BTreeSet::from(["docs/done.md".to_string()]);
 
-        let response = build_indexing_state(&entries, &indexed_paths, Some("notes/current.md"));
+        let response =
+            build_indexing_state(&entries, &indexed_paths, Some("notes/current.md"), false);
 
         // The ancestor chain of the in-flight file is Indexing.
         assert_eq!(
@@ -797,6 +819,40 @@ mod tests {
                 .map(|node| node.state),
             Some(IndexingDirectoryState::Indexed)
         );
+    }
+
+    /// `is_embedding_sweep` is the signal that makes the spine pulse for
+    /// the whole background embed pass. Only `Idle { embedding: Some(..) }`
+    /// (BM25 committed, vectors still flushing) counts; a settled idle, a
+    /// foreground Building/Reindexing pass (those carry a per-file label
+    /// instead), and Error do not.
+    #[test]
+    fn is_embedding_sweep_only_true_for_idle_with_embedding() {
+        use crate::indexer::EmbedProgress;
+
+        assert!(is_embedding_sweep(&IndexStatus::Idle {
+            indexed_docs: 3,
+            indexed_vectors: 1,
+            model: "m".to_string(),
+            embedding: Some(EmbedProgress { done: 1, total: 3 }),
+        }));
+        assert!(!is_embedding_sweep(&IndexStatus::Idle {
+            indexed_docs: 3,
+            indexed_vectors: 3,
+            model: "m".to_string(),
+            embedding: None,
+        }));
+        assert!(!is_embedding_sweep(&IndexStatus::Building {
+            current: 1,
+            total: 3,
+            file: "notes/a.md".to_string(),
+        }));
+        assert!(!is_embedding_sweep(&IndexStatus::Reindexing {
+            file: "notes/a.md".to_string(),
+        }));
+        assert!(!is_embedding_sweep(&IndexStatus::Error {
+            message: "boom".to_string(),
+        }));
     }
 
     struct RouteTestApp {
