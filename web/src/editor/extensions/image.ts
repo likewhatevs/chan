@@ -7,7 +7,7 @@
 // (http/data/blob) pass through unchanged.
 
 import { withTokenQuery } from "../../api/client";
-import { normalizeHref } from "../links";
+import { decodePercent, normalizeHref } from "../links";
 
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "svg"] as const;
 
@@ -96,7 +96,13 @@ export function resolveImageSrc(src: string, fromPath?: string | null): string {
   const sourceDir = fromPath
     ? fromPath.split("/").slice(0, -1).join("/")
     : "";
-  const workspaceRooted = normalizeHref(base, sourceDir) ?? base;
+  // Decode first: the on-disk src is percent-encoded (a spaced
+  // filename is written `./My%20Image.png` so pulldown-cmark produces
+  // a graph edge). normalizeHref + the `/api/files` re-encode below
+  // expect the real path; without the decode a spaced name would be
+  // double-encoded (`%2520`) and 404.
+  const decoded = decodePercent(base);
+  const workspaceRooted = normalizeHref(decoded, sourceDir) ?? decoded;
   const encoded = workspaceRooted
     .split("/")
     .map((s) => encodeURIComponent(s))

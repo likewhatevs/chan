@@ -41,7 +41,7 @@ import {
 import { syntaxTree } from "@codemirror/language";
 import { type Extension, StateEffect } from "@codemirror/state";
 import { selectionInRange } from "../decorations/selection";
-import { normalizeHref } from "../links";
+import { decodePercent, normalizeHref } from "../links";
 import { isImagePath, resolveImageSrc } from "../extensions/image";
 import { api } from "../../api/client";
 import { openPreviewPopover } from "../overlays/preview_popover";
@@ -120,19 +120,6 @@ export function parseWikiBody(body: string): ParsedWikiLink {
   const displayLabel =
     label ?? (target.split("/").pop() ?? target).replace(/\.md$/, "");
   return { target, label: displayLabel, anchor, wasAbs };
-}
-
-/// Percent-decode a URL path, mirroring pulldown-cmark's destination
-/// decoding on the backend. Returns the input unchanged when it carries
-/// no escapes or when an escape is malformed (decodeURIComponent throws
-/// on a stray `%`), so a literal path is never corrupted.
-function decodePercent(s: string): string {
-  if (!s.includes("%")) return s;
-  try {
-    return decodeURIComponent(s);
-  } catch {
-    return s;
-  }
 }
 
 /// Detect whether a markdown link URL is internal (workspace-relative or

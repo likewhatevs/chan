@@ -14,7 +14,7 @@ import { api } from "../../api/client";
 import { notify } from "../../state/notify.svelte";
 import { convertHeicForUpload, isHeicFile } from "./heic";
 import { invalidateImageCatalog } from "./image";
-import { relativizePath } from "../links";
+import { encodeRelPath, relativizePath } from "../links";
 import { listLineAt } from "../commands/list";
 import { IMAGE_MOVE_MIME } from "../widgets/image";
 
@@ -251,6 +251,12 @@ function uploadAndInsertAll(
         const pathArg = currentPath
           ? relativizePath(res.path, currentPath)
           : res.path;
+        // Percent-encode the path so an uploaded file whose name has a
+        // space (or other URL-special char) round-trips: an unencoded
+        // `![](./My Photo.png)` truncates at the space on the backend
+        // graph scan and resolves wrong. resolveImageSrc decodes on
+        // read. The `#w=N` fragment is appended after encoding.
+        const encPath = encodeRelPath(pathArg);
         // Default new images to 250px wide. The widget reads
         // `#w=N` from the src fragment and clamps via CSS; the
         // user can drag the corner handle to resize. Dropped /
@@ -258,8 +264,8 @@ function uploadAndInsertAll(
         // size on a notes page, hence the small default.
         const onListLine = listLineAt(view.state, cursor) !== null;
         const insert = onListLine
-          ? `![](${pathArg}#w=${DEFAULT_INSERT_WIDTH_PX}) `
-          : `![](${pathArg}#w=${DEFAULT_INSERT_WIDTH_PX})\n`;
+          ? `![](${encPath}#w=${DEFAULT_INSERT_WIDTH_PX}) `
+          : `![](${encPath}#w=${DEFAULT_INSERT_WIDTH_PX})\n`;
         view.dispatch({
           changes: { from: cursor, to: cursor, insert },
           selection: { anchor: cursor + insert.length },

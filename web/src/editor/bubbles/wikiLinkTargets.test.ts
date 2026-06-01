@@ -40,4 +40,24 @@ describe("wiki file completion uses graph link targets", () => {
     // The per-file style snapshot is a complete `[[...]]` match.
     expect(wiki).toMatch(/const fileUsesWikiLinks = WIKI_LINK_RE\.test\(/);
   });
+
+  test("heading-mode commit relativizes the typed target via fileLinkInsert", () => {
+    // The explicit `#` mode no longer emits a verbatim `[[target#anchor]]`;
+    // it routes through fileLinkInsert so the on-disk link is relative
+    // markdown (or wiki form in a wiki-mode file), same as a file hit.
+    expect(wiki).toMatch(
+      /const h = hit as HeadingHit;\s*insert = fileLinkInsert\(mode\.target, h\.anchor, raw\);/,
+    );
+    expect(wiki).not.toMatch(/const ref = `\$\{mode\.target\}#\$\{h\.anchor\}`;/);
+  });
+
+  test("block-mode commit emits a #^id anchor via fileLinkInsert", () => {
+    // The block ref is now a `#^id` fragment routed through
+    // fileLinkInsert (relative markdown / wiki form), not the old
+    // unresolvable `[[target^id]]`.
+    expect(wiki).toMatch(
+      /const insert = fileLinkInsert\(target, `\^\$\{anchorId\}`, raw\);/,
+    );
+    expect(wiki).not.toMatch(/const ref = `\$\{target\}\^\$\{anchorId\}`;/);
+  });
 });

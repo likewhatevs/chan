@@ -59,6 +59,7 @@
   } from "./commands/list";
   import type { FindAdapter } from "./find";
   import { breathingRoom } from "./breathing_room";
+  import { clickToPlaceCaret } from "./click_caret";
   import { listGuideVisibility } from "./extensions/list_guide_visibility";
   import { externalLinkClickHandler } from "./external_links";
   import { rightClickNoSelect } from "./right_click_no_select";
@@ -372,6 +373,11 @@
         breathingRoom(),
         listGuideVisibility(),
         listCaretGuard(),
+        // After listCaretGuard: both ignore precise-hit clicks, so for a
+        // normal click both fall through to CM6. This one only fires on
+        // a blank-area click (no precise hit) to drop the caret on the
+        // nearest row position.
+        clickToPlaceCaret(),
         findField,
         chanDecorations(),
         pageBreakDecorations(),

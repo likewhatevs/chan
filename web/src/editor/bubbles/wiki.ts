@@ -419,16 +419,16 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
     }
     let insert: string;
     if (mode.kind === "heading") {
-      // Explicit `#` heading mode commits the user-typed target
-      // verbatim. That target may be a title/stem rather than a
-      // resolvable workspace path, so relativizing it into markdown is
-      // unsafe here (the markdown resolver is path-based, not title-
-      // based). The file-mode branch below carries a real path and is
-      // where relative markdown is emitted; Wave-2 resolves the typed
-      // target to a path before converting this branch.
+      // The typed target IS a real workspace path here: /api/headings
+      // does an exact rel_path match, so a heading hit can only exist
+      // when the target names an indexed file (the user typed the path
+      // through to its `#`). So we relativize it exactly like a
+      // file-mode hit and emit relative markdown `[stem](./path.md#slug)`
+      // (or keep wiki form in a wiki-mode file). The graph + search
+      // already resolve a `#slug` anchor (workspace split_anchor), so
+      // the link round-trips on disk.
       const h = hit as HeadingHit;
-      const ref = `${mode.target}#${h.anchor}`;
-      insert = raw ? ref : `[[${ref}]]`;
+      insert = fileLinkInsert(mode.target, h.anchor, raw);
     } else {
       const lt = hit as LinkTarget;
       const anchor = lt.kind === "Heading" ? (lt.anchor ?? null) : null;
@@ -501,8 +501,14 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
         return;
       }
     }
-    const ref = `${target}^${anchorId}`;
-    const insert = raw ? ref : `[[${ref}]]`;
+    // Emit the block anchor as a `#^id` fragment so the on-disk link is
+    // relative markdown `[stem](./path.md#^id)` (or wiki form in a
+    // wiki-mode file). The backend split_anchor keeps the `^id` anchor
+    // for a `.md` target, so the link resolves; the old `[[target^id]]`
+    // wiki form never resolved (split_anchor only cuts on `#`, leaving
+    // `target^id` as an unresolvable path). `target` is the exact stored
+    // rel_path: api.read needs an exact path to have loaded the blocks.
+    const insert = fileLinkInsert(target, `^${anchorId}`, raw);
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert },
       selection: { anchor: opts.triggerStart + insert.length },

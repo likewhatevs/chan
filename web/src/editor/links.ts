@@ -35,16 +35,44 @@ export function wikiLinkToMarkdown(
     : fromPath
       ? relativizePath(target, fromPath)
       : target;
-  const enc = path
-    .split("/")
-    .map((s) => encodeURIComponent(s).replace(/%2F/g, "/"))
-    .join("/");
+  const enc = encodeRelPath(path);
   // Anchor is appended verbatim. Heading anchors are already
   // slugged by chan-workspace (kebab-case ASCII); block anchors are
   // `^id` and round-trip cleanly through encodeURIComponent's
   // identity for `^`.
   const frag = anchor ? `#${anchor}` : "";
   return `[${stem}](${enc}${frag})`;
+}
+
+/// Percent-encode each segment of a workspace path for use in a
+/// markdown link/image destination. A filename with a space or other
+/// URL-special char would otherwise terminate the destination at the
+/// space (pulldown-cmark, the on-disk graph scanner, does not parse a
+/// literal space inside `](dest)`), so an unencoded `./My File.md`
+/// produces NO graph edge and the resolver gets a truncated path.
+/// `/` is preserved so segments stay separated; the reader side
+/// (`decodePercent`) reverses this before resolving.
+export function encodeRelPath(path: string): string {
+  return path
+    .split("/")
+    .map((s) => encodeURIComponent(s).replace(/%2F/g, "/"))
+    .join("/");
+}
+
+/// Reverse `encodeRelPath` (and any author-typed percent-encoding) so
+/// the resolver sees the real path before mapping it to a workspace
+/// file. A bare string with no `%` is returned unchanged; a malformed
+/// escape falls back to the input rather than throwing. The editor's
+/// link + image resolvers must decode because the on-disk form is
+/// percent-encoded but `normalizeHref` / `/api/files` expect the
+/// decoded path.
+export function decodePercent(s: string): string {
+  if (!s.includes("%")) return s;
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
 }
 
 /// Compute a file-relative path from `fromPath`'s directory to

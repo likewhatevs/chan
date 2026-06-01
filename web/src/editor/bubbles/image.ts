@@ -30,7 +30,7 @@ import {
   type ImageAlign,
 } from "../extensions/image";
 import { convertHeicForUpload } from "./heic";
-import { relativizePath } from "../links";
+import { encodeRelPath, relativizePath } from "../links";
 import { completionEmptyState, renderBubbleEmptyState } from "./empty_state";
 
 export interface ImageBubbleOpts {
@@ -298,6 +298,16 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
     const pathArg = opts.currentPath
       ? relativizePath(path, opts.currentPath)
       : path;
+    // Percent-encode the path portion (leaving any `#...` fragment
+    // alone) so a filename with a space round-trips: an unencoded
+    // `![](./My Photo.png)` truncates at the space on the backend graph
+    // scan and resolves wrong. resolveImageSrc decodes on read. Mirrors
+    // the [[ wiki-link writer (links.ts encodeRelPath).
+    const hashIdx = pathArg.indexOf("#");
+    const encArg =
+      hashIdx >= 0
+        ? encodeRelPath(pathArg.slice(0, hashIdx)) + pathArg.slice(hashIdx)
+        : encodeRelPath(pathArg);
     // Default to 250px wide whenever the picked / uploaded path
     // doesn't already carry a `#w=N` fragment of its own. Covers
     // wrap mode (fresh `![](path)` insert from `![query`), raw
@@ -306,9 +316,9 @@ export function openImageBubble(opts: ImageBubbleOpts): ImageBubbleHandle {
     // If the user re-uses a path they had previously written with
     // a specific width, that width round-trips; otherwise the
     // small default keeps new inserts from going full-bleed.
-    const sized = /#w=\d+/.test(pathArg)
-      ? pathArg
-      : `${pathArg}#w=${DEFAULT_INSERT_WIDTH_PX}`;
+    const sized = /#w=\d+/.test(encArg)
+      ? encArg
+      : `${encArg}#w=${DEFAULT_INSERT_WIDTH_PX}`;
     const insert = opts.templateMode === "raw" ? sized : `![](${sized})`;
     opts.view.dispatch({
       changes: { from: opts.triggerStart, to: triggerEnd, insert },
