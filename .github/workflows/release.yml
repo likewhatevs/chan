@@ -38,7 +38,7 @@ jobs:
       tag: ${{ steps.context.outputs.tag }}
       version: ${{ steps.context.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: chan
 
@@ -106,7 +106,7 @@ jobs:
     env:
       RUSTFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: chan
 
@@ -116,7 +116,7 @@ jobs:
         with:
           workspaces: chan
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
@@ -152,7 +152,7 @@ jobs:
             package_arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: chan
 
@@ -174,7 +174,7 @@ jobs:
         with:
           version: 0.15.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
@@ -217,7 +217,7 @@ jobs:
           cp "$rpm" "release-artifacts/chan-${PACKAGE_ARCH}.rpm"
           ls -la release-artifacts
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-linux-cli-${{ matrix.target }}
           path: chan/release-artifacts/*
@@ -243,7 +243,7 @@ jobs:
             package_arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: chan
 
@@ -256,7 +256,7 @@ jobs:
           workspaces: chan/gateway
           key: gateway-${{ matrix.target }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
@@ -290,7 +290,7 @@ jobs:
           done
           ls -la release-artifacts
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-gateway-${{ matrix.package_arch }}
           path: chan/gateway/release-artifacts/*.deb
@@ -322,7 +322,7 @@ jobs:
             package_arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: chan
 
@@ -334,7 +334,7 @@ jobs:
         with:
           workspaces: chan
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
@@ -384,7 +384,7 @@ jobs:
           done
           ls -la release-artifacts
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-linux-desktop-${{ matrix.package_arch }}
           path: chan/release-artifacts/*
@@ -399,7 +399,7 @@ jobs:
     env:
       RUSTFLAGS: -D warnings
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: chan
 
@@ -417,7 +417,7 @@ jobs:
     needs: macos-validate
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: chan
 
@@ -429,7 +429,7 @@ jobs:
         with:
           workspaces: chan
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
@@ -448,7 +448,7 @@ jobs:
           tar -czf release-artifacts/chan-aarch64-apple-darwin.tar.gz -C staging .
           ls -la release-artifacts
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-macos-cli
           path: chan/release-artifacts/*
@@ -461,7 +461,7 @@ jobs:
       - macos-validate
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: chan
 
@@ -471,7 +471,7 @@ jobs:
         with:
           workspaces: chan
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
@@ -582,7 +582,7 @@ jobs:
 
       - if: failure()
         name: Upload notarization diagnostics
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: notarization-diagnostics
           path: |
@@ -592,7 +592,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-macos-desktop
           path: chan/release-artifacts/*
@@ -612,15 +612,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: chan
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: release-*
@@ -670,11 +670,11 @@ jobs:
       - publish-release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: chan
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
 
