@@ -1,0 +1,50 @@
+# gateway-build (dev): Ubuntu base carrying the Rust toolchain, node/npm,
+# cargo-deb, and a C toolchain, for building the chan-gateway .deb packages
+# locally on Linux and on macOS (via lima-vm hosting sdme). The matching CI
+# lane is the release.yml gateway-linux-packages job; this rootfs bakes the
+# build inputs that job relies on (the apt deps + cargo-deb).
+#
+# Build: limactl shell default sudo sdme fs build gateway-build \
+#          gateway-build.sdme    (-f to rebuild over an existing one)
+# Used by: make linux-gateway (root Makefile) -> build-gateway.sh.
+#
+# Why this is leaner than chan-desktop-ubuntu.sdme: the gateway has NO GUI,
+# so none of the GTK/webkit/AppImage deps are needed. Every TLS path is
+# rustls (sqlx tls-rustls, reqwest/oauth2 rustls-tls) and the postgres
+# driver is pure-rust, so there is no libpq / libssl / libp-dev to install.
+# The gateway also uses no compile-time-checked sqlx macros (runtime-prepared
+# queries only), so NO database is needed at build time; this rootfs ships
+# no postgres (that is chan-psql.sdme's job, for the integration tests).
+#
+# cargo-deb IS baked here (unlike tauri-cli in chan-desktop-ubuntu.sdme):
+# it is a host-side packaging tool with no repo pin to track, so baking it
+# once keeps each build from paying a cold `cargo install` (~2 min).
+#
+# Apple Silicon note: on an aarch64 host this rootfs and the emitted .deb
+# packages are aarch64. That de-risks the gateway build and packaging from
+# macOS; CI's native runners own the canonical x86_64 + arm64 builds.
+
+FROM ubuntu
+
+# build-essential + pkg-config + git for the cargo build; nodejs/npm for the
+# identity SPA bundle that rust-embed bakes into the identity binary at
+# compile time (make gateway-build depends on gateway-spa). No GTK, no
+# libpq, no libssl: see the header for why.
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential pkg-config curl ca-certificates git \
+        nodejs npm && \
+    rm -rf /var/lib/apt/lists/*
+
+# Pinned compiler (rust-toolchain.toml) auto-installs on the first cargo call
+# against the seeded repo; baking the rustup default keeps cargo ready and
+# lets the cargo-deb install below run without coupling the rootfs to the pin.
+# HOME is unset in the sdme RUN environment, so "$HOME/.cargo/env" would
+# resolve to /.cargo/env and the source (plus cargo's own ~/.cargo lookup)
+# would fail. The rootfs builds as root, so pin HOME=/root for both the env
+# source and the cargo-deb install.
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal && \
+    echo '. "$HOME/.cargo/env"' >> /root/.bashrc && \
+    export HOME=/root && \
+    . "$HOME/.cargo/env" && \
+    cargo install cargo-deb --locked

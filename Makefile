@@ -92,6 +92,14 @@ linux-chan-desktop: ## Build the chan-desktop AppImage/.deb for DISTRO via sdme.
 		CHAN_REPO="$(REPO_ROOT)" SDME="$(SDME)" DISTRO="$(DISTRO)" \
 		chan-desktop
 
+.PHONY: linux-gateway
+linux-gateway: ## Build the gateway .deb packages via sdme (the gateway-linux-packages mirror).
+	# The gateway is a separate nested workspace, so its sdme build infra
+	# lives under gateway/scripts/dev/sdme/ (next to chan-psql.sdme) rather
+	# than packaging/linux. SDME selects how sdme is reached (lima on macOS).
+	CHAN_REPO="$(REPO_ROOT)" SDME="$(SDME)" \
+		gateway/scripts/dev/sdme/build-gateway.sh
+
 .PHONY: macos-chan-app
 macos-chan-app: ## Build and sign the macOS .app bundle.
 	$(MAKE) -C desktop app-signed
