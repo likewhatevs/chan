@@ -64,6 +64,13 @@ Disjoint from D (routes/search.rs) and B (build infra). No cross-lane seam.
 
 ### Wave 2 - lead-first spawn orchestration + tests + smoke
 
+ARCHITECT DECISION on your Wave-1 open question (the spawn mechanism):
+orchestrate the spawn SERVER-SIDE via the terminal Registry (lead first, full
+command+env, submit chords) - robust, no SPA edit. Do NOT half-wire `cs
+terminal new --command/--env` (that needs an SPA edit you do not own this
+round = the gate-blind-wire trap you correctly flagged). Keep `--script` as
+the auditable best-effort form. (Also in round-4-status.md, authoritative.)
+
 - The non-`--script` `new` RUNS the bootstrap: spawn the lead first, then the
   workers, with the right tab-names / group / submit chords (mirror
   runTeamBootstrap's sequencing; the placeholder pane never goes empty in the

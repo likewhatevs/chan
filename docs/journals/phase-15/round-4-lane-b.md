@@ -61,15 +61,56 @@ RISK: does `cargo tauri build` produce a valid AppImage inside a headless sdme
 container (no X11/fonts)? If the bundler needs a display, find the headless
 flag / fakeroot / xvfb path. This is the unknown to retire in Wave 1.
 
-### Wave 2 - the full matrix + gateway + CI
+### Wave 2 - gateway + CI matrix (NOT fedora/arch - see the division)
 
-- Add fedora (webkitgtk dep names differ) + arch/cachyos `.sdme` rootfs +
-  targets. Subagents per distro are encouraged (the work parallelizes).
-- Add the gateway linux build via sdme (same procedure;
-  GATEWAY_RELEASE_CRATES).
+SCOPE CHANGE (architect, round-4-status.md is authoritative): the fedora +
+arch per-distro `.sdme` rootfs builds are now OWNED BY @@LaneA's lent
+subagents (your driver is DISTRO-parameterized, so each distro is just a new
+`scripts/dev/sdme/chan-desktop-<distro>.sdme`; A validates them on the lima
+VM and integrates the templates). You do NOT redo fedora/arch - that avoids
+A-subagent vs B duplication on scripts/dev/sdme/. Your Wave 2:
+
+- The gateway linux build via sdme (same procedure; GATEWAY_RELEASE_CRATES).
 - Extend `.github/workflows/release.yml`'s linux-desktop-artifacts into the
-  multi-distro matrix. Land + gate this BEFORE @@LaneA's v0.23.0 cut.
+  multi-distro CI matrix. Land + gate this BEFORE @@LaneA's v0.23.0 cut (the
+  B<->A seam). You may reference the fedora/arch `.sdme` files A integrates.
 - Gate (incl. the gateway workspace); poke @@Architect "wave 2 done".
+
+### Wave 3 - STATIC MUSL `chan` CLI binary (NEW, @@Host-approved; v0.23.0 holds)
+
+Ship a fully-static standalone `chan` Linux binary so a too-new build glibc
+does not block older machines. The old static blocker was CUDA, which is
+already gone (embeddings default to pure-Rust candle CPU; `cuda` is an opt-in
+feature). Grounded (see round-4-status.md cross-lane notes for the full
+assessment):
+
+- Favorable: TLS = rustls + ring, NO `openssl-sys` in the tree (the usual musl
+  killer). The C/C++ deps the musl build cross-compiles: ring, libsqlite3-sys
+  (bundled SQLite), tokenizers' esaxx-rs (C++) + onig (C).
+- Tool = `cargo-zigbuild` (zig as the cross C/C++ compiler; both musl arches
+  from one runner). ALREADY INSTALLED on this Mac: zig 0.15.2 + cargo-zigbuild
+  + the `x86_64-unknown-linux-musl` target (A added it). Add
+  `aarch64-unknown-linux-musl` too.
+- SCOPE: standalone `chan` tarball -> musl static (the install.sh / self-upgrade
+  download). `.deb`/`.rpm` stay gnu (distro provides glibc). chan-desktop stays
+  gnu (webkit can't be static). The gnu-only guard to lift is in
+  `packaging/linux/Makefile` (the `chan-tarball` target rejects non-gnu).
+
+Sequence:
+1. DE-RISK FIRST (the one unknown to retire): prove the full
+   embeddings+tokenizers+candle tree links FULLY static. Run
+   `cargo zigbuild --release --target x86_64-unknown-linux-musl -p chan`
+   (then aarch64); confirm `file`/`ldd` report a static PIE ("not a dynamic
+   executable"). This is your Wave-1-style de-risk; do it before touching CI.
+2. Wire it: a musl tarball path (lift the Makefile gnu-only guard; use
+   zigbuild for musl targets) + ADD musl CLI legs to `release.yml`
+   (`linux-cli-artifacts`) producing the static standalone tarball. This is a
+   SEPARATE release.yml edit, after the Wave-2 M1 matrix (you own release.yml;
+   no collision).
+3. Point the standalone Linux download (install.sh / latest.json) at the musl
+   tarball; keep `.deb`/`.rpm` gnu. No back-compat shim (pre-release).
+4. Gate; the authoritative release.yml check is A's pre-cut workflow_dispatch
+   dry-run. The musl legs land BEFORE A cuts v0.23.0 (sequence with A).
 
 ## Completion (each wave)
 
