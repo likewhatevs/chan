@@ -144,9 +144,11 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            musl_target: x86_64-unknown-linux-musl
             package_arch: amd64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            musl_target: aarch64-unknown-linux-musl
             package_arch: arm64
     runs-on: ${{ matrix.os }}
     steps:
@@ -162,6 +164,16 @@ jobs:
         with:
           workspaces: chan
 
+      # The standalone CLI tarball is musl (fully static) so a too-new build
+      # glibc does not gate older machines. zig is the cross C/C++ compiler
+      # cargo-zigbuild drives so the C/C++ deps (ring, bundled SQLite,
+      # tokenizers esaxx-rs/onig) link static. The .deb/.rpm packages stay gnu
+      # (the distro provides glibc) and use plain cargo build below.
+      - run: rustup target add ${{ matrix.musl_target }}
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -170,9 +182,9 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deb,cargo-generate-rpm
+          tool: cargo-deb,cargo-generate-rpm,cargo-zigbuild
 
-      - run: make linux-chan-tarball LINUX_TARGET=${{ matrix.target }}
+      - run: make linux-chan-tarball LINUX_TARGET=${{ matrix.musl_target }}
         working-directory: chan
       - run: make linux-deb DEB_TARGET=${{ matrix.target }}
         working-directory: chan
@@ -184,10 +196,13 @@ jobs:
         env:
           PACKAGE_ARCH: ${{ matrix.package_arch }}
           TARGET: ${{ matrix.target }}
+          MUSL_TARGET: ${{ matrix.musl_target }}
         run: |
           set -e
           mkdir -p release-artifacts
-          cp "target/release/chan-${TARGET}.tar.gz" release-artifacts/
+          # The standalone tarball is the musl (static) build; the .deb/.rpm
+          # are the gnu builds from this same job.
+          cp "target/release/chan-${MUSL_TARGET}.tar.gz" release-artifacts/
           deb=$(find "target/${TARGET}/debian" -name '*.deb' -type f | head -1)
           rpm=$(find target -path '*/generate-rpm/*.rpm' -type f | head -1)
           if [ -z "$deb" ]; then

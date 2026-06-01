@@ -60,9 +60,12 @@ case "$os" in
         esac
         ;;
     Linux)
+        # The standalone Linux tarball is musl (fully static) so a too-new
+        # build glibc does not gate older machines. The .deb/.rpm packages
+        # (installed via the distro, not this script) stay gnu.
         case "$arch" in
-            x86_64|amd64)  target="x86_64-unknown-linux-gnu" ;;
-            aarch64|arm64) target="aarch64-unknown-linux-gnu" ;;
+            x86_64|amd64)  target="x86_64-unknown-linux-musl" ;;
+            aarch64|arm64) target="aarch64-unknown-linux-musl" ;;
             *) err "Linux on $arch is not published." ;;
         esac
         ;;

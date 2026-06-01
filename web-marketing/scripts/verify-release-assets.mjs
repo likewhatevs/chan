@@ -19,8 +19,8 @@ async function main() {
     `Chan_${version}.dmg`,
     `Chan_${version}_amd64.AppImage`,
     `Chan_${version}_amd64.deb`,
-    "chan-x86_64-unknown-linux-gnu.tar.gz",
-    "chan-aarch64-unknown-linux-gnu.tar.gz",
+    "chan-x86_64-unknown-linux-musl.tar.gz",
+    "chan-aarch64-unknown-linux-musl.tar.gz",
     "chan-aarch64-apple-darwin.tar.gz",
   ];
   const updaterAssets = [

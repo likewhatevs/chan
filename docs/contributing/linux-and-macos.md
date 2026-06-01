@@ -164,6 +164,39 @@ binary as `cs`. linuxdeploy's generated `AppRun` re-execs
 The AppImage runtime does export `ARGV0=cs`, which is the intended fix
 hook; tracked for a follow-up.
 
+## CLI: build the static musl `chan` tarball
+
+The standalone `chan` CLI tarball (what `install.sh` and the self-upgrade
+download) is built fully static against musl, so a too-new build glibc does
+not gate older Linux machines. The `.deb`/`.rpm` packages and the
+chan-desktop AppImage stay gnu: the distro provides glibc, and webkit cannot
+be static.
+
+This is a host cross-compile, no container. cargo-zigbuild uses zig as the
+cross C/C++ compiler so the C/C++ deps (ring, bundled SQLite, tokenizers'
+esaxx-rs/onig) link static. Prerequisites on the host: zig, cargo-zigbuild,
+and the musl rust targets.
+
+```bash
+# one-time: tooling (zig must already be on PATH) + the musl rust targets
+cargo install cargo-zigbuild
+rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+
+# build the static tarball for an arch (from the repo root)
+make linux-chan-tarball LINUX_TARGET=x86_64-unknown-linux-musl
+make linux-chan-tarball LINUX_TARGET=aarch64-unknown-linux-musl
+
+# the tarball lands at target/release/chan-<target>.tar.gz; confirm static
+tar -xzf target/release/chan-x86_64-unknown-linux-musl.tar.gz -C /tmp
+file /tmp/chan          # -> ... statically linked
+# on Linux: ldd /tmp/chan -> "not a dynamic executable"
+```
+
+CI builds these in `release.yml`'s `linux-cli-artifacts` job (zig via
+`mlugg/setup-zig` + cargo-zigbuild); the `.deb`/`.rpm` in that same job stay
+gnu. The `chan-tarball` Make target uses `cargo zigbuild` for musl targets
+and plain `cargo build` for gnu.
+
 ## Gateway: Postgres-backed tests
 
 The gateway is a separate workspace with Postgres-backed integration

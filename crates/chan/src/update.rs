@@ -116,8 +116,11 @@ pub fn current_target() -> Result<(&'static str, &'static str, &'static str)> {
 
 fn release_target_for(os: &str, arch: &str) -> Result<(&'static str, &'static str, &'static str)> {
     match (os, arch) {
-        ("linux", "x86_64") => Ok(("x86_64-unknown-linux-gnu", "tar.gz", "chan")),
-        ("linux", "aarch64") => Ok(("aarch64-unknown-linux-gnu", "tar.gz", "chan")),
+        // The standalone Linux CLI tarball is musl (fully static) so a too-new
+        // build glibc does not gate older machines; self-upgrade resolves the
+        // same musl asset install.sh and latest.json publish. macOS is native.
+        ("linux", "x86_64") => Ok(("x86_64-unknown-linux-musl", "tar.gz", "chan")),
+        ("linux", "aarch64") => Ok(("aarch64-unknown-linux-musl", "tar.gz", "chan")),
         ("macos", "aarch64") => Ok(("aarch64-apple-darwin", "tar.gz", "chan")),
         (os, arch) => bail!(
             "no published standalone chan CLI release for {os}/{arch}. \
@@ -750,9 +753,9 @@ mod tests {
   "published_at":"2026-05-27T00:00:00Z",
   "targets":[
     {
-      "target":"x86_64-unknown-linux-gnu",
-      "asset":"chan-x86_64-unknown-linux-gnu.tar.gz",
-      "url":"https://github.com/fiorix/chan/releases/download/v0.14.0/chan-x86_64-unknown-linux-gnu.tar.gz",
+      "target":"x86_64-unknown-linux-musl",
+      "asset":"chan-x86_64-unknown-linux-musl.tar.gz",
+      "url":"https://github.com/fiorix/chan/releases/download/v0.14.0/chan-x86_64-unknown-linux-musl.tar.gz",
       "sha256":"DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
     },
     {
@@ -783,12 +786,12 @@ mod tests {
         assert_eq!(
             normalize_sha256(
                 "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF",
-                "chan-x86_64-unknown-linux-gnu.tar.gz"
+                "chan-x86_64-unknown-linux-musl.tar.gz"
             )
             .unwrap(),
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
         );
-        assert!(normalize_sha256("NOT_HEX", "chan-x86_64-unknown-linux-gnu.tar.gz").is_err());
+        assert!(normalize_sha256("NOT_HEX", "chan-x86_64-unknown-linux-musl.tar.gz").is_err());
     }
 
     #[test]
@@ -835,13 +838,13 @@ mod tests {
         assert_eq!(metadata.version, "0.14.0");
         assert_eq!(metadata.tag, "v0.14.0");
 
-        let asset = target_asset_for(&metadata, "x86_64-unknown-linux-gnu", "tar.gz").unwrap();
+        let asset = target_asset_for(&metadata, "x86_64-unknown-linux-musl", "tar.gz").unwrap();
         assert_eq!(
             asset,
             CliTargetAsset {
-                target: "x86_64-unknown-linux-gnu".into(),
-                asset: "chan-x86_64-unknown-linux-gnu.tar.gz".into(),
-                url: "https://github.com/fiorix/chan/releases/download/v0.14.0/chan-x86_64-unknown-linux-gnu.tar.gz".into(),
+                target: "x86_64-unknown-linux-musl".into(),
+                asset: "chan-x86_64-unknown-linux-musl.tar.gz".into(),
+                url: "https://github.com/fiorix/chan/releases/download/v0.14.0/chan-x86_64-unknown-linux-musl.tar.gz".into(),
                 sha256: "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF".into(),
             }
         );
@@ -938,11 +941,11 @@ mod tests {
     fn test_release_target_for_active_public_artifacts() {
         assert_eq!(
             release_target_for("linux", "x86_64").unwrap(),
-            ("x86_64-unknown-linux-gnu", "tar.gz", "chan")
+            ("x86_64-unknown-linux-musl", "tar.gz", "chan")
         );
         assert_eq!(
             release_target_for("linux", "aarch64").unwrap(),
-            ("aarch64-unknown-linux-gnu", "tar.gz", "chan")
+            ("aarch64-unknown-linux-musl", "tar.gz", "chan")
         );
         assert_eq!(
             release_target_for("macos", "aarch64").unwrap(),

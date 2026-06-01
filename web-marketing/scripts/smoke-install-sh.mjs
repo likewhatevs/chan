@@ -22,7 +22,7 @@ async function main() {
     await fs.mkdir(prefixes, { recursive: true });
     await writeFakeUname(fakeBin);
 
-    const linuxTar = await makeTarball(assets, "x86_64-unknown-linux-gnu", "linux");
+    const linuxTar = await makeTarball(assets, "x86_64-unknown-linux-musl", "linux");
     const macTar = await makeTarball(assets, "aarch64-apple-darwin", "mac");
     const metadataPath = path.join(root, "latest.json");
     await fs.writeFile(
@@ -34,8 +34,8 @@ async function main() {
           published_at: "2026-05-27T00:00:00Z",
           targets: [
             {
-              target: "x86_64-unknown-linux-gnu",
-              asset: "chan-x86_64-unknown-linux-gnu.tar.gz",
+              target: "x86_64-unknown-linux-musl",
+              asset: "chan-x86_64-unknown-linux-musl.tar.gz",
               url: pathToFileURL(linuxTar.path).href,
               sha256: linuxTar.sha256,
             },

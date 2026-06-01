@@ -7,10 +7,14 @@ import path from "node:path";
 
 const defaultRepo = "fiorix/chan";
 
+// The standalone Linux CLI tarballs are musl (fully static); the gnu tarball
+// is no longer published. The .deb/.rpm packages stay gnu but are distro
+// packages, not these standalone tarballs, and are not collected here. Must
+// stay in sync with cliTargets in generate-release-metadata.mjs.
 function cliAssets() {
   return [
-    "chan-x86_64-unknown-linux-gnu.tar.gz",
-    "chan-aarch64-unknown-linux-gnu.tar.gz",
+    "chan-x86_64-unknown-linux-musl.tar.gz",
+    "chan-aarch64-unknown-linux-musl.tar.gz",
     "chan-aarch64-apple-darwin.tar.gz",
   ];
 }

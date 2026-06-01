@@ -3,14 +3,18 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+// The standalone Linux CLI tarball is musl (fully static): a too-new build
+// glibc must not gate older machines. install.sh maps Linux arch to these
+// musl targets. The .deb/.rpm packages stay gnu (the distro provides glibc)
+// and are not in this list. macOS is the native darwin target.
 const cliTargets = [
   {
-    target: "x86_64-unknown-linux-gnu",
-    asset: "chan-x86_64-unknown-linux-gnu.tar.gz",
+    target: "x86_64-unknown-linux-musl",
+    asset: "chan-x86_64-unknown-linux-musl.tar.gz",
   },
   {
-    target: "aarch64-unknown-linux-gnu",
-    asset: "chan-aarch64-unknown-linux-gnu.tar.gz",
+    target: "aarch64-unknown-linux-musl",
+    asset: "chan-aarch64-unknown-linux-musl.tar.gz",
   },
   {
     target: "aarch64-apple-darwin",
@@ -52,18 +56,18 @@ function cliDownloads() {
     {
       id: "cli-linux-x64",
       kind: "cli",
-      label: "Linux x86_64 tarball",
-      target: "x86_64-unknown-linux-gnu",
+      label: "Linux x86_64 tarball (static)",
+      target: "x86_64-unknown-linux-musl",
       format: "tar.gz",
-      asset: "chan-x86_64-unknown-linux-gnu.tar.gz",
+      asset: "chan-x86_64-unknown-linux-musl.tar.gz",
     },
     {
       id: "cli-linux-arm64",
       kind: "cli",
-      label: "Linux aarch64 tarball",
-      target: "aarch64-unknown-linux-gnu",
+      label: "Linux aarch64 tarball (static)",
+      target: "aarch64-unknown-linux-musl",
       format: "tar.gz",
-      asset: "chan-aarch64-unknown-linux-gnu.tar.gz",
+      asset: "chan-aarch64-unknown-linux-musl.tar.gz",
     },
     {
       id: "cli-macos-arm64",

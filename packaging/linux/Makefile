@@ -30,13 +30,24 @@ else
 ARCHPKG_ARCH := unsupported
 endif
 
+# The standalone tarball is the only musl artifact (it is the install.sh /
+# self-upgrade download, so a too-new build glibc must not gate older machines).
+# musl needs cargo-zigbuild (zig as the cross C/C++ compiler) so the C/C++ deps
+# (ring, bundled SQLite, tokenizers esaxx-rs/onig) link fully static; gnu uses
+# plain cargo build. The .deb/.rpm targets stay gnu (the distro provides glibc).
+ifneq ($(filter %-unknown-linux-musl,$(LINUX_TARGET)),)
+TARBALL_BUILD := $(CARGO) zigbuild
+else
+TARBALL_BUILD := $(CARGO) build
+endif
+
 .PHONY: chan-tarball
 chan-tarball:
-	@case "$(LINUX_TARGET)" in *-unknown-linux-gnu) ;; \
-		*) echo "error: LINUX_TARGET must be a gnu Linux target, got $(LINUX_TARGET)"; exit 1;; \
+	@case "$(LINUX_TARGET)" in *-unknown-linux-gnu|*-unknown-linux-musl) ;; \
+		*) echo "error: LINUX_TARGET must be a gnu or musl Linux target, got $(LINUX_TARGET)"; exit 1;; \
 	esac
 	$(MAKE) -C "$(CHAN_REPO)" web
-	cd "$(CHAN_REPO)" && $(CARGO) build --release --target "$(LINUX_TARGET)" -p chan
+	cd "$(CHAN_REPO)" && $(TARBALL_BUILD) --release --target "$(LINUX_TARGET)" -p chan
 	rm -rf "$(TARBALL_STAGE)"
 	mkdir -p "$(TARBALL_STAGE)" "$(CHAN_REPO)/target/release"
 	cp "$(CHAN_REPO)/target/$(LINUX_TARGET)/release/chan" "$(TARBALL_STAGE)/chan"

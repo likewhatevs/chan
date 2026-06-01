@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 const version = "0.15.4";
 const tag = `v${version}`;
 const names = [
-  "chan-x86_64-unknown-linux-gnu.tar.gz",
-  "chan-aarch64-unknown-linux-gnu.tar.gz",
+  "chan-x86_64-unknown-linux-musl.tar.gz",
+  "chan-aarch64-unknown-linux-musl.tar.gz",
   "chan-aarch64-apple-darwin.tar.gz",
   `Chan_${version}.dmg`,
   `Chan_${version}_amd64.AppImage`,
