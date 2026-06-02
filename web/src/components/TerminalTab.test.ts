@@ -237,6 +237,15 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
   // the load-bearing structural changes at the source level (the prompt
   // component is not mounted in the runtime tests above).
 
+  test("Alt+Shift+[/] is let through to App tab-nav (not written to the PTY)", () => {
+    // handleTerminalKeyEvent returns false for Alt+Shift+BracketLeft/Right so
+    // xterm doesn't send them to the shell (which would brace-expand `{...}`);
+    // App.svelte's onWindowKey then navigates tabs.
+    expect(terminalSource).toMatch(
+      /e\.altKey &&\s*e\.shiftKey &&\s*!e\.metaKey &&\s*!e\.ctrlKey &&\s*\(e\.code === "BracketLeft" \|\| e\.code === "BracketRight"\)[\s\S]{0,60}return false;/,
+    );
+  });
+
   test("the Team Work bubble composer is fully removed", () => {
     // @@Host: delete the Team Work bubble entirely. No <TeamWork> mount, no
     // submitTeamWork/teamWorkUsesAgentSubmit helpers, no tab.teamWork, no raw
