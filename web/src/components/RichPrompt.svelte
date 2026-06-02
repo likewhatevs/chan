@@ -16,7 +16,11 @@
   import { EditorState, Prec } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
   import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-  import { markdown } from "@codemirror/lang-markdown";
+  import {
+    deleteMarkupBackward,
+    insertNewlineContinueMarkup,
+    markdown,
+  } from "@codemirror/lang-markdown";
   import { makeThemeCompartment } from "../editor/base";
   import { effectiveHybridSurfaceTheme } from "../state/store.svelte";
   import { currentOS } from "../state/shortcuts";
@@ -55,11 +59,24 @@
       doc: richPrompt.draft,
       extensions: [
         history(),
-        // Plain Enter stays a newline (defaultKeymap's insertNewline); full
-        // undo/redo via history.
         keymap.of([...defaultKeymap, ...historyKeymap]),
-        // High-prec submit chord so Cmd/Ctrl+Enter beats any newline binding.
-        Prec.high(keymap.of([{ key: "Mod-Enter", run: submit }])),
+        // High-prec keymap (beats defaultKeymap below):
+        //  - Mod-Enter submits (a distinct key, so it composes with Enter).
+        //  - Enter continues markdown markup so "- item" / "1." / "> " keep
+        //    going on Enter; insertNewlineContinueMarkup returns false
+        //    off-markup, falling through to defaultKeymap's plain newline.
+        //  - Backspace deletes list/quote markup at the line start, else
+        //    falls through to a normal character delete.
+        // markdown({ addKeymap: false }) keeps the language (syntax) without
+        // its own keymap, so these explicit bindings own Enter/Backspace and
+        // the precedence is unambiguous.
+        Prec.high(
+          keymap.of([
+            { key: "Mod-Enter", run: submit },
+            { key: "Enter", run: insertNewlineContinueMarkup },
+            { key: "Backspace", run: deleteMarkupBackward },
+          ]),
+        ),
         markdown({ addKeymap: false }),
         EditorView.lineWrapping,
         theme.extension,

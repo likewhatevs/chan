@@ -49,12 +49,17 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).not.toMatch(/from "[^"]*(wysiwyg|widgets|bubbles)/i);
   });
 
-  test("plain Enter stays a newline; Cmd/Ctrl+Enter (Mod-Enter) submits", () => {
+  test("markdown-aware editing: Enter continues lists, Backspace dedents, Cmd+Enter submits", () => {
     expect(richPromptSrc).toMatch(
-      /Prec\.high\(\s*keymap\.of\(\[\{ key: "Mod-Enter", run: submit \}\]\)/,
+      /import \{[\s\S]*?deleteMarkupBackward[\s\S]*?insertNewlineContinueMarkup[\s\S]*?\} from "@codemirror\/lang-markdown"/,
     );
-    // No plain-Enter submit binding (that would make Enter submit, not newline).
-    expect(richPromptSrc).not.toMatch(/key: "Enter"/);
+    // One high-prec keymap: Mod-Enter submit + markdown Enter/Backspace, above
+    // defaultKeymap so list continuation wins on Enter.
+    expect(richPromptSrc).toMatch(
+      /Prec\.high\(\s*keymap\.of\(\[[\s\S]*?\{ key: "Mod-Enter", run: submit \}[\s\S]*?\{ key: "Enter", run: insertNewlineContinueMarkup \}[\s\S]*?\{ key: "Backspace", run: deleteMarkupBackward \}/,
+    );
+    // Enter is NOT bound to submit (that would block newlines / list continue).
+    expect(richPromptSrc).not.toMatch(/\{ key: "Enter", run: submit \}/);
   });
 
   test("submit routes through the queue seam + clears, never a raw input frame", () => {
