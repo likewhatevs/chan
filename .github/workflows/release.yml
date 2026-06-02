@@ -646,7 +646,7 @@ jobs:
           find artifacts -type f | sort
           find release-extras -type f | sort
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.context.outputs.tag }}
           files: |
