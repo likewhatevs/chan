@@ -95,6 +95,22 @@ describe("mermaid wiring", () => {
     expect(mermaidSrc).toMatch(/EditorSelection\.cursor\(enter\)/);
   });
 
+  test("reverse flip: cursor-enter ghosts the cached face and folds it out", () => {
+    // The forward flip plays on widget mount; the reverse needs a ghost
+    // because CM removes the widget DOM instantly on enter. Needs real
+    // layout + WAAPI (jsdom has neither), so behaviour is browser-
+    // verified; this pins the mechanism. The ghost rotateX-folds from 0
+    // to -90 (mirror of the forward -90 -> 0) over the same duration.
+    expect(mermaidSrc).toMatch(/cacheFace\(this\.source, this\.dark, res\.svg\)/);
+    expect(mermaidSrc).toMatch(/function flipOutGhost/);
+    expect(mermaidSrc).toMatch(/rotateX\(0deg\)/);
+    expect(mermaidSrc).toMatch(/rotateX\(-90deg\)/);
+    // One chokepoint for every entry path: a block leaving the rendered
+    // set on a pure cursor move ghosts out.
+    expect(mermaidSrc).toMatch(/if \(update\.docChanged \|\| !update\.selectionSet\) return/);
+    expect(mermaidSrc).toMatch(/flipOutGhost\(update\.view, it\.from, widget\)/);
+  });
+
   test("no button: cursor is the only trigger; theme + rotateX wired", () => {
     expect(mermaidSrc).not.toMatch(/createElement\("button"\)/);
     expect(mermaidSrc).not.toMatch(/addEventListener\("click"/);

@@ -6,6 +6,13 @@
 // (rotateX) axis. Cursor back inside reveals the source again. There is
 // no button: the cursor is the only trigger, like every other atom.
 //
+// The flip is symmetric: cursor-LEAVE plays the forward flip-in on the
+// new widget's mount (CSS, Wysiwyg.svelte); cursor-ENTER plays a reverse
+// flip-out. The reverse can't animate the widget (CM removes its DOM the
+// instant the caret lands inside), so a throwaway ghost of the cached
+// diagram face is folded away over the block while the editable source
+// takes its place underneath - see flipOutGhost / the ghostFlip plugin.
+//
 // Only closed fences render (never a mid-typing/unclosed block). A bad
 // diagram renders mermaid's own error on the diagram face rather than
 // falling back to source or throwing. mermaid is dynamic-imported on
@@ -18,6 +25,8 @@ import {
   type DecorationSet,
   EditorView,
   keymap,
+  ViewPlugin,
+  type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
@@ -31,6 +40,112 @@ import {
 import type { SyntaxNode } from "@lezer/common";
 import { selectionInRange } from "../decorations/selection";
 import { renderMermaid } from "../mermaid_render";
+
+// Snapshot of each rendered diagram's face (the SVG, or the error
+// markup), keyed by source + theme. The reverse flip (rendered ->
+// source, when the cursor ENTERS a block) can't animate the widget
+// itself: CM removes the block-replace widget's DOM instantly the moment
+// the caret lands inside. So we rebuild the diagram face from this
+// snapshot as a throwaway "ghost" overlay and flip THAT out while the
+// editable source takes the widget's place underneath. The forward flip
+// (source -> rendered) needs none of this - it just plays on the new
+// widget's mount (see the CSS in Wysiwyg.svelte).
+const FACE_CACHE_MAX = 48;
+const faceCache = new Map<string, string>();
+function faceKey(source: string, dark: boolean): string {
+  return (dark ? "1" : "0") + source;
+}
+function cacheFace(source: string, dark: boolean, html: string): void {
+  const k = faceKey(source, dark);
+  faceCache.delete(k); // re-insert so it counts as most-recently-used
+  faceCache.set(k, html);
+  if (faceCache.size > FACE_CACHE_MAX) {
+    const oldest = faceCache.keys().next().value;
+    if (oldest !== undefined) faceCache.delete(oldest);
+  }
+}
+
+function prefersReducedMotion(): boolean {
+  try {
+    return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  } catch {
+    return false;
+  }
+}
+
+const FLIP_MS = 450; // matches the forward flip-in (Wysiwyg.svelte).
+
+/// Play the reverse flip for a block that just de-rendered to source.
+/// A self-styled fixed-position ghost of the cached diagram face is
+/// dropped over the block's old location and rotateX-folded away (the
+/// mirror of the forward flip-in), then removed. The live source is
+/// already in place underneath, so editing is never blocked by the
+/// animation. No-ops when the face was never cached (entered before the
+/// first render) or the block is off-screen.
+function flipOutGhost(view: EditorView, from: number, widget: MermaidWidget): void {
+  if (prefersReducedMotion()) return;
+  const html = faceCache.get(faceKey(widget.source, widget.dark));
+  if (!html) return; // entered before the first render cached a face
+  // Geometry can't be read during the dispatch that de-renders the block
+  // ("Reading the editor layout isn't allowed during an update"), so the
+  // measure pass reads coordsAtPos and the following write pass builds
+  // the ghost. By then the source has replaced the widget at the same
+  // top, which is exactly where the diagram folds away from.
+  view.requestMeasure<{ top: number; left: number; width: number } | null>({
+    read: () => {
+      const coords = view.coordsAtPos(from);
+      if (!coords) return null; // scrolled out of the viewport
+      const content = view.contentDOM.getBoundingClientRect();
+      return { top: coords.top, left: content.left, width: content.width };
+    },
+    write: (box) => {
+      if (!box) return;
+      const ghost = document.createElement("div");
+      ghost.className = "cm-md-mermaid-ghost";
+      ghost.setAttribute("aria-hidden", "true");
+      Object.assign(ghost.style, {
+        position: "fixed",
+        top: `${box.top}px`,
+        left: `${box.left}px`,
+        width: `${box.width}px`,
+        margin: "0",
+        pointerEvents: "none",
+        zIndex: "40",
+        transformOrigin: "center top",
+      } satisfies Partial<CSSStyleDeclaration>);
+
+      const diagram = document.createElement("div");
+      Object.assign(diagram.style, {
+        display: "flex",
+        justifyContent: "center",
+      } satisfies Partial<CSSStyleDeclaration>);
+      // Inject the cached SVG verbatim: mermaid bakes its own
+      // `max-width` inline style into it, so the ghost renders at the
+      // exact width the editor showed (centered by the flex above).
+      // Do NOT override the SVG sizing - that's what made the ghost
+      // balloon to the full content width.
+      diagram.innerHTML = html;
+      ghost.append(diagram);
+      document.body.append(ghost);
+
+      const cleanup = () => ghost.remove();
+      try {
+        ghost
+          .animate(
+            [
+              { transform: "perspective(1200px) rotateX(0deg)", opacity: 1 },
+              { transform: "perspective(1200px) rotateX(-90deg)", opacity: 0.2 },
+            ],
+            { duration: FLIP_MS, easing: "ease", fill: "forwards" },
+          )
+          .finished.then(cleanup, cleanup);
+      } catch {
+        // No Web Animations API (jsdom): just don't leave a stray ghost.
+        cleanup();
+      }
+    },
+  });
+}
 
 class MermaidWidget extends WidgetType {
   constructor(
@@ -68,6 +183,10 @@ class MermaidWidget extends WidgetType {
         diagram.classList.add("cm-md-mermaid-error");
         diagram.textContent = `mermaid: ${res.error ?? "render failed"}`;
       }
+      // Stash the face so the reverse (enter) flip can ghost it after CM
+      // tears the widget down. SVG only - the error face is plain text,
+      // not worth ghosting.
+      if (res.ok && res.svg) cacheFace(this.source, this.dark, res.svg);
     });
     return wrap;
   }
@@ -133,6 +252,34 @@ export function mermaidDecorations(isDark: () => boolean): Extension {
       return true;
     };
 
+  // Reverse flip. One chokepoint for every entry path (click, left/right,
+  // up/down all land the caret inside the block, which drops its widget
+  // from `field`). When a block leaves the rendered set on a pure cursor
+  // move, ghost its face and flip it out. Doc edits are skipped (no flip
+  // on structural changes); cursor-LEAVE adds to the set, never removes,
+  // so the forward flip is untouched.
+  const ghostFlip = ViewPlugin.fromClass(
+    class {
+      update(update: ViewUpdate): void {
+        if (update.docChanged || !update.selectionSet) return;
+        const prev = update.startState.field(field, false);
+        const cur = update.state.field(field, false);
+        if (!prev || !cur) return;
+        const stillRendered = new Set<number>();
+        for (const it = cur.iter(); it.value; it.next()) {
+          stillRendered.add(it.from);
+        }
+        for (const it = prev.iter(); it.value; it.next()) {
+          if (stillRendered.has(it.from)) continue;
+          const widget = (it.value.spec as { widget?: WidgetType }).widget;
+          if (widget instanceof MermaidWidget) {
+            flipOutGhost(update.view, it.from, widget);
+          }
+        }
+      }
+    },
+  );
+
   return [
     field,
     EditorView.atomicRanges.of(
@@ -146,6 +293,7 @@ export function mermaidDecorations(isDark: () => boolean): Extension {
         { key: "ArrowDown", run: stepInto(true) },
       ]),
     ),
+    ghostFlip,
   ];
 }
 
