@@ -59,6 +59,7 @@ import {
   markTerminalEnvNameRestarted,
   moveTab,
   renameTerminalTab,
+  uniqueTerminalName,
   reopenClosedTab,
   reorderTab,
   restoreLayout,
@@ -1273,6 +1274,40 @@ describe("pane state", () => {
     expect(spawned.kind).toBe("terminal");
     expect(spawned.cwd).toBe("notes");
     expect(created?.id).toBe(spawned.id);
+  });
+
+  test("uniqueTerminalName disambiguates collisions with a -N suffix", () => {
+    resetLayout([
+      terminalTab({ id: "a", title: "agent" }),
+      terminalTab({ id: "b", title: "agent-2" }),
+    ]);
+    // Free when no clash; -2 on a clash; skips to -3 when -2 is taken too.
+    expect(uniqueTerminalName("worker")).toBe("worker");
+    expect(uniqueTerminalName("agent")).toBe("agent-3");
+    // excludeTabId lets a tab keep its own name (rename to the same value).
+    expect(uniqueTerminalName("agent", "a")).toBe("agent");
+  });
+
+  test("renameTerminalTab enforces a unique name (auto -N, never rejects)", () => {
+    const seed = resetLayout([
+      terminalTab({ id: "a", title: "agent" }),
+      terminalTab({ id: "b", title: "Terminal-2" }),
+    ]);
+    const b = (layout.nodes[seed.id] as LeafNode).tabs.find(
+      (t) => t.id === "b",
+    ) as TerminalTab;
+    renameTerminalTab(b, "agent");
+    expect(b.title).toBe("agent-2");
+    // Renaming to its own current name is a no-op (excludes itself).
+    renameTerminalTab(b, "agent-2");
+    expect(b.title).toBe("agent-2");
+  });
+
+  test("a passed creation name is deduped (cs --tab-name / team spawn)", () => {
+    resetLayout([terminalTab({ id: "a", title: "build" })]);
+    const seed = layout.activePaneId;
+    const spawned = openTerminalInPane(seed, { title: "build" });
+    expect(spawned?.title).toBe("build-2");
   });
 
   test("repeated openBrowserInActivePane / openGraphInActivePane stack", () => {

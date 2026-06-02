@@ -694,6 +694,26 @@ function nextTerminalTitle(state: LayoutState = layout): string {
   return `Terminal-${max + 1}`;
 }
 
+/// Disambiguate a desired terminal name against the OTHER live terminals with a
+/// numeric `-N` suffix (the same shape as the Terminal-N default + the cs-team
+/// group `-N`). Two terminals must never share a name: `cs terminal write
+/// --tab-name` targets BY NAME, so a duplicate would double-deliver / ambiguously
+/// route the poke+queue, breaking the serialized-input model. `excludeTabId`
+/// skips the tab being renamed so it never collides with itself.
+export function uniqueTerminalName(desired: string, excludeTabId?: string): string {
+  const base = desired.trim() || "Terminal";
+  const taken = new Set(
+    terminalTabsIn(layout)
+      .filter((t) => t.id !== excludeTabId)
+      .map((t) => terminalTabName(t)),
+  );
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
 /// Each pane (Hybrid in user-facing copy) holds an optional back-side
 /// slot. The back is a per-surface configuration view scoped to the
 /// type of the currently-active front tab. `pane.tabs` /
@@ -1034,7 +1054,9 @@ export function openTerminalInPane(
   const tab: TerminalTab = {
     kind: "terminal",
     id: id("term"),
-    title: title || nextTerminalTitle(),
+    // A passed name (cs terminal new --tab-name, reopen) is deduped so two
+    // terminals never share a name; an unnamed spawn gets the unique Terminal-N.
+    title: title ? uniqueTerminalName(title) : nextTerminalTitle(),
     createdAt: Date.now(),
     broadcastEnabled: false,
     broadcastTargetIds: [],
@@ -1193,7 +1215,11 @@ function graphScopeBasename(path: string): string {
 }
 
 export function renameTerminalTab(tab: TerminalTab, title: string): void {
-  tab.title = title;
+  // Enforce unique terminal names (auto-disambiguate, never reject). Programmatic
+  // callers (team spawn) get uniqueness here; the live rename input commits
+  // through this on blur (it sets tab.title raw while typing to avoid a
+  // per-keystroke cursor jump, then dedupes on commit).
+  tab.title = uniqueTerminalName(title, tab.id);
   if (terminalEnvTabNameStale(tab)) tab.terminalEnvNamePromptDismissed = false;
 }
 

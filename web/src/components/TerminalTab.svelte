@@ -1442,7 +1442,8 @@
           class="rename-input"
           value={tab.title}
           spellcheck="false"
-          oninput={(e) => renameTerminalTab(tab, (e.currentTarget as HTMLInputElement).value)}
+          oninput={(e) => (tab.title = (e.currentTarget as HTMLInputElement).value)}
+          onblur={() => renameTerminalTab(tab, tab.title)}
           onkeydown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
