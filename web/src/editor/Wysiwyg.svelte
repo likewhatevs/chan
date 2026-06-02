@@ -28,6 +28,7 @@
     type WikiLinkClickArgs,
   } from "./widgets/wikilink";
   import {
+    collectDocImageSrcs,
     imageCaretRedirect,
     imageDecorations,
     type ImageClickArgs,
@@ -167,7 +168,12 @@
   /// inside the URL so the image bubble auto-opens via the
   /// imageUrlAtCaret trigger). We treat Cmd/Ctrl-click as "open" -   /// route to the existing image-zoom modal.
   function handleImageClick(args: ImageClickArgs): void {
-    openImageZoom(args.src, currentPath);
+    // The viewer's prev/next set = every image in THIS document, in
+    // document order, so paging stays within the open doc.
+    const set = view
+      ? collectDocImageSrcs(view).map((src) => ({ src, fromPath: currentPath }))
+      : undefined;
+    openImageZoom(args.src, currentPath, set);
     onImageClick(args);
   }
 

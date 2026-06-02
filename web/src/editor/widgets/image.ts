@@ -660,6 +660,27 @@ function imageNodeRange(
   return { from: node.from, to: node.to };
 }
 
+/// Every image src in the document, in document order. Backs the
+/// fullscreen viewer's prev/next over the doc's images: Wysiwyg passes
+/// these as the zoom set so paging stays within the open document.
+export function collectDocImageSrcs(view: EditorView): string[] {
+  const srcs: string[] = [];
+  syntaxTree(view.state).iterate({
+    enter(node) {
+      if (node.name !== "Image") return;
+      const cursor = node.node.cursor();
+      if (!cursor.firstChild()) return;
+      do {
+        if (cursor.name === "URL") {
+          srcs.push(view.state.doc.sliceString(cursor.from, cursor.to));
+          break;
+        }
+      } while (cursor.nextSibling());
+    },
+  });
+  return srcs;
+}
+
 function placeCaretInImageUrl(view: EditorView, hintPos: number): void {
   // hintPos is the Image node's start as captured when the widget
   // was constructed. Looking up via syntaxTree is more reliable than

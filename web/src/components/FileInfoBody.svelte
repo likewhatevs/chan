@@ -39,7 +39,7 @@
     graphData,
     selectionEdgesFor,
   } from "../state/graphData.svelte";
-  import { openImageZoom } from "../state/imageZoom";
+  import { openImageZoom, type ZoomImage } from "../state/imageZoom";
   import { openPdfViewer } from "../state/pdfViewer";
   import {
     downloadTransfer,
@@ -144,6 +144,20 @@
   const entryByPath = $derived(
     new Map(tree.entries.map((e) => [e.path, e])),
   );
+
+  function parentDir(p: string): string {
+    return p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+  }
+
+  /// Images that sit in the SAME directory as `p`, in the file tree's
+  /// display order. Backs the fullscreen viewer's prev/next when the
+  /// view is opened from the file browser (flat directory, no recursion).
+  function dirImageSet(p: string): ZoomImage[] {
+    const dir = parentDir(p);
+    return tree.entries
+      .filter((e) => !e.is_dir && isImage(e.path) && parentDir(e.path) === dir)
+      .map((e) => ({ src: e.path, fromPath: null }));
+  }
 
   const entry = $derived.by(() => {
     if (path === null || path === undefined) return null;
@@ -727,7 +741,7 @@
           <button
             class="open"
             type="button"
-            onclick={() => openImageZoom(entry.path)}>View / Zoom</button
+            onclick={() => openImageZoom(entry.path, null, dirImageSet(entry.path))}>View / Zoom</button
           >
         {:else if pdf}
           <button
@@ -947,7 +961,7 @@
         type="button"
         class="image-preview"
         title="Zoom"
-        onclick={() => openImageZoom(entry.path)}
+        onclick={() => openImageZoom(entry.path, null, dirImageSet(entry.path))}
       >
         <img
           src={withTokenQuery(`/api/files/${encodeURIComponent(entry.path).replace(/%2F/g, "/")}`)}
@@ -1086,7 +1100,7 @@
                       class="ref file"
                       data-refkind="image"
                       title="Zoom"
-                      onclick={() => openImageZoom(l.path)}
+                      onclick={() => openImageZoom(l.path, null, dirImageSet(l.path))}
                     >{l.label}</button>
                   {:else if onNavigate}
                     <button
@@ -1113,7 +1127,7 @@
                       class="ref file"
                       data-refkind="image"
                       title="Zoom"
-                      onclick={() => openImageZoom(b.src)}
+                      onclick={() => openImageZoom(b.src, null, dirImageSet(b.src))}
                     >{b.src}</button>
                   {:else if onNavigate}
                     <button

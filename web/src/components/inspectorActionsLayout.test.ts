@@ -34,7 +34,7 @@ describe("shared actions section under the filename", () => {
 
   test("media gets View / Zoom (image) or View PDF in the actions section", () => {
     expect(fileInfo).toMatch(
-      /\{#snippet actionsSection\(\)\}[\s\S]*?\{#if image\}[\s\S]*?onclick=\{\(\) => openImageZoom\(entry\.path\)\}>View \/ Zoom/,
+      /\{#snippet actionsSection\(\)\}[\s\S]*?\{#if image\}[\s\S]*?onclick=\{\(\) => openImageZoom\(entry\.path, null, dirImageSet\(entry\.path\)\)\}>View \/ Zoom/,
     );
     expect(fileInfo).toMatch(
       /\{:else if pdf\}[\s\S]*?onclick=\{\(\) => openPdfViewer\(entry\.path\)\}>View PDF/,
