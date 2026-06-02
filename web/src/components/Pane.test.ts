@@ -627,3 +627,29 @@ describe("Pane Hybrid NAV transaction mode", () => {
     expect(paneSource).not.toMatch(/class="dead-zone"[\s\S]{0,200}draggable="true"/);
   });
 });
+
+describe("Pane cross-window tab DnD (pane-id collision fix)", () => {
+  test("the drag payload carries the originating window", () => {
+    // Pane ids are a per-window counter and collide across windows, so
+    // the drop side must compare the originating window, not the pane id.
+    expect(paneSource).toMatch(
+      /TAB_DRAG_MIME,[\s\S]{1,160}fromWindow: sessionWindowId\(\)/,
+    );
+    expect(paneSource).toMatch(
+      /import \{ sessionWindowId \} from "\.\.\/api\/client"/,
+    );
+  });
+
+  test("intra-window is decided by window identity, not pane-id presence", () => {
+    expect(paneSource).toMatch(
+      /function isIntraWindowDrag\(fromWindow: string \| undefined\): boolean \{[\s\S]{1,120}fromWindow === sessionWindowId\(\)/,
+    );
+    // Both tab-strip drop handlers gate the intra branch on the window
+    // check (so a colliding stranger pane id falls through to the
+    // cross-window adopt instead of a no-op moveTab).
+    const intraGates = paneSource.match(
+      /isIntraWindowDrag\(fromWindow\) && paneInThisWindow\(fromPaneId\)/g,
+    );
+    expect(intraGates?.length).toBe(2);
+  });
+});

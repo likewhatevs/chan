@@ -93,6 +93,7 @@
     osChord,
   } from "../state/shortcuts";
   import { openTabMenu, tabMenu } from "../state/tabMenu.svelte";
+  import { sessionWindowId } from "../api/client";
   import { onDestroy, onMount } from "svelte";
   import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
 
@@ -627,9 +628,13 @@
   function onDragStart(e: DragEvent, tabId: string): void {
     if (!e.dataTransfer) return;
     e.dataTransfer.effectAllowed = "move";
+    // `fromWindow` is what actually separates an intra-window move from a
+    // cross-window one: pane IDs are a per-window counter (tabs.svelte.ts
+    // makeId) and COLLIDE across Tauri windows, so a stranger pane id can
+    // match a same-id local pane. See isIntraWindowDrag.
     e.dataTransfer.setData(
       TAB_DRAG_MIME,
-      JSON.stringify({ fromPaneId: pane.id, tabId }),
+      JSON.stringify({ fromPaneId: pane.id, tabId, fromWindow: sessionWindowId() }),
     );
     const t = pane.tabs.find((tab) => tab.id === tabId);
     if (t) {
@@ -718,16 +723,37 @@
     }
   }
 
-  function tabDragPayload(e: DragEvent): { fromPaneId: string; tabId: string } | null {
+  function tabDragPayload(
+    e: DragEvent,
+  ): { fromPaneId: string; tabId: string; fromWindow?: string } | null {
     const raw = e.dataTransfer?.getData(TAB_DRAG_MIME);
     if (!raw) return null;
     try {
-      const parsed = JSON.parse(raw) as { fromPaneId?: string; tabId?: string };
+      const parsed = JSON.parse(raw) as {
+        fromPaneId?: string;
+        tabId?: string;
+        fromWindow?: string;
+      };
       if (!parsed.fromPaneId || !parsed.tabId) return null;
-      return { fromPaneId: parsed.fromPaneId, tabId: parsed.tabId };
+      return {
+        fromPaneId: parsed.fromPaneId,
+        tabId: parsed.tabId,
+        fromWindow: parsed.fromWindow,
+      };
     } catch {
       return null;
     }
+  }
+
+  /// True when a tab-drag originated in THIS window. The discriminator is
+  /// the originating window, NOT the pane id: pane ids are a per-window
+  /// counter (tabs.svelte.ts makeId), so a cross-window drag's stranger
+  /// pane id can collide with a same-id pane that happens to exist here.
+  /// Relying on pane-id presence made cross-window drops take the intra
+  /// moveTab path, which no-ops on the foreign tab while the source still
+  /// closes on dragend, so the tab vanished instead of moving.
+  function isIntraWindowDrag(fromWindow: string | undefined): boolean {
+    return fromWindow === sessionWindowId();
   }
 
   function edgeForBodyDrop(e: DragEvent): PaneDropEdge {
@@ -746,7 +772,12 @@
 
   function onBodyDragOver(e: DragEvent): void {
     const payload = tabDragPayload(e);
-    if (!payload || !paneInThisWindow(payload.fromPaneId)) return;
+    if (
+      !payload ||
+      !isIntraWindowDrag(payload.fromWindow) ||
+      !paneInThisWindow(payload.fromPaneId)
+    )
+      return;
     e.preventDefault();
     e.stopPropagation();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
@@ -764,7 +795,15 @@
     const payload = tabDragPayload(e);
     const edge = bodyDropEdge ?? edgeForBodyDrop(e);
     bodyDropEdge = null;
-    if (!payload || !paneInThisWindow(payload.fromPaneId)) return;
+    // Cross-window split-edge drops are not supported (acceptCrossWindowTab
+    // adds a tab to the strip, not a split), so an intra-window check
+    // both fixes the id-collision false-positive and keeps the boundary.
+    if (
+      !payload ||
+      !isIntraWindowDrag(payload.fromWindow) ||
+      !paneInThisWindow(payload.fromPaneId)
+    )
+      return;
     e.preventDefault();
     e.stopPropagation();
     markLocalTabDrop(payload.fromPaneId, payload.tabId);
@@ -830,11 +869,12 @@
     const tabRaw = dt.getData(TAB_DRAG_MIME);
     if (tabRaw) {
       try {
-        const { fromPaneId, tabId } = JSON.parse(tabRaw) as {
+        const { fromPaneId, tabId, fromWindow } = JSON.parse(tabRaw) as {
           fromPaneId: string;
           tabId: string;
+          fromWindow?: string;
         };
-        if (paneInThisWindow(fromPaneId)) {
+        if (isIntraWindowDrag(fromWindow) && paneInThisWindow(fromPaneId)) {
           e.preventDefault();
           e.stopPropagation();
           markLocalTabDrop(fromPaneId, tabId);
@@ -848,7 +888,8 @@
           }
           return;
         }
-        // Fall through to cross-window path: fromPaneId is a stranger.
+        // Fall through to cross-window path: the drag is from another
+        // window (its pane id may coincidentally match a local one).
       } catch {
         // malformed payload; fall through.
       }
@@ -882,11 +923,12 @@
     const tabRaw = dt.getData(TAB_DRAG_MIME);
     if (tabRaw) {
       try {
-        const { fromPaneId, tabId } = JSON.parse(tabRaw) as {
+        const { fromPaneId, tabId, fromWindow } = JSON.parse(tabRaw) as {
           fromPaneId: string;
           tabId: string;
+          fromWindow?: string;
         };
-        if (paneInThisWindow(fromPaneId)) {
+        if (isIntraWindowDrag(fromWindow) && paneInThisWindow(fromPaneId)) {
           e.preventDefault();
           markLocalTabDrop(fromPaneId, tabId);
           if (fromPaneId === pane.id) {
@@ -901,7 +943,7 @@
           }
           return;
         }
-        // Fall through to cross-window path.
+        // Fall through to cross-window path (drag from another window).
       } catch {
         // malformed payload; fall through.
       }
