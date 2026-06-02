@@ -16,3 +16,9 @@ Format: [HH:MM @@From] TYPE: one line
 [post-break @@Lead] @@Host: SKIP the publish=false dry-run; cut the real tag directly (deploys binaries + /dl + Pages together). Updated release sequence: unique-names -> gate -> final :8787 validation -> docs(phase-16) -> 0.24.0 bump (all pins) -> full pre-push green -> make macos-chan-dmg (hand DMG to @@Host) -> @@Host go -> tag vX.Y.Z (CI publishes binaries+/dl+pages). NOTE: tag push still runs the pre-push hook (full make pre-push) so the gate happens at tag time regardless. Still PAUSE before the tag for @@Host explicit go (outward-facing).
 [post-break @@Lead] :8787 rebuilt @ 8c53c29a (md5-fresh WuOXu6Y5; TeamWork bubble markers=0, createDraft=3). Automated boot-smoke PASS: clean boot, zero console errors, UI renders (welcome+actions), new model confirmed. @@Host validating hands-on. Proceeding release prep per authorization: docs(phase-16) -> 0.24.0 bump -> pre-push -> macos-chan-dmg -> tag (if DMG clean).
 [release @@Lead] 0.24.0 bump committed 3e59f12a (7 pins, lockstep gateway). docs(phase-16) d9974284 committed. @@LaneE terminal.md 6+7 in working tree (+48 lines, coherent) but uncommitted -> poked to verify+commit (ships in 0.24.0) or revert clean (tree must be clean for gate/DMG/tag). Then: full pre-push gate -> make macos-chan-dmg -> @@Host DMG copy -> tag v0.24.0 (CI: binaries+/dl+pages). Per @@Host: clean DMG build authorizes the tag.
+
+[RELEASE @@Lead] v0.24.0 CUT. Pushed origin main 238639de..45a6e341 + tag
+v0.24.0. release.yml in_progress (run 26819568757) -> binaries + /dl + Pages.
+Local signed DMG: target/release/bundle/dmg/Chan_0.24.0_aarch64.dmg (14M).
+All 16 crates + web + tauri unified at 0.24.0 (cargo-metadata verified).
+Full pre-push green pre-tag + the gated push re-ran it green. Round-1 COMPLETE.
