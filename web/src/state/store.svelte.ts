@@ -712,6 +712,13 @@ type WindowCommandFrame =
       command: "pane_exec";
       request_id: string;
       op: PaneExecOp;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "team_spawned";
+      group: string;
+      members: { tab_name: string; session_id: string }[];
     };
 
 /// A tab's display title for `cs pane`: a file tab's basename, else its
@@ -1013,6 +1020,38 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     // and POST the result back to unblock the waiting CLI.
     await respondPaneExec(frame.request_id, frame.op);
     return;
+  }
+  if (frame.command === "team_spawned" && Array.isArray(frame.members)) {
+    // S1: a CLI `cs terminal team new|load` spawned a team in this window;
+    // surface each member by opening a terminal tab attached to its live
+    // session.
+    surfaceTeamSpawn(typeof frame.group === "string" ? frame.group : "", frame.members);
+    return;
+  }
+}
+
+/// S1: surface a CLI-spawned team. The server already started each PTY; open
+/// a terminal tab ATTACHED to each live `session_id` (not a fresh session),
+/// grouped under the team's group, so a `cs terminal team new|load` from the
+/// CLI shows up in this window instead of only on the next attach. The new
+/// tabs stack in the active pane.
+function surfaceTeamSpawn(
+  group: string,
+  members: { tab_name: string; session_id: string }[],
+): void {
+  let opened = 0;
+  for (const m of members) {
+    if (!m || typeof m.session_id !== "string" || !m.session_id) continue;
+    openTerminalInActivePane({
+      sessionId: m.session_id,
+      title: typeof m.tab_name === "string" && m.tab_name ? m.tab_name : undefined,
+      group: group || undefined,
+    });
+    opened += 1;
+  }
+  if (opened > 0) {
+    setTransientStatus(`team: opened ${opened} terminal(s)`);
+    scheduleSessionSave();
   }
 }
 

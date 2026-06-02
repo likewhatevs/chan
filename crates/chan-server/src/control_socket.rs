@@ -107,6 +107,25 @@ enum WindowCommand {
         request_id: String,
         op: PaneOp,
     },
+    // S1: a CLI `cs terminal team new|load` spawned a team server-side; tell
+    // the window that owns it to SURFACE the agents by opening a terminal tab
+    // per member ATTACHED to the already-spawned `session_id` (not a fresh
+    // session), grouped under `group`. Fire-and-forget (no reply / no window
+    // bus), like the `open_*` commands.
+    TeamSpawned {
+        group: String,
+        members: Vec<SpawnedMember>,
+    },
+}
+
+/// One spawned team member in a [`WindowCommand::TeamSpawned`]: the tab name
+/// (the member handle) and the live `session_id` the SPA attaches its new
+/// terminal tab to.
+#[cfg(unix)]
+#[derive(Debug, Clone, Serialize)]
+struct SpawnedMember {
+    tab_name: String,
+    session_id: String,
 }
 
 #[cfg(unix)]
@@ -409,6 +428,7 @@ async fn handle_request(
                 config_toml,
                 script,
                 window_id,
+                events_tx,
             )
             .await
         }
@@ -457,6 +477,10 @@ async fn handle_request(
 /// async because the non-`--script` `new` spawns the team then blocks a
 /// boot grace before poking each agent's identity prompt (the same
 /// sequence the `--script` form runs inline with `sleep 3`).
+// Each arg is a distinct dispatch input forwarded from the control request +
+// the connection's shared handles; bundling them into a struct would only
+// move the noise, so allow the count here.
+#[allow(clippy::too_many_arguments)]
 #[cfg(unix)]
 async fn handle_team(
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
@@ -467,8 +491,10 @@ async fn handle_team(
     script: bool,
     // The caller's window ($CHAN_WINDOW_ID), when present: every spawned
     // agent session binds to it so the agents carry $CHAN_WINDOW_ID and the
-    // window-targeting `cs` commands work from inside an agent.
+    // window-targeting `cs` commands work from inside an agent. The same
+    // window receives the S1 `TeamSpawned` surfacing push.
     window_id: Option<String>,
+    events_tx: &broadcast::Sender<String>,
 ) -> ControlResponse {
     use crate::routes::team_config::{
         ensure_created_at, generate_bootstrap_script, read_team_config, validate_team_config,
@@ -536,7 +562,7 @@ async fn handle_team(
                     ),
                 };
             };
-            spawn_and_poke_team(registry, dir, &config, window_id.as_deref()).await
+            spawn_and_poke_team(registry, dir, &config, window_id.as_deref(), events_tx).await
         }
         TeamOp::Load => {
             let workspace = match workspace_from_cell(workspace_cell) {
@@ -574,7 +600,7 @@ async fn handle_team(
                     ),
                 };
             };
-            spawn_and_poke_team(registry, dir, &config, window_id.as_deref()).await
+            spawn_and_poke_team(registry, dir, &config, window_id.as_deref(), events_tx).await
         }
     }
 }
@@ -598,6 +624,9 @@ struct TeamSpawn {
     /// `(handle, payload)` for each AGENT member; the payload is the
     /// identity prompt with the agent's submit chord already appended.
     pokes: Vec<(String, String)>,
+    /// Each spawned member's tab name + live `session_id`, for the S1
+    /// SPA-surfacing push (`WindowCommand::TeamSpawned`).
+    members: Vec<SpawnedMember>,
 }
 
 /// Resolve the team's terminal group against the LIVE registry, appending
@@ -645,6 +674,7 @@ fn spawn_team(
     let mut spawned = Vec::new();
     let mut failed = Vec::new();
     let mut pokes = Vec::new();
+    let mut members = Vec::new();
     for m in lead_first_order(config) {
         // A blank command runs the member's default login shell (a shell
         // member); a named command (claude/codex/...) is the PTY program.
@@ -675,11 +705,15 @@ fn spawn_team(
             env: m.env.clone(),
         };
         match registry.create(opts) {
-            Ok(_handle) => {
-                // Drop the attach handle: the session stays in the registry
-                // map, and the boot-grace poke re-resolves it by
-                // tab-name + group.
+            Ok(handle) => {
+                // Capture the session id for the S1 surfacing push, then drop
+                // the attach handle: the session stays in the registry map,
+                // and the boot-grace poke re-resolves it by tab-name + group.
                 spawned.push(m.handle.clone());
+                members.push(SpawnedMember {
+                    tab_name: m.handle.clone(),
+                    session_id: handle.id().to_string(),
+                });
                 if let Some(agent) = m.agent.as_deref().and_then(SubmitAgent::from_agent_name) {
                     let payload = apply_submit_chord(identity_prompt(config, dir, m), Some(agent));
                     pokes.push((m.handle.clone(), payload));
@@ -693,6 +727,7 @@ fn spawn_team(
         spawned,
         failed,
         pokes,
+        members,
     }
 }
 
@@ -707,8 +742,29 @@ async fn spawn_and_poke_team(
     dir: &str,
     config: &TeamConfig,
     window_id: Option<&str>,
+    events_tx: &broadcast::Sender<String>,
 ) -> ControlResponse {
     let spawn = spawn_team(registry, dir, config, window_id);
+
+    // S1: surface the spawned team in the window that owns it (fix A bound
+    // each agent to `window_id`). The same window opens a terminal tab per
+    // member ATTACHED to the live session, so a CLI `cs terminal team new`
+    // shows up in the running SPA instead of only on the SPA's next attach.
+    // A windowless spawn has no window to surface into. Sent before the boot
+    // grace so the tabs appear while the agents start; the poke reaches the
+    // PTYs independently of any SPA attach.
+    if let Some(window_id) = window_id {
+        if !spawn.members.is_empty() {
+            let _ = send_window_command(
+                window_id,
+                WindowCommand::TeamSpawned {
+                    group: spawn.group.clone(),
+                    members: spawn.members.clone(),
+                },
+                events_tx,
+            );
+        }
+    }
 
     // Let the agents come up before poking their compose boxes, then deliver
     // each agent its identity prompt + submit chord. A shell member has no
@@ -1727,16 +1783,45 @@ agent = "codex"
         Arc::new(RwLock::new(None))
     }
 
+    /// A throwaway events sender for `handle_team` / `spawn_and_poke_team` in
+    /// tests. The S1 `TeamSpawned` push goes here; with no receiver the
+    /// broadcast `send` is a harmless no-op, so the tests do not assert on it.
+    fn test_events() -> broadcast::Sender<String> {
+        broadcast::channel::<String>(8).0
+    }
+
     #[tokio::test]
     async fn handle_team_rejects_empty_and_absolute_dir() {
         let cell = empty_cell();
-        match handle_team(&cell, None, "   ", TeamOp::New, None, false, None).await {
+        match handle_team(
+            &cell,
+            None,
+            "   ",
+            TeamOp::New,
+            None,
+            false,
+            None,
+            &test_events(),
+        )
+        .await
+        {
             ControlResponse::Error { message } => {
                 assert!(message.contains("required"), "{message}")
             }
             ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
         }
-        match handle_team(&cell, None, "/abs/team", TeamOp::Load, None, false, None).await {
+        match handle_team(
+            &cell,
+            None,
+            "/abs/team",
+            TeamOp::Load,
+            None,
+            false,
+            None,
+            &test_events(),
+        )
+        .await
+        {
             ControlResponse::Error { message } => {
                 assert!(message.contains("workspace-relative"), "{message}")
             }
@@ -1747,7 +1832,18 @@ agent = "codex"
     #[tokio::test]
     async fn handle_team_new_requires_a_config() {
         let cell = empty_cell();
-        match handle_team(&cell, None, "new-team-1", TeamOp::New, None, false, None).await {
+        match handle_team(
+            &cell,
+            None,
+            "new-team-1",
+            TeamOp::New,
+            None,
+            false,
+            None,
+            &test_events(),
+        )
+        .await
+        {
             ControlResponse::Error { message } => {
                 assert!(message.contains("needs a config"), "{message}")
             }
@@ -1768,6 +1864,7 @@ agent = "codex"
             Some(SAMPLE_TEAM_TOML.into()),
             true,
             None,
+            &test_events(),
         )
         .await
         {
@@ -1791,6 +1888,7 @@ agent = "codex"
             Some("this is not = = toml".into()),
             true,
             None,
+            &test_events(),
         )
         .await
         {
@@ -1819,6 +1917,7 @@ created_at = "2026-05-29T00:00:00Z"
             Some(toml_text.into()),
             true,
             None,
+            &test_events(),
         )
         .await
         {
@@ -1970,7 +2069,7 @@ is_lead = false
         let (_root, registry) = empty_registry();
         let registry = Arc::new(registry);
         let config: TeamConfig = toml::from_str(SHELL_TEAM_TOML).expect("valid shell team");
-        match spawn_and_poke_team(&registry, "new-team-1", &config, None).await {
+        match spawn_and_poke_team(&registry, "new-team-1", &config, None, &test_events()).await {
             ControlResponse::Ok { message } => {
                 assert!(message.contains("shellsquad"), "{message}");
                 assert!(message.contains("2 member(s) up"), "{message}");
@@ -1979,6 +2078,49 @@ is_lead = false
             ControlResponse::Error { message } => panic!("unexpected error: {message}"),
         }
         assert_eq!(registry.session_summaries().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn spawn_and_poke_team_surfaces_to_the_window() {
+        // S1: a windowed spawn pushes a `team_spawned` frame to that window
+        // carrying the group + each member's tab name and live session id, so
+        // the SPA can open a terminal tab attached to the session.
+        let (_root, registry) = empty_registry();
+        let registry = Arc::new(registry);
+        let config: TeamConfig = toml::from_str(SHELL_TEAM_TOML).expect("valid shell team");
+        let (events_tx, mut rx) = broadcast::channel::<String>(8);
+        spawn_and_poke_team(&registry, "new-team-1", &config, Some("win-s1"), &events_tx).await;
+
+        let frame: serde_json::Value =
+            serde_json::from_str(&rx.try_recv().expect("team_spawned frame")).expect("json");
+        assert_eq!(frame["type"], "window_command");
+        assert_eq!(frame["window_id"], "win-s1");
+        assert_eq!(frame["command"], "team_spawned");
+        assert_eq!(frame["group"], "shellsquad");
+        let members = frame["members"].as_array().expect("members array");
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0]["tab_name"], "@@Boss");
+        assert!(
+            members[0]["session_id"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
+            "member carries a live session id: {members:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_and_poke_team_windowless_does_not_surface() {
+        // No window to surface into -> no `team_spawned` push (the SPA learns
+        // the sessions on its next attach, as before).
+        let (_root, registry) = empty_registry();
+        let registry = Arc::new(registry);
+        let config: TeamConfig = toml::from_str(SHELL_TEAM_TOML).expect("valid shell team");
+        let (events_tx, mut rx) = broadcast::channel::<String>(8);
+        spawn_and_poke_team(&registry, "new-team-1", &config, None, &events_tx).await;
+        assert!(
+            rx.try_recv().is_err(),
+            "a windowless spawn must not surface a team_spawned frame"
+        );
     }
 
     /// A workspace cell with a SHELL_TEAM_TOML team already written under
@@ -2036,6 +2178,7 @@ is_lead = false
             None,
             false,
             Some("win-load".to_string()),
+            &test_events(),
         )
         .await
         {
@@ -2064,7 +2207,18 @@ is_lead = false
         // A server with terminals disabled has nothing to spawn into, so Load
         // still validates + summarizes instead of erroring.
         let (_cfg, _root, cell) = bound_cell_with_shell_team("saved-team");
-        match handle_team(&cell, None, "saved-team", TeamOp::Load, None, false, None).await {
+        match handle_team(
+            &cell,
+            None,
+            "saved-team",
+            TeamOp::Load,
+            None,
+            false,
+            None,
+            &test_events(),
+        )
+        .await
+        {
             ControlResponse::Ok { message } => {
                 assert!(
                     message.contains("no terminal registry to spawn into"),
@@ -2083,6 +2237,7 @@ is_lead = false
             spawned: vec!["@@Lead".into(), "@@A".into()],
             failed: vec![("@@B".into(), "no such file".into())],
             pokes: vec![("@@Lead".into(), "hi\x1b[27;9;13~".into())],
+            members: vec![],
         };
         match team_spawn_summary("alpha", &spawn) {
             ControlResponse::Ok { message } => {
@@ -2104,6 +2259,7 @@ is_lead = false
             spawned: vec![],
             failed: vec![("@@Lead".into(), "boom".into())],
             pokes: vec![],
+            members: vec![],
         };
         match team_spawn_summary("alpha", &spawn) {
             ControlResponse::Error { message } => {
