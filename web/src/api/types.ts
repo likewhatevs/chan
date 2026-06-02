@@ -244,6 +244,17 @@ export type TreeEntry = {
   kind?: "document" | "contact" | "text" | "media" | "binary";
 };
 
+/// Per-workspace directory blocklist view (round-1 wave-3). The index +
+/// graph walk skips `effective = union(defaults, workspace)`. `defaults`
+/// is the global machine-wide baseline (read-only here); `workspace` is
+/// this workspace's own editable additions. Backed by
+/// `crates/chan-server/src/routes/excluded_dirs.rs`.
+export type ExcludedDirsView = {
+  defaults: string[];
+  workspace: string[];
+  effective: string[];
+};
+
 export type PathKind =
   | "directory"
   | "symlink"

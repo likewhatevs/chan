@@ -9,6 +9,7 @@ import type {
   ContentSearchResponse,
   DraftInspectResponse,
   DraftPromoteResponse,
+  ExcludedDirsView,
   FileResponse,
   FsGraphResponse,
   PreflightSnapshot,
@@ -1045,6 +1046,15 @@ export const api = {
     req<{ enabled: boolean }>("POST", "/api/index/reports/enable"),
   reportsDisable: () =>
     req<{ enabled: boolean }>("POST", "/api/index/reports/disable"),
+  /// Per-workspace directory blocklist (round-1 wave-3). The index +
+  /// graph walk skips `effective = union(defaults, workspace)`; only the
+  /// `workspace` additions are editable. PUT replaces the whole set
+  /// (names only - case-insensitive basenames, no paths) and queues a
+  /// re-walk. Backed by
+  /// `crates/chan-server/src/routes/excluded_dirs.rs`.
+  excludedDirs: () => req<ExcludedDirsView>("GET", "/api/index/excluded-dirs"),
+  setExcludedDirs: (workspace: string[]) =>
+    req<ExcludedDirsView>("PUT", "/api/index/excluded-dirs", { workspace }),
   /// Screensaver state and PIN endpoints
   /// (`crates/chan-server/src/routes/screensaver.rs`). The PIN
   /// hash never appears in the response body; the state shape
