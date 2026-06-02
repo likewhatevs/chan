@@ -58,6 +58,7 @@
   surface="dashboard"
   ariaLabel="Dashboard settings"
   {onDone}
+  footerBorder={false}
 >
   {#if slot === 0}
     <AboutSlotConfig />
@@ -68,16 +69,16 @@
   {/if}
 
   <!-- Carousel navigator. Mirrors the FRONT card's carousel controls
-       (EmptyPaneCarousel.svelte) in both look AND placement: a centered
-       BOTTOM ROW of prev/next chevrons + a dot pager + a pause/play toggle.
-       `margin-top: auto` pushes it below the slot body the way the front's
-       slide-stage pushes its controls to the bottom; `align-self: center`
-       centers it like the front's `align-items: center`. Selecting a slot
-       swaps the body above and moves tab.carouselSlide so the front lands
-       on the same slot when flipped back; pause/play sets tab.autoRotate.
-       The navigator itself does not auto-rotate (you are configuring, not
+       (EmptyPaneCarousel.svelte): prev/next chevrons + a dot pager + a
+       pause/play toggle. It rides in the shell's footer row (footerCenter)
+       now - centered, sharing the row with the right-aligned OK - instead
+       of a separate bottom row above a divider. Selecting a slot swaps the
+       body above and moves tab.carouselSlide so the front lands on the
+       same slot when flipped back; pause/play sets tab.autoRotate. The
+       navigator itself does not auto-rotate (you are configuring, not
        watching). -->
-  <div class="carousel-nav" aria-label="Dashboard slot navigator">
+  {#snippet footerCenter()}
+    <div class="carousel-nav" aria-label="Dashboard slot navigator">
     <button
       class="nav-arrow"
       type="button"
@@ -122,22 +123,20 @@
         <Play size={14} strokeWidth={1.75} aria-hidden="true" />
       {/if}
     </button>
-  </div>
+    </div>
+  {/snippet}
 </HybridSurfaceConfigShell>
 
 <style>
   /* Carousel navigator, styled to match the front carousel's
      `.carousel-controls` (EmptyPaneCarousel.svelte) so the two faces read
-     as the same control family. `margin-top: auto` parks it on the BOTTOM
-     row of the config body (the front's slide-stage flexes it down the same
-     way) and `align-self: center` centers it (the front uses the carousel's
-     `align-items: center`), so the back nav sits exactly like the front. */
+     as the same control family. It lives in the shell footer's centered
+     slot now, so the row placement/centering is the footer grid's job;
+     this just lays the controls out inline. */
   .carousel-nav {
     display: inline-flex;
-    align-self: center;
     align-items: center;
     gap: 8px;
-    margin-top: auto;
   }
   .nav-arrow,
   .cycle-toggle {

@@ -16,6 +16,8 @@
     saveStatus = "idle",
     onDone,
     children,
+    footerCenter,
+    footerBorder = true,
   }: {
     title: string;
     surface: HybridSurfaceKind;
@@ -23,6 +25,12 @@
     saveStatus?: SaveStatus;
     onDone?: () => void;
     children?: Snippet;
+    // Optional content centered in the footer row, sharing it with the
+    // right-aligned OK (e.g. the Dashboard back's carousel navigator).
+    footerCenter?: Snippet;
+    // The footer's top divider. On by default; a back that pulls its own
+    // controls into the footer row can drop it for a seamless single row.
+    footerBorder?: boolean;
   } = $props();
 
   const activeTheme = $derived(effectiveHybridSurfaceTheme(surface));
@@ -56,7 +64,10 @@
       {@render children()}
     {/if}
   </div>
-  <footer class="config-footer">
+  <footer class="config-footer" class:bordered={footerBorder}>
+    {#if footerCenter}
+      <div class="footer-center">{@render footerCenter()}</div>
+    {/if}
     <button type="button" class="config-ok" onclick={() => onDone?.()}>OK</button>
   </footer>
 </section>
@@ -119,13 +130,26 @@
     font-weight: 600;
     color: var(--text);
   }
+  /* Three tracks so optional centered content (footerCenter) sits in the
+     middle while OK stays pinned right; the empty left track balances the
+     right one so the center is true-centered across the whole row. With
+     no footerCenter the middle track collapses and OK is still right. */
   .config-footer {
-    display: flex;
-    justify-content: flex-end;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
     padding: 12px 20px 16px;
+  }
+  .config-footer.bordered {
     border-top: 1px solid var(--border);
   }
+  .footer-center {
+    grid-column: 2;
+    justify-self: center;
+  }
   .config-ok {
+    grid-column: 3;
+    justify-self: end;
     background: var(--btn-bg);
     color: var(--text);
     border: 1px solid var(--btn-border);
