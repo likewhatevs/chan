@@ -139,7 +139,7 @@ describe("shouldEscapeTerminal lookup", () => {
 describe("TerminalTab consults shouldEscapeTerminal", () => {
   test("handleTerminalKeyEvent imports + calls shouldEscapeTerminal", () => {
     expect(terminalRaw).toMatch(
-      /import \{ chordFor, shouldEscapeTerminal \} from "\.\.\/state\/shortcuts";/,
+      /import \{[\s\S]*?\bshouldEscapeTerminal\b[\s\S]*?\} from "\.\.\/state\/shortcuts";/,
     );
     expect(terminalRaw).toMatch(
       /function handleTerminalKeyEvent\(e: KeyboardEvent\): boolean \{[\s\S]*?if \(shouldEscapeTerminal\(e\)\) return false;/,

@@ -28,7 +28,12 @@
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
   import { openExternalUrl } from "../editor/external_links";
-  import { chordFor, shouldEscapeTerminal } from "../state/shortcuts";
+  import {
+    chordFor,
+    currentOS,
+    formatChord,
+    shouldEscapeTerminal,
+  } from "../state/shortcuts";
   import {
     advanceTerminalSeq,
     allTerminalTabs,
@@ -42,6 +47,7 @@
     markTerminalEnvNameRestarted,
     registerTerminalCloseSink,
     registerTerminalInputSink,
+    registerTerminalPromptSink,
     renameTerminalTab,
     reopenClosedTab,
     setTerminalBroadcastEnabled,
@@ -92,6 +98,8 @@
   import McpEnvInfoModal from "./McpEnvInfoModal.svelte";
   import { markPaneModalOpen } from "../state/paneModalGuard.svelte";
   import TeamWork from "./TeamWork.svelte";
+  import RichPrompt from "./RichPrompt.svelte";
+  import { richPrompt, toggleRichPrompt } from "../state/richPrompt.svelte";
 
   let {
     tab,
@@ -250,9 +258,13 @@
   $effect(() => {
     const unregisterInput = registerTerminalInputSink(tab.id, (data) => sendInput(data));
     const unregisterClose = registerTerminalCloseSink(tab.id, closeTerminalForTab);
+    // Rich Prompt bubble -> this session's WS `prompt` frame -> the server-side
+    // write queue (NOT sendInput's raw keystroke path).
+    const unregisterPrompt = registerTerminalPromptSink(tab.id, sendPrompt);
     return () => {
       unregisterInput();
       unregisterClose();
+      unregisterPrompt();
     };
   });
 
@@ -854,6 +866,25 @@
     send({ type: "input", data });
   }
 
+  /// Rich Prompt submit path: send the markdown over the existing terminal WS
+  /// as a `prompt` frame so the server ENQUEUES it into this session's write
+  /// queue (shared FIFO with `cs terminal write`) and appends the submit chord
+  /// when the agent is idle. Deliberately NOT `sendInput` (the raw keystroke
+  /// path bypasses the queue). `agent` is omitted in v1; the server defaults
+  /// to claude. Contract: @@LaneA event-lane-a.md 10:58 CONTRACT (3d6d144e).
+  function sendPrompt(data: string, agent?: string): void {
+    send({ type: "prompt", data, ...(agent ? { agent } : {}) });
+  }
+
+  // Rich Prompt: the right-click "Show/Hide Rich Prompt" entry mirrors the
+  // Cmd+Shift+P chord (App.svelte onWindowKey). The chord label is formatted
+  // for the current OS (Cmd on macOS, Ctrl elsewhere).
+  const richPromptChord = formatChord("Mod+Shift+P", currentOS());
+  function toggleRichPromptFromMenu(): void {
+    closeTabMenu();
+    toggleRichPrompt();
+  }
+
   function writePtyOutput(bytes: Uint8Array): void {
     if (!term) return;
     ptyOutputWriteDepth += 1;
@@ -1440,6 +1471,15 @@
             <span class="mbtn-label">Copy Scrollback</span>
             <span class="mbtn-chord"></span>
           </button>
+          <button class="mbtn" onclick={toggleRichPromptFromMenu}>
+            <span class="mbtn-icon">
+              <MessageSquare size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">
+              {richPrompt.visible ? "Hide Rich Prompt" : "Show Rich Prompt"}
+            </span>
+            <span class="mbtn-chord">{richPromptChord}</span>
+          </button>
         </div>
       {:else}
       <label class="rename-row">
@@ -1736,6 +1776,13 @@
       ? `${(tab.teamWork.measuredHeightPx ?? tab.teamWork.heightPx ?? 320) + 12}px`
       : null}
   ></div>
+  <!-- Rich Prompt bubble floats over this terminal's bottom (the
+       .terminal-tab is the position:absolute context). Mount only on the
+       ACTIVE terminal so one window shows a single bubble that follows the
+       active terminal; toggled by Cmd+Shift+P / the right-click menu. -->
+  {#if active && richPrompt.visible}
+    <RichPrompt />
+  {/if}
 </div>
 
 <McpEnvInfoModal
