@@ -164,6 +164,16 @@ pub struct IndexConfig {
     /// `IndexConfig` (Round-3 may refactor to a separate `features.toml`).
     #[serde(default)]
     pub reports_enabled: bool,
+    /// Round-1 wave-3 (@@Host): per-workspace directory BLOCKLIST additions.
+    /// Directory basenames excluded from THIS workspace's index + graph walk,
+    /// ON TOP of the global machine-wide baseline (`Registry::
+    /// index_excluded_dirs`). The effective walk filter is
+    /// union(global defaults, these). Empty by default (`#[serde(default)]`),
+    /// so a new or legacy workspace adds nothing of its own. Matched as exact
+    /// basenames at any depth, case-insensitive (same semantics as the global
+    /// list). Managed via `GET`/`PUT /api/index/excluded-dirs`.
+    #[serde(default)]
+    pub excluded_dirs: Vec<String>,
     /// systacean-40: screensaver overlay opt-in. Default-false so
     /// workspaces without the feature configured stay unchanged. SPA
     /// reads `Workspace::screensaver_enabled()` via the
@@ -253,6 +263,10 @@ impl Default for IndexConfig {
             // false via the field's `#[serde(default)]`, so existing
             // workspaces never flip (no migration).
             reports_enabled: true,
+            // Per-workspace blocklist additions: none by default; the global
+            // baseline alone applies until the user adds workspace-specific
+            // dirs via the CRUD route.
+            excluded_dirs: Vec::new(),
             screensaver_enabled: false,
             screensaver_timeout_secs: default_screensaver_timeout_secs(),
             screensaver_theme: ScreensaverTheme::Plain,

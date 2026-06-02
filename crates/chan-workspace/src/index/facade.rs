@@ -313,6 +313,23 @@ impl Index {
         Ok(())
     }
 
+    /// Replace the per-workspace directory blocklist additions. Idempotent on
+    /// no-change. Persists the new set to `config.toml`; the effective walk
+    /// filter is re-derived on the next reindex (union with the global
+    /// baseline), so callers trigger a rebuild after this to re-walk.
+    pub fn set_excluded_dirs(&self, dirs: Vec<String>) -> Result<(), IndexError> {
+        let to_save = {
+            let mut cfg = self.config.lock().unwrap();
+            if cfg.excluded_dirs == dirs {
+                return Ok(());
+            }
+            cfg.excluded_dirs = dirs;
+            cfg.clone()
+        };
+        config::save(&self.index_dir, &to_save)?;
+        Ok(())
+    }
+
     /// systacean-40: flip the per-workspace screensaver-enabled flag.
     /// Idempotent on no-change.
     pub fn set_screensaver_enabled(&self, enabled: bool) -> Result<(), IndexError> {
@@ -1618,6 +1635,7 @@ mod tests {
             vectors_dim: Some(1024),
             semantic_enabled: false,
             reports_enabled: false,
+            excluded_dirs: Vec::new(),
             screensaver_enabled: false,
             screensaver_timeout_secs: 300,
             screensaver_theme: config::ScreensaverTheme::Matrix,
@@ -1658,6 +1676,7 @@ mod tests {
             vectors_dim: Some(384),
             semantic_enabled: false,
             reports_enabled: false,
+            excluded_dirs: Vec::new(),
             screensaver_enabled: false,
             screensaver_timeout_secs: 300,
             screensaver_theme: config::ScreensaverTheme::Matrix,
@@ -1696,6 +1715,7 @@ mod tests {
             vectors_dim: Some(384),
             semantic_enabled: false,
             reports_enabled: false,
+            excluded_dirs: Vec::new(),
             screensaver_enabled: false,
             screensaver_timeout_secs: 300,
             screensaver_theme: config::ScreensaverTheme::Matrix,

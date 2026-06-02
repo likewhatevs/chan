@@ -2176,10 +2176,12 @@ impl Workspace {
         self.write_rebuild_marker()?;
         self.rebuild_graph(cancel, progress)?;
         let index = self.index()?;
-        // Push the current filter snapshot to the index facade so the
+        // Push the EFFECTIVE filter (global baseline unioned with this
+        // workspace's `excluded_dirs` additions) to the index facade so the
         // walk under `build_all` agrees with the graph rebuild on which
-        // subtrees to skip.
-        index.set_walk_filter(Arc::clone(&self.walk_filter));
+        // subtrees to skip. Re-derived here, so a blocklist edit + reindex
+        // re-walks against the new set without mutating the shared snapshot.
+        index.set_walk_filter(self.effective_walk_filter()?);
         let summary = index
             .build_all(
                 BuildOptions {
@@ -2322,7 +2324,11 @@ impl Workspace {
         // duration of the rebuild and atomically flips to the new
         // shape at the end.
         let graph = self.graph()?;
-        let entries = fs_ops::list_tree_filtered(self.root(), &self.walk_filter)?;
+        // Effective filter = global baseline + this workspace's blocklist
+        // additions, so the graph rebuild skips the same subtrees the index
+        // build does (both re-derive it per reindex).
+        let filter = self.effective_walk_filter()?;
+        let entries = fs_ops::list_tree_filtered(self.root(), &filter)?;
         // The graph is Markdown-only: only `.md` files become document
         // nodes (and contribute wikilink / heading / token edges). `.txt`
         // stays editable + BM25-searchable (the search pass in `build_all`
@@ -2523,6 +2529,56 @@ impl Workspace {
             }
         }
         Ok(())
+    }
+
+    /// The global machine-wide directory blocklist baseline (the
+    /// `Registry::index_excluded_dirs` snapshot this workspace opened with),
+    /// read-only here. The per-workspace CRUD only edits the additions; this
+    /// is surfaced so the UI can show the baseline it sits on top of.
+    pub fn global_excluded_dirs(&self) -> Vec<String> {
+        self.walk_filter.excluded_dir_names.clone()
+    }
+
+    /// This workspace's own blocklist ADDITIONS (the editable set), on top of
+    /// the global baseline.
+    pub fn excluded_dirs(&self) -> Result<Vec<String>> {
+        Ok(self.index()?.config().excluded_dirs)
+    }
+
+    /// The effective blocklist applied to this workspace's index + graph walk:
+    /// union(global baseline, per-workspace additions). What the reindex walk
+    /// actually skips.
+    pub fn effective_excluded_dirs(&self) -> Result<Vec<String>> {
+        Ok(self.effective_walk_filter()?.excluded_dir_names.clone())
+    }
+
+    /// Replace this workspace's blocklist additions. Persists the set; the
+    /// effective walk filter is re-derived on the next reindex, so the caller
+    /// triggers a rebuild to re-walk (the chan-server route does this OFF the
+    /// async executor). Names are stored as given; matching is
+    /// case-insensitive basename-at-any-depth, so the caller normalizes
+    /// (trim / drop blanks / reject path separators / lower-case + dedupe).
+    pub fn set_excluded_dirs(&self, dirs: Vec<String>) -> Result<()> {
+        self.index()?.set_excluded_dirs(dirs)?;
+        Ok(())
+    }
+
+    /// The walk filter actually applied to this workspace's index + graph
+    /// rebuild: the global baseline (`self.walk_filter`) unioned with this
+    /// workspace's `excluded_dirs` additions. Re-derived per reindex so a
+    /// blocklist edit takes effect on the next rebuild WITHOUT mutating the
+    /// shared snapshot. The file tree / fs-graph keep using the global
+    /// `self.walk_filter`, so additions affect INDEXING + the graph, not
+    /// on-demand browsing - matching how the global blocklist already behaves
+    /// (a blocklisted dir stays navigable in the tree).
+    fn effective_walk_filter(&self) -> Result<Arc<fs_ops::WalkFilter>> {
+        let extra = self.index()?.config().excluded_dirs;
+        if extra.is_empty() {
+            return Ok(Arc::clone(&self.walk_filter));
+        }
+        let mut names = self.walk_filter.excluded_dir_names.clone();
+        names.extend(extra);
+        Ok(Arc::new(fs_ops::WalkFilter::new(names)))
     }
 
     /// systacean-40: read the per-workspace screensaver-enabled flag.
@@ -6465,6 +6521,36 @@ mod tests {
         // Re-enable round-trips back on.
         workspace.set_reports_enabled(true).unwrap();
         assert!(workspace.reports_enabled().unwrap());
+    }
+
+    #[test]
+    fn excluded_dirs_additions_union_with_the_global_baseline() {
+        // Round-1 wave-3 blocklist (hybrid C): per-workspace additions union
+        // with the global baseline; the effective set drives the reindex walk.
+        let (_cfg, _root, workspace) = fixture();
+        // Fresh workspace: no additions; effective == the global baseline.
+        assert!(workspace.excluded_dirs().unwrap().is_empty());
+        let base = workspace.global_excluded_dirs();
+        assert_eq!(workspace.effective_excluded_dirs().unwrap(), base);
+
+        // Add a per-workspace dir: persisted, and effective = base + addition.
+        workspace
+            .set_excluded_dirs(vec!["vendor".to_string()])
+            .unwrap();
+        assert_eq!(
+            workspace.excluded_dirs().unwrap(),
+            vec!["vendor".to_string()]
+        );
+        let eff = workspace.effective_excluded_dirs().unwrap();
+        assert!(eff.contains(&"vendor".to_string()), "addition in effective");
+        for b in &base {
+            assert!(eff.contains(b), "baseline {b} preserved in effective");
+        }
+
+        // Round-trips back to empty (clearing the additions).
+        workspace.set_excluded_dirs(vec![]).unwrap();
+        assert!(workspace.excluded_dirs().unwrap().is_empty());
+        assert_eq!(workspace.effective_excluded_dirs().unwrap(), base);
     }
 
     #[test]

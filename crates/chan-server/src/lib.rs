@@ -58,16 +58,17 @@ use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
     api_backlinks, api_build_info, api_cloud_workspaces, api_create_draft, api_create_file,
     api_create_terminal, api_cs_link_create, api_delete_file, api_delete_session,
-    api_delete_terminal, api_discard_draft, api_fonts_source_code_pro_download, api_fs_graph,
-    api_fs_transfer, api_get_config, api_get_contacts, api_get_mentions, api_get_server_config,
-    api_get_session, api_get_workspace, api_graph, api_headings, api_health, api_index_rebuild,
-    api_index_status, api_indexing_state, api_inspect_draft, api_inspector, api_language_graph,
-    api_link_targets, api_links, api_list_files, api_list_sessions, api_metadata_export,
-    api_metadata_import, api_move, api_patch_config, api_patch_server_config, api_patch_workspace,
-    api_post_attachment, api_post_contacts_import, api_preflight, api_preflight_decision,
-    api_promote_draft, api_put_session, api_read_file, api_report_dir, api_report_file,
-    api_report_prefix, api_reports_disable, api_reports_enable, api_reports_state,
-    api_resolve_link, api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
+    api_delete_terminal, api_discard_draft, api_excluded_dirs_get, api_excluded_dirs_put,
+    api_fonts_source_code_pro_download, api_fs_graph, api_fs_transfer, api_get_config,
+    api_get_contacts, api_get_mentions, api_get_server_config, api_get_session, api_get_workspace,
+    api_graph, api_headings, api_health, api_index_rebuild, api_index_status, api_indexing_state,
+    api_inspect_draft, api_inspector, api_language_graph, api_link_targets, api_links,
+    api_list_files, api_list_sessions, api_metadata_export, api_metadata_import, api_move,
+    api_patch_config, api_patch_server_config, api_patch_workspace, api_post_attachment,
+    api_post_contacts_import, api_preflight, api_preflight_decision, api_promote_draft,
+    api_put_session, api_read_file, api_report_dir, api_report_file, api_report_prefix,
+    api_reports_disable, api_reports_enable, api_reports_state, api_resolve_link,
+    api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
     api_search_files, api_storage_reset, api_survey_reply, api_team_config_read,
     api_team_config_write, api_terminal_ws, api_upload_file, api_window_reply,
@@ -935,6 +936,12 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/search/content", get(api_search_content))
         .route("/api/index/status", get(api_index_status))
         .route("/api/indexing/state", get(api_indexing_state))
+        // Per-workspace directory blocklist (additions on top of the global
+        // baseline). PUT re-walks off the executor via the indexer.
+        .route(
+            "/api/index/excluded-dirs",
+            get(api_excluded_dirs_get).put(api_excluded_dirs_put),
+        )
         // First-boot workspace readiness for the locked OverlayShell
         // (contracts §2): poll the snapshot, submit a step decision.
         .route("/api/preflight", get(api_preflight))
