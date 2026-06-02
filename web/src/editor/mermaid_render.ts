@@ -20,6 +20,31 @@ export interface MermaidResult {
   ok: boolean;
   svg?: string;
   error?: string;
+  // 1-indexed line/column of the parse error WITHIN the original
+  // (untrimmed) source, when mermaid's message carries them. Used to
+  // point the editor at the failing line.
+  errorLine?: number;
+  errorCol?: number;
+}
+
+/// Mermaid parse errors carry "line N, column M" (Lexer/Parse errors).
+/// Pull them out so the caller can locate the failure. mermaid numbers
+/// lines against the string it parsed - `source.trim()` below - so the
+/// leading blank lines `.trim()` removed are added back to land on the
+/// right line in the ORIGINAL source.
+export function parseErrorPos(
+  source: string,
+  message: string,
+): { line?: number; col?: number } {
+  const m = /line (\d+)(?:,?\s*column (\d+))?/i.exec(message);
+  if (!m) return {};
+  const removedLeadingLines = (
+    source.slice(0, source.length - source.trimStart().length).match(/\n/g) ?? []
+  ).length;
+  return {
+    line: Number(m[1]) + removedLeadingLines,
+    col: m[2] !== undefined ? Number(m[2]) : undefined,
+  };
 }
 
 /// Render mermaid source to an SVG string. A parse/render failure (bad
@@ -43,6 +68,8 @@ export async function renderMermaid(
     const { svg } = await mermaid.render(id, source.trim());
     return { ok: true, svg };
   } catch (err) {
-    return { ok: false, error: (err as Error)?.message ?? String(err) };
+    const error = (err as Error)?.message ?? String(err);
+    const { line, col } = parseErrorPos(source, error);
+    return { ok: false, error, errorLine: line, errorCol: col };
   }
 }

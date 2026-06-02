@@ -1334,6 +1334,32 @@
     font-size: 12px;
     white-space: pre-wrap;
   }
+  /* Actionable error face (D3): the line number leads, the offending
+     source line is echoed verbatim, then mermaid's reason follows. */
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-error-head) {
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-error-src) {
+    padding: 2px 6px;
+    margin-bottom: 4px;
+    border-left: 2px solid var(--danger-text, #d33);
+    background: var(--bg-card, rgba(0, 0, 0, 0.04));
+    white-space: pre;
+    overflow-x: auto;
+  }
+  /* Failing-line accent (D1-i): a left-border bar on the source line
+     mermaid blamed, shown only while the cursor is in the block's
+     source. A gutter-less linter marker - no global code-block restyle,
+     no line-number column. `box-shadow` (not `border`) so the line
+     doesn't reflow, and a faint tint to draw the eye. */
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-mermaid-error-line) {
+    box-shadow: inset 2px 0 0 0 var(--danger-text, #d33);
+    /* Faint translucent tint (not an opaque background) so a selection
+       on this line still shows through - see the code-block ::before
+       slab note above. */
+    background: rgba(211, 51, 51, 0.12);
+  }
   /* Selected ring: lit by clicking on the image (sets
      data-selected on the wrap). Click-outside clears it. The ring
      is a 2px outline so it sits on top of the image without

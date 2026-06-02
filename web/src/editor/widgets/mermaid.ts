@@ -39,7 +39,7 @@ import {
 } from "@codemirror/state";
 import type { SyntaxNode } from "@lezer/common";
 import { selectionInRange } from "../decorations/selection";
-import { renderMermaid } from "../mermaid_render";
+import { type MermaidResult, renderMermaid } from "../mermaid_render";
 
 // Snapshot of each rendered diagram's face (the SVG, or the error
 // markup), keyed by source + theme. The reverse flip (rendered ->
@@ -63,6 +63,52 @@ function cacheFace(source: string, dark: boolean, html: string): void {
     const oldest = faceCache.keys().next().value;
     if (oldest !== undefined) faceCache.delete(oldest);
   }
+}
+
+// Last parse error per source (theme-independent), so the editor can
+// accent the failing line while the cursor is in the source view. Set
+// on a failed render, cleared on a successful one (see toDOM). Keyed by
+// source alone; bounded the same way as the face cache.
+interface MermaidError {
+  line: number;
+  col?: number;
+  message: string;
+}
+const errorCache = new Map<string, MermaidError>();
+function cacheError(source: string, err: MermaidError | null): void {
+  errorCache.delete(source);
+  if (err) {
+    errorCache.set(source, err);
+    if (errorCache.size > FACE_CACHE_MAX) {
+      const oldest = errorCache.keys().next().value;
+      if (oldest !== undefined) errorCache.delete(oldest);
+    }
+  }
+}
+
+/// Actionable error face (D3): lead with the failing line number, echo
+/// that source line's text, then mermaid's reason - so the user can
+/// locate the problem before stepping into the source. Falls back to the
+/// raw message when mermaid didn't report a line.
+function renderErrorFace(diagram: HTMLElement, source: string, res: MermaidResult): void {
+  diagram.classList.add("cm-md-mermaid-error");
+  diagram.replaceChildren();
+  if (res.errorLine) {
+    const head = document.createElement("div");
+    head.className = "cm-md-mermaid-error-head";
+    head.textContent = `Mermaid error - line ${res.errorLine}`;
+    diagram.append(head);
+    const lineText = source.split("\n")[res.errorLine - 1];
+    if (lineText !== undefined) {
+      const code = document.createElement("div");
+      code.className = "cm-md-mermaid-error-src";
+      code.textContent = lineText;
+      diagram.append(code);
+    }
+  }
+  const reason = document.createElement("div");
+  reason.textContent = res.error ?? "render failed";
+  diagram.append(reason);
 }
 
 function prefersReducedMotion(): boolean {
@@ -177,16 +223,24 @@ class MermaidWidget extends WidgetType {
     void renderMermaid(this.source, this.dark).then((res) => {
       if (res.ok && res.svg) {
         diagram.innerHTML = res.svg;
+        // Stash the face so the reverse (enter) flip can ghost it after
+        // CM tears the widget down, and clear any stale error so the
+        // source view stops accenting a now-fixed line.
+        cacheFace(this.source, this.dark, res.svg);
+        cacheError(this.source, null);
       } else {
         // Cursor-out always renders, even on a bad diagram: show
         // mermaid's error on the diagram face, never crash / fall back.
-        diagram.classList.add("cm-md-mermaid-error");
-        diagram.textContent = `mermaid: ${res.error ?? "render failed"}`;
+        renderErrorFace(diagram, this.source, res);
+        // Remember the failing line so the source view can accent it
+        // when the cursor steps in (D2-A, cached-on-entry).
+        cacheError(
+          this.source,
+          res.errorLine
+            ? { line: res.errorLine, col: res.errorCol, message: res.error ?? "" }
+            : null,
+        );
       }
-      // Stash the face so the reverse (enter) flip can ghost it after CM
-      // tears the widget down. SVG only - the error face is plain text,
-      // not worth ghosting.
-      if (res.ok && res.svg) cacheFace(this.source, this.dark, res.svg);
     });
     return wrap;
   }
@@ -206,6 +260,19 @@ export function mermaidDecorations(isDark: () => boolean): Extension {
     update(decorations, tr) {
       if (!tr.docChanged && !tr.selection) return decorations;
       return scan(tr.state, isDark());
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+  // Failing-line accent for the source view. Kept separate from `field`
+  // so its line decorations never leak into atomicRanges (which only
+  // wants the block-replace widgets).
+  const errorLines = StateField.define<DecorationSet>({
+    create(state) {
+      return scanErrorLines(state);
+    },
+    update(decorations, tr) {
+      if (!tr.docChanged && !tr.selection) return decorations;
+      return scanErrorLines(tr.state);
     },
     provide: (f) => EditorView.decorations.from(f),
   });
@@ -282,6 +349,7 @@ export function mermaidDecorations(isDark: () => boolean): Extension {
 
   return [
     field,
+    errorLines,
     EditorView.atomicRanges.of(
       (view) => view.state.field(field, false) ?? Decoration.none,
     ),
@@ -303,15 +371,15 @@ function scan(state: EditorState, dark: boolean): DecorationSet {
   syntaxTree(state).iterate({
     enter(node) {
       if (node.name !== "FencedCode") return;
-      const source = mermaidSource(state, node.node);
-      if (source === null) return; // not mermaid / unclosed / empty
+      const info = mermaidSource(state, node.node);
+      if (info === null) return; // not mermaid / unclosed / empty
       // Cursor inside -> show the raw editable code block (blocks.ts).
       if (selectionInRange(sel, node.from, node.to)) return;
       decos.push({
         from: node.from,
         to: node.to,
         deco: Decoration.replace({
-          widget: new MermaidWidget(source, dark),
+          widget: new MermaidWidget(info.source, dark),
           block: true,
         }),
       });
@@ -324,10 +392,52 @@ function scan(state: EditorState, dark: boolean): DecorationSet {
   );
 }
 
-/// The mermaid source of a CLOSED fenced block, or null when the block
-/// is not `mermaid`, unclosed (mid-typing), or empty. Source is the text
-/// between the opener and closer fence lines.
-function mermaidSource(state: EditorState, node: SyntaxNode): string | null {
+/// Error-line accent. While the cursor is INSIDE a mermaid block whose
+/// last render failed (its source is in errorCache), mark the failing
+/// source line so the user can find it without a line-number gutter.
+/// Cached-on-entry (D2-A): the error comes from the prior render, so the
+/// accent shows when you step in and clears once you edit the source
+/// (cache miss on the changed text) until the next render re-validates.
+const LINE_ERROR_DECO = Decoration.line({
+  attributes: { class: "cm-md-mermaid-error-line" },
+});
+
+function scanErrorLines(state: EditorState): DecorationSet {
+  const sel = state.selection;
+  const lines: number[] = [];
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name !== "FencedCode") return;
+      const info = mermaidSource(state, node.node);
+      if (info === null) return;
+      // Only while editing the source (cursor inside); the rendered
+      // error FACE carries the message when the cursor is outside.
+      if (!selectionInRange(sel, node.from, node.to)) return;
+      const err = errorCache.get(info.source);
+      if (!err) return;
+      // Source line 1 sits at openLine + 1, so source line N is doc line
+      // openLine + N.
+      const docLine = info.openLine + err.line;
+      if (docLine >= 1 && docLine <= state.doc.lines) {
+        lines.push(state.doc.line(docLine).from);
+      }
+    },
+  });
+  lines.sort((a, b) => a - b);
+  return Decoration.set(
+    lines.map((from) => LINE_ERROR_DECO.range(from)),
+    true,
+  );
+}
+
+/// The mermaid source of a CLOSED fenced block (plus the opener line
+/// number, for mapping parse-error lines into the document), or null
+/// when the block is not `mermaid`, unclosed (mid-typing), or empty.
+/// Source is the text between the opener and closer fence lines.
+function mermaidSource(
+  state: EditorState,
+  node: SyntaxNode,
+): { source: string; openLine: number } | null {
   const cursor = node.cursor();
   if (!cursor.firstChild()) return null;
   let openFrom = -1;
@@ -356,5 +466,5 @@ function mermaidSource(state: EditorState, node: SyntaxNode): string | null {
   const first = state.doc.line(openLine + 1);
   const last = state.doc.line(closeLine - 1);
   const source = state.doc.sliceString(first.from, last.to);
-  return source.trim() ? source : null;
+  return source.trim() ? { source, openLine } : null;
 }

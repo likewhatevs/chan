@@ -111,6 +111,22 @@ describe("mermaid wiring", () => {
     expect(mermaidSrc).toMatch(/flipOutGhost\(update\.view, it\.from, widget\)/);
   });
 
+  test("error locatability: failing line accented in source + actionable face", () => {
+    // Errors are cached per source on render and the source line they
+    // blame (openLine + N) is line-decorated while the cursor is inside
+    // the block; the rendered face leads with the line number. Browser-
+    // verified end to end (needs mermaid + layout); pinned here.
+    expect(mermaidSrc).toMatch(/const errorCache = new Map/);
+    expect(mermaidSrc).toMatch(/cm-md-mermaid-error-line/);
+    // openLine + N mapping into the document.
+    expect(mermaidSrc).toMatch(/info\.openLine \+ err\.line/);
+    // Actionable face leads with the line number (D3).
+    expect(mermaidSrc).toMatch(/Mermaid error - line \$\{res\.errorLine\}/);
+    // Error cleared on a successful re-render so a fixed line stops
+    // accenting.
+    expect(mermaidSrc).toMatch(/cacheError\(this\.source, null\)/);
+  });
+
   test("no button: cursor is the only trigger; theme + rotateX wired", () => {
     expect(mermaidSrc).not.toMatch(/createElement\("button"\)/);
     expect(mermaidSrc).not.toMatch(/addEventListener\("click"/);
