@@ -770,19 +770,6 @@ mod tests {
     }
 
     #[test]
-    fn invoke_handler_registers_workspace_features_ipcs() {
-        // `fullstack-b-28a`: the launcher's expand panel calls
-        // `get_workspace_features` on first open + `set_workspace_features`
-        // on every checkbox flip. Pin both sides so a future rename
-        // gets caught.
-        const MAIN_RS: &str = include_str!("main.rs");
-        assert!(MAIN_RS.contains("get_workspace_features,"));
-        assert!(MAIN_RS.contains("set_workspace_features,"));
-        assert!(MAIN_RS.contains("fn get_workspace_features("));
-        assert!(MAIN_RS.contains("fn set_workspace_features("));
-    }
-
-    #[test]
     fn invoke_handler_registers_outbound_attach_ipcs() {
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(MAIN_RS.contains("add_outbound_workspace,"));
@@ -807,19 +794,22 @@ mod tests {
     }
 
     #[test]
-    fn pick_and_add_shows_preflight_dialog_before_add_workspace() {
-        // `fullstack-b-28b` slice iii: pickAndAdd MUST gate the
-        // add_workspace invocation behind the pre-flight modal so the
-        // user always sees the round-2-plan explanatory copy +
-        // the feature toggles BEFORE chan-workspace's BOOT runs.
+    fn new_workspace_modal_gates_add_workspace_with_features() {
+        // The launcher redesign folded the old pickAndAdd +
+        // showPreflightDialog two-step into the [New] modal's Local
+        // choice (showNewWorkspaceDialog). That choice still runs the
+        // pre-flight scan + the feature toggles and still threads the
+        // chosen feature pair into add_workspace, so the BGE/reports
+        // choice reaches chan-workspace's BOOT on first open. Pin the
+        // new wiring so a refactor can't silently drop it.
         const MAIN_JS: &str = include_str!("../../src/main.js");
         assert!(
-            MAIN_JS.contains("showPreflightDialog("),
-            "main.js must call showPreflightDialog from pickAndAdd",
+            MAIN_JS.contains("showNewWorkspaceDialog("),
+            "main.js must open the [New] workspace modal (showNewWorkspaceDialog)",
         );
         assert!(
-            MAIN_JS.contains("features: choice.features"),
-            "main.js must thread the pre-flight choice through to add_workspace",
+            MAIN_JS.contains("invoke('add_workspace', { path: localPath, features }"),
+            "the modal's Local choice must thread the chosen features into add_workspace",
         );
     }
 
@@ -875,7 +865,7 @@ mod tests {
         const MAIN_JS: &str = include_str!("../../src/main.js");
         assert!(
             MAIN_JS.contains("invoke('compute_workspace_preflight'"),
-            "main.js must invoke compute_workspace_preflight from showPreflightDialog",
+            "main.js must invoke compute_workspace_preflight from the [New] modal Local choice",
         );
         assert!(
             MAIN_JS.contains("renderPreflightReport(reportEl, report)"),
@@ -957,23 +947,6 @@ mod tests {
     }
 
     #[test]
-    fn launcher_calls_workspace_features_ipcs() {
-        // `fullstack-b-28a`: the SPA-side launcher MUST invoke
-        // both IPCs so the expand panel reflects + persists
-        // toggle state. Pin the invoke names alongside the
-        // Rust registration above.
-        const MAIN_JS: &str = include_str!("../../src/main.js");
-        assert!(
-            MAIN_JS.contains("invoke('get_workspace_features'"),
-            "main.js must invoke get_workspace_features on panel open"
-        );
-        assert!(
-            MAIN_JS.contains("invoke('set_workspace_features'"),
-            "main.js must invoke set_workspace_features on checkbox change"
-        );
-    }
-
-    #[test]
     fn launcher_prompts_for_existing_user_default_workspace() {
         const MAIN_JS: &str = include_str!("../../src/main.js");
         assert!(
@@ -1003,27 +976,30 @@ mod tests {
     }
 
     #[test]
-    fn launcher_features_panel_carries_round2_plan_toggles() {
-        // `fullstack-b-28a`: the panel HTML ships both feature
-        // labels + the brief copy. Pin the label strings so a
-        // future renaming requires deliberate coordination
-        // (Settings copy in `-a-76` mirrors these labels).
+    fn new_workspace_modal_carries_add_time_feature_toggles() {
+        // The per-row gear features panel was removed (ongoing
+        // reconfiguration lives in the chan SPA now). The SAME two
+        // toggles survive as CREATION-TIME selection in the [New]
+        // modal's Local choice (decision D1): the labels + data-feat
+        // bindings moved onto the modal. Pin them there so the
+        // add-time feature wiring can't silently drop (Settings copy
+        // in `-a-76` mirrors these labels).
         const MAIN_JS: &str = include_str!("../../src/main.js");
         assert!(
             MAIN_JS.contains("Semantic search"),
-            "features panel must label the BGE toggle as 'Semantic search'"
+            "the add-time toggles must label the BGE toggle as 'Semantic search'"
         );
         assert!(
             MAIN_JS.contains("Reports"),
-            "features panel must label the chan-report toggle as 'Reports'"
+            "the add-time toggles must label the chan-report toggle as 'Reports'"
         );
         assert!(
             MAIN_JS.contains("data-feat=\"bge\""),
-            "features panel must bind the BGE checkbox to the bge field"
+            "the add-time toggles must bind the BGE checkbox to the bge field"
         );
         assert!(
             MAIN_JS.contains("data-feat=\"reports\""),
-            "features panel must bind the reports checkbox to the reports field"
+            "the add-time toggles must bind the reports checkbox to the reports field"
         );
     }
 

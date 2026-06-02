@@ -6,10 +6,9 @@ const { relaunch } = window.__TAURI__.process;
 const { openUrl } = window.__TAURI__.opener;
 
 const main = document.getElementById('main');
-const openBtn = document.getElementById('open-workspace');
+const newBtn = document.getElementById('new-workspace');
 const themeToggle = document.getElementById('theme-toggle');
 const authBtn = document.getElementById('auth-btn');
-const tunnelBtn = document.getElementById('tunnel-btn');
 
 /// Theme handling. Stored values:
 ///   - null  : follow OS via prefers-color-scheme (no data-theme attr)
@@ -140,13 +139,37 @@ function renderPath(full) {
   return `${computer}<span class="path-sep">/</span>${escapeHtml(full.replace(/^\//, ''))}`;
 }
 
+// `new-team-1`: directional glyphs for the WHERE column on remote rows.
+// out = arrow leaving a box (we connect OUT to a URL); in = arrow
+// arriving into a tray (we LISTEN for an incoming connection). Match
+// the ic-home / ic-computer style (13x13, currentColor, 1.8 stroke) so
+// theme switches keep parity.
+const ICON_OUTBOUND = `<svg class="ic-outbound" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="outbound"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>`;
+const ICON_INBOUND = `<svg class="ic-inbound" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="inbound"><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/></svg>`;
+
+/// The WHERE cell, one renderer keyed on `kind`. Local reuses the
+/// home/computer path glyph; remote rows lead with a directional icon
+/// (outbound = we connect to a URL; inbound = we listen) plus a muted
+/// direction caption, which is the launcher's INBOUND vs OUTBOUND
+/// indication now that the ON-column text tags are gone.
+function renderWhere(d) {
+  if (d.kind === 'tunneled') {
+    return `${ICON_INBOUND}<span class="where-text">${escapeHtml(d.label || '')}</span><span class="where-dir">inbound</span>`;
+  }
+  if (d.kind === 'outbound') {
+    const display = d.label || d.url || 'Remote workspace';
+    return `${ICON_OUTBOUND}<span class="where-text">${escapeHtml(display)}</span><span class="where-dir">outbound</span>`;
+  }
+  return renderPath(d.path);
+}
+
 async function boot() {
   let workspaces = await refresh();
   await maybePromptDefaultWorkspace();
   workspaces = await refresh();
   if (!booted && workspaces.length === 0) {
     booted = true;
-    await pickAndAdd();
+    showNewWorkspaceDialog('local');
   } else {
     booted = true;
   }
@@ -380,8 +403,7 @@ function showDefaultWorkspaceDialog(status) {
 
 function applyChanBusyState(payload) {
   chanBusy = !!(payload && payload.busy);
-  openBtn.disabled = chanBusy;
-  tunnelBtn.disabled = chanBusy;
+  newBtn.disabled = chanBusy;
   document.body.classList.toggle('chan-busy', chanBusy);
 
   let banner = document.getElementById('chan-busy-banner');
@@ -399,198 +421,400 @@ function applyChanBusyState(payload) {
   banner.textContent = `${op}...`;
 }
 
-async function pickAndAdd() {
-  const selected = await open({
-    directory: true,
-    multiple: false,
-    title: 'Select a folder containing markdown files',
-  });
-  if (typeof selected !== 'string' || !selected.length) return;
-  // `fullstack-b-28b` slice iii: interpose the pre-flight modal
-  // between the directory picker and add_workspace so the user
-  // chooses BGE + reports BEFORE chan-workspace's BOOT process runs.
-  // Cancel exits without any chan-side side effect — the folder
-  // wasn't registered yet, so closing the modal is a clean
-  // back-out.
-  const choice = await showPreflightDialog(selected);
-  if (!choice.accepted) return;
-  try {
-    await invoke('add_workspace', {
-      path: selected,
-      features: choice.features,
-    });
-  } catch (e) {
-    showError(e);
-    return;
-  }
-  await refresh();
+/// Local|Tunnel snippet mode for the [New] -> Inbound listening state.
+/// `local` means "the remote chan serve runs on the same machine as
+/// this desktop, no SSH needed". `tunnel` means "chan serve lives on a
+/// remote host and an SSH reverse-forward bridges to this desktop's
+/// loopback port". Persisted in localStorage; the backend doesn't care
+/// since both snippets are pre-formatted.
+const TUNNEL_MODE_KEY = 'chanDesktopTunnelMode';
+function tunnelMode() {
+  const v = localStorage.getItem(TUNNEL_MODE_KEY);
+  return v === 'local' ? 'local' : 'tunnel';
+}
+function setTunnelMode(mode) {
+  localStorage.setItem(TUNNEL_MODE_KEY, mode === 'local' ? 'local' : 'tunnel');
 }
 
-/// `fullstack-b-28b` slice iii: pre-flight modal. Round-2-plan
-/// §"UI surface" requires a load-bearing explanatory paragraph
-/// above the toggles so users understand the baseline before
-/// they choose what to layer on. The two toggles default OFF;
-/// Open passes the chosen state through to `add_workspace` which
-/// forwards `--semantic-search` / `--reports` to `chan add`,
-/// so chan-workspace's BOOT process picks up the choice on the
-/// first open.
+/// The [New] workspace modal. Replaces the old [Open workspace] +
+/// [Attach] entry points with one overlay carrying three choices, each
+/// a different body (modeled on showPreflightDialog for the scaffold and
+/// on the Team Work dialog's real-estate toggle for the segmented switch
+/// that swaps the body per choice):
+///   - Local directory: a folder picker + in-body preflight scan + the
+///     two add-time feature toggles + Open (add_workspace).
+///   - Remote outbound: a URL + name form (add_outbound_workspace); we
+///     dial out to the remote.
+///   - Remote inbound: a port-listen form, then a listening state with
+///     the chan serve snippet (tunnel_start / tunnel_stop); we listen.
 ///
-/// Backdrop click + Escape cancel; Open button gets initial
-/// focus + Enter triggers it.
-function showPreflightDialog(path) {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'preflight-overlay';
-    overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-modal', 'true');
-    overlay.setAttribute('aria-labelledby', 'preflight-title');
+/// ESC / backdrop / [X] dismiss. Dismiss NEVER stops a live inbound
+/// listener: it lives in the Rust supervisor and tunnel_status is the
+/// source of truth, so reopening New -> Inbound shows it still
+/// listening (matches the old always-visible Attach panel).
+let activeNewDialog = null;
 
-    const dialog = document.createElement('div');
-    dialog.className = 'preflight-dialog';
+function showNewWorkspaceDialog(initialChoice = 'local') {
+  // Singleton: a second [New] click just switches the open modal's
+  // choice instead of stacking overlays.
+  if (activeNewDialog) {
+    activeNewDialog.select(initialChoice);
+    return;
+  }
 
-    const title = document.createElement('h2');
-    title.id = 'preflight-title';
-    title.textContent = 'Open workspace';
-    dialog.appendChild(title);
+  const overlay = document.createElement('div');
+  overlay.className = 'nw-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'nw-title');
 
-    const intro = document.createElement('p');
-    intro.className = 'preflight-intro';
-    intro.textContent = `This folder will be registered as a chan workspace:`;
-    dialog.appendChild(intro);
+  const dialog = document.createElement('div');
+  dialog.className = 'nw-dialog';
+  overlay.appendChild(dialog);
 
-    const pathEl = document.createElement('p');
-    pathEl.className = 'preflight-path';
-    pathEl.textContent = path;
-    dialog.appendChild(pathEl);
+  const header = document.createElement('div');
+  header.className = 'nw-header';
+  const title = document.createElement('h2');
+  title.id = 'nw-title';
+  title.textContent = 'New workspace';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'nw-close';
+  closeBtn.type = 'button';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.textContent = '×';
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+  dialog.appendChild(header);
 
-    // `fullstack-b-28b` slice iv: report rows populated by
-    // `compute_workspace_preflight` IPC. Renders a "Scanning..."
-    // placeholder while the walk runs so the modal opens fast
-    // even on a large workspace; resolved facts replace the row
-    // contents in-place.
-    const reportEl = document.createElement('div');
-    reportEl.className = 'preflight-report';
-    reportEl.setAttribute('aria-busy', 'true');
-    reportEl.textContent = 'Scanning workspace…';
-    dialog.appendChild(reportEl);
+  const choices = document.createElement('div');
+  choices.className = 'nw-choices';
+  choices.setAttribute('role', 'radiogroup');
+  choices.setAttribute('aria-label', 'New workspace type');
+  const CHOICES = [
+    ['local', 'Local directory'],
+    ['outbound', 'Remote outbound'],
+    ['inbound', 'Remote inbound'],
+  ];
+  const choiceButtons = {};
+  for (const [key, label] of CHOICES) {
+    const b = document.createElement('button');
+    b.className = 'nw-choice';
+    b.type = 'button';
+    b.setAttribute('role', 'radio');
+    b.dataset.choice = key;
+    b.textContent = label;
+    b.addEventListener('click', () => select(key));
+    choices.appendChild(b);
+    choiceButtons[key] = b;
+  }
+  dialog.appendChild(choices);
 
-    const baseline = document.createElement('p');
-    baseline.className = 'preflight-baseline';
-    baseline.textContent =
-      "Chan will walk this workspace, read every markdown file, and build a documentation graph from the wiki-links between them. This graph plus BM25 keyword search is the minimum needed to operate — it can't be disabled.";
-    dialog.appendChild(baseline);
+  const body = document.createElement('div');
+  body.className = 'nw-body';
+  dialog.appendChild(body);
 
-    const layered = document.createElement('p');
-    layered.className = 'preflight-layered';
-    layered.textContent =
-      'Two optional layers can be enabled on top. Both default off and drop their per-workspace data when disabled (the shared model file stays).';
-    dialog.appendChild(layered);
+  const footer = document.createElement('div');
+  footer.className = 'nw-footer';
+  dialog.appendChild(footer);
 
-    const togglesWrap = document.createElement('div');
-    togglesWrap.className = 'preflight-toggles';
+  document.body.appendChild(overlay);
 
-    const bgeRow = document.createElement('label');
-    bgeRow.className = 'preflight-toggle';
-    const bgeBox = document.createElement('input');
-    bgeBox.type = 'checkbox';
-    bgeBox.dataset.feat = 'bge';
-    bgeRow.appendChild(bgeBox);
-    const bgeLabel = document.createElement('span');
-    bgeLabel.className = 'preflight-toggle-label';
-    bgeLabel.innerHTML =
-      '<strong>Semantic search</strong>' +
-      '<span class="preflight-toggle-hint">Adds dense-vector embeddings for find-by-meaning queries. Needs the BGE-small model (~63 MB, downloaded once + shared across workspaces) and produces per-workspace vector data.</span>';
-    bgeRow.appendChild(bgeLabel);
-    togglesWrap.appendChild(bgeRow);
+  let choice = initialChoice;
+  // Local-choice state: the picked folder (null until chosen).
+  let localPath = null;
 
-    const reportsRow = document.createElement('label');
-    reportsRow.className = 'preflight-toggle';
-    const reportsBox = document.createElement('input');
-    reportsBox.type = 'checkbox';
-    reportsBox.dataset.feat = 'reports';
-    reportsRow.appendChild(reportsBox);
-    const reportsLabel = document.createElement('span');
-    reportsLabel.className = 'preflight-toggle-label';
-    reportsLabel.innerHTML =
-      '<strong>Reports</strong>' +
-      '<span class="preflight-toggle-hint">Runs code analysis on every file — language detection (tokei), source-lines-of-code counts per file + per-language roll-ups, and a Basic COCOMO estimate on top. Maintained incrementally from filesystem events. Per-workspace.</span>';
-    reportsRow.appendChild(reportsLabel);
-    togglesWrap.appendChild(reportsRow);
-
-    dialog.appendChild(togglesWrap);
-
-    const footer = document.createElement('p');
-    footer.className = 'preflight-footer';
-    footer.textContent =
-      'Both layers can be enabled later from the workspace row or Settings.';
-    dialog.appendChild(footer);
-
-    const buttons = document.createElement('div');
-    buttons.className = 'preflight-buttons';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'btn';
-    cancelBtn.type = 'button';
-    cancelBtn.textContent = 'Cancel';
-
-    const openBtn = document.createElement('button');
-    openBtn.className = 'btn primary';
-    openBtn.type = 'button';
-    openBtn.textContent = 'Open';
-
-    buttons.appendChild(cancelBtn);
-    buttons.appendChild(openBtn);
-    dialog.appendChild(buttons);
-
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-
-    function close(result) {
-      document.removeEventListener('keydown', onKey);
-      overlay.remove();
-      resolve(result);
+  function close() {
+    document.removeEventListener('keydown', onKey);
+    overlay.remove();
+    activeNewDialog = null;
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
     }
-    function snapshot() {
-      return {
-        accepted: true,
-        features: { bge: bgeBox.checked, reports: reportsBox.checked },
-      };
+  }
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  closeBtn.addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+
+  function select(next) {
+    choice = next;
+    for (const [key, b] of Object.entries(choiceButtons)) {
+      const on = key === choice;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
     }
-    function onKey(e) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        close({ accepted: false, features: { bge: false, reports: false } });
-      } else if (e.key === 'Enter' && document.activeElement === openBtn) {
-        e.preventDefault();
-        close(snapshot());
-      }
+    renderBody();
+  }
+
+  function renderBody() {
+    body.innerHTML = '';
+    footer.innerHTML = '';
+    if (choice === 'local') renderLocal();
+    else if (choice === 'outbound') renderOutbound();
+    else renderInbound();
+  }
+
+  // ---- Local directory -------------------------------------------------
+  function renderLocal() {
+    if (!localPath) {
+      body.innerHTML =
+        `<p class="nw-intro">A local folder with your markdown files (a git repository, or any directory).</p>`;
+      const choose = document.createElement('button');
+      choose.className = 'btn primary';
+      choose.type = 'button';
+      choose.textContent = 'Choose folder...';
+      choose.addEventListener('click', chooseLocalFolder);
+      body.appendChild(choose);
+      choose.focus();
+      return;
     }
-
-    cancelBtn.addEventListener('click', () =>
-      close({ accepted: false, features: { bge: false, reports: false } }),
-    );
-    openBtn.addEventListener('click', () => close(snapshot()));
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay)
-        close({ accepted: false, features: { bge: false, reports: false } });
-    });
-    document.addEventListener('keydown', onKey);
-
-    openBtn.focus();
-
-    // `fullstack-b-28b` slice iv: kick off the pre-flight walk
-    // in parallel with the modal mount so the user can read
-    // the explanatory copy while the report is filling in. The
-    // dialog stays usable (Open/Cancel still respond) even if
-    // the IPC takes the full cap (5s).
-    invoke('compute_workspace_preflight', { path })
+    // Folder chosen: confirm path + the live scan + add-time toggles.
+    body.innerHTML = `
+      <p class="preflight-intro">This folder will be registered as a chan workspace:</p>
+      <p class="preflight-path"></p>
+      <div class="preflight-report" aria-busy="true">Scanning workspace…</div>
+      <p class="preflight-baseline">Chan will walk this workspace, read every markdown file, and build a documentation graph from the wiki-links between them. This graph plus BM25 keyword search is the minimum needed to operate — it can't be disabled.</p>
+      <p class="preflight-layered">Two optional layers can be enabled on top. Both default off and drop their per-workspace data when disabled (the shared model file stays).</p>
+      <div class="preflight-toggles">
+        <label class="preflight-toggle">
+          <input type="checkbox" data-feat="bge" />
+          <span class="preflight-toggle-label"><strong>Semantic search</strong><span class="preflight-toggle-hint">Adds dense-vector embeddings for find-by-meaning queries. Needs the BGE-small model (~63 MB, downloaded once + shared across workspaces) and produces per-workspace vector data.</span></span>
+        </label>
+        <label class="preflight-toggle">
+          <input type="checkbox" data-feat="reports" />
+          <span class="preflight-toggle-label"><strong>Reports</strong><span class="preflight-toggle-hint">Runs code analysis on every file — language detection (tokei), source-lines-of-code counts per file + per-language roll-ups, and a Basic COCOMO estimate on top. Maintained incrementally from filesystem events. Per-workspace.</span></span>
+        </label>
+      </div>
+      <p class="preflight-footer">Both layers can also be enabled later from the workspace Dashboard.</p>`;
+    body.querySelector('.preflight-path').textContent = localPath;
+    const reportEl = body.querySelector('.preflight-report');
+    invoke('compute_workspace_preflight', { path: localPath })
       .then((report) => renderPreflightReport(reportEl, report))
       .catch((err) => {
         reportEl.removeAttribute('aria-busy');
         reportEl.classList.add('preflight-report-error');
         reportEl.textContent = `Couldn't scan workspace: ${(err && err.message) || String(err)}`;
       });
-  });
+
+    const back = document.createElement('button');
+    back.className = 'btn';
+    back.type = 'button';
+    back.textContent = 'Back';
+    back.addEventListener('click', () => { localPath = null; renderBody(); });
+
+    const openWs = document.createElement('button');
+    openWs.className = 'btn primary';
+    openWs.type = 'button';
+    openWs.textContent = 'Open';
+    openWs.addEventListener('click', async () => {
+      const features = {
+        bge: body.querySelector('input[data-feat="bge"]').checked,
+        reports: body.querySelector('input[data-feat="reports"]').checked,
+      };
+      try {
+        await invoke('add_workspace', { path: localPath, features });
+      } catch (e) {
+        showError(e);
+        return;
+      }
+      close();
+      await refresh();
+    });
+    footer.appendChild(back);
+    footer.appendChild(openWs);
+    openWs.focus();
+  }
+
+  async function chooseLocalFolder() {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: 'Select a folder containing markdown files',
+    });
+    if (typeof selected !== 'string' || !selected.length) return;
+    localPath = selected;
+    renderBody();
+  }
+
+  // ---- Remote outbound (we connect to a URL) ---------------------------
+  function renderOutbound() {
+    body.innerHTML = `
+      <p class="nw-intro">Connect to a chan workspace already being served at a URL (we dial out to it).</p>
+      <div class="nw-row">
+        <label class="nw-url-field">URL
+          <input id="nw-outbound-url" type="url" autocomplete="off" spellcheck="false"
+                 placeholder="http://127.0.0.1:4000/?t=..."/>
+        </label>
+        <label>Name
+          <input id="nw-outbound-label" type="text" maxlength="120" autocomplete="off"/>
+        </label>
+      </div>`;
+    const attach = document.createElement('button');
+    attach.className = 'btn primary';
+    attach.type = 'button';
+    attach.textContent = 'Attach URL';
+    attach.addEventListener('click', submitOutbound);
+    footer.appendChild(attach);
+    const urlInput = body.querySelector('#nw-outbound-url');
+    for (const inp of [urlInput, body.querySelector('#nw-outbound-label')]) {
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); attach.click(); }
+      });
+    }
+    urlInput.focus();
+  }
+
+  async function submitOutbound() {
+    const urlInput = body.querySelector('#nw-outbound-url');
+    const labelInput = body.querySelector('#nw-outbound-label');
+    const url = (urlInput && urlInput.value || '').trim();
+    const label = (labelInput && labelInput.value || '').trim();
+    if (!url) {
+      if (urlInput) urlInput.focus();
+      showError('Remote URL is required.');
+      return;
+    }
+    try {
+      await invoke('add_outbound_workspace', { url, label });
+    } catch (e) {
+      showError(e);
+      return;
+    }
+    close();
+    await refresh();
+  }
+
+  // ---- Remote inbound (we listen for an incoming connection) ----------
+  async function renderInbound() {
+    body.innerHTML = `<p class="nw-intro">Reading listener status…</p>`;
+    let status;
+    try {
+      status = await invoke('tunnel_status');
+    } catch (e) {
+      showError(e);
+      return;
+    }
+    // The user may have switched choices while tunnel_status was in
+    // flight; only paint if Inbound is still the active choice.
+    if (choice !== 'inbound') return;
+    if (status.listening && status.port != null) {
+      renderInboundListening(status);
+    } else {
+      renderInboundForm(status);
+    }
+  }
+
+  function renderInboundForm(status) {
+    body.innerHTML = `
+      <p class="nw-intro">Bind a loopback port to accept an incoming <code>chan serve --tunnel-url</code> from another machine over an SSH reverse forward (we listen).</p>
+      <div class="nw-row">
+        <label>Port
+          <input id="nw-tunnel-port" type="number" min="0" max="65535" placeholder="auto"
+                 value="${status.preferred_port ? status.preferred_port : ''}"/>
+        </label>
+        <label>Label
+          <input id="nw-tunnel-label" type="text" maxlength="64"
+                 value="${escapeAttr(status.preferred_label || '')}"/>
+        </label>
+        <label>Workspace
+          <input id="nw-tunnel-workspace" type="text" maxlength="32"
+                 value="${escapeAttr(status.preferred_workspace || '')}"/>
+        </label>
+      </div>
+      <p class="nw-hint">Port 0 / empty lets the OS pick. Label appears as the first URL segment. Workspace name is lowercase ASCII + hyphens.</p>`;
+    const start = document.createElement('button');
+    start.className = 'btn primary';
+    start.type = 'button';
+    start.textContent = 'Start listening';
+    start.addEventListener('click', async () => {
+      const rawPort = (body.querySelector('#nw-tunnel-port').value || '').trim();
+      const preferred = rawPort === '' ? 0 : Math.max(0, Math.min(65535, Number(rawPort) | 0));
+      const label = (body.querySelector('#nw-tunnel-label').value || '').trim();
+      const workspace = (body.querySelector('#nw-tunnel-workspace').value || '').trim();
+      try {
+        await invoke('tunnel_start', { preferredPort: preferred, label, workspace });
+      } catch (e) {
+        showError(e);
+        return;
+      }
+      renderInbound();
+    });
+    footer.appendChild(start);
+  }
+
+  function renderInboundListening(status) {
+    const ssh = status.ssh_snippet || '';
+    const cmd = status.chan_serve_snippet || '';
+    const mode = tunnelMode();
+    const isTunnel = mode === 'tunnel';
+    const sshBlock = isTunnel
+      ? `<p class="nw-muted">SSH from this machine to the remote with a reverse forward:</p>
+         <pre class="snippet" data-copy="${escapeAttr(ssh)}" title="click to copy">${escapeHtml(ssh)}</pre>
+         <p class="nw-muted">Then on the remote run:</p>`
+      : `<p class="nw-muted">On this machine, run:</p>`;
+    body.innerHTML = `
+      <div class="nw-listening-head">
+        <strong>Listening on 127.0.0.1:${status.port}</strong>
+        <div class="seg-toggle" role="tablist" aria-label="Where will chan serve run?">
+          <button class="seg ${mode === 'local' ? 'on' : ''}" data-mode="local" role="tab" aria-selected="${mode === 'local'}">Local</button>
+          <button class="seg ${mode === 'tunnel' ? 'on' : ''}" data-mode="tunnel" role="tab" aria-selected="${mode === 'tunnel'}">Tunnel</button>
+        </div>
+      </div>
+      ${sshBlock}
+      <pre class="snippet" data-copy="${escapeAttr(cmd)}" title="click to copy">${escapeHtml(cmd)}</pre>
+      <p class="nw-muted">Connected workspaces appear in the launcher list and open automatically.</p>`;
+    body.querySelectorAll('.seg-toggle .seg').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        setTunnelMode(btn.dataset.mode);
+        renderInboundListening(status);
+      });
+    });
+    body.querySelectorAll('.snippet[data-copy]').forEach((node) => {
+      node.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(node.dataset.copy);
+          const old = node.textContent;
+          node.textContent = 'Copied';
+          setTimeout(() => { node.textContent = old; }, 1200);
+        } catch {
+          // Clipboard denied; nothing to do.
+        }
+      });
+    });
+    const stop = document.createElement('button');
+    stop.className = 'btn danger';
+    stop.type = 'button';
+    stop.textContent = 'Stop';
+    stop.addEventListener('click', async () => {
+      try {
+        await invoke('tunnel_stop');
+      } catch (e) {
+        showError(e);
+        return;
+      }
+      await refresh();
+      renderInbound();
+    });
+    const done = document.createElement('button');
+    done.className = 'btn';
+    done.type = 'button';
+    done.textContent = 'Done';
+    done.addEventListener('click', close);
+    footer.appendChild(stop);
+    footer.appendChild(done);
+  }
+
+  // Re-render hook so tunnel events can refresh a live inbound body
+  // while the modal is open (e.g. a remote connecting, or the listener
+  // stopping from elsewhere).
+  activeNewDialog = {
+    select,
+    refreshInbound() { if (choice === 'inbound') renderInbound(); },
+  };
+
+  select(choice);
 }
 
 /// `fullstack-b-28b` slice iv: replace the "Scanning…" placeholder
@@ -680,15 +904,16 @@ function render(workspaces) {
         <h2>No workspaces yet</h2>
         <p>A <em>workspace</em> is a local folder with your markdown files.
            Pick one to get started.</p>
-        <button class="btn primary" id="empty-pick" ${chanCommandDisabledAttr}>Open workspace</button>
+        <button class="btn primary" id="empty-pick" ${chanCommandDisabledAttr}>New workspace</button>
       </div>`;
-    document.getElementById('empty-pick').onclick = pickAndAdd;
+    document.getElementById('empty-pick').onclick = () => showNewWorkspaceDialog('local');
     return;
   }
 
   const rows = workspaces.map((d) => {
     const hasUrl = !!d.url;
     const urlAttr = escapeAttr(d.url || '');
+    const dotClass = hasUrl ? 'conn-dot on' : 'conn-dot';
     if (d.kind === 'tunneled') {
       // Tunneled row: no On toggle (the remote owns the lifecycle),
       // no Path (it's a remote folder), no Forget (the remote drops
@@ -700,16 +925,13 @@ function render(workspaces) {
         d.public ? 'public' : null,
         d.connected_at ? `connected ${d.connected_at}` : null,
       ].filter(Boolean).join(' · ');
-      // `fullstack-53`: dropped the name cell. Path + actions are
-      // enough; the rename display surface was leftover from a
-      // previous launcher iteration.
       return `
       <tr data-kind="tunneled"
           data-tunnel-label="${escapeAttr(d.label || '')}"
           data-tunnel-workspace="${escapeAttr(d.workspace || '')}"
           data-url="${urlAttr}">
-        <td><span class="tag tag-tunnel" title="${escapeAttr(tip)}">tunnel</span></td>
-        <td class="path-cell muted">${escapeHtml(d.label || '')}</td>
+        <td><span class="${dotClass}" title="${escapeAttr(tip || 'inbound listener')}"></span></td>
+        <td class="path-cell remote-cell where-cell" title="${escapeAttr(d.url || '')}">${renderWhere(d)}</td>
         <td>
           <div class="row-actions">
             ${renderOpenSplit({ hasUrl, includeForget: false, forgetDisabledAttr: 'disabled' })}
@@ -718,13 +940,12 @@ function render(workspaces) {
       </tr>`;
     }
     if (d.kind === 'outbound') {
-      const display = d.label || d.url || 'Remote workspace';
       return `
       <tr data-kind="outbound"
           data-outbound-id="${escapeAttr(d.id || '')}"
           data-url="${urlAttr}">
-        <td><span class="tag tag-outbound" title="Attached URL">url</span></td>
-        <td class="path-cell remote-cell" title="${escapeAttr(d.url || '')}">${escapeHtml(display)}</td>
+        <td><span class="${dotClass}" title="Attached URL"></span></td>
+        <td class="path-cell remote-cell where-cell" title="${escapeAttr(d.url || '')}">${renderWhere(d)}</td>
         <td>
           <div class="row-actions">
             ${renderOpenSplit({
@@ -745,15 +966,13 @@ function render(workspaces) {
           <span class="slider"></span>
         </label>
       </td>
-      <td class="path-cell" data-act="reveal" title="${escapeAttr(d.path)} — click to open in Finder">${renderPath(d.path)}</td>
+      <td class="path-cell where-cell" data-act="reveal" title="${escapeAttr(d.path)} — click to open in Finder">${renderWhere(d)}</td>
       <td>
         <div class="row-actions">
-          ${renderFeaturesToggle(d.path, chanCommandDisabledAttr)}
           ${renderOpenSplit({ hasUrl, includeForget: true, forgetDisabledAttr: chanCommandDisabledAttr })}
         </div>
       </td>
-    </tr>
-    ${renderFeaturesPanel(d.path)}`;
+    </tr>`;
   }).join('');
 
   main.innerHTML = `
@@ -761,7 +980,7 @@ function render(workspaces) {
       <thead>
         <tr>
           <th style="width:60px">On</th>
-          <th>Path</th>
+          <th>Where</th>
           <th style="width:150px"></th>
         </tr>
       </thead>
@@ -769,71 +988,6 @@ function render(workspaces) {
     </table>`;
 
   bindRowEvents();
-}
-
-/// `fullstack-b-28a`: per-workspace features toggle. Renders the
-/// "⚙" expand button shown alongside the Open split. Clicking
-/// expands the sibling feature-panel row showing the BGE +
-/// reports checkboxes. Stub-persisted via chan-desktop's
-/// desktop config until `systacean-27` lands the chan-workspace
-/// config API + `-b-28b` swaps the IPC body.
-function renderFeaturesToggle(path, disabledAttr = '') {
-  return `
-    <button class="btn features-toggle" data-act="toggle-features"
-            data-features-path="${escapeAttr(path)}"
-            aria-expanded="false"
-            aria-controls="features-${escapeAttr(path)}"
-            ${disabledAttr}
-            title="Per-workspace feature toggles">
-      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
-           stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-      </svg>
-    </button>`;
-}
-
-/// `fullstack-b-28a`: sibling row holding the BGE + reports
-/// checkboxes + brief explanatory copy. Hidden by default; the
-/// features-toggle button flips the `hidden` attribute on click
-/// and lazy-loads the persisted state via `get_workspace_features`.
-/// Round-2-plan's full explanatory paragraph + per-toggle hint
-/// copy will land in `-b-28b`'s full pre-flight screen.
-function renderFeaturesPanel(path) {
-  return `
-    <tr class="features-panel" id="features-${escapeAttr(path)}"
-        data-features-for="${escapeAttr(path)}" hidden>
-      <td colspan="3">
-        <div class="features-content">
-          <p class="features-copy">
-            Chan walks this workspace and indexes the wiki-link graph plus
-            BM25 keyword search by default. Two optional layers can be
-            enabled per-workspace; both default off and drop their data when
-            disabled.
-          </p>
-          <label class="features-row">
-            <input type="checkbox" data-feat="bge" disabled />
-            <span class="features-label">
-              <strong>Semantic search</strong>
-              <span class="features-hint">
-                Dense embeddings via BGE-small (~63 MB shared model;
-                per-workspace vector index).
-              </span>
-            </span>
-          </label>
-          <label class="features-row">
-            <input type="checkbox" data-feat="reports" disabled />
-            <span class="features-label">
-              <strong>Reports</strong>
-              <span class="features-hint">
-                File classification + per-language SLOC + Basic COCOMO
-                via chan-report.
-              </span>
-            </span>
-          </label>
-        </div>
-      </td>
-    </tr>`;
 }
 
 /// Per-row "Open" split button: primary action opens the workspace in
@@ -950,7 +1104,7 @@ function bindRowEvents() {
     if (forget) {
       // "Forget Workspace" removes the workspace entry from the chan
       // registry. Files on disk are untouched; the user can re-add
-      // the folder later via Open workspace. Tunneled workspaces have no
+      // the folder later via New workspace. Tunneled workspaces have no
       // Forget — the remote `chan serve` owns that lifecycle.
       forget.addEventListener('click', async () => {
         closeAllSplitMenus();
@@ -963,96 +1117,8 @@ function bindRowEvents() {
       });
     }
 
-    bindFeaturesToggle(tr);
     bindSplitMenu(tr);
   });
-}
-
-/// `fullstack-b-28a`: wire the ⚙ features toggle on a workspace row.
-/// Click flips the sibling `features-panel` row's `hidden`
-/// attribute. First open lazy-loads the persisted state via
-/// `get_workspace_features` (so a fresh render only pays the IPC cost
-/// on workspaces the user actually inspects). Subsequent
-/// checkbox changes call `set_workspace_features` with the current
-/// pair value; optimistic update + revert on failure.
-function bindFeaturesToggle(tr) {
-  const path = tr.dataset.path;
-  const toggle = tr.querySelector('[data-act="toggle-features"]');
-  if (!toggle) return;
-  const panel = main.querySelector(`tr.features-panel[data-features-for="${cssEscape(path)}"]`);
-  if (!panel) return;
-
-  toggle.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    const willOpen = panel.hasAttribute('hidden');
-    if (willOpen) {
-      panel.removeAttribute('hidden');
-      toggle.setAttribute('aria-expanded', 'true');
-      if (!panel.dataset.loaded) {
-        await loadFeaturesInto(panel, path);
-        panel.dataset.loaded = '1';
-      }
-    } else {
-      panel.setAttribute('hidden', '');
-      toggle.setAttribute('aria-expanded', 'false');
-    }
-  });
-
-  for (const box of panel.querySelectorAll('input[type="checkbox"][data-feat]')) {
-    box.addEventListener('change', async (e) => {
-      const target = e.target;
-      const checked = target.checked;
-      const features = collectFeaturesFromPanel(panel);
-      try {
-        await invoke('set_workspace_features', { path, features });
-      } catch (err) {
-        // Revert the toggle on failure so the UI matches persisted state.
-        target.checked = !checked;
-        showError(err);
-      }
-    });
-  }
-}
-
-/// Read the persisted feature pair via IPC and reflect it on the
-/// panel's checkboxes. Boxes are `disabled` while the IPC is in
-/// flight so a fast double-click can't fire a `set_workspace_features`
-/// before the load resolves.
-async function loadFeaturesInto(panel, path) {
-  try {
-    const features = await invoke('get_workspace_features', { path });
-    for (const box of panel.querySelectorAll('input[type="checkbox"][data-feat]')) {
-      const feat = box.dataset.feat;
-      box.checked = Boolean(features && features[feat]);
-      box.disabled = false;
-    }
-  } catch (err) {
-    showError(err);
-  }
-}
-
-/// Snapshot the checkbox pair into the same `{bge, reports}` shape
-/// the Rust IPC expects. Missing field defaults to false on the
-/// Rust side; defensive default here keeps the contract explicit.
-function collectFeaturesFromPanel(panel) {
-  const features = { bge: false, reports: false };
-  for (const box of panel.querySelectorAll('input[type="checkbox"][data-feat]')) {
-    const feat = box.dataset.feat;
-    if (feat in features) features[feat] = box.checked;
-  }
-  return features;
-}
-
-/// CSS.escape polyfill for older webviews. Tauri's WKWebView /
-/// WebView2 both ship `CSS.escape` today, but the launcher's
-/// minimum-supported runtime predates that guarantee; the
-/// fallback hand-escapes the ASCII characters that matter for
-/// workspace paths (`/`, `.`, ` `, `:`).
-function cssEscape(s) {
-  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-    return CSS.escape(s);
-  }
-  return String(s).replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`);
 }
 
 /// Wire the split-button caret + dropdown items shared between
@@ -1124,7 +1190,7 @@ function escapeAttr(s) {
   return escapeHtml(s).replaceAll('"', '&quot;');
 }
 
-openBtn.addEventListener('click', pickAndAdd);
+newBtn.addEventListener('click', () => showNewWorkspaceDialog('local'));
 
 // Fire-and-forget update check. Runs once per process launch.
 // Endpoint / pubkey live in tauri.conf.json under `plugins.updater`.
@@ -1170,230 +1236,22 @@ listen('chan-busy', (e) => {
   refresh().catch(showError);
 });
 
-/// Tunnel panel. Hidden until the user clicks "Attach", then
-/// rendered inline above the workspaces table. Two states:
-///
-///   1. Setup: port input (placeholder "auto") + Start button.
-///   2. Listening: bound port + `chan serve` snippet + Stop button.
-///
-/// A remote workspace that registers while the panel is in state 2 is
-/// auto-launched via `openUrl`; the panel stays visible so the user
-/// can connect more remotes from the same listening session.
-let tunnelPanelOpen = false;
-
-async function toggleTunnelPanel() {
-  tunnelPanelOpen = !tunnelPanelOpen;
-  await renderTunnelPanel();
-}
-
-async function renderTunnelPanel() {
-  const slot = document.getElementById('tunnel-panel-slot');
-  if (!slot) return;
-  if (!tunnelPanelOpen) {
-    slot.innerHTML = '';
-    tunnelBtn.textContent = 'Attach';
-    return;
-  }
-  let status;
-  try {
-    status = await invoke('tunnel_status');
-  } catch (e) {
-    showError(e);
-    slot.innerHTML = '';
-    tunnelPanelOpen = false;
-    return;
-  }
-  tunnelBtn.textContent = status.listening ? 'Hide' : 'Attach';
-  slot.innerHTML = renderTunnelPanelHtml(status);
-  bindTunnelPanelEvents(status);
-}
-
-/// Whether to render the SSH `-R` snippet alongside the `chan serve`
-/// snippet. `local` means "the remote chan serve runs on the same
-/// machine as this desktop, no SSH needed". `tunnel` means "chan
-/// serve lives on a remote host and an SSH reverse-forward bridges
-/// to this desktop's loopback port". Persisted in localStorage; the
-/// backend doesn't care since both snippets are pre-formatted.
-const TUNNEL_MODE_KEY = 'chanDesktopTunnelMode';
-function tunnelMode() {
-  const v = localStorage.getItem(TUNNEL_MODE_KEY);
-  return v === 'local' ? 'local' : 'tunnel';
-}
-function setTunnelMode(mode) {
-  localStorage.setItem(TUNNEL_MODE_KEY, mode === 'local' ? 'local' : 'tunnel');
-}
-
-function renderTunnelPanelHtml(status) {
-  if (status.listening && status.port != null) {
-    const ssh = status.ssh_snippet || '';
-    const cmd = status.chan_serve_snippet || '';
-    const mode = tunnelMode();
-    const isTunnel = mode === 'tunnel';
-    const sshBlock = isTunnel
-      ? `<p class="muted">SSH from this machine to the remote with a reverse forward:</p>
-         <pre class="snippet" data-copy="${escapeAttr(ssh)}" title="click to copy">${escapeHtml(ssh)}</pre>
-         <p class="muted">Then on the remote run:</p>`
-      : `<p class="muted">On this machine, run:</p>`;
-    return `
-      ${renderOutboundAttachForm()}
-      <section class="tunnel-panel">
-        <header>
-          <strong>Listening on 127.0.0.1:${status.port}</strong>
-          <div class="seg-toggle" role="tablist" aria-label="Where will chan serve run?">
-            <button class="seg ${mode === 'local' ? 'on' : ''}" data-mode="local"
-                    role="tab" aria-selected="${mode === 'local'}">Local</button>
-            <button class="seg ${mode === 'tunnel' ? 'on' : ''}" data-mode="tunnel"
-                    role="tab" aria-selected="${mode === 'tunnel'}">Tunnel</button>
-          </div>
-          <button class="btn danger" data-act="tunnel-stop">Stop</button>
-        </header>
-        ${sshBlock}
-        <pre class="snippet" data-copy="${escapeAttr(cmd)}" title="click to copy">${escapeHtml(cmd)}</pre>
-        <p class="muted">Connected workspaces appear in the list below and open automatically.</p>
-      </section>`;
-  }
-  return `
-    ${renderOutboundAttachForm()}
-    <section class="tunnel-panel">
-      <header><strong>Receive a remote workspace</strong></header>
-      <p class="muted">Bind a loopback port to accept incoming <code>chan serve --tunnel-url</code> from another machine over an SSH reverse forward.</p>
-      <div class="tunnel-row">
-        <label>Port
-          <input id="tunnel-port-input" type="number" min="0" max="65535" placeholder="auto"
-                 value="${status.preferred_port ? status.preferred_port : ''}"/>
-        </label>
-        <label>Label
-          <input id="tunnel-label-input" type="text" maxlength="64"
-                 value="${escapeAttr(status.preferred_label || '')}"/>
-        </label>
-        <label>Workspace
-          <input id="tunnel-workspace-input" type="text" maxlength="32"
-                 value="${escapeAttr(status.preferred_workspace || '')}"/>
-        </label>
-        <button class="btn primary" data-act="tunnel-start">Start listening</button>
-      </div>
-      <p class="muted">Port 0 / empty lets the OS pick. Label appears as the first URL segment. Workspace name is lowercase ASCII + hyphens.</p>
-    </section>`;
-}
-
-function renderOutboundAttachForm() {
-  return `
-    <section class="tunnel-panel outbound-panel">
-      <header><strong>Open by URL</strong></header>
-      <div class="tunnel-row outbound-row">
-        <label class="outbound-url-field">URL
-          <input id="outbound-url-input" type="url" autocomplete="off" spellcheck="false"
-                 placeholder="http://127.0.0.1:4000/?t=..."/>
-        </label>
-        <label>Name
-          <input id="outbound-label-input" type="text" maxlength="120" autocomplete="off"/>
-        </label>
-        <button class="btn primary" data-act="outbound-add">Attach URL</button>
-      </div>
-    </section>`;
-}
-
-function bindTunnelPanelEvents(_status) {
-  // Mode toggle (Local | Tunnel). Pure UI state — persisted in
-  // localStorage, no backend round-trip. Switching just re-renders
-  // the snippet block.
-  document.querySelectorAll('.seg-toggle .seg').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      setTunnelMode(btn.dataset.mode);
-      await renderTunnelPanel();
-    });
-  });
-
-  const startBtn = document.querySelector('[data-act="tunnel-start"]');
-  if (startBtn) {
-    startBtn.addEventListener('click', async () => {
-      const portInp = document.getElementById('tunnel-port-input');
-      const rawPort = (portInp && portInp.value || '').trim();
-      const preferred = rawPort === '' ? 0 : Math.max(0, Math.min(65535, Number(rawPort) | 0));
-      const label = (document.getElementById('tunnel-label-input').value || '').trim();
-      const workspace = (document.getElementById('tunnel-workspace-input').value || '').trim();
-      try {
-        await invoke('tunnel_start', { preferredPort: preferred, label, workspace });
-      } catch (e) {
-        showError(e);
-        return;
-      }
-      await renderTunnelPanel();
-    });
-  }
-  const outboundBtn = document.querySelector('[data-act="outbound-add"]');
-  if (outboundBtn) {
-    outboundBtn.addEventListener('click', attachOutboundUrl);
-    for (const input of [
-      document.getElementById('outbound-url-input'),
-      document.getElementById('outbound-label-input'),
-    ]) {
-      if (!input) continue;
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          outboundBtn.click();
-        }
-      });
-    }
-  }
-  const stopBtn = document.querySelector('[data-act="tunnel-stop"]');
-  if (stopBtn) {
-    stopBtn.addEventListener('click', async () => {
-      try {
-        await invoke('tunnel_stop');
-      } catch (e) {
-        showError(e);
-        return;
-      }
-      await renderTunnelPanel();
-      await refresh();
-    });
-  }
-  document.querySelectorAll('.tunnel-panel .snippet[data-copy]').forEach((node) => {
-    node.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(node.dataset.copy);
-        const old = node.textContent;
-        node.textContent = 'Copied';
-        setTimeout(() => { node.textContent = old; }, 1200);
-      } catch {
-        // Clipboard denied; nothing to do.
-      }
-    });
-  });
-}
-
-async function attachOutboundUrl() {
-  const urlInput = document.getElementById('outbound-url-input');
-  const labelInput = document.getElementById('outbound-label-input');
-  const url = (urlInput && urlInput.value || '').trim();
-  const label = (labelInput && labelInput.value || '').trim();
-  if (!url) {
-    if (urlInput) urlInput.focus();
-    showError('Remote URL is required.');
-    return;
-  }
-  try {
-    await invoke('add_outbound_workspace', { url, label });
-  } catch (e) {
-    showError(e);
-    return;
-  }
-  if (urlInput) urlInput.value = '';
-  if (labelInput) labelInput.value = '';
-  await refresh();
-}
-
-tunnelBtn.addEventListener('click', toggleTunnelPanel);
-
 // `tunneled-workspace-ready` is informational on this side: the Rust
 // supervisor already opened the in-app webview window the moment
 // the per-tenant listener bound. We just refresh the workspace table
-// so the new row shows up alongside its URL.
-listen('tunneled-workspace-ready', () => { refresh().catch(showError); });
+// so the new row shows up alongside its URL, and refresh the [New]
+// modal's inbound body if it happens to be open.
+listen('tunneled-workspace-ready', () => {
+  refresh().catch(showError);
+  if (activeNewDialog) activeNewDialog.refreshInbound();
+});
 
-listen('tunnel-state-changed', () => { renderTunnelPanel().catch(showError); });
+// The listener state changed (started / stopped, possibly from
+// elsewhere). Refresh the [New] modal's inbound body if it's open and
+// showing inbound; the launcher list refreshes via serves-changed.
+listen('tunnel-state-changed', () => {
+  if (activeNewDialog) activeNewDialog.refreshInbound();
+});
 
 boot().catch(showError);
 maybeOfferUpdate().catch((e) => console.warn('update flow error:', e));

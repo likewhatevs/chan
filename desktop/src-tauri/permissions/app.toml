@@ -6,8 +6,6 @@ permissions = [
   "allow-add-workspace",
   "allow-remove-workspace",
   "allow-set-workspace-on",
-  "allow-get-workspace-features",
-  "allow-set-workspace-features",
   "allow-compute-workspace-preflight",
   "allow-get-config",
   "allow-home-dir",
@@ -67,16 +65,6 @@ commands.allow = ["remove_workspace"]
 identifier = "allow-set-workspace-on"
 description = "Enables the set_workspace_on command."
 commands.allow = ["set_workspace_on"]
-
-[[permission]]
-identifier = "allow-get-workspace-features"
-description = "Enables the get_workspace_features command."
-commands.allow = ["get_workspace_features"]
-
-[[permission]]
-identifier = "allow-set-workspace-features"
-description = "Enables the set_workspace_features command."
-commands.allow = ["set_workspace_features"]
 
 [[permission]]
 identifier = "allow-compute-workspace-preflight"

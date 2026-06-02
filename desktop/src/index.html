@@ -13,12 +13,9 @@
     <div class="brand">
       <span class="enso" aria-hidden="true"></span>
       <b class="brand-title">Workspaces</b>
-      <!-- fullstack-53: subtle italic tagline next to the brand title. -->
-      <em class="brand-tagline">what are we working on today?</em>
     </div>
     <div class="actions">
-      <button class="btn primary" id="open-workspace">Open workspace</button>
-      <button class="btn primary" id="tunnel-btn" title="Attach a remote workspace">Attach</button>
+      <button class="btn primary" id="new-workspace" title="Add a workspace">New</button>
       <!-- Sign-in kept in the DOM but hidden. -->
       <button class="btn" id="auth-btn" title="Sign in to chan.app" hidden>Sign in</button>
       <button class="btn icon" id="theme-toggle" title="Toggle light/dark mode" aria-label="Toggle theme">
@@ -35,7 +32,6 @@
     </div>
   </header>
 
-  <div id="tunnel-panel-slot"></div>
   <main id="main"></main>
 
   <script src="main.js"></script>

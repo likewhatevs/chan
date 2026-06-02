@@ -99,15 +99,6 @@ header.bar {
   letter-spacing: .08em;
   font-size: 14px;
 }
-/* `fullstack-53`: subtle italic tagline next to the brand title.
-   Muted to keep the brand title primary. */
-.brand .brand-tagline {
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-style: italic;
-  letter-spacing: .01em;
-  white-space: nowrap;
-}
 
 .actions { display: flex; gap: 6px; align-items: center; }
 
@@ -197,21 +188,31 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   user-select: text;
 }
 .remote-cell:hover { color: var(--text-secondary); }
-.tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 42px;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+/* Remote-row connection dot (replaces the old url/tunnel text tags).
+   Green when the workspace has a live URL, grey otherwise. The
+   inbound/outbound direction now lives on the WHERE-column icon. */
+.conn-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.conn-dot.on { background: var(--accent); }
+/* WHERE-column directional glyphs for remote rows + the muted
+   inbound/outbound caption. Mirrors the .path-cell home/computer rules. */
+.where-cell .ic-outbound,
+.where-cell .ic-inbound {
+  vertical-align: -2px;
+  margin-right: 2px;
+}
+.where-dir {
   color: var(--text-secondary);
   font-size: 11px;
-  line-height: 1.4;
+  margin-left: 6px;
   text-transform: uppercase;
+  letter-spacing: .04em;
 }
-.tag-tunnel { color: var(--accent); }
-.tag-outbound { color: var(--link); }
 
 /* Split button: primary "Open" + caret that toggles a small menu
    anchored to the row. The menu is absolutely positioned to the
@@ -273,33 +274,102 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   pointer-events: none;
 }
 
-/* Tunnel panel — inline above the workspaces table while the user is
-   configuring or actively running the loopback tunnel listener. */
-.tunnel-panel {
-  margin: 14px 14px 0;
-  padding: 12px 14px;
+/* New-workspace modal: overlay + segmented 3-choice switch + the
+   per-choice bodies. Clones the preflight overlay scaffold and the
+   Team Work real-estate toggle; the inbound listening state reuses the
+   seg-toggle + snippet rules (rehomed here from the old tunnel panel). */
+.nw-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+.nw-dialog {
+  background: var(--surface, var(--bg));
+  color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-card);
-  font-size: 13px;
+  border-radius: 10px;
+  padding: 18px 22px 16px;
+  max-width: 640px;
+  width: 100%;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
+  gap: 12px;
+}
+.nw-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.nw-header h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.nw-close {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-secondary);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.nw-close:hover { color: var(--text); }
+.nw-choices { display: flex; gap: 6px; }
+.nw-choice {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.nw-choice.on {
+  background: color-mix(in srgb, var(--brand) 20%, var(--bg));
+  border-color: var(--brand);
+}
+.nw-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 80px;
+}
+.nw-intro, .nw-hint, .nw-muted {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.nw-intro { font-size: 13px; }
+.nw-hint, .nw-muted { font-size: 12px; }
+.nw-footer {
+  display: flex;
+  justify-content: flex-end;
   gap: 8px;
+  margin-top: 4px;
 }
-.tunnel-panel header {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+.nw-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
-.tunnel-panel p.muted { margin: 0; color: var(--text-secondary); }
-.tunnel-panel .tunnel-row {
-  display: flex; align-items: center; gap: 10px;
+.nw-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
 }
-.tunnel-panel .tunnel-row label {
-  display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary);
-}
-.tunnel-panel .tunnel-row input[type="number"],
-.tunnel-panel .tunnel-row input[type="url"],
-.tunnel-panel .tunnel-row input[type="text"] {
-  width: 100px;
+.nw-row input[type="number"],
+.nw-row input[type="url"],
+.nw-row input[type="text"] {
+  width: 110px;
   padding: 4px 6px;
   background: var(--bg);
   color: var(--text);
@@ -307,24 +377,24 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   border-radius: 4px;
   font: inherit;
 }
-.tunnel-panel .outbound-url-field {
-  flex: 1 1 320px;
+.nw-url-field { flex: 1 1 320px; }
+.nw-url-field input[type="url"] { width: 100%; min-width: 220px; }
+.nw-listening-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
-.tunnel-panel .outbound-url-field input[type="url"] {
-  width: 100%;
-  min-width: 220px;
-}
-.tunnel-panel .outbound-row {
-  flex-wrap: wrap;
-}
-.tunnel-panel .seg-toggle {
+/* seg-toggle + snippet are used inside the inbound listening state
+   (rehomed from the removed inline tunnel panel). */
+.seg-toggle {
   display: inline-flex;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
   font-size: 12px;
 }
-.tunnel-panel .seg-toggle .seg {
+.seg-toggle .seg {
   appearance: none;
   background: transparent;
   color: var(--text-secondary);
@@ -333,9 +403,9 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   cursor: pointer;
   font: inherit;
 }
-.tunnel-panel .seg-toggle .seg + .seg { border-left: 1px solid var(--border); }
-.tunnel-panel .seg-toggle .seg.on { background: var(--accent); color: var(--bg); }
-.tunnel-panel .snippet {
+.seg-toggle .seg + .seg { border-left: 1px solid var(--border); }
+.seg-toggle .seg.on { background: var(--accent); color: var(--bg); }
+.snippet {
   margin: 0;
   padding: 6px 8px;
   background: var(--bg);
@@ -428,68 +498,6 @@ button.btn.icon {
 #theme-toggle .ic-moon { display: none; }
 .is-dark #theme-toggle .ic-sun { display: inline-block; }
 .is-light #theme-toggle .ic-moon { display: inline-block; }
-
-/* fullstack-b-28a: per-workspace features expand button + sibling
-   panel. The ⚙ button lives in the row-actions area; clicking it
-   flips the sibling `features-panel` row's hidden attribute. The
-   panel spans all three columns and holds the BGE + reports
-   checkboxes plus the brief explanatory copy. -b-28b will move
-   this to a full pre-flight screen + swap the stub persistence
-   for the chan-workspace config API from systacean-27. */
-button.btn.features-toggle {
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-button.btn.features-toggle[aria-expanded="true"] {
-  color: var(--brand);
-  border-color: var(--brand);
-}
-tr.features-panel > td {
-  background: color-mix(in srgb, var(--brand) 6%, transparent);
-  border-top: 1px dashed var(--border);
-  padding: 12px 14px;
-}
-.features-content {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 640px;
-}
-.features-copy {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--text-secondary, var(--text));
-}
-.features-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.features-row input[type="checkbox"] {
-  margin-top: 3px;
-}
-.features-row input[type="checkbox"]:disabled {
-  cursor: progress;
-}
-.features-label {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.features-label strong {
-  font-weight: 600;
-}
-.features-hint {
-  font-size: 12px;
-  color: var(--text-secondary, var(--text));
-}
 
 /* fullstack-b-28b slice iii: pre-flight modal shown between
    the directory picker and add_workspace. The toggle rows are wider than the

@@ -69,15 +69,6 @@ impl EmbeddedServer {
         self.host.library()
     }
 
-    /// Live `Arc<Workspace>` for a mounted workspace, or `None` when the
-    /// path isn't currently mounted. Feature toggles use this to
-    /// reach the SAME handle the runtime holds instead of re-opening
-    /// (which would hit `WorkspaceAlreadyOpen` against the lifetime
-    /// flock).
-    pub fn live_workspace(&self, root: &Path) -> Option<Arc<chan_workspace::Workspace>> {
-        self.host.live_workspace(root)
-    }
-
     pub fn close_prefix(&self, prefix: &str) -> Result<(), String> {
         self.host
             .close_workspace(prefix)
