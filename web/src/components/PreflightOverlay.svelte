@@ -366,8 +366,8 @@
             {#if reportsError}<span class="onboard-err">{reportsError}</span>{/if}
           </li>
         </ul>
-        <div class="boot-actions">
-          <button type="button" onclick={dismissOnboard}>Dismiss</button>
+        <div class="boot-actions boot-actions-end">
+          <button type="button" onclick={dismissOnboard}>OK</button>
         </div>
       </aside>
     {/if}
@@ -576,6 +576,10 @@
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
+  }
+  /* Onboarding card: single OK button, aligned to the right edge. */
+  .boot-actions-end {
+    justify-content: flex-end;
   }
   .boot-actions button {
     padding: 5px 11px;
