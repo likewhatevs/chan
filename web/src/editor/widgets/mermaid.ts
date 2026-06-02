@@ -13,13 +13,21 @@
 // until a diagram is actually shown.
 
 import {
+  type Command,
   Decoration,
   type DecorationSet,
   EditorView,
+  keymap,
   WidgetType,
 } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
-import { type EditorState, type Extension, StateField } from "@codemirror/state";
+import {
+  EditorSelection,
+  type EditorState,
+  type Extension,
+  Prec,
+  StateField,
+} from "@codemirror/state";
 import type { SyntaxNode } from "@lezer/common";
 import { selectionInRange } from "../decorations/selection";
 import { renderMermaid } from "../mermaid_render";
@@ -82,10 +90,61 @@ export function mermaidDecorations(isDark: () => boolean): Extension {
     },
     provide: (f) => EditorView.decorations.from(f),
   });
+  // Vertical caret entry. A rendered mermaid block is a single
+  // block-replace widget: it has no internal lines for the caret to
+  // land on, so ArrowUp/ArrowDown skip over it (atomicRanges then snaps
+  // the caret past the atom). Left/right entry already works because the
+  // caret can sit at the block's edge and selectionInRange reveals the
+  // source; vertical motion never lands there. This command catches a
+  // vertical move that would step OVER a rendered block and instead
+  // lands the caret on the entered edge - inside the range - so the next
+  // scan() de-renders it to editable source, matching left/right entry.
+  const stepInto =
+    (forward: boolean): Command =>
+    (view) => {
+      const deco = view.state.field(field, false);
+      if (!deco || deco.size === 0) return false;
+      const range = view.state.selection.main;
+      if (!range.empty) return false; // plain caret motion only
+      const head = range.head;
+      // Geometry-aware target (respects wrapped lines); with the block
+      // atomic this lands past the widget when the move crosses it.
+      const target = view.moveVertically(range, forward).head;
+      let enter = -1;
+      deco.between(
+        Math.min(head, target),
+        Math.max(head, target),
+        (from, to) => {
+          // Did this move start outside the block and reach (or
+          // overshoot) the edge we'd enter from? Down enters at `from`,
+          // up at `to`.
+          if (forward ? head < from && target >= from : head > to && target <= to) {
+            enter = forward ? from : to;
+            return false;
+          }
+          return undefined;
+        },
+      );
+      if (enter < 0 || enter === head) return false;
+      view.dispatch({
+        selection: EditorSelection.cursor(enter),
+        scrollIntoView: true,
+      });
+      return true;
+    };
+
   return [
     field,
     EditorView.atomicRanges.of(
       (view) => view.state.field(field, false) ?? Decoration.none,
+    ),
+    // Beats the default-precedence cursorLineUp/Down so we can redirect
+    // into the block before atomicRanges snaps the caret past it.
+    Prec.high(
+      keymap.of([
+        { key: "ArrowUp", run: stepInto(false) },
+        { key: "ArrowDown", run: stepInto(true) },
+      ]),
     ),
   ];
 }

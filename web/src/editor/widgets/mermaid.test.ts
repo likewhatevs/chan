@@ -82,6 +82,19 @@ describe("mermaid wiring", () => {
     expect(blocksSrc).not.toMatch(/mermaid/i);
   });
 
+  test("vertical arrow keys step INTO a rendered block (no widget skip)", () => {
+    // A block-replace widget has no internal lines, so ArrowUp/Down skip
+    // it (atomicRanges snaps the caret past the atom). The fix is an
+    // ArrowUp/ArrowDown keymap that redirects a crossing move onto the
+    // block edge so scan() de-renders it. moveVertically needs real
+    // layout (jsdom has none), so the behaviour is browser-verified;
+    // this pins the mechanism so it can't silently drop out.
+    expect(mermaidSrc).toMatch(/key:\s*"ArrowUp",\s*run:\s*stepInto\(false\)/);
+    expect(mermaidSrc).toMatch(/key:\s*"ArrowDown",\s*run:\s*stepInto\(true\)/);
+    expect(mermaidSrc).toMatch(/view\.moveVertically\(range, forward\)/);
+    expect(mermaidSrc).toMatch(/EditorSelection\.cursor\(enter\)/);
+  });
+
   test("no button: cursor is the only trigger; theme + rotateX wired", () => {
     expect(mermaidSrc).not.toMatch(/createElement\("button"\)/);
     expect(mermaidSrc).not.toMatch(/addEventListener\("click"/);
