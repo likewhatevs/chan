@@ -280,6 +280,12 @@ export type TerminalTab = {
   cwd?: string;
   seedInput?: string;
   teamWork?: TeamWorkState;
+  /// Rich Prompt per-terminal draft path (`Drafts/<name>/draft.md`) backing
+  /// the bubble: the draft.md IS the prompt text and the folder holds pasted
+  /// media. Created lazily on first open; discarded on terminal close.
+  /// Persisted (SerTab.rpd) so a window reload rebinds + the close cleanup
+  /// targets the right draft (no leak).
+  richPromptDraftPath?: string;
   /// Broadcast group label. A group is a plain string, not an allocated
   /// resource: it "exists" iff >=1 terminal references it, and is
   /// implicitly destroyed when the last member closes. Defaults to
@@ -3520,6 +3526,10 @@ type SerTab = {
   /// Team Work draft state. Only emitted in per-window session payloads,
   /// never in shareable URL hashes.
   rpb?: string;
+  /// Rich Prompt per-terminal draft path (Drafts/<name>/draft.md). Persisted
+  /// so a reload rebinds the bubble + the close cleanup deletes the right
+  /// draft folder. Per-window session payloads only.
+  rpd?: string;
   rph?: number;
   rpo?: 1;
   rpm?: "w" | "s";
@@ -3709,6 +3719,9 @@ function serializeTab(
               return kp ? { kp } : {};
             })(),
           }
+        : {}),
+      ...(opts.terminalSessions && t.richPromptDraftPath
+        ? { rpd: t.richPromptDraftPath }
         : {}),
       ...(opts.terminalSessions && t.teamWork
         ? {
@@ -4017,6 +4030,7 @@ export async function restoreLayout(
                 ? Math.max(0, Math.floor((sertab.tae ?? savedTerm?.tae)!))
                 : undefined,
             teamWork,
+            richPromptDraftPath: (sertab.rpd ?? savedTerm?.rpd) || undefined,
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
@@ -4279,6 +4293,7 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
       }
       const teamWork = teamWorkFromSer(savedTerm);
       if (teamWork) liveTerms[j]!.teamWork = teamWork;
+      if (savedTerm.rpd) liveTerms[j]!.richPromptDraftPath = savedTerm.rpd;
     }
   }
 }

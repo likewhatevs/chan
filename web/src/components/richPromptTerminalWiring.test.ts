@@ -21,10 +21,20 @@ describe("TerminalTab Rich Prompt wiring", () => {
     );
   });
 
-  test("mounts <RichPrompt> only on the active terminal when visible", () => {
+  test("mounts <RichPrompt> only on the active terminal when visible, passing the tab", () => {
     expect(terminal).toMatch(/import RichPrompt from "\.\/RichPrompt\.svelte"/);
+    // The tab is passed so the bubble binds to THIS terminal's per-terminal
+    // Drafts-backed draft.
     expect(terminal).toMatch(
-      /\{#if active && richPrompt\.visible\}[\s\S]{1,80}<RichPrompt \/>/,
+      /\{#if active && richPrompt\.visible\}[\s\S]{1,80}<RichPrompt \{tab\} \/>/,
+    );
+  });
+
+  test("discards the per-terminal Rich Prompt draft folder on terminal close", () => {
+    // @@Host lifecycle: the draft (draft.md + pasted media) is tied to the
+    // terminal; closing the terminal deletes the whole folder so nothing leaks.
+    expect(terminal).toMatch(
+      /function closeTerminalForTab\(\): boolean \{[\s\S]{1,400}if \(tab\.richPromptDraftPath\) \{[\s\S]{1,120}api\.discardDraft\(tab\.richPromptDraftPath\)/,
     );
   });
 

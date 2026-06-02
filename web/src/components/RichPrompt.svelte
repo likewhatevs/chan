@@ -2,15 +2,18 @@
   // Rich Prompt: a floating, inset, rounded, button-less markdown bubble over
   // the BOTTOM of the active terminal. The only chrome is a "submit with
   // cmd+enter" label. ENTER inserts a newline (keep editing); CMD+ENTER (Mod-
-  // Enter) submits the markdown to the active terminal's write queue via the WS
-  // `prompt` frame (sendPromptToActiveTerminal -> the per-session FIFO, NOT the
-  // raw keystroke path) and clears, leaving the bubble open + focused.
+  // Enter) submits to the active terminal's write queue via the WS `prompt`
+  // frame (NOT the raw keystroke path).
   //
-  // Lightweight, hand-assembled CM6: markdown syntax + history + a minimal
-  // keymap. No Wysiwyg widgets/decorations/bubbles, no wiki picker, no date
-  // macros (v1 is deliberately minimal). Mounted by TerminalTab when its tab is
-  // active and `richPrompt.visible`; toggled by Cmd+Shift+P / the terminal
-  // right-click menu.
+  // Drafts-backed (@@Host): the bubble edits a real per-terminal chan-workspace
+  // DRAFT (`tab.richPromptDraftPath` -> `Drafts/<name>/draft.md`). That file IS
+  // the prompt text, and pasted images land in the SAME draft folder via the
+  // editor's image-paste machinery (imageDropHandlers) + insert `![](path)`.
+  // So an agent reads the media as FILES (chan MCP read_media / disk under
+  // ~/.chan) - no base64, seamless across claude/codex/gemini. The draft is
+  // created lazily on first open, persists across hide/show + reload, is
+  // cleared (text only) on submit, and the whole folder is discarded when the
+  // terminal closes (TerminalTab's close sink).
 
   import { onDestroy, onMount } from "svelte";
   import { EditorState, Prec } from "@codemirror/state";
@@ -21,25 +24,64 @@
     insertNewlineContinueMarkup,
     markdown,
   } from "@codemirror/lang-markdown";
+  import { imageDropHandlers } from "../editor/bubbles/image_drop";
   import { makeThemeCompartment } from "../editor/base";
   import { effectiveHybridSurfaceTheme } from "../state/store.svelte";
   import { currentOS } from "../state/shortcuts";
-  import { hideRichPrompt, richPrompt } from "../state/richPrompt.svelte";
-  import { sendPromptToActiveTerminal } from "../state/tabs.svelte";
+  import { hideRichPrompt } from "../state/richPrompt.svelte";
+  import {
+    sendPromptToActiveTerminal,
+    type TerminalTab,
+  } from "../state/tabs.svelte";
+  import { api } from "../api/client";
+
+  // The terminal this bubble belongs to (TerminalTab mounts one per active
+  // terminal). Its `richPromptDraftPath` is the per-terminal draft backing.
+  let { tab }: { tab: TerminalTab } = $props();
 
   let host = $state<HTMLDivElement>();
   let view: EditorView | undefined;
-  // Reuse the editor's theme/highlight so markdown reads the same as the
-  // Source editor; reconfigured below when the surface theme flips.
+  let destroyed = false;
+  let draftPath = "";
+  let writeTimer: ReturnType<typeof setTimeout> | null = null;
   const theme = makeThemeCompartment(effectiveHybridSurfaceTheme("terminal"));
 
   const submitLabel =
     currentOS() === "mac" ? "submit with cmd+enter" : "submit with ctrl+enter";
 
-  /// Submit the current markdown to the active terminal's queue and clear.
-  /// Always returns true so Cmd+Enter is consumed (never inserts a newline);
-  /// an empty/whitespace draft is swallowed without sending. On a failed send
-  /// (no active terminal / WS not open) the draft is kept so nothing is lost.
+  // Directory holding the draft (images upload here). "Drafts/x/draft.md" -> "Drafts/x".
+  function draftDir(): string {
+    const i = draftPath.lastIndexOf("/");
+    return i === -1 ? "" : draftPath.slice(0, i);
+  }
+
+  function scheduleWrite(): void {
+    if (writeTimer !== null) clearTimeout(writeTimer);
+    writeTimer = setTimeout(() => void flushWrite(), 400);
+  }
+
+  // Persist the current doc to draft.md. Best-effort (a failed write keeps the
+  // in-memory text; the next change retries). Captures the text synchronously
+  // so an onDestroy flush reads it before the view is torn down.
+  async function flushWrite(): Promise<void> {
+    if (writeTimer !== null) {
+      clearTimeout(writeTimer);
+      writeTimer = null;
+    }
+    if (!view || !draftPath) return;
+    const text = view.state.doc.toString();
+    try {
+      await api.write(draftPath, text);
+    } catch {
+      // best-effort; leave the in-memory draft intact.
+    }
+  }
+
+  // Cmd+Enter: submit the draft text through the queue, then RESET = clear
+  // draft.md TEXT but KEEP the folder + any pasted media (the agent reads the
+  // media AFTER submit; the folder is cleaned on terminal close). Always
+  // returns true so the chord never inserts a newline; empty/whitespace is
+  // swallowed; a failed send keeps the text.
   function submit(): boolean {
     if (!view) return true;
     const text = view.state.doc.toString();
@@ -48,49 +90,82 @@
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: "" },
     });
-    richPrompt.draft = "";
+    void flushWrite();
     view.focus();
     return true;
   }
 
+  // Resolve this terminal's draft, creating it lazily on first open. createDraft
+  // seeds "# draft\n"; clear it so the composer starts empty.
+  async function ensureDraft(): Promise<string> {
+    if (tab.richPromptDraftPath) return tab.richPromptDraftPath;
+    const { path } = await api.createDraft();
+    tab.richPromptDraftPath = path;
+    try {
+      await api.write(path, "");
+    } catch {
+      // best-effort; an unclear seed just shows once.
+    }
+    return path;
+  }
+
+  async function loadContent(path: string): Promise<string> {
+    try {
+      return (await api.read(path)).content ?? "";
+    } catch {
+      return "";
+    }
+  }
+
   onMount(() => {
-    if (!host) return;
-    const state = EditorState.create({
-      doc: richPrompt.draft,
-      extensions: [
-        history(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
-        // High-prec keymap (beats defaultKeymap below):
-        //  - Mod-Enter submits (a distinct key, so it composes with Enter).
-        //  - Enter continues markdown markup so "- item" / "1." / "> " keep
-        //    going on Enter; insertNewlineContinueMarkup returns false
-        //    off-markup, falling through to defaultKeymap's plain newline.
-        //  - Backspace deletes list/quote markup at the line start, else
-        //    falls through to a normal character delete.
-        // markdown({ addKeymap: false }) keeps the language (syntax) without
-        // its own keymap, so these explicit bindings own Enter/Backspace and
-        // the precedence is unambiguous.
-        Prec.high(
-          keymap.of([
-            { key: "Mod-Enter", run: submit },
-            { key: "Enter", run: insertNewlineContinueMarkup },
-            { key: "Backspace", run: deleteMarkupBackward },
-          ]),
-        ),
-        markdown({ addKeymap: false }),
-        EditorView.lineWrapping,
-        theme.extension,
-        // Persist the draft so a toggle / active-terminal switch keeps the text.
-        EditorView.updateListener.of((u) => {
-          if (u.docChanged) richPrompt.draft = u.state.doc.toString();
-        }),
-      ],
-    });
-    view = new EditorView({ state, parent: host });
-    view.focus();
+    void (async () => {
+      if (!host) return;
+      draftPath = await ensureDraft();
+      if (destroyed || !host) return;
+      const content = await loadContent(draftPath);
+      if (destroyed || !host) return;
+      const state = EditorState.create({
+        doc: content,
+        extensions: [
+          history(),
+          keymap.of([...defaultKeymap, ...historyKeymap]),
+          // High-prec: Mod-Enter submits; Enter continues markdown markup
+          // (lists/quotes), falling through to a plain newline off-markup;
+          // Backspace dedents markup. markdown({addKeymap:false}) keeps syntax
+          // only so these bindings own Enter/Backspace unambiguously.
+          Prec.high(
+            keymap.of([
+              { key: "Mod-Enter", run: submit },
+              { key: "Enter", run: insertNewlineContinueMarkup },
+              { key: "Backspace", run: deleteMarkupBackward },
+            ]),
+          ),
+          markdown({ addKeymap: false }),
+          // Real editor image paste/drop: pasted images upload into the draft
+          // folder and insert ![](path); the draft text (with the refs) rides
+          // the prompt frame on submit, and the agent reads the files.
+          imageDropHandlers({
+            getUploadDir: () => draftDir(),
+            getCurrentPath: () => draftPath,
+          }),
+          EditorView.lineWrapping,
+          theme.extension,
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged) scheduleWrite();
+          }),
+        ],
+      });
+      view = new EditorView({ state, parent: host });
+      view.focus();
+    })();
   });
 
-  onDestroy(() => view?.destroy());
+  onDestroy(() => {
+    destroyed = true;
+    // Persist the latest text on hide/unmount (reads the doc before destroy).
+    void flushWrite();
+    view?.destroy();
+  });
 
   // Track surface-theme flips so the bubble's markdown highlight follows.
   $effect(() => {

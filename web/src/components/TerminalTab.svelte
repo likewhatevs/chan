@@ -1077,6 +1077,13 @@
 
   function closeTerminalForTab(): boolean {
     explicitCloseSession();
+    // Discard this terminal's Rich Prompt draft folder (draft.md + any pasted
+    // media) so nothing leaks in Drafts (@@Host: the bubble's draft is tied to
+    // the terminal lifecycle). Best-effort + fire-and-forget; the tab is going
+    // away regardless.
+    if (tab.richPromptDraftPath) {
+      void api.discardDraft(tab.richPromptDraftPath);
+    }
     return true;
   }
 
@@ -1746,7 +1753,7 @@
        ACTIVE terminal so one window shows a single bubble that follows the
        active terminal; toggled by Cmd+Shift+P / the right-click menu. -->
   {#if active && richPrompt.visible}
-    <RichPrompt />
+    <RichPrompt {tab} />
   {/if}
 </div>
 
