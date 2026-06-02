@@ -877,21 +877,17 @@
   }
   /* Opener / closer / content rows share the code-block background
      so the whole fenced block reads as one continuous slab.
-     `position: relative` anchors the floating badge widget on the
-     opener row.
-     Specificity note: the earlier `.md-wysiwyg-cm6 .cm-editor
-     .cm-line { background: transparent !important }` rule has THREE
-     class selectors. To beat it we chain `.cm-line.cm-md-X` (two
-     classes on the same element) inside the same `.cm-editor`
-     scope - 4 class selectors total - and `!important` ties the
-     priority bucket. Without this the slab stays invisible. */
+     The slab is painted by a ::before (further down), NOT by a
+     `background` on the line itself: CodeMirror's drawSelection layer
+     sits at z-index -2, so an opaque line background buried the
+     selection highlight - text selected inside a code block was
+     invisible. `position: relative` (no z-index, so it forms no
+     stacking context) anchors the ::before and the floating badge
+     widget on the opener row. */
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-opener),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-closer),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-code-block) {
-    background: var(
-      --chan-editor-code-block-bg,
-      var(--bg-card, rgba(0, 0, 0, 0.04))
-    ) !important;
+    position: relative;
     color: var(--chan-editor-code-block-color, inherit);
     font-family: var(--chan-editor-code-family, monospace);
     font-size: var(--chan-editor-code-size, 0.92em);
@@ -904,19 +900,34 @@
     padding-left: 0.75em !important;
     padding-right: 0.75em !important;
     /* The CM6 fold gutter eats ~18px on the LEFT of the editor; the
-       right side has no gutter, so the slab bleeds to the editor's
-       right edge while the left edge sits flush with the post-
-       gutter content edge - visibly lopsided. A transparent right
-       border + `background-clip: padding-box` paints the slab up to
-       the padding edge only, leaving a matching empty strip on the
-       right that mirrors the gutter on the left.
-       !important on background-clip is required: the `background:
-       ... !important` shorthand above implicitly sets
-       `background-clip: border-box !important`, and without
-       !important here the longhand loses the cascade. */
+       right side has no gutter, so the slab would bleed to the
+       editor's right edge while the left edge sits flush with the
+       post-gutter content edge - visibly lopsided. The 18px
+       transparent right border shrinks the PADDING box (the ::before's
+       absolute containing block), so the slab stops 18px short on the
+       right, mirroring the left gutter - same effect the old
+       background-clip:padding-box gave. */
     border-right: 18px solid transparent;
-    background-clip: padding-box !important;
     box-sizing: border-box;
+  }
+  /* The slab itself: a non-interactive layer pinned to the line's
+     padding box, sitting at z-index -3 so it paints BEHIND the
+     selection layer (-2) but still behind the text (normal flow).
+     `inset: 0` resolves against the padding box, which the 18px
+     transparent right border already shortens - so it reproduces the
+     old slab's exact bounds. */
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-opener::before),
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-closer::before),
+  :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-code-block::before) {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(
+      --chan-editor-code-block-bg,
+      var(--bg-card, rgba(0, 0, 0, 0.04))
+    );
+    z-index: -3;
+    pointer-events: none;
   }
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-opener),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-fence-closer) {
