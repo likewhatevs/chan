@@ -342,10 +342,11 @@
   </div>
 </section>
 
-<!-- Screensaver preview: a static frame matching the selected theme so
-     the dropdown choice is visible before locking. The back face is
-     always mounted, so both previews are static (zero timers): Matrix
-     renders a single frame, Default the enso mark on a dark backdrop. -->
+<!-- Screensaver preview: shows the selected theme so the dropdown choice
+     is visible before locking. The Matrix preview animates the real
+     falling rain (shared engine with the fullscreen screensaver, so they
+     match); it self-gates to on-screen + reduced-motion. The Default
+     preview is the static enso mark on a dark backdrop. -->
 <section class="screensaver-preview">
   <h3>Screensaver preview</h3>
   <div class="preview-box">
@@ -356,7 +357,7 @@
     {/if}
   </div>
   <p class="hint">
-    Static preview of the {screensaverTheme === "matrix"
+    Preview of the {screensaverTheme === "matrix"
       ? "Matrix"
       : "Default"} lock theme.
   </p>

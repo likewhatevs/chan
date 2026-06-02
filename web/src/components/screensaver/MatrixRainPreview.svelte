@@ -1,32 +1,45 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { drawStaticMatrix, gridDimensions } from "./matrixRain";
+  import {
+    createRainColumns,
+    DRAW_INTERVAL_MS,
+    drawStaticMatrix,
+    gridDimensions,
+    stepRain,
+    type RainColumn,
+  } from "./matrixRain";
 
-  // Small, self-contained matrix preview for config panels (the Dashboard
-  // About-slot back). Unlike MatrixRain.svelte this never reads the window
-  // size: it renders into a fixed preview box so it can sit inside a card.
+  // Matrix preview for the dashboard About-slot config. Renders the SAME
+  // falling rain as the fullscreen screensaver (MatrixRain.svelte) via the
+  // shared engine, scaled into a fixed preview box. It used to draw a static
+  // full grid that looked nothing like the screensaver (@@Host DB2: the rain is
+  // sparse falling columns over black, not a wall of glyphs).
   //
-  // The static frame is the safe default for an always-mounted back face: no
-  // timers, no leaked rAF. The animated path re-rolls the same shared static
-  // frame on a throttled cadence so it never forks the live screensaver's
-  // column state machine, which is intentionally not extracted.
+  // The dashboard back face is latched-mounted and rotated away when the card
+  // shows its front, so the animation self-gates to avoid wasted work: it runs
+  // only while the canvas is on-screen (IntersectionObserver) and the document
+  // is visible, and falls back to a single accurate still under
+  // prefers-reduced-motion. (The rotated-away-but-mounted case is invisible to
+  // IntersectionObserver; that tiny interval is still cleared on destroy.)
 
   let {
     width = 320,
     height = 180,
-    animated = false,
+    animated = true,
   }: { width?: number; height?: number; animated?: boolean } = $props();
-
-  // Re-roll cadence for the animated path. Slower than the live screensaver's
-  // 40ms tick because a previewbox-sized full re-roll every frame reads as
-  // noise; this gives a calmer shimmer.
-  const FRAME_INTERVAL_MS = 90;
 
   let canvas = $state<HTMLCanvasElement | undefined>();
   let ctx: CanvasRenderingContext2D | null = null;
   let fontsReady = false;
-  let rafId: number | null = null;
-  let lastFrameAt = 0;
+  let columns: RainColumn[] = [];
+  let grid = { numCols: 0, numChars: 0 };
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let onScreen = true;
+  let observer: IntersectionObserver | null = null;
+  const reduced =
+    typeof window === "undefined"
+      ? null
+      : window.matchMedia("(prefers-reduced-motion: reduce)");
 
   // Device pixel ratio matters here: the box is small, so glyph blur on retina
   // is visible. We scale the backing store and map drawing units back to CSS
@@ -35,93 +48,115 @@
     return typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
   }
 
-  function sizeCanvas(): void {
+  // Size the backing store, set the CSS-pixel transform, and (re)derive the
+  // grid + a fresh column set. Callers clear the canvas separately when they
+  // want the rain to fall in from the top again.
+  function resetCanvas(): void {
     if (!canvas || !ctx) return;
     const ratio = dpr();
     canvas.width = Math.round(width * ratio);
     canvas.height = Math.round(height * ratio);
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  }
-
-  function renderStatic(): void {
-    if (!ctx) return;
-    const { numCols, numChars } = gridDimensions(width, height);
-    drawStaticMatrix(ctx, numCols, numChars);
+    ctx.clearRect(0, 0, width, height);
+    grid = gridDimensions(width, height);
+    columns = createRainColumns(grid.numCols, grid.numChars);
   }
 
   function stopLoop(): void {
-    if (rafId !== null) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
     }
   }
 
-  function tick(now: number): void {
-    // Bail if the prop flipped off mid-flight so a stale rAF cannot re-arm.
-    if (!animated || !ctx) {
-      rafId = null;
+  // Start/stop the incremental rain loop to match the current gates. Reduced
+  // motion paints one still and never loops; otherwise the loop runs only while
+  // visible. The interval reads `columns`/`grid` live, so a resize that swaps
+  // them in does not need a restart.
+  function sync(): void {
+    if (!ctx || !fontsReady) return;
+    if (reduced?.matches) {
+      stopLoop();
+      drawStaticMatrix(ctx, grid.numCols, grid.numChars);
       return;
     }
-    if (now - lastFrameAt >= FRAME_INTERVAL_MS) {
-      lastFrameAt = now;
-      renderStatic();
+    const run =
+      animated &&
+      onScreen &&
+      !(typeof document !== "undefined" && document.hidden);
+    if (run) {
+      if (timer === null) {
+        timer = setInterval(() => {
+          if (ctx) stepRain(ctx, columns, grid.numCols, grid.numChars);
+        }, DRAW_INTERVAL_MS);
+      }
+    } else {
+      stopLoop();
     }
-    rafId = requestAnimationFrame(tick);
   }
 
-  function startLoop(): void {
-    if (rafId !== null) return;
-    lastFrameAt = 0;
-    rafId = requestAnimationFrame(tick);
+  function onVisibilityChange(): void {
+    sync();
   }
 
   async function loadMatrixFont(): Promise<void> {
-    if (typeof document === "undefined" || !document.fonts) {
-      fontsReady = true;
-      return;
-    }
+    if (typeof document === "undefined" || !document.fonts) return;
     try {
       await document.fonts.load("20px matrix_code");
     } catch {
       // A missing font falls back to the canvas default; still legible.
     }
-    fontsReady = true;
   }
 
   onMount(() => {
     if (!canvas) return;
     ctx = canvas.getContext("2d");
     if (!ctx) return;
-    sizeCanvas();
+    resetCanvas();
+
+    observer = new IntersectionObserver(
+      (entries) => {
+        onScreen = entries.some((e) => e.isIntersecting);
+        sync();
+      },
+      { threshold: 0 },
+    );
+    observer.observe(canvas);
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
+    reduced?.addEventListener?.("change", onVisibilityChange);
+
     void loadMatrixFont().then(() => {
+      fontsReady = true;
       if (!ctx) return;
-      sizeCanvas();
-      renderStatic();
-      if (animated) startLoop();
+      // Clear + fresh columns so the rain falls in from the top once the matrix
+      // face has resolved (no fallback-font flash), then start if visible.
+      resetCanvas();
+      sync();
     });
   });
 
   onDestroy(() => {
     stopLoop();
+    observer?.disconnect();
+    observer = null;
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    }
+    reduced?.removeEventListener?.("change", onVisibilityChange);
   });
 
-  // React to prop changes after mount: resize and re-render on dimension
-  // changes, and start/stop the loop strictly with the animated flag. The
-  // guard on fontsReady avoids a flash of fallback-font glyphs before the
-  // matrix_code face resolves on first mount.
+  // React to size / animated prop changes after mount: re-size, re-seed, and
+  // re-evaluate the loop. Guarded on fontsReady so it doesn't fight the initial
+  // font-load path above.
   $effect(() => {
-    // Touch the reactive inputs so the effect re-runs when any of them change.
     void width;
     void height;
-    const wantAnimated = animated;
+    void animated;
     if (!ctx || !fontsReady) return;
-    sizeCanvas();
-    if (wantAnimated) {
-      startLoop();
-    } else {
-      stopLoop();
-      renderStatic();
-    }
+    resetCanvas();
+    sync();
   });
 </script>
 

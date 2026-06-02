@@ -554,7 +554,7 @@ describe("About-back screensaver preview reacts to theme (A7)", () => {
       /\{#if screensaverTheme === "matrix"\}[\s\S]{1,160}<MatrixRainPreview[\s\S]{1,80}\{:else\}[\s\S]{1,160}<PlainScreensaverPreview/,
     );
     expect(aboutSlot).toMatch(
-      /Static preview of the \{screensaverTheme === "matrix"[\s\S]{1,80}\? "Matrix"[\s\S]{1,80}: "Default"\} lock theme/,
+      /Preview of the \{screensaverTheme === "matrix"[\s\S]{1,80}\? "Matrix"[\s\S]{1,80}: "Default"\} lock theme/,
     );
     // No longer hardcoded to a Matrix-only preview + hint.
     expect(aboutSlot).not.toMatch(/Static preview of the Matrix lock theme\./);

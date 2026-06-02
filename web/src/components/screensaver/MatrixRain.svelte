@@ -1,16 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    BODY_COLOR,
     COLUMN_SPACING_PX,
+    createRainColumns,
+    DRAW_INTERVAL_MS,
     drawStaticMatrix as drawStaticFrame,
-    HEAD_COLOR,
-    LEAD_COLOR,
-    MID_COLOR,
     RAIN_FONT_SIZE_PX,
     randInt,
-    randomChar,
+    type RainColumn,
     ROW_SPACING_PX,
+    stepRain,
   } from "./matrixRain";
 
   // High-fidelity Svelte adaptation of the MIT-licensed
@@ -22,17 +21,8 @@
   const INTRO_HOLD_MS = 2000;
   const TYPE_DELAY_SLOW_MS = 300;
   const TYPE_DELAY_FAST_MS = 100;
-  const DRAW_INTERVAL_MS = 40;
   const INTRO_FONT_SIZE_PX = 22;
-  const RAIN_DENSITY = 4;
   const INTRO_COLOR = "#7bff8d";
-
-  type Column = {
-    chars: string[];
-    delay: number;
-    speed: number;
-    position: number;
-  };
 
   let canvas = $state<HTMLCanvasElement | undefined>();
 
@@ -46,7 +36,7 @@
     let active = true;
     let numCols = 0;
     let numChars = 0;
-    let columns: Column[] = [];
+    let columns: RainColumn[] = [];
     let drawTimer: ReturnType<typeof setInterval> | null = null;
     const timeouts: ReturnType<typeof setTimeout>[] = [];
 
@@ -57,29 +47,8 @@
       });
     }
 
-    function randomChars(count: number): string[] {
-      const chars: string[] = [];
-      for (let index = 0; index < count; index += 1) {
-        chars.push(randomChar());
-      }
-      return chars;
-    }
-
-    function newColumn(initialCharCount: number, delayColumnCount: number): Column {
-      return {
-        chars: randomChars(initialCharCount),
-        delay: randInt(delayColumnCount * RAIN_DENSITY * 2),
-        speed: !randInt(4) ? 1 : 0,
-        position: 0,
-      };
-    }
-
     function outputChar(char: string, horpos: number, verpos: number): void {
       ctx.fillText(char, horpos, verpos);
-    }
-
-    function clearChar(horpos: number, verpos: number): void {
-      ctx.clearRect(horpos, verpos, COLUMN_SPACING_PX, ROW_SPACING_PX);
     }
 
     function clearScreen(): void {
@@ -93,10 +62,7 @@
       canvas.height = window.innerHeight;
       numCols = Math.floor(canvas.width / COLUMN_SPACING_PX) + 1;
       numChars = Math.floor(canvas.height / ROW_SPACING_PX) + 1;
-      columns = [];
-      for (let index = 0; index < numCols; index += 1) {
-        columns.push(newColumn(numCols, numChars));
-      }
+      columns = createRainColumns(numCols, numChars);
     }
 
     async function loadMatrixFonts(): Promise<void> {
@@ -135,74 +101,6 @@
       clearScreen();
     }
 
-    function drawScreen(): void {
-      ctx.font = `${RAIN_FONT_SIZE_PX}px matrix_code`;
-
-      for (let colIndex = 0; colIndex < columns.length; colIndex += 1) {
-        const col = columns[colIndex]!;
-
-        if (col.delay) {
-          col.delay -= 1;
-          continue;
-        }
-
-        for (let rowIndex = 0; rowIndex < col.chars.length; rowIndex += 1) {
-          const char = col.chars[rowIndex] ?? randomChar();
-          const horpos = colIndex * COLUMN_SPACING_PX;
-          const verpos = rowIndex * ROW_SPACING_PX;
-          const verout = verpos + ROW_SPACING_PX;
-
-          if (rowIndex > col.position) {
-            break;
-          } else if (rowIndex === col.position) {
-            clearChar(horpos, verpos);
-            ctx.fillStyle = HEAD_COLOR;
-            outputChar(char, horpos, verout);
-          } else if (rowIndex === col.position - 1) {
-            clearChar(horpos, verpos);
-            ctx.fillStyle = LEAD_COLOR;
-            outputChar(char, horpos, verout);
-          } else if (rowIndex === col.position - 2) {
-            clearChar(horpos, verpos);
-            ctx.fillStyle = MID_COLOR;
-            outputChar(char, horpos, verout);
-          } else if (rowIndex === col.position - 3) {
-            clearChar(horpos, verpos);
-            ctx.fillStyle = BODY_COLOR;
-            outputChar(char, horpos, verout);
-          } else if (
-            rowIndex < col.position - 3 &&
-            rowIndex >= col.position - numChars + 10 &&
-            !randInt(15)
-          ) {
-            const newChar = randomChar();
-            clearChar(horpos, verpos);
-            ctx.fillStyle = BODY_COLOR;
-            outputChar(newChar, horpos, verout);
-          } else if (
-            rowIndex < col.position - numChars + 10 &&
-            rowIndex > col.position - numChars - 10
-          ) {
-            ctx.fillStyle = !randInt(5)
-              ? "rgba(0, 0, 0, 0.30)"
-              : "rgba(0, 0, 0, 0.05)";
-            ctx.fillRect(horpos, verpos, COLUMN_SPACING_PX, ROW_SPACING_PX);
-          } else if (rowIndex === col.position - numChars - 10) {
-            clearChar(horpos, verpos);
-          }
-        }
-
-        col.delay = col.speed;
-        col.position += 1;
-
-        if (col.position > numChars * 2 + 10) {
-          col.chars = randomChars(numChars);
-          col.position = 0;
-          col.delay = randInt((numCols * RAIN_DENSITY) / 2);
-        }
-      }
-    }
-
     // Delegates to the shared static-frame renderer so the screensaver and the
     // config-panel preview never drift. The shared helper clears its own grid
     // extent before drawing, so no separate clearScreen() call is needed.
@@ -216,7 +114,12 @@
         drawStaticMatrix();
         return;
       }
-      drawTimer = setInterval(drawScreen, DRAW_INTERVAL_MS);
+      // One rain frame per tick via the shared engine (same logic the preview
+      // runs), so the two surfaces stay identical.
+      drawTimer = setInterval(
+        () => stepRain(ctx, columns, numCols, numChars),
+        DRAW_INTERVAL_MS,
+      );
     }
 
     function onResize(): void {
