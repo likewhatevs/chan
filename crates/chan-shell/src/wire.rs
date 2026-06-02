@@ -138,6 +138,15 @@ pub enum ControlRequest {
         /// (`new`) / summarizing (`load`).
         #[serde(default)]
         script: bool,
+        /// The caller's window id ($CHAN_WINDOW_ID), when `cs terminal team`
+        /// runs from a chan terminal that belongs to an SPA window. The
+        /// server binds each spawned agent session to it, so the agents
+        /// carry $CHAN_WINDOW_ID too and `cs pane` / `cs open` work from
+        /// inside an agent (the window-targeting commands resolve a window).
+        /// Absent when the caller has no window (e.g. a native terminal):
+        /// the agents spawn unbound, as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_id: Option<String>,
     },
 }
 
@@ -394,6 +403,7 @@ mod survey_wire_tests {
             op: TeamOp::New,
             config_toml: Some("team_name = \"alpha\"\n".into()),
             script: true,
+            window_id: Some("window-a".into()),
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["type"], "terminal_team");
@@ -401,14 +411,16 @@ mod survey_wire_tests {
         assert_eq!(v["op"], "new");
         assert_eq!(v["config_toml"], "team_name = \"alpha\"\n");
         assert_eq!(v["script"], true);
+        assert_eq!(v["window_id"], "window-a");
 
-        // `load` omits config_toml (skip_serializing_if) and defaults
-        // script to false.
+        // `load` omits config_toml + window_id (skip_serializing_if) and
+        // defaults script to false.
         let load = ControlRequest::TerminalTeam {
             dir: "teams/alpha".into(),
             op: TeamOp::Load,
             config_toml: None,
             script: false,
+            window_id: None,
         };
         let v: serde_json::Value = serde_json::to_value(&load).unwrap();
         assert_eq!(v["op"], "load");
@@ -416,6 +428,7 @@ mod survey_wire_tests {
             v.get("config_toml").is_none(),
             "None config_toml is skipped"
         );
+        assert!(v.get("window_id").is_none(), "None window_id is skipped");
         assert_eq!(v["script"], false);
 
         // Round-trips back into the same variant (the server's decode path).

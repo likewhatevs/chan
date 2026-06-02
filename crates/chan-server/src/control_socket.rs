@@ -391,6 +391,7 @@ async fn handle_request(
             op,
             config_toml,
             script,
+            window_id,
         } => {
             handle_team(
                 workspace_cell,
@@ -399,6 +400,7 @@ async fn handle_request(
                 op,
                 config_toml,
                 script,
+                window_id,
             )
             .await
         }
@@ -433,6 +435,10 @@ async fn handle_team(
     op: TeamOp,
     config_toml: Option<String>,
     script: bool,
+    // The caller's window ($CHAN_WINDOW_ID), when present: every spawned
+    // agent session binds to it so the agents carry $CHAN_WINDOW_ID and the
+    // window-targeting `cs` commands work from inside an agent.
+    window_id: Option<String>,
 ) -> ControlResponse {
     use crate::routes::team_config::{
         ensure_created_at, generate_bootstrap_script, read_team_config, validate_team_config,
@@ -500,7 +506,7 @@ async fn handle_team(
                     ),
                 };
             };
-            spawn_and_poke_team(registry, dir, &config).await
+            spawn_and_poke_team(registry, dir, &config, window_id.as_deref()).await
         }
         TeamOp::Load => {
             let workspace = match workspace_from_cell(workspace_cell) {
@@ -538,7 +544,7 @@ async fn handle_team(
                     ),
                 };
             };
-            spawn_and_poke_team(registry, dir, &config).await
+            spawn_and_poke_team(registry, dir, &config, window_id.as_deref()).await
         }
     }
 }
@@ -597,7 +603,12 @@ fn resolve_team_group(registry: &TerminalRegistry, base: &str) -> String {
 /// runTeamBootstrap's per-worker try/catch). This step is synchronous (the
 /// boot-grace wait + poke delivery happen in `spawn_and_poke_team`).
 #[cfg(unix)]
-fn spawn_team(registry: &TerminalRegistry, dir: &str, config: &TeamConfig) -> TeamSpawn {
+fn spawn_team(
+    registry: &TerminalRegistry,
+    dir: &str,
+    config: &TeamConfig,
+    window_id: Option<&str>,
+) -> TeamSpawn {
     use crate::routes::team_config::{identity_prompt, lead_first_order, team_base_group};
 
     let group = resolve_team_group(registry, team_base_group(config));
@@ -622,7 +633,12 @@ fn spawn_team(registry: &TerminalRegistry, dir: &str, config: &TeamConfig) -> Te
             },
             tab_name: Some(m.handle.clone()),
             tab_group: Some(group.clone()),
-            window_id: None,
+            // Bind every agent to the caller's window when there is one, so
+            // the spawned session exports $CHAN_WINDOW_ID (a window-targeting
+            // `cs` command run inside the agent resolves a window) and
+            // `window_ids_matching` finds the agent's window. None when the
+            // caller is windowless (a native terminal), unchanged from before.
+            window_id: window_id.map(str::to_string),
             mcp_env: true,
             cwd: None,
             command,
@@ -660,8 +676,9 @@ async fn spawn_and_poke_team(
     registry: &Arc<TerminalRegistry>,
     dir: &str,
     config: &TeamConfig,
+    window_id: Option<&str>,
 ) -> ControlResponse {
-    let spawn = spawn_team(registry, dir, config);
+    let spawn = spawn_team(registry, dir, config, window_id);
 
     // Let the agents come up before poking their compose boxes, then deliver
     // each agent its identity prompt + submit chord. A shell member has no
@@ -1561,13 +1578,13 @@ agent = "codex"
     #[tokio::test]
     async fn handle_team_rejects_empty_and_absolute_dir() {
         let cell = empty_cell();
-        match handle_team(&cell, None, "   ", TeamOp::New, None, false).await {
+        match handle_team(&cell, None, "   ", TeamOp::New, None, false, None).await {
             ControlResponse::Error { message } => {
                 assert!(message.contains("required"), "{message}")
             }
             ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
         }
-        match handle_team(&cell, None, "/abs/team", TeamOp::Load, None, false).await {
+        match handle_team(&cell, None, "/abs/team", TeamOp::Load, None, false, None).await {
             ControlResponse::Error { message } => {
                 assert!(message.contains("workspace-relative"), "{message}")
             }
@@ -1578,7 +1595,7 @@ agent = "codex"
     #[tokio::test]
     async fn handle_team_new_requires_a_config() {
         let cell = empty_cell();
-        match handle_team(&cell, None, "new-team-1", TeamOp::New, None, false).await {
+        match handle_team(&cell, None, "new-team-1", TeamOp::New, None, false, None).await {
             ControlResponse::Error { message } => {
                 assert!(message.contains("needs a config"), "{message}")
             }
@@ -1598,6 +1615,7 @@ agent = "codex"
             TeamOp::New,
             Some(SAMPLE_TEAM_TOML.into()),
             true,
+            None,
         )
         .await
         {
@@ -1620,6 +1638,7 @@ agent = "codex"
             TeamOp::New,
             Some("this is not = = toml".into()),
             true,
+            None,
         )
         .await
         {
@@ -1647,6 +1666,7 @@ created_at = "2026-05-29T00:00:00Z"
             TeamOp::New,
             Some(toml_text.into()),
             true,
+            None,
         )
         .await
         {
@@ -1723,7 +1743,7 @@ is_lead = false
     fn spawn_team_brings_up_lead_first_and_pokes_only_agents() {
         let (_root, registry) = empty_registry();
         let config = spawnable_config();
-        let spawn = spawn_team(&registry, "new-team-1", &config);
+        let spawn = spawn_team(&registry, "new-team-1", &config, Some("win-spawn"));
 
         // Lead first, then roster order: @@Lead, @@LaneA, @@Shell.
         assert_eq!(spawn.spawned, vec!["@@Lead", "@@LaneA", "@@Shell"]);
@@ -1760,6 +1780,15 @@ is_lead = false
         let summaries = registry.session_summaries();
         assert_eq!(summaries.len(), 3);
         assert!(summaries.iter().all(|s| s.tab_group == "spawnme"));
+
+        // Window-id fix A: every spawned agent binds to the caller's window,
+        // so `window_ids_matching` (the survey / pane-selector resolver) finds
+        // it. A windowless spawn (None) would leave nothing to match.
+        assert_eq!(
+            registry.window_ids_matching(None, Some("spawnme")),
+            vec!["win-spawn".to_string()],
+            "agents are bound to the caller window"
+        );
     }
 
     // A team of two shell members (one lead, neither an agent). spawn_and_
@@ -1789,7 +1818,7 @@ is_lead = false
         let (_root, registry) = empty_registry();
         let registry = Arc::new(registry);
         let config: TeamConfig = toml::from_str(SHELL_TEAM_TOML).expect("valid shell team");
-        match spawn_and_poke_team(&registry, "new-team-1", &config).await {
+        match spawn_and_poke_team(&registry, "new-team-1", &config, None).await {
             ControlResponse::Ok { message } => {
                 assert!(message.contains("shellsquad"), "{message}");
                 assert!(message.contains("2 member(s) up"), "{message}");
@@ -1854,6 +1883,7 @@ is_lead = false
             TeamOp::Load,
             None,
             false,
+            Some("win-load".to_string()),
         )
         .await
         {
@@ -1868,6 +1898,13 @@ is_lead = false
             2,
             "both shell members are live after a load"
         );
+        // Window-id fix A applies to Load too: the loaded team's agents bind
+        // to the caller's window.
+        assert_eq!(
+            registry.window_ids_matching(None, Some("shellsquad")),
+            vec!["win-load".to_string()],
+            "loaded agents bind to the caller window"
+        );
     }
 
     #[tokio::test]
@@ -1875,7 +1912,7 @@ is_lead = false
         // A server with terminals disabled has nothing to spawn into, so Load
         // still validates + summarizes instead of erroring.
         let (_cfg, _root, cell) = bound_cell_with_shell_team("saved-team");
-        match handle_team(&cell, None, "saved-team", TeamOp::Load, None, false).await {
+        match handle_team(&cell, None, "saved-team", TeamOp::Load, None, false, None).await {
             ControlResponse::Ok { message } => {
                 assert!(
                     message.contains("no terminal registry to spawn into"),

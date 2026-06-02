@@ -789,6 +789,14 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
 /// one-line ack/summary goes to stderr like the other queueing commands.
 async fn cmd_shell_team(action: TeamAction) -> Result<()> {
     let socket = control_socket_env()?;
+    // The caller's window, when run from a chan terminal that owns one, so
+    // the server binds each spawned agent session to it ($CHAN_WINDOW_ID
+    // flows to the agents, like a regular SPA terminal). A windowless caller
+    // (a native terminal) omits it and the agents spawn unbound, as before.
+    let window_id = std::env::var("CHAN_WINDOW_ID")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let (request, script) = match action {
         TeamAction::New {
             dir,
@@ -803,6 +811,7 @@ async fn cmd_shell_team(action: TeamAction) -> Result<()> {
                     op: TeamOp::New,
                     config_toml: Some(config_toml),
                     script,
+                    window_id,
                 },
                 script,
             )
@@ -813,6 +822,7 @@ async fn cmd_shell_team(action: TeamAction) -> Result<()> {
                 op: TeamOp::Load,
                 config_toml: None,
                 script,
+                window_id,
             },
             script,
         ),
