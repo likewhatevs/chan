@@ -89,7 +89,6 @@
     paneModeMoveFocus,
     paneModeOpenBrowser,
     paneModeOpenGraph,
-    paneModeOpenTeamWorkTerminal,
     paneModeOpenTerminal,
     paneModeResize,
     paneModeSplit,
@@ -553,12 +552,6 @@
         scheduleSessionSave();
         paneModeHelpVisible = false;
         openDashboardInActivePane();
-        return;
-      // `P` stages a fresh Team Work terminal (the overlay opens on the
-      // new tab, not on whatever terminal is currently focused).
-      case "p":
-      case "P":
-        paneModeOpenTeamWorkTerminal(resolveSpawnContext());
         return;
       // `N` stages a new draft editor. The intent queues onto
       // `paneMode.stagedDraftEditors` pinned to the focused pane; Enter

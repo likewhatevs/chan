@@ -71,10 +71,12 @@ describe("Cmd+K pane mode transactional staging", () => {
     );
   });
 
-  test("p / P stages a Team Work terminal (no immediate commit, no toggle on existing terminal)", () => {
-    expect(app).toMatch(
-      /case "p":\s*\n\s*case "P":\s*\n?\s*paneModeOpenTeamWorkTerminal\(resolveSpawnContext\(\)\);\s*\n\s*return;/,
-    );
+  test("p / P no longer stages a Team Work terminal (decoupled to lead-only)", () => {
+    // The pane-mode P binding that spawned a bare Team Work bubble terminal on
+    // an arbitrary pane was removed: the bubble renders only on a team LEAD
+    // terminal via the Cmd+P workflow, so pane mode no longer references the
+    // removed spawn.
+    expect(app).not.toMatch(/paneModeOpenTeamWorkTerminal/);
   });
 
   test("n / N stages a new draft editor onto the focused pane", () => {
@@ -147,16 +149,12 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords", () => {
 });
 
 describe("Cmd+K pane mode Team Work binding", () => {
-  test("p inside Hybrid Nav stages a plain Team Work terminal (no commit, no dialog)", () => {
-    // Hybrid Nav P stages a fresh Team Work terminal. The Spawn-agents
-    // dialog is reserved for the top-level Cmd+P / Cmd+Alt+P.
-    expect(app).toMatch(
-      /case "p":\s*\n\s*case "P":\s*\n?\s*paneModeOpenTeamWorkTerminal\(resolveSpawnContext\(\)\);/,
-    );
-    // The pane-mode P case must NOT open the team dialog.
-    expect(app).not.toMatch(
-      /case "p":\s*\n\s*case "P":\s*\n?\s*[\s\S]{0,200}openTeamDialog/,
-    );
+  test("Hybrid Nav has no P Team Work binding (lead-only via the Cmd+P dialog)", () => {
+    // The Hybrid Nav P binding that spawned a bare Team Work bubble terminal
+    // was removed when the bubble was decoupled from arbitrary terminals. Team
+    // Work is now reached ONLY through the top-level Cmd+P / Cmd+Alt+P dialog
+    // (spawnTeamWorkFromContext); pane mode never spawns the bubble.
+    expect(app).not.toMatch(/paneModeOpenTeamWorkTerminal/);
   });
 
   test("top-level Cmd+P flow creates a Team Work lead terminal then opens the dialog", () => {

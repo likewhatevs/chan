@@ -2842,41 +2842,6 @@ export function openDashboardInActivePane(): void {
   openDashboardInPane(layout.activePaneId);
 }
 
-/// Cmd+K mode `P`. Spawn a fresh Team Work terminal inside the draft's
-/// focused pane: a regular terminal tab with the Team Work overlay
-/// armed open and focused on first mount.
-export function paneModeOpenTeamWorkTerminal(ctx?: SpawnContext): void {
-  const draft = draftLayout();
-  if (!draft) return;
-  const p = draft.nodes[draft.activePaneId];
-  if (!p || p.kind !== "leaf") return;
-  const cwd = ctx?.dir?.trim();
-  const tab: TerminalTab = {
-    kind: "terminal",
-    id: id("term"),
-    title: nextTerminalTitle(draft),
-    createdAt: Date.now(),
-    broadcastEnabled: false,
-    broadcastTargetIds: [],
-    mcpEnv: true,
-    sessionMcpEnv: undefined,
-    terminalSessionId: undefined,
-    controlledTerminal: undefined,
-    lastSeq: undefined,
-    cwd: cwd || undefined,
-    seedInput: undefined,
-    teamWork: {
-      buffer: "",
-      heightPx: 320,
-      open: true,
-      mode: "wysiwyg",
-      focusNonce: 1,
-    },
-  };
-  p.tabs.push(tab);
-  p.activeTabId = tab.id;
-}
-
 /// Stage a "new draft editor" intent onto the currently-focused pane.
 /// Materialization is async (needs `api.createDraft()` to mint the
 /// file), so the intent queues to commit-time. Multiple presses queue

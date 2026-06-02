@@ -34,10 +34,12 @@ describe("paneMode state: stagedDraftEditors field", () => {
 });
 
 describe("paneMode staging: spawn helpers", () => {
-  test("paneModeOpenTeamWorkTerminal pushes a TerminalTab with teamWork armed", () => {
-    expect(tabs).toMatch(
-      /export function paneModeOpenTeamWorkTerminal\(ctx\?: SpawnContext\): void \{[\s\S]{1,2000}teamWork: \{[\s\S]{1,400}open: true,/,
-    );
+  test("there is no pane-mode Team Work bubble spawn (decoupled to lead-only)", () => {
+    // The Team Work bubble was decoupled from arbitrary terminals: it renders
+    // only on a team LEAD terminal via the Cmd+P workflow. The pane-mode
+    // `paneModeOpenTeamWorkTerminal` spawn (a bare bubble terminal on any pane)
+    // was removed; pane mode spawns plain terminals via paneModeOpenTerminal.
+    expect(tabs).not.toMatch(/export function paneModeOpenTeamWorkTerminal\b/);
   });
 
   test("paneModeStageDraftEditor pushes a {paneId} entry pinned at press time", () => {

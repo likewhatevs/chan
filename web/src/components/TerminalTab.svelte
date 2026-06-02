@@ -81,7 +81,6 @@
   } from "../terminal/keymap";
   import { injectShowMcpEnvCommand } from "../terminal/mcpEnv";
   import { installTerminalReportGuards } from "../terminal/xtermReports";
-  import { AGENT_SUBMIT_CHORD } from "../terminal/submitMode";
   import {
     clampScrollbackMb,
     scrollbackLinesFromMb,
@@ -1198,39 +1197,12 @@
     term?.focus();
   }
 
-  function ensureTeamWork(): NonNullable<TerminalTabState["teamWork"]> {
-    if (!tab.teamWork) {
-      tab.teamWork = {
-        buffer: "",
-        heightPx: Math.max(220, Math.round((host?.clientHeight ?? 640) / 2)),
-        open: false,
-        mode: "wysiwyg",
-      };
-    }
-    if (!tab.teamWork.heightPx) {
-      tab.teamWork.heightPx = Math.max(220, Math.round((host?.clientHeight ?? 640) / 2));
-    }
-    if (!tab.teamWork.mode) tab.teamWork.mode = "wysiwyg";
-    return tab.teamWork;
-  }
-
-  function openTeamWork(): void {
-    closeTabMenu();
-    ensureTeamWork().open = true;
-    scheduleTerminalSessionSave();
-  }
-
-  function closeTeamWork(): void {
-    ensureTeamWork().open = false;
-    scheduleTerminalSessionSave();
-    term?.focus();
-  }
-
-  function toggleTeamWorkFromMenu(): void {
-    closeTabMenu();
-    if (tab.teamWork?.open) closeTeamWork();
-    else openTeamWork();
-  }
+  // The Team Work bubble is no longer summonable per-terminal: it renders ONLY
+  // on a team LEAD terminal, where the orchestrator primes `tab.teamWork` as
+  // part of the Cmd+P team workflow. Regular terminals use the universal Rich
+  // Prompt (Cmd+Shift+P) instead. The old ensure/open/close/toggle helpers +
+  // the "Show/Hide Team Work" menu row were removed; what remains drives the
+  // already-primed lead bubble (submit + agent-mode detection).
 
   function teamWorkUsesAgentSubmit(): boolean {
     const rp = tab.teamWork;
@@ -1240,28 +1212,33 @@
   }
 
   function submitTeamWork(source: string): void {
-    // When the prompt is in Agent submit-mode, strip any trailing
-    // newline the editor left on the buffer and append the
-    // agent-submit chord. Claude Code reads `\x1b[27;9;13~` (xterm
-    // modifyOtherKeys Cmd+Enter) as submit; a stray `\n` before the
-    // chord would land as a newline in the agent's multi-line draft.
-    // Shell mode appends a missing trailing newline so the command
-    // actually executes.
+    // Submit through the cs-write QUEUE via the WS `prompt` frame - the SAME
+    // producer Rich Prompt uses (landed in 3d6d144e) - NOT raw keystrokes. The
+    // lead bubble's prompts then enqueue + drain serialized with CLI pokes and
+    // Rich Prompt, and the server appends the submit chord for the lead's
+    // agent. Both bubbles always go through the queue now.
+    const rp = tab.teamWork;
     if (teamWorkUsesAgentSubmit()) {
-      const stripped = source.replace(/\n+$/, "");
-      sendUserInput(stripped + AGENT_SUBMIT_CHORD);
+      // Agent lead: pass the agent (claude / codex / gemini) so the server
+      // appends ITS chord (claude CSI vs codex/gemini CR) instead of the
+      // claude default - this carries the right per-agent chord for a
+      // codex/gemini lead.
+      const agent =
+        rp?.agentTarget && rp.agentTarget !== "none" ? rp.agentTarget : "claude";
+      sendPrompt(source, agent);
     } else {
-      sendUserInput(source.endsWith("\n") ? source : `${source}\n`);
+      // Shell lead: run the text as a command. Carry the trailing newline in
+      // the data and send agent "none" so the server appends no agent chord
+      // (apply_submit_chord(None) leaves the data + its newline as-is).
+      sendPrompt(source.endsWith("\n") ? source : `${source}\n`, "none");
     }
     scheduleTerminalSessionSave();
-    // Every submit to the lead terminal resets the draft back to
-    // empty unconditionally.
-    if (tab.teamWork) {
-      tab.teamWork.buffer = "";
-      // Caret stays in the prompt after Cmd+Enter so consecutive
-      // prompts are fluid; refocusing the terminal here would force
-      // the user to click back into the prompt for every entry.
-      tab.teamWork.focusNonce = (tab.teamWork.focusNonce ?? 0) + 1;
+    // Every submit to the lead terminal resets the draft back to empty.
+    if (rp) {
+      rp.buffer = "";
+      // Caret stays in the prompt after Cmd+Enter so consecutive prompts are
+      // fluid; refocusing the terminal would force a click-back per entry.
+      rp.focusNonce = (rp.focusNonce ?? 0) + 1;
     }
   }
 
@@ -1686,18 +1663,6 @@
           </span>
           <span class="mbtn-label">New Graph</span>
           <span class="mbtn-chord">{chordFor("app.graph.toggle") ?? ""}</span>
-        </button>
-        <div class="msep" role="separator"></div>
-        <button class="mbtn" onclick={toggleTeamWorkFromMenu}>
-          <span class="mbtn-icon">
-            <MessageSquare size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">
-            {tab.teamWork?.open ? "Hide Team Work" : "Show Team Work"}
-          </span>
-          <span class="mbtn-chord">
-            {chordFor("app.terminal.teamWork") ?? ""}
-          </span>
         </button>
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={flipToSettings}>

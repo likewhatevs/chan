@@ -42,7 +42,6 @@ import {
   paneModeMoveFocus,
   paneModeOpenBrowser,
   paneModeOpenGraph,
-  paneModeOpenTeamWorkTerminal,
   paneModeOpenTerminal,
   paneModeResize,
   paneModeSetGrab,
@@ -1071,27 +1070,12 @@ describe("pane state", () => {
     expect(terminals.every((tab) => tab.broadcastEnabled === false)).toBe(true);
   });
 
-  test("pane mode Team Work terminals share the draft title allocator", () => {
-    resetLayout([]);
-
-    enterPaneMode();
-    paneModeSplit("row");
-    paneModeOpenTeamWorkTerminal();
-    paneModeMoveFocus("left");
-    paneModeOpenTeamWorkTerminal();
-    commitPaneMode();
-
-    const terminals = Object.values(layout.nodes)
-      .filter((node): node is LeafNode => node.kind === "leaf")
-      .flatMap((node) => node.tabs)
-      .filter((tab): tab is TerminalTab => tab.kind === "terminal");
-
-    expect(terminals.map((tab) => tab.title).sort()).toEqual([
-      "Terminal-1",
-      "Terminal-2",
-    ]);
-    expect(terminals.every((tab) => tab.teamWork?.open === true)).toBe(true);
-  });
+  // (Removed: "pane mode Team Work terminals share the draft title allocator".
+  // The pane-mode Team Work bubble spawn (paneModeOpenTeamWorkTerminal) was
+  // removed when the Team Work bubble was decoupled from arbitrary terminals -
+  // it now renders only on a team LEAD terminal via the Cmd+P workflow. The
+  // draft-title-allocator behavior stays covered by the regular pane-mode
+  // terminal test above.)
 
   test("File Browser and Graph spawns always add a new tab", () => {
     // Every spawn affordance creates a fresh tab with its own state

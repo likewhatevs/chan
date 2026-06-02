@@ -214,7 +214,7 @@ describe("TerminalTab menu", () => {
     },
   );
 
-  test("the terminal menu shows the Team Work editor toggle", async () => {
+  test("the terminal menu has NO per-terminal Team Work toggle (lead-only now)", async () => {
     const tab = terminalTab({
       terminalSessionId: "term-session-1",
       teamWork: { buffer: "", open: false },
@@ -228,7 +228,11 @@ describe("TerminalTab menu", () => {
     const labels = Array.from(document.body.querySelectorAll(".mbtn-label")).map(
       (el) => (el.textContent || "").trim(),
     );
-    expect(labels).toContain("Show Team Work");
+    // The Team Work bubble is decoupled from arbitrary terminals: it renders
+    // only on a team LEAD terminal via the Cmd+P workflow, so the right-click
+    // menu no longer carries a per-terminal Show/Hide Team Work toggle.
+    expect(labels).not.toContain("Show Team Work");
+    expect(labels).not.toContain("Hide Team Work");
   });
 });
 
@@ -241,16 +245,24 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
     // Every submit resets the draft to empty immediately rather than
     // waiting on a workspace-archive write confirmation.
     expect(terminalSource).toMatch(/function submitTeamWork\(source: string\): void/);
-    expect(terminalSource).toMatch(/tab\.teamWork\.buffer = "";/);
+    expect(terminalSource).toMatch(/rp\.buffer = "";/);
     expect(terminalSource).not.toMatch(/rp\.buffer === bufferAtSubmit/);
   });
 
-  test("the client submit-chord logic is preserved", () => {
-    // Agent submit-mode still appends AGENT_SUBMIT_CHORD; shell mode
-    // still appends a trailing newline.
+  test("submitTeamWork submits the lead bubble through the cs-write QUEUE", () => {
+    // The lead Team Work bubble now submits via the WS `prompt` frame
+    // (sendPrompt) into the per-session write queue - the SAME producer Rich
+    // Prompt uses - NOT raw keystrokes. Agent leads pass their agent so the
+    // server appends the right chord (claude CSI vs codex/gemini CR); a shell
+    // lead carries a trailing newline + agent "none" (server appends no
+    // chord). The old sendUserInput + AGENT_SUBMIT_CHORD keystroke path is
+    // gone.
     expect(terminalSource).toMatch(/teamWorkUsesAgentSubmit\(\)/);
-    expect(terminalSource).toMatch(/AGENT_SUBMIT_CHORD/);
-    expect(terminalSource).toMatch(/source\.endsWith\("\\n"\) \? source : `\$\{source\}\\n`/);
+    expect(terminalSource).toMatch(/sendPrompt\(source, agent\)/);
+    expect(terminalSource).toMatch(
+      /sendPrompt\(source\.endsWith\("\\n"\) \? source : `\$\{source\}\\n`, "none"\)/,
+    );
+    expect(terminalSource).not.toMatch(/AGENT_SUBMIT_CHORD/);
   });
 
   test("the TeamWork mount passes exactly the three required props", () => {
