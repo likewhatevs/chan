@@ -2,13 +2,15 @@
   // Per-slot Dashboard flip-back. Replaces the monolithic
   // HybridDashboardConfig: the back now mirrors the front carousel's
   // current slot (About / Workspace / Search) and shows that slot's own
-  // config body. A force-paused slot picker lets the user move between
-  // slot configs without flipping back to the front; selecting a slot
-  // moves the shared `tab.carouselSlide` cursor so the front carousel
-  // follows on flip-back (the carousel is controlled off the same
-  // field). The shell (title band, per-Hybrid Dark/Light override, OK)
-  // is HybridSurfaceConfigShell, same as every other Hybrid back.
+  // config body. A carousel navigator (prev/next chevrons + a dot pager +
+  // a pause/play toggle) lets the user move between slot configs without
+  // flipping back to the front; selecting a slot moves the shared
+  // `tab.carouselSlide` cursor so the front carousel follows on flip-back
+  // (the carousel is controlled off the same field). The shell (title
+  // band, per-Hybrid Dark/Light override, OK) is HybridSurfaceConfigShell,
+  // same as every other Hybrid back.
 
+  import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-svelte";
   import type { DashboardTab } from "../../state/tabs.svelte";
   import { scheduleSessionSave } from "../../state/store.svelte";
   import HybridSurfaceConfigShell from "../HybridSurfaceConfigShell.svelte";
@@ -25,10 +27,28 @@
   const slot = $derived(
     Math.min(Math.max(0, Math.floor(tab.carouselSlide ?? 0)), SLOTS.length - 1),
   );
+  // The pause/play toggle drives `tab.autoRotate`, the per-tab DashboardTab
+  // field the FRONT carousel reads (its `paused` derived includes
+  // `!autoRotate`). Default true. This is the per-tab auto-advance override;
+  // the front's own inline play/pause stays wired to the global cycling pref.
+  const autoRotate = $derived(tab.autoRotate ?? true);
 
   function selectSlot(i: number): void {
     if (tab.carouselSlide === i) return;
     tab.carouselSlide = i;
+    scheduleSessionSave();
+  }
+
+  // Prev/next wrap across all three slots so the config back can reach
+  // every slot's config even when a slot is toggled off for the front
+  // rotation (the front carousel filters its dots by disabledSlots; this
+  // navigator does not, matching the old segmented picker's reach).
+  function step(delta: number): void {
+    selectSlot((slot + delta + SLOTS.length) % SLOTS.length);
+  }
+
+  function toggleAutoRotate(): void {
+    tab.autoRotate = !autoRotate;
     scheduleSessionSave();
   }
 </script>
@@ -39,21 +59,57 @@
   ariaLabel="Dashboard settings"
   {onDone}
 >
-  <!-- Force-paused slot picker. The front dots auto-rotate; this one
-       does not (you are configuring, not watching). Selecting a slot
-       swaps the body below and moves tab.carouselSlide so the front
-       lands on the same slot when flipped back. -->
-  <div class="slot-picker" role="tablist" aria-label="Dashboard slot">
-    {#each SLOTS as label, i (label)}
-      <button
-        type="button"
-        class="slot-tab"
-        class:on={slot === i}
-        role="tab"
-        aria-selected={slot === i}
-        onclick={() => selectSlot(i)}
-      >{label}</button>
-    {/each}
+  <!-- Carousel navigator. Mirrors the front carousel's controls
+       (EmptyPaneCarousel.svelte): prev/next chevrons + a dot pager + a
+       pause/play toggle. Selecting a slot swaps the body below and moves
+       tab.carouselSlide so the front lands on the same slot when flipped
+       back; pause/play sets tab.autoRotate. The navigator itself does not
+       auto-rotate (you are configuring, not watching). -->
+  <div class="carousel-nav" aria-label="Dashboard slot navigator">
+    <button
+      class="nav-arrow"
+      type="button"
+      onclick={() => step(-1)}
+      aria-label="previous slot"
+    >
+      <ChevronLeft size={16} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+    <div class="dots" role="tablist" aria-label="Dashboard slot">
+      {#each SLOTS as label, i (label)}
+        <button
+          type="button"
+          class="dot-btn"
+          class:active={slot === i}
+          role="tab"
+          aria-selected={slot === i}
+          aria-label={label}
+          onclick={() => selectSlot(i)}
+        ></button>
+      {/each}
+    </div>
+    <button
+      class="nav-arrow"
+      type="button"
+      onclick={() => step(1)}
+      aria-label="next slot"
+    >
+      <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+    <button
+      class="cycle-toggle"
+      type="button"
+      onclick={toggleAutoRotate}
+      aria-label={autoRotate
+        ? "pause carousel auto-rotate"
+        : "resume carousel auto-rotate"}
+      title={autoRotate ? "Pause auto-rotate" : "Resume auto-rotate"}
+    >
+      {#if autoRotate}
+        <Pause size={14} strokeWidth={1.75} aria-hidden="true" />
+      {:else}
+        <Play size={14} strokeWidth={1.75} aria-hidden="true" />
+      {/if}
+    </button>
   </div>
 
   {#if slot === 0}
@@ -66,32 +122,62 @@
 </HybridSurfaceConfigShell>
 
 <style>
-  .slot-picker {
+  /* Carousel navigator, styled to match the front carousel's
+     `.carousel-controls` (EmptyPaneCarousel.svelte) so the two faces read
+     as the same control family. */
+  .carousel-nav {
     display: inline-flex;
     align-self: flex-start;
-    gap: 2px;
-    padding: 2px;
-    border: 1px solid var(--btn-border);
-    border-radius: 6px;
-    background: var(--bg);
+    align-items: center;
+    gap: 8px;
   }
-  .slot-tab {
+  .nav-arrow,
+  .cycle-toggle {
+    background: none;
     border: 0;
-    border-radius: 4px;
-    background: transparent;
+    padding: 4px;
     color: var(--text-secondary);
-    font: inherit;
-    font-size: 13px;
-    padding: 4px 12px;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    opacity: 0.5;
+    transition: opacity 120ms ease, background 120ms ease;
   }
-  .slot-tab:hover {
-    color: var(--text);
+  .nav-arrow:hover,
+  .cycle-toggle:hover {
+    opacity: 1;
     background: var(--hover-bg);
   }
-  .slot-tab.on {
-    color: var(--text);
-    background: var(--bg-card);
-    box-shadow: inset 0 0 0 1px var(--border);
+  /* Soft separator between the navigation cluster and the pause/play
+     toggle so they read as two control groups. */
+  .cycle-toggle {
+    margin-left: 6px;
+    border-left: 1px solid var(--border);
+    border-radius: 0 4px 4px 0;
+    padding-left: 8px;
+  }
+  .dots {
+    display: inline-flex;
+    gap: 6px;
+  }
+  .dot-btn {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    border: 0;
+    padding: 0;
+    background: var(--text-secondary);
+    opacity: 0.35;
+    cursor: pointer;
+    transition: opacity 120ms ease, transform 120ms ease;
+  }
+  .dot-btn:hover {
+    opacity: 0.7;
+  }
+  .dot-btn.active {
+    opacity: 0.9;
+    transform: scale(1.2);
   }
 </style>
