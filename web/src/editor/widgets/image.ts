@@ -40,6 +40,10 @@ import {
   resolveImageSrc,
   setImageWidth,
 } from "../extensions/image";
+import {
+  clearImageDragIndicator,
+  startImageDragIndicator,
+} from "../image_drag_indicator";
 
 const MIN_IMG_WIDTH = 40;
 const USER_SCROLL_QUIET_MS = 900;
@@ -82,6 +86,9 @@ function beginImageDrag(
     e.dataTransfer.setDragImage(img, img.width / 2, img.height / 2);
   }
   wrap.dataset.dragging = "true";
+  // Arm the live source-row indicator (drop-line + line badge) for the
+  // duration of this move; dragover refreshes it, dragend clears it.
+  startImageDragIndicator(view, range);
 }
 const scrollIntentUntil = new WeakMap<HTMLElement, number>();
 const scrollIntentInstalled = new WeakSet<HTMLElement>();
@@ -321,6 +328,7 @@ class ImageWidget extends WidgetType {
       });
       img.addEventListener("dragend", () => {
         wrap.removeAttribute("data-dragging");
+        clearImageDragIndicator(view);
       });
     }
     // Broken-image placeholder: when the resolved URL 404s or

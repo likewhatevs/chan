@@ -40,6 +40,7 @@
   import { openContactBubble } from "./bubbles/contact";
   import { openImageBubble } from "./bubbles/image";
   import { imageDropHandlers } from "./bubbles/image_drop";
+  import { imageDragIndicator } from "./image_drag_indicator";
   import { htmlPasteHandler } from "./paste_html";
   import { openImageZoom } from "../state/imageZoom";
   import { headingFold } from "./fold";
@@ -653,6 +654,10 @@
         getUploadDir: () => dirOf(currentPath),
         getCurrentPath: () => currentPath,
       }),
+      // Live source-row indicator (drop-line + line badge) for the
+      // image drag-to-move above. Write-side only: the drag affordance
+      // exists solely in editable mode.
+      imageDragIndicator,
       // HTML-paste handler runs ahead of CM6's default plain-text
       // paste so rich pastes get converted to markdown. Image-file
       // pastes (clipboard with image/* MIME) are owned by
@@ -1229,6 +1234,43 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-image-wrap[data-dragging="true"]) {
     opacity: 0.4;
+  }
+  /* Live source-row indicator while dragging an image to a new row. The
+     drop-line marks the target line's top (where moveImageSource
+     inserts); the muted variant means dropping there is a no-op (the
+     image's own row). Drawn as an inset top shadow so it adds no height
+     and never reflows the line under the pointer. */
+  :global(.md-wysiwyg-cm6 .cm-md-image-drop-line) {
+    box-shadow: inset 0 2px 0 0 var(--accent);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-image-drop-line.cm-md-image-drop-noop) {
+    box-shadow: inset 0 2px 0 0 var(--text-secondary);
+    opacity: 0.7;
+  }
+  /* The pointer-following badge naming the target row. Appended to
+     <body> (so a transformed pane ancestor can't break position:fixed),
+     hence global + colour fallbacks in case the theme vars don't reach
+     it. pointer-events:none so it never intercepts the drag. */
+  :global(.cm-md-image-drop-badge) {
+    position: fixed;
+    z-index: 40000;
+    pointer-events: none;
+    max-width: 340px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    background: var(--bg-card, #222);
+    color: var(--text, #eee);
+    border: 1px solid var(--accent, #4a9eff);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  }
+  :global(.cm-md-image-drop-badge.cm-md-image-drop-badge-noop) {
+    border-color: var(--text-secondary, #888);
+    opacity: 0.9;
   }
   /* Selected ring: lit by clicking on the image (sets
      data-selected on the wrap). Click-outside clears it. The ring

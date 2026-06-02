@@ -17,6 +17,11 @@ import { invalidateImageCatalog } from "./image";
 import { encodeRelPath, relativizePath } from "../links";
 import { listLineAt } from "../commands/list";
 import { IMAGE_MOVE_MIME } from "../widgets/image";
+import {
+  clearImageDragIndicator,
+  hideImageDropTarget,
+  updateImageDropTarget,
+} from "../image_drag_indicator";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const DEFAULT_INSERT_WIDTH_PX = 250;
@@ -34,7 +39,7 @@ export interface ImageDropOptions {
 
 export function imageDropHandlers(opts: ImageDropOptions): Extension {
   return EditorView.domEventHandlers({
-    dragover(event, _view) {
+    dragover(event, view) {
       // An internal image-move drag must show the move cursor and,
       // crucially, the editor must accept the drop (the default is to
       // reject). Without preventDefault on dragover the `drop` never
@@ -43,7 +48,19 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
       if (event.dataTransfer?.types?.includes(IMAGE_MOVE_MIME)) {
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
+        // Refresh the live source-row indicator under the pointer.
+        updateImageDropTarget(view, event.clientX, event.clientY);
         return true;
+      }
+      return false;
+    },
+    dragleave(event, view) {
+      // Hide the indicator when the pointer truly leaves the editor (not
+      // when it merely crosses into a child node). The source range is
+      // kept so re-entering re-arms on the next dragover.
+      const related = event.relatedTarget as Node | null;
+      if (!related || !view.dom.contains(related)) {
+        hideImageDropTarget(view);
       }
       return false;
     },
@@ -55,6 +72,9 @@ export function imageDropHandlers(opts: ImageDropOptions): Extension {
       if (moveData) {
         event.preventDefault();
         moveImageSource(view, moveData, posFromEvent(view, event));
+        // A real move clears the indicator via docChanged; a no-op drop
+        // (own row) leaves the doc untouched, so clear it explicitly.
+        clearImageDragIndicator(view);
         return true;
       }
       const files = event.dataTransfer?.files;
