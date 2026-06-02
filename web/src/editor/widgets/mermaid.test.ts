@@ -22,40 +22,51 @@ const DOC = [
   "after",
 ].join("\n");
 
-function mount(caret?: number): { parent: HTMLElement; view: EditorView } {
+// An unclosed fence (still being typed): no closer ```.
+const UNCLOSED = ["before", "", "```mermaid", "pie title Pets"].join("\n");
+
+function mount(doc: string, caret?: number): {
+  parent: HTMLElement;
+  view: EditorView;
+} {
   const parent = document.createElement("div");
   document.body.appendChild(parent);
   const view = new EditorView({
     parent,
     state: EditorState.create({
-      doc: DOC,
+      doc,
       selection: caret !== undefined ? EditorSelection.cursor(caret) : undefined,
-      // isDark=false; mounting renders only the source face (mermaid is
-      // not imported until the first flip), so this stays jsdom-safe.
+      // Mounting replaces the closed block with the diagram widget;
+      // mermaid is not imported until renderMermaid runs, but that is an
+      // async void in the widget, so the field/decoration is jsdom-safe.
       extensions: [chanMarkdown(), mermaidDecorations(() => false)],
     }),
   });
   return { parent, view };
 }
 
-describe("mermaidDecorations", () => {
-  test("a mermaid block renders as a flip card when the caret is outside", () => {
-    const { parent, view } = mount(0); // caret at "before"
-    expect(parent.querySelector(".cm-md-mermaid-card")).toBeTruthy();
-    expect(parent.querySelector(".cm-md-mermaid-source")?.textContent).toContain(
-      "pie title Pets",
-    );
-    expect(parent.querySelector(".cm-md-mermaid-flip")).toBeTruthy();
-    expect(parent.querySelector(".cm-md-mermaid-copy")).toBeTruthy();
-    // The card replaces the block but never mutates the document.
+describe("mermaidDecorations (cursor-render)", () => {
+  test("cursor OUTSIDE a closed block renders the diagram widget", () => {
+    const { parent, view } = mount(DOC, 0); // caret at "before"
+    expect(parent.querySelector(".cm-md-mermaid-rendered")).toBeTruthy();
+    expect(parent.querySelector(".cm-md-mermaid-diagram")).toBeTruthy();
+    // The block is replaced; the raw fence text is not in the DOM.
+    expect(parent.textContent).not.toContain("pie title Pets");
     expect(view.state.doc.toString()).toBe(DOC);
     view.destroy();
     parent.remove();
   });
 
-  test("caret inside the block suppresses the card (raw source stays editable)", () => {
-    const { parent, view } = mount(DOC.indexOf("pie title"));
-    expect(parent.querySelector(".cm-md-mermaid-card")).toBeNull();
+  test("cursor INSIDE the block suppresses the widget (source editable)", () => {
+    const { parent, view } = mount(DOC, DOC.indexOf("pie title"));
+    expect(parent.querySelector(".cm-md-mermaid-rendered")).toBeNull();
+    view.destroy();
+    parent.remove();
+  });
+
+  test("an unclosed (mid-typing) block never renders", () => {
+    const { parent, view } = mount(UNCLOSED, 0);
+    expect(parent.querySelector(".cm-md-mermaid-rendered")).toBeNull();
     view.destroy();
     parent.remove();
   });
@@ -67,13 +78,17 @@ describe("mermaid wiring", () => {
     expect(renderSrc).not.toMatch(/^import .* from "mermaid"/m);
   });
 
-  test("blocks.ts hands mermaid fences to the card", () => {
-    expect(blocksSrc).toMatch(/fenceLang === "mermaid"/);
+  test("blocks.ts is unchanged for mermaid (no special-case)", () => {
+    expect(blocksSrc).not.toMatch(/mermaid/i);
   });
 
-  test("the flip toggles a class + lazy-renders; theme is fed in", () => {
-    expect(mermaidSrc).toContain("cm-md-mermaid-flipped");
+  test("no button: cursor is the only trigger; theme + rotateX wired", () => {
+    expect(mermaidSrc).not.toMatch(/createElement\("button"\)/);
+    expect(mermaidSrc).not.toMatch(/addEventListener\("click"/);
     expect(mermaidSrc).toMatch(/renderMermaid\(this\.source, this\.dark\)/);
+    // closed-fence gate + cursor-out render.
+    expect(mermaidSrc).toMatch(/closeFrom === openFrom/);
+    expect(wysiwygSrc).toMatch(/cm-md-mermaid-flip-in[\s\S]{1,160}rotateX/);
     expect(wysiwygSrc).toMatch(
       /mermaidDecorations\([\s\S]{1,80}effectiveHybridSurfaceTheme\("editor"\) === "dark"/,
     );

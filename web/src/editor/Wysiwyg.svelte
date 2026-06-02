@@ -1276,56 +1276,34 @@
     border-color: var(--text-secondary, #888);
     opacity: 0.9;
   }
-  /* Mermaid flip card: a ```mermaid block rendered as a two-face card
-     (source front, diagram back) when the caret is outside it. The flip
-     button rotateY-flips between faces; the inner height is JS-synced to
-     the visible face so a tall diagram is not clipped to the source. */
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-card) {
-    perspective: 1400px;
+  /* Mermaid cursor-render: a closed ```mermaid block is replaced by its
+     rendered diagram when the cursor LEAVES it (the source code block is
+     blocks.ts's own, untouched, while the cursor is inside). The diagram
+     flips in on the HORIZONTAL (rotateX) axis -- like the image atom's
+     cursor-in-source / cursor-out-render, no button. */
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-rendered) {
     margin: 0.4rem 0;
+    perspective: 1200px;
   }
   :global(.md-wysiwyg-cm6 .cm-md-mermaid-inner) {
-    position: relative;
-    transform-style: preserve-3d;
-    transition:
-      transform 0.5s,
-      height 0.35s;
+    transform-origin: center top;
+    animation: cm-md-mermaid-flip-in 0.45s ease;
   }
-  :global(
-      .md-wysiwyg-cm6
-        .cm-md-mermaid-card.cm-md-mermaid-flipped
-        .cm-md-mermaid-inner
-    ) {
-    transform: rotateY(180deg);
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-face) {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    box-sizing: border-box;
-    backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg-elev, var(--bg));
-    padding: 26px 12px;
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-back) {
-    transform: rotateY(180deg);
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-source) {
-    margin: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13px;
-    white-space: pre;
-    overflow-x: auto;
-    color: var(--text);
+  @keyframes cm-md-mermaid-flip-in {
+    from {
+      transform: rotateX(-90deg);
+      opacity: 0.2;
+    }
+    to {
+      transform: rotateX(0);
+      opacity: 1;
+    }
   }
   :global(.md-wysiwyg-cm6 .cm-md-mermaid-diagram) {
     display: flex;
     justify-content: center;
     min-height: 40px;
+    padding: 8px 0;
     color: var(--text-secondary);
   }
   :global(.md-wysiwyg-cm6 .cm-md-mermaid-diagram svg) {
@@ -1338,40 +1316,6 @@
     font-family: ui-monospace, monospace;
     font-size: 12px;
     white-space: pre-wrap;
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-lang) {
-    position: absolute;
-    top: 7px;
-    left: 12px;
-    font-size: 11px;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    pointer-events: none;
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-btn) {
-    position: absolute;
-    right: 8px;
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    background: var(--btn-bg);
-    color: var(--text-secondary);
-    font-size: 11px;
-    padding: 1px 6px;
-    cursor: pointer;
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-btn:hover) {
-    color: var(--text);
-    border-color: var(--btn-hover);
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-copy) {
-    top: 5px;
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-flip) {
-    bottom: 5px;
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-mermaid-copy.copied) {
-    color: var(--accent);
   }
   /* Selected ring: lit by clicking on the image (sets
      data-selected on the wrap). Click-outside clears it. The ring
