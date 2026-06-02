@@ -1505,6 +1505,39 @@ export function registerTerminalInputSink(tabId: string, sink: TerminalInputSink
   };
 }
 
+// Rich Prompt send seam. Mirrors the input-sink registry but feeds the terminal
+// WS `prompt` frame (NOT the raw `input` keystroke path): each TerminalTab
+// registers a sink that enqueues into THIS session's server-side write queue,
+// where it shares one FIFO with `cs terminal write` and auto-submits in order.
+// Keeping it a separate registry lets the Rich Prompt bubble reach the active
+// terminal without touching TerminalTab internals.
+type TerminalPromptSink = (data: string, agent?: string) => void;
+const terminalPromptSinks = new Map<string, TerminalPromptSink>();
+
+export function registerTerminalPromptSink(
+  tabId: string,
+  sink: TerminalPromptSink,
+): () => void {
+  terminalPromptSinks.set(tabId, sink);
+  return () => {
+    if (terminalPromptSinks.get(tabId) === sink) terminalPromptSinks.delete(tabId);
+  };
+}
+
+/// Send Rich Prompt markdown to the ACTIVE terminal's write queue via its WS
+/// `prompt` frame. Returns false when there is no active terminal or its WS
+/// has no live prompt sink (e.g. socket not open yet) so the caller can keep
+/// the draft instead of clearing it. The server enqueues the text and appends
+/// the submit chord when the target agent is idle.
+export function sendPromptToActiveTerminal(data: string, agent?: string): boolean {
+  const tab = activeTerminalTab();
+  if (!tab) return false;
+  const sink = terminalPromptSinks.get(tab.id);
+  if (!sink) return false;
+  sink(data, agent);
+  return true;
+}
+
 export function registerTerminalCloseSink(tabId: string, sink: TerminalCloseSink): () => void {
   terminalCloseSinks.set(tabId, sink);
   return () => {

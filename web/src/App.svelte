@@ -16,6 +16,7 @@
   // Open-count of pane-LOCAL modals (MCP-env info, import-contacts) whose
   // visibility lives in component state App.svelte can't otherwise see.
   import { paneModalGuard } from "./state/paneModalGuard.svelte";
+  import { toggleRichPrompt } from "./state/richPrompt.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PreflightOverlay from "./components/PreflightOverlay.svelte";
@@ -660,6 +661,14 @@
     if (e.metaKey && !e.altKey && e.shiftKey && !e.ctrlKey && e.code === "KeyM") {
       e.preventDefault();
       spawnGraphFromContext();
+      return;
+    }
+    // Cmd+Shift+P toggles the Rich Prompt bubble over the active terminal.
+    // Free chord (no command palette); also reachable via the terminal
+    // right-click "Show/Hide Rich Prompt" entry.
+    if (e.metaKey && !e.altKey && e.shiftKey && !e.ctrlKey && e.code === "KeyP") {
+      e.preventDefault();
+      toggleRichPrompt();
       return;
     }
     // Web-only pane nav: Cmd+[/] is browser back/forward so the web build
