@@ -555,6 +555,19 @@ export type CsLink = {
   /// Why auto-create is unavailable, when `can_create` is false.
   note?: string | null;
 };
+// Post-open workspace facts for the first-run onboarding nudge (P2). Rides on
+// the pre-flight snapshot, present only once the workspace is ready; never
+// feeds the lock gate.
+export type WorkspaceSummary = {
+  /// BM25-indexed chunk count; a coarse "there is content here" signal, not a
+  /// file count.
+  indexed_docs: number;
+  /// Detected source-control kind ("git" | "hg" | "svn"), or null.
+  scm?: string | null;
+  /// Current optional-layer state, so the nudge renders the truth.
+  semantic_enabled: boolean;
+  reports_enabled: boolean;
+};
 export type PreflightSnapshot = {
   phase: PreflightPhase;
   /// True until `phase === "ready"`. The single signal the locked surface
@@ -565,6 +578,8 @@ export type PreflightSnapshot = {
   /// Non-blocking `cs` alias offer; rendered as a dismissible card, never
   /// part of the lock.
   cs_link?: CsLink | null;
+  /// Post-open workspace facts for the onboarding nudge; present once ready.
+  summary?: WorkspaceSummary | null;
 };
 export type PreflightDecisionRequest = { step: string; choice: string };
 // POST /api/preflight/cs-link result.

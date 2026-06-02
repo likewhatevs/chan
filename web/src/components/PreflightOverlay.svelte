@@ -15,6 +15,8 @@
   import { onMount, onDestroy } from "svelte";
   import { api } from "../api/client";
   import { ApiError } from "../api/errors";
+  import { workspace } from "../state/store.svelte";
+  import { openDashboardInActivePane } from "../state/tabs.svelte";
   import type { PreflightSnapshot } from "../api/types";
 
   const POLL_MS = 750;
@@ -96,6 +98,51 @@
     } finally {
       csBusy = false;
     }
+  }
+
+  // First-run onboarding nudge (P2). Non-locking, like the cs card: it rides on
+  // the ready snapshot's `summary` block and points the user at the Dashboard
+  // to enable the optional Semantic / Reports layers (a thin nudge, NOT inline
+  // toggles). Dismissal is persisted PER WORKSPACE so each new workspace gets
+  // its own one-time nudge, keyed off the workspace identity the store already
+  // holds.
+  const ONBOARD_DISMISS_PREFIX = "chan.onboardDismissed:";
+  const summary = $derived(snapshot?.summary ?? null);
+  // Bumped on dismiss to force the localStorage-backed check below to re-read
+  // (localStorage is not reactive on its own).
+  let onboardDismissTick = $state(0);
+  function workspaceKey(): string | null {
+    return workspace.info?.metadata_key ?? workspace.info?.root ?? null;
+  }
+  // Reactive on both the workspace identity (loads after boot) and the tick, so
+  // the nudge resolves correctly once `workspace.info` arrives and hides
+  // immediately on dismiss. Reads only; never mutates state in the derivation.
+  const onboardDismissed = $derived.by(() => {
+    void onboardDismissTick;
+    const key = workspaceKey();
+    if (!key) return false;
+    try {
+      return localStorage.getItem(ONBOARD_DISMISS_PREFIX + key) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const showOnboardCard = $derived(!!summary && !locked && !onboardDismissed);
+
+  function dismissOnboard(): void {
+    const key = workspaceKey();
+    if (key) {
+      try {
+        localStorage.setItem(ONBOARD_DISMISS_PREFIX + key, "1");
+      } catch {
+        // Private-mode storage: the tick still hides it for this session.
+      }
+    }
+    onboardDismissTick += 1;
+  }
+  function openDashboard(): void {
+    openDashboardInActivePane();
+    dismissOnboard();
   }
 
   function schedule(ms = POLL_MS): void {
@@ -184,48 +231,92 @@
   </main>
 {/if}
 
-<!-- Non-blocking `cs` terminal-alias offer. A corner card, never modal: the
-     workspace is already usable, this just helps a fresh install set up the
-     terminal control alias. -->
-{#if showCsCard && csOffer}
-  <aside class="cs-card" role="status" aria-label="terminal shortcut setup">
-    <div class="cs-head">
-      <strong>Terminal shortcut</strong>
-      <button class="cs-x" type="button" aria-label="Dismiss" onclick={dismissCs}>×</button>
-    </div>
-    {#if csResult}
-      <p class="cs-msg done">{csResult}</p>
-      <div class="cs-actions">
-        <button type="button" class="primary" onclick={dismissCs}>Done</button>
-      </div>
-    {:else}
-      <p class="cs-body">
-        Add <code>cs</code> to your PATH to drive this window from the terminal
-        (open files, split panes, run Team Work).
-      </p>
-      {#if csError}
-        <p class="cs-msg warn">{csError}</p>
-      {/if}
-      {#if csOffer.can_create && !manualMode}
-        <div class="cs-actions">
-          <button type="button" class="primary" disabled={csBusy} onclick={createCsLink}>
-            {csBusy ? "Creating…" : "Create link"}
-          </button>
-          <button type="button" disabled={csBusy} onclick={dismissCs}>Not now</button>
+<!-- Non-blocking boot cards: a corner stack shown once the workspace is ready
+     (or right away when nothing locked the boot). Never modal, the workspace
+     is already usable. Holds the first-run onboarding nudge and the cs offer,
+     stacked when both apply. -->
+{#if (showOnboardCard && summary) || (showCsCard && csOffer)}
+  <div class="boot-cards">
+    {#if showOnboardCard && summary}
+      <aside class="boot-card onboard-card" role="status" aria-label="workspace ready">
+        <div class="boot-head">
+          <strong>{workspace.info?.label ?? "Workspace"} is ready</strong>
+          <button class="boot-x" type="button" aria-label="Dismiss" onclick={dismissOnboard}>×</button>
         </div>
-        <p class="cs-target">{csOffer.target}</p>
-      {:else}
-        <p class="cs-hint">Run this once in a terminal whose PATH you control:</p>
-        <code class="cs-cmd">ln -s "{csOffer.points_to}" ~/.local/bin/cs</code>
-        {#if csOffer.note}
-          <p class="cs-note">({csOffer.note})</p>
-        {/if}
-        <div class="cs-actions">
-          <button type="button" onclick={dismissCs}>Got it</button>
+        <p class="onboard-summary">
+          {summary.indexed_docs.toLocaleString()} indexed{#if summary.scm} · {summary.scm} repository{/if}
+        </p>
+        <p class="boot-body">
+          Keyword search and the wiki-link graph are always on, the minimum
+          needed to operate. Two optional layers are off by default:
+        </p>
+        <ul class="onboard-layers">
+          <li>
+            <span class="onboard-layer-name">Semantic search</span>
+            <span class="onboard-state" data-on={summary.semantic_enabled}>
+              {summary.semantic_enabled ? "on" : "off"}
+            </span>
+            <span class="onboard-layer-hint">
+              find by meaning; needs the BGE-small model (~63 MB, shared)
+            </span>
+          </li>
+          <li>
+            <span class="onboard-layer-name">Reports</span>
+            <span class="onboard-state" data-on={summary.reports_enabled}>
+              {summary.reports_enabled ? "on" : "off"}
+            </span>
+            <span class="onboard-layer-hint">
+              per-file language, SLOC and COCOMO analysis
+            </span>
+          </li>
+        </ul>
+        <div class="boot-actions">
+          <button type="button" class="primary" onclick={openDashboard}>Open Dashboard</button>
+          <button type="button" onclick={dismissOnboard}>Dismiss</button>
         </div>
-      {/if}
+      </aside>
     {/if}
-  </aside>
+    {#if showCsCard && csOffer}
+      <aside class="boot-card cs-card" role="status" aria-label="terminal shortcut setup">
+        <div class="boot-head">
+          <strong>Terminal shortcut</strong>
+          <button class="boot-x" type="button" aria-label="Dismiss" onclick={dismissCs}>×</button>
+        </div>
+        {#if csResult}
+          <p class="boot-msg done">{csResult}</p>
+          <div class="boot-actions">
+            <button type="button" class="primary" onclick={dismissCs}>Done</button>
+          </div>
+        {:else}
+          <p class="boot-body">
+            Add <code>cs</code> to your PATH to drive this window from the terminal
+            (open files, split panes, run Team Work).
+          </p>
+          {#if csError}
+            <p class="boot-msg warn">{csError}</p>
+          {/if}
+          {#if csOffer.can_create && !manualMode}
+            <div class="boot-actions">
+              <button type="button" class="primary" disabled={csBusy} onclick={createCsLink}>
+                {csBusy ? "Creating…" : "Create link"}
+              </button>
+              <button type="button" disabled={csBusy} onclick={dismissCs}>Not now</button>
+            </div>
+            <p class="cs-target">{csOffer.target}</p>
+          {:else}
+            <p class="cs-hint">Run this once in a terminal whose PATH you control:</p>
+            <code class="cs-cmd">ln -s "{csOffer.points_to}" ~/.local/bin/cs</code>
+            {#if csOffer.note}
+              <p class="cs-note">({csOffer.note})</p>
+            {/if}
+            <div class="boot-actions">
+              <button type="button" onclick={dismissCs}>Got it</button>
+            </div>
+          {/if}
+        {/if}
+      </aside>
+    {/if}
+  </div>
 {/if}
 
 <style>
@@ -319,15 +410,21 @@
     line-height: 1.5;
   }
 
-  /* Non-blocking corner card. Sits above the editor but well below the
-     locked boot surface (z=40000), and only ever renders when nothing is
-     locked, so the two never overlap. */
-  .cs-card {
+  /* Non-blocking corner stack. Sits above the editor but well below the
+     locked boot surface (z=40000), and only renders when nothing is locked,
+     so the two never overlap. Holds the onboarding nudge and the cs offer,
+     stacked when both apply. */
+  .boot-cards {
     position: fixed;
     right: 1rem;
     bottom: 1rem;
     z-index: 9000;
     width: min(340px, calc(100vw - 2rem));
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .boot-card {
     box-sizing: border-box;
     background: var(--bg-elev);
     color: var(--text);
@@ -340,13 +437,13 @@
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
-  .cs-head {
+  .boot-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     font-size: 13px;
   }
-  .cs-x {
+  .boot-x {
     border: none;
     background: transparent;
     color: var(--text-secondary);
@@ -356,19 +453,55 @@
     cursor: pointer;
     border-radius: 4px;
   }
-  .cs-x:hover {
+  .boot-x:hover {
     color: var(--text);
   }
-  .cs-body {
+  .boot-body {
     margin: 0;
     font-size: 12.5px;
     color: var(--text-secondary);
     line-height: 1.5;
   }
-  .cs-body code,
+  .boot-body code,
   .cs-cmd {
     font-family: "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
   }
+  .boot-msg {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .boot-msg.done {
+    color: var(--text);
+  }
+  .boot-msg.warn {
+    color: var(--warn-text);
+  }
+  .boot-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .boot-actions button {
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12.5px;
+  }
+  .boot-actions button.primary {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+  }
+  .boot-actions button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  /* cs-offer specifics */
   .cs-hint {
     margin: 0;
     font-size: 12px;
@@ -398,38 +531,44 @@
     color: var(--text-secondary);
     line-height: 1.4;
   }
-  .cs-msg {
+
+  /* onboarding-nudge specifics */
+  .onboard-summary {
     margin: 0;
     font-size: 12px;
-    line-height: 1.4;
+    color: var(--text-secondary);
   }
-  .cs-msg.done {
-    color: var(--text);
-  }
-  .cs-msg.warn {
-    color: var(--warn-text);
-  }
-  .cs-actions {
+  .onboard-layers {
+    list-style: none;
+    margin: 0;
+    padding: 0;
     display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 0.45rem;
   }
-  .cs-actions button {
-    padding: 5px 11px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg);
-    color: var(--text);
-    cursor: pointer;
+  .onboard-layers li {
+    display: grid;
+    grid-template-columns: auto auto;
+    column-gap: 0.4rem;
+    align-items: baseline;
+  }
+  .onboard-layer-name {
     font-size: 12.5px;
+    color: var(--text);
   }
-  .cs-actions button.primary {
-    background: var(--text);
-    color: var(--bg);
-    border-color: var(--text);
+  .onboard-state {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
-  .cs-actions button:disabled {
-    opacity: 0.5;
-    cursor: default;
+  .onboard-state[data-on="true"] {
+    color: var(--text);
+  }
+  .onboard-layer-hint {
+    grid-column: 1 / -1;
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.4;
   }
 </style>
