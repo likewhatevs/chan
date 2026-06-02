@@ -45,17 +45,24 @@ describe("DB1: dashboard config slot selector is a carousel navigator", () => {
     );
   });
 
-  test("the nav sits in a centered BOTTOM row, mirroring the front card", () => {
-    // @@Host: place it exactly like the front carousel nav - bottom row,
-    // centered. The slot body dispatch renders BEFORE the nav (so the nav is
-    // the last/bottom row), and the nav centers + parks at the bottom via CSS.
+  test("the nav rides the shell footer row (footerCenter), sharing it with OK", () => {
+    // @@Host: the nav now shares the OK footer row - centered, OK pinned
+    // right, no divider - via the shell's `footerCenter` snippet +
+    // `footerBorder={false}`, instead of a separate centered bottom row in
+    // the body above the divider. The slot body still renders before the nav.
     const slotIdx = dashboardBack.indexOf("<SearchSlotConfig />");
     const navIdx = dashboardBack.indexOf('class="carousel-nav"');
     expect(slotIdx).toBeGreaterThan(-1);
     expect(navIdx).toBeGreaterThan(slotIdx);
+    // The nav is the shell's footerCenter content...
     expect(dashboardBack).toMatch(
-      /\.carousel-nav \{[\s\S]{1,200}align-self: center;[\s\S]{1,120}margin-top: auto;/,
+      /\{#snippet footerCenter\(\)\}[\s\S]{1,240}class="carousel-nav"/,
     );
-    expect(dashboardBack).not.toMatch(/\.carousel-nav \{[\s\S]{1,200}align-self: flex-start;/);
+    // ...and this back drops the footer's top divider for a seamless row.
+    expect(dashboardBack).toMatch(/footerBorder=\{false\}/);
+    // Row placement/centering is the footer grid's job now, so the nav no
+    // longer carries its own margin-top:auto / align-self.
+    expect(dashboardBack).not.toMatch(/\.carousel-nav \{[\s\S]{1,200}margin-top: auto;/);
+    expect(dashboardBack).not.toMatch(/\.carousel-nav \{[\s\S]{1,200}align-self:/);
   });
 });
