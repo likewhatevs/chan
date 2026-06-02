@@ -253,6 +253,15 @@ const handleFencedCode: TokenHandler = (ctx) => {
   } while (cursor.nextSibling());
   if (openMarkFrom === -1) return;
 
+  // Mermaid blocks are owned by the flip card (widgets/mermaid.ts): skip
+  // the source fence styling so the card can replace the block when the
+  // caret is outside, and so caret-inside shows the raw editable source.
+  const fenceLang =
+    infoFrom !== -1 && infoTo !== -1
+      ? ctx.state.doc.sliceString(infoFrom, infoTo).trim().toLowerCase()
+      : "";
+  if (fenceLang === "mermaid") return;
+
   const openLineObj = ctx.state.doc.lineAt(openMarkFrom);
   const closeLineObj = ctx.state.doc.lineAt(closeMarkFrom);
   const openLine = openLineObj.number;

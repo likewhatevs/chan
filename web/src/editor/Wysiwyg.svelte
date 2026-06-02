@@ -33,6 +33,7 @@
     type ImageClickArgs,
   } from "./widgets/image";
   import { tableDecorations } from "./widgets/table";
+  import { mermaidDecorations } from "./widgets/mermaid";
   import { bubbleKeymap, bubbleListener } from "./bubbles/controller";
   import type { BubbleHandle, BubbleSpec } from "./bubbles/types";
   import { openWikiBubble } from "./bubbles/wiki";
@@ -420,6 +421,9 @@
         }),
         imageCaretRedirect(),
         tableDecorations(),
+        mermaidDecorations(
+          () => effectiveHybridSurfaceTheme("editor") === "dark",
+        ),
         // Inline edit bubbles + paste/drop handlers go through the
         // write-side compartment so toggling `readonly` at runtime
         // tears them down without rebuilding the editor.
@@ -1271,6 +1275,103 @@
   :global(.cm-md-image-drop-badge.cm-md-image-drop-badge-noop) {
     border-color: var(--text-secondary, #888);
     opacity: 0.9;
+  }
+  /* Mermaid flip card: a ```mermaid block rendered as a two-face card
+     (source front, diagram back) when the caret is outside it. The flip
+     button rotateY-flips between faces; the inner height is JS-synced to
+     the visible face so a tall diagram is not clipped to the source. */
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-card) {
+    perspective: 1400px;
+    margin: 0.4rem 0;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-inner) {
+    position: relative;
+    transform-style: preserve-3d;
+    transition:
+      transform 0.5s,
+      height 0.35s;
+  }
+  :global(
+      .md-wysiwyg-cm6
+        .cm-md-mermaid-card.cm-md-mermaid-flipped
+        .cm-md-mermaid-inner
+    ) {
+    transform: rotateY(180deg);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-face) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    box-sizing: border-box;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-elev, var(--bg));
+    padding: 26px 12px;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-back) {
+    transform: rotateY(180deg);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-source) {
+    margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--text);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-diagram) {
+    display: flex;
+    justify-content: center;
+    min-height: 40px;
+    color: var(--text-secondary);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-diagram svg) {
+    max-width: 100%;
+    height: auto;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-diagram.cm-md-mermaid-error) {
+    display: block;
+    color: var(--danger-text, #d33);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-lang) {
+    position: absolute;
+    top: 7px;
+    left: 12px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    pointer-events: none;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-btn) {
+    position: absolute;
+    right: 8px;
+    border: 1px solid var(--btn-border);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    color: var(--text-secondary);
+    font-size: 11px;
+    padding: 1px 6px;
+    cursor: pointer;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-btn:hover) {
+    color: var(--text);
+    border-color: var(--btn-hover);
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-copy) {
+    top: 5px;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-flip) {
+    bottom: 5px;
+  }
+  :global(.md-wysiwyg-cm6 .cm-md-mermaid-copy.copied) {
+    color: var(--accent);
   }
   /* Selected ring: lit by clicking on the image (sets
      data-selected on the wrap). Click-outside clears it. The ring
