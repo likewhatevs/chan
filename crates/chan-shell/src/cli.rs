@@ -345,6 +345,16 @@ pub enum TerminalAction {
     /// and/or group. No newline is appended: `cs terminal write $'ls\n'`
     /// runs; `cs terminal write ls` only types. At least one selector is
     /// required.
+    ///
+    /// The write is QUEUED per target, not delivered instantly: each
+    /// session's queue drains one message at a time, delivering the next only
+    /// when that agent has finished generating (its output has gone idle), so
+    /// chained writes submit one after another instead of stacking into one
+    /// compose. The command returns the queue position. NOTE: "idle" is
+    /// detected from output quiescence, so a target sitting at its prompt
+    /// with a PAUSED, half-typed buffer reads as idle; that rare case is not
+    /// detected. Queue bound: 100 per target; dropped when the session is
+    /// recycled (restarted).
     Write {
         /// Literal bytes to write. Omit with --stdin to stream instead.
         cmd: Option<String>,

@@ -270,6 +270,9 @@ struct AppArtifacts {
     /// sessions. Held so dropping AppArtifacts aborts it if serve()
     /// exits without the shutdown channel firing.
     _terminal_pruner: tokio::task::JoinHandle<()>,
+    /// The `cs terminal write` queue drainer (see terminal_sessions). Held
+    /// alongside the pruner so dropping AppArtifacts aborts it too.
+    _terminal_drainer: tokio::task::JoinHandle<()>,
     /// Mutable handle to the URL prefix injected into the SPA shell
     /// as `<meta name="chan-prefix">`. Local serve sets it once at
     /// build time from `ServeConfig::prefix`; tunnel mode swaps in
@@ -462,6 +465,9 @@ async fn build_app(
     // can resolve sessions. Set-once; ignore a second set (never happens).
     let _ = terminal_registry_cell.set(terminal_sessions.clone());
     let terminal_pruner = terminal_sessions.clone().spawn_pruner(shutdown_rx.clone());
+    // Drain the per-session `cs terminal write` queues (deliver each next
+    // poke when its agent goes idle). Sibling of the pruner.
+    let terminal_drainer = terminal_sessions.clone().spawn_drainer(shutdown_rx.clone());
 
     let state = Arc::new(AppState {
         library,
@@ -500,6 +506,7 @@ async fn build_app(
         last_activity,
         workspace_cell: state_for_bridge.clone(),
         _terminal_pruner: terminal_pruner,
+        _terminal_drainer: terminal_drainer,
         prefix,
         mcp_bridge,
         control_socket,

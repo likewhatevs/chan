@@ -18,12 +18,32 @@ use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
 use crate::config::TerminalConfig;
-use crate::signal::now_unix_secs;
+use crate::signal::{now_unix_millis, now_unix_secs};
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
 const BROADCAST_CAP: usize = 1024;
+
+// `cs terminal write` serialization queue (the auto-deliver poke chain).
+// Each session has a bounded FIFO; the drainer delivers the next message
+// only when the agent is IDLE (its output has quiesced) and then awaits the
+// agent's generation-START before the next, so chained pokes submit one
+// after another instead of stacking into one compose. The signal is purely
+// output quiescence (`last_output_at`); see cs-write-queue-design.md.
+const WRITE_QUEUE_CAP: usize = 100;
+/// Output-idle threshold: the agent is considered done generating when no
+/// output has arrived for this long. Conservative to ride over brief
+/// mid-stream gaps; tune against real agent streaming.
+const WRITE_QUEUE_QUIET_MS: i64 = 800;
+/// After a deliver+submit, wait at most this long for the agent's generation
+/// to START before allowing the next delivery. Caps the post-submit window
+/// so a message that did not trigger generation (e.g. no submit chord) does
+/// not wedge the queue.
+const WRITE_QUEUE_GEN_START_CAP_MS: i64 = 2000;
+/// How often the drainer scans sessions for a deliverable queued write.
+const WRITE_QUEUE_DRAIN_TICK: Duration = Duration::from_millis(150);
+
 const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 const ALT_SCREEN_EXIT: &[u8] = b"\x1b[?1049l";
 const ALT_SCREEN_TAIL_BYTES: usize = ALT_SCREEN_ENTER.len() - 1;
@@ -77,6 +97,18 @@ pub struct TerminalSessionSummary {
     /// Resolved group (never empty; `DEFAULT_TERMINAL_GROUP` when unset).
     pub tab_group: String,
     pub cwd: Option<PathBuf>,
+}
+
+/// Result of enqueuing a `cs terminal write` onto the matched sessions'
+/// write queues. `queued` is how many sessions accepted it, `full` how many
+/// were already at `WRITE_QUEUE_CAP` (the write was dropped for those), and
+/// `position` the queue length after the push when EXACTLY one session
+/// matched (the caller's position; `None` for a broadcast or a full single).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EnqueueOutcome {
+    pub queued: usize,
+    pub full: usize,
+    pub position: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -165,6 +197,16 @@ impl AttachHandle {
 
     pub fn send_input(&self, data: &[u8]) {
         self.session.send_input(data);
+    }
+
+    /// Enqueue `data` onto this session's `cs terminal write` FIFO instead of
+    /// writing it straight to the PTY. The Rich Prompt bubble's WS `prompt`
+    /// frame uses this so bubble prompts and CLI pokes share ONE queue + one
+    /// drain (the drain appends nothing; `data` already carries the submit
+    /// chord the caller chose). Returns the queue position, or `None` when
+    /// the queue is at `WRITE_QUEUE_CAP`.
+    pub fn enqueue_write(&self, data: &[u8]) -> Option<usize> {
+        self.session.enqueue_write(data)
     }
 
     pub fn resize(&self, size: PtySize) {
@@ -397,6 +439,55 @@ impl Registry {
         written
     }
 
+    /// Enqueue `data` onto the write FIFO of every live session matching the
+    /// given tab name and/or group, for `cs terminal write`. Same selector
+    /// semantics as `write_input_matching` (a `None` axis matches all; both
+    /// narrow to the intersection), but the bytes are QUEUED, not written
+    /// straight to the PTY: the drainer delivers them one at a time when the
+    /// agent is idle, so chained pokes submit one after another. `data`
+    /// already carries the caller's submit chord (the CLI appends it). See
+    /// [`EnqueueOutcome`] for the return shape.
+    pub fn enqueue_write_matching(
+        &self,
+        tab_name: Option<&str>,
+        tab_group: Option<&str>,
+        data: &[u8],
+    ) -> EnqueueOutcome {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        let matched: Vec<&Arc<Session>> = sessions
+            .values()
+            .filter(|session| !session.closed.load(Ordering::Relaxed))
+            .filter(|session| match tab_name {
+                Some(name) => session.tab_name.as_deref() == Some(name),
+                None => true,
+            })
+            .filter(|session| match tab_group {
+                Some(group) => {
+                    session
+                        .tab_group
+                        .as_deref()
+                        .unwrap_or(DEFAULT_TERMINAL_GROUP)
+                        == group
+                }
+                None => true,
+            })
+            .collect();
+        let single = matched.len() == 1;
+        let mut outcome = EnqueueOutcome::default();
+        for session in matched {
+            match session.enqueue_write(data) {
+                Some(position) => {
+                    outcome.queued += 1;
+                    if single {
+                        outcome.position = Some(position);
+                    }
+                }
+                None => outcome.full += 1,
+            }
+        }
+        outcome
+    }
+
     /// Full replay-ring snapshots of every live session whose tab name is
     /// `tab_name`, as `(session_id, bytes)`, for `cs terminal scrollback`.
     /// The bytes are the raw PTY stream the WS attach replays (ANSI and
@@ -564,6 +655,45 @@ impl Registry {
         })
     }
 
+    /// One drain pass over every live session's `cs terminal write` queue.
+    /// Snapshots the session Arcs under the lock, then drains each outside it
+    /// (delivery touches the session's own queue + PTY, never the registry
+    /// map). A no-op for sessions with an empty queue or a busy agent.
+    pub fn drain_writes(&self) {
+        let now = now_unix_millis();
+        let sessions: Vec<Arc<Session>> = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .values()
+            .filter(|session| !session.closed.load(Ordering::Relaxed))
+            .cloned()
+            .collect();
+        for session in sessions {
+            session.try_drain_one(now);
+        }
+    }
+
+    /// The write-queue drainer: ticks every `WRITE_QUEUE_DRAIN_TICK` and
+    /// delivers each session's next queued write once its agent is idle. A
+    /// sibling of `spawn_pruner` (own task, shuts down on the same signal).
+    pub fn spawn_drainer(
+        self: Arc<Self>,
+        mut shutdown_rx: watch::Receiver<bool>,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(WRITE_QUEUE_DRAIN_TICK);
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx.changed() => break,
+                    _ = tick.tick() => {
+                        self.drain_writes();
+                    }
+                }
+            }
+        })
+    }
+
     fn unused_id(&self, sessions: &HashMap<String, Arc<Session>>) -> String {
         loop {
             let id = random_session_id();
@@ -653,6 +783,23 @@ struct Session {
     ring: Mutex<RingBuffer>,
     seq: AtomicU64,
     last_activity: AtomicI64,
+    /// Wall-clock millis of the most recent OUTPUT byte (the agent
+    /// rendering / generating), distinct from `last_activity` (which also
+    /// bumps on input). The `cs terminal write` queue drains only when this
+    /// has been quiet for `WRITE_QUEUE_QUIET_MS` (the agent is idle).
+    last_output_at: AtomicI64,
+    /// FIFO of pending `cs terminal write` payloads for this session, drained
+    /// one at a time when the agent is idle. Each payload is the raw bytes
+    /// the CLI sent (the submit chord, if any, is already appended by
+    /// `--submit`). Bounded at `WRITE_QUEUE_CAP`; dropped on session recycle
+    /// (the session, and this queue with it, is replaced on restart/close).
+    write_queue: Mutex<VecDeque<Vec<u8>>>,
+    /// Millis of the drainer's last delivery (0 when nothing is pending), to
+    /// time the await-generation-start window after a deliver.
+    last_deliver_at: AtomicI64,
+    /// True between a delivery and the agent's generation-START (or the cap),
+    /// so the next queued message does not fire into the same compose.
+    awaiting_gen: AtomicBool,
     attach_count: AtomicUsize,
     winsize: Mutex<PtySize>,
     focused: AtomicBool,
@@ -761,6 +908,12 @@ impl Session {
             ring: Mutex::new(RingBuffer::new(config.terminal.ring_bytes)),
             seq: AtomicU64::new(0),
             last_activity: AtomicI64::new(now_unix_secs() as i64),
+            // Seed output-idle at spawn time so a brand-new session is not
+            // treated as instantly idle before it has rendered anything.
+            last_output_at: AtomicI64::new(now_unix_millis()),
+            write_queue: Mutex::new(VecDeque::new()),
+            last_deliver_at: AtomicI64::new(0),
+            awaiting_gen: AtomicBool::new(false),
             attach_count: AtomicUsize::new(0),
             winsize: Mutex::new(opts.size),
             focused: AtomicBool::new(false),
@@ -890,6 +1043,72 @@ impl Session {
         let _ = self.command_tx.send(PtyCommand::Input(data.to_vec()));
     }
 
+    /// One drainer step for this session's `cs terminal write` queue. Deliver
+    /// the next queued message ONLY when the agent is idle (output quiesced),
+    /// and after a delivery AWAIT the agent's generation-START before the
+    /// next, so chained pokes submit one after another instead of stacking
+    /// into one compose. Called on each drainer tick with the current millis;
+    /// a no-op when the queue is empty or the agent is still busy.
+    fn try_drain_one(&self, now_ms: i64) {
+        if self
+            .write_queue
+            .lock()
+            .expect("terminal write queue poisoned")
+            .is_empty()
+        {
+            // Nothing pending: clear the post-deliver await state so the next
+            // enqueue starts clean.
+            self.last_deliver_at.store(0, Ordering::Relaxed);
+            self.awaiting_gen.store(false, Ordering::Relaxed);
+            return;
+        }
+        let last_output = self.last_output_at.load(Ordering::Relaxed);
+        // After a deliver, hold the next message until the agent's generation
+        // has STARTED (output advanced past the delivery) or the cap elapses
+        // (the message did not trigger generation), so two messages never
+        // fire into one compose in the post-submit, pre-generation window.
+        if self.awaiting_gen.load(Ordering::Relaxed) {
+            let delivered_at = self.last_deliver_at.load(Ordering::Relaxed);
+            let generation_started = last_output > delivered_at;
+            let timed_out = now_ms - delivered_at >= WRITE_QUEUE_GEN_START_CAP_MS;
+            if generation_started || timed_out {
+                self.awaiting_gen.store(false, Ordering::Relaxed);
+            } else {
+                return;
+            }
+        }
+        // Deliver only once the agent is idle (the previous turn, if any, has
+        // quiesced).
+        if now_ms - last_output < WRITE_QUEUE_QUIET_MS {
+            return;
+        }
+        let next = self
+            .write_queue
+            .lock()
+            .expect("terminal write queue poisoned")
+            .pop_front();
+        if let Some(data) = next {
+            self.send_input(&data);
+            self.last_deliver_at.store(now_ms, Ordering::Relaxed);
+            self.awaiting_gen.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Push a `cs terminal write` payload onto this session's FIFO. Returns
+    /// the queue length after the push (the caller's position), or `None`
+    /// when the queue is already at `WRITE_QUEUE_CAP` (the write is dropped).
+    fn enqueue_write(&self, data: &[u8]) -> Option<usize> {
+        let mut q = self
+            .write_queue
+            .lock()
+            .expect("terminal write queue poisoned");
+        if q.len() >= WRITE_QUEUE_CAP {
+            return None;
+        }
+        q.push_back(data.to_vec());
+        Some(q.len())
+    }
+
     /// The full replay ring, flattened, for `cs terminal scrollback`.
     /// `snapshot_since(None)` returns every chunk currently held (no
     /// `missed`, since we ask from the ring's own start), so this is the
@@ -955,6 +1174,10 @@ impl Session {
         }
         self.last_activity
             .store(now_unix_secs() as i64, Ordering::Relaxed);
+        // Output-only timestamp for the write-queue's idle/quiescence signal
+        // (the agent is rendering / generating).
+        self.last_output_at
+            .store(now_unix_millis(), Ordering::Relaxed);
         self.update_alt_screen(bytes);
         let end_seq = {
             let mut ring = self.ring.lock().expect("terminal ring poisoned");
@@ -1327,6 +1550,10 @@ mod tests {
             ring: Mutex::new(RingBuffer::new(ring_bytes)),
             seq: AtomicU64::new(0),
             last_activity: AtomicI64::new(now_unix_secs() as i64),
+            last_output_at: AtomicI64::new(now_unix_millis()),
+            write_queue: Mutex::new(VecDeque::new()),
+            last_deliver_at: AtomicI64::new(0),
+            awaiting_gen: AtomicBool::new(false),
             attach_count: AtomicUsize::new(0),
             winsize: Mutex::new(test_size()),
             focused: AtomicBool::new(false),
@@ -1479,6 +1706,95 @@ mod tests {
         // count is what the control socket's single-match policy gates on.
         assert_eq!(registry.scrollback_matching("@@LaneB").len(), 1);
         assert!(registry.scrollback_matching("@@Nope").is_empty());
+        registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[test]
+    fn write_queue_enqueue_bounds_at_cap() {
+        let session = test_session_with_ring(1024);
+        for i in 1..=WRITE_QUEUE_CAP {
+            assert_eq!(session.enqueue_write(b"x"), Some(i), "position grows");
+        }
+        assert_eq!(session.enqueue_write(b"x"), None, "rejected at cap");
+    }
+
+    #[test]
+    fn write_queue_drains_only_when_idle_and_awaits_generation() {
+        let session = test_session_with_ring(1024);
+        session.enqueue_write(b"one");
+        session.enqueue_write(b"two");
+        let qlen = |s: &Session| s.write_queue.lock().expect("queue").len();
+        let base = now_unix_millis();
+
+        // Agent busy (output just now): nothing delivered.
+        session.last_output_at.store(base, Ordering::Relaxed);
+        session.try_drain_one(base);
+        assert_eq!(qlen(&session), 2, "busy -> hold");
+
+        // Agent idle (output quiet > QUIET_MS): deliver one, then await the
+        // next generation-start.
+        let idle_now = base + WRITE_QUEUE_QUIET_MS + 10;
+        session.try_drain_one(idle_now);
+        assert_eq!(qlen(&session), 1, "idle -> delivered one");
+        assert!(session.awaiting_gen.load(Ordering::Relaxed), "awaiting gen");
+
+        // Still awaiting generation-start (no new output, under the cap): hold.
+        session.try_drain_one(idle_now + 10);
+        assert_eq!(qlen(&session), 1, "awaiting gen -> hold the second");
+
+        // Generation started (output advanced past the deliver) then finished
+        // (idle again): the second delivers.
+        let gen_at = idle_now + 20;
+        session.last_output_at.store(gen_at, Ordering::Relaxed);
+        session.try_drain_one(gen_at + WRITE_QUEUE_QUIET_MS + 10);
+        assert_eq!(qlen(&session), 0, "turn done -> second delivered");
+    }
+
+    #[test]
+    fn write_queue_gen_start_cap_unwedges_a_non_generating_message() {
+        // A delivered message that never triggers generation (no output
+        // advance) must not wedge the queue forever: after the gen-start cap,
+        // the next message delivers.
+        let session = test_session_with_ring(1024);
+        session.enqueue_write(b"one");
+        session.enqueue_write(b"two");
+        let base = now_unix_millis();
+        // last output well in the past -> always "idle".
+        session.last_output_at.store(base, Ordering::Relaxed);
+        let t1 = base + WRITE_QUEUE_QUIET_MS + 10;
+        session.try_drain_one(t1);
+        assert!(session.awaiting_gen.load(Ordering::Relaxed));
+        // No output ever arrives; past the cap the await clears + the second
+        // delivers (idle the whole time).
+        session.try_drain_one(t1 + WRITE_QUEUE_GEN_START_CAP_MS + 10);
+        assert_eq!(session.write_queue.lock().expect("queue").len(), 0);
+    }
+
+    #[test]
+    fn enqueue_write_matching_reports_position_for_a_single_target() {
+        let registry = Registry::new(test_config(4096, 4, 60));
+        let handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: Some("@@A".into()),
+                tab_group: None,
+                window_id: None,
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+            })
+            .unwrap();
+        // No drainer runs in this test, so positions are stable.
+        let first = registry.enqueue_write_matching(Some("@@A"), None, b"x");
+        assert_eq!(first.queued, 1);
+        assert_eq!(first.position, Some(1));
+        let second = registry.enqueue_write_matching(Some("@@A"), None, b"y");
+        assert_eq!(second.position, Some(2), "FIFO position grows");
+        // No match -> nothing queued, no position.
+        let none = registry.enqueue_write_matching(Some("@@Nope"), None, b"z");
+        assert_eq!(none.queued, 0);
+        assert_eq!(none.position, None);
         registry.close(handle.id(), CloseReason::Explicit);
     }
 

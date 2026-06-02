@@ -10,6 +10,7 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Json, Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use chan_shell::{apply_submit_chord, SubmitAgent};
 use portable_pty::PtySize;
 use serde::{Deserialize, Serialize};
 
@@ -106,6 +107,20 @@ enum ClientFrame {
     Focus { focused: bool },
     #[serde(rename = "close")]
     Close,
+    /// Rich Prompt bubble submit (@@LaneB). Unlike `Input` (raw keystrokes
+    /// straight to the PTY), this ENQUEUES `data` onto this session's write
+    /// queue -- the SAME FIFO the control socket's `cs terminal write` feeds
+    /// -- so bubble prompts and CLI pokes serialize through one drain and
+    /// submit one after another when the agent is idle. The server appends
+    /// the submit chord for `agent` (claude / codex / gemini); `agent` is
+    /// optional and DEFAULTS to claude (the round's primary agent) when the
+    /// SPA does not know the terminal's launch command.
+    #[serde(rename = "prompt")]
+    Prompt {
+        data: String,
+        #[serde(default)]
+        agent: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -519,6 +534,19 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 let id = session.id().to_owned();
                                 state.terminal_sessions.close(&id, CloseReason::Explicit);
                             }
+                            Ok(ClientFrame::Prompt { data, agent }) => {
+                                // Rich Prompt bubble: append the target agent's
+                                // submit chord (default claude when omitted),
+                                // then ENQUEUE onto the shared write queue so it
+                                // serializes with `cs terminal write` pokes and
+                                // submits when the agent is idle.
+                                let submit = SubmitAgent::from_agent_name(
+                                    agent.as_deref().unwrap_or("claude"),
+                                );
+                                let payload = apply_submit_chord(data, submit);
+                                let _ = session.enqueue_write(payload.as_bytes());
+                                state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                            }
                             Err(e) => {
                                 let _ = send_frame(
                                     &mut socket,
@@ -787,6 +815,32 @@ mod tests {
         lib.register_workspace(root.path()).unwrap();
         let workspace = lib.open_workspace(root.path()).unwrap();
         (cfg, root, workspace)
+    }
+
+    #[test]
+    fn client_frame_prompt_decodes_with_optional_agent() {
+        // The @@LaneB Rich Prompt contract: { type: "prompt", data, agent? }.
+        // A Rust rename of the tag / fields would break the bubble's wire at
+        // runtime with a green build, so pin the decode.
+        let with_agent: ClientFrame =
+            serde_json::from_str(r#"{"type":"prompt","data":"hi","agent":"codex"}"#).unwrap();
+        match with_agent {
+            ClientFrame::Prompt { data, agent } => {
+                assert_eq!(data, "hi");
+                assert_eq!(agent.as_deref(), Some("codex"));
+            }
+            other => panic!("expected Prompt, got {other:?}"),
+        }
+        // agent omitted -> None (the handler defaults the chord to claude).
+        let no_agent: ClientFrame =
+            serde_json::from_str(r#"{"type":"prompt","data":"yo"}"#).unwrap();
+        match no_agent {
+            ClientFrame::Prompt { data, agent } => {
+                assert_eq!(data, "yo");
+                assert!(agent.is_none());
+            }
+            other => panic!("expected Prompt, got {other:?}"),
+        }
     }
 
     #[test]

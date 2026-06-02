@@ -1243,9 +1243,13 @@ fn open_dashboard(
     Ok("dashboard request queued".into())
 }
 
-/// Category 2: write raw bytes to the matching live PTY sessions. At
-/// least one selector is required so a missing filter cannot fan out to
-/// every terminal by accident.
+/// Category 2: ENQUEUE bytes onto the matching live sessions' write queues.
+/// At least one selector is required so a missing filter cannot fan out to
+/// every terminal by accident. The bytes are not written to the PTY here:
+/// the per-session drainer delivers each queued write when its agent is idle
+/// (the serialization the Rich Prompt / poke-chain workflow needs), so
+/// chained `cs terminal write`s submit one after another. `data` already
+/// carries the caller's submit chord (the CLI's `--submit`).
 #[cfg(unix)]
 fn term_write(
     registry: &TerminalRegistry,
@@ -1256,12 +1260,31 @@ fn term_write(
     if tab_name.is_none() && tab_group.is_none() {
         return Err("term write needs a tab name and/or group selector".into());
     }
-    let written = registry.write_input_matching(tab_name, tab_group, data.as_bytes());
-    if written == 0 {
-        return Err("no live terminal session matched".into());
+    let outcome = registry.enqueue_write_matching(tab_name, tab_group, data.as_bytes());
+    if outcome.queued == 0 {
+        return if outcome.full > 0 {
+            Err(format!(
+                "matched session(s) at the {WRITE_QUEUE_CAP_MSG}-write queue cap; nothing queued"
+            ))
+        } else {
+            Err("no live terminal session matched".into())
+        };
     }
-    Ok(format!("wrote to {written} terminal session(s)"))
+    let mut message = match outcome.position {
+        Some(position) => format!("queued at position {position}"),
+        None => format!("queued to {} terminal session(s)", outcome.queued),
+    };
+    if outcome.full > 0 {
+        message.push_str(&format!("; {} at queue cap (dropped)", outcome.full));
+    }
+    Ok(message)
 }
+
+/// The queue cap, surfaced in the "queue full" message. Kept in sync with
+/// `terminal_sessions::WRITE_QUEUE_CAP` (private there); a literal here
+/// avoids widening that module's surface just for an error string.
+#[cfg(unix)]
+const WRITE_QUEUE_CAP_MSG: usize = 100;
 
 /// Category 2: restart the matching live PTY sessions, preserving each
 /// session's spawn command + env (so an agent relaunches). At least one
