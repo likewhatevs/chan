@@ -63,6 +63,43 @@ Omit `--submit` to write pure bytes: the text then lands in the agent's
 compose box unsubmitted (a bare newline is just a newline to an agent, not a
 submit), which is rarely what you want for a poke.
 
+## Rich Prompt
+
+Rich Prompt is a floating markdown input over the bottom of the active
+terminal. Toggle it with Cmd+Shift+P (or the terminal right-click
+"Show/Hide Rich Prompt" entry); one bubble per window follows whichever
+terminal is active. Type markdown freely: Enter inserts a newline, and
+Cmd+Enter submits.
+
+Each terminal's bubble is backed by a real draft on disk, a
+`Drafts/<name>/draft.md` in the workspace, so the prompt text is an ordinary
+file. Pasting an image works like the editor: the image is written into the
+same draft folder and referenced with `![](path)`, so an agent reads the
+picture as a file (no base64), whichever agent it is. Submitting clears the
+draft text but keeps the folder and any pasted media, so the agent can still
+read them; the whole draft folder is discarded when the terminal closes.
+
+Submit sends the text to the active terminal's agent through the same write
+queue the CLI uses, so a prompt and a `cs terminal write` poke share one
+ordered path.
+
+## The write queue
+
+Every write to a terminal session, from `cs terminal write` or from Rich
+Prompt, goes through a per-session FIFO queue. The queue serializes
+deliveries so chained messages never interleave into one compose buffer and
+submit one after another: the drainer delivers the next queued message only
+once the target agent has gone idle (its previous turn's output has
+quiesced), each with the right submit chord. A free target drains
+immediately; a busy one enqueues and drains as it frees.
+
+The queue holds up to 100 messages per session and is dropped when the
+session is recycled (restart or close). It detects that the agent is
+generating, not that it has a half-typed but unsubmitted compose buffer, so
+a message can still land mid-buffer in the rare case where text was left
+typed and paused; routing all input through the queue is what keeps that
+case rare.
+
 ## Survey
 
 `cs terminal survey` asks a question and blocks until it is answered. It
@@ -82,6 +119,17 @@ The constraint to know: survey needs a live SPA window that owns the tab. A
 terminal running as a bare PTY with no window attached matches nothing, and
 the command fails with `no live terminal session matched`. Open the tab in a
 Chan window before surveying it.
+
+## Team Work
+
+Team Work runs a set of agents as a team across terminal tabs. The lead is
+an ordinary terminal, with the same Rich Prompt and survey as any other and
+no special composer: on spawn it receives its identity prompt through the
+same write queue, then runs like any other terminal. You bootstrap a team
+with Cmd+P (the team setup/load dialog) or `cs terminal team new|load`,
+which writes or reads the team's `config.toml` and the generated bootstrap.
+The team then coordinates through the same `cs terminal` tools (pokes,
+survey) this page covers.
 
 ## MCP discovery
 
