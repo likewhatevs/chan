@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 
 use crate::control::{absolutize, control_socket_env, open_env, send_control_request};
 use crate::submit::{apply_submit_chord, SubmitAgent};
-use crate::wire::{ControlRequest, SurveyFollowup, SurveySpec, TeamOp};
+use crate::wire::{ControlRequest, PaneOp, SplitDir, SurveyFollowup, SurveySpec, TeamOp};
 
 /// Top-level `cs` parser. The `chan` binary reaches `cs` through its own
 /// `Cli` (rewriting `cs ...` into `chan shell ...` in `parse_cli`), but
@@ -100,20 +100,132 @@ pub enum ShellAction {
         #[arg(long)]
         pretty: bool,
     },
-    /// Report the current window's tab/pane layout: every pane, its tabs
-    /// (kind, title, whether a file tab is unsaved or a terminal tab is
-    /// live), and which pane is selected. Prints a markdown table per pane
-    /// by default; `--json` emits compact machine output and `--json
-    /// --pretty` indents it. Queries the running SPA window over the control
-    /// socket, so it needs `$CHAN_WINDOW_ID` (a chan terminal).
+    /// Inspect or drive a window's tab/pane layout. Bare `cs pane` reports
+    /// the layout (every pane, its tabs and which is selected); the
+    /// subcommands focus a pane, split it left|bottom, resize it, or close a
+    /// tab / pane / everything. Targets the caller's own window
+    /// ($CHAN_WINDOW_ID) by default, or any window via `--tab-name` (a tab it
+    /// owns) so it works from a context with no window. Markdown by default;
+    /// `--json [--pretty]` for machine output.
+    #[command(infer_subcommands = true)]
     Pane {
-        /// Emit machine-readable JSON instead of the markdown tables.
-        #[arg(long)]
+        /// Target the window owning this tab, instead of the caller's own
+        /// window. Lets `cs pane` run without a $CHAN_WINDOW_ID.
+        #[arg(long = "tab-name", global = true)]
+        tab_name: Option<String>,
+        /// Emit JSON instead of the markdown rendering (layout or exec
+        /// result). Compact by default.
+        #[arg(long, global = true)]
         json: bool,
         /// Indent the JSON output. Only meaningful with `--json`.
-        #[arg(long)]
+        #[arg(long, global = true)]
         pretty: bool,
+        /// A layout mutation. Omit for the read-only layout report.
+        #[command(subcommand)]
+        action: Option<PaneAction>,
     },
+}
+
+/// `cs pane <action>`: the layout mutations, executed on the target window's
+/// live SPA `layout`. Each maps 1:1 to a [`PaneOp`] sent in a
+/// [`ControlRequest::PaneExec`].
+#[derive(Subcommand, Debug)]
+pub enum PaneAction {
+    /// Focus (activate) a pane by id.
+    Focus {
+        /// The pane id to focus (from `cs pane`).
+        pane_id: String,
+    },
+    /// Split a pane, placing a new empty pane to the `left` or `bottom`.
+    Split {
+        /// Where the new pane goes: `left` or `bottom`.
+        dir: SplitDirArg,
+        /// The pane to split (default: the active pane).
+        #[arg(long = "pane")]
+        pane: Option<String>,
+    },
+    /// Resize a pane's enclosing split by a ratio delta (e.g. `0.1`,
+    /// `-0.1`); positive grows the pane. No-ops the sole pane.
+    // allow_negative_numbers so a bare `-0.1` is the delta value, not parsed
+    // as an (unknown) `-0` flag.
+    #[command(allow_negative_numbers = true)]
+    Resize {
+        /// Ratio delta in -1.0..1.0.
+        delta: f64,
+        /// The pane to resize (default: the active pane).
+        #[arg(long = "pane")]
+        pane: Option<String>,
+    },
+    /// Close one tab (the pane's active tab by default).
+    CloseTab {
+        /// The pane to close a tab in (default: the active pane).
+        #[arg(long = "pane")]
+        pane: Option<String>,
+        /// The tab id to close (default: the pane's active tab).
+        #[arg(long = "tab")]
+        tab: Option<String>,
+        /// Close past a dirty file / live terminal.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Close a whole pane (the active one by default).
+    ClosePane {
+        /// The pane id to close (default: the active pane).
+        #[arg(long = "pane")]
+        pane: Option<String>,
+        /// Close past dirty files / live terminals.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Close every tab in every pane.
+    CloseAll {
+        /// Close past dirty files / live terminals.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+/// `left` | `bottom` for `cs pane split`, mapped to the wire [`SplitDir`].
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum SplitDirArg {
+    Left,
+    Bottom,
+}
+
+impl From<SplitDirArg> for SplitDir {
+    fn from(dir: SplitDirArg) -> Self {
+        match dir {
+            SplitDirArg::Left => SplitDir::Left,
+            SplitDirArg::Bottom => SplitDir::Bottom,
+        }
+    }
+}
+
+impl PaneAction {
+    /// Convert the parsed subcommand into the wire [`PaneOp`].
+    fn into_op(self) -> PaneOp {
+        match self {
+            PaneAction::Focus { pane_id } => PaneOp::Focus { pane_id },
+            PaneAction::Split { dir, pane } => PaneOp::Split {
+                pane_id: pane,
+                dir: dir.into(),
+            },
+            PaneAction::Resize { delta, pane } => PaneOp::Resize {
+                pane_id: pane,
+                delta,
+            },
+            PaneAction::CloseTab { pane, tab, force } => PaneOp::CloseTab {
+                pane_id: pane,
+                tab_id: tab,
+                force,
+            },
+            PaneAction::ClosePane { pane, force } => PaneOp::ClosePane {
+                pane_id: pane,
+                force,
+            },
+            PaneAction::CloseAll { force } => PaneOp::CloseAll { force },
+        }
+    }
 }
 
 /// Worked examples appended to `cs terminal survey --help`. Each case
@@ -446,7 +558,12 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
             json,
             pretty,
         } => cmd_shell_search(query.join(" "), limit, json, pretty).await,
-        ShellAction::Pane { json, pretty } => cmd_pane(json, pretty).await,
+        ShellAction::Pane {
+            tab_name,
+            json,
+            pretty,
+            action,
+        } => cmd_pane(tab_name, json, pretty, action).await,
     }
 }
 
@@ -530,38 +647,108 @@ fn render_search_markdown(raw: &str) -> Result<String> {
     Ok(out)
 }
 
-/// `cs pane`: query the running window's tab/pane layout over the control
-/// socket (the server pushes a `pane_query` to the SPA, which replies with a
-/// layout snapshot) and print it. Markdown table per pane by default;
-/// `--json` compact, `--json --pretty` indented. Mirrors the `cs terminal
-/// list` output convention. Needs `$CHAN_WINDOW_ID` (a chan terminal), like
-/// `cs open`, since the layout is a property of one SPA window.
-async fn cmd_pane(json: bool, pretty: bool) -> Result<()> {
-    let env = open_env()?;
-    let raw = send_control_request(
-        &env.control_socket,
-        ControlRequest::PaneQuery {
-            window_id: env.window_id,
+/// The `(window_id, tab_name)` target a `cs pane` request carries. An
+/// explicit `--tab-name` targets the window owning that tab (and needs no
+/// $CHAN_WINDOW_ID); otherwise the caller's own window from $CHAN_WINDOW_ID.
+/// Sending one or the other (never both) keeps the server's precedence
+/// unambiguous; the server errors when neither resolves.
+fn pane_target(tab_name: Option<String>) -> (Option<String>, Option<String>) {
+    let trimmed = |s: String| {
+        let s = s.trim().to_string();
+        (!s.is_empty()).then_some(s)
+    };
+    match tab_name.and_then(trimmed) {
+        Some(tab) => (None, Some(tab)),
+        None => (std::env::var("CHAN_WINDOW_ID").ok().and_then(trimmed), None),
+    }
+}
+
+/// `cs pane`: inspect or drive the target window's tab/pane layout over the
+/// control socket (the server pushes a `pane_query` / `pane_exec` to the SPA,
+/// which replies). Bare = the layout report; a subcommand = a mutation. The
+/// target is the caller's own window or `--tab-name`. Markdown by default;
+/// `--json [--pretty]` for machine output. A close blocked by a dirty file /
+/// live terminal (without `--force`) exits non-zero.
+async fn cmd_pane(
+    tab_name: Option<String>,
+    json: bool,
+    pretty: bool,
+    action: Option<PaneAction>,
+) -> Result<()> {
+    let socket = control_socket_env()?;
+    let (window_id, tab_name) = pane_target(tab_name);
+    let is_query = action.is_none();
+    let request = match action {
+        None => ControlRequest::PaneQuery {
+            window_id,
+            tab_name,
         },
-    )
-    .await?;
+        Some(action) => ControlRequest::PaneExec {
+            window_id,
+            tab_name,
+            op: action.into_op(),
+        },
+    };
+    let raw = send_control_request(&socket, request).await?;
     if json {
         // Compact by default; --pretty re-indents. Both go to stdout so the
         // output pipes cleanly.
         if pretty {
             let value: serde_json::Value =
-                serde_json::from_str(&raw).context("parsing pane layout JSON")?;
+                serde_json::from_str(&raw).context("parsing pane reply JSON")?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&value).context("formatting pane layout JSON")?
+                serde_json::to_string_pretty(&value).context("formatting pane reply JSON")?
             );
         } else {
             println!("{raw}");
         }
-    } else {
+    } else if is_query {
         print!("{}", render_pane_layout_markdown(&raw)?);
+    } else {
+        print!("{}", render_pane_exec_markdown(&raw)?);
+    }
+    // An exec that was blocked (a dirty file / live terminal without --force)
+    // completed the round-trip but did not fully apply; surface it as a
+    // non-zero exit so scripts can react. The detail is already on stdout.
+    if !is_query {
+        let value: serde_json::Value =
+            serde_json::from_str(&raw).context("parsing pane exec reply")?;
+        if !value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            anyhow::bail!("cs pane: the operation was blocked (see output above)");
+        }
     }
     Ok(())
+}
+
+/// Render a `cs pane <exec>` result. Shape (the SPA builds it):
+/// `{ ok, summary, blocked: [{ tab, reason }] }`. Prints the summary, then a
+/// `blocked:` list when a close hit a dirty file / live terminal. Falls back
+/// to a bare `ok` / `blocked` line if the SPA omitted a summary.
+fn render_pane_exec_markdown(raw: &str) -> Result<String> {
+    let value: serde_json::Value = serde_json::from_str(raw).context("parsing pane exec JSON")?;
+    let ok = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mut out = String::new();
+    if let Some(summary) = value.get("summary").and_then(|v| v.as_str()) {
+        if !summary.is_empty() {
+            out.push_str(summary);
+            out.push('\n');
+        }
+    }
+    if let Some(blocked) = value.get("blocked").and_then(|v| v.as_array()) {
+        if !blocked.is_empty() {
+            out.push_str("blocked:\n");
+            for b in blocked {
+                let tab = b.get("tab").and_then(|v| v.as_str()).unwrap_or("?");
+                let reason = b.get("reason").and_then(|v| v.as_str()).unwrap_or("?");
+                out.push_str(&format!("  - {tab}: {reason}\n"));
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push_str(if ok { "ok\n" } else { "blocked\n" });
+    }
+    Ok(out)
 }
 
 /// Render the `cs pane` layout snapshot JSON as one markdown table per pane.
@@ -1173,15 +1360,110 @@ mod tests {
     }
 
     #[test]
-    fn parses_pane_json_pretty() {
+    fn parses_pane_query_json_pretty() {
         let cli = CsCli::parse_from(["cs", "pane", "--json", "--pretty"]);
         match cli.action {
-            ShellAction::Pane { json, pretty } => {
+            ShellAction::Pane {
+                tab_name,
+                json,
+                pretty,
+                action,
+            } => {
                 assert!(json);
                 assert!(pretty);
+                assert!(tab_name.is_none());
+                assert!(action.is_none(), "bare cs pane is the query");
             }
             other => panic!("unexpected parse: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_pane_exec_subcommands_and_global_tab_name() {
+        // --tab-name is global, so it works on a subcommand; focus carries
+        // the pane id.
+        let cli = CsCli::parse_from(["cs", "pane", "--tab-name", "@@LaneB", "focus", "pane-1"]);
+        match cli.action {
+            ShellAction::Pane {
+                tab_name,
+                action: Some(PaneAction::Focus { pane_id }),
+                ..
+            } => {
+                assert_eq!(tab_name.as_deref(), Some("@@LaneB"));
+                assert_eq!(pane_id, "pane-1");
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+
+        // split bottom --pane.
+        let cli = CsCli::parse_from(["cs", "pane", "split", "bottom", "--pane", "pane-2"]);
+        match cli.action {
+            ShellAction::Pane {
+                action: Some(PaneAction::Split { dir, pane }),
+                ..
+            } => {
+                assert!(matches!(dir, SplitDirArg::Bottom));
+                assert_eq!(pane.as_deref(), Some("pane-2"));
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+
+        // close-tab --force.
+        let cli = CsCli::parse_from(["cs", "pane", "close-tab", "--force"]);
+        match cli.action {
+            ShellAction::Pane {
+                action: Some(PaneAction::CloseTab { force, tab, pane }),
+                ..
+            } => {
+                assert!(force);
+                assert!(tab.is_none() && pane.is_none());
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+
+        // resize delta.
+        let cli = CsCli::parse_from(["cs", "pane", "resize", "-0.1"]);
+        match cli.action {
+            ShellAction::Pane {
+                action: Some(PaneAction::Resize { delta, .. }),
+                ..
+            } => assert!((delta - (-0.1)).abs() < 1e-9),
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pane_action_into_op_maps_each_variant() {
+        assert!(matches!(
+            PaneAction::Focus {
+                pane_id: "p".into()
+            }
+            .into_op(),
+            PaneOp::Focus { .. }
+        ));
+        assert!(matches!(
+            PaneAction::CloseAll { force: true }.into_op(),
+            PaneOp::CloseAll { force: true }
+        ));
+        // SplitDirArg maps to the wire SplitDir.
+        match (PaneAction::Split {
+            dir: SplitDirArg::Left,
+            pane: None,
+        })
+        .into_op()
+        {
+            PaneOp::Split { dir, .. } => assert!(matches!(dir, SplitDir::Left)),
+            other => panic!("unexpected op: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pane_exec_markdown_lists_blocked() {
+        let raw = r#"{"ok":false,"summary":"closed 1, blocked 1","blocked":[
+            {"tab":"notes.md","reason":"unsaved changes"}]}"#;
+        let out = render_pane_exec_markdown(raw).expect("render");
+        assert!(out.contains("closed 1, blocked 1"), "{out}");
+        assert!(out.contains("- notes.md: unsaved changes"), "{out}");
     }
 
     #[test]

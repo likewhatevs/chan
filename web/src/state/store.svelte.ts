@@ -24,6 +24,7 @@ import {
 import { showSurvey } from "./survey.svelte";
 import {
   activeLayout,
+  closePane,
   closeTab,
   hasBrowserTab,
   cancelMissingFileCheck,
@@ -38,9 +39,12 @@ import {
   registerDraftPromotionSink,
   restoreLayout,
   serializeLayout,
+  setActivePane,
+  splitPane,
   type BrowserTab,
   type LeafNode,
   type SpawnContext,
+  type SplitNode,
   type Tab,
 } from "./tabs.svelte";
 import { isEditableText } from "./fileTypes";
@@ -701,13 +705,33 @@ type WindowCommandFrame =
       window_id: string;
       command: "pane_query";
       request_id: string;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "pane_exec";
+      request_id: string;
+      op: PaneExecOp;
     };
+
+/// A tab's display title for `cs pane`: a file tab's basename, else its
+/// explicit `title`.
+function paneTabTitle(tab: Tab): string {
+  return tab.kind === "file" ? (tab.path.split("/").pop() ?? tab.path) : tab.title;
+}
+
+/// The close-blocker for a tab, or null when it closes freely. A non-null
+/// reason means `cs pane close*` needs `--force`: an unsaved file or a live
+/// terminal. Mirrors the query's `dirty` / `live` flags from public fields.
+function paneCloseBlock(tab: Tab): string | null {
+  if (tab.kind === "file" && tab.content !== tab.saved) return "unsaved changes";
+  if (tab.kind === "terminal" && tab.terminalSessionId) return "live terminal";
+  return null;
+}
 
 /// Build a `cs pane` snapshot of one tab: its kind + title, whether it is
 /// the pane's active tab, and the close-blocker flags the CLI surfaces
-/// (`dirty` for an unsaved file, `live` for a running terminal). A file
-/// tab's title is its basename; every other kind carries an explicit
-/// `title`.
+/// (`dirty` for an unsaved file, `live` for a running terminal).
 function paneQueryTab(
   tab: Tab,
   activeTabId: string | null,
@@ -722,12 +746,162 @@ function paneQueryTab(
   } = {
     id: tab.id,
     kind: tab.kind,
-    title: tab.kind === "file" ? (tab.path.split("/").pop() ?? tab.path) : tab.title,
+    title: paneTabTitle(tab),
     active: tab.id === activeTabId,
   };
   if (tab.kind === "file") snap.dirty = tab.content !== tab.saved;
   if (tab.kind === "terminal") snap.live = !!tab.terminalSessionId;
   return snap;
+}
+
+/// All leaf (real, non-split) panes in the live layout.
+function paneLeaves(): LeafNode[] {
+  return Object.values(layout.nodes).filter((n): n is LeafNode => n.kind === "leaf");
+}
+
+/// Resolve a `cs pane` op's target pane: `paneId` when given, else the
+/// active pane. Null when it does not resolve to a leaf pane.
+function paneByIdOrActive(paneId: string | null | undefined): LeafNode | null {
+  const id = paneId ?? layout.activePaneId;
+  const node = layout.nodes[id];
+  return node && node.kind === "leaf" ? node : null;
+}
+
+/// The `op` payload of a `pane_exec` window_command (internally tagged on
+/// `kind`, mirroring the wire `PaneOp`).
+type PaneExecOp =
+  | { kind: "focus"; pane_id: string }
+  | { kind: "split"; pane_id?: string | null; dir: "left" | "bottom" }
+  | { kind: "resize"; pane_id?: string | null; delta: number }
+  | { kind: "close_tab"; pane_id?: string | null; tab_id?: string | null; force?: boolean }
+  | { kind: "close_pane"; pane_id?: string | null; force?: boolean }
+  | { kind: "close_all"; force?: boolean };
+
+type PaneExecResult = {
+  ok: boolean;
+  summary: string;
+  blocked: { tab: string; reason: string }[];
+};
+
+/// Apply a `cs pane` exec op to the live `layout` and return the result the
+/// CLI prints. Focus / split / resize mutate the layout directly; close ops
+/// pre-check the dirty/live blocker on PUBLIC fields and, without `force`,
+/// report the blocked tabs instead of closing (no UI dialog, since this is
+/// a scripted command). With `force`, `closeTab`/`closePane` run with
+/// `{ force: true }` so the SPA's own confirm is bypassed.
+async function applyPaneExec(op: PaneExecOp): Promise<PaneExecResult> {
+  const blocked: { tab: string; reason: string }[] = [];
+  switch (op.kind) {
+    case "focus": {
+      const p = paneByIdOrActive(op.pane_id);
+      if (!p) return { ok: false, summary: `no such pane ${op.pane_id}`, blocked };
+      setActivePane(p.id);
+      return { ok: true, summary: `focused pane ${p.id}`, blocked };
+    }
+    case "split": {
+      const p = paneByIdOrActive(op.pane_id);
+      if (!p)
+        return { ok: false, summary: `no such pane ${op.pane_id ?? layout.activePaneId}`, blocked };
+      const before = paneLeaves().length;
+      if (op.dir === "left") splitPane(p.id, "row", "before");
+      else splitPane(p.id, "column", "after");
+      if (paneLeaves().length > before)
+        return { ok: true, summary: `split pane ${p.id} ${op.dir}`, blocked };
+      return { ok: false, summary: "split limit reached", blocked };
+    }
+    case "resize": {
+      const p = paneByIdOrActive(op.pane_id);
+      if (!p)
+        return { ok: false, summary: `no such pane ${op.pane_id ?? layout.activePaneId}`, blocked };
+      const split = Object.values(layout.nodes).find(
+        (n): n is SplitNode => n.kind === "split" && (n.a === p.id || n.b === p.id),
+      );
+      if (!split) return { ok: true, summary: "single pane, nothing to resize", blocked };
+      // Growing pane `a` raises the ratio; growing pane `b` lowers it. Clamp
+      // so a pane never collapses to nothing.
+      const grow = split.a === p.id ? op.delta : -op.delta;
+      split.ratio = Math.min(0.9, Math.max(0.1, split.ratio + grow));
+      return { ok: true, summary: `resized pane ${p.id} (ratio ${split.ratio.toFixed(2)})`, blocked };
+    }
+    case "close_tab": {
+      const p = paneByIdOrActive(op.pane_id);
+      if (!p)
+        return { ok: false, summary: `no such pane ${op.pane_id ?? layout.activePaneId}`, blocked };
+      const tabId = op.tab_id ?? p.activeTabId;
+      const tab = tabId ? p.tabs.find((t) => t.id === tabId) : undefined;
+      if (!tab) return { ok: false, summary: "no tab to close", blocked };
+      const reason = paneCloseBlock(tab);
+      if (reason && !op.force) {
+        blocked.push({ tab: paneTabTitle(tab), reason });
+        return { ok: false, summary: "blocked 1 tab", blocked };
+      }
+      await closeTab(p.id, tab.id, { force: true });
+      return { ok: true, summary: "closed 1 tab", blocked };
+    }
+    case "close_pane": {
+      const p = paneByIdOrActive(op.pane_id);
+      if (!p)
+        return { ok: false, summary: `no such pane ${op.pane_id ?? layout.activePaneId}`, blocked };
+      collectBlocks(p.tabs, op.force, blocked);
+      if (blocked.length)
+        return { ok: false, summary: `blocked ${blocked.length} tab(s)`, blocked };
+      await closePane(p.id, { force: true });
+      return { ok: true, summary: `closed pane ${p.id}`, blocked };
+    }
+    case "close_all": {
+      const panes = paneLeaves();
+      for (const p of panes) collectBlocks(p.tabs, op.force, blocked);
+      if (blocked.length)
+        return { ok: false, summary: `blocked ${blocked.length} tab(s)`, blocked };
+      let closed = 0;
+      for (const id of panes.map((p) => p.id)) {
+        const node = layout.nodes[id];
+        if (node && node.kind === "leaf") {
+          closed += node.tabs.length;
+          await closePane(id, { force: true });
+        }
+      }
+      return { ok: true, summary: `closed ${closed} tab(s)`, blocked };
+    }
+  }
+}
+
+/// Append each blocked tab in `tabs` (a dirty/live tab without `force`) to
+/// `blocked`. A no-op when `force` is set.
+function collectBlocks(
+  tabs: Tab[],
+  force: boolean | undefined,
+  blocked: { tab: string; reason: string }[],
+): void {
+  if (force) return;
+  for (const tab of tabs) {
+    const reason = paneCloseBlock(tab);
+    if (reason) blocked.push({ tab: paneTabTitle(tab), reason });
+  }
+}
+
+/// Answer a `cs pane <exec>` request: apply the op to the live layout and
+/// POST the result to `/api/window/reply`, unblocking the waiting CLI. A
+/// thrown error is reported as a failed result rather than dropped, so the
+/// CLI always gets a reply (or times out).
+async function respondPaneExec(requestId: string, op: PaneExecOp): Promise<void> {
+  let result: PaneExecResult;
+  try {
+    result = await applyPaneExec(op);
+  } catch (e) {
+    result = {
+      ok: false,
+      summary: `error: ${e instanceof Error ? e.message : String(e)}`,
+      blocked: [],
+    };
+  }
+  // A layout mutation IS worth persisting (unlike the read-only query).
+  scheduleSessionSave();
+  try {
+    await api.windowReply({ requestId, payload: result });
+  } catch {
+    // Stale/timed-out request id -> the route 404s; nothing to do.
+  }
 }
 
 /// Answer a `cs pane` layout query: serialize the live `layout` (every leaf
@@ -832,6 +1006,12 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     // `cs pane` asked this window for its tab/pane layout; serialize it and
     // POST it back to unblock the waiting CLI. Read-only, no session save.
     await respondPaneQuery(frame.request_id);
+    return;
+  }
+  if (frame.command === "pane_exec" && typeof frame.request_id === "string" && frame.op) {
+    // `cs pane <exec>` asked this window to mutate its layout; apply the op
+    // and POST the result back to unblock the waiting CLI.
+    await respondPaneExec(frame.request_id, frame.op);
     return;
   }
 }

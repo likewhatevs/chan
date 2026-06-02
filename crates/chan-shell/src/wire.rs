@@ -89,15 +89,36 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<u32>,
     },
-    // Category 3 (blocking round-trip): query the originating SPA window's
-    // tab/pane LAYOUT. The layout lives only in the frontend, so the server
-    // pushes a `pane` window_command keyed by `window_id`, parks a oneshot
-    // (the window bus), and BLOCKS until the SPA replies with the layout
-    // snapshot via `POST /api/window/reply`. The CLI prints it (markdown by
-    // default, `--json` for machine output). `window_id` is the caller's own
-    // window ($CHAN_WINDOW_ID), like the `open_*` commands.
+    // Category 3 (blocking round-trip): query a SPA window's tab/pane
+    // LAYOUT. The layout lives only in the frontend, so the server resolves
+    // the target window, pushes a `pane_query` window_command, parks a
+    // oneshot (the window bus), and BLOCKS until the SPA replies with the
+    // layout snapshot via `POST /api/window/reply`. The CLI prints it
+    // (markdown by default, `--json` for machine output). The target is
+    // EITHER `window_id` (the caller's own window, $CHAN_WINDOW_ID) OR
+    // `tab_name` (`--tab-name`, which the server resolves to the single
+    // window owning that tab via `window_ids_matching`) so the command works
+    // from a context with no $CHAN_WINDOW_ID (an unbound agent, a native
+    // terminal).
     PaneQuery {
-        window_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab_name: Option<String>,
+    },
+    // Category 3 (blocking round-trip): EXECUTE a layout mutation on a SPA
+    // window (focus / split / resize / close) over the same window bus as
+    // `PaneQuery`, with the same `window_id` / `tab_name` target resolution.
+    // The server pushes a `pane_exec` window_command, BLOCKS until the SPA
+    // applies it and replies the result, and the CLI prints it. A close that
+    // hits a dirty file or a live terminal WITHOUT `force` is a partial
+    // failure (reported in the result, non-zero exit); `force` closes anyway.
+    PaneExec {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab_name: Option<String>,
+        op: PaneOp,
     },
     // Category 2 (blocking): raise a survey overlay on the SPA window(s)
     // that own the matching terminal tab(s) and BLOCK until the user
@@ -163,6 +184,67 @@ pub enum TeamOp {
     /// `cs terminal team load`: read + validate `{dir}/config.toml`, or
     /// with `--script` emit the bootstrap script for the stored config.
     Load,
+}
+
+/// A `cs pane` exec operation carried in [`ControlRequest::PaneExec`], pushed
+/// to the SPA nested under the `pane_exec` window command's `op` field.
+/// Internally tagged on `kind` (snake_case), so each variant is
+/// `{ "kind": "focus", ... }` and the SPA discriminates on `frame.op.kind`.
+/// The explicit `rename_all` pins the wire strings the SPA matches on, so a
+/// Rust rename cannot silently drift the format with a green build.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PaneOp {
+    /// Make `pane_id` the active (focused) pane.
+    Focus { pane_id: String },
+    /// Split a pane (the active one when `pane_id` is absent), placing the
+    /// new empty pane to the `left` or `bottom`.
+    Split {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane_id: Option<String>,
+        dir: SplitDir,
+    },
+    /// Resize the enclosing split of a pane (the active one when absent) by
+    /// `delta` (a ratio step in -1.0..1.0; positive grows the pane). The SPA
+    /// clamps the resulting ratio and no-ops a pane that has no parent split
+    /// (the sole pane).
+    Resize {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane_id: Option<String>,
+        delta: f64,
+    },
+    /// Close one tab: `tab_id` in `pane_id` (each defaults to the active
+    /// tab / pane). `force` closes past a dirty file / live terminal.
+    CloseTab {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab_id: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
+    /// Close a whole pane (the active one when absent). `force` as above.
+    ClosePane {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane_id: Option<String>,
+        #[serde(default)]
+        force: bool,
+    },
+    /// Close every tab in every pane. `force` as above.
+    CloseAll {
+        #[serde(default)]
+        force: bool,
+    },
+}
+
+/// Which side a [`PaneOp::Split`] places the new pane. `left` splits the
+/// pane horizontally (new pane to the left); `bottom` splits it vertically
+/// (new pane below). Bare snake_case on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SplitDir {
+    Left,
+    Bottom,
 }
 
 /// A survey raised over terminal tab(s) by `cs terminal survey`. Carried in
@@ -380,18 +462,76 @@ mod survey_wire_tests {
     }
 
     #[test]
-    fn pane_query_request_tag_and_field() {
-        // Wire tag `pane_query`, a required `window_id`. A Rust rename that
-        // drifts either breaks the server's decode with a green build.
-        let req = ControlRequest::PaneQuery {
-            window_id: "window-a".into(),
+    fn pane_query_request_tag_and_target() {
+        // Wire tag `pane_query`; the target is window_id XOR tab_name (both
+        // optional + skipped when None). A Rust rename that drifts either
+        // breaks the server's decode with a green build.
+        let by_window = ControlRequest::PaneQuery {
+            window_id: Some("window-a".into()),
+            tab_name: None,
         };
-        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        let v: serde_json::Value = serde_json::to_value(&by_window).unwrap();
         assert_eq!(v["type"], "pane_query");
         assert_eq!(v["window_id"], "window-a");
-        let raw = serde_json::to_string(&req).unwrap();
+        assert!(v.get("tab_name").is_none(), "None tab_name is skipped");
+        let raw = serde_json::to_string(&by_window).unwrap();
         let back: ControlRequest = serde_json::from_str(&raw).unwrap();
         assert!(matches!(back, ControlRequest::PaneQuery { .. }));
+
+        let by_tab = ControlRequest::PaneQuery {
+            window_id: None,
+            tab_name: Some("@@LaneB".into()),
+        };
+        let v: serde_json::Value = serde_json::to_value(&by_tab).unwrap();
+        assert_eq!(v["tab_name"], "@@LaneB");
+        assert!(v.get("window_id").is_none(), "None window_id is skipped");
+    }
+
+    #[test]
+    fn pane_exec_request_tag_and_op_kind() {
+        // `pane_exec` carries a `tab_name`/`window_id` target plus the op,
+        // which is internally tagged on `kind` and nests under `op`.
+        let req = ControlRequest::PaneExec {
+            window_id: None,
+            tab_name: Some("@@LaneB".into()),
+            op: PaneOp::Split {
+                pane_id: Some("pane-1".into()),
+                dir: SplitDir::Bottom,
+            },
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "pane_exec");
+        assert_eq!(v["tab_name"], "@@LaneB");
+        assert_eq!(v["op"]["kind"], "split");
+        assert_eq!(v["op"]["pane_id"], "pane-1");
+        assert_eq!(v["op"]["dir"], "bottom");
+        // Round-trips into the same variant (the server's decode path).
+        let raw = serde_json::to_string(&req).unwrap();
+        let back: ControlRequest = serde_json::from_str(&raw).unwrap();
+        assert!(matches!(
+            back,
+            ControlRequest::PaneExec {
+                op: PaneOp::Split { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn pane_op_close_variants_carry_force() {
+        // close_tab / close_pane / close_all all carry `force`; `force:false`
+        // is emitted (default) so the SPA always reads a boolean.
+        let v: serde_json::Value = serde_json::to_value(&PaneOp::CloseAll { force: true }).unwrap();
+        assert_eq!(v["kind"], "close_all");
+        assert_eq!(v["force"], true);
+        let v: serde_json::Value = serde_json::to_value(&PaneOp::CloseTab {
+            pane_id: None,
+            tab_id: None,
+            force: false,
+        })
+        .unwrap();
+        assert_eq!(v["kind"], "close_tab");
+        assert_eq!(v["force"], false);
     }
 
     #[test]

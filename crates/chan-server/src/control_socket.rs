@@ -44,7 +44,7 @@ pub use chan_shell::{ControlRequest, ControlResponse};
 // pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
 // TeamOp tags the `cs terminal team` op (new | load).
 #[cfg(unix)]
-use chan_shell::{apply_submit_chord, SubmitAgent, SurveyReply, SurveySpec, TeamOp};
+use chan_shell::{apply_submit_chord, PaneOp, SubmitAgent, SurveyReply, SurveySpec, TeamOp};
 
 #[cfg(unix)]
 #[derive(Debug, Serialize)]
@@ -98,6 +98,14 @@ enum WindowCommand {
     // open a tab), hence the non-`Open` name and the `pane_query` wire tag.
     PaneQuery {
         request_id: String,
+    },
+    // `cs pane <exec>`: the server asks the window to APPLY a layout mutation
+    // (focus / split / resize / close). The op nests under `op` (it is
+    // internally tagged on `kind`, so the SPA reads `frame.op.kind`); the SPA
+    // applies it and POSTs the result echoing `request_id`.
+    PaneExec {
+        request_id: String,
+        op: PaneOp,
     },
 }
 
@@ -404,11 +412,33 @@ async fn handle_request(
             )
             .await
         }
-        ControlRequest::PaneQuery { window_id } => {
-            if let Err(message) = require_window_id(&window_id) {
-                return ControlResponse::Error { message };
-            }
-            handle_pane_query(&window_id, events_tx, window_bus).await
+        ControlRequest::PaneQuery {
+            window_id,
+            tab_name,
+        } => {
+            handle_pane_query(
+                window_id,
+                tab_name,
+                events_tx,
+                window_bus,
+                terminal_registry,
+            )
+            .await
+        }
+        ControlRequest::PaneExec {
+            window_id,
+            tab_name,
+            op,
+        } => {
+            handle_pane_exec(
+                window_id,
+                tab_name,
+                op,
+                events_tx,
+                window_bus,
+                terminal_registry,
+            )
+            .await
         }
     }
 }
@@ -818,62 +848,147 @@ fn format_survey_reply(reply: &SurveyReply) -> String {
     }
 }
 
-/// How long `cs pane` waits for the SPA to answer a layout query before
-/// giving up. The SPA replies in milliseconds (no user interaction, unlike a
-/// survey), so this only fires when the target window is not actually
-/// connected (e.g. the browser tab was closed while the terminal lived on),
-/// keeping `cs pane` from blocking forever in that case.
+/// How long `cs pane` waits for the SPA to answer before giving up. The SPA
+/// replies in milliseconds (no user interaction, unlike a survey), so this
+/// only fires when the target window is not actually connected (e.g. the
+/// browser tab was closed while the terminal lived on), keeping `cs pane`
+/// from blocking forever in that case.
 #[cfg(unix)]
-const PANE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const PANE_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The blocking `cs pane` layout-query path: mint a request id, push a
-/// `pane_query` window_command to the originating window, park a oneshot on
-/// the window bus, and AWAIT the SPA's reply (delivered by `POST
-/// /api/window/reply` -> `WindowBus::complete`). The returned message is the
-/// layout snapshot JSON the CLI formats. Mirrors `handle_survey`'s register
-/// -> push -> await shape, with a timeout since no user is in the loop.
+/// Resolve the target SPA window for a `cs pane` command. Prefer the explicit
+/// `window_id` ($CHAN_WINDOW_ID); otherwise resolve `tab_name` (`--tab-name`)
+/// to the single live window owning that tab via `window_ids_matching`, so
+/// the command works from a context with no $CHAN_WINDOW_ID (an unbound
+/// agent, a native terminal). Errors when neither is given, when a tab
+/// selector matches no window, or when it is ambiguous.
 #[cfg(unix)]
-async fn handle_pane_query(
+fn resolve_pane_window(
+    window_id: Option<String>,
+    tab_name: Option<&str>,
+    terminal_registry: Option<&Arc<TerminalRegistry>>,
+) -> Result<String, String> {
+    if let Some(window_id) = window_id {
+        let trimmed = window_id.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    let Some(tab_name) = tab_name.map(str::trim).filter(|t| !t.is_empty()) else {
+        return Err(
+            "cs pane needs a target: run inside a chan terminal ($CHAN_WINDOW_ID) or pass --tab-name"
+                .into(),
+        );
+    };
+    let Some(registry) = terminal_registry else {
+        return Err("terminal registry unavailable".into());
+    };
+    let mut windows = registry.window_ids_matching(Some(tab_name), None);
+    match windows.len() {
+        0 => Err(format!("no live window owns a tab named {tab_name:?}")),
+        1 => Ok(windows.pop().expect("one window")),
+        n => Err(format!(
+            "{n} live windows own a tab named {tab_name:?}; --tab-name must resolve to one"
+        )),
+    }
+}
+
+/// The shared `cs pane` round-trip: mint a request id, build the
+/// window_command from it (a query or an exec), push it to `window_id`, park
+/// a oneshot on the window bus, and AWAIT the SPA's reply (delivered by `POST
+/// /api/window/reply` -> `WindowBus::complete`). The returned message is the
+/// reply payload JSON the CLI formats. Mirrors `handle_survey`'s register ->
+/// push -> await shape, with a timeout since no user is in the loop.
+#[cfg(unix)]
+async fn pane_round_trip<F>(
     window_id: &str,
+    make_command: F,
     events_tx: &broadcast::Sender<String>,
     window_bus: &Arc<crate::window_bus::WindowBus>,
-) -> ControlResponse {
+) -> ControlResponse
+where
+    F: FnOnce(String) -> WindowCommand,
+{
     // Park the oneshot BEFORE pushing the command so a fast reply cannot
     // arrive before the request is registered.
     let (request_id, rx) = window_bus.register();
-    if let Err(message) = send_window_command(
-        window_id,
-        WindowCommand::PaneQuery {
-            request_id: request_id.clone(),
-        },
-        events_tx,
-    ) {
+    if let Err(message) =
+        send_window_command(window_id, make_command(request_id.clone()), events_tx)
+    {
         window_bus.cancel(&request_id);
         return ControlResponse::Error { message };
     }
     // Block until the reply route fires the oneshot, or the timeout elapses
     // (the window never answered). Cancel the parked entry on either failure
     // so it does not leak.
-    match tokio::time::timeout(PANE_QUERY_TIMEOUT, rx).await {
+    match tokio::time::timeout(PANE_REPLY_TIMEOUT, rx).await {
         Ok(Ok(payload)) => match serde_json::to_string(&payload) {
             Ok(json) => ControlResponse::Ok { message: json },
             Err(e) => ControlResponse::Error {
-                message: format!("encode pane layout: {e}"),
+                message: format!("encode pane reply: {e}"),
             },
         },
         Ok(Err(_)) => {
             window_bus.cancel(&request_id);
             ControlResponse::Error {
-                message: "pane query cancelled before a reply".into(),
+                message: "pane request cancelled before a reply".into(),
             }
         }
         Err(_elapsed) => {
             window_bus.cancel(&request_id);
             ControlResponse::Error {
-                message: "no layout reply from the window (is it open in a browser?)".into(),
+                message: "no reply from the window (is it open in a browser?)".into(),
             }
         }
     }
+}
+
+/// `cs pane` (layout query): resolve the target window, then round-trip a
+/// `pane_query`. The reply payload is the layout snapshot the CLI formats.
+#[cfg(unix)]
+async fn handle_pane_query(
+    window_id: Option<String>,
+    tab_name: Option<String>,
+    events_tx: &broadcast::Sender<String>,
+    window_bus: &Arc<crate::window_bus::WindowBus>,
+    terminal_registry: Option<&Arc<TerminalRegistry>>,
+) -> ControlResponse {
+    let target = match resolve_pane_window(window_id, tab_name.as_deref(), terminal_registry) {
+        Ok(target) => target,
+        Err(message) => return ControlResponse::Error { message },
+    };
+    pane_round_trip(
+        &target,
+        |request_id| WindowCommand::PaneQuery { request_id },
+        events_tx,
+        window_bus,
+    )
+    .await
+}
+
+/// `cs pane <exec>` (focus / split / resize / close): resolve the target
+/// window, then round-trip a `pane_exec` carrying the op. The reply payload
+/// is the exec result the CLI formats.
+#[cfg(unix)]
+async fn handle_pane_exec(
+    window_id: Option<String>,
+    tab_name: Option<String>,
+    op: PaneOp,
+    events_tx: &broadcast::Sender<String>,
+    window_bus: &Arc<crate::window_bus::WindowBus>,
+    terminal_registry: Option<&Arc<TerminalRegistry>>,
+) -> ControlResponse {
+    let target = match resolve_pane_window(window_id, tab_name.as_deref(), terminal_registry) {
+        Ok(target) => target,
+        Err(message) => return ControlResponse::Error { message },
+    };
+    pane_round_trip(
+        &target,
+        move |request_id| WindowCommand::PaneExec { request_id, op },
+        events_tx,
+        window_bus,
+    )
+    .await
 }
 
 #[cfg(unix)]
@@ -1526,6 +1641,43 @@ mod tests {
         let (_root, registry) = empty_registry();
         let err = term_scrollback(&registry, "@@Nope").expect_err("no match");
         assert!(err.contains("no live terminal session"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_pane_window_prefers_window_id_then_resolves_tab_name() {
+        let (_root, registry) = empty_registry();
+        let registry = Arc::new(registry);
+        // An explicit window_id wins outright (no registry lookup).
+        assert_eq!(
+            resolve_pane_window(Some("win-x".into()), None, Some(&registry)).unwrap(),
+            "win-x"
+        );
+        // Neither a window_id nor a tab_name -> a clear "need a target" error.
+        assert!(resolve_pane_window(None, None, Some(&registry)).is_err());
+        // A tab selector that matches no live window -> error.
+        assert!(resolve_pane_window(None, Some("@@Nope"), Some(&registry)).is_err());
+        // A session bound to a window, owning a tab: --tab-name resolves it.
+        let _h = registry
+            .create(CreateOptions {
+                size: PtySize {
+                    cols: 80,
+                    rows: 24,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                tab_name: Some("@@LaneB".into()),
+                tab_group: None,
+                window_id: Some("win-b".into()),
+                mcp_env: true,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+            })
+            .expect("spawn session");
+        assert_eq!(
+            resolve_pane_window(None, Some("@@LaneB"), Some(&registry)).unwrap(),
+            "win-b"
+        );
     }
 
     #[test]
