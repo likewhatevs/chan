@@ -175,6 +175,21 @@
         size: 0,
       } as TreeEntry;
     }
+    if (path === "Drafts") {
+      // The Drafts root is metadata-backed and lives OUTSIDE the workspace
+      // tree, so it never appears in `entryByPath` (the tree only lists
+      // in-root entries). Without this, selecting the graph's yellow Drafts
+      // node left the inspector blank: the directory branch's
+      // `entry.path === "Drafts"` arm never fired because `entry` was null.
+      // Synthesize a directory-shaped record so that arm renders the DRAFTS
+      // chip + notice, matching what the File Browser shows for Drafts.
+      return {
+        path: "Drafts",
+        is_dir: true,
+        mtime: null,
+        size: 0,
+      } as TreeEntry;
+    }
     return entryByPath.get(path) ?? null;
   });
 
