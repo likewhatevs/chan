@@ -96,7 +96,6 @@
   } from "../state/tabMenu.svelte";
   import McpEnvInfoModal from "./McpEnvInfoModal.svelte";
   import { markPaneModalOpen } from "../state/paneModalGuard.svelte";
-  import TeamWork from "./TeamWork.svelte";
   import RichPrompt from "./RichPrompt.svelte";
   import { richPrompt, toggleRichPrompt } from "../state/richPrompt.svelte";
 
@@ -286,21 +285,10 @@
     setTerminalActivity(tab, false);
     sendFocusState();
     queueMicrotask(() => {
-      // When the Team Work prompt is open it owns the keyboard. Cmd+K
-      // p on a pane without a terminal spawns one and opens the
-      // prompt in the same Svelte tick; without this gate, xterm's
-      // mount-time focus races past the prompt's focus effect and
-      // steals the caret. Bump `focusNonce` so the prompt's
-      // open-effect re-runs and lands the caret on the editor. This
-      // covers both the Cmd+K p race AND the user returning to a pane
-      // whose prompt was already open (no focusNonce bump would
-      // otherwise fire there).
-      if (tab.teamWork?.open) {
-        if (tab.teamWork) {
-          tab.teamWork.focusNonce = (tab.teamWork.focusNonce ?? 0) + 1;
-        }
-        return;
-      }
+      // The Rich Prompt bubble owns the keyboard when it is open over this
+      // (active) terminal; don't yank focus back to xterm or it would steal the
+      // caret from the bubble's editor.
+      if (active && richPrompt.visible) return;
       term?.focus();
     });
   });
@@ -856,23 +844,28 @@
     }, 1000 - elapsed);
   }
 
-  function send(frame: unknown): void {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  // Returns whether the frame went out (the WS was open). Callers that need to
+  // retry a not-yet-connected terminal (the team lead bootstrap) read this.
+  function send(frame: unknown): boolean {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     ws.send(JSON.stringify(frame));
+    return true;
   }
 
   function sendInput(data: string): void {
     send({ type: "input", data });
   }
 
-  /// Rich Prompt submit path: send the markdown over the existing terminal WS
-  /// as a `prompt` frame so the server ENQUEUES it into this session's write
-  /// queue (shared FIFO with `cs terminal write`) and appends the submit chord
-  /// when the agent is idle. Deliberately NOT `sendInput` (the raw keystroke
-  /// path bypasses the queue). `agent` is omitted in v1; the server defaults
-  /// to claude. Contract: @@LaneA event-lane-a.md 10:58 CONTRACT (3d6d144e).
-  function sendPrompt(data: string, agent?: string): void {
-    send({ type: "prompt", data, ...(agent ? { agent } : {}) });
+  /// Rich Prompt + team-lead-identity submit path: send `data` over the existing
+  /// terminal WS as a `prompt` frame so the server ENQUEUES it into this
+  /// session's write queue (shared FIFO with `cs terminal write`) and appends
+  /// the submit chord when the agent is idle. Deliberately NOT `sendInput` (the
+  /// raw keystroke path bypasses the queue). Returns whether the WS was open so
+  /// the orchestrator can retry a freshly-spawned lead. `agent` picks the chord
+  /// (claude CSI / codex/gemini CR); omitted defaults to claude server-side.
+  /// Contract: @@LaneA event-lane-a.md 10:58 CONTRACT (3d6d144e).
+  function sendPrompt(data: string, agent?: string): boolean {
+    return send({ type: "prompt", data, ...(agent ? { agent } : {}) });
   }
 
   // Rich Prompt: the right-click "Show/Hide Rich Prompt" entry mirrors the
@@ -1204,50 +1197,11 @@
     term?.focus();
   }
 
-  // The Team Work bubble is no longer summonable per-terminal: it renders ONLY
-  // on a team LEAD terminal, where the orchestrator primes `tab.teamWork` as
-  // part of the Cmd+P team workflow. Regular terminals use the universal Rich
-  // Prompt (Cmd+Shift+P) instead. The old ensure/open/close/toggle helpers +
-  // the "Show/Hide Team Work" menu row were removed; what remains drives the
-  // already-primed lead bubble (submit + agent-mode detection).
-
-  function teamWorkUsesAgentSubmit(): boolean {
-    const rp = tab.teamWork;
-    if (!rp) return false;
-    if (rp.agentTarget && rp.agentTarget !== "none") return true;
-    return rp.submitMode === "agent";
-  }
-
-  function submitTeamWork(source: string): void {
-    // Submit through the cs-write QUEUE via the WS `prompt` frame - the SAME
-    // producer Rich Prompt uses (landed in 3d6d144e) - NOT raw keystrokes. The
-    // lead bubble's prompts then enqueue + drain serialized with CLI pokes and
-    // Rich Prompt, and the server appends the submit chord for the lead's
-    // agent. Both bubbles always go through the queue now.
-    const rp = tab.teamWork;
-    if (teamWorkUsesAgentSubmit()) {
-      // Agent lead: pass the agent (claude / codex / gemini) so the server
-      // appends ITS chord (claude CSI vs codex/gemini CR) instead of the
-      // claude default - this carries the right per-agent chord for a
-      // codex/gemini lead.
-      const agent =
-        rp?.agentTarget && rp.agentTarget !== "none" ? rp.agentTarget : "claude";
-      sendPrompt(source, agent);
-    } else {
-      // Shell lead: run the text as a command. Carry the trailing newline in
-      // the data and send agent "none" so the server appends no agent chord
-      // (apply_submit_chord(None) leaves the data + its newline as-is).
-      sendPrompt(source.endsWith("\n") ? source : `${source}\n`, "none");
-    }
-    scheduleTerminalSessionSave();
-    // Every submit to the lead terminal resets the draft back to empty.
-    if (rp) {
-      rp.buffer = "";
-      // Caret stays in the prompt after Cmd+Enter so consecutive prompts are
-      // fluid; refocusing the terminal would force a click-back per entry.
-      rp.focusNonce = (rp.focusNonce ?? 0) + 1;
-    }
-  }
+  // The Team Work bubble composer is gone. Team Work is the Cmd+P dialog +
+  // orchestrator spawn/load; the lead is a NORMAL terminal whose identity
+  // prompt the orchestrator auto-delivers through the write queue (the same
+  // prompt-frame path every terminal uses). Per-terminal text input is the
+  // universal Rich Prompt (Cmd+Shift+P) - see RichPrompt.svelte / sendPrompt.
 
   function runFind(next: boolean): void {
     if (!findQuery.trim()) {
@@ -1718,36 +1672,7 @@
       />
     </div>
   {/if}
-  {#if tab.teamWork?.open}
-    <TeamWork
-      prompt={tab.teamWork}
-      onSubmit={submitTeamWork}
-      terminalSessionId={tab.terminalSessionId}
-    />
-  {/if}
-  <!-- When the Team Work prompt is open we reserve space at the
-       bottom of the terminal-host equal to the prompt's current
-       height plus the resize-handle gap. The xterm ResizeObserver
-       picks the new size up and calls `fit()`, so the bottom-most
-       rendered line stays visible above the prompt instead of being
-       painted over.
-
-       Prefer the prompt's measured runtime height (written by a
-       ResizeObserver in the Team Work editor) over the user-resized
-       `heightPx` so the reserved space tracks the collapse
-       transition. When collapsed the CSS `height: auto` branch
-       shrinks the prompt to header-only (~44 px) but `heightPx` stays
-       at the expanded value; reading `measuredHeightPx` collapses the
-       reserved space in lockstep with the visible pill. Falls back to
-       `heightPx` for the brief mount window before the first observer
-       tick fires. -->
-  <div
-    class="terminal-host"
-    bind:this={host}
-    style:margin-bottom={tab.teamWork?.open
-      ? `${(tab.teamWork.measuredHeightPx ?? tab.teamWork.heightPx ?? 320) + 12}px`
-      : null}
-  ></div>
+  <div class="terminal-host" bind:this={host}></div>
   <!-- Rich Prompt bubble floats over this terminal's bottom (the
        .terminal-tab is the position:absolute context). Mount only on the
        ACTIVE terminal so one window shows a single bubble that follows the

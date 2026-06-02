@@ -58,7 +58,6 @@ import {
   markLocalTabDrop,
   markTerminalEnvNameRestarted,
   moveTab,
-  openActiveTeamWork,
   renameTerminalTab,
   reopenClosedTab,
   reorderTab,
@@ -569,54 +568,6 @@ describe("pane state", () => {
     expect(layout.activePaneId).toBe(right.id);
   });
 
-  test("moving a terminal preserves Team Work workspace state", () => {
-    const terminal = terminalTab({
-      id: "term-a",
-      title: "@@Agent",
-      terminalSessionId: "session-a",
-      teamWork: {
-        buffer: "queued prompt",
-        open: true,
-        phase: "active",
-        workspaceName: "team-work-2",
-        draftPath: "Drafts/team-work-2/draft.md",
-        workspacePath: "Drafts/team-work-2",
-        eventsPath: "Drafts/team-work-2/spool/events",
-        processPath: "Drafts/team-work-2/spool/process.md",
-        workspaceAbs: "/tmp/workspace/.chan/team-work-2",
-        eventsAbs: "/tmp/workspace/.chan/team-work-2/spool/events",
-        submissionSequence: 7,
-        submitMode: "agent",
-        agentTarget: "claude",
-        collapsed: true,
-        pageWidthRatio: 0.7,
-      },
-    });
-    const pane = resetLayout([terminal]);
-    splitPane(pane.id, "row", "after");
-    const root = layout.nodes[layout.rootId];
-    expect(root?.kind).toBe("split");
-    if (root?.kind !== "split") return;
-
-    moveTab(pane.id, terminal.id, root.b);
-
-    const target = layout.nodes[root.b];
-    expect(target?.kind).toBe("leaf");
-    if (target?.kind !== "leaf") return;
-    const moved = target.tabs[0];
-    expect(moved?.kind).toBe("terminal");
-    if (moved?.kind !== "terminal") return;
-    expect(moved.teamWork).toMatchObject({
-      buffer: "queued prompt",
-      workspaceName: "team-work-2",
-      eventsPath: "Drafts/team-work-2/spool/events",
-      submissionSequence: 7,
-      submitMode: "agent",
-      agentTarget: "claude",
-      collapsed: true,
-      pageWidthRatio: 0.7,
-    });
-  });
 
   test("closeTabsInPane leaves every tab when a terminal close sink fails", async () => {
     const terminal = terminalTab({ id: "term-a" });
@@ -1267,10 +1218,6 @@ describe("pane state", () => {
     expect(pane.tabs).toHaveLength(1);
     const terminal = pane.tabs[0];
     expect(terminal.kind).toBe("terminal");
-    if (terminal.kind === "terminal") {
-      expect(terminal.teamWork?.open).toBe(true);
-      expect(terminal.teamWork?.mode).toBe("wysiwyg");
-    }
     expect(pane.activeTabId).toBe(terminal.id);
     // The factory returns the freshly-created tab so the Team dialog
     // can delete it on Cancel.
@@ -1302,11 +1249,10 @@ describe("pane state", () => {
     expect(pane.activeTabId).not.toBe("term-existing");
     const active = pane.tabs.find((t) => t.id === pane.activeTabId);
     expect(active?.kind).toBe("terminal");
-    expect((active as TerminalTab).teamWork?.open).toBe(true);
     expect(created?.id).toBe(pane.activeTabId);
   });
 
-  test("createTeamWorkLeadTerminal always spawns a fresh Team Work terminal", () => {
+  test("createTeamWorkLeadTerminal always spawns a fresh terminal (never reuses)", () => {
     const terminal: TerminalTab = {
       kind: "terminal",
       id: "term-1",
@@ -1314,7 +1260,6 @@ describe("pane state", () => {
       createdAt: 1,
       broadcastEnabled: false,
       broadcastTargetIds: [],
-      teamWork: { buffer: "draft", heightPx: 200, open: true, mode: "source" },
     };
     const seed = resetLayout([terminal]);
     (layout.nodes[seed.id] as LeafNode).activeTabId = "term-1";
@@ -1323,81 +1268,11 @@ describe("pane state", () => {
 
     const pane = layout.nodes[seed.id] as LeafNode;
     expect(pane.tabs).toHaveLength(2);
-    const live = pane.tabs.find((t) => t.id === "term-1") as TerminalTab;
-    expect(live.teamWork?.buffer).toBe("draft");
-    expect(live.teamWork?.mode).toBe("source");
     const spawned = pane.tabs.find((t) => t.id === pane.activeTabId) as TerminalTab;
     expect(spawned.id).not.toBe("term-1");
     expect(spawned.kind).toBe("terminal");
     expect(spawned.cwd).toBe("notes");
-    expect(spawned.teamWork?.open).toBe(true);
-    expect(spawned.teamWork?.mode).toBe("wysiwyg");
     expect(created?.id).toBe(spawned.id);
-  });
-
-  test("openActiveTeamWork blurs the focused xterm helper textarea", () => {
-    // Between the Team Work chord and the editor child mounting +
-    // focusing, xterm-helper-textarea still owns focus. Keystrokes
-    // typed there fire `term.onData` and reach the live PTY, leaving
-    // the dispatched buffer short its first character. Blurring the
-    // helper textarea parks focus on `<body>` so the racing keystroke
-    // is dropped instead of going to the shell.
-    const terminal: TerminalTab = {
-      kind: "terminal",
-      id: "term-blur",
-      title: "Terminal",
-      createdAt: 1,
-      broadcastEnabled: false,
-      broadcastTargetIds: [],
-    };
-    const seed = resetLayout([terminal]);
-    (layout.nodes[seed.id] as LeafNode).activeTabId = "term-blur";
-
-    const xtermRoot = document.createElement("div");
-    xtermRoot.className = "xterm";
-    const helper = document.createElement("textarea");
-    helper.className = "xterm-helper-textarea";
-    xtermRoot.appendChild(helper);
-    document.body.appendChild(xtermRoot);
-    helper.focus();
-    expect(document.activeElement).toBe(helper);
-
-    openActiveTeamWork();
-
-    expect(document.activeElement).not.toBe(helper);
-    const pane = layout.nodes[seed.id] as LeafNode;
-    const live = pane.tabs.find((t) => t.id === "term-blur") as TerminalTab;
-    expect(live.teamWork?.open).toBe(true);
-
-    document.body.removeChild(xtermRoot);
-  });
-
-  test("openActiveTeamWork leaves non-xterm focus alone", () => {
-    // The blur is scoped to xterm-owned elements. A user invoking
-    // the prompt from a code editor or any other input keeps their
-    // focus until the editor child takes over; we don't want to
-    // strip focus globally.
-    const terminal: TerminalTab = {
-      kind: "terminal",
-      id: "term-keep",
-      title: "Terminal",
-      createdAt: 1,
-      broadcastEnabled: false,
-      broadcastTargetIds: [],
-    };
-    const seed = resetLayout([terminal]);
-    (layout.nodes[seed.id] as LeafNode).activeTabId = "term-keep";
-
-    const someInput = document.createElement("input");
-    document.body.appendChild(someInput);
-    someInput.focus();
-    expect(document.activeElement).toBe(someInput);
-
-    openActiveTeamWork();
-
-    expect(document.activeElement).toBe(someInput);
-
-    document.body.removeChild(someInput);
   });
 
   test("repeated openBrowserInActivePane / openGraphInActivePane stack", () => {
@@ -2147,210 +2022,6 @@ describe("terminal session serialization", () => {
     expect(tab.terminalSessionId).toBe("term_plain");
   });
 
-  test("persists Team Work drafts only in session layouts", async () => {
-    resetLayout([
-      terminalTab({
-        title: "prompt",
-        teamWork: {
-          buffer: "## plan\n\nship it",
-          heightPx: 420,
-          open: true,
-          mode: "source",
-        },
-      }),
-    ]);
-
-    const shareable = serializeLayout();
-    expect(JSON.stringify(shareable)).not.toContain("ship it");
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).toContain("ship it");
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"rph\":420");
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpo\":1");
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpm\":\"s\"");
-
-    await restoreLayout(sessionSnapshot!);
-
-    const [tab] = activePane().tabs;
-    expect(tab?.kind).toBe("terminal");
-    if (tab?.kind !== "terminal") return;
-    expect(tab.teamWork).toEqual({
-      buffer: "## plan\n\nship it",
-      heightPx: 420,
-      open: true,
-      mode: "source",
-    });
-  });
-
-  test("round-trips Team Work workspace identity via session layout", async () => {
-    resetLayout([
-      terminalTab({
-        title: "prompt",
-        teamWork: {
-          buffer: "",
-          open: true,
-          workspaceName: "team-work-2",
-          submissionSequence: 3,
-        },
-      }),
-    ]);
-
-    const shareable = serializeLayout();
-    expect(JSON.stringify(shareable)).not.toContain("team-work-2");
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpn\":\"team-work-2\"");
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpsq\":3");
-
-    await restoreLayout(sessionSnapshot!);
-
-    const [tab] = activePane().tabs;
-    expect(tab?.kind).toBe("terminal");
-    if (tab?.kind !== "terminal") return;
-    expect(tab.teamWork?.workspaceName).toBe("team-work-2");
-    expect(tab.teamWork?.submissionSequence).toBe(3);
-  });
-
-  test("round-trips Team Work submitMode via SerTab.rpsm", async () => {
-    // Per-prompt shell-vs-agent toggle survives session restore.
-    // Agent mode emits the short-form "a"; shell mode omits the
-    // field entirely so the persisted shape stays compact.
-    resetLayout([
-      terminalTab({
-        terminalSessionId: "term_rpsm",
-        teamWork: {
-          buffer: "ship it",
-          heightPx: 200,
-          open: true,
-          mode: "wysiwyg",
-          submitMode: "agent",
-        },
-      }),
-    ]);
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpsm\":\"a\"");
-
-    await restoreLayout(sessionSnapshot!);
-
-    const [tab] = activePane().tabs;
-    expect(tab?.kind).toBe("terminal");
-    if (tab?.kind !== "terminal") return;
-    expect(tab.teamWork?.submitMode).toBe("agent");
-  });
-
-  test("round-trips Team Work agent picker via SerTab.rpa", async () => {
-    resetLayout([
-      terminalTab({
-        terminalSessionId: "term_rpa",
-        teamWork: {
-          buffer: "ship it",
-          heightPx: 200,
-          open: true,
-          mode: "wysiwyg",
-          agentTarget: "codex",
-          submitMode: "agent",
-        },
-      }),
-    ]);
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"rpa\":\"x\"");
-
-    await restoreLayout(sessionSnapshot!);
-
-    const [tab] = activePane().tabs;
-    expect(tab?.kind).toBe("terminal");
-    if (tab?.kind !== "terminal") return;
-    expect(tab.teamWork?.agentTarget).toBe("codex");
-    expect(tab.teamWork?.submitMode).toBe("agent");
-  });
-
-  test("omits rpsm from SerTab when submitMode is shell or absent", async () => {
-    // Shell is the default; omitting the field keeps the persisted
-    // shape compact. Absence reads as shell.
-    resetLayout([
-      terminalTab({
-        terminalSessionId: "term_rpsm_default",
-        teamWork: {
-          buffer: "default prompt",
-          heightPx: 200,
-          open: true,
-          mode: "wysiwyg",
-        },
-      }),
-    ]);
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).not.toContain("\"rpsm\"");
-
-    resetLayout([
-      terminalTab({
-        terminalSessionId: "term_rpsm_shell",
-        teamWork: {
-          buffer: "explicit shell",
-          heightPx: 200,
-          open: true,
-          mode: "wysiwyg",
-          submitMode: "shell",
-        },
-      }),
-    ]);
-
-    const sessionSnapshot2 = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot2)).not.toContain("\"rpsm\"");
-  });
-
-  test("round-trips per-prompt page-width via SerTab.rppw", async () => {
-    // Each Team Work prompt carries its own page-width ratio so
-    // narrowing one prompt does not cascade onto a sibling tile.
-    // The value persists across session restore.
-    resetLayout([
-      terminalTab({
-        terminalSessionId: "term_rppw",
-        teamWork: {
-          buffer: "narrow prompt draft",
-          heightPx: 320,
-          open: true,
-          mode: "wysiwyg",
-          pageWidthRatio: 0.55,
-        },
-      }),
-    ]);
-
-    const shareable = serializeLayout();
-    expect(JSON.stringify(shareable)).not.toContain("\"rppw\"");
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"rppw\":0.55");
-
-    await restoreLayout(sessionSnapshot!);
-
-    const [tab] = activePane().tabs;
-    expect(tab?.kind).toBe("terminal");
-    if (tab?.kind !== "terminal") return;
-    expect(tab.teamWork?.pageWidthRatio).toBe(0.55);
-  });
-
-  test("omits rppw from SerTab when pageWidthRatio is unset or 100%", async () => {
-    // 1.0 is the "no cap" sentinel; it rounds to absent so
-    // the persisted shape stays short for the common case.
-    resetLayout([
-      terminalTab({
-        terminalSessionId: "term_full",
-        teamWork: {
-          buffer: "default prompt",
-          heightPx: 320,
-          open: true,
-          mode: "wysiwyg",
-          pageWidthRatio: 1.0,
-        },
-      }),
-    ]);
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).not.toContain("\"rppw\"");
-  });
 
   test("hydrates terminal session ids onto hash-restored terminal tabs", async () => {
     resetLayout([

@@ -214,11 +214,8 @@ describe("TerminalTab menu", () => {
     },
   );
 
-  test("the terminal menu has NO per-terminal Team Work toggle (lead-only now)", async () => {
-    const tab = terminalTab({
-      terminalSessionId: "term-session-1",
-      teamWork: { buffer: "", open: false },
-    });
+  test("the terminal menu has NO Team Work toggle (the bubble is gone)", async () => {
+    const tab = terminalTab({ terminalSessionId: "term-session-1" });
     await renderTerminal(tab, true);
 
     openTabMenu(tab.id, { left: 0, top: 0, right: 0, bottom: 0 });
@@ -228,9 +225,8 @@ describe("TerminalTab menu", () => {
     const labels = Array.from(document.body.querySelectorAll(".mbtn-label")).map(
       (el) => (el.textContent || "").trim(),
     );
-    // The Team Work bubble is decoupled from arbitrary terminals: it renders
-    // only on a team LEAD terminal via the Cmd+P workflow, so the right-click
-    // menu no longer carries a per-terminal Show/Hide Team Work toggle.
+    // The Team Work bubble composer was removed entirely; Team Work is the
+    // Cmd+P dialog now, so no terminal carries a Show/Hide Team Work toggle.
     expect(labels).not.toContain("Show Team Work");
     expect(labels).not.toContain("Hide Team Work");
   });
@@ -241,38 +237,15 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
   // the load-bearing structural changes at the source level (the prompt
   // component is not mounted in the runtime tests above).
 
-  test("submitTeamWork unconditionally resets the draft buffer to empty", () => {
-    // Every submit resets the draft to empty immediately rather than
-    // waiting on a workspace-archive write confirmation.
-    expect(terminalSource).toMatch(/function submitTeamWork\(source: string\): void/);
-    expect(terminalSource).toMatch(/rp\.buffer = "";/);
-    expect(terminalSource).not.toMatch(/rp\.buffer === bufferAtSubmit/);
-  });
-
-  test("submitTeamWork submits the lead bubble through the cs-write QUEUE", () => {
-    // The lead Team Work bubble now submits via the WS `prompt` frame
-    // (sendPrompt) into the per-session write queue - the SAME producer Rich
-    // Prompt uses - NOT raw keystrokes. Agent leads pass their agent so the
-    // server appends the right chord (claude CSI vs codex/gemini CR); a shell
-    // lead carries a trailing newline + agent "none" (server appends no
-    // chord). The old sendUserInput + AGENT_SUBMIT_CHORD keystroke path is
-    // gone.
-    expect(terminalSource).toMatch(/teamWorkUsesAgentSubmit\(\)/);
-    expect(terminalSource).toMatch(/sendPrompt\(source, agent\)/);
-    expect(terminalSource).toMatch(
-      /sendPrompt\(source\.endsWith\("\\n"\) \? source : `\$\{source\}\\n`, "none"\)/,
-    );
+  test("the Team Work bubble composer is fully removed", () => {
+    // @@Host: delete the Team Work bubble entirely. No <TeamWork> mount, no
+    // submitTeamWork/teamWorkUsesAgentSubmit helpers, no tab.teamWork, no raw
+    // AGENT_SUBMIT_CHORD path. Per-terminal text input is the Rich Prompt.
+    expect(terminalSource).not.toMatch(/<TeamWork\b/);
+    expect(terminalSource).not.toMatch(/submitTeamWork/);
+    expect(terminalSource).not.toMatch(/teamWorkUsesAgentSubmit/);
+    expect(terminalSource).not.toMatch(/tab\.teamWork/);
     expect(terminalSource).not.toMatch(/AGENT_SUBMIT_CHORD/);
-  });
-
-  test("the TeamWork mount passes exactly the three required props", () => {
-    expect(terminalSource).toMatch(/<TeamWork\b/);
-    expect(terminalSource).toMatch(/prompt=\{tab\.teamWork\}/);
-    expect(terminalSource).toMatch(/onSubmit=\{submitTeamWork\}/);
-    expect(terminalSource).toMatch(/terminalSessionId=\{tab\.terminalSessionId\}/);
-    expect(terminalSource).not.toMatch(/watcherPath=/);
-    expect(terminalSource).not.toMatch(/onSpawned=/);
-    expect(terminalSource).not.toMatch(/\{bubbleCount\}/);
   });
 
   test("the survey overlay is no longer mounted per terminal tab", () => {

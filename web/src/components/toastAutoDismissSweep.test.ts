@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import teamWork from "./TeamWork.svelte?raw";
 import fileEditor from "./FileEditorTab.svelte?raw";
 import terminal from "./TerminalTab.svelte?raw";
 
@@ -12,12 +11,6 @@ import terminal from "./TerminalTab.svelte?raw";
 // "bubble mode failed" toast assertion is gone too.
 
 describe("confirmed same-shape success swaps", () => {
-  test("Team Work Copy path uses setTransientStatus", () => {
-    expect(teamWork).toMatch(
-      /setTransientStatus\("copied metadata dir"\)/,
-    );
-  });
-
   test("FileEditorTab `Copied file path` uses setTransientStatus", () => {
     expect(fileEditor).toMatch(
       /setTransientStatus\("Copied file path"\)/,
@@ -26,12 +19,6 @@ describe("confirmed same-shape success swaps", () => {
 });
 
 describe("error paths stay persistent", () => {
-  test("Team Work copy-failed stays persistent", () => {
-    expect(teamWork).toMatch(
-      /ui\.status = `copy failed: \$\{\(err as Error\)\.message\}`;/,
-    );
-  });
-
   test("FileEditorTab copy-failed stays persistent", () => {
     // Copy errors route through the shared copyTextToClipboard
     // helper's onError callback, which still assigns ui.status

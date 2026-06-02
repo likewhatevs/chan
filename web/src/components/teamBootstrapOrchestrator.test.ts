@@ -58,11 +58,11 @@ function tabFromLayout(id: string): TerminalTab {
 }
 
 // After the consolidate the lead is a freshly-spawned terminal (the
-// Cmd+P "lead-tab" placeholder is closed), identified as the terminal
-// whose Team Work editor the orchestrator primed.
+// Cmd+P "lead-tab" placeholder is closed), renamed to the lead's handle
+// (@@Lead). The Team Work bubble is gone, so we identify it by title.
 function leadFromLayout(): TerminalTab {
-  const tab = allTerminalTabs().find((t) => t.teamWork?.open === true);
-  if (!tab) throw new Error("no lead tab (teamWork-primed terminal)");
+  const tab = allTerminalTabs().find((t) => t.title === "@@Lead");
+  if (!tab) throw new Error("no lead tab (@@Lead-titled terminal)");
   return tab;
 }
 
@@ -155,21 +155,21 @@ describe("runTeamBootstrap: lead-first flow", () => {
     expect(allTerminalTabs()).toHaveLength(3);
   });
 
-  test("primes the # Team work identity prompt into the lead's embedded editor", async () => {
-    resetLayoutWithLead(leadTerminalTab());
-    mockApi();
-    await runTeamBootstrap(tabsConfig(), {
-      leadTabId: "lead-tab",
-      leadPaneId: "pane-test",
-    });
-    const lead = leadFromLayout();
-    expect(lead.teamWork?.open).toBe(true);
-    expect(lead.teamWork?.buffer).toContain("# Team work");
-    expect(lead.teamWork?.buffer).toContain("We are a team of 3");
-    expect(lead.teamWork?.buffer).toContain("Our host is @@Neo");
-    expect(lead.teamWork?.buffer).toContain("the team lead is @@Lead");
-    expect(lead.teamWork?.buffer).toContain("- @@Worker1");
-    expect(lead.teamWork?.buffer).toContain("- @@Worker2");
+  test("auto-delivers the identity prompt to the lead through the write queue", async () => {
+    // The Team Work bubble is gone: the lead is a normal terminal whose identity
+    // prompt the orchestrator delivers via the prompt frame
+    // (sendPromptToTerminal), retried until the freshly-spawned lead's WS
+    // connects - NOT primed into a bubble buffer. The prompt CONTENT is pinned
+    // in teamLeadPrompt.test.ts; this pins the delivery wiring (the async retry
+    // against a live WS is fragile to fake-time in a unit test, so assert the
+    // source seam; @@Host validates the live lead bootstrap on the rebuild).
+    const src = (await import("../state/teamOrchestrator.svelte?raw"))
+      .default as string;
+    expect(src).toMatch(/void deliverLeadIdentity\(\s*leadTab\.id,\s*prompt,/);
+    expect(src).toMatch(
+      /async function deliverLeadIdentity\([\s\S]*?sendPromptToTerminal\(tabId, text, agent\)/,
+    );
+    expect(src).not.toMatch(/primeTeamWork/);
   });
 
   test("final broadcast membership == {lead, workers} exactly", async () => {

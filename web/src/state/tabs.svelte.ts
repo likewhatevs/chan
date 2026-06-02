@@ -279,7 +279,6 @@ export type TerminalTab = {
   terminalActivityPulsing?: boolean;
   cwd?: string;
   seedInput?: string;
-  teamWork?: TeamWorkState;
   /// Rich Prompt per-terminal draft path (`Drafts/<name>/draft.md`) backing
   /// the bubble: the draft.md IS the prompt text and the folder holds pasted
   /// media. Created lazily on first open; discarded on terminal close.
@@ -372,65 +371,6 @@ export type BrowserTab = {
   /// Per-tab inspector width so two FB tabs can carry different inspector
   /// sizes. Falls back to `paneWidths.browser` when unset.
   inspectorWidth?: number;
-};
-
-export type TeamWorkState = {
-  buffer: string;
-  heightPx?: number;
-  open?: boolean;
-  phase?: "active" | "broken" | "submitted" | "discarded";
-  workspaceName?: string;
-  draftPath?: string;
-  workspacePath?: string;
-  eventsPath?: string;
-  processPath?: string;
-  workspaceAbs?: string;
-  eventsAbs?: string;
-  submissionSequence?: number;
-  workspaceBusy?: boolean;
-  workspaceError?: string | null;
-  mode?: "wysiwyg" | "source";
-  styleToolbarOpen?: boolean;
-  /// Bumped on every `openActiveTeamWork` call so the prompt component
-  /// re-focuses its input even when `open` was already true. Mirrors the
-  /// find-bar `focusNonce` pattern.
-  focusNonce?: number;
-  /// Collapse the prompt to a minimal-height bar (just enough room for
-  /// the placeholder / first line + the control row) so the bubbles
-  /// above gain vertical real estate. Sticks across close / re-open
-  /// within the same session via the serialized payload. Default
-  /// expanded (`undefined` reads as `false`).
-  collapsed?: boolean;
-  /// Actual rendered height (px) of the Team Work root, written by a
-  /// ResizeObserver in the Team Work editor component. The terminal-host
-  /// margin reactor reads this in preference to `heightPx` so the
-  /// reserved space tracks both the expanded drag-resize AND the collapse
-  /// transition (where the prompt shrinks to header-only and `heightPx`
-  /// is stale). Not persisted to SerTab - repopulated on every mount.
-  measuredHeightPx?: number;
-  /// Actual rendered width (px) of the team-work root, written by the
-  /// same ResizeObserver. Feeds the per-prompt page-width clamp on the
-  /// composer-editor so the cap is computed relative to this prompt's
-  /// painted width, not the pane's editor wrapper. Not persisted.
-  measuredWidthPx?: number;
-  /// Per-prompt page-width ratio in (0.25, 1.0]. `1.0` (or absent) reads
-  /// as "no cap" - the composer fills the prompt's painted width. Set via
-  /// the slider in the team-work context menu. Decouples the prompt's
-  /// line width from the global `pageWidth.ratio` so narrowing the editor
-  /// in one tile does not cascade onto a sibling tile's prompt.
-  pageWidthRatio?: number;
-  /// Per-prompt shell-vs-agent submit-mode toggle. `"shell"` (default;
-  /// absent reads as shell) sends the buffer with a trailing `\n`.
-  /// `"agent"` sends the xterm modifyOtherKeys Cmd+Enter chord
-  /// (`\x1b[27;9;13~`) so the buffer submits inside an agent (Claude
-  /// Code / codex / gemini) running in the terminal. Persisted on
-  /// `SerTab.rpsm`; the server-side `dispatch_agent_event` path via
-  /// `PUT /api/terminal/:session/submit-mode` also reads this toggle so
-  /// survey-reply echoes pick the right trailing bytes.
-  submitMode?: "shell" | "agent";
-  /// Agent picker. `"none"` maps to shell submit-mode; named agents map
-  /// to agent submit-mode while preserving which runtime was selected.
-  agentTarget?: "none" | "claude" | "codex" | "gemini";
 };
 
 /// Dashboard tab - read-only surface hosting the shortcut table and
@@ -1056,68 +996,16 @@ export function toggleActiveTerminalBroadcastSelectAll(): void {
   }
 }
 
-export function openActiveTeamWork(): void {
-  const tab = activeTerminalTab();
-  if (!tab) return;
-  // The Team Work editor focuses inside `onMount`. Until Svelte flushes
-  // the open-state update and the editor child mounts, whatever held
-  // focus before (typically xterm's helper-textarea) is still the
-  // keyboard target. A fast typer hits this race: the first keystroke
-  // lands on xterm-helper-textarea, fires `term.onData -> sendUserInput`,
-  // and goes to the PTY behind the user's back. Blurring up front parks
-  // focus on `<body>` until the editor mounts, so the missed keystroke
-  // goes nowhere visible instead of into the live shell.
-  blurTerminalHelperTextarea();
-  if (!tab.teamWork) {
-    tab.teamWork = {
-      buffer: "",
-      heightPx: 320,
-      open: true,
-      mode: "wysiwyg",
-      focusNonce: 1,
-    };
-  } else {
-    tab.teamWork.open = true;
-    tab.teamWork.mode ??= "wysiwyg";
-    // Bump every call (including when already open) so the input
-    // re-focuses even if the user had clicked away.
-    tab.teamWork.focusNonce = (tab.teamWork.focusNonce ?? 0) + 1;
-  }
-}
-
-/// Blur the active element when it is xterm's helper textarea. We
-/// only blur known terminal-input surfaces so non-terminal flows
-/// (e.g. an editor that calls this state module indirectly) keep
-/// their focus. The class `xterm-helper-textarea` is the textarea
-/// xterm.js inserts inside `.xterm-screen` to capture keystrokes
-/// and IME composition; if the user clicks elsewhere on the xterm
-/// element xterm reassigns focus there too. Both share the
-/// `.xterm` ancestor.
-function blurTerminalHelperTextarea(): void {
-  if (typeof document === "undefined") return;
-  const active = document.activeElement;
-  if (!(active instanceof HTMLElement)) return;
-  if (
-    active.classList.contains("xterm-helper-textarea") ||
-    active.closest(".xterm")
-  ) {
-    active.blur();
-  }
-}
-
-/// Team Work lead-terminal factory. Creates a fresh terminal in the
-/// active pane and opens the Team Work editor on it, returning the
-/// created tab. The Cmd+P flow uses the returned handle so the Team
-/// dialog can delete the just-spawned terminal if the user cancels
-/// before committing.
+/// Team Work lead-terminal factory. Spawns a fresh (normal) terminal in the
+/// active pane and returns it. The Cmd+P flow uses the returned handle so the
+/// Team dialog can delete the just-spawned terminal if the user cancels before
+/// committing; the orchestrator delivers the lead's identity prompt through the
+/// write queue (the lead is a normal terminal - no bubble).
 export function createTeamWorkLeadTerminal(
   opts: OpenTerminalOptions = {},
 ): TerminalTab | null {
   const p = activePane();
-  const tab = openTerminalInPane(p.id, opts);
-  if (!tab) return null;
-  openActiveTeamWork();
-  return tab;
+  return openTerminalInPane(p.id, opts);
 }
 
 export type OpenTerminalOptions = {
@@ -1158,7 +1046,6 @@ export function openTerminalInPane(
     cwd: cwd || undefined,
     seedInput: seedInput || undefined,
     group: group && group !== DEFAULT_TERMINAL_GROUP ? group : undefined,
-    teamWork: undefined,
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
@@ -1467,26 +1354,6 @@ export function findTerminalBySession(sessionId: string): TerminalTab | null {
   return null;
 }
 
-/// Prime the Team Work buffer on a terminal tab and flag it open.
-/// Mirrors `openActiveTeamWork` but without the focus nonce kick:
-/// the orchestrator seeds the text and the user focuses the prompt
-/// themselves to commit.
-export function primeTeamWork(tab: TerminalTab, text: string): void {
-  if (!tab.teamWork) {
-    tab.teamWork = {
-      buffer: text,
-      heightPx: 320,
-      open: true,
-      mode: "wysiwyg",
-      focusNonce: 1,
-    };
-    return;
-  }
-  tab.teamWork.buffer = text;
-  tab.teamWork.open = true;
-  tab.teamWork.mode ??= "wysiwyg";
-}
-
 export function hasGraphTab(): boolean {
   return Object.values(layout.nodes).some(
     (node) => node.kind === "leaf" && node.tabs.some((tab) => tab.kind === "graph"),
@@ -1516,8 +1383,10 @@ export function registerTerminalInputSink(tabId: string, sink: TerminalInputSink
 // registers a sink that enqueues into THIS session's server-side write queue,
 // where it shares one FIFO with `cs terminal write` and auto-submits in order.
 // Keeping it a separate registry lets the Rich Prompt bubble reach the active
-// terminal without touching TerminalTab internals.
-type TerminalPromptSink = (data: string, agent?: string) => void;
+// terminal without touching TerminalTab internals. The sink returns whether the
+// frame actually went out (the WS was open) so callers can retry a freshly-
+// spawned terminal whose socket has not connected yet (the team lead bootstrap).
+type TerminalPromptSink = (data: string, agent?: string) => boolean;
 const terminalPromptSinks = new Map<string, TerminalPromptSink>();
 
 export function registerTerminalPromptSink(
@@ -1538,10 +1407,19 @@ export function registerTerminalPromptSink(
 export function sendPromptToActiveTerminal(data: string, agent?: string): boolean {
   const tab = activeTerminalTab();
   if (!tab) return false;
-  const sink = terminalPromptSinks.get(tab.id);
+  return sendPromptToTerminal(tab.id, data, agent);
+}
+
+/// Send a prompt to a SPECIFIC terminal's write queue via its WS `prompt`
+/// frame. Returns false when that terminal has no live prompt sink OR its WS
+/// is not open yet (so the caller can retry). The team orchestrator uses this
+/// to auto-deliver the lead's identity prompt to the freshly-spawned lead
+/// terminal once its socket connects (the lead is a normal terminal now - no
+/// bubble - so its identity arrives through the same queue as every prompt).
+export function sendPromptToTerminal(tabId: string, data: string, agent?: string): boolean {
+  const sink = terminalPromptSinks.get(tabId);
   if (!sink) return false;
-  sink(data, agent);
-  return true;
+  return sink(data, agent);
 }
 
 export function registerTerminalCloseSink(tabId: string, sink: TerminalCloseSink): () => void {
@@ -2336,7 +2214,6 @@ function cloneTab(src: Tab): Tab {
       lastAgentEchoSeq: src.lastAgentEchoSeq,
       cwd: src.cwd,
       seedInput: src.seedInput,
-      teamWork: src.teamWork ? { ...src.teamWork } : undefined,
     };
   }
   if (src.kind === "graph") {
@@ -2767,7 +2644,6 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
     lastSeq: undefined,
     cwd: cwd || undefined,
     seedInput: undefined,
-    teamWork: undefined,
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
@@ -3497,10 +3373,6 @@ type SerTab = {
   /// Terminal PTY session id. Only emitted in the per-window
   /// session payload, never in the shareable URL hash.
   tsid?: string;
-  /// Active Team Work workspace identity. Only emitted in the
-  /// per-window session payload, alongside `tsid`.
-  rpn?: string;
-  rpsq?: number;
   /// Terminal was created through the HTTP control channel; restart
   /// uses the server-side restart endpoint.
   tc?: 1;
@@ -3523,26 +3395,10 @@ type SerTab = {
   /// Shift+Enter -> newline survives a reload reattaching to a long-lived
   /// agent. See `TerminalTab.keyboardProtocol`.
   kp?: SerializedKeyboardProtocolState;
-  /// Team Work draft state. Only emitted in per-window session payloads,
-  /// never in shareable URL hashes.
-  rpb?: string;
   /// Rich Prompt per-terminal draft path (Drafts/<name>/draft.md). Persisted
-  /// so a reload rebinds the bubble + the close cleanup deletes the right
-  /// draft folder. Per-window session payloads only.
+  /// so a reload rebinds the per-terminal Rich Prompt draft + the close
+  /// cleanup deletes the right draft folder. Per-window session payloads only.
   rpd?: string;
-  rph?: number;
-  rpo?: 1;
-  rpm?: "w" | "s";
-  /// Team-work collapsed flag. `1` when the user collapsed the prompt
-  /// to its minimal-height bar; absent otherwise.
-  rpc?: 1;
-  /// Per-prompt page-width ratio in (0.25, 1.0). Absence reads as
-  /// "no cap" (decoupled from the global `pageWidth.ratio`).
-  rppw?: number;
-  /// Per-prompt shell-vs-agent submit-mode toggle. `"a"` means Agent;
-  /// absent means Shell (default).
-  rpsm?: "a";
-  rpa?: "c" | "x" | "g";
   /// Graph tab state.
   gm?: "s" | "f" | "l";
   gs?: string;
@@ -3722,39 +3578,6 @@ function serializeTab(
         : {}),
       ...(opts.terminalSessions && t.richPromptDraftPath
         ? { rpd: t.richPromptDraftPath }
-        : {}),
-      ...(opts.terminalSessions && t.teamWork
-        ? {
-            rpb: t.teamWork.buffer,
-            ...(t.teamWork.heightPx
-              ? { rph: Math.max(1, Math.floor(t.teamWork.heightPx)) }
-              : {}),
-            ...(t.teamWork.open ? { rpo: 1 as const } : {}),
-            ...(t.teamWork.mode === "source" ? { rpm: "s" as const } : {}),
-            ...(t.teamWork.collapsed ? { rpc: 1 as const } : {}),
-            ...(typeof t.teamWork.pageWidthRatio === "number" &&
-            Number.isFinite(t.teamWork.pageWidthRatio) &&
-            t.teamWork.pageWidthRatio > 0 &&
-            t.teamWork.pageWidthRatio < 1
-              ? { rppw: t.teamWork.pageWidthRatio }
-              : {}),
-            ...(t.teamWork.submitMode === "agent" ? { rpsm: "a" as const } : {}),
-            ...(t.teamWork.agentTarget && t.teamWork.agentTarget !== "none"
-              ? {
-                  rpa:
-                    t.teamWork.agentTarget === "codex"
-                      ? "x"
-                      : t.teamWork.agentTarget === "gemini"
-                        ? "g"
-                        : "c",
-                }
-              : {}),
-            ...(t.teamWork.workspaceName ? { rpn: t.teamWork.workspaceName } : {}),
-            ...(typeof t.teamWork.submissionSequence === "number" &&
-            Number.isFinite(t.teamWork.submissionSequence)
-              ? { rpsq: Math.max(0, Math.floor(t.teamWork.submissionSequence)) }
-              : {}),
-          }
         : {}),
       ...active,
     };
@@ -3999,7 +3822,6 @@ export async function restoreLayout(
               : terminalSessionId
                 ? true
                 : undefined;
-          const teamWork = teamWorkFromSer(sertab, savedTerm);
           const group = (sertab.tg ?? savedTerm?.tg)?.trim();
           // Restore the negotiated keyboard protocol for a reattaching
           // session so Shift+Enter -> newline survives a reload even when
@@ -4029,7 +3851,6 @@ export async function restoreLayout(
               Number.isFinite(sertab.tae ?? savedTerm?.tae)
                 ? Math.max(0, Math.floor((sertab.tae ?? savedTerm?.tae)!))
                 : undefined,
-            teamWork,
             richPromptDraftPath: (sertab.rpd ?? savedTerm?.rpd) || undefined,
           };
           p.tabs.push(tab);
@@ -4197,73 +4018,6 @@ function serializedLeaves(node: SerNode | null, out: SerLeaf[] = []): SerLeaf[] 
   return out;
 }
 
-function teamWorkFromSer(
-  tab: SerTab | undefined,
-  fallback?: SerTab,
-): TeamWorkState | undefined {
-  const src =
-    tab?.rpb !== undefined ||
-    tab?.rph !== undefined ||
-    tab?.rpo ||
-    tab?.rpm ||
-    tab?.rpc ||
-    tab?.rppw !== undefined ||
-    tab?.rpsm ||
-    tab?.rpa ||
-    tab?.rpn ||
-    tab?.rpsq !== undefined
-      ? tab
-      : fallback;
-  if (!src) return undefined;
-  if (
-    src.rpb === undefined &&
-    src.rph === undefined &&
-    !src.rpo &&
-    !src.rpm &&
-    !src.rpc &&
-    src.rppw === undefined &&
-    !src.rpsm &&
-    !src.rpa &&
-    !src.rpn &&
-    src.rpsq === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    buffer: src.rpb ?? "",
-    heightPx:
-      typeof src.rph === "number" && Number.isFinite(src.rph)
-        ? Math.max(1, Math.floor(src.rph))
-        : undefined,
-    open: src.rpo === 1,
-    mode: src.rpm === "s" ? "source" : "wysiwyg",
-    // Absence reads as expanded (the default); only emit when collapsed.
-    ...(src.rpc === 1 ? { collapsed: true } : {}),
-    // Per-prompt page-width ratio. Only emit when strictly inside (0, 1);
-    // `1.0` means "no cap" and is omitted, matching serialize.
-    ...(typeof src.rppw === "number" && Number.isFinite(src.rppw) && src.rppw > 0 && src.rppw < 1
-      ? { pageWidthRatio: src.rppw }
-      : {}),
-    // Absence reads as Shell (the default); only emit for Agent.
-    ...(src.rpsm === "a" ? { submitMode: "agent" as const } : {}),
-    ...(src.rpa
-      ? {
-          agentTarget:
-            src.rpa === "x"
-              ? "codex" as const
-              : src.rpa === "g"
-                ? "gemini" as const
-                : "claude" as const,
-          submitMode: "agent" as const,
-        }
-      : {}),
-    ...(src.rpn ? { workspaceName: src.rpn } : {}),
-    ...(typeof src.rpsq === "number" && Number.isFinite(src.rpsq)
-      ? { submissionSequence: Math.max(0, Math.floor(src.rpsq)) }
-      : {}),
-  };
-}
-
 /// Copy terminal PTY session metadata from a per-window session layout
 /// onto the live layout after a shareable URL-hash layout restore.
 /// The hash deliberately omits `tsid`/`tseq`; this graft keeps reloads
@@ -4291,8 +4045,6 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
             ? Math.max(0, Math.floor(savedTerm.tae))
             : undefined;
       }
-      const teamWork = teamWorkFromSer(savedTerm);
-      if (teamWork) liveTerms[j]!.teamWork = teamWork;
       if (savedTerm.rpd) liveTerms[j]!.richPromptDraftPath = savedTerm.rpd;
     }
   }

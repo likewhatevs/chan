@@ -11,7 +11,7 @@ describe("TerminalTab Rich Prompt wiring", () => {
   test("registers a prompt sink that sends the `prompt` frame (not raw input)", () => {
     expect(terminal).toMatch(/registerTerminalPromptSink\(tab\.id, sendPrompt\)/);
     expect(terminal).toMatch(
-      /function sendPrompt\(data: string, agent\?: string\): void \{[\s\S]{1,200}send\(\{ type: "prompt", data, \.\.\.\(agent \? \{ agent \} : \{\}\) \}\)/,
+      /function sendPrompt\(data: string, agent\?: string\): boolean \{[\s\S]{1,200}return send\(\{ type: "prompt", data, \.\.\.\(agent \? \{ agent \} : \{\}\) \}\)/,
     );
   });
 

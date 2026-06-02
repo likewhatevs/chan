@@ -1,6 +1,5 @@
 import { describe, expect, test } from "vitest";
 import modal from "./PathPromptModal.svelte?raw";
-import teamWork from "./TeamWork.svelte?raw";
 
 // PathPromptModal `attach` mode: an existing directory should not
 // trigger an "overwrites" warning, and a missing absolute path should
@@ -47,13 +46,5 @@ describe("PathPromptModal notice line", () => {
   test("notice uses the muted info hue, not the error/warn colours", () => {
     // The status row owns err/warn colours; the notice is contextual.
     expect(modal).toMatch(/\.notice \{[\s\S]{0,120}var\(--info-text/);
-  });
-});
-
-describe("Team Work has no watcher attach dialog", () => {
-  test("Team Work editor never opens PathPromptModal for watcher attach", () => {
-    expect(teamWork).not.toMatch(/function watchDirectory/);
-    expect(teamWork).not.toMatch(/uiPathPrompt/);
-    expect(teamWork).not.toMatch(/mode: "attach"/);
   });
 });

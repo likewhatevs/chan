@@ -23,8 +23,8 @@ import {
   closeTab,
   layout,
   openTerminalInPane,
-  primeTeamWork,
   renameTerminalTab,
+  sendPromptToTerminal,
   setActivePane,
   setTerminalBroadcastEnabled,
   setTerminalBroadcastTarget,
@@ -305,6 +305,24 @@ async function launchLead(
   return tab;
 }
 
+/// Deliver the lead's identity prompt to its freshly-spawned terminal through
+/// the write queue (the prompt frame). The lead's WS may not be open the instant
+/// we ask, so retry until the send goes out; the lead typically connects within
+/// ~1s, we poll up to ~10s, then warn rather than silently strand the lead. The
+/// server enqueues + drains the prompt (with the agent's submit chord) when the
+/// agent is idle - the same path every other prompt takes.
+async function deliverLeadIdentity(
+  tabId: string,
+  text: string,
+  agent?: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (sendPromptToTerminal(tabId, text, agent)) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  notify("team lead did not connect; deliver its identity prompt manually");
+}
+
 /// Resolve the target pane for each worker (by member index) +
 /// confirm the lead's pane. Tabs mode: every worker shares the lead's
 /// pane (stacked as tabs). Split mode: build the RxC grid rooted at
@@ -404,23 +422,21 @@ export async function runTeamBootstrap(
     workerEntries.map((m) => m.handle),
     bootstrapPath,
   );
-  primeTeamWork(leadTab, prompt);
-
-  // Seed the lead tab's Team Work composer submit mode from the lead
-  // member's agent. The composer is the surface that pokes/drives the
-  // lead agent, so it must submit with THAT agent's chord (claude's
-  // Cmd+Enter CSI vs codex/gemini's plain CR); a shell lead ("none")
-  // stays in shell mode (plain Enter). `primeTeamWork` above guarantees
-  // `leadTab.teamWork` exists, so we mutate it directly (the
-  // orchestrator already owns this tab's reactive state). Mirrors
-  // TeamWork.svelte's setAgentTarget: agentTarget !== "none" => "agent".
+  // The lead is a NORMAL terminal now (no Team Work bubble). Auto-deliver its
+  // identity prompt through the write queue - the same prompt-frame path every
+  // terminal uses - with the lead's agent so the server appends the right
+  // submit chord (claude CSI / codex,gemini CR; a shell lead "none" gets no
+  // chord). The freshly-spawned lead's WS may not be open yet, so retry until
+  // the send goes out (the server then enqueues + drains when the agent is
+  // idle). This is what makes the lead read bootstrap.md + drive the workers.
   const leadAgent = leadEntry.agent ?? "none";
-  if (leadTab.teamWork) {
-    leadTab.teamWork.agentTarget = leadAgent;
-    leadTab.teamWork.submitMode = leadAgent === "none" ? "shell" : "agent";
-  }
+  void deliverLeadIdentity(
+    leadTab.id,
+    prompt,
+    leadAgent === "none" ? undefined : leadAgent,
+  );
 
-  // Restore focus to the lead's pane so the editor lands there.
+  // Restore focus to the lead's pane.
   setActivePane(ctx.leadPaneId);
 
   // 5. Broadcast membership. First force-clear EVERY terminal's

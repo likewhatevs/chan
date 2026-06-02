@@ -14,10 +14,14 @@ import graph from "./GraphPanel.svelte?raw";
 //    max without needing to drag.
 
 describe("Phase 13 Cmd+P Team Work lead terminal", () => {
-  test("createTeamWorkLeadTerminal opens a fresh terminal in the active pane and returns it", () => {
+  test("createTeamWorkLeadTerminal spawns a fresh (normal) terminal in the active pane and returns it", () => {
+    // The Team Work bubble is gone: the lead is a normal terminal (the
+    // orchestrator delivers its identity prompt via the queue), so this just
+    // spawns + returns - no openActiveTeamWork.
     expect(tabs).toMatch(
-      /export function createTeamWorkLeadTerminal\([\s\S]*?opts: OpenTerminalOptions = \{\},[\s\S]*?\): TerminalTab \| null \{[\s\S]*?const p = activePane\(\);[\s\S]*?openTerminalInPane\(p\.id, opts\);[\s\S]*?openActiveTeamWork\(\);[\s\S]*?return tab;/,
+      /export function createTeamWorkLeadTerminal\([\s\S]*?opts: OpenTerminalOptions = \{\},[\s\S]*?\): TerminalTab \| null \{[\s\S]*?const p = activePane\(\);[\s\S]*?return openTerminalInPane\(p\.id, opts\);/,
     );
+    expect(tabs).not.toMatch(/openActiveTeamWork/);
   });
 
   test("no active-terminal toggle branch (fresh terminal each time)", () => {
