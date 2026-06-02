@@ -486,13 +486,13 @@ mod tests {
     }
 
     #[test]
-    fn summary_reflects_a_fresh_bm25_workspace() {
+    fn summary_reflects_a_fresh_workspace() {
         let (_c, _r, ws) = workspace();
         let s = workspace_summary(&ws);
-        // Fresh workspace defaults: BM25-only, reports off, no VCS in the
-        // tempdir root.
+        // Fresh workspace defaults: semantic off, reports ON (round-1 wave-3
+        // default), no VCS in the tempdir root.
         assert!(!s.semantic_enabled);
-        assert!(!s.reports_enabled);
+        assert!(s.reports_enabled);
         assert_eq!(s.scm, None);
     }
 

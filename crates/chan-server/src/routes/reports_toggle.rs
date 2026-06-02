@@ -219,38 +219,44 @@ mod tests {
         let app = route_test_app();
         let router = crate::router(app.state);
 
-        // Initial state: chan-workspace default is `false`.
-        let (status, body) = fetch_state(&router, true).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["enabled"], false);
-
-        // Enable: flip to true + response carries the new state.
-        let (status, body) = post(&router, "/api/index/reports/enable").await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["enabled"], true);
-
-        // Re-check via state: still true after the flip persists.
+        // Initial state: reports defaults ON (round-1 wave-3).
         let (status, body) = fetch_state(&router, true).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], true);
 
-        // Disable: flip back + response carries the new state.
+        // Disable: flip to false + response carries the new state.
         let (status, body) = post(&router, "/api/index/reports/disable").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], false);
 
-        // Re-check via state: still false.
-        let (_, body) = fetch_state(&router, true).await;
+        // Re-check via state: still false after the flip persists.
+        let (status, body) = fetch_state(&router, true).await;
+        assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], false);
+
+        // Enable: flip back + response carries the new state.
+        let (status, body) = post(&router, "/api/index/reports/enable").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["enabled"], true);
+
+        // Re-check via state: still true.
+        let (_, body) = fetch_state(&router, true).await;
+        assert_eq!(body["enabled"], true);
     }
 
     #[tokio::test]
     async fn reports_disable_is_idempotent_when_already_off() {
         // systacean-39: chan-workspace's set_reports_enabled(false)
         // on an already-off workspace is a no-op + returns Ok. The
-        // route must surface 200 + the current state, not error.
+        // route must surface 200 + the current state, not error. Reports
+        // defaults ON now (round-1 wave-3), so the first disable turns it off;
+        // the SECOND disable is the already-off idempotent case under test.
         let app = route_test_app();
         let router = crate::router(app.state);
+        let (status, body) = post(&router, "/api/index/reports/disable").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["enabled"], false);
+        // Already off: disable again is the no-op that must still 200 + false.
         let (status, body) = post(&router, "/api/index/reports/disable").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], false);

@@ -153,14 +153,15 @@ pub struct IndexConfig {
     /// `Mode::Hybrid` overrides on `search` still work regardless.
     #[serde(default)]
     pub semantic_enabled: bool,
-    /// systacean-27: per-workspace chan-report opt-in (Round-2 pre-flight
-    /// feature toggle). Default-false so workspaces stay lean (no
-    /// language-detection scan, no SLOC roll-up, no COCOMO). When
-    /// true, `Workspace::report()` initializes the per-workspace
-    /// `ReportState` + the watcher fanout keeps it current. Lives
-    /// alongside `semantic_enabled` for symmetry; both toggles
-    /// persist in the per-workspace `IndexConfig` (Round-3 may refactor
-    /// to a separate `features.toml` if/when more flags accumulate).
+    /// systacean-27: per-workspace chan-report opt-in. Default ON as of
+    /// round-1 wave-3 (@@Host): a new workspace gets language detection +
+    /// SLOC roll-up + COCOMO out of the box. When true, `Workspace::report()`
+    /// initializes the per-workspace `ReportState` + the watcher fanout keeps
+    /// it current. The on-by-default lives in the struct `Default` (used for a
+    /// brand-new workspace); the `#[serde(default)]` here stays `false` so a
+    /// legacy config.toml that omits the field is NOT silently migrated on.
+    /// Persists alongside `semantic_enabled` in the per-workspace
+    /// `IndexConfig` (Round-3 may refactor to a separate `features.toml`).
     #[serde(default)]
     pub reports_enabled: bool,
     /// systacean-40: screensaver overlay opt-in. Default-false so
@@ -244,7 +245,14 @@ impl Default for IndexConfig {
             vectors_model: None,
             vectors_dim: None,
             semantic_enabled: false,
-            reports_enabled: false,
+            // Reports default ON (round-1 wave-3, @@Host): a freshly-created
+            // workspace opts into chan-report. This is the struct Default, used
+            // by `load()` only when no config.toml exists yet (a new
+            // workspace). An existing config.toml keeps its persisted value,
+            // and a legacy file that omits the field still deserializes to
+            // false via the field's `#[serde(default)]`, so existing
+            // workspaces never flip (no migration).
+            reports_enabled: true,
             screensaver_enabled: false,
             screensaver_timeout_secs: default_screensaver_timeout_secs(),
             screensaver_theme: ScreensaverTheme::Plain,
@@ -366,17 +374,21 @@ mod tests {
     }
 
     #[test]
-    fn reports_enabled_defaults_false_and_round_trips_true() {
-        // systacean-27: pin the chan-reports opt-in field. Default
-        // matches Round-2's lean-workspace baseline (off). Round-
-        // tripping with the field set to true verifies the toml
-        // shape is preserved across save/load. Backward-compat:
-        // a pre-`-27` config.toml without the field loads with
-        // reports_enabled = false.
+    fn reports_enabled_defaults_true_for_new_workspace_but_legacy_file_stays_false() {
+        // Round-1 wave-3 (@@Host): reports default ON. A brand-new workspace
+        // has no config.toml, so `load()` returns `IndexConfig::default()` ->
+        // reports ON. But a legacy config.toml that omits the field must NOT be
+        // migrated on: the field's `#[serde(default)]` keeps it false. This
+        // test pins both halves so the "new on, existing unchanged" split can't
+        // drift.
         let tmp = TempDir::new().unwrap();
         let cfg = load(tmp.path()).unwrap();
-        assert!(!cfg.reports_enabled, "default must be false");
+        assert!(
+            cfg.reports_enabled,
+            "a new workspace defaults to reports ON"
+        );
 
+        // The field still round-trips when explicitly persisted.
         let cfg = IndexConfig {
             reports_enabled: true,
             ..IndexConfig::default()
@@ -384,18 +396,20 @@ mod tests {
         save(tmp.path(), &cfg).unwrap();
         let loaded = load(tmp.path()).unwrap();
         assert!(loaded.reports_enabled);
-        // Backward-compat: serialize manually without the field
-        // (simulating a pre-`-27` on-disk file) + verify
-        // deserialize defaults it to false. Chunking + the new
-        // toggles all use serde defaults so the minimum file is
-        // just schema_version + model.
+        // No migration: a pre-existing on-disk file that omits the field
+        // (simulating an older workspace) deserializes to false, so an
+        // existing workspace never silently flips on. The minimum file is just
+        // schema_version + model; the toggles all use serde defaults.
         std::fs::write(
             config_path(tmp.path()),
             "schema_version = 1\nmodel = \"BAAI/bge-small-en-v1.5\"\n",
         )
         .unwrap();
         let legacy = load(tmp.path()).unwrap();
-        assert!(!legacy.reports_enabled, "missing field defaults to false");
+        assert!(
+            !legacy.reports_enabled,
+            "legacy config missing the field stays false (no migration)"
+        );
         assert!(!legacy.semantic_enabled, "missing field defaults to false");
     }
 

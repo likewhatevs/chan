@@ -16,7 +16,6 @@
   import { api } from "../api/client";
   import { ApiError } from "../api/errors";
   import { workspace } from "../state/store.svelte";
-  import { openDashboardInActivePane } from "../state/tabs.svelte";
   import type { PreflightSnapshot } from "../api/types";
 
   const POLL_MS = 750;
@@ -68,7 +67,7 @@
     csDismissed = true;
     persistCsDismissed();
   }
-  function csErrorText(e: unknown): string {
+  function errText(e: unknown): string {
     if (e instanceof ApiError) {
       // Some transports hand back the raw JSON body; unwrap { error }.
       try {
@@ -93,7 +92,7 @@
     } catch (e) {
       // Non-fatal: surface why and fall back to the manual hint so the user
       // can finish by hand, then continue.
-      csError = csErrorText(e);
+      csError = errText(e);
       manualMode = true;
     } finally {
       csBusy = false;
@@ -140,9 +139,84 @@
     }
     onboardDismissTick += 1;
   }
-  function openDashboard(): void {
-    openDashboardInActivePane();
-    dismissOnboard();
+  // Inline layer controls (round-1 wave-3: the nudge became actionable). The
+  // displayed state seeds from the summary and then tracks the toggle results,
+  // so a click reflects immediately without re-polling the snapshot.
+  let reportsOverride = $state<boolean | null>(null);
+  let semanticOverride = $state<boolean | null>(null);
+  const reportsOn = $derived(reportsOverride ?? summary?.reports_enabled ?? false);
+  const semanticOn = $derived(semanticOverride ?? summary?.semantic_enabled ?? false);
+  let reportsBusy = $state(false);
+  let reportsError = $state<string | null>(null);
+  let semanticBusy = $state(false);
+  let semanticError = $state<string | null>(null);
+  // The embedding model is missing, so enabling needs a download first.
+  let semanticNeedsModel = $state(false);
+  let semanticDownloading = $state(false);
+
+  async function toggleReports(): Promise<void> {
+    if (reportsBusy) return;
+    reportsBusy = true;
+    reportsError = null;
+    try {
+      const next = !reportsOn;
+      const state = next ? await api.reportsEnable() : await api.reportsDisable();
+      reportsOverride = state.enabled;
+    } catch (e) {
+      reportsError = errText(e);
+    } finally {
+      reportsBusy = false;
+    }
+  }
+
+  async function enableSemantic(): Promise<void> {
+    if (semanticBusy) return;
+    semanticBusy = true;
+    semanticError = null;
+    try {
+      // The enable route guards on the embedding model being present; the
+      // common case (model already fetched for another workspace, it is shared
+      // machine-wide) succeeds in one click.
+      const state = await api.semanticEnable();
+      semanticOverride = state.semantic_enabled;
+    } catch (e) {
+      // Model missing: surface the download affordance instead of failing.
+      semanticNeedsModel = true;
+      semanticError = errText(e);
+    } finally {
+      semanticBusy = false;
+    }
+  }
+  async function downloadAndEnableSemantic(): Promise<void> {
+    if (semanticBusy) return;
+    semanticBusy = true;
+    semanticDownloading = true;
+    semanticError = null;
+    try {
+      await api.semanticDownload();
+      const state = await api.semanticEnable();
+      semanticOverride = state.semantic_enabled;
+      semanticNeedsModel = false;
+    } catch (e) {
+      semanticError = errText(e);
+    } finally {
+      semanticBusy = false;
+      semanticDownloading = false;
+    }
+  }
+  async function disableSemantic(): Promise<void> {
+    if (semanticBusy) return;
+    semanticBusy = true;
+    semanticError = null;
+    try {
+      const state = await api.semanticDisable();
+      semanticOverride = state.semantic_enabled;
+      semanticNeedsModel = false;
+    } catch (e) {
+      semanticError = errText(e);
+    } finally {
+      semanticBusy = false;
+    }
   }
 
   function schedule(ms = POLL_MS): void {
@@ -248,30 +322,51 @@
         </p>
         <p class="boot-body">
           Keyword search and the wiki-link graph are always on, the minimum
-          needed to operate. Two optional layers are off by default:
+          needed to operate. Two optional layers you can toggle here:
         </p>
         <ul class="onboard-layers">
           <li>
-            <span class="onboard-layer-name">Semantic search</span>
-            <span class="onboard-state" data-on={summary.semantic_enabled}>
-              {summary.semantic_enabled ? "on" : "off"}
-            </span>
+            <div class="onboard-layer-top">
+              <span class="onboard-layer-name">Semantic search</span>
+              <span class="onboard-state" data-on={semanticOn}>{semanticOn ? "on" : "off"}</span>
+              {#if semanticOn}
+                <button class="onboard-toggle" disabled={semanticBusy} onclick={disableSemantic}>
+                  Turn off
+                </button>
+              {:else if semanticNeedsModel}
+                <button
+                  class="onboard-toggle"
+                  disabled={semanticBusy}
+                  onclick={downloadAndEnableSemantic}
+                >
+                  {semanticDownloading ? "Downloading…" : "Download & enable"}
+                </button>
+              {:else}
+                <button class="onboard-toggle" disabled={semanticBusy} onclick={enableSemantic}>
+                  {semanticBusy ? "…" : "Turn on"}
+                </button>
+              {/if}
+            </div>
             <span class="onboard-layer-hint">
               find by meaning; needs the BGE-small model (~63 MB, shared)
             </span>
+            {#if semanticError}<span class="onboard-err">{semanticError}</span>{/if}
           </li>
           <li>
-            <span class="onboard-layer-name">Reports</span>
-            <span class="onboard-state" data-on={summary.reports_enabled}>
-              {summary.reports_enabled ? "on" : "off"}
-            </span>
+            <div class="onboard-layer-top">
+              <span class="onboard-layer-name">Reports</span>
+              <span class="onboard-state" data-on={reportsOn}>{reportsOn ? "on" : "off"}</span>
+              <button class="onboard-toggle" disabled={reportsBusy} onclick={toggleReports}>
+                {reportsBusy ? "…" : reportsOn ? "Turn off" : "Turn on"}
+              </button>
+            </div>
             <span class="onboard-layer-hint">
               per-file language, SLOC and COCOMO analysis
             </span>
+            {#if reportsError}<span class="onboard-err">{reportsError}</span>{/if}
           </li>
         </ul>
         <div class="boot-actions">
-          <button type="button" class="primary" onclick={openDashboard}>Open Dashboard</button>
           <button type="button" onclick={dismissOnboard}>Dismiss</button>
         </div>
       </aside>
@@ -544,13 +639,17 @@
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
+    gap: 0.6rem;
   }
   .onboard-layers li {
-    display: grid;
-    grid-template-columns: auto auto;
-    column-gap: 0.4rem;
-    align-items: baseline;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .onboard-layer-top {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
   }
   .onboard-layer-name {
     font-size: 12.5px;
@@ -565,10 +664,29 @@
   .onboard-state[data-on="true"] {
     color: var(--text);
   }
+  .onboard-toggle {
+    margin-left: auto;
+    padding: 3px 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .onboard-toggle:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
   .onboard-layer-hint {
-    grid-column: 1 / -1;
     font-size: 11px;
     color: var(--text-secondary);
+    line-height: 1.4;
+  }
+  .onboard-err {
+    font-size: 11px;
+    color: var(--warn-text);
     line-height: 1.4;
   }
 </style>

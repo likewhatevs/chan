@@ -2488,10 +2488,11 @@ impl Workspace {
     }
 
     /// systacean-27: read the per-workspace chan-report opt-in flag.
-    /// Mirrors `IndexConfig::reports_enabled`; default-false on a
-    /// workspace that has never been touched by the pre-flight UI / CLI
-    /// / Settings. Consumers gate `Workspace::report()` initialization
-    /// + the per-workspace language-graph layer on this flag.
+    /// Mirrors `IndexConfig::reports_enabled`; default-TRUE for a brand-new
+    /// workspace as of round-1 wave-3 (reports on by default), while an
+    /// existing workspace keeps its persisted value. Consumers gate
+    /// `Workspace::report()` initialization + the per-workspace
+    /// language-graph layer on this flag.
     pub fn reports_enabled(&self) -> Result<bool> {
         Ok(self.index()?.config().reports_enabled)
     }
@@ -6428,30 +6429,24 @@ mod tests {
     }
 
     #[test]
-    fn reports_enabled_round_trips_through_workspace_and_boot_kicks_off_initial_scan() {
-        // systacean-27: Workspace::reports_enabled defaults false on a
-        // never-touched workspace; Workspace::set_reports_enabled persists
-        // the flag; Workspace::boot kicks off the initial scan when the
-        // flag is on so the first `Workspace::report()` consumer sees
-        // populated data.
+    fn reports_enabled_defaults_true_round_trips_and_boot_kicks_off_initial_scan() {
+        // systacean-27 + round-1 wave-3: Workspace::reports_enabled defaults
+        // TRUE for a new workspace (reports on by default); boot kicks off the
+        // initial scan when the flag is on so the first `Workspace::report()`
+        // consumer sees populated data; set_reports_enabled round-trips the
+        // flag; disable drops the persisted jsonl.
         let (_cfg, _root, workspace) = fixture();
         assert!(
-            !workspace.reports_enabled().unwrap(),
-            "default must be false"
+            workspace.reports_enabled().unwrap(),
+            "a new workspace defaults to reports ON"
         );
 
-        workspace.set_reports_enabled(true).unwrap();
-        assert!(workspace.reports_enabled().unwrap());
-
-        // boot() is idempotent + safe to call after enabling.
+        // On by default, so boot kicks the initial scan. boot() is idempotent.
         workspace.boot().unwrap();
         workspace.boot().unwrap(); // re-call no-op
                                    // Confirm the report state was initialized (the persisted
-                                   // jsonl now exists after boot's initial scan + flush).
-                                   // Best-effort assert: the writer thread flushes async so
-                                   // give it a small window. The flag persistence + boot
-                                   // call returning Ok are the load-bearing invariants;
-                                   // visible jsonl is the operational consequence.
+                                   // jsonl now exists after boot's initial scan + flush). The
+                                   // writer thread flushes async, so give it a small window.
         for _ in 0..50 {
             if workspace.paths().report.exists() {
                 break;
@@ -6459,13 +6454,17 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
-        // Disable drops the persisted jsonl.
+        // Disable drops the persisted jsonl + round-trips the flag off.
         workspace.set_reports_enabled(false).unwrap();
         assert!(!workspace.reports_enabled().unwrap());
         assert!(
             !workspace.paths().report.exists(),
             "disable should drop the persisted report.jsonl"
         );
+
+        // Re-enable round-trips back on.
+        workspace.set_reports_enabled(true).unwrap();
+        assert!(workspace.reports_enabled().unwrap());
     }
 
     #[test]
@@ -6473,8 +6472,10 @@ mod tests {
         // systacean-27: boot() with both feature flags off is a
         // pure no-op. No report scan kicked off; no eager
         // initialization that would slow down chan-server startup
-        // on a lean workspace.
+        // on a lean workspace. Reports now defaults ON (round-1 wave-3), so
+        // explicitly turn it off to exercise the both-off no-op path.
         let (_cfg, _root, workspace) = fixture();
+        workspace.set_reports_enabled(false).unwrap();
         assert!(!workspace.semantic_enabled().unwrap());
         assert!(!workspace.reports_enabled().unwrap());
         workspace.boot().unwrap();
