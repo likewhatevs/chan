@@ -14,7 +14,7 @@ Start here:
 - [Editing markdown](editing-markdown.md)
 - [Wiki-links](wiki-links.md)
 - [Search and graph basics](search-and-graph.md)
-- [Terminal and MCP discovery](terminal-and-mcp.md)
+- [Terminal](terminal.md)
 - [Tunnel basics](tunnel.md)
 - [Upgrade and troubleshooting](upgrade-and-troubleshooting.md)
 

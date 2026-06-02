@@ -1,0 +1,102 @@
+# Terminal
+
+Chan embeds a real terminal next to your files. Each terminal tab is a PTY
+rooted at the workspace, so shell work, builds, and AI agents all run in the
+tree you are editing. One terminal owns one agent: start an agent CLI
+(claude, codex, gemini) in a tab, and that tab is how you, and other agents,
+reach it.
+
+## What a terminal exports
+
+Every terminal session exports a few environment variables so scripts and
+agents know where they are:
+
+```text
+CHAN_TAB_NAME    the tab's name (also the cs selector for this session)
+CHAN_TAB_GROUP   the broadcast group (default "default")
+CHAN_MCP_*       MCP discovery, when the server's MCP bridge is up (below)
+```
+
+## The `cs terminal` command family
+
+`cs` is Chan's in-terminal CLI; `cs terminal` drives the live terminal
+sessions in the current window. Prefix matching applies, so `cs t n`,
+`cs t w`, and `cs t l` resolve to `new`, `write`, and `list`.
+
+Sessions are selected by `--tab-name <name>` (one session, the tab's
+CHAN_TAB_NAME) or `--tab-group <name>` (every session in a broadcast group).
+`write`, `restart`, and `survey` require at least one selector.
+
+- `new [PATH]` opens a terminal tab. `--tab-name` sets its CHAN_TAB_NAME,
+  `--tab-group` its group (default "default"); PATH defaults to the
+  workspace root.
+- `list` lists live sessions grouped by group; `--json` for machine output.
+- `write` writes raw bytes to the selected session(s). No newline is
+  appended (`cs terminal write $'ls\n'` runs a command; `cs terminal write
+  ls` only types it); `--stdin` streams the bytes instead, and `--submit`
+  appends an agent's submit chord (see Pokes).
+- `restart` restarts the selected session(s), preserving each one's spawn
+  command and env so an agent relaunches in place.
+- `scrollback` dumps one session's scrollback ring to stdout. It takes
+  `--tab-name` only (no group axis, since it reads a single terminal).
+- `team new|load` creates or loads a Team Work team from a `config.toml`
+  (the CLI form of the Cmd+P team dialog); `--script` emits the bootstrap
+  as a runnable shell script instead of writing anything.
+
+## Pokes
+
+A poke is how one agent hands work to another. `cs terminal write --submit
+<agent>` writes bytes into another tab AND submits them, so a running agent
+receives the input hands-free:
+
+```sh
+cs terminal write --tab-name=@@Worker --submit claude 'read tasks/next.md'
+```
+
+The submit chord differs per agent, because each agent CLI reads a different
+key as "submit":
+
+- `claude`: the Cmd+Enter chord (an xterm modifyOtherKeys sequence).
+- `codex` / `gemini`: a plain carriage return.
+
+Omit `--submit` to write pure bytes: the text then lands in the agent's
+compose box unsubmitted (a bare newline is just a newline to an agent, not a
+submit), which is rarely what you want for a poke.
+
+## Survey
+
+`cs terminal survey` asks a question and blocks until it is answered. It
+raises a survey over the SPA window that owns the target tab and prints the
+chosen option to stdout (or, with `--followup`, the path of a follow-up file
+the UI writes):
+
+```sh
+cs terminal survey --tab-name=@@Host --title "Cut the release?" \
+    --option "Yes" --option "Not yet" "v0.24.0 is green."
+```
+
+Options are numbered `[1]`..`[4]` in the UI, and `--stdin` reads a
+multi-line markdown body.
+
+The constraint to know: survey needs a live SPA window that owns the tab. A
+terminal running as a bare PTY with no window attached matches nothing, and
+the command fails with `no live terminal session matched`. Open the tab in a
+Chan window before surveying it.
+
+## MCP discovery
+
+When the server's MCP bridge is available, each terminal session exports a
+descriptor for Chan's in-process MCP server:
+
+```text
+CHAN_MCP_SERVER_NAME=chan
+CHAN_MCP_SOCKET=...
+CHAN_MCP_COMMAND=...
+CHAN_MCP_COMMAND_JSON=...
+CHAN_MCP_SERVER_JSON=...
+```
+
+An external agent CLI launched from the terminal translates that `CHAN_`
+descriptor into its own MCP configuration shape, which is how it picks up
+Chan's workspace tools. Chan exposes its tools through MCP for external
+agents only; it ships no in-app chat or assistant HTTP API.
