@@ -554,10 +554,19 @@ describe("About-back screensaver preview reacts to theme (A7)", () => {
       /\{#if screensaverTheme === "matrix"\}[\s\S]{1,160}<MatrixRainPreview[\s\S]{1,80}\{:else\}[\s\S]{1,160}<PlainScreensaverPreview/,
     );
     expect(aboutSlot).toMatch(
-      /Preview of the \{screensaverTheme === "matrix"[\s\S]{1,80}\? "Matrix"[\s\S]{1,80}: "Default"\} lock theme/,
+      /Preview of the \{screensaverTheme === "matrix"[\s\S]{1,80}\? "Matrix"[\s\S]{1,80}: "Default"\} lock[\s\S]{1,20}theme/,
     );
     // No longer hardcoded to a Matrix-only preview + hint.
     expect(aboutSlot).not.toMatch(/Static preview of the Matrix lock theme\./);
+    // The preview now lives INSIDE the Screen lock box (a div with a
+    // title), not as a separate standalone <section> below it.
+    expect(aboutSlot).not.toMatch(/<section class="screensaver-preview">/);
+    expect(aboutSlot).toMatch(/class="preview-title">Screensaver preview</);
+    // ...and only renders while the screen lock is ON (gated inside the
+    // screensaverEnabled === true block).
+    expect(aboutSlot).toMatch(
+      /\{#if screensaverEnabled === true\}[\s\S]*?class="screensaver-preview"[\s\S]*?\{\/if\}/,
+    );
   });
 
   test("PlainScreensaverPreview renders the enso mark on a dark backdrop", async () => {

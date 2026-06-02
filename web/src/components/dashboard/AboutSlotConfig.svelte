@@ -318,6 +318,25 @@
             auto-locks.
           </p>
         </div>
+        <!-- Screensaver preview, nested INSIDE the Screen lock box and
+             shown only while the lock is ON: it previews the selected
+             theme before locking. Matrix animates the shared rain engine
+             (self-gates to on-screen + reduced-motion); Default is the
+             static enso on a dark backdrop. -->
+        <div class="screensaver-preview">
+          <div class="preview-title">Screensaver preview</div>
+          <div class="preview-box">
+            {#if screensaverTheme === "matrix"}
+              <MatrixRainPreview width={320} height={180} />
+            {:else}
+              <PlainScreensaverPreview width={320} height={180} />
+            {/if}
+          </div>
+          <p class="hint">
+            Preview of the {screensaverTheme === "matrix" ? "Matrix" : "Default"} lock
+            theme.
+          </p>
+        </div>
       {/if}
     </div>
     <label class="screen-lock-switch">
@@ -340,27 +359,6 @@
       </span>
     </label>
   </div>
-</section>
-
-<!-- Screensaver preview: shows the selected theme so the dropdown choice
-     is visible before locking. The Matrix preview animates the real
-     falling rain (shared engine with the fullscreen screensaver, so they
-     match); it self-gates to on-screen + reduced-motion. The Default
-     preview is the static enso mark on a dark backdrop. -->
-<section class="screensaver-preview">
-  <h3>Screensaver preview</h3>
-  <div class="preview-box">
-    {#if screensaverTheme === "matrix"}
-      <MatrixRainPreview width={320} height={180} />
-    {:else}
-      <PlainScreensaverPreview width={320} height={180} />
-    {/if}
-  </div>
-  <p class="hint">
-    Preview of the {screensaverTheme === "matrix"
-      ? "Matrix"
-      : "Default"} lock theme.
-  </p>
 </section>
 
 <style>
@@ -480,12 +478,19 @@
     cursor: wait;
   }
   .muted { color: var(--text-secondary); font-style: italic; }
-  /* Fixed preview box sized to match the MatrixRainPreview canvas so
-     the card never reflows when the static frame paints. */
+  /* Screensaver preview, nested inside the Screen lock box. The fixed
+     preview-box matches the MatrixRainPreview canvas so the card never
+     reflows when the static frame paints. */
   .screensaver-preview {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.4rem;
+    margin-top: 0.75rem;
+  }
+  .preview-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
   }
   .preview-box {
     width: 320px;
