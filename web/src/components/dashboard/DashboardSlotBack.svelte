@@ -59,12 +59,24 @@
   ariaLabel="Dashboard settings"
   {onDone}
 >
-  <!-- Carousel navigator. Mirrors the front carousel's controls
-       (EmptyPaneCarousel.svelte): prev/next chevrons + a dot pager + a
-       pause/play toggle. Selecting a slot swaps the body below and moves
-       tab.carouselSlide so the front lands on the same slot when flipped
-       back; pause/play sets tab.autoRotate. The navigator itself does not
-       auto-rotate (you are configuring, not watching). -->
+  {#if slot === 0}
+    <AboutSlotConfig />
+  {:else if slot === 1}
+    <WorkspaceSlotConfig />
+  {:else}
+    <SearchSlotConfig />
+  {/if}
+
+  <!-- Carousel navigator. Mirrors the FRONT card's carousel controls
+       (EmptyPaneCarousel.svelte) in both look AND placement: a centered
+       BOTTOM ROW of prev/next chevrons + a dot pager + a pause/play toggle.
+       `margin-top: auto` pushes it below the slot body the way the front's
+       slide-stage pushes its controls to the bottom; `align-self: center`
+       centers it like the front's `align-items: center`. Selecting a slot
+       swaps the body above and moves tab.carouselSlide so the front lands
+       on the same slot when flipped back; pause/play sets tab.autoRotate.
+       The navigator itself does not auto-rotate (you are configuring, not
+       watching). -->
   <div class="carousel-nav" aria-label="Dashboard slot navigator">
     <button
       class="nav-arrow"
@@ -111,25 +123,21 @@
       {/if}
     </button>
   </div>
-
-  {#if slot === 0}
-    <AboutSlotConfig />
-  {:else if slot === 1}
-    <WorkspaceSlotConfig />
-  {:else}
-    <SearchSlotConfig />
-  {/if}
 </HybridSurfaceConfigShell>
 
 <style>
   /* Carousel navigator, styled to match the front carousel's
      `.carousel-controls` (EmptyPaneCarousel.svelte) so the two faces read
-     as the same control family. */
+     as the same control family. `margin-top: auto` parks it on the BOTTOM
+     row of the config body (the front's slide-stage flexes it down the same
+     way) and `align-self: center` centers it (the front uses the carousel's
+     `align-items: center`), so the back nav sits exactly like the front. */
   .carousel-nav {
     display: inline-flex;
-    align-self: flex-start;
+    align-self: center;
     align-items: center;
     gap: 8px;
+    margin-top: auto;
   }
   .nav-arrow,
   .cycle-toggle {

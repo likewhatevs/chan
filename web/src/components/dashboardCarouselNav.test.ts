@@ -44,4 +44,18 @@ describe("DB1: dashboard config slot selector is a carousel navigator", () => {
       /class="cycle-toggle"[\s\S]{1,200}onclick=\{toggleAutoRotate\}[\s\S]{1,300}\{#if autoRotate\}[\s\S]{1,120}<Pause[\s\S]{1,160}<Play/,
     );
   });
+
+  test("the nav sits in a centered BOTTOM row, mirroring the front card", () => {
+    // @@Host: place it exactly like the front carousel nav - bottom row,
+    // centered. The slot body dispatch renders BEFORE the nav (so the nav is
+    // the last/bottom row), and the nav centers + parks at the bottom via CSS.
+    const slotIdx = dashboardBack.indexOf("<SearchSlotConfig />");
+    const navIdx = dashboardBack.indexOf('class="carousel-nav"');
+    expect(slotIdx).toBeGreaterThan(-1);
+    expect(navIdx).toBeGreaterThan(slotIdx);
+    expect(dashboardBack).toMatch(
+      /\.carousel-nav \{[\s\S]{1,200}align-self: center;[\s\S]{1,120}margin-top: auto;/,
+    );
+    expect(dashboardBack).not.toMatch(/\.carousel-nav \{[\s\S]{1,200}align-self: flex-start;/);
+  });
 });
