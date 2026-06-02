@@ -508,7 +508,7 @@ jobs:
           fi
 
       - name: Import Developer ID certificate
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -690,7 +690,7 @@ jobs:
           node scripts/generate-release-metadata.mjs --manifest /tmp/chan-release-assets.json --out dist/dl
           find dist/dl -type f | sort
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: chan/web-marketing/dist
 
@@ -709,4 +709,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

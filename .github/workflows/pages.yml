@@ -37,7 +37,7 @@ jobs:
       - name: Preserve existing release metadata
         run: npm run preserve:metadata
         working-directory: chan/web-marketing
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: chan/web-marketing/dist
 
@@ -51,4 +51,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
