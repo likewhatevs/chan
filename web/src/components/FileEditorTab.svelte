@@ -20,6 +20,12 @@
   } from "../state/editorBuffer";
   import JsonPretty from "../editor/JsonPretty.svelte";
   import CsvTable from "../editor/CsvTable.svelte";
+  import { openExternalUrl } from "../editor/external_links";
+  import {
+    internalLinkAtPoint,
+    openLinkPreview,
+    type InternalLinkHit,
+  } from "../editor/link_preview";
   import {
     ArrowLeft,
     ArrowRight,
@@ -29,10 +35,13 @@
     Code2,
     Copy,
     Eraser,
+    ExternalLink,
+    Eye,
     FilePlus,
     Folder,
     History,
     Highlighter,
+    Link as LinkIcon,
     Network,
     Pencil,
     Pilcrow,
@@ -501,9 +510,20 @@
   // actions (Reload / Search / Graph from here). Anchored at
   // the click coords by synthesizing a zero-size rect.
 
+  // Link state for the body menu, captured at right-click time BEFORE
+  // the menu portal covers the click point. `bodyLinkUrl` = the external
+  // URL under the cursor (F4 #3); `bodyPreviewHit` = the internal wiki
+  // link under the cursor (F4 #4). Both null when the click was off a
+  // link.
+  let bodyLinkUrl = $state<string | null>(null);
+  let bodyPreviewHit = $state<InternalLinkHit | null>(null);
+
   function onEditorContext(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
+    bodyLinkUrl =
+      activeEditorRef()?.externalUrlAtCoords(e.clientX, e.clientY) ?? null;
+    bodyPreviewHit = internalLinkAtPoint(e.clientX, e.clientY);
     openTabMenu(
       tab.id,
       {
@@ -545,6 +565,35 @@
   function doPasteClipboard(): void {
     closeTabMenu();
     void activeEditorRef()?.pasteClipboard();
+  }
+
+  function doOpenLink(): void {
+    const url = bodyLinkUrl;
+    closeTabMenu();
+    if (url) void openExternalUrl(url);
+  }
+  async function doCopyLink(): Promise<void> {
+    const url = bodyLinkUrl;
+    closeTabMenu();
+    if (!url) return;
+    await copyTextToClipboard(url, {
+      onSuccess: () => setTransientStatus("Copied link"),
+      onError: (msg) => (ui.status = `copy failed: ${msg}`),
+    });
+  }
+
+  /// Open the read-only markdown preview for the internal wiki link
+  /// under the cursor (F4 #4). The popover's Open button navigates to
+  /// the target in the active pane.
+  function doPreviewLink(): void {
+    const hit = bodyPreviewHit;
+    closeTabMenu();
+    if (!hit) return;
+    openLinkPreview({
+      hit,
+      fromPath: tab.path,
+      onOpen: () => void openInActivePane(hit.target),
+    });
   }
 
   async function doReload(): Promise<void> {
@@ -800,6 +849,34 @@
             <span class="mbtn-label">Paste</span>
             <span class="mbtn-chord"></span>
           </button>
+          {#if bodyLinkUrl || bodyPreviewHit}
+            <div class="msep" role="separator"></div>
+            {#if bodyLinkUrl}
+              <button class="mbtn" onclick={doOpenLink}>
+                <span class="mbtn-icon">
+                  <ExternalLink size={16} strokeWidth={1.75} aria-hidden="true" />
+                </span>
+                <span class="mbtn-label">Open link</span>
+                <span class="mbtn-chord"></span>
+              </button>
+              <button class="mbtn" onclick={doCopyLink}>
+                <span class="mbtn-icon">
+                  <LinkIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+                </span>
+                <span class="mbtn-label">Copy link</span>
+                <span class="mbtn-chord"></span>
+              </button>
+            {/if}
+            {#if bodyPreviewHit}
+              <button class="mbtn" onclick={doPreviewLink}>
+                <span class="mbtn-icon">
+                  <Eye size={16} strokeWidth={1.75} aria-hidden="true" />
+                </span>
+                <span class="mbtn-label">Preview</span>
+                <span class="mbtn-chord"></span>
+              </button>
+            {/if}
+          {/if}
           <div class="msep" role="separator"></div>
           <button class="mbtn" onclick={doFind}>
             <span class="mbtn-icon">

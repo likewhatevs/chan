@@ -62,7 +62,10 @@
   import { breathingRoom } from "./breathing_room";
   import { clickToPlaceCaret } from "./click_caret";
   import { listGuideVisibility } from "./extensions/list_guide_visibility";
-  import { externalLinkClickHandler } from "./external_links";
+  import {
+    externalLinkClickHandler,
+    externalUrlAtCoords as resolveExternalUrlAtCoords,
+  } from "./external_links";
   import { rightClickNoSelect } from "./right_click_no_select";
   import {
     removeTrailingWhitespace,
@@ -324,6 +327,11 @@
   }
   export function pasteClipboard(): Promise<void> {
     return view ? clip.pasteClipboard(view) : Promise.resolve();
+  }
+  // F4 link affordances: the openable external URL under the right-click
+  // point (the body menu anchors there), or null.
+  export function externalUrlAtCoords(x: number, y: number): string | null {
+    return view ? resolveExternalUrlAtCoords(view, x, y) : null;
   }
   export function currentBlockKind(): BlockKind {
     return view ? fmt.currentBlockKind(view) : "normal";

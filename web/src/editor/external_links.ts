@@ -89,6 +89,20 @@ export async function openExternalUrl(url: string): Promise<boolean> {
   return true;
 }
 
+/// The openable external URL under the given viewport coordinates, or
+/// null. Backs the F4 body-context "Open link" / "Copy link" entries:
+/// the menu opens at the right-click point, so it resolves the URL from
+/// those coordinates rather than the caret.
+export function externalUrlAtCoords(
+  view: EditorView,
+  x: number,
+  y: number,
+): string | null {
+  const pos = view.posAtCoords({ x, y });
+  if (pos === null) return null;
+  return externalUrlAtPos(view.state, pos);
+}
+
 export function externalUrlAtPos(state: EditorState, pos: number): string | null {
   for (const side of [-1, 0, 1] as const) {
     let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, side);

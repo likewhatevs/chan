@@ -191,14 +191,14 @@ describe("imports", () => {
 describe("F4: editor body-context vs tab-context split", () => {
   test("body right-click opens the body source", () => {
     expect(editor).toMatch(
-      /function onEditorContext[\s\S]{1,200}openTabMenu\([\s\S]{1,300}"body",/,
+      /function onEditorContext[\s\S]{1,500}openTabMenu\([\s\S]{1,300}"body",/,
     );
   });
 
   test("body menu is the tight Cut / Copy / Paste + Find set", () => {
     expect(editor).toContain('{#if tabMenu.source === "body"}');
     expect(editor).toMatch(
-      /tabMenu\.source === "body"[\s\S]{1,1500}onclick=\{doCutSelection\}[\s\S]{1,600}onclick=\{doCopySelection\}[\s\S]{1,600}onclick=\{doPasteClipboard\}[\s\S]{1,600}onclick=\{doFind\}/,
+      /tabMenu\.source === "body"[\s\S]{1,1500}onclick=\{doCutSelection\}[\s\S]{1,600}onclick=\{doCopySelection\}[\s\S]{1,600}onclick=\{doPasteClipboard\}[\s\S]{1,1800}onclick=\{doFind\}/,
     );
   });
 
@@ -218,5 +218,32 @@ describe("F4: editor body-context vs tab-context split", () => {
     expect(editor).toMatch(/activeEditorRef\(\)\?\.cutSelection\(\)/);
     expect(editor).toMatch(/activeEditorRef\(\)\?\.copySelection\(\)/);
     expect(editor).toMatch(/activeEditorRef\(\)\?\.pasteClipboard\(\)/);
+  });
+});
+
+describe("F4 #3/#4: link affordances (editor body menu)", () => {
+  test("link state is captured at right-click, before the menu covers it", () => {
+    // elementFromPoint would resolve the menu portal once it is on
+    // screen, so onEditorContext samples the link under the cursor first.
+    expect(editor).toMatch(
+      /function onEditorContext[\s\S]{1,400}externalUrlAtCoords\(e\.clientX, e\.clientY\)[\s\S]{1,200}internalLinkAtPoint\(e\.clientX, e\.clientY\)[\s\S]{1,200}openTabMenu/,
+    );
+  });
+
+  test("Open link / Copy link show only on an external URL (#3 = A, no bubble)", () => {
+    expect(editor).toMatch(
+      /\{#if bodyLinkUrl\}[\s\S]{1,400}onclick=\{doOpenLink\}[\s\S]{1,400}onclick=\{doCopyLink\}/,
+    );
+    expect(editor).toMatch(/function doOpenLink[\s\S]{1,160}openExternalUrl\(url\)/);
+    expect(editor).toMatch(/doCopyLink[\s\S]{1,200}copyTextToClipboard\(url/);
+  });
+
+  test("Preview shows only on an internal wiki link (#4) + reuses the popover", () => {
+    expect(editor).toMatch(
+      /\{#if bodyPreviewHit\}[\s\S]{1,300}onclick=\{doPreviewLink\}/,
+    );
+    expect(editor).toMatch(
+      /function doPreviewLink[\s\S]{1,300}openLinkPreview\(\{[\s\S]{1,200}openInActivePane\(hit\.target\)/,
+    );
   });
 });

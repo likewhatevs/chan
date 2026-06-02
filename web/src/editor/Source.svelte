@@ -35,6 +35,7 @@
   } from "./tools";
   import { rightClickNoSelect } from "./right_click_no_select";
   import * as clip from "./clipboard";
+  import { externalUrlAtCoords as resolveExternalUrlAtCoords } from "./external_links";
 
   // Editor density follows the user's line_spacing pref. Same hook
   // the Wysiwyg side uses, exposed here as a `data-density` attribute
@@ -186,6 +187,11 @@
   }
   export function pasteClipboard(): Promise<void> {
     return view ? clip.pasteClipboard(view) : Promise.resolve();
+  }
+  // F4 link affordances: the openable external URL under the right-click
+  // point (the body menu anchors there), or null.
+  export function externalUrlAtCoords(x: number, y: number): string | null {
+    return view ? resolveExternalUrlAtCoords(view, x, y) : null;
   }
 
   onMount(() => {
