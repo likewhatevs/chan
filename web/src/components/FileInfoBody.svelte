@@ -62,6 +62,7 @@
   } from "../state/store.svelte";
   import { classifyEntry } from "../state/kinds";
   import KindChip from "./KindChip.svelte";
+  import { Copy } from "lucide-svelte";
 
   /// Visual / behavioural kind for a file reference. Images route to
   /// the fullscreen zoom overlay (editor's "Zoom" button shares the
@@ -742,7 +743,8 @@
               class="copy-btn"
               onclick={doCopyAbsolutePath}
               title="Copy absolute path to clipboard"
-            >COPY</button>
+              aria-label="Copy absolute path to clipboard"
+            ><Copy size={14} aria-hidden="true" /></button>
           </div>
         {/if}
       {/if}
@@ -1372,17 +1374,16 @@
   }
   .copy-btn {
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: transparent;
     border: 1px solid var(--btn-border);
     border-radius: 3px;
     color: var(--text);
     cursor: pointer;
-    font: inherit;
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    padding: 1px 6px;
-    line-height: 1.4;
+    padding: 3px;
+    line-height: 0;
   }
   .copy-btn:hover { border-color: var(--btn-hover); }
   .open {
