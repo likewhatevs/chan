@@ -1204,19 +1204,6 @@ fn merge_filesystem_layer_with_buckets(
     Ok(())
 }
 
-fn scoped_report_files(
-    workspace: &chan_workspace::Workspace,
-    p: &GraphParams,
-) -> chan_workspace::Result<Vec<ReportFileStats>> {
-    let path = graph_scope_path(p);
-    let report = match p.scope {
-        GraphScope::Workspace => workspace.report()?,
-        GraphScope::Directory => workspace.report_for_prefix(path)?,
-        GraphScope::File => workspace.report_for_files(&[path.to_string()])?,
-    };
-    Ok(report.files)
-}
-
 fn report_buckets_for_graph(
     workspace: &chan_workspace::Workspace,
 ) -> std::collections::HashMap<String, ReportFileBucket> {
@@ -1244,12 +1231,10 @@ fn apply_report_buckets(
 
 fn merge_language_layer(
     workspace: &chan_workspace::Workspace,
-    p: &GraphParams,
+    _p: &GraphParams,
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     edges: &mut Vec<GraphEdgeView>,
 ) -> chan_workspace::Result<()> {
-    let files = scoped_report_files(workspace, p)?;
-
     // Phase-13 round-1 closing (B9): the workspace-graph language
     // layer now emits Language -> File edges directly so the
     // language lens (1-hop BFS in GraphPanel) splays out to
@@ -1267,17 +1252,60 @@ fn merge_language_layer(
     // /api/graph/languages keeps using `build_language_graph`
     // for the overview's directory rollup (with `?depth=N`
     // ranking); only the workspace lens path moves.
+    //
+    // @@LaneC fix: the file-NODE set comes from the unified tree
+    // layer (the full File Browser namespace), but the language
+    // EDGE set used to come from a scope-restricted report
+    // (`report_for_prefix` / `report_for_files`). In directory and
+    // file scope the tree layer pulls in spine and link-target
+    // files that live OUTSIDE the scoped prefix, so those file
+    // nodes had no language edge and rendered disconnected
+    // (floating) even when they were of a recognized language.
+    // We now drive the language edges off the SAME namespace as the
+    // nodes: take per-file language from the FULL workspace report
+    // (`report.files`, whose `language` is `tokei`'s classification
+    // and is never empty for a tracked file) and emit a `language`
+    // edge for every File node already present in `nodes` that the
+    // report tracks. Media/binary files return no language from the
+    // report (and are separate node kinds), so they never get a
+    // spurious edge. Language-node `files`/`code` counts aggregate
+    // only over the file nodes actually rendered.
 
-    let mut by_language: std::collections::BTreeMap<String, (u64, u64)> =
+    let report = workspace.report()?;
+    let language_by_path: std::collections::HashMap<&str, &str> = report
+        .files
+        .iter()
+        .filter_map(|f| {
+            let language = f.language.trim();
+            if language.is_empty() {
+                None
+            } else {
+                Some((f.path.as_str(), language))
+            }
+        })
+        .collect();
+    let code_by_path: std::collections::HashMap<&str, u64> = report
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.code))
+        .collect();
+
+    // Walk the file nodes the graph already holds; emit one
+    // Language -> File edge per file node the report classifies.
+    let mut by_language: std::collections::BTreeMap<&str, (u64, u64)> =
         std::collections::BTreeMap::new();
-    for file in &files {
-        let language = file.language.trim();
-        if language.is_empty() {
+    let mut language_edges: Vec<(String, String)> = Vec::new();
+    for node in nodes.values() {
+        let GraphNodeView::File { path, .. } = node else {
             continue;
-        }
-        let entry = by_language.entry(language.to_string()).or_default();
+        };
+        let Some(&language) = language_by_path.get(path.as_str()) else {
+            continue;
+        };
+        let entry = by_language.entry(language).or_default();
         entry.0 += 1;
-        entry.1 += file.code;
+        entry.1 += code_by_path.get(path.as_str()).copied().unwrap_or(0);
+        language_edges.push((language_node_id(language), path.clone()));
     }
 
     for (language, (files_count, code_count)) in &by_language {
@@ -1286,22 +1314,18 @@ fn merge_language_layer(
             id.clone(),
             GraphNodeView::Language {
                 id,
-                label: language.clone(),
-                language: language.clone(),
+                label: (*language).to_string(),
+                language: (*language).to_string(),
                 files: *files_count,
                 code: *code_count,
             },
         );
     }
 
-    for file in &files {
-        let language = file.language.trim();
-        if language.is_empty() {
-            continue;
-        }
+    for (source, target) in language_edges {
         edges.push(GraphEdgeView {
-            source: language_node_id(language),
-            target: file.path.clone(),
+            source,
+            target,
             kind: "language",
             broken: None,
             rank: None,
