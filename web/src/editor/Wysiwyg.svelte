@@ -1310,6 +1310,15 @@
   :global(.md-wysiwyg-cm6 .cm-md-mermaid-rendered) {
     margin: 0.4rem 0;
     perspective: 1200px;
+    /* Mirror the code-block slab's right inset. The CM6 fold gutter eats
+       ~18px on the LEFT, so the diagram's left edge already sits flush with
+       the post-gutter content edge (correct). The right side has no gutter,
+       so without this the diagram bleeds to the editor's right edge while the
+       left is inset - lopsided, right margin too short. An 18px transparent
+       right border (with border-box) shortens the diagram's box by 18px on
+       the right, mirroring the left gutter exactly like .cm-md-code-block. */
+    border-right: 18px solid transparent;
+    box-sizing: border-box;
   }
   :global(.md-wysiwyg-cm6 .cm-md-mermaid-inner) {
     transform-origin: center top;
