@@ -129,18 +129,31 @@ impl ReportState {
                     Some(p) => idx.remove(p),
                     None => return,
                 },
-                WatchKind::Renamed => {
-                    let (Some(from), Some(to)) = (&ev.path, &ev.to) else {
-                        return;
-                    };
-                    match idx.rename(from, to) {
+                WatchKind::Renamed => match (&ev.path, &ev.to) {
+                    (Some(from), Some(to)) => match idx.rename(from, to) {
                         Ok(o) => o,
                         Err(e) => {
                             tracing::warn!(error = %e, "chan-report rename failed");
                             return;
                         }
-                    }
-                }
+                    },
+                    // macOS FSEvents reports a rename as UNPAIRED Name events
+                    // (one path each, no `to`), so the paired arm above never
+                    // fires there. Treat a lone path as an update: `idx.update`
+                    // stats the path, indexing the destination if it now
+                    // exists or dropping the row if the source vanished.
+                    // Without this the rename destination never gets a report
+                    // row, so its graph language edge stays missing until a
+                    // later edit re-indexes it via a Modified event.
+                    (Some(p), None) => match idx.update(p) {
+                        Ok(o) => o,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "chan-report rename update failed");
+                            return;
+                        }
+                    },
+                    (None, _) => return,
+                },
                 WatchKind::Created | WatchKind::Modified => {
                     let Some(p) = &ev.path else {
                         return;
@@ -263,5 +276,62 @@ fn writer_loop(
         if let Err(e) = atomic_write(&jsonl_path, &buf) {
             tracing::warn!(error = %e, path = %jsonl_path.display(), "chan-report atomic_write failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn lang_of(state: &ReportState, rel: &str) -> Option<String> {
+        state
+            .snapshot(&Scope::All)
+            .files
+            .into_iter()
+            .find(|f| f.path == rel)
+            .map(|f| f.language)
+    }
+
+    // macOS FSEvents delivers a rename as UNPAIRED Name events (one path
+    // each, `to` = None), so the report's Renamed handler must still
+    // (re)index a lone path. Without it the rename DESTINATION never gets a
+    // report row, so the graph's language layer emits no language edge for
+    // it and the file renders as a floating node until a later edit heals
+    // it. Regression for that staleness bug.
+    #[test]
+    fn unpaired_rename_indexes_destination_and_drops_source() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("a.md"), "# A\n\nprose\n").unwrap();
+        let jsonl = root.join(".chan/report.jsonl");
+        let state = ReportState::open(root, &jsonl, &[]).unwrap();
+        assert_eq!(lang_of(&state, "a.md").as_deref(), Some("Markdown"));
+
+        // `mv a.md b.md`. macOS surfaces this as the destination's lone Name
+        // event (the file now exists at b.md) and the source's lone Name
+        // event (a.md is gone), each with `to` = None.
+        fs::rename(root.join("a.md"), root.join("b.md")).unwrap();
+        state.on_event(&WatchEvent {
+            kind: WatchKind::Renamed,
+            path: Some("b.md".to_string()),
+            to: None,
+        });
+        assert_eq!(
+            lang_of(&state, "b.md").as_deref(),
+            Some("Markdown"),
+            "unpaired-rename destination must be indexed with its language",
+        );
+
+        state.on_event(&WatchEvent {
+            kind: WatchKind::Renamed,
+            path: Some("a.md".to_string()),
+            to: None,
+        });
+        assert!(
+            lang_of(&state, "a.md").is_none(),
+            "vanished rename source must be dropped from the report",
+        );
     }
 }
