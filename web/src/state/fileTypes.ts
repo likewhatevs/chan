@@ -26,6 +26,13 @@
 //
 // Well-known no-extension files (Makefile, Dockerfile, LICENSE, ...)
 // resolve via TEXT_BASENAMES after the extension check misses.
+//
+// Unknown extensions: the server maps these to the `pending` wire kind
+// and resolves them to `text`/`binary` with a content sniff (valid
+// UTF-8 + no NUL) the editor + workspace share. The frontend cannot
+// read bytes here, so this path-only `classifyPath` stays conservative
+// and returns `binary` for the unknown case; the authoritative
+// text/binary answer always rides the server `kind`.
 
 const MARKDOWN_EXTENSIONS = new Set(["md", "txt"]);
 

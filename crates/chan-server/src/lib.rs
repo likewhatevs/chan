@@ -98,13 +98,16 @@ use self_writes::SelfWrites;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
-use chan_workspace::{Library, SearchAggression, WatchEvent, Workspace};
+use chan_workspace::{
+    Library, ProgressCallback, ProgressEvent, ProgressStage, SearchAggression, WatchEvent,
+    Workspace,
+};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 use tower_http::trace::TraceLayer;
@@ -137,6 +140,11 @@ pub struct ServeConfig {
     /// Optional one-shot override for the search indexer's resource
     /// profile. When absent, the persisted server config decides.
     pub search_aggression: Option<SearchAggression>,
+    /// Mirror of the CLI `-v/--verbose` flag. When true, the cold-start
+    /// stderr indexing progress (B10) carries per-phase detail
+    /// (current file / labels); when false it stays a throttled
+    /// one-liner. Off for tunnel/desktop-spawned runs.
+    pub verbose: bool,
     /// Tell the SPA shell to grey out the Settings entry point so a
     /// non-owner viewer can't open the settings panel. Surfaced to
     /// the frontend as `<meta name="chan-settings-disabled">`, and
@@ -295,6 +303,106 @@ struct AppArtifacts {
     shutdown_tx: Arc<watch::Sender<bool>>,
 }
 
+/// Fan one `ProgressEvent` out to several sinks. Used by `build_app`
+/// to tee the indexer's progress to both the WebSocket broadcast (the
+/// web UI's indexer pill) and stderr (so a foreground `chan serve` on
+/// a large tree isn't silent).
+struct TeeProgress(Vec<Arc<dyn ProgressCallback>>);
+
+impl ProgressCallback for TeeProgress {
+    fn on_progress(&self, event: ProgressEvent) {
+        for sink in &self.0 {
+            sink.on_progress(event.clone());
+        }
+    }
+}
+
+/// Don't surface a single stderr line until the initial build has been
+/// running this long: a small or already-warm workspace indexes in a
+/// blink and should stay silent. Only a genuinely long build (the
+/// large-tree case B10 targets) crosses this threshold and starts
+/// streaming.
+const STDERR_PROGRESS_MIN_ELAPSED: Duration = Duration::from_millis(800);
+/// Minimum spacing between stderr progress lines once they start, so a
+/// fast index loop emits a readable trickle rather than a flood.
+const STDERR_PROGRESS_INTERVAL: Duration = Duration::from_millis(750);
+
+/// Concise indexing progress on stderr for a cold-start `chan serve`.
+/// The launch URL is printed immediately (the server is usable at
+/// once); these lines stream underneath it so the user can see what
+/// chan is doing on a large tree. Self-gates on elapsed time so fast
+/// builds print nothing, and throttles once active.
+struct StderrIndexProgress {
+    verbose: bool,
+    started: Instant,
+    last_emit: Mutex<Option<Instant>>,
+}
+
+impl ProgressCallback for StderrIndexProgress {
+    fn on_progress(&self, event: ProgressEvent) {
+        let now = Instant::now();
+        if now.duration_since(self.started) < STDERR_PROGRESS_MIN_ELAPSED {
+            return;
+        }
+        {
+            let mut last = self.last_emit.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(prev) = *last {
+                if now.duration_since(prev) < STDERR_PROGRESS_INTERVAL {
+                    return;
+                }
+            }
+            *last = Some(now);
+        }
+        eprintln!("{}", format_index_progress(&event, self.verbose));
+    }
+}
+
+/// One concise stderr line for an indexing `ProgressEvent`. Phase +
+/// counts (+ percent / ETA when known); `--verbose` appends the
+/// current item label.
+fn format_index_progress(event: &ProgressEvent, verbose: bool) -> String {
+    let pct = match event.current.saturating_mul(100).checked_div(event.total) {
+        Some(p) => format!(" ({p}%)"),
+        None => String::new(),
+    };
+    let mut line = match event.stage {
+        ProgressStage::GraphRebuild => {
+            format!(
+                "chan: building graph {}/{}{pct}",
+                event.current, event.total
+            )
+        }
+        ProgressStage::IndexFile => {
+            format!(
+                "chan: indexing {}/{} files{pct}",
+                event.current, event.total
+            )
+        }
+        ProgressStage::EmbedBatch => format!("chan: embedding ({} chunks)", event.current),
+        ProgressStage::ModelLoad => "chan: loading embedding model".to_string(),
+        ProgressStage::Heartbeat => {
+            format!("chan: {}", event.label.as_deref().unwrap_or("indexing"))
+        }
+        ProgressStage::RenameRewrite => {
+            format!("chan: rewriting links {}/{}", event.current, event.total)
+        }
+        ProgressStage::Import => format!("chan: importing {}/{}", event.current, event.total),
+        ProgressStage::Reset => {
+            format!("chan: resetting {}", event.label.as_deref().unwrap_or(""))
+        }
+    };
+    if let Some(secs) = event.eta_secs {
+        line.push_str(&format!(", ~{secs}s left"));
+    }
+    if verbose {
+        if let Some(label) = &event.label {
+            line.push_str("  ");
+            line.push_str(label);
+        }
+    }
+    line
+}
+
 /// Build the full axum app: state assembly, channels, watcher,
 /// indexer, config loads, router. Shared by `serve()` (local TCP
 /// listener) and `serve_via_tunnel()` (chan-tunnel-client transport)
@@ -352,6 +460,23 @@ async fn build_app(
     // Arc is stored on AppState for the /ws handler and survives a
     // storage reset (the rebuilt bridge re-references it).
     let scope_registry = Arc::new(bus::ScopeRegistry::new());
+    // B10: detect a cold (empty) index BEFORE the potentially slow
+    // pre-URL work (watcher registration on a large tree can take
+    // several seconds, and the initial index build is about to run).
+    // On a cold start we print one heads-up line right here, ahead of
+    // everything below, so a foreground `chan serve` on a large tree
+    // shows a sign of life immediately instead of a long silent gap
+    // before the URL. A warm restart leaves the index non-empty and
+    // stays quiet. The same flag gates the stderr progress tee below.
+    let cold_index = workspace.num_indexed().map(|n| n == 0).unwrap_or(false);
+    if cold_index {
+        eprintln!(
+            "chan: preparing this workspace (first run): registering the file \
+             watcher + building the search index. This can take a moment on a \
+             large tree; the URL prints below when the server is ready, and \
+             indexing then continues in the background."
+        );
+    }
     let bridge = make_watch_bridge(&events_tx, &index_events_tx, &self_writes, &scope_registry);
     let watch_handle = workspace.watch(bridge)?;
     let workspace_root = workspace.root().to_path_buf();
@@ -362,8 +487,21 @@ async fn build_app(
     // index, graph rebuild, embed batch) lands on the same /ws
     // stream as watch + LLM frames, with `type: "progress"`. The
     // status bar in the web app subscribes to workspace the live
-    // indexer pill.
-    let progress_sink = make_progress_broadcast(&events_tx);
+    // indexer pill. On a cold start we also tee that progress to stderr
+    // so the background build isn't silent in the terminal.
+    let broadcast_sink = make_progress_broadcast(&events_tx);
+    let progress_sink: Arc<dyn ProgressCallback> = if cold_index {
+        Arc::new(TeeProgress(vec![
+            broadcast_sink,
+            Arc::new(StderrIndexProgress {
+                verbose: config.verbose,
+                started: Instant::now(),
+                last_emit: Mutex::new(None),
+            }),
+        ]))
+    } else {
+        broadcast_sink
+    };
     let indexer = Arc::new(indexer::Indexer::spawn(
         workspace.clone(),
         index_events_tx.subscribe(),
@@ -666,6 +804,10 @@ pub async fn serve_via_tunnel(
         // serve() open path is never reached in tunnel mode.
         open_browser: false,
         search_aggression,
+        // Tunnel/desktop-spawned runs keep the cold-start stderr
+        // progress quiet by default; it targets the foreground local
+        // `chan serve` terminal.
+        verbose: false,
         // Settings track `public`: OAuth-gated runs leave the panel
         // live (the gateway has proven the viewer is the workspace
         // owner), `--tunnel-public` greys it out so anonymous

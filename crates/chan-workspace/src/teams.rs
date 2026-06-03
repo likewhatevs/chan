@@ -22,6 +22,15 @@ pub struct TeamConfig {
     pub tab_group: String,
     #[serde(default = "default_auto_prefix_at")]
     pub auto_prefix_at: bool,
+    // Whether the team's member terminals start with the chan MCP
+    // discovery env vars (CHAN_MCP_SERVER_JSON + companions) set. Off by
+    // default (B5: MCP env starts disabled for ALL agents, since codex
+    // wants a file-based config and a stray env descriptor makes it fail
+    // to start). The team setup dialog and `cs terminal team new|load`
+    // opt back in. `#[serde(default)]` => an absent field (hand-written
+    // or pre-field config.toml) reads as false; pre-release, no migration.
+    #[serde(default)]
+    pub mcp_env: bool,
     // ISO 8601 UTC creation time. The SPA dialog always sends it; the CLI
     // `cs terminal team new` lets the input config.toml omit it (a
     // hand-written team spec should not carry a timestamp), and the server

@@ -393,6 +393,44 @@ fn classify_basename(name: &str) -> Option<FileClass> {
     Some(class)
 }
 
+/// Leading bytes sampled by `looks_like_text` for files the
+/// extension / basename classifier can't type. 8 KiB catches a NUL
+/// or an invalid UTF-8 byte in any real binary header while staying a
+/// single cheap read; text files this size or larger that are clean
+/// in their first 8 KiB are overwhelmingly clean throughout (the
+/// editor's full UTF-8 read is the backstop for the rare exception).
+pub const TEXT_SNIFF_BYTES: usize = 8192;
+
+/// Content sniff for files `classify` settles on `FileClass::Other`:
+/// treat the sampled bytes as text when they hold no NUL byte and are
+/// valid UTF-8. This is the hand-rolled "magic" the editor and file
+/// browser use so extensionless or odd-suffix text files (`.zshrc`,
+/// `*.service`, `Kconfig`, a stray `Makefile.inc`) open instead of
+/// being refused as binary. Deliberately dependency-free: a NUL byte
+/// is the canonical binary marker, and UTF-8 validity rejects Latin-1
+/// / UTF-16 / arbitrary byte soup without pulling in libmagic / infer.
+///
+/// `bytes` is a *prefix* of the file (the first `TEXT_SNIFF_BYTES`),
+/// so a multibyte UTF-8 character may be cut mid-sequence at the end
+/// of the sample. That single trailing truncation is tolerated; any
+/// other invalid sequence, or any NUL anywhere in the sample, fails.
+pub fn looks_like_text(bytes: &[u8]) -> bool {
+    // NUL is the canonical "this is binary" signal. It is itself
+    // valid UTF-8 (U+0000), so the from_utf8 check below would pass
+    // it; screen for it explicitly first.
+    if bytes.contains(&0) {
+        return false;
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(_) => true,
+        // `error_len() == None` is "unexpected end of input": a
+        // multibyte char straddling the sample boundary. The bytes
+        // before it are valid UTF-8, so the file still reads as text.
+        // A `Some(_)` error_len is a genuinely invalid byte sequence.
+        Err(e) => e.error_len().is_none(),
+    }
+}
+
 /// Caller-supplied list of directory names that the indexing /
 /// graph-rebuild walks should not descend into. Matched at any
 /// depth by exact basename, case-insensitive. `Library` loads the
@@ -1672,6 +1710,43 @@ mod tests {
         // Case insensitivity for known textual extensions.
         assert_eq!(classify("Main.PY"), FileClass::Text);
         assert_eq!(classify("Build.YAML"), FileClass::Text);
+    }
+
+    #[test]
+    fn looks_like_text_accepts_real_text() {
+        assert!(looks_like_text(b""));
+        assert!(looks_like_text(b"plain ascii\n"));
+        assert!(looks_like_text(
+            "alias gs='git status'\nexport EDITOR=vim\n".as_bytes()
+        ));
+        // Multibyte UTF-8 well inside the sample.
+        assert!(looks_like_text(
+            "caf\u{e9} \u{1f600} \u{4e2d}\u{6587}".as_bytes()
+        ));
+    }
+
+    #[test]
+    fn looks_like_text_rejects_binary() {
+        // A NUL byte is the canonical binary marker.
+        assert!(!looks_like_text(b"text then\x00binary"));
+        // A PNG header: NUL bytes + non-UTF-8.
+        assert!(!looks_like_text(&[
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a
+        ]));
+        // A lone continuation byte is invalid UTF-8 (error_len = Some).
+        assert!(!looks_like_text(&[0x80]));
+        // Latin-1 bytes that aren't valid UTF-8.
+        assert!(!looks_like_text(&[b'a', 0xe9, b'b']));
+    }
+
+    #[test]
+    fn looks_like_text_tolerates_truncated_trailing_multibyte() {
+        // A 3-byte CJK char cut after its first byte at the sample
+        // boundary: valid up to the cut, no NUL -> still text.
+        let full = "\u{4e2d}".as_bytes(); // 3 bytes
+        assert!(looks_like_text(&full[..1]));
+        // But a NUL anywhere still wins over the truncation grace.
+        assert!(!looks_like_text(&[full[0], 0x00]));
     }
 
     #[test]

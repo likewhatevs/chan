@@ -121,12 +121,17 @@ pub(crate) fn validate_team_config(config: &TeamConfig) -> Result<(), String> {
 
 /// The submit chord a member's agent reads as "submit this buffer", as a
 /// human-readable escape literal for the bootstrap poke note. Mirrors the
-/// shared submit map (`chan_shell::SubmitAgent::submit_chord` /
-/// submitMode.ts AGENT_SUBMIT_CHORDS): claude uses the xterm modifyOtherKeys
-/// Cmd+Enter CSI; codex / gemini submit on a bare CR.
+/// shared submit map (`chan_shell::SubmitAgent::{submit_chord,
+/// apply_submit_chord}` / submitMode.ts): claude uses the xterm
+/// modifyOtherKeys Cmd+Enter CSI; gemini submits on a bare CR; codex also
+/// ends in CR but its text must be bracketed-paste wrapped first (B8 -
+/// codex coalesces a single `text + CR` write into a paste burst whose
+/// trailing CR never submits), so a bare CR alone does NOT submit codex.
 fn submit_chord_literal(agent: Option<&str>) -> &'static str {
     match agent {
-        Some("codex") | Some("gemini") => "\\r",
+        // B8: codex needs its text wrapped in bracketed paste before the CR.
+        Some("codex") => "bracketed-paste + \\r",
+        Some("gemini") => "\\r",
         // claude is the default chord for any agent member; a shell member
         // (None) is not poked as an agent, so it falls through to the claude
         // literal only as a harmless default in the note.
@@ -662,6 +667,7 @@ mod tests {
             host_handle: "@@Neo".into(),
             tab_group: "alpha".into(),
             auto_prefix_at: true,
+            mcp_env: false,
             created_at: "2026-05-29T00:00:00Z".into(),
             members: vec![
                 Member {
@@ -802,8 +808,8 @@ mod tests {
             "claude chord line"
         );
         assert!(
-            bootstrap.contains("--submit=codex (chord \\r)"),
-            "codex chord line"
+            bootstrap.contains("--submit=codex (chord bracketed-paste + \\r)"),
+            "codex chord line reflects the B8 bracketed-paste wrap"
         );
         // Still pure ASCII, no em dashes.
         assert!(bootstrap.is_ascii(), "bootstrap must be pure ASCII");

@@ -80,6 +80,15 @@ pub struct TerminalConfig {
     /// download flow before the activation completes.
     #[serde(default)]
     pub font: TerminalFontChoice,
+    /// B5: the non-team default for whether a newly-spawned terminal
+    /// gets the chan MCP discovery env vars (`CHAN_MCP_*`). Off by
+    /// default for ALL agents (a stray env descriptor makes codex fail
+    /// to start; it wants a file-based config). Plain `cs terminal new`
+    /// / server-spawned terminals consult this; the per-request
+    /// `?mcp_env=on` query still overrides it, and team spawns use the
+    /// team config's own `mcp_env` toggle instead.
+    #[serde(default)]
+    pub mcp_env: bool,
 }
 
 /// `fullstack-b-30` slice b: terminal-font preference. Wire shape
@@ -106,6 +115,7 @@ impl Default for TerminalConfig {
             scrollback_mb: default_terminal_scrollback_mb(),
             default_term: default_terminal_default_term(),
             font: TerminalFontChoice::default(),
+            mcp_env: false,
         }
     }
 }
@@ -214,6 +224,7 @@ mod tests {
                 scrollback_mb: 100,
                 default_term: "tmux-256color".into(),
                 font: TerminalFontChoice::SourceCodePro,
+                mcp_env: true,
             },
         };
         cfg.save_to(&p).unwrap();

@@ -660,10 +660,49 @@ impl Workspace {
         Ok(buf)
     }
 
-    /// Read UTF-8 text. Errors if the file isn't on the editable-
-    /// text whitelist or isn't a regular file.
+    /// Sniff whether `rel` is editable text by *content*. Reads up to
+    /// `fs_ops::TEXT_SNIFF_BYTES` and applies `fs_ops::looks_like_text`.
+    /// This is the fall-back arm of the editable-text gate (and the
+    /// file browser's kind resolver): it is what lets the editor open
+    /// `.zshrc`, `*.service`, `Kconfig`, and other extensionless /
+    /// odd-suffix text files that the path-only `fs_ops::is_editable_text`
+    /// refuses. Returns false on any I/O error or non-regular file: a
+    /// file we cannot sample stays non-editable.
+    pub fn sniff_is_text(&self, rel: &str) -> bool {
+        use std::io::Read;
+        let Ok((dir, rel_path)) = self.resolve_io(rel) else {
+            return false;
+        };
+        if ensure_regular_file_in(dir, &rel_path).is_err() {
+            return false;
+        }
+        let Ok(f) = dir.open(&rel_path) else {
+            return false;
+        };
+        let mut buf = Vec::with_capacity(fs_ops::TEXT_SNIFF_BYTES);
+        if f.take(fs_ops::TEXT_SNIFF_BYTES as u64)
+            .read_to_end(&mut buf)
+            .is_err()
+        {
+            return false;
+        }
+        fs_ops::looks_like_text(&buf)
+    }
+
+    /// The editable-text gate for `read_text` / `write_text` and
+    /// friends: a path the extension classifier already types as text,
+    /// OR an unknown-extension file whose leading bytes sniff as text.
+    /// Keep the sniff out of `fs_ops::is_editable_text` (which stays a
+    /// pure, I/O-free path predicate used in hot index walks); the
+    /// content read belongs only on the per-file read/write path.
+    fn editable_text_gate(&self, rel: &str) -> bool {
+        fs_ops::is_editable_text(rel) || self.sniff_is_text(rel)
+    }
+
+    /// Read UTF-8 text. Errors if the file isn't editable text (by
+    /// extension or content sniff) or isn't a regular file.
     pub fn read_text(&self, rel: &str) -> Result<String> {
-        if !fs_ops::is_editable_text(rel) {
+        if !self.editable_text_gate(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
         // systacean-26: route Drafts/-prefixed rels through the
@@ -688,7 +727,7 @@ impl Workspace {
     /// for optimistic-concurrency editor saves.
     pub fn read_text_with_stat(&self, rel: &str) -> Result<(String, FileStat)> {
         use std::io::Read;
-        if !fs_ops::is_editable_text(rel) {
+        if !self.editable_text_gate(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
         // systacean-26: same Drafts routing as read_text.
@@ -723,7 +762,7 @@ impl Workspace {
         F: FnMut(TextReadEvent<'_>) -> bool,
     {
         use std::io::Read;
-        if !fs_ops::is_editable_text(rel) {
+        if !self.editable_text_gate(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
         let (dir, rel_path) = self.resolve_io(rel)?;
@@ -769,7 +808,7 @@ impl Workspace {
     /// must remove the existing entry first if they intend to
     /// replace it.
     pub fn write_text(&self, rel: &str, content: &str) -> Result<()> {
-        if !fs_ops::is_editable_text(rel) {
+        if !self.editable_text_gate(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
         // systacean-26: same Drafts routing as read_text. The
@@ -827,7 +866,7 @@ impl Workspace {
         expected_mtime_ns: Option<i64>,
         content: &str,
     ) -> Result<()> {
-        if !fs_ops::is_editable_text(rel) {
+        if !self.editable_text_gate(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
         // systacean-26: same Drafts routing as write_text.
@@ -4210,6 +4249,25 @@ mod tests {
         let (_cfg, _root, workspace) = fixture();
         workspace.write_text("notes/a.md", "hello").unwrap();
         assert_eq!(workspace.read_text("notes/a.md").unwrap(), "hello");
+    }
+
+    #[test]
+    fn read_text_sniffs_unknown_extension_text() {
+        // B11: the editable-text gate falls back to a content sniff for
+        // files the extension classifier types as Other. A UTF-8,
+        // NUL-free `.service` file opens; a NUL-bearing one does not.
+        let (_cfg, root, workspace) = fixture();
+        std::fs::write(root.path().join("app.service"), "[Unit]\nX=1\n").unwrap();
+        std::fs::write(root.path().join("blob.weird"), [b'o', b'k', 0u8, 9]).unwrap();
+
+        assert!(workspace.sniff_is_text("app.service"));
+        assert_eq!(workspace.read_text("app.service").unwrap(), "[Unit]\nX=1\n");
+
+        assert!(!workspace.sniff_is_text("blob.weird"));
+        assert!(matches!(
+            workspace.read_text("blob.weird"),
+            Err(ChanError::NotEditableText(_))
+        ));
     }
 
     #[test]

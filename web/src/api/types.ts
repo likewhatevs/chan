@@ -238,10 +238,14 @@ export type TreeEntry = {
   ///     frontmatter.
   ///   - `text`: any other text file (.py, .json, Makefile, ...)
   ///     the editor can round-trip through a UTF-8 buffer.
-  ///   - `media`: images.
-  ///   - `binary`: PDFs, archives, audio/video, and everything else
-  ///     opaque to the editor.
-  kind?: "document" | "contact" | "text" | "media" | "binary";
+  ///   - `media`: images and PDFs.
+  ///   - `binary`: archives, audio/video, and everything else opaque
+  ///     to the editor.
+  ///   - `pending`: unknown extension, content not yet sniffed.
+  ///     Per-directory listings resolve this server-side to `text`
+  ///     or `binary`; only the recursive whole-tree listing leaves
+  ///     it pending (its consumer reads media kinds only).
+  kind?: "document" | "contact" | "text" | "media" | "binary" | "pending";
 };
 
 /// Per-workspace directory blocklist view (round-1 wave-3). The index +

@@ -178,7 +178,19 @@ pub async fn api_terminal_ws(
     let tab_name = query.tab_name.as_deref().and_then(normalize_tab_name);
     let tab_group = query.tab_group.as_deref().and_then(normalize_tab_group);
     let window_id = query.window_id.as_deref().and_then(normalize_window_id);
-    let mcp_env = query.mcp_env.unwrap_or_default().enabled();
+    // B5: MCP env is off by default. An explicit `?mcp_env=on|off` query
+    // wins (the SPA can force a per-terminal choice); when absent we fall
+    // back to the non-team server-config default, which itself defaults
+    // off. Team spawns don't reach here -- they read the team config's
+    // own `mcp_env` toggle in control_socket::spawn_team.
+    let mcp_env = match query.mcp_env {
+        Some(choice) => choice.enabled(),
+        None => state
+            .server_config
+            .lock()
+            .map(|c| c.terminal.mcp_env)
+            .unwrap_or(false),
+    };
     let cwd = if query.session.is_some() {
         None
     } else {
@@ -246,7 +258,12 @@ pub async fn api_create_terminal(
         tab_name: Some(name.clone()),
         tab_group: body.group.as_deref().and_then(normalize_tab_group),
         window_id: None,
-        mcp_env: true,
+        // B5: off by default; honor the non-team server-config opt-in.
+        mcp_env: state
+            .server_config
+            .lock()
+            .map(|c| c.terminal.mcp_env)
+            .unwrap_or(false),
         cwd: None,
         command: Some(command),
         env: body.env,

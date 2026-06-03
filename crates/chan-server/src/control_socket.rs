@@ -699,7 +699,11 @@ fn spawn_team(
             // `window_ids_matching` finds the agent's window. None when the
             // caller is windowless (a native terminal), unchanged from before.
             window_id: window_id.map(str::to_string),
-            mcp_env: true,
+            // B5: MCP env starts OFF; a team opts in via its config's
+            // `mcp_env` toggle (team setup dialog / `cs terminal team
+            // new|load`). Off by default keeps codex (which wants a
+            // file-based MCP config) from failing on a stray descriptor.
+            mcp_env: config.mcp_env,
             cwd: None,
             command,
             env: m.env.clone(),
@@ -2063,6 +2067,95 @@ is_lead = false
             vec!["win-spawn".to_string()],
             "agents are bound to the caller window"
         );
+    }
+
+    // A registry that advertises an MCP socket path, so `set_mcp_env` actually
+    // stamps the CHAN_MCP_* descriptor when a member's mcp_env is on (the
+    // `empty_registry` helper sets it to None, which no-ops the env even when
+    // the toggle is on). The path need not point at a live socket: the child
+    // only receives it as env, it does not dial it at spawn time.
+    #[cfg(unix)]
+    fn registry_with_mcp_socket() -> (tempfile::TempDir, TerminalRegistry) {
+        use crate::config::TerminalConfig;
+        use crate::terminal_sessions::RegistryConfig;
+        let root = tempfile::tempdir().expect("workspace root");
+        let registry = TerminalRegistry::new(RegistryConfig {
+            workspace_root: root.path().to_path_buf(),
+            mcp_socket_path: Some(std::path::PathBuf::from("/tmp/chan-test-b5-mcp.sock")),
+            control_socket_path: None,
+            terminal: TerminalConfig::default(),
+        });
+        (root, registry)
+    }
+
+    #[cfg(unix)]
+    fn probe_team_config(mcp_env: bool) -> TeamConfig {
+        TeamConfig {
+            team_name: "probe".into(),
+            host_name: "Neo".into(),
+            host_handle: "@@Neo".into(),
+            tab_group: "probe".into(),
+            auto_prefix_at: false,
+            mcp_env,
+            created_at: "2026-06-03T00:00:00Z".into(),
+            members: vec![chan_workspace::Member {
+                handle: "@@Probe".into(),
+                // `${VAR:+set}` expands to "set" when CHAN_MCP_SERVER_JSON is
+                // present and "" when absent, so the marker line records the
+                // toggle outcome. `sleep` keeps the session alive to be read.
+                command: "printf '<<MCP:%s>>\\n' \"${CHAN_MCP_SERVER_JSON:+set}\"; sleep 3".into(),
+                env: Default::default(),
+                is_lead: true,
+                position: None,
+                agent: None,
+            }],
+        }
+    }
+
+    // B5 e2e: the team config `mcp_env` toggle must flow all the way to the
+    // spawned member's PTY env (TeamConfig.mcp_env -> CreateOptions.mcp_env in
+    // spawn_team -> set_mcp_env on the child). mcp_env=true stamps
+    // CHAN_MCP_SERVER_JSON; mcp_env=false omits it. Read off the member's PTY
+    // scrollback via the marker the probe command prints.
+    #[cfg(unix)]
+    #[test]
+    fn spawn_team_mcp_env_toggle_reaches_member_pty_env() {
+        use std::time::{Duration, Instant};
+        for mcp_env in [true, false] {
+            let (_root, registry) = registry_with_mcp_socket();
+            let config = probe_team_config(mcp_env);
+            let spawn = spawn_team(&registry, "probe-team", &config, Some("win-probe"));
+            assert_eq!(spawn.spawned, vec!["@@Probe"], "probe member spawned");
+
+            let deadline = Instant::now() + Duration::from_secs(6);
+            let mut out = String::new();
+            loop {
+                if let Ok(s) = term_scrollback(&registry, "@@Probe") {
+                    out = s;
+                    if out.contains("<<MCP:") {
+                        break;
+                    }
+                }
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+
+            if mcp_env {
+                assert!(
+                    out.contains("<<MCP:set>>"),
+                    "team mcp_env=true should stamp CHAN_MCP_SERVER_JSON on the \
+                     member; scrollback: {out:?}"
+                );
+            } else {
+                assert!(
+                    out.contains("<<MCP:>>") && !out.contains("<<MCP:set>>"),
+                    "team mcp_env=false should omit CHAN_MCP_SERVER_JSON on the \
+                     member; scrollback: {out:?}"
+                );
+            }
+        }
     }
 
     // A team of two shell members (one lead, neither an agent). spawn_and_

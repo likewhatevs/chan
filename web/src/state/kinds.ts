@@ -19,7 +19,17 @@ import { FileText, User, FileCode, Image, File, Hash, Calendar, Folder } from "l
 import type { TreeEntry } from "../api/types";
 import { classifyPath } from "./fileTypes";
 
-export type FileKind = "document" | "contact" | "text" | "media" | "binary";
+export type FileKind =
+  | "document"
+  | "contact"
+  | "text"
+  | "media"
+  | "binary"
+  // Unknown extension whose content hasn't been sniffed yet. The
+  // server resolves this to "text"/"binary" for per-directory file-
+  // browser listings; it only reaches the SPA from the recursive
+  // whole-tree listing (image picker), so it renders neutrally.
+  | "pending";
 export type EntityKind = "tag" | "mention" | "date";
 export type ContainerKind = "folder";
 export type Kind = FileKind | EntityKind | ContainerKind;
@@ -89,6 +99,9 @@ export function colorVarFor(kind: Kind): string {
       return "var(--g-tag)";
     case "binary":
       return "var(--g-binary)";
+    case "pending":
+      // Low-emphasis neutral until the sniff resolves it.
+      return "var(--text-secondary)";
     case "date":
       return "var(--text-secondary)";
     case "folder":
@@ -114,6 +127,8 @@ export function iconFor(kind: Kind): any {
     case "media":
       return Image;
     case "binary":
+    case "pending":
+      // Generic file glyph; "pending" is transient and rarely shown.
       return File;
     case "tag":
       return Hash;

@@ -711,6 +711,7 @@ fn main() -> Result<()> {
                 tunnel_token,
                 tunnel_workspace_name,
                 tunnel_public,
+                cli.verbose > 0,
             ));
             // Don't block on blocking-pool tasks (e.g. an in-flight
             // initial reindex on a large workspace): chan-workspace's reindex
@@ -1105,6 +1106,7 @@ async fn cmd_serve(
     tunnel_token: Option<String>,
     tunnel_workspace_name: Option<String>,
     tunnel_public: bool,
+    verbose: bool,
 ) -> Result<()> {
     let lib = library()?;
     // Resolve the workspace root: explicit arg first, then the registry
@@ -1227,6 +1229,7 @@ async fn cmd_serve(
         // and tunnel mode.
         open_browser: !no_browser,
         search_aggression,
+        verbose,
         // Local serve trusts the operator by default; --no-settings
         // opts into the same UI grey + server 403 that --tunnel-public
         // forces, for kiosk / shared-workstation deployments. The

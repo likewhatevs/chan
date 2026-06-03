@@ -30,9 +30,9 @@ enum ReadFileResult {
 /// Tree entry shape on the wire. Adds a `kind` discriminator on top
 /// of chan-workspace's `TreeEntry` so the file browser, search overlay,
 /// and graph inspector can render the right glyph + chip without a
-/// per-file resolve round-trip. Five kinds (`document`, `contact`,
-/// `text`, `media`, `binary`) for regular files; absent on directory
-/// entries (the frontend keys off `is_dir` for those).
+/// per-file resolve round-trip. Six kinds (`document`, `contact`,
+/// `text`, `media`, `binary`, `pending`) for regular files; absent on
+/// directory entries (the frontend keys off `is_dir` for those).
 ///
 /// Mapping (see `project_kind` below):
 ///   - `FileClass::EditableText` + contact frontmatter -> `contact`
@@ -40,7 +40,9 @@ enum ReadFileResult {
 ///   - `FileClass::EditableText` non-Markdown (`.txt`)  -> `text`
 ///   - `FileClass::Text`                               -> `text`
 ///   - `FileClass::Image` / `FileClass::Pdf`           -> `media`
-///   - `FileClass::Other`                              -> `binary`
+///   - `FileClass::Other` -> `pending`; a content sniff in
+///     `list_files_sync` then resolves it to `text` (valid UTF-8, no
+///     NUL) or `binary` for per-directory listings.
 ///
 /// PDFs are media: the frontend's fullscreen viewer (state/pdfViewer.ts)
 /// handles them via `<embed type="application/pdf">`. chan-workspace keeps
@@ -82,7 +84,14 @@ fn project_kind(path: &str, is_dir: bool, is_contact: bool) -> Option<&'static s
         }
         chan_workspace::FileClass::EditableText | chan_workspace::FileClass::Text => "text",
         chan_workspace::FileClass::Image | chan_workspace::FileClass::Pdf => "media",
-        chan_workspace::FileClass::Other => "binary",
+        // Unknown extension/basename: the path alone can't tell text
+        // from binary. Emit "pending" rather than prejudging "binary";
+        // per-directory listings resolve it with a content sniff (see
+        // `list_files_sync`), so the file browser still shows a final
+        // "text"/"binary" kind. Only the recursive whole-tree listing
+        // (image picker) leaves it "pending", and that caller reads
+        // media kinds only.
+        chan_workspace::FileClass::Other => "pending",
     })
 }
 
@@ -133,7 +142,7 @@ fn list_files_sync(
         Ok(rows) => rows.into_iter().map(|c| c.rel_path).collect(),
         Err(_) => std::collections::HashSet::new(),
     };
-    let out: Vec<TreeEntryView> = tree
+    let mut out: Vec<TreeEntryView> = tree
         .into_iter()
         .map(|e| TreeEntryView {
             kind: project_kind(&e.path, e.is_dir, contact_paths.contains(&e.path)),
@@ -144,6 +153,23 @@ fn list_files_sync(
             size: e.size,
         })
         .collect();
+    // Resolve the path-only "pending" kind with a bounded content
+    // sniff, but only for per-directory listings (the file browser).
+    // It lists one directory at a time, so this stays a handful of
+    // 8 KiB reads per expand. The recursive whole-tree listing (no
+    // `dir`, used by the image picker) is left untouched so we never
+    // sniff the entire tree; its consumer reads media kinds only.
+    if query.dir.is_some() {
+        for entry in out.iter_mut() {
+            if entry.kind == Some("pending") {
+                entry.kind = Some(if workspace.sniff_is_text(&entry.path) {
+                    "text"
+                } else {
+                    "binary"
+                });
+            }
+        }
+    }
     Ok(out)
 }
 
@@ -277,20 +303,25 @@ fn read_file_sync(
     workspace: &chan_workspace::Workspace,
     path: &str,
 ) -> chan_workspace::Result<ReadFileResult> {
-    if chan_workspace::fs_ops::is_editable_text(path) {
-        let (content, stat) = workspace.read_text_with_stat(path)?;
-        let mtime = stat.mtime;
-        let mtime_ns = stat.mtime_ns;
-        let writable = fs_writable(workspace, path);
-        return Ok(ReadFileResult::Text {
+    // `read_text_with_stat` applies the content-aware editable gate, so
+    // an extensionless / odd-suffix text file (`.zshrc`, `*.service`)
+    // reads as text here. A genuinely binary file fails the gate with
+    // `NotEditableText`; that is the only error we swallow into a binary
+    // read. Any other error (invalid UTF-8 deeper than the sniff window,
+    // I/O failure) propagates so the editor sees the real cause.
+    match workspace.read_text_with_stat(path) {
+        Ok((content, stat)) => Ok(ReadFileResult::Text {
             content,
-            mtime,
-            mtime_ns,
-            writable,
+            mtime: stat.mtime,
+            mtime_ns: stat.mtime_ns,
+            writable: fs_writable(workspace, path),
             path_class: path_class_for_wire(workspace, path),
-        });
+        }),
+        Err(chan_workspace::ChanError::NotEditableText(_)) => {
+            workspace.read(path).map(ReadFileResult::Binary)
+        }
+        Err(e) => Err(e),
     }
-    workspace.read(path).map(ReadFileResult::Binary)
 }
 
 fn ndjson_bytes(event: &FileStreamEvent<'_>) -> Result<Bytes, serde_json::Error> {
@@ -1158,6 +1189,60 @@ mod write_tests {
     }
 
     #[test]
+    fn read_file_sync_sniffs_unknown_extension_text_as_text() {
+        // B11: an odd-suffix text file the extension classifier can't
+        // type (here `.service`) must still open in the editor. Created
+        // via std::fs because write_text only creates known-text paths.
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        std::fs::write(
+            root.path().join("deploy.service"),
+            "[Unit]\nDescription=demo\n",
+        )
+        .unwrap();
+
+        match read_file_sync(&workspace, "deploy.service").unwrap() {
+            ReadFileResult::Text { content, .. } => {
+                assert_eq!(content, "[Unit]\nDescription=demo\n");
+            }
+            ReadFileResult::Binary(_) => panic!("expected sniffed text result"),
+        }
+    }
+
+    #[test]
+    fn list_files_sync_resolves_pending_kind_per_dir() {
+        // Per-directory listings sniff Other-class files so the file
+        // browser shows a final text/binary kind, never "pending".
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        std::fs::create_dir(root.path().join("cfg")).unwrap();
+        std::fs::write(root.path().join("cfg/zshrc-like"), "export A=1\n").unwrap();
+        std::fs::write(root.path().join("cfg/blob"), [0u8, 1, 2, 0]).unwrap();
+
+        let out = list_files_sync(
+            &workspace,
+            ListFilesQuery {
+                dir: Some("cfg".to_string()),
+            },
+        )
+        .unwrap();
+
+        let kind_of = |name: &str| {
+            out.iter()
+                .find(|e| e.path == format!("cfg/{name}"))
+                .and_then(|e| e.kind)
+        };
+        assert_eq!(kind_of("zshrc-like"), Some("text"));
+        assert_eq!(kind_of("blob"), Some("binary"));
+    }
+
+    #[test]
     fn stream_read_file_sync_emits_meta_chunks_done_in_order() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
@@ -1650,7 +1735,10 @@ mod tests {
         assert_eq!(project_kind("notes/plain.txt", false, false), Some("text"));
         assert_eq!(project_kind("src/main.rs", false, false), Some("text"));
         assert_eq!(project_kind("logo.png", false, false), Some("media"));
-        assert_eq!(project_kind("archive.zip", false, false), Some("binary"));
+        // Unknown extension is "pending" from the path alone; the
+        // per-directory listing sniff (list_files_sync) resolves it to
+        // text/binary. project_kind is path-only and never sniffs.
+        assert_eq!(project_kind("archive.zip", false, false), Some("pending"));
         // Contact frontmatter wins over the .md document mapping.
         assert_eq!(
             project_kind("contacts/alex.md", false, true),

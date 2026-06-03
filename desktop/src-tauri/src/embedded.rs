@@ -110,6 +110,9 @@ fn serve_config(addr: SocketAddr, prefix: &str) -> chan_server::ServeConfig {
         search_aggression: None,
         settings_disabled: false,
         tunnel_public: false,
+        // The embedded desktop server has no controlling terminal for the
+        // serve-progress stream (B10), so it stays quiet like open_browser.
+        verbose: false,
     }
 }
 
