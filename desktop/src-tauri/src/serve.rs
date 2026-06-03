@@ -217,7 +217,9 @@ pub fn spawn_local_workspace_window(app: &AppHandle, key: &str, url: &str) -> Re
         .unwrap_or_default();
     let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
     let title = workspace_title(key);
-    build_workspace_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
+    build_workspace_window(
+        app, &label, &title, url, &url_hash, config_key, zoom_level, None,
+    )
 }
 
 /// Spawn a new tunneled-workspace webview window. Same multi-window
@@ -245,7 +247,9 @@ pub fn spawn_tunneled_workspace_window(
     // tunneled workspace has no local filesystem path, so we use the
     // closest analog ("<tenant>·<workspace>") with no prefix.
     let title = format!("{tenant_label} \u{00b7} {workspace}");
-    build_workspace_window(app, &label, &title, url, &url_hash, config_key, zoom_level)
+    build_workspace_window(
+        app, &label, &title, url, &url_hash, config_key, zoom_level, None,
+    )
 }
 
 /// Spawn a new outbound URL webview window. The desktop does not own
@@ -270,7 +274,20 @@ pub fn spawn_outbound_workspace_window(
         .map(|c| c.url_hash.clone())
         .unwrap_or_default();
     let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
-    build_workspace_window(app, &label, title, url, &url_hash, config_key, zoom_level)
+    // Outbound = an outgoing connection to a remote we do not own. Route
+    // through the connecting screen so a down remote shows a retrying
+    // surface instead of a blank white webview. `url` is the display +
+    // probe URL; `build_workspace_window` assembles the navigate target.
+    build_workspace_window(
+        app,
+        &label,
+        title,
+        url,
+        &url_hash,
+        config_key,
+        zoom_level,
+        Some(url),
+    )
 }
 
 /// Pop the top-of-stack window config for `config_key` only if the
@@ -325,6 +342,21 @@ fn pop_compatible_config(
 /// or `tunnel_window_key`). Stamped onto the close handler so a
 /// user-initiated close pushes the window's final URL hash back
 /// into the LRU stack.
+///
+/// `connecting` switches the load strategy. `None` (local + tunnel)
+/// loads the workspace URL directly via `WebviewUrl::External`: those
+/// backends are up before the window opens. `Some(display_url)`
+/// (outbound) instead loads the bundled `connecting.html` and hands it
+/// the display URL plus the assembled navigate target through an
+/// injected `window.__CHAN_CONNECTING__`; the page probes the remote
+/// via `probe_url` and navigates on success. A direct External load of
+/// a down outbound remote paints a blank white webview (WKWebView never
+/// finishes navigating, see `capture_window_config_on_close`), which is
+/// the bug the connecting screen fixes.
+// All inputs are distinct primitives handed straight to the builder;
+// bundling them into a spec struct would only move the noise. Matches
+// the repo's existing `too_many_arguments` allows on similar builders.
+#[allow(clippy::too_many_arguments)]
 fn build_workspace_window(
     app: &AppHandle,
     window_label: &str,
@@ -333,6 +365,7 @@ fn build_workspace_window(
     url_hash_seed: &str,
     config_key: String,
     zoom_seed: f64,
+    connecting: Option<&str>,
 ) -> Result<(), String> {
     let Ok(mut parsed) = url.parse::<tauri::Url>() else {
         return Err(format!("bad chan URL for {window_label}: {url}"));
@@ -341,6 +374,21 @@ fn build_workspace_window(
     if !url_hash_seed.is_empty() {
         parsed.set_fragment(Some(url_hash_seed));
     }
+    // The connecting page receives its inputs before any page script runs
+    // (same mechanism as KEY_BRIDGE_JS). `target` is the fully-assembled
+    // navigate URL (remote + ?w=<label> + restored #fragment) so the SPA's
+    // per-window state + restore survive the success navigation.
+    let (webview_url, init_script) = match connecting {
+        Some(display_url) => {
+            let payload = serde_json::json!({
+                "url": display_url,
+                "target": parsed.as_str(),
+            });
+            let script = format!("window.__CHAN_CONNECTING__ = {payload};\n{KEY_BRIDGE_JS}");
+            (WebviewUrl::App("connecting.html".into()), script)
+        }
+        None => (WebviewUrl::External(parsed), KEY_BRIDGE_JS.to_string()),
+    };
     let app_owned = app.clone();
     let label_owned = window_label.to_string();
     let title_owned = title.to_string();
@@ -352,12 +400,12 @@ fn build_workspace_window(
         if let Some(old) = app_owned.get_webview_window(&label_owned) {
             let _ = old.destroy();
         }
-        match WebviewWindowBuilder::new(&app_owned, &label_owned, WebviewUrl::External(parsed))
+        match WebviewWindowBuilder::new(&app_owned, &label_owned, webview_url)
             .title(title_owned)
             .inner_size(1200.0, 800.0)
             .min_inner_size(640.0, 400.0)
             .resizable(true)
-            .initialization_script(KEY_BRIDGE_JS)
+            .initialization_script(init_script.as_str())
             // `fullstack-b-19`: explicit `zoom_in` / `zoom_out` /
             // `zoom_reset` IPC commands fired from KEY_BRIDGE_JS
             // are the primary path; this Tauri-level polyfill stays
@@ -778,6 +826,38 @@ mod tests {
         assert!(MAIN_RS.contains("fn add_outbound_workspace("));
         assert!(MAIN_RS.contains("fn open_outbound_workspace("));
         assert!(MAIN_RS.contains("fn remove_outbound_workspace("));
+    }
+
+    #[test]
+    fn outbound_windows_load_the_connecting_page_not_the_remote() {
+        // Blank-white outbound bug: a direct WebviewUrl::External(remote)
+        // paints white when the remote is down. Outbound windows load the
+        // bundled connecting page instead, which probes via `probe_url` and
+        // navigates on success. Needles are built at runtime so this test's
+        // own source text doesn't satisfy the `contains` checks (the
+        // bin_status test uses the same trick).
+        let serve_rs = include_str!("serve.rs");
+        let app_load = format!("WebviewUrl::App({q}connecting.html", q = '"');
+        let handoff = format!("__CHAN{u}CONNECTING__", u = '_');
+        assert!(
+            serve_rs.contains(&app_load),
+            "outbound windows must load connecting.html, not the remote directly",
+        );
+        assert!(
+            serve_rs.contains(&handoff),
+            "the connecting page must receive its inputs via window.__CHAN_CONNECTING__",
+        );
+    }
+
+    #[test]
+    fn invoke_handler_registers_probe_url() {
+        // The connecting screen's retry loop calls `probe_url` each attempt;
+        // it must be in `tauri::generate_handler!` or the IPC denies and the
+        // screen never detects a reachable remote. generate_handler! doesn't
+        // catch a missing entry at compile time, so pin it here.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("probe_url,"));
+        assert!(MAIN_RS.contains("fn probe_url("));
     }
 
     #[test]
@@ -1249,6 +1329,10 @@ mod tests {
             "allow-zoom-in",
             "allow-zoom-out",
             "allow-zoom-reset",
+            // The connecting screen (outbound-* windows) probes the remote
+            // through this command; without the ACL grant the IPC denies and
+            // the screen never detects a reachable remote.
+            "allow-probe-url",
         ] {
             assert!(
                 workspace_set.iter().any(|p| p == expected),

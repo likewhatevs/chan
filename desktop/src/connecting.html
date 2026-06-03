@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Connecting...</title>
+  <link rel="icon" type="image/png" href="chan-favicon.png" />
+  <link rel="apple-touch-icon" href="chan-favicon.png" />
+  <!-- Reuse the launcher token + base styles (read-only link, not an
+       edit) so the connecting window reads as the same product, then
+       layer the connecting-specific rules on top. -->
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="connecting.css" />
+</head>
+<body class="connecting-body">
+  <main class="connecting-wrap" role="main">
+    <div class="connecting-card">
+      <div class="connecting-head">
+        <span class="spinner" id="spinner" aria-hidden="true"></span>
+        <div class="connecting-headtext">
+          <div class="connecting-title" id="title">Connecting to workspace</div>
+          <div class="connecting-url" id="url" title=""></div>
+        </div>
+      </div>
+
+      <div class="connecting-meta" role="status" aria-live="polite">
+        Trying for <span class="mono" id="elapsed">00:00</span>
+        <span class="meta-sep">&middot;</span>
+        attempt <span class="mono" id="attempt">0</span>
+      </div>
+
+      <div class="connecting-log" id="log" aria-live="polite" aria-label="Connection attempts"></div>
+
+      <p class="connecting-foot" id="foot">
+        This window keeps retrying until you close it.
+      </p>
+    </div>
+  </main>
+
+  <script src="connecting.js"></script>
+</body>
+</html>

@@ -44,6 +44,7 @@ permissions = [
   "allow-zoom-in",
   "allow-zoom-out",
   "allow-zoom-reset",
+  "allow-probe-url",
 ]
 
 [[permission]]
@@ -165,6 +166,11 @@ commands.allow = ["open_local_workspace"]
 identifier = "allow-open-tunneled-workspace"
 description = "Enables the open_tunneled_workspace command."
 commands.allow = ["open_tunneled_workspace"]
+
+[[permission]]
+identifier = "allow-probe-url"
+description = "Enables the probe_url command."
+commands.allow = ["probe_url"]
 
 [[permission]]
 identifier = "allow-add-outbound-workspace"

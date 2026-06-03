@@ -1143,6 +1143,76 @@ fn open_tunneled_workspace(
     Ok(())
 }
 
+/// Result of a connecting-screen reachability probe. `reachable` is
+/// true when the remote returned ANY HTTP response (even 401 / 404:
+/// the server is up and serving). It is false only on a transport
+/// failure (connection refused / DNS / TLS / timeout), which is exactly
+/// the blank-white case the connecting screen retries past. `detail` is
+/// a short ASCII reason shown in the per-attempt row; `status` is the
+/// HTTP code when reachable.
+#[derive(Debug, Clone, Serialize)]
+struct ProbeResult {
+    reachable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
+    detail: String,
+}
+
+/// Server-side cap so a black-hole host (packets dropped, no RST) can't
+/// hang the probe and stack up overlapping in-flight requests behind the
+/// page's retry loop.
+const PROBE_TIMEOUT_SECS: u64 = 5;
+
+/// Reachability probe for the chan-desktop connecting screen. Outbound
+/// windows load `connecting.html` instead of pointing the webview
+/// straight at the remote (a down remote paints a blank white webview);
+/// that page calls this command on a retry loop until the remote answers,
+/// then navigates. Runs from Rust because the page's CSP
+/// (`default-src 'self'`) blocks a cross-origin `fetch`.
+#[tauri::command]
+async fn probe_url(url: String) -> ProbeResult {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(PROBE_TIMEOUT_SECS))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return ProbeResult {
+                reachable: false,
+                status: None,
+                detail: format!("probe client error: {e}"),
+            }
+        }
+    };
+    match client.get(&url).send().await {
+        Ok(resp) => ProbeResult {
+            reachable: true,
+            status: Some(resp.status().as_u16()),
+            detail: resp.status().to_string(),
+        },
+        Err(e) => ProbeResult {
+            reachable: false,
+            status: None,
+            detail: probe_error_detail(&e),
+        },
+    }
+}
+
+/// Collapse a reqwest error to the transport-failure class the
+/// connecting screen's row cares about. reqwest's own Display is verbose
+/// and embeds the full URL, so we surface a short ASCII label instead.
+fn probe_error_detail(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        "timed out".to_string()
+    } else if e.is_connect() {
+        "could not connect".to_string()
+    } else if e.is_request() {
+        "request failed".to_string()
+    } else {
+        "unreachable".to_string()
+    }
+}
+
 /// Host OS the desktop shell is running on, as `std::env::consts::OS`
 /// (`"macos"`, `"linux"`, `"windows"`, ...). The SPA branches features
 /// that only exist on one platform; "Export to PDF" uses this to keep
@@ -1622,6 +1692,7 @@ fn main() {
             factory_reset_default_workspace,
             open_local_workspace,
             open_tunneled_workspace,
+            probe_url,
             add_outbound_workspace,
             open_outbound_workspace,
             remove_outbound_workspace,
