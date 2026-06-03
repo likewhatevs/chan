@@ -49,11 +49,15 @@ Compile into the round-close retrospective. None are release-blockers for r1.
 - About-slide (R2-1) visual smoke: static content, low risk - folding into the
   consolidation joint frontend smoke.
 
-## @@LaneA round-1 SPA browser-smoke (PUSHED gated-green, smoke unverified)
+## @@LaneA round-1 SPA browser-smoke - VERIFIED 2026-06-03 (Chrome, with @@Alex)
 
-Chrome automation was permission-denied while @@Alex was away, so these shipped
-in 03bb91f8 gated-green (svelte-check 0 err + vitest + build) but NOT
-interactively browser-smoked. Hand-smoke (or a webtest pass) on return:
+All four PASSED in Chrome on a fresh HEAD build (server :8855, torn down):
+- B3: bare prefix `teams` -> datalist `teams/`, `teams/alpha/`, `teams/beta/`.
+- MCP toggle: checkbox present + unchecked (default off).
+- E1: 4 agents + 2x2 -> auto-assign distributed one-per-cell.
+- Search: `./sub/` -> file/dir rows ("3 path"); dir drills to gamma.md; file
+  opens in the editor.
+Original (now-resolved) entries:
 - B3: team-load dir field (Cmd+P) autocompletes a bare prefix as `foo/` (no
   leading "/" needed).
 - MCP toggle: the team setup dialog's "expose MCP env vars" checkbox (default
@@ -62,7 +66,7 @@ interactively browser-smoked. Hand-smoke (or a webtest pass) on return:
   layout cells (logic vitest-tested).
 - Search: Cmd+S, type a path like `./sub/` -> filesystem suggestions; a file
   opens, a directory drills. The only one with no test of its own.
-- R2-2 (@@LaneC, list paste/outdent): 30s confirm - paste a copied link into a
-  nested list (no extra indent) + Shift-Tab a top-level bullet (stays a bullet).
-  Deterministic CM6 transforms, verified via real-EditorView + unit tests +
-  turndown probe; Chrome smoke was denied. Will ship in the round-2 commit.
+- R2-2 (@@LaneC, list paste/outdent): Shift-Tab half VERIFIED in Chrome
+  2026-06-03 (top-level Shift-Tab kept the bullet). PASTE-LINK half still needs
+  @@Alex: copy a link out of a list, paste into a nested list, confirm no extra
+  indent (a synthetic paste won't faithfully test the real DOM paste path).

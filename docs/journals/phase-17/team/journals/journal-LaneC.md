@@ -342,3 +342,69 @@ folder-mode drafts), B9 (graph bugs a/b/c). Wave 1 = B2; Wave 2 = B6, B9.
   open_survey region (~1013) for R2-3 - stay clear. NO conflict: my R2-2 work
   doesn't touch store.svelte.ts; my committed B9 store edits are ~1881-2052
   (openGraph), far from ~1013. I'm done with round-2 + idle. Noted; holding.
+
+- 2026-06-03 ~01:10: PHASE-17 ROUND CLOSED by @@LaneA. origin/main = 92fdf17e,
+  full gate green, verified on remote. VERIFIED my work landed + local in sync
+  with origin/main, no leftover WIP:
+  - 23d8db15 feat(editor): bullet glyphs, path-dialog autocomplete, graph
+    expand/slider/layers  <- my round-1 B2 + B6 + B9.
+  - f6eb16e1 fix(editor): list paste-link indent + top-level outdent (R2-2)
+    <- my round-2 R2-2.
+  All four of my items (B2 adopt, B6, B9, R2-2) committed + pushed. Pending
+  hand-smokes (incl. my R2-2 30s @@Alex confirm) tracked in
+  deferred-backlog.md. Standing down. Round summary of my lane: B2 adopted
+  cleanly (caught + escalated the dual-team collision); B6 root-caused past a
+  wrong recon premise (lazy tree.entries, fix in PathPromptModal); B9 done via
+  supervised subagent + I verified/smoked all 3 graph bugs; R2-2 both bugs fixed
+  + gated (browser-smoke blocked by a permission denial, mitigated via
+  EditorView/unit tests). Lessons for retro: 2 recon imprecisions (B6 mechanism,
+  B9 file) + session bash-grep flakiness -> anchored on Read throughout.
+
+## Post-round hotfix
+
+- 2026-06-03 ~01:20: task-LaneA-LaneC-4 - lang=X graph leaves files
+  disconnected from the language node (@@Alex live). ROOT-CAUSED to SERVER side
+  (Explore subagent + my Read of graph.rs):
+  - File NODES come from merge_unified_tree_layer (graph.rs:1202) = full public
+    namespace (File Browser coverage), so every file is a node.
+  - Language EDGES come from merge_language_layer (graph.rs:1245) iterating
+    scoped_report_files = workspace.report().files (1207-1218), emitting an edge
+    only for non-empty file.language (1297-1311).
+  - MISMATCH: file nodes not in report.files (or with empty report language) get
+    a node but NO language edge -> float. @@Alex sees a CLUSTER of .md docs
+    floating, so a systematic set of .md nodes isn't covered by report.files.
+  - Client is NOT at fault: GraphPanel language scope (scopedNodeIds 1094-1105)
+    + pullContainsSpine can pull a file in via the contains spine, but there's
+    no language edge to render; visibleEdges/edgeVisibleByChip do NOT drop an
+    in-scope language edge. My B9 change touched the workspace/dir branch, not
+    the language branch - unrelated.
+  - FIX = server-side graph.rs (emit a language edge for every file NODE with a
+    known language). graph.rs is @@LaneD's crate -> FLAGGED to @@LaneA via
+    followup-LaneC-LaneA-3.md + poke (authorize me the one fix, or hand to
+    @@LaneD). NOT touching graph.rs until cleared. Offered an empirical
+    curl-confirmation (count file-nodes vs language-edges). HOLDING for the
+    decision.
+- 2026-06-03 ~01:35: @@LaneA AUTHORIZED me the graph.rs fix (followup-LaneA-
+  LaneC-4): keep in graph.rs if per-node language derivable; flag if it needs a
+  chan-workspace report change. DONE (subagent implemented under my direction;
+  I verified). Repro (curl): bug reproduced in DIRECTORY/FILE scope (scoped
+  report_for_prefix vs full-namespace nodes), NOT workspace scope - @@Alex's
+  "no links/tags" framing was a red herring (plain .md IS report-tracked); the
+  language lens inherits the scoped-data mismatch. FIX: merge_language_layer
+  now reads the FULL workspace.report(), iterates the file NODES, emits a
+  language edge per report-classified node (all scopes); per-file language from
+  ReportFileStats::language - derivable in graph.rs, NO chan-workspace change.
+  VERIFIED independently: cargo fmt 0 / clippy -p chan-server -D warnings 0 /
+  test -p chan-server 400 passed / web-check built; ONLY graph.rs touched
+  (chan-workspace untouched); sha 2d9b6004. Curl after-fix: 0 floating in
+  workspace/directory/file scopes; no spurious cross-language edges. CAVEAT:
+  visual lang=X browser-smoke blocked by the earlier permission denial -
+  confirmed at the DATA layer (curl) + client render path read-verified;
+  recommended @@Alex visually re-confirm. Wrote task-LaneC-LaneA-4.md + poking
+  @@LaneA. Note: graph.rs edit was under @@LaneA's explicit authorization
+  (@@LaneD's crate, round closed, no compile-window risk).
+- 2026-06-03 ~01:40: @@LaneA received the graph fix (clean: graph.rs-only,
+  report-driven, gate-green, curl 4/4) and is visually re-confirming lang=X in
+  Chrome himself (extension approved) - this closes my browser-smoke caveat.
+  Holding for @@LaneA's hotfix commit. Fix sits as uncommitted WIP (graph.rs,
+  sha 2d9b6004). No commit/push from me. Nothing running on my side. Idle-ready.

@@ -399,3 +399,37 @@ remove, rm temp). This is @@Alex's exact ask + image-3.
 
 R2-3 is my last round-2 item. All my phase-17 work (B8, B1, B12, cs mcp_env,
 B4, R2-3) landed + gate-green + empirically verified.
+
+## 2026-06-03 - post-round rich-prompt A+B (task-LaneA-LaneB-8)
+
+@@Alex hit 2 rich-prompt items post-round-close. Both client-only, confined to
+RichPrompt.svelte + its test (NO server, NO @@LaneC list.ts change - import
+only).
+
+A. Submit chord wrong on a SHELL. The old submit sent NO agent -> server
+   defaulted to the claude modifyOtherKeys CSI, which a shell can't read (left
+   `...7;9;13~` at the prompt, never ran). This is exactly what I flagged in
+   B1's smoke. Fix: submitAgent() derives the chord from THIS terminal's
+   negotiated keyboard protocol (tab.keyboardProtocol): xtermModifyOtherKeys>0
+   -> "claude"; kitty flags>0 -> "codex"; else (shell/gemini, neither) ->
+   "gemini" (a bare CR). Passed to sendPromptToTerminal -> the prompt frame's
+   agent. Reuses the shared chord map; no new map; no server change.
+B. Tab escaped to the browser instead of indenting lists. Fix: keymap binds
+   Tab -> indentListItem(v) || indentMore(v); Shift+Tab -> outdentListItem(v) ||
+   indentLess(v). indentListItem/outdentListItem IMPORTED from @@LaneC's
+   editor/commands/list.ts (import is safe; no change to it); indentMore/Less
+   from @codemirror/commands as the off-list fallback so Tab NEVER escapes.
+
+Files (blob fingerprints):
+  web/src/components/RichPrompt.svelte           427323402fbae59aee24474d2affd425a7e0fe6b
+  web/src/components/richPromptComponent.test.ts 0617b6e0c90b649450b51d0ed6e0f9d9b6a5f04e
+
+Own-gate GREEN: rich-prompt tests (16), full vitest (1665), svelte-check 0
+errors (tree is clean now that round-2 landed), npm run build OK.
+
+Empirical (Chrome, fresh /tmp/chan-laneb-rp): A - rich prompt over a SHELL,
+type `echo hello_rp_shell` + cmd+enter -> RAN (output hello_rp_shell, no
+7;9;13~), composer cleared. B - typed `- alpha` Enter `beta` Tab -> `  - beta`
+(indented), focus STAYED in the prompt; Shift+Tab -> outdented back to `- beta`.
+Claude path unchanged (modifyOtherKeys -> "claude" chord, as B1 verified). Torn
+down (server by PID, chan remove, rm temp).
