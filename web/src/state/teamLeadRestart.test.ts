@@ -59,6 +59,7 @@ function config(): TeamDialogConfig {
     tabGroup: "chan-team",
     size: 1,
     autoPrefix: true,
+    mcpEnv: false,
     members: [{ name: "Lead", command: "claude --resume", env: "DEBUG=1", isLead: true }],
     realEstate: { kind: "tabs" },
   };

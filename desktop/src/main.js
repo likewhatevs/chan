@@ -642,6 +642,10 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
   function renderOutbound() {
     body.innerHTML = `
       <p class="nw-intro">Connect to a chan workspace already being served at a URL (we dial out to it).</p>
+      <p class="nw-muted">Run chan where your repo lives, then paste the URL it prints above:</p>
+      <pre class="snippet" data-copy="chan serve ./path/to/repo" title="click to copy">chan serve ./path/to/repo</pre>
+      <p class="nw-muted">Or reach it over an SSH local forward:</p>
+      <pre class="snippet" data-copy="ssh user@host -L 8787:localhost:8787 chan serve ./path/to/repo" title="click to copy">ssh user@host -L 8787:localhost:8787 chan serve ./path/to/repo</pre>
       <div class="nw-row">
         <label class="nw-url-field">URL
           <input id="nw-outbound-url" type="url" autocomplete="off" spellcheck="false"
@@ -663,6 +667,7 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
         if (e.key === 'Enter') { e.preventDefault(); attach.click(); }
       });
     }
+    wireSnippetCopy(body);
     urlInput.focus();
   }
 
@@ -708,7 +713,8 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
 
   function renderInboundForm(status) {
     body.innerHTML = `
-      <p class="nw-intro">Bind a loopback port to accept an incoming <code>chan serve --tunnel-url</code> from another machine over an SSH reverse forward (we listen).</p>
+      <p class="nw-intro">Listen for incoming connections on a configurable port, or use 0 to let the OS pick one. Then connect to it:</p>
+      <pre class="snippet" data-copy="chan serve ./path/to/repo --tunnel-url={chan-desktop-listener}" title="click to copy">chan serve ./path/to/repo --tunnel-url={chan-desktop-listener}</pre>
       <div class="nw-row">
         <label>Port
           <input id="nw-tunnel-port" type="number" min="0" max="65535" placeholder="auto"
@@ -742,6 +748,7 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
       renderInbound();
     });
     footer.appendChild(start);
+    wireSnippetCopy(body);
   }
 
   function renderInboundListening(status) {
@@ -771,18 +778,7 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
         renderInboundListening(status);
       });
     });
-    body.querySelectorAll('.snippet[data-copy]').forEach((node) => {
-      node.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(node.dataset.copy);
-          const old = node.textContent;
-          node.textContent = 'Copied';
-          setTimeout(() => { node.textContent = old; }, 1200);
-        } catch {
-          // Clipboard denied; nothing to do.
-        }
-      });
-    });
+    wireSnippetCopy(body);
     const stop = document.createElement('button');
     stop.className = 'btn danger';
     stop.type = 'button';
@@ -1180,6 +1176,23 @@ function showError(e) {
   banner.textContent = msg;
   main.prepend(banner);
   setTimeout(() => banner.remove(), 5000);
+}
+
+// Click-to-copy wiring for every `.snippet[data-copy]` under `scope`.
+// Shared by the outbound + inbound-form + inbound-listening code blocks.
+function wireSnippetCopy(scope) {
+  scope.querySelectorAll('.snippet[data-copy]').forEach((node) => {
+    node.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(node.dataset.copy);
+        const old = node.textContent;
+        node.textContent = 'Copied';
+        setTimeout(() => { node.textContent = old; }, 1200);
+      } catch {
+        // Clipboard denied; nothing to do.
+      }
+    });
+  });
 }
 
 function escapeHtml(s) {

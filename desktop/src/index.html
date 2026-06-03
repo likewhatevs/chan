@@ -15,9 +15,7 @@
       <b class="brand-title">Workspaces</b>
     </div>
     <div class="actions">
-      <button class="btn primary" id="new-workspace" title="Add a workspace">New</button>
-      <!-- Sign-in kept in the DOM but hidden. -->
-      <button class="btn" id="auth-btn" title="Sign in to chan.app" hidden>Sign in</button>
+      <!-- @@Alex S1: theme toggle sits BEFORE [New] -> [icon][New]. -->
       <button class="btn icon" id="theme-toggle" title="Toggle light/dark mode" aria-label="Toggle theme">
         <!-- Sun: shown in dark mode (click switches to light) -->
         <svg class="ic-sun" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
@@ -29,6 +27,9 @@
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
         </svg>
       </button>
+      <!-- Sign-in kept in the DOM but hidden. -->
+      <button class="btn" id="auth-btn" title="Sign in to chan.app" hidden>Sign in</button>
+      <button class="btn primary" id="new-workspace" title="Add a workspace">New</button>
     </div>
   </header>
 

@@ -153,6 +153,11 @@ export interface TeamDialogConfig {
   size: number;
   /// When true, all member names render with `@@` prefix.
   autoPrefix: boolean;
+  /// When true, the team's terminals start with the chan MCP env vars
+  /// (CHAN_MCP_*) exposed. Default OFF: agents still reach `cs search` +
+  /// friends via the control socket; opt in only when an agent consumes the
+  /// MCP env directly. Mirrors `chan_workspace::TeamConfig.mcp_env`.
+  mcpEnv: boolean;
   /// Length must equal `size`. Exactly one member has `isLead: true`.
   members: TeamMemberDraft[];
   realEstate: TeamRealEstate;
@@ -195,6 +200,33 @@ export function defaultTabGroupFromPath(teamDir: string): string {
   return base || "chan-team";
 }
 
+/// Auto-assign (E1): distribute every member NOT already placed in a cell
+/// across the split grid's cells, filling the least-populated cell each time
+/// (so empty cells fill first, then it balances). Members already dropped into
+/// a cell stay put. Pure: returns a fresh slots array, the input untouched.
+/// Backs the team dialog's auto-assign button next to the layout-shape picker.
+export function autoAssignSlots(
+  slots: number[][],
+  memberCount: number,
+): number[][] {
+  const next = slots.map((cell) => [...cell]);
+  if (next.length === 0) return next;
+  const placed = new Set<number>();
+  for (const cell of next) for (const m of cell) placed.add(m);
+  for (let m = 0; m < memberCount; m += 1) {
+    if (placed.has(m)) continue;
+    // Least-populated cell; ties resolve to the lowest index, so empty cells
+    // fill in row-major order before any cell takes a second robot.
+    let target = 0;
+    for (let i = 1; i < next.length; i += 1) {
+      if (next[i].length < next[target].length) target = i;
+    }
+    next[target].push(m);
+    placed.add(m);
+  }
+  return next;
+}
+
 /// Default team config used as the dialog's initial state. One lead
 /// member, auto-prefix on, New mode, real estate defaults to tabs.
 export function defaultTeamConfig(): TeamDialogConfig {
@@ -205,6 +237,7 @@ export function defaultTeamConfig(): TeamDialogConfig {
     tabGroup: defaultTabGroupFromPath(TEAM_DIR_DEFAULT),
     size: TEAM_MIN_SIZE,
     autoPrefix: true,
+    mcpEnv: false,
     members: [
       { name: "Lead", command: "claude", env: "", isLead: true, agent: "claude" },
     ],

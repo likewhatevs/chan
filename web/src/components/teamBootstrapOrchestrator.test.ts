@@ -74,6 +74,7 @@ function tabsConfig(): TeamDialogConfig {
     tabGroup: "chan-team",
     size: 3,
     autoPrefix: true,
+    mcpEnv: false,
     members: [
       { name: "Lead", command: "claude", env: "", isLead: true },
       { name: "Worker1", command: "claude --resume", env: "", isLead: false },

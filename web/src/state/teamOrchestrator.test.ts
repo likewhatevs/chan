@@ -87,6 +87,7 @@ describe("translateConfig", () => {
       tabGroup: "chan-team",
       size: 2,
       autoPrefix: true,
+      mcpEnv: false,
       members: [
         { name: "Lead", command: "claude", env: "", isLead: true },
         { name: "Worker1", command: "claude", env: "", isLead: false },
@@ -208,6 +209,7 @@ describe("wireToDialog", () => {
       host_handle: "@@Alice",
       tab_group: "demo",
       auto_prefix_at: true,
+      mcp_env: false,
       created_at: "2026-05-29T08:00:00.000Z",
       members: [
         {
@@ -323,6 +325,7 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
       tabGroup: "chan-team",
       size: 3,
       autoPrefix: true,
+      mcpEnv: false,
       members: [
         { name: "Lead", command: "claude", env: "", isLead: true },
         { name: "Worker1", command: "claude", env: "", isLead: false },
@@ -355,6 +358,7 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
       tabGroup: "chan-team",
       size: 3,
       autoPrefix: true,
+      mcpEnv: false,
       members: [
         { name: "Lead", command: "claude", env: "", isLead: true, agent: "claude" },
         { name: "Worker1", command: "gemini", env: "", isLead: false, agent: "gemini" },

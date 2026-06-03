@@ -119,6 +119,7 @@ export function translateConfig(config: TeamDialogConfig): TeamConfigWire {
     host_handle: hostHandle,
     tab_group: config.tabGroup,
     auto_prefix_at: config.autoPrefix,
+    mcp_env: config.mcpEnv,
     created_at: new Date().toISOString(),
     members,
   };
@@ -185,6 +186,7 @@ export function wireToDialog(
     tabGroup: wire.tab_group ?? defaultTabGroupFromPath(dir),
     size,
     autoPrefix: wire.auto_prefix_at,
+    mcpEnv: wire.mcp_env,
     members,
     realEstate: realEstateFromWire(wire, size),
   };

@@ -11,6 +11,7 @@
     gridShapesForSize,
     reshapeSplitGrid,
     resizeTeamMembers,
+    autoAssignSlots,
     switchRealEstate,
     TEAM_MAX_SIZE,
     TEAM_MIN_SIZE,
@@ -126,6 +127,13 @@
   /// "teams/beta", etc. Files are filtered out: a team config always
   /// lives in a directory, so the field forces a directory choice. The
   /// request id guards against out-of-order responses.
+  ///
+  /// A BARE prefix (no "/") must work too: typing "foo" suggests every
+  /// root dir starting with "foo" as "foo/", so loading an existing team
+  /// does not require typing the trailing "/" first. We prefix-filter in
+  /// JS BEFORE the cap so a match is never sliced off, and append "/" so
+  /// each suggestion reads as a directory to descend into (validateAndLoad
+  /// strips the trailing slash before reading {dir}/config.toml).
   async function refreshDirSuggestions(value: string): Promise<void> {
     const slash = value.lastIndexOf("/");
     const parent = slash >= 0 ? value.slice(0, slash) : "";
@@ -133,9 +141,12 @@
     try {
       const entries = await api.list(parent || null);
       if (req !== dirSuggestReq) return;
+      const needle = value.toLowerCase();
       dirSuggestions = entries
         .filter((e) => e.is_dir)
         .map((e) => e.path)
+        .filter((p) => p.toLowerCase().startsWith(needle))
+        .map((p) => `${p}/`)
         .slice(0, 50);
     } catch {
       if (req === dirSuggestReq) dirSuggestions = [];
@@ -222,6 +233,14 @@
 
   function onShapeClick(shape: GridShape): void {
     config = reshapeSplitGrid(config, shape);
+  }
+
+  /// E1: distribute every unassigned member across the current grid's cells
+  /// (least-populated first). No-op outside split mode.
+  function autoAssign(): void {
+    if (config.realEstate.kind !== "split") return;
+    const slots = autoAssignSlots(config.realEstate.slots, config.members.length);
+    config = { ...config, realEstate: { ...config.realEstate, slots } };
   }
 
   function cellOfMember(memberIdx: number): number | null {
@@ -328,6 +347,11 @@
       <label class="team-checkbox-row">
         <input type="checkbox" bind:checked={config.autoPrefix} />
         <span>Auto-prefix names with <code>@@</code></span>
+      </label>
+
+      <label class="team-checkbox-row">
+        <input type="checkbox" bind:checked={config.mcpEnv} />
+        <span>Expose chan MCP env vars to the team's terminals (off by default)</span>
       </label>
 
       <fieldset class="team-realestate">
@@ -553,6 +577,23 @@
                 {shape.rows}x{shape.cols}
               </button>
             {/each}
+            <button
+              type="button"
+              class="team-auto-assign"
+              onclick={autoAssign}
+              title="Auto-assign robots across the cells"
+              aria-label="Auto-assign robots across the cells"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                stroke-linejoin="round" aria-hidden="true">
+                <rect x="5" y="9" width="14" height="9" rx="2" />
+                <path d="M12 9V5.5" />
+                <circle cx="12" cy="4" r="1.3" />
+                <circle cx="9.5" cy="13.5" r="1" />
+                <circle cx="14.5" cy="13.5" r="1" />
+              </svg>
+            </button>
           </div>
 
           <div
@@ -849,6 +890,24 @@
   .team-shape-pick.on {
     background: color-mix(in srgb, var(--accent) 20%, var(--bg));
     border-color: var(--accent);
+  }
+  /* E1 auto-assign: same pill look as the shape picks, pushed to the right
+     end of the shapes row, sized to hold the robot icon. */
+  .team-auto-assign {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .team-auto-assign:hover {
+    border-color: var(--accent);
+    color: var(--accent);
   }
   .team-airplane-grid {
     display: grid;

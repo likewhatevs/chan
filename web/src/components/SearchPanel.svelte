@@ -61,6 +61,12 @@
     | { kind: "chunk"; hit: ContentHit; key: string }
     | { kind: "image"; path: string; key: string }
     | { kind: "file"; path: string; key: string }
+    // Path autocomplete: a filesystem entry surfaced when the query LOOKS
+    // like a path (has a "/" or starts with "./"). Lists the typed parent dir
+    // directly via api.list - NOT the lazy `tree.entries` - so deep / unindexed
+    // paths still resolve (the "I typed a path and got nothing" case). A file
+    // opens; a directory drills (re-seeds the query to its contents).
+    | { kind: "path"; path: string; isDir: boolean; key: string }
     | {
         kind: "language_file";
         path: string;
@@ -84,6 +90,7 @@
   /// `search=foo` reopens the panel preloaded with that term.
   let chunkHits = $state<ContentHit[]>([]);
   let languageHits = $state<SearchRow[]>([]);
+  let pathHits = $state<SearchRow[]>([]);
   let loading = $state(false);
   let active = $state(0);
   let error = $state<string | null>(null);
@@ -179,6 +186,7 @@
     if (!q) {
       chunkHits = [];
       languageHits = [];
+      pathHits = [];
       loading = false;
       return;
     }
@@ -187,6 +195,10 @@
     const myToken = queryToken;
     loading = true;
     debounceTimer = setTimeout(async () => {
+      // Path autocomplete runs alongside content search (best-effort, its own
+      // staleness guard via myToken), so a path-like query still surfaces
+      // matches even when the content index has nothing for it.
+      void refreshPathHits(q, myToken);
       try {
         const language = parseLanguageQuery(q);
         if (language) {
@@ -216,6 +228,45 @@
   }
 
   const LANGUAGE_LIMIT = 25;
+  const PATH_LIMIT = 25;
+
+  /// Treat the query as a path when it carries a "/" or a leading "./" - the
+  /// user is signalling "I'm typing a path", so we offer filesystem
+  /// autocomplete. A bare word stays a pure content/tag/file search.
+  function isPathLike(q: string): boolean {
+    return q.startsWith("/") || q.startsWith("./") || q.includes("/");
+  }
+
+  /// Populate `pathHits` from the typed parent directory. Lists via api.list
+  /// DIRECTLY (not the lazy `tree.entries`), so a deep / unindexed path still
+  /// resolves; entries are prefix-filtered by the full typed path. `token`
+  /// guards against out-of-order responses (same counter as the content search).
+  async function refreshPathHits(q: string, token: number): Promise<void> {
+    if (!isPathLike(q)) {
+      if (token === queryToken) pathHits = [];
+      return;
+    }
+    // Drop a single leading "./"; api.list keys off workspace-relative paths.
+    const norm = q.replace(/^\.\//, "");
+    const slash = norm.lastIndexOf("/");
+    const parent = slash >= 0 ? norm.slice(0, slash) : "";
+    try {
+      const entries = await api.list(parent || null);
+      if (token !== queryToken) return;
+      const needle = norm.toLowerCase();
+      pathHits = entries
+        .filter((e) => e.path.toLowerCase().startsWith(needle))
+        .slice(0, PATH_LIMIT)
+        .map((e) => ({
+          kind: "path" as const,
+          path: e.path,
+          isDir: e.is_dir,
+          key: `path:${e.path}`,
+        }));
+    } catch {
+      if (token === queryToken) pathHits = [];
+    }
+  }
 
   function parseLanguageQuery(q: string): string | null {
     const m = q.match(/^language\s*:\s*(.+)$/i);
@@ -406,6 +457,9 @@
   /// file that surfaces under both shows once.
   const rows = $derived.by<SearchRow[]>(() => {
     const out: SearchRow[] = [];
+    // Path matches first: the user typed a path, so surface filesystem hits
+    // above the content / tag long tail.
+    out.push(...pathHits);
     const chunkPaths = new Set<string>();
     for (const h of chunkHits) chunkPaths.add(h.path);
     out.push(...tagRows);
@@ -431,6 +485,7 @@
       contact: 0,
       file: 0,
       language: 0,
+      path: 0,
     };
     for (const row of rows) {
       if (row.kind === "chunk") counts.chunk += 1;
@@ -439,6 +494,7 @@
       else if (row.kind === "contact") counts.contact += 1;
       else if (row.kind === "file") counts.file += 1;
       else if (row.kind === "language_file") counts.language += 1;
+      else if (row.kind === "path") counts.path += 1;
     }
     return counts;
   });
@@ -454,6 +510,9 @@
     if (r.kind === "file") return { kind: "file", path: r.path };
     if (r.kind === "language_file") return { kind: "file", path: r.path };
     if (r.kind === "contact") return { kind: "file", path: r.path };
+    // A path-file gets the file inspector; a path-dir has no file report, so
+    // no inspector selection (avoids a spurious reportFile 404).
+    if (r.kind === "path") return r.isDir ? null : { kind: "file", path: r.path };
     return { kind: "tag", nodeId: r.nodeId, label: r.label };
   });
   const activeKey = $derived(rows[active]?.key ?? null);
@@ -507,6 +566,18 @@
       // as "select" only. The inspector pane already shows the
       // preview thanks to the active-row selection effect, so no
       // further action is needed here.
+    } else if (r.kind === "path") {
+      if (r.isDir) {
+        // Drill into the directory: re-seed the query to its contents and
+        // keep the panel open so the next segment autocompletes.
+        searchPanel.query = r.path.endsWith("/") ? r.path : `${r.path}/`;
+        active = 0;
+        scheduleSearch();
+        inputEl?.focus();
+      } else {
+        close();
+        await openInActivePane(r.path);
+      }
     } else {
       // Tag hits route to a tag-scoped graph (depth-hop
       // neighbourhood around the tag) rather than workspace scope.
@@ -699,6 +770,15 @@
                   <span class="score">{r.language}</span>
                 </div>
                 <div class="preview muted">{r.code.toLocaleString()} SLOC</div>
+              {:else if r.kind === "path"}
+                <!-- Path autocomplete row: a directory (drills on open) or a
+                     file (opens). The trailing "/" + "directory" label mark a
+                     dir; a file shows its basename like a filename match. -->
+                <div class="row1">
+                  <KindChip kind="document" compact dim />
+                  <span class="path">{r.path}{r.isDir ? "/" : ""}</span>
+                </div>
+                <div class="preview muted">{r.isDir ? "directory" : basename(r.path)}</div>
               {:else if r.kind === "file"}
                 <!-- Markdown / text filename match (deduped against
                      chunk hits in the rows combiner). The preview
@@ -754,11 +834,12 @@
         {:else if rows.length > 0}
           <span>
             {rows.length} hit{rows.length === 1 ? "" : "s"}
-            {#if rowCounts.tag + rowCounts.image + rowCounts.contact + rowCounts.file + rowCounts.language > 0}
+            {#if rowCounts.tag + rowCounts.image + rowCounts.contact + rowCounts.file + rowCounts.language + rowCounts.path > 0}
               ({rowCounts.chunk} doc - {rowCounts.image} image - {rowCounts.tag} tag
               {#if rowCounts.contact > 0} - {rowCounts.contact} contact{/if}
               {#if rowCounts.file > 0} - {rowCounts.file} file{/if}
-              {#if rowCounts.language > 0} - {rowCounts.language} language{/if})
+              {#if rowCounts.language > 0} - {rowCounts.language} language{/if}
+              {#if rowCounts.path > 0} - {rowCounts.path} path{/if})
             {/if}
           </span>
         {:else}

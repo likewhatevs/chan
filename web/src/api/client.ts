@@ -1167,6 +1167,10 @@ export interface TeamConfigWire {
   /// Bootstrap.
   tab_group: string;
   auto_prefix_at: boolean;
+  /// When true, the team's terminals start with the chan MCP env vars
+  /// (CHAN_MCP_*) exposed. Default false (off). Mirrors
+  /// `chan_workspace::TeamConfig.mcp_env`.
+  mcp_env: boolean;
   created_at: string;
   members: TeamMemberWire[];
 }
