@@ -52,6 +52,7 @@
     syncOverlayStack,
     toggleBrowserSidePane,
     topOverlay,
+    ui,
     watchSystemTheme,
   } from "./state/store.svelte";
   import { confirmState } from "./state/confirm.svelte";
@@ -395,6 +396,16 @@
 
   function onWindowKey(e: KeyboardEvent): void {
     const meta = e.metaKey || e.ctrlKey;
+    // While the disconnect overlay blocks the UI, swallow every global
+    // shortcut: the backdrop stops clicks but not document-level keystrokes,
+    // so without this a chord like Ctrl+D would still close a tab behind the
+    // overlay. The overlay's own Retry button (a focused element) is
+    // unaffected; there is nothing else to drive while the server is gone.
+    if (ui.disconnectBlocking) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (paneMode.active) {
       e.preventDefault();
       e.stopPropagation();
@@ -869,6 +880,14 @@
     // both. The keystroke we care about is the literal Ctrl + the
     // physical D key, not a shifted variant or a Cmd-modified one.
     if (e.code !== "KeyD") return;
+    // The disconnect overlay blocks the UI: swallow Ctrl+D entirely (capture
+    // phase, so the terminal/editor behind the overlay never sees it) rather
+    // than closing a tab the user can't act on.
+    if (ui.disconnectBlocking) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     // In-house modals + the Cmd+K pane-mode dispatcher own their
     // own keyboard contexts; never close a tab from under them.
     if (promptState.open || pathPromptState.open || confirmState.open || draftCloseState.open) {

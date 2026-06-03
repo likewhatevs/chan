@@ -29,10 +29,23 @@
   /// Done with an $effect that owns the timer rather than a $derived
   /// computing on Date.now: $derived must be pure, and recording
   /// state transitions is a side effect.
+  import { onDestroy } from "svelte";
+
   const STARTUP_GRACE_MS = 600;
   let visible = $state(false);
   let hasBeenOpen = $state(false);
   let retryBtn: HTMLButtonElement | null = $state(null);
+
+  // Mirror `visible` into the shared store so App.svelte's document-level
+  // key handlers can suppress pane/tab shortcuts while the overlay blocks
+  // the UI (the backdrop stops clicks, but not keystrokes). Reset on teardown
+  // so a stale `true` can't outlive the overlay.
+  $effect(() => {
+    ui.disconnectBlocking = visible;
+  });
+  onDestroy(() => {
+    ui.disconnectBlocking = false;
+  });
 
   $effect(() => {
     if (ui.ws === "open") {

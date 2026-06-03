@@ -157,6 +157,14 @@ export const ui = $state<{
   /// loopback URL out of the address bar but lose the `?t=...` token
   /// the server prints at launch.
   authMissing: boolean;
+  /// True while the DisconnectOverlay is actively blocking the UI (the
+  /// watcher dropped after having been open, past the startup grace). The
+  /// overlay greys out the app, but global keyboard shortcuts are
+  /// document-level and fire regardless of focus, so App.svelte's key
+  /// handlers consult this to suppress pane/tab shortcuts (e.g. Ctrl+D
+  /// closing a tab) behind the overlay. Owned by DisconnectOverlay, which
+  /// mirrors its `visible` here.
+  disconnectBlocking: boolean;
 }>({
   status: null,
   statusKind: null,
@@ -166,6 +174,7 @@ export const ui = $state<{
   themeChoice: "system",
   theme: effectiveTheme("system"),
   authMissing: false,
+  disconnectBlocking: false,
 });
 
 export const HYBRID_SURFACE_KINDS: readonly HybridSurfaceKind[] = [
