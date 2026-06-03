@@ -1,5 +1,6 @@
 .PHONY: dev build check fmt fmt-check lint test clean web tauri-cli \
-        app-signed app-notarized sign-prereqs notarize-prereqs
+        app-signed app-notarized sign-prereqs notarize-prereqs \
+        dmg-layout-proof
 
 # Monorepo root. Override via CHAN_REPO=/path on CI.
 CHAN_REPO ?= ..
@@ -8,6 +9,13 @@ TAURI_CLI_VERSION ?= ^2
 TAURI_CLI_ROOT := $(abspath $(CHAN_REPO)/target/tauri-cli)
 TAURI_CLI_BIN := $(TAURI_CLI_ROOT)/bin/cargo-tauri
 TAURI := PATH="$(TAURI_CLI_ROOT)/bin:$$PATH" cargo tauri
+
+# Finder-less DMG packaging (packaging/build-dmg.sh + dmg_settings.py). The
+# layout is pinned by the settings file, so any dmgbuild 1.x yields the same
+# layout; tighten DMGBUILD_SPEC to an exact `==` for a fully reproducible pin.
+DMGBUILD_SPEC ?= dmgbuild>=1.6,<2
+DMG_VENV ?= $(abspath $(CHAN_REPO))/target/dmg-venv
+BUNDLE_DIR := $(abspath $(CHAN_REPO))/target/release/bundle
 
 # Keep local dev self-contained: CI installs tauri-cli globally, but a
 # fresh workstation usually does not have the cargo subcommand yet.
@@ -211,22 +219,27 @@ app-signed: sign-prereqs tauri-cli web
 
 # Sign + notarize + staple + bundle a .dmg.
 #
-# We split the build (Tauri) from the notarize (xcrun notarytool)
-# because tauri-bundler 2.x only knows the APPLE_ID/PASSWORD/TEAM_ID
-# auth shape; it does NOT consume notarytool Keychain profiles. To
-# support `--keychain-profile <name>` for local dev (Apple's blessed
-# mechanism) AND env-var for CI, we unset Tauri's notarize env vars
-# during the build so tauri-bundler skips its own notarize step, then
-# call `xcrun notarytool submit` ourselves with the appropriate flag
-# set. CI behaviour is identical to the prior path (manual notarytool
-# call uses the same credentials Tauri would have used).
+# We build ONLY the signed .app with Tauri, then build the .dmg ourselves with
+# `dmgbuild` (packaging/build-dmg.sh), because tauri-bundler's DMG step lays out
+# the Finder window over AppleScript/Finder, which no-ops on a headless CI
+# runner and ships a flat default-layout DMG. dmgbuild writes the layout
+# programmatically (no Finder), so local == CI byte-for-byte. The notarize is
+# split from the build (as before): tauri-bundler 2.x only knows the
+# APPLE_ID/PASSWORD/TEAM_ID auth shape, not notarytool Keychain profiles, so we
+# unset those env vars during the Tauri build and call `xcrun notarytool submit`
+# ourselves with the right flag set (Keychain profile locally, env vars on CI).
 app-notarized: sign-prereqs notarize-prereqs tauri-cli web
 	cd src-tauri && env -u APPLE_ID -u APPLE_PASSWORD -u APPLE_TEAM_ID \
-	    $(TAURI) build --bundles app,dmg
-	@DMG=$$(ls -1 $(CHAN_REPO)/target/release/bundle/dmg/*.dmg | head -1); \
-	    if [ -z "$$DMG" ]; then \
-	        echo "error: no .dmg produced by cargo tauri build"; exit 1; \
-	    fi; \
+	    $(TAURI) build --bundles app
+	@set -e; \
+	    APP="$(BUNDLE_DIR)/macos/Chan.app"; \
+	    if [ ! -d "$$APP" ]; then echo "error: signed Chan.app not found at $$APP"; exit 1; fi; \
+	    VERSION=$$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' src-tauri/tauri.conf.json | head -1); \
+	    ARCH=$$(uname -m | sed 's/arm64/aarch64/'); \
+	    DMG="$(BUNDLE_DIR)/dmg/Chan_$${VERSION}_$${ARCH}.dmg"; \
+	    rm -f "$(BUNDLE_DIR)"/dmg/*.dmg; \
+	    DMG_VENV="$(DMG_VENV)" DMGBUILD_SPEC="$(DMGBUILD_SPEC)" \
+	        packaging/build-dmg.sh "$$APP" "$$DMG" "Chan"; \
 	    if [ "$(NOTARIZE_VIA)" = "keychain" ]; then \
 	        echo "notarizing $$DMG (via Keychain profile '$(NOTARIZE_PROFILE)')"; \
 	        xcrun notarytool submit "$$DMG" \
@@ -237,10 +250,29 @@ app-notarized: sign-prereqs notarize-prereqs tauri-cli web
 	            --apple-id "$(APPLE_ID)" \
 	            --password "$(APPLE_PASSWORD)" \
 	            --team-id "$(APPLE_TEAM_ID)" --wait; \
-	    fi && \
+	    fi; \
 	    xcrun stapler staple "$$DMG"
 	@echo ""
 	@echo "notarized artifacts:"
-	@ls -1 $(CHAN_REPO)/target/release/bundle/dmg/*.dmg 2>/dev/null || true
+	@ls -1 $(BUNDLE_DIR)/dmg/*.dmg 2>/dev/null || true
 	@echo "verify: spctl -a -t open --context context:primary-signature -v \\"
-	@echo "          $(CHAN_REPO)/target/release/bundle/macos/Chan.app"
+	@echo "          $(BUNDLE_DIR)/macos/Chan.app"
+
+# Local DMG layout proof (no certs, no notarization). Builds the .app + the
+# Finder-less DMG so you can eyeball the layout; because dmgbuild is
+# Finder-less, this local layout is identical to what CI produces. Use to
+# verify the layout before a release cut.
+dmg-layout-proof: tauri-cli web
+	cd src-tauri && $(TAURI) build --bundles app
+	@set -e; \
+	    APP="$(BUNDLE_DIR)/macos/Chan.app"; \
+	    if [ ! -d "$$APP" ]; then echo "error: Chan.app not found at $$APP"; exit 1; fi; \
+	    VERSION=$$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' src-tauri/tauri.conf.json | head -1); \
+	    ARCH=$$(uname -m | sed 's/arm64/aarch64/'); \
+	    DMG="$(BUNDLE_DIR)/dmg/Chan_$${VERSION}_$${ARCH}.dmg"; \
+	    rm -f "$(BUNDLE_DIR)"/dmg/*.dmg; \
+	    DMG_VENV="$(DMG_VENV)" DMGBUILD_SPEC="$(DMGBUILD_SPEC)" \
+	        packaging/build-dmg.sh "$$APP" "$$DMG" "Chan"; \
+	    echo ""; \
+	    echo "layout-proof DMG: $$DMG"; \
+	    echo "inspect: hdiutil attach \"$$DMG\" && ls -la /Volumes/Chan"
