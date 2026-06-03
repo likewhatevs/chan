@@ -18,7 +18,8 @@
 // pastes rich content.
 
 import { EditorView } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import type { EditorState, Extension } from "@codemirror/state";
+import { parseListPrefix } from "./commands/list";
 
 // Semantic HTML tags we treat as "this paste is actually rich" and
 // worth running through turndown. Without these, a paste of bold or
@@ -49,14 +50,41 @@ export function htmlPasteHandler(): Extension {
       void htmlToMarkdown(html).then((md) => {
         if (!md) return;
         const sel = view.state.selection.main;
+        const insert = dedentListPaste(view.state, sel.from, md);
         view.dispatch({
-          changes: { from: sel.from, to: sel.to, insert: md },
-          selection: { anchor: sel.from + md.length },
+          changes: { from: sel.from, to: sel.to, insert },
+          selection: { anchor: sel.from + insert.length },
         });
       });
       return true;
     },
   });
+}
+
+/// When rich content is pasted INTO a list item, turndown converts a
+/// copied list-item link (clipboard HTML `<ul><li><a>...`, which is
+/// what copying a link out of a list / web page yields) to
+/// `-   [url](url)` - a leading bullet marker. Inserting that verbatim
+/// into an existing `- ` bullet yields `- -   [url]`, which parses as a
+/// stray NESTED bullet: @@Alex's R2-2 "pasting a link indents the list".
+/// When the caret line is already a list item, strip a leading list
+/// marker from the FIRST pasted line so the content flows into the
+/// current bullet as a sibling instead of nesting under it. Only the
+/// first line is touched, so a genuine multi-item paste keeps its later
+/// bullets. A bare-anchor paste (turndown emits inline `[url](url)`, no
+/// marker) is unaffected: `parseListPrefix` returns null and `md` passes
+/// through unchanged. Exported for the unit test.
+export function dedentListPaste(
+  state: EditorState,
+  pos: number,
+  md: string,
+): string {
+  if (!parseListPrefix(state.doc.lineAt(pos).text)) return md;
+  const nl = md.indexOf("\n");
+  const first = nl === -1 ? md : md.slice(0, nl);
+  const firstPrefix = parseListPrefix(first);
+  if (!firstPrefix) return md;
+  return first.slice(firstPrefix.length) + (nl === -1 ? "" : md.slice(nl));
 }
 
 // Exported for the vitest pin in `paste_html.test.ts`. Production

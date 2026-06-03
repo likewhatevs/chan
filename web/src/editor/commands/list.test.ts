@@ -138,16 +138,20 @@ describe("indentListItem / outdentListItem", () => {
     expect(snapshot().doc).toBe("  - a");
   });
 
-  test("Shift-Tab on a top-level list item exits the list", () => {
+  test("Shift-Tab on a top-level list item is a no-op (keeps the bullet)", () => {
+    // R2-2: a top-level item is already at the outermost level, so
+    // outdent must NOT strip the marker (that silently demoted the
+    // bullet to a plain paragraph). Still consumed (returns true) so
+    // Shift-Tab never escapes the editor; the doc is unchanged.
     mount("- a", 3);
     expect(outdentListItem(view)).toBe(true);
-    expect(snapshot().doc).toBe("a");
+    expect(snapshot().doc).toBe("- a");
   });
 
-  test("Shift-Tab on a top-level task item exits the list", () => {
+  test("Shift-Tab on a top-level task item keeps the bullet", () => {
     mount("- [x] done", 10);
     expect(outdentListItem(view)).toBe(true);
-    expect(snapshot().doc).toBe("done");
+    expect(snapshot().doc).toBe("- [x] done");
   });
 
   test("Shift-Tab on a non-list line is an editor-local no-op", () => {

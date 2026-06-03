@@ -146,20 +146,18 @@ function shiftListLines(view: EditorView, dir: 1 | -1): boolean {
       changes.push({ from: line.from, to: line.from, insert: INDENT_UNIT });
     } else {
       // Strip up to INDENT_UNIT.length leading space chars. Tabs
-      // count as one char each - we don't try to expand them.
+      // count as one char each - we don't try to expand them. A
+      // top-level item (no leading indent) is already at the outermost
+      // level, so Shift-Tab is a NO-OP there: it must NOT strip the
+      // list marker. Stripping the prefix silently turned the bullet
+      // into a plain paragraph - exactly @@Alex's "cmd+shift+tab makes
+      // it worse" (R2-2). Leaving a list is Enter-on-an-empty-bullet,
+      // not outdent.
       let strip = 0;
       while (strip < INDENT_UNIT.length && line.text[strip] === " ") strip++;
       if (strip > 0) {
         changes.push({ from: line.from, to: line.from + strip, insert: "" });
-        continue;
       }
-      const prefix = parseListPrefix(line.text);
-      if (!prefix) continue;
-      changes.push({
-        from: line.from,
-        to: line.from + prefix.length,
-        insert: "",
-      });
     }
   }
   if (changes.length === 0) return false;

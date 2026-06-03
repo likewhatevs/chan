@@ -10,7 +10,8 @@
 // markdown extension stack, which jsdom doesn't fully support.
 
 import { describe, expect, test } from "vitest";
-import { htmlToMarkdown } from "./paste_html";
+import { EditorState } from "@codemirror/state";
+import { dedentListPaste, htmlToMarkdown } from "./paste_html";
 
 describe("pasted markdown is NOT escaped", () => {
   test("asterisk emphasis survives the conversion", async () => {
@@ -72,5 +73,36 @@ describe("pasted markdown is NOT escaped", () => {
     const md = await htmlToMarkdown("<p><b>real bold</b> and <i>real italic</i></p>");
     expect(md).toContain("**real bold**");
     expect(md).toContain("*real italic*");
+  });
+});
+
+describe("dedentListPaste (R2-2: pasting a link must not indent the list)", () => {
+  // Pure function: build a doc state, paste markdown at a position.
+  const paste = (doc: string, pos: number, md: string): string =>
+    dedentListPaste(EditorState.create({ doc }), pos, md);
+
+  test("strips turndown's leading bullet marker when pasting into a bullet", () => {
+    // Copying a list-item link yields `-   [url](url)` from turndown;
+    // pasting it onto an existing `- ` bullet must flow in as that
+    // bullet's content, not a nested `- -   [url]`.
+    expect(paste("- ", 2, "-   [u](https://u)")).toBe("[u](https://u)");
+  });
+
+  test("strips the marker when pasting into a task item too", () => {
+    expect(paste("- [ ] ", 6, "-   [u](https://u)")).toBe("[u](https://u)");
+  });
+
+  test("only the first pasted line is dedented; later bullets survive", () => {
+    expect(paste("- ", 2, "-   [a](https://a)\n-   [b](https://b)")).toBe(
+      "[a](https://a)\n-   [b](https://b)",
+    );
+  });
+
+  test("a bare-anchor paste (inline link, no marker) passes through unchanged", () => {
+    expect(paste("- ", 2, "[u](https://u)")).toBe("[u](https://u)");
+  });
+
+  test("pasting into a NON-list line is unchanged (keeps the marker)", () => {
+    expect(paste("para", 4, "-   [u](https://u)")).toBe("-   [u](https://u)");
   });
 });
