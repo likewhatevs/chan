@@ -42,14 +42,23 @@ pub enum SurveyReplyRequest {
         option_index: u32,
         option_label: String,
     },
+    /// The user hit [F]. `followup` carries the team context when the survey
+    /// had it (the route creates the file); Part C made [F] standard on every
+    /// survey, so a survey without context sends `followup: null` and the
+    /// route treats it as a plain deferral (no file).
     #[serde(rename = "followup", rename_all = "camelCase")]
     Followup {
         survey_id: String,
-        followup: FollowupContext,
+        #[serde(default)]
+        followup: Option<FollowupContext>,
         #[serde(default)]
         title: Option<String>,
         body_markdown: String,
     },
+    /// The user hit Dismiss (Part C): carries only the survey id (no option,
+    /// no file), so the asking agent can tell a dismiss from an answer.
+    #[serde(rename = "dismissed", rename_all = "camelCase")]
+    Dismissed { survey_id: String },
 }
 
 /// Team context for a `[F]` followup, originating with the surveying agent
@@ -82,7 +91,7 @@ pub async fn api_survey_reply(
         },
         SurveyReplyRequest::Followup {
             survey_id,
-            followup,
+            followup: Some(followup),
             title,
             body_markdown,
         } => {
@@ -102,12 +111,22 @@ pub async fn api_survey_reply(
             match result {
                 Ok(Ok(path)) => SurveyReply::Followup {
                     survey_id,
-                    followup_path: path,
+                    followup_path: Some(path),
                 },
                 Ok(Err(msg)) => return err(StatusCode::BAD_REQUEST, msg),
                 Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
             }
         }
+        // Part C: [F] without team context is a plain deferral, no file.
+        SurveyReplyRequest::Followup {
+            survey_id,
+            followup: None,
+            ..
+        } => SurveyReply::Followup {
+            survey_id,
+            followup_path: None,
+        },
+        SurveyReplyRequest::Dismissed { survey_id } => SurveyReply::Dismissed { survey_id },
     };
 
     let survey_id = reply.survey_id().to_string();
@@ -349,6 +368,40 @@ mod tests {
     }
 
     #[test]
+    fn followup_reply_request_deserializes_with_null_context() {
+        // Part C: [F] is standard on every survey; a survey raised without
+        // followup context sends `followup: null` and the route treats it as a
+        // plain deferral (no file).
+        let json = r#"{"surveyId":"survey-9","kind":"followup",
+            "followup":null,"bodyMarkdown":"the question"}"#;
+        let req: SurveyReplyRequest = serde_json::from_str(json).unwrap();
+        match req {
+            SurveyReplyRequest::Followup {
+                survey_id,
+                followup,
+                body_markdown,
+                ..
+            } => {
+                assert_eq!(survey_id, "survey-9");
+                assert!(followup.is_none());
+                assert_eq!(body_markdown, "the question");
+            }
+            _ => panic!("expected followup variant"),
+        }
+    }
+
+    #[test]
+    fn dismissed_reply_request_deserializes() {
+        // Part C: a dismiss carries only the survey id (no option, no file).
+        let json = r#"{"surveyId":"survey-4","kind":"dismissed"}"#;
+        let req: SurveyReplyRequest = serde_json::from_str(json).unwrap();
+        match req {
+            SurveyReplyRequest::Dismissed { survey_id } => assert_eq!(survey_id, "survey-4"),
+            _ => panic!("expected dismissed variant"),
+        }
+    }
+
+    #[test]
     fn followup_reply_request_deserializes_with_context() {
         let json = r#"{"surveyId":"survey-9","kind":"followup",
             "followup":{"dir":"new-team-1","from":"@@LaneC","to":"@@Host"},
@@ -362,6 +415,7 @@ mod tests {
                 body_markdown,
             } => {
                 assert_eq!(survey_id, "survey-9");
+                let followup = followup.expect("context present");
                 assert_eq!(followup.dir, "new-team-1");
                 assert_eq!(followup.from, "@@LaneC");
                 assert_eq!(followup.to, "@@Host");

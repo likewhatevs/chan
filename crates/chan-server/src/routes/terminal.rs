@@ -51,6 +51,15 @@ pub struct CreateTerminalBody {
     /// terminal joins the team's group.
     #[serde(default)]
     group: Option<String>,
+    /// Owning window for the new session. Team-dialog terminals are
+    /// created through this POST and only ATTACHED over `/ws` afterwards,
+    /// and attach does not rebind `window_id`. Without binding it here the
+    /// session keeps `window_id = None`, so `cs terminal survey` (which
+    /// resolves its target by window) reports "no live terminal session
+    /// matched". The Team Work orchestrator passes the dialog window's
+    /// `sessionWindowId()` so the survey overlay lands in the right window.
+    #[serde(default)]
+    window_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -257,7 +266,7 @@ pub async fn api_create_terminal(
         size: pty_size(None, None),
         tab_name: Some(name.clone()),
         tab_group: body.group.as_deref().and_then(normalize_tab_group),
-        window_id: None,
+        window_id: body.window_id.as_deref().and_then(normalize_window_id),
         // B5: off by default; honor the non-team server-config opt-in.
         mcp_env: state
             .server_config
@@ -928,6 +937,7 @@ mod tests {
             command: command.into(),
             env: BTreeMap::new(),
             group: None,
+            window_id: None,
         }
     }
 
@@ -997,6 +1007,7 @@ mod tests {
                 command: " ".into(),
                 env: BTreeMap::new(),
                 group: None,
+                window_id: None,
             })),
         )
         .await;

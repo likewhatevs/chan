@@ -1,11 +1,12 @@
 <!-- Survey overlay for `cs terminal survey`.
 
      Renders ONE survey slot (R2-3 @@LaneB per-terminal): a markdown problem
-     body, up to 4 vertically aligned numbered options, and an optional [F]
-     follow-up. Picking an option (click or 1..N) or [F] (click or F) POSTs the
-     reply, which unblocks the waiting CLI. The overlay is modal over its slot
-     and has NO dismiss chrome: the CLI is blocked on the reply, so [F] (defer)
-     is the only non-answer exit.
+     body, up to 4 vertically aligned numbered options, and (Part C, standard on
+     EVERY survey) an [F] follow-up plus a Dismiss. Picking an option (click or
+     1..N), [F] (click or F), or Dismiss (click or Escape) POSTs the reply,
+     which unblocks the waiting CLI. The overlay is modal over its slot; the CLI
+     is blocked on the reply, so the three exits are option / followup /
+     dismissed - all real replies, no silent close that could hang the CLI.
 
      `tabId` selects the slot: a terminal tab id => render PER-TERMINAL, anchored
      over THAT terminal only (mounted inside its TerminalTab), so two terminals
@@ -19,6 +20,7 @@
     surveyBusy,
     pickOption,
     requestFollowup,
+    dismissSurvey,
     type SurveySlot,
   } from "../state/survey.svelte";
 
@@ -37,9 +39,11 @@
     if (id && card) card.focus();
   });
 
-  // Number keys 1..N pick an option; F follows up. Scoped to the focused card
-  // (NOT the window) so each terminal's survey handles its own keys and a
-  // focused terminal does not swallow the keystroke into its PTY.
+  // Number keys 1..N pick an option; F follows up; Escape dismisses. F and
+  // Escape are standard on every survey now (Part C). Scoped to the focused
+  // card (NOT the window) so each terminal's survey handles its own keys, a
+  // focused terminal does not swallow the keystroke into its PTY, and a handled
+  // Escape does not bubble out to close other overlays.
   function onCardKeydown(e: KeyboardEvent): void {
     const s = active;
     if (!s) return;
@@ -52,10 +56,16 @@
       }
       return;
     }
-    if ((e.key === "f" || e.key === "F") && s.allowFollowup && s.followup) {
+    if (e.key === "f" || e.key === "F") {
       e.preventDefault();
       e.stopPropagation();
       void requestFollowup(slot);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      void dismissSurvey(slot);
     }
   }
 </script>
@@ -98,7 +108,11 @@
           </li>
         {/each}
       </ul>
-      {#if active.allowFollowup && active.followup}
+      <!-- Part C: F (follow up) + Dismiss are standard on every survey (no
+           longer an opt-in). F defers with a paper-trail file; Dismiss sends a
+           distinct "dismissed" reply (no file) so the asking agent can tell the
+           host dropped it. -->
+      <div class="survey-actions">
         <button
           type="button"
           class="survey-followup"
@@ -107,7 +121,15 @@
         >
           [F] Follow up later
         </button>
-      {/if}
+        <button
+          type="button"
+          class="survey-dismiss"
+          disabled={busy}
+          onclick={() => dismissSurvey(slot)}
+        >
+          Dismiss
+        </button>
+      </div>
     </div>
   </div>
 {/if}
@@ -213,8 +235,15 @@
   .survey-option-label {
     flex: 1 1 auto;
   }
+  /* Part C actions row: [F] follow-up (dashed = soft defer, takes the width)
+     and Dismiss (solid = firm drop, sits on the right). */
+  .survey-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: stretch;
+  }
   .survey-followup {
-    width: 100%;
+    flex: 1 1 auto;
     padding: 0.5rem 0.75rem;
     background: transparent;
     color: var(--text-secondary);
@@ -229,6 +258,25 @@
     border-color: var(--text);
   }
   .survey-followup:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .survey-dismiss {
+    flex: 0 0 auto;
+    padding: 0.5rem 0.9rem;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .survey-dismiss:hover:not(:disabled),
+  .survey-dismiss:focus-visible {
+    color: var(--text);
+    border-color: var(--text);
+  }
+  .survey-dismiss:disabled {
     opacity: 0.5;
     cursor: default;
   }

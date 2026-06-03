@@ -8,7 +8,8 @@ import { surveyState } from "../state/survey.svelte";
 import type { SurveySpec } from "../api/client";
 
 // The survey overlay renders ONE slot's survey (R2-3 per-terminal): a markdown
-// body, numbered options, and an optional [F]. `tabId` null = window-wide
+// body, numbered options, plus a standard [F] follow-up + Dismiss (Part C).
+// `tabId` null = window-wide
 // fallback (centered modal); a tab id = per-terminal (anchored, `.per-terminal`
 // class). Renders nothing when that slot has no survey. Render assertions only
 // (no clicks, so no /api/survey/reply network).
@@ -21,7 +22,6 @@ function spec(over: Partial<SurveySpec> = {}): SurveySpec {
     title: null,
     bodyMarkdown: "Pick a backend",
     options: ["BM25", "Semantic"],
-    allowFollowup: false,
     followup: null,
     ...over,
   };
@@ -83,27 +83,18 @@ describe("survey overlay", () => {
     expect(other.querySelector(".survey-overlay")).toBeNull();
   });
 
-  test("[F] affordance shows only with allowFollowup + a followup context", async () => {
-    surveyState.windowWide = { spec: spec({ allowFollowup: true, followup: null }), busy: false };
-    const target = document.createElement("div");
-    document.body.append(target);
-    mounted.push(mount(BubbleOverlay, { target, props: { tabId: null } }));
-    await tick();
-    expect(target.querySelector(".survey-followup")).toBeNull();
-  });
-
-  test("[F] affordance renders with allowFollowup + context", async () => {
-    surveyState.windowWide = {
-      spec: spec({
-        allowFollowup: true,
-        followup: { dir: "new-team-1", from: "@@LaneC", to: "@@Host" },
-      }),
-      busy: false,
-    };
+  // Part C: F (follow up) + Dismiss are STANDARD on every survey, not an opt-in
+  // and not gated on a followup context. The default spec() has followup:null,
+  // so this is the bare case.
+  test("[F] follow-up + Dismiss render on every survey (no context needed)", async () => {
+    surveyState.windowWide = { spec: spec(), busy: false };
     const target = document.createElement("div");
     document.body.append(target);
     mounted.push(mount(BubbleOverlay, { target, props: { tabId: null } }));
     await tick();
     expect(target.querySelector(".survey-followup")).not.toBeNull();
+    expect(target.querySelector(".survey-dismiss")).not.toBeNull();
+    expect(target.querySelector(".survey-followup")?.textContent).toContain("Follow up");
+    expect(target.querySelector(".survey-dismiss")?.textContent).toContain("Dismiss");
   });
 });

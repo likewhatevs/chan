@@ -8,6 +8,7 @@ import {
   surveyBusy,
   pickOption,
   requestFollowup,
+  dismissSurvey,
 } from "./survey.svelte";
 
 // The survey store holds active surveys keyed by slot (a terminal tab id, or
@@ -20,7 +21,6 @@ function spec(over: Partial<SurveySpec> = {}): SurveySpec {
     title: "T",
     bodyMarkdown: "the question",
     options: ["Yes", "No"],
-    allowFollowup: false,
     followup: null,
     ...over,
   };
@@ -76,7 +76,6 @@ describe("survey store", () => {
     const reply = vi.spyOn(api, "surveyReply").mockResolvedValue(undefined as never);
     showSurvey(
       spec({
-        allowFollowup: true,
         followup: { dir: "new-team-1", from: "@@LaneC", to: "@@Host" },
       }),
       "t1",
@@ -92,12 +91,38 @@ describe("survey store", () => {
     expect(surveyFor("t1")).toBeNull();
   });
 
-  test("requestFollowup is a no-op without a followup context", async () => {
+  test("requestFollowup without a context posts followup: null (Part C: F is standard)", async () => {
     const reply = vi.spyOn(api, "surveyReply").mockResolvedValue(undefined as never);
-    showSurvey(spec({ allowFollowup: true, followup: null }), null);
+    showSurvey(spec({ followup: null }), null);
     await requestFollowup(null);
-    expect(reply).not.toHaveBeenCalled();
-    expect(surveyFor(null)).not.toBeNull();
+    expect(reply).toHaveBeenCalledWith({
+      surveyId: "survey-7",
+      kind: "followup",
+      followup: null,
+      title: "T",
+      bodyMarkdown: "the question",
+    });
+    expect(surveyFor(null)).toBeNull();
+  });
+
+  test("dismissSurvey posts the dismissed reply and clears ONLY that slot", async () => {
+    const reply = vi.spyOn(api, "surveyReply").mockResolvedValue(undefined as never);
+    showSurvey(spec({ surveyId: "survey-a" }), "t1");
+    showSurvey(spec({ surveyId: "survey-b" }), "t2");
+    await dismissSurvey("t1");
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({ surveyId: "survey-a", kind: "dismissed" });
+    // t1 cleared; t2 untouched (independence).
+    expect(surveyFor("t1")).toBeNull();
+    expect(surveyFor("t2")?.surveyId).toBe("survey-b");
+  });
+
+  test("a failed dismiss keeps the survey up and clears busy", async () => {
+    vi.spyOn(api, "surveyReply").mockRejectedValue(new Error("boom"));
+    showSurvey(spec(), "t1");
+    await dismissSurvey("t1");
+    expect(surveyFor("t1")).not.toBeNull();
+    expect(surveyBusy("t1")).toBe(false);
   });
 
   test("a failed reply keeps the survey up and clears busy", async () => {

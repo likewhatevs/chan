@@ -109,7 +109,7 @@ mod tests {
             "survey-nope",
             SurveyReply::Followup {
                 survey_id: "survey-nope".into(),
-                followup_path: "team/followups/x.md".into(),
+                followup_path: Some("team/followups/x.md".into()),
             },
         ));
     }

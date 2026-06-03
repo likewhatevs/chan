@@ -14,7 +14,12 @@
 //   5. Broadcast: deselect ALL terminals first, then enable ONLY the
 //      lead + workers set.
 
-import { api, type TeamConfigWire, type TeamMemberWire } from "../api/client";
+import {
+  api,
+  sessionWindowId,
+  type TeamConfigWire,
+  type TeamMemberWire,
+} from "../api/client";
 import { notify } from "./notify.svelte";
 import { teamNameFromDir } from "./teamConfigPath";
 import {
@@ -291,6 +296,10 @@ async function launchLead(
     command: lead.command,
     env: lead.env,
     group,
+    // Bind the spawning window so `cs terminal survey` can resolve this
+    // team terminal by window (POST-created sessions otherwise keep
+    // window_id = None; /ws attach does not rebind it).
+    window_id: sessionWindowId(),
   });
   const tab = openTerminalInPane(ctx.leadPaneId, {
     sessionId: response.session,
@@ -394,6 +403,8 @@ export async function runTeamBootstrap(
         command: m.command,
         env: m.env,
         group,
+        // Same window binding as the lead so worker surveys resolve too.
+        window_id: sessionWindowId(),
       });
       const paneId = workerPanes[i] ?? ctx.leadPaneId;
       const tab = openTerminalInPane(paneId, {

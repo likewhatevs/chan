@@ -155,6 +155,12 @@ export type TerminalSpawnRequest = {
   /// terminal joins the team's group.
   group?: string;
   orchestrator_session?: string;
+  /// Owning window for the new session. Team-dialog terminals are created
+  /// through this POST then merely attached over /ws (attach does not
+  /// rebind window_id), so without binding it here they keep window_id =
+  /// None and `cs terminal survey` cannot resolve them by window. The Team
+  /// Work bootstrap passes the dialog window's sessionWindowId().
+  window_id?: string;
 };
 
 export type TerminalSpawnResponse = {

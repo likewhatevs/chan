@@ -273,8 +273,6 @@ pub struct SurveySpec {
     pub body_markdown: String,
     /// 1..=4 option labels; the SPA numbers them [1]..[4].
     pub options: Vec<String>,
-    /// Render the [F] follow-up affordance.
-    pub allow_followup: bool,
     /// Team context for the `[F]` path, so C's reply route can land the
     /// followup at `{dir}/followups/followup-{from}-{to}-{n}.md` without
     /// re-deriving the team-dir (a workspace may hold several teams). The
@@ -314,13 +312,23 @@ pub enum SurveyReply {
         option_index: u32,
         option_label: String,
     },
-    /// The user hit [F]: C created the followup file and replies its path
-    /// (workspace-relative).
+    /// The user hit [F] (follow up). When the survey carried followup context,
+    /// C created `{dir}/followups/followup-{from}-{to}-{n}.md` and
+    /// `followup_path` is that workspace-relative path. Part C made [F]
+    /// standard on every survey, so a survey raised WITHOUT followup context
+    /// still offers it: that is a plain deferral and `followup_path` is `None`
+    /// (no file).
     #[serde(rename = "followup", rename_all = "camelCase")]
     Followup {
         survey_id: String,
-        followup_path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        followup_path: Option<String>,
     },
+    /// The user hit Dismiss (Part C). A distinct reply with no option index
+    /// and no file, so the asking agent can tell the host dropped the survey
+    /// rather than answering it or deferring with [F].
+    #[serde(rename = "dismissed", rename_all = "camelCase")]
+    Dismissed { survey_id: String },
 }
 
 impl SurveyReply {
@@ -330,6 +338,7 @@ impl SurveyReply {
         match self {
             SurveyReply::Option { survey_id, .. } => survey_id,
             SurveyReply::Followup { survey_id, .. } => survey_id,
+            SurveyReply::Dismissed { survey_id } => survey_id,
         }
     }
 }
@@ -349,7 +358,6 @@ mod survey_wire_tests {
             title: None,
             body_markdown: "pick one".into(),
             options: vec!["A".into(), "B".into()],
-            allow_followup: true,
             followup: Some(SurveyFollowup {
                 dir: "team".into(),
                 from: "@@LaneD".into(),
@@ -362,7 +370,6 @@ mod survey_wire_tests {
         assert!(v.get("title").is_some_and(|t| t.is_null()));
         assert_eq!(v["bodyMarkdown"], "pick one");
         assert_eq!(v["options"], serde_json::json!(["A", "B"]));
-        assert_eq!(v["allowFollowup"], true);
         assert_eq!(v["followup"]["dir"], "team");
         assert_eq!(v["followup"]["from"], "@@LaneD");
         assert_eq!(v["followup"]["to"], "@@LaneC");
@@ -375,7 +382,6 @@ mod survey_wire_tests {
             title: Some("Heads up".into()),
             body_markdown: "x".into(),
             options: vec!["ok".into()],
-            allow_followup: false,
             followup: None,
         };
         let v: serde_json::Value = serde_json::to_value(&spec).unwrap();
@@ -411,12 +417,39 @@ mod survey_wire_tests {
     fn survey_reply_followup_tag_and_fields() {
         let reply = SurveyReply::Followup {
             survey_id: "survey-9".into(),
-            followup_path: "team/followups/followup-a-b-1.md".into(),
+            followup_path: Some("team/followups/followup-a-b-1.md".into()),
         };
         let v: serde_json::Value = serde_json::to_value(&reply).unwrap();
         assert_eq!(v["kind"], "followup");
         assert_eq!(v["surveyId"], "survey-9");
         assert_eq!(v["followupPath"], "team/followups/followup-a-b-1.md");
+    }
+
+    #[test]
+    fn survey_reply_followup_without_path_is_a_bare_deferral() {
+        // Part C: [F] is standard on every survey. A survey raised without
+        // followup context defers with no file, so `followupPath` is omitted.
+        let reply = SurveyReply::Followup {
+            survey_id: "survey-9".into(),
+            followup_path: None,
+        };
+        let v: serde_json::Value = serde_json::to_value(&reply).unwrap();
+        assert_eq!(v["kind"], "followup");
+        assert_eq!(v["surveyId"], "survey-9");
+        assert!(v.get("followupPath").is_none());
+    }
+
+    #[test]
+    fn survey_reply_dismissed_tag_and_fields() {
+        // Part C: Dismiss is a distinct reply (no option index, no file) so
+        // the asking agent can tell the host dropped the survey.
+        let reply = SurveyReply::Dismissed {
+            survey_id: "survey-7".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&reply).unwrap();
+        assert_eq!(v["kind"], "dismissed");
+        assert_eq!(v["surveyId"], "survey-7");
+        assert_eq!(reply.survey_id(), "survey-7");
     }
 
     #[test]
@@ -429,7 +462,6 @@ mod survey_wire_tests {
                 title: None,
                 body_markdown: "q".into(),
                 options: vec!["yes".into()],
-                allow_followup: false,
                 followup: None,
             },
         };

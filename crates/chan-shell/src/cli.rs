@@ -253,8 +253,10 @@ impl PaneAction {
 const SURVEY_AFTER_HELP: &str = r#"EXAMPLES:
 Each case shows the invocation and the JSON survey the SPA receives.
 `surveyId` is empty from the CLI; the server mints it before the SPA sees
-it. The blocking call prints the chosen option label to stdout, or on [F]
-the workspace-relative path of the new followup file.
+it. Every overlay shows the options PLUS [F] (follow up) and Dismiss, so
+the blocking call prints one of: the chosen option label; the new followup
+file path on [F] when `--followup-dir` context was passed (else a bare "host
+deferred" line); or "survey dismissed" when the host drops it.
 
 Single question, two options:
   cs terminal survey --tab-name @@LaneB \
@@ -266,7 +268,6 @@ Single question, two options:
     "title": "Merge order",
     "bodyMarkdown": "Which patch lands first?",
     "options": ["A first", "B first"],
-    "allowFollowup": false,
     "followup": null
   }
 
@@ -280,14 +281,14 @@ Four options, no title, multi-line body from stdin:
     "title": null,
     "bodyMarkdown": "Pick a slot:\n\n- morning\n- evening",
     "options": ["Mon", "Tue", "Wed", "Thu"],
-    "allowFollowup": false,
     "followup": null
   }
 
-With an [F] follow-up (from <- $CHAN_TAB_NAME, to <- the survey target):
+With an [F] follow-up paper-trail file (from <- $CHAN_TAB_NAME, to <- the
+survey target); passing --followup-dir is what makes [F] write the file:
   cs terminal survey --tab-name @@Host \
     --option "Ship it" --option "Hold" \
-    --followup --followup-dir teams/alpha \
+    --followup-dir teams/alpha \
     "Ready to cut v0.23.0?"
 
   {
@@ -295,7 +296,6 @@ With an [F] follow-up (from <- $CHAN_TAB_NAME, to <- the survey target):
     "title": null,
     "bodyMarkdown": "Ready to cut v0.23.0?",
     "options": ["Ship it", "Hold"],
-    "allowFollowup": true,
     "followup": { "dir": "teams/alpha", "from": "@@LaneA", "to": "@@Host" }
   }
 "#;
@@ -458,24 +458,21 @@ pub enum TerminalAction {
         /// --option B`. The UI numbers them [1]..[4].
         #[arg(long = "option", value_name = "LABEL")]
         option: Vec<String>,
-        /// Also offer an `[F]` follow-up affordance (the UI writes a
-        /// followup file and returns its path instead of an option).
-        /// Requires `--followup-dir` so the followup is always team-scoped.
-        #[arg(long, requires = "followup_dir")]
-        followup: bool,
-        /// Team directory (workspace-relative) the `[F]` followup file is
-        /// created under, at `{dir}/followups/followup-{from}-{to}-{n}.md`.
-        /// Required with `--followup`.
+        /// Team directory (workspace-relative) for the `[F]` follow-up
+        /// paper-trail file, created at
+        /// `{dir}/followups/followup-{from}-{to}-{n}.md`. `[F]` is shown on
+        /// every survey regardless; PASSING this dir is what makes `[F]` write
+        /// the file (and return its path) instead of a plain no-file deferral.
         #[arg(long = "followup-dir", value_name = "TEAM_DIR")]
         followup_dir: Option<String>,
-        /// Override the followup author (`from`). Defaults to
+        /// Override the follow-up author (`from`). Defaults to
         /// `$CHAN_TAB_NAME` (the surveying agent's tab). Only used with
-        /// `--followup`.
+        /// `--followup-dir`.
         #[arg(long)]
         from: Option<String>,
-        /// Override the followup target (`to`). Defaults to the survey
+        /// Override the follow-up target (`to`). Defaults to the survey
         /// target (`--tab-name`, or `--tab-group` for a group). Only used
-        /// with `--followup`.
+        /// with `--followup-dir`.
         #[arg(long)]
         to: Option<String>,
         /// Read the markdown problem body from this process's stdin
@@ -990,7 +987,6 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             tab_group,
             title,
             option,
-            followup,
             followup_dir,
             from,
             to,
@@ -1002,7 +998,6 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
                 tab_group,
                 title,
                 option,
-                followup,
                 followup_dir,
                 from,
                 to,
@@ -1216,7 +1211,6 @@ struct SurveyArgs {
     tab_group: Option<String>,
     title: Option<String>,
     option: Vec<String>,
-    followup: bool,
     followup_dir: Option<String>,
     from: Option<String>,
     to: Option<String>,
@@ -1235,7 +1229,6 @@ async fn cmd_shell_survey(args: SurveyArgs) -> Result<()> {
         tab_group,
         title,
         option,
-        followup,
         followup_dir,
         from,
         to,
@@ -1267,10 +1260,10 @@ async fn cmd_shell_survey(args: SurveyArgs) -> Result<()> {
     if body_markdown.trim().is_empty() {
         anyhow::bail!("cs terminal survey needs a markdown body (positional words or --stdin)");
     }
-    // The [F] team context (2026-06-01 amendment): only populated when
-    // --followup is set, so a survey without a followup carries `null`.
-    // clap already guarantees --followup-dir is present when --followup is.
-    let followup_ctx = if followup {
+    // Part C: [F] is standard on every survey. PASSING --followup-dir is what
+    // attaches the team context so [F] writes a paper-trail file; without it
+    // the survey carries `followup: null` and [F] is a plain no-file deferral.
+    let followup_ctx = if followup_dir.is_some() {
         Some(build_followup(
             followup_dir,
             from,
@@ -1287,7 +1280,6 @@ async fn cmd_shell_survey(args: SurveyArgs) -> Result<()> {
         title,
         body_markdown,
         options: option,
-        allow_followup: followup,
         followup: followup_ctx,
     };
     let socket = control_socket_env()?;
@@ -1330,7 +1322,7 @@ fn build_followup(
 /// The pure followup-context precedence per the 2026-06-01 amendment:
 /// `from` <- `$CHAN_TAB_NAME` (fallback `--from`); `to` <- the survey target
 /// (`--tab-name`, then `--tab-group`; fallback `--to`). `dir` comes straight
-/// from `--followup-dir` (clap-required with `--followup`). Bails with a clear
+/// from `--followup-dir` (only called when that was passed). Bails with a clear
 /// message if `dir`/`from`/`to` cannot be resolved, so a followup is always
 /// well-named and team-scoped.
 fn resolve_followup(
@@ -1347,13 +1339,13 @@ fn resolve_followup(
     };
     let dir = followup_dir
         .and_then(trimmed)
-        .ok_or_else(|| anyhow::anyhow!("--followup-dir is required with --followup"))?;
+        .ok_or_else(|| anyhow::anyhow!("--followup-dir is required to write a follow-up file"))?;
     // from: the surveying agent's own tab, overridable with --from.
     let from = env_tab_name
         .and_then(trimmed)
         .or_else(|| from.and_then(trimmed))
         .ok_or_else(|| {
-            anyhow::anyhow!("--followup needs a `from`: set $CHAN_TAB_NAME or pass --from")
+            anyhow::anyhow!("--followup-dir needs a `from`: set $CHAN_TAB_NAME or pass --from")
         })?;
     // to: the survey target. A selector is always present (checked by the
     // caller), so the tab name / group resolves; --to is the final fallback.
@@ -1362,7 +1354,7 @@ fn resolve_followup(
         .or_else(|| tab_group.and_then(trimmed))
         .or_else(|| to.and_then(trimmed))
         .ok_or_else(|| {
-            anyhow::anyhow!("--followup needs a `to` target (--tab-name/--tab-group)")
+            anyhow::anyhow!("--followup-dir needs a `to` target (--tab-name/--tab-group)")
         })?;
     Ok(SurveyFollowup { dir, from, to })
 }

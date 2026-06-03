@@ -931,15 +931,26 @@ async fn handle_survey(
     }
 }
 
-/// The stdout line the CLI prints for a completed survey: the bare chosen
-/// option label, or the `new follow up file created: ...` line on `[F]`.
+/// The stdout line the CLI prints for a completed survey. Each variant prints
+/// a distinct line so the asking agent can tell an answer from a deferral from
+/// a dismissal: the chosen option label; the `new follow up file created: ...`
+/// path on `[F]` with team context (or a bare-deferral line without); or the
+/// dismissed line (Part C).
 #[cfg(unix)]
 fn format_survey_reply(reply: &SurveyReply) -> String {
     match reply {
         SurveyReply::Option { option_label, .. } => option_label.clone(),
-        SurveyReply::Followup { followup_path, .. } => {
-            format!("new follow up file created: {followup_path}")
+        SurveyReply::Followup {
+            followup_path: Some(path),
+            ..
+        } => {
+            format!("new follow up file created: {path}")
         }
+        SurveyReply::Followup {
+            followup_path: None,
+            ..
+        } => "host deferred; no follow up file created".to_string(),
+        SurveyReply::Dismissed { .. } => "survey dismissed; no answer".to_string(),
     }
 }
 
@@ -2136,7 +2147,6 @@ is_lead = false
             title: None,
             body_markdown: "pick one".into(),
             options: vec!["a".into(), "b".into()],
-            allow_followup: false,
             followup: None,
         };
         // `--tab-name=X` -> the frame carries `tabName`.

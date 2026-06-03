@@ -296,8 +296,32 @@ pub(crate) fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> Stri
          (owned by you, append-only).\n"
     ));
     out.push_str(&format!(
-        "- Most worker-to-host communication routes through {lead_handle}, who\n  \
-         aggregates requests for {host_handle}.\n\n"
+        "- Worker-to-host communication routes through {lead_handle} (see\n  \
+         \"Reaching the host\" below); workers do not contact {host_handle} directly.\n\n"
+    ));
+
+    out.push_str("## Reaching the host\n\n");
+    out.push_str(&format!(
+        "When a decision needs {host_handle}, do NOT survey the host directly from a\n\
+         worker, and do NOT use a TUI / in-editor survey (AskUserQuestion). Cut the\n\
+         question to {lead_handle} (a task, or folded into your completion task).\n\
+         {lead_handle} consolidates the open questions and raises a survey to\n\
+         {host_handle} with `cs terminal survey` (a blocking overlay in the host's\n\
+         window), keeping each survey focused (one decision, up to 4 options) and\n\
+         batching or sequencing several pending questions rather than firing many\n\
+         tiny ones:\n\n"
+    ));
+    out.push_str(&format!(
+        "    cs terminal survey --tab-name={host_handle} --title '<topic>' \\\n\
+        \x20       --option '<a>' --option '<b>' $'<question / context, markdown>'\n\n"
+    ));
+    out.push_str(&format!(
+        "Every survey also offers {host_handle} an `[F]` follow-up (defers with a\n\
+         paper-trail under {team_dir}/followups/) and a Dismiss, so the host can pick\n\
+         an option, follow up, or drop it; the reply tells {lead_handle} which.\n\
+         Prefer `cs terminal survey` over any TUI survey: it blocks in the host's\n\
+         window and routes the answer back to {lead_handle} (see `cs terminal survey\n\
+         --help` for the current flags).\n\n"
     ));
 
     out.push_str("## The poke 1-liner\n\n");

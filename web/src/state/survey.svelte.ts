@@ -14,9 +14,12 @@
 // no resolvable target (`tabName` absent/unmatched, or a --tab-group broadcast)
 // falls back to a single window-wide slot, the pre-R2-3 behavior.
 //
-// The overlay is intentionally NOT dismissable without an answer: the CLI is
-// blocked on the reply, so a stray Escape/backdrop close would hang it. [F]
-// (follow up) is the defer path - it writes a followup file and unblocks.
+// Part C (R2, @@LaneD): every survey overlay now offers its options PLUS an [F]
+// follow-up AND a Dismiss. The host can defer (F: writes a followup file and
+// unblocks) or dismiss (a distinct "dismissed" reply, no file, so the asking
+// agent can tell). Both are real replies that unblock the CLI, so a stray
+// Escape/backdrop close is no longer the hang risk it was: Escape now maps to
+// the explicit Dismiss reply rather than a silent close.
 
 import { api, type SurveySpec, type SurveyReplyRequest } from "../api/client";
 import { notify } from "./notify.svelte";
@@ -89,19 +92,20 @@ export async function pickOption(slot: SurveySlot, index: number): Promise<void>
   }
 }
 
-/// Reply with [F] for the survey on `slot`: the route creates
-/// `{dir}/followups/followup-{from}-{to}-{n}.md` from the echoed-back context +
-/// the original prompt, then unblocks the CLI with that path. No-op when the
-/// survey carried no followup context.
+/// Reply with [F] for the survey on `slot`. F is standard on every survey now
+/// (Part C), so it is no longer an opt-in affordance: when the survey carries
+/// followup context the route creates
+/// `{dir}/followups/followup-{from}-{to}-{n}.md` and unblocks with that path;
+/// when it does not (`followup: null`), the route treats it as a plain deferral
+/// (no file) and still unblocks.
 export async function requestFollowup(slot: SurveySlot): Promise<void> {
   const e = entry(slot);
   if (!e || e.busy) return;
-  if (!e.spec.allowFollowup || !e.spec.followup) return;
   e.busy = true;
   const reply: SurveyReplyRequest = {
     surveyId: e.spec.surveyId,
     kind: "followup",
-    followup: e.spec.followup,
+    followup: e.spec.followup ?? null,
     title: e.spec.title ?? null,
     bodyMarkdown: e.spec.bodyMarkdown,
   };
@@ -111,5 +115,26 @@ export async function requestFollowup(slot: SurveySlot): Promise<void> {
   } catch (err) {
     e.busy = false;
     notify(`followup create failed: ${(err as Error).message ?? err}`);
+  }
+}
+
+/// Dismiss the survey on `slot` (Part C). Unlike [F], a dismiss creates no
+/// file: it sends a distinct "dismissed" reply that carries only the surveyId,
+/// so the asking agent can tell the host dropped the survey rather than
+/// answering or deferring it. Still a real reply, so it unblocks the CLI.
+export async function dismissSurvey(slot: SurveySlot): Promise<void> {
+  const e = entry(slot);
+  if (!e || e.busy) return;
+  e.busy = true;
+  const reply: SurveyReplyRequest = {
+    surveyId: e.spec.surveyId,
+    kind: "dismissed",
+  };
+  try {
+    await api.surveyReply(reply);
+    clear(slot);
+  } catch (err) {
+    e.busy = false;
+    notify(`survey dismiss failed: ${(err as Error).message ?? err}`);
   }
 }

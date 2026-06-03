@@ -1184,7 +1184,6 @@ export interface SurveySpec {
   title?: string | null;
   bodyMarkdown: string;
   options: string[];
-  allowFollowup: boolean;
   /// Followup context (team-dir + from/to) for the `[F]` affordance. Present
   /// only when the survey was raised with `--followup`; the reply route uses
   /// it to create `{dir}/followups/followup-{from}-{to}-{n}.md`. Optional
@@ -1202,15 +1201,23 @@ export interface SurveyFollowupContext {
 /// `chan_shell::wire::SurveyReply`: for a followup the SPA cannot know the
 /// minted path, so it sends the echoed-back context and the route creates the
 /// file + synthesizes the path before completing the bus oneshot.
+///
+/// Part C (R2): every survey overlay offers options PLUS an [F] follow-up AND a
+/// Dismiss, so the reply has three kinds. `dismissed` carries only the
+/// `surveyId` (no option index), so the asking agent can tell a dismiss apart
+/// from an answer. `followup` now allows a null context: F is standard on every
+/// survey, so when a survey carried no followup context the SPA sends
+/// `followup: null` and the route treats it as a plain deferral (no file).
 export type SurveyReplyRequest =
   | { surveyId: string; kind: "option"; optionIndex: number; optionLabel: string }
   | {
       surveyId: string;
       kind: "followup";
-      followup: SurveyFollowupContext;
+      followup: SurveyFollowupContext | null;
       title?: string | null;
       bodyMarkdown: string;
-    };
+    }
+  | { surveyId: string; kind: "dismissed" };
 
 /// Body of `POST /api/window/reply` (the `cs pane` reply). camelCase to match
 /// the server's `WindowReplyRequest`. `payload` is opaque to the server (the
