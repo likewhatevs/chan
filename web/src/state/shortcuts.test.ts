@@ -66,11 +66,12 @@ describe("shortcut table", () => {
     expect(renderTable("native", "mac")).toMatch(/^Search\s+Cmd\+S/m);
   });
 
-  // Dashboard has no direct chord (Cmd+I is the editor italic
-  // binding); it is reachable only via Hybrid Nav `Cmd+. i`.
-  test("advertises Dashboard via Hybrid Nav (no direct Cmd+I)", () => {
-    expect(renderTable("web", "mac")).toMatch(/^Dashboard\s+Cmd\+\. i/m);
-    expect(renderTable("native", "mac")).toMatch(/^Dashboard\s+Cmd\+\. i/m);
+  // Dashboard now has a direct chord, out of Hybrid Nav: native Cmd+Shift+D
+  // (free in the Tauri webview), web Alt+Shift+D (Cmd+Shift+D is the
+  // browser's bookmark-all on web). Mod+. i stays as an alternate path.
+  test("advertises Dashboard direct chord (native Cmd+Shift+D, web Alt+Shift+D)", () => {
+    expect(renderTable("web", "mac")).toMatch(/^Dashboard\s+Alt\+Shift\+D/m);
+    expect(renderTable("native", "mac")).toMatch(/^Dashboard\s+Cmd\+Shift\+D/m);
   });
 
   test("advertises editor Bold (Cmd+B) and Italic (Cmd+I)", () => {

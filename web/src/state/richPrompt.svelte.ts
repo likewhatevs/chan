@@ -1,32 +1,42 @@
-// Rich Prompt: window-global VISIBILITY for the floating markdown bubble that
-// overlays the active terminal's bottom. One bubble per window; it renders only
-// inside the ACTIVE terminal (TerminalTab gates on its own `active` prop + this
-// `visible` flag), so the global toggle shows the bubble on whichever terminal
-// is active.
+// Rich Prompt: PER-TERMINAL visibility for the floating markdown bubble that
+// overlays a terminal's bottom. Keyed by terminal tab id (NOT a window-global
+// flag, which used to show the bubble on every pane's active terminal at once
+// and land focus on the last one): Cmd+Shift+P toggles the bubble ONLY on the
+// FOCUSED pane's active terminal (App.svelte resolves it via
+// activeTerminalTab; a no-op when the focused tab is not a terminal), and the
+// per-terminal right-click "Show/Hide Rich Prompt" entry toggles that one
+// terminal. So two terminals can each independently show their own bubble, and
+// submit routes to the bubble's OWN terminal (RichPrompt.submit ->
+// sendPromptToTerminal(tab.id, ...)).
 //
-// The prompt TEXT is no longer held here: each terminal's bubble is backed by a
+// The prompt TEXT is not held here: each terminal's bubble is backed by a
 // per-terminal chan-workspace DRAFT (`tab.richPromptDraftPath` -> a real
 // `Drafts/<name>/draft.md`), so the text + any pasted images live on disk and
 // any MCP/disk agent can read the media as files. RichPrompt.svelte owns that
-// draft binding; this module owns only the show/hide flag.
+// draft binding; this module owns only which terminals currently show the
+// bubble. The entry is dropped when the terminal closes
+// (TerminalTab.closeTerminalForTab -> hideRichPromptForTab).
 //
-// Toggled by Cmd+Shift+P (App.svelte onWindowKey) and the terminal right-click
-// "Show/Hide Rich Prompt" entry. Submit routes through the terminal WS `prompt`
-// frame into the per-session write queue (see tabs.svelte.ts
-// sendPromptToActiveTerminal).
+// Submit routes through the terminal WS `prompt` frame into the per-session
+// write queue (see tabs.svelte.ts sendPromptToTerminal).
 
-export const richPrompt = $state<{ visible: boolean }>({
-  visible: false,
+export const richPrompt = $state<{ byTab: Record<string, boolean> }>({
+  byTab: {},
 });
 
-export function toggleRichPrompt(): void {
-  richPrompt.visible = !richPrompt.visible;
+export function isRichPromptVisible(tabId: string): boolean {
+  return richPrompt.byTab[tabId] === true;
 }
 
-export function showRichPrompt(): void {
-  richPrompt.visible = true;
+export function showRichPromptForTab(tabId: string): void {
+  richPrompt.byTab[tabId] = true;
 }
 
-export function hideRichPrompt(): void {
-  richPrompt.visible = false;
+export function hideRichPromptForTab(tabId: string): void {
+  richPrompt.byTab[tabId] = false;
+}
+
+export function toggleRichPromptForTab(tabId: string): void {
+  if (isRichPromptVisible(tabId)) hideRichPromptForTab(tabId);
+  else showRichPromptForTab(tabId);
 }

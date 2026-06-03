@@ -237,13 +237,14 @@ pub enum PaneOp {
     },
 }
 
-/// Which side a [`PaneOp::Split`] places the new pane. `left` splits the
-/// pane horizontally (new pane to the left); `bottom` splits it vertically
-/// (new pane below). Bare snake_case on the wire.
+/// Which side a [`PaneOp::Split`] places the new pane. `right` splits the
+/// pane horizontally (new pane to the right); `bottom` splits it vertically
+/// (new pane below). Matches the hybrid pane hamburger (right / bottom). Bare
+/// snake_case on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SplitDir {
-    Left,
+    Right,
     Bottom,
 }
 

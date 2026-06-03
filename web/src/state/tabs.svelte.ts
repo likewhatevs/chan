@@ -1425,17 +1425,6 @@ export function registerTerminalPromptSink(
   };
 }
 
-/// Send Rich Prompt markdown to the ACTIVE terminal's write queue via its WS
-/// `prompt` frame. Returns false when there is no active terminal or its WS
-/// has no live prompt sink (e.g. socket not open yet) so the caller can keep
-/// the draft instead of clearing it. The server enqueues the text and appends
-/// the submit chord when the target agent is idle.
-export function sendPromptToActiveTerminal(data: string, agent?: string): boolean {
-  const tab = activeTerminalTab();
-  if (!tab) return false;
-  return sendPromptToTerminal(tab.id, data, agent);
-}
-
 /// Send a prompt to a SPECIFIC terminal's write queue via its WS `prompt`
 /// frame. Returns false when that terminal has no live prompt sink OR its WS
 /// is not open yet (so the caller can retry). The team orchestrator uses this

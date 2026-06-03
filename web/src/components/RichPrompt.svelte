@@ -28,9 +28,9 @@
   import { makeThemeCompartment } from "../editor/base";
   import { effectiveHybridSurfaceTheme } from "../state/store.svelte";
   import { currentOS } from "../state/shortcuts";
-  import { hideRichPrompt } from "../state/richPrompt.svelte";
+  import { hideRichPromptForTab } from "../state/richPrompt.svelte";
   import {
-    sendPromptToActiveTerminal,
+    sendPromptToTerminal,
     type TerminalTab,
   } from "../state/tabs.svelte";
   import { api } from "../api/client";
@@ -40,6 +40,15 @@
   let { tab }: { tab: TerminalTab } = $props();
 
   let host = $state<HTMLDivElement>();
+  let rootEl = $state<HTMLDivElement>();
+  // Drag-to-resize the bubble's TOP edge upward. null = content-driven default
+  // height (min..32vh); a number pins the bubble height in px, capped so the
+  // top never passes the terminal top minus the same 12px inset as the bottom.
+  let customHeight = $state<number | null>(null);
+  const MIN_PROMPT_HEIGHT = 56;
+  let resizing = false;
+  let resizeStartY = 0;
+  let resizeStartHeight = 0;
   let view: EditorView | undefined;
   let destroyed = false;
   let draftPath = "";
@@ -81,12 +90,21 @@
   // draft.md TEXT but KEEP the folder + any pasted media (the agent reads the
   // media AFTER submit; the folder is cleaned on terminal close). Always
   // returns true so the chord never inserts a newline; empty/whitespace is
-  // swallowed; a failed send keeps the text.
+  // swallowed.
+  //
+  // Routes to THIS bubble's OWN terminal (`tab`), NOT the focused pane's active
+  // terminal: the bubble belongs to `tab`, so its text must land there. And we
+  // do NOT reap the composer unless the `prompt` frame actually went out to
+  // this terminal's OPEN socket (sendPromptToTerminal returns false on a
+  // closed / not-yet-connected socket). That is the data-loss guard @@Alex
+  // hit: the old path cleared the text on a local-sink-true that could route
+  // to the wrong terminal or nowhere visible. Keeping the text on a failed
+  // send lets the user retry instead of losing it.
   function submit(): boolean {
     if (!view) return true;
     const text = view.state.doc.toString();
     if (!text.trim()) return true;
-    if (!sendPromptToActiveTerminal(text)) return true;
+    if (!sendPromptToTerminal(tab.id, text)) return true;
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: "" },
     });
@@ -173,19 +191,75 @@
     if (view) theme.reconfigure(view, t);
   });
 
+  // The tallest the bubble may grow: the positioning context (.terminal-tab)
+  // height minus the top + bottom 12px insets, so the top stops at the
+  // terminal top with the same margin as the bottom.
+  function maxPromptHeight(): number {
+    const parent = rootEl?.offsetParent as HTMLElement | null;
+    const ph = parent?.clientHeight ?? window.innerHeight;
+    return Math.max(MIN_PROMPT_HEIGHT, ph - 24);
+  }
+
+  // Top-edge resize: dragging UP (smaller clientY) grows the bubble, which is
+  // anchored at the bottom, so it extends toward the terminal top. Pointer
+  // capture keeps the drag alive outside the thin handle.
+  function onResizeStart(e: PointerEvent): void {
+    if (!rootEl) return;
+    resizing = true;
+    resizeStartY = e.clientY;
+    resizeStartHeight = rootEl.offsetHeight;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function onResizeMove(e: PointerEvent): void {
+    if (!resizing) return;
+    const next = resizeStartHeight + (resizeStartY - e.clientY);
+    customHeight = Math.min(maxPromptHeight(), Math.max(MIN_PROMPT_HEIGHT, next));
+  }
+  function onResizeEnd(e: PointerEvent): void {
+    if (!resizing) return;
+    resizing = false;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // capture may already be released; ignore.
+    }
+  }
+
   function onKeydown(e: KeyboardEvent): void {
     // Escape hides the bubble (returns the user to the terminal). Stop it from
     // reaching App.svelte's global Escape handling.
     if (e.key === "Escape") {
       e.stopPropagation();
       e.preventDefault();
-      hideRichPrompt();
+      hideRichPromptForTab(tab.id);
     }
   }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="rich-prompt" role="group" aria-label="Rich Prompt" onkeydown={onKeydown}>
+<div
+  class="rich-prompt"
+  class:resized={customHeight !== null}
+  role="group"
+  aria-label="Rich Prompt"
+  bind:this={rootEl}
+  style:height={customHeight !== null ? `${customHeight}px` : null}
+  onkeydown={onKeydown}
+>
+  <!-- Top-edge grab handle: drag up to grow the bubble toward the terminal
+       top (mirrors the bottom inset). -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="rp-resize"
+    role="separator"
+    aria-orientation="horizontal"
+    aria-label="Resize Rich Prompt"
+    onpointerdown={onResizeStart}
+    onpointermove={onResizeMove}
+    onpointerup={onResizeEnd}
+    onpointercancel={onResizeEnd}
+  ></div>
   <div class="rp-editor" bind:this={host}></div>
   <div class="rp-label" aria-hidden="true">{submitLabel}</div>
 </div>
@@ -199,6 +273,9 @@
     left: 12px;
     right: 12px;
     bottom: 12px;
+    /* Safety cap so a stale custom height (e.g. after the terminal shrank)
+       still leaves the same 12px inset at the top as the bottom. */
+    max-height: calc(100% - 24px);
     z-index: 20;
     display: flex;
     flex-direction: column;
@@ -208,11 +285,34 @@
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
     overflow: hidden;
   }
+  /* The thin top-edge grab strip; the whole strip is the ns-resize target. */
+  .rp-resize {
+    flex: 0 0 auto;
+    height: 8px;
+    cursor: ns-resize;
+    touch-action: none;
+  }
+  .rp-resize::before {
+    content: "";
+    display: block;
+    width: 28px;
+    height: 3px;
+    margin: 2px auto 0;
+    border-radius: 2px;
+    background: var(--border);
+  }
   .rp-editor {
     min-height: 2.4em;
     max-height: 32vh;
     overflow-y: auto;
     padding: 8px 10px;
+  }
+  /* When the user has pinned a height, the editor fills the bubble and scrolls
+     within it (the content-driven max-height no longer applies). */
+  .rich-prompt.resized .rp-editor {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
   }
   .rp-editor :global(.cm-editor) {
     background: transparent;

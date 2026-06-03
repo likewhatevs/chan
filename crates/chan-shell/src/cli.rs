@@ -102,7 +102,7 @@ pub enum ShellAction {
     },
     /// Inspect or drive a window's tab/pane layout. Bare `cs pane` reports
     /// the layout (every pane, its tabs and which is selected); the
-    /// subcommands focus a pane, split it left|bottom, resize it, or close a
+    /// subcommands focus a pane, split it right|bottom, resize it, or close a
     /// tab / pane / everything. Targets the caller's own window
     /// ($CHAN_WINDOW_ID) by default, or any window via `--tab-name` (a tab it
     /// owns) so it works from a context with no window. Markdown by default;
@@ -136,9 +136,9 @@ pub enum PaneAction {
         /// The pane id to focus (from `cs pane`).
         pane_id: String,
     },
-    /// Split a pane, placing a new empty pane to the `left` or `bottom`.
+    /// Split a pane, placing a new empty pane to the `right` or `bottom`.
     Split {
-        /// Where the new pane goes: `left` or `bottom`.
+        /// Where the new pane goes: `right` or `bottom`.
         dir: SplitDirArg,
         /// The pane to split (default: the active pane).
         #[arg(long = "pane")]
@@ -185,19 +185,36 @@ pub enum PaneAction {
     },
 }
 
-/// `left` | `bottom` for `cs pane split`, mapped to the wire [`SplitDir`].
+/// `right` | `bottom` for `cs pane split`, mapped to the wire [`SplitDir`].
+/// Matches the hybrid pane hamburger's split options.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum SplitDirArg {
-    Left,
+    Right,
     Bottom,
 }
 
 impl From<SplitDirArg> for SplitDir {
     fn from(dir: SplitDirArg) -> Self {
         match dir {
-            SplitDirArg::Left => SplitDir::Left,
+            SplitDirArg::Right => SplitDir::Right,
             SplitDirArg::Bottom => SplitDir::Bottom,
         }
+    }
+}
+
+/// `--mcp-env on|off` for `cs terminal team new`: whether the team's terminals
+/// get the chan MCP env vars (sets `TeamConfig.mcp_env`). Omitting the flag
+/// leaves the field at its config / serde default (OFF).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum McpEnvToggle {
+    On,
+    Off,
+}
+
+impl McpEnvToggle {
+    fn as_bool(self) -> bool {
+        matches!(self, McpEnvToggle::On)
     }
 }
 
@@ -361,12 +378,13 @@ pub enum TerminalAction {
         /// Read the bytes from this process's stdin instead of `cmd`.
         #[arg(long)]
         stdin: bool,
-        /// After the bytes, append the named agent's submit chord so a
-        /// running agent submits the input hands-free (the completion-poke
-        /// path). Trailing newlines are stripped first. Values:
-        /// `claude` (Cmd+Enter chord), `codex` / `gemini` (plain CR).
-        /// Omit it to write pure bytes: the input parks in the agent's
-        /// compose box unsubmitted (a bare newline is a newline to an
+        /// After the bytes, encode them so the named agent submits the input
+        /// hands-free (the completion-poke path). Trailing newlines are
+        /// stripped first. Values: `claude` (Cmd+Enter chord),
+        /// `gemini` (plain CR), `codex` (bracketed-paste wrap + CR; a bare CR
+        /// is coalesced into a paste burst and lands as a newline, so it never
+        /// submits). Omit it to write pure bytes: the input parks in the
+        /// agent's compose box unsubmitted (a bare newline is a newline to an
         /// agent, not a submit).
         #[arg(long, value_name = "AGENT")]
         submit: Option<SubmitAgent>,
@@ -495,6 +513,13 @@ pub enum TeamAction {
         /// `--config`.
         #[arg(long)]
         stdin: bool,
+        /// Turn the chan MCP env vars ON or OFF for the team's terminals
+        /// (sets `mcp_env` in the written config.toml). Default when omitted:
+        /// OFF, matching the config default - agents still reach `cs search`
+        /// and friends with MCP env off. `on` opts the whole team in; `off`
+        /// writes it explicitly. Overrides any `mcp_env` in the input config.
+        #[arg(long = "mcp-env", value_name = "ON_OFF")]
+        mcp_env: Option<McpEnvToggle>,
         /// Emit the paste-and-run bootstrap shell script to stdout instead
         /// of writing the team. A pure preview: it mutates nothing.
         #[arg(long)]
@@ -999,9 +1024,15 @@ async fn cmd_shell_team(action: TeamAction) -> Result<()> {
             dir,
             config,
             stdin,
+            mcp_env,
             script,
         } => {
-            let config_toml = read_team_config_input(config, stdin)?;
+            let mut config_toml = read_team_config_input(config, stdin)?;
+            // --mcp-env overrides the input config's `mcp_env` (or adds it).
+            // Omitted -> leave the config as-is (server's serde default is OFF).
+            if let Some(toggle) = mcp_env {
+                config_toml = set_team_mcp_env(&config_toml, toggle.as_bool())?;
+            }
             (
                 ControlRequest::TerminalTeam {
                     dir: resolve_team_dir(&dir)?,
@@ -1057,6 +1088,21 @@ fn read_team_config_input(config: Option<PathBuf>, stdin: bool) -> Result<String
             anyhow::bail!("cs terminal team new needs a config: --config <file> or --stdin")
         }
     }
+}
+
+/// Set the top-level `mcp_env` key in a team config TOML string, so
+/// `cs terminal team new --mcp-env on|off` overrides whatever the input config
+/// had (or adds it when absent). The server re-parses + regenerates
+/// config.toml from this, so the only requirement is a valid TOML document
+/// with `mcp_env` at the root (before the `[[members]]` tables). Parsing +
+/// re-serializing via `toml` keeps the key at the document root regardless of
+/// where the input put its tables, which a naive string append cannot.
+fn set_team_mcp_env(config_toml: &str, value: bool) -> Result<String> {
+    let mut doc: toml::Table = config_toml
+        .parse()
+        .context("parsing team config TOML to apply --mcp-env")?;
+    doc.insert("mcp_env".to_string(), toml::Value::Boolean(value));
+    toml::to_string(&doc).context("re-serializing team config after --mcp-env")
 }
 
 /// Resolve a user-typed `cs terminal team` dir to a WORKSPACE-relative dir,
@@ -1457,12 +1503,12 @@ mod tests {
         ));
         // SplitDirArg maps to the wire SplitDir.
         match (PaneAction::Split {
-            dir: SplitDirArg::Left,
+            dir: SplitDirArg::Right,
             pane: None,
         })
         .into_op()
         {
-            PaneOp::Split { dir, .. } => assert!(matches!(dir, SplitDir::Left)),
+            PaneOp::Split { dir, .. } => assert!(matches!(dir, SplitDir::Right)),
             other => panic!("unexpected op: {other:?}"),
         }
     }
@@ -1529,6 +1575,7 @@ mod tests {
                                 dir,
                                 config,
                                 stdin,
+                                mcp_env,
                                 script,
                             },
                     },
@@ -1536,10 +1583,90 @@ mod tests {
                 assert_eq!(dir, "alpha");
                 assert_eq!(config.as_deref(), Some(std::path::Path::new("spec.toml")));
                 assert!(!stdin);
+                // Omitting --mcp-env leaves the field unset (server default OFF).
+                assert_eq!(mcp_env, None);
                 assert!(script);
             }
             other => panic!("unexpected parse: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_terminal_team_new_mcp_env_on_off() {
+        let on = CsCli::parse_from([
+            "cs",
+            "terminal",
+            "team",
+            "new",
+            "alpha",
+            "--stdin",
+            "--mcp-env",
+            "on",
+        ]);
+        match on.action {
+            ShellAction::Terminal {
+                action:
+                    TerminalAction::Team {
+                        action: TeamAction::New { mcp_env, .. },
+                    },
+            } => assert_eq!(mcp_env, Some(McpEnvToggle::On)),
+            other => panic!("unexpected parse: {other:?}"),
+        }
+        let off = CsCli::parse_from([
+            "cs",
+            "terminal",
+            "team",
+            "new",
+            "alpha",
+            "--stdin",
+            "--mcp-env",
+            "off",
+        ]);
+        match off.action {
+            ShellAction::Terminal {
+                action:
+                    TerminalAction::Team {
+                        action: TeamAction::New { mcp_env, .. },
+                    },
+            } => assert_eq!(mcp_env, Some(McpEnvToggle::Off)),
+            other => panic!("unexpected parse: {other:?}"),
+        }
+        // Only on|off parse; a bogus value is a clap error, not a silent miss.
+        assert!(CsCli::try_parse_from([
+            "cs",
+            "terminal",
+            "team",
+            "new",
+            "alpha",
+            "--stdin",
+            "--mcp-env",
+            "maybe",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn set_team_mcp_env_sets_root_key_before_members() {
+        let input = "team_name = \"alpha\"\nhost_handle = \"@@Neo\"\n\n\
+                     [[members]]\nhandle = \"@@Lead\"\ncommand = \"claude\"\nis_lead = true\n";
+        // ON injects mcp_env = true at the root; the member table is preserved
+        // and (per TOML) still serializes after the root scalar keys, so the
+        // server parses it back into TeamConfig.mcp_env.
+        let on: toml::Table = set_team_mcp_env(input, true).unwrap().parse().unwrap();
+        assert_eq!(on.get("mcp_env"), Some(&toml::Value::Boolean(true)));
+        assert!(on.get("members").and_then(|m| m.as_array()).is_some());
+        // OFF writes it explicitly.
+        let off: toml::Table = set_team_mcp_env(input, false).unwrap().parse().unwrap();
+        assert_eq!(off.get("mcp_env"), Some(&toml::Value::Boolean(false)));
+    }
+
+    #[test]
+    fn set_team_mcp_env_overrides_existing_value() {
+        // An input that already turned it on is overridden by --mcp-env off.
+        let input = "team_name = \"a\"\nmcp_env = true\n\n[[members]]\n\
+                     handle = \"@@L\"\ncommand = \"claude\"\nis_lead = true\n";
+        let out: toml::Table = set_team_mcp_env(input, false).unwrap().parse().unwrap();
+        assert_eq!(out.get("mcp_env"), Some(&toml::Value::Boolean(false)));
     }
 
     #[test]

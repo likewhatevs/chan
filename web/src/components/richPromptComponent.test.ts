@@ -3,10 +3,11 @@ import richPromptSrc from "./RichPrompt.svelte?raw";
 import app from "../App.svelte?raw";
 import tabs from "../state/tabs.svelte.ts?raw";
 import {
-  hideRichPrompt,
+  hideRichPromptForTab,
+  isRichPromptVisible,
   richPrompt,
-  showRichPrompt,
-  toggleRichPrompt,
+  showRichPromptForTab,
+  toggleRichPromptForTab,
 } from "../state/richPrompt.svelte";
 
 // Rich Prompt - the Drafts-backed bubble + its toggle + the send seam. The
@@ -17,19 +18,21 @@ import {
 
 describe("richPrompt state module", () => {
   beforeEach(() => {
-    richPrompt.visible = false;
+    richPrompt.byTab = {};
   });
 
-  test("toggle / show / hide drive `visible` (visibility-only; text lives in the draft)", () => {
-    expect(richPrompt.visible).toBe(false);
-    toggleRichPrompt();
-    expect(richPrompt.visible).toBe(true);
-    toggleRichPrompt();
-    expect(richPrompt.visible).toBe(false);
-    showRichPrompt();
-    expect(richPrompt.visible).toBe(true);
-    hideRichPrompt();
-    expect(richPrompt.visible).toBe(false);
+  test("per-terminal toggle / show / hide keyed by tab id (text lives in the draft)", () => {
+    expect(isRichPromptVisible("t1")).toBe(false);
+    toggleRichPromptForTab("t1");
+    expect(isRichPromptVisible("t1")).toBe(true);
+    // Independent per terminal: opening t1 does not affect t2.
+    expect(isRichPromptVisible("t2")).toBe(false);
+    toggleRichPromptForTab("t1");
+    expect(isRichPromptVisible("t1")).toBe(false);
+    showRichPromptForTab("t2");
+    expect(isRichPromptVisible("t2")).toBe(true);
+    hideRichPromptForTab("t2");
+    expect(isRichPromptVisible("t2")).toBe(false);
   });
 });
 
@@ -71,8 +74,13 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/await api\.write\(draftPath, text\)/);
   });
 
-  test("submit routes through the queue, then clears draft.md text (keeps the folder)", () => {
-    expect(richPromptSrc).toMatch(/sendPromptToActiveTerminal\(text\)/);
+  test("submit routes to THIS terminal then clears draft.md text (keeps the folder)", () => {
+    // Routes to the bubble's OWN tab (not the focused pane's active terminal),
+    // and only reaps the composer when the frame actually went out (the
+    // data-loss guard: a failed send keeps the text instead of clearing it).
+    expect(richPromptSrc).toMatch(
+      /if \(!sendPromptToTerminal\(tab\.id, text\)\) return true;/,
+    );
     // Reset = clear the doc + persist the empty draft.md; NO raw input frame,
     // and NO folder/media delete on submit (that happens on terminal close).
     expect(richPromptSrc).toMatch(/insert: "" \}/);
@@ -89,21 +97,23 @@ describe("RichPrompt.svelte component", () => {
 });
 
 describe("App.svelte Cmd+Shift+P toggle", () => {
-  test("imports + binds Cmd+Shift+P to toggleRichPrompt (shift, not alt)", () => {
+  test("imports + binds Cmd+Shift+P to the per-terminal toggle (shift, not alt)", () => {
     expect(app).toMatch(
-      /import \{ toggleRichPrompt \} from "\.\/state\/richPrompt\.svelte"/,
+      /import \{ toggleRichPromptForTab \} from "\.\/state\/richPrompt\.svelte"/,
     );
+    // Resolves the focused terminal, then toggles ONLY that terminal; no-op
+    // when the focused tab is not a terminal.
     expect(app).toMatch(
-      /e\.metaKey && !e\.altKey && e\.shiftKey && !e\.ctrlKey && e\.code === "KeyP"[\s\S]{1,120}toggleRichPrompt\(\)/,
+      /e\.metaKey && !e\.altKey && e\.shiftKey && !e\.ctrlKey && e\.code === "KeyP"[\s\S]{1,200}activeTerminalTab\(\)[\s\S]{1,80}toggleRichPromptForTab\(term\.id\)/,
     );
   });
 });
 
 describe("prompt-sink send seam (tabs.svelte.ts)", () => {
-  test("registry + active-terminal sender exist, distinct from the input sink", () => {
+  test("registry + per-terminal sender exist, distinct from the input sink", () => {
     expect(tabs).toMatch(/export function registerTerminalPromptSink\(/);
     expect(tabs).toMatch(
-      /export function sendPromptToActiveTerminal\(data: string, agent\?: string\): boolean/,
+      /export function sendPromptToTerminal\(tabId: string, data: string, agent\?: string\): boolean/,
     );
     expect(tabs).toMatch(/const terminalPromptSinks = new Map/);
   });

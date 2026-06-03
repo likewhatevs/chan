@@ -16,7 +16,7 @@
   // Open-count of pane-LOCAL modals (MCP-env info, import-contacts) whose
   // visibility lives in component state App.svelte can't otherwise see.
   import { paneModalGuard } from "./state/paneModalGuard.svelte";
-  import { toggleRichPrompt } from "./state/richPrompt.svelte";
+  import { toggleRichPromptForTab } from "./state/richPrompt.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
   import PreflightOverlay from "./components/PreflightOverlay.svelte";
@@ -58,6 +58,7 @@
   import {
     activeFileTab,
     activePane,
+    activeTerminalTab,
     closeFind,
     closePane,
     closeTab,
@@ -656,13 +657,37 @@
       spawnGraphFromContext();
       return;
     }
-    // Cmd+Shift+P toggles the Rich Prompt bubble over the active terminal.
-    // Free chord (no command palette); also reachable via the terminal
-    // right-click "Show/Hide Rich Prompt" entry.
+    // Cmd+Shift+P toggles the Rich Prompt bubble, PER-TERMINAL, on the focused
+    // pane's active terminal only. No-op when the focused tab is not a terminal
+    // (nothing selected to prompt). Free chord (no command palette); also
+    // reachable via the terminal right-click "Show/Hide Rich Prompt" entry.
     if (e.metaKey && !e.altKey && e.shiftKey && !e.ctrlKey && e.code === "KeyP") {
       e.preventDefault();
-      toggleRichPrompt();
+      const term = activeTerminalTab();
+      if (term) toggleRichPromptForTab(term.id);
       return;
+    }
+    // Dashboard direct chord, OUT of Hybrid Nav (Dashboard was the only
+    // surface still mixed with it). Native (Tauri): Mod+Shift+D (Cmd+Shift+D
+    // mac / Ctrl+Shift+D linux), free in the webview. Web: Alt+Shift+D, because
+    // Cmd/Ctrl+Shift+D is the browser's "bookmark all tabs" which page JS
+    // cannot reliably preventDefault - same web-vs-native split as tab/pane
+    // nav. e.code === "KeyD" is layout/Option-glyph agnostic. On native this
+    // branch fires when chan-desktop's KEY_BRIDGE_JS does NOT intercept the
+    // chord; if it does, it stopImmediatePropagation + routes the
+    // `chan:command` app.dashboard.open bridge instead (no double-fire).
+    // Mod+. i (Hybrid Nav) + the hamburger remain.
+    if (e.code === "KeyD") {
+      const dashboardChord = isTauriDesktop()
+        ? currentOS() === "mac"
+          ? e.metaKey && !e.ctrlKey && !e.altKey && e.shiftKey
+          : e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey
+        : e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey;
+      if (dashboardChord) {
+        e.preventDefault();
+        openDashboardInActivePane();
+        return;
+      }
     }
     // Web-only pane nav: Cmd+[/] is browser back/forward so the web build
     // moves pane nav onto Alt+[/]. Desktop handles this via KEY_BRIDGE_JS

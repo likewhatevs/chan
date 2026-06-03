@@ -14,7 +14,7 @@ description = "chan: the `cs` control-socket client shared by chan and chan-desk
 # (`ControlRequest` / `ControlResponse`), so the server does not link
 # clap or the client transport.
 default = ["client"]
-client = ["dep:clap", "dep:tokio", "dep:serde_json", "dep:anyhow"]
+client = ["dep:clap", "dep:tokio", "dep:serde_json", "dep:anyhow", "dep:toml"]
 
 [dependencies]
 # The wire types are always available (serde only); everything else is
@@ -24,6 +24,11 @@ clap = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 anyhow = { workspace = true, optional = true }
+# Client-only: `cs terminal team new --mcp-env` sets the top-level `mcp_env`
+# key in the forwarded config TOML. The key must land at the document root
+# (before the `[[members]]` tables), so a parse + re-serialize is cleaner and
+# safer than a line edit. The server links the wire types without this.
+toml = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

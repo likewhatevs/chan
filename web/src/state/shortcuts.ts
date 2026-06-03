@@ -295,18 +295,21 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     escapeTerminal: true,
   },
-  // Dashboard has no direct chord; Cmd+I is the editor italic
-  // binding. Dashboard is reachable via Hybrid Nav `Cmd+. i`
-  // (handled in App.svelte::handlePaneModeKey) and the hamburger
-  // item. The entry here is for cheatsheet + menu discoverability
-  // only: it is NOT a dispatch source (no e.code branch matches
-  // it as a single keypress), so `escapeTerminal` is omitted.
+  // Dashboard direct chord, OUT of Hybrid Nav (it was the only surface still
+  // mixed with it). Native (Tauri webview): Mod+Shift+D (Cmd+Shift+D mac /
+  // Ctrl+Shift+D linux), free since there is no browser chrome to fight. Web:
+  // Alt+Shift+D, because Cmd/Ctrl+Shift+D is the browser's "bookmark all tabs"
+  // which page JS cannot reliably preventDefault (the same web-vs-native split
+  // as tab/pane nav). escapeTerminal so the chord fires from a focused
+  // terminal. Mod+. i (Hybrid Nav) + the hamburger remain as alternate paths.
   {
     id: "app.dashboard.open",
     label: "Dashboard",
-    web: "Mod+. i",
-    native: "Mod+. i",
+    web: "Alt+Shift+D",
+    native: "Mod+Shift+D",
     group: "App",
+    note: "or Mod+. i (Hybrid Nav)",
+    escapeTerminal: true,
   },
   // Tab navigation
   {

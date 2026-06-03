@@ -97,7 +97,11 @@
   import McpEnvInfoModal from "./McpEnvInfoModal.svelte";
   import { markPaneModalOpen } from "../state/paneModalGuard.svelte";
   import RichPrompt from "./RichPrompt.svelte";
-  import { richPrompt, toggleRichPrompt } from "../state/richPrompt.svelte";
+  import {
+    isRichPromptVisible,
+    toggleRichPromptForTab,
+    hideRichPromptForTab,
+  } from "../state/richPrompt.svelte";
 
   let {
     tab,
@@ -288,7 +292,7 @@
       // The Rich Prompt bubble owns the keyboard when it is open over this
       // (active) terminal; don't yank focus back to xterm or it would steal the
       // caret from the bubble's editor.
-      if (active && richPrompt.visible) return;
+      if (active && isRichPromptVisible(tab.id)) return;
       term?.focus();
     });
   });
@@ -874,7 +878,7 @@
   const richPromptChord = formatChord("Mod+Shift+P", currentOS());
   function toggleRichPromptFromMenu(): void {
     closeTabMenu();
-    toggleRichPrompt();
+    toggleRichPromptForTab(tab.id);
   }
 
   function writePtyOutput(bytes: Uint8Array): void {
@@ -1077,6 +1081,9 @@
     if (tab.richPromptDraftPath) {
       void api.discardDraft(tab.richPromptDraftPath);
     }
+    // Drop this terminal's per-terminal bubble-visibility entry so it does not
+    // linger in the keyed map after the tab is gone.
+    hideRichPromptForTab(tab.id);
     return true;
   }
 
@@ -1427,7 +1434,7 @@
               <MessageSquare size={16} strokeWidth={1.75} aria-hidden="true" />
             </span>
             <span class="mbtn-label">
-              {richPrompt.visible ? "Hide Rich Prompt" : "Show Rich Prompt"}
+              {isRichPromptVisible(tab.id) ? "Hide Rich Prompt" : "Show Rich Prompt"}
             </span>
             <span class="mbtn-chord">{richPromptChord}</span>
           </button>
@@ -1688,10 +1695,11 @@
   {/if}
   <div class="terminal-host" bind:this={host}></div>
   <!-- Rich Prompt bubble floats over this terminal's bottom (the
-       .terminal-tab is the position:absolute context). Mount only on the
-       ACTIVE terminal so one window shows a single bubble that follows the
-       active terminal; toggled by Cmd+Shift+P / the right-click menu. -->
-  {#if active && richPrompt.visible}
+       .terminal-tab is the position:absolute context). PER-TERMINAL: mounts
+       only when THIS terminal's bubble is toggled on and the tab is active in
+       its pane, so each terminal shows its own bubble (not a window-global
+       one). Toggled by Cmd+Shift+P / the right-click menu. -->
+  {#if active && isRichPromptVisible(tab.id)}
     <RichPrompt {tab} />
   {/if}
 </div>

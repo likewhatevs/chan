@@ -21,12 +21,13 @@ describe("TerminalTab Rich Prompt wiring", () => {
     );
   });
 
-  test("mounts <RichPrompt> only on the active terminal when visible, passing the tab", () => {
+  test("mounts <RichPrompt> only on the active terminal when its bubble is on, passing the tab", () => {
     expect(terminal).toMatch(/import RichPrompt from "\.\/RichPrompt\.svelte"/);
     // The tab is passed so the bubble binds to THIS terminal's per-terminal
-    // Drafts-backed draft.
+    // Drafts-backed draft; visibility is per-terminal (keyed by tab id), not a
+    // window-global flag.
     expect(terminal).toMatch(
-      /\{#if active && richPrompt\.visible\}[\s\S]{1,80}<RichPrompt \{tab\} \/>/,
+      /\{#if active && isRichPromptVisible\(tab\.id\)\}[\s\S]{1,80}<RichPrompt \{tab\} \/>/,
     );
   });
 
@@ -40,7 +41,7 @@ describe("TerminalTab Rich Prompt wiring", () => {
 
   test("right-click menu has a Show/Hide Rich Prompt entry with the chord", () => {
     expect(terminal).toMatch(
-      /onclick=\{toggleRichPromptFromMenu\}[\s\S]{1,260}richPrompt\.visible \? "Hide Rich Prompt" : "Show Rich Prompt"[\s\S]{1,120}\{richPromptChord\}/,
+      /onclick=\{toggleRichPromptFromMenu\}[\s\S]{1,260}isRichPromptVisible\(tab\.id\) \? "Hide Rich Prompt" : "Show Rich Prompt"[\s\S]{1,120}\{richPromptChord\}/,
     );
     expect(terminal).toMatch(
       /const richPromptChord = formatChord\("Mod\+Shift\+P", currentOS\(\)\)/,

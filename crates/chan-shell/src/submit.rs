@@ -25,11 +25,16 @@ pub enum SubmitAgent {
     /// Claude Code. Submits on the xterm modifyOtherKeys CSI for
     /// Cmd+Enter (`\x1b[27;9;13~`), live-probed 2026-05-20.
     Claude,
-    /// OpenAI codex. Submits on a plain CR; it ignores the Claude chord
-    /// silently (so the Claude chord parks the buffer unsubmitted).
+    /// OpenAI codex. Reads a plain CR as Enter, but ONLY as a distinct
+    /// keypress: codex coalesces a single `text + CR` write into a paste
+    /// burst and treats the trailing CR as a literal newline, so a bare-CR
+    /// suffix never submits. `apply_submit_chord` wraps codex's text in
+    /// bracketed paste so the trailing CR lands as a real Enter. It ignores
+    /// both the Claude chord and the kitty CSI-u Enter (`\x1b[13u`) silently.
+    /// Live-probed 2026-06-02 against codex-cli 0.136.0.
     Codex,
-    /// Google gemini. Submits on a plain CR (live-probed 2026-05-31 in a
-    /// chan terminal: the Claude chord left the buffer unsubmitted).
+    /// Google gemini. Submits on a plain CR suffix (live-probed 2026-05-31 in
+    /// a chan terminal: the Claude chord left the buffer unsubmitted).
     Gemini,
 }
 
@@ -57,23 +62,40 @@ impl SubmitAgent {
             // lands as a newline in Claude's multi-line draft, not a
             // submit.
             SubmitAgent::Claude => "\x1b[27;9;13~",
-            // codex + gemini both read a plain CR as submit and ignore
-            // the Claude chord.
+            // codex + gemini both read a plain CR as Enter. gemini submits on
+            // a bare CR suffix; codex needs that CR delivered as a distinct
+            // keypress (apply_submit_chord wraps codex's text in bracketed
+            // paste so the CR is not coalesced into a paste burst).
             SubmitAgent::Codex | SubmitAgent::Gemini => "\r",
         }
     }
 }
 
-/// `cs terminal write --submit=<agent>`: strip trailing newlines from the
-/// bytes then append the agent's submit chord, so a running agent submits
-/// the input hands-free (the completion poke). `None` writes the bytes
-/// verbatim. A trailing newline before the chord would land as a newline
-/// inside the agent's draft, splitting the buffer before submit fires, so
-/// we trim first. Mirrors `encodeForAgentSubmit` in `submitMode.ts`.
+/// `cs terminal write --submit=<agent>`: encode `data` into the PTY bytes
+/// that make a running agent submit it hands-free (the completion poke).
+/// `None` writes the bytes verbatim. Trailing newlines are stripped first: a
+/// newline before the submit would land inside the agent's draft, splitting
+/// the buffer before submit fires.
+///
+/// claude/gemini take a plain suffix chord (`submit_chord`). codex is the odd
+/// one out: it coalesces a single `text + CR` write into a paste burst and
+/// reads the trailing CR as a literal newline, so a bare-CR suffix never
+/// submits. Wrapping the text in explicit bracketed-paste delimiters
+/// (`\x1b[200~` .. `\x1b[201~`) makes codex insert it as a paste, so the CR
+/// after the paste-end marker is read as a distinct Enter keypress and
+/// submits. Interior newlines are preserved inside the paste (a multi-line
+/// poke arrives as one message). Live-probed 2026-06-02 against codex-cli
+/// 0.136.0.
+///
+/// Mirrors `encodeForAgentSubmit` in `submitMode.ts` byte-for-byte.
 pub fn apply_submit_chord(data: String, submit: Option<SubmitAgent>) -> String {
-    match submit {
-        Some(agent) => format!("{}{}", data.trim_end_matches('\n'), agent.submit_chord()),
-        None => data,
+    let Some(agent) = submit else {
+        return data;
+    };
+    let text = data.trim_end_matches('\n');
+    match agent {
+        SubmitAgent::Codex => format!("\x1b[200~{text}\x1b[201~{}", agent.submit_chord()),
+        SubmitAgent::Claude | SubmitAgent::Gemini => format!("{text}{}", agent.submit_chord()),
     }
 }
 
@@ -88,14 +110,23 @@ mod tests {
             apply_submit_chord("poke\n\n".into(), Some(SubmitAgent::Claude)),
             "poke\x1b[27;9;13~"
         );
-        // codex + gemini -> a plain CR.
+        // codex -> bracketed-paste wrap, then CR. The wrap defeats codex's
+        // paste-burst coalescing of a bare text+CR write (which would land
+        // the CR as a literal newline and never submit).
         assert_eq!(
             apply_submit_chord("poke\n".into(), Some(SubmitAgent::Codex)),
-            "poke\r"
+            "\x1b[200~poke\x1b[201~\r"
         );
+        // gemini -> a plain CR suffix.
         assert_eq!(
             apply_submit_chord("poke".into(), Some(SubmitAgent::Gemini)),
             "poke\r"
+        );
+        // codex keeps interior newlines inside the paste (a multi-line poke is
+        // one message) and trims only the trailing ones before the wrap.
+        assert_eq!(
+            apply_submit_chord("line one\nline two\n\n".into(), Some(SubmitAgent::Codex)),
+            "\x1b[200~line one\nline two\x1b[201~\r"
         );
         // Unset -> bytes verbatim (no chord, trailing newline kept).
         assert_eq!(apply_submit_chord("poke\n".into(), None), "poke\n");

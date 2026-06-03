@@ -23,11 +23,25 @@ describe("submitMode", () => {
   });
 
   test("encodeForAgentSubmit appends the picked agent's chord", () => {
-    // codex + gemini submit on a plain CR, not the Claude chord.
-    expect(encodeForAgentSubmit("ship it\n", "codex")).toBe("ship it\r");
+    // gemini submits on a plain CR suffix; claude on the Cmd+Enter chord.
     expect(encodeForAgentSubmit("ship it\n", "gemini")).toBe("ship it\r");
     expect(encodeForAgentSubmit("ship it\n", "claude")).toBe(
       "ship it\x1b[27;9;13~",
+    );
+  });
+
+  test("encodeForAgentSubmit wraps codex in bracketed paste then CR", () => {
+    // codex coalesces a bare text+CR write into a paste burst (the CR lands
+    // as a literal newline and never submits). Wrapping in explicit
+    // bracketed-paste delimiters makes the trailing CR a distinct Enter.
+    // Must stay byte-identical to apply_submit_chord in submit.rs.
+    expect(encodeForAgentSubmit("ship it\n", "codex")).toBe(
+      "\x1b[200~ship it\x1b[201~\r",
+    );
+    // Interior newlines are preserved inside the paste; only trailing ones
+    // are stripped before the wrap.
+    expect(encodeForAgentSubmit("line one\nline two\n\n", "codex")).toBe(
+      "\x1b[200~line one\nline two\x1b[201~\r",
     );
   });
 
