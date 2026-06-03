@@ -1175,7 +1175,20 @@ fn send_window_command(
         command,
     };
     let raw = serde_json::to_string(&frame).map_err(|e| format!("encode window command: {e}"))?;
-    let _ = events_tx.send(raw);
+    // Window commands fan out over the /ws event broadcast; the SPA window
+    // owning `window_id` acts on its frame. `events_tx` is subscribed ONLY by
+    // /ws connections, so a zero receiver count means NO window is connected:
+    // the command would vanish silently. Surface that as an error rather than
+    // a misleading "queued" so the caller knows nothing will happen (the most
+    // common cause is running a window-scoped `cs` command outside a chan
+    // terminal, where $CHAN_WINDOW_ID is unset and no window is open).
+    if events_tx.send(raw).is_err() {
+        return Err(
+            "no chan window is connected to receive this; open the workspace in a window, \
+             or run from inside a chan terminal so $CHAN_WINDOW_ID targets one"
+                .into(),
+        );
+    }
     Ok(())
 }
 
