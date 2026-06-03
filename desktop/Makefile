@@ -240,6 +240,8 @@ app-notarized: sign-prereqs notarize-prereqs tauri-cli web
 	    rm -f "$(BUNDLE_DIR)"/dmg/*.dmg; \
 	    DMG_VENV="$(DMG_VENV)" DMGBUILD_SPEC="$(DMGBUILD_SPEC)" \
 	        packaging/build-dmg.sh "$$APP" "$$DMG" "Chan"; \
+	    echo "codesigning $$DMG (Developer ID: $(APPLE_SIGNING_IDENTITY))"; \
+	    codesign --force --timestamp --sign "$(APPLE_SIGNING_IDENTITY)" "$$DMG"; \
 	    if [ "$(NOTARIZE_VIA)" = "keychain" ]; then \
 	        echo "notarizing $$DMG (via Keychain profile '$(NOTARIZE_PROFILE)')"; \
 	        xcrun notarytool submit "$$DMG" \
