@@ -218,6 +218,17 @@
       semanticBusy = false;
     }
   }
+  // The single checkmark toggle dispatches to the SAME calls the old
+  // Turn on / Turn off / Download & enable buttons made, keyed on state: on ->
+  // disable; off and the model is missing -> download then enable; off with the
+  // model present -> enable (which flips to needs-model on a missing-model
+  // failure, so the next toggle downloads).
+  async function toggleSemantic(): Promise<void> {
+    if (semanticBusy) return;
+    if (semanticOn) return disableSemantic();
+    if (semanticNeedsModel) return downloadAndEnableSemantic();
+    return enableSemantic();
+  }
 
   function schedule(ms = POLL_MS): void {
     if (stopped) return;
@@ -326,40 +337,56 @@
         </p>
         <ul class="onboard-layers">
           <li>
-            <div class="onboard-layer-top">
+            <!-- One checkmark toggle per layer: checked = on. The whole row is
+                 the click/keyboard target (role=checkbox + aria-checked, so
+                 Space/Enter toggle and screen readers announce on/off). -->
+            <button
+              class="onboard-switch"
+              type="button"
+              role="checkbox"
+              aria-checked={semanticOn}
+              aria-label="Semantic search"
+              disabled={semanticBusy}
+              onclick={toggleSemantic}
+            >
+              <span class="onboard-check" data-on={semanticOn} aria-hidden="true">
+                {#if semanticBusy}
+                  <span class="onboard-spin"></span>
+                {:else if semanticOn}
+                  <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>
+                {/if}
+              </span>
               <span class="onboard-layer-name">Semantic search</span>
-              <span class="onboard-state" data-on={semanticOn}>{semanticOn ? "on" : "off"}</span>
-              {#if semanticOn}
-                <button class="onboard-toggle" disabled={semanticBusy} onclick={disableSemantic}>
-                  Turn off
-                </button>
-              {:else if semanticNeedsModel}
-                <button
-                  class="onboard-toggle"
-                  disabled={semanticBusy}
-                  onclick={downloadAndEnableSemantic}
-                >
-                  {semanticDownloading ? "Downloading…" : "Download & enable"}
-                </button>
-              {:else}
-                <button class="onboard-toggle" disabled={semanticBusy} onclick={enableSemantic}>
-                  {semanticBusy ? "…" : "Turn on"}
-                </button>
+              {#if semanticDownloading}
+                <span class="onboard-aside">Downloading…</span>
+              {:else if !semanticOn && semanticNeedsModel}
+                <span class="onboard-aside">downloads ~63 MB</span>
               {/if}
-            </div>
+            </button>
             <span class="onboard-layer-hint">
               find by meaning; needs the BGE-small model (~63 MB, shared)
             </span>
             {#if semanticError}<span class="onboard-err">{semanticError}</span>{/if}
           </li>
           <li>
-            <div class="onboard-layer-top">
+            <button
+              class="onboard-switch"
+              type="button"
+              role="checkbox"
+              aria-checked={reportsOn}
+              aria-label="Reports"
+              disabled={reportsBusy}
+              onclick={toggleReports}
+            >
+              <span class="onboard-check" data-on={reportsOn} aria-hidden="true">
+                {#if reportsBusy}
+                  <span class="onboard-spin"></span>
+                {:else if reportsOn}
+                  <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>
+                {/if}
+              </span>
               <span class="onboard-layer-name">Reports</span>
-              <span class="onboard-state" data-on={reportsOn}>{reportsOn ? "on" : "off"}</span>
-              <button class="onboard-toggle" disabled={reportsBusy} onclick={toggleReports}>
-                {reportsBusy ? "…" : reportsOn ? "Turn off" : "Turn on"}
-              </button>
-            </div>
+            </button>
             <span class="onboard-layer-hint">
               per-file language, SLOC and COCOMO analysis
             </span>
@@ -650,38 +677,73 @@
     flex-direction: column;
     gap: 0.2rem;
   }
-  .onboard-layer-top {
+  /* One checkmark toggle per layer (replaces the old on/off label + Turn
+     on/off button). The whole row is a button (role=checkbox) so a click or
+     Space/Enter toggles it. */
+  .onboard-switch {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 2px 0;
+    background: none;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .onboard-switch:disabled {
+    cursor: default;
+  }
+  .onboard-switch:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  .onboard-check {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: #fff;
+  }
+  .onboard-check[data-on="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
   }
   .onboard-layer-name {
     font-size: 12.5px;
     color: var(--text);
   }
-  .onboard-state {
+  .onboard-aside {
+    margin-left: auto;
     font-size: 11px;
     color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .onboard-state[data-on="true"] {
-    color: var(--text);
-  }
-  .onboard-toggle {
-    margin-left: auto;
-    padding: 3px 9px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg);
-    color: var(--text);
-    cursor: pointer;
-    font-size: 12px;
     white-space: nowrap;
   }
-  .onboard-toggle:disabled {
-    opacity: 0.5;
-    cursor: default;
+  .onboard-spin {
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--border);
+    border-top-color: var(--text);
+    border-radius: 50%;
+    animation: onboard-spin 0.7s linear infinite;
+  }
+  @keyframes onboard-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .onboard-spin {
+      animation: none;
+    }
   }
   .onboard-layer-hint {
     font-size: 11px;
