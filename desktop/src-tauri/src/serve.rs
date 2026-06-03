@@ -9,6 +9,7 @@
 //! local serving never spawns `chan serve`.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -33,6 +34,16 @@ use crate::AppState;
 pub const SERVES_CHANGED: &str = "serves-changed";
 
 const MAX_WINDOWS_PER_WORKSPACE: usize = 10;
+
+/// Window-title kind glyphs. A workspace window's title leads with one of
+/// these so the OS title bar + window switcher encode the kind at a glance,
+/// then the locator (path / URL / listen address). Emoji render as color
+/// glyphs in the macOS title bar; named constants so swapping to a monochrome
+/// set (e.g. arrows for outbound/inbound) is a one-line change each.
+const ICON_LOCAL_HOME: &str = "\u{1F3E0}"; // house: local disk, under $HOME
+const ICON_LOCAL_OTHER: &str = "\u{1F5A5}\u{FE0F}"; // desktop computer: local, elsewhere
+const ICON_OUTBOUND: &str = "\u{1F4E4}"; // outbox tray: we dial OUT to a URL
+const ICON_INBOUND: &str = "\u{1F4E5}"; // inbox tray: a remote dials IN to us
 
 /// Live state for one running serve. Held in `AppState.serves`
 /// keyed by canonical workspace path.
@@ -145,12 +156,41 @@ pub fn new_workspace_window_label(key: &str) -> String {
     format!("{}-{}", workspace_window_prefix(key), next_window_seq())
 }
 
-/// Window title for a local-workspace webview: the workspace path verbatim.
-/// `fullstack-b-14` swapped the earlier "chan workspace: <basename>"
-/// shape after @@Alex flagged that the path is the more useful
-/// signal in the OS window switcher than the prefix + basename.
+/// Window title for a local-workspace webview: a kind glyph (home vs this
+/// machine) then the workspace path. `fullstack-b-14` made the path the
+/// locator (the disambiguating signal in the OS window switcher); R1 prefixes
+/// the home/computer glyph so the kind reads at a glance.
 fn workspace_title(key: &str) -> String {
-    key.to_string()
+    local_title(key, dirs::home_dir().as_deref())
+}
+
+/// Pure home-vs-elsewhere title formatting, split from `workspace_title` so it
+/// is testable without depending on the process's real home dir. A path under
+/// `home` gets the house glyph; anything else (or no resolvable home) gets the
+/// computer glyph.
+fn local_title(key: &str, home: Option<&Path>) -> String {
+    let icon = match home {
+        Some(home) if Path::new(key).starts_with(home) => ICON_LOCAL_HOME,
+        _ => ICON_LOCAL_OTHER,
+    };
+    format!("{icon} {key}")
+}
+
+/// The local listen address a tunneled-workspace window connects to: the
+/// host:port (authority) of the per-tenant loopback `url`. Used as the inbound
+/// title locator. Falls back to the raw `url` if it has no authority (a
+/// loopback workspace URL always does, so the fallback is defensive).
+fn listen_addr_from_url(url: &str) -> String {
+    url.parse::<url::Url>()
+        .ok()
+        .and_then(|u| {
+            let host = u.host_str()?.to_string();
+            Some(match u.port() {
+                Some(port) => format!("{host}:{port}"),
+                None => host,
+            })
+        })
+        .unwrap_or_else(|| url.to_string())
 }
 
 /// Stable window-label prefix for a tunneled workspace, namespaced
@@ -243,10 +283,11 @@ pub fn spawn_tunneled_workspace_window(
         .map(|c| c.url_hash.clone())
         .unwrap_or_default();
     let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
-    // `fullstack-b-14`: matches the local-workspace title shape; the
-    // tunneled workspace has no local filesystem path, so we use the
-    // closest analog ("<tenant>·<workspace>") with no prefix.
-    let title = format!("{tenant_label} \u{00b7} {workspace}");
+    // R1: inbound (a remote dialed in over the tunnel) is reached through a
+    // local per-tenant loopback listener; the window's `url` points at it.
+    // Title with the inbound glyph + that listener's host:port, the locator
+    // analogous to the local path / outbound URL.
+    let title = format!("{ICON_INBOUND} {}", listen_addr_from_url(url));
     build_workspace_window(
         app, &label, &title, url, &url_hash, config_key, zoom_level, None,
     )
@@ -255,12 +296,7 @@ pub fn spawn_tunneled_workspace_window(
 /// Spawn a new outbound URL webview window. The desktop does not own
 /// the remote process; this only creates another webview pointed at
 /// the persisted URL.
-pub fn spawn_outbound_workspace_window(
-    app: &AppHandle,
-    id: &str,
-    title: &str,
-    url: &str,
-) -> Result<(), String> {
+pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
     ensure_window_capacity(app, &outbound_window_prefix(id))?;
     let config_key = config::outbound_window_key(id);
     let prefix = outbound_window_prefix(id);
@@ -274,6 +310,9 @@ pub fn spawn_outbound_workspace_window(
         .map(|c| c.url_hash.clone())
         .unwrap_or_default();
     let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
+    // R1: outbound title is the outbound glyph + the URL (the locator),
+    // not the user's label (which still names the launcher row).
+    let title = format!("{ICON_OUTBOUND} {url}");
     // Outbound = an outgoing connection to a remote we do not own. Route
     // through the connecting screen so a down remote shows a retrying
     // surface instead of a blank white webview. `url` is the display +
@@ -281,7 +320,7 @@ pub fn spawn_outbound_workspace_window(
     build_workspace_window(
         app,
         &label,
-        title,
+        &title,
         url,
         &url_hash,
         config_key,
@@ -1200,19 +1239,43 @@ mod tests {
     }
 
     #[test]
-    fn workspace_title_is_the_path_verbatim() {
-        // `fullstack-b-14`: titles are the workspace path so the OS
-        // window switcher surfaces the disambiguating signal.
-        // Earlier shape "chan workspace: <basename>" lost the path
-        // detail and collided when two workspaces shared a basename.
+    fn local_title_prefixes_home_vs_computer_glyph_then_path() {
+        // R1: the local title leads with the kind glyph (home when under the
+        // user's home dir, computer otherwise) then the path verbatim
+        // (`fullstack-b-14`: the path is the disambiguating window-switcher
+        // signal). `local_title` takes home explicitly so the test does not
+        // depend on the process's real home dir.
+        let home = Path::new("/Users/alex");
         assert_eq!(
-            workspace_title("/Users/alex/dev/github.com/fiorix/chan"),
-            "/Users/alex/dev/github.com/fiorix/chan",
+            local_title("/Users/alex/dev/github.com/fiorix/chan", Some(home)),
+            format!("{ICON_LOCAL_HOME} /Users/alex/dev/github.com/fiorix/chan"),
         );
-        // Trailing slash, edge case, etc. are passed through; we
-        // don't sanitize; the caller's path is the source of truth.
-        assert_eq!(workspace_title("/tmp/scratch/"), "/tmp/scratch/");
-        assert_eq!(workspace_title(""), "");
+        // Outside home -> computer glyph. Trailing slash passed through.
+        assert_eq!(
+            local_title("/tmp/scratch/", Some(home)),
+            format!("{ICON_LOCAL_OTHER} /tmp/scratch/"),
+        );
+        // No resolvable home dir -> computer glyph (never mislabels as home).
+        assert_eq!(
+            local_title("/Users/alex/notes", None),
+            format!("{ICON_LOCAL_OTHER} /Users/alex/notes"),
+        );
+    }
+
+    #[test]
+    fn listen_addr_from_url_extracts_host_port_authority() {
+        // R1: the inbound (tunnel) title locator is the per-tenant loopback
+        // host:port the window connects to.
+        assert_eq!(
+            listen_addr_from_url("http://127.0.0.1:54321/notes/?t=tok"),
+            "127.0.0.1:54321",
+        );
+        assert_eq!(
+            listen_addr_from_url("http://localhost:8787/index.html"),
+            "localhost:8787",
+        );
+        // No authority to extract -> defensive fall back to the raw string.
+        assert_eq!(listen_addr_from_url("not a url"), "not a url");
     }
 
     // `fullstack-b-7`: workspace and tunnel webviews host the SPA, which

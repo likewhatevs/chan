@@ -866,19 +866,15 @@ fn add_outbound_workspace(
 ) -> Result<String, String> {
     let url = normalize_outbound_url(&url)?;
     let label = normalize_outbound_label(&label)?;
-    let (id, title, stored_url) = {
+    let (id, stored_url) = {
         let mut store = state.store.lock().unwrap();
         let mut cfg = store.get().map_err(err)?;
-        let (id, title, stored_url) = match cfg.outbound.iter_mut().find(|d| d.url == url) {
+        let (id, stored_url) = match cfg.outbound.iter_mut().find(|d| d.url == url) {
             Some(existing) => {
                 if !label.is_empty() {
                     existing.label = label.clone();
                 }
-                (
-                    existing.id.clone(),
-                    outbound_title(&existing.label, &existing.url),
-                    existing.url.clone(),
-                )
+                (existing.id.clone(), existing.url.clone())
             }
             None => {
                 let entry = OutboundWorkspace {
@@ -888,15 +884,14 @@ fn add_outbound_workspace(
                     added_at: config::current_millis(),
                 };
                 let id = entry.id.clone();
-                let title = outbound_title(&entry.label, &entry.url);
                 cfg.outbound.push(entry);
-                (id, title, url)
+                (id, url)
             }
         };
         store.save(&cfg).map_err(err)?;
-        (id, title, stored_url)
+        (id, stored_url)
     };
-    serve::spawn_outbound_workspace_window(&app, &id, &title, &stored_url)?;
+    serve::spawn_outbound_workspace_window(&app, &id, &stored_url)?;
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(id)
 }
@@ -908,19 +903,16 @@ fn open_outbound_workspace(
     state: State<Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    let (title, url) = {
+    let url = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         let outbound = cfg
             .outbound
             .iter()
             .find(|d| d.id == id)
             .ok_or_else(|| format!("no outbound workspace attachment {id}"))?;
-        (
-            outbound_title(&outbound.label, &outbound.url),
-            outbound.url.clone(),
-        )
+        outbound.url.clone()
     };
-    serve::spawn_outbound_workspace_window(&app, &id, &title, &url)
+    serve::spawn_outbound_workspace_window(&app, &id, &url)
 }
 
 /// Forget an outbound URL attachment. The remote server is not
@@ -987,15 +979,6 @@ fn normalize_outbound_label(raw: &str) -> Result<String, String> {
         ));
     }
     Ok(label)
-}
-
-fn outbound_title(label: &str, url: &str) -> String {
-    let label = label.trim();
-    if label.is_empty() {
-        url.to_string()
-    } else {
-        label.to_string()
-    }
 }
 
 fn outbound_label(outbound: &OutboundWorkspace) -> Option<String> {
