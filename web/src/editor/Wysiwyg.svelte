@@ -1023,40 +1023,49 @@
   }
   /* Render bullet markers with styled glyphs while keeping the source
      bytes intact (source mode + round-trip still show the literal
-     `-` / `*`; see blocks.ts). The literal marker char is collapsed
-     to zero width with font-size:0 and the styled glyph is drawn by
-     an IN-FLOW ::before (no positioning), so the existing list-line
-     text-indent places the glyph exactly where the source char sat at
-     every nesting depth. (An absolute-positioned overlay was tried
-     first but text-indent does not apply to out-of-flow boxes, so
-     nested glyphs detached to the gutter.)
-     Hyphen -> en-dash at all levels; star -> filled bullet at the top
-     level, hollow bullet when nested. `+` keeps its literal styled
-     char via the base .cm-md-ul-marker rule. */
-  :global(.md-wysiwyg-cm6 .cm-md-ul-dash),
+     `-` / `*` / `+`; see blocks.ts). The literal marker char is
+     collapsed to zero width with font-size:0 and the styled glyph is
+     drawn by an IN-FLOW ::before (no positioning), so the existing
+     list-line text-indent places the glyph exactly where the source
+     char sat at every nesting depth. (An absolute-positioned overlay
+     was tried first but text-indent does not apply to out-of-flow
+     boxes, so nested glyphs detached to the gutter.)
+     The glyph keys off NESTING DEPTH, not the typed marker char,
+     matching Google Docs: level 1 = filled disc, level 2 = open
+     circle, level 3 = filled square, then the cycle repeats. All
+     three markers (- / * / +) share this depth cycle. */
   :global(.md-wysiwyg-cm6 .cm-md-ul-bullet) {
     font-size: 0;
   }
-  :global(.md-wysiwyg-cm6 .cm-md-ul-dash::before),
+  /* Geometric glyphs fill most of the em box at body size, so they
+     read much larger than a normal list bullet. The disc and the open
+     circle are a matched pair (same outer diameter), so one shared
+     size keeps them optically even; vertical-align nudges them onto
+     the text center line so baselines align across levels. The square
+     is trimmed + lifted separately below (its solid ink area reads
+     heavier than a circle of equal box).
+     margin-right doubles the glyph-to-text gap (@@Alex: "i want double
+     the amount of space between glyph and text"): the source `-`/`*`/`+`
+     leaves one space before the text, and this adds a second space's
+     worth. It is keyed off the body size (not em) so the gap stays
+     equal across disc/circle/square despite their differing glyph
+     sizes, and is consistent at every nesting level. */
   :global(.md-wysiwyg-cm6 .cm-md-ul-bullet::before) {
-    font-size: var(--chan-editor-body-size, 11pt);
     color: var(--text-secondary, #888);
+    font-size: calc(var(--chan-editor-body-size, 11pt) * 0.62);
+    vertical-align: 0.08em;
+    margin-right: calc(var(--chan-editor-body-size, 11pt) * 0.28);
   }
-  :global(.md-wysiwyg-cm6 .cm-md-ul-dash::before) {
-    content: "\2013"; /* en-dash */
+  :global(.md-wysiwyg-cm6 .cm-md-ul-disc::before) {
+    content: "\25CF"; /* black circle (filled disc) */
   }
-  /* The geometric circle glyphs fill nearly the full em box at body size,
-     so they read much larger than a normal list bullet. Scale them down to
-     bullet proportions (the en-dash above stays at body size). The hollow
-     nested circle is outline-only, so it needs a touch more size than the
-     filled top circle to stay visible. */
-  :global(.md-wysiwyg-cm6 .cm-md-ul-bullet-top::before) {
-    content: "\25CF"; /* black circle (filled) */
-    font-size: calc(var(--chan-editor-body-size, 11pt) * 0.6);
+  :global(.md-wysiwyg-cm6 .cm-md-ul-circle::before) {
+    content: "\25CB"; /* white circle (open) */
   }
-  :global(.md-wysiwyg-cm6 .cm-md-ul-bullet-nested::before) {
-    content: "\25EF"; /* large circle (hollow) */
-    font-size: calc(var(--chan-editor-body-size, 11pt) * 0.72);
+  :global(.md-wysiwyg-cm6 .cm-md-ul-square::before) {
+    content: "\25A0"; /* black square (filled) */
+    font-size: calc(var(--chan-editor-body-size, 11pt) * 0.56);
+    vertical-align: 0;
   }
   /* Left indent and guides on every line of every list (bullet,
      ordered, task). Three-class chain matches the fence-row pattern

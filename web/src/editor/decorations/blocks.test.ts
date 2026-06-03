@@ -88,18 +88,18 @@ describe("list marker rendering (source-faithful)", () => {
     // rather than being swapped for a glyph; no replace-widgets.
     expect(blocksSource).not.toContain("BulletMarkerWidget");
     expect(blocksSource).not.toContain("OrderedMarkerWidget");
-    // The bullet marker has a char/depth styling hook (dash vs
-    // filled-top vs hollow-nested). The source char stays in the doc;
-    // the glyph is a CSS ::before substitution in Wysiwyg.svelte.
-    expect(blocksSource).toContain("cm-md-ul-dash");
-    expect(blocksSource).toContain("cm-md-ul-bullet-top");
-    expect(blocksSource).toContain("cm-md-ul-bullet-nested");
-    expect(wysiwygSource).toContain(".cm-md-ul-dash::before");
-    expect(wysiwygSource).toContain(".cm-md-ul-bullet-top::before");
-    expect(wysiwygSource).toContain(".cm-md-ul-bullet-nested::before");
+    // The bullet glyph keys off nesting depth (Google-Docs cycle:
+    // disc -> circle -> square). The source char stays in the doc; the
+    // glyph is a CSS ::before substitution in Wysiwyg.svelte.
+    expect(blocksSource).toContain("cm-md-ul-disc");
+    expect(blocksSource).toContain("cm-md-ul-circle");
+    expect(blocksSource).toContain("cm-md-ul-square");
+    expect(wysiwygSource).toContain(".cm-md-ul-disc::before");
+    expect(wysiwygSource).toContain(".cm-md-ul-circle::before");
+    expect(wysiwygSource).toContain(".cm-md-ul-square::before");
   });
 
-  test("dash bullet keeps the source `-` and carries the dash class", () => {
+  test("top-level bullet keeps the source char and the disc class", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
@@ -111,12 +111,12 @@ describe("list marker rendering (source-faithful)", () => {
       }),
     });
 
-    // The wysiwyg glyph is an en-dash via CSS ::before, but the doc
-    // + textContent stay the literal `-` (source-faithful). The dash
+    // The wysiwyg glyph is a filled disc via CSS ::before, but the doc
+    // + textContent stay the literal `-` (source-faithful). The disc
     // class is the CSS hook.
     const marker = parent.querySelector(".cm-md-ul-marker");
     expect(marker?.textContent).toBe("-");
-    expect(marker?.classList.contains("cm-md-ul-dash")).toBe(true);
+    expect(marker?.classList.contains("cm-md-ul-disc")).toBe(true);
     expect(parent.textContent).toContain("- item");
     expect(view.state.doc.toString()).toBe("- item");
 
@@ -124,50 +124,53 @@ describe("list marker rendering (source-faithful)", () => {
     parent.remove();
   });
 
-  test("top-level asterisk keeps the source `*` and the filled class", () => {
+  test("glyph keys off depth, not the typed marker char", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
+    // Three top-level items with different markers all render the same
+    // disc: Google Docs keys the glyph off depth, not the char.
     const view = new EditorView({
       parent,
       state: EditorState.create({
-        doc: "* item",
-        extensions: [chanMarkdown(), chanDecorations()],
-      }),
-    });
-
-    const marker = parent.querySelector(".cm-md-ul-marker");
-    expect(marker?.textContent).toBe("*");
-    expect(marker?.classList.contains("cm-md-ul-bullet-top")).toBe(true);
-    expect(parent.textContent).toContain("* item");
-
-    view.destroy();
-    parent.remove();
-  });
-
-  test("nested asterisk gets the hollow class; top stays filled", () => {
-    const parent = document.createElement("div");
-    document.body.appendChild(parent);
-
-    const view = new EditorView({
-      parent,
-      state: EditorState.create({
-        doc: "* top\n    * nested",
+        doc: "- dash\n* star\n+ plus",
         extensions: [chanMarkdown(), chanDecorations()],
       }),
     });
 
     const markers = Array.from(parent.querySelectorAll(".cm-md-ul-marker"));
-    const top = markers.find((m) =>
-      m.classList.contains("cm-md-ul-bullet-top"),
+    expect(markers.length).toBe(3);
+    for (const m of markers) {
+      expect(m.classList.contains("cm-md-ul-disc")).toBe(true);
+    }
+    expect(view.state.doc.toString()).toBe("- dash\n* star\n+ plus");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  test("bullet glyph cycles disc -> circle -> square by depth", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "- l1\n  - l2\n    - l3\n      - l4",
+        extensions: [chanMarkdown(), chanDecorations()],
+      }),
+    });
+
+    const markers = Array.from(parent.querySelectorAll(".cm-md-ul-marker"));
+    // depth 0 disc, 1 circle, 2 square, 3 wraps back to disc.
+    expect(markers[0]?.classList.contains("cm-md-ul-disc")).toBe(true);
+    expect(markers[1]?.classList.contains("cm-md-ul-circle")).toBe(true);
+    expect(markers[2]?.classList.contains("cm-md-ul-square")).toBe(true);
+    expect(markers[3]?.classList.contains("cm-md-ul-disc")).toBe(true);
+    // All keep their literal source char.
+    expect(view.state.doc.toString()).toBe(
+      "- l1\n  - l2\n    - l3\n      - l4",
     );
-    const nested = markers.find((m) =>
-      m.classList.contains("cm-md-ul-bullet-nested"),
-    );
-    // Filled top, hollow nested -- both keep their literal `*`.
-    expect(top?.textContent).toBe("*");
-    expect(nested?.textContent).toBe("*");
-    expect(view.state.doc.toString()).toBe("* top\n    * nested");
 
     view.destroy();
     parent.remove();

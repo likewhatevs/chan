@@ -778,7 +778,7 @@ function paneByIdOrActive(paneId: string | null | undefined): LeafNode | null {
 /// `kind`, mirroring the wire `PaneOp`).
 type PaneExecOp =
   | { kind: "focus"; pane_id: string }
-  | { kind: "split"; pane_id?: string | null; dir: "left" | "bottom" }
+  | { kind: "split"; pane_id?: string | null; dir: "right" | "bottom" }
   | { kind: "resize"; pane_id?: string | null; delta: number }
   | { kind: "close_tab"; pane_id?: string | null; tab_id?: string | null; force?: boolean }
   | { kind: "close_pane"; pane_id?: string | null; force?: boolean }
@@ -810,8 +810,16 @@ async function applyPaneExec(op: PaneExecOp): Promise<PaneExecResult> {
       if (!p)
         return { ok: false, summary: `no such pane ${op.pane_id ?? layout.activePaneId}`, blocked };
       const before = paneLeaves().length;
-      if (op.dir === "left") splitPane(p.id, "row", "before");
+      // A one-shot `cs pane split` must NOT steal focus to the new empty pane:
+      // splitPane sets activePaneId = newPane (right for the keyboard/UI split,
+      // wrong for a scripted command sent from a terminal). Restore the
+      // sending terminal's pane afterward. `right` puts the new pane to the
+      // right (row/after); `bottom` below (column/after) - matching the wire
+      // SplitDir and the hybrid hamburger.
+      const keepActive = layout.activePaneId;
+      if (op.dir === "right") splitPane(p.id, "row", "after");
       else splitPane(p.id, "column", "after");
+      layout.activePaneId = keepActive;
       if (paneLeaves().length > before)
         return { ok: true, summary: `split pane ${p.id} ${op.dir}`, blocked };
       return { ok: false, summary: "split limit reached", blocked };
@@ -1993,8 +2001,17 @@ export function openFsGraphForDirectory(path: string): void {
   // "Graph from here" on a directory scopes to that subtree directly.
   // Empty path is the workspace root, so use the "workspace" alias instead of
   // a sentinel `dir:` scope.
+  //
+  // B9 (c): open the directory graph in SEMANTIC mode, not the
+  // directories-only filesystem mode. The semantic dir-scope graph
+  // carries every layer (files with their link / backlink / hashtag /
+  // contact / language edges plus the directory `contains` spine), and
+  // GraphPanel now supports directory expand/collapse + the
+  // depth-slider in semantic mode, so "Graph from here" on a directory
+  // (from the file browser, mirroring the in-graph re-scope) keeps the
+  // rich graph instead of collapsing to a bare directory tree.
   const tab = openGraphInActivePane({
-    mode: "filesystem",
+    mode: "semantic",
     scopeId: path ? `dir:${path}` : "workspace",
     depth: 1,
     pendingSelectId: path || null,

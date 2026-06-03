@@ -366,7 +366,10 @@ describe("filesystem graph entrypoints", () => {
     openFsGraphForDirectory("notes");
 
     graph = activeGraphTab();
-    expect(graph.mode).toBe("filesystem");
+    // B9 (c): the directory "Graph from here" opens the RICH semantic
+    // graph (all layers, with client-side directory expand/collapse),
+    // not the directories-only filesystem mode.
+    expect(graph.mode).toBe("semantic");
     // Directory trigger scopes to that subtree directly.
     expect(graph.scopeId).toBe("dir:notes");
     expect(graph.pendingSelectId).toBe("notes");
@@ -385,7 +388,9 @@ describe("filesystem graph entrypoints", () => {
     openFsGraphForDirectory("");
 
     graph = activeGraphTab();
-    expect(graph.mode).toBe("filesystem");
+    // B9 (c): workspace-root "Graph from here" is the rich semantic
+    // graph too (workspace scope, all layers).
+    expect(graph.mode).toBe("semantic");
     expect(graph.scopeId).toBe("workspace");
   });
 

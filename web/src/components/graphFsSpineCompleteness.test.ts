@@ -43,17 +43,28 @@ describe("filesystem-mode graph spine visibility", () => {
     );
   });
 
-  test("workspace + dir semantic scope use find -d N depth filter", () => {
-    // In semantic mode, workspace + dir scope filter by filesystem depth
-    // relative to the scope root. depth >= depthCap lifts the filter;
-    // the workspace-root anchor is always kept.
+  test("workspace + dir semantic scope use the expanded-ancestor tree model", () => {
+    // B9 (a/b/c): the pre-B9 flat `relativeDepth(root, path) <= depth`
+    // filter was replaced by the same expanded-ancestor tree model the
+    // filesystem mode uses, so directory nodes expand / collapse in the
+    // rich semantic graph. A file / folder renders only when every
+    // ancestor up to the scope root is expanded; the workspace-root
+    // anchor is always kept; tag / mention / language meta-nodes always
+    // pass through.
     expect(graph).toMatch(
       /currentScope\.kind === "workspace" \|\| currentScope\.kind === "dir"/,
     );
-    expect(graph).toMatch(/if \(graphState\.depth >= depthCap\) return null;/);
+    // The semantic branch now gates file / folder visibility on
+    // ancestorsExpanded(rootPath, ...), not a relativeDepth comparison.
     expect(graph).toMatch(
+      /ancestorsExpanded\(rootPath, n\.path, expanded\)/,
+    );
+    // The flat depth filter and its lift-the-filter short-circuit are
+    // gone from the semantic branch.
+    expect(graph).not.toMatch(
       /relativeDepth\(rootPath, nodePath\) <= graphState\.depth/,
     );
+    expect(graph).not.toMatch(/if \(graphState\.depth >= depthCap\) return null;/);
     // The only remaining file-seed path is file scope.
     expect(graph).not.toMatch(/n\.path === root \|\| n\.path\.startsWith\(prefix\)/);
   });

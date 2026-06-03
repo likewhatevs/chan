@@ -236,6 +236,31 @@
       selectedFsNode.path
     ) {
       void toggleDirExpand(selectedFsNode.path);
+      return;
+    }
+    // B9 (a): in semantic mode the directory spine ships in the
+    // already-loaded /api/graph payload, so a directory double-click
+    // toggles its children purely client-side - no fs-graph fetch, no
+    // mode flip. The fresh Cmd+Shift+M graph is semantic, so this is
+    // what makes double-click-to-expand work there without first
+    // running "Graph from here" on the root. The directory node is a
+    // `folder`-kind RenderedNode whose `path` is the bare workspace-
+    // relative directory path (the expanded set is keyed by path).
+    if (selectedNode && selectedNode.kind === "folder") {
+      toggleSemanticDirExpand(selectedNode.path);
+    }
+  }
+
+  /// Toggle a directory's expansion in semantic mode. Unlike the
+  /// filesystem-mode `toggleDirExpand`, the whole spine is already
+  /// loaded by the graphStream fetch, so expanding just flips the
+  /// `expanded` flag and `scopedNodeIds` re-derives the visible set;
+  /// there is no per-directory degree to fetch.
+  function toggleSemanticDirExpand(path: string): void {
+    if (graphState.expanded[path]) {
+      delete graphState.expanded[path];
+    } else {
+      graphState.expanded[path] = true;
     }
   }
 
@@ -346,20 +371,71 @@
     }
   }
 
-  /// Re-establish the expanded set so every directory up to depth N is
-  /// open (find -d N). Authoritative: the depth slider drives this to
-  /// override individual expand / collapse toggles.
-  function seedExpandedToDepth(rootPath: string, depth: number): void {
+  /// Directory paths in the currently-loaded graph. Filesystem mode
+  /// emits `directory`-kind fs-graph nodes; semantic mode emits
+  /// `folder`-kind RenderedNodes (the /api/graph directory spine).
+  /// Both carry the bare workspace-relative path on `path`, which is
+  /// how the `expanded` set is keyed.
+  function loadedDirectoryPaths(): string[] {
+    if (filesystemMode) {
+      return fsNodes.flatMap((n) =>
+        n.kind === "directory" && n.path ? [n.path] : [],
+      );
+    }
+    return nodes.flatMap((n) =>
+      n.kind === "folder" && n.path ? [n.path] : [],
+    );
+  }
+
+  /// B9 (b): re-establish the expanded set so the depth slider expands
+  /// the directory tree FROM THE CURRENTLY SELECTED directory downward
+  /// by `depth` levels. Selecting the workspace root and cranking the
+  /// slider to its max reveals the whole workspace; selecting a
+  /// directory two levels deep expands only that subtree. The selected
+  /// directory's ancestors stay expanded so the revealed subtree stays
+  /// attached to the spine. When nothing (or a non-directory) is
+  /// selected the seed falls back to the scope root, preserving the
+  /// pre-B9 "find -d N from the scope root" behaviour. Authoritative:
+  /// the slider overrides individual expand / collapse toggles.
+  function seedExpandedFromSelected(depth: number): void {
+    const scopeRoot = currentScope?.kind === "dir" ? currentScope.path : "";
+    // The slider seeds from the selected directory when one is
+    // selected; otherwise from the scope root. A selected file (or
+    // non-directory node) seeds from the scope root, not the file's
+    // parent, so cranking the slider over a file behaves like "expand
+    // the whole scope" rather than a surprise re-root.
+    const selectedDirPath =
+      filesystemMode && selectedFsNode && isFsDirectory(selectedFsNode)
+        ? selectedFsNode.path
+        : !filesystemMode && selectedNode?.kind === "folder"
+          ? selectedNode.path
+          : null;
+    const seedRoot = selectedDirPath ?? scopeRoot;
     const next: Record<string, boolean> = { "": true };
-    if (rootPath) next[rootPath] = true;
-    for (const n of fsNodes) {
-      if (
-        n.kind === "directory" &&
-        n.path &&
-        relativeDepth(rootPath, n.path) < depth
-      ) {
-        next[n.path] = true;
+    if (scopeRoot) next[scopeRoot] = true;
+    // Keep every ancestor directory between the scope root and the
+    // seed root expanded so the seeded subtree is reachable from the
+    // spine (otherwise the ancestor-expanded gate would hide it).
+    if (seedRoot && seedRoot !== scopeRoot) {
+      const rel =
+        scopeRoot && seedRoot.startsWith(`${scopeRoot}/`)
+          ? seedRoot.slice(scopeRoot.length + 1)
+          : seedRoot;
+      const parts = rel.split("/");
+      let prefix = scopeRoot;
+      for (const part of parts) {
+        prefix = prefix ? `${prefix}/${part}` : part;
+        next[prefix] = true;
       }
+    }
+    if (seedRoot) next[seedRoot] = true;
+    // Expand every directory within `depth` levels below the seed
+    // root. relativeDepth(seedRoot, dir) === 1 is a direct child;
+    // a directory at relative depth d expands its own children when
+    // d < depth (find -d N semantics).
+    for (const dir of loadedDirectoryPaths()) {
+      const rel = relativeDepth(seedRoot, dir);
+      if (rel >= 1 && rel < depth) next[dir] = true;
     }
     graphState.expanded = next;
   }
@@ -391,12 +467,17 @@
     let scopeId: string;
     if (isDir) {
       scopeId = path ? `dir:${path}` : "workspace";
-      // BUG-GRAPH: switch into filesystem mode for a directory re-scope,
-      // matching openFsGraphForDirectory. Without this the re-scope keeps
-      // the current (semantic) mode, so it plots the markdown link
-      // neighbourhood instead of the directory's files and the
-      // double-click expand (gated on filesystemMode) stays a no-op.
-      graphState.mode = "filesystem";
+      // B9 (c): STAY in semantic mode for a directory re-scope. The
+      // pre-B9 code flipped to filesystem mode here to get double-
+      // click expansion, but that mode emits directories ONLY - it
+      // dropped every other layer (files' link / backlink / hashtag /
+      // contact / language edges) the fresh Cmd+Shift+M graph showed.
+      // The semantic dir-scope load already pulls all those layers
+      // plus the directory `contains` spine, and double-click /
+      // depth-slider expansion now works in semantic mode
+      // (toggleSemanticDirExpand + the expanded-ancestor scopedNodeIds
+      // branch), so re-scoping a directory keeps the rich graph.
+      graphState.mode = "semantic";
     } else {
       const slash = path.lastIndexOf("/");
       const parent = slash > 0 ? path.slice(0, slash) : "";
@@ -860,25 +941,32 @@
 
   const scopedNodeIds = $derived.by<Set<string> | null>(() => {
     if (!currentScope) return null;
-    // Round-1 closing-8 (F1): semantic-mode workspace + dir scope
-    // now filter file / folder / media nodes by their filesystem
-    // depth relative to the scope root, matching `find -d N`
-    // semantics. depth=1 shows only the first level under the
-    // scope; cranking the slider to its derived max
-    // (`depthCap` = the workspace / dir probe's actual reachable
-    // depth) lifts the filter entirely and the full graph
-    // renders. Tag / mention / language meta-nodes always pass
-    // through - they get culled naturally by the edges filter
-    // if no visible file references them. File-scope keeps the
-    // hop-based BFS below; "Graph from here" on a single file
-    // is the right surface for hop semantics.
+    // B9 (a/b/c): semantic-mode workspace + dir scope renders the
+    // FULL rich graph (files + tags + mentions + languages + the
+    // directory spine), with the directory tree expanded / collapsed
+    // by the same `graphState.expanded` set the filesystem mode uses.
+    // A file / folder node renders only when every ancestor directory
+    // up to the scope root is expanded (File Browser tree parity);
+    // double-click a directory node to toggle its children, or drag
+    // the depth slider to seed the expanded set from the selected
+    // directory downward (`seedExpandedFromSelected`). Tag / mention /
+    // language meta-nodes always pass through (they get culled
+    // naturally by the edges filter if no visible file references
+    // them); the workspace-root anchor is unconditional so the spine
+    // always has a root to hang off. This replaces the pre-B9 flat
+    // `relativeDepth(root, path) <= depth` filter, which (1) couldn't
+    // be expanded / collapsed per-node and (2) forced "Graph from
+    // here" on a directory into the directories-only filesystem mode
+    // to get expansion, dropping every non-directory layer. File scope
+    // keeps the hop-based BFS below; "Graph from here" on a single
+    // file is the right surface for hop semantics.
     if (
       !filesystemMode &&
       (currentScope.kind === "workspace" || currentScope.kind === "dir")
     ) {
-      if (graphState.depth >= depthCap) return null;
       const rootPath =
         currentScope.kind === "workspace" ? "" : currentScope.path;
+      const expanded = expandedDirs;
       const visible = new Set<string>();
       for (const n of nodes) {
         if (n.kind === "tag" || n.kind === "mention" || n.kind === "language") {
@@ -895,12 +983,10 @@
         // workspace-root short-circuit above. RenderedNode doesn't
         // model media as a separate kind - media files come through
         // as `kind: "file"` and the canvas re-classifies them via
-        // `classifyFile`. Their `.path` works the same way.
-        const nodePath = n.path;
-        if (!nodePath) continue;
-        if (relativeDepth(rootPath, nodePath) <= graphState.depth) {
-          visible.add(n.id);
-        }
+        // `classifyFile`. Their `.path` works the same way, so the
+        // ancestor-expanded gate covers files and subdirectories
+        // alike.
+        if (ancestorsExpanded(rootPath, n.path, expanded)) visible.add(n.id);
       }
       return visible;
     }
@@ -1760,9 +1846,9 @@
         if (currentScope.kind !== "file") {
           // The expanded set is restored with the tab (or defaults to the
           // root for a fresh depth-1 graph), so the first load trusts it.
-          // A later depth-slider move or rescope re-establishes the set to
-          // depth N (authoritative; overrides individual expand/collapse).
-          const fsRoot = currentScope.kind === "dir" ? currentScope.path : "";
+          // A later depth-slider move or rescope re-establishes the set
+          // from the selected directory to depth N (authoritative;
+          // overrides individual expand/collapse).
           const scopeKey = graphState.scopeId;
           if (appliedDepth === null) {
             appliedDepth = graphState.depth;
@@ -1771,7 +1857,7 @@
             graphState.depth !== appliedDepth ||
             scopeKey !== appliedScopeKey
           ) {
-            seedExpandedToDepth(fsRoot, graphState.depth);
+            seedExpandedFromSelected(graphState.depth);
             appliedDepth = graphState.depth;
             appliedScopeKey = scopeKey;
           }
@@ -1860,6 +1946,31 @@
         graphState.inspectorOpen = true;
       } else if (pending !== null) {
         graphState.pendingSelectId = null;
+      }
+      // B9 (b): re-seed the semantic-mode expanded set after the full
+      // spine lands. The first load (or a window-restore) trusts the
+      // serialized `expanded` set; a later depth-slider move or rescope
+      // re-establishes it from the selected directory to depth N
+      // (authoritative; overrides manual expand/collapse). Mirrors the
+      // filesystem-mode reseed above. Workspace + dir scope only; the
+      // tag / contact / language / file lenses don't use the expanded
+      // set (their visible set is BFS-derived).
+      if (
+        currentScope &&
+        (currentScope.kind === "workspace" || currentScope.kind === "dir")
+      ) {
+        const scopeKey = graphState.scopeId;
+        if (appliedDepth === null) {
+          appliedDepth = graphState.depth;
+          appliedScopeKey = scopeKey;
+        } else if (
+          graphState.depth !== appliedDepth ||
+          scopeKey !== appliedScopeKey
+        ) {
+          seedExpandedFromSelected(graphState.depth);
+          appliedDepth = graphState.depth;
+          appliedScopeKey = scopeKey;
+        }
       }
     } catch (e) {
       if (seq === graphLoadSeq && (e as DOMException).name !== "AbortError") {

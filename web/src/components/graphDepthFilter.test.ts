@@ -125,18 +125,18 @@ describe("depth slider works in workspace path-scope", () => {
   });
 });
 
-describe("find -d N depth semantics in semantic mode", () => {
-  test("workspace + dir scope filter by filesystem depth (relativeDepth)", () => {
-    // Depth=1 shows only the first level; max depth shows the full
-    // graph. Tag / mention / language meta-nodes always pass through;
-    // the workspace-root anchor is unconditional so the spine has a root.
-    expect(graph).toMatch(
-      /import \{[\s\S]{1,400}relativeDepth[\s\S]{1,40}\} from "\.\.\/graph\/depth"/,
-    );
+describe("B9: directory expand/collapse in the rich semantic graph", () => {
+  test("workspace + dir scope render the expanded-ancestor tree, keeping every layer", () => {
+    // B9 (a/b/c): the fresh Cmd+Shift+M graph is semantic and now
+    // supports directory expand/collapse without flipping to the
+    // directories-only filesystem mode. Workspace + dir scope gate
+    // file / folder visibility on `ancestorsExpanded` (the same tree
+    // model the filesystem mode uses); tag / mention / language
+    // meta-nodes always pass through so the rich layers survive; the
+    // workspace-root anchor is unconditional so the spine has a root.
     expect(graph).toMatch(
       /currentScope\.kind === "workspace" \|\| currentScope\.kind === "dir"/,
     );
-    expect(graph).toMatch(/if \(graphState\.depth >= depthCap\) return null;/);
     expect(graph).toMatch(
       /n\.kind === "tag" \|\| n\.kind === "mention" \|\| n\.kind === "language"/,
     );
@@ -144,7 +144,42 @@ describe("find -d N depth semantics in semantic mode", () => {
       /n\.kind === "folder" && \(n\.id === "" \|\| n\.path === ""\)/,
     );
     expect(graph).toMatch(
+      /ancestorsExpanded\(rootPath, n\.path, expanded\)/,
+    );
+    // The pre-B9 flat depth filter is gone from the semantic branch.
+    expect(graph).not.toMatch(
       /relativeDepth\(rootPath, nodePath\) <= graphState\.depth/,
+    );
+  });
+
+  test("double-click toggles a directory in semantic mode (no fetch, no mode flip)", () => {
+    // Bug (a): on the fresh semantic graph a directory double-click
+    // toggles the spine client-side via toggleSemanticDirExpand; it no
+    // longer requires a "Graph from here" mode flip first.
+    expect(graph).toMatch(/function toggleSemanticDirExpand\(path: string\): void/);
+    expect(graph).toMatch(
+      /if \(selectedNode && selectedNode\.kind === "folder"\) \{\s*toggleSemanticDirExpand\(selectedNode\.path\);/,
+    );
+  });
+
+  test("the depth slider seeds the expanded set FROM THE SELECTED directory", () => {
+    // Bug (b): the slider expands from the currently selected directory
+    // downward by N levels, keeping that node's ancestors expanded.
+    // Selecting the workspace root + max reveals everything; a deep
+    // node expands only its subtree.
+    expect(graph).toMatch(/function seedExpandedFromSelected\(depth: number\): void/);
+    expect(graph).toMatch(/const seedRoot = selectedDirPath \?\? scopeRoot;/);
+    expect(graph).toMatch(/seedExpandedFromSelected\(graphState\.depth\)/);
+  });
+
+  test("graph-from-here on a directory STAYS in semantic mode", () => {
+    // Bug (c): re-scoping a directory keeps the rich graph (all layers)
+    // instead of flipping to the directories-only filesystem mode.
+    expect(graph).toMatch(
+      /if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "workspace";[\s\S]{1,800}graphState\.mode = "semantic";/,
+    );
+    expect(graph).not.toMatch(
+      /if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "workspace";[\s\S]{1,800}graphState\.mode = "filesystem";/,
     );
   });
 });

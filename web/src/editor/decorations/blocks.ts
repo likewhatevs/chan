@@ -434,54 +434,40 @@ const handleBulletList: TokenHandler = (ctx) => {
   decorateBulletList(ctx, ctx.node.node);
 };
 
-/// `cm-md-ul-marker` styles the bullet marker (`-` / `*` / `+`) in
-/// the source. We attach the class via `Decoration.mark` instead of
-/// replacing the source text with a fixed glyph so the rendered
-/// editor reflects whatever character the author typed ("even if I
-/// start a list with a dash, it changes to bullet; i know this is
-/// just rendering, but i want the rendering to reflect what's in
-/// the source code").
-const BULLET_MARK = Decoration.mark({ class: "cm-md-ul-marker" });
-
-/// Per-marker glyph decorations. The class chosen here only ADDS a
+/// Depth-cycling glyph decorations. The class chosen here only ADDS a
 /// styling hook; the source bytes are untouched (so source mode +
-/// round-trip still show the literal `-` / `*`). The wysiwyg glyph
-/// substitution is pure CSS (Wysiwyg.svelte): `-` renders an
-/// en-dash at every level, `*` renders a filled bullet at the top
-/// level and a hollow bullet when nested. `+` keeps its literal
-/// styled char via the base BULLET_MARK.
-const BULLET_DASH = Decoration.mark({
-  class: "cm-md-ul-marker cm-md-ul-dash",
-});
-const BULLET_DOT_TOP = Decoration.mark({
-  class: "cm-md-ul-marker cm-md-ul-bullet cm-md-ul-bullet-top",
-});
-const BULLET_DOT_NESTED = Decoration.mark({
-  class: "cm-md-ul-marker cm-md-ul-bullet cm-md-ul-bullet-nested",
-});
+/// round-trip still show the literal `-` / `*` / `+`). The wysiwyg
+/// glyph is pure CSS (Wysiwyg.svelte) and keys off NESTING DEPTH, not
+/// the typed marker char, matching Google Docs: level 1 = filled disc,
+/// level 2 = open circle, level 3 = filled square, then the cycle
+/// repeats (depth % 3). All three source markers (- / * / +) render
+/// the same glyph at a given depth.
+const BULLET_GLYPHS = [
+  Decoration.mark({ class: "cm-md-ul-marker cm-md-ul-bullet cm-md-ul-disc" }),
+  Decoration.mark({ class: "cm-md-ul-marker cm-md-ul-bullet cm-md-ul-circle" }),
+  Decoration.mark({ class: "cm-md-ul-marker cm-md-ul-bullet cm-md-ul-square" }),
+];
 
-/// True when this ListItem sits inside another list (any depth > 0).
-/// Used to pick the filled vs hollow `*` bullet. Walks the syntax
-/// ancestry rather than the indent so it tracks the actual list
-/// structure (a `*` one space deeper is still top-level until it
-/// nests under a parent item).
-function isNestedListItem(
-  item: import("@lezer/common").SyntaxNode,
-): boolean {
+/// Nesting depth of this ListItem: the count of ancestor ListItems
+/// above it (0 = top-level). Drives the Google-Docs glyph cycle
+/// (depth % 3). Walks the syntax ancestry rather than the indent so it
+/// tracks the actual list structure (a `*` one space deeper is still
+/// top-level until it nests under a parent item).
+function bulletDepth(item: import("@lezer/common").SyntaxNode): number {
+  let depth = 0;
   let cur = item.parent;
   while (cur) {
-    if (cur.name === "ListItem") return true;
+    if (cur.name === "ListItem") depth++;
     cur = cur.parent;
   }
-  return false;
+  return depth;
 }
 
-/// Map a bullet ListMark's source char + nesting to its decoration.
-function bulletMarkerDecoration(ch: string, nested: boolean): Decoration {
-  const c = ch.trim();
-  if (c === "-") return BULLET_DASH;
-  if (c === "*") return nested ? BULLET_DOT_NESTED : BULLET_DOT_TOP;
-  return BULLET_MARK;
+/// Map a bullet ListItem's nesting depth to its glyph decoration. The
+/// source marker char (- / * / +) is intentionally ignored: Google
+/// Docs keys the glyph off depth alone, not the typed char.
+function bulletGlyphDecoration(depth: number): Decoration {
+  return BULLET_GLYPHS[depth % BULLET_GLYPHS.length];
 }
 
 function decorateBulletList(
@@ -508,9 +494,8 @@ function decorateBulletList(
       } while (sub.nextSibling());
     }
     if (!hasTask && markFrom !== -1 && markTo !== -1) {
-      const ch = ctx.state.doc.sliceString(markFrom, markTo);
       ctx.push(
-        bulletMarkerDecoration(ch, isNestedListItem(item)),
+        bulletGlyphDecoration(bulletDepth(item)),
         markFrom,
         markTo,
       );

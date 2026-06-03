@@ -9,6 +9,7 @@
 
   import { tick } from "svelte";
   import {
+    loadTreeDir,
     pathPromptState,
     resolvePathPrompt,
     tree,
@@ -257,6 +258,34 @@
   const dirSuggestions = $derived(
     suggestions.filter((s) => s.kind === "dir").map((s) => s.path),
   );
+
+  /// Progressive directory autocomplete. `tree.entries` is loaded
+  /// lazily: `refreshTree` fetches only the workspace root, and each
+  /// directory's children land in the tree on first File-Browser
+  /// expand. So a dialog opened WITHOUT having browsed to the target
+  /// (e.g. save-from-draft, where the user came straight from editing a
+  /// draft) has no entries for deep paths and the suggestion list stays
+  /// empty even though the directories exist. This effect walks the
+  /// ancestor chain of whatever the user has typed and loads the
+  /// children of any directory that is known to exist but not loaded
+  /// yet, so the next path segment can be suggested. We gate on
+  /// `folderSet.has` (only load directories already known to exist), so
+  /// a mistyped segment can never trigger a 404; loading one level
+  /// reveals the next via `folderSet`, and this effect re-runs (it
+  /// reads `folderSet`) until the deepest known ancestor is loaded.
+  $effect(() => {
+    if (!pathPromptState.open) return;
+    const q = value.trim();
+    const slash = q.lastIndexOf("/");
+    if (slash <= 0) return;
+    let acc = "";
+    for (const seg of q.slice(0, slash).split("/")) {
+      acc = acc ? `${acc}/${seg}` : seg;
+      if (folderSet.has(acc) && !tree.loadedDirs[acc] && !tree.loadingDirs[acc]) {
+        void loadTreeDir(acc);
+      }
+    }
+  });
 
   /// Walk every ancestor of `path` and return the ones that don't
   /// exist as directories yet. Used so the status row can announce both

@@ -48,3 +48,17 @@ describe("PathPromptModal notice line", () => {
     expect(modal).toMatch(/\.notice \{[\s\S]{0,120}var\(--info-text/);
   });
 });
+
+describe("PathPromptModal progressive autocomplete", () => {
+  // tree.entries is loaded lazily (workspace root + File-Browser-expanded
+  // dirs only), so a dialog opened without first browsing to the target
+  // directory (e.g. save-from-draft) would show no suggestions for a deep
+  // path. The modal walks the typed ancestor chain and loads the children
+  // of each directory known to exist, so the next segment can be
+  // suggested. Gated on folderSet so a mistyped segment can't 404.
+  test("modal lazily loads typed ancestor directories for suggestions", () => {
+    expect(modal).toContain("loadTreeDir");
+    // The load is gated on the directory already existing in folderSet.
+    expect(modal).toMatch(/folderSet\.has\(acc\)[\s\S]{0,80}loadTreeDir\(acc\)/);
+  });
+});
