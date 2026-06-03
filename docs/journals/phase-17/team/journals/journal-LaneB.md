@@ -433,3 +433,252 @@ type `echo hello_rp_shell` + cmd+enter -> RAN (output hello_rp_shell, no
 (indented), focus STAYED in the prompt; Shift+Tab -> outdented back to `- beta`.
 Claude path unchanged (modifyOtherKeys -> "claude" chord, as B1 verified). Torn
 down (server by PID, chan remove, rm temp).
+
+================================================================================
+## round-2: desktop connecting/retry screen (task desktop-connecting-screen.md)
+
+Role: scope + desktop/Tauri side. Owns desktop/src-tauri/. Posted the
+window<->page contract FIRST (in the task file's Contract section) so @@LaneD
+can build the page in parallel.
+
+Scope findings (serve.rs):
+- 3 webview flavours. workspace-* (local embedded server, URL awaited before
+  the window opens -> never blank). tunnel-* (remote dials IN, reached over a
+  LOCAL loopback listener, only opened once bound). outbound-* (attach a
+  remote by URL; webview points straight at a remote we do NOT own).
+- The blank-white bug is OUTBOUND: build_workspace_window opens
+  WebviewUrl::External(remote); a down remote never finishes navigating and
+  WKWebView paints white (the nil-URL panic guard at serve.rs ~443-447
+  documents exactly this case). The ask "outgoing connection to a URL" == the
+  outbound flavour. Scoped to outbound only; local + tunnel unchanged.
+
+Contract (full text in the task file). Key decisions:
+- Page loads WebviewUrl::App("connecting.html") instead of the remote;
+  LaneB injects window.__CHAN_CONNECTING__ = {url, target} via an init script
+  (matches the existing initialization_script(KEY_BRIDGE_JS) pattern; sidesteps
+  query-string encoding). target = remote + ?w=<label> + #fragment, pre-built
+  in Rust so SPA per-window state + restore survive the success navigation.
+- Detection primitive (LaneB): probe_url(url) IPC -> {reachable,status,detail}.
+  reachable = got ANY HTTP response (401/404 included = server up). false only
+  on transport failure (refused/DNS/TLS/timeout) = the blank case. reqwest is
+  already a desktop dep; 5s timeout so a black-hole host can't hang.
+- Retry LOOP lives in LaneD's PAGE (calls probe_url on a ~2s cadence), NOT in
+  Rust. Rationale: avoids the lost-event race where a Rust emit loop fires
+  connecting-ready before the webview attaches its listener. Flagged to @@LaneA
+  in case Rust-driven is preferred.
+- Capability: add allow-probe-url to the workspace-window set in app.toml.
+  No JSON/capability change: outbound-* is already in the `workspace`
+  capability and it applies to app-origin pages (local defaults true).
+
+Next: implement probe_url + outbound redirection + permission + pin tests,
+own-gate (make -C desktop check), report to @@LaneA.
+
+--- completion (Tauri side landed + own-gate green) ---
+Files (blob fingerprints):
+  desktop/src-tauri/src/serve.rs           6908fe4f2b4b304c082a59940c184e6819993773
+  desktop/src-tauri/src/main.rs            c6f428b31e75a8c9efc508a2886ee9f492154614
+  desktop/src-tauri/permissions/app.toml   3b3296b2fe58f667740a13c979774cf09c2260dd
+
+What landed:
+- serve.rs: build_workspace_window gains `connecting: Option<&str>`. None
+  (local/tunnel) = direct WebviewUrl::External as before. Some(display_url)
+  (outbound) = load WebviewUrl::App("connecting.html") + inject
+  window.__CHAN_CONNECTING__ = {url, target} via initialization_script
+  (target = remote + ?w=<label> + #fragment, pre-assembled). spawn_outbound_
+  workspace_window passes Some(url); both attach + reopen outbound paths get
+  the connecting screen for free.
+- main.rs: probe_url(url) -> ProbeResult {reachable, status:Option<u16>,
+  detail} via reqwest, 5s timeout. reachable = any HTTP response (401/404
+  too); false only on transport failure. Registered in generate_handler!.
+- app.toml: allow-probe-url permission + added to the workspace-window set
+  (outbound-* windows carry it; the connecting page runs there).
+- pins: serve.rs outbound_windows_load_the_connecting_page_not_the_remote
+  (runtime-built needles), invoke_handler_registers_probe_url, +
+  app_acl_allows_workspace_window_commands extended with allow-probe-url.
+
+Own-gate GREEN (cd desktop/src-tauri):
+  cargo fmt --all -- --check : OK
+  cargo clippy --all-targets -- -D warnings : OK
+  cargo test --all-targets : 81 + 7 passed, 0 failed
+
+Integration verified at the interface level against @@LaneD's connecting.js:
+  invoke('probe_url', { url }) [their L168] == my fn probe_url(url: String);
+  res.reachable / res.status / res.detail [L151/152/244/245] == ProbeResult;
+  location.replace(injected.target) [L52/196] == my injected `target`.
+  My skip_serializing_if on `status` (omitted when None) matches their
+  `res.status != null` guard. No drift.
+
+Did NOT push (per process). Did NOT touch capabilities/workspace.json or
+tauri.conf.json (outbound-* already in the `workspace` capability; local
+defaults true so the app-origin connecting page inherits it). Remaining:
+@@LaneC stage-2 desktop run (unreachable vs reachable end-to-end).
+
+================================================================================
+## round-2: survey system v2 (task survey-system.md) - Part A + Part C
+
+Part A (surveys reach team-DIALOG terminals): the diagnosed window_id=None
+bug. terminal.rs CreateTerminalBody += window_id (serde default);
+api_create_terminal binds body.window_id via normalize_window_id instead of
+hardcoded None. SPA: types.ts TerminalSpawnRequest += window_id?; teamOrchestrator
+both spawnTerminal calls pass window_id: sessionWindowId(). cs-team path
+(control_socket spawn_team) already sets window_id from $CHAN_WINDOW_ID -
+unaffected, confirmed by inspection.
+
+Part C (F + Dismiss standard + dismissed reply): @@LaneD had ALREADY built the
+whole web slice (overlay renders F + Dismiss unconditionally, dismissSurvey,
+SurveyReplyRequest 3 kinds, tests) and posted a contract. I mirrored it in the
+crates/ slice exactly:
+- wire.rs SurveyReply: followup_path -> Option<String> (skip None); new
+  Dismissed{survey_id}; survey_id() arm.
+- routes/survey.rs SurveyReplyRequest: followup -> Option<FollowupContext>; new
+  Dismissed. Route: Some->file->Followup{Some}; None->Followup{None} (no file);
+  Dismissed->SurveyReply::Dismissed.
+- control_socket format_survey_reply: 4 distinct stdout lines (option label /
+  file-created / host-deferred-no-file / survey-dismissed). CLI prints verbatim.
+- survey.rs bus test updated to Some(..).
+
+Two judgment calls (flagged to @@LaneA + @@LaneD in the task file):
+1. F-without-context: took the FALLBACK (followup:null = bare defer, no file),
+   NOT @@LaneD's "server always derives dir=workspace followups/" - that writes
+   into user content for every deferred survey. CLI opts into a file via
+   --followup-dir. @@LaneD's SPA tolerates either, no web change.
+2. allow_followup is now vestigial (set, never read - overlay ungated it). NOT
+   dropping unilaterally: synchronized drop touches Rust wire+cli help+after-help
+   + @@LaneD's client.ts+2 fixtures, AND --followup flag help is CLI surface
+   @@LaneA's Part B bootstrap may reference. Flagged to @@LaneA to sequence.
+
+Own-gate GREEN: crates fmt/clippy -Dwarnings/test (chan-server 402, chan-shell
+45); web make web-check (svelte-check 0, vitest 1670/1670, build clean).
+Remaining: @@LaneC joint empirical smoke (survey reaches team-dialog terminal +
+dismiss round-trip) once the server is rebuilt. Did NOT push.
+
+--- survey Part C addendum: allow_followup DROPPED (per @@LaneA ratification) ---
+@@LaneA ratified the Part C contract + directed dropping the vestigial
+allow_followup outright (pre-release) + the route accepting followup context-or-
+null (= my fallback, confirmed). Dropped allow_followup from: wire.rs SurveySpec
++ 3 wire tests; cli.rs SurveySpec construction + 3 after-help example JSONs +
+the --followup flag help (flag KEPT - still gates context attachment); control_
+socket test fixture. crates/ re-gated green (clippy -Dwarnings, chan-server 402
++ chan-shell 45 tests). @@LaneD owns dropping allowFollowup from client.ts
+SurveySpec + their 2 fixtures (overlay already ignores it; my Rust drop doesn't
+break their gate meanwhile). kind name "dismissed" confirmed. Did NOT push.
+
+--- survey Part C: --followup BOOLEAN gate removed too (per @@LaneA round-2) ---
+@@LaneA ratified going one further: remove the --followup BOOL flag (F is
+standard), KEEP --followup-dir/--from/--to as the optional F paper-trail
+context. @@LaneA confirmed Part B bootstrap does NOT reference --followup (uses
+"see cs terminal survey --help"), so zero conflict; and re-confirmed flag-1
+(bare-defer-no-file, do NOT auto-write user content). Done in cli.rs:
+- dropped `followup: bool` from the clap Survey args + SurveyArgs struct + the
+  dispatch destructure + cmd_shell_survey destructure.
+- followup context now gated on `followup_dir.is_some()` (presence of
+  --followup-dir attaches context; else followup:null bare defer).
+- updated --followup-dir/--from/--to help, the after-help intro + example 3
+  (dropped `--followup` from the example), and the resolve_followup error
+  messages (--followup -> --followup-dir).
+resolve_followup tests assert .is_err() only (not message text) -> unaffected.
+Re-gate GREEN: chan-shell clippy -Dwarnings + tests; full web-check
+(svelte-check 0, vitest 1670/1670, build) on the COMBINED tree (my Part A SPA +
+@@LaneD's allowFollowup removal). @@LaneD already did their half (allowFollowup
+gone from client.ts + fixtures, their gate green). HOLDING crates edits now so
+@@LaneC can build + joint-smoke the final survey. Did NOT push.
+
+================================================================================
+## round-2 R1: chan-desktop window title by workspace kind (desktop-refinements.md)
+
+Scope (serve.rs, 4 title sites; all flow into build_workspace_window's .title()):
+- LOCAL: workspace_title(key) (line 152), used by spawn_local_workspace_window
+  (219). Today returns the path verbatim. Split by home-vs-elsewhere:
+  dirs::home_dir() (already a dep; main.rs home_dir cmd uses it) -> if
+  Path::new(key).starts_with(home) => HOME icon, else COMPUTER icon; prefix +
+  " " + path. home_dir None -> COMPUTER. The workspace_title_is_the_path_verbatim
+  test (1203) updates to expect the icon prefix.
+- INBOUND (tunnel): spawn_tunneled_workspace_window title (249) is
+  "{tenant} \u{b7} {workspace}". Change to INBOUND icon + listen-addr.
+- OUTBOUND: spawn_outbound_workspace_window (258) takes a `title` param
+  (label-or-url, computed by main.rs outbound_title) used at 284. Change to
+  OUTBOUND icon + URL.
+
+PROPOSED GLYPHS (the one open choice; poking @@LaneA to confirm). Primary set
+(emoji; render cleanly in macOS title bars / window switcher, @@Alex's client):
+  - local-home : 1F3E0 house            (home on disk)
+  - local-other: 1F5A5 desktop computer (this machine, outside home)
+  - outbound   : 1F4E4 outbox tray      (we dial OUT to a remote URL)
+  - inbound    : 1F4E5 inbox tray       (a remote dials IN to our listener)
+Monochrome alt (if @@Alex wants a flatter title bar): home 2302, local-other
+  no clean glyph (keep emoji), outbound 2197 (up-right arrow), inbound 2199
+  (down-right arrow).
+
+TWO locator interpretations to confirm (task says glyphs are the open choice,
+so following the spec on these; flag if wrong):
+  1. OUTBOUND locator = the URL (per spec "{outbound-icon} {URL}"), NOT the
+     user's label. The label still shows in the launcher list. If @@Alex
+     prefers label-or-url in the title, say so.
+  2. INBOUND "listen-addr" = the per-tenant loopback host:port this window
+     connects to (extracted from the window `url`), which is unique per
+     tunneled workspace. NOT the shared tunnel ingress 127.0.0.1:7777 (same for
+     all, so useless as a per-window title). Confirm which you meant.
+
+HOLDING implementation until @@LaneA confirms the glyphs (per task). Then:
+add 4 consts, split workspace_title, reformat tunnel + outbound titles, update
+the title test, own-gate make -C desktop check + fmt/clippy. Do NOT push.
+
+--- R1 implemented (per @@LaneA confirm: emoji glyphs as named consts) ---
+serve.rs:
+- 4 named glyph consts: ICON_LOCAL_HOME 1F3E0, ICON_LOCAL_OTHER 1F5A5+FE0F
+  (VS16 forces emoji presentation - 1F5A5 is text-default otherwise),
+  ICON_OUTBOUND 1F4E4, ICON_INBOUND 1F4E5. Named so the monochrome-arrow swap
+  is 1 line each.
+- workspace_title -> local_title(key, home: Option<&Path>) split (pure +
+  testable, no real-home dependency): under $HOME => house, else => computer.
+- inbound (tunnel) title = ICON_INBOUND + listen_addr_from_url(url) (per-tenant
+  loopback host:port, new helper; falls back to raw url).
+- outbound: spawn_outbound_workspace_window dropped its now-redundant `title`
+  param; title = ICON_OUTBOUND + url (the URL locator, not the label).
+main.rs: add_outbound_workspace + open_outbound_workspace restructured to drop
+  the title arg; removed the now-dead outbound_title fn (outbound_label kept).
+Tests: replaced workspace_title_is_the_path_verbatim with
+  local_title_prefixes_home_vs_computer_glyph_then_path + added
+  listen_addr_from_url_extracts_host_port_authority.
+
+Own-gate GREEN: cargo fmt --check + clippy --all-targets -D warnings + test
+(82 + 7 passed) + make -C desktop check. serve.rs b78cd37e, main.rs 4cfa31f2.
+Empirical (WKWebView title bar) is @@Alex/@@LaneA's hand-smoke (agents can't
+drive WKWebView). Did NOT push.
+
+================================================================================
+## round-2: deterministic DMG layout (dmg-ci-layout.md) - last item pre-0.24.0
+
+Root cause: tauri-bundler's DMG step lays out the Finder window via AppleScript/
+Finder, which no-ops on a headless CI runner -> flat default DMG; local (GUI
+Finder) -> the good layout. Fix: stop depending on Finder.
+
+Tool: dmgbuild (Python) over appdmg (Node). dmgbuild writes .DS_Store purely
+programmatically (ds_store lib + hdiutil, no Finder), pure-Python wheels (no
+native compile). appdmg reuses CI's Node 20 but pulls fs-xattr (native node-gyp
+addon) = release fragility. python3 ships on macOS runners; pinned venv
+sidesteps PEP 668.
+
+Landed (packaging only, no Rust, no signing/secret touch):
+- desktop/packaging/dmg_settings.py (NEW): icon view, 600x400 chromeless,
+  icon_size 128, Chan.app (150,200), Applications (450,200), /Applications
+  symlink, no bg. Layout fully pinned here -> any dmgbuild 1.x identical.
+- desktop/packaging/build-dmg.sh (NEW): venv-pinned Finder-less builder.
+- desktop/Makefile: app-notarized -> --bundles app (was app,dmg) + build-dmg.sh
+  + notarize the produced DMG (same keychain/env notarytool flow). New
+  dmg-layout-proof target (unsigned, no certs). Vars DMGBUILD_SPEC/DMG_VENV/
+  BUNDLE_DIR. Clears stale bundle/dmg/*.dmg so release.yml's find+rename gets
+  exactly one.
+NOT changed: tauri.conf.json (dmgbuild owns layout; targets="all" stays for
+Linux; --bundles app stops tauri's Finder DMG); release-desktop.yml (step
+unchanged, python3 preinstalled; 1-line setup-python is the only fallback,
+flagged). release.yml is a drop-in (globs bundle/dmg + renames; updater payload
+is the .app).
+
+Verified LOCAL: make -C desktop check GREEN; Finder-less path proven end-to-end
+against a stub Chan.app -> hdiutil attach -> .DS_Store has exact programmatic
+positions Chan.app (150,200) / Applications (450,200) + Applications->/Applications
+symlink + icon-view settings. Headless determinism proof (same path local==CI).
+Remaining (not mine): full real-.app eyeball (make dmg-layout-proof) + @@Host CI
+dry-run (workflow_dispatch publish=false). Blobs: dmg_settings.py, build-dmg.sh,
+Makefile (in poke). Did NOT push.

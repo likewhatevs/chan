@@ -408,3 +408,277 @@ folder-mode drafts), B9 (graph bugs a/b/c). Wave 1 = B2; Wave 2 = B6, B9.
   Chrome himself (extension approved) - this closes my browser-smoke caveat.
   Holding for @@LaneA's hotfix commit. Fix sits as uncommitted WIP (graph.rs,
   sha 2d9b6004). No commit/push from me. Nothing running on my side. Idle-ready.
+
+## Round-2 reassignment: connecting-screen VERIFY lane
+
+- 2026-06-03 ~11:55: post-/clear re-bootstrap (poke from @@LaneA). New task =
+  docs/journals/phase-17/round-2/desktop-connecting-screen.md. For THIS task my
+  role from $CHAN_TAB_NAME (@@LaneC) is webtest/VERIFY, NOT a product-code lane.
+  I write NO product code; @@LaneB owns desktop/src-tauri (detection+retry
+  driver), @@LaneD owns the connecting page (spinner/timer/timestamped retry
+  rows). I empirically verify once it builds.
+- State on arrival: Contract section in the task file = TBD (=> @@LaneB has not
+  posted the window<->page contract yet); `git status` shows NO desktop/
+  changes and no connecting-page stub. So nothing is built to verify. Correctly
+  blocked; holding for the contract + a build.
+- Scoped the CURRENT (broken) flow so my harness is ready:
+  - Outgoing-URL windows = two paths: outbound
+    (main.rs open_outbound_workspace -> serve::spawn_outbound_workspace_window,
+    serve.rs:254) and tunneled (serve::spawn_tunneled_workspace_window,
+    serve.rs:225). Both funnel into build_workspace_window (serve.rs:328).
+  - The blank-white window IS serve.rs:355:
+    `WebviewWindowBuilder::new(.., WebviewUrl::External(parsed))`. When the
+    external URL is unreachable WKWebView renders blank white (no error page).
+    That is exactly @@Alex's bug. This is the line @@LaneB's detection/retry
+    driver has to front with the connecting surface.
+  - Outbound attachment shape (config.rs OutboundWorkspace): {id, url, label,
+    added_at} in config.outbound[]. On-disk config (macOS):
+    ~/Library/Application Support/Chan Desktop/config.json.
+- VERIFICATION PLAN (execute when it builds):
+  1. CONSTRAINT: agents cannot drive WKWebView via Chrome automation (Blink).
+     Two-pronged: (a) @@LaneD's connecting PAGE is plain HTML/JS -> verify the
+     VISUAL standalone in Chrome with stubbed inputs (spinner, "connecting to
+     {url}...", live elapsed timer, scrolling timestamped retry rows accruing).
+     (b) End-to-end (Tauri loads connecting page -> probes dead URL -> retries
+     -> navigates on success) needs a real desktop run; observe the WKWebView
+     window via macOS `screencapture` (legit empirical check).
+  2. DEAD-URL repro: seed an outbound attachment to http://127.0.0.1:59999
+     (nothing listening) in config.json (or add via launcher), open it. PASS =
+     connecting surface shows immediately (NOT blank white); timer counts up;
+     one timestamped row appended PER retry attempt; retries continue until I
+     close the window (no silent give-up).
+  3. SUCCESS path: point an attachment at a LIVE `chan serve` URL; PASS = window
+     navigates to the live workspace as normal.
+  4. ASCII-only / no em dashes in any committed text (repo writing rules).
+- NOT building chan-desktop now: @@LaneB is mid-edit in desktop/src-tauri;
+  a `cargo tauri build` now would build pre-change code + collide with their
+  cargo state. Build the INTEGRATED version once the contract + impl land.
+- Reporting readiness to @@LaneA; surfacing the WKWebView-observability note
+  (screencapture for the e2e is my plan; flag if a different proof is wanted).
+
+## Contract aligned (posted by @@LaneB; @@LaneA confirmed)
+
+- 2026-06-03 ~12:05: re-read the Contract section (was TBD on arrival, now
+  posted by @@LaneB). @@LaneA: screencapture for the desktop e2e APPROVED;
+  @@LaneA is NOT editing src-tauri (only @@LaneB, for THIS #4). Sole block now =
+  the integrated build. Hold for @@LaneB probe_url + @@LaneD page, then run.
+- Contract essentials that shape my verify:
+  - OUTBOUND ONLY. local/tunnel keep direct WebviewUrl::External. My test must
+    use an outbound attachment (config.outbound[]). Confirmed my harness fits.
+  - spawn_outbound_workspace_window now loads WebviewUrl::App("connecting.html")
+    + injects init script: window.__CHAN_CONNECTING__ = { url, target }.
+    url = clean remote URL (display + probe_url arg); target = full nav URL
+    (remote + ?w=<label> + #fragment) used on success.
+  - Loop is in the PAGE (connecting.js): render "connecting to {url}..." +
+    spinner + live elapsed timer (setInterval); loop invoke('probe_url',{url})
+    -> {reachable,status,detail}. reachable=true (ANY HTTP resp incl 401/404)
+    -> window.location.replace(target). reachable=false (transport fail only)
+    -> append ONE timestamped row (new Date(), attempt#, detail), wait ~2s,
+    retry. 5s server-side probe timeout. Never gives up; ends only on close.
+  - CSP: connecting.js MUST be external (<script src>); page canNOT fetch the
+    remote (that is why detection goes through probe_url IPC).
+- TWO-STAGE verify (staged so @@LaneD gets feedback without the full build):
+  - STAGE 1 (needs ONLY @@LaneD's connecting.html/.js; NO Rust build): copy the
+    page into a temp harness dir, prepend a stub that supplies
+    window.__CHAN_CONNECTING__ + window.__TAURI__.core.invoke (Blink-drivable),
+    open in Chrome. Stub probe_url to fail N times then succeed:
+        window.__CHAN_CONNECTING__ = { url: "http://127.0.0.1:59999",
+          target: "http://127.0.0.1:59999/?w=outbound-test" };
+        let n=0; window.__TAURI__ = { core: { invoke: async (cmd) => {
+          if (cmd==='probe_url'){ n++; return n<3
+            ? { reachable:false, status:null, detail:'connection refused' }
+            : { reachable:true, status:200, detail:'ok' }; } } } };
+    PASS = spinner + "connecting to http://127.0.0.1:59999..." render; elapsed
+    timer ticks; exactly one timestamped row per failed attempt (2 rows) then a
+    location.replace(target) navigation on the success probe. Verifies @@LaneD's
+    page visual + loop logic standalone (own temp dir; no product files touched;
+    relax the CSP meta in MY copy so the inline stub runs).
+  - STAGE 2 (needs @@LaneB probe_url + @@LaneD page + integrated desktop build):
+    real e2e. (a) DEAD URL: seed config.outbound[] with http://127.0.0.1:59999
+    (nothing listening), run the .app, open the attachment, `screencapture` the
+    window -> PASS = connecting surface (NOT blank white) + timer + timestamped
+    retry rows accruing + retries continue until I close. (b) SUCCESS: point an
+    attachment at a LIVE `chan serve` URL -> PASS = navigates to the workspace.
+- Holding. Will run STAGE 1 the moment @@LaneD pokes the page landed; STAGE 2
+  once @@LaneB's Rust + an integrated build land.
+
+## STAGE-1 verify DONE (page-in-Chrome, standalone) - PASS
+
+- 2026-06-03 ~12:10: ran @@LaneD's Stage-1 recipe. Served the REAL desktop/src
+  over loopback on a FREE port (8913; verified 8799 IS held by chan-lane PID
+  11342 = @@LaneD's collision warning is real). curl: connecting.html/.js/.css
+  all HTTP 200. Drove states by query param in Chrome (Blink); no Tauri, no
+  probe_url (simulated probe fallback). Teardown done (killed 8913, closed tab).
+- RESULTS (all acceptance items PASS):
+  1. Surface paints IMMEDIATELY, never blank white. [criterion 1]
+  2. Spinner (animated ring) + "Connecting to workspace" + the {url} line
+     (http://127.0.0.1:4000/). [criterion 2]
+  3. "Trying for MM:SS . attempt N" ticks live every 1s (watched 00:05 -> 00:14).
+     [criterion 2]
+  4. demo=fail: ONE timestamped wall-clock row per attempt, fails RED
+     ("attempt N: connection refused (demo)"), KEEP appending ~2-3s apart,
+     watched to attempt 10 with no give-up; log auto-scrolls newest into view.
+     [criterion 3 - the core never-give-up retry proof]
+  5. demo=ok: green check ring (spinner replaced), title -> "Connected", timer
+     stops, green row "attempt 1: connected (HTTP 200)", footer -> "Opening
+     workspace...". Standalone INTENTIONALLY skips the real
+     location.replace(target) (only fires under Tauri). [criterion 4 visual]
+  6. Dark + light themes both render correctly (set localStorage
+     chanDesktopTheme=dark -> reload; data-theme applied; dark bg/light text,
+     red rows still legible). Light is the default.
+  7. Console: NO errors/exceptions, no failed resource loads, no CSP violations
+     on a fresh load (favicon/css/js all clean).
+- DEFERRED to STAGE-2 (correctly; both need Tauri present, per @@LaneD's note):
+  - the REAL success navigation (location.replace(target)) - standalone skips it.
+  - the no-URL HARD-ERROR state ("Cannot connect", red static ring) - standalone
+    auto-defaults a demo url when invoke is absent, so this only triggers with
+    Tauri present + no url injected.
+- Stage-1 verdict: @@LaneD's connecting page is visually + behaviorally correct
+  standalone. Reporting findings to @@LaneD; Stage-2 (real unreachable-vs-
+  reachable desktop run + screencapture) waits on @@LaneB probe_url + redirection
+  + an integrated chan-desktop build.
+
+## STAGE-2 verify - agent-verifiable layers GREEN; live WKWebView = @@Alex hand-smoke
+
+- 2026-06-03 ~12:20: @@LaneA pushed GO on Stage-2 twice (thought my block was
+  staleness). It was NOT staleness - I had already confirmed @@LaneB's code is
+  in-tree + built it. The REAL block: opening the outbound window needs a click
+  on the launcher's "Open" button, which lives in a WKWebView. Established:
+  - AXIsProcessTrusted = FALSE (swift /tmp/axcheck.swift) -> the agent process
+    has no macOS Accessibility permission -> synthetic CGEvent mouse/key events
+    to other apps are silently dropped. Can't click or keyboard-drive.
+  - WKWebView is not Chrome-drivable (Blink-only automation; longstanding norm).
+  - No outbound deep-link (on_open_url only handles chan://auth/callback), no
+    CLI open command, no auto-open-on-startup. The launcher button is the ONLY
+    outbound trigger. So an agent cannot spawn the outbound window. This matches
+    the round-1 team norm: WKWebView smokes = @@Alex by hand.
+- So I verified EVERY layer up to the WKWebView (non-intrusive, no GUI launch):
+  - Integrated build: cargo build --manifest-path desktop/src-tauri/Cargo.toml
+    -> exit 0; target/debug/chan-desktop present (154MB, 12:18).
+  - Full desktop test suite: 81 + 7 passed, 0 failed. Two pins confirmed BY
+    NAME: outbound_windows_load_the_connecting_page_not_the_remote (ok),
+    invoke_handler_registers_probe_url (ok).
+  - probe_url premise via real servers (probe_url = reqwest GET, 5s timeout,
+    probe_error_detail is_connect->"could not connect"): started a live chan
+    serve (renamed-binary copy /tmp/chan-conn-live-srv on :8921, scoped, torn
+    down). curl live -> HTTP 200 (reachable:true -> navigate); curl dead 59999
+    -> refused/exit 7 (reachable:false -> retry). Both page-loop branches OK.
+  - Stage-1 page (Chrome) already green.
+- Did NOT launch chan-desktop on @@Alex's live screen: AX=false means I'd be
+  blocked at the launcher anyway, and a GUI pop + (no-op) synthetic clicks on
+  his active multi-agent session is intrusive for zero added proof.
+- DELIVERED: docs/journals/phase-17/round-2/connecting-screen-handsmoke.md - a
+  turnkey 60s @@Alex smoke (dead-URL -> connecting screen; live-URL -> navigate;
+  exact expected visuals + cleanup). Updated the task file Status ([~] LaneC
+  with findings). Reporting the honest result + the residual to @@LaneA.
+- HONEST framing: I have NOT visually seen the connecting screen in the real
+  WKWebView. I confirmed it MUST render it (wiring test + build) and that the
+  probe resolves both branches correctly, and that the page renders correctly
+  (Stage-1). The final pixel confirmation is @@Alex's 60s smoke.
+
+## STAND DOWN (connecting-screen verify closed)
+
+- 2026-06-03 ~12:25: @@LaneA accepted the Stage-2 verification as a complete
+  sign-off for our side - the live WKWebView visual is the correct
+  "automatable ceiling" (Accessibility trust absent; WKWebView not
+  Chrome-drivable), recorded as pending @@Alex 60s hand-smoke per the
+  pre-release norm. @@LaneA is running the full-tree gate + committing #4 now.
+- My deliverables, all in place + clean:
+  - Stage-1 page verified green (Chrome).
+  - Stage-2 agent-verifiable layers green (build exit0, desktop tests 81+7,
+    @@LaneB pins by name, probe live/dead branches).
+  - connecting-screen-handsmoke.md (turnkey @@Alex smoke).
+  - task file Status [~] + Stage-2 findings; this journal.
+- No product code touched (verify lane). No push (=@@LaneA). All test servers
+  (8913/8921) + temp files + Chrome tab torn down. Standing down.
+
+## Graph stale-language-edge: root-caused + clean fix landed (own-gate green)
+
+- 2026-06-03 ~12:30: task = docs/journals/phase-17/round-2/graph-stale-language-
+  edge.md. @@LaneA pre-cleared it as a report/index incremental-refresh
+  staleness gap (fresh serve of a copy HAS the edge), NOT a merge_language_layer
+  logic bug. @@Alex later confirmed it self-heals -> transient. Asked: quick
+  repro + land a CLEAN small fix or defer.
+- CAUGHT a confabulated subagent root cause: an Explore agent claimed the
+  atomic-write temp file is dot-prefixed (`.tmpXXXX`) -> filtered -> event
+  dropped. VERIFIED FALSE in source: cap_tempfile names temps
+  `cap-primitives.<rand>` (NOT dot-prefixed), so the hidden-file filter does
+  not drop it. Did NOT report that root cause; reproduced empirically instead.
+- EMPIRICAL REPRO (fresh binary, live server on :8931, curl /api/graph +
+  /api/report/file): create/modify (editor PUT + external) all refresh the
+  language edge fine. The BUG is the RENAME path: external `mv` of a tracked
+  .md -> destination has a NODE (file-browser) but NO language edge; /api/
+  report/file for the dest = 404 (report never indexed it). A later plain
+  Modify heals it (idx.update runs) -> matches @@Alex's "self-resolves".
+- ROOT CAUSE (source-anchored): macOS FSEvents delivers a rename as UNPAIRED
+  Name events (one path each). watch.rs:225-227 sets to=paths.next() (None when
+  one path). report.rs on_event WatchKind::Renamed required (Some(from),
+  Some(to)) and RETURNED early on to=None -> idx.update/rename never ran for the
+  rename destination -> no report row -> graph language layer emits no edge ->
+  floating node. (Fresh serve works because ReportState::open scans from
+  scratch.) The file NODE persists because it comes from the file-browser
+  namespace, a different source than the report.
+- FIX (report.rs on_event Renamed arm, ~14 lines): match (&ev.path, &ev.to):
+  paired -> idx.rename(from,to) (unchanged); (Some(p), None) -> idx.update(p)
+  (stats p: indexes the destination if present, drops the row if the source
+  vanished); (None,_) -> return. Report-scoped, low-risk; also cleans up the
+  stale source orphan as a bonus. Paired-rename platforms unaffected.
+- PROVEN: rebuilt chan, clean fresh-dir re-repro -> rename now keeps lang_edge
+  True with NO later edit (was False on the old binary). report/file = 200.
+- REGRESSION TEST: report::tests::unpaired_rename_indexes_destination_and_drops_
+  source (new mod tests in report.rs) -> ok. Guards both the dest-index + the
+  source-drop.
+- OWN-GATE GREEN (chan-workspace): cargo fmt --check 0; clippy --all-targets
+  -D warnings 0; cargo test -p chan-workspace ALL pass (incl existing
+  watcher_keeps_report_current + the new test). Only crates/chan-workspace/src/
+  report.rs touched; blob sha 85d33526.
+- CAVEAT for @@LaneA's commit: the shared tree also has 6 OTHER-LANE WIP files
+  (chan-server survey/team_config/terminal/control_socket + chan-shell/wire) -
+  NOT mine. Commit my fix with a PATHSPEC: git commit -F msg --
+  crates/chan-workspace/src/report.rs (avoid contaminating). Did NOT push.
+- Test server + temp dirs torn down (8931 clean). Reporting to @@LaneA.
+
+## NEXT: joint survey smoke (Part A + Part C) - prepped, holding for @@LaneB poke
+
+- 2026-06-03 ~12:40: @@LaneA assigned me the JOINT survey smoke (deferred by
+  @@LaneB/@@LaneD - sandbox cs cross-process UDS limit; the SPA IS Chrome-
+  drivable so this is my lane). Context: docs/journals/phase-17/round-2/
+  survey-system.md. Part A (window_id) + Part C (dismiss/F) crates + web are
+  DONE + own-gate green; only the live joint smoke remains.
+- GATE: @@LaneB is landing the allow_followup web-side drop (@@LaneD's half:
+  remove allowFollowup from client.ts SurveySpec + 2 fixtures). Build AFTER
+  their poke (web change -> npm run build BEFORE cargo build for rust-embed).
+- SMOKE PLAN (when @@LaneB pokes):
+  1. Build: npm run build (web/) -> cargo build -p chan (renamed binary copy,
+     scoped port; per persistent-test-server norm).
+  2. Serve a fresh workspace; open the SPA in Chrome with the token.
+  3. Spawn a team via the TEAM WORK DIALOG (Cmd+P / dialog, NOT `cs terminal
+     team` - Part A bug is specifically the POST /api/terminal dialog path that
+     hardcoded window_id=None). Members e.g. @@LaneB etc.
+  4. Find the server's control socket; run (backgrounded, it BLOCKS for a reply)
+     CHAN_CONTROL_SOCKET=<sock> cs terminal survey --tab-name=@@<member>
+       --title T --option A --option B "body".
+  5. PART A PASS: the survey overlay APPEARS in that SPA window (was "no live
+     terminal session matched"). Confirm via Chrome (BubbleOverlay).
+  6. PART C: overlay shows options + F + Dismiss; Dismiss (Escape/click) ->
+     the blocked cs survey stdout prints "survey dismissed" (distinct reply,
+     not an option). Confirm both the UI + the CLI stdout.
+  7. Report to @@LaneA (runs full-tree gate + commit + cut after). Do NOT push.
+- cs survey mechanics confirmed (cli.rs:440): --tab-name selector, blocks until
+  answered, prints option label or the dismissed/defer line. drive cs via
+  CHAN_CONTROL_SOCKET pointed at the server's socket.
+- Prepped + holding for @@LaneB's poke.
+
+## STAND DOWN (free) - survey smoke reassigned to @@LaneA release validation
+
+- 2026-06-03 ~12:45: @@LaneA stood me down on the survey joint smoke - @@LaneD
+  already wire-smoked the route (3 reply kinds + 422 control) and the live team-
+  terminal-reach is sandbox-restricted (cs UDS), so @@LaneA runs that on a real
+  loop at release validation. Did NOT build/serve for it.
+- My round-2 deliverables, all clean + in place for @@LaneA's commits:
+  - connecting-screen verify: Stage-1 green + Stage-2 layers green + @@Alex
+    hand-smoke recipe (connecting-screen-handsmoke.md).
+  - graph stale-language-edge: root-caused (macOS unpaired-rename to=None) +
+    fixed (report.rs only, sha 85d33526) + regression test + own-gate green.
+    @@LaneA commits with a PATHSPEC (6 other-lane WIP files in the tree).
+- No servers running, no /tmp stragglers of mine, no push. Free.

@@ -202,3 +202,151 @@ Append-only. Owner: @@LaneD (worker - platform: server/CLI/workspace + docs).
 - Gate: cargo check -p chan-server green; fmt+clippy clean; chan-server 400.
   control_socket.rs cumulative sha = fd11557ba32459b5.
 - Poked @@LaneA so @@LaneB reads the real tabName. My last round-2 item.
+
+### R2-#4 desktop connecting screen (round-2/desktop-connecting-screen.md) - DONE my slice
+- Role = connecting-screen PAGE/UI (@@LaneD); @@LaneB owns src-tauri detection +
+  redirection, @@LaneC verifies. Re-bootstrapped post-/clear from $CHAN_TAB_NAME.
+- Recon: outbound windows load WebviewUrl::External(remote) via serve.rs
+  build_workspace_window; unreachable remote -> WKWebView paints blank white
+  (the nil-URL panic guard at serve.rs ~443 documents the exact case). frontendDist
+  =../src, withGlobalTauri:true (window.__TAURI__ global like main.js), strict CSP
+  (script-src 'self' -> external JS only; default-src 'self' -> page CANNOT fetch
+  the remote, so detection MUST be a Rust IPC).
+- Built 3 NEW files under desktop/src/ (no overlap with launcher index/main/styles):
+  connecting.html, connecting.css, connecting.js. connecting.html <link>s styles.css
+  (read-only reuse of theme tokens + base) + connecting.css (spinner, log rows,
+  layout). Page: animated ring spinner, "Connecting to {workspace}" + the URL line,
+  live elapsed timer (MM:SS / H:MM:SS) + attempt counter, a scrolling log with ONE
+  wall-clock-timestamped row per attempt (info/pending/fail/ok colors), footer
+  "keeps retrying until you close it". Success -> green check + "Opening
+  workspace..." then navigate. Hard-error (no URL) -> red static ring, no misleading
+  spinner. Mirrors the launcher theme via shared-origin localStorage.chanDesktopTheme.
+  prefers-reduced-motion drops the spin.
+- FIRST built to a self-proposed query-param contract; @@LaneB then posted the real
+  contract. REBUILT connecting.js to it exactly:
+  * inputs via injected `window.__CHAN_CONNECTING__ = { url, target }` (init script,
+    pre-script) NOT query string; url = display+probe, target = navigate (carries
+    ?w=<label>+#fragment). Page treats target as opaque, replaces verbatim on
+    success (all w=/token/zoom construction stays Rust-side).
+  * detection = `invoke('probe_url', { url }) -> { reachable, status, detail }`;
+    reachable=true for ANY HTTP response (even 401/404), false only on transport
+    failure (the blank-white case to retry past). Rejected IPC = failed attempt.
+  * page owns the loop (2s cadence, no overlapping probes), timer, rows, success
+    nav; probe_url stays stateless. No events (avoids the late-listener race
+    @@LaneB flagged).
+  Kept a query-param + simulated-probe fallback so the page renders standalone with
+  no Tauri (?demo=ok/fail) for dev smoke.
+- Smoke (Chrome, served desktop/src over a loopback http server on a PRIVATE port
+  after a collision with another lane's chan-lane on :8799; moved to :8913, bound
+  127.0.0.1, torn down after): verified fail-path (7 timestamped rows accruing +
+  live timer + "keeps retrying"), success-path (green check + connected (HTTP 200)
+  + Opening workspace), no-URL hard error, dark + light theme token inheritance.
+  JS-eval confirmed the new {reachable,status,detail} shape surfaces `detail` in the
+  fail row. node --check connecting.js clean. Tore down server (:8913 free) + tab.
+- Gate: pure static frontend assets; `make -C desktop check` is Rust-only and
+  unaffected (no Rust touched by me). My files: desktop/src/connecting.{html,css,js}.
+- BLOCKED-on for live end-to-end: @@LaneB's probe_url + outbound redirection +
+  allow-probe-url permission. My page is contract-complete; checked the LaneD
+  Status box in the task file. Reporting to @@LaneA.
+- @@LaneA coordination: poked @@LaneC to run STAGE-1 (page-in-Chrome, stubbed
+  inputs) ahead of the integrated build; wrote the recipe into the task file.
+- STAGE-1 RESULT (@@LaneC, 2026-06-03): PASS, ZERO visual defects -> no page
+  changes needed. Confirmed: immediate paint (never blank white), spinner +
+  "Connecting to workspace" + {url}, live MM:SS timer (1s tick), one red
+  wall-clock-timestamped row per attempt accruing to attempt 10 with no
+  give-up + auto-scroll, demo=ok green check + "connected (HTTP 200)" +
+  "Opening workspace...", dark+light both clean, ZERO console/CSP errors.
+  @@LaneC independently confirmed the :8799 chan-lane collision (used :8913).
+  Correctly deferred to stage-2 (need Tauri): the real location.replace(target)
+  + the no-url hard-error state. Page is visually + behaviorally signed off
+  standalone; only stage-2 (LaneB integrated build) remains.
+
+### Survey Part C (round-2/survey-system.md) - pairing with @@LaneB - web slice DONE
+- @@LaneA freed me from #4 to pair on Part C: every cs terminal survey overlay
+  must show options PLUS an [F] follow-up AND a Dismiss; dismiss returns a
+  distinct "dismissed" reply so the asking agent can tell. @@LaneB owns Part A
+  (window_id) + the survey route/spec; I take the overlay.
+- Recon: overlay = BubbleOverlay.svelte; state = survey.svelte.ts; reply type =
+  client.ts SurveyReplyRequest (option|followup); Rust SurveyReply enum in
+  chan-shell/wire.rs (Option|Followup), route in chan-server/routes/survey.rs.
+  Today [F] is gated on allowFollowup+context; there is NO dismiss (overlay was
+  intentionally non-dismissable b/c CLI blocks on the reply).
+- COORDINATION: proposed a clean non-overlapping split - web/ = me (BubbleOverlay
+  + survey.svelte.ts + SurveyReplyRequest type + the 2 tests), crates/ = @@LaneB
+  (SurveyReply::Dismissed + route + cli + always-populate-followup-context),
+  single shared contract = the reply JSON. Wrote it into the task file "Part C
+  contract + ownership" + poked @@LaneB to confirm/counter. Built immediately
+  (web side compiles+tests independently of the Rust; safe under either LaneB
+  decision).
+- Built (web slice): client.ts SurveyReplyRequest += {kind:"dismissed"} + followup
+  context nullable; survey.svelte.ts ungated requestFollowup (sends followup ??
+  null) + new dismissSurvey (posts {kind:"dismissed"}, clears slot, busy-guard);
+  BubbleOverlay always renders F + Dismiss in a .survey-actions row, keys
+  1..N/f/Escape (Escape = real dismiss reply now, stopPropagation so it does not
+  bubble to other overlays). Left SurveySpec.allowFollowup alone (LaneB's field;
+  UI just stops reading it) - flagged the lockstep when LaneB drops it.
+- Tests: survey.svelte.test.ts (followup-without-context posts null; dismiss
+  posts+clears only that slot; failed-dismiss keeps survey+clears busy);
+  BubbleOverlay.test.ts (F + Dismiss render on the bare default spec). Replaced
+  the 2 old allowFollowup-gated [F] tests.
+- Gate (own): svelte-check 0 err (1 pre-existing RichPrompt warning, not mine);
+  full vitest 1670/1670 incl the real-Svelte jsdom overlay mount; vite build
+  clean. Web side green independent of crates/.
+- DEFERRED: the live integration smoke (raise a real survey -> click/Escape
+  Dismiss -> agent gets "dismissed") needs @@LaneB's route to handle
+  kind:"dismissed"; that is the natural joint step once crates/ lands. The
+  reactivity is covered by the runtime jsdom mount (no $state-in-$derived added;
+  dismiss mutates state only in event handlers, like the existing pickOption).
+- Files: web/src/api/client.ts, web/src/state/survey.svelte.ts,
+  web/src/components/BubbleOverlay.svelte + the 2 test files. Reported to
+  @@LaneA + @@LaneB.
+- INTEGRATION (both slices in the shared tree): @@LaneB landed crates/ green;
+  reply JSON matches my contract exactly (verified by reading routes/survey.rs
+  SurveyReplyRequest: option/followup(nullable)/dismissed, camelCase). @@LaneB
+  counter: F-without-context = FALLBACK (route accepts followup:null = bare
+  defer, no file; CLI opts into a file via --followup-dir), NOT always-populate.
+  My SPA already sends followup ?? null, so NO web change needed - aligned.
+- Smoked the integration (sandbox-allowed level): cargo build -p chan GREEN
+  (web bundle + LaneB crates link). WIRE smoke (renamed binary, private port
+  4717, bearer POST /api/survey/reply, torn down clean): all 3 reply kinds
+  deserialize -> 404 "no survey parked" (parsed past the shape into the bus
+  lookup); control {kind:"bogus"} -> 422 "unknown variant, expected one of
+  option/followup/dismissed" = the route accepts EXACTLY my 3 kinds. followup:
+  null path confirmed (LaneB's bare-defer). Build+wire empirically green.
+- DEFERRED: live human-loop visual (cs-raised survey -> overlay -> Dismiss ->
+  agent CLI prints "survey dismissed") + Part A live (overlay reaches team-
+  dialog terminal). cs cross-process UDS blocked in this sandbox (B5 finding) ->
+  real machine / webtest lane. Documented in task file "Part C integration
+  smoke". Part C is implementation-complete + integration-verified short of the
+  human loop.
+- allow_followup DROP (@@LaneA-ratified, @@LaneB did the Rust side): my
+  synchronized half done - removed allowFollowup from client.ts SurveySpec + the
+  2 test fixtures + 3 stale comments (grepped both casings, zero left in
+  web/src). Re-gated GREEN: svelte-check 0 err, vitest 1670/1670, build clean;
+  web/dist refreshed. Lockstep complete; field is gone end to end (Rust + TS).
+
+### R2 pre-flight bubble checkmark toggle (round-2/desktop-refinements.md) - DONE
+- Task: the workspace-ready onboard bubble showed "Semantic search OFF [Turn on]"
+  / "Reports ON [Turn off]" (confusing label+button pair); replace BOTH with ONE
+  checkmark toggle per row, keyboard-accessible, same enable/disable calls.
+- Found it: PreflightOverlay.svelte onboard-card ("<workspace> is ready"), two
+  layer rows (Semantic, Reports). Semantic had a 3-state button (Turn off /
+  Download & enable / Turn on) because enabling needs the BGE model.
+- Built: each row is now `<button role="checkbox" aria-checked aria-label>`
+  (whole row = click+keyboard target; Space/Enter native; SR announces). Check
+  SVG fills the box only when on; busy = spinner (reduced-motion guarded).
+  Removed dead .onboard-state/.onboard-toggle/.onboard-layer-top markup+CSS.
+  New `toggleSemantic` dispatcher routes to the SAME 3 calls (on->disable;
+  off+needsModel->downloadAndEnable; off->enable) so download consent is
+  preserved (no auto-download on a stray click); model-missing shows a small
+  "downloads ~63 MB" aside. Reports -> toggleReports unchanged.
+- Gate: make web-check exit 0 (svelte-check 0 err, vitest 1670/1670, build
+  clean; no new a11y/unused-css warnings).
+- BROWSER-SMOKED (fresh served workspace, private port 4731, renamed binary,
+  torn down): onboard card renders the 2 checkmark rows; Reports round-trips
+  off->on (aria-checked + check SVG track the API result, confirming runtime
+  reactivity); Semantic enable verified (model present); JS-confirmed both are
+  BUTTON role=checkbox + aria-checked + aria-label (keyboard-native). Server +
+  tab torn down clean.
+- Files: web/src/components/PreflightOverlay.svelte (single file). Reported to
+  @@LaneA.
