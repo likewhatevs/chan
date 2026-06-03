@@ -257,12 +257,16 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
     expect(terminalSource).not.toMatch(/AGENT_SUBMIT_CHORD/);
   });
 
-  test("the survey overlay is no longer mounted per terminal tab", () => {
-    // The rebuilt survey overlay (BubbleOverlay) is a window-level modal
-    // mounted once at App root and driven by the singleton surveyState, so
-    // a window-targeted `cs terminal survey` shows exactly once instead of
-    // once per visible terminal tab.
-    expect(terminalSource).not.toMatch(/BubbleOverlay/);
+  test("mounts a PER-TERMINAL survey overlay (R2-3), keyed by tab.id", () => {
+    // R2-3 (@@Alex): surveys are per-terminal, not window-wide. Each visible
+    // terminal mounts its own <BubbleOverlay tabId={tab.id} />, anchored over
+    // it; the App-root mount (tabId null) is the window-wide fallback.
+    expect(terminalSource).toMatch(
+      /import BubbleOverlay from "\.\/BubbleOverlay\.svelte"/,
+    );
+    expect(terminalSource).toMatch(
+      /\{#if active\}[\s\S]{1,80}<BubbleOverlay tabId=\{tab\.id\} \/>/,
+    );
   });
 
   test("the deleted watcher + team-work-workspace plumbing is gone", () => {

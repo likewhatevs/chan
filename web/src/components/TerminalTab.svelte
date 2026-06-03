@@ -97,6 +97,7 @@
   import McpEnvInfoModal from "./McpEnvInfoModal.svelte";
   import { markPaneModalOpen } from "../state/paneModalGuard.svelte";
   import RichPrompt from "./RichPrompt.svelte";
+  import BubbleOverlay from "./BubbleOverlay.svelte";
   import {
     isRichPromptVisible,
     toggleRichPromptForTab,
@@ -1701,6 +1702,15 @@
        one). Toggled by Cmd+Shift+P / the right-click menu. -->
   {#if active && isRichPromptVisible(tab.id)}
     <RichPrompt {tab} />
+  {/if}
+  <!-- Per-terminal survey overlay (R2-3): a survey raised on THIS terminal
+       (`cs terminal survey --tab-name`) renders anchored over it, keyed by
+       tab.id, independent of other terminals. Self-gates on an active survey
+       for this tab; only over the visible (active) tab so a background survey
+       waits until its tab is shown. The window-wide fallback lives at the App
+       root (App.svelte <BubbleOverlay />). -->
+  {#if active}
+    <BubbleOverlay tabId={tab.id} />
   {/if}
 </div>
 

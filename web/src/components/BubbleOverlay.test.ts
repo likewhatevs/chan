@@ -7,10 +7,11 @@ import BubbleOverlay from "./BubbleOverlay.svelte";
 import { surveyState } from "../state/survey.svelte";
 import type { SurveySpec } from "../api/client";
 
-// The rebuilt survey overlay renders the singleton `surveyState.active`: a
-// markdown body, numbered options, and an optional [F]. It renders nothing
-// when no survey is active. These are render assertions only (no clicks, so
-// no /api/survey/reply network).
+// The survey overlay renders ONE slot's survey (R2-3 per-terminal): a markdown
+// body, numbered options, and an optional [F]. `tabId` null = window-wide
+// fallback (centered modal); a tab id = per-terminal (anchored, `.per-terminal`
+// class). Renders nothing when that slot has no survey. Render assertions only
+// (no clicks, so no /api/survey/reply network).
 
 const mounted: Array<Record<string, any>> = [];
 
@@ -29,56 +30,79 @@ function spec(over: Partial<SurveySpec> = {}): SurveySpec {
 afterEach(() => {
   for (const component of mounted.splice(0)) unmount(component);
   document.body.innerHTML = "";
-  surveyState.active = null;
-  surveyState.busy = false;
+  surveyState.byTab = {};
+  surveyState.windowWide = null;
 });
 
 describe("survey overlay", () => {
-  test("renders nothing when no survey is active", async () => {
+  test("renders nothing when the slot has no survey", async () => {
     const target = document.createElement("div");
     document.body.append(target);
-    mounted.push(mount(BubbleOverlay, { target, props: {} }));
+    mounted.push(mount(BubbleOverlay, { target, props: { tabId: null } }));
     await tick();
     expect(target.querySelector(".survey-overlay")).toBeNull();
   });
 
-  test("renders the body + numbered options for an active survey", async () => {
-    surveyState.active = spec({ title: "Search backend" });
+  test("renders the body + numbered options for a window-wide survey", async () => {
+    surveyState.windowWide = { spec: spec({ title: "Search backend" }), busy: false };
     const target = document.createElement("div");
     document.body.append(target);
-    mounted.push(mount(BubbleOverlay, { target, props: {} }));
+    mounted.push(mount(BubbleOverlay, { target, props: { tabId: null } }));
     await tick();
 
-    expect(target.querySelector(".survey-overlay")).not.toBeNull();
+    const overlay = target.querySelector(".survey-overlay");
+    expect(overlay).not.toBeNull();
+    // Window-wide = centered modal, NOT the per-terminal anchored variant.
+    expect(overlay?.classList.contains("per-terminal")).toBe(false);
     expect(target.querySelector(".survey-title")?.textContent).toBe("Search backend");
-    // Markdown body rendered (sanitized) into the body container.
     expect(target.querySelector(".survey-body")?.textContent).toContain("Pick a backend");
     const options = target.querySelectorAll(".survey-option");
     expect(options.length).toBe(2);
-    // Options are numbered [1]..[N].
     expect(options[0].querySelector(".survey-option-key")?.textContent).toBe("1");
     expect(options[1].querySelector(".survey-option-key")?.textContent).toBe("2");
     expect(options[1].querySelector(".survey-option-label")?.textContent).toBe("Semantic");
   });
 
-  test("[F] affordance shows only with allowFollowup + a followup context", async () => {
-    // allowFollowup true but no context => no [F] (cannot create a file).
-    surveyState.active = spec({ allowFollowup: true, followup: null });
+  test("a per-terminal survey renders anchored (.per-terminal) for its tab only", async () => {
+    surveyState.byTab = { t1: { spec: spec({ title: "On t1" }), busy: false } };
     const target = document.createElement("div");
     document.body.append(target);
-    mounted.push(mount(BubbleOverlay, { target, props: {} }));
+    // The overlay for t1 shows its survey, anchored.
+    mounted.push(mount(BubbleOverlay, { target, props: { tabId: "t1" } }));
+    // A second overlay for t2 (no survey) renders nothing.
+    const other = document.createElement("div");
+    document.body.append(other);
+    mounted.push(mount(BubbleOverlay, { target: other, props: { tabId: "t2" } }));
+    await tick();
+
+    const t1 = target.querySelector(".survey-overlay");
+    expect(t1).not.toBeNull();
+    expect(t1?.classList.contains("per-terminal")).toBe(true);
+    expect(target.querySelector(".survey-title")?.textContent).toBe("On t1");
+    // t2 has no survey -> nothing.
+    expect(other.querySelector(".survey-overlay")).toBeNull();
+  });
+
+  test("[F] affordance shows only with allowFollowup + a followup context", async () => {
+    surveyState.windowWide = { spec: spec({ allowFollowup: true, followup: null }), busy: false };
+    const target = document.createElement("div");
+    document.body.append(target);
+    mounted.push(mount(BubbleOverlay, { target, props: { tabId: null } }));
     await tick();
     expect(target.querySelector(".survey-followup")).toBeNull();
   });
 
   test("[F] affordance renders with allowFollowup + context", async () => {
-    surveyState.active = spec({
-      allowFollowup: true,
-      followup: { dir: "new-team-1", from: "@@LaneC", to: "@@Host" },
-    });
+    surveyState.windowWide = {
+      spec: spec({
+        allowFollowup: true,
+        followup: { dir: "new-team-1", from: "@@LaneC", to: "@@Host" },
+      }),
+      busy: false,
+    };
     const target = document.createElement("div");
     document.body.append(target);
-    mounted.push(mount(BubbleOverlay, { target, props: {} }));
+    mounted.push(mount(BubbleOverlay, { target, props: { tabId: null } }));
     await tick();
     expect(target.querySelector(".survey-followup")).not.toBeNull();
   });

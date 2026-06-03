@@ -125,3 +125,39 @@ add is cheap now vs a retrofit):
 Ownership unchanged: D owns the wire type + command; C owns the SPA + reply
 route + followup generator. C's TS mirrors this doc, not D's Rust. Everything
 except the [F] end-to-end stays parallel and unblocked.
+
+## AMENDMENT 2026-06-03 (@@Architect): open_survey frame carries the target tab
+
+Phase-17 R2-3 (@@Alex: "survey must be per terminal, not window-wide; each
+terminal could have their own survey and they should not impact each other").
+Today the `open_survey` WindowCommand carries the survey but NO target tab, so
+the SPA can only render one window-wide modal. To make surveys per-terminal the
+frame must carry which terminal it was raised on. Purely ADDITIVE: SurveySpec,
+the reply path, survey_id, and the bus are all UNCHANGED, so the existing
+reply/followup contract is not disturbed.
+
+RATIFIED SHAPE (one optional field on the frame):
+  - Rust (control_socket.rs WindowCommand::OpenSurvey): add
+    `tab_name: Option<String>`, serialized to the SPA as `tabName` (camelCase;
+    pin the wire string with serde(rename) so a green compile can't hide a
+    mismatch).
+  - SPA frame: `{ command: "open_survey", survey, tabName?: string | null }`.
+  - Semantics: `tabName = Some(X)` when the survey targets a specific terminal
+    (`--tab-name=X`); the SPA attaches the survey to terminal X only. `None` for
+    a `--tab-group` broadcast (or no specific tab) -> the SPA keeps the current
+    window-wide fallback. `--tab-name` is the primary case (it is how the lead
+    surveys @@Alex), so per-terminal lands there; group-broadcast stays
+    window-wide.
+
+PHASE-17 OWNERSHIP (the SPA survey overlay moved to @@LaneB this phase, who owns
+BubbleOverlay.svelte; the reply route + bus are untouched so their owners are
+not involved):
+  - @@LaneD (transport, ~2 lines): control_socket.rs TermSurvey handler already
+    knows the selector (~372); put `tab_name` into the OpenSurvey push (~91).
+  - @@LaneB (SPA, atomic once the frame lands): survey.svelte.ts state keyed by
+    tab id (`byTab`, the B1 rich-prompt pattern) instead of a singleton;
+    store.svelte.ts open_survey handler (~1013) routes the tab to showSurvey;
+    BubbleOverlay.svelte + TerminalTab render each terminal's own survey
+    anchored over that terminal; api/client.ts mirrors the frame field.
+    AUTHORIZED to edit the store.svelte.ts open_survey-handler region + the
+    unowned survey.svelte.ts + the api/client.ts survey frame for this.

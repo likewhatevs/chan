@@ -1,58 +1,82 @@
-<!-- Survey overlay for `cs terminal survey` (round-3 @@LaneC rebuild).
+<!-- Survey overlay for `cs terminal survey`.
 
-     Renders the active survey raised on this window: a markdown problem
+     Renders ONE survey slot (R2-3 @@LaneB per-terminal): a markdown problem
      body, up to 4 vertically aligned numbered options, and an optional [F]
-     follow-up. Picking an option (click or 1..N) or [F] (click or F) POSTs
-     the reply, which unblocks the waiting CLI. The overlay is modal and has
-     NO dismiss chrome: the CLI is blocked on the reply, so [F] (defer) is the
-     only non-answer exit. Mounted once at the App root (window-level), driven
-     by the singleton `surveyState`. -->
+     follow-up. Picking an option (click or 1..N) or [F] (click or F) POSTs the
+     reply, which unblocks the waiting CLI. The overlay is modal over its slot
+     and has NO dismiss chrome: the CLI is blocked on the reply, so [F] (defer)
+     is the only non-answer exit.
+
+     `tabId` selects the slot: a terminal tab id => render PER-TERMINAL, anchored
+     over THAT terminal only (mounted inside its TerminalTab), so two terminals
+     show independent surveys and the rest of the window stays usable. `null` =>
+     the window-wide fallback (a centered modal over the whole window), mounted
+     once at the App root for surveys with no resolvable target. -->
 <script lang="ts">
   import { renderMarkdown } from "../api/markdown";
   import {
-    surveyState,
+    surveyFor,
+    surveyBusy,
     pickOption,
     requestFollowup,
+    type SurveySlot,
   } from "../state/survey.svelte";
 
-  const active = $derived(surveyState.active);
+  let { tabId = null }: { tabId?: SurveySlot } = $props();
 
-  // Steal focus to the card when a survey appears so option/F keys land here
-  // and not in the terminal/editor underneath. Keyed on surveyId so a
+  const slot = $derived(tabId);
+  const active = $derived(surveyFor(slot));
+  const busy = $derived(surveyBusy(slot));
+
+  // Steal focus to the card when this slot's survey appears so option/F keys
+  // land here and not in the terminal/editor underneath. Keyed on surveyId so a
   // replacing survey re-focuses.
   let card = $state<HTMLDivElement | null>(null);
   $effect(() => {
-    const id = surveyState.active?.surveyId;
+    const id = active?.surveyId;
     if (id && card) card.focus();
   });
 
-  // Number keys 1..N pick an option; F follows up. Routed at the window so a
+  // Number keys 1..N pick an option; F follows up. Scoped to the focused card
+  // (NOT the window) so each terminal's survey handles its own keys and a
   // focused terminal does not swallow the keystroke into its PTY.
-  function onKeydown(e: KeyboardEvent): void {
-    const s = surveyState.active;
+  function onCardKeydown(e: KeyboardEvent): void {
+    const s = active;
     if (!s) return;
     if (e.key >= "1" && e.key <= "9") {
       const idx = Number(e.key) - 1;
       if (idx < s.options.length) {
         e.preventDefault();
         e.stopPropagation();
-        void pickOption(idx);
+        void pickOption(slot, idx);
       }
       return;
     }
     if ((e.key === "f" || e.key === "F") && s.allowFollowup && s.followup) {
       e.preventDefault();
       e.stopPropagation();
-      void requestFollowup();
+      void requestFollowup(slot);
     }
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
 {#if active}
-  <div class="survey-overlay" role="dialog" aria-modal="true">
-    <div class="survey-card" tabindex="-1" bind:this={card}>
+  <div
+    class="survey-overlay"
+    class:per-terminal={slot !== null}
+    role="dialog"
+    aria-modal="true"
+  >
+    <!-- The card is the focusable survey surface (tabindex -1, focused on
+         appear); its keydown is the 1..N / F shortcut handler, scoped here
+         rather than the window so each terminal's survey owns its own keys. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="survey-card"
+      tabindex="-1"
+      bind:this={card}
+      onkeydown={onCardKeydown}
+    >
       {#if active.title}
         <h2 class="survey-title">{active.title}</h2>
       {/if}
@@ -65,8 +89,8 @@
             <button
               type="button"
               class="survey-option"
-              disabled={surveyState.busy}
-              onclick={() => pickOption(i)}
+              disabled={busy}
+              onclick={() => pickOption(slot, i)}
             >
               <span class="survey-option-key">{i + 1}</span>
               <span class="survey-option-label">{option}</span>
@@ -78,8 +102,8 @@
         <button
           type="button"
           class="survey-followup"
-          disabled={surveyState.busy}
-          onclick={() => requestFollowup()}
+          disabled={busy}
+          onclick={() => requestFollowup(slot)}
         >
           [F] Follow up later
         </button>
@@ -101,6 +125,15 @@
     box-sizing: border-box;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
+  /* Per-terminal: cover only the owning terminal (the .terminal-tab is the
+     position:relative context), so the survey sits over its own terminal and
+     other terminals stay usable. Below the terminal menu bubble (z 25500) but
+     above the xterm canvas. */
+  .survey-overlay.per-terminal {
+    position: absolute;
+    z-index: 24000;
+    padding: 1rem;
+  }
   .survey-card {
     width: min(520px, 92vw);
     max-height: 86vh;
@@ -113,6 +146,10 @@
     padding: 1.25rem 1.5rem;
     box-sizing: border-box;
     outline: none;
+  }
+  .per-terminal .survey-card {
+    width: min(520px, 94%);
+    max-height: 92%;
   }
   .survey-title {
     margin: 0 0 0.75rem;

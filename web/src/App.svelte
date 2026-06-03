@@ -1161,10 +1161,13 @@
      is unusable until they reopen the original URL. -->
 <MissingTokenOverlay />
 <PreflightOverlay />
-<!-- Survey overlay: window-level modal raised by `cs terminal survey`. One
-     mount per window, driven by the singleton surveyState; renders nothing
-     when no survey is active. Mounted at App root (not per terminal tab) so
-     a window-targeted survey shows exactly once. -->
+<!-- Survey overlay, WINDOW-WIDE FALLBACK (R2-3): renders a survey raised by
+     `cs terminal survey` with no resolvable target terminal (a --tab-group
+     broadcast, an unmatched --tab-name, or @@LaneD's transport not yet carrying
+     tabName) as a centered modal. Per-terminal surveys render over their own
+     terminal (TerminalTab mounts <BubbleOverlay tabId={tab.id} />); this
+     App-root mount (default tabId=null) is the fallback slot. Renders nothing
+     when the window-wide slot is empty. -->
 <BubbleOverlay />
 <!-- Screensaver cover. Mounts at App root so z-index sits above every
      chan overlay (screensaver-backdrop uses z=2000). Renders nothing

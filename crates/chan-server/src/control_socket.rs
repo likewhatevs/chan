@@ -90,6 +90,14 @@ enum WindowCommand {
     // reads `frame.survey` and POSTs a SurveyReply to the reply route.
     OpenSurvey {
         survey: SurveySpec,
+        // R2-3: the terminal this survey targets, so the SPA can anchor a
+        // per-terminal survey instead of one window-wide modal. `cs terminal
+        // survey --tab-name=X` -> Some(X); a `--tab-group` broadcast (or no
+        // specific tab) -> None, where the SPA keeps its window-wide fallback.
+        // camelCase `tabName` on the wire, pinned with serde(rename) so a green
+        // compile can't hide a wire mismatch.
+        #[serde(rename = "tabName", skip_serializing_if = "Option::is_none")]
+        tab_name: Option<String>,
     },
     // `cs pane` layout query: the server asks the window for its current
     // tab/pane layout. The SPA reads its `layout` and POSTs the snapshot to
@@ -873,6 +881,7 @@ async fn handle_survey(
             window_id,
             WindowCommand::OpenSurvey {
                 survey: spec.clone(),
+                tab_name: tab_name.map(str::to_string),
             },
             events_tx,
         ) {
@@ -2066,6 +2075,44 @@ is_lead = false
             registry.window_ids_matching(None, Some("spawnme")),
             vec!["win-spawn".to_string()],
             "agents are bound to the caller window"
+        );
+    }
+
+    // R2-3 transport: the open_survey frame must carry the target tab as
+    // camelCase `tabName`. A green compile alone would not catch a snake_case
+    // drift, so pin the wire string here.
+    #[test]
+    fn open_survey_frame_serializes_tab_name_as_camel_case_tabname() {
+        let spec = SurveySpec {
+            survey_id: "sid-1".into(),
+            title: None,
+            body_markdown: "pick one".into(),
+            options: vec!["a".into(), "b".into()],
+            allow_followup: false,
+            followup: None,
+        };
+        // `--tab-name=X` -> the frame carries `tabName`.
+        let with_tab = serde_json::to_value(WindowCommand::OpenSurvey {
+            survey: spec.clone(),
+            tab_name: Some("@@Probe".into()),
+        })
+        .expect("serialize open_survey");
+        assert_eq!(with_tab["command"], "open_survey");
+        assert_eq!(with_tab["tabName"], "@@Probe");
+        assert!(
+            with_tab.get("tab_name").is_none(),
+            "wire field must be camelCase tabName, not tab_name"
+        );
+        // No specific tab -> `tabName` is omitted; the SPA keeps its window-wide
+        // fallback.
+        let without_tab = serde_json::to_value(WindowCommand::OpenSurvey {
+            survey: spec,
+            tab_name: None,
+        })
+        .expect("serialize open_survey");
+        assert!(
+            without_tab.get("tabName").is_none(),
+            "None tab_name omits the field"
         );
     }
 

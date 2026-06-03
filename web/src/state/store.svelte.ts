@@ -57,6 +57,7 @@ import {
 import { setNotifyHandler } from "./notify.svelte";
 import { defaultScopeId } from "./scope.svelte";
 import {
+  allTerminalTabs,
   clearTabError,
   flagExternalChange,
   refreshTabFromDisk,
@@ -699,6 +700,10 @@ type WindowCommandFrame =
       window_id: string;
       command: "open_survey";
       survey: SurveySpec;
+      // R2-3: the target terminal's name (the survey's `--tab-name`), camelCase
+      // per the 2026-06-03 survey-contract amendment. Present => attach to that
+      // terminal only; absent/null => the window-wide fallback (pre-R2-3).
+      tabName?: string | null;
     }
   | {
       type: "window_command";
@@ -944,6 +949,18 @@ async function respondPaneQuery(requestId: string): Promise<void> {
   }
 }
 
+/// Resolve a survey's target `tabName` (a terminal's `--tab-name`) to the SPA
+/// tab id its per-terminal overlay renders on, or null when no terminal matches
+/// (the survey then uses the window-wide fallback). Matches the stable session
+/// name ($CHAN_TAB_NAME / terminalEnvTabName) first, then the display title (so
+/// it still resolves before a rename's env name catches up).
+function terminalSlotForName(name: string): string | null {
+  const t = allTerminalTabs().find(
+    (tab) => tab.terminalEnvTabName === name || tab.title === name,
+  );
+  return t?.id ?? null;
+}
+
 async function handleWindowCommand(raw: unknown): Promise<void> {
   const frame = raw as Partial<WindowCommandFrame> | null;
   if (!frame || frame.window_id !== sessionWindowId()) return;
@@ -1011,10 +1028,16 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     return;
   }
   if (frame.command === "open_survey" && frame.survey) {
-    // `cs terminal survey` raised a survey on this window; render the modal
-    // overlay. The reply round-trip (POST /api/survey/reply) unblocks the
-    // waiting CLI. No session save: a survey is transient, not layout.
-    showSurvey(frame.survey);
+    // `cs terminal survey` raised a survey on this window. R2-3: when the frame
+    // names a target terminal (`tabName`, the survey's --tab-name), attach the
+    // survey to THAT terminal only; otherwise (a --tab-group broadcast, an
+    // unmatched name, or @@LaneD's transport not yet carrying tabName) fall back
+    // to the window-wide overlay - the pre-R2-3 behavior. Resolve the name to
+    // the SPA tab id (the slot the per-terminal overlay renders on). The reply
+    // round-trip (POST /api/survey/reply) unblocks the waiting CLI. No session
+    // save: a survey is transient, not layout.
+    const slot = frame.tabName ? terminalSlotForName(frame.tabName) : null;
+    showSurvey(frame.survey, slot);
     return;
   }
   if (frame.command === "pane_query" && typeof frame.request_id === "string") {
