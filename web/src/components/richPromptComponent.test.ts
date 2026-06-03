@@ -74,12 +74,13 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/await api\.write\(draftPath, text\)/);
   });
 
-  test("submit routes to THIS terminal then clears draft.md text (keeps the folder)", () => {
+  test("submit routes to THIS terminal with its OWN submit agent, then clears draft.md text", () => {
     // Routes to the bubble's OWN tab (not the focused pane's active terminal),
-    // and only reaps the composer when the frame actually went out (the
-    // data-loss guard: a failed send keeps the text instead of clearing it).
+    // submits with the chord THIS terminal reads (submitAgent()), and only
+    // reaps the composer when the frame actually went out (the data-loss guard:
+    // a failed send keeps the text instead of clearing it).
     expect(richPromptSrc).toMatch(
-      /if \(!sendPromptToTerminal\(tab\.id, text\)\) return true;/,
+      /if \(!sendPromptToTerminal\(tab\.id, text, submitAgent\(\)\)\) return true;/,
     );
     // Reset = clear the doc + persist the empty draft.md; NO raw input frame,
     // and NO folder/media delete on submit (that happens on terminal close).
@@ -87,6 +88,27 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/void flushWrite\(\)/);
     expect(richPromptSrc).not.toMatch(/type: "input"/);
     expect(richPromptSrc).not.toMatch(/discardDraft/);
+  });
+
+  test("submitAgent picks the chord from the terminal's negotiated protocol", () => {
+    // modifyOtherKeys -> claude; kitty -> codex; neither (shell / gemini) -> a
+    // bare CR = the gemini chord. Fixes @@Alex's shell case (the old no-agent
+    // path defaulted to claude's CSI, unreadable by a shell).
+    expect(richPromptSrc).toMatch(/function submitAgent\(\): string/);
+    expect(richPromptSrc).toMatch(
+      /kp\.xtermModifyOtherKeys > 0\) return "claude"/,
+    );
+    expect(richPromptSrc).toMatch(/return "codex"/);
+    expect(richPromptSrc).toMatch(/return "gemini";/);
+  });
+
+  test("Tab indents the list item (Shift+Tab outdents), never escaping to the browser", () => {
+    expect(richPromptSrc).toMatch(
+      /import \{[\s\S]{1,80}indentListItem,[\s\S]{1,40}outdentListItem,[\s\S]{1,40}\} from "\.\.\/editor\/commands\/list"/,
+    );
+    expect(richPromptSrc).toMatch(
+      /key: "Tab",[\s\S]{1,80}run: \(v\) => indentListItem\(v\) \|\| indentMore\(v\),[\s\S]{1,90}shift: \(v\) => outdentListItem\(v\) \|\| indentLess\(v\),/,
+    );
   });
 
   test("floating bubble with the submit-with-cmd+enter label", () => {

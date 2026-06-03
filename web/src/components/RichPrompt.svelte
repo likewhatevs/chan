@@ -18,12 +18,25 @@
   import { onDestroy, onMount } from "svelte";
   import { EditorState, Prec } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
-  import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+  import {
+    defaultKeymap,
+    history,
+    historyKeymap,
+    indentLess,
+    indentMore,
+  } from "@codemirror/commands";
   import {
     deleteMarkupBackward,
     insertNewlineContinueMarkup,
     markdown,
   } from "@codemirror/lang-markdown";
+  // Reuse @@LaneC's editor list commands (import is shared; no change to
+  // list.ts) so the rich prompt indents/outdents lists exactly like the main
+  // editor instead of letting Tab escape to the browser.
+  import {
+    indentListItem,
+    outdentListItem,
+  } from "../editor/commands/list";
   import { imageDropHandlers } from "../editor/bubbles/image_drop";
   import { makeThemeCompartment } from "../editor/base";
   import { effectiveHybridSurfaceTheme } from "../state/store.svelte";
@@ -86,6 +99,28 @@
     }
   }
 
+  // The submit chord must match what THIS terminal actually reads, derived from
+  // its negotiated keyboard protocol (TerminalTab.keyboardProtocol): claude
+  // announces xterm modifyOtherKeys, codex announces the kitty protocol. A
+  // plain SHELL (or gemini) announces NEITHER and submits on a bare CR - which
+  // is the gemini chord. The old path sent NO agent, so the server defaulted to
+  // the claude modifyOtherKeys CSI, which a shell can't read: it left the
+  // literal `...7;9;13~` at the prompt and never ran the command (@@Alex).
+  // Reuses the shared AGENT_SUBMIT_CHORDS map server-side via the agent name on
+  // the prompt frame; no new chord map.
+  function submitAgent(): string {
+    const kp = tab.keyboardProtocol;
+    if (kp) {
+      if (kp.xtermModifyOtherKeys > 0) return "claude";
+      const kittyFlags =
+        kp.kitty.screen === "alternate"
+          ? kp.kitty.alternateFlags
+          : kp.kitty.mainFlags;
+      if (kittyFlags > 0) return "codex";
+    }
+    return "gemini";
+  }
+
   // Cmd+Enter: submit the draft text through the queue, then RESET = clear
   // draft.md TEXT but KEEP the folder + any pasted media (the agent reads the
   // media AFTER submit; the folder is cleaned on terminal close). Always
@@ -104,7 +139,7 @@
     if (!view) return true;
     const text = view.state.doc.toString();
     if (!text.trim()) return true;
-    if (!sendPromptToTerminal(tab.id, text)) return true;
+    if (!sendPromptToTerminal(tab.id, text, submitAgent())) return true;
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: "" },
     });
@@ -149,13 +184,20 @@
           keymap.of([...defaultKeymap, ...historyKeymap]),
           // High-prec: Mod-Enter submits; Enter continues markdown markup
           // (lists/quotes), falling through to a plain newline off-markup;
-          // Backspace dedents markup. markdown({addKeymap:false}) keeps syntax
-          // only so these bindings own Enter/Backspace unambiguously.
+          // Backspace dedents markup. Tab indents the list item (Shift+Tab
+          // outdents), falling back to plain indent so Tab NEVER escapes to the
+          // browser's focus nav (@@Alex). markdown({addKeymap:false}) keeps
+          // syntax only so these bindings own Enter/Tab/Backspace unambiguously.
           Prec.high(
             keymap.of([
               { key: "Mod-Enter", run: submit },
               { key: "Enter", run: insertNewlineContinueMarkup },
               { key: "Backspace", run: deleteMarkupBackward },
+              {
+                key: "Tab",
+                run: (v) => indentListItem(v) || indentMore(v),
+                shift: (v) => outdentListItem(v) || indentLess(v),
+              },
             ]),
           ),
           markdown({ addKeymap: false }),
