@@ -21,6 +21,33 @@ this repo under `gateway/`, so you can self-host the whole path; the
 maintainer's own deployment at `workspace.chan.app` is experimental, with
 sign-in off by default, and is not the product.
 
+## Quickstart
+
+Install the CLI, point it at any git repo (or clone chan's own), and the
+IDE opens in your browser:
+
+```bash
+# 1. Install the standalone chan CLI (Linux x86_64/aarch64, macOS aarch64).
+curl -fsSL https://chan.app/install.sh | sh
+
+# 2. Open any existing git repo, or clone chan's source to try it out.
+git clone https://github.com/fiorix/chan
+chan serve ./chan
+```
+
+`chan serve` starts a loopback server, prints a URL carrying a per-launch
+bearer token on stderr, and opens your default browser. From there you
+drive the workspace like it is your own machine: editor, terminal, Team
+Work, file browser, graph, and dashboard as tiling tabs and panes.
+
+The in-browser experience is the full IDE. Browser keyboard shortcuts are
+constrained by the browser itself, so the keyboard story is suboptimal
+there but still powerful: see Hybrid Nav (`Cmd+.`) for keyboard-driven
+navigation. For a native window and remote-attach support (macOS `.app`,
+Linux AppImage), use chan-desktop; see ["Reach a workspace
+remotely"](#reach-a-workspace-remotely) below and the
+[manual](https://chan.app/manual/).
+
 ## Layout
 
 ```

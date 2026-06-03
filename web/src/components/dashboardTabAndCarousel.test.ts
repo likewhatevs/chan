@@ -189,6 +189,34 @@ describe("carousel slides", () => {
     expect(matrixMatches?.length ?? 0).toBe(1);
   });
 
+  test("R2-1: About widget credits the open-source stack below the licenses block", () => {
+    // The credits block sits after `.about-licenses`, opens with the
+    // free/open-source tagline, and links the load-bearing libraries
+    // (the ones @@Alex flagged plus the verified rest), grouped by
+    // browser vs. server. mermaid points at the canonical site.
+    expect(carousel).toMatch(
+      /<div class="about-licenses">[\s\S]{1,1600}dcragusa\/MatrixScreensaver[\s\S]{1,1000}<div class="about-credits">/,
+    );
+    expect(carousel).toMatch(
+      /Built on a strong open-source foundation\. Chan is free and[\s\S]{1,20}open-source software\./,
+    );
+    for (const href of [
+      "https://svelte.dev/",
+      "https://tauri.app/",
+      "https://github.com/xtermjs/xterm.js/",
+      "https://codemirror.net/",
+      "https://mermaid.js.org/",
+      "https://d3js.org/d3-force",
+      "https://github.com/tokio-rs/axum",
+      "https://github.com/quickwit-oss/tantivy",
+      "https://github.com/huggingface/candle",
+    ]) {
+      expect(carousel).toContain(`href="${href}"`);
+    }
+    // No non-canonical mermaid mirror leaked through from the report.
+    expect(carousel).not.toContain("mermaid-cjv.pages.dev");
+  });
+
   test("About widget renders icon-linked website + source links", () => {
     expect(carousel).toMatch(/href="https:\/\/chan\.app"/);
     expect(carousel).toMatch(

@@ -16,6 +16,8 @@ Start here:
 - [Search and graph basics](search-and-graph.md)
 - [Terminal](terminal.md)
 - [Tunnel basics](tunnel.md)
+- [Chan Desktop and remote workspaces](desktop.md)
+- [Chan Gateway (self-hosted tunnel)](gateway.md)
 - [Upgrade and troubleshooting](upgrade-and-troubleshooting.md)
 
 ## What stays on disk

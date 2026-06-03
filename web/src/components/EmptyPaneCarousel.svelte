@@ -548,6 +548,44 @@
             </span>
           </span>
         </div>
+
+        <!-- R2-1: open-source attribution. Built on a strong open-source
+             foundation; chan itself is free + open-source (Apache 2.0, on
+             the version row above). Credits the load-bearing libraries that
+             ship in the app, grouped by browser vs. server. Canonical
+             upstream URLs (mermaid -> mermaid.js.org, the official site;
+             @@Alex's report listed a non-canonical mirror). -->
+        <div class="about-credits">
+          <p class="credits-tagline">
+            Built on a strong open-source foundation. Chan is free and
+            open-source software.
+          </p>
+          <p class="credits-list">
+            In the browser:
+            <a href="https://svelte.dev/" target="_blank" rel="noopener">Svelte</a>,
+            <a href="https://github.com/xtermjs/xterm.js/" target="_blank" rel="noopener">xterm.js</a>,
+            <a href="https://codemirror.net/" target="_blank" rel="noopener">CodeMirror</a>,
+            <a href="https://mermaid.js.org/" target="_blank" rel="noopener">Mermaid</a>,
+            <a href="https://js.cytoscape.org/" target="_blank" rel="noopener">Cytoscape</a>
+            with <a href="https://d3js.org/d3-force" target="_blank" rel="noopener">d3-force</a>,
+            <a href="https://katex.org/" target="_blank" rel="noopener">KaTeX</a>, and
+            <a href="https://lucide.dev/" target="_blank" rel="noopener">Lucide</a>.
+            On the server:
+            <a href="https://github.com/tokio-rs/axum" target="_blank" rel="noopener">axum</a>
+            on <a href="https://tokio.rs/" target="_blank" rel="noopener">Tokio</a>,
+            <a href="https://github.com/quickwit-oss/tantivy" target="_blank" rel="noopener">Tantivy</a>
+            and <a href="https://github.com/huggingface/candle" target="_blank" rel="noopener">Candle</a>
+            (BGE-small embeddings) for search,
+            <a href="https://github.com/notify-rs/notify" target="_blank" rel="noopener">notify</a>,
+            <a href="https://github.com/pyrossh/rust-embed" target="_blank" rel="noopener">rust-embed</a>,
+            <a href="https://github.com/wezterm/wezterm" target="_blank" rel="noopener">portable-pty</a>,
+            and <a href="https://github.com/libp2p/rust-yamux" target="_blank" rel="noopener">yamux</a>
+            over <a href="https://github.com/hyperium/h2" target="_blank" rel="noopener">h2</a>
+            for the tunnel.
+            The desktop app is built with
+            <a href="https://tauri.app/" target="_blank" rel="noopener">Tauri</a>.
+          </p>
+        </div>
       </div>
     {:else if slideIndex === 1}
       <!-- Slide 1 hosts `WorkspaceInfoBody`, the same inspector body
@@ -921,6 +959,29 @@
     opacity: 0.85;
   }
   .about-licenses a {
+    color: var(--link, var(--text));
+    text-decoration: underline;
+  }
+  /* R2-1: open-source attribution. A flowing credits paragraph rather
+     than the k/v grid above, since the library list is long; same
+     muted/underlined-link treatment as the licenses block. */
+  .about-credits {
+    width: 100%;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .about-credits .credits-tagline {
+    color: var(--text);
+    margin: 0;
+  }
+  .about-credits .credits-list {
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.5;
+  }
+  .about-credits a {
     color: var(--link, var(--text));
     text-decoration: underline;
   }
