@@ -484,35 +484,17 @@
               placeholder="claude --resume"
               autocomplete="off"
             />
+            <!-- Submit-encoding agent is auto-detected from the command
+                 (claude/codex/gemini), overridable with CHAN_AGENT in the env
+                 below - no manual picker. -->
             <input
               class="team-member-env"
               bind:value={member.env}
               oninput={(e) =>
                 setMemberField(idx, "env", (e.currentTarget as HTMLInputElement).value)}
-              placeholder="KEY=value"
+              placeholder="KEY=value (CHAN_AGENT to override agent)"
               autocomplete="off"
             />
-            <!-- Per-member submit-encoding agent. Kept independent of the
-                 command field on purpose: silently rewriting a manual pick
-                 on every command keystroke would clobber an intentional
-                 override (the producers seed it via agentForCommand). -->
-            <select
-              class="team-member-agent agent-picker"
-              value={member.agent ?? "none"}
-              aria-label="Agent"
-              title="Submit-encoding agent for this member's terminal"
-              onchange={(e) =>
-                setMemberField(
-                  idx,
-                  "agent",
-                  (e.currentTarget as HTMLSelectElement).value as TeamMemberDraft["agent"],
-                )}
-            >
-              <option value="none">none</option>
-              <option value="claude">claude</option>
-              <option value="codex">codex</option>
-              <option value="gemini">gemini</option>
-            </select>
             <label class="team-member-lead">
               <input
                 type="radio"
@@ -780,7 +762,7 @@
   }
   .team-member-row {
     display: grid;
-    grid-template-columns: auto 1fr 1.5fr 1fr auto auto;
+    grid-template-columns: auto 1fr 1.5fr 1fr auto;
     gap: 6px;
     align-items: center;
   }
@@ -825,19 +807,6 @@
   .team-member-cell-badge.unassigned {
     cursor: default;
     opacity: 0.6;
-  }
-  /* Mirrors TeamWork.svelte's prompt-toolbar .agent-picker for visual
-     consistency; here it is a per-member control in the member list. */
-  .team-member-agent {
-    height: 26px;
-    max-width: 92px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--btn-bg);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
-    padding: 0 6px;
   }
   .team-realestate {
     border: 1px solid var(--border);

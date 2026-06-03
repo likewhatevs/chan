@@ -23,16 +23,34 @@ import { TEAM_DIR_DEFAULT } from "./teamConfigPath";
 /// omits the field entirely (`TeamMemberWire.agent?`).
 export type AgentTarget = "none" | "claude" | "codex" | "gemini";
 
-/// Sniff the default agent from a spawn command's first word so the
-/// dialog can seed the picker without the user re-stating it. The
-/// command is the source of truth the user already typed; anything that
-/// is not a known agent runtime falls back to `"none"` (shell member).
+/// Derive a member's submit-encoding agent from its spawn command. The match
+/// is intentionally LOOSE: it recognizes claude/codex/gemini anywhere in the
+/// command as a whole word, not just the first token, so wrappers like
+/// `my-claude.sh`, `/usr/local/bin/codex-cli`, or `claude --resume` still
+/// resolve (the `\b` boundaries keep `claudette` from matching). Anything
+/// unrecognized falls back to `"none"` (a shell member, plain Enter); set
+/// `CHAN_AGENT` in the member's env to override (see `agentForMember`).
 export function agentForCommand(command: string): AgentTarget {
-  const first = command.trim().split(/\s+/)[0] ?? "";
-  if (first === "claude") return "claude";
-  if (first === "codex") return "codex";
-  if (first === "gemini") return "gemini";
+  const c = command.toLowerCase();
+  if (/\bclaude\b/.test(c)) return "claude";
+  if (/\bcodex\b/.test(c)) return "codex";
+  if (/\bgemini\b/.test(c)) return "gemini";
   return "none";
+}
+
+/// A member's submit-encoding agent, replacing the old manual dropdown. An
+/// explicit `CHAN_AGENT=<claude|codex|gemini|none|shell>` in the member's env
+/// WINS - the escape hatch for unorthodox setups (custom launcher scripts a
+/// command sniff can't recognize). Otherwise derive loosely from the command.
+/// An unrecognized CHAN_AGENT value is ignored (falls through to the command).
+export function agentForMember(command: string, envText: string): AgentTarget {
+  const m = envText.match(/^[ \t]*CHAN_AGENT[ \t]*=[ \t]*(\S+)/m);
+  if (m) {
+    const v = m[1].toLowerCase();
+    if (v === "claude" || v === "codex" || v === "gemini") return v;
+    if (v === "none" || v === "shell") return "none";
+  }
+  return agentForCommand(command);
 }
 
 /// One agent in the team being bootstrapped. Position in
@@ -52,13 +70,10 @@ export interface TeamMemberDraft {
   env: string;
   /// Exactly one member must be flagged as lead; the lead lands on
   /// the existing Team Work Lead terminal, the others on new tabs.
+  /// The submit-encoding agent is no longer stored here: it is derived
+  /// from `command` (loosely) + a `CHAN_AGENT` env override at wire time
+  /// (see `agentForMember`).
   isLead: boolean;
-  /// Submit-encoding target for this member's terminal. Optional only so
-  /// hand-built drafts (and the wire round-trip, where a shell member
-  /// omits the field) stay terse; producers always populate it and
-  /// consumers read a missing value as `"none"`. `"none"` is a shell
-  /// member; named agents drive the poke/composer submit chord.
-  agent?: AgentTarget;
 }
 
 /// The pane real-estate strategy for the team's terminals.
@@ -239,7 +254,7 @@ export function defaultTeamConfig(): TeamDialogConfig {
     autoPrefix: true,
     mcpEnv: false,
     members: [
-      { name: "Lead", command: "claude", env: "", isLead: true, agent: "claude" },
+      { name: "Lead", command: "claude", env: "", isLead: true },
     ],
     realEstate: { kind: "tabs" },
   };
@@ -358,9 +373,6 @@ export function resizeTeamMembers(cfg: TeamDialogConfig): TeamDialogConfig {
       command: "claude",
       env: "",
       isLead: false,
-      // New workers default to the claude command, so the picker seeds to
-      // claude too (keeps command + agent consistent out of the box).
-      agent: "claude",
     });
   }
   while (out.members.length > out.size) {

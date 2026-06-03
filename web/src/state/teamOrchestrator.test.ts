@@ -161,43 +161,22 @@ describe("translateConfig", () => {
     expect(out.members[1].position).toEqual({ row: 0, col: 1 });
   });
 
-  test("named agents survive onto the wire member", () => {
+  test("the wire carries no agent field (the server derives it from command)", () => {
+    // The submit agent is no longer carried on the wire: the server derives
+    // it from the command (+ CHAN_AGENT) via SubmitAgent::derive. The TS
+    // derivation (agentForMember) is unit-tested in teamDialogAgent.test.ts.
     const out = translateConfig(
       sample({
         members: [
-          { name: "Lead", command: "claude", env: "", isLead: true, agent: "claude" },
-          { name: "Worker1", command: "codex", env: "", isLead: false, agent: "codex" },
+          { name: "Lead", command: "claude --resume", env: "", isLead: true },
+          { name: "Worker1", command: "bash", env: "CHAN_AGENT=codex", isLead: false },
         ],
       }),
     );
-    expect(out.members[0].agent).toBe("claude");
-    expect(out.members[1].agent).toBe("codex");
-  });
-
-  test("a shell member (none) omits the wire agent field entirely", () => {
-    const out = translateConfig(
-      sample({
-        members: [
-          { name: "Lead", command: "claude", env: "", isLead: true, agent: "claude" },
-          { name: "Worker1", command: "bash", env: "", isLead: false, agent: "none" },
-        ],
-      }),
-    );
-    expect(out.members[1].agent).toBeUndefined();
+    expect("agent" in out.members[0]).toBe(false);
     expect("agent" in out.members[1]).toBe(false);
-  });
-
-  test("an unset draft agent also omits the wire field", () => {
-    const out = translateConfig(
-      sample({
-        members: [
-          { name: "Lead", command: "claude", env: "", isLead: true },
-          { name: "Worker1", command: "claude", env: "", isLead: false },
-        ],
-      }),
-    );
-    expect(out.members[0].agent).toBeUndefined();
-    expect(out.members[1].agent).toBeUndefined();
+    // CHAN_AGENT stays in the member's env so the server can read it.
+    expect(out.members[1].env.CHAN_AGENT).toBe("codex");
   });
 });
 
@@ -237,10 +216,10 @@ describe("wireToDialog", () => {
     expect(dialog.autoPrefix).toBe(true);
     expect(dialog.size).toBe(2);
     expect(dialog.members).toEqual([
-      // The wire members carry no `agent`, so each reads back as a shell
-      // member ("none").
-      { name: "@@Lead", command: "claude", env: "FOO=bar", isLead: true, agent: "none" },
-      { name: "@@Worker1", command: "claude", env: "", isLead: false, agent: "none" },
+      // The draft carries no `agent`; it is derived from the command at wire
+      // time, not stored on the member.
+      { name: "@@Lead", command: "claude", env: "FOO=bar", isLead: true },
+      { name: "@@Worker1", command: "claude", env: "", isLead: false },
     ]);
   });
 
@@ -289,30 +268,18 @@ describe("wireToDialog", () => {
     expect(dialog.autoPrefix).toBe(false);
   });
 
-  test("a named wire agent maps back onto the draft", () => {
+  test("the draft never carries an agent field (it is derived from command)", () => {
     const dialog = wireToDialog(
       wire({
         members: [
-          { handle: "@@Lead", command: "claude", env: {}, is_lead: true, agent: "claude" },
-          { handle: "@@Worker1", command: "codex", env: {}, is_lead: false, agent: "codex" },
+          { handle: "@@Lead", command: "claude", env: {}, is_lead: true },
+          { handle: "@@Worker1", command: "bash", env: {}, is_lead: false },
         ],
       }),
       "demo",
     );
-    expect(dialog.members[0].agent).toBe("claude");
-    expect(dialog.members[1].agent).toBe("codex");
-  });
-
-  test("an omitted wire agent reads back as none (shell member)", () => {
-    const dialog = wireToDialog(
-      wire({
-        members: [
-          { handle: "@@Lead", command: "bash", env: {}, is_lead: true },
-        ],
-      }),
-      "demo",
-    );
-    expect(dialog.members[0].agent).toBe("none");
+    expect("agent" in dialog.members[0]).toBe(false);
+    expect("agent" in dialog.members[1]).toBe(false);
   });
 });
 
@@ -350,7 +317,7 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
     }
   });
 
-  test("agent targets survive a full save -> load round-trip", () => {
+  test("commands survive a save -> load round-trip (the agent re-derives)", () => {
     const original: TeamDialogConfig = {
       hostName: "Neo",
       configMode: "new",
@@ -360,14 +327,19 @@ describe("translateConfig <-> wireToDialog round-trips real estate", () => {
       autoPrefix: true,
       mcpEnv: false,
       members: [
-        { name: "Lead", command: "claude", env: "", isLead: true, agent: "claude" },
-        { name: "Worker1", command: "gemini", env: "", isLead: false, agent: "gemini" },
-        { name: "Worker2", command: "bash", env: "", isLead: false, agent: "none" },
+        { name: "Lead", command: "claude", env: "", isLead: true },
+        { name: "Worker1", command: "gemini", env: "", isLead: false },
+        { name: "Worker2", command: "bash", env: "", isLead: false },
       ],
       realEstate: { kind: "tabs" },
     };
-    const back = wireToDialog(translateConfig(original), "round");
-    expect(back.members.map((m) => m.agent)).toEqual(["claude", "gemini", "none"]);
+    // The agent is not stored anywhere: it is derived from the command at use
+    // time (server-side, and SPA-side for the lead poke). The command round-
+    // trips, so the derivation stays stable. The wire never carries `agent`.
+    const wireOut = translateConfig(original);
+    expect(wireOut.members.every((m) => !("agent" in m))).toBe(true);
+    const back = wireToDialog(wireOut, "round");
+    expect(back.members.map((m) => m.command)).toEqual(["claude", "gemini", "bash"]);
   });
 });
 

@@ -60,15 +60,6 @@ pub struct Member {
     pub is_lead: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Position>,
-    // Submit-encoding agent type for this member's terminal. Feeds the
-    // generated bootstrap.md poke chord (claude reads ESC[27;9;13~,
-    // codex/gemini read CR) and the lead composer's submit mode, both via
-    // the shared submit map. `None` is a shell member with no submit chord;
-    // valid Some values are "claude" / "codex" / "gemini". Stored as a plain
-    // String to avoid a chan-workspace -> chan-shell layering dependency on
-    // SubmitAgent; chan-server validates the value on read/write.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
 }
 
 /// Airplane-style grid coordinate. Row + column are zero-based.

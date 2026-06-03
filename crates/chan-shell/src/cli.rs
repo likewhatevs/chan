@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use crate::control::{absolutize, control_socket_env, open_env, send_control_request};
-use crate::submit::{apply_submit_chord, SubmitAgent};
+use crate::submit::{submit_writes, SubmitAgent};
 use crate::wire::{ControlRequest, PaneOp, SplitDir, SurveyFollowup, SurveySpec, TeamOp};
 
 /// Top-level `cs` parser. The `chan` binary reaches `cs` through its own
@@ -305,8 +305,12 @@ With an [F] follow-up (from <- $CHAN_TAB_NAME, to <- the survey target):
 /// Raw string so the literal escapes inside the sample stay literal.
 const TEAM_AFTER_HELP: &str = r#"EXAMPLES:
 A team is one config.toml (the on-disk `{dir}/config.toml` shape). Members
-are 1..=9, exactly one `is_lead = true`; each agent member's `agent` is
-claude / codex / gemini (omit it for a plain shell member). `created_at` is
+are 1..=9, exactly one `is_lead = true`. The submit-encoding agent
+(claude / codex / gemini) is DERIVED from each member's `command`: a loose
+whole-word match, so `claude --resume` or `/usr/local/bin/codex-cli` resolve.
+A command that matches none is a plain shell member (no submit chord). To
+force the agent for an unorthodox launcher, set `CHAN_AGENT` in the member's
+env (claude/codex/gemini, or none/shell to force a shell). `created_at` is
 optional: the server stamps the current time when it is omitted.
 
   # myteam.toml
@@ -319,12 +323,16 @@ optional: the server stamps the current time when it is omitted.
   handle  = "@@Lead"
   command = "claude"
   is_lead = true
-  agent   = "claude"
 
   [[members]]
   handle  = "@@LaneA"
   command = "codex"
-  agent   = "codex"
+
+  # A custom launcher the command can't reveal: name the agent explicitly.
+  [[members]]
+  handle  = "@@LaneB"
+  command = "./my-agent.sh"
+  env     = { CHAN_AGENT = "gemini" }
 
 Write the team (config.toml + the server-regenerated bootstrap.md + the
 tasks/journals/followups tree) inside the workspace at `alpha/`:
@@ -905,20 +913,25 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             };
             // --submit=<agent>: strip trailing newlines then append that
             // agent's submit chord so a running agent submits the input
-            // hands-free (the completion poke). Mirrors
-            // `encodeForAgentSubmit` in web/src/terminal/submitMode.ts.
-            let data = apply_submit_chord(data, submit);
+            // hands-free (the completion poke). Most agents take ONE write;
+            // gemini needs the chord as a SEPARATE write (it coalesces a bulk
+            // text+CR into a newline), so submit_writes may return two. Each
+            // goes as its own TermWrite -> its own write-queue item, which the
+            // per-session drainer delivers idle-gated, so the CR lands as a
+            // distinct keypress. Mirrors submit_writes / encodeForAgentSubmit.
             let socket = control_socket_env()?;
-            let message = send_control_request(
-                &socket,
-                ControlRequest::TermWrite {
-                    tab_name,
-                    tab_group,
-                    data,
-                },
-            )
-            .await?;
-            eprintln!("{message}");
+            for write in submit_writes(data, submit) {
+                let message = send_control_request(
+                    &socket,
+                    ControlRequest::TermWrite {
+                        tab_name: tab_name.clone(),
+                        tab_group: tab_group.clone(),
+                        data: write,
+                    },
+                )
+                .await?;
+                eprintln!("{message}");
+            }
             Ok(())
         }
         TerminalAction::List { json, pretty } => {

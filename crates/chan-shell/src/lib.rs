@@ -35,7 +35,7 @@ pub use cli::{dispatch, run_cs, ShellAction, TerminalAction};
 pub use control::{
     absolutize, control_socket_env, open_env, open_env_from, send_control_request, OpenEnv,
 };
-pub use submit::{apply_submit_chord, SubmitAgent};
+pub use submit::{apply_submit_chord, set_chord_overrides, submit_writes, SubmitAgent};
 
 /// Whether this process was invoked through a `cs` name (a `cs -> chan`
 /// symlink on PATH, or chan-desktop launched as `cs`). Both `chan`'s

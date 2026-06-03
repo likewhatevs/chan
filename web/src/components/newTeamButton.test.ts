@@ -86,15 +86,15 @@ describe("TeamDialog component shell", () => {
     expect(dialog).toMatch(/name="team-lead"/);
   });
 
-  test("per-member row renders a none/claude/codex/gemini agent picker bound to member.agent", () => {
-    // The select uses the shared .agent-picker styling and writes back
-    // through setMemberField(idx, "agent", ...).
-    expect(dialog).toMatch(/class="team-member-agent agent-picker"/);
-    expect(dialog).toMatch(/value=\{member\.agent \?\? "none"\}/);
-    expect(dialog).toMatch(/setMemberField\(\s*idx,\s*"agent"/);
-    for (const opt of ["none", "claude", "codex", "gemini"]) {
-      expect(dialog).toMatch(new RegExp(`<option value="${opt}">${opt}</option>`));
-    }
+  test("the per-member agent dropdown is gone; agent derives from the command", () => {
+    // The manual picker was removed. The submit-encoding agent now derives
+    // from the command (loosely) with a CHAN_AGENT env override, so there is
+    // no agent <select> and nothing writes setMemberField(idx, "agent", ...).
+    expect(dialog).not.toMatch(/team-member-agent/);
+    expect(dialog).not.toMatch(/agent-picker/);
+    expect(dialog).not.toMatch(/setMemberField\(\s*idx,\s*"agent"/);
+    // The env field advertises the override hatch.
+    expect(dialog).toMatch(/CHAN_AGENT/);
   });
 
   test("the unassigned chip is relabeled drag-me", () => {

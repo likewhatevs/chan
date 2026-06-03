@@ -103,26 +103,28 @@ pub(crate) fn validate_team_config(config: &TeamConfig) -> Result<(), String> {
     if config.members.iter().any(|m| m.handle.trim().is_empty()) {
         return Err("every member must have a non-empty handle".into());
     }
-    // When present, the agent type must be one the submit map knows, so the
-    // generated poke chord + the lead composer's submit mode resolve. A shell
-    // member carries no agent (None), which is valid.
-    for m in &config.members {
-        if let Some(agent) = m.agent.as_deref() {
-            if !matches!(agent, "claude" | "codex" | "gemini") {
-                return Err(format!(
-                    "member {} has an unknown agent {agent:?} (want claude, codex, or gemini)",
-                    m.handle
-                ));
-            }
-        }
-    }
+    // The submit-encoding agent is no longer a stored field: it is DERIVED
+    // from each member's command (+ a `CHAN_AGENT` env override) at use time,
+    // so there is nothing to validate here. An unrecognized command simply
+    // resolves to a shell member (no chord). See `member_agent`.
     Ok(())
+}
+
+/// The submit-encoding agent a member's terminal uses, derived from its
+/// spawn command and an optional `CHAN_AGENT` env override. This is the
+/// single source of truth (`chan_shell::SubmitAgent::derive`, mirrored by
+/// `agentForMember` in the SPA). `None` is a shell member with no submit
+/// chord. Returns the lower-case agent name for the roster/script text.
+fn member_agent(m: &Member) -> Option<&'static str> {
+    chan_shell::SubmitAgent::derive(&m.command, m.env.get("CHAN_AGENT").map(String::as_str))
+        .map(chan_shell::SubmitAgent::name)
 }
 
 /// The submit chord a member's agent reads as "submit this buffer", as a
 /// human-readable escape literal for the bootstrap poke note. Mirrors the
-/// shared submit map (`chan_shell::SubmitAgent::{submit_chord,
-/// apply_submit_chord}` / submitMode.ts): claude uses the xterm
+/// shared submit map (`chan_shell::apply_submit_chord` / submitMode.ts;
+/// the chord is the agent's DEFAULT template, overridable at runtime):
+/// claude uses the xterm
 /// modifyOtherKeys Cmd+Enter CSI; gemini submits on a bare CR; codex also
 /// ends in CR but its text must be bracketed-paste wrapped first (B8 -
 /// codex coalesces a single `text + CR` write into a paste burst whose
@@ -447,7 +449,7 @@ pub(crate) fn generate_bootstrap_script(team_dir: &str, config: &TeamConfig) -> 
     out.push_str("# 4. Spawn the team, lead first. Each tab's $CHAN_TAB_NAME is its handle.\n");
     for &m in &order {
         let role = if m.is_lead { "lead" } else { "worker" };
-        let agent = m.agent.as_deref().unwrap_or("shell");
+        let agent = member_agent(m).unwrap_or("shell");
         out.push_str(&format!("# --- {} ({role}, {agent}) ---\n", m.handle));
         out.push_str(&format!(
             "cs terminal new --tab-name={} --tab-group={}\n",
@@ -472,7 +474,7 @@ pub(crate) fn generate_bootstrap_script(team_dir: &str, config: &TeamConfig) -> 
     out.push_str("# 5. Poke each agent its identity + the team process pointer. A shell\n");
     out.push_str("#    member has no compose box, so it gets no identity poke.\n");
     for &m in &order {
-        let Some(agent) = m.agent.as_deref() else {
+        let Some(agent) = member_agent(m) else {
             continue;
         };
         let prompt = identity_prompt(config, dir, m);
@@ -576,7 +578,7 @@ fn render_roster(config: &TeamConfig) -> String {
         .iter()
         .map(|m| {
             let role = if m.is_lead { "lead" } else { "worker" };
-            let agent = m.agent.clone().unwrap_or_else(|| "shell".to_string());
+            let agent = member_agent(m).unwrap_or("shell").to_string();
             (m.handle.clone(), m.command.clone(), agent, role)
         })
         .collect();
@@ -634,11 +636,7 @@ fn render_roster(config: &TeamConfig) -> String {
 /// types actually present are listed (a shell-only team gets the claude
 /// default line so the doc still names the common chord).
 fn render_poke_chords(config: &TeamConfig) -> String {
-    let mut agents: Vec<&str> = config
-        .members
-        .iter()
-        .filter_map(|m| m.agent.as_deref())
-        .collect();
+    let mut agents: Vec<&str> = config.members.iter().filter_map(member_agent).collect();
     agents.sort_unstable();
     agents.dedup();
     if agents.is_empty() {
@@ -679,7 +677,6 @@ mod tests {
                     )]),
                     is_lead: true,
                     position: None,
-                    agent: Some("claude".into()),
                 },
                 Member {
                     handle: "@@LaneA".into(),
@@ -687,7 +684,6 @@ mod tests {
                     env: std::collections::BTreeMap::new(),
                     is_lead: false,
                     position: None,
-                    agent: Some("codex".into()),
                 },
             ],
         }
@@ -769,7 +765,6 @@ mod tests {
                 env: std::collections::BTreeMap::new(),
                 is_lead: i == 0,
                 position: None,
-                agent: Some("claude".into()),
             })
             .collect();
         let err = validate_team_config(&config).unwrap_err();
@@ -777,14 +772,20 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_unknown_agent() {
+    fn agent_is_derived_from_command_in_roster_and_pokes() {
+        // No stored agent field: a "claude"/"codex" command derives the agent.
         let mut config = sample_config();
-        config.members[1].agent = Some("copilot".into());
-        let err = validate_team_config(&config).unwrap_err();
-        assert!(err.contains("unknown agent"), "got: {err}");
-        // A shell member (None) is valid.
-        config.members[1].agent = None;
-        assert!(validate_team_config(&config).is_ok());
+        assert_eq!(member_agent(&config.members[0]), Some("claude"));
+        assert_eq!(member_agent(&config.members[1]), Some("codex"));
+        // CHAN_AGENT in the env overrides the command sniff.
+        config.members[1]
+            .env
+            .insert("CHAN_AGENT".into(), "gemini".into());
+        assert_eq!(member_agent(&config.members[1]), Some("gemini"));
+        // A shell command derives no agent.
+        config.members[1].command = "bash".into();
+        config.members[1].env.remove("CHAN_AGENT");
+        assert_eq!(member_agent(&config.members[1]), None);
     }
 
     #[test]
@@ -933,9 +934,9 @@ mod tests {
     #[test]
     fn script_skips_identity_poke_for_a_shell_member() {
         let mut config = sample_config();
-        // Make the worker a shell member (no agent): it is launched but
-        // never poked an identity prompt (no compose box / submit chord).
-        config.members[1].agent = None;
+        // Make the worker a shell member: a "bash" command derives no agent,
+        // so it is launched but never poked an identity prompt (no compose
+        // box / submit chord).
         config.members[1].handle = "@@Shell".into();
         config.members[1].command = "bash".into();
         let script = generate_bootstrap_script("new-team-1", &config);

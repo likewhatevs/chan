@@ -32,7 +32,7 @@ import {
   type TerminalTab,
 } from "./tabs.svelte";
 import type { TeamDialogConfig, TeamMemberDraft } from "./teamDialog.svelte";
-import { defaultTabGroupFromPath } from "./teamDialog.svelte";
+import { agentForMember, defaultTabGroupFromPath } from "./teamDialog.svelte";
 
 /// Context the dialog hands the orchestrator: the EXISTING Team Work
 /// Lead terminal tab + the pane it lives in. The lead is never
@@ -105,10 +105,12 @@ export function translateConfig(config: TeamDialogConfig): TeamConfigWire {
       env,
       is_lead: m.isLead,
     };
-    // A shell member ("none", or an unset draft) carries no submit
-    // chord, so the wire form omits `agent` entirely; only a named
-    // agent round-trips the field.
-    if (m.agent && m.agent !== "none") member.agent = m.agent;
+    // The submit-encoding agent is NOT carried on the wire: the server
+    // DERIVES it from the command (+ a CHAN_AGENT env override) via
+    // chan_shell::SubmitAgent::derive, the single source of truth. The SPA
+    // bootstrap re-derives the lead's agent locally (runTeamBootstrap), only
+    // to pick the lead identity poke's submit chord; agentForMember mirrors
+    // the Rust algorithm.
     const pos = positions[idx];
     if (pos) member.position = pos;
     return member;
@@ -173,9 +175,6 @@ export function wireToDialog(
       command: m.command,
       env: envText,
       isLead: m.is_lead,
-      // An omitted wire `agent` is a shell member; read it back as
-      // "none" so the dialog's picker shows the right selection.
-      agent: m.agent ?? "none",
     };
   });
   const size = Math.max(members.length, 1);
@@ -431,7 +430,14 @@ export async function runTeamBootstrap(
   // chord). The freshly-spawned lead's WS may not be open yet, so retry until
   // the send goes out (the server then enqueues + drains when the agent is
   // idle). This is what makes the lead read bootstrap.md + drive the workers.
-  const leadAgent = leadEntry.agent ?? "none";
+  // Derive the lead's submit agent from its DIALOG command (+ a CHAN_AGENT
+  // env override), the same algorithm the server uses (SubmitAgent::derive);
+  // the agent is no longer carried on the wire. A shell lead derives "none"
+  // and gets no submit chord (undefined).
+  const leadDraft = config.members.find((m) => m.isLead);
+  const leadAgent = leadDraft
+    ? agentForMember(leadDraft.command, leadDraft.env)
+    : "none";
   void deliverLeadIdentity(
     leadTab.id,
     prompt,

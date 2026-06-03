@@ -1,12 +1,27 @@
-//! The per-agent submit-encoding map. A coding agent running inside a
-//! chan terminal submits its compose buffer on a different byte sequence
-//! depending on which agent it is, so a hands-free completion poke
-//! (`cs terminal write --submit=<agent>`) has to append the right one.
+//! The per-agent submit-encoding map plus the command -> agent derivation.
+//! A coding agent running inside a chan terminal submits its compose buffer
+//! on a different byte sequence depending on which agent it is, so a
+//! hands-free completion poke (`cs terminal write --submit=<agent>`) has to
+//! append the right one.
 //!
-//! This is the Rust half of the shared map; the TypeScript half lives in
-//! `web/src/terminal/submitMode.ts` (`AGENT_SUBMIT_CHORDS` /
-//! `encodeForAgentSubmit`) and must stay in sync byte-for-byte. Keeping
-//! the chords in one enum here means a new agent is added in one place.
+//! Two things live here, both shared by the `cs` CLI and chan-server:
+//!
+//!   - `SubmitAgent::derive`: map a spawn command (+ an optional `CHAN_AGENT`
+//!     env override) to the agent whose submit encoding it uses. This is the
+//!     single source of truth for "which agent is this", mirrored in
+//!     `web/src/state/teamDialog.svelte.ts` (`agentForMember`).
+//!   - `apply_submit_chord`: turn a poke into the PTY bytes that submit it.
+//!     Each agent has a `{}`-templated chord whose DEFAULT reproduces the
+//!     live-probed bytes, but which is overridable at runtime (env var or
+//!     `<config>/chan/submit.toml`) so a client changing its submit behavior
+//!     does not need a rebuild. See `apply_submit_chord` / `set_chord_overrides`.
+//!
+//! The frontend only ever sends the agent NAME (the server applies the
+//! chord), so the chord bytes are not duplicated in the SPA. The agent-name
+//! detection in `submitMode.ts` is the only TS half that must stay in sync.
+
+use std::collections::HashMap;
+use std::sync::RwLock;
 
 #[cfg(feature = "client")]
 use clap::ValueEnum;
@@ -28,21 +43,27 @@ pub enum SubmitAgent {
     /// OpenAI codex. Reads a plain CR as Enter, but ONLY as a distinct
     /// keypress: codex coalesces a single `text + CR` write into a paste
     /// burst and treats the trailing CR as a literal newline, so a bare-CR
-    /// suffix never submits. `apply_submit_chord` wraps codex's text in
+    /// suffix never submits. The default template wraps codex's text in
     /// bracketed paste so the trailing CR lands as a real Enter. It ignores
     /// both the Claude chord and the kitty CSI-u Enter (`\x1b[13u`) silently.
     /// Live-probed 2026-06-02 against codex-cli 0.136.0.
     Codex,
-    /// Google gemini. Submits on a plain CR suffix (live-probed 2026-05-31 in
-    /// a chan terminal: the Claude chord left the buffer unsubmitted).
+    /// Google gemini. Submits on a CR, but ONLY when the CR arrives as a
+    /// DISTINCT write: gemini 0.42 coalesces a bulk `text + CR` write into one
+    /// read and treats the trailing CR as a newline in its draft, not Enter
+    /// (a bracketed-paste wrap does not help, unlike codex). So gemini's chord
+    /// is delivered as a SEPARATE write from the text - see `submit_writes`.
+    /// Live-probed 2026-06-03 against gemini-cli 0.42.0: bare CR and a
+    /// bracketed-paste wrap both left the buffer unsubmitted; a standalone CR
+    /// write submitted it. (Earlier 0.x gemini did submit on a coalesced CR.)
     Gemini,
 }
 
 impl SubmitAgent {
     /// Resolve an agent NAME ("claude" | "codex" | "gemini") to its variant
     /// without clap's `ValueEnum::from_str` (so a caller that only has the
-    /// string, e.g. the chan-server team spawner reading a member's `agent`,
-    /// does not have to pull clap in). Returns `None` for an unknown name.
+    /// string does not have to pull clap in). Returns `None` for an unknown
+    /// name.
     pub fn from_agent_name(name: &str) -> Option<Self> {
         match name {
             "claude" => Some(SubmitAgent::Claude),
@@ -52,23 +73,115 @@ impl SubmitAgent {
         }
     }
 
-    /// The byte sequence that makes this agent submit its compose buffer.
-    /// These ARE the wire bytes written to the PTY; changing one changes
-    /// runtime behavior with a green build, so the map is the single
-    /// source of truth (mirrored in `submitMode.ts`).
-    pub fn submit_chord(self) -> &'static str {
+    /// The agent's lower-case name, the inverse of `from_agent_name`.
+    pub fn name(self) -> &'static str {
         match self {
-            // xterm modifyOtherKeys CSI for Cmd+Enter. A bare newline
-            // lands as a newline in Claude's multi-line draft, not a
-            // submit.
-            SubmitAgent::Claude => "\x1b[27;9;13~",
-            // codex + gemini both read a plain CR as Enter. gemini submits on
-            // a bare CR suffix; codex needs that CR delivered as a distinct
-            // keypress (apply_submit_chord wraps codex's text in bracketed
-            // paste so the CR is not coalesced into a paste burst).
-            SubmitAgent::Codex | SubmitAgent::Gemini => "\r",
+            SubmitAgent::Claude => "claude",
+            SubmitAgent::Codex => "codex",
+            SubmitAgent::Gemini => "gemini",
         }
     }
+
+    /// Derive the submit agent from a spawn command and an optional
+    /// `CHAN_AGENT` override value. The single source of truth for the
+    /// command -> agent mapping, mirrored in `agentForMember`
+    /// (teamDialog.svelte.ts).
+    ///
+    /// `CHAN_AGENT` wins when it names a known agent ("claude"/"codex"/
+    /// "gemini") or an explicit shell ("none"/"shell" -> `None`); an
+    /// unrecognized value falls through to the command sniff (the escape
+    /// hatch is opt-in, a typo should not silently disable submit). The
+    /// command match is a LOOSE whole-word sniff: claude/codex/gemini
+    /// recognized anywhere in the command as a word, so wrappers like
+    /// `my-claude.sh`, `/usr/local/bin/codex-cli`, or `claude --resume` still
+    /// resolve, while `claudette` does not. `None` means a shell member with
+    /// no submit chord.
+    pub fn derive(command: &str, chan_agent: Option<&str>) -> Option<SubmitAgent> {
+        if let Some(raw) = chan_agent {
+            match raw.trim().to_ascii_lowercase().as_str() {
+                "claude" => return Some(SubmitAgent::Claude),
+                "codex" => return Some(SubmitAgent::Codex),
+                "gemini" => return Some(SubmitAgent::Gemini),
+                "none" | "shell" => return None,
+                // Unrecognized CHAN_AGENT: ignore it, sniff the command.
+                _ => {}
+            }
+        }
+        let c = command.to_ascii_lowercase();
+        if word_match(&c, "claude") {
+            Some(SubmitAgent::Claude)
+        } else if word_match(&c, "codex") {
+            Some(SubmitAgent::Codex)
+        } else if word_match(&c, "gemini") {
+            Some(SubmitAgent::Gemini)
+        } else {
+            None
+        }
+    }
+
+    /// The built-in submit template for this agent: a string with a single
+    /// `{}` placeholder for the (trailing-newline-trimmed) text. These ARE
+    /// the live-probed default bytes; an override (env / config file) replaces
+    /// the whole template. claude appends the modifyOtherKeys Cmd+Enter CSI;
+    /// gemini a bare CR; codex wraps the text in bracketed paste then CR (its
+    /// paste-burst coalescing eats a bare trailing CR, so the wrap is what
+    /// makes the CR submit).
+    fn default_template(self) -> &'static str {
+        match self {
+            SubmitAgent::Claude => "{}\x1b[27;9;13~",
+            SubmitAgent::Codex => "\x1b[200~{}\x1b[201~\r",
+            SubmitAgent::Gemini => "{}\r",
+        }
+    }
+
+    /// Resolve this agent's submit template, applying overrides in priority
+    /// order: env `CHAN_SUBMIT_<AGENT>` > the process-global override map
+    /// (loaded from `<config>/chan/submit.toml` by the server) > the built-in
+    /// default. Override strings are unescaped (`\e`, `\xHH`, `\r`, `\n`,
+    /// `\t`, `\\`) so a config/env value can carry control bytes as text.
+    fn template(self) -> String {
+        let guard = CHORD_OVERRIDES.read().expect("CHORD_OVERRIDES poisoned");
+        resolve_template(self, |k| std::env::var(k).ok(), guard.as_ref())
+    }
+}
+
+/// Process-global per-agent chord template overrides, keyed by agent name
+/// ("claude"/"codex"/"gemini"). The server loads these from
+/// `<config>/chan/submit.toml` once at startup via `set_chord_overrides`;
+/// env `CHAN_SUBMIT_<AGENT>` still takes precedence at apply time. Default
+/// `None` means "no file overrides", which every chan-shell-only caller
+/// (the `cs` CLI) sees, so it falls back to env + built-in.
+static CHORD_OVERRIDES: RwLock<Option<HashMap<String, String>>> = RwLock::new(None);
+
+/// Install the config-file chord template overrides (agent name -> template
+/// string, escapes intact). Called once by the server at startup; a later
+/// call replaces the map. Env vars still win over these at apply time.
+pub fn set_chord_overrides(overrides: HashMap<String, String>) {
+    *CHORD_OVERRIDES.write().expect("CHORD_OVERRIDES poisoned") = Some(overrides);
+}
+
+/// Pure resolution of an agent's template from an env lookup + an optional
+/// override map, so the precedence logic is testable without touching the
+/// process env or the global. env `CHAN_SUBMIT_<AGENT>` > override map >
+/// built-in default; an empty/whitespace override value is ignored (falls
+/// through), so a blank env var does not blank the chord.
+fn resolve_template(
+    agent: SubmitAgent,
+    env: impl Fn(&str) -> Option<String>,
+    overrides: Option<&HashMap<String, String>>,
+) -> String {
+    let name = agent.name();
+    if let Some(v) = env(&format!("CHAN_SUBMIT_{}", name.to_ascii_uppercase())) {
+        if !v.trim().is_empty() {
+            return unescape(&v);
+        }
+    }
+    if let Some(v) = overrides.and_then(|m| m.get(name)) {
+        if !v.trim().is_empty() {
+            return unescape(v);
+        }
+    }
+    agent.default_template().to_string()
 }
 
 /// `cs terminal write --submit=<agent>`: encode `data` into the PTY bytes
@@ -77,26 +190,147 @@ impl SubmitAgent {
 /// newline before the submit would land inside the agent's draft, splitting
 /// the buffer before submit fires.
 ///
-/// claude/gemini take a plain suffix chord (`submit_chord`). codex is the odd
-/// one out: it coalesces a single `text + CR` write into a paste burst and
-/// reads the trailing CR as a literal newline, so a bare-CR suffix never
-/// submits. Wrapping the text in explicit bracketed-paste delimiters
-/// (`\x1b[200~` .. `\x1b[201~`) makes codex insert it as a paste, so the CR
-/// after the paste-end marker is read as a distinct Enter keypress and
-/// submits. Interior newlines are preserved inside the paste (a multi-line
-/// poke arrives as one message). Live-probed 2026-06-02 against codex-cli
-/// 0.136.0.
+/// The agent's resolved template (default or overridden) drives the bytes. A
+/// template with a `{}` placeholder substitutes the text there (the codex
+/// bracketed-paste wrap is expressed this way); a template WITHOUT `{}` is
+/// treated as a pure suffix appended after the text, so a bare-chord override
+/// like `CHAN_SUBMIT_GEMINI=$'\r'` still works.
 ///
-/// Mirrors `encodeForAgentSubmit` in `submitMode.ts` byte-for-byte.
+/// Defaults mirror the live-probed bytes; the agent-name half is mirrored by
+/// `submitMode.ts` (the SPA sends the name, the server applies the chord).
 pub fn apply_submit_chord(data: String, submit: Option<SubmitAgent>) -> String {
     let Some(agent) = submit else {
         return data;
     };
     let text = data.trim_end_matches('\n');
-    match agent {
-        SubmitAgent::Codex => format!("\x1b[200~{text}\x1b[201~{}", agent.submit_chord()),
-        SubmitAgent::Claude | SubmitAgent::Gemini => format!("{text}{}", agent.submit_chord()),
+    let template = agent.template();
+    if template.contains("{}") {
+        template.replacen("{}", text, 1)
+    } else {
+        format!("{text}{template}")
     }
+}
+
+/// The ordered PTY writes that deliver `data` to an agent and submit it. Most
+/// agents need ONE write (the chord is part of it, via `apply_submit_chord`),
+/// so a caller can write/enqueue the single element verbatim.
+///
+/// gemini is the exception. gemini 0.42 coalesces a bulk `text + CR` write
+/// into one read and treats the trailing CR as a newline in its draft, not an
+/// Enter, so the submit never fires (even a bracketed-paste wrap does not
+/// help; unlike codex, gemini ignores the post-paste CR as a distinct key).
+/// Only a CR delivered as its OWN write submits gemini, so for gemini this
+/// returns TWO writes (the text body, then the submit chord alone) which the
+/// caller MUST deliver as separate events: separate write-queue items, whose
+/// drainer idle-gates between them, or separate PTY writes with a gap. Empty
+/// parts are dropped. Live-probed 2026-06-03 against gemini-cli 0.42.0: bare
+/// CR and a bracketed-paste wrap both left the buffer unsubmitted; a
+/// standalone CR submitted it.
+pub fn submit_writes(data: String, submit: Option<SubmitAgent>) -> Vec<String> {
+    if submit != Some(SubmitAgent::Gemini) {
+        return vec![apply_submit_chord(data, submit)];
+    }
+    let body = data.trim_end_matches('\n').to_string();
+    // The submit chord alone is gemini's resolved template with the text
+    // placeholder removed (default `\r`, or an override's trailing bytes).
+    let template = SubmitAgent::Gemini.template();
+    let chord = if template.contains("{}") {
+        template.replacen("{}", "", 1)
+    } else {
+        template
+    };
+    let writes: Vec<String> = [body, chord]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect();
+    if writes.is_empty() {
+        vec![String::new()]
+    } else {
+        writes
+    }
+}
+
+/// Whether `word` (ASCII) occurs in `haystack` bounded by non-word chars on
+/// both sides, the `\b<word>\b` of `agentForCommand`. Word chars are ASCII
+/// alphanumerics + `_`; anything else (including non-ASCII bytes and string
+/// edges) is a boundary. `haystack` is expected pre-lowercased.
+fn word_match(haystack: &str, word: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let mut from = 0;
+    while let Some(pos) = haystack[from..].find(word) {
+        let start = from + pos;
+        let end = start + word.len();
+        let before_ok = start == 0 || !is_word_byte(bytes[start - 1]);
+        let after_ok = end == bytes.len() || !is_word_byte(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = start + 1;
+        if from >= bytes.len() {
+            break;
+        }
+    }
+    false
+}
+
+fn is_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Decode the backslash escapes a config/env override string may carry so a
+/// template can express control bytes as plain text: `\e` (ESC), `\xHH` (a
+/// hex byte, intended for ASCII/control), `\r`, `\n`, `\t`, `\0`, `\\`. An
+/// unrecognized escape keeps both the backslash and the following char, so a
+/// literal `\d` survives rather than being silently dropped.
+fn unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('e') => out.push('\x1b'),
+            Some('r') => out.push('\r'),
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('0') => out.push('\0'),
+            Some('\\') => out.push('\\'),
+            Some('x') => {
+                let h1 = chars.next();
+                let h2 = chars.next();
+                match (h1, h2) {
+                    (Some(a), Some(b)) => {
+                        let hex: String = [a, b].iter().collect();
+                        if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                            out.push(byte as char);
+                        } else {
+                            out.push('\\');
+                            out.push('x');
+                            out.push(a);
+                            out.push(b);
+                        }
+                    }
+                    (Some(a), None) => {
+                        out.push('\\');
+                        out.push('x');
+                        out.push(a);
+                    }
+                    _ => {
+                        out.push('\\');
+                        out.push('x');
+                    }
+                }
+            }
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -132,6 +366,132 @@ mod tests {
         assert_eq!(apply_submit_chord("poke\n".into(), None), "poke\n");
     }
 
+    #[test]
+    fn submit_writes_is_one_write_except_gemini() {
+        // claude/codex/none: a single write, identical to apply_submit_chord.
+        assert_eq!(
+            submit_writes("poke\n".into(), Some(SubmitAgent::Claude)),
+            vec!["poke\x1b[27;9;13~".to_string()]
+        );
+        assert_eq!(
+            submit_writes("poke".into(), Some(SubmitAgent::Codex)),
+            vec!["\x1b[200~poke\x1b[201~\r".to_string()]
+        );
+        assert_eq!(submit_writes("raw".into(), None), vec!["raw".to_string()]);
+        // gemini: TWO writes - the text body, then the bare submit chord -
+        // so the CR is a distinct keypress (gemini coalesces a bulk text+CR).
+        assert_eq!(
+            submit_writes("poke\n".into(), Some(SubmitAgent::Gemini)),
+            vec!["poke".to_string(), "\r".to_string()]
+        );
+        // A text-only gemini body still splits off the chord write.
+        assert_eq!(
+            submit_writes("hi there".into(), Some(SubmitAgent::Gemini)),
+            vec!["hi there".to_string(), "\r".to_string()]
+        );
+    }
+
+    #[test]
+    fn derive_sniffs_the_command_loosely() {
+        let d = |c: &str| SubmitAgent::derive(c, None);
+        assert_eq!(d("claude"), Some(SubmitAgent::Claude));
+        assert_eq!(d("codex"), Some(SubmitAgent::Codex));
+        assert_eq!(d("gemini"), Some(SubmitAgent::Gemini));
+        // past the first token / through a path / a wrapper
+        assert_eq!(d("claude --resume"), Some(SubmitAgent::Claude));
+        assert_eq!(d("/usr/local/bin/codex-cli"), Some(SubmitAgent::Codex));
+        assert_eq!(d("my-claude.sh --flag"), Some(SubmitAgent::Claude));
+        assert_eq!(d("env FOO=1 gemini chat"), Some(SubmitAgent::Gemini));
+        assert_eq!(d("CLAUDE"), Some(SubmitAgent::Claude)); // case-insensitive
+                                                            // word boundaries keep near-misses out
+        assert_eq!(d("claudette"), None);
+        assert_eq!(d("codexterous"), None);
+        // a plain shell -> no chord
+        assert_eq!(d("bash"), None);
+        assert_eq!(d(""), None);
+    }
+
+    #[test]
+    fn derive_honors_chan_agent_override() {
+        // CHAN_AGENT wins over the command sniff
+        assert_eq!(
+            SubmitAgent::derive("codex", Some("claude")),
+            Some(SubmitAgent::Claude)
+        );
+        assert_eq!(
+            SubmitAgent::derive("./run-my-agent.sh", Some("gemini")),
+            Some(SubmitAgent::Gemini)
+        );
+        // explicit shell forces None despite an agent command
+        assert_eq!(SubmitAgent::derive("claude", Some("none")), None);
+        assert_eq!(SubmitAgent::derive("claude", Some("shell")), None);
+        // an unrecognized value falls through to the command sniff
+        assert_eq!(
+            SubmitAgent::derive("claude", Some("banana")),
+            Some(SubmitAgent::Claude)
+        );
+        assert_eq!(SubmitAgent::derive("bash", Some("banana")), None);
+        // whitespace / case tolerated
+        assert_eq!(
+            SubmitAgent::derive("bash", Some("  Codex ")),
+            Some(SubmitAgent::Codex)
+        );
+    }
+
+    #[test]
+    fn resolve_template_precedence_env_over_file_over_default() {
+        let none = |_: &str| None;
+        // default when nothing is set
+        assert_eq!(
+            resolve_template(SubmitAgent::Claude, none, None),
+            "{}\x1b[27;9;13~"
+        );
+        // file override (the process-global map), escapes decoded
+        let mut file = HashMap::new();
+        file.insert("claude".to_string(), "{}\\r".to_string());
+        assert_eq!(
+            resolve_template(SubmitAgent::Claude, none, Some(&file)),
+            "{}\r"
+        );
+        // env beats the file
+        let env = |k: &str| (k == "CHAN_SUBMIT_CLAUDE").then(|| "{}\\x0d".to_string());
+        assert_eq!(
+            resolve_template(SubmitAgent::Claude, env, Some(&file)),
+            "{}\r"
+        );
+        // a blank env value is ignored (falls through to the file)
+        let blank = |k: &str| (k == "CHAN_SUBMIT_CLAUDE").then(|| "  ".to_string());
+        assert_eq!(
+            resolve_template(SubmitAgent::Claude, blank, Some(&file)),
+            "{}\r"
+        );
+    }
+
+    #[test]
+    fn template_without_placeholder_is_a_suffix() {
+        // A bare-chord override (no `{}`) appends after the text.
+        let mut file = HashMap::new();
+        file.insert("gemini".to_string(), "\\r".to_string());
+        let tmpl = resolve_template(SubmitAgent::Gemini, |_| None, Some(&file));
+        // mimic apply_submit_chord's suffix branch
+        let out = if tmpl.contains("{}") {
+            tmpl.replacen("{}", "poke", 1)
+        } else {
+            format!("poke{tmpl}")
+        };
+        assert_eq!(out, "poke\r");
+    }
+
+    #[test]
+    fn unescape_decodes_control_escapes() {
+        assert_eq!(unescape("\\e[27;9;13~"), "\x1b[27;9;13~");
+        assert_eq!(unescape("\\x1b[200~"), "\x1b[200~");
+        assert_eq!(unescape("a\\rb\\nc\\t"), "a\rb\nc\t");
+        assert_eq!(unescape("\\\\"), "\\");
+        // unknown escape keeps both chars
+        assert_eq!(unescape("\\d"), "\\d");
+    }
+
     // ValueEnum parsing only exists with the `client` feature (the
     // `--submit` flag); the chord map below is tested unconditionally.
     #[cfg(feature = "client")]
@@ -154,24 +514,10 @@ mod tests {
     }
 
     #[test]
-    fn from_agent_name_parses_the_known_names() {
-        assert_eq!(
-            SubmitAgent::from_agent_name("claude"),
-            Some(SubmitAgent::Claude)
-        );
-        assert_eq!(
-            SubmitAgent::from_agent_name("codex"),
-            Some(SubmitAgent::Codex)
-        );
-        assert_eq!(
-            SubmitAgent::from_agent_name("gemini"),
-            Some(SubmitAgent::Gemini)
-        );
+    fn from_agent_name_round_trips_with_name() {
+        for a in [SubmitAgent::Claude, SubmitAgent::Codex, SubmitAgent::Gemini] {
+            assert_eq!(SubmitAgent::from_agent_name(a.name()), Some(a));
+        }
         assert_eq!(SubmitAgent::from_agent_name("turbo"), None);
-        // Same chord whether parsed by clap's ValueEnum or by name.
-        assert_eq!(
-            SubmitAgent::from_agent_name("claude").map(SubmitAgent::submit_chord),
-            Some("\x1b[27;9;13~"),
-        );
     }
 }

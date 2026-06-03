@@ -10,7 +10,7 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Json, Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use chan_shell::{apply_submit_chord, SubmitAgent};
+use chan_shell::{submit_writes, SubmitAgent};
 use portable_pty::PtySize;
 use serde::{Deserialize, Serialize};
 
@@ -560,8 +560,15 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 let submit = SubmitAgent::from_agent_name(
                                     agent.as_deref().unwrap_or("claude"),
                                 );
-                                let payload = apply_submit_chord(data, submit);
-                                let _ = session.enqueue_write(payload.as_bytes());
+                                // gemini needs its submit chord as a SEPARATE
+                                // queue item (it coalesces a bulk text+CR into
+                                // a newline); submit_writes returns two writes
+                                // for gemini, one for everyone else. Each
+                                // enqueued item drains idle-gated, so the CR
+                                // lands as a distinct keypress.
+                                for write in submit_writes(data, submit) {
+                                    let _ = session.enqueue_write(write.as_bytes());
+                                }
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
                             Err(e) => {

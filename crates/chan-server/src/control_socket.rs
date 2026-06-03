@@ -44,7 +44,7 @@ pub use chan_shell::{ControlRequest, ControlResponse};
 // pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
 // TeamOp tags the `cs terminal team` op (new | load).
 #[cfg(unix)]
-use chan_shell::{apply_submit_chord, PaneOp, SubmitAgent, SurveyReply, SurveySpec, TeamOp};
+use chan_shell::{submit_writes, PaneOp, SubmitAgent, SurveyReply, SurveySpec, TeamOp};
 
 #[cfg(unix)]
 #[derive(Debug, Serialize)]
@@ -621,6 +621,16 @@ async fn handle_team(
 #[cfg(unix)]
 const TEAM_SPAWN_POKE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// Gap between the body write and the submit-chord write of a multi-write
+/// poke (gemini: the prompt, then the bare CR as a distinct keypress). The
+/// gap lets gemini render + settle on the body before the CR arrives, so the
+/// CR is read as Enter rather than coalesced into the body's read. The
+/// queue-based poke paths (cs / Rich Prompt) get this separation for free
+/// from the drainer's idle-gating; this direct-write spawn path needs an
+/// explicit gap.
+#[cfg(unix)]
+const SUBMIT_SPLIT_GAP: std::time::Duration = std::time::Duration::from_millis(400);
+
 /// What a server-side team spawn produced: the resolved group, the handles
 /// that came up, the ones that failed (with the spawn error), and the
 /// per-agent identity pokes to deliver after the boot grace.
@@ -629,9 +639,12 @@ struct TeamSpawn {
     group: String,
     spawned: Vec<String>,
     failed: Vec<(String, String)>,
-    /// `(handle, payload)` for each AGENT member; the payload is the
-    /// identity prompt with the agent's submit chord already appended.
-    pokes: Vec<(String, String)>,
+    /// `(handle, writes)` for each AGENT member. `writes` is the ordered list
+    /// of PTY writes that deliver the identity prompt + submit it: one element
+    /// for most agents (prompt + chord), but TWO for gemini (the prompt, then
+    /// the bare submit chord as a distinct write, since gemini coalesces a
+    /// bulk text+CR). The delivery loop writes them with a gap between.
+    pokes: Vec<(String, Vec<String>)>,
     /// Each spawned member's tab name + live `session_id`, for the S1
     /// SPA-surfacing push (`WindowCommand::TeamSpawned`).
     members: Vec<SpawnedMember>,
@@ -726,9 +739,14 @@ fn spawn_team(
                     tab_name: m.handle.clone(),
                     session_id: handle.id().to_string(),
                 });
-                if let Some(agent) = m.agent.as_deref().and_then(SubmitAgent::from_agent_name) {
-                    let payload = apply_submit_chord(identity_prompt(config, dir, m), Some(agent));
-                    pokes.push((m.handle.clone(), payload));
+                // Derive the submit agent from the command (+ CHAN_AGENT env
+                // override), the single source of truth shared with the SPA;
+                // a shell member derives None and gets no identity poke.
+                if let Some(agent) =
+                    SubmitAgent::derive(&m.command, m.env.get("CHAN_AGENT").map(String::as_str))
+                {
+                    let writes = submit_writes(identity_prompt(config, dir, m), Some(agent));
+                    pokes.push((m.handle.clone(), writes));
                 }
             }
             Err(e) => failed.push((m.handle.clone(), e.to_string())),
@@ -784,8 +802,16 @@ async fn spawn_and_poke_team(
     // failed spawn) skips the wait entirely.
     if !spawn.spawned.is_empty() && !spawn.pokes.is_empty() {
         tokio::time::sleep(TEAM_SPAWN_POKE_GRACE).await;
-        for (handle, payload) in &spawn.pokes {
-            registry.write_input_matching(Some(handle), Some(&spawn.group), payload.as_bytes());
+        for (handle, writes) in &spawn.pokes {
+            // Most agents have a single write; gemini has two (prompt, then
+            // the bare CR), which must arrive as distinct keypresses, so we
+            // gap between writes.
+            for (i, write) in writes.iter().enumerate() {
+                if i > 0 {
+                    tokio::time::sleep(SUBMIT_SPLIT_GAP).await;
+                }
+                registry.write_input_matching(Some(handle), Some(&spawn.group), write.as_bytes());
+            }
         }
     }
 
@@ -1975,17 +2001,22 @@ host_handle = "@@Neo"
 tab_group = "spawnme"
 created_at = "2026-05-29T00:00:00Z"
 
+# The submit agent is DERIVED from the command (+ a CHAN_AGENT env override).
+# These fixtures use empty commands (so the spawn launches a harmless shell,
+# not a real agent binary), and CHAN_AGENT to classify which members are
+# agents vs the shell member. The command-sniff path is unit-tested in
+# chan_shell::submit.
 [[members]]
 handle = "@@LaneA"
 command = ""
 is_lead = false
-agent = "codex"
+env = { CHAN_AGENT = "codex" }
 
 [[members]]
 handle = "@@Lead"
 command = ""
 is_lead = true
-agent = "claude"
+env = { CHAN_AGENT = "claude" }
 
 [[members]]
 handle = "@@Shell"
@@ -2046,19 +2077,23 @@ is_lead = false
         // worker's carries codex's CR.
         assert_eq!(spawn.pokes.len(), 2, "agents only: {:?}", spawn.pokes);
         assert_eq!(spawn.pokes[0].0, "@@Lead");
+        // claude is a SINGLE write ending in its modifyOtherKeys chord.
+        assert_eq!(spawn.pokes[0].1.len(), 1, "claude poke is one write");
         assert!(
-            spawn.pokes[0].1.ends_with("\x1b[27;9;13~"),
+            spawn.pokes[0].1[0].ends_with("\x1b[27;9;13~"),
             "lead poke ends with claude chord: {:?}",
             spawn.pokes[0].1
         );
         assert!(
-            spawn.pokes[0].1.contains("You are @@Lead"),
+            spawn.pokes[0].1[0].contains("You are @@Lead"),
             "lead poke names the lead: {:?}",
             spawn.pokes[0].1
         );
         assert_eq!(spawn.pokes[1].0, "@@LaneA");
+        // codex is a SINGLE write (bracketed-paste wrap) ending in CR.
+        assert_eq!(spawn.pokes[1].1.len(), 1, "codex poke is one write");
         assert!(
-            spawn.pokes[1].1.ends_with('\r') && !spawn.pokes[1].1.ends_with("\x1b[27;9;13~"),
+            spawn.pokes[1].1[0].ends_with('\r') && !spawn.pokes[1].1[0].ends_with("\x1b[27;9;13~"),
             "worker poke ends with codex CR: {:?}",
             spawn.pokes[1].1
         );
@@ -2154,7 +2189,6 @@ is_lead = false
                 env: Default::default(),
                 is_lead: true,
                 position: None,
-                agent: None,
             }],
         }
     }
@@ -2399,7 +2433,7 @@ is_lead = false
             group: "alpha".into(),
             spawned: vec!["@@Lead".into(), "@@A".into()],
             failed: vec![("@@B".into(), "no such file".into())],
-            pokes: vec![("@@Lead".into(), "hi\x1b[27;9;13~".into())],
+            pokes: vec![("@@Lead".into(), vec!["hi\x1b[27;9;13~".into()])],
             members: vec![],
         };
         match team_spawn_summary("alpha", &spawn) {

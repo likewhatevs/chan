@@ -36,6 +36,7 @@ mod signal;
 mod state;
 mod static_assets;
 mod store;
+mod submit_config;
 mod survey;
 mod terminal_sessions;
 mod tunnel_guard;
@@ -435,6 +436,13 @@ async fn build_app(
         ServerConfig::default()
     });
     let search_aggression = server_config.effective_search_aggression(config.search_aggression);
+
+    // Install any per-agent submit-chord overrides from
+    // `<config>/chan/submit.toml` into chan-shell, so a client changing its
+    // submit behavior is a config edit, not a rebuild. Missing/malformed
+    // file falls back to the built-in defaults. Env CHAN_SUBMIT_<AGENT>
+    // still wins at chord-application time.
+    submit_config::install();
 
     // Unified event stream: every /ws subscriber gets watcher and
     // progress events from the same channel. Producers serialize to

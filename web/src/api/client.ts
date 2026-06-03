@@ -1150,11 +1150,10 @@ export interface TeamMemberWire {
   env: Record<string, string>;
   is_lead: boolean;
   position?: { row: number; col: number };
-  /// Submit-encoding agent type for this member's terminal, feeding the
-  /// bootstrap poke chord + the lead composer's submit mode. Maps to the
-  /// shared submit map (submitMode.ts AGENT_SUBMIT_CHORDS). Omitted for a
-  /// shell member ("none" in the dialog), which has no submit chord.
-  agent?: "claude" | "codex" | "gemini";
+  // The submit-encoding agent is NOT carried on the wire: the server derives
+  // it from `command` (+ a CHAN_AGENT env override) via SubmitAgent::derive.
+  // The SPA mirror is agentForMember (teamDialog.svelte.ts), used only to
+  // pick the lead identity poke's chord at bootstrap.
 }
 
 export interface TeamConfigWire {
