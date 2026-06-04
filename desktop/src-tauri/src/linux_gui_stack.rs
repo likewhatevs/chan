@@ -1,0 +1,173 @@
+//! Linux AppImage GUI-stack preference.
+//!
+//! WHY: the Linux AppImage bundles its own GUI stack (libgtk-3,
+//! libwebkit2gtk-4.1) plus the GL/EGL/gbm libraries linuxdeploy-plugin-gtk
+//! drags in, built on Ubuntu in release.yml. On a rolling distro whose Mesa
+//! is newer than the bundle (e.g. CachyOS on an AMD radeonsi iGPU), the
+//! bundled libgtk cannot create an EGL display against the host Mesa and the
+//! webview aborts at creation time with `EGL_BAD_PARAMETER`. The host's GTK
+//! and Mesa are always built against each other, so preferring the host GUI
+//! stack (and keeping the bundle as fallback for anything the host lacks) is
+//! the durable fix across distros.
+//!
+//! WHY a re-exec: by the time `main()` runs, libgtk/libEGL are already
+//! resolved and loaded (they are DT_NEEDED of the binary, loaded at process
+//! start in the bundle-first order AppRun set). Rewriting `LD_LIBRARY_PATH`
+//! from inside `main()` cannot move them. A fresh process started via `execv`
+//! after rewriting the loader path honors the new order, and the
+//! `EGL_BAD_PARAMETER` failure happens later (at webview creation), so a
+//! top-of-`main()` re-exec runs before the failing path. The GTK module env
+//! AppRun exported (GTK_PATH, GDK_PIXBUF_MODULE_FILE, GIO_MODULE_DIR, ...) is
+//! inherited across the exec for free, so the shim only has to rewrite the
+//! library search path.
+
+/// Prefer the host GUI stack on a Linux AppImage launch, re-exec'ing once.
+/// No-op off Linux, off an AppImage, or once already applied.
+pub fn prefer_system_gui_stack() {
+    #[cfg(target_os = "linux")]
+    linux::prefer_system_gui_stack();
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use crate::cs_install;
+    use std::ffi::OsString;
+    use std::os::unix::process::CommandExt;
+    use std::path::Path;
+    use std::process::Command;
+
+    /// Policy knob: `auto` (default), `system` (force; any reason we cannot
+    /// prefer the host stack is fatal rather than a silent fallback), or
+    /// `bundled` (keep today's bundle-first behavior).
+    const POLICY_ENV: &str = "CHAN_LINUX_SYSTEM_GUI";
+
+    /// Loop guard, set across the re-exec so the child does not re-exec again.
+    const APPLIED_ENV: &str = "CHAN_LINUX_SYSTEM_GUI_APPLIED";
+
+    // The sonames chan-desktop links. BOTH must be present on the host before
+    // we shadow the bundle: a partial shadow (host libgtk against a bundled
+    // libwebkit, or the reverse) is worse than either stack on its own.
+    const GTK_SONAME: &str = "libgtk-3.so.0";
+    const WEBKIT_SONAME: &str = "libwebkit2gtk-4.1.so.0";
+
+    pub fn prefer_system_gui_stack() {
+        // Bundle-first loader order only exists inside an AppImage.
+        if cs_install::appimage_path().is_none() {
+            return;
+        }
+
+        // Independent, cheap layer: keep WebKit off the dma-buf renderer path
+        // that aborts with EGL_BAD_PARAMETER on the affected GPUs. WebKit reads
+        // this lazily at webview init (no re-exec needed) and it is inherited
+        // across the re-exec below when one happens. Never clobber a user value.
+        set_webkit_env_defaults();
+
+        match std::env::var(POLICY_ENV).unwrap_or_default().trim() {
+            "bundled" => {}
+            "system" => apply(true),
+            _ => apply(false), // auto (default)
+        }
+    }
+
+    /// Prefer the host stack, re-exec'ing once. `force` reflects
+    /// `CHAN_LINUX_SYSTEM_GUI=system`.
+    fn apply(force: bool) {
+        // The re-exec'd child inherits APPLIED=1 and must not loop.
+        if std::env::var_os(APPLIED_ENV).is_some() {
+            return;
+        }
+
+        let Some(cache) = ldconfig_cache() else {
+            return bail(force, "`ldconfig -p` is unavailable");
+        };
+
+        // Presence gate: both sonames must resolve in the host linker cache.
+        // We prepend the dir reported for libwebkit2gtk (the heavier of the
+        // two); on every supported distro libgtk lives in the same dir.
+        let (Some(_gtk), Some(system_dir)) =
+            (lib_dir(&cache, GTK_SONAME), lib_dir(&cache, WEBKIT_SONAME))
+        else {
+            return bail(
+                force,
+                "host is missing libgtk-3 and/or libwebkit2gtk-4.1 in the ldconfig cache",
+            );
+        };
+
+        let exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => return bail(force, &format!("current_exe() failed: {e}")),
+        };
+
+        // Prepend the host lib dir so the loader resolves libgtk /
+        // libwebkit2gtk / libEGL / libgbm to the host copies, falling back to
+        // the bundle for anything the host lacks.
+        let mut ld_path = system_dir;
+        if let Some(existing) = std::env::var_os("LD_LIBRARY_PATH") {
+            if !existing.is_empty() {
+                ld_path.push(":");
+                ld_path.push(existing);
+            }
+        }
+
+        let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
+        // execv replaces the image on success and returns only on failure.
+        let err = Command::new(&exe)
+            .args(&argv)
+            .env("LD_LIBRARY_PATH", &ld_path)
+            .env(APPLIED_ENV, "1")
+            .exec();
+        // Re-exec failed. Under `system` that is fatal; under `auto` fall
+        // through to a normal bundle-first launch rather than aborting.
+        if force {
+            eprintln!("chan: {POLICY_ENV}=system re-exec failed: {err}");
+            std::process::exit(1);
+        }
+        eprintln!("chan: system-GUI-stack re-exec failed ({err}); continuing on bundled stack");
+    }
+
+    fn bail(force: bool, why: &str) {
+        if force {
+            eprintln!("chan: {POLICY_ENV}=system but {why}");
+            std::process::exit(1);
+        }
+        // auto: leave bundle-first behavior intact so minimal/older hosts
+        // (and hosts without the host GUI stack) still launch.
+    }
+
+    fn set_webkit_env_defaults() {
+        // Only the dma-buf renderer is forced off: it is the path that aborts
+        // with EGL_BAD_PARAMETER. WEBKIT_DISABLE_COMPOSITING_MODE is left
+        // alone on purpose; forcing it off degrades rendering on healthy
+        // hosts. Either can be set by the user.
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
+    fn ldconfig_cache() -> Option<String> {
+        let out = Command::new("ldconfig").arg("-p").output().ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    // `ldconfig -p` entries look like:
+    //   \tlibwebkit2gtk-4.1.so.0 (libc6,x86-64) => /usr/lib/libwebkit2gtk-4.1.so.0
+    // Return the directory of the first entry whose soname (the first token)
+    // matches, so the dir is right on Arch (/usr/lib), Fedora (/usr/lib64) and
+    // Debian/Ubuntu multiarch (/usr/lib/x86_64-linux-gnu), x86_64 and arm64.
+    fn lib_dir(cache: &str, soname: &str) -> Option<OsString> {
+        for line in cache.lines() {
+            let line = line.trim();
+            if line.split_whitespace().next() != Some(soname) {
+                continue;
+            }
+            let path = line.rsplit("=>").next()?.trim();
+            if path.is_empty() {
+                continue;
+            }
+            return Path::new(path).parent().map(|d| d.as_os_str().to_owned());
+        }
+        None
+    }
+}

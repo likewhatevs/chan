@@ -6,6 +6,7 @@ mod cs_install;
 mod default_workspace;
 mod download;
 mod embedded;
+mod linux_gui_stack;
 #[cfg(target_os = "macos")]
 mod pdf;
 mod registry;
@@ -1244,6 +1245,11 @@ fn main() {
             std::process::exit(1);
         }
     }
+    // Linux AppImage only: prefer the host GTK/WebKit/EGL stack over the
+    // bundled one and re-exec once before the webview is created, so it does
+    // not abort with EGL_BAD_PARAMETER against a rolling-distro Mesa. No-op
+    // off Linux/AppImage and once already applied.
+    linux_gui_stack::prefer_system_gui_stack();
     init_tracing();
     // AppImage-only, best-effort: drop a `~/.local/bin/cs` wrapper so a
     // desktop-only Linux user gets the `cs` control client without a
