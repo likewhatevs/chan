@@ -48,11 +48,11 @@ describe("FileTree browser drag-out removed", () => {
   });
 
   test("shared inspectors expose Upload and Download transfer actions", () => {
-    // Upload + Download live in the shared actionsSection; Download
-    // is disabled while a desktop transfer is in progress.
-    expect(fileInfo).toMatch(/onclick=\{triggerUpload\}/);
-    expect(fileInfo).toMatch(/onclick=\{downloadSelection\}/);
-    expect(fileInfo).toMatch(/disabled=\{downloadBusy\}/);
+    // Upload + Download live in the shared actionsSection's pill/dropdown
+    // model; Download is disabled while a desktop transfer is in progress.
+    expect(fileInfo).toMatch(/onClick: triggerUpload/);
+    expect(fileInfo).toMatch(/onClick: downloadSelection/);
+    expect(fileInfo).toMatch(/disabled: downloadBusy/);
     expect(fileInfo).toMatch(/fileOps\.replaceFileAt\(entry\.path, files\[0\]!\)/);
     expect(fileInfo).toMatch(/fileOps\.uploadFilesTo\(entry\.path, files\)/);
     // The folder inspector uses FileInfoBody's dir branch, not a

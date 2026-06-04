@@ -3,14 +3,19 @@ import fileInfo from "./FileInfoBody.svelte?raw";
 
 // The inspector renders one consistent layout on every surface:
 //   header -> actions section -> lazy content (report / refs).
-// The actions (Open / View+Zoom / Upload / Download / Show / Graph from
-// here) sit directly under the filename, plus a full-path toggle. These
-// source pins lock that ordering so the layout can't silently drift.
+// The actions are a single PILL (primary action) plus a caret that drops
+// the secondary actions, chosen per item category (directory / media /
+// editable file / binary) and per surface (the editor "Show Details"
+// inspector has no onOpen, so its file pill is "Show file"). A full-path
+// toggle sits above the pill. These source pins lock that contract so the
+// layout can't silently drift.
 
 describe("shared actions section under the filename", () => {
-  test("defines a reusable actionsSection snippet", () => {
+  test("defines a reusable actionsSection snippet driven by actionModel", () => {
     expect(fileInfo).toMatch(/\{#snippet actionsSection\(\)\}/);
     expect(fileInfo).toMatch(/<div class="actions-section">/);
+    // The category logic lives in the script (actionModel), not inline.
+    expect(fileInfo).toMatch(/const actionModel = \$derived\.by</);
   });
 
   test("actions section carries the full-path toggle + revealed path row", () => {
@@ -24,41 +29,89 @@ describe("shared actions section under the filename", () => {
     expect(fileInfo).toMatch(/showFullPath = false;/);
   });
 
-  test("actions section gates Open on isEditableText + onOpen", () => {
-    // Open lives inside actionsSection now (not at the body bottom),
-    // and only for editable files with an onOpen handler bound.
+  test("renders a pill (primary) + caret that toggles the dropdown", () => {
     expect(fileInfo).toMatch(
-      /\{#snippet actionsSection\(\)\}[\s\S]*?\{@const editable = !isDir && isEditableText\(entry\.path\)\}[\s\S]*?\{#if !isDir && onOpen\}[\s\S]*?\{#if editable\}[\s\S]*?onclick=\{onOpen\}>Open/,
+      /<button[\s\S]*?class="pill-main"[\s\S]*?onclick=\{actionModel\.main\.onClick\}[\s\S]*?\{actionModel\.main\.label\}/,
+    );
+    // Caret only renders when there are secondary actions, and toggles the menu.
+    expect(fileInfo).toMatch(
+      /\{#if actionModel\.secondary\.length > 0\}[\s\S]*?class="pill-caret"[\s\S]*?onclick=\{\(\) => \(menuOpen = !menuOpen\)\}/,
     );
   });
 
-  test("media gets View / Zoom (image) or View PDF in the actions section", () => {
+  test("dropdown lists the secondary actions as menu items", () => {
     expect(fileInfo).toMatch(
-      /\{#snippet actionsSection\(\)\}[\s\S]*?\{#if image\}[\s\S]*?onclick=\{\(\) => openImageZoom\(entry\.path, null, dirImageSet\(entry\.path\)\)\}>View \/ Zoom/,
+      /\{#if menuOpen && actionModel\.secondary\.length > 0\}[\s\S]*?<div class="action-menu" role="menu">/,
     );
     expect(fileInfo).toMatch(
-      /\{:else if pdf\}[\s\S]*?onclick=\{\(\) => openPdfViewer\(entry\.path\)\}>View PDF/,
+      /\{#each actionModel\.secondary as item[\s\S]*?class="action-menu-item"[\s\S]*?item\.onClick\(\)/,
+    );
+    // Selecting an item closes the menu.
+    expect(fileInfo).toMatch(/menuOpen = false;[\s\S]{1,40}item\.onClick\(\);/);
+  });
+
+  test("directory pill is Open -> a new File Browser tab", () => {
+    expect(fileInfo).toMatch(
+      /if \(isDir\) \{[\s\S]{1,80}main = \{ label: "Open", onClick: openDirInBrowser \}/,
+    );
+    // openDirInBrowser prefers the host onReveal, else reveals a new tab.
+    expect(fileInfo).toMatch(
+      /function openDirInBrowser\(\): void \{[\s\S]{1,200}revealPathInBrowser\(entry\.path, \{ enter: true/,
     );
   });
 
-  test("Show File/Directory + Graph from here are host-gated in the section", () => {
+  test("media pill is View / Zoom (image) or View PDF", () => {
     expect(fileInfo).toMatch(
-      /\{#if onReveal\}[\s\S]*?\{isDir \? "Show Directory" : "Show File"\}/,
+      /label: "View \/ Zoom",[\s\S]{1,80}onClick: \(\) => openImageZoom\(p, null, dirImageSet\(p\)\)/,
     );
     expect(fileInfo).toMatch(
-      /\{#if onSetAsScope\}[\s\S]*?onclick=\{onSetAsScope\}[\s\S]*?Graph from here/,
+      /label: "View PDF", onClick: \(\) => openPdfViewer\(p\)/,
     );
   });
 
-  test("Export to PDF shows for markdown files + routes through the print helper", () => {
+  test("editable file pill is Open (onOpen) or Show file (editor Show Details)", () => {
+    // FB / search bind onOpen -> "Open" (Hybrid Editor).
+    expect(fileInfo).toMatch(
+      /if \(onOpen\) \{[\s\S]{1,80}main = \{ label: "Open", onClick: onOpen \}/,
+    );
+    // Editor "Show Details" binds no onOpen -> "Show file" via onReveal.
+    expect(fileInfo).toMatch(
+      /\} else if \(onReveal\) \{[\s\S]{1,120}main = \{ label: "Show file", onClick: onReveal \}/,
+    );
+  });
+
+  test("binary (incl symlinks) pill is Download file, dropdown only Graph", () => {
+    // The else branch (not dir / media / editable) makes download the main
+    // action; Graph from here is the only secondary it offers.
+    expect(fileInfo).toMatch(
+      /\} else \{[\s\S]{1,120}main = download;[\s\S]{1,80}if \(graph\) secondary\.push\(graph\)/,
+    );
+    expect(fileInfo).toMatch(
+      /label: isDir \? "Download tarball" : "Download file",[\s\S]{1,80}onClick: downloadSelection/,
+    );
+  });
+
+  test("New terminal here is a secondary action seeded via fromHere", () => {
+    expect(fileInfo).toMatch(
+      /label: "New terminal here",[\s\S]{1,40}onClick: newTerminalHere,/,
+    );
+    expect(fileInfo).toMatch(
+      /function newTerminalHere\(\): void \{[\s\S]{1,200}terminalFromHereTarget\(entry\.path, entry\.is_dir\)/,
+    );
+    expect(fileInfo).toMatch(
+      /import \{ terminalFromHereTarget \} from "\.\.\/terminal\/fromHere";/,
+    );
+    expect(fileInfo).toMatch(
+      /import \{ openTerminalInActivePane \} from "\.\.\/state\/tabs\.svelte";/,
+    );
+  });
+
+  test("Export to PDF is a markdown-only dropdown action via the print helper", () => {
     // Gated on markdown files; the selection isn't necessarily open in an
     // editor, so the handler fetches the file content and prints it.
-    expect(fileInfo).toMatch(/\{@const markdown = !isDir && isMarkdown\(entry\.path\)\}/);
-    // Gated on `markdown` AND `showExportPdf`: the latter hides the button
-    // on non-macOS desktop (Linux/Windows have no native PDF export wired);
-    // web and macOS desktop keep it.
+    // showExportPdf hides it on non-macOS desktop (no native PDF path).
     expect(fileInfo).toMatch(
-      /\{#if markdown && showExportPdf\}[\s\S]*?onclick=\{doExportPdf\}[\s\S]*?Export to PDF/,
+      /markdown && showExportPdf[\s\S]{1,120}label: "Export to PDF", onClick: \(\) => void doExportPdf\(\)/,
     );
     expect(fileInfo).toMatch(
       /async function doExportPdf\(\): Promise<void> \{[\s\S]*?printMarkdownDocument\(\{[\s\S]*?markdown: file\.content/,
@@ -77,9 +130,6 @@ describe("shared actions section under the filename", () => {
   test("file branch renders actions BEFORE the size/modified meta-grid", () => {
     // The file branch renders the (optional) image preview, then
     // {@render actionsSection()}, then the size/modified meta-grid.
-    // (lastIndexOf gives the file-branch render; the dir-branch render
-    // is the earlier occurrence. Search for the file-branch size span
-    // AFTER that render so we don't match the dir-branch stats grid.)
     const lastActions = fileInfo.lastIndexOf("{@render actionsSection()}");
     const sizeGrid = fileInfo.indexOf(
       '<span class="k">size</span>',
@@ -90,9 +140,9 @@ describe("shared actions section under the filename", () => {
   });
 
   test("actions live only in the reusable section, not standalone bottom blocks", () => {
-    // The action buttons are defined once inside actionsSection and
-    // rendered via {@render actionsSection()}; there is no separate
-    // bottom-of-body action block to drift out of sync.
+    // The pill is defined once inside actionsSection and rendered via
+    // {@render actionsSection()}; there is no separate bottom-of-body
+    // action block to drift out of sync.
     const sectionDefs = fileInfo.match(/<div class="actions-section">/g) ?? [];
     expect(sectionDefs.length).toBe(1);
     expect(fileInfo).toMatch(/\{@render actionsSection\(\)\}/);

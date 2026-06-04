@@ -519,13 +519,18 @@ describe("Search-slot directory inspector actions (A4)", () => {
     expect(fileInfo).toMatch(/onNewTerminal\?: \(\) => void;/);
     expect(fileInfo).toMatch(/allowUpload\?: boolean;/);
     expect(fileInfo).toMatch(/allowUpload = true,/);
-    // Upload is gated behind allowUpload; Download stays unconditional.
+    // Upload is a directory dropdown action, gated behind allowUpload.
     expect(fileInfo).toMatch(
-      /\{#if allowUpload\}[\s\S]{1,200}onclick=\{triggerUpload\}[\s\S]{1,80}Upload<\/button[\s\S]{1,160}\{\/if\}[\s\S]{1,200}onclick=\{downloadSelection\}/,
+      /if \(allowUpload\) \{[\s\S]{1,160}label: "Upload file here",[\s\S]{1,80}onClick: triggerUpload/,
     );
-    // New Terminal renders for directories only when the handler is bound.
+    // Download is always offered (tarball for dirs, "Download file" otherwise).
+    expect(fileInfo).toMatch(/onClick: downloadSelection,/);
+    // "New terminal here" prefers the host handler, else seeds via fromHere.
     expect(fileInfo).toMatch(
-      /\{#if onNewTerminal && isDir\}[\s\S]{1,200}onclick=\{onNewTerminal\}[\s\S]{1,40}New Terminal/,
+      /label: "New terminal here",[\s\S]{1,40}onClick: newTerminalHere,/,
+    );
+    expect(fileInfo).toMatch(
+      /function newTerminalHere\(\): void \{[\s\S]{1,120}if \(onNewTerminal\) \{[\s\S]{1,60}onNewTerminal\(\);[\s\S]{1,160}terminalFromHereTarget\(entry\.path, entry\.is_dir\)/,
     );
   });
 
