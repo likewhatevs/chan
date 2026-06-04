@@ -37,3 +37,7 @@ crates/chan-server/resources/models/
 # name is chosen at spawn time, so add new ones here as needed)
 /new-team-1/
 /web-team/
+
+# Local scratch / working area for in-flight design notes and agent
+# plans. Not shipped; design that needs to persist goes under docs/.
+/dev/
