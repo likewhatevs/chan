@@ -13,7 +13,6 @@
 
 import type { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { cursorLineDown, cursorLineUp } from "@codemirror/commands";
 
 /// Anchored at line start. Captures:
 ///   1: leading whitespace (indent)
@@ -176,55 +175,14 @@ export function listLineAt(state: EditorState, pos: number): {
   return prefix ? { from: line.from, to: line.to, prefix } : null;
 }
 
-export function clampListCaretPosition(state: EditorState, pos: number): number {
-  const info = listLineAt(state, pos);
-  if (!info) return pos;
-  const min = info.from + info.prefix.length;
-  if (pos >= info.from && pos < min) return min;
-  return pos;
-}
-
-/// ArrowDown / ArrowUp that keep the caret out of a list line's prefix.
-///
-/// A `*` / `+` bullet marker renders as a zero-width source char plus a
-/// CSS ::before glyph (blocks.ts / Wysiwyg.svelte), so a vertical move
-/// whose goal column lands left of the glyph drops the caret AT the
-/// glyph - inside the prefix, before any text. Ordered (and now hyphen)
-/// lists keep a real visible marker, so their goal column maps past it
-/// onto the text; @@Alex calls that behaviour "perfect". We reproduce it
-/// for `*` / `+` bullets by running the normal vertical motion, then
-/// snapping a caret that landed inside the prefix to the first text
-/// column. The snap only fires when it actually moves the caret, so
-/// lines that already land on the text keep CM6's native goal-column
-/// tracking untouched.
-export function listAwareArrowDown(view: EditorView): boolean {
-  return verticalMoveClampingPrefix(view, cursorLineDown);
-}
-
-export function listAwareArrowUp(view: EditorView): boolean {
-  return verticalMoveClampingPrefix(view, cursorLineUp);
-}
-
-function verticalMoveClampingPrefix(
-  view: EditorView,
-  move: (view: EditorView) => boolean,
-): boolean {
-  // Plain caret motion only. A range selection collapses on a bare
-  // arrow via CM6's default; returning false routes there so we never
-  // clamp a selection endpoint.
-  if (!view.state.selection.main.empty) return false;
-  // `move` is the same command CM6's default keymap binds to the arrow
-  // (cursorLineUp / cursorLineDown), so non-list lines behave exactly as
-  // before. It returns false at the document edge - propagate that so
-  // lower-precedence handlers still see the key.
-  if (!move(view)) return false;
-  const head = view.state.selection.main.head;
-  const clamped = clampListCaretPosition(view.state, head);
-  if (clamped !== head) {
-    view.dispatch({ selection: { anchor: clamped } });
-  }
-  return true;
-}
+// Bullet caret-snap scaffolding (clampListCaretPosition,
+// listAwareArrowDown/Up, listCaretGuard, isListEolClick) was removed in
+// phase-18: once `*`/`+` markers render as real-width glyph widgets
+// (blocks.ts BulletGlyphWidget) instead of a zero-width source char + CSS
+// ::before glyph, bullet lists get default CodeMirror cursor / click /
+// arrow behavior - the same path hyphen and ordered lists already used.
+// The snap logic existed only to compensate for that decoupling, so it is
+// gone. listLineAt above stays (consumed by the image-drop handler).
 
 export function stripUnusedInlineImageSpaceOnEnter(view: EditorView): boolean {
   const sel = view.state.selection.main;
@@ -239,18 +197,6 @@ export function stripUnusedInlineImageSpaceOnEnter(view: EditorView): boolean {
   return false;
 }
 
-export function listCaretGuard(): ReturnType<typeof EditorView.domEventHandlers> {
-  return EditorView.domEventHandlers({
-    mousedown(event, view) {
-      if (event.button !== 0) return false;
-      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-      if (pos === null) return false;
-      const clamped = clampListCaretPosition(view.state, pos);
-      if (clamped === pos) return false;
-      event.preventDefault();
-      view.dispatch({ selection: { anchor: clamped } });
-      view.focus();
-      return true;
-    },
-  });
-}
+// (listCaretGuard / isListEolClick removed - see the note above
+// stripUnusedInlineImageSpaceOnEnter. Bullet markers are real-width
+// glyphs now, so the click path is plain CodeMirror.)

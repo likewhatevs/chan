@@ -78,32 +78,32 @@ describe("listLineClass", () => {
   });
 });
 
-describe("list marker rendering (source-faithful)", () => {
-  test("classes the source marker without replacing the character", () => {
+describe("list marker rendering (real positioned markers)", () => {
+  test("markers are real positioned characters, not zero-width + ::before", () => {
     expect(blocksSource).toContain("cm-md-ul-marker");
     expect(blocksSource).toContain("cm-md-ol-marker");
     expect(wysiwygSource).toContain(".cm-md-ul-marker");
     expect(wysiwygSource).toContain(".cm-md-ol-marker");
-    // List markers render as the authored character (-, *, +, 1., 2))
-    // rather than being swapped for a glyph; no replace-widgets.
-    expect(blocksSource).not.toContain("BulletMarkerWidget");
-    expect(blocksSource).not.toContain("OrderedMarkerWidget");
-    // The `*` / `+` bullet glyph keys off nesting depth (Google-Docs
-    // cycle: disc -> circle -> square). The source char stays in the doc;
-    // the glyph is a CSS ::before substitution in Wysiwyg.svelte.
+    // `*` / `+` markers are REPLACED by a real-width glyph widget (the
+    // disc/circle/square CHARACTER), so the marker is a real positioned
+    // char like the hyphen `-` and ordered `1.` markers - default CM
+    // cursor/click, no caret-snap. Hyphen `-` stays a styling mark.
+    expect(blocksSource).toContain("class BulletGlyphWidget");
+    expect(blocksSource).toContain("Decoration.replace({ widget: new BulletGlyphWidget");
+    expect(blocksSource).toContain("cm-md-ul-glyph");
     expect(blocksSource).toContain("cm-md-ul-disc");
     expect(blocksSource).toContain("cm-md-ul-circle");
     expect(blocksSource).toContain("cm-md-ul-square");
-    expect(wysiwygSource).toContain(".cm-md-ul-disc::before");
-    expect(wysiwygSource).toContain(".cm-md-ul-circle::before");
-    expect(wysiwygSource).toContain(".cm-md-ul-square::before");
-    // Hyphen (`-`) lists stay a distinct literal dash, NOT a depth glyph
-    // (no font-size:0 + ::before substitution).
     expect(blocksSource).toContain("cm-md-ul-hyphen");
+    expect(wysiwygSource).toContain(".cm-md-ul-glyph");
     expect(wysiwygSource).toContain(".cm-md-ul-hyphen");
+    // The old zero-width-char + ::before glyph rendering is gone (it was
+    // the source of the bullet cursor/click bugs).
+    expect(wysiwygSource).not.toContain(".cm-md-ul-bullet");
+    expect(wysiwygSource).not.toContain(".cm-md-ul-disc::before");
   });
 
-  test("top-level star bullet keeps the source char and the disc class", () => {
+  test("top-level star bullet renders the disc GLYPH char; doc keeps `*`", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
@@ -115,13 +115,12 @@ describe("list marker rendering (source-faithful)", () => {
       }),
     });
 
-    // The wysiwyg glyph is a filled disc via CSS ::before, but the doc
-    // + textContent stay the literal `*` (source-faithful). The disc
-    // class is the CSS hook.
-    const marker = parent.querySelector(".cm-md-ul-marker");
-    expect(marker?.textContent).toBe("*");
+    // The `*` is REPLACED by a real-width glyph widget rendering the disc
+    // character. The rendered marker text is the glyph (not `*`), but the
+    // DOCUMENT keeps the literal `*` (render-only replace).
+    const marker = parent.querySelector(".cm-md-ul-glyph");
+    expect(marker?.textContent).toBe("●");
     expect(marker?.classList.contains("cm-md-ul-disc")).toBe(true);
-    expect(parent.textContent).toContain("* item");
     expect(view.state.doc.toString()).toBe("* item");
 
     view.destroy();
@@ -132,9 +131,9 @@ describe("list marker rendering (source-faithful)", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
-    // `*` and `+` both render the depth-0 disc (Google Docs keys the
+    // `*` and `+` both render the depth-0 disc GLYPH (Google Docs keys the
     // glyph off depth, not the char). `-` is excluded from the cycle and
-    // keeps its literal dash, marked with the distinct hyphen class.
+    // keeps its literal dash via a styling mark.
     const view = new EditorView({
       parent,
       state: EditorState.create({
@@ -145,12 +144,14 @@ describe("list marker rendering (source-faithful)", () => {
 
     const markers = Array.from(parent.querySelectorAll(".cm-md-ul-marker"));
     expect(markers.length).toBe(3);
+    // `*` and `+` -> disc glyph widget (real ● character).
     expect(markers[0]?.classList.contains("cm-md-ul-disc")).toBe(true);
+    expect(markers[0]?.textContent).toBe("●");
     expect(markers[1]?.classList.contains("cm-md-ul-disc")).toBe(true);
-    // The hyphen marker is NOT a depth glyph (no font-size:0 bullet
-    // class) - it carries the distinct hyphen class instead.
+    expect(markers[1]?.textContent).toBe("●");
+    // `-` -> literal dash (styling mark, NOT a glyph widget).
     expect(markers[2]?.classList.contains("cm-md-ul-hyphen")).toBe(true);
-    expect(markers[2]?.classList.contains("cm-md-ul-bullet")).toBe(false);
+    expect(markers[2]?.classList.contains("cm-md-ul-glyph")).toBe(false);
     expect(markers[2]?.classList.contains("cm-md-ul-disc")).toBe(false);
     expect(markers[2]?.textContent).toBe("-");
     expect(view.state.doc.toString()).toBe("* star\n+ plus\n- dash");
@@ -198,13 +199,17 @@ describe("list marker rendering (source-faithful)", () => {
       }),
     });
 
-    const markers = Array.from(parent.querySelectorAll(".cm-md-ul-marker"));
-    // depth 0 disc, 1 circle, 2 square, 3 wraps back to disc.
+    const markers = Array.from(parent.querySelectorAll(".cm-md-ul-glyph"));
+    // depth 0 disc ●, 1 circle ○, 2 square ■, 3 wraps back to disc ●.
     expect(markers[0]?.classList.contains("cm-md-ul-disc")).toBe(true);
+    expect(markers[0]?.textContent).toBe("●");
     expect(markers[1]?.classList.contains("cm-md-ul-circle")).toBe(true);
+    expect(markers[1]?.textContent).toBe("○");
     expect(markers[2]?.classList.contains("cm-md-ul-square")).toBe(true);
+    expect(markers[2]?.textContent).toBe("■");
     expect(markers[3]?.classList.contains("cm-md-ul-disc")).toBe(true);
-    // All keep their literal source char.
+    expect(markers[3]?.textContent).toBe("●");
+    // The document keeps the literal source chars (render-only replace).
     expect(view.state.doc.toString()).toBe(
       "* l1\n  * l2\n    * l3\n      * l4",
     );

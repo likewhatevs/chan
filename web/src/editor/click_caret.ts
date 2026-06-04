@@ -14,7 +14,7 @@
 // misses (`posAtCoords(coords)` returns null). A click that lands on a
 // glyph still resolves precisely, so CM6's default handling - and the
 // widget/pill mousedown handlers that stop propagation before this runs
-// - are untouched. Mirrors the existing `listCaretGuard` pattern.
+// - are untouched.
 
 import { EditorView } from "@codemirror/view";
 

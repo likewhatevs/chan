@@ -57,9 +57,6 @@
   import {
     continueListOnEnter,
     indentListItem,
-    listAwareArrowDown,
-    listAwareArrowUp,
-    listCaretGuard,
     outdentListItem,
     stripUnusedInlineImageSpaceOnEnter,
   } from "./commands/list";
@@ -405,11 +402,11 @@
         drawSelection(),
         breathingRoom(),
         listGuideVisibility(),
-        listCaretGuard(),
-        // After listCaretGuard: both ignore precise-hit clicks, so for a
-        // normal click both fall through to CM6. This one only fires on
-        // a blank-area click (no precise hit) to drop the caret on the
-        // nearest row position.
+        // Blank-area click helper: only fires when the precise hit-test
+        // misses (a click past a short line's end or below the doc) to
+        // drop the caret on the nearest row position. List markers are
+        // real-width glyphs now, so list clicks need no special guard -
+        // default CodeMirror placement handles them.
         clickToPlaceCaret(),
         findField,
         chanDecorations(),
@@ -485,15 +482,6 @@
             // apply so the keys keep their default behaviour
             // (cursorDown / caller submit / new line in code).
             { key: "ArrowDown", run: (view) => fmt.escapeFenceAtDocEnd(view) },
-            // List-aware vertical motion: run the normal cursorLineUp /
-            // cursorLineDown, then snap a caret that landed inside a list
-            // line's prefix (e.g. on a `*` bullet's zero-width glyph)
-            // onto the first text column, matching ordered-list cursor
-            // behaviour. Registered after the mermaid stepInto entries
-            // (earlier extension, same Prec.high) so a vertical move that
-            // crosses a rendered mermaid block is still handled there.
-            { key: "ArrowDown", run: (view) => listAwareArrowDown(view) },
-            { key: "ArrowUp", run: (view) => listAwareArrowUp(view) },
             // Mod-Enter inside any fenced code block: append a fresh
             // line just past the block end and place the caret
             // there. Always-on escape, independent of the block's
@@ -1043,49 +1031,29 @@
     color: var(--text-secondary, #888);
     margin-right: calc(var(--chan-editor-body-size, 11pt) * 0.28);
   }
-  /* Render bullet markers with styled glyphs while keeping the source
-     bytes intact (source mode + round-trip still show the literal
-     `-` / `*` / `+`; see blocks.ts). The literal marker char is
-     collapsed to zero width with font-size:0 and the styled glyph is
-     drawn by an IN-FLOW ::before (no positioning), so the existing
-     list-line text-indent places the glyph exactly where the source
-     char sat at every nesting depth. (An absolute-positioned overlay
-     was tried first but text-indent does not apply to out-of-flow
-     boxes, so nested glyphs detached to the gutter.)
-     The glyph keys off NESTING DEPTH, not the typed marker char,
-     matching Google Docs: level 1 = filled disc, level 2 = open
-     circle, level 3 = filled square, then the cycle repeats. All
-     three markers (- / * / +) share this depth cycle. */
-  :global(.md-wysiwyg-cm6 .cm-md-ul-bullet) {
-    font-size: 0;
-  }
-  /* Geometric glyphs fill most of the em box at body size, so they
-     read much larger than a normal list bullet. The disc and the open
-     circle are a matched pair (same outer diameter), so one shared
-     size keeps them optically even; vertical-align nudges them onto
-     the text center line so baselines align across levels. The square
-     is trimmed + lifted separately below (its solid ink area reads
-     heavier than a circle of equal box).
-     margin-right doubles the glyph-to-text gap (@@Alex: "i want double
-     the amount of space between glyph and text"): the source `-`/`*`/`+`
-     leaves one space before the text, and this adds a second space's
-     worth. It is keyed off the body size (not em) so the gap stays
-     equal across disc/circle/square despite their differing glyph
-     sizes, and is consistent at every nesting level. */
-  :global(.md-wysiwyg-cm6 .cm-md-ul-bullet::before) {
+  /* `*`/`+` bullet markers render as a REAL glyph CHARACTER carried by a
+     replace-widget (blocks.ts BulletGlyphWidget): ● disc / ○ circle / ■
+     square by nesting depth (Google Docs). The glyph is real inline text
+     with real width, so it is positioned exactly like the hyphen `-` and
+     ordered `1.` markers and gets default CodeMirror cursor / click /
+     arrow behavior (no caret-snap scaffolding). The DOCUMENT keeps the
+     literal `*`/`+` (the widget is render-only; source mode + round-trip
+     are unchanged).
+     Geometric glyphs fill most of the em box, so they read larger than a
+     normal bullet; 0.62em keeps the disc + open circle (a matched outer-
+     diameter pair) optically even, vertical-align nudges them onto the
+     text center line. margin-right doubles the glyph-to-text gap (@@Alex:
+     "double the space between glyph and text"), keyed off the body size so
+     it stays equal across glyphs and at every nesting depth. */
+  :global(.md-wysiwyg-cm6 .cm-md-ul-glyph) {
     color: var(--text-secondary, #888);
     font-size: calc(var(--chan-editor-body-size, 11pt) * 0.62);
     vertical-align: 0.08em;
     margin-right: calc(var(--chan-editor-body-size, 11pt) * 0.28);
   }
-  :global(.md-wysiwyg-cm6 .cm-md-ul-disc::before) {
-    content: "\25CF"; /* black circle (filled disc) */
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-ul-circle::before) {
-    content: "\25CB"; /* white circle (open) */
-  }
-  :global(.md-wysiwyg-cm6 .cm-md-ul-square::before) {
-    content: "\25A0"; /* black square (filled) */
+  /* The square's solid ink area reads heavier than a circle of equal box,
+     so trim + recenter it. */
+  :global(.md-wysiwyg-cm6 .cm-md-ul-glyph.cm-md-ul-square) {
     font-size: calc(var(--chan-editor-body-size, 11pt) * 0.56);
     vertical-align: 0;
   }
@@ -1111,6 +1079,17 @@
     --cm-md-list-prefix: calc((var(--cm-md-list-depth, 0) + 1) * 2ch);
     padding-left: calc(32px + var(--cm-md-list-prefix)) !important;
     text-indent: calc(-1 * var(--cm-md-list-prefix));
+    /* Outline indent: shift each nesting level right by ~one marker
+       column so a nested item's glyph aligns under the FIRST TEXT
+       CHARACTER of its parent line (@@Alex, Google-Docs style). The
+       markdown source only indents 2 spaces/level, which renders
+       narrower than the marker column in the proportional body font, so
+       the child glyph sat left of the parent text; this margin makes up
+       the difference. Keyed off the body size (~0.6em) so it scales and
+       stays consistent across bullet / hyphen / ordered. margin (not
+       padding) shifts the whole line, so row-1 and wrapped rows move
+       together and the hanging indent is preserved. */
+    margin-left: calc(var(--cm-md-list-depth, 0) * var(--chan-editor-body-size, 11pt) * 0.6);
     position: relative;
   }
   :global(.md-wysiwyg-cm6 .cm-editor .cm-line.cm-md-list-line::before) {
