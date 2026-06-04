@@ -154,10 +154,22 @@ already trust the old DEV pubkey need a bridge release:
 
 ### Manifest endpoint
 
-Client probes:
-`https://chan.app/dl/desktop/{{target}}/{{current_version}}/latest.json`
+Client probes a single static manifest:
+`https://chan.app/dl/desktop/latest.json`
 
-Server-side publishing of that manifest is owned by chan-prod-setup.
+That manifest is generated at release time by
+`web-marketing/scripts/generate-release-metadata.mjs` (driven by
+`.github/workflows/release.yml`) and deployed to GitHub Pages alongside
+the rest of chan.app; there is no separate dynamic server for `/dl`. It
+is a Tauri static updater manifest: a top-level `version` plus a
+`platforms` map keyed by `{os}-{arch}` (e.g. `darwin-aarch64`), each
+carrying the minisign `signature` and the release-asset `url`. Tauri
+selects the entry for the running target and compares `version`.
+
+Note: an earlier templated endpoint
+(`/dl/desktop/{{target}}/{{current_version}}/latest.json`) never matched
+the flat path the generator writes, so desktop self-upgrade 404'd until
+v0.26.1 flattened the endpoint to the static manifest above.
 
 ## Release package version metadata
 
