@@ -1,6 +1,0 @@
-[mcp_servers.chan]
-args = [
-    "__mcp-proxy",
-    "/var/folders/q2/3g45h5q10wb0pfzx3t_2yjgr0000gn/T/chan-mcp-72574-7e4196a0.sock",
-]
-command = "/Applications/Chan.app/Contents/MacOS/chan"
