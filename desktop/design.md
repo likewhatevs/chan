@@ -323,6 +323,46 @@ Cargo install (`cargo install chan-desktop`) builds the self-contained
 desktop from source, for contributors and packagers rather than end
 users. The README points end users at chan.app.
 
+### 7.1 Linux AppImage GUI stack
+
+The AppImage bundles its own GUI stack (libgtk-3, libwebkit2gtk-4.1) and
+the GL/EGL/gbm libraries `linuxdeploy-plugin-gtk` pulls in, built on the
+Ubuntu CI runner. On a host whose Mesa is newer than the bundle (rolling
+distros such as CachyOS / Arch on an AMD radeonsi iGPU), the bundled
+libgtk cannot create an EGL display against the host Mesa and the webview
+aborts at creation with `EGL_BAD_PARAMETER`. No single bundled GTK/Mesa
+works across every distro indefinitely; the host's GTK and Mesa are
+always built against each other.
+
+`src-tauri/src/linux_gui_stack.rs` (called at the top of `fn main()`)
+prefers the host GUI stack, falling back to the bundle:
+
+- It runs only inside an AppImage (keyed on `cs_install::appimage_path()`)
+  and is a no-op on macOS / Windows / `.deb` / `.rpm` / `cargo run`.
+- Presence gate: only when BOTH `libgtk-3.so.0` AND
+  `libwebkit2gtk-4.1.so.0` resolve in the host `ldconfig -p` cache does it
+  shadow the bundle (a partial shadow is worse than either stack alone).
+- It discovers the host lib dir from `ldconfig -p` (correct on Arch
+  `/usr/lib`, Fedora `/usr/lib64`, Debian/Ubuntu multiarch, x86_64 and
+  arm64), prepends it to `LD_LIBRARY_PATH`, and re-execs the binary once.
+  A re-exec is required because `libgtk` / `libEGL` are already loaded by
+  the time `main()` runs, so rewriting the loader path only takes effect in
+  a fresh process. The GTK module env the AppImage `AppRun` exported is
+  inherited across the exec, so only the library path is rewritten.
+- A `CHAN_LINUX_SYSTEM_GUI_APPLIED=1` marker set across the re-exec guards
+  against a loop.
+- Independent fallback: under an AppImage it defaults
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1` (the dma-buf renderer is the path that
+  aborts) unless the user already set it, so a host WITHOUT the system
+  stack still launches on the bundle.
+
+The `CHAN_LINUX_SYSTEM_GUI` env knob selects the policy:
+
+- `auto` (default): prefer the host stack when present, else the bundle.
+- `system`: force the host stack; exit with an error if it is unavailable.
+- `bundled`: keep the bundle-first behavior (the pre-fix path), for
+  debugging.
+
 ## 8. Self-upgrade
 
 chan-desktop updates itself through `tauri-plugin-updater`. The plugin
@@ -334,9 +374,16 @@ bundle.
   production public key is embedded in `src-tauri/tauri.conf.json`
   under `plugins.updater.pubkey`; the matching private key lives
   outside the repo in the release owner's secret store.
-- The client probes the manifest endpoint
-  `https://chan.app/dl/desktop/{{target}}/{{current_version}}/latest.json`.
-  Server-side publishing of that manifest is owned by chan-prod-setup.
+- The client probes a single static manifest at
+  `https://chan.app/dl/desktop/latest.json`. It is generated at release
+  time by `web-marketing/scripts/generate-release-metadata.mjs` (run from
+  `.github/workflows/release.yml`) and deployed to GitHub Pages with the
+  rest of chan.app; there is no separate dynamic `/dl` server. The
+  manifest carries a top-level `version` plus a `platforms` map keyed by
+  `{os}-{arch}` (e.g. `darwin-aarch64`); Tauri picks the running target's
+  entry and compares `version`. (Before v0.26.1 the endpoint was templated
+  as `/dl/desktop/{{target}}/{{current_version}}/latest.json`, which never
+  matched the flat path the generator writes, so self-upgrade 404'd.)
 - Because the desktop ships no separate `chan` binary, there is no
   second executable to upgrade and no in-bundle update banner to
   suppress.
@@ -356,6 +403,8 @@ Maintainer controls stay native:
 - Cmd+R / Ctrl+R reloads the focused workspace webview.
 - Cmd+Opt+I / Ctrl+Alt+I opens webview DevTools.
 - Cmd+Shift+N opens another launcher window.
+- `CHAN_LINUX_SYSTEM_GUI` (`auto` | `system` | `bundled`) selects the
+  Linux AppImage GUI-stack policy; see 7.1.
 
 Future global settings additions are deferred until they have
 concrete demand. Tunnel publishing belongs in the workspace attachment
