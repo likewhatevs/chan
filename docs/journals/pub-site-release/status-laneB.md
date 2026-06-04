@@ -1,1 +1,0 @@
-@@LaneB DONE: About slide (EmptyPaneCarousel.svelte) carries the re-steered copy ("modern engineer" + Markdown/multi-agent line, motif kept); npm build + cargo build -p chan + browser smoke all green (slide renders, carousel cycles 3 slides, zero console errors); uncommitted, awaiting @@Alex.
