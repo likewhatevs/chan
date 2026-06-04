@@ -52,11 +52,12 @@ cards in [`../agents/README.md`](../agents/README.md).
   and polish stream, and the chan-desktop launcher redesign (v0.24.0).
 - [Phase 17](phase-17.md) - host bug sweep, survey v2, and the desktop
   connecting screen (v0.25.0).
+- [Phase 18](phase-18.md) - hybrid-surface bug sweep (editor lists, graph,
+  File Browser, inspector pills, terminal), the repo/docs fold, and the
+  v0.26.0 release wave.
 - [pub-site-release](pub-site-release.md) - a standalone branding and
   positioning re-steer plus marketing site refresh (not a numbered
   phase).
-
-Phase 18 folds in when it closes.
 
 ## Conventions
 
