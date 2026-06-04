@@ -499,10 +499,10 @@ button.btn.icon {
 .is-dark #theme-toggle .ic-sun { display: inline-block; }
 .is-light #theme-toggle .ic-moon { display: inline-block; }
 
-/* fullstack-b-28b slice iii: pre-flight modal shown between
-   the directory picker and add_workspace. The toggle rows are wider than the
-   per-row expand panel from -b-28a because the pre-flight
-   carries the full round-2-plan explanatory copy. */
+/* Modal scaffold for the default-workspace chooser (the new-workspace
+   local-path flow reuses .preflight-intro / -path here too). The first-boot
+   pre-flight scan + layer toggles moved to chan's SPA in phase-17, so these
+   are now a plain centered-dialog shell, not a scan surface. */
 .preflight-overlay {
   position: fixed;
   inset: 0;
@@ -549,47 +549,6 @@ button.btn.icon {
   padding: 6px 10px;
   word-break: break-all;
 }
-.preflight-baseline,
-.preflight-layered,
-.preflight-footer {
-  margin: 4px 0 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-secondary, var(--text));
-}
-.preflight-toggles {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 8px 0 4px;
-}
-.preflight-toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  font-size: 13px;
-  cursor: pointer;
-  padding: 10px 12px;
-  background: var(--btn-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.preflight-toggle input[type="checkbox"] {
-  margin-top: 3px;
-}
-.preflight-toggle-label {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.preflight-toggle-label strong {
-  font-weight: 600;
-}
-.preflight-toggle-hint {
-  font-size: 12px;
-  color: var(--text-secondary, var(--text));
-  line-height: 1.45;
-}
 .preflight-buttons {
   margin-top: 6px;
   display: flex;
@@ -623,46 +582,10 @@ button.btn.icon {
   word-break: break-all;
 }
 
-/* fullstack-b-28b slice iv: pre-flight report rows shown
-   between the workspace path + the explanatory paragraph. The
-   "Scanning…" placeholder lives in `.preflight-report` until
-   `compute_workspace_preflight` resolves; resolved facts replace
-   the placeholder via the dl/dt/dd grid below. */
-.preflight-report[aria-busy="true"] {
-  font-size: 12px;
-  color: var(--text-secondary, var(--text));
-  font-style: italic;
-}
-.preflight-report-error {
-  color: var(--danger);
-  font-size: 12px;
-}
-.preflight-report-rows {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  column-gap: 14px;
-  row-gap: 4px;
-  margin: 0;
-  font-size: 12px;
-  background: var(--btn-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px 12px;
-}
-.preflight-report-rows dt {
-  font-weight: 600;
-  color: var(--text-secondary, var(--text));
-}
-.preflight-report-rows dd {
-  margin: 0;
-  color: var(--text);
-}
-.preflight-warn {
-  margin: 0 0 6px;
-  font-size: 12px;
-  color: var(--danger, #c83a3a);
-  background: rgba(248, 81, 73, 0.08);
-  border: 1px solid color-mix(in srgb, var(--danger, #c83a3a) 40%, transparent);
-  border-radius: 6px;
-  padding: 6px 10px;
-}
+/* The new-workspace local path no longer runs a desktop-side pre-flight
+   scan; chan's SPA (PreflightOverlay.svelte) owns first-boot readiness +
+   the Semantic / Reports layer toggles since phase-17, so the desktop's
+   .preflight-report* / .preflight-toggle* / .preflight-warn rules were
+   removed with the scan UI. The .preflight-overlay / -dialog / -intro /
+   -path / -buttons rules above stay: the default-workspace dialog uses
+   them. */

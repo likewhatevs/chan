@@ -834,6 +834,19 @@ impl Session {
         cmd.env("CLICOLOR", "1");
         cmd.env("CLICOLOR_FORCE", "1");
         cmd.env("FORCE_COLOR", "3");
+        // GUI-launched servers (notably chan-desktop on macOS) frequently
+        // inherit an empty locale, so `less` and `vim` fall back to the
+        // POSIX/C codeset and render multibyte UTF-8 (e.g. an em dash) as raw
+        // bytes. Provide a language-neutral UTF-8 default when nothing already
+        // selects one, and drop any non-UTF-8 LC_ALL/LC_CTYPE so the LANG
+        // default actually controls the codeset (the user's shell profile can
+        // still re-export LANG). C.UTF-8 is present on macOS, every musl Linux
+        // build, and glibc >= 2.35 / Debian / Ubuntu / RHEL 8+.
+        if !locale_selects_utf8(&opts.env) {
+            cmd.env("LANG", "C.UTF-8");
+            cmd.env_remove("LC_ALL");
+            cmd.env_remove("LC_CTYPE");
+        }
         cmd.env("CHAN", "1");
         clear_mcp_env(&mut cmd);
         if opts.mcp_env {
@@ -1279,6 +1292,28 @@ enum PtyCommand {
     Kill,
 }
 
+/// True when the requested or inherited environment already selects a UTF-8
+/// codeset, following the standard LC_ALL > LC_CTYPE > LANG precedence. The
+/// per-session overrides win over the server's own environment. When this is
+/// false the spawned shell would fall back to the POSIX/C codeset and render
+/// multibyte UTF-8 as raw bytes in pagers / editors like `less` and `vim`.
+fn locale_selects_utf8(requested: &BTreeMap<String, String>) -> bool {
+    let lookup = |key: &str| -> Option<String> {
+        requested
+            .get(key)
+            .cloned()
+            .or_else(|| std::env::var(key).ok())
+            .filter(|value| !value.is_empty())
+    };
+    for key in ["LC_ALL", "LC_CTYPE", "LANG"] {
+        if let Some(value) = lookup(key) {
+            let value = value.to_ascii_lowercase();
+            return value.contains("utf-8") || value.contains("utf8");
+        }
+    }
+    false
+}
+
 fn command_builder(command: Option<&str>) -> CommandBuilder {
     let Some(command) = command.map(str::trim).filter(|command| !command.is_empty()) else {
         return CommandBuilder::new_default_prog();
@@ -1578,6 +1613,24 @@ mod tests {
                 Ok(Err(_)) | Err(_) => return out,
             }
         }
+    }
+
+    // LC_ALL is the highest-precedence locale category, so when it is present
+    // in the requested map the helper never consults the (test-host-dependent)
+    // process environment; these cases stay deterministic.
+    #[test]
+    fn locale_selects_utf8_honors_lc_all_codeset() {
+        let utf8 = |v: &str| {
+            let mut env = BTreeMap::new();
+            env.insert("LC_ALL".to_string(), v.to_string());
+            locale_selects_utf8(&env)
+        };
+        assert!(utf8("en_US.UTF-8"));
+        assert!(utf8("C.UTF-8"));
+        assert!(utf8("en_GB.utf8"));
+        assert!(!utf8("C"));
+        assert!(!utf8("POSIX"));
+        assert!(!utf8("en_US.ISO8859-1"));
     }
 
     #[test]

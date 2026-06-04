@@ -6,7 +6,6 @@ permissions = [
   "allow-add-workspace",
   "allow-remove-workspace",
   "allow-set-workspace-on",
-  "allow-compute-workspace-preflight",
   "allow-get-config",
   "allow-home-dir",
   "allow-reveal-in-finder",
@@ -66,11 +65,6 @@ commands.allow = ["remove_workspace"]
 identifier = "allow-set-workspace-on"
 description = "Enables the set_workspace_on command."
 commands.allow = ["set_workspace_on"]
-
-[[permission]]
-identifier = "allow-compute-workspace-preflight"
-description = "Enables the compute_workspace_preflight command."
-commands.allow = ["compute_workspace_preflight"]
 
 [[permission]]
 identifier = "allow-get-config"

@@ -298,6 +298,25 @@
     });
   });
 
+  // Hiding the Rich Prompt bubble hands keyboard focus + cursor back to this
+  // terminal. The hide arrives by three paths (the tab menu's Hide entry,
+  // Cmd+Shift+P, and the bubble's own Escape); watching the visibility STATE
+  // covers all three uniformly instead of patching each call site. The
+  // focus-pulse effect above only re-runs on a tab switch, so it does not
+  // observe a same-tab show->hide flip - hence this dedicated transition
+  // watcher. `richPromptWasVisible` is a plain (non-reactive) tracker so the
+  // effect acts on the show->hide edge and not on every active/focused
+  // re-render. Guarded on active + focused so a background pane never steals
+  // focus when its (out-of-view) bubble is toggled.
+  let richPromptWasVisible = false;
+  $effect(() => {
+    const visible = isRichPromptVisible(tab.id);
+    if (richPromptWasVisible && !visible && active && focused) {
+      queueMicrotask(() => term?.focus());
+    }
+    richPromptWasVisible = visible;
+  });
+
   // When focus moves AWAY from this terminal to another pane, the
   // pane losing focus can paint stale in the desktop app's WKWebView:
   // its WebGL renderer leaves the canvas half-updated and a single
@@ -1114,6 +1133,54 @@
     term?.focus();
   }
 
+  // Keyboard copy (Cmd+C / Ctrl+Shift+C) copies the CURRENT SELECTION only.
+  // A bare copy chord must never dump the whole scrollback - that is the
+  // explicit "Copy Scrollback" menu action - so an empty selection is a
+  // no-op, matching every native terminal. The menu's "Copy" stays
+  // selection-or-scrollback because an explicit click wants a result.
+  async function copySelectionToClipboard(): Promise<void> {
+    const text = term?.getSelection() ?? "";
+    if (!text) return;
+    await navigator.clipboard?.writeText(text);
+    term?.focus();
+  }
+
+  // Terminal clipboard chords are OS-divergent and CANNOT use the registry's
+  // `Mod` token: `Mod+C` becomes Ctrl+C on Linux/Windows, which is the
+  // shell's SIGINT. So macOS copies/pastes with Cmd+C / Cmd+V (Cmd never
+  // collides with a control code) and every other platform uses the standard
+  // Ctrl+Shift+C / Ctrl+Shift+V, leaving bare Ctrl+C/V for the shell.
+  function isTerminalCopyChord(e: KeyboardEvent): boolean {
+    if (currentOS() === "mac") {
+      return e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
+    }
+    return e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
+  }
+  function isTerminalPasteChord(e: KeyboardEvent): boolean {
+    return isTerminalCopyChord(e);
+  }
+
+  // Resolve a clipboard chord on keydown and run the action. Returns true
+  // when the event was a copy/paste chord so `handleTerminalKeyEvent` can
+  // tell xterm to skip it (no stray bytes, no SIGINT on Ctrl+Shift+C, no
+  // double-paste from xterm's native paste handler). preventDefault here
+  // also suppresses the browser's own copy/paste default.
+  function handleTerminalClipboardChord(e: KeyboardEvent): boolean {
+    if (e.type !== "keydown") return false;
+    const key = e.key.toLowerCase();
+    if (key === "c" && isTerminalCopyChord(e)) {
+      e.preventDefault();
+      void copySelectionToClipboard();
+      return true;
+    }
+    if (key === "v" && isTerminalPasteChord(e)) {
+      e.preventDefault();
+      void pasteClipboard();
+      return true;
+    }
+    return false;
+  }
+
   function openFind(): void {
     closeTabMenu();
     findOpen = true;
@@ -1262,6 +1329,12 @@
 
   function handleTerminalKeyEvent(e: KeyboardEvent): boolean {
     if (closeExitedTabFromKey(e)) return false;
+    // Copy/paste chords act on the xterm selection / system clipboard, not
+    // the PTY. Resolve them here (the custom handler runs before xterm
+    // processes the key) so no bytes reach the shell, Ctrl+Shift+C does not
+    // raise SIGINT, and xterm's native paste does not also fire. `false`
+    // tells xterm to skip the keystroke entirely.
+    if (handleTerminalClipboardChord(e)) return false;
     // Chord-escape registry. When the incoming event matches a
     // shortcut flagged `escapeTerminal: true` in shortcuts.ts, return
     // false so
@@ -1414,14 +1487,14 @@
               <Clipboard size={16} strokeWidth={1.75} aria-hidden="true" />
             </span>
             <span class="mbtn-label">Copy</span>
-            <span class="mbtn-chord"></span>
+            <span class="mbtn-chord">{chordFor("terminal.copy") ?? ""}</span>
           </button>
           <button class="mbtn" onclick={pasteClipboard}>
             <span class="mbtn-icon">
               <ClipboardPaste size={16} strokeWidth={1.75} aria-hidden="true" />
             </span>
             <span class="mbtn-label">Paste</span>
-            <span class="mbtn-chord"></span>
+            <span class="mbtn-chord">{chordFor("terminal.paste") ?? ""}</span>
           </button>
           <button class="mbtn" onclick={copyScrollback}>
             <span class="mbtn-icon">

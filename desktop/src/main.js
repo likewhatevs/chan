@@ -570,33 +570,17 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
       choose.focus();
       return;
     }
-    // Folder chosen: confirm path + the live scan + add-time toggles.
+    // Folder chosen: confirm the path, then register + open. The first-boot
+    // pre-flight (the workspace scan, the index / seed progress, and the
+    // Semantic / Reports layer toggles) moved to chan's SPA
+    // (PreflightOverlay.svelte) in phase-17. The desktop must NOT run its own
+    // scan dialog here: it duplicates and races the SPA boot surface (the
+    // double-dialog @@Alex hit). add_workspace defaults both optional layers
+    // off; the SPA's onboarding card turns them on after boot.
     body.innerHTML = `
-      <p class="preflight-intro">This folder will be registered as a chan workspace:</p>
-      <p class="preflight-path"></p>
-      <div class="preflight-report" aria-busy="true">Scanning workspace…</div>
-      <p class="preflight-baseline">Chan will walk this workspace, read every markdown file, and build a documentation graph from the wiki-links between them. This graph plus BM25 keyword search is the minimum needed to operate — it can't be disabled.</p>
-      <p class="preflight-layered">Two optional layers can be enabled on top. Both default off and drop their per-workspace data when disabled (the shared model file stays).</p>
-      <div class="preflight-toggles">
-        <label class="preflight-toggle">
-          <input type="checkbox" data-feat="bge" />
-          <span class="preflight-toggle-label"><strong>Semantic search</strong><span class="preflight-toggle-hint">Adds dense-vector embeddings for find-by-meaning queries. Needs the BGE-small model (~63 MB, downloaded once + shared across workspaces) and produces per-workspace vector data.</span></span>
-        </label>
-        <label class="preflight-toggle">
-          <input type="checkbox" data-feat="reports" />
-          <span class="preflight-toggle-label"><strong>Reports</strong><span class="preflight-toggle-hint">Runs code analysis on every file — language detection (tokei), source-lines-of-code counts per file + per-language roll-ups, and a Basic COCOMO estimate on top. Maintained incrementally from filesystem events. Per-workspace.</span></span>
-        </label>
-      </div>
-      <p class="preflight-footer">Both layers can also be enabled later from the workspace Dashboard.</p>`;
+      <p class="nw-intro">This folder will be registered as a chan workspace:</p>
+      <p class="preflight-path"></p>`;
     body.querySelector('.preflight-path').textContent = localPath;
-    const reportEl = body.querySelector('.preflight-report');
-    invoke('compute_workspace_preflight', { path: localPath })
-      .then((report) => renderPreflightReport(reportEl, report))
-      .catch((err) => {
-        reportEl.removeAttribute('aria-busy');
-        reportEl.classList.add('preflight-report-error');
-        reportEl.textContent = `Couldn't scan workspace: ${(err && err.message) || String(err)}`;
-      });
 
     const back = document.createElement('button');
     back.className = 'btn';
@@ -609,12 +593,8 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
     openWs.type = 'button';
     openWs.textContent = 'Open';
     openWs.addEventListener('click', async () => {
-      const features = {
-        bge: body.querySelector('input[data-feat="bge"]').checked,
-        reports: body.querySelector('input[data-feat="reports"]').checked,
-      };
       try {
-        await invoke('add_workspace', { path: localPath, features });
+        await invoke('add_workspace', { path: localPath });
       } catch (e) {
         showError(e);
         return;
@@ -811,83 +791,6 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
   };
 
   select(choice);
-}
-
-/// `fullstack-b-28b` slice iv: replace the "Scanning…" placeholder
-/// with the resolved report rows. Each row carries one fact the
-/// user needs to confirm "this is the folder I meant" + "I know
-/// what I'm committing to" before chan-workspace's BOOT runs.
-function renderPreflightReport(host, report) {
-  host.removeAttribute('aria-busy');
-  host.textContent = '';
-
-  if (report.already_registered) {
-    const warn = document.createElement('p');
-    warn.className = 'preflight-warn';
-    warn.textContent =
-      'This folder is already a registered chan workspace. Opening it from the launcher row is the safer path.';
-    host.appendChild(warn);
-  }
-  if (!report.writable) {
-    const warn = document.createElement('p');
-    warn.className = 'preflight-warn';
-    warn.textContent =
-      'Read-only mount: chan can still index this workspace but you will not be able to create or edit notes from chan.';
-    host.appendChild(warn);
-  }
-
-  const rows = document.createElement('dl');
-  rows.className = 'preflight-report-rows';
-
-  const filesLabel = report.truncated
-    ? `${report.file_count.toLocaleString()}+ (scan capped)`
-    : report.file_count.toLocaleString();
-  appendPreflightRow(rows, 'Files', filesLabel);
-  appendPreflightRow(
-    rows,
-    'Markdown',
-    report.markdown_count.toLocaleString(),
-  );
-  appendPreflightRow(rows, 'Size', formatPreflightBytes(report.size_bytes));
-
-  const mediaParts = [];
-  if (report.image_count) mediaParts.push(`${report.image_count.toLocaleString()} images`);
-  if (report.audio_count) mediaParts.push(`${report.audio_count.toLocaleString()} audio`);
-  if (report.video_count) mediaParts.push(`${report.video_count.toLocaleString()} video`);
-  appendPreflightRow(
-    rows,
-    'Media',
-    mediaParts.length ? mediaParts.join(' · ') : 'none',
-  );
-
-  if (report.scm) {
-    appendPreflightRow(rows, 'Source control', report.scm);
-  }
-
-  host.appendChild(rows);
-}
-
-function appendPreflightRow(parent, label, value) {
-  const dt = document.createElement('dt');
-  dt.textContent = label;
-  const dd = document.createElement('dd');
-  dd.textContent = value;
-  parent.appendChild(dt);
-  parent.appendChild(dd);
-}
-
-/// Human-friendly byte formatter. Caps at 999 G so the modal
-/// never spills past a reasonable column width.
-function formatPreflightBytes(bytes) {
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let n = bytes;
-  let unit = 0;
-  while (n >= 1024 && unit < units.length - 1) {
-    n = n / 1024;
-    unit += 1;
-  }
-  const formatted = unit === 0 ? `${n}` : n.toFixed(n >= 10 ? 0 : 1);
-  return `${formatted} ${units[unit]}`;
 }
 
 function render(workspaces) {

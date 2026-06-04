@@ -913,95 +913,51 @@ mod tests {
     }
 
     #[test]
-    fn new_workspace_modal_gates_add_workspace_with_features() {
-        // The launcher redesign folded the old pickAndAdd +
-        // showPreflightDialog two-step into the [New] modal's Local
-        // choice (showNewWorkspaceDialog). That choice still runs the
-        // pre-flight scan + the feature toggles and still threads the
-        // chosen feature pair into add_workspace, so the BGE/reports
-        // choice reaches chan-workspace's BOOT on first open. Pin the
-        // new wiring so a refactor can't silently drop it.
+    fn new_workspace_local_choice_has_no_desktop_preflight() {
+        // Phase-18: the desktop-side first-boot pre-flight was removed.
+        // @@Alex's v0.26.0 spec: "we should NOT have any pre-flight in the
+        // chan-desktop app anymore since this have moved over to chan's SPA"
+        // (PreflightOverlay.svelte, phase-17). The old desktop flow scanned
+        // the folder + rendered report rows + carried the BGE/reports
+        // toggles; it double-dialogged with, and raced, the SPA boot
+        // surface. The [New] modal's Local choice now just registers the
+        // folder and opens it; chan's SPA owns readiness + the optional
+        // Semantic / Reports layer toggles. Pin the new shape so a refactor
+        // can't reintroduce a desktop-side pre-flight.
         const MAIN_JS: &str = include_str!("../../src/main.js");
+        const MAIN_RS: &str = include_str!("main.rs");
+        // The [New] modal still exists and still registers via add_workspace,
+        // now WITHOUT threading a desktop-chosen feature pair (the SPA's
+        // onboarding card enables the optional layers post-boot).
         assert!(
             MAIN_JS.contains("showNewWorkspaceDialog("),
             "main.js must open the [New] workspace modal (showNewWorkspaceDialog)",
         );
         assert!(
-            MAIN_JS.contains("invoke('add_workspace', { path: localPath, features }"),
-            "the modal's Local choice must thread the chosen features into add_workspace",
+            MAIN_JS.contains("invoke('add_workspace', { path: localPath }"),
+            "the Local choice must register the chosen folder via add_workspace",
         );
-    }
-
-    #[test]
-    fn preflight_dialog_carries_round2_plan_explanatory_copy() {
-        // `fullstack-b-28b` slice iii: the round-2-plan flagged
-        // the explanatory copy as "load-bearing"; @@Alex wants
-        // users to understand the baseline before they choose
-        // what to layer on". Pin the load-bearing phrases so a
-        // future refactor can't silently drop them.
-        const MAIN_JS: &str = include_str!("../../src/main.js");
-        assert!(
-            MAIN_JS.contains("BM25 keyword search is"),
-            "preflight modal must explain the BM25 baseline",
-        );
-        assert!(
-            MAIN_JS.contains("can't be disabled"),
-            "preflight modal must explain that the baseline is mandatory",
-        );
-        assert!(
-            MAIN_JS.contains("dense-vector embeddings"),
-            "preflight modal must describe semantic search via dense embeddings",
-        );
-        assert!(
-            MAIN_JS.contains("tokei"),
-            "preflight modal must name tokei as the language-detection engine",
-        );
-        assert!(
-            MAIN_JS.contains("COCOMO"),
-            "preflight modal must name COCOMO as the estimate model",
-        );
-    }
-
-    #[test]
-    fn invoke_handler_registers_compute_workspace_preflight() {
-        // `fullstack-b-28b` slice iv: the pre-flight modal calls
-        // `compute_workspace_preflight` after mount to populate the
-        // report rows. Mirrors the other IPC registration pins
-        // so a rename catches deliberately.
-        const MAIN_RS: &str = include_str!("main.rs");
-        assert!(MAIN_RS.contains("compute_workspace_preflight,"));
-        assert!(MAIN_RS.contains("fn compute_workspace_preflight("));
-    }
-
-    #[test]
-    fn preflight_modal_renders_report_rows_after_b28b_iv() {
-        // `fullstack-b-28b` slice iv: the modal kicks off
-        // `compute_workspace_preflight` after mount and renders the
-        // returned facts via `renderPreflightReport`. Pin both
-        // the invoke + the renderer + the load-bearing report
-        // labels so a future refactor can't silently revert to
-        // the slice-iii "toggles only" shape.
-        const MAIN_JS: &str = include_str!("../../src/main.js");
-        assert!(
-            MAIN_JS.contains("invoke('compute_workspace_preflight'"),
-            "main.js must invoke compute_workspace_preflight from the [New] modal Local choice",
-        );
-        assert!(
-            MAIN_JS.contains("renderPreflightReport(reportEl, report)"),
-            "main.js must render the resolved report into the dialog",
-        );
-        for label in [
-            "'Files'",
-            "'Markdown'",
-            "'Size'",
-            "'Media'",
-            "'Source control'",
+        // None of the removed desktop pre-flight wiring may survive: no scan
+        // IPC, no report renderer, no feature toggles, and none of the
+        // explanatory copy the SPA now owns.
+        for gone in [
+            "compute_workspace_preflight",
+            "renderPreflightReport",
+            "data-feat=\"bge\"",
+            "data-feat=\"reports\"",
+            "BM25 keyword search is",
+            "dense-vector embeddings",
         ] {
             assert!(
-                MAIN_JS.contains(label),
-                "preflight modal must surface {label} report row",
+                !MAIN_JS.contains(gone),
+                "main.js must not carry the removed desktop pre-flight ({gone})",
             );
         }
+        // The Rust IPC backend is gone too: no pre-flight scan in the app.
+        assert!(
+            !MAIN_RS.contains("fn compute_workspace_preflight("),
+            "the desktop compute_workspace_preflight IPC must be removed",
+        );
     }
 
     #[test]
@@ -1091,34 +1047,6 @@ mod tests {
         assert!(
             MAIN_JS.contains("invoke('factory_reset_default_workspace'"),
             "launcher must route confirmed missing-default reset to Rust",
-        );
-    }
-
-    #[test]
-    fn new_workspace_modal_carries_add_time_feature_toggles() {
-        // The per-row gear features panel was removed (ongoing
-        // reconfiguration lives in the chan SPA now). The SAME two
-        // toggles survive as CREATION-TIME selection in the [New]
-        // modal's Local choice (decision D1): the labels + data-feat
-        // bindings moved onto the modal. Pin them there so the
-        // add-time feature wiring can't silently drop (Settings copy
-        // in `-a-76` mirrors these labels).
-        const MAIN_JS: &str = include_str!("../../src/main.js");
-        assert!(
-            MAIN_JS.contains("Semantic search"),
-            "the add-time toggles must label the BGE toggle as 'Semantic search'"
-        );
-        assert!(
-            MAIN_JS.contains("Reports"),
-            "the add-time toggles must label the chan-report toggle as 'Reports'"
-        );
-        assert!(
-            MAIN_JS.contains("data-feat=\"bge\""),
-            "the add-time toggles must bind the BGE checkbox to the bge field"
-        );
-        assert!(
-            MAIN_JS.contains("data-feat=\"reports\""),
-            "the add-time toggles must bind the reports checkbox to the reports field"
         );
     }
 
