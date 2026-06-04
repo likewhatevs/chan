@@ -15,7 +15,7 @@ Touches the filesystem-facing seams that go through
 
 A handles the smaller / faster-cycling work in the FullStack
 queue; B carries the bigger / cross-stack items. The split is
-operational — both lanes have identical skill sets.
+operational - both lanes have identical skill sets.
 
 ## Skills
 
@@ -28,10 +28,10 @@ operational — both lanes have identical skill sets.
 
 ## Predecessors
 
-* `@@FullStack` — phase 7 single FullStack lane (commits 1
+* `@@FullStack` - phase 7 single FullStack lane (commits 1
   through mid-fullstack-30 era).
-* `@@Backend` — phases 1-5 backend slot.
-* `@@Frontend` — phases 1-6 frontend slot.
+* `@@Backend` - phases 1-5 backend slot.
+* `@@Frontend` - phases 1-6 frontend slot.
 
 ## History
 

@@ -35,14 +35,14 @@ Body:
 }
 ```
 
-* `name` — the tab's display name. The chan-server
+* `name` - the tab's display name. The chan-server
   event watcher uses this to route `poke\n` dispatches
   by matching the `to` field of incoming events. Use
   the `@@Name` convention.
-* `command` — the full CLI to run, including flags. No
+* `command` - the full CLI to run, including flags. No
   argv-array form; chan splits on the shell quoting
   you provide.
-* `env` — optional extras merged into the PTY
+* `env` - optional extras merged into the PTY
   environment on top of chan's default `CHAN_*` env
   plumbing.
 
@@ -117,7 +117,7 @@ reply endpoint; chan-server reacted:
    CLI.
 3. chan-server creates the tab, launches the PTY, gets
    the tab name into the watcher dispatch registry.
-4. If the helper boots cleanly, that's it — the helper
+4. If the helper boots cleanly, that's it - the helper
    is now reachable by routing events at `@@HelperName`.
 5. If the helper emits a pre-flight signal first,
    chan-server fires the `pre-flight` event into the

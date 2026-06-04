@@ -26,11 +26,11 @@ carries the smaller / faster-cycling work.
 
 ## Predecessors
 
-* `@@FullStack` — phase 7 single FullStack lane (commits 1
+* `@@FullStack` - phase 7 single FullStack lane (commits 1
   through mid-fullstack-30 era).
-* `@@Backend` / `@@Frontend` — pre-phase-7 split roles.
+* `@@Backend` / `@@Frontend` - pre-phase-7 split roles.
 
 ## History
 
-See [fullstack-a.md](fullstack-a.md) — both lanes share the
+See [fullstack-a.md](fullstack-a.md) - both lanes share the
 same lineage from @@FullStack.

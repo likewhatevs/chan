@@ -20,6 +20,17 @@ we did not" companion to these contact cards.
 | @@WebtestA    | [webtest-a.md](webtest-a.md)   | Web test lane A.                 |
 | @@WebtestB    | [webtest-b.md](webtest-b.md)   | Web test lane B.                 |
 
+## Desktop + CI lanes (phase 8)
+
+Phase 8 stood up a parallel chan-desktop team plus a dedicated CI lane.
+
+| Tag          | Contact                        | Profile                       |
+|--------------|--------------------------------|-------------------------------|
+| @@Desktect   | [desktect.md](desktect.md)     | chan-desktop architect lead.  |
+| @@Desktacean | [desktacean.md](desktacean.md) | Tauri/Rust desktop impl.      |
+| @@Desktest   | [desktest.md](desktest.md)     | chan-desktop tester.          |
+| @@CI         | [ci.md](ci.md)                 | CI/release infrastructure.    |
+
 ## Historical handles
 
 Older phases used different slot names. Each maps to its active

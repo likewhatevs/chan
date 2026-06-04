@@ -17,7 +17,7 @@ different feature flags, different browser tabs).
 
 ## Predecessors
 
-* `@@Webtest` — single-lane test slot in phases 1-5.
+* `@@Webtest` - single-lane test slot in phases 1-5.
 * `@@WebtestB` named explicitly from phase 6 onward.
 
 ## History

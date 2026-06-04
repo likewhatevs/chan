@@ -21,9 +21,9 @@ crate boundary contract.
 
 ## Predecessors
 
-* `@@Syseng` — phases 1-5 systems-engineering slot.
-* `@@Rustacean` — phases 1-5 Rust-quality slot.
-* `@@Backsystacean` — phase 6 merger of Backend + Syseng +
+* `@@Syseng` - phases 1-5 systems-engineering slot.
+* `@@Rustacean` - phases 1-5 Rust-quality slot.
+* `@@Backsystacean` - phase 6 merger of Backend + Syseng +
   Rustacean.
 
 Phase 7 splits Backend back out into @@FullStack and keeps
