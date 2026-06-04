@@ -109,7 +109,10 @@ pub fn build_inspector_payload(
         let class = chan_workspace::fs_ops::classify_abs(workspace.root(), &abs)?;
         (class, Some(abs.to_string_lossy().into_owned()))
     } else {
-        (chan_workspace::classify_path(workspace.root(), &path)?, None)
+        (
+            chan_workspace::classify_path(workspace.root(), &path)?,
+            None,
+        )
     };
     let stat = if path.is_empty() {
         None
