@@ -52,13 +52,39 @@ impl EmbeddedServer {
     }
 
     pub async fn open_workspace(&self, key: &str) -> Result<String, String> {
+        use chan_workspace::ChanError;
+        // A workspace just turned OFF can keep its flock for a beat: a
+        // background indexer / in-flight request still holding an
+        // `Arc<Workspace>` releases it shortly after the runtime is dropped.
+        // A quick OFF -> ON would otherwise spuriously hit
+        // `WorkspaceAlreadyOpen` (our own releasing handle) or
+        // `WorkspaceLocked`. Retry briefly so the toggle settles instead of
+        // erroring; a genuine other-process lock still surfaces after the
+        // short budget. Mirrors `unregister_with_retry` on the close side.
+        const MAX_ATTEMPTS: usize = 8;
+        const BACKOFF: std::time::Duration = std::time::Duration::from_millis(150);
         let prefix = prefix_for_key(key);
-        let hosted = self
-            .host
-            .open_registered_workspace(Path::new(key), serve_config(self.addr, &prefix))
-            .await
-            .map_err(|e| map_open_error(key, e))?;
-        Ok(hosted.handle.launch_url())
+        for attempt in 1..=MAX_ATTEMPTS {
+            match self
+                .host
+                .open_registered_workspace(Path::new(key), serve_config(self.addr, &prefix))
+                .await
+            {
+                Ok(hosted) => return Ok(hosted.handle.launch_url()),
+                Err(
+                    e @ chan_server::Error::Core(
+                        ChanError::WorkspaceLocked | ChanError::WorkspaceAlreadyOpen,
+                    ),
+                ) => {
+                    if attempt == MAX_ATTEMPTS {
+                        return Err(map_open_error(key, e));
+                    }
+                    tokio::time::sleep(BACKOFF).await;
+                }
+                Err(other) => return Err(map_open_error(key, other)),
+            }
+        }
+        unreachable!("retry loop returns on the final attempt")
     }
 
     /// Shared workspace registry handle owned by the embedded host.

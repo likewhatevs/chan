@@ -102,13 +102,18 @@ let defaultWorkspacePromptDismissed = false;
 // to flicker. Skip the render when the payload hasn't changed.
 let lastWorkspacesJson = '';
 
-async function refresh() {
+// `force` re-renders even when the workspace-list JSON is unchanged. The
+// periodic / event-driven callers dedupe on the JSON to avoid flicker, but a
+// user toggle must reconcile the DOM back to the true serve state even when
+// the net registry JSON did not move (e.g. a native checkbox flip whose
+// underlying on/off transition failed), so it forces a render.
+async function refresh(force = false) {
   if (!homeDir) {
     try { homeDir = await invoke('home_dir'); } catch { homeDir = ''; }
   }
   const workspaces = await invoke('list_workspaces');
   const json = JSON.stringify(workspaces);
-  if (json !== lastWorkspacesJson) {
+  if (force || json !== lastWorkspacesJson) {
     lastWorkspacesJson = json;
     render(workspaces);
   }
@@ -973,12 +978,25 @@ function bindRowEvents() {
     const path = tr.dataset.path;
 
     tr.querySelector('[data-act="toggle-on"]').addEventListener('change', async (e) => {
+      const toggle = e.target;
+      // Serve start/stop is not instant: stop removes the runtime but a
+      // background indexer / in-flight request can hold the workspace flock
+      // for a beat, and start awaits a fresh open. The native checkbox flips
+      // the instant it is clicked, so without locking the control a second
+      // click races the still-transitioning server -> WorkspaceLocked
+      // ("open in another chan process") and the row sticks ON with Open
+      // disabled. Disable the toggle for the whole transition so it can't be
+      // re-clicked mid-flight, then force a re-render from the TRUE serve
+      // state (bypassing the list-JSON dedupe) so the toggle + Open reconcile
+      // to reality on every outcome - including a failed re-enable, which
+      // then cleanly reverts the toggle instead of stranding it.
+      toggle.disabled = true;
       try {
-        await invoke('set_workspace_on', { path, on: e.target.checked });
+        await invoke('set_workspace_on', { path, on: toggle.checked });
       } catch (err) {
         showError(err);
       }
-      await refresh();
+      await refresh(true);
     });
 
     tr.querySelector('[data-act="launch"]').addEventListener('click', async () => {
