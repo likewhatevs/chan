@@ -73,6 +73,12 @@
     /// the parent owns the rescope (it has access to the current
     /// selection's `path` / `isDir` and to `graphFromHere`).
     onSetAsScope?: () => void;
+    /// Where the single focal node sits in the viewport. "center" (default)
+    /// centers it; "bottom" anchors it near the bottom edge so the cluster
+    /// grows upward from it. The Dashboard search-index graph uses "bottom"
+    /// to seat the workspace-root node just above the carousel scroller
+    /// (@@Alex); every other surface keeps "center".
+    focalAnchor?: "center" | "bottom";
   };
   let {
     open,
@@ -85,6 +91,7 @@
     onSelect,
     onContextMenu,
     onSetAsScope,
+    focalAnchor = "center",
   }: Props = $props();
 
   // ---- types: d3-shaped working copies ---------------------------------
@@ -1382,8 +1389,18 @@
       halfW = (xmax - xmin) / 2;
       halfH = (ymax - ymin) / 2;
     }
+    // Bottom-anchor mode (Dashboard search-index): seat the focal node near
+    // the bottom edge instead of the vertical center, so the spine grows
+    // upward from it and the root sits just above the carousel scroller. The
+    // fittable height is then the room ABOVE the bottom anchor, not half the
+    // canvas.
+    const bottomAnchored = focalAnchor === "bottom" && focal !== null;
+    const FOCAL_BOTTOM_MARGIN = 56;
+    const anchorY = bottomAnchored ? ch - FOCAL_BOTTOM_MARGIN : ch / 2;
     const availHalfW = Math.max(1, cw / 2 - pad);
-    const availHalfH = Math.max(1, ch / 2 - pad);
+    const availHalfH = bottomAnchored
+      ? Math.max(1, ch - FOCAL_BOTTOM_MARGIN - pad)
+      : Math.max(1, ch / 2 - pad);
     // Clamp to the wheel-zoom range, with the same upper cap so a
     // tiny cluster (1-2 nodes) doesn't zoom in past a sensible level.
     const k = Math.min(
@@ -1393,7 +1410,7 @@
         Math.min(availHalfW / Math.max(1, halfW), availHalfH / Math.max(1, halfH)),
       ),
     );
-    return { x: cw / 2 - cx * k, y: ch / 2 - cy * k, k };
+    return { x: cw / 2 - cx * k, y: anchorY - cy * k, k };
   }
 
   /// Snap the transform to fit the current node set. Used at first

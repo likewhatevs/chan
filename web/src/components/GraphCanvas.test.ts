@@ -105,7 +105,7 @@ describe("dblclick on a node = graph from here", () => {
       /type Props = \{[\s\S]{1,2000}onSetAsScope\?: \(\) => void;/,
     );
     expect(source).toMatch(
-      /let \{[\s\S]{1,800}onSetAsScope,\s*\}: Props = \$props\(\);/,
+      /let \{[\s\S]{1,800}onSetAsScope,[\s\S]{0,160}\}: Props = \$props\(\);/,
     );
   });
 

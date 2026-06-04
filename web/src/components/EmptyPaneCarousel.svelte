@@ -621,6 +621,7 @@
                 visibleNodeIds={indexingNodeIds}
                 visibleEdges={indexingGraph.edges}
                 focalIds={indexingFocal}
+                focalAnchor="bottom"
                 selectedId={selectedIndexId}
                 onSelect={onIndexingSelect}
               />
