@@ -62,7 +62,7 @@
     tree,
   } from "../state/store.svelte";
   import { openTerminalInActivePane } from "../state/tabs.svelte";
-  import { terminalFromHereTarget } from "../terminal/fromHere";
+  import { terminalFromHereTarget, shellQuotePath } from "../terminal/fromHere";
   import { classifyEntry } from "../state/kinds";
   import KindChip from "./KindChip.svelte";
   import { ChevronDown, Copy } from "lucide-svelte";
@@ -194,7 +194,29 @@
         size: 0,
       } as TreeEntry;
     }
-    return entryByPath.get(path) ?? null;
+    const looked = entryByPath.get(path);
+    if (looked) return looked;
+    // Draft FILES (Drafts/<name>/draft.md) live in chan's metadata folder,
+    // OUTSIDE the workspace tree, so they never appear in `entryByPath` and
+    // the inspector rendered blank. The server now resolves the draft via
+    // /api/inspector (size/mtime/abs_path), so synthesize a file-shaped entry
+    // from that payload to drive the normal markdown file branch. Refs
+    // (tags/contacts/links/backlinks) already resolve from the graph, which
+    // indexes drafts under the same Drafts/ key.
+    if (
+      path.startsWith("Drafts/") &&
+      inspectorPayload &&
+      inspectorPayload.path === path &&
+      !inspectorPayload.is_dir
+    ) {
+      return {
+        path,
+        is_dir: false,
+        size: inspectorPayload.size,
+        mtime: inspectorPayload.mtime,
+      } as TreeEntry;
+    }
+    return null;
   });
 
   /// The file tree lazy-loads directory contents, so opening a file
@@ -595,6 +617,28 @@
     if (entry.path === "Drafts") {
       return {
         main: { label: "Terminal from here", onClick: newTerminalHere },
+        secondary: [],
+      };
+    }
+    // A draft FILE also lives outside the workspace, so Open / Show file /
+    // Download / Graph-from-here don't apply. @@Alex: a SINGLE "Terminal from
+    // here" button (no dropdown) that opens a terminal seeded with
+    // {cursor}{space}{ABSOLUTE-path-of-the-draft}. The absolute path comes
+    // from the inspector payload (abs_path); cwd is the workspace root, so the
+    // location-independent absolute seed is what reaches the prompt. The
+    // {cursor}{space} prefix is added by TerminalTab's seed mechanism.
+    if (entry.path.startsWith("Drafts/")) {
+      const draftAbs = inspectorPayload?.abs_path ?? null;
+      return {
+        main: {
+          label: "Terminal from here",
+          onClick: () =>
+            openTerminalInActivePane(
+              draftAbs
+                ? { cwd: "", seedInput: shellQuotePath(draftAbs) }
+                : terminalFromHereTarget(entry.path, false),
+            ),
+        },
         secondary: [],
       };
     }

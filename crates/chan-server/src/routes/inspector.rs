@@ -39,6 +39,13 @@ pub struct InspectorPayload {
     pub size: u64,
     pub mtime: Option<i64>,
     pub path_class: PathClass,
+    /// Absolute on-disk path, surfaced ONLY for Drafts (which live in chan's
+    /// metadata folder outside the workspace root, so the SPA can't derive
+    /// the absolute path from `workspace.info.root` + the relative path). The
+    /// draft inspector seeds "Terminal from here" with this. None for in-root
+    /// paths, where the SPA already knows the absolute path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abs_path: Option<String>,
     pub frontmatter_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_file: Option<ReportFileStats>,
@@ -91,7 +98,19 @@ pub fn build_inspector_payload(
     requested_path: &str,
 ) -> chan_workspace::Result<InspectorPayload> {
     let path = normalize_path(requested_path)?;
-    let path_class = chan_workspace::classify_path(workspace.root(), &path)?;
+    // Drafts live in chan's metadata folder OUTSIDE the workspace root, so the
+    // root-relative `classify_path` (root.join(path) + symlink_metadata) can't
+    // see them and errors, leaving the inspector blank. Resolve the physical
+    // path and classify THAT instead; surface the absolute path so the SPA's
+    // draft "Terminal from here" can seed the real on-disk location.
+    let is_draft = chan_workspace::drafts::is_unified_drafts_path(&path);
+    let (path_class, abs_path) = if is_draft {
+        let abs = workspace.resolve_physical_path(&path)?;
+        let class = chan_workspace::fs_ops::classify_abs(workspace.root(), &abs)?;
+        (class, Some(abs.to_string_lossy().into_owned()))
+    } else {
+        (chan_workspace::classify_path(workspace.root(), &path)?, None)
+    };
     let stat = if path.is_empty() {
         None
     } else {
@@ -131,6 +150,7 @@ pub fn build_inspector_payload(
         size: stat.as_ref().map(|s| s.size).unwrap_or(0),
         mtime: stat.as_ref().and_then(|s| s.mtime),
         path_class,
+        abs_path,
         frontmatter_kind,
         report_file,
         report_summary,

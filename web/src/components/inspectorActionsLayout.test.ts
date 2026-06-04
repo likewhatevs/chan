@@ -99,7 +99,7 @@ describe("shared actions section under the filename", () => {
       /function newTerminalHere\(\): void \{[\s\S]{1,200}terminalFromHereTarget\(entry\.path, entry\.is_dir\)/,
     );
     expect(fileInfo).toMatch(
-      /import \{ terminalFromHereTarget \} from "\.\.\/terminal\/fromHere";/,
+      /import \{[^}]*\bterminalFromHereTarget\b[^}]*\} from "\.\.\/terminal\/fromHere";/,
     );
     expect(fileInfo).toMatch(
       /import \{ openTerminalInActivePane \} from "\.\.\/state\/tabs\.svelte";/,
