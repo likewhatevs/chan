@@ -38,6 +38,28 @@ describe("wiki file completion uses graph link targets", () => {
     expect(wiki).not.toMatch(/\.filter\(\(hit\) => hit\.kind === "File"\)/);
   });
 
+  test("`[[` completes workspace paths (BOTH: names + paths, additive)", () => {
+    // The LinkTarget wire type carries a "Path" kind alongside
+    // File / Heading.
+    expect(types).toMatch(/kind: "File" \| "Heading" \| "Path";/);
+    // The picker renders a "Path" row leading with the full workspace
+    // path so a `[[dir/sub` query surfaces path candidates.
+    expect(wiki).toMatch(/else if \(t\.kind === "Path"\)/);
+    expect(wiki).toMatch(/tag\.textContent = "PATH";/);
+  });
+
+  test("path candidates are synthesized CLIENT-SIDE off the file tree", () => {
+    // No backend link-targets change: paths come from the existing
+    // /api/files listing (api.list), filtered + tagged "Path" here.
+    expect(wiki).toMatch(/function computePathHits\(/);
+    // api.list() may be formatted as a method chain (api\n.list()).
+    expect(wiki).toMatch(/api\s*\.list\(\)/);
+    expect(wiki).toMatch(/kind: "Path" as const,/);
+    // Merged AFTER the link-target hits, deduped against same-path file
+    // rows (a file matched by both name and path lists once).
+    expect(wiki).toMatch(/const extras = pathHits\.filter\(/);
+  });
+
   test("file-mode commit extracts the heading anchor and defers to fileLinkInsert", () => {
     expect(wiki).toMatch(
       /const lt = hit as LinkTarget;[\s\S]*?const anchor = lt\.kind === "Heading" \? \(lt\.anchor \?\? null\) : null;[\s\S]*?insert = fileLinkInsert\(lt\.path, anchor, raw\);/,

@@ -3,6 +3,8 @@ import type { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 import { notify } from "../state/notify.svelte";
+import { openGraphFromLink } from "../state/store.svelte";
+import { GRAPH_LINK_PREFIX } from "../state/tabs.svelte";
 
 type SyntaxNode = ReturnType<ReturnType<typeof syntaxTree>["resolveInner"]>;
 
@@ -122,6 +124,16 @@ export function externalLinkClickHandler() {
       if (!target?.closest(".cm-md-link, .cm-md-link-url")) return false;
       const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
       if (pos === null) return false;
+      // In-app `chan://graph?...` links (pasted from a graph tab's "Copy
+      // link to graph") open the graph tab rather than navigating out.
+      // Checked before the external-URL path because `chan:` is not an
+      // openable external scheme, so externalUrlAtPos would drop it.
+      const raw = linkUrlAtPos(view.state, pos);
+      if (raw?.startsWith(GRAPH_LINK_PREFIX) && openGraphFromLink(raw)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
       const url = externalUrlAtPos(view.state, pos);
       if (!url) return false;
       event.preventDefault();
@@ -132,26 +144,48 @@ export function externalLinkClickHandler() {
   });
 }
 
+/// Raw URL string of the link / autolink / naked-URL under `pos`, any
+/// scheme and unfiltered. Backs in-app scheme handling (e.g. the
+/// `chan://graph?...` graph links) that the openable-external path
+/// intentionally ignores. Image URLs are excluded (an image is not a
+/// navigable link).
+export function linkUrlAtPos(state: EditorState, pos: number): string | null {
+  for (const side of [-1, 0, 1] as const) {
+    let node: SyntaxNode | null = syntaxTree(state).resolveInner(pos, side);
+    while (node) {
+      const url = rawUrlForNode(state, node);
+      if (url) return url;
+      node = node.parent;
+    }
+  }
+  return null;
+}
+
 function externalUrlForNode(state: EditorState, node: SyntaxNode): string | null {
+  const raw = rawUrlForNode(state, node);
+  return raw ? openableUrl(raw) : null;
+}
+
+function rawUrlForNode(state: EditorState, node: SyntaxNode): string | null {
   if (node.name === "Link" || node.name === "Autolink") {
-    return openableUrlFromChild(state, node);
+    return rawUrlFromChild(state, node);
   }
   if (node.name !== "URL") return null;
   const parent = node.parent;
   if (parent?.name === "Image") return null;
   if (parent?.name === "Link" || parent?.name === "Autolink") {
-    return openableUrlFromChild(state, parent);
+    return rawUrlFromChild(state, parent);
   }
-  return openableUrl(state.doc.sliceString(node.from, node.to));
+  return state.doc.sliceString(node.from, node.to).trim();
 }
 
-function openableUrlFromChild(state: EditorState, node: SyntaxNode): string | null {
+function rawUrlFromChild(state: EditorState, node: SyntaxNode): string | null {
   const cursor = node.cursor();
   if (!cursor.firstChild()) return null;
   do {
-    if (cursor.name !== "URL") continue;
-    const url = state.doc.sliceString(cursor.from, cursor.to);
-    return openableUrl(url);
+    if (cursor.name === "URL") {
+      return state.doc.sliceString(cursor.from, cursor.to).trim();
+    }
   } while (cursor.nextSibling());
   return null;
 }

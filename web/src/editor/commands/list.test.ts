@@ -13,9 +13,12 @@ import {
   clampListCaretPosition,
   continueListOnEnter,
   indentListItem,
+  listAwareArrowDown,
+  listAwareArrowUp,
   outdentListItem,
   stripUnusedInlineImageSpaceOnEnter,
 } from "./list";
+import wysiwygSource from "../Wysiwyg.svelte?raw";
 
 let host: HTMLDivElement;
 let view: EditorView;
@@ -212,5 +215,31 @@ describe("list caret and inline image paste helpers", () => {
     mount(doc, doc.length);
     expect(stripUnusedInlineImageSpaceOnEnter(view)).toBe(false);
     expect(snapshot()).toEqual({ doc, head: doc.length });
+  });
+});
+
+describe("list-aware vertical caret motion", () => {
+  // The clamp-after-move behaviour needs real layout geometry
+  // (cursorLineUp/Down -> moveVertically -> coordsAtPos), which jsdom
+  // does not provide, so the positive case is covered by the browser
+  // smoke. Here we lock the layout-independent contract: the range-
+  // selection guard, and the keymap wiring in Wysiwyg.svelte.
+  test("defers a non-empty selection to the default arrow handler", () => {
+    mount("* one\n  * two", 0);
+    view.dispatch({ selection: { anchor: 0, head: 5 } });
+    expect(listAwareArrowDown(view)).toBe(false);
+    expect(listAwareArrowUp(view)).toBe(false);
+    // Selection is untouched: we returned false before moving anything.
+    expect(view.state.selection.main.from).toBe(0);
+    expect(view.state.selection.main.to).toBe(5);
+  });
+
+  test("Wysiwyg keymap wires the arrows to the list-aware handlers", () => {
+    expect(wysiwygSource).toMatch(
+      /key:\s*"ArrowDown",\s*run:\s*\(view\)\s*=>\s*listAwareArrowDown\(view\)/,
+    );
+    expect(wysiwygSource).toMatch(
+      /key:\s*"ArrowUp",\s*run:\s*\(view\)\s*=>\s*listAwareArrowUp\(view\)/,
+    );
   });
 });

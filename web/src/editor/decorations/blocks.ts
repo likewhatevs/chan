@@ -434,19 +434,35 @@ const handleBulletList: TokenHandler = (ctx) => {
   decorateBulletList(ctx, ctx.node.node);
 };
 
-/// Depth-cycling glyph decorations. The class chosen here only ADDS a
-/// styling hook; the source bytes are untouched (so source mode +
-/// round-trip still show the literal `-` / `*` / `+`). The wysiwyg
-/// glyph is pure CSS (Wysiwyg.svelte) and keys off NESTING DEPTH, not
-/// the typed marker char, matching Google Docs: level 1 = filled disc,
-/// level 2 = open circle, level 3 = filled square, then the cycle
-/// repeats (depth % 3). All three source markers (- / * / +) render
-/// the same glyph at a given depth.
+/// Depth-cycling glyph decorations for `*` / `+` lists. The class chosen
+/// here only ADDS a styling hook; the source bytes are untouched (so
+/// source mode + round-trip still show the literal `*` / `+`). The
+/// wysiwyg glyph is pure CSS (Wysiwyg.svelte) and keys off NESTING
+/// DEPTH, not the typed marker char, matching Google Docs: level 1 =
+/// filled disc, level 2 = open circle, level 3 = filled square, then the
+/// cycle repeats (depth % 3).
+///
+/// Hyphen (`-`) lists are deliberately EXCLUDED from this cycle (see
+/// HYPHEN_MARK below): @@Alex's phase-17 google-docs request was for the
+/// `*` bullet style only, so hyphen lists keep their literal dash and
+/// stay visually distinct.
 const BULLET_GLYPHS = [
   Decoration.mark({ class: "cm-md-ul-marker cm-md-ul-bullet cm-md-ul-disc" }),
   Decoration.mark({ class: "cm-md-ul-marker cm-md-ul-bullet cm-md-ul-circle" }),
   Decoration.mark({ class: "cm-md-ul-marker cm-md-ul-bullet cm-md-ul-square" }),
 ];
+
+/// Hyphen (`-`) lists render their literal dash, NOT a depth glyph. The
+/// `cm-md-ul-hyphen` class styles the marker (color) without the
+/// `cm-md-ul-bullet` font-size:0 + ::before substitution, so the source
+/// `-` shows through at every nesting level. As a side benefit the
+/// marker stays real visible text (like an ordered `1.` marker), so a
+/// vertical caret move lands past it onto the text instead of on a
+/// zero-width glyph - hyphen lists get ordered-list cursor parity for
+/// free.
+const HYPHEN_MARK = Decoration.mark({
+  class: "cm-md-ul-marker cm-md-ul-hyphen",
+});
 
 /// Nesting depth of this ListItem: the count of ancestor ListItems
 /// above it (0 = top-level). Drives the Google-Docs glyph cycle
@@ -463,10 +479,11 @@ function bulletDepth(item: import("@lezer/common").SyntaxNode): number {
   return depth;
 }
 
-/// Map a bullet ListItem's nesting depth to its glyph decoration. The
-/// source marker char (- / * / +) is intentionally ignored: Google
-/// Docs keys the glyph off depth alone, not the typed char.
-function bulletGlyphDecoration(depth: number): Decoration {
+/// Decoration for a bullet ListItem's marker. Hyphen (`-`) markers stay
+/// a literal dash (HYPHEN_MARK); `*` / `+` markers map their nesting
+/// depth to a Google-Docs glyph (disc / circle / square, depth % 3).
+function bulletMarkerDecoration(markerChar: string, depth: number): Decoration {
+  if (markerChar === "-") return HYPHEN_MARK;
   return BULLET_GLYPHS[depth % BULLET_GLYPHS.length];
 }
 
@@ -494,8 +511,9 @@ function decorateBulletList(
       } while (sub.nextSibling());
     }
     if (!hasTask && markFrom !== -1 && markTo !== -1) {
+      const markerChar = ctx.state.doc.sliceString(markFrom, markTo);
       ctx.push(
-        bulletGlyphDecoration(bulletDepth(item)),
+        bulletMarkerDecoration(markerChar, bulletDepth(item)),
         markFrom,
         markTo,
       );

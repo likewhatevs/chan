@@ -13,6 +13,7 @@
 
 import type { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { cursorLineDown, cursorLineUp } from "@codemirror/commands";
 
 /// Anchored at line start. Captures:
 ///   1: leading whitespace (indent)
@@ -181,6 +182,48 @@ export function clampListCaretPosition(state: EditorState, pos: number): number 
   const min = info.from + info.prefix.length;
   if (pos >= info.from && pos < min) return min;
   return pos;
+}
+
+/// ArrowDown / ArrowUp that keep the caret out of a list line's prefix.
+///
+/// A `*` / `+` bullet marker renders as a zero-width source char plus a
+/// CSS ::before glyph (blocks.ts / Wysiwyg.svelte), so a vertical move
+/// whose goal column lands left of the glyph drops the caret AT the
+/// glyph - inside the prefix, before any text. Ordered (and now hyphen)
+/// lists keep a real visible marker, so their goal column maps past it
+/// onto the text; @@Alex calls that behaviour "perfect". We reproduce it
+/// for `*` / `+` bullets by running the normal vertical motion, then
+/// snapping a caret that landed inside the prefix to the first text
+/// column. The snap only fires when it actually moves the caret, so
+/// lines that already land on the text keep CM6's native goal-column
+/// tracking untouched.
+export function listAwareArrowDown(view: EditorView): boolean {
+  return verticalMoveClampingPrefix(view, cursorLineDown);
+}
+
+export function listAwareArrowUp(view: EditorView): boolean {
+  return verticalMoveClampingPrefix(view, cursorLineUp);
+}
+
+function verticalMoveClampingPrefix(
+  view: EditorView,
+  move: (view: EditorView) => boolean,
+): boolean {
+  // Plain caret motion only. A range selection collapses on a bare
+  // arrow via CM6's default; returning false routes there so we never
+  // clamp a selection endpoint.
+  if (!view.state.selection.main.empty) return false;
+  // `move` is the same command CM6's default keymap binds to the arrow
+  // (cursorLineUp / cursorLineDown), so non-list lines behave exactly as
+  // before. It returns false at the document edge - propagate that so
+  // lower-precedence handlers still see the key.
+  if (!move(view)) return false;
+  const head = view.state.selection.main.head;
+  const clamped = clampListCaretPosition(view.state, head);
+  if (clamped !== head) {
+    view.dispatch({ selection: { anchor: clamped } });
+  }
+  return true;
 }
 
 export function stripUnusedInlineImageSpaceOnEnter(view: EditorView): boolean {

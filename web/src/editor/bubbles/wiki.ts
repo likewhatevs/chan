@@ -26,7 +26,7 @@ import { openBubbleShell } from "../bubble";
 import type { BubbleHandle } from "./types";
 import { createCaretAnchor } from "./anchor";
 import { api } from "../../api/client";
-import type { LinkTarget } from "../../api/types";
+import type { LinkTarget, TreeEntry } from "../../api/types";
 import { indexStatus } from "../../state/store.svelte";
 import { decodePercent, relativizePath, wikiLinkToMarkdown } from "../links";
 import {
@@ -72,6 +72,52 @@ export interface WikiBubbleOpts {
 const SEARCH_LIMIT = 5;
 const HEADING_LIMIT = 8;
 const BLOCK_LIMIT = 8;
+// Cap on client-synthesized workspace-PATH candidates merged in beside
+// the /api/link-targets hits. Keeps a path query (e.g. `[[docs/`) from
+// flooding the list while still surfacing the matches that matter.
+const PATH_LIMIT = 8;
+
+/// Build workspace-PATH completion candidates from the file tree.
+/// @@Alex's survey: `[[` completes BOTH names (/api/link-targets) AND
+/// workspace paths. Paths are done CLIENT-SIDE here off the existing
+/// /api/files tree listing - no backend route change.
+///
+/// A candidate is a FILE whose full rel_path either starts with the
+/// query (rank 1; discoverable from the first segment, e.g. `[[docs`
+/// surfaces `docs/...`) or, once the query is an explicit path (has a
+/// `/`), contains it (rank 2). Directories are skipped: a file's row
+/// already shows its full path, so the user drills in by typing more
+/// of the path rather than committing an unresolvable directory link.
+function computePathHits(q: string, entries: TreeEntry[]): LinkTarget[] {
+  const query = q.toLowerCase();
+  if (query === "") return [];
+  const hasSlash = query.includes("/");
+  const scored: Array<{ rank: number; entry: TreeEntry }> = [];
+  for (const entry of entries) {
+    if (entry.is_dir) continue;
+    const p = entry.path.toLowerCase();
+    let rank: number;
+    if (p.startsWith(query)) rank = 1;
+    else if (hasSlash && p.includes(query)) rank = 2;
+    else continue;
+    scored.push({ rank, entry });
+  }
+  scored.sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      a.entry.path.length - b.entry.path.length ||
+      a.entry.path.localeCompare(b.entry.path),
+  );
+  return scored.slice(0, PATH_LIMIT).map(({ entry }) => ({
+    kind: "Path" as const,
+    path: entry.path,
+    title: null,
+    heading: null,
+    anchor: null,
+    level: null,
+    mtime: entry.mtime ?? null,
+  }));
+}
 const FETCH_DEBOUNCE_MS = 60;
 // Poll interval for the index-completion watch (see startIndexWatch).
 const INDEX_WATCH_MS = 200;
@@ -154,8 +200,15 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   // mode and search the URL's basename (see rawSearchTerm / fetchFile).
   let mode: Mode =
     opts.templateMode === "raw" ? { kind: "file" } : classifyQuery(query);
-  // File-mode results.
+  // File-mode results from /api/link-targets.
   let fileHits: LinkTarget[] = [];
+  // Client-synthesized workspace-PATH candidates (see computePathHits),
+  // merged into the file-mode list. `allEntries` caches the workspace
+  // file tree for the bubble's lifetime so we fetch it at most once per
+  // `[[` session; `treePromise` dedupes concurrent loads.
+  let pathHits: LinkTarget[] = [];
+  let allEntries: TreeEntry[] | null = null;
+  let treePromise: Promise<void> | null = null;
   // Heading-mode all-headings cache (keyed by target so target switch
   // re-fetches only when needed) + filtered display list.
   let headingTarget: string | null = null;
@@ -191,7 +244,14 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   function activeHits(): Array<LinkTarget | HeadingHit | ParsedBlock> {
     if (mode.kind === "heading") return headingHits;
     if (mode.kind === "block") return blockHits;
-    return fileHits;
+    // File mode: /api/link-targets hits first (names / titles / headings),
+    // then the client-side PATH candidates, deduped against any file row
+    // for the same path so a file matched by both name and path lists once.
+    const namedPaths = new Set(
+      fileHits.filter((h) => h.kind !== "Heading").map((h) => h.path),
+    );
+    const extras = pathHits.filter((p) => !namedPaths.has(p.path));
+    return [...fileHits, ...extras];
   }
 
   function render(): void {
@@ -280,6 +340,18 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
           row.appendChild(level);
           row.appendChild(text);
           row.appendChild(path);
+        } else if (t.kind === "Path") {
+          // Path match: lead with the full workspace path (what the user
+          // is completing), tagged so it reads as a path candidate next
+          // to the name/title-matched "File" rows. Same "level tag +
+          // text" shape as heading / block rows for visual consistency.
+          const tag = document.createElement("span");
+          tag.className = "md-bubble-row-level";
+          tag.textContent = "PATH";
+          const text = document.createElement("span");
+          text.textContent = t.path;
+          row.appendChild(tag);
+          row.appendChild(text);
         } else {
           const title = t.title?.trim();
           row.textContent = title && title !== t.path ? `${title} - ${t.path}` : t.path;
@@ -314,6 +386,36 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
           status.textContent = `Search failed: ${err.message ?? err}`;
         });
     }, FETCH_DEBOUNCE_MS);
+  }
+
+  /// Lazily fetch + cache the workspace file tree (recursive listing via
+  /// GET /api/files, the same route the file browser uses). Resolves
+  /// immediately on a cache hit; dedupes concurrent loads. On failure we
+  /// cache an empty tree so path completion is simply absent rather than
+  /// retrying every keystroke.
+  function ensureTreeLoaded(): Promise<void> {
+    if (allEntries !== null) return Promise.resolve();
+    if (treePromise) return treePromise;
+    treePromise = api
+      .list()
+      .then((entries) => {
+        if (alive) allEntries = entries;
+      })
+      .catch(() => {
+        if (alive) allEntries = [];
+      });
+    return treePromise;
+  }
+
+  /// Recompute the merged file-mode list's PATH half for the current
+  /// query, then re-render. Cheap (in-memory filter over the cached
+  /// tree); the only async cost is the one-time tree fetch.
+  function fetchPaths(): void {
+    void ensureTreeLoaded().then(() => {
+      if (!alive || mode.kind !== "file") return;
+      pathHits = computePathHits(query, allEntries ?? []);
+      render();
+    });
   }
 
   function fetchHeadings(target: string): void {
@@ -420,6 +522,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
   function refetchForMode(): void {
     if (mode.kind === "file") {
       fetchFile();
+      fetchPaths();
     } else if (mode.kind === "heading") {
       fetchHeadings(mode.target);
     } else {
@@ -680,6 +783,7 @@ export function openWikiBubble(opts: WikiBubbleOpts): WikiBubbleHandle {
         filterBlocksLocal();
       } else {
         fetchFile();
+        fetchPaths();
       }
     },
     setTriggerEnd(end: number): void {

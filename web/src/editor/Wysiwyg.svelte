@@ -57,6 +57,8 @@
   import {
     continueListOnEnter,
     indentListItem,
+    listAwareArrowDown,
+    listAwareArrowUp,
     listCaretGuard,
     outdentListItem,
     stripUnusedInlineImageSpaceOnEnter,
@@ -483,6 +485,15 @@
             // apply so the keys keep their default behaviour
             // (cursorDown / caller submit / new line in code).
             { key: "ArrowDown", run: (view) => fmt.escapeFenceAtDocEnd(view) },
+            // List-aware vertical motion: run the normal cursorLineUp /
+            // cursorLineDown, then snap a caret that landed inside a list
+            // line's prefix (e.g. on a `*` bullet's zero-width glyph)
+            // onto the first text column, matching ordered-list cursor
+            // behaviour. Registered after the mermaid stepInto entries
+            // (earlier extension, same Prec.high) so a vertical move that
+            // crosses a rendered mermaid block is still handled there.
+            { key: "ArrowDown", run: (view) => listAwareArrowDown(view) },
+            { key: "ArrowUp", run: (view) => listAwareArrowUp(view) },
             // Mod-Enter inside any fenced code block: append a fresh
             // line just past the block end and place the caret
             // there. Always-on escape, independent of the block's
@@ -770,16 +781,15 @@
     padding-bottom: 60px !important;
     transition: padding-top 180ms ease;
   }
-  /* Programmatic `scrollIntoView` from CM gets smoothed by the
-     browser. Mouse-wheel / touchpad pans are not affected. */
-  :global(.md-wysiwyg-cm6 .cm-scroller) {
-    scroll-behavior: smooth;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    :global(.md-wysiwyg-cm6 .cm-scroller) {
-      scroll-behavior: auto;
-    }
-  }
+  /* No `scroll-behavior: smooth` on `.cm-scroller`. `smooth` animates
+     EVERY scrollTop write, including the height-estimation corrections
+     CM6 makes itself while you scroll a tall, mostly-estimated document.
+     During a trackpad pan those animated corrections fight the pan - the
+     "scroll hangs, jumps the opposite way, then settles" stall @@Alex
+     reported. The Google-Docs page-lift effect comes from the 60px
+     bottom padding + scrollMargin (breathing_room.ts), not from smooth,
+     so leaving the scroller at its default (instant) scroll-behavior
+     keeps the lift and removes the stall. */
   :global(.md-wysiwyg-cm6 .cm-editor),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-scroller),
   :global(.md-wysiwyg-cm6 .cm-editor .cm-content),
@@ -1020,6 +1030,18 @@
   }
   :global(.md-wysiwyg-cm6 .cm-md-ul-marker) {
     color: var(--text-secondary, #888);
+  }
+  /* Hyphen (`-`) lists keep their literal dash, distinct from the `*`/`+`
+     Google-Docs depth glyphs (blocks.ts HYPHEN_MARK). No font-size:0 +
+     ::before substitution, so the source `-` renders as text. A small
+     right margin matches the disc/circle glyph-to-text gap so the dash
+     lists read evenly beside the glyph lists. Because the marker stays
+     real visible text, the caret lands past it onto the text - the same
+     path the ordered marker takes - so hyphen-list cursor behaviour
+     matches ordered lists. */
+  :global(.md-wysiwyg-cm6 .cm-md-ul-hyphen) {
+    color: var(--text-secondary, #888);
+    margin-right: calc(var(--chan-editor-body-size, 11pt) * 0.28);
   }
   /* Render bullet markers with styled glyphs while keeping the source
      bytes intact (source mode + round-trip still show the literal

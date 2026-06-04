@@ -4,8 +4,10 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   externalUrlAtPos,
   isOpenableExternalUrl,
+  linkUrlAtPos,
   openExternalUrl,
 } from "./external_links";
+import externalLinksSource from "./external_links.ts?raw";
 import { chanMarkdown } from "./markdown/grammar";
 import { setNotifyHandler } from "../state/notify.svelte";
 
@@ -35,6 +37,40 @@ describe("external link helpers", () => {
       "https://chan.app",
     );
     expect(externalUrlAtPos(state("[Local](notes.md)"), 2)).toBeNull();
+  });
+
+  test("linkUrlAtPos returns the raw URL of any scheme (incl. chan://)", () => {
+    // Graph links use the in-app chan:// scheme, which is NOT an openable
+    // external scheme; linkUrlAtPos must still surface it so the click
+    // handler can route it to the graph opener.
+    const gDoc = "[g](chan://graph?s=foo&d=2)";
+    expect(linkUrlAtPos(state(gDoc), gDoc.indexOf("g"))).toBe(
+      "chan://graph?s=foo&d=2",
+    );
+    // A normal external link returns its raw URL too (unfiltered).
+    const eDoc = "[x](https://example.com)";
+    expect(linkUrlAtPos(state(eDoc), 1)).toBe("https://example.com");
+    // An internal path returns its raw value (the openable filter lives
+    // in externalUrlAtPos, not here).
+    expect(linkUrlAtPos(state("[L](notes.md)"), 1)).toBe("notes.md");
+    // Image URLs are not navigable links -> null.
+    const imgDoc = "![a](pic.png)";
+    expect(linkUrlAtPos(state(imgDoc), imgDoc.indexOf("a"))).toBeNull();
+  });
+
+  test("click handler routes a chan://graph link to the graph opener", () => {
+    // Wiring is source-pinned (executing the click handler would need a
+    // live store/openGraphFromLink). The interception sits BEFORE the
+    // external-URL path and short-circuits on a handled graph link.
+    expect(externalLinksSource).toMatch(
+      /import \{ openGraphFromLink \} from "\.\.\/state\/store\.svelte";/,
+    );
+    expect(externalLinksSource).toMatch(
+      /import \{ GRAPH_LINK_PREFIX \} from "\.\.\/state\/tabs\.svelte";/,
+    );
+    expect(externalLinksSource).toMatch(
+      /raw\?\.startsWith\(GRAPH_LINK_PREFIX\) && openGraphFromLink\(raw\)/,
+    );
   });
 
   test("uses the Tauri opener bridge when available", async () => {

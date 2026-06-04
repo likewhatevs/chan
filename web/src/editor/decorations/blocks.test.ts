@@ -88,75 +88,112 @@ describe("list marker rendering (source-faithful)", () => {
     // rather than being swapped for a glyph; no replace-widgets.
     expect(blocksSource).not.toContain("BulletMarkerWidget");
     expect(blocksSource).not.toContain("OrderedMarkerWidget");
-    // The bullet glyph keys off nesting depth (Google-Docs cycle:
-    // disc -> circle -> square). The source char stays in the doc; the
-    // glyph is a CSS ::before substitution in Wysiwyg.svelte.
+    // The `*` / `+` bullet glyph keys off nesting depth (Google-Docs
+    // cycle: disc -> circle -> square). The source char stays in the doc;
+    // the glyph is a CSS ::before substitution in Wysiwyg.svelte.
     expect(blocksSource).toContain("cm-md-ul-disc");
     expect(blocksSource).toContain("cm-md-ul-circle");
     expect(blocksSource).toContain("cm-md-ul-square");
     expect(wysiwygSource).toContain(".cm-md-ul-disc::before");
     expect(wysiwygSource).toContain(".cm-md-ul-circle::before");
     expect(wysiwygSource).toContain(".cm-md-ul-square::before");
+    // Hyphen (`-`) lists stay a distinct literal dash, NOT a depth glyph
+    // (no font-size:0 + ::before substitution).
+    expect(blocksSource).toContain("cm-md-ul-hyphen");
+    expect(wysiwygSource).toContain(".cm-md-ul-hyphen");
   });
 
-  test("top-level bullet keeps the source char and the disc class", () => {
+  test("top-level star bullet keeps the source char and the disc class", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
     const view = new EditorView({
       parent,
       state: EditorState.create({
-        doc: "- item",
+        doc: "* item",
         extensions: [chanMarkdown(), chanDecorations()],
       }),
     });
 
     // The wysiwyg glyph is a filled disc via CSS ::before, but the doc
-    // + textContent stay the literal `-` (source-faithful). The disc
+    // + textContent stay the literal `*` (source-faithful). The disc
     // class is the CSS hook.
     const marker = parent.querySelector(".cm-md-ul-marker");
-    expect(marker?.textContent).toBe("-");
+    expect(marker?.textContent).toBe("*");
     expect(marker?.classList.contains("cm-md-ul-disc")).toBe(true);
-    expect(parent.textContent).toContain("- item");
-    expect(view.state.doc.toString()).toBe("- item");
+    expect(parent.textContent).toContain("* item");
+    expect(view.state.doc.toString()).toBe("* item");
 
     view.destroy();
     parent.remove();
   });
 
-  test("glyph keys off depth, not the typed marker char", () => {
+  test("`*` and `+` share the depth glyph; `-` stays a distinct dash", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
-    // Three top-level items with different markers all render the same
-    // disc: Google Docs keys the glyph off depth, not the char.
+    // `*` and `+` both render the depth-0 disc (Google Docs keys the
+    // glyph off depth, not the char). `-` is excluded from the cycle and
+    // keeps its literal dash, marked with the distinct hyphen class.
     const view = new EditorView({
       parent,
       state: EditorState.create({
-        doc: "- dash\n* star\n+ plus",
+        doc: "* star\n+ plus\n- dash",
         extensions: [chanMarkdown(), chanDecorations()],
       }),
     });
 
     const markers = Array.from(parent.querySelectorAll(".cm-md-ul-marker"));
     expect(markers.length).toBe(3);
-    for (const m of markers) {
-      expect(m.classList.contains("cm-md-ul-disc")).toBe(true);
-    }
-    expect(view.state.doc.toString()).toBe("- dash\n* star\n+ plus");
+    expect(markers[0]?.classList.contains("cm-md-ul-disc")).toBe(true);
+    expect(markers[1]?.classList.contains("cm-md-ul-disc")).toBe(true);
+    // The hyphen marker is NOT a depth glyph (no font-size:0 bullet
+    // class) - it carries the distinct hyphen class instead.
+    expect(markers[2]?.classList.contains("cm-md-ul-hyphen")).toBe(true);
+    expect(markers[2]?.classList.contains("cm-md-ul-bullet")).toBe(false);
+    expect(markers[2]?.classList.contains("cm-md-ul-disc")).toBe(false);
+    expect(markers[2]?.textContent).toBe("-");
+    expect(view.state.doc.toString()).toBe("* star\n+ plus\n- dash");
 
     view.destroy();
     parent.remove();
   });
 
-  test("bullet glyph cycles disc -> circle -> square by depth", () => {
+  test("hyphen list keeps the literal dash at every nesting depth", () => {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
 
     const view = new EditorView({
       parent,
       state: EditorState.create({
-        doc: "- l1\n  - l2\n    - l3\n      - l4",
+        doc: "- l1\n  - l2\n    - l3",
+        extensions: [chanMarkdown(), chanDecorations()],
+      }),
+    });
+
+    const markers = Array.from(parent.querySelectorAll(".cm-md-ul-marker"));
+    // No depth cycle: hyphen lists are distinct dashes at every level.
+    for (const m of markers) {
+      expect(m.classList.contains("cm-md-ul-hyphen")).toBe(true);
+      expect(m.classList.contains("cm-md-ul-disc")).toBe(false);
+      expect(m.classList.contains("cm-md-ul-circle")).toBe(false);
+      expect(m.classList.contains("cm-md-ul-square")).toBe(false);
+      expect(m.textContent).toBe("-");
+    }
+    expect(view.state.doc.toString()).toBe("- l1\n  - l2\n    - l3");
+
+    view.destroy();
+    parent.remove();
+  });
+
+  test("star bullet glyph cycles disc -> circle -> square by depth", () => {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "* l1\n  * l2\n    * l3\n      * l4",
         extensions: [chanMarkdown(), chanDecorations()],
       }),
     });
@@ -169,7 +206,7 @@ describe("list marker rendering (source-faithful)", () => {
     expect(markers[3]?.classList.contains("cm-md-ul-disc")).toBe(true);
     // All keep their literal source char.
     expect(view.state.doc.toString()).toBe(
-      "- l1\n  - l2\n    - l3\n      - l4",
+      "* l1\n  * l2\n    * l3\n      * l4",
     );
 
     view.destroy();

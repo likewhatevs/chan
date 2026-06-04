@@ -455,16 +455,13 @@
        in Wysiwyg.svelte for rationale. */
     padding-bottom: 60px;
   }
-  /* Programmatic `scrollIntoView` from CM gets smoothed by the
-     browser. Mouse-wheel / touchpad pans are not affected. */
-  :global(.md-source .cm-scroller) {
-    scroll-behavior: smooth;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    :global(.md-source .cm-scroller) {
-      scroll-behavior: auto;
-    }
-  }
+  /* No `scroll-behavior: smooth` on `.cm-scroller`. `smooth` animates
+     EVERY scrollTop write, including CM6's own height-estimation
+     corrections while scrolling a tall doc; during a trackpad pan those
+     animated corrections fight the pan (the "hang, jump opposite,
+     settle" stall). Removed for parity with Wysiwyg.svelte's
+     `.cm-scroller`, where the same stall was reported and fixed. The
+     60px bottom padding keeps the off-the-edge clearance. */
   /* Force every CM internal that could paint a background to
      transparent so `.md-source`'s `var(--bg)` shows uniformly,
      even past the longest line. CM injects theme rules as
