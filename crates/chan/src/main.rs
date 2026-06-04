@@ -84,7 +84,11 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   Lock screen                                  Cmd+. L
   Dismiss overlay                              Esc
   Search                                       Cmd+S
-  Dashboard                                    Cmd+. i
+  Dashboard                                    Alt+Shift+D   (or Mod+. i (Hybrid Nav))
+  
+  File
+  ----
+  Delete file or directory                     Backspace
   
   Panes
   -----
@@ -108,6 +112,11 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   Show Source Code (toggle rendered/source)    Cmd+E
   Bold                                         Cmd+B
   Italic                                       Cmd+I
+  
+  Terminal
+  --------
+  Copy selection                               Cmd+C   (Ctrl+Shift+C on Linux / Windows)
+  Paste                                        Cmd+V   (Ctrl+Shift+V on Linux / Windows)
 ";
 
 #[derive(Parser, Debug)]

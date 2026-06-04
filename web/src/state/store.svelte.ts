@@ -33,6 +33,7 @@ import {
   openBrowserInActivePane,
   scheduleMissingFileCheck,
   openGraphInActivePane,
+  parseGraphLink,
   openInActivePane,
   openTerminalInActivePane,
   openDashboardInActivePane,
@@ -635,6 +636,10 @@ export function onWatchEvent(e: unknown): void {
     void ensureGraphLoaded();
   }
   if (hasGraphTab()) {
+    // Carry the touched path(s) so each open graph reloads only when the
+    // change is in ITS scope (GraphPanel path-filters the signal). An
+    // empty set means the event carried no path -> reload to stay safe.
+    graphReloadSignal.paths = watchedPaths;
     graphReloadSignal.nonce += 1;
   }
   const inner = (e as { event?: { kind?: string; path?: string; to?: string } } | null)?.event;
@@ -1406,6 +1411,9 @@ export async function handleDraftPromoted(path: string): Promise<void> {
     void ensureGraphLoaded();
   }
   if (hasGraphTab()) {
+    // A promoted draft becomes a real file at `path`; reload any graph
+    // whose scope covers it (GraphPanel path-filters the signal).
+    graphReloadSignal.paths = [path];
     graphReloadSignal.nonce += 1;
   }
 }
@@ -1445,6 +1453,9 @@ export async function noteDraftCreated(path: string): Promise<void> {
     void ensureGraphLoaded();
   }
   if (hasGraphTab()) {
+    // New draft at `path`; reload any graph whose scope covers it
+    // (GraphPanel path-filters the signal).
+    graphReloadSignal.paths = [path];
     graphReloadSignal.nonce += 1;
   }
 }
@@ -1562,11 +1573,28 @@ function applyOverlaysFromHash(): void {
   }
 }
 
+/// Trailing-debounce window for the hash write. Lighter than the
+/// session save (it never touches disk) but long enough to collapse a
+/// burst of layout mutations into one `history.replaceState`.
+const HASH_DEBOUNCE_MS = 150;
+let hashDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
 /// Write the current layout + overlay state to `location.hash` via
 /// `history.replaceState` (so reloads are silent and the browser
 /// back/forward stack stays clean). Empty values strip their key
 /// entirely so a hash never grows orphans.
+///
+/// Synchronous + idempotent. This is the FLUSH path: the
+/// pagehide/beforeunload handler calls it (via `persistLayoutToHash`)
+/// expecting the write to land before the page tears down, so a
+/// reload restores the exact caret. Hot reactive callers should use
+/// `schedulePersistStateToHash` instead. A pending debounced write is
+/// cancelled here so an explicit flush always supersedes a queued one.
 export function persistStateToHash(): void {
+  if (hashDebounceTimer) {
+    clearTimeout(hashDebounceTimer);
+    hashDebounceTimer = null;
+  }
   const ser = serializeLayout();
   const url = new URL(window.location.href);
   const params = hashParams();
@@ -1594,11 +1622,35 @@ export function persistStateToHash(): void {
   }
   const next = params.toString();
   url.hash = next ? `#${next}` : "";
-  history.replaceState(null, "", url.toString());
+  const href = url.toString();
+  // Dedup: a replaceState that wouldn't change the URL still counts
+  // toward WebKit's >100-calls / 10s throttle (the SecurityError that
+  // hangs the file browser on "Loading"), so skip the no-op. The
+  // file-browser expansion effect re-runs on every `fbTreeInstances`
+  // registry churn and recomputes the same hash each time; this
+  // collapses that storm to zero writes.
+  if (href === window.location.href) return;
+  history.replaceState(null, "", href);
 }
 
-/// Back-compat alias used elsewhere in the tree.
+/// Back-compat alias used elsewhere in the tree, including the
+/// synchronous pagehide/beforeunload flush, which relies on this
+/// writing immediately.
 export const persistLayoutToHash = persistStateToHash;
+
+/// Debounced entry for the hot reactive callers (the file-browser
+/// expansion effect, App's layout-walking effects). Coalesces a burst
+/// of layout mutations into a single trailing write so the burst can't
+/// trip the `history.replaceState` SecurityError. The final state is
+/// still captured on exit because the pagehide handler flushes
+/// synchronously via `persistLayoutToHash`.
+export function schedulePersistStateToHash(): void {
+  if (hashDebounceTimer) clearTimeout(hashDebounceTimer);
+  hashDebounceTimer = setTimeout(() => {
+    hashDebounceTimer = null;
+    persistStateToHash();
+  }, HASH_DEBOUNCE_MS);
+}
 
 /// Test seam for URL-hash overlay restore. The public bootstrap path
 /// mixes hash, remote session, auth, and websocket startup; keeping
@@ -1911,8 +1963,16 @@ export const DEFAULT_GRAPH_FILTERS: GraphFilters = {
 
 /// Incremented by watcher events while the graph overlay is open.
 /// GraphPanel consumes this as a lightweight reload signal and
-/// debounces the actual `/api/graph` request locally.
-export const graphReloadSignal = $state<{ nonce: number }>({ nonce: 0 });
+/// debounces the actual `/api/graph` request locally. `paths` carries
+/// the workspace-relative path(s) the event touched so each GraphPanel
+/// can gate its reload on whether the change is in ITS scope: editing a
+/// file that is not in the open graph must NOT reload it (@@Alex: "any
+/// change to any file in the workspace would trigger a graph reload,
+/// this is BAD"). Empty `paths` means "unknown" -> reload to stay safe.
+export const graphReloadSignal = $state<{ nonce: number; paths: string[] }>({
+  nonce: 0,
+  paths: [],
+});
 
 /** Open the graph overlay, snapping the scope to the active file
  *  when applicable. Idempotent. */
@@ -2104,6 +2164,26 @@ export function openGraphForLanguage(language: string): void {
     pendingSelectId: `language:${language}`,
   });
   scheduleSessionSave();
+}
+
+/** phase-18 "Copy link to graph": open a graph tab from a
+ *  `chan://graph?...` link (produced by the graph tab menu's "Copy link
+ *  to graph"). Returns true when the link parsed and a tab was opened so
+ *  the editor's link-click handler can fall through to normal handling
+ *  on a non-graph href. The serialized selection rides in as
+ *  `pendingSelectId` so the re-opened graph lands on the same node. */
+export function openGraphFromLink(link: string): boolean {
+  const parsed = parseGraphLink(link);
+  if (!parsed) return false;
+  openGraphInActivePane({
+    mode: parsed.mode,
+    scopeId: parsed.scopeId,
+    depth: parsed.depth,
+    filters: parsed.filters,
+    pendingSelectId: parsed.selectedNodeId,
+  });
+  scheduleSessionSave();
+  return true;
 }
 
 // ---- file browser overlay ----------------------------------------------

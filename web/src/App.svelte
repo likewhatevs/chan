@@ -40,6 +40,7 @@
     pathPromptState,
     noteDraftCreated,
     persistLayoutToHash,
+    schedulePersistStateToHash,
     promptState,
     reconnectWatcher,
     refreshWorkspace,
@@ -187,7 +188,7 @@
       }
     }
     if (bootstrapped) {
-      persistLayoutToHash();
+      schedulePersistStateToHash();
       // Same payload, mirrored to the per-window session.json so
       // the layout restores on next launch. Heavier debounce than
       // the URL hash since it touches disk.
@@ -212,7 +213,7 @@
     // The graph + browser surfaces are tabs; their per-tab state
     // (scope/depth/filters/inspector) is tracked by the layout-walking
     // effect above, so this effect no longer mirrors overlay state.
-    persistLayoutToHash();
+    schedulePersistStateToHash();
     scheduleSessionSave();
   });
 

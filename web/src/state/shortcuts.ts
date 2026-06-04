@@ -43,6 +43,7 @@ export type ShortcutGroup =
   | "Tabs"
   | "Panes"
   | "Find"
+  | "Terminal"
   | "Editor";
 
 export type Shortcut = {
@@ -128,6 +129,21 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "App",
     note: "macOS web + native everywhere; all platforms via Mod+. o (Hybrid Nav)",
     escapeTerminal: true,
+  },
+  // File-browser destructive delete. Bare Backspace (the Mac "delete"
+  // key) or forward-Delete removes the selected entry; the dispatch
+  // source is FileTree's `onTreeKeydown`, with the uiConfirm in
+  // `fileOps.remove` as the safety gate. Recorded here so the FB
+  // selection-menu hint reads the chord from the central store
+  // (`chordFor`) and it ports across web/native. No modifier, so it
+  // never escapes the terminal (`chordFromEvent` ignores modifierless
+  // keys); `escapeTerminal` stays false to keep shell Backspace intact.
+  {
+    id: "app.files.delete",
+    label: "Delete file or directory",
+    web: "Backspace",
+    native: "Backspace",
+    group: "File",
   },
   // Graph top-level chord. Context-aware spawn: the focused doc /
   // terminal cwd seeds the graph's scope. Native and web share
@@ -400,6 +416,31 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Mod+I",
     group: "Editor",
   },
+  // Terminal copy / paste. The ONE family whose chord can't use the `Mod`
+  // token: `Mod+C` resolves to Ctrl+C on Linux / Windows, which is the
+  // shell's SIGINT. So macOS uses literal Cmd+C / Cmd+V (Cmd never collides
+  // with a control code) and every other platform uses the standard terminal
+  // Ctrl+Shift+C / Ctrl+Shift+V, leaving bare Ctrl+C/V for the shell. Handled
+  // terminal-locally in TerminalTab (handleTerminalClipboardChord), NOT via
+  // the App-level keymap, so no `escapeTerminal` flag (same as Find). The
+  // displayed hint is correct on macOS; the `note` documents the Linux /
+  // Windows divergence the handler implements.
+  {
+    id: "terminal.copy",
+    label: "Copy selection",
+    web: "Cmd+C",
+    native: "Cmd+C",
+    group: "Terminal",
+    note: "Ctrl+Shift+C on Linux / Windows",
+  },
+  {
+    id: "terminal.paste",
+    label: "Paste",
+    web: "Cmd+V",
+    native: "Cmd+V",
+    group: "Terminal",
+    note: "Ctrl+Shift+V on Linux / Windows",
+  },
 ];
 
 // Editor strikethrough / inline-code chords are not in this registry:
@@ -421,17 +462,26 @@ export function formatChord(chord: Chord, os: OS): string {
   return chord.replaceAll(/\bMod\b/g, MOD_LABEL[os]);
 }
 
-/// The one shortcut whose chord diverges by OS, not just by label.
+/// Shortcuts whose chord diverges by OS, not just by label (macOS keeps the
+/// stored chord; Linux / Windows get a DIFFERENT chord because the macOS one
+/// collides with a control code there).
 const RELOAD_SHORTCUT_ID = "app.window.reload";
+const TERMINAL_COPY_ID = "terminal.copy";
+const TERMINAL_PASTE_ID = "terminal.paste";
 
-/// Resolve a shortcut's chord for a platform with chan's single
-/// OS-level chord override applied. Reload binds Cmd+R on macOS, but on
-/// Linux/Windows plain Ctrl+R is the shell's reverse-search, so reload
-/// moves to Ctrl+Shift+R there. The registry stores the macOS form
-/// (`Mod+R`); this is the ONE place that diverges it, so the escape
-/// matcher, the on-screen labels, and the help table all agree.
-/// App.svelte's keymap and chan-desktop's KEY_BRIDGE_JS branch on the
-/// same rule (Cmd vs Ctrl+Shift) at the raw-event layer.
+/// Resolve a shortcut's chord for a platform with chan's OS-level chord
+/// overrides applied. Most chords differ only by LABEL (`Mod` -> Cmd/Ctrl);
+/// a few diverge into a different chord entirely on Linux / Windows:
+///   - Reload: Cmd+R (mac) vs Ctrl+Shift+R (plain Ctrl+R is the shell's
+///     reverse-search).
+///   - Terminal copy / paste: Cmd+C/V (mac) vs Ctrl+Shift+C/V (bare Ctrl+C/V
+///     is the shell's SIGINT / EOF). TerminalTab's clipboard handler splits on
+///     the same rule at the event layer; this keeps the displayed hint + the
+///     help table correct per-OS.
+/// The registry stores the macOS form; this function is the ONE place the
+/// divergence lives, so the escape matcher, the on-screen labels, and the
+/// help table all agree. App.svelte's keymap and chan-desktop's KEY_BRIDGE_JS
+/// branch on the same rule (Cmd vs Ctrl+Shift) at the raw-event layer.
 export function osChord(
   s: Shortcut,
   platform: Platform,
@@ -440,6 +490,8 @@ export function osChord(
   const chord = s[platform];
   if (!chord) return undefined;
   if (s.id === RELOAD_SHORTCUT_ID && os !== "mac") return "Mod+Shift+R";
+  if (s.id === TERMINAL_COPY_ID && os !== "mac") return "Mod+Shift+C";
+  if (s.id === TERMINAL_PASTE_ID && os !== "mac") return "Mod+Shift+V";
   return chord;
 }
 
