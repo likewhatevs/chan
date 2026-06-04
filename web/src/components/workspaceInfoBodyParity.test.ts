@@ -24,30 +24,53 @@ describe("WorkspaceInfoBody variant split + directory action row", () => {
     expect(workspaceInfo).toMatch(/\{#if variant === "inspector"\}/);
   });
 
-  test("the action row renders Upload + Download (download disabled while busy)", () => {
+  test("the action row is a File Browser pill + secondary dropdown", () => {
+    // The row renders the shared split-action pill: a "File Browser"
+    // primary action plus the secondary dropdown built from actionModel.
+    expect(workspaceInfo).toMatch(
+      /<InspectorActionPill[\s\S]*?main=\{actionModel\.main\}[\s\S]*?secondary=\{actionModel\.secondary\}/,
+    );
+    expect(workspaceInfo).toMatch(
+      /main: \{ label: "File Browser", onClick: openRootInBrowser \}/,
+    );
+  });
+
+  test("the dropdown offers Upload + Download (download disabled while busy)", () => {
     // Upload triggers the hidden picker; onUploadPicked uploads to the
     // workspace root (relative path ""). Download targets the root as a
     // directory (is_dir = true) and disables while a transfer is busy.
-    expect(workspaceInfo).toMatch(/onclick=\{triggerUpload\}/);
+    expect(workspaceInfo).toMatch(/label: "Upload", onClick: triggerUpload/);
+    expect(workspaceInfo).toMatch(/fileOps\.uploadFilesTo\("", files\)/);
     expect(workspaceInfo).toMatch(
-      /fileOps\.uploadFilesTo\("", files\)/,
+      /label: "Download",\s*onClick: downloadSelection/,
     );
-    expect(workspaceInfo).toMatch(/onclick=\{downloadSelection\}/);
     expect(workspaceInfo).toMatch(
       /fileOps\.downloadPathWithProgress\("", true\)/,
     );
-    expect(workspaceInfo).toMatch(/disabled=\{downloadBusy\}/);
+    expect(workspaceInfo).toMatch(/disabled: downloadBusy/);
   });
 
-  test("Show in File Browser is gated on onReveal", () => {
+  test("the dropdown offers Terminal from here, rooted at the workspace root", () => {
+    // Mirrors FileInfoBody's directory "New terminal here": a terminal
+    // rooted at the workspace root (relative path "").
     expect(workspaceInfo).toMatch(
-      /\{#if onReveal\}[\s\S]*?onclick=\{onReveal\}[\s\S]*?Show in File Browser/,
+      /label: "Terminal from here", onClick: newTerminalHere/,
+    );
+    expect(workspaceInfo).toMatch(/terminalFromHereTarget\("", true\)/);
+  });
+
+  test("File Browser primary prefers onReveal, else reveals the root", () => {
+    // openRootInBrowser mirrors FileInfoBody.openDirInBrowser: call the
+    // host's onReveal when present, otherwise reveal the root ("") in the
+    // current browser.
+    expect(workspaceInfo).toMatch(
+      /function openRootInBrowser\(\)[\s\S]*?if \(onReveal\)[\s\S]*?onReveal\(\);[\s\S]*?revealPathInBrowser\("", \{ enter: true, inspectorOpen: true \}\)/,
     );
   });
 
-  test("Graph from here is gated on onSetAsScope inside the row", () => {
+  test("Graph from here is gated on onSetAsScope inside the action model", () => {
     expect(workspaceInfo).toMatch(
-      /\{#if onSetAsScope\}[\s\S]*?onclick=\{onSetAsScope\}[\s\S]*?Graph from here/,
+      /if \(onSetAsScope\) \{[\s\S]*?secondary\.push\(\{ label: "Graph from here", onClick: onSetAsScope \}\)/,
     );
   });
 

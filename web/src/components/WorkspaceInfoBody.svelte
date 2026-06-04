@@ -25,6 +25,7 @@
     openGraphAtNode,
     openGraphForContact,
     openGraphForLanguage,
+    revealPathInBrowser,
     tree,
     workspace,
   } from "../state/store.svelte";
@@ -34,6 +35,11 @@
     downloadTransferActive,
     clearDownloadTransfer,
   } from "../state/downloadTransfer.svelte";
+  import { openTerminalInActivePane } from "../state/tabs.svelte";
+  import { terminalFromHereTarget } from "../terminal/fromHere";
+  import InspectorActionPill, {
+    type InspectorAction,
+  } from "./InspectorActionPill.svelte";
 
   /// Optional "Graph from here" callback. Consumers that host this
   /// body alongside an existing inspector convention pass it;
@@ -112,6 +118,50 @@
     "Upload adds the selected file to this directory. You can also drop files onto File Browser rows.";
   const downloadTitle =
     "Download this directory as a tar archive. You can also drag rows out of the File Browser where supported.";
+
+  /// "File Browser" primary action for the workspace root. Mirrors
+  /// FileInfoBody's openDirInBrowser: prefer the host's onReveal (the graph
+  /// switches to a File Browser tab at the root) and otherwise reveal the
+  /// root in the current browser (the File Browser tab leaves onReveal unset
+  /// because the root already lives there).
+  function openRootInBrowser(): void {
+    if (onReveal) {
+      onReveal();
+      return;
+    }
+    revealPathInBrowser("", { enter: true, inspectorOpen: true });
+  }
+
+  /// "Terminal from here": a terminal rooted at the workspace root.
+  function newTerminalHere(): void {
+    openTerminalInActivePane(terminalFromHereTarget("", true));
+  }
+
+  /// Split-action model for the inspector variant: a "File Browser" primary
+  /// plus the Upload / Download / Terminal / Graph dropdown. $derived so the
+  /// Download item tracks the live downloadBusy state.
+  const actionModel = $derived.by<{
+    main: InspectorAction;
+    secondary: InspectorAction[];
+  }>(() => {
+    const secondary: InspectorAction[] = [
+      { label: "Upload", onClick: triggerUpload, title: uploadTitle },
+      {
+        label: "Download",
+        onClick: downloadSelection,
+        title: downloadTitle,
+        disabled: downloadBusy,
+      },
+      { label: "Terminal from here", onClick: newTerminalHere },
+    ];
+    if (onSetAsScope) {
+      secondary.push({ label: "Graph from here", onClick: onSetAsScope });
+    }
+    return {
+      main: { label: "File Browser", onClick: openRootInBrowser },
+      secondary,
+    };
+  });
 
   let globalConfig = $state<GlobalConfig | null>(null);
   let editedDefaultRoot = $state<string>("");
@@ -390,37 +440,15 @@
   </div>
 
   {#if variant === "inspector"}
-    <!-- The workspace root gets the standard directory action row,
-         mirroring FileInfoBody's is_dir branch. The row operates on
-         the workspace ROOT (relative path ""). Upload + Download are
-         self-contained; "Show in File Browser" and "Graph from here"
-         are gated on their host callbacks. -->
-    <div class="action-buttons">
-      <div class="transfer-actions">
-        <button
-          class="open"
-          type="button"
-          onclick={triggerUpload}
-          title={uploadTitle}>Upload</button
-        >
-        <button
-          class="open"
-          type="button"
-          onclick={downloadSelection}
-          disabled={downloadBusy}
-          title={downloadTitle}>Download</button
-        >
-      </div>
-      {#if onReveal}
-        <button class="open" type="button" onclick={onReveal}
-          >Show in File Browser</button
-        >
-      {/if}
-      {#if onSetAsScope}
-        <button class="open" type="button" onclick={onSetAsScope}
-          >Graph from here</button
-        >
-      {/if}
+    <!-- Workspace-root action row, mirroring FileInfoBody's is_dir branch on
+         the workspace ROOT (relative path ""). A "File Browser" primary
+         action plus a dropdown: Upload / Download / Terminal from here /
+         Graph from here. "Graph from here" is gated on the host callback. -->
+    <div class="actions-section">
+      <InspectorActionPill
+        main={actionModel.main}
+        secondary={actionModel.secondary}
+      />
     </div>
     {#if transfer}
       <div
@@ -699,46 +727,10 @@
     text-align: left;
   }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  /* Mirrors the FileInfoBody `.open` styling so the "Graph from here"
-     affordance reads consistently across every inspector body. */
-  .open {
-    width: 100%;
-    background: var(--btn-bg);
-    color: var(--text);
-    border: 1px solid var(--btn-border);
-    border-radius: 4px;
-    padding: 5px 0;
-    cursor: pointer;
-    font: inherit;
-    margin-top: 0.6rem;
-  }
-  .open:hover { border-color: var(--btn-hover); }
-  .open:disabled {
-    opacity: 0.55;
-    cursor: default;
-  }
-  .open:disabled:hover { border-color: var(--btn-border); }
-  /* Directory action row, mirroring FileInfoBody so the
-     workspace-root inspector reads identically to a regular folder
-     inspector. The flex `gap` owns vertical spacing between buttons. */
-  .action-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    margin: 0.6rem 0 0 0;
-  }
-  .action-buttons .open,
-  .action-buttons .open + .open {
-    margin-top: 0;
-  }
-  .transfer-actions {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 0.35rem;
-  }
-  .transfer-actions .open,
-  .transfer-actions .open + .open {
-    margin-top: 0;
+  /* Spacing wrapper for the workspace-root action pill; InspectorActionPill
+     owns the pill + dropdown styling itself. */
+  .actions-section {
+    margin: 0.6rem 0 0.2rem 0;
   }
   .file-picker {
     position: absolute;

@@ -74,10 +74,12 @@ describe("no inline close affordance on first-class surfaces", () => {
       await import("./WorkspaceInfoBody.svelte?raw")
     ).default as string;
     expect(workspaceInfo).toContain("onSetAsScope");
-    expect(workspaceInfo).toMatch(/onclick=\{onSetAsScope\}\s*>Graph from here/);
-    // Button is gated on the prop being present, mirroring the
-    // FileInfoBody convention.
-    expect(workspaceInfo).toMatch(/\{#if onSetAsScope\}[\s\S]*?Graph from here/);
+    // "Graph from here" is a dropdown action in the inspector action model,
+    // pushed only when the onSetAsScope prop is present (mirroring the
+    // FileInfoBody convention).
+    expect(workspaceInfo).toMatch(
+      /if \(onSetAsScope\) \{[\s\S]*?secondary\.push\(\{ label: "Graph from here", onClick: onSetAsScope \}\)/,
+    );
   });
 
   // GraphPanel wires onSetAsScope for workspace root and directory nodes.
