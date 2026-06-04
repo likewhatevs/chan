@@ -43,6 +43,8 @@
     paneWidths,
     persistPaneWidths,
     persistTreeExpanded,
+    schedulePersistStateToHash,
+    scheduleSessionSave,
     surfaceThemeOverride,
     tree,
     treeExpanded,
@@ -2260,6 +2262,32 @@
     }, 250);
   });
 
+  /// Persist the live selection so it survives a window reload (@@Alex:
+  /// the selected node was lost on reload). The serializer already writes
+  /// `gn`/`gnl` from graphState.selectedNodeId/Label, and restore reads
+  /// them back into selectedNodeId + pendingSelectId - the missing link
+  /// was the TRIGGER: App.svelte's layout-persist effect tracks the graph
+  /// tab's scope/depth/filters/inspector but NOT its selection, so a pure
+  /// select change never reached the hash. Mirror selectedId (the live,
+  /// component-local source of truth, written by clicks AND the
+  /// programmatic re-scope / load-resolution paths) into the tab fields
+  /// and kick both persists (each debounces internally).
+  let lastSyncedSelect: string | null = null;
+  $effect(() => {
+    const id = selectedId;
+    // A restore (gn -> pendingSelectId) or re-scope resolves through
+    // load(); skip until it settles so we neither clobber the restored
+    // selection with the initial null nor persist a transient mid-resolve
+    // value. setSelected clears pendingSelectId, so user clicks pass.
+    if (graphState.pendingSelectId !== null) return;
+    if (id === lastSyncedSelect) return;
+    lastSyncedSelect = id;
+    graphState.selectedNodeId = id;
+    graphState.selectedNodeLabel = id === null ? null : graphSelectionLabel(id);
+    schedulePersistStateToHash();
+    scheduleSessionSave();
+  });
+
   onDestroy(() => {
     if (watchReloadTimer) clearTimeout(watchReloadTimer);
     graphLoadAbort?.abort();
@@ -2269,6 +2297,10 @@
   /// flips the inspector open; background tap clears.
   function setSelected(id: string | null): void {
     selectedId = id;
+    // A user tap is a definitive selection: drop any unresolved
+    // pending auto-select (restore / re-scope) so the persist effect
+    // below is free to capture this click.
+    graphState.pendingSelectId = null;
     if (id !== null) graphState.inspectorOpen = true;
     // `fullstack-81`: surface the selection to the tab so the
     // tab strip can derive the title from the selected node's
