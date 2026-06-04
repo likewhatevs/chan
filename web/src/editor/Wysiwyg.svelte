@@ -1097,7 +1097,16 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    left: 10px;
+    /* Anchor the guide at a FIXED x, independent of depth. The list line
+       carries a per-depth `margin-left` (the outline indent below), which
+       shifts the line's padding box, the containing block this `::before`
+       is positioned in. Without compensation `left: 10px` would ride that
+       shift, stepping every nested level's guide rightward so the bars no
+       longer line up into continuous vertical alignment rails (the whole
+       point of them; @@Alex). Subtracting the same `margin-left` term pins
+       every list line's leftmost bar to content-left + 10px, so the
+       level-k bar (at +k*2ch) is one continuous rail down the whole list. */
+    left: calc(10px - var(--cm-md-list-depth, 0) * var(--chan-editor-body-size, 11pt) * 0.6);
     /* One 1px-wide stripe per indent level: anchor + N stamps at
        2ch intervals = depth+1 vertical bars. repeating-linear-
        gradient keeps the spacing exact at any depth without per-
