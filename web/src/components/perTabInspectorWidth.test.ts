@@ -24,8 +24,11 @@ describe("FileBrowserSurface binds inspector width per-tab", () => {
   });
 
   test("tab expansion changes refresh the URL hash for reload restore", () => {
+    // The hash write is debounced (schedulePersistStateToHash) so a
+    // directory-expand burst can't trip WebKit's replaceState
+    // SecurityError; the expanded set itself is still set synchronously.
     expect(fileBrowserSurface).toMatch(
-      /captured\.expanded = expanded\.length > 0 \? expanded : undefined;[\s\S]*?persistLayoutToHash\(\);/,
+      /captured\.expanded = expanded\.length > 0 \? expanded : undefined;[\s\S]*?schedulePersistStateToHash\(\);/,
     );
   });
 });

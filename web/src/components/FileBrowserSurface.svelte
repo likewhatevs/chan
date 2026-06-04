@@ -3,6 +3,7 @@
   import {
     ArrowLeft,
     ArrowRight,
+    FilePlus,
     FolderOpen,
     HardDrive,
     History,
@@ -12,6 +13,7 @@
     PanelLeftOpen,
     PanelRightOpen,
     Settings2,
+    Terminal as TerminalIcon,
     Users,
     X,
   } from "lucide-svelte";
@@ -46,9 +48,8 @@
     openGraphForLanguage,
     paneWidths,
     persistPaneWidths,
-    persistLayoutToHash,
+    schedulePersistStateToHash,
     persistFbTreeInstanceExpansion,
-    refreshTree,
     seedFbTreeInstanceFromReloadSnapshot,
     surfaceThemeOverride,
     toggleBrowserSidePane,
@@ -57,11 +58,14 @@
   } from "../state/store.svelte";
   import {
     canReopenClosedTab,
+    layout,
     openBrowserInActivePane,
     openInActivePane,
+    openTerminalInPane,
     reopenClosedTab,
   } from "../state/tabs.svelte";
   import type { BrowserTab } from "../state/tabs.svelte";
+  import { terminalFromHereTarget } from "../terminal/fromHere";
   import {
     fbWatchRegister,
     fbWatchReconcile,
@@ -254,7 +258,13 @@
     const expanded = Object.keys(map).filter((p) => p.length > 0 && map[p]);
     untrack(() => {
       captured.expanded = expanded.length > 0 ? expanded : undefined;
-      persistLayoutToHash();
+      // Debounced: expanding a directory subtree churns the
+      // fbTreeInstances registry and re-runs this effect many times in
+      // a burst; coalescing the hash write keeps that burst from
+      // tripping WebKit's replaceState SecurityError (the "Loading"
+      // hang). The expanded set itself is set synchronously above, so
+      // session.json + the pagehide flush still capture it.
+      schedulePersistStateToHash();
     });
   });
 
@@ -390,15 +400,25 @@
     menu?.close();
   }
 
-  async function reloadTree(): Promise<void> {
+  /// Workspace-root actions for the FB tab / hamburger menu. Unlike
+  /// the FileTree in-row menu (which roots under the selected entry),
+  /// these always act from the workspace root (""), matching the
+  /// menu's "act on the whole workspace" framing. They reuse the same
+  /// store helpers the in-row menu calls.
+  function newFileOrDirFromRoot(): void {
     menu?.close();
-    await refreshTree();
+    void fileOps.createFileOrDir("");
   }
 
-  /// New File / New Dir live in the selection menu (where they can
-  /// root under the selected directory); workspace rename is a path
-  /// row in the menu header rather than a modal. Graph-from-workspace
-  /// is reachable via the empty-pane spawn grid + Cmd+Shift+M.
+  function newTerminalFromRoot(): void {
+    menu?.close();
+    openTerminalInPane(layout.activePaneId, terminalFromHereTarget("", true));
+  }
+
+  function newGraphFromRoot(): void {
+    menu?.close();
+    openFsGraphForDirectory("");
+  }
 
   function showWorkspaceInfo(): void {
     if (isDock) {
@@ -699,10 +719,26 @@
       <span class="menu-row-chord"></span>
     </button>
   </li>
+  <!-- Workspace-root spawn actions (replace the removed Reload entry).
+       Each acts from the workspace root, not the current selection. -->
   <li>
-    <button role="menuitem" onclick={reloadTree}>
-      <span class="glyph" aria-hidden="true">↻</span>
-      <span class="menu-row-label">Reload</span>
+    <button role="menuitem" onclick={newFileOrDirFromRoot}>
+      <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="menu-row-label">New file or Directory</span>
+      <span class="menu-row-chord"></span>
+    </button>
+  </li>
+  <li>
+    <button role="menuitem" onclick={newTerminalFromRoot}>
+      <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="menu-row-label">New Terminal</span>
+      <span class="menu-row-chord"></span>
+    </button>
+  </li>
+  <li>
+    <button role="menuitem" onclick={newGraphFromRoot}>
+      <Network size={16} strokeWidth={1.75} aria-hidden="true" />
+      <span class="menu-row-label">New Graph</span>
       <span class="menu-row-chord"></span>
     </button>
   </li>

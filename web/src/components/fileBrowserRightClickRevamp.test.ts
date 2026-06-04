@@ -30,7 +30,7 @@ describe("FBSurface menu header: path-derived workspace label + path row", () =>
   });
 });
 
-describe("FBSurface menu body: dock / expand / reload / import in order", () => {
+describe("FBSurface menu body: dock / expand / root-spawn / import in order", () => {
   test("dock variant can open a File Browser tab for current selection or workspace", () => {
     expect(surface).toMatch(
       /function openCurrentInFileBrowser\(\): void \{[\s\S]{1,300}const path = browserSelection\.path;[\s\S]{1,200}const tab = openBrowserInActivePane\(path \? \{ select: path \} : \{\}\);[\s\S]{1,200}tab\.inspectorOpen = true;/,
@@ -55,15 +55,23 @@ describe("FBSurface menu body: dock / expand / reload / import in order", () => 
     );
   });
 
-  test("expand-all + reload sit between dock and import sections", () => {
+  test("expand-all + root spawn actions sit between dock and import sections", () => {
+    // Reload was removed; below Expand-all the menu gains three
+    // workspace-root spawn entries in order: New file or Directory,
+    // New Terminal, New Graph.
     expect(surface).toMatch(
-      /toggleStick\("right"\)[\s\S]{1,1000}<li class="sep" role="separator"><\/li>[\s\S]{1,200}onclick=\{toggleAll\}[\s\S]{1,1000}onclick=\{reloadTree\}/,
+      /toggleStick\("right"\)[\s\S]{1,1000}<li class="sep" role="separator"><\/li>[\s\S]{1,200}onclick=\{toggleAll\}[\s\S]{1,700}onclick=\{newFileOrDirFromRoot\}[\s\S]{1,400}onclick=\{newTerminalFromRoot\}[\s\S]{1,400}onclick=\{newGraphFromRoot\}/,
     );
   });
 
-  test("Import contacts entry kept, after reload band", () => {
+  test("Reload entry removed from the FB tab/hamburger menu", () => {
+    expect(surface).not.toContain("onclick={reloadTree}");
+    expect(surface).not.toMatch(/<span class="menu-row-label">Reload<\/span>/);
+  });
+
+  test("Import contacts entry kept, after the root-spawn band", () => {
     expect(surface).toMatch(
-      /onclick=\{reloadTree\}[\s\S]{1,800}<li class="sep" role="separator"><\/li>[\s\S]{1,400}onclick=\{openImportContacts\}/,
+      /onclick=\{newGraphFromRoot\}[\s\S]{1,800}<li class="sep" role="separator"><\/li>[\s\S]{1,400}onclick=\{openImportContacts\}/,
     );
   });
 });

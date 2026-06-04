@@ -35,6 +35,7 @@
     openTerminalInPane,
   } from "../state/tabs.svelte";
   import { terminalFromHereTarget } from "../terminal/fromHere";
+  import { chordFor } from "../state/shortcuts";
   import {
     browserSelection,
     clearTreeLoadingForPath,
@@ -1372,11 +1373,13 @@
     {/if}
     <button onclick={() => terminalFromHere(menu!.path, menu!.isDir)}>
       <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>New Terminal</span>
+      <span class="menu-row-label">New Terminal</span>
+      <span class="menu-row-chord">{chordFor("app.terminal.toggle") ?? ""}</span>
     </button>
     <button onclick={() => graphThis(menu!.path, menu!.isDir)}>
       <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>New Graph</span>
+      <span class="menu-row-label">New Graph</span>
+      <span class="menu-row-chord">{chordFor("app.graph.toggle") ?? ""}</span>
     </button>
     {#if docked}
       <button onclick={() => openSelectionInFileBrowser(menu!.path)}>
@@ -1404,13 +1407,15 @@
     </button>
     <button class="danger" onclick={() => remove(menu!.path, menu!.isDir)}>
       <Trash2 size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>Delete</span>
+      <span class="menu-row-label">Delete</span>
+      <span class="menu-row-chord">{chordFor("app.files.delete") ?? ""}</span>
     </button>
     {#if onFlip}
       <div class="ctx-sep" role="separator"></div>
       <button onclick={flipFromMenu}>
         <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
-        <span>Settings</span>
+        <span class="menu-row-label">Settings</span>
+        <span class="menu-row-chord">{chordFor("app.settings.toggle") ?? ""}</span>
       </button>
     {/if}
   </div>

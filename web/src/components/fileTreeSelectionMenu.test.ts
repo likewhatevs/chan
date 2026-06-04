@@ -19,7 +19,7 @@ describe("FileTree selection menu header + new entries", () => {
   });
 
   test("New Terminal label relabelled (was \"Terminal from here\")", () => {
-    expect(tree).toMatch(/<span>New Terminal<\/span>/);
+    expect(tree).toMatch(/<span class="menu-row-label">New Terminal<\/span>/);
     expect(tree).not.toMatch(/<span>Terminal from here<\/span>/);
   });
 
@@ -32,13 +32,32 @@ describe("FileTree selection menu header + new entries", () => {
 
   test("New Graph entry added, routes to graphThis", () => {
     expect(tree).toMatch(
-      /onclick=\{\(\) => graphThis\(menu!\.path, menu!\.isDir\)\}[\s\S]{1,400}<span>New Graph<\/span>/,
+      /onclick=\{\(\) => graphThis\(menu!\.path, menu!\.isDir\)\}[\s\S]{1,400}<span class="menu-row-label">New Graph<\/span>/,
     );
   });
 
   test("docked transfer rows sit between separators", () => {
     expect(tree).toMatch(
-      /<span>New Graph<\/span>[\s\S]{1,500}\{#if docked\}[\s\S]{1,500}<span>Open in File Browser<\/span>[\s\S]{1,300}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,500}<span>Upload<\/span>[\s\S]{1,500}<span>Download<\/span>[\s\S]{1,300}\{\/if\}[\s\S]{1,120}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,400}<span>Copy Path<\/span>/,
+      /<span class="menu-row-label">New Graph<\/span>[\s\S]{1,500}\{#if docked\}[\s\S]{1,500}<span>Open in File Browser<\/span>[\s\S]{1,300}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,500}<span>Upload<\/span>[\s\S]{1,500}<span>Download<\/span>[\s\S]{1,300}\{\/if\}[\s\S]{1,120}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,400}<span>Copy Path<\/span>/,
+    );
+  });
+
+  test("selection-menu shortcut hints read from the central store (chordFor)", () => {
+    // New Terminal cmd+t, New Graph cmd+shift+m, Delete backspace,
+    // Settings cmd+, - each surfaced via chordFor so they port across
+    // web/native and stay in sync with the keymap layer.
+    expect(tree).toContain('import { chordFor } from "../state/shortcuts";');
+    expect(tree).toMatch(
+      /<span class="menu-row-chord">\{chordFor\("app\.terminal\.toggle"\) \?\? ""\}<\/span>/,
+    );
+    expect(tree).toMatch(
+      /<span class="menu-row-chord">\{chordFor\("app\.graph\.toggle"\) \?\? ""\}<\/span>/,
+    );
+    expect(tree).toMatch(
+      /<span class="menu-row-chord">\{chordFor\("app\.files\.delete"\) \?\? ""\}<\/span>/,
+    );
+    expect(tree).toMatch(
+      /<span class="menu-row-chord">\{chordFor\("app\.settings\.toggle"\) \?\? ""\}<\/span>/,
     );
   });
 
@@ -57,6 +76,6 @@ describe("transfer rows gated, per-row ops kept", () => {
     expect(tree).toMatch(/\{#if docked\}[\s\S]{1,1000}<span>Download<\/span>/);
     expect(tree).toMatch(/<span>Copy Path<\/span>/);
     expect(tree).toMatch(/<span>Rename \/ Move<\/span>/);
-    expect(tree).toMatch(/<span>Delete<\/span>/);
+    expect(tree).toMatch(/<span class="menu-row-label">Delete<\/span>/);
   });
 });

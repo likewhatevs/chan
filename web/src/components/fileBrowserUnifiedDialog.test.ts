@@ -100,7 +100,7 @@ describe("FileTree wiring", () => {
 
   test("Settings flip entry sits at the foot, gated on onFlip", () => {
     expect(tree).toMatch(
-      /\{#if onFlip\}[\s\S]{1,400}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,400}onclick=\{flipFromMenu\}[\s\S]{1,400}<span>Settings<\/span>/,
+      /\{#if onFlip\}[\s\S]{1,400}<div class="ctx-sep" role="separator"><\/div>[\s\S]{1,400}onclick=\{flipFromMenu\}[\s\S]{1,400}<span class="menu-row-label">Settings<\/span>/,
     );
   });
 });
