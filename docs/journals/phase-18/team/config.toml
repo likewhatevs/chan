@@ -1,0 +1,91 @@
+team_name = "phase-18-team"
+host_name = "Alex"
+host_handle = "@@Alex"
+tab_group = "phase-18"
+auto_prefix_at = true
+mcp_env = true
+created_at = "2026-06-04T11:05:26.636487+00:00"
+
+[[members]]
+handle = "@@Lead"
+command = "claude"
+is_lead = true
+
+[members.env]
+CHAN_TAB_NAME = "@@Lead"
+
+[members.position]
+row = 0
+col = 0
+
+[[members]]
+handle = "@@LaneA"
+command = "claude"
+is_lead = false
+
+[members.env]
+CHAN_TAB_NAME = "@@LaneA"
+
+[members.position]
+row = 0
+col = 1
+
+[[members]]
+handle = "@@LaneB"
+command = "claude"
+is_lead = false
+
+[members.env]
+CHAN_TAB_NAME = "@@LaneB"
+
+[members.position]
+row = 0
+col = 2
+
+[[members]]
+handle = "@@LaneC"
+command = "claude"
+is_lead = false
+
+[members.env]
+CHAN_TAB_NAME = "@@LaneC"
+
+[members.position]
+row = 0
+col = 3
+
+[[members]]
+handle = "@@LaneD"
+command = "claude"
+is_lead = false
+
+[members.env]
+CHAN_TAB_NAME = "@@LaneD"
+
+[members.position]
+row = 1
+col = 0
+
+[[members]]
+handle = "@@LaneE"
+command = "claude"
+is_lead = false
+
+[members.env]
+CHAN_TAB_NAME = "@@LaneE"
+
+[members.position]
+row = 1
+col = 1
+
+[[members]]
+handle = "@@LaneF"
+command = "claude"
+is_lead = false
+
+[members.env]
+CHAN_TAB_NAME = "@@LaneF"
+
+[members.position]
+row = 1
+col = 2
