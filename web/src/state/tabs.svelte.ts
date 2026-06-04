@@ -1076,7 +1076,7 @@ export function openTerminalInPane(
 }
 
 export type OpenGraphOptions = Partial<
-  Pick<GraphTab, "mode" | "scopeId" | "depth" | "pendingSelectId" | "title">
+  Pick<GraphTab, "mode" | "scopeId" | "depth" | "pendingSelectId" | "title" | "filters">
 >;
 
 const DEFAULT_GRAPH_FILTERS: GraphFilters = {
@@ -1110,7 +1110,7 @@ export function openGraphInPane(paneId: string, opts: OpenGraphOptions = {}): Gr
     scopeId,
     depth: opts.depth ?? 1,
     expanded: { "": true },
-    filters: { ...DEFAULT_GRAPH_FILTERS },
+    filters: opts.filters ? { ...opts.filters } : { ...DEFAULT_GRAPH_FILTERS },
     inspectorOpen: false,
     pendingSelectId: opts.pendingSelectId ?? null,
   };
@@ -3558,6 +3558,66 @@ function restoreGraphMode(mode: SerTab["gm"]): GraphTab["mode"] {
   if (mode === "f") return "filesystem";
   if (mode === "l") return "language";
   return "semantic";
+}
+
+/// phase-18 "Copy link to graph": a graph tab serializes to a
+/// `chan://graph?...` URL that reproduces the view when opened from a
+/// markdown file. A custom-scheme URL survives a paste into markdown
+/// intact and is trivial to detect on a link click. Round-trips
+/// scope / depth / mode / filters / selection via `parseGraphLink`.
+export const GRAPH_LINK_PREFIX = "chan://graph?";
+
+export function graphLinkFor(tab: GraphTab): string {
+  const params = new URLSearchParams();
+  params.set("s", tab.scopeId);
+  if (tab.depth !== 1) params.set("d", String(tab.depth));
+  params.set(
+    "m",
+    tab.mode === "filesystem" ? "f" : tab.mode === "language" ? "l" : "s",
+  );
+  params.set("f", encodeGraphTabFilters(tab.filters));
+  if (tab.selectedNodeId) params.set("n", tab.selectedNodeId);
+  return `${GRAPH_LINK_PREFIX}${params.toString()}`;
+}
+
+export type ParsedGraphLink = {
+  mode: GraphTab["mode"];
+  scopeId: string;
+  depth: number;
+  filters: GraphFilters;
+  selectedNodeId: string | null;
+};
+
+/// Parse a `chan://graph?...` link back into the fields needed to open a
+/// graph tab. Returns null when the string is not a graph link or has no
+/// scope. Lenient on the rest: missing depth -> 1, missing mode ->
+/// semantic, missing filters -> all-on (decodeGraphTabFilters default).
+export function parseGraphLink(link: string): ParsedGraphLink | null {
+  const trimmed = link.trim();
+  if (!trimmed.startsWith(GRAPH_LINK_PREFIX)) return null;
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(trimmed.slice(GRAPH_LINK_PREFIX.length));
+  } catch {
+    return null;
+  }
+  const scopeId = params.get("s");
+  if (!scopeId) return null;
+  const depthRaw = params.get("d");
+  const depth = depthRaw ? Number.parseInt(depthRaw, 10) : 1;
+  const modeChar = params.get("m");
+  return {
+    mode:
+      modeChar === "f"
+        ? "filesystem"
+        : modeChar === "l"
+          ? "language"
+          : "semantic",
+    scopeId,
+    depth: Number.isFinite(depth) && depth > 0 ? depth : 1,
+    filters: decodeGraphTabFilters(params.get("f") ?? undefined),
+    selectedNodeId: params.get("n"),
+  };
 }
 
 /// Walk the layout starting at `nodeId`, producing a serializable tree.

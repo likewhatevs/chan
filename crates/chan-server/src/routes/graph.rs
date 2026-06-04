@@ -1763,7 +1763,22 @@ fn build_graph_view(
     // `drafts_link` kind to style the edge / Drafts root
     // differently from regular `contains` edges (per
     // addendun-a.md's spec).
-    let drafts_link_edges = synthesize_drafts_layer(&files, &mut nodes);
+    //
+    // phase-18 (B item-2): only synthesize Drafts at WORKSPACE scope.
+    // The Drafts root lives outside any directory/file scope's subtree,
+    // so the unified tree layer emits no `contains` edge to it there;
+    // the node then arrived anchored solely by `drafts_link`, which the
+    // SPA does not render as an edge, leaving the Drafts directory
+    // floating with no visible edge (@@Alex's image-5: "the Drafts
+    // folder, the one outside the workspace, is showing but has no
+    // edge"). At workspace scope the tree layer already anchors Drafts
+    // via `contains`, so it never floats; a graph scoped INTO Drafts
+    // gets its spine from merge_unified_tree_layer's drafts branch.
+    let drafts_link_edges = if matches!(p.scope, GraphScope::Workspace) {
+        synthesize_drafts_layer(&files, &mut nodes)
+    } else {
+        Vec::new()
+    };
     emit_graph_nodes(emit, nodes.values().cloned().collect())?;
 
     let mut edges: Vec<GraphEdgeView> = all_edges
@@ -2541,6 +2556,71 @@ mod tests {
         let response = api_graph_sync(workspace, params);
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn drafts_root_only_at_workspace_scope() {
+        // phase-18 (B item-2): the Drafts root hangs off the workspace
+        // root via the unified tree layer's `contains` edge ONLY at
+        // workspace scope. In a directory scope the tree layer doesn't
+        // list Drafts, so synthesize_drafts_layer's bare `drafts_link`
+        // edge (which the SPA does not render as an edge) left the Drafts
+        // directory floating with no visible edge (@@Alex's image-5).
+        // Gate the synthesis to workspace scope: present at workspace
+        // scope, absent in a non-Drafts directory scope.
+        let (_cfg, _root, workspace) = open_workspace();
+        workspace.create_draft_dir("untitled").unwrap();
+        workspace
+            .write_text("Drafts/untitled/draft.md", "# Draft\n")
+            .unwrap();
+        workspace
+            .index_draft_file("Drafts/untitled/draft.md")
+            .unwrap();
+        workspace.write_text("notes/a.md", "# A\n").unwrap();
+        workspace.index_file("notes/a.md").unwrap();
+
+        let drafts_id = directory_node_id("Drafts");
+        let has_drafts = |view: &GraphViewResponse| {
+            view.nodes
+                .iter()
+                .any(|n| matches!(n, GraphNodeView::Directory { id, .. } if *id == drafts_id))
+        };
+
+        let mut e1 = None;
+        let ws = build_graph_view(
+            workspace.clone(),
+            GraphParams {
+                scope: GraphScope::Workspace,
+                path: String::new(),
+                depth: 1,
+            },
+            &mut e1,
+        )
+        .unwrap();
+        assert!(
+            has_drafts(&ws),
+            "Drafts root should appear at workspace scope"
+        );
+
+        let mut e2 = None;
+        let dir = build_graph_view(
+            workspace,
+            GraphParams {
+                scope: GraphScope::Directory,
+                path: "notes".to_string(),
+                depth: 1,
+            },
+            &mut e2,
+        )
+        .unwrap();
+        assert!(
+            !has_drafts(&dir),
+            "Drafts root must NOT float in a non-Drafts directory scope"
+        );
+        assert!(
+            !dir.edges.iter().any(|e| e.kind == "drafts_link"),
+            "no drafts_link edge should leak into a directory-scoped graph"
+        );
     }
 
     #[test]

@@ -26,11 +26,13 @@
   } from "../api/types";
   import {
     canReopenClosedTab,
+    graphLinkFor,
     openBrowserInActivePane,
     openInActivePane,
     reopenClosedTab,
     type GraphTab,
   } from "../state/tabs.svelte";
+  import { notify } from "../state/notify.svelte";
   import {
     browserSelection,
     fbSelectSingle,
@@ -64,6 +66,7 @@
     HardDrive,
     Hash,
     History,
+    Link,
     Settings2,
     X,
   } from "lucide-svelte";
@@ -799,12 +802,20 @@
   // `pageWidth.svelte` for any future consumer; this panel is no
   // longer one.
 
-  async function reloadGraph(): Promise<void> {
-    if (currentScope?.kind === "workspace") {
-      workspaceDepthProbe = null;
-      await loadWorkspaceDepthProbe();
+  /// phase-18 "Copy link to graph" (replaces the tab menu's Reload):
+  /// serialize this tab to a `chan://graph?...` link and put it on the
+  /// clipboard. Pasted into a markdown file, the link reopens this graph
+  /// (scope / depth / mode / filters / selection) on click.
+  async function copyGraphLink(): Promise<void> {
+    closeTabMenu();
+    if (!tab) return;
+    const link = graphLinkFor(tab);
+    try {
+      await navigator.clipboard.writeText(link);
+      notify("Graph link copied");
+    } catch {
+      notify("Couldn't copy graph link to clipboard");
     }
-    await load();
   }
 
   function flipToSettings(): void {
@@ -1800,6 +1811,26 @@
     return `${e.source}\u0000${e.target}\u0000${e.kind}\u0000${e.rank ?? ""}`;
   }
 
+  /// Resolve a `pendingSelectId` (set by "Graph from here") to the real
+  /// rendered node id. The select is a workspace PATH: for a file that
+  /// path IS the node id, but a directory node's id is `directory:<path>`
+  /// (graph.rs::directory_node_id), so a bare-path pending never matched
+  /// and the originating directory was left unselected after the re-scope
+  /// (@@Alex: "we redraw but do not select the node"). Match by id first,
+  /// then fall back to a file/folder node whose `.path` equals the pend.
+  function resolveSelectId(
+    pending: string,
+    byId: Map<string, RenderedNode>,
+  ): string | null {
+    if (byId.has(pending)) return pending;
+    for (const n of byId.values()) {
+      if ((n.kind === "file" || n.kind === "folder") && n.path === pending) {
+        return n.id;
+      }
+    }
+    return null;
+  }
+
   async function load(): Promise<void> {
     const seq = ++graphLoadSeq;
     graphLoadAbort?.abort();
@@ -1863,8 +1894,15 @@
           }
         }
         const pending = graphState.pendingSelectId;
-        if (pending && fsNodes.some((n) => n.id === pending)) {
-          selectedId = pending;
+        // Match the pending select by node id OR path: "Graph from here"
+        // sets a workspace path, which equals the fs node id for files /
+        // dirs today, but matching path too keeps the select robust and
+        // mirrors the semantic branch's resolveSelectId.
+        const pendingNode = pending
+          ? fsNodes.find((n) => n.id === pending || n.path === pending)
+          : undefined;
+        if (pendingNode) {
+          selectedId = pendingNode.id;
           graphState.inspectorOpen = true;
         } else if (!selectedId || !fsNodes.some((n) => n.id === selectedId)) {
           selectedId = fs.path;
@@ -1907,10 +1945,13 @@
         nodes = [...renderedNodesById.values()];
         edges = [...renderedEdgesByKey.values()];
         const pending = graphState.pendingSelectId;
-        if (pending !== null && renderedNodesById.has(pending)) {
-          selectedId = pending;
-          graphState.inspectorOpen = true;
-          graphState.pendingSelectId = null;
+        if (pending !== null) {
+          const resolved = resolveSelectId(pending, renderedNodesById);
+          if (resolved !== null) {
+            selectedId = resolved;
+            graphState.inspectorOpen = true;
+            graphState.pendingSelectId = null;
+          }
         }
       };
       await api.graphStream(
@@ -2003,7 +2044,15 @@
 
   function mapFsNodes(fs: FsGraphResponse): RenderedNode[] {
     return fs.nodes.map((n): RenderedNode => {
-      if (n.kind === "file") {
+      // A symlink is a file-like leaf: render it as a file node so the
+      // canvas classifies it by name (binary for an extension-less link,
+      // doc for a `.md` link, etc.). Without this branch a "symlink" kind
+      // fell through to the `mention` catch-all below and drew as a yellow
+      // contact silhouette (@@Alex's image-10). The symlink relationship
+      // still reads via its distinct edge (mapFsEdges maps "symlink" ->
+      // a tag-kind edge); the inspector keeps the BINARY + target body
+      // off the raw `selectedFsNode`, which is unaffected by this mapping.
+      if (n.kind === "file" || n.kind === "symlink") {
         return {
           kind: "file",
           id: n.id,
@@ -2147,6 +2196,44 @@
     }
   });
 
+  /// Does a watcher event touching `paths` warrant reloading THIS graph?
+  /// Pre-fix the graph reloaded on every workspace edit, even files not
+  /// in the open graph (@@Alex: "any change to any file in the workspace
+  /// would trigger a graph reload, this is BAD"). We reload only when the
+  /// change is in scope:
+  ///   - workspace scope spans the whole tree -> always.
+  ///   - dir / file scope -> a path inside the subtree (covers a NEW
+  ///     file not yet a node) or a path currently rendered as a node.
+  ///   - tag / contact / language lens -> only when the changed path is a
+  ///     file currently VISIBLE in the lens (its edges may have changed).
+  /// Unknown paths (empty) reload to stay safe.
+  function changeAffectsScope(paths: string[]): boolean {
+    if (paths.length === 0) return true;
+    const scope = currentScope;
+    if (!scope) return true;
+    if (scope.kind === "workspace") return true;
+    const visibleIds = scopedNodeIds;
+    for (const p of paths) {
+      if (
+        scope.kind === "dir" &&
+        (p === scope.path || p.startsWith(`${scope.path}/`))
+      ) {
+        return true;
+      }
+      if (scope.kind === "file" && p === scope.path) return true;
+      for (const n of nodes) {
+        if (
+          (n.kind === "file" || n.kind === "folder") &&
+          n.path === p &&
+          (visibleIds === null || visibleIds.has(n.id))
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   $effect(() => {
     const nonce = graphReloadSignal.nonce;
     if (!visible) {
@@ -2155,6 +2242,11 @@
     }
     if (nonce === seenGraphReloadNonce) return;
     seenGraphReloadNonce = nonce;
+    // Path-filter the reload: an out-of-scope edit must NOT reload this
+    // graph, and must NOT cancel an already-armed in-scope reload either
+    // (so we bail BEFORE touching the timer). `untrack` so reading the
+    // scope / node sets here doesn't make the effect re-fire on load.
+    if (!untrack(() => changeAffectsScope(graphReloadSignal.paths))) return;
     if (watchReloadTimer) clearTimeout(watchReloadTimer);
     watchReloadTimer = setTimeout(() => {
       watchReloadTimer = null;
@@ -2336,9 +2428,11 @@
         </span>
       </div>
       <div class="msep" role="separator"></div>
-      <button class="mbtn" onclick={reloadGraph}>
-        <span class="mbtn-icon" aria-hidden="true">↻</span>
-        <span class="mbtn-label">Reload</span>
+      <button class="mbtn" onclick={copyGraphLink}>
+        <span class="mbtn-icon" aria-hidden="true">
+          <Link size={16} strokeWidth={1.75} />
+        </span>
+        <span class="mbtn-label">Copy link to graph</span>
         <span class="mbtn-chord"></span>
       </button>
       <div class="msep" role="separator"></div>
