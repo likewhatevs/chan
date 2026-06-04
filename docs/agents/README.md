@@ -2,7 +2,12 @@
 
 Contact cards and skill anchors for the agents that have worked
 on chan. Used as the link target for `@@{name}` references in
-the phase journals (`docs/journals/phase-*/`).
+the phase reports (`docs/phases/`).
+
+For the cross-phase operational lessons (coordination, the gate,
+verification, commit discipline, the pre-release norms) see the
+[playbook](playbook.md). It is the "how we work and what went wrong when
+we did not" companion to these contact cards.
 
 ## Active roster (phase 7)
 
@@ -17,35 +22,32 @@ the phase journals (`docs/journals/phase-*/`).
 
 ## Historical handles
 
-Older phases used different slot names. Each historical
-contact below is a redirect card pointing at its active
-successor, so a `@@Backend` reference in a phase-2 journal
-resolves to its contact card here AND to @@FullStack via
-the predecessor list on the active card.
+Older phases used different slot names. Each maps to its active
+successor below, so a `@@Backend` reference in a phase-2 report resolves
+to the current role. The standalone redirect cards were removed in the
+phase-18 docs cleanup; this map is now the single resolution point.
 
-| Tag             | Active successor                | Contact                                                       |
-|-----------------|---------------------------------|---------------------------------------------------------------|
-| @@Backend       | @@FullStackA + @@FullStackB     | [backend.md](backend.md)                       |
-| @@Frontend      | @@FullStackA + @@FullStackB     | [frontend.md](frontend.md)                     |
-| @@Webdev        | @@FullStackA + @@FullStackB     | [webdev.md](webdev.md)                         |
-| @@FullStack     | @@FullStackA + @@FullStackB     | [fullstack.md](fullstack.md)                   |
-| @@Syseng        | @@Systacean                     | [syseng.md](syseng.md)                         |
-| @@Rustacean     | @@Systacean                     | [rustacean.md](rustacean.md)                   |
-| @@Backsystacean | @@FullStack + @@Systacean       | [backsystacean.md](backsystacean.md)           |
-| @@Webtest       | @@WebtestA + @@WebtestB         | [webtest.md](webtest.md)                       |
+| Tag             | Active successor             |
+|-----------------|------------------------------|
+| @@Backend       | @@FullStackA + @@FullStackB  |
+| @@Frontend      | @@FullStackA + @@FullStackB  |
+| @@Webdev        | @@FullStackA + @@FullStackB  |
+| @@FullStack     | @@FullStackA + @@FullStackB  |
+| @@Syseng        | @@Systacean                  |
+| @@Rustacean     | @@Systacean                  |
+| @@Backsystacean | @@FullStack + @@Systacean    |
+| @@Webtest       | @@WebtestA + @@WebtestB      |
 
 ## Skills
 
-Each agent ships its own skill guides under
-`docs/agents/{name}/skills/`. The guides are copies of the
-shared skill library at
-`~/dev/github.com/fiorix/dotfiles/ai/skills/` so the repo stays
-self-contained.
+Each agent's skills come from the shared skill library at
+`~/dev/github.com/fiorix/dotfiles/ai/skills/` (architect, rustacean,
+syseng, webdev, pythonic). The cards reference them by name; they are
+not vendored in-repo.
 
 ## Why this directory exists
 
-We want phase journals to be graphable: any `@@{name}`
-reference resolves to a single canonical contact card and a
-single skill anchor. Future tooling can crawl
-`docs/journals/**` for `@@{name}` mentions and join against
-this directory to render the dev-log graph.
+We want the phase reports to be graphable: any `@@{name}` reference
+resolves to a single canonical contact card. Future tooling can crawl
+`docs/phases/**` for `@@{name}` mentions and join against this directory
+to render the dev-log graph.

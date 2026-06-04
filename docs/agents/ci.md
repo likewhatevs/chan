@@ -25,9 +25,9 @@ the rotation, @@Systacean reviews the in-tree config change.
 
 ## Skills
 
-* [syseng](skills/syseng.md) — Linux systems engineering, build
+* syseng - Linux systems engineering, build
   pipelines, operational clarity.
-* [rustacean](skills/rustacean.md) — Rust build matrix, Cargo
+* rustacean - Rust build matrix, Cargo
   ergonomics, release-mode toggles.
 
 Same skill blend as @@Systacean; different scope.

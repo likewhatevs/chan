@@ -20,7 +20,7 @@ plus the tunnel domain rename.
   copy so they read as a present-state snapshot rather than a development
   history. The editor design note (`web/src/editor/design.md`) now
   describes the current CodeMirror 6 editor without its tiptap-to-CM6
-  migration story (that history is kept in `docs/journals`); stale
+  migration story (that history is kept in `docs/phases`); stale
   `chan-core` crate references were corrected to the post-split crates;
   and user-facing strings were normalized to ASCII typography (em dashes,
   ellipses, and middle dots replaced with `-` and `...`).

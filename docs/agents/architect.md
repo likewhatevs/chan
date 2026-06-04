@@ -12,7 +12,7 @@ commit grouping. Carries no implementation slot of its own.
 
 ## Skills
 
-* [architect](architect/skills/architect.md) — optimize for simple
+* architect - optimize for simple
   structure, clear boundaries, maintainable contracts; flag
   over-engineering early.
 

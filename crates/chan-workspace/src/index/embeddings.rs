@@ -16,7 +16,7 @@
 //
 // CPU is the default because the Metal path hangs in
 // `[_MTLCommandBuffer waitUntilCompleted]` on at least one machine;
-// see `select_device` and docs/journals/phase-11/gpu-embed-followup.md.
+// see `select_device`; the GPU-embed investigation is in git history.
 // `CHAN_ENABLE_GPU=1` opts back into the accelerator at runtime
 // without rebuilding. `CHAN_DISABLE_GPU` is still accepted (now a
 // no-op, since CPU is already the default) for back-compat.
@@ -356,8 +356,8 @@ fn l2_normalize(t: &Tensor) -> Result<Tensor, EmbedError> {
 /// correcting how we submit/await the Metal command buffer), the GPU
 /// path must not be reachable out of the box. The code path is kept
 /// intact behind the opt-in so machines with a working Metal/CUDA
-/// stack can still use it for benchmarking. See
-/// docs/journals/phase-11/gpu-embed-followup.md.
+/// stack can still use it for benchmarking. See the phase-11
+/// GPU-embed investigation, preserved in git history.
 ///
 /// `CHAN_DISABLE_GPU` is accepted for back-compat. CPU is already the
 /// default, so it is now a no-op, but honoring it means existing

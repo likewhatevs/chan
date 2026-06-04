@@ -18,7 +18,7 @@ of its own.
 
 Lane boundary at the workspace-level network layer per the phase-8
 desktop-native vision, summarized in
-[`../journals/phase-8/README.md`](../journals/phase-8/README.md) (the
+[`../phases/phase-8.md`](../phases/phase-8.md) (the
 original vision doc is preserved in git history at
 `phase-8/raw/architect/phase-9-desktop-native-vision.md`).
 @@Alex is the bridge between the two architect leads;
@@ -27,11 +27,9 @@ but decisional traffic routes through @@Alex.
 
 ## Skills
 
-* [architect](desktect/skills/architect.md) — same skill as
-  chan-core's @@Architect; role-agnostic (optimize
-  for simple structure, clear boundaries,
-  maintainable contracts; flag over-engineering
-  early).
+* architect: same skill as chan-core's @@Architect; role-agnostic
+  (optimize for simple structure, clear boundaries, maintainable
+  contracts; flag over-engineering early).
 
 ## Team
 
@@ -44,19 +42,17 @@ but decisional traffic routes through @@Alex.
 
 * Cross-team-lead channel inbound: the welcome + scope hand-off and the
   tail coordination-shape update are summarized in the phase-8 essence
-  [`../journals/phase-8/README.md`](../journals/phase-8/README.md); the
+  [`../phases/phase-8.md`](../phases/phase-8.md); the
   channel itself is preserved in git history at
   `phase-8/raw/alex/event-architect-desktect.md`.
 * chan-core @@Architect contact card:
   [`architect.md`](architect.md).
 * Phase-8 process (inherits from phase-7), summarized in the phase-8
-  essence [`../journals/phase-8/README.md`](../journals/phase-8/README.md);
+  essence [`../phases/phase-8.md`](../phases/phase-8.md);
   the spec is preserved in git history at `phase-8/raw/process.md`.
-* Bootstrap doc (generic; use the architect-block):
-  [`bootstrap.md`](bootstrap.md). The architect-block
-  references chan-core's working-agent channels;
-  @@Desktect adapts mentally for the chan-desktop
-  team (read your team's `event-*-desktect.md`
+* Coordination model + working rules: [`playbook.md`](playbook.md).
+  @@Desktect adapts the chan-core working-agent channels mentally for
+  the chan-desktop team (read your team's `event-*-desktect.md`
   channels instead).
 
 ## Predecessors

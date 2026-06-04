@@ -17,10 +17,10 @@ permission where launches or GUI automation are required.
 
 ## Skills
 
-* [webdev](skills/webdev.md) — frontend/webview interaction
+* webdev - frontend/webview interaction
   model, accessibility, keyboard/menu behavior, manual
   verification discipline.
-* [rustacean](skills/rustacean.md) — small Rust/Tauri patches
+* rustacean - small Rust/Tauri patches
   and review when needed.
 
 ## Team

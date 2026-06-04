@@ -10,8 +10,8 @@
 // workspace.
 //
 // Window <-> page contract (page side). The Rust/Tauri half is owned by
-// @@LaneB; the authoritative spec is the "Contract" section of
-// docs/journals/phase-17/round-2/desktop-connecting-screen.md. Summary:
+// @@LaneB; the original design spec (the phase-17 round-2
+// connecting-screen brief) is preserved in git history. Summary:
 //
 //   * Inputs are injected by an initialization_script that runs BEFORE
 //     this file, as a global object:

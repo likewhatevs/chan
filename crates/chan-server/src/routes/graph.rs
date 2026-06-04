@@ -547,11 +547,11 @@ fn is_image_path(rel: &str) -> bool {
 ///   3. Decoded target joined to each higher ANCESTOR directory of the
 ///      source, walking up toward the workspace root. This rescues workspace-
 ///      rooted wiki-links authored with a partial prefix: chan-workspace
-///      stores bare `[[phase-2/frontend-3.md]]` as the workspace-rooted
-///      `phase-2/frontend-3.md`, but when the workspace root is a repo root
-///      the real file lives at `docs/journals/phase-2/frontend-3.md`.
-///      Joining the prefix to the ancestor base `docs/journals` lands
-///      on the real file instead of a false "does not exist" ghost
+///      stores bare `[[sub/topic.md]]` as the workspace-rooted
+///      `sub/topic.md`, but when the workspace root is a repo root the
+///      real file may live at `docs/sub/topic.md`. Joining the prefix to
+///      the ancestor base `docs` lands on the real file instead of a
+///      false "does not exist" ghost
 ///      (GI-3). Tried after the workspace-root + immediate-parent bases so
 ///      it only acts as a fallback and a sibling/root match still wins.
 ///
@@ -1601,9 +1601,8 @@ fn build_graph_view(
     // in the graph. Unreferenced files would inflate the node count
     // without adding any edges, which is purely visual noise.
     //
-    // `referenced_disk_files` covers the bug repro from
-    // docs/journals/phase-8/systacean/systacean-2.md: a markdown link
-    // to LICENSE / a .rs source / a shell script lands on a real
+    // `referenced_disk_files` covers a phase-8 bug repro: a markdown
+    // link to LICENSE / a .rs source / a shell script lands on a real
     // file node here instead of falling through to ghost_set as a
     // "missing" target.
     let mut referenced_images: std::collections::BTreeSet<String> =
@@ -2312,10 +2311,9 @@ mod tests {
         // Source link: bare `some-dir` resolves workspace-rooted under
         // the wiki convention. `some-dir/` exists as a real
         // directory on disk (created by `put` writing a file under
-        // it). Mirrors the live-repo shape where
-        // `docs/journals/phase-7/architect/journal.md` links
-        // `../alex/` and `docs/journals/phase-7/alex/` is a real
-        // directory.
+        // it). Mirrors a real-repo shape where a markdown file links a
+        // sibling directory (`[label](../sibling/)`) that exists on
+        // disk.
         put(root.path(), "notes/intro.md", b"# Intro\n\n[[some-dir]]\n");
         put(root.path(), "some-dir/contents.md", b"# contents\n");
         workspace.index_file("notes/intro.md").unwrap();

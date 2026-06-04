@@ -19,11 +19,11 @@ operational — both lanes have identical skill sets.
 
 ## Skills
 
-* [webdev](skills/webdev.md) — frontend and web app work,
+* webdev - frontend and web app work,
   TypeScript / Svelte / Vite, browser APIs, SPA architecture.
-* [rustacean](skills/rustacean.md) — idiomatic Rust for the
+* rustacean - idiomatic Rust for the
   axum / chan-server layer, async, error handling, tests.
-* [pythonic](skills/pythonic.md) — kept for ad-hoc Python
+* pythonic - kept for ad-hoc Python
   tooling and data wrangling around tests / dev scripts.
 
 ## Predecessors

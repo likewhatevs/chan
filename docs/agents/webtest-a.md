@@ -14,7 +14,7 @@ multi-pane / multi-workspace scenarios.
 
 ## Skills
 
-* [webdev](skills/webdev.md) — browser session driving, DOM
+* webdev - browser session driving, DOM
   inspection, network/console traces.
 
 ## Predecessors

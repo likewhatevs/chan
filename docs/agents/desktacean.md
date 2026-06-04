@@ -17,9 +17,9 @@ bridges cross-team decisions.
 
 ## Skills
 
-* [rustacean](skills/rustacean.md) — idiomatic Rust,
+* rustacean - idiomatic Rust,
   async/lifecycle, error handling, tests.
-* [syseng](skills/syseng.md) — process lifecycle, OS
+* syseng - process lifecycle, OS
   integration, filesystem/process diagnostics.
 
 ## Team

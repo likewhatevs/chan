@@ -14,9 +14,9 @@ crate boundary contract.
 
 ## Skills
 
-* [syseng](skills/syseng.md) — Linux systems engineering,
+* syseng - Linux systems engineering,
   diagnosis, operational clarity, minimal targeted fixes.
-* [rustacean](skills/rustacean.md) — idiomatic Rust,
+* rustacean - idiomatic Rust,
   async / concurrency, Cargo hygiene, error handling, tests.
 
 ## Predecessors
