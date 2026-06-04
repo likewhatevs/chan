@@ -587,6 +587,17 @@
     secondary: InspectorAction[];
   } | null>(() => {
     if (!entry) return null;
+    // The Drafts root is metadata-backed and lives OUTSIDE the workspace, so
+    // "Open" (a File Browser tab into the workspace tree), Upload, Download
+    // tarball and Graph-from-here don't apply. The one meaningful action is
+    // to drop a terminal there, so the Drafts node gets a SINGLE
+    // "Terminal from here" button and no dropdown (@@Alex).
+    if (entry.path === "Drafts") {
+      return {
+        main: { label: "Terminal from here", onClick: newTerminalHere },
+        secondary: [],
+      };
+    }
     const isDir = entry.is_dir;
     const p = entry.path;
     const image = !isDir && isImage(p);
