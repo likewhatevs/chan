@@ -155,7 +155,7 @@ Post-bridge updater signing:
   key, or an explicit empty value for a no-password key.
 
 macOS packaging and notarization also need the Apple signing variables
-documented in `CLAUDE.md`, but those are not updater signature keys.
+documented in `.agents/desktop.md`, but those are not updater signature keys.
 
 ## Identifying Which Key Signed A Payload
 

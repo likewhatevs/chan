@@ -503,7 +503,7 @@ jobs:
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || missing+=("TAURI_SIGNING_PRIVATE_KEY")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::Missing signing secrets: ${missing[*]}"
-            echo "::error::Populate Apple secrets per docs/release/macos-signing.md and updater key secrets per desktop/CLAUDE.md."
+            echo "::error::Populate Apple secrets per docs/release/macos-signing.md and updater key secrets per .agents/desktop.md."
             exit 1
           fi
 

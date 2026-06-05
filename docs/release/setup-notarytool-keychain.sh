@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-time setup: create the `chan` notarytool Keychain profile so
 # `xcrun notarytool log`, `xcrun notarytool history`, and
-# `make app-notarized` (per desktop/CLAUDE.md) all work locally
+# `make app-notarized` (per .agents/desktop.md) all work locally
 # without re-typing Apple ID / team ID / app-specific password.
 #
 # Sources the app-specific password from the `chan-notary` generic-
@@ -12,7 +12,7 @@
 # change.
 #
 # After running this once, the standard notarytool flows from
-# desktop/CLAUDE.md ("Local notarization setup" + "Verifying the
+# .agents/desktop.md ("Local notarization setup" + "Verifying the
 # Keychain profile is in place") work as documented.
 #
 # Idempotent: if the profile already exists, notarytool's

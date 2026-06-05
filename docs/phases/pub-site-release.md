@@ -38,7 +38,7 @@ site and the /story founder page.
 
 Three lanes, coordinated through the shared phase-style bus. The
 `@@handle` references resolve via the roster in
-[`../agents/README.md`](../agents/README.md):
+[`.agents/roster/README.md`](../../.agents/roster/README.md):
 
 - @@LaneA (architect plus positioning docs): the docs re-steer across
   README, design.md, the manual, CLAUDE.md, AGENTS.md, multi-user fixes,

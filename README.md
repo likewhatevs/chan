@@ -177,6 +177,8 @@ that code; it is experimental, with sign-in off by default. See
 
 ## Contributing
 
+Agents and contributors: start at [`.agents/README.md`](.agents/README.md).
+
 The Rust toolchain is pinned in `rust-toolchain.toml` (1.95). Install
 [rustup](https://rustup.rs/); it picks up the pin automatically the
 first time you run `cargo` here.

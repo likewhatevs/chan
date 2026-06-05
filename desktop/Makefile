@@ -90,7 +90,7 @@ clean:
 # Recommended local flow: stash the app-specific password as a
 # notarytool Keychain profile so `make app-notarized` runs from a
 # bare shell with no env exports (see "Local notarization setup" in
-# desktop/CLAUDE.md):
+# .agents/desktop.md):
 #
 #   xcrun notarytool store-credentials chan \
 #       --apple-id <email> --team-id <TEAMID> --password <app-pw>

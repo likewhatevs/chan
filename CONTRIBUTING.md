@@ -5,10 +5,12 @@ notes app: a CLI plus an HTTP server that serves an
 embedded Svelte editor for plain markdown workspaces.
 Contributions are welcome.
 
+Agents and contributors: start at [`.agents/README.md`](.agents/README.md).
+
 This file is the practical guide. For the architectural
 shape (workspace layout, workspace boundary, single-binary
 discipline, MCP-only stance), read
-[`CLAUDE.md`](CLAUDE.md) at the repo root.
+[`.agents/README.md`](.agents/README.md) at the repo root.
 
 ## Setup
 
@@ -60,7 +62,7 @@ Installing the pre-push hook
 enforces: fmt + clippy `-D warnings` + cargo test +
 `cargo build --no-default-features` + `npm run check` +
 `npm test` + `npm run build` against the pinned Rust
-toolchain. Run it locally before pushing — CI will fail
+toolchain. Run it locally before pushing; CI will fail
 fast otherwise.
 
 Do not bypass with `--no-verify` unless explicitly
@@ -125,7 +127,7 @@ service) on PRs that touch `gateway/**`.
 * Subject line < 70 chars; body wraps at ~72. Explain
   the **why**, not just the what.
 * No em dashes; tables are pure ASCII targeting 80
-  columns (see [`CLAUDE.md`](CLAUDE.md) "Writing rules").
+  columns (see [`.agents/writing-rules.md`](.agents/writing-rules.md)).
 
 ### Architectural ground rules
 

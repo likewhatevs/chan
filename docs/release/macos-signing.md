@@ -26,7 +26,7 @@ In scope:
 Out of scope (separate briefs):
 
 * Apple updater bundle signing (the Tauri `minisign` key). The
-  key-rotation procedure lives in `desktop/CLAUDE.md`; CI
+  key-rotation procedure lives in `.agents/desktop.md`; CI
   reads `TAURI_SIGNING_PRIVATE_KEY` once the bridge release
   ships.
 * Windows Authenticode. Mentioned at the bottom as a pointer;
@@ -323,7 +323,7 @@ The release workflow consumes the secrets by name, and the next
 approved `vX.Y.Z` release cut produces a notarized `.dmg` ready
 for GitHub Release upload. The same release workflow also checks
 for the Tauri updater signing secret names documented in
-`desktop/CLAUDE.md`; those keys are separate from Apple
+`.agents/desktop.md`; those keys are separate from Apple
 Developer ID signing.
 
 ## Parallel Windows signing path (pointer only)
@@ -362,7 +362,7 @@ in a later Round-2 task once the macOS path is green.
   `https://github.com/tauri-apps/tauri-action`.
 * `apple-actions/import-codesign-certs`:
   `https://github.com/apple-actions/import-codesign-certs`.
-* `desktop/CLAUDE.md` for the orthogonal Tauri updater key
+* `.agents/desktop.md` for the orthogonal Tauri updater key
   rotation that has to ship before the first signed release.
 * `desktop/Makefile` `app-notarized` target as the local
   reference implementation of the CI path.

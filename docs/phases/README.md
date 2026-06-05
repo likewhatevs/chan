@@ -10,9 +10,9 @@ and coordination buses that backed them were distilled into these files
 and removed from the working tree; the raw material is preserved in git
 history under the former `docs/journals/phase-N/` trees.
 
-New agents should also read [`../agents/playbook.md`](../agents/playbook.md)
+New agents should also read [`.agents/playbook.md`](../../.agents/playbook.md)
 (the operational lessons distilled across every phase) and the contact
-cards in [`../agents/README.md`](../agents/README.md).
+cards in [`.agents/roster/README.md`](../../.agents/roster/README.md).
 
 ## Index
 
@@ -62,8 +62,8 @@ cards in [`../agents/README.md`](../agents/README.md).
 ## Conventions
 
 Agent references in prose use the `@@{name}` form and resolve to the
-contact cards under [`../agents/`](../agents/). The coordination scheme
-evolved over the project; each report records the scheme that phase ran
-on, and the cross-phase summary is in
-[`../agents/playbook.md`](../agents/playbook.md). Reports are text only;
+contact cards under [`.agents/roster/`](../../.agents/roster/). The
+coordination scheme evolved over the project; each report records the
+scheme that phase ran on, and the cross-phase summary is in
+[`.agents/playbook.md`](../../.agents/playbook.md). Reports are text only;
 a load-bearing screenshot is described in prose rather than embedded.

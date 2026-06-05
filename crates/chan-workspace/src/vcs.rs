@@ -149,7 +149,7 @@ fn vcs_kind_at(dir: &Path) -> Option<VcsKind> {
 /// and devices are rejected: real Git never produces those at
 /// this path, and trusting them lets a tampered tree fool the
 /// suggestion. Matches the crate-wide "lstat, never stat, on user
-/// paths" invariant from CLAUDE.md.
+/// paths" invariant from .agents/principles.md.
 fn is_git_marker(p: &Path) -> bool {
     match std::fs::symlink_metadata(p) {
         Ok(md) => {

@@ -76,7 +76,7 @@ a release tag.
 These per-phase artifacts are consolidated into the
 phase report at close and preserved in git history;
 the shape above evolved over the project (see
-[`agents/playbook.md`](agents/playbook.md)).
+[`.agents/playbook.md`](../.agents/playbook.md)).
 
 ## Why this pattern
 
@@ -106,10 +106,10 @@ A few design choices that show up everywhere:
 * `docs/phases/phase-N.md` - one consolidated report
   per phase: its roadmap, rounds, waves, and
   retrospective. The front door to the project history.
-* `docs/agents/` - role contact cards plus
-  `playbook.md`, the cross-phase operational lessons
-  (coordination, the gate, verification, commit
-  discipline, the pre-release norms).
+* `.agents/roster/` - role contact cards; `.agents/playbook.md`
+  carries the cross-phase operational lessons (coordination,
+  the gate, verification, commit discipline, the pre-release
+  norms).
 * While a round is active, the team runs an
   append-only coordination bus (task files plus
   one-line pokes) under the phase's working directory.

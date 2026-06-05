@@ -735,7 +735,7 @@ benefit from tracing being present and from the `chan_cmd` helper.
 
 ### Group D: pre-flight before the public DMG
 
-- P0.1 updater key rotation per `CLAUDE.md`. Coordinate with
+- P0.1 updater key rotation per `.agents/desktop.md`. Coordinate with
   whoever stages the public DMG; the bridge release must ship
   signed with the OLD key.
 - P6.3 swap `path = ...` deps for chan-tunnel-{server,proto} to

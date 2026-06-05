@@ -389,7 +389,7 @@ bundle.
   suppress.
 
 Key rotation and the bridge-release procedure are documented in
-`desktop/CLAUDE.md` ("Auto-upgrade signing") and the
+`.agents/desktop.md` ("Auto-upgrade signing") and the
 [`updater-bridge.md`](updater-bridge.md) runbook.
 
 ## 9. Settings and developer controls
