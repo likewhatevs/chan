@@ -46,8 +46,13 @@ describe("terminal-tab right-click: Reload + Open Inspector dropped", () => {
     expect(terminalSource).not.toMatch(/onclick=\{doOpenInspector\}/);
   });
 
-  test("desktop helpers no longer imported", () => {
-    expect(terminalSource).not.toMatch(/from "\.\.\/api\/desktop"/);
+  test("reload desktop helper no longer imported", () => {
+    // The Reload + Open Inspector menu entries are gone, so their reload
+    // helper must not be re-imported. isTauriDesktop IS imported now: the
+    // terminal renderer gate uses it to skip WebGL on the Linux desktop
+    // webview (WebKitGTK), so this is helper-specific rather than a blanket
+    // api/desktop import ban.
+    expect(terminalSource).not.toMatch(/\breloadWindow\b/);
   });
 
   test("inspector-fallback notify() hint gone too", () => {

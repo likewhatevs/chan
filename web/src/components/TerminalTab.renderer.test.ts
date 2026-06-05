@@ -1,10 +1,13 @@
 import { describe, expect, test } from "vitest";
 import tab from "./TerminalTab.svelte?raw";
 
-// TerminalTab uses the WebGL renderer. The DOM renderer renders
-// box-drawing characters via the system font, leaving vertical gaps at
-// lineHeight: 1.2. The WebGL renderer's customGlyphs path fills the
-// entire cell including line-height padding. These pins guard the wiring.
+// TerminalTab uses the WebGL renderer everywhere EXCEPT the Linux desktop
+// webview (WebKitGTK), where it stays on the DOM renderer (WebKitGTK does
+// not composite the WebGL layer while idle, so writes lag until an event
+// flushes them). The DOM renderer draws box-drawing characters via the
+// system font, leaving vertical gaps at lineHeight: 1.2; the WebGL
+// customGlyphs path fills the whole cell including line-height padding.
+// These pins guard the wiring.
 
 describe("TerminalTab WebGL renderer", () => {
   test("imports WebglAddon from @xterm/addon-webgl", () => {
@@ -30,6 +33,17 @@ describe("TerminalTab WebGL renderer", () => {
     // The try/catch keeps terminal mount working with the DOM renderer.
     expect(tab).toMatch(/try\s*\{[\s\S]*?new WebglAddon[\s\S]*?\}\s*catch/);
     expect(tab).toMatch(/falling back to DOM/);
+  });
+
+  test("skips WebGL on the Linux desktop webview (WebKitGTK), staying on DOM", () => {
+    // WebKitGTK does not composite the WebGL layer while idle, so pasted /
+    // typed text is drawn but not presented until a later event flushes it.
+    // The DOM renderer paints through normal DOM mutation. Scoped to the
+    // Linux desktop only: macOS WKWebView and every browser keep WebGL.
+    expect(tab).toMatch(/import \{ isTauriDesktop \} from "\.\.\/api\/desktop"/);
+    expect(tab).toMatch(
+      /if \(isTauriDesktop\(\) && currentOS\(\) === "linux"\) return;[\s\S]{0,40}try \{/,
+    );
   });
 
   test("keeps the event-driven row-repaint helper wired", () => {
