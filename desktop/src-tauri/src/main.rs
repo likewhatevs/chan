@@ -21,9 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
+use tauri::menu::MenuItemBuilder;
 #[cfg(target_os = "macos")]
-use tauri::menu::{Menu, MenuItemKind, WINDOW_SUBMENU_ID};
-use tauri::menu::{MenuItemBuilder, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use config::{Config, ConfigStore, OutboundWorkspace, WindowConfig, WorkspaceFeatures};
@@ -1578,22 +1578,28 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // Linux / Windows: build the bar by hand. "About Chan" opens a version
     // dialog that also offers a manual update check - the only manual
     // self-update entry point off macOS (the launcher window otherwise
-    // auto-checks once per launch). "Exit" quits via the predefined Quit
-    // item. No Help submenu.
+    // auto-checks once per launch). No Help submenu.
+    //
+    // Quit is a CUSTOM item, not PredefinedMenuItem::quit: muda has no GTK
+    // handler for the predefined Quit (it is wired only on macOS / Windows),
+    // so on Linux the predefined item is silently dropped and File showed no
+    // Exit at all. A custom item with an explicit app.exit(0) handler renders
+    // and works. Undo/Redo are likewise GTK-unsupported (dropped, and they
+    // would orphan a leading separator), so Edit sticks to the four clipboard
+    // items muda does implement on GTK.
     #[cfg(not(target_os = "macos"))]
     let menu = {
         use tauri::menu::{MenuBuilder, SubmenuBuilder};
         let about = MenuItemBuilder::with_id("chan-about", "About Chan").build(app)?;
-        let exit = PredefinedMenuItem::quit(app, Some("Exit"))?;
+        let quit = MenuItemBuilder::with_id("chan-quit", "Quit")
+            .accelerator("CmdOrCtrl+Q")
+            .build(app)?;
         let file = SubmenuBuilder::new(app, "File")
             .item(&about)
             .separator()
-            .item(&exit)
+            .item(&quit)
             .build()?;
         let edit = SubmenuBuilder::new(app, "Edit")
-            .undo()
-            .redo()
-            .separator()
             .cut()
             .copy()
             .paste()
@@ -1627,6 +1633,10 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         #[cfg(not(target_os = "macos"))]
         "chan-about" => {
             show_about_dialog(app.clone());
+        }
+        #[cfg(not(target_os = "macos"))]
+        "chan-quit" => {
+            app.exit(0);
         }
         _ => {}
     });
