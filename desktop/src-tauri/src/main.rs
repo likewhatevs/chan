@@ -21,7 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
-use tauri::menu::{Menu, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
+#[cfg(target_os = "macos")]
+use tauri::menu::{Menu, MenuItemKind, WINDOW_SUBMENU_ID};
+use tauri::menu::{MenuItemBuilder, PredefinedMenuItem};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use config::{Config, ConfigStore, OutboundWorkspace, WindowConfig, WorkspaceFeatures};
@@ -1497,22 +1499,22 @@ fn main() {
     });
 }
 
-/// Inject window-navigation items into the default Tauri menu.
-/// Tauri's `Menu::default` produces the standard macOS menubar
-/// (app / File / Edit / View / Window / Help) but its Window
-/// submenu only has Minimize / Zoom / Close — a closed main
-/// window has no menu path back. We prepend Workspaces, Settings,
-/// and Logs items to that submenu so each app window is
-/// reachable by name.
+/// Build and install the application menu.
 ///
-/// Settings has Cmd+, but no chan-desktop-owned UI behind it:
-/// chan owns the Settings concept per-workspace. The handler dispatches
-/// `app.settings.toggle` into the focused workspace webview, where
-/// chan's `runCommand` opens its settings overlay. Cmd+, with the
-/// Workspaces window focused is a no-op.
+/// The Window submenu carries Workspaces / New Window / Settings so a
+/// closed main window stays reachable by name. Settings has Cmd+, but no
+/// chan-desktop-owned UI behind it: chan owns the Settings concept
+/// per-workspace, so the handler dispatches `app.settings.toggle` into
+/// the focused workspace webview where chan's `runCommand` opens its
+/// settings overlay (a no-op when the Workspaces window is focused).
+///
+/// macOS starts from Tauri's `Menu::default` (the system menubar already
+/// carries the App menu's About / Quit). Off macOS `Menu::default` has no
+/// File menu - Linux shows only Edit/Window/Help - so the bar is built
+/// explicitly: File (About, Exit), Edit, Window; no Help.
 fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let menu = Menu::default(app)?;
-
+    // Window-navigation items shared by both menu shapes.
+    //
     // Workspaces keeps no accelerator: Cmd+1..9 is reserved for
     // jump-to-tab in workspace windows (handled by the per-workspace key
     // bridge script in serve.rs). The menu entry still surfaces the
@@ -1523,8 +1525,8 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // additional launchers land on `main-<N>` so each carries its
     // own state independently. Convention for future chan-desktop
     // shortcuts: declare a MenuItemBuilder here with the
-    // `CmdOrCtrl+<key>` accelerator, prepend into the Window
-    // submenu below, and add a matching `on_menu_event` branch.
+    // `CmdOrCtrl+<key>` accelerator, add it to the Window submenu, and
+    // add a matching `on_menu_event` branch.
     // `fullstack-b-27`: moved from `CmdOrCtrl+N` to
     // `CmdOrCtrl+Shift+N` so the SPA's New Draft handler (per
     // `fullstack-a-66`) can claim plain Cmd+N without the menu
@@ -1540,30 +1542,74 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
 
-    if let Some(window_submenu) = menu
-        .get(WINDOW_SUBMENU_ID)
-        .and_then(|k| k.as_submenu().cloned())
-    {
-        let sep = PredefinedMenuItem::separator(app)?;
-        window_submenu.prepend_items(&[&workspace_manager, &new_window, &settings, &sep])?;
-        // Strip the default "Close Window" item so Cmd+W reaches the
-        // workspace webview's key bridge (which dispatches `app.tab.close`
-        // to chan). The trade-off: non-workspace windows (main, console)
-        // lose their Cmd+W shortcut — closing them is still possible
-        // via the red traffic light. Match by text since muda assigns
-        // predefined items an opaque generated id.
-        if let Ok(items) = window_submenu.items() {
-            for item in items {
-                if let MenuItemKind::Predefined(p) = &item {
-                    if let Ok(text) = p.text() {
-                        if text.to_lowercase().contains("close") {
-                            let _ = window_submenu.remove(&item);
+    // macOS: inject the window-nav items into the system menubar's Window
+    // submenu. The App menu already owns About <app> and Quit, so File ▸
+    // About / Exit are macOS-implicit.
+    #[cfg(target_os = "macos")]
+    let menu = {
+        let menu = Menu::default(app)?;
+        if let Some(window_submenu) = menu
+            .get(WINDOW_SUBMENU_ID)
+            .and_then(|k| k.as_submenu().cloned())
+        {
+            let sep = PredefinedMenuItem::separator(app)?;
+            window_submenu.prepend_items(&[&workspace_manager, &new_window, &settings, &sep])?;
+            // Strip the default "Close Window" item so Cmd+W reaches the
+            // workspace webview's key bridge (which dispatches `app.tab.close`
+            // to chan). The trade-off: non-workspace windows (main, console)
+            // lose their Cmd+W shortcut — closing them is still possible
+            // via the red traffic light. Match by text since muda assigns
+            // predefined items an opaque generated id.
+            if let Ok(items) = window_submenu.items() {
+                for item in items {
+                    if let MenuItemKind::Predefined(p) = &item {
+                        if let Ok(text) = p.text() {
+                            if text.to_lowercase().contains("close") {
+                                let _ = window_submenu.remove(&item);
+                            }
                         }
                     }
                 }
             }
         }
-    }
+        menu
+    };
+
+    // Linux / Windows: build the bar by hand. "About Chan" opens a version
+    // dialog that also offers a manual update check - the only manual
+    // self-update entry point off macOS (the launcher window otherwise
+    // auto-checks once per launch). "Exit" quits via the predefined Quit
+    // item. No Help submenu.
+    #[cfg(not(target_os = "macos"))]
+    let menu = {
+        use tauri::menu::{MenuBuilder, SubmenuBuilder};
+        let about = MenuItemBuilder::with_id("chan-about", "About Chan").build(app)?;
+        let exit = PredefinedMenuItem::quit(app, Some("Exit"))?;
+        let file = SubmenuBuilder::new(app, "File")
+            .item(&about)
+            .separator()
+            .item(&exit)
+            .build()?;
+        let edit = SubmenuBuilder::new(app, "Edit")
+            .undo()
+            .redo()
+            .separator()
+            .cut()
+            .copy()
+            .paste()
+            .select_all()
+            .build()?;
+        let window = SubmenuBuilder::new(app, "Window")
+            .item(&workspace_manager)
+            .item(&new_window)
+            .item(&settings)
+            .build()?;
+        MenuBuilder::new(app)
+            .item(&file)
+            .item(&edit)
+            .item(&window)
+            .build()?
+    };
 
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| match event.id().as_ref() {
@@ -1578,9 +1624,104 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         "chan-settings" => {
             dispatch_to_focused_workspace(app, "app.settings.toggle");
         }
+        #[cfg(not(target_os = "macos"))]
+        "chan-about" => {
+            show_about_dialog(app.clone());
+        }
         _ => {}
     });
     Ok(())
+}
+
+/// File ▸ About on Linux / Windows (macOS keeps the system App-menu About
+/// panel). Shows the product name + version and offers a manual update
+/// check - the only manual self-update entry point off macOS, since the
+/// launcher window otherwise auto-checks once per launch. Runs on the
+/// menu-event thread, so the first dialog is non-blocking (`show`); the
+/// update flow it spawns blocks on its own task instead.
+#[cfg(not(target_os = "macos"))]
+fn show_about_dialog(app: tauri::AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let version = app.package_info().version.to_string();
+    app.dialog()
+        .message(format!("Chan Desktop\nVersion {version}"))
+        .title("About Chan Desktop")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Check for updates".to_string(),
+            "OK".to_string(),
+        ))
+        .show(move |check_updates| {
+            if check_updates {
+                check_for_updates_interactive(app);
+            }
+        });
+}
+
+/// Manual update check behind File ▸ About ▸ "Check for updates". Mirrors
+/// the launcher window's auto-check (desktop/src/main.js) but in Rust so
+/// it works from any focused window and does not depend on the JS updater
+/// capability (granted only to the launcher windows). Spawns onto the
+/// async runtime; the result dialogs block that task, never the UI thread.
+#[cfg(not(target_os = "macos"))]
+fn check_for_updates_interactive(app: tauri::AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    use tauri_plugin_updater::UpdaterExt;
+    tauri::async_runtime::spawn(async move {
+        let check = match app.updater() {
+            Ok(updater) => updater.check().await,
+            Err(e) => Err(e),
+        };
+        match check {
+            Ok(Some(update)) => {
+                let install = app
+                    .dialog()
+                    .message(format!(
+                        "A new version of Chan Desktop is available: {}.\n\n\
+                         Install and restart now?",
+                        update.version
+                    ))
+                    .title("Chan Desktop update")
+                    .kind(MessageDialogKind::Info)
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Install".to_string(),
+                        "Later".to_string(),
+                    ))
+                    .blocking_show();
+                if install {
+                    match update.download_and_install(|_, _| {}, || {}).await {
+                        // restart() diverges (process exec), so this arm
+                        // never returns to the match.
+                        Ok(()) => app.restart(),
+                        Err(e) => {
+                            app.dialog()
+                                .message(format!("Update failed to install:\n{e}"))
+                                .title("Chan Desktop update")
+                                .kind(MessageDialogKind::Error)
+                                .blocking_show();
+                        }
+                    }
+                }
+            }
+            Ok(None) => {
+                let version = app.package_info().version.to_string();
+                app.dialog()
+                    .message(format!(
+                        "You're up to date.\n\nChan Desktop {version} is the latest version."
+                    ))
+                    .title("Chan Desktop update")
+                    .kind(MessageDialogKind::Info)
+                    .blocking_show();
+            }
+            Err(e) => {
+                app.dialog()
+                    .message(format!("Could not check for updates:\n{e}"))
+                    .title("Chan Desktop update")
+                    .kind(MessageDialogKind::Error)
+                    .blocking_show();
+            }
+        }
+    });
 }
 
 /// `fullstack-83`: spawn a fresh launcher (workspace-picker) window via
