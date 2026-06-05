@@ -344,18 +344,16 @@ fn exec_resolve_path(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let path = arg_string(args, "path")?;
     let physical = ctx.workspace.resolve_physical_path(path)?;
     let meta = std::fs::symlink_metadata(&physical).ok();
-    let mut out = serde_json::json!({
+    // Drafts are now real in-root files under the configured drafts dir,
+    // so nothing resolves to a virtual location outside the root. The
+    // `virtual` flag stays for wire stability but is always false.
+    let out = serde_json::json!({
         "path": path,
         "physical_path": physical.to_string_lossy(),
-        "virtual": chan_workspace::drafts::is_unified_drafts_path(path),
+        "virtual": false,
         "exists": meta.is_some(),
         "is_dir": meta.as_ref().is_some_and(|m| m.is_dir()),
     });
-    if chan_workspace::drafts::is_unified_drafts_path(path) {
-        out["note"] = serde_json::json!(
-            "Drafts paths resolve to uncommitted chan metadata outside the workspace root."
-        );
-    }
     Ok(out)
 }
 
@@ -727,12 +725,14 @@ mod tests {
     }
 
     #[test]
-    fn list_files_includes_and_filters_drafts_namespace() {
+    fn list_files_includes_in_root_drafts_dir() {
+        // Drafts are real in-root files under the configured drafts dir,
+        // so they show up in the workspace tree like any other path.
         let (_cfg, _root, ctx) = fixture();
+        let drafts_dir = ctx.workspace.drafts_dir_name().to_string();
         ctx.workspace.create_draft_dir("untitled-1").unwrap();
-        ctx.workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
-            .unwrap();
+        let draft_md = format!("{drafts_dir}/untitled-1/draft.md");
+        ctx.workspace.write_text(&draft_md, "# draft\n").unwrap();
 
         let v = execute("list_files", &serde_json::json!({}), &ctx).unwrap();
         let paths: Vec<&str> = v["entries"]
@@ -741,41 +741,43 @@ mod tests {
             .iter()
             .map(|entry| entry["path"].as_str().unwrap())
             .collect();
-        assert!(paths.contains(&"Drafts"));
-        assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
+        assert!(paths.contains(&drafts_dir.as_str()));
+        assert!(paths.contains(&draft_md.as_str()));
 
-        let v = execute(
-            "list_files",
-            &serde_json::json!({"prefix": "Drafts/untitled-1"}),
-            &ctx,
-        )
-        .unwrap();
+        let prefix = format!("{drafts_dir}/untitled-1");
+        let v = execute("list_files", &serde_json::json!({ "prefix": prefix }), &ctx).unwrap();
         let paths: Vec<&str> = v["entries"]
             .as_array()
             .unwrap()
             .iter()
             .map(|entry| entry["path"].as_str().unwrap())
             .collect();
-        assert!(paths.contains(&"Drafts/untitled-1"));
-        assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
+        assert!(paths.contains(&prefix.as_str()));
+        assert!(paths.contains(&draft_md.as_str()));
     }
 
     #[test]
-    fn resolve_path_maps_drafts_to_metadata_dir() {
+    fn resolve_path_resolves_in_root_draft_to_real_path() {
+        // Drafts are real in-root files under the configured drafts dir
+        // now, so a draft path resolves like any other in-root path:
+        // `virtual` is always false and the physical path lives under
+        // the workspace root's drafts dir.
         let (_cfg, root, ctx) = fixture();
+        let drafts_dir = ctx.workspace.drafts_dir_name().to_string();
         ctx.workspace.create_draft_dir("untitled-1").unwrap();
+        let draft_dir_rel = format!("{drafts_dir}/untitled-1");
         ctx.workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .write_text(&format!("{draft_dir_rel}/draft.md"), "# draft\n")
             .unwrap();
 
         let draft = execute(
             "resolve_path",
-            &serde_json::json!({"path": "Drafts/untitled-1"}),
+            &serde_json::json!({ "path": draft_dir_rel }),
             &ctx,
         )
         .unwrap();
-        assert_eq!(draft["path"], "Drafts/untitled-1");
-        assert_eq!(draft["virtual"], true);
+        assert_eq!(draft["path"], draft_dir_rel);
+        assert_eq!(draft["virtual"], false);
         assert_eq!(draft["exists"], true);
         assert_eq!(draft["is_dir"], true);
         assert_eq!(

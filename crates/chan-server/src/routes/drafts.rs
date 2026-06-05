@@ -1,15 +1,15 @@
-//! `fullstack-a-66` Drafts route.
+//! Drafts route.
 //!
-//! * `POST /api/drafts/new` — slice a (Cmd+N from SPA). Creates
-//!   `Drafts/<next-untitled>/draft.md` + indexes it + returns
-//!   the unified-path.
+//! * `POST /api/drafts/new` — Cmd+N from the SPA. Creates
+//!   `<drafts_dir>/<next-untitled>/draft.md` + indexes it + returns
+//!   the real in-root path.
 //!
-//! Drafts live in chan-workspace metadata (`drafts_dir()`), OUTSIDE
-//! the workspace root, but appear in the wire under the `Drafts/`
-//! prefix per the keyspace `systacean-25` + `-26` unified.
-//! `Workspace::create_draft_dir`, `next_untitled_draft_name`,
-//! `write_text`, and `index_draft_file` (called via the unified
-//! `write_text` after `-26`) all route correctly.
+//! Drafts are real in-root files under the configured drafts
+//! directory (default `.Drafts`), named by `Workspace::drafts_dir_name`.
+//! Public paths are plain relpaths like `.Drafts/<name>/draft.md`, so
+//! `create_draft_dir`, `next_untitled_draft_name`, and `write_text`
+//! route through the normal workspace path machinery with no special
+//! casing.
 
 use std::sync::Arc;
 
@@ -24,16 +24,44 @@ use crate::state::AppState;
 
 const NEW_DRAFT_CONTENT: &str = "# Draft\n";
 
+/// Extract the draft leaf name from a draft public path.
+///
+/// A draft path is `<drafts_dir>/<name>/...`, so strip the configured
+/// `<drafts_dir>/` prefix and take the first path segment. Errors when
+/// the path is not under the drafts directory or carries no leaf.
+fn draft_name_from_path(
+    workspace: &chan_workspace::Workspace,
+    path: &str,
+) -> Result<String, chan_workspace::ChanError> {
+    let dir = workspace.drafts_dir_name();
+    let trimmed = path.trim_matches('/');
+    let rest = trimmed
+        .strip_prefix(dir)
+        .and_then(|r| r.strip_prefix('/'))
+        .ok_or_else(|| {
+            chan_workspace::ChanError::Io(format!(
+                "path `{path}` is not under the drafts directory `{dir}`"
+            ))
+        })?;
+    let name = rest.split('/').next().unwrap_or("");
+    if name.is_empty() {
+        return Err(chan_workspace::ChanError::Io(format!(
+            "path `{path}` carries no draft name under `{dir}`"
+        )));
+    }
+    Ok(name.to_string())
+}
+
 #[derive(Deserialize)]
 pub struct DraftPathPayload {
-    /// Any unified path inside the draft workspace, usually
-    /// `Drafts/<name>/draft.md`.
+    /// Any path inside the draft directory, usually
+    /// `<drafts_dir>/<name>/draft.md`.
     pub path: String,
 }
 
 #[derive(Deserialize)]
 pub struct DraftPromotePayload {
-    /// Any unified path inside the draft workspace.
+    /// Any path inside the draft directory.
     pub path: String,
     /// Workspace-relative destination. Single-file drafts save to this
     /// file; workspace drafts save to this directory.
@@ -42,10 +70,9 @@ pub struct DraftPromotePayload {
 
 #[derive(Serialize)]
 pub struct DraftCreateResponse {
-    /// Unified-path for the new draft.md: `Drafts/<name>/draft.md`.
+    /// In-root path for the new draft.md: `<drafts_dir>/<name>/draft.md`.
     /// SPA `openInActivePane(path)` routes through
-    /// `/api/files/Drafts/<name>/draft.md` which post-`-26` reads
-    /// from the drafts dir transparently.
+    /// `/api/files/<drafts_dir>/<name>/draft.md`, a normal in-root read.
     pub path: String,
     /// Bare draft name (e.g. `"untitled"` or `"untitled-3"`), in
     /// case the SPA wants to show it separately from the path.
@@ -84,18 +111,18 @@ pub async fn api_create_draft(State(state): State<Arc<AppState>>) -> Response {
     let self_writes = Arc::clone(&state.self_writes);
     let result = tokio::task::spawn_blocking(move || {
         let name = create_draft_sync(&workspace)?;
-        self_writes.note(&format!("Drafts/{name}/draft.md"));
-        Ok::<_, chan_workspace::ChanError>(name)
+        self_writes.note(&format!("{}/{name}/draft.md", workspace.drafts_dir_name()));
+        Ok::<_, chan_workspace::ChanError>((name, workspace.drafts_dir_name().to_string()))
     })
     .await;
 
-    let name = match result {
-        Ok(Ok(name)) => name,
+    let (name, dir) = match result {
+        Ok(Ok(pair)) => pair,
         Ok(Err(e)) => return err_from(&e),
         Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
     };
 
-    let path = format!("Drafts/{name}/draft.md");
+    let path = format!("{dir}/{name}/draft.md");
     Json(DraftCreateResponse { path, name }).into_response()
 }
 
@@ -106,8 +133,8 @@ fn create_draft_sync(
         let name = workspace.next_untitled_draft_name()?;
         match workspace.create_draft_dir(&name) {
             Ok(_) => {
-                let unified = format!("Drafts/{name}/draft.md");
-                workspace.write_text(&unified, NEW_DRAFT_CONTENT)?;
+                let path = format!("{}/{name}/draft.md", workspace.drafts_dir_name());
+                workspace.write_text(&path, NEW_DRAFT_CONTENT)?;
                 return Ok(name);
             }
             Err(chan_workspace::ChanError::Io(msg)) if msg.contains("already exists") => {
@@ -182,10 +209,10 @@ fn inspect_draft_sync(
     workspace: &chan_workspace::Workspace,
     path: &str,
 ) -> Result<DraftInspectResponse, chan_workspace::ChanError> {
-    let name = chan_workspace::drafts::name_from_unified_path(path)?;
+    let name = draft_name_from_path(workspace, path)?;
     let info = workspace.inspect_draft(&name)?;
     Ok(DraftInspectResponse {
-        path: format!("Drafts/{name}/draft.md"),
+        path: format!("{}/{name}/draft.md", workspace.drafts_dir_name()),
         name,
         file_count: info.file_count,
         dir_count: info.dir_count,
@@ -198,7 +225,7 @@ fn discard_draft_sync(
     workspace: &chan_workspace::Workspace,
     path: &str,
 ) -> Result<(), chan_workspace::ChanError> {
-    let name = chan_workspace::drafts::name_from_unified_path(path)?;
+    let name = draft_name_from_path(workspace, path)?;
     workspace.discard_draft(&name)
 }
 
@@ -207,7 +234,7 @@ fn promote_draft_sync(
     path: &str,
     target: &str,
 ) -> Result<DraftPromoteResponse, chan_workspace::ChanError> {
-    let name = chan_workspace::drafts::name_from_unified_path(path)?;
+    let name = draft_name_from_path(workspace, path)?;
     let report = workspace.promote_draft(&name, target)?;
     Ok(DraftPromoteResponse {
         path: report.target_path,
@@ -243,7 +270,7 @@ mod tests {
         let (_cfg, _root, workspace) = make_workspace();
 
         let name = create_draft_sync(&workspace).unwrap();
-        let path = format!("Drafts/{name}/draft.md");
+        let path = format!(".Drafts/{name}/draft.md");
 
         assert_eq!(name, "untitled");
         assert_eq!(workspace.read_text(&path).unwrap(), NEW_DRAFT_CONTENT);
@@ -254,16 +281,16 @@ mod tests {
         let (_cfg, _root, workspace) = make_workspace();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
         workspace
-            .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
+            .write_bytes(".Drafts/untitled-1/pasted.png", &[1, 2, 3])
             .unwrap();
 
-        let out = inspect_draft_sync(&workspace, "Drafts/untitled-1/draft.md").unwrap();
+        let out = inspect_draft_sync(&workspace, ".Drafts/untitled-1/draft.md").unwrap();
 
         assert_eq!(out.name, "untitled-1");
-        assert_eq!(out.path, "Drafts/untitled-1/draft.md");
+        assert_eq!(out.path, ".Drafts/untitled-1/draft.md");
         assert_eq!(out.file_count, 2);
         assert!(out.has_attachments);
     }
@@ -274,11 +301,11 @@ mod tests {
         std::fs::create_dir_all(root.path().join("notes")).unwrap();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
-        let out =
-            promote_draft_sync(&workspace, "Drafts/untitled-1/draft.md", "notes/draft.md").unwrap();
+        let out = promote_draft_sync(&workspace, ".Drafts/untitled-1/draft.md", "notes/draft.md")
+            .unwrap();
 
         assert_eq!(out.name, "untitled-1");
         assert_eq!(out.path, "notes/draft.md");
@@ -294,10 +321,10 @@ mod tests {
         let (_cfg, _root, workspace) = make_workspace();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
-        discard_draft_sync(&workspace, "Drafts/untitled-1/draft.md").unwrap();
+        discard_draft_sync(&workspace, ".Drafts/untitled-1/draft.md").unwrap();
 
         assert!(!workspace.drafts_dir().join("untitled-1").exists());
     }
@@ -353,7 +380,7 @@ mod tests {
         // Create the draft the way api_create_draft does: seed draft.md,
         // note the path so the Created event is suppressed.
         let name = create_draft_sync(&workspace).unwrap();
-        let path = format!("Drafts/{name}/draft.md");
+        let path = format!(".Drafts/{name}/draft.md");
         self_writes.note(&path);
         echo(&bridge, WatchKind::Created, &path);
 

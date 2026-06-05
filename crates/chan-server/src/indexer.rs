@@ -235,32 +235,11 @@ impl Indexer {
             // queued a rebuild and the redundant request is fine
             // to drop.
             let _ = rebuild_tx.send(());
-        } else if initial_build {
-            // systacean-37: when the full reindex DOESN'T fire
-            // (workspace root is non-empty + graph is non-empty),
-            // the `-34` drafts walker inside `Workspace::reindex`
-            // never runs at boot. Drafts content authored
-            // pre-`-36` (when watcher events were silently
-            // dropped) stays absent from BM25 + graph. Walk
-            // drafts unconditionally on every boot; idempotent
-            // (`index_draft_file` overwrites both backends) and
-            // O(N) per draft so the cost is bounded by how
-            // many drafts the user keeps around. Runs on the
-            // blocking pool so a slow drafts subtree doesn't
-            // stall the rest of `Indexer::spawn`.
-            let workspace_for_drafts = workspace_weak.clone();
-            tokio::task::spawn_blocking(move || {
-                let Some(workspace_for_drafts) = workspace_for_drafts.upgrade() else {
-                    return;
-                };
-                if let Err(e) = workspace_for_drafts.index_drafts_subtree() {
-                    tracing::warn!(
-                        error = %e,
-                        "indexer: drafts boot walk failed; drafts may be missing from BM25/graph until next save"
-                    );
-                }
-            });
         }
+        // Drafts are real in-root files under the configured drafts dir
+        // now, so the normal `Workspace::reindex` walk and the watcher
+        // pick them up like any other path. No dedicated drafts boot
+        // walk is needed.
 
         let watcher_task = spawn_watcher_loop(
             workspace_weak,
@@ -632,38 +611,10 @@ fn apply_watch_change(
         workspace.forget_file(path)?;
         return Ok(ApplyOutcome::Forgotten);
     }
-    // systacean-36: route `Drafts/`-prefixed paths through the
-    // drafts cap-std handle via `Workspace::index_draft_file`. The
-    // chan-workspace watcher (`-25`) emits drafts events with the
-    // `Drafts/` prefix already applied; without this branch the
-    // `resolve_safe(workspace.root(), ...)` below would error
-    // (drafts dir is at `<state>/drafts/<uuid>/`, NOT under workspace
-    // root) + the event would be silently dropped; the root
-    // cause of the recurring `-a-66 slice e` PARTIAL despite
-    // `-34`'s boot walker.
-    if let Some(sub) = path.strip_prefix("Drafts/") {
-        if sub.is_empty() {
-            // `Drafts/` itself (root of the subtree). Nothing to
-            // index; same SkippedSpecial path as for non-file
-            // events under workspace root.
-            return Ok(ApplyOutcome::SkippedSpecial);
-        }
-        let abs = workspace.drafts_dir().join(sub);
-        match std::fs::symlink_metadata(&abs) {
-            Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
-                workspace.index_draft_file(path)?;
-                return Ok(ApplyOutcome::Indexed);
-            }
-            Ok(_) => {
-                let _ = workspace.forget_file(path);
-                return Ok(ApplyOutcome::SkippedSpecial);
-            }
-            Err(_) => {
-                let _ = workspace.forget_file(path);
-                return Ok(ApplyOutcome::SkippedMissing);
-            }
-        }
-    }
+    // Drafts are real in-root files under the configured drafts dir now,
+    // so a `<drafts_dir>/...` watcher event is just a normal in-root
+    // path: the generic resolve + `index_file` below handles it with no
+    // special casing.
     let abs = match chan_workspace::fs_ops::resolve_safe(workspace.root(), path) {
         Ok(abs) => abs,
         Err(_) => return Ok(ApplyOutcome::SkippedMissing),
@@ -1050,71 +1001,6 @@ mod tests {
     use chan_workspace::{Library, SearchMode, SearchOpts};
     use std::fs;
     use tempfile::TempDir;
-
-    /// Well-known lock-file name (under the OS temp dir) for the
-    /// cross-process FS-timing test gate. MUST stay identical to
-    /// `chan_workspace::test_gate::GATE_FILE` and the copy in the terminal
-    /// test module so every FS-timing test across both crates' separate
-    /// test binaries contends on the same OS advisory lock.
-    const FS_TIMING_GATE: &str = "chan-fs-timing-test.gate";
-
-    /// Cross-process serial gate for the real-FS boot-walk tests. Each
-    /// spins a fresh `Indexer` whose boot walk is a `spawn_blocking`
-    /// re-index + a Tantivy commit + a reader refresh, then polls BM25
-    /// for the result. Under the FULL parallel `cargo test` run (CI)
-    /// every core is saturated, so the boot walk's turn on the CPU and
-    /// the commit/refresh cycle slip past a tight poll deadline and the
-    /// tests flake.
-    ///
-    /// WHY a FILE lock and not a `static`/`tokio` Mutex: a `static` lock
-    /// serializes only tests WITHIN this test binary, but `cargo test`
-    /// runs each crate's test binary as a SEPARATE PROCESS concurrently,
-    /// so these boot-walk tests still race chan-workspace's FS-watcher tests
-    /// and this crate's PTY tests for the CPU + the kernel FSEvent queue.
-    /// An OS advisory lock on a well-known temp path is the one primitive
-    /// that spans process boundaries; the SAME `FS_TIMING_GATE` path is
-    /// opened in chan-workspace (`crate::test_gate`) + the terminal test
-    /// module, so a single named gate serializes the entire FS-timing
-    /// class workspace-wide. The `std::fs::File` guard is `Send` (held
-    /// across `.await` on the multi-thread runtime is fine) and releases
-    /// on drop / process exit.
-    fn boot_walk_test_lock() -> std::fs::File {
-        let path = std::env::temp_dir().join(FS_TIMING_GATE);
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&path)
-            .expect("open FS-timing test gate file");
-        file.lock().expect("acquire FS-timing test gate");
-        file
-    }
-
-    /// Poll budget for the real-FS boot-walk tests. On an idle host the
-    /// boot walk completes and BM25 is queryable in well under a second,
-    /// so this ceiling is never approached; it only governs the worst
-    /// case under the full parallel suite, where the `spawn_blocking`
-    /// walk + commit + reader refresh can be delayed by seconds under
-    /// CPU contention. The cross-process `boot_walk_test_lock` gate is
-    /// the primary fix (it removes the competing FS-timing load); this
-    /// budget is the backstop and should rarely be approached now.
-    const BOOT_WALK_BUDGET: Duration = Duration::from_secs(30);
-
-    /// Poll a closure until it returns true or `timeout` elapses, yielding
-    /// to the runtime between checks. Returns true on success. The boot
-    /// walk is asynchronous (`spawn_blocking` + commit + reader refresh);
-    /// tests need a bounded wait rather than a fixed sleep so they pass
-    /// quickly on fast hosts and tolerate slower CI.
-    async fn poll_until(timeout: Duration, mut check: impl FnMut() -> bool) -> bool {
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            if check() {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        check()
-    }
 
     fn setup_workspace() -> (TempDir, TempDir, Arc<Workspace>) {
         let cfg = TempDir::new().unwrap();
@@ -1547,179 +1433,13 @@ mod tests {
         assert_eq!(Arc::strong_count(&workspace), 1);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn webtest_a_repro_drafts_via_write_text_then_boot_walk() {
-        // systacean-38: empirical reproduction of @@WebtestA's
-        // 5th-round PARTIAL. Uses `Workspace::write_text` (the actual
-        // path Cmd+N's `api_create_draft` takes, post-`-26`) +
-        // simulates the chan-server boot flow via Indexer::spawn.
-        //
-        // If `-36` + `-37` are both correctly wired, this test
-        // should PASS: the watcher path catches the write +
-        // populates BM25; the boot walk re-indexes on restart;
-        // search returns the hit.
-        //
-        // If this test FAILS, we've reproduced the 5th-round gap
-        // in-tree + can probe the failure mode without needing
-        // a live chan serve.
-        //
-        // Serialize against the sibling boot-walk test so the two
-        // do not stack their `spawn_blocking` re-index load on each
-        // other under the full parallel `cargo test` run.
-        let _serial = boot_walk_test_lock();
-        let (_cfg, workspace_dir, workspace) = setup_workspace();
-
-        // Seed workspace root to force the ELSE IF branch on the
-        // SECOND Indexer::spawn (graph + BM25 non-empty after
-        // initial reindex).
-        std::fs::write(workspace_dir.path().join("seed.md"), "# seed\nbody\n").unwrap();
-        workspace.reindex(None).unwrap();
-        assert!(workspace.index_stats().unwrap().indexed_docs > 0);
-
-        // Mimic Cmd+N: create draft dir + write file via
-        // unified-path API.
-        workspace.create_draft_dir("untitled").unwrap();
-        workspace
-            .write_text(
-                "Drafts/untitled/draft.md",
-                "# my draft\nUNIQUEMARKER38BM25CLOSURE here\n",
-            )
-            .unwrap();
-
-        // SIMULATE chan-server restart: spawn the indexer fresh
-        // against the same workspace. The boot walk should re-index
-        // existing drafts content under the unified key.
-        let (_events_tx, events_rx) = tokio::sync::broadcast::channel(64);
-        let progress: std::sync::Arc<dyn chan_workspace::ProgressCallback> =
-            std::sync::Arc::new(chan_workspace::NoProgress);
-        let _indexer = super::Indexer::spawn(
-            workspace.clone(),
-            events_rx,
-            true,
-            chan_workspace::SearchAggression::Balanced,
-            progress,
-        );
-
-        // Poll BM25 outcome for the boot walk + commit + reader
-        // refresh cycle to complete. Bounded by BOOT_WALK_BUDGET;
-        // returns as soon as the hit lands, so the common path is
-        // fast and only the worst case under parallel load waits.
-        let opts = chan_workspace::SearchOpts {
-            mode: chan_workspace::SearchMode::Bm25,
-            limit: 10,
-            scope: None,
-        };
-        let expected = "Drafts/untitled/draft.md";
-        let seen = poll_until(BOOT_WALK_BUDGET, || {
-            matches!(
-                workspace.search("UNIQUEMARKER38BM25CLOSURE", &opts),
-                Ok(hits) if hits.hits.iter().any(|h| h.path == expected)
-            )
-        })
-        .await;
-        if !seen {
-            // Empirical-audit failure mode: capture diagnostic
-            // state for the task tail. Probe the graph + index
-            // stats to figure out where the write went.
-            let graph_files = workspace.graph().unwrap().files().unwrap();
-            let in_graph = graph_files.iter().any(|p| p == expected);
-            let stats = workspace.index_stats().unwrap();
-            panic!(
-                "BM25 search missed the draft after boot walk; \
-                 graph_contains_path={in_graph}, stats={stats:?}, \
-                 graph_files={graph_files:?}"
-            );
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn indexer_spawn_walks_drafts_on_boot_when_workspace_root_has_content() {
-        // systacean-38: empirical test of `-37`'s unconditional
-        // boot walk. Replicates @@WebtestA's repro: workspace has
-        // workspace-root content (so reindex would NOT fire on
-        // boot), Drafts subtree has content with a unique
-        // marker, `Indexer::spawn` is called, content search
-        // must return a hit.
-        //
-        // Pre-`-37` this would fail: reindex skipped (workspace
-        // non-empty) -> `-34`'s walker never runs -> drafts not
-        // in BM25.
-        //
-        // Serialize against the sibling boot-walk test so the two
-        // do not stack their `spawn_blocking` re-index load on each
-        // other under the full parallel `cargo test` run.
-        let _serial = boot_walk_test_lock();
-        let (_cfg, workspace_dir, workspace) = setup_workspace();
-
-        // Seed workspace root with content so `indexed_docs > 0`
-        // after we reindex below.
-        std::fs::write(workspace_dir.path().join("seed.md"), "# seed\nbody\n").unwrap();
-        workspace.reindex(None).unwrap();
-        let stats = workspace.index_stats().unwrap();
-        assert!(stats.indexed_docs > 0, "seed not indexed: {stats:?}");
-
-        // Seed Drafts subtree with a marker token. Bypass the
-        // watcher (write directly via std::fs into drafts_dir)
-        // so the boot walk is the ONLY path that can land this
-        // in BM25.
-        workspace.create_draft_dir("untitled").unwrap();
-        std::fs::write(
-            workspace.drafts_dir().join("untitled").join("draft.md"),
-            "# my draft\nUNIQUEMARKER37BM25CLOSURE here\n",
-        )
-        .unwrap();
-
-        // Spawn the indexer (mirrors chan-server `serve` flow).
-        // initial_build=true triggers the boot-time `-37` walk.
-        let (_events_tx, events_rx) = tokio::sync::broadcast::channel(64);
-        let progress: std::sync::Arc<dyn chan_workspace::ProgressCallback> =
-            std::sync::Arc::new(chan_workspace::NoProgress);
-        let _indexer = super::Indexer::spawn(
-            workspace.clone(),
-            events_rx,
-            true,
-            chan_workspace::SearchAggression::Balanced,
-            progress,
-        );
-
-        // Boot walk is `tokio::task::spawn_blocking`'d; poll for it
-        // to complete + BM25 to commit + reader to refresh. Bounded
-        // by BOOT_WALK_BUDGET; returns as soon as the hit lands.
-        let opts = chan_workspace::SearchOpts {
-            mode: chan_workspace::SearchMode::Bm25,
-            limit: 10,
-            scope: None,
-        };
-        let expected = "Drafts/untitled/draft.md";
-        let seen = poll_until(BOOT_WALK_BUDGET, || {
-            matches!(
-                workspace.search("UNIQUEMARKER37BM25CLOSURE", &opts),
-                Ok(hits) if hits.hits.iter().any(|h| h.path == expected)
-            )
-        })
-        .await;
-        assert!(
-            seen,
-            "boot walk did not land the Drafts file in BM25 within the budget; \
-             search for UNIQUEMARKER37BM25CLOSURE returned no hit"
-        );
-    }
-
     #[test]
-    fn apply_watch_change_indexes_drafts_prefixed_path() {
-        // systacean-36: closes the recurring `-a-66 slice e`
-        // PARTIAL. The chan-workspace watcher (`-25`) emits drafts
-        // events with the `Drafts/` prefix. Pre-`-36`, this
-        // function ran `resolve_safe(workspace.root(), path)` for
-        // ALL paths including the prefixed ones; drafts live
-        // outside workspace root -> resolve_safe failed -> events
-        // silently dropped -> graph + BM25 empty under `Drafts/`
-        // despite the watcher being correctly attached.
-        //
-        // After `-36`, prefixed paths route through
-        // `index_draft_file` (parallel to the `Workspace::stat` /
-        // `read_text` / `list` unified-path API from
-        // `-26`/`-29`/`-32`).
+    fn apply_watch_change_indexes_in_root_draft_path() {
+        // Drafts are real in-root files under the configured drafts dir
+        // now, so a `<drafts_dir>/...` watcher event is just a normal
+        // in-root path: `apply_watch_change` resolves it under the root
+        // and indexes it via the generic `index_file` path, with no
+        // drafts-specific routing.
         let (_cfg, _dir, workspace) = setup_workspace();
         workspace.create_draft_dir("untitled-1").unwrap();
         fs::write(
@@ -1728,16 +1448,16 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = apply_watch_change(&workspace, "Drafts/untitled-1/draft.md", false).unwrap();
+        let outcome = apply_watch_change(&workspace, ".Drafts/untitled-1/draft.md", false).unwrap();
         assert_eq!(outcome, ApplyOutcome::Indexed);
 
-        // Verify the side-effect: graph + BM25 now know about
-        // the drafted file under the unified key.
+        // Verify the side-effect: graph + BM25 now know about the draft
+        // file under its real in-root path.
         let graph = workspace.graph().unwrap();
         let files = graph.files().unwrap();
         assert!(
-            files.iter().any(|p| p == "Drafts/untitled-1/draft.md"),
-            "graph should know the prefixed draft path; got {files:?}"
+            files.iter().any(|p| p == ".Drafts/untitled-1/draft.md"),
+            "graph should know the in-root draft path; got {files:?}"
         );
 
         let opts = chan_workspace::SearchOpts {
@@ -1749,7 +1469,7 @@ mod tests {
         assert!(
             hits.hits
                 .iter()
-                .any(|h| h.path == "Drafts/untitled-1/draft.md"),
+                .any(|h| h.path == ".Drafts/untitled-1/draft.md"),
             "BM25 should return the draft hit; got {:?}",
             hits.hits
         );

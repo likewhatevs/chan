@@ -508,8 +508,8 @@ Resolve a chan public path to a host filesystem path. Use this only \
 when you need a real path for shell tools or terminal cwd. Normal \
 content operations should keep using read_file, write_file, and \
 list_files with chan paths. The path argument is POSIX-style in \
-chan's public namespace, including `Drafts/...`; Drafts paths \
-resolve to uncommitted chan metadata outside the workspace root.")]
+chan's public namespace and resolves under the workspace root, \
+including drafts in the in-workspace `.Drafts/` directory.")]
     async fn resolve_path(
         &self,
         Parameters(p): Parameters<ResolvePathParams>,
@@ -644,7 +644,7 @@ need to drill in. The per-file array is capped at 200 entries; if \
 
 #[tool_handler(
     name = "chan",
-    instructions = "Tools for reading, writing, listing, searching, and resolving paths in a chan markdown workspace. Content operations are sandboxed by chan-workspace; Drafts paths are uncommitted workspaces that may resolve to chan metadata outside the workspace root."
+    instructions = "Tools for reading, writing, listing, searching, and resolving paths in a chan markdown workspace. Content operations are sandboxed by chan-workspace; Cmd+N drafts are regular workspace files in the in-workspace .Drafts/ directory, addressed by their real relpath."
 )]
 impl ServerHandler for Server {}
 
@@ -923,24 +923,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_path_maps_drafts_to_metadata_dir() {
+    async fn resolve_path_maps_drafts_to_in_root_dir() {
+        // Drafts are real in-root files under the configured drafts dir
+        // now, so a draft path resolves like any other in-root path:
+        // `virtual` is false and the physical path lives under the
+        // workspace root's drafts dir.
         let (_cfg, _root, server) = fixture();
+        let drafts_dir = server.ctx.workspace.drafts_dir_name().to_string();
         server.ctx.workspace.create_draft_dir("untitled-1").unwrap();
+        let draft_dir_rel = format!("{drafts_dir}/untitled-1");
         server
             .ctx
             .workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .write_text(&format!("{draft_dir_rel}/draft.md"), "# draft\n")
             .unwrap();
 
         let out = server
             .resolve_path(Parameters(ResolvePathParams {
-                path: "Drafts/untitled-1".into(),
+                path: draft_dir_rel.clone(),
             }))
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(body["path"], "Drafts/untitled-1");
-        assert_eq!(body["virtual"], true);
+        assert_eq!(body["path"], draft_dir_rel);
+        assert_eq!(body["virtual"], false);
         assert_eq!(
             body["physical_path"].as_str().unwrap(),
             server

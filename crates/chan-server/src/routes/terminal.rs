@@ -889,25 +889,25 @@ mod tests {
     }
 
     #[test]
-    fn resolve_terminal_cwd_maps_drafts_namespace_to_metadata_dir() {
+    fn resolve_terminal_cwd_maps_drafts_dir_to_in_root_path() {
         let (_cfg, _root, workspace) = terminal_workspace_fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
 
-        let cwd = resolve_terminal_cwd(&workspace, Some("Drafts/untitled-1"))
+        let cwd = resolve_terminal_cwd(&workspace, Some(".Drafts/untitled-1"))
             .expect("valid cwd")
             .expect("cwd set");
 
         assert_eq!(cwd, workspace.drafts_dir().join("untitled-1"));
         assert_eq!(
             workspace.physical_path_to_virtual(&cwd),
-            Some("Drafts/untitled-1".to_string())
+            Some(".Drafts/untitled-1".to_string())
         );
 
         let (cwd_abs, cwd_rel) = terminal_cwd_payload(&workspace, Some(cwd));
         assert!(cwd_abs
             .as_deref()
             .is_some_and(|path| path.ends_with("untitled-1")));
-        assert_eq!(cwd_rel.as_deref(), Some("Drafts/untitled-1"));
+        assert_eq!(cwd_rel.as_deref(), Some(".Drafts/untitled-1"));
     }
 
     #[test]

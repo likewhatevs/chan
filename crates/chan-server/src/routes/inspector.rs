@@ -39,11 +39,10 @@ pub struct InspectorPayload {
     pub size: u64,
     pub mtime: Option<i64>,
     pub path_class: PathClass,
-    /// Absolute on-disk path, surfaced ONLY for Drafts (which live in chan's
-    /// metadata folder outside the workspace root, so the SPA can't derive
-    /// the absolute path from `workspace.info.root` + the relative path). The
-    /// draft inspector seeds "Terminal from here" with this. None for in-root
-    /// paths, where the SPA already knows the absolute path.
+    /// Always `None` now that drafts are real in-root files: the SPA
+    /// derives the absolute path from `workspace.info.root` + the
+    /// relative path for every path. Field kept on the payload to keep
+    /// the wire shape stable; do not rely on it being populated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub abs_path: Option<String>,
     pub frontmatter_kind: Option<String>,
@@ -98,22 +97,12 @@ pub fn build_inspector_payload(
     requested_path: &str,
 ) -> chan_workspace::Result<InspectorPayload> {
     let path = normalize_path(requested_path)?;
-    // Drafts live in chan's metadata folder OUTSIDE the workspace root, so the
-    // root-relative `classify_path` (root.join(path) + symlink_metadata) can't
-    // see them and errors, leaving the inspector blank. Resolve the physical
-    // path and classify THAT instead; surface the absolute path so the SPA's
-    // draft "Terminal from here" can seed the real on-disk location.
-    let is_draft = chan_workspace::drafts::is_unified_drafts_path(&path);
-    let (path_class, abs_path) = if is_draft {
-        let abs = workspace.resolve_physical_path(&path)?;
-        let class = chan_workspace::fs_ops::classify_abs(workspace.root(), &abs)?;
-        (class, Some(abs.to_string_lossy().into_owned()))
-    } else {
-        (
-            chan_workspace::classify_path(workspace.root(), &path)?,
-            None,
-        )
-    };
+    // Drafts are now real in-root files under the configured drafts dir,
+    // so the root-relative `classify_path` resolves them like any other
+    // path. `abs_path` stays None: the SPA derives the absolute path from
+    // `workspace.info.root` + the relative path.
+    let path_class = chan_workspace::classify_path(workspace.root(), &path)?;
+    let abs_path: Option<String> = None;
     let stat = if path.is_empty() {
         None
     } else {

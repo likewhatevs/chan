@@ -25,6 +25,11 @@ struct WorkspaceInfo {
     label: Option<String>,
     /// Stable metadata storage key under `~/.chan/workspaces/`.
     metadata_key: Option<String>,
+    /// Validated name of the in-root drafts directory (default
+    /// `.Drafts`), from the global `drafts_dir` config. Read-only: the
+    /// SPA keys off this to build draft public paths and to recognize
+    /// the drafts dir. Wire is snake_case `drafts_dir`.
+    drafts_dir: String,
     /// Per-device preferences view. The frontend uses this to seed
     /// the editor (fonts, theme, line spacing) without a follow-up
     /// /api/config round-trip. Same shape as
@@ -167,24 +172,26 @@ fn workspace_info(state: &AppState) -> Result<WorkspaceInfo, String> {
             .and_then(|name| name.to_str())
             .map(str::to_string),
         metadata_key: entry.map(|e| e.metadata_key.clone()),
+        drafts_dir: state.library.drafts_dir(),
         preferences: preferences_view(state).map_err(|e| e.to_string())?,
         warnings: workspace_warnings(&workspace),
     })
 }
 
 fn workspace_warnings(workspace: &chan_workspace::Workspace) -> Vec<WorkspaceWarning> {
+    let drafts_dir = workspace.drafts_dir_name();
     match workspace.draft_preflight() {
         Ok(issues) => issues
             .into_iter()
             .map(|issue| WorkspaceWarning {
                 kind: "broken_draft",
-                path: format!("Drafts/{}", issue.name),
+                path: format!("{}/{}", drafts_dir, issue.name),
                 message: issue.message,
             })
             .collect(),
         Err(e) => vec![WorkspaceWarning {
             kind: "draft_preflight_failed",
-            path: "Drafts".to_string(),
+            path: drafts_dir.to_string(),
             message: e.to_string(),
         }],
     }
@@ -208,7 +215,7 @@ mod tests {
 
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].kind, "broken_draft");
-        assert_eq!(warnings[0].path, "Drafts/untitled-1");
+        assert_eq!(warnings[0].path, ".Drafts/untitled-1");
         assert_eq!(warnings[0].message, "missing draft.md");
     }
 }

@@ -55,11 +55,11 @@ be edited through these tools.
 
 Paths: every content tool `path` argument is a POSIX path in chan's \
 public namespace (no leading slash, no `..`, no host filesystem \
-paths). Normal paths are workspace content. `Drafts/...` points at \
-uncommitted draft workspaces stored in chan metadata outside the \
-workspace root; read_file, write_file, list_files, search_content, and \
-graph tools still address them as `Drafts/...`. Use resolve_path \
-only when you need a real host path or shell cwd for a chan path. \
+paths) and resolves under the workspace root. All paths are regular \
+workspace content, including Cmd+N drafts, which live in a normal \
+in-workspace directory (`.Drafts/` by default) and are addressed by \
+their real relpath like any other file. Use resolve_path only when \
+you need a real host path or shell cwd for a chan path. \
 When you write markdown content, keep \
 link and image hrefs relative to the file that contains them (the \
 GitHub rendering convention) so links keep working when notes are \
@@ -188,8 +188,8 @@ Resolve a chan public path to a host filesystem path. Use this only \
 when you need a real path for shell tools or terminal cwd. Normal \
 content operations should keep using read_file, write_file, and \
 list_files with chan paths. The path argument is POSIX-style in \
-chan's public namespace, including `Drafts/...`; Drafts paths \
-resolve to uncommitted chan metadata outside the workspace root.";
+chan's public namespace and resolves under the workspace root, \
+including drafts in the in-workspace `.Drafts/` directory.";
 
 /// Description of the search_content tool.
 pub const SEARCH_CONTENT_DESC: &str = "\

@@ -835,44 +835,6 @@ fn path_class_for_graph(workspace: &chan_workspace::Workspace, path: &str) -> Op
 /// in markdown bodies. The pre-`-22` behaviour emitted all 1973
 /// contact File nodes; this filter collapses to the referenced
 /// subset (~49).
-/// systacean-25: synthesize the Drafts root node + the
-/// distinguished `drafts_link` edge from workspace-root → Drafts-
-/// root when any indexed file lives under the `Drafts/`
-/// unified-keyspace prefix. Inserts the node into `nodes` (no-
-/// op when the node already exists) + returns the edges to
-/// append. Pure with respect to its inputs so the caller can
-/// fold the edges into the final `edges` Vec at the end of
-/// `api_graph` without changing the ordering of the other layers.
-fn synthesize_drafts_layer(
-    files: &[String],
-    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
-) -> Vec<GraphEdgeView> {
-    let drafts_root_id = directory_node_id("Drafts");
-    let any_draft_indexed = files.iter().any(|p| p.starts_with("Drafts/"));
-    if !any_draft_indexed {
-        return Vec::new();
-    }
-    nodes
-        .entry(drafts_root_id.clone())
-        .or_insert_with(|| GraphNodeView::Directory {
-            id: drafts_root_id.clone(),
-            label: "Drafts".to_string(),
-            path: "Drafts".to_string(),
-            path_class: None,
-            files: 0,
-            code: 0,
-        });
-    vec![GraphEdgeView {
-        source: directory_node_id(""),
-        target: drafts_root_id,
-        kind: "drafts_link",
-        broken: None,
-        rank: None,
-        files: None,
-        code: None,
-    }]
-}
-
 fn should_emit_contact_file(
     path: &str,
     contact_paths: &std::collections::HashSet<String>,
@@ -1125,13 +1087,6 @@ fn merge_filesystem_layer_with_buckets(
     report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
 ) -> Result<(), super::fs_graph::FsGraphError> {
     let path = graph_scope_path(p);
-    if chan_workspace::drafts::is_unified_drafts_path(path) {
-        // Drafts lives in chan metadata. build_fs_graph intentionally
-        // walks the workspace root, so virtual draft nodes come from the
-        // graph/index layer rather than a metadata filesystem walk.
-        merge_unified_tree_layer(workspace, p, nodes, edges, report_buckets);
-        return Ok(());
-    }
     let scope = match p.scope {
         GraphScope::File => FsGraphScope::File,
         GraphScope::Workspace | GraphScope::Directory => FsGraphScope::Directory,
@@ -1753,31 +1708,10 @@ fn build_graph_view(
     // render as `missing` via the `files` loop above; that is a stale-
     // index signal, distinct from an unresolved link target.)
 
-    // systacean-25: synthesize the special Drafts root + the
-    // distinguished `drafts_link` edge from workspace-root → Drafts-
-    // root when any indexed file lives under the `Drafts/`
-    // unified-keyspace prefix. chan-workspace emits per-file under
-    // `Drafts/...`; this is the chan-server piece per the routed
-    // (3.iii) decision in the -24 scope-poke. The SPA reads the
-    // `drafts_link` kind to style the edge / Drafts root
-    // differently from regular `contains` edges (per
-    // addendun-a.md's spec).
-    //
-    // phase-18 (B item-2): only synthesize Drafts at WORKSPACE scope.
-    // The Drafts root lives outside any directory/file scope's subtree,
-    // so the unified tree layer emits no `contains` edge to it there;
-    // the node then arrived anchored solely by `drafts_link`, which the
-    // SPA does not render as an edge, leaving the Drafts directory
-    // floating with no visible edge (@@Alex's image-5: "the Drafts
-    // folder, the one outside the workspace, is showing but has no
-    // edge"). At workspace scope the tree layer already anchors Drafts
-    // via `contains`, so it never floats; a graph scoped INTO Drafts
-    // gets its spine from merge_unified_tree_layer's drafts branch.
-    let drafts_link_edges = if matches!(p.scope, GraphScope::Workspace) {
-        synthesize_drafts_layer(&files, &mut nodes)
-    } else {
-        Vec::new()
-    };
+    // The drafts dir is a real in-root directory now, so it arrives as a
+    // normal `directory:<drafts_dir>` node with a `contains` edge from
+    // root through the filesystem / tree layers below. No special
+    // synthesis is needed.
     emit_graph_nodes(emit, nodes.values().cloned().collect())?;
 
     let mut edges: Vec<GraphEdgeView> = all_edges
@@ -1842,11 +1776,6 @@ fn build_graph_view(
     merge_filesystem_layer_with_buckets(&workspace, &p, &mut nodes, &mut edges, &report_buckets)?;
     merge_language_layer(&workspace, &p, &mut nodes, &mut edges)?;
 
-    // systacean-25: append the synthesized drafts-link edges (if
-    // any) AFTER the filesystem + language layers merge their own
-    // edges. The Drafts root node was already inserted into
-    // `nodes` above.
-    edges.extend(drafts_link_edges);
     emit_graph_nodes(emit, nodes.values().cloned().collect())?;
     emit_graph_edges(emit, edges[emitted_edge_len..].to_vec())?;
 
@@ -2487,68 +2416,16 @@ mod tests {
     }
 
     #[test]
-    fn synthesize_drafts_layer_emits_root_node_and_distinct_link_edge_when_drafts_present() {
-        // systacean-25: when any indexed file path starts with
-        // `Drafts/`, api_graph synthesizes a special Drafts root
-        // node + a `drafts_link` edge from workspace-root → Drafts
-        // root. The SPA distinguishes from regular `contains`
-        // edges by the `kind` field.
-        let files = vec![
-            "notes/intro.md".to_string(),
-            "Drafts/untitled-1/draft.md".to_string(),
-        ];
-        let mut nodes: std::collections::BTreeMap<String, GraphNodeView> =
-            std::collections::BTreeMap::new();
-
-        let edges = super::synthesize_drafts_layer(&files, &mut nodes);
-
-        // Drafts root inserted as a Directory node.
-        let drafts_root = nodes
-            .get("directory:Drafts")
-            .expect("Drafts root node should be synthesized");
-        match drafts_root {
-            GraphNodeView::Directory { label, path, .. } => {
-                assert_eq!(label, "Drafts");
-                assert_eq!(path, "Drafts");
-            }
-            other => panic!("expected Directory variant, got {other:?}"),
-        }
-
-        // Exactly one `drafts_link` edge from workspace-root to
-        // Drafts root.
-        assert_eq!(edges.len(), 1, "got {edges:?}");
-        let edge = &edges[0];
-        assert_eq!(edge.source, "");
-        assert_eq!(edge.target, "directory:Drafts");
-        assert_eq!(edge.kind, "drafts_link");
-    }
-
-    #[test]
-    fn synthesize_drafts_layer_is_noop_when_no_draft_paths() {
-        // systacean-25: workspaces without any Drafts/-prefixed paths
-        // see no Drafts root + no drafts_link edge. Backward-
-        // compatibility for users who never create a draft.
-        let files = vec!["notes/intro.md".to_string(), "src/lib.rs".to_string()];
-        let mut nodes: std::collections::BTreeMap<String, GraphNodeView> =
-            std::collections::BTreeMap::new();
-
-        let edges = super::synthesize_drafts_layer(&files, &mut nodes);
-
-        assert!(edges.is_empty());
-        assert!(!nodes.contains_key("directory:Drafts"));
-    }
-
-    #[test]
-    fn api_graph_file_scope_accepts_virtual_draft_paths() {
+    fn api_graph_file_scope_accepts_draft_paths() {
         let (_cfg, _root, workspace) = open_workspace();
         workspace.create_draft_dir("untitled").unwrap();
         workspace
-            .write_text("Drafts/untitled/draft.md", "# Draft\n")
+            .write_text(".Drafts/untitled/draft.md", "# Draft\n")
             .unwrap();
 
         let params = GraphParams {
             scope: GraphScope::File,
-            path: "Drafts/untitled/draft.md".to_string(),
+            path: ".Drafts/untitled/draft.md".to_string(),
             depth: 1,
         };
         let response = api_graph_sync(workspace, params);
@@ -2557,27 +2434,23 @@ mod tests {
     }
 
     #[test]
-    fn drafts_root_only_at_workspace_scope() {
-        // phase-18 (B item-2): the Drafts root hangs off the workspace
-        // root via the unified tree layer's `contains` edge ONLY at
-        // workspace scope. In a directory scope the tree layer doesn't
-        // list Drafts, so synthesize_drafts_layer's bare `drafts_link`
-        // edge (which the SPA does not render as an edge) left the Drafts
-        // directory floating with no visible edge (@@Alex's image-5).
-        // Gate the synthesis to workspace scope: present at workspace
-        // scope, absent in a non-Drafts directory scope.
+    fn drafts_dir_appears_as_natural_directory_at_workspace_scope() {
+        // Drafts are now real in-root files under the configured drafts
+        // dir, so the drafts directory arrives as a normal
+        // `directory:.Drafts` node anchored by a real `contains` edge
+        // from root via the filesystem / tree layers. No synthetic
+        // edge kind is emitted, and a non-drafts directory scope shows
+        // neither the drafts node nor any edge pointing at it.
         let (_cfg, _root, workspace) = open_workspace();
         workspace.create_draft_dir("untitled").unwrap();
         workspace
-            .write_text("Drafts/untitled/draft.md", "# Draft\n")
+            .write_text(".Drafts/untitled/draft.md", "# Draft\n")
             .unwrap();
-        workspace
-            .index_draft_file("Drafts/untitled/draft.md")
-            .unwrap();
+        workspace.index_file(".Drafts/untitled/draft.md").unwrap();
         workspace.write_text("notes/a.md", "# A\n").unwrap();
         workspace.index_file("notes/a.md").unwrap();
 
-        let drafts_id = directory_node_id("Drafts");
+        let drafts_id = directory_node_id(".Drafts");
         let has_drafts = |view: &GraphViewResponse| {
             view.nodes
                 .iter()
@@ -2597,7 +2470,24 @@ mod tests {
         .unwrap();
         assert!(
             has_drafts(&ws),
-            "Drafts root should appear at workspace scope"
+            "drafts directory should appear at workspace scope"
+        );
+        // The drafts directory is anchored by a real `contains` edge from
+        // the workspace root, not a synthetic edge kind.
+        assert!(
+            ws.edges
+                .iter()
+                .any(|e| e.source.is_empty() && e.target == drafts_id && e.kind == "contains"),
+            "drafts directory must be anchored by a `contains` edge from root"
+        );
+        // Every edge pointing at the drafts node is a normal `contains`
+        // edge; no synthetic drafts-specific edge kind survives.
+        assert!(
+            ws.edges
+                .iter()
+                .filter(|e| e.target == drafts_id)
+                .all(|e| e.kind == "contains"),
+            "drafts node must carry only `contains` edges"
         );
 
         let mut e2 = None;
@@ -2613,11 +2503,11 @@ mod tests {
         .unwrap();
         assert!(
             !has_drafts(&dir),
-            "Drafts root must NOT float in a non-Drafts directory scope"
+            "drafts directory must NOT appear in a non-drafts directory scope"
         );
         assert!(
-            !dir.edges.iter().any(|e| e.kind == "drafts_link"),
-            "no drafts_link edge should leak into a directory-scoped graph"
+            !dir.edges.iter().any(|e| e.target == drafts_id),
+            "no edge to the drafts node should leak into a directory-scoped graph"
         );
     }
 

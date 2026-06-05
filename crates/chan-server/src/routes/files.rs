@@ -134,6 +134,10 @@ fn list_files_sync(
         // `node_modules/`, ...). Repo roots can otherwise spend startup
         // walking hundreds of thousands of uninteresting files before the
         // user sees anything.
+        //
+        // The drafts dir (`.Drafts/` by default) is a real in-root
+        // directory and lists like any other folder; the File Browser
+        // shows it once a draft exists.
         chan_workspace::fs_ops::list_tree_filtered(workspace.root(), workspace.walk_filter())?
     };
     // Pull the contact-kind set in one shot; a single SQL scan beats N
@@ -178,11 +182,6 @@ fn list_dir_entries(
     dir: &str,
 ) -> chan_workspace::Result<Vec<chan_workspace::TreeEntry>> {
     let rel = normalize_dir_query(dir)?;
-    if chan_workspace::drafts::is_unified_drafts_path(&rel) {
-        return Err(chan_workspace::ChanError::Io(
-            "not found: Drafts is hidden from File Browser".to_string(),
-        ));
-    }
     let children = workspace.list(&rel)?;
     let mut out = Vec::with_capacity(children.len());
     for child in children {
@@ -985,7 +984,11 @@ mod file_browser_listing_tests {
     };
 
     #[test]
-    fn list_files_sync_keeps_drafts_out_of_root_dir_query() {
+    fn list_files_sync_surfaces_drafts_dir_as_normal_in_root_folder() {
+        // The drafts dir is a real in-root directory now, so the File
+        // Browser lists it like any other folder (no metadata escape
+        // hatch, no synthetic hiding) in both the recursive whole-tree
+        // listing and the per-directory root listing.
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
@@ -993,38 +996,46 @@ mod file_browser_listing_tests {
         let workspace = lib.open_workspace(root.path()).unwrap();
         std::fs::write(root.path().join("note.md"), "hi").unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
-        let entries = list_files_sync(
+        // Recursive whole-tree listing (dir = None) descends into .Drafts.
+        let recursive = list_files_sync(&workspace, ListFilesQuery { dir: None }).unwrap();
+        assert!(recursive
+            .iter()
+            .any(|entry| entry.path == ".Drafts/untitled-1/draft.md"));
+        assert!(recursive.iter().any(|entry| entry.path == "note.md"));
+
+        // Per-directory root listing (dir = "") shows .Drafts as a child.
+        let root_dir = list_files_sync(
             &workspace,
             ListFilesQuery {
                 dir: Some(String::new()),
             },
         )
         .unwrap();
-
-        assert!(!entries.iter().any(|entry| entry.path == "Drafts"));
-        assert!(entries.iter().any(|entry| entry.path == "note.md"));
+        assert!(root_dir
+            .iter()
+            .any(|entry| entry.path == ".Drafts" && entry.is_dir));
+        assert!(root_dir.iter().any(|entry| entry.path == "note.md"));
     }
 
     #[test]
-    fn list_dir_entries_rejects_drafts_namespace_for_file_browser() {
+    fn list_dir_entries_lists_inside_drafts_dir() {
         let cfg = tempfile::TempDir::new().unwrap();
         let root = tempfile::TempDir::new().unwrap();
         let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
         lib.register_workspace(root.path()).unwrap();
         let workspace = lib.open_workspace(root.path()).unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
 
-        let err = list_dir_entries(&workspace, "Drafts").unwrap_err();
+        let entries = list_dir_entries(&workspace, ".Drafts").unwrap();
 
-        assert!(
-            err.to_string().contains("hidden from File Browser"),
-            "unexpected error: {err:?}"
-        );
+        assert!(entries
+            .iter()
+            .any(|entry| entry.path == ".Drafts/untitled-1" && entry.is_dir));
     }
 
     #[test]
