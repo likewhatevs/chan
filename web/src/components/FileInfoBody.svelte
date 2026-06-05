@@ -59,6 +59,7 @@
     openGraphForContact,
     openGraphForFile,
     openGraphForLanguage,
+    openGraphForMention,
     openGraphForTag,
     revealPathInBrowser,
     tree,
@@ -320,14 +321,15 @@
         });
       } else {
         // Unresolved `@@name` - no matching contact on disk yet.
-        // Falls back to workspace-scoped graph with the mention node
-        // pre-selected (openGraphAtNode), since there's no file
-        // to scope to.
+        // Opens the mention lens (a focused graph centered on the
+        // `@@Name` meta-node with edges to every referencing file),
+        // mirroring how a tag chip opens the tag lens. There's no
+        // contact file to scope to, so the meta-node itself is the seed.
         push({
           key: m.id,
           label: m.label.replace(/^@@/, ""),
           path: null,
-          onClick: () => openGraphAtNode(m.id),
+          onClick: () => openGraphForMention(m.id, m.label),
         });
       }
     }

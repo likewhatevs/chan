@@ -26,6 +26,12 @@ describe("G1: filtered lenses anchor files to the directory spine", () => {
     );
   });
 
+  test("the mention lens pulls the spine before returning its visible set", () => {
+    expect(graphPanel).toMatch(
+      /if \(currentScope\.kind === "mention"\) \{[\s\S]{1,1800}pullContainsSpine\(visited\);[\s\S]{0,80}return visited;/,
+    );
+  });
+
   test("the contact lens pulls the spine before returning its visible set", () => {
     expect(graphPanel).toMatch(
       /if \(currentScope\.kind === "contact"\) \{[\s\S]{1,1800}pullContainsSpine\(visited\);[\s\S]{0,80}return visited;/,

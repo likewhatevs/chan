@@ -79,6 +79,17 @@ export type ScopeOption =
       enabled?: boolean;
     }
   | {
+      id: string;
+      kind: "mention";
+      label: string;
+      /// Graph node id of the mention (e.g. `@@Lead`). Like the tag
+      /// lens, BFS seeds from this id directly - no path resolution,
+      /// since the backend emits a standalone Mention node plus a
+      /// `file -> @@Name` edge per referencing document.
+      nodeId: string;
+      enabled?: boolean;
+    }
+  | {
       /// Contact lens. The seed is a file node (contact-kind .md
       /// frontmatter or a workspace file referenced via a mention);
       /// the graph lens centers on this file and expands

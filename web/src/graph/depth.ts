@@ -10,6 +10,7 @@ type GraphDepthScope =
   | { kind: "workspace" }
   | { kind: "global" }
   | { kind: "tag" }
+  | { kind: "mention" }
   | { kind: "contact" }
   | { kind: "language" }
   | { kind: "git_repo" };
@@ -69,6 +70,10 @@ export function graphDepthCap({
   if (scope.kind === "file") return 1;
   if (scope.kind === "group") return clampDepth(scope.paths.length, hardMax);
   if (scope.kind === "tag" || scope.kind === "git_repo") return hardMax;
+  // Mention lens uses depth meaningfully (bidirectional BFS from the
+  // mention meta-node), same as the tag lens, so it lifts the cap to
+  // the hard max rather than pinning the slider.
+  if (scope.kind === "mention") return hardMax;
   // Contact lens uses depth meaningfully (BFS-from-center
   // bidirectional) so it lifts the hard cap. Language lens is
   // always 1-hop, so the cap is pinned to 1 so the slider reads

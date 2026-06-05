@@ -2170,6 +2170,23 @@ export function openGraphForTag(nodeId: string, _label: string): void {
   scheduleSessionSave();
 }
 
+/** Open the graph overlay scoped to a `@@mention`, with the mention
+ *  node itself pre-selected. Mirrors `openGraphForTag`: the resulting
+ *  subgraph is the mention's neighbourhood (every file referencing the
+ *  handle, plus their directory spine). Called from the surfaces that
+ *  click a standalone `@@name`: the inspector's unresolved-mention
+ *  pill, the editor mention click on a name with no contact file, and
+ *  search mention hits. The `nodeId` is the `@@Name` graph node id. */
+export function openGraphForMention(nodeId: string, _label: string): void {
+  const tab = openGraphInActivePane({
+    mode: "semantic",
+    scopeId: `mention:${nodeId}`,
+    depth: 1,
+    pendingSelectId: nodeId,
+  });
+  scheduleSessionSave();
+}
+
 /** Open the graph scoped to a contact (a Contact-kind note or a
  *  workspace file referenced by a mention). The lens centers on
  *  the contact file with edges to every doc referencing it.

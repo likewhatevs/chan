@@ -1197,6 +1197,10 @@ export function graphTitle(mode: GraphTab["mode"], scopeId: string): string {
     const tag = scopeId.slice("tag:".length);
     return `tag=${tag.startsWith("#") ? tag : `#${tag}`}`;
   }
+  if (scopeId.startsWith("mention:")) {
+    const mention = scopeId.slice("mention:".length);
+    return `mention=${mention.startsWith("@@") ? mention : `@@${mention}`}`;
+  }
   if (scopeId.startsWith("contact:")) {
     const name = graphScopeBasename(scopeId.slice("contact:".length));
     return `contact=${name || scopeId.slice("contact:".length)}`;

@@ -104,6 +104,7 @@
     isDraftPath,
     openFsGraphForFile,
     openGraphForFile,
+    openGraphForMention,
     openGraphForTag,
     searchPanel,
     openGraphAtNode,
@@ -1288,11 +1289,13 @@
               // Mention widget resolved the contact via api.contacts
               // and (in read-only contexts) already opened the preview
               // popover. We get here on commit (Cmd/Ctrl+Enter from
-              // the popover) or on a writable plain click. Open the
-              // resolved contact file; the widget passes a null path
-              // when the name didn't match any contact (silent no-op
-              // for now - could surface a status hint later).
+              // the popover) or on a writable plain click. A resolved
+              // contact opens its file; a standalone `@@name` with no
+              // contact file routes to the mention lens (focused graph
+              // around the `@@Name` meta-node), mirroring how a tag
+              // pill opens the tag lens.
               if (args.path) void openInActivePane(args.path);
+              else openGraphForMention(`@@${args.name}`, args.name);
             }}
           />
           {#if tab.styleToolbarOpen}

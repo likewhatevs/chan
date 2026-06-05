@@ -138,6 +138,13 @@
       // as `#${label}`, so the raw `#search` nodeId would double-hash.
       return { id: scopeId, kind: "tag", label: nodeId.replace(/^#/, ""), nodeId };
     }
+    if (scopeId.startsWith("mention:")) {
+      const nodeId = scopeId.slice("mention:".length);
+      if (!nodeId) return null;
+      // Strip the leading `@@` for the label: the scope header renders it
+      // as `@@${label}`, so the raw `@@Lead` nodeId would double-sigil.
+      return { id: scopeId, kind: "mention", label: nodeId.replace(/^@@/, ""), nodeId };
+    }
     if (scopeId.startsWith("contact:")) {
       const relPath = scopeId.slice("contact:".length);
       if (!relPath) return null;
@@ -1062,6 +1069,37 @@
       pullContainsSpine(visited);
       return visited;
     }
+    // Mention lens: same shape as the tag arm above. The backend emits
+    // mention edges as `source: <file>, target: <@@Name>` (file ->
+    // mention), so a forward-only BFS from the mention id would never
+    // traverse the incoming file->mention edges and the lens renders
+    // empty. The BFS is BIDIRECTIONAL so depth=1 captures every doc
+    // that references the handle (the backlinks the lens exists to
+    // show) and deeper depths walk those docs' outgoing edges further.
+    if (currentScope.kind === "mention") {
+      const seedIds = new Set<string>([currentScope.nodeId]);
+      const visited = new Set(seedIds);
+      let frontier = new Set(seedIds);
+      for (let i = 0; i < graphState.depth; i++) {
+        const next = new Set<string>();
+        for (const e of edges) {
+          if (frontier.has(e.source) && !visited.has(e.target)) {
+            next.add(e.target);
+            visited.add(e.target);
+          }
+          if (frontier.has(e.target) && !visited.has(e.source)) {
+            next.add(e.source);
+            visited.add(e.source);
+          }
+        }
+        if (next.size === 0) break;
+        frontier = next;
+      }
+      // G1: re-anchor every file the lens surfaced to its directory
+      // spine so no file renders edgeless.
+      pullContainsSpine(visited);
+      return visited;
+    }
     // Phase-13 KIND slice 2b: contact lens. Seed is the contact
     // file node (located by its rel_path); BFS expands
     // BIDIRECTIONALLY so the resulting subgraph captures every
@@ -1596,6 +1634,10 @@
       nodeId = "";
     } else if (currentScope.kind === "tag") {
       nodeId = currentScope.nodeId;
+    } else if (currentScope.kind === "mention") {
+      // Mention lens header opens the mention meta-node inspector;
+      // the node id IS the scope's nodeId (`@@Name`), same as tag.
+      nodeId = currentScope.nodeId;
     } else if (currentScope.kind === "file") {
       // File-kind nodes carry their path as the id when emitted
       // from the markdown layer + a synthesized id from the
@@ -1766,6 +1808,10 @@
   const focalIds = $derived.by<string[]>(() => {
     if (!currentScope) return [];
     if (currentScope.kind === "tag") return [currentScope.nodeId];
+    // Mention lens pins the mention meta-node itself; the
+    // bidirectional BFS splays its referencing files around it,
+    // matching the tag lens.
+    if (currentScope.kind === "mention") return [currentScope.nodeId];
     // Phase-13 KIND slice 2b: contact lens pins the contact's
     // file node so the canvas centres on it like a regular
     // file-scope graph would; the bidirectional BFS in
@@ -2389,12 +2435,14 @@
           : currentScope.kind === "file" ? currentScope.path
           : currentScope.kind === "dir" ? currentScope.path
           : currentScope.kind === "tag" ? `#${currentScope.label}`
+          : currentScope.kind === "mention" ? `@@${currentScope.label}`
           : currentScope.kind === "contact" ? `@@${currentScope.label}`
           : currentScope.kind === "language" ? currentScope.label
           : ""}
         {@const scopeKindLabel =
           currentScope.kind === "workspace" ? "Workspace"
           : currentScope.kind === "tag" ? "Hashtag"
+          : currentScope.kind === "mention" ? "Mention"
           : currentScope.kind === "file" ? "File"
           : currentScope.kind === "dir" ? "Directory"
           : currentScope.kind === "contact" ? "Contact"
@@ -2415,6 +2463,8 @@
               <Folder size={16} strokeWidth={1.75} />
             {:else if currentScope.kind === "tag"}
               <Hash size={16} strokeWidth={1.75} />
+            {:else if currentScope.kind === "mention"}
+              <AtSign size={16} strokeWidth={1.75} />
             {:else if currentScope.kind === "contact"}
               <AtSign size={16} strokeWidth={1.75} />
             {:else if currentScope.kind === "language"}

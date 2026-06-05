@@ -35,6 +35,7 @@
   import {
     loadTreeDir,
     openFsGraphForFile,
+    openGraphForMention,
     openGraphForTag,
     paneWidths,
     persistPaneWidths,
@@ -77,6 +78,13 @@
     | { kind: "contact"; path: string; key: string }
     | {
         kind: "tag";
+        nodeId: string;
+        label: string;
+        documents: number;
+        key: string;
+      }
+    | {
+        kind: "mention";
         nodeId: string;
         label: string;
         documents: number;
@@ -335,6 +343,7 @@
   /// hits under hundreds of directory / image / file / contact rows.
   /// Chunks come from the server already capped at 25.
   const TAG_LIMIT = 8;
+  const MENTION_LIMIT = 8;
   const IMAGE_LIMIT = 8;
   const FILE_LIMIT = 8;
   const CONTACT_LIMIT = 8;
@@ -449,6 +458,48 @@
     return out;
   });
 
+  /// Mention hits: mention-kind nodes (`@@Name`) whose label contains
+  /// the typed query. Same shape as `tagRows` - the index already
+  /// emits standalone Mention nodes plus a `file -> @@Name` edge per
+  /// referencing document, so the doc count is the mention-edge count.
+  /// A mention with no referencing documents is dropped. Selecting a
+  /// row opens the mention lens (a focused graph around the handle).
+  const mentionRows = $derived.by<SearchRow[]>(() => {
+    const q = searchPanel.query.trim().toLowerCase();
+    if (!q) return [];
+    const view = graphData.view;
+    if (!view) return [];
+    const docCounts = new Map<string, number>();
+    for (const e of view.edges) {
+      if (e.kind !== "mention") continue;
+      docCounts.set(e.target, (docCounts.get(e.target) ?? 0) + 1);
+    }
+    const out: SearchRow[] = [];
+    for (const n of view.nodes) {
+      if (n.kind !== "mention") continue;
+      if (!n.label.toLowerCase().includes(q)) continue;
+      const refs = docCounts.get(n.id) ?? 0;
+      // Drop mentions with no referencing documents.
+      if (refs === 0) continue;
+      out.push({
+        kind: "mention",
+        nodeId: n.id,
+        label: n.label,
+        documents: refs,
+        key: `mention:${n.id}`,
+      });
+      if (out.length >= MENTION_LIMIT) break;
+    }
+    // Most-referenced first so prominent handles rank above one-off
+    // mentions that happen to share a prefix.
+    out.sort((a, b) =>
+      a.kind === "mention" && b.kind === "mention"
+        ? b.documents - a.documents
+        : 0,
+    );
+    return out;
+  });
+
   /// Final ordered row list: tags first (compact, high signal),
   /// then contacts (people get top billing among file-name matches),
   /// images, markdown filename matches, and finally content chunks
@@ -463,6 +514,7 @@
     const chunkPaths = new Set<string>();
     for (const h of chunkHits) chunkPaths.add(h.path);
     out.push(...tagRows);
+    out.push(...mentionRows);
     out.push(...languageHits);
     for (const r of contactRows) out.push(r);
     for (const r of imageRows) out.push(r);
@@ -482,6 +534,7 @@
       chunk: 0,
       image: 0,
       tag: 0,
+      mention: 0,
       contact: 0,
       file: 0,
       language: 0,
@@ -491,6 +544,7 @@
       if (row.kind === "chunk") counts.chunk += 1;
       else if (row.kind === "image") counts.image += 1;
       else if (row.kind === "tag") counts.tag += 1;
+      else if (row.kind === "mention") counts.mention += 1;
       else if (row.kind === "contact") counts.contact += 1;
       else if (row.kind === "file") counts.file += 1;
       else if (row.kind === "language_file") counts.language += 1;
@@ -513,6 +567,7 @@
     // A path-file gets the file inspector; a path-dir has no file report, so
     // no inspector selection (avoids a spurious reportFile 404).
     if (r.kind === "path") return r.isDir ? null : { kind: "file", path: r.path };
+    if (r.kind === "mention") return { kind: "mention", nodeId: r.nodeId, label: r.label };
     return { kind: "tag", nodeId: r.nodeId, label: r.label };
   });
   const activeKey = $derived(rows[active]?.key ?? null);
@@ -578,6 +633,12 @@
         close();
         await openInActivePane(r.path);
       }
+    } else if (r.kind === "mention") {
+      // Mention hits route to a mention-scoped graph (the focused
+      // lens around the `@@Name` meta-node with edges to every
+      // referencing file), mirroring the tag-row behaviour.
+      close();
+      openGraphForMention(r.nodeId, r.label);
     } else {
       // Tag hits route to a tag-scoped graph (depth-hop
       // neighbourhood around the tag) rather than workspace scope.
@@ -796,6 +857,16 @@
                   <span class="path">{r.path}</span>
                 </div>
                 <div class="preview muted">{basename(r.path)}</div>
+              {:else if r.kind === "mention"}
+                <!-- `@@mention` hit. Same compact row shape as the tag
+                     hit: the handle label + a doc count. Selecting it
+                     opens the mention lens (focused graph). The label
+                     already carries the `@@` sigil from the index. -->
+                <div class="row1">
+                  <KindChip kind="mention" compact />
+                  <span class="path">{r.label}</span>
+                  <span class="score">{r.documents} doc{r.documents === 1 ? "" : "s"}</span>
+                </div>
               {:else}
                 <div class="row1">
                   <KindChip kind="tag" compact />
@@ -834,8 +905,9 @@
         {:else if rows.length > 0}
           <span>
             {rows.length} hit{rows.length === 1 ? "" : "s"}
-            {#if rowCounts.tag + rowCounts.image + rowCounts.contact + rowCounts.file + rowCounts.language + rowCounts.path > 0}
+            {#if rowCounts.tag + rowCounts.mention + rowCounts.image + rowCounts.contact + rowCounts.file + rowCounts.language + rowCounts.path > 0}
               ({rowCounts.chunk} doc - {rowCounts.image} image - {rowCounts.tag} tag
+              {#if rowCounts.mention > 0} - {rowCounts.mention} mention{/if}
               {#if rowCounts.contact > 0} - {rowCounts.contact} contact{/if}
               {#if rowCounts.file > 0} - {rowCounts.file} file{/if}
               {#if rowCounts.language > 0} - {rowCounts.language} language{/if}
@@ -880,13 +952,15 @@
               if (sel?.kind === "tag") {
                 close();
                 openGraphForTag(sel.nodeId, sel.label);
+              } else if (sel?.kind === "mention") {
+                // Mention rows open the mention lens (focused graph
+                // around the `@@Name` meta-node), mirroring the tag arm.
+                close();
+                openGraphForMention(sel.nodeId, sel.label);
               } else if (sel?.kind === "file") {
                 close();
                 openFsGraphForFile(sel.path);
               }
-              // Mention "Set as Scope" stays unwired here - the
-              // search panel doesn't surface mention rows yet, so
-              // resolving a contact label would never fire.
             }}
           />
         </Inspector>
