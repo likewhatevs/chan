@@ -137,12 +137,26 @@
   $effect(() => {
     const id = instanceId;
     untrack(() => fbWatchRegister(id));
-    // The dock / overlay surfaces have no layout home for their expansion,
-    // so seed from the per-instance reload snapshot on register. The tab
-    // variant seeds from `tab.expanded` in `restoreFromTab` instead
-    // (authoritative across app restart, not just reload).
-    if (!isTab) untrack(() => seedFbTreeInstanceFromReloadSnapshot(id));
     return () => untrack(() => fbWatchDispose(id));
+  });
+
+  // Seed the dock / overlay expansion from its per-instance reload snapshot.
+  // These surfaces have no layout home, so the sessionStorage snapshot is
+  // their only restore path. The snapshot key is scoped by the workspace
+  // root, which is NOT known on raw mount (`workspace.info` loads async);
+  // seeding then keys off the "/" pathname fallback and misses the
+  // real-root snapshot the save wrote. So wait for the root, then seed
+  // once. Safe against clobbering user intent: the tree has no expandable
+  // directories until the workspace loads, so the user cannot have toggled
+  // anything before this fires. The tab variant seeds from `tab.expanded`
+  // in `restoreFromTab` instead (authoritative across app restart).
+  let dockSeeded = false;
+  $effect(() => {
+    if (isTab) return;
+    const root = workspace.info?.root;
+    if (!root || dockSeeded) return;
+    dockSeeded = true;
+    untrack(() => seedFbTreeInstanceFromReloadSnapshot(instanceId));
   });
 
   // Reconcile this instance's dir subscriptions against the directories
@@ -199,9 +213,20 @@
     const multi = browserSelection.paths;
     target.selectedPaths = multi.length > 1 ? [...multi] : undefined;
     target.showWorkspace = browserSelection.showWorkspace ? true : undefined;
-    const map = ensureFbTreeInstance(`fb-tab-${target.id}`).expanded;
-    const expanded = Object.keys(map).filter((p) => p.length > 0 && map[p]);
-    target.expanded = expanded.length > 0 ? expanded : undefined;
+    // Read the live instance NON-destructively. On a tab-switch unmount the
+    // instance may already be disposed: the dispose effect's teardown
+    // (fbWatchDispose) runs before this one, and `ensureFbTreeInstance` would
+    // recreate an empty instance here and clobber the saved expansion with
+    // `undefined`. The reactive expansion effect keeps `target.expanded` in
+    // sync on every toggle, so when the instance is gone we keep what it
+    // already holds; we only resnapshot while the instance is still live.
+    const inst = fbTreeInstance(`fb-tab-${target.id}`);
+    if (inst) {
+      const expanded = Object.keys(inst.expanded).filter(
+        (p) => p.length > 0 && inst.expanded[p],
+      );
+      target.expanded = expanded.length > 0 ? expanded : undefined;
+    }
     const scroll = treeWrapEl?.scrollTop ?? 0;
     target.scroll = scroll > 0 ? Math.round(scroll) : undefined;
   }
