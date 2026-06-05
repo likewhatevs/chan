@@ -2011,6 +2011,11 @@ async function closeTabAsync(
 const NEW_DRAFT_SEED = "# Draft\n";
 
 async function handleDraftTabClose(tab: FileTab): Promise<boolean> {
+  // A draft whose backing file vanished (the user moved or deleted it
+  // on disk) has nothing to inspect, save, or discard. Close it like
+  // any missing-file tab instead of 404-ing on inspectDraft and
+  // trapping the tab open (no Cmd+W / Ctrl+D / X would dismiss it).
+  if (tab.fileMissing) return true;
   try {
     const contentIsEmpty = tab.content.trim().length === 0;
     const isPristineSeed = !isDirty(tab) && tab.content === NEW_DRAFT_SEED;

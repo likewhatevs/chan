@@ -9,6 +9,7 @@
   // the popover; lifting it out of there reduces the chrome users have
   // to twirl through and keeps formatting one mouse-move away.
 
+  import { onDestroy } from "svelte";
   import Wysiwyg from "../editor/Wysiwyg.svelte";
   import Source from "../editor/Source.svelte";
   import {
@@ -659,6 +660,18 @@
     // beyond setting the open bit here.
     searchPanel.open = true;
   }
+
+  // The "choose the moved file" reopen instruction (set in
+  // doReopenMissing) is a deliberately persistent status (see
+  // toastAutoDismissSweep.test). Clear it when this tab unmounts, so an
+  // abandoned reopen (the user closes the tab instead of picking the
+  // moved file) does not leave the status stuck in the bar. The literal
+  // must match the one set below.
+  onDestroy(() => {
+    if (ui.status === "Choose the moved file in Files to re-open this tab") {
+      ui.status = null;
+    }
+  });
 
   async function doReopenMissing(): Promise<void> {
     // First try to restore the SAME file at its original path -     // covers the false-positive case where the panel surfaced

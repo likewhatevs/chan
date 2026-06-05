@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import {
   attemptInPlaceReopen,
   cancelMissingFileCheck,
+  closeTab,
   layout,
   scheduleMissingFileCheck,
   type FileTab,
@@ -265,5 +266,34 @@ describe("attemptInPlaceReopen - Re-open button behaviour", () => {
 
     expect(ok).toBe(false);
     expect(readTab(seed.id)?.fileMissing).not.toBeNull();
+  });
+});
+
+describe("closeTab - a draft whose file vanished is not trapped open", () => {
+  // Regression: drafts are now in-root files (`.Drafts/...`), so a shell
+  // `mv`/`rm` puts a draft tab into the missing-file overlay. The draft
+  // close flow must NOT call inspectDraft (it would 404 and return false,
+  // trapping the tab so no Cmd+W / Ctrl+D / X could dismiss it).
+  test("closes the tab without inspecting the gone draft", async () => {
+    const seed = fileTab({
+      id: "tab-draft-gone",
+      path: ".Drafts/untitled-3/draft.md",
+      content: "scratch",
+      saved: "scratch",
+      fileMissing: { path: ".Drafts/untitled-3/draft.md", fragment: null },
+    });
+    const pane = resetLayout([seed]);
+    const inspectSpy = vi.spyOn(api, "inspectDraft");
+    const discardSpy = vi.spyOn(api, "discardDraft");
+
+    await closeTab(pane.id, seed.id);
+
+    // Read the live $state proxy, not the pre-insert `pane` reference.
+    const livePane = layout.nodes[pane.id] as LeafNode;
+    expect(readTab(seed.id)).toBeUndefined();
+    expect(livePane.tabs.length).toBe(0);
+    // Nothing to save or discard: the draft is already gone on disk.
+    expect(inspectSpy).not.toHaveBeenCalled();
+    expect(discardSpy).not.toHaveBeenCalled();
   });
 });
