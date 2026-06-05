@@ -438,7 +438,7 @@ impl Workspace {
                 "pending_writes journal non-empty at open; replay required",
             );
         }
-        Ok(Arc::new(Self {
+        let workspace = Arc::new(Self {
             entry,
             root_canon,
             dir,
@@ -457,7 +457,47 @@ impl Workspace {
             reindexing: std::sync::atomic::AtomicBool::new(false),
             report: std::sync::OnceLock::new(),
             walk_filter,
-        }))
+        });
+
+        // Converge the graph against disk on every open. The watcher
+        // only sees events that happen WHILE a server is running, so a
+        // file added/removed/edited while nothing was watching (closed
+        // laptop, `chan serve` not running) leaves the graph diverged
+        // from the live tree, and no consumer's startup path catches it:
+        // chan-server only triggers a full reindex when an index side is
+        // wholly EMPTY, and the indexer only reconciles on watcher
+        // ProviderError / path-less events. So a single offline-added
+        // file in a non-empty graph stays invisible across restarts (its
+        // mentions/tags never get edges). reconcile() is a stat-only walk
+        // that indexes just the diff, so the cost is one tree stat plus
+        // re-indexing only the changed files, not a full rebuild.
+        //
+        // Skip the empty-graph case: that is a cold workspace whose
+        // consumer (chan-server's coldboot trigger / the CLI's reindex)
+        // runs the full build in the background, and reconciling an empty
+        // graph here would index every file synchronously inside open(),
+        // defeating the "open stays fast" invariant. needs_rebuild also
+        // short-circuits, since a pending full rebuild supersedes a
+        // reconcile.
+        let graph_non_empty = workspace
+            .graph()
+            .and_then(|g| g.files().map(|fs| !fs.is_empty()))
+            .unwrap_or(false);
+        if graph_non_empty && !needs_rebuild {
+            if let Err(e) = workspace.reconcile() {
+                // Best-effort: a reconcile failure must never block the
+                // open. The watcher + the next manual reindex still
+                // converge the index; we just lose the offline catch-up
+                // for this session.
+                tracing::warn!(
+                    workspace = %workspace.entry.root_path.display(),
+                    ?e,
+                    "startup reconcile failed; index may lag the live tree until next reindex",
+                );
+            }
+        }
+
+        Ok(workspace)
     }
 
     /// True when the last reindex did not run to completion (either
@@ -4778,6 +4818,70 @@ mod tests {
             .collect();
         hit_paths.sort();
         assert_eq!(hit_paths, vec!["a.md".to_string(), "b.md".to_string()]);
+    }
+
+    #[test]
+    fn open_picks_up_nested_file_added_offline() {
+        // Startup-level regression: a markdown file dropped into a
+        // nested subdir while no server was watching (so neither the
+        // watcher nor reconcile ran) must be in the graph after the
+        // next `open`. This drives the real consumer entry point
+        // (`Library::open_workspace` -> `Workspace::open`), NOT a
+        // direct `reconcile()` call, because the bug was that the
+        // startup path never reconciled when the graph was non-empty.
+        let cfg = TempDir::new().unwrap();
+        let workspace_dir = TempDir::new().unwrap();
+        let lib = Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(workspace_dir.path()).unwrap();
+
+        {
+            let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
+            workspace
+                .write_text("top.md", "# top\nalready-indexed\n")
+                .unwrap();
+            workspace.reindex(None).unwrap();
+            // Sanity: the graph knows about the pre-existing file but
+            // not (yet) the nested one we are about to drop offline.
+            let files = workspace.graph().unwrap().files().unwrap();
+            assert!(files.iter().any(|f| f == "top.md"));
+            // Drop the handle so the flock + live-workspace weak ref
+            // release; the re-open below then takes the same path a
+            // fresh `chan serve` would.
+        }
+
+        // Simulate "added while no server watched": write the nested
+        // .md straight to disk, bypassing index_file/reconcile. This
+        // mirrors `new-team-1/journals/journal-Lead.md` landing while
+        // the workspace was offline. Tests may touch the temp tree
+        // directly; production user-content writes still route through
+        // Workspace.
+        let nested_dir = workspace_dir.path().join("new-team-1").join("journals");
+        std::fs::create_dir_all(&nested_dir).unwrap();
+        std::fs::write(
+            nested_dir.join("journal-Lead.md"),
+            "# journal\noffline-nested-token\n",
+        )
+        .unwrap();
+
+        // Re-open via the real startup entry point.
+        let workspace = lib.open_workspace(workspace_dir.path()).unwrap();
+        let files = workspace.graph().unwrap().files().unwrap();
+        assert!(
+            files
+                .iter()
+                .any(|f| f == "new-team-1/journals/journal-Lead.md"),
+            "offline-added nested file missing from graph after open: {files:?}"
+        );
+
+        // And it must be searchable, matching a fresh reindex.
+        let opts = crate::workspace::SearchOpts {
+            mode: crate::SearchMode::Bm25,
+            limit: 10,
+            scope: None,
+        };
+        let hits = workspace.search("offline-nested-token", &opts).unwrap();
+        assert_eq!(hits.hits.len(), 1);
+        assert_eq!(hits.hits[0].path, "new-team-1/journals/journal-Lead.md");
     }
 
     #[test]
