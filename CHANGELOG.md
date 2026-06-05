@@ -6,24 +6,452 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Phase 14 round 2: a frontend pristine pass for the first public release,
-plus the tunnel domain rename.
+## [v0.26.2] - 2026-06-05
+
+Phase 18 follow-up: Linux desktop (WebKitGTK) fixes found while testing
+the v0.26.x desktop build. macOS code paths are unchanged.
+
+### Added
+
+- Linux desktop File menu, built explicitly because `Menu::default` only
+  produces a File menu on macOS: File (About, Quit), Edit, Window, no
+  Help. "About Chan" shows the version plus a manual "Check for updates"
+  (the only manual self-update entry point off macOS); Quit is a custom
+  item with an `app.exit(0)` handler because muda does not implement the
+  predefined Quit on GTK.
+
+### Fixed
+
+- New draft (Ctrl+N) and Show Source (Ctrl+E) now fire off macOS. The
+  handlers were Mac-only by accident (`Mod` resolves to Ctrl on
+  Linux/Windows, and a `!ctrlKey` guard excluded it); they now follow the
+  per-OS chord the shortcut registry already declared.
+- The Hybrid pane flip (Cmd+, / Ctrl+,) no longer sticks mirror-reversed
+  under WebKitGTK: the rotated-away face is hidden with a state-driven
+  visibility swap rather than relying on `backface-visibility`, which
+  WebKitGTK ignores inside a `preserve-3d` context (Blink was already
+  correct, so the browser build was unaffected).
+- The embedded terminal stays on the DOM renderer under WebKitGTK, fixing
+  typed and pasted input that did not paint until a later keystroke (the
+  WebGL layer did not composite while idle). Box-drawing characters fall
+  back to the system font's glyphs on the Linux desktop.
+- Ctrl+E stays inside a focused terminal for readline (move-to-end-of-
+  line) instead of being claimed by the Show Source toggle.
+
+## [v0.26.1] - 2026-06-04
+
+Phase 18 follow-up: desktop self-update and Linux AppImage fixes.
+
+### Fixed
+
+- Desktop self-upgrade: the updater manifest endpoint was flattened to the
+  static `/dl/desktop/latest.json` the release generator actually
+  publishes; the previous templated path never matched, so desktop
+  self-update always 404'd.
+- Linux AppImage: prefer the host GTK/WebKit stack so a host whose Mesa is
+  newer than the bundle (e.g. CachyOS) no longer aborts webview creation
+  with `EGL_BAD_PARAMETER`.
+- Inspector: the workspace-root split action button.
+
+## [v0.26.0] - 2026-06-04
+
+Phase 18: a hybrid-surface bug sweep, the inspector pill redesign, and a
+repo/docs consolidation, cut as v0.26.0.
+
+### Added
+
+- Inspector: each item category (File Browser Directory / File / Media /
+  Binary, and the editor "Show Details") now shows a single pill for the
+  main action plus a dropdown for the secondary actions, replacing the
+  flat button stack. "New terminal here" seeds the terminal with the
+  relative path after the cursor.
+- Editor: `[[` completion now offers local workspace paths, not only
+  filename and heading targets.
+- File Browser: the tab right-click menu adds "New file or Directory",
+  "New Terminal", and "New Graph" (all from the workspace root) below
+  "Expand all directories", and shows keyboard-shortcut hints in the
+  selection context menu.
+- Graph: a "Copy link to graph" right-click action that serializes the
+  tab to a `chan://graph?...` link (scope, depth, mode, filters, selected
+  node) which can be pasted into a markdown file and clicked to reopen.
+- Terminal: context-menu copy/paste chords (Cmd+C / Cmd+V on macOS,
+  Ctrl+Shift+C / Ctrl+Shift+V elsewhere so bare Ctrl stays SIGINT).
+
+### Changed
+
+- Editor: bullet and hyphen lists now behave like ordered lists for
+  cursor, indent, and clicks; hyphen lists render distinctly again
+  (phase-17's glyph change was meant for bullet lists only). Bullet
+  markers are now real glyph-character widgets, so CodeMirror handles
+  cursor, click, and arrow positioning natively.
+- Consolidated `docs/journals` into per-phase `docs/phases/phase-N.md`
+  documents and distilled `docs/agents` into a minimal set plus a
+  lessons-learned playbook; removed the raw journals, `docs/archive`, and
+  related scaffolding.
+
+### Fixed
+
+- Editor: trackpad free-scroll no longer hangs or jumps in the opposite
+  direction when the caret is far from the scroll target (removed
+  `scroll-behavior: smooth` from the CodeMirror scroller).
+- Graph: "Graph from here" now selects the originating node on the
+  redrawn graph and persists the selection across a window reload; no
+  directory node is plotted without a visible edge back to the workspace
+  root; binary files and symlinks no longer render as contact nodes; and
+  the graph no longer reloads on every out-of-scope workspace file edit.
+- File Browser: directory expand no longer hangs at "Loading" until a
+  window reload (a `history.replaceState` SecurityError); hash writes are
+  now debounced.
+- Terminal: UTF-8 multibyte text renders correctly in `less` and `vim`
+  (PTY now spawns with `LANG=C.UTF-8` when the inherited env selects no
+  UTF-8 codeset); hiding the rich prompt returns focus to the terminal.
+- Inspector: the Drafts graph node and draft files (which live outside
+  the workspace tree) now populate the inspector with a single
+  Terminal-from-here action.
+- Desktop: turning a workspace OFF then quickly ON no longer strands the
+  row "ON but no Open"; the toggle is disabled across the start/stop
+  transition and `open_workspace` retries on a still-releasing flock.
+
+### Removed
+
+- chan-desktop: the old local-disk New-workspace pre-flight dialog (and
+  its now-dead Rust backend); pre-flight moved to the SPA boot menu in
+  phase 17.
+- File Browser and graph context menus: the "Reload" entry.
+
+## [v0.25.0] - 2026-06-03
+
+Phase 17: a host bug sweep, survey system v2, and a desktop connecting
+screen, cut as v0.25.0. The release also carries phase 16's closing-round
+desktop launcher redesign, which landed after the v0.24.0 cut.
+
+### Added
+
+- Survey system v2: surveys now reach team-dialog-created terminals, and
+  every survey offers options plus an F follow-up plus a Dismiss (with a
+  distinct "dismissed" reply so the asking agent can tell). Surveys are
+  per-terminal rather than window-wide.
+- Desktop: an outbound remote-workspace window that cannot reach its URL
+  now shows a connecting screen immediately (spinner, URL, live elapsed
+  timer, one timestamped row per retry) instead of a blank white webview;
+  the retry loop is page-driven over a Rust `probe_url` IPC. The window
+  title shows the workspace kind (home / computer / outbound / inbound)
+  plus the locator.
+- Desktop launcher redesign (phase 16 closing round): the separate [Open
+  workspace] and [Attach] header buttons merged into one [New] modal with
+  three choices (Local directory / Remote outbound / Remote inbound);
+  remote rows show a connection dot.
+- Path autocomplete in the lazy file tree, search, and the image-draft
+  save dialog; team-load path autocomplete; a Spawn-agents auto-assign
+  button; `cs pane split RIGHT|BOTTOM`.
+- About page: open-source attributions (trimmed to a one-line
+  free-and-open-source tagline).
+- README and home page: a `curl | bash` install plus `chan serve ./repo`
+  usage example, plus chan-desktop and `gateway/` self-hosted manuals.
+- Editor: files are now editable by content sniff (a `.zshrc` or
+  `*.service` opens as text); a serve-progress heads-up so a large
+  workspace shows progress before the URL prints.
+
+### Changed
+
+- The rich prompt (Cmd+Shift+P) now acts only on the focused terminal in
+  the focused pane rather than toggling on every terminal; survey bubbles
+  stay on top.
+- MCP env is now off by default per terminal, with a team-config opt-in
+  toggle; chan never writes the user's config files for MCP.
+- Editor: unordered-list bullet glyphs use the Google-Docs depth-cycle
+  look.
+- Submit chord derivation refactored to `SubmitAgent::derive(command,
+  CHAN_AGENT)` (dropping the stored per-member agent field); submit chords
+  are now runtime-overridable.
+- Pre-flight bubble: the per-row OFF/ON label-plus-button became a single
+  checkmark toggle.
+- Release: the CI macOS DMG now uses a Finder-less dmgbuild layout so it
+  matches the local layout deterministically.
+
+### Fixed
+
+- `cs terminal write --submit codex` now submits correctly (the write is
+  wrapped in bracketed paste, since codex coalesced text and CR into a
+  paste burst that ate a bare CR).
+- Graph: a fresh Cmd+Shift+M window can now expand directories without a
+  "graph from here" first, and keeps its depth slider and non-directory
+  layers; a file's language edge refreshes on a bare FSEvents rename.
+- Editor: pasting a link into a list no longer indents the list (turndown
+  was emitting a stray list marker); Shift-Tab outdents at top level.
+- One-shot `cs` commands no longer enter hybrid-nav transaction mode or
+  steal focus from the sending terminal.
+- `cs` window commands now error cleanly when no window is connected;
+  global shortcuts are blocked behind the disconnect overlay; the
+  rendered mermaid diagram's right margin is aligned.
+- Release: the new dmgbuild DMG is codesigned before notarization (the
+  dry-run caught it unsigned before the tag).
+
+## [v0.24.0] - 2026-06-02
+
+Phase 16: lead-orchestration CLI tooling and a long host feature stream
+converging on a single per-session input queue, cut as v0.24.0.
+
+### Added
+
+- CLI: `cs terminal scrollback` (read a tab's scrollback by name) and
+  `cs pane` (query windows/panes/layout/selected pane; set focus; split
+  left/bottom; close tab/all-tabs/pane, with `--force`), over a new
+  bidirectional control-socket channel. SPA-visible CLI team spawn.
+- A per-session FIFO write queue with idle-drain that serializes all
+  terminal and agent input (control-socket writes, Rich Prompt, Team
+  Work).
+- Mermaid: cursor-based render (no flip button), horizontal flip, up/down
+  step-in, reverse-flip symmetry, visible selection inside code blocks,
+  and error line/column locatability.
+- Image viewer prev/next navigation; a live source-row indicator for the
+  image drag-to-move.
+- Per-workspace directory blocklist (global baseline plus per-workspace
+  additions) with a File Browser settings UI.
+- Pre-flight: a non-blocking check that the `cs` symlink exists in `$PATH`
+  (offers to create it, continues if it cannot); a first-load onboarding
+  card; Reports on by default.
+- Dashboard: a carousel navigator, a real-engine screensaver preview
+  (shown inside the Screen-lock box only when locked).
+- Graph: lens plots (language, hashtags, mentions) now draw the directory
+  spine back to the workspace root, leaving no edgeless file node.
+- Editor: external-link "open" affordance and internal markdown-link
+  previews; body context menus (Cut/Copy/Paste/Find/split).
+- Docs: a gateway self-host guide and a Terminal manual page (the `cs`
+  family, pokes, survey, MCP).
+
+### Changed
+
+- Tunnel/gateway messaging reframed: the tunnel is a core chan
+  capability, and the `gateway/` online service is experimental, off by
+  default, and meant as a self-hosted offering.
+- `cs terminal team load` now resolves paths cwd-relative and actually
+  spawns the team instead of only summarizing it.
+- Terminal context menus made contextual on right-click; agent terminals
+  now carry `CHAN_WINDOW_ID` so `cs pane` / `cs open` / `cs survey` can
+  target a window from an agent context.
+- Rich Prompt returned as a floating Cmd+Shift+P bubble, then
+  re-architected to be Drafts-backed with editor-style image paste (paste
+  writes real files any agent can read via MCP).
+- CI: bumped the Node-20 GitHub Actions to Node-24 majors ahead of the
+  2026-06-16 deprecation.
+
+### Removed
+
+- The in-terminal Team Work bubble (the lead is now a normal terminal;
+  identity flows through the queue).
+
+### Fixed
+
+- Cross-window editor-tab drag-drop no longer loses the tab on drop.
+- Terminal names are enforced unique (auto `-N`) on create and rename;
+  Alt+Shift+[/] reaches tab navigation instead of the PTY.
+
+## [v0.23.0] - 2026-06-01
+
+Phase 15 round 4: desktop and release engineering, native macOS
+Export-to-PDF, and semantic-search gating, cut as v0.23.0.
+
+### Added
+
+- Native macOS Export-to-PDF via the print pipeline (paginates and honors
+  `@pagebreak`); the button is hidden on Linux.
+- Linux chan-desktop builds for ubuntu, fedora, and arch (AppImage / .deb
+  / .rpm on amd64 and arm64) plus the gateway .deb packages, all built
+  from a macOS host via sdme/lima; a static-musl standalone Linux `chan`
+  CLI; a multi-arch desktop CI matrix.
+- `cs terminal team new|load --script` as the CLI equivalent of the Cmd+P
+  team dialog, with server-side lead-first spawn.
+
+### Changed
+
+- Semantic (hybrid) search is now requested only when `semantic_enabled`
+  is on and the model is present, instead of building vectors on every
+  reindex but never querying them.
+- The indexing spine pulses orange during the background embed sweep.
+- Unified the favicon to the orange transparent enso across all chan
+  sites.
+- Only Markdown counts as a graph document; `.txt` stays searchable text
+  but is no longer a graph node.
+
+### Fixed
+
+- Desktop no longer crashes when closing a window whose navigation
+  failed.
+- Silenced tokei "Unknown extension" log spam.
+
+## [v0.22.0] - 2026-06-01
+
+Phase 15 round 3: Team Work moved into the workspace, the survey rebuilt,
+the `chan-shell` crate, relative-markdown links, and a BM25 improvement,
+cut as v0.22.0.
+
+### Added
+
+- `[[` completion writes relative markdown links on disk (not wiki links),
+  with heading `#` and block `^` anchors and click-to-place-caret;
+  relative-link pills are openable.
+- A `chan-shell` crate so `chan` and `chan-desktop` share the `cs` client,
+  plus a per-agent submit-encoding map; `cs terminal survey` exposes its
+  wire JSON in `--help`.
+- The Team Work survey rebuilt for real (overlay, reply round-trip, `[F]`
+  follow-up file) with a per-member agent field; desktop `cs`.
+
+### Changed
+
+- Team Work config moved from a `/tmp` path into the workspace under a
+  user-chosen `{team-name}/` directory.
+- BM25 now matches @@mentions, paths, and filenames via a subtoken split.
+- Halved the embed batch size to shorten the in-flush chip freeze.
+
+### Fixed
+
+- Pre-flight no longer re-locks the boot overlay on an incremental
+  reindex (the session-crashing RELOAD-HANG); only a cold cold-build
+  locks.
+- The background-embed chip survives a watcher reindex.
+- Graph: dropped ghost nodes for unresolved link targets; the anchor
+  joins the edges primary key so multi-anchor links survive.
+
+### Removed
+
+- The in-terminal `chan open` command (superseded by desktop `cs` and the
+  OS file association); the dead Team Work bubble stub; the embeddings row
+  from the Dashboard About card.
+
+## [v0.21.0] - 2026-05-31
+
+Phase 15 round 2: the dropped round-1 Dashboard items, terminal UX,
+the `cs` rename, Team Work self-start, and the indexing rework, cut as
+v0.21.0.
+
+### Added
+
+- Dashboard: the Search-slot directory inspector actions (Show Directory /
+  Graph from here / New Terminal), per-tab carousel autoRotate, and the
+  remaining part-1 items (license placement, screensaver preview).
+- Terminal: clickable URLs; a Shift+Enter LF newline fallback while an
+  agent is running.
+- `cs` renamed from `cs term` to `cs terminal`, with subcommand
+  prefix-matching, `cs terminal restart`, `cs search`, and `cs dashboard
+  --carousel-off`; team terminals join the team tab group;
+  `cs terminal write --submit` appends the agent submit chord.
+- `chan open` as the OS file-association entry (desktop).
+
+### Changed
+
+- Indexing: pre-flight now unblocks on BM25-ready and embeds in the
+  background instead of a synchronous embed pass that wedged boot;
+  workspaces over the file cap skip embeddings; the background-embed chip
+  advances per file.
+- Editor: Cmd+R remapped to Ctrl+Shift+R off macOS so bash reverse-search
+  survives.
+
+### Fixed
+
+- True two-face CSS card flip for Cmd+, (the old keyframe raced focus and
+  only fired once focus left the pane).
+- Conceal marks re-decorate on a tab-switch remount.
+- Editor focus follows the active pane; the indexing graph survives a
+  pane flip.
+- The team lead launches its agent via the worker spawn path
+  (TEAM-SELFSTART).
+- `cs search` renders snippet highlights as markdown bold.
+
+## [v0.20.0] - 2026-05-31
+
+Phase 15 round 1: the Dashboard carousel redesign, the Search cleanup,
+and the `cs` shell surface, cut as v0.20.0.
+
+### Added
+
+- Dashboard: a controlled carousel with per-slot front and back surfaces
+  (About / Workspace / Search), a relabeled Search slot with a
+  conditional legend, and a shared matrix-rain screensaver preview.
+- A `chan shell` subcommand with `argv[0]=="cs"` dispatch so a `cs`
+  symlink works directly (open / graph / term / term-write / dashboard).
+- Terminal tab groups (`$CHAN_TAB_GROUP`) so Cmd+Shift+I broadcast is
+  group-scoped.
+
+### Changed
+
+- Search is now workspace-wide.
+
+### Removed
+
+- The Search SCOPE selector, the SEARCH STATUS button, and the search
+  status overlay (and the dead scope/overlay code they orphaned).
+
+## [v0.19.1] - 2026-05-30
+
+Phase 14 patch: Cmd+, pane-flip guarding and editor focus.
+
+### Fixed
+
+- Cmd+, pane flip is now guarded behind every over-pane modal (it no
+  longer fires while an overlay or modal owns the keyboard).
+- Editor focus follows the active pane, and the indexing graph survives a
+  flip.
+
+## [v0.19.0] - 2026-05-30
+
+Phase 14: the gateway monorepo migration with the drive-to-workspace
+rename, a frontend pristine cleanup for the first public release, paced
+graph delivery, and the new-workspace pre-flight, cut as v0.19.0.
+
+### Added
+
+- Cursor-paged `/api/fs-graph` delivery: opt-in via `limit`, resumed via
+  an opaque `cursor`, bounded DFS batches (at most 256 nodes / 64 KiB),
+  scope-bound rejection. The frontend consumes it incrementally, yielding
+  a frame between batches. The whole-scope path stays byte-identical.
+- New-workspace pre-flight: a `GET /api/preflight` poll plus
+  `POST /api/preflight/decision`, derived from live indexer state, shown
+  on a locked overlay (no close button, ESC ignored) until completion, so
+  local and remote workspaces share one flow.
+- A depth-slider "next degree, not a re-walk" primitive.
+- The chan.app gateway (account, sign-in, reverse-proxy) brought into the
+  repo as a nested Cargo workspace (NOT a member of the root workspace, so
+  the core build stays Postgres-free), with its own CI gate and four .deb
+  packages wired into the release flow.
 
 ### Changed
 
 - The tunnel domain is now `workspace.chan.app` (previously
-  `drive.chan.app`). Tunnel mode dials `workspace.chan.app/v1/tunnel` and
-  publishes at `{user}.workspace.chan.app/{workspace}/`; the chan client
-  default, the chan-tunnel-* crates, chan-server, the desktop shell, the
-  manual, and the marketing copy all use the new hostname.
-- Reviewed the frontend code comments, documentation, and user-facing
-  copy so they read as a present-state snapshot rather than a development
-  history. The editor design note (`web/src/editor/design.md`) now
-  describes the current CodeMirror 6 editor without its tiptap-to-CM6
-  migration story (that history is kept in `docs/phases`); stale
-  `chan-core` crate references were corrected to the post-split crates;
-  and user-facing strings were normalized to ASCII typography (em dashes,
-  ellipses, and middle dots replaced with `-` and `...`).
+  `drive.chan.app`); tunnel mode dials `workspace.chan.app/v1/tunnel` and
+  publishes at `{user}.workspace.chan.app/{workspace}/`. Applied across
+  the chan client default, the chan-tunnel-* crates, chan-server, the
+  desktop shell, the manual, and the marketing copy.
+- The `drive` to `workspace` rename applied across the gateway suite:
+  `drive-proxy` is now `workspace-proxy`; the `workspace_gate` cookie, the
+  `workspace.chan.app` host, the `/api/workspaces/*` routes, the
+  `WORKSPACE_*` env vars, and the `workspaces` / `workspace_grants`
+  tables. Single-source domain config derives every host from
+  `CHAN_DOMAIN` plus `PUBLIC_SCHEME`.
+- Graph directory nodes expand/collapse in place on double-click, with the
+  expanded set persisting across a window reload; the old "graph from
+  here" double-click rescope was dropped (rescope stays in the inspector).
+- Reviewed the frontend comments, documentation, and user-facing copy so
+  they read as a present-state snapshot rather than a development history:
+  the editor design note now describes the current CodeMirror 6 editor,
+  stale `chan-core` references were corrected, and user-facing strings
+  were normalized to ASCII typography.
+
+### Fixed
+
+- False "unsaved changes" banner: a per-page-load `SESSION_ID` plus an
+  mtime-stale guard so own-session edits never raise the banner while a
+  genuine crashed session still recovers.
+- The `/dl` circular 404: the listing regenerates from the latest GitHub
+  Release instead of self-fetching the live site.
+- The gateway `configure.sh` `install /dev/stdin` write over an existing
+  file.
+- De-flaked three indexer/PTY tests with capability-gated skips rather
+  than bigger timeouts.
+
+### Removed
+
+- The vestigial `team-work-N` draft convention.
 
 ## [v0.18.0] - 2026-05-29
 
@@ -147,271 +575,26 @@ changes. Supersedes the 0.15.x line: `chan upgrade` only offers 0.16.0+.
   release workflow stages it, gate vitest in the CI build, and fix a
   flaky unhandled rejection from the debounced workspace-info refresh.
 
-## [v0.14.0] - 2026-05-24
-
-Phase 9 release. Rich Prompt workspaces, metadata archive import/export,
-Drafts lifecycle cleanup, editor page breaks plus PDF export, and several
-server hot-path and file-watcher fixes landed.
-
-### Added
-
-- Rich Prompt workspaces with Core-owned workspace and spool creation, active
-  workspace markers, session-aware status, exact-buffer submit archival, and a
-  single close route for terminal/workspace cleanup.
-- Rich Prompt UI workflow with draft editing, submit/preflight confirmation,
-  prompt history, session status, close/discard handling, and Hybrid Nav
-  `P`/`Mod+. p` entry points.
-- Editor page-break command and print/PDF export support.
-- chan metadata archive export/import core plus CLI import and Infographics
-  import/export UI.
-- Drafts lifecycle routes and UI for close, discard, no-clobber creation, and
-  boot-time broken-workspace reporting.
-- Post-release parking-lot record for skipped native `Cmd+P` validation,
-  Rich Prompt visual follow-up, low-FD live stress, and mtime CAS status.
-
-### Changed
-
-- Workspace metadata is keyed by canonical workspace path and local workspace-name surfaces
-  were removed from the registry/API flow.
-- Terminals and MCP now resolve Drafts paths consistently.
-- File Browser hides inactive Drafts internals while preserving Drafts-aware
-  graph, inspector, indexer, and watcher behavior.
-- Server state, file routes, sessions, storage reset, and tunnel prefix paths
-  now return explicit errors on lock poisoning instead of panicking.
-- File and session hot paths were moved off async workers where needed.
-- Indexers release old workspace handles during metadata import.
-- Semantic model size copy checks avoid oversize copies.
-- Rich Prompt process guidance now lives in static spool/process.md.
-
-### Fixed
-
-- Pathless watcher events are classified as noise, removing noisy
-  `unhandled file event with no path` warnings seen during live validation.
-- Low file-descriptor pressure now caps terminal spawning before starving
-  editor/indexer work.
-- Editor markdown source handling keeps horizontal rules, bullets, and markers
-  visible without rewriting source unexpectedly.
-- Terminal renderer refresh hooks cover tab restore and styled output refresh
-  regressions.
-- File Browser collision handling and tree de-duplication were tightened.
-- Hybrid pane backsides exit explicitly and left-edge hamburger menus open
-  inward.
-
-## [v0.13.0] - 2026-05-23
-
-Phase-8 closing release. Public-flip pre-flight docs landed, screensaver themes shipped, terminal renderer regression fixed, chan-server async-blocking cleanup, plus a number of UI polish and bug fixes.
-
-### Added
-
-- Apache 2.0 `LICENSE` at the repo root.
-- `CONTRIBUTING.md` with build/test/PR submission instructions plus the architectural ground rules (workspace boundary, single binary, local-first, MCP-only, pinned toolchain).
-- `CODE_OF_CONDUCT.md` adapted from Contributor Covenant 2.1.
-- `SECURITY.md` with private disclosure policy, 90-day window, and chan-workspace sandbox identified as the primary security boundary.
-- `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md`, plus `PULL_REQUEST_TEMPLATE.md` with the pre-push gate checklist.
-- `docs/coordination.md` explaining the multi-agent development pattern visible in the journals to outside readers.
-- `CHANGELOG.md` (this file) seeded with v0.6.23 through v0.13.0 entries.
-- Screensaver visual themes: Matrix rain (default) and code-drawn Castaway pixel-art scene with eight animation states (idle / wave / sit / sleep / drink / walk / fish / ship).
-- Settings theme picker for screensaver (Matrix or Castaway), persisted per workspace.
-- Screensaver `prefers-reduced-motion` handling: Matrix rain drops to once-per-second refresh instead of full animation.
-- Right-click menu footer rows across Terminal, File Browser, Graph, and Editor: Settings (toggle), Reopen Closed Tab, and Close.
-
-### Changed
-
-- Terminal and editor tab header clicks now focus the tab content: terminals are ready to type immediately, editors are ready to edit.
-- Hybrid pane hamburger menu cleaned up to match the addendum-a spec: stale "Light mode" and "Flip pane" entries removed (pane flip is now per-tab-kind via the tab's settings).
-- Editor right-click menu reordered: name row now leads, page width slider follows after the first separator.
-- Terminal right-click menu: redundant separator after the name row removed.
-- Screensaver inactivity timeout bounded to `[10s, 3600s]`; the chan-server PATCH endpoint rejects out-of-range writes with `400 Bad Request`.
-- chan-desktop bundle metadata bumped to track v0.13.0 release artifacts.
-- chan-desktop updater public key rotated to the production identity.
-
-### Fixed
-
-- Terminal WebGL renderer glyph atlas corruption under animated SGR sequences (per-character substitution when colored text and animations hit the renderer simultaneously). Detects styled output, coalesces a texture-atlas refresh on the next animation frame, keeps WebGL enabled.
-- File Browser: Drafts subtree refreshes correctly after `Cmd+N` creates a new draft. `refreshTreeForPath` now climbs to the nearest loaded ancestor instead of no-oping when the immediate parent of the new file is not yet loaded. Fixes the symptom where Drafts looked empty after creating a draft, Graph tabs stalled, and `Cmd+N` appeared to do nothing.
-- chan-server: GET `/api/files` and `/api/files/<path>` no longer block the async runtime. Sync filesystem work moved behind `tokio::task::spawn_blocking`. Resolves the 10s timeouts on small-file reads observed under indexer / watcher contention.
-- chan-server: twelve additional route handlers (`fs_graph`, `terminal`, `fonts`, `index`, `graph`, `report`, `search`, `inspector`, `attachments`, `contacts`, `workspace`) plus `static_assets` audited and moved to `spawn_blocking` or `tokio::fs` so request-path filesystem and graph work no longer starves Tokio workers.
-- chan-server: terminal watcher event listing now caps individual event files at 1 MiB before reading them, preventing memory pressure on stray large files in attached watcher directories.
-- chan serve: bind-port errors now name the requested listen address (e.g. `127.0.0.1:8787`) instead of returning a generic message.
-- chan-tunnel-client and chan-tunnel-server: removed twelve confirmed-unused dependency edges; `cargo machete` clean.
-- chan-tunnel-server: integration-test `reqwest` `stream` feature now explicit, no longer relying on feature unification.
-- Repo history audited (gitleaks) for the open-source flip: three pre-release loopback bearer-token entries found, all triaged as acceptable (stopped local services), no purge required.
-
-### Removed
-
-- chan-tunnel-client and chan-tunnel-server: twelve unused dependencies (`anyhow`, `async-trait`, `bytes`, `http-body`, `http-body-util`, `pin-project-lite`, `serde`, `serde_json`, `tower`, and friends across the two crates).
-
-## [v0.12.0] - 2026-05-23
-
-### Added
-
-- Drafts metadata workspace: New Draft creates `Drafts/<name>/draft.md`
-  inside chan metadata, outside the workspace root.
-- Drafts now appear in the file browser, inspector, graph, rich prompt
-  history, workspace read/write/list/stat primitives, BM25 indexer, and watcher
-  flow.
-- Team workspace bootstrap: team config, watcher load, per-cell pane
-  assignment, worker spawn, identity prompt staging, lead PTY rename, and
-  restart.
-- Team APIs for create, duplicate, load, unload, loaded state, and config.
-- Split-pane real-estate grid with per-cell team member assignment.
-- Screensaver with per-workspace enable state, timeout, PIN storage, and manual
-  lock chord.
-- Settings Features section for chan-reports and BGE semantic-search toggles.
-- Mention completion merges contacts and the mention corpus.
-- Cross-platform release pipeline for Linux CLI packages and signed,
-  notarized macOS chan-desktop DMGs.
-
-### Changed
-
-- Hybrid Nav moved to transactional staging for T/O/P/G/E operations.
-- Right-click menus were rebuilt for Terminal, File Browser, and Editor.
-- Carousel moved into the Infographics tab; the welcome pane is now a static
-  spawn grid.
-- First boot now opens with a docked file browser on the left.
-- chan-desktop defaults to native monospace fonts per OS and supports optional
-  Source Code Pro download.
-
-### Fixed
-
-- Rich Prompt cursor and placeholder now share the same row.
-- Hang-recovery banner persists unsaved editor content and restores it after
-  reload.
-- Terminal resize now converges columns to final pane width.
-- Toasts auto-dismiss across success and info surfaces.
-- Silent axum 0.7 path-param mismatch on team routes was fixed.
-- PTY soft-wrap test refactor removed cross-lane drift seen in release smoke.
-
-### Removed
-
-- Legacy Alt+Space rich-prompt chord.
-
-## [v0.11.2] - 2026-05-21
-
-### Added
-
-- First signed and notarized chan-desktop release path.
-- Tag-triggered signed + notarized chan-desktop workflow.
-- Bundled `chan` binary fallback for chan-desktop, with PATH-first lookup and
-  version match.
-- Local `make app-notarized` path using notarytool Keychain profile.
-
-### Changed
-
-- chan-desktop signing identity rotated to the release Developer ID identity.
-
-### Fixed
-
-- Missing-file panel no longer falsely appears while the file still exists.
-- Re-open action and suggest-reopen flow restored for legitimate moved files.
-- Source-mode editor no longer auto-continues markdown lists.
-- Wysiwyg ordered lists render dotted outline numbering.
-- Copied-path notification auto-dismisses.
-- Pre-flight spinner no longer sticks at `0:00`.
-- Submit-mode toolbar toggle persists across reload.
-- Shell-mode tooltip copy no longer claims to append a trailing newline.
-- File-browser expand/collapse state persists across tab switches.
-- Spawn chord always creates a new file-browser tab.
-- chan-desktop Reload and Open Inspector menu items work.
-- Browser-style zoom works in chan-desktop and persists per window.
-
-## [v0.11.1] - 2026-05-20
-
-### Added
-
-- Per-prompt page-width slider for Rich Prompt.
-- Shell/agent submit-mode toolbar toggle and Claude Code submit chord path.
-- Graph ancestor breadcrumb navigation.
-- Inline file rename band above the page-width cap.
-
-### Changed
-
-- Rich Prompt bubble overlay, collapse/expand spacing, terminal broadcast
-  selector, chord surface, and graph-from-here defaults were polished.
-- chan-desktop window title now shows the workspace path.
-
-### Fixed
-
-- BubbleOverlay regression cluster around filtering, dismissal, and flicker.
-- Collapse/expand dead-space recompute.
-- Wysiwyg paste now keeps markdown unescaped.
-- Event watcher silently skips non-matching filenames.
-- CLI no-default-features build is clean.
-
-## [v0.11.0] - 2026-05-19
-
-### Changed
-
-- Workspace, web, and Tauri desktop metadata bumped to 0.11.0 for the phase-7
-  wrap.
-- Cargo.lock and package-lock metadata refreshed for the release boundary.
-
-### Fixed
-
-- Release verification passed: release build, release tests, web build,
-  pre-push gate, and `chan --version`.
-
-## [v0.10.1] - 2026-05-18
-
-### Changed
-
-- Version metadata bumped to 0.10.1.
-
-## [v0.9.0] - 2026-05-17
-
-### Added
-
-- chan-native persistent PTY sessions with byte-offset ring, idle prune,
-  alt-screen-aware reattach, and winsize handling.
-- Terminal environment now exposes only the `CHAN_` MCP namespace, with a
-  per-tab MCP env toggle.
-- VCS-aware indexing for git/hg checkouts.
-- Search aggression budget and `chan serve --search-aggression`.
-- xterm.js Alt-key word motions.
-
-### Changed
-
-- chan-llm became MCP-only.
-- chan-desktop windows key editor sessions per window; browser tabs use
-  per-tab session storage.
-
-### Fixed
-
-- Confirm-on-close for dirty editor tabs and live terminal tabs.
-- Editor caret restore uses nearest scrolling.
-
-### Removed
-
-- In-app Agent overlay.
-- chan-workspace assistant blob API.
-
-## [v0.8.1] - 2026-05-14
-
-### Changed
-
-- Maintenance release for the pre-release track.
-
-## [v0.7.1] - 2026-05-11
-
-### Changed
-
-- Maintenance release for the pre-release track.
-
-## [v0.6.23] - 2026-05-11
-
-### Changed
-
-- Final v0.6.x maintenance release before the v0.7 line.
-
-[Unreleased]: https://github.com/fiorix/chan/compare/chan-v0.14.0...HEAD
-[v0.14.0]: https://github.com/fiorix/chan/compare/chan-v0.13.0...chan-v0.14.0
-[v0.13.0]: https://github.com/fiorix/chan/compare/chan-v0.12.0...chan-v0.13.0
-[v0.12.0]: https://github.com/fiorix/chan/compare/chan-v0.11.2...chan-v0.12.0
-[v0.11.2]: https://github.com/fiorix/chan/compare/chan-v0.11.1...chan-v0.11.2
-[v0.11.1]: https://github.com/fiorix/chan/compare/v0.11.0...chan-v0.11.1
-[v0.11.0]: https://github.com/fiorix/chan/compare/v0.10.1...v0.11.0
-[v0.10.1]: https://github.com/fiorix/chan/compare/v0.9.0...v0.10.1
-[v0.9.0]: https://github.com/fiorix/chan/compare/v0.8.1...v0.9.0
-[v0.8.1]: https://github.com/fiorix/chan/compare/v0.7.1...v0.8.1
-[v0.7.1]: https://github.com/fiorix/chan/compare/v0.6.23...v0.7.1
-[v0.6.23]: https://github.com/fiorix/chan/releases/tag/v0.6.23
+## Pre-v0.16.0 (prototyping)
+
+Versions before v0.16.0 were pre-release prototyping. chan has not made
+an official public release yet; the early development logs, files, and
+tags were cleaned up, so those versions (roughly v0.6.x through v0.15.x)
+carry no tags in this repository and are not detailed here. Their history
+lives in the per-phase reports under `docs/phases/`.
+
+[Unreleased]: https://github.com/fiorix/chan/compare/v0.26.2...HEAD
+[v0.26.2]: https://github.com/fiorix/chan/compare/v0.26.1...v0.26.2
+[v0.26.1]: https://github.com/fiorix/chan/compare/v0.26.0...v0.26.1
+[v0.26.0]: https://github.com/fiorix/chan/compare/v0.25.0...v0.26.0
+[v0.25.0]: https://github.com/fiorix/chan/compare/v0.24.0...v0.25.0
+[v0.24.0]: https://github.com/fiorix/chan/compare/v0.23.0...v0.24.0
+[v0.23.0]: https://github.com/fiorix/chan/compare/v0.22.0...v0.23.0
+[v0.22.0]: https://github.com/fiorix/chan/compare/v0.21.0...v0.22.0
+[v0.21.0]: https://github.com/fiorix/chan/compare/v0.20.0...v0.21.0
+[v0.20.0]: https://github.com/fiorix/chan/compare/v0.19.1...v0.20.0
+[v0.19.1]: https://github.com/fiorix/chan/compare/v0.19.0...v0.19.1
+[v0.19.0]: https://github.com/fiorix/chan/compare/v0.18.0...v0.19.0
+[v0.18.0]: https://github.com/fiorix/chan/compare/v0.17.0...v0.18.0
+[v0.17.0]: https://github.com/fiorix/chan/compare/v0.16.0...v0.17.0
+[v0.16.0]: https://github.com/fiorix/chan/releases/tag/v0.16.0
