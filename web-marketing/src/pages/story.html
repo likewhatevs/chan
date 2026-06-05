@@ -70,5 +70,104 @@
     That is chan. It is the tool I wanted to stop looking for. I hope it is
     useful to you too.
   </p>
+
+  <h2>How it works</h2>
+  <p>
+    I am a simple guy, and I grew up learning to compose things. Chan is a
+    reflection of that. It is a tiny command-line tool, a single static binary
+    under 35MB, with an embedded IDE that runs as a single-page app. You run it
+    on a workspace, which can map one-to-one to a git repo, or any other
+    directory:
+  </p>
+  <pre><code>chan serve ./path/to/repo</code></pre>
+  <p>
+    On a macOS or Linux desktop that starts serving the app to your local
+    browser, and you are ready to go. Running an IDE in the browser is a little
+    limiting, mostly because of the keyboard shortcuts a browser reserves for
+    itself. The first mitigation is chan's Hybrid Nav, a keyboard navigation
+    system inspired by tiling window managers; the UI is built on detached
+    panes in the spirit of iTerm2. The second and more important mitigation is
+    chan-desktop, the native shell for macOS (Chan.app) and Linux
+    (Chan.AppImage). It wraps the same app in a real window where every
+    shortcut works as expected, while still letting the local browser handle
+    external links.
+  </p>
+  <p>
+    What this looks like in practice is one desktop app driving three
+    workspaces at once: one local on disk, one in a Lima VM reached over
+    localhost, and one on a remote VPS reached through an SSH tunnel.
+  </p>
+  <figure class="inline-shot">
+    <img src="/assets/architecture.svg"
+         alt="Chan Desktop driving a local workspace, a Lima VM workspace over localhost, and a remote VPS workspace over an SSH tunnel" />
+  </figure>
+
+  <h2>The IDE</h2>
+  <p>
+    The IDE is the editor, the terminal, the file browser, the graph, and the
+    dashboard. That is everything I needed to stitch my workflow together.
+    Every component can be driven from the UI with mouse or keyboard, and also
+    through the <code>cs</code> command, which runs through <code>chan
+    shell</code> or, better, as a symlink to your <code>chan</code> or
+    <code>chan-desktop</code> binary.
+  </p>
+
+  <h3>Editor</h3>
+  <p>
+    A source code editor built on CodeMirror 6, with a live Markdown renderer
+    that feels familiar. Beyond settings like themes and compact or standard
+    modes, it has special triggers: <code>[[</code> for links, <code>![</code>
+    for images, <code>@today</code> for a date pill, <code>@date</code> for a
+    calendar pick, and <code>@{name}</code> for contacts and mentions. It also
+    renders <code>mermaid</code> charts in code blocks.
+  </p>
+
+  <h3>Terminal</h3>
+  <p>
+    For years I lived in tmux -CC and iTerm2. Because chan is a web app, its
+    terminal sessions run server-side: you can reload or close the window and
+    the sessions stay until you close them. The terminal is fully automatable
+    through the <code>cs terminal</code> command line, which lets you
+    orchestrate agents and smooth out the interaction between agents and you
+    through process and tools like an in-terminal survey. Terminals have names
+    and belong to a group, both reflected in environment variables for
+    automation and cross-terminal communication; cmd+shift+i toggles broadcast
+    input to the group. They also get a Rich Prompt (cmd+shift+p) where you
+    type Markdown freely and submit with cmd+enter, which keeps your input from
+    colliding with automation when the underlying terminal is taking pokes from
+    other agents.
+  </p>
+
+  <h3>File Browser</h3>
+  <p>
+    I needed a way to navigate the workspace. Besides file browser tabs, you
+    can dock the file browser on the left or right of the screen. The docked
+    version is lightweight, without the inspector you get in a full file
+    browser tab. Enable chan-reports for the workspace and the inspector also
+    shows code analysis. The file browser can import a CSV from Google
+    Contacts; the import writes contacts with <code>kind: contact</code>
+    frontmatter, which chan recognizes and renders as contacts in the graph.
+  </p>
+
+  <h3>Graph</h3>
+  <p>
+    The graph is another way to navigate the workspace, rooted on the file
+    browser: its spine is the filesystem, starting from the workspace root. You
+    see directories and files with inspector options that vary by file type, on
+    top of which sit two more layers: Markdown, linking across files, tags, and
+    mentions; and language, if you enable chan-reports for code analysis. The
+    graph tab can export reproducible <code>chan://</code> links for use in the
+    editor.
+  </p>
+
+  <h3>Dashboard</h3>
+  <p>
+    The dashboard is where I put the more central information. It was hard to
+    name, so dashboard it is for now; the plan is to make it more extensible as
+    chan evolves. Its settings turn on screen lock, configure the workspace
+    (enabling chan-reports, importing and exporting metadata), and tune the
+    indexing mechanisms.
+  </p>
+
   <p>-- Alex</p>
 </article>

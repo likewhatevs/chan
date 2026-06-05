@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 560" role="img"
+     aria-labelledby="arch-title arch-desc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <title id="arch-title">Chan running across three workspaces from one desktop app</title>
+  <desc id="arch-desc">Chan Desktop on a Mac drives three windows: a local
+    on-disk workspace, a chan serve running in a Lima Ubuntu VM reached over
+    localhost, and a chan serve on a remote VPS reached over an SSH tunnel.</desc>
+
+  <style>
+    .label { fill: #191816; font-size: 14px; }
+    .sub   { fill: #69655d; font-size: 12px; }
+    .edge  { stroke: #69655d; stroke-width: 1.5; fill: none; }
+    .edgelabel { fill: #69655d; font-size: 11px; }
+    .panel { fill: #ffffff; stroke: #dddad2; stroke-width: 1.5; }
+    .group { fill: #fbfbf8; stroke: #dddad2; stroke-width: 1.5; }
+    .win   { fill: #fff; stroke: #1f6feb; stroke-width: 1.5; }
+    .serve { fill: #fff; stroke: #2ea043; stroke-width: 1.5; }
+    .store { fill: #fff; stroke: #c45a2c; stroke-width: 1.5; }
+    .net   { fill: #fff; stroke: #8957e5; stroke-width: 1.5; }
+    .grouptitle { font-size: 13px; font-weight: 700; }
+  </style>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+            markerHeight="7" orient="auto-start-end">
+      <path d="M0,0 L10,5 L0,10 z" fill="#69655d" />
+    </marker>
+  </defs>
+
+  <!-- Laptop boundary -->
+  <rect class="group" x="20" y="20" width="560" height="520" rx="10" />
+  <text class="grouptitle label" x="40" y="48">My Laptop (macOS)</text>
+
+  <!-- chan-desktop group -->
+  <rect class="group" x="40" y="64" width="270" height="220" rx="8" />
+  <text class="grouptitle sub" x="56" y="88">chan-desktop (Chan.app)</text>
+
+  <rect class="win" x="56" y="100" width="238" height="48" rx="6" />
+  <text class="label" x="72" y="120">Window</text>
+  <text class="sub" x="72" y="138">Local workspace</text>
+
+  <rect class="win" x="56" y="160" width="238" height="48" rx="6" />
+  <text class="label" x="72" y="180">Window</text>
+  <text class="sub" x="72" y="198">localhost:8787</text>
+
+  <rect class="win" x="56" y="220" width="238" height="48" rx="6" />
+  <text class="label" x="72" y="240">Window</text>
+  <text class="sub" x="72" y="258">localhost:18787</text>
+
+  <!-- Local disk store -->
+  <rect class="store" x="40" y="312" width="270" height="56" rx="8" />
+  <text class="label" x="56" y="336">Local workspace on disk</text>
+  <text class="sub" x="56" y="354">iCloud / Google Drive / Dropbox</text>
+
+  <!-- Lima VM group -->
+  <rect class="group" x="40" y="392" width="270" height="92" rx="8" />
+  <text class="grouptitle sub" x="56" y="416">Lima VM (Ubuntu)</text>
+  <rect class="serve" x="56" y="428" width="238" height="44" rx="6" />
+  <text class="sub" x="72" y="448">chan serve ./project</text>
+  <text class="sub" x="72" y="465">listening on :8787</text>
+
+  <!-- SSH tunnel node -->
+  <rect class="net" x="370" y="220" width="190" height="60" rx="8" />
+  <text class="label" x="386" y="246">SSH tunnel</text>
+  <text class="sub" x="386" y="266">-L 18787:localhost:18787</text>
+
+  <!-- VPS boundary -->
+  <rect class="group" x="640" y="200" width="250" height="120" rx="10" />
+  <text class="grouptitle label" x="660" y="232">VPS (remote host)</text>
+  <rect class="serve" x="660" y="248" width="210" height="56" rx="6" />
+  <text class="sub" x="676" y="272">chan serve ./project</text>
+  <text class="sub" x="676" y="290">listening on :18787</text>
+
+  <!-- Edges -->
+  <!-- Local window -> disk -->
+  <path class="edge" marker-end="url(#arrow)" d="M120,148 L120,312" />
+  <!-- Lima window -> Lima serve (routed down the gutter right of the boxes) -->
+  <path class="edge" marker-end="url(#arrow)" d="M294,184 C340,184 340,450 294,450" />
+  <text class="edgelabel" x="348" y="312">localhost:8787</text>
+  <text class="edgelabel" x="348" y="328">(Lima host network)</text>
+  <!-- VPS window -> tunnel -->
+  <path class="edge" marker-end="url(#arrow)" d="M294,244 C330,244 340,250 370,250" />
+  <text class="edgelabel" x="300" y="232">localhost:18787</text>
+  <!-- tunnel -> VPS serve -->
+  <path class="edge" marker-end="url(#arrow)" d="M560,250 C600,250 615,265 660,272" />
+  <text class="edgelabel" x="566" y="240">ssh -L</text>
+</svg>
