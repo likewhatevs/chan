@@ -15,9 +15,11 @@ describe("shortcut registry entry", () => {
     );
   });
 
-  test("entry sits in the Editor group + escapes terminal", () => {
+  test("entry sits in the Editor group + does NOT escape terminal", () => {
+    // Off macOS Mod+E is Ctrl+E, which a focused terminal needs for
+    // readline (move-to-end-of-line), so the chord must stay inside xterm.
     expect(shortcuts).toMatch(
-      /id: "app\.editor\.toggleMode",[\s\S]{1,600}group: "Editor",[\s\S]{1,80}escapeTerminal: true,/,
+      /id: "app\.editor\.toggleMode",[\s\S]{1,800}group: "Editor",[\s\S]{1,800}escapeTerminal: false,/,
     );
   });
 

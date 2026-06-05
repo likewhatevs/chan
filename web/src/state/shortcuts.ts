@@ -395,7 +395,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+E",
     web: "Mod+E",
     group: "Editor",
-    escapeTerminal: true,
+    // escapeTerminal stays FALSE: off macOS `Mod` is Ctrl, and Ctrl+E is
+    // readline's move-to-end-of-line, which a focused terminal must keep.
+    // Escaping bought nothing here anyway - the toggle targets the active
+    // FILE tab, so from a focused terminal pane (no file tab) it is a no-op.
+    // The editor reaches the chord directly (it is not a terminal), so the
+    // Show Source toggle still fires when a file tab is focused.
+    escapeTerminal: false,
   },
   // Bold + Italic are bound in the editor's CM6 keymap
   // (Wysiwyg.svelte -> fmt.toggleBold/Italic). These entries exist
