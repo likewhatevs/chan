@@ -55,7 +55,7 @@
   }
 
   // Metadata archive export/import. Import replaces the per-workspace
-  // metadata (index, graph, report, sessions, drafts) and reloads.
+  // metadata (index, graph, report, sessions) and reloads.
   let metadataBusy = $state(false);
   let metadataStatus = $state<string | null>(null);
   let metadataError = $state<string | null>(null);
@@ -218,7 +218,7 @@
     <div class="metadata-import-panel">
       <div class="metadata-import-file">{metadataImportFile.name}</div>
       <p class="metadata-warning">
-        Import replaces index, graph, report, sessions, and drafts metadata.
+        Import replaces index, graph, report, and sessions metadata.
       </p>
       <label class="metadata-check">
         <input

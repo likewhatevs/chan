@@ -370,15 +370,15 @@ pub struct SearchContentParams {
 pub struct ListFilesParams {
     /// Optional POSIX rel-path prefix to scope the listing to a
     /// subdirectory. Empty / omitted lists the whole workspace (capped).
-    /// `Drafts/...` points at uncommitted metadata-backed draft workspaces.
+    /// Drafts live in the in-workspace `.Drafts/` directory like any content.
     #[serde(default)]
     pub prefix: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ResolvePathParams {
-    /// POSIX-style path in chan's public namespace, including
-    /// `Drafts/...` when resolving a draft metadata location.
+    /// POSIX-style path in chan's public namespace; resolves under the
+    /// workspace root, including drafts in the in-workspace `.Drafts/`.
     pub path: String,
 }
 
@@ -441,8 +441,8 @@ pub struct RepoReportParams {
 impl Server {
     #[tool(description = "\
 Read the UTF-8 content of a file in the active workspace. The path is \
-POSIX-style in chan's public namespace, including `Drafts/...` \
-when needed. Returns { path, content, size, mtime_ns }. Files \
+POSIX-style in chan's public namespace. Returns { path, content, \
+size, mtime_ns }. Files \
 larger than 256 KiB are truncated and the response includes \
 `truncated: true` plus a `note` describing the cap; in that case \
 re-issue with a smaller scope (or open the file in the editor if \
@@ -463,7 +463,7 @@ you need the full thing). Pass `mtime_ns` back on `write_file` as \
     #[tool(description = "\
 Replace the content of a file in the active workspace (creates the \
 parent directory if needed). The path is POSIX-style in chan's \
-public namespace, including `Drafts/...` when needed, and must be \
+public namespace and must be \
 classified by chan-workspace as editable UTF-8 text (.md, .txt, source \
 and config text such as .rs or .json, or known text basenames like \
 Makefile). New files are capped at 2 MiB; existing files can be \
@@ -488,9 +488,9 @@ write_file call.")]
     #[tool(description = "\
 List files in the active workspace as { entries, count, total }. \
 Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
-a subdirectory; omit it to list the whole workspace. Includes the \
-metadata-backed `Drafts/...` namespace for uncommitted draft \
-workspaces. Listings are capped at 2,000 entries; if `truncated` \
+a subdirectory; omit it to list the whole workspace, including \
+drafts in the in-workspace `.Drafts/` directory. Listings are \
+capped at 2,000 entries; if `truncated` \
 is true, narrow with a prefix or call search_content instead.")]
     async fn list_files(
         &self,

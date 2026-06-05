@@ -1060,11 +1060,11 @@ fn router(state: Arc<AppState>) -> Router {
             "/api/files/upload",
             post(api_upload_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
-        // `fullstack-a-66`: New Draft action. Creates
-        // `Drafts/<next-untitled>/draft.md` + indexes via the
-        // chan-workspace unified-path API (`systacean-25`/`-26`).
-        // SPA Cmd+N chord routes here; response path opens via
-        // the existing /api/files/Drafts/.../draft.md GET path.
+        // New Draft action. Creates `<drafts_dir>/<next-untitled>/draft.md`
+        // in the in-root drafts dir (`.Drafts/` by default) as ordinary
+        // workspace content; it indexes and graphs through the normal walk.
+        // SPA Cmd+N chord routes here; the response path opens via the
+        // existing /api/files/<path> GET path like any other file.
         .route("/api/drafts/new", post(api_create_draft))
         .route("/api/drafts/inspect", post(api_inspect_draft))
         .route("/api/drafts/discard", post(api_discard_draft))

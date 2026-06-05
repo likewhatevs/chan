@@ -433,8 +433,8 @@ export function dismissWorkspaceWarning(warning: WorkspaceWarning): void {
 export async function discardWorkspaceWarning(warning: WorkspaceWarning): Promise<void> {
   if (!canDiscardWorkspaceWarning(warning)) return;
   const confirmed = await uiConfirm({
-    title: "Discard broken Draft metadata?",
-    message: `Move ${warning.path} to metadata trash?`,
+    title: "Discard broken draft?",
+    message: `Move ${warning.path} to trash?`,
     confirmLabel: "Discard",
     destructive: true,
   });

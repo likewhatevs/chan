@@ -670,8 +670,8 @@ fn image_subset(
 }
 
 /// True only for regular files in chan's public namespace.
-/// Uses Workspace so virtual Drafts paths share the same truth as
-/// `/api/files` and MCP content tools.
+/// Uses Workspace so drafts (in the in-root `.Drafts/` dir) share the
+/// same truth as `/api/files` and MCP content tools.
 fn indexed_file_exists(workspace: &chan_workspace::Workspace, rel: &str) -> bool {
     workspace.exists(rel)
 }

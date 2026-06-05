@@ -114,14 +114,12 @@ pub struct WatchHandle {
 }
 
 impl WatchHandle {
-    /// systacean-25: attach the notify backend to one or more
-    /// roots. Each root carries an optional keyspace prefix; the
-    /// dispatcher relativizes events against whichever root they
-    /// emerge under and prepends the prefix when set so the
-    /// indexer sees paths in a unified namespace
-    /// (`<rel>` for workspace-root events; `Drafts/<rel>` for
-    /// drafts-root events). Existing single-root callers pass
-    /// `&[WatchRoot::workspace(workspace_root)]`.
+    /// Attach the notify backend to one or more roots. Each root
+    /// carries an optional keyspace prefix; the dispatcher relativizes
+    /// events against whichever root they emerge under and prepends the
+    /// prefix when set so the indexer sees a stable `<prefix>/<rel>`
+    /// path. The workspace root is watched with no prefix (`<rel>`).
+    /// Callers pass `&[WatchRoot::workspace(workspace_root)]`.
     ///
     /// `filter` is the SAME unified ignore set the bootstrap walk
     /// uses (`Workspace::walk_filter`): events whose relative path runs

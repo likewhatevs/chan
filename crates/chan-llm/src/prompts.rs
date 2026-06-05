@@ -131,10 +131,9 @@ content as text, or propose alternatives.\n\
 your own Read / Glob / Grep when the target is in the user's workspace; \
 they go through chan-workspace's sandbox and graph index, which match the \
 user's visible scope exactly.\n\
-  - If an MCP result points at `Drafts/...` and you need to run a \
-shell command there, call `mcp__chan__resolve_path` first. Drafts \
-is an uncommitted metadata-backed workspace and does not exist as a \
-`Drafts` directory under the workspace root.\n\
+  - To run a shell command in a draft's directory, call \
+`mcp__chan__resolve_path` to get the real host path. Drafts are \
+ordinary files in the in-workspace `.Drafts/` directory.\n\
   - Even when the user explicitly says \"let me review\", \
 \"don't auto-apply\", or \"show me the proposal first\", you \
 should still emit the tool call. Those phrasings describe the \
@@ -145,8 +144,8 @@ verbal exchange.";
 /// the backend sees.
 pub const READ_FILE_DESC: &str = "\
 Read the UTF-8 content of a file in the active workspace. The path is \
-POSIX-style in chan's public namespace, including `Drafts/...` \
-when needed. Returns { path, content, size, mtime_ns }. Files \
+POSIX-style in chan's public namespace. Returns { path, content, \
+size, mtime_ns }. Files \
 larger than 256 KiB are truncated and the response includes \
 `truncated: true` plus a `note` describing the cap; in that case \
 re-issue with a smaller scope (or open the file in the editor if \
@@ -161,7 +160,7 @@ you need the full thing). Pass `mtime_ns` back on `write_file` as \
 pub const WRITE_FILE_DESC: &str = "\
 Replace the content of a file in the active workspace (creates the \
 parent directory if needed). The path is POSIX-style in chan's \
-public namespace, including `Drafts/...` when needed, and must be \
+public namespace and must be \
 classified by chan-workspace as editable UTF-8 text (.md, .txt, source \
 and config text such as .rs or .json, or known text basenames like \
 Makefile). New files are capped at 2 MiB; existing files can be \
@@ -177,9 +176,9 @@ write_file call.";
 pub const LIST_FILES_DESC: &str = "\
 List files in the active workspace as { entries, count, total }. \
 Pass an optional `prefix` (POSIX rel-path) to scope the listing to \
-a subdirectory; omit it to list the whole workspace. Includes the \
-metadata-backed `Drafts/...` namespace for uncommitted draft \
-workspaces. Listings are capped at 2,000 entries; if `truncated` \
+a subdirectory; omit it to list the whole workspace, including \
+drafts in the in-workspace `.Drafts/` directory. Listings are \
+capped at 2,000 entries; if `truncated` \
 is true, narrow with a prefix or call search_content instead.";
 
 /// Description of the resolve_path tool.

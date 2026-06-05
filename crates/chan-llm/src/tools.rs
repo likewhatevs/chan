@@ -308,9 +308,8 @@ fn exec_list_files(args: &Json, ctx: &ToolContext) -> Result<Json> {
     let prefix = args.get("prefix").and_then(|v| v.as_str());
     // Push prefix scoping into chan-workspace so a narrow `prefix` on a
     // 500k-file workspace walks only the relevant subtree instead of the
-    // full root. Use the unified variant so agents can see
-    // uncommitted draft workspaces even though they live in chan
-    // metadata.
+    // full root. Drafts (in the in-root `.Drafts/` dir) are included by
+    // the normal walk like any other content.
     let mut entries: Vec<_> = match prefix {
         Some(p) if !p.is_empty() => ctx
             .workspace
@@ -510,7 +509,7 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "POSIX rel path in chan's public namespace, including Drafts/..."
+                        "description": "POSIX rel path in chan's public namespace."
                     }
                 },
                 "required": ["path"],
@@ -553,7 +552,7 @@ pub fn standard_tool_schemas() -> Vec<ToolSchema> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "POSIX rel path in chan's public namespace, including Drafts/... when needed."
+                        "description": "POSIX rel path in chan's public namespace."
                     }
                 },
                 "required": ["path"],
