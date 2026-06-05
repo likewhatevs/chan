@@ -6,6 +6,63 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.28.0] - 2026-06-05
+
+Phase 19: a graph @@mention lens, a startup index-reconcile fix, the
+agent-docs reorg into a committed `.agents/` home, and a marketing
+story page.
+
+### Added
+
+- Graph `@@mention` lens. Clicking a standalone `@@handle` from the file
+  inspector, an editor mention, or a search mention row opens a focused
+  graph centered on the `@@Name` node with an edge to every file that
+  references it, each re-anchored through its parent-directory spine back
+  to the workspace root. Mirrors the existing `#tag` lens. Search now
+  surfaces mention rows alongside tags.
+- A chan story page on the marketing site (`/story`) carrying the project
+  motivation, an architecture diagram, and a tour of the IDE.
+
+### Changed
+
+- Agent and contributor docs now live in a single committed `.agents/`
+  home (standards, roster, orchestration contracts, and skills). The
+  near-duplicate root `CLAUDE.md` and `AGENTS.md` are removed; `README.md`
+  and `CONTRIBUTING.md` point into `.agents/README.md`.
+
+### Fixed
+
+- The graph index reconciles against disk on workspace open. A markdown
+  file added, edited, or removed while no server was watching (closed
+  laptop, no `chan serve` running) is now picked up on the next start
+  instead of staying invisible across restarts, so its mentions and tags
+  get edges. Cold or empty workspaces still defer to the background full
+  build, so open stays fast.
+- Contacts (`chan.kind: contact` notes) render as contact nodes in the
+  graph even when reached only by a link rather than an `@@mention`.
+  They previously fell back to the generic markdown node glyph while the
+  file browser, inspector, and `@{}` search already treated them as
+  contacts.
+
+## [v0.27.1] - 2026-06-05
+
+### Fixed
+
+- New Draft (Cmd+N) surfaces the drafts directory in the file tree.
+- File browser expansion state persists across reload and tab switch.
+
+## [v0.27.0] - 2026-06-05
+
+### Changed
+
+- Drafts are stored in-tree under a configurable `.Drafts/` directory and
+  addressed as in-root workspace paths; the server surfaces the drafts
+  directory and the web client keys draft-path logic off it.
+
+### Fixed
+
+- A moved or deleted draft tab now closes cleanly.
+
 ## [v0.26.2] - 2026-06-05
 
 Phase 18 follow-up: Linux desktop (WebKitGTK) fixes found while testing
