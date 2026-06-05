@@ -1528,12 +1528,37 @@
     min-height: 0;
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
+    /* WebKitGTK (the Linux desktop webview) ignores backface-visibility
+       inside a preserve-3d context, so the rotated-away face keeps
+       painting; since the back face sits later in source order it then
+       covers the front mirror-reversed and the flip looks stuck on the
+       Settings side. Blink (the browser build) honors it, which is why
+       the bug is desktop-only. So drive each face's visibility off the
+       flip state as the real hider, not just backface-visibility. The
+       0s/140ms transition defers the swap to the ~90deg edge-on point of
+       the 400ms turn (where the Material curve crosses half-rotation) so
+       the face vanishes while the card is edge-on and the swap is unseen;
+       backface-visibility is kept for Blink/WebKit, where it already
+       lines up at that same instant. */
+    transition: visibility 0s linear 140ms;
+  }
+  .flip-card .face.front {
+    visibility: visible;
   }
   .flip-card .face.back {
     transform: rotateY(180deg);
+    visibility: hidden;
+  }
+  .flip-card.showing-back .face.front {
+    visibility: hidden;
+  }
+  .flip-card.showing-back .face.back {
+    visibility: visible;
   }
   @media (prefers-reduced-motion: reduce) {
     .flip-card { transition: none; }
+    /* No turn to mask, so swap the faces instantly with the class. */
+    .flip-card .face { transition: none; }
   }
   /* iTerm-style strip: a dark bar with no per-tab dividers. The
      active tab is a rounded pill sitting on the bar rather than a
