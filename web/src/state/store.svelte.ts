@@ -1407,6 +1407,25 @@ function treeAncestorDirs(path: string): string[] {
   return dirs;
 }
 
+/// Surface a freshly created draft in the file tree. Re-lists every
+/// currently-loaded ancestor dir of `path` (root included) and merges the
+/// result, so the drafts dir (and any visible draft subdir) appears without
+/// a reload. Unlike `refreshTreeForPath`, this does NOT bail on draft paths:
+/// creating a draft is exactly when the drafts dir first becomes a real
+/// tree entry. Draft EDITS still skip the tree via the watcher path's
+/// `refreshTreeForPath` draft-bail, so autosave doesn't shake it.
+async function surfaceDraftInTree(path: string): Promise<void> {
+  for (const dir of ["", ...treeAncestorDirs(path)]) {
+    if (!tree.loadedDirs[dir]) continue;
+    try {
+      const entries = await api.list(dir);
+      tree.entries = sortTreeEntries(mergeDirEntries(tree.entries, dir, entries));
+    } catch {
+      // Best effort; a transient list error self-heals on the next event.
+    }
+  }
+}
+
 export async function handleDraftPromoted(path: string): Promise<void> {
   if (isDraftPath(path)) return;
   await refreshTreeForPath(path);
@@ -1460,7 +1479,7 @@ function nearestLoadedParentDir(path: string): string | null {
 }
 
 export async function noteDraftCreated(path: string): Promise<void> {
-  await refreshTreeForPath(path);
+  await surfaceDraftInTree(path);
   scheduleWorkspaceRefresh();
   invalidateGraph();
   if (hasBrowserTab() || hasGraphTab()) {
