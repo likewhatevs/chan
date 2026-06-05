@@ -437,6 +437,13 @@ against that Library, and forwards it into `Index` for the search
 side. `.git` and `.chan` stay hardcoded in `walk_workspace`: those are
 invariants of the on-disk layout, not policy.
 
+`Registry::drafts_dir` (default `.Drafts`) is modeled the same way as
+`index_excluded_dirs`: a global field in `~/.chan/config.toml`,
+hand-edited, not exposed through any UI. It names the in-tree Drafts
+directory rather than a skip target, so it is deliberately NOT on the
+walk filter: drafts are real in-tree content and index and graph like
+any other file.
+
 The filter is honored by the indexing pipeline only:
 `rebuild_graph` and `Index::build_all` use `list_tree_filtered`
 and `walk_workspace_filtered`. The editor-visible APIs
@@ -1137,9 +1144,12 @@ chan-workspace never emits events for it or includes it in
     report/report.jsonl           chan-report cache
     index/                        tantivy segments + dense vectors +
                                   config.toml
-    drafts/                       in-progress drafts outside the
-                                  user workspace root
 ```
+
+Drafts (the scratch namespace for Cmd+N) are NOT stored in this
+metadata tree. They live in-tree as a real hidden directory at the
+workspace root, named by `Registry::drafts_dir` (default `.Drafts`).
+See "Workspace contents" below.
 
 `<metadata_key>` is the path slug plus an 8-hex hash of the
 canonical path at first registration. `Library::move_workspace`
@@ -1166,10 +1176,27 @@ alongside the rest of the per-app state.
 
 ### Workspace contents
 
-User content only: markdown, attachments, whatever the user puts
-there. chan-workspace never writes inside the workspace root. This is a
-load-bearing invariant for the "workspace a git repo / sync directory"
-story.
+User content: markdown, attachments, whatever the user puts there.
+
+The one chan-managed subtree that lives inside the workspace root is
+the Drafts directory, named by `Registry::drafts_dir` (default
+`.Drafts`). It holds Cmd+N scratch work as `<name>/draft.md` plus
+companions (e.g. pasted images). It is dot-prefixed so it stays out
+of the way and is created lazily on the first Cmd+N, so an untouched
+workspace has no `.Drafts/`.
+
+Keeping drafts in-tree reverses the earlier design that parked them
+in chan metadata to keep the user's tree clean. The current tradeoff
+is the simpler uniform path: drafts are ordinary relpaths
+(`.Drafts/<name>/draft.md`), so search, graph, and the watcher pick
+them up through the normal machinery with no virtual namespace, no
+separate cap-std handle, no separate watch root, and no synthesized
+graph node. Users who do not want drafts tracked by SCM add `.Drafts/`
+to their `.gitignore`.
+
+The walker still hard-skips `.git` and `.chan` and honors
+`index_excluded_dirs`; `.Drafts` is not on the skip list, so drafts
+index and graph like any other content.
 
 ## 7. Error model
 

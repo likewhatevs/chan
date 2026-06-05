@@ -10,8 +10,17 @@ files without changing the workspace layout on disk.
 
 ## Drafts
 
-Drafts are temporary markdown files managed by Chan. Save a draft when you
-want it to become workspace content. Discard it when it should not be kept.
+Drafts are scratch markdown files Chan creates for you with Cmd+N. Save a
+draft when you want it to become workspace content. Discard it when it should
+not be kept.
+
+Drafts live inside your workspace in a hidden directory named `.Drafts/`
+(at the workspace root), with each draft kept as `.Drafts/<name>/draft.md`
+plus any companions such as pasted images. The directory is created the
+first time you make a draft, so an untouched workspace has none. Because it
+is part of the workspace, drafts show up in search and the graph like any
+other note. If you keep your workspace under version control and do not want
+drafts committed, add `.Drafts/` to your `.gitignore`.
 
 ## External edits
 

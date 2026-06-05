@@ -69,6 +69,23 @@ Per-workspace entry persisted at registration time:
 | `last_opened` | `DateTime<Utc>` | now() | `chan list` | recency sort |
 | `canonical_path` | transient (`#[serde(skip)]`) | n/a | (internal cache) | symlink-stable comparison |
 
+Global registry fields (not per-workspace), persisted in the same
+`~/.chan/config.toml`:
+
+| Field | Type | Default | Reachability | Consumers |
+|-------|------|---------|--------------|-----------|
+| `index_excluded_dirs` | `Vec<String>` | dev-junk set | hand-edited TOML only | walk filter for index + graph rebuild |
+| `drafts_dir` | `String` | `".Drafts"` | hand-edited TOML only | in-tree Drafts dir name for Cmd+N |
+
+Both `index_excluded_dirs` and `drafts_dir` are hand-edited in the
+TOML and have no UI surface. `drafts_dir` names a real hidden
+directory at the workspace root (default `.Drafts/`) that holds Cmd+N
+scratch work as `<name>/draft.md` plus companions. It is created
+lazily on the first Cmd+N, so an untouched workspace has no such
+directory. Because it lives in-tree it participates in search, graph,
+and watch through the normal machinery; add `.Drafts/` to a
+`.gitignore` to keep drafts out of SCM.
+
 ### `<state_dir>/index/<uuid>/config.toml` — `IndexConfig`
 
 Source: `crates/chan-workspace/src/index/config.rs`.
@@ -83,7 +100,7 @@ Source: `crates/chan-workspace/src/index/config.rs`.
 | `semantic_enabled` | `bool` | `false` | `chan index enable-semantic/disable-semantic --path <workspace>` + Settings (`fullstack-a-21`) | `Workspace::search` Hybrid default mode |
 | `reports_enabled` | `bool` | `false` | `chan reports enable/disable --path <workspace> [-y]` + `chan add --reports` | `Workspace::report()` lazy init + `Workspace::boot()` |
 
-### `Drafts/team-{name}/config.toml` — `TeamConfig`
+### `.Drafts/team-{name}/config.toml` — `TeamConfig`
 
 Source: `crates/chan-workspace/src/teams.rs` (post-`systacean-30`).
 
@@ -150,7 +167,11 @@ Per-workspace subpaths key by `KnownWorkspace.uuid` (16 hex chars), assigned at 
 * `state_dir/tokens/<uuid>/` — chan-server bearer token (mode 0600).
 * `state_dir/trash/<uuid>/` — soft-deleted files (lazy GC).
 * `state_dir/report/<uuid>/report.jsonl` — chan-report state (lazy on opt-in post-`systacean-27`).
-* `state_dir/drafts/<uuid>/` — Drafts metadata (post-`systacean-24`). Contains regular drafts (`untitled-N/`) + team workspaces (`team-{name}/`).
 * `cache_dir/index/<uuid>/` — tantivy search-index segments + `config.toml`.
+
+Drafts are NOT in this metadata tree. They live in-tree under the
+workspace root in the directory named by `Registry::drafts_dir`
+(default `.Drafts/`), holding regular drafts (`untitled-N/`) and team
+workspaces (`team-{name}/`).
 
 See `crates/chan-workspace/src/paths.rs::WorkspacePaths` for the canonical computation.
