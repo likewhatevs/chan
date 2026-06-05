@@ -1288,9 +1288,10 @@
     --g-source: #4169e1;
     --g-binary: #5e5e62;
     --g-folder: #8e8e93;
-    /* Drafts folder: distinct yellow tone. Sits at the top of the FB tree
-       as the synthetic "Drafts" entry. Low-alpha background tint marks the
-       row as a category without dominating the panel. */
+    /* Drafts folder: distinct yellow tone. The configured Drafts dir
+       (default .Drafts) is a real in-workspace directory; this tint
+       marks its FB row + graph node as a category without dominating
+       the panel. */
     --fb-drafts-fg: #e3b341;
     --fb-drafts-bg: rgba(227, 179, 65, 0.10);
     /* Inline editor pills (wiki link, image, tag, contact, date,

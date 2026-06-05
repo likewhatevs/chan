@@ -257,7 +257,7 @@ describe("editorBuffer path-keyed buffers survive a reload", () => {
 describe("editorBuffer draft lifecycle", () => {
   test("own-session edits never raise the banner; a prior session does", () => {
     vi.useFakeTimers();
-    const path = "Drafts/untitled-1.md";
+    const path = ".Drafts/untitled-1.md";
     const seed = "# Draft\n";
 
     // Freshly seeded draft: editor matches disk, nothing persisted.

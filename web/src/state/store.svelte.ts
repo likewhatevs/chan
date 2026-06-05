@@ -70,7 +70,17 @@ import { withTokenQuery } from "../api/transport";
 import { uiConfirm } from "./confirm.svelte";
 import { applyEditorToolPreferences } from "./editorTools.svelte";
 import { fbWatchResyncAll } from "./fbWatch.svelte";
-export const workspace = $state<{ info: WorkspaceInfo | null }>({ info: null });
+// `workspace` + the draft-path helpers live in a side-effect-free leaf
+// module so `tabs.svelte.ts` can read `draftsDir()` without dragging in
+// store's eager draft-promotion-sink registration (init-order cycle).
+// Re-export `workspace` here so existing `from "./store.svelte"`
+// importers keep working unchanged.
+export {
+  workspace,
+  draftsDir,
+  isDraftPath,
+} from "./workspace.svelte";
+import { workspace, draftsDir, isDraftPath } from "./workspace.svelte";
 
 /// Display name for the active workspace. The server computes this from
 /// the path; it is not user-managed registry metadata.
@@ -330,7 +340,12 @@ export function canDiscardWorkspaceWarning(warning: WorkspaceWarning): boolean {
   if (warning.kind !== "broken_draft") {
     return false;
   }
-  return /^Drafts\/[^/]+$/.test(warning.path);
+  // A discardable broken draft is a direct child of the drafts dir
+  // (e.g. `.Drafts/untitled-1`), not the dir itself or a deeper path.
+  const prefix = `${draftsDir()}/`;
+  if (!warning.path.startsWith(prefix)) return false;
+  const rest = warning.path.slice(prefix.length);
+  return rest.length > 0 && !rest.includes("/");
 }
 
 function surfaceWorkspaceWarnings(info: WorkspaceInfo): void {
@@ -1369,7 +1384,7 @@ export function pathInAnyScope(path: string, scopes: string[]): boolean {
 /// loaded (nothing visible would change). Use `refreshTree` when
 /// a full root re-fetch is needed.
 export async function refreshTreeForPath(path: string): Promise<void> {
-  if (isDraftsPath(path)) return;
+  if (isDraftPath(path)) return;
   const parent = nearestLoadedParentDir(path);
   if (parent === null) return;
   try {
@@ -1393,7 +1408,7 @@ function treeAncestorDirs(path: string): string[] {
 }
 
 export async function handleDraftPromoted(path: string): Promise<void> {
-  if (isDraftsPath(path)) return;
+  if (isDraftPath(path)) return;
   await refreshTreeForPath(path);
   for (const dir of treeAncestorDirs(path)) {
     try {
@@ -1422,12 +1437,11 @@ registerDraftPromotionSink((path) => {
   void handleDraftPromoted(path);
 });
 
-function isDraftsPath(path: string): boolean {
-  return path === "Drafts" || path.startsWith("Drafts/");
-}
-
+// File-Browser operations (rename/move/delete/create) are blocked on
+// draft paths on purpose: drafts are saved or discarded from editor
+// tabs, not the tree. Keyed off `draftsDir()` via the shared helper.
 function fileBrowserDraftsPathReason(path: string): string | null {
-  if (!isDraftsPath(path)) return null;
+  if (!isDraftPath(path)) return null;
   return "Drafts are saved or discarded from editor tabs";
 }
 

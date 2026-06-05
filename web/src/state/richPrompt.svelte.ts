@@ -11,7 +11,7 @@
 //
 // The prompt TEXT is not held here: each terminal's bubble is backed by a
 // per-terminal chan-workspace DRAFT (`tab.richPromptDraftPath` -> a real
-// `Drafts/<name>/draft.md`), so the text + any pasted images live on disk and
+// `<draftsDir>/<name>/draft.md`), so the text + any pasted images live on disk and
 // any MCP/disk agent can read the media as files. RichPrompt.svelte owns that
 // draft binding; this module owns only which terminals currently show the
 // bubble. The entry is dropped when the terminal closes

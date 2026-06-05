@@ -38,6 +38,7 @@
     type Simulation,
   } from "d3-force";
   import type { GraphViewEdge, GraphViewNode } from "../api/types";
+  import { draftsDir } from "../state/workspace.svelte";
 
   type RenderedEdgeKind =
     | "link"
@@ -45,11 +46,7 @@
     | "mention"
     | "contains"
     | "language"
-    | "group"
-    /// Workspace-root → Drafts-root edge. Styled distinctly in the
-    /// canvas to read as a "different category" connector with the
-    /// shared Drafts tint.
-    | "drafts_link";
+    | "group";
   type RenderedEdge = GraphViewEdge & { kind: RenderedEdgeKind };
   type RenderedNode = Extract<
     GraphViewNode,
@@ -382,9 +379,9 @@
     /// Binary file fill. Grey (darker than --g-folder so binary
     /// nodes don't visually collapse into directory nodes).
     binary: string;
-    /// Drafts directory node fill + drafts_link edge stroke. Pulls
-    /// from --fb-drafts-fg so the graph + the FB row + the inspector
-    /// header all render the same yellow tint.
+    /// Drafts directory node fill. Pulls from --fb-drafts-fg so the
+    /// graph + the FB row + the inspector header all render the same
+    /// yellow tint.
     drafts: string;
   };
 
@@ -947,7 +944,7 @@
     // (--g-source), and so on, honouring the Graph settings palette.
     ctx.lineWidth = 1 / Math.max(0.5, transform.k);
     const edgesByKind: Record<RenderedEdgeKind, DEdge[]> = {
-      link: [], tag: [], mention: [], contains: [], language: [], group: [], drafts_link: [],
+      link: [], tag: [], mention: [], contains: [], language: [], group: [],
     };
     for (const e of visibleEdgeRefs) edgesByKind[e.kind].push(e);
 
@@ -960,7 +957,6 @@
       : kind === "mention" ? theme.mention
       : kind === "contains" ? theme.folder
       : kind === "language" ? theme.language
-      : kind === "drafts_link" ? theme.drafts
       : theme.accent;
 
     const strokePass = (list: DEdge[], color: string, alpha: number): void => {
@@ -996,10 +992,8 @@
       }
     };
 
-    for (const kind of ["tag", "mention", "contains", "language", "group", "drafts_link"] as const) {
-      // `drafts_link` renders at a higher base alpha so the
-      // workspace-root → Drafts edge reads as a category boundary crossing.
-      strokePass(edgesByKind[kind], strokeForKind(kind), kind === "drafts_link" ? 0.4 : 0.18);
+    for (const kind of ["tag", "mention", "contains", "language", "group"] as const) {
+      strokePass(edgesByKind[kind], strokeForKind(kind), 0.18);
     }
 
     // `link` edges grouped by source-document kind. Resolving the
@@ -1039,12 +1033,11 @@
       const isGhost = n.missing;
       // Tint the Drafts directory node with the Drafts yellow so the
       // graph reads consistent with the FB row + the inspector chip.
-      // Match by node id: the chan-server `synthesize_drafts_layer`
-      // emits this node as `directory_node_id("Drafts")` →
-      // `"directory:Drafts"`. DNode doesn't carry the raw path (the
-      // canvas only needs id + label + kind), so we key on the id
-      // literal instead.
-      const isDraftsRoot = n.kind === "folder" && n.id === "directory:Drafts";
+      // The drafts dir is a normal in-workspace directory node with id
+      // `directory:${draftsDir()}`. DNode doesn't carry the raw path
+      // (the canvas only needs id + label + kind), so we key on the id.
+      const isDraftsRoot =
+        n.kind === "folder" && n.id === `directory:${draftsDir()}`;
       // Indexing palette override. When a
       // folder/workspace node carries `indexState` (the Dashboard
       // indexing slide feeds this; the main graph leaves it

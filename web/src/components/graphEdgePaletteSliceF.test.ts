@@ -20,7 +20,7 @@ describe("contains (dir->dir / dir->file) edges stay grey", () => {
 
   test("contains rides the single-stroke-per-kind loop, not the link pass", () => {
     expect(canvas).toMatch(
-      /\["tag", "mention", "contains", "language", "group", "drafts_link"\] as const/,
+      /\["tag", "mention", "contains", "language", "group"\] as const/,
     );
   });
 });

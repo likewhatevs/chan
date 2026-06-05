@@ -684,8 +684,8 @@ export const api = {
     }),
   /// Create a new draft directory with a seeded draft.md via
   /// /api/drafts/new. Picks the next `untitled` / `untitled-N`
-  /// name server-side. Returns the unified-path
-  /// `Drafts/<name>/draft.md` which the SPA opens via
+  /// name server-side. Returns the real in-workspace relpath
+  /// `<draftsDir>/<name>/draft.md` which the SPA opens via
   /// the existing /api/files/* GET path.
   createDraft: () =>
     req<{ path: string; name: string }>("POST", "/api/drafts/new"),

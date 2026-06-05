@@ -100,6 +100,7 @@
   import {
     copyTextToClipboard,
     fileOps,
+    isDraftPath,
     openFsGraphForFile,
     openGraphForFile,
     openGraphForTag,
@@ -401,9 +402,7 @@
   /// traversal (`../other/dir/`), extension preservation, and link
   /// rewriting.
   let nameDraft = $state("");
-  const isDraftEditorTab = $derived(
-    tab.path === "Drafts" || tab.path.startsWith("Drafts/"),
-  );
+  const isDraftEditorTab = $derived(isDraftPath(tab.path));
   $effect(() => {
     // Sync the draft to the tab path when the underlying file
     // changes (e.g. external rename, or another menu surface).

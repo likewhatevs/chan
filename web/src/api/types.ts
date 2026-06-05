@@ -7,6 +7,13 @@ export type WorkspaceInfo = {
   /// persisted user metadata; full root remains authoritative.
   label: string | null;
   metadata_key: string | null;
+  /// Configured Drafts directory: a real in-workspace relpath
+  /// (default `.Drafts`) named by a global backend config. Surfaced
+  /// READ-ONLY; the SPA keys all draft-path logic off this value
+  /// (see `draftsDir()` / `isDraftPath()` in state/workspace.svelte).
+  /// Not user-editable from the SPA. Snake_case on the wire to match
+  /// the rest of WorkspaceInfo (e.g. `metadata_key`).
+  drafts_dir: string;
   /// Mirror of GlobalConfig.preferences. Per-workspace overrides
   /// were removed; settings are always per-device-global. Carried
   /// here so a single `/api/workspace` round-trip is enough to
@@ -460,13 +467,7 @@ export type GraphViewEdgeKind =
   | "mention"
   | "contains"
   | "language"
-  | "date"
-  /// Distinguished edge from workspace-root to Drafts-root.
-  /// Emitted by chan-server's `synthesize_drafts_layer` when any
-  /// indexed file lives under the `Drafts/` unified-keyspace
-  /// prefix. Styled distinctly in the canvas (yellow tint) so the
-  /// drafts surface reads as "different category" at a glance.
-  | "drafts_link";
+  | "date";
 
 export type GraphViewEdge = {
   source: string;

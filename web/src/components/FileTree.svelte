@@ -586,14 +586,6 @@
     onFlip?.();
   }
 
-  /// Detect `Drafts/team-{name}/` directories. The team workspace
-  /// primitive puts every team under `Drafts/team-<name>/` with a
-  /// `config.toml` at the root; this helper matches the path shape
-  /// only, since the `config.toml` check would need a tree-lookup
-  /// that isn't cheap from here. False positives (any
-  /// `Drafts/team-foo/` dir without a config) fall through
-  /// gracefully: the server's `team_events_dir` returns a not-found
-  /// error which the caller surfaces.
   async function rename(path: string, isDir: boolean): Promise<void> {
     await fileOps.rename(path, isDir);
     menu = null;

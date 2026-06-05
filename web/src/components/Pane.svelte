@@ -171,7 +171,7 @@
   // empty-pane carousel slide 1. A single `spawnActions` list backs
   // all three surfaces so they stay in lockstep (same 7 entries in
   // the same order). New Draft is the first entry (Cmd+N opens a
-  // fresh `Drafts/untitled-N/draft.md`).
+  // fresh `<draftsDir>/untitled-N/draft.md`).
   const spawnActions: EmptyMenuRow[] = [
     {
       label: "New Draft",

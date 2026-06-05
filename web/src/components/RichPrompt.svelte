@@ -6,7 +6,7 @@
   // frame (NOT the raw keystroke path).
   //
   // Drafts-backed (@@Host): the bubble edits a real per-terminal chan-workspace
-  // DRAFT (`tab.richPromptDraftPath` -> `Drafts/<name>/draft.md`). That file IS
+  // DRAFT (`tab.richPromptDraftPath` -> `<draftsDir>/<name>/draft.md`). That file IS
   // the prompt text, and pasted images land in the SAME draft folder via the
   // editor's image-paste machinery (imageDropHandlers) + insert `![](path)`.
   // So an agent reads the media as FILES (chan MCP read_media / disk under
@@ -71,7 +71,8 @@
   const submitLabel =
     currentOS() === "mac" ? "submit with cmd+enter" : "submit with ctrl+enter";
 
-  // Directory holding the draft (images upload here). "Drafts/x/draft.md" -> "Drafts/x".
+  // Directory holding the draft (images upload here).
+  // ".Drafts/x/draft.md" -> ".Drafts/x".
   function draftDir(): string {
     const i = draftPath.lastIndexOf("/");
     return i === -1 ? "" : draftPath.slice(0, i);

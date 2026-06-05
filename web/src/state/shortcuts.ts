@@ -206,9 +206,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
     note: "Ctrl+Shift+R on Linux / Windows",
     escapeTerminal: true,
   },
-  // New Draft: creates a fresh draft dir under chan-workspace's
-  // metadata-side Drafts folder and opens `draft.md` in the
-  // Hybrid Editor. chan-desktop's "New Window" accelerator is
+  // New Draft: creates a fresh draft dir under the configured
+  // in-workspace Drafts folder (default `.Drafts`) and opens
+  // `draft.md` in the Hybrid Editor. chan-desktop's "New Window"
+  // accelerator is
   // Cmd+Shift+N, leaving plain Cmd+N for this SPA handler.
   {
     id: "app.draft.new",

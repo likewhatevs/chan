@@ -48,6 +48,8 @@
   } from "../state/downloadTransfer.svelte";
   import {
     copyTextToClipboard,
+    draftsDir,
+    isDraftPath,
     setTransientStatus,
     ui,
     workspace,
@@ -179,43 +181,8 @@
         size: 0,
       } as TreeEntry;
     }
-    if (path === "Drafts") {
-      // The Drafts root is metadata-backed and lives OUTSIDE the workspace
-      // tree, so it never appears in `entryByPath` (the tree only lists
-      // in-root entries). Without this, selecting the graph's yellow Drafts
-      // node left the inspector blank: the directory branch's
-      // `entry.path === "Drafts"` arm never fired because `entry` was null.
-      // Synthesize a directory-shaped record so that arm renders the DRAFTS
-      // chip + notice, matching what the File Browser shows for Drafts.
-      return {
-        path: "Drafts",
-        is_dir: true,
-        mtime: null,
-        size: 0,
-      } as TreeEntry;
-    }
     const looked = entryByPath.get(path);
     if (looked) return looked;
-    // Draft FILES (Drafts/<name>/draft.md) live in chan's metadata folder,
-    // OUTSIDE the workspace tree, so they never appear in `entryByPath` and
-    // the inspector rendered blank. The server now resolves the draft via
-    // /api/inspector (size/mtime/abs_path), so synthesize a file-shaped entry
-    // from that payload to drive the normal markdown file branch. Refs
-    // (tags/contacts/links/backlinks) already resolve from the graph, which
-    // indexes drafts under the same Drafts/ key.
-    if (
-      path.startsWith("Drafts/") &&
-      inspectorPayload &&
-      inspectorPayload.path === path &&
-      !inspectorPayload.is_dir
-    ) {
-      return {
-        path,
-        is_dir: false,
-        size: inspectorPayload.size,
-        mtime: inspectorPayload.mtime,
-      } as TreeEntry;
-    }
     return null;
   });
 
@@ -609,25 +576,25 @@
     secondary: InspectorAction[];
   } | null>(() => {
     if (!entry) return null;
-    // The Drafts root is metadata-backed and lives OUTSIDE the workspace, so
-    // "Open" (a File Browser tab into the workspace tree), Upload, Download
-    // tarball and Graph-from-here don't apply. The one meaningful action is
-    // to drop a terminal there, so the Drafts node gets a SINGLE
-    // "Terminal from here" button and no dropdown (@@Alex).
-    if (entry.path === "Drafts") {
+    // The Drafts dir is uncommitted scratch space, so "Open" (a File
+    // Browser tab), Upload, Download tarball and Graph-from-here don't
+    // apply. The one meaningful action is to drop a terminal there, so
+    // the Drafts node gets a SINGLE "Terminal from here" button and no
+    // dropdown (@@Alex).
+    if (entry.path === draftsDir()) {
       return {
         main: { label: "Terminal from here", onClick: newTerminalHere },
         secondary: [],
       };
     }
-    // A draft FILE also lives outside the workspace, so Open / Show file /
-    // Download / Graph-from-here don't apply. @@Alex: a SINGLE "Terminal from
+    // A draft FILE is scratch too, so Open / Show file / Download /
+    // Graph-from-here don't apply. @@Alex: a SINGLE "Terminal from
     // here" button (no dropdown) that opens a terminal seeded with
     // {cursor}{space}{ABSOLUTE-path-of-the-draft}. The absolute path comes
     // from the inspector payload (abs_path); cwd is the workspace root, so the
     // location-independent absolute seed is what reaches the prompt. The
     // {cursor}{space} prefix is added by TerminalTab's seed mechanism.
-    if (entry.path.startsWith("Drafts/")) {
+    if (isDraftPath(entry.path)) {
       const draftAbs = inspectorPayload?.abs_path ?? null;
       return {
         main: {
@@ -1010,10 +977,10 @@
 {:else if entry.is_dir}
   <div class="info">
     <header class="head">
-      {#if entry.path === "Drafts"}
+      {#if isDraftPath(entry.path)}
         <!-- Keep the file-inspector Drafts copy aligned with the
-             graph directory inspector in case a caller passes the
-             metadata-backed Drafts root through this component. -->
+             graph directory inspector. Keyed off draftsDir() so the
+             configured Drafts dir (default .Drafts) renders the chip. -->
         <span class="kind-chip drafts-chip">DRAFTS</span>
       {:else}
         <KindChip kind="folder" block onClick={onSetAsScope} />
@@ -1022,14 +989,13 @@
     <h3 class="title" title={entry.path || "/"}>
       {label || basename(entry.path) || workspace.info?.label || "(root)"}
     </h3>
-    {#if entry.path === "Drafts"}
-      <!-- "outside workspace's root" notice. Mirrors the copy in
-           DirectoryInfoBody. -->
+    {#if isDraftPath(entry.path)}
+      <!-- Drafts notice. Mirrors the copy in DirectoryInfoBody. -->
       <div class="drafts-notice" role="note">
-        <strong>Drafts lives outside the workspace's root.</strong>
-        Files here are stored in chan's metadata folder so they
-        survive workspace moves + don't clutter your tree. Cmd+N
-        creates a fresh draft under <code>Drafts/untitled-N/</code>.
+        <strong>Drafts are uncommitted scratch space.</strong>
+        Save or discard them from their editor tabs, not the tree.
+        Cmd+N creates a fresh draft under
+        <code>{draftsDir()}/untitled-N/</code>.
       </div>
     {/if}
     {#if specialBadges.length > 0}

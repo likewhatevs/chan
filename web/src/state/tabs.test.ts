@@ -214,11 +214,11 @@ describe("tab close confirmation", () => {
   test("draft tab close prompts for discard or save", async () => {
     const tab = fileTab({
       id: "draft-tab",
-      path: "Drafts/untitled-1/draft.md",
+      path: ".Drafts/untitled-1/draft.md",
     });
     const pane = resetLayout([tab]);
     vi.spyOn(api, "inspectDraft").mockResolvedValue({
-      path: "Drafts/untitled-1/draft.md",
+      path: ".Drafts/untitled-1/draft.md",
       name: "untitled-1",
       file_count: 1,
       dir_count: 0,
@@ -233,21 +233,21 @@ describe("tab close confirmation", () => {
     resolveDraftClose("discard");
     await close;
 
-    expect(discard).toHaveBeenCalledWith("Drafts/untitled-1/draft.md");
+    expect(discard).toHaveBeenCalledWith(".Drafts/untitled-1/draft.md");
     expect(activePane().tabs).toHaveLength(0);
   });
 
   test("saving a draft notifies promotion sinks with the workspace path", async () => {
     const tab = fileTab({
       id: "draft-tab",
-      path: "Drafts/untitled-1/draft.md",
+      path: ".Drafts/untitled-1/draft.md",
       content: "# draft\n",
       saved: "# draft\n",
       savedMtime: 1,
     });
     const pane = resetLayout([tab]);
     vi.spyOn(api, "inspectDraft").mockResolvedValue({
-      path: "Drafts/untitled-1/draft.md",
+      path: ".Drafts/untitled-1/draft.md",
       name: "untitled-1",
       file_count: 1,
       dir_count: 0,
@@ -274,7 +274,7 @@ describe("tab close confirmation", () => {
     }
 
     expect(promote).toHaveBeenCalledWith(
-      "Drafts/untitled-1/draft.md",
+      ".Drafts/untitled-1/draft.md",
       "untitled-1.md",
     );
     expect(promotedPaths).toEqual(["untitled-1.md"]);
@@ -284,14 +284,14 @@ describe("tab close confirmation", () => {
   test("explicit draft save promotes and keeps the tab open on the workspace file", async () => {
     const tab = fileTab({
       id: "draft-tab",
-      path: "Drafts/untitled-1/draft.md",
+      path: ".Drafts/untitled-1/draft.md",
       content: "# draft\n",
       saved: "# draft\n",
       savedMtime: 1,
     });
     resetLayout([tab]);
     vi.spyOn(api, "inspectDraft").mockResolvedValue({
-      path: "Drafts/untitled-1/draft.md",
+      path: ".Drafts/untitled-1/draft.md",
       name: "untitled-1",
       file_count: 1,
       dir_count: 0,
@@ -322,7 +322,7 @@ describe("tab close confirmation", () => {
     await save;
 
     expect(promote).toHaveBeenCalledWith(
-      "Drafts/untitled-1/draft.md",
+      ".Drafts/untitled-1/draft.md",
       "untitled-1.md",
     );
     expect(activePane().tabs).toHaveLength(1);
@@ -336,14 +336,14 @@ describe("tab close confirmation", () => {
   test("explicit draft workspace save uses the dir-only prompt + notice", async () => {
     const tab = fileTab({
       id: "draft-tab",
-      path: "Drafts/untitled-1/draft.md",
+      path: ".Drafts/untitled-1/draft.md",
       content: "# draft\n",
       saved: "# draft\n",
       savedMtime: 1,
     });
     resetLayout([tab]);
     vi.spyOn(api, "inspectDraft").mockResolvedValue({
-      path: "Drafts/untitled-1/draft.md",
+      path: ".Drafts/untitled-1/draft.md",
       name: "untitled-1",
       file_count: 2,
       dir_count: 0,
@@ -375,7 +375,7 @@ describe("tab close confirmation", () => {
     await save;
 
     expect(promote).toHaveBeenCalledWith(
-      "Drafts/untitled-1/draft.md",
+      ".Drafts/untitled-1/draft.md",
       "notes/final/",
     );
     expect(read.mock.calls[0][0]).toBe("notes/final/draft.md");
@@ -387,7 +387,7 @@ describe("tab close confirmation", () => {
   test("whitespace-only draft closes as empty without save prompt", async () => {
     const tab = fileTab({
       id: "draft-tab",
-      path: "Drafts/untitled-empty/draft.md",
+      path: ".Drafts/untitled-empty/draft.md",
       content: " \n\n\t",
       saved: "",
       savedMtime: null,
@@ -398,7 +398,7 @@ describe("tab close confirmation", () => {
       mtime_ns: "2",
     });
     vi.spyOn(api, "inspectDraft").mockResolvedValue({
-      path: "Drafts/untitled-empty/draft.md",
+      path: ".Drafts/untitled-empty/draft.md",
       name: "untitled-empty",
       file_count: 1,
       dir_count: 0,
@@ -411,7 +411,7 @@ describe("tab close confirmation", () => {
 
     expect(write).not.toHaveBeenCalled();
     expect(draftCloseState.open).toBe(false);
-    expect(discard).toHaveBeenCalledWith("Drafts/untitled-empty/draft.md");
+    expect(discard).toHaveBeenCalledWith(".Drafts/untitled-empty/draft.md");
     expect(activePane().tabs).toHaveLength(0);
   });
 

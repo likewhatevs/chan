@@ -70,8 +70,7 @@
     | "mention"
     | "contains"
     | "language"
-    | "group"
-    | "drafts_link";
+    | "group";
   type CanvasEdge = GraphViewEdge & { kind: CanvasEdgeKind };
 
 

@@ -29,6 +29,11 @@ import {
   type TerminalKeyboardProtocolState,
 } from "../terminal/keymap";
 import { notify } from "./notify.svelte";
+// `isDraftPath` comes from the side-effect-free `workspace.svelte`
+// leaf module (NOT store.svelte), so importing it here doesn't trigger
+// store's eager draft-promotion-sink registration. See the cycle note
+// below.
+import { isDraftPath } from "./workspace.svelte";
 // `uiPathPrompt` lives in store.svelte, which has a TOP-LEVEL side
 // effect (`registerDraftPromotionSink(...)`) that calls back into THIS
 // module. A static `import { uiPathPrompt } from "./store.svelte"`
@@ -279,7 +284,7 @@ export type TerminalTab = {
   terminalActivityPulsing?: boolean;
   cwd?: string;
   seedInput?: string;
-  /// Rich Prompt per-terminal draft path (`Drafts/<name>/draft.md`) backing
+  /// Rich Prompt per-terminal draft path (`<draftsDir>/<name>/draft.md`) backing
   /// the bubble: the draft.md IS the prompt text and the folder holds pasted
   /// media. Created lazily on first open; discarded on terminal close.
   /// Persisted (SerTab.rpd) so a window reload rebinds + the close cleanup
@@ -1573,10 +1578,6 @@ export function resolveDraftClose(action: "cancel" | "discard" | "save"): void {
 
 function isLiveTerminal(t: Tab): boolean {
   return t.kind === "terminal" && terminalInputSinks.has(t.id);
-}
-
-function isDraftPath(path: string): boolean {
-  return path === "Drafts" || path.startsWith("Drafts/");
 }
 
 function isDraftTab(t: Tab): t is FileTab {
@@ -3410,7 +3411,7 @@ type SerTab = {
   /// Shift+Enter -> newline survives a reload reattaching to a long-lived
   /// agent. See `TerminalTab.keyboardProtocol`.
   kp?: SerializedKeyboardProtocolState;
-  /// Rich Prompt per-terminal draft path (Drafts/<name>/draft.md). Persisted
+  /// Rich Prompt per-terminal draft path (<draftsDir>/<name>/draft.md). Persisted
   /// so a reload rebinds the per-terminal Rich Prompt draft + the close
   /// cleanup deletes the right draft folder. Per-window session payloads only.
   rpd?: string;
