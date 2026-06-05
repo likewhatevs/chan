@@ -231,14 +231,20 @@ pub struct Workspace {
     /// pair had a small TOCTOU window between the lexical sandbox
     /// check and the kernel-side path walk; cap-std closes it.
     dir: cap_std::fs::Dir,
-    /// systacean-26: cap-std handle rooted at `paths.drafts`,
-    /// parallel to `dir`. Editable-text reads + writes whose `rel`
-    /// starts with `Drafts/` route through this handle (after
-    /// stripping the prefix) instead of `dir`, so the sandbox
-    /// invariant + atomic-write semantics + editable-text gate
-    /// apply uniformly to drafts. The drafts dir is eagerly
-    /// created in `Workspace::open` so this handle attaches cleanly.
-    drafts_dir_handle: cap_std::fs::Dir,
+    /// Validated in-root drafts directory name (single path segment,
+    /// e.g. `.Drafts`). Resolved from the global `drafts_dir` config at
+    /// open; falls back to the default when the configured value is
+    /// invalid. Exposed via `drafts_dir_name` so chan-server can build
+    /// `<drafts_dir>/<name>/draft.md` public paths.
+    drafts_dir_name: String,
+    /// Absolute path to the in-root drafts directory
+    /// (`root/<drafts_dir_name>`). Drafts are real in-root files, so
+    /// they read/write/list/stat through the workspace-root `dir`
+    /// handle like any other path; this is only used by the draft
+    /// wrapper methods (`create_draft_dir`, `list_drafts`, ...) that
+    /// operate on the drafts directory as a whole. Created lazily on
+    /// the first `create_draft_dir`.
+    drafts_root: std::path::PathBuf,
     paths: WorkspacePaths,
     /// Held for the lifetime of the Workspace. Released on drop.
     _lock: WorkspaceLock,
@@ -332,6 +338,7 @@ impl Workspace {
     pub(crate) fn open(
         entry: KnownWorkspace,
         walk_filter: Arc<fs_ops::WalkFilter>,
+        drafts_dir: String,
     ) -> Result<Arc<Self>> {
         // Defensive check: the registered path must still resolve to
         // a directory. A user (or another tool) could have replaced
@@ -377,33 +384,25 @@ impl Workspace {
         // Errors are swallowed: a corrupt trash dir must never block
         // a legitimate workspace open.
         let _ = trash::sweep_expired(&paths.trash, TRASH_RETENTION_SECS);
-        // systacean-24: eagerly ensure the per-workspace drafts
-        // subtree exists so `create_draft_dir` / `list_drafts`
-        // calls don't need to re-check + so the watcher
-        // attachment in a future task lands on a path that
-        // already exists. Errors logged + ignored: the drafts
-        // dir is recoverable (next call re-tries) and shouldn't
-        // block a legitimate workspace open.
-        if let Err(e) = drafts::ensure_root(&paths.drafts) {
-            tracing::warn!(
-                error = %e,
-                path = %paths.drafts.display(),
-                "failed to ensure drafts dir on Workspace::open"
-            );
-        }
-        // systacean-26: open a cap-std handle on the drafts dir so
-        // unified-path read/write helpers (read_text /
-        // write_text / write_text_if_unchanged for `Drafts/`-
-        // prefixed rels) get the same sandbox + atomic-write
-        // semantics as workspace-root files. The drafts dir was just
-        // ensured above so `open_ambient_dir` lands on an
-        // existing path. A failure here is unusual (permissions
-        // on the metadata root) but recoverable on the next open; we
-        // surface as an `Io` so callers see why drafts writes
-        // can't proceed.
-        let drafts_dir_handle =
-            cap_std::fs::Dir::open_ambient_dir(&paths.drafts, cap_std::ambient_authority())
-                .map_err(|e| ChanError::Io(format!("open drafts dir: {e}")))?;
+        // Validate the configured in-root drafts dir name. An invalid
+        // value (separator, traversal, clash with `.git`/`.chan` or an
+        // excluded dir) falls back to the default rather than failing
+        // the open, mirroring the graceful handling of other global
+        // config. Drafts are real in-root files: nothing is created
+        // here; `<root>/<drafts_dir_name>` materializes lazily on the
+        // first `create_draft_dir`.
+        let drafts_dir_name =
+            if crate::registry::validate_drafts_dir(&drafts_dir, &walk_filter.excluded_dir_names) {
+                drafts_dir
+            } else {
+                tracing::warn!(
+                    configured = %drafts_dir,
+                    fallback = crate::registry::DEFAULT_DRAFTS_DIR,
+                    "invalid drafts_dir config; falling back to default"
+                );
+                crate::registry::DEFAULT_DRAFTS_DIR.to_string()
+            };
+        let drafts_root = entry.root_path.join(&drafts_dir_name);
         // A stale `rebuild.inprogress` marker means the previous
         // reindex did not finish atomically. Promote it to an
         // in-process flag the consumer can observe via
@@ -443,7 +442,8 @@ impl Workspace {
             entry,
             root_canon,
             dir,
-            drafts_dir_handle,
+            drafts_dir_name,
+            drafts_root,
             paths,
             _lock: lock,
             _fd_permit: fd_permit,
@@ -491,58 +491,25 @@ impl Workspace {
         fs_ops::validate_rel(rel)
     }
 
-    /// systacean-26: resolve a unified-path rel to the
-    /// (cap-std dir, validated PathBuf inside that dir) pair the
-    /// IO helpers operate against. Drafts/-prefixed rels route
-    /// through `drafts_dir_handle` (rooted at `paths.drafts`)
-    /// with the prefix stripped; everything else routes through
-    /// `dir` (rooted at the workspace root) unchanged. The cap-std
-    /// sandbox prevents traversal escape in either case.
-    ///
-    /// Returns the validated PathBuf (no leading `Drafts/`)
-    /// because cap-std's `open` / `atomic_write_in` / etc. expect
-    /// paths relative to the dir handle they're called against.
-    /// The full unified path (with `Drafts/` prefix) is still
-    /// what callers pass into editable-text gates + journaling +
-    /// graph/index keys.
+    /// Resolve a workspace-relative rel to the (cap-std dir, validated
+    /// PathBuf inside that dir) pair the IO helpers operate against.
+    /// Every path now routes through the workspace-root `dir` handle:
+    /// drafts are real in-root files under `<drafts_dir_name>/...`, so
+    /// `.Drafts/untitled-1/draft.md` resolves like any other path. The
+    /// cap-std sandbox prevents traversal escape.
     fn resolve_io(&self, rel: &str) -> Result<(&cap_std::fs::Dir, std::path::PathBuf)> {
-        if let Some(sub) = drafts::strip_unified_prefix(rel) {
-            if sub.is_empty() {
-                return Err(ChanError::Io(
-                    "rel `Drafts` cannot be the drafts root itself; pass `Drafts/<name>/<file>`"
-                        .into(),
-                ));
-            }
-            let validated = fs_ops::validate_rel(sub)?;
-            Ok((&self.drafts_dir_handle, validated))
-        } else {
-            let validated = fs_ops::validate_rel(rel)?;
-            Ok((&self.dir, validated))
-        }
+        let validated = fs_ops::validate_rel(rel)?;
+        Ok((&self.dir, validated))
     }
 
-    /// Resolve a public chan path to the real host filesystem path.
-    ///
-    /// Most paths map under `Workspace::root()`. The `Drafts/` namespace
-    /// is virtual: it maps into this workspace's metadata drafts dir so
-    /// callers that truly need a real cwd (terminal, external shell
-    /// agents) can opt into that physical location without pretending
-    /// Drafts lives in the user's notes tree.
+    /// Resolve a public chan path to the real host filesystem path,
+    /// rooted at the workspace root. Drafts have no separate namespace:
+    /// `<drafts_dir_name>/<name>/...` resolves under the root like any
+    /// other in-tree path.
     pub fn resolve_physical_path(&self, rel: &str) -> Result<std::path::PathBuf> {
         let trimmed = rel.trim_matches('/');
         if trimmed.is_empty() || trimmed == "." {
             return Ok(self.root_canon.clone());
-        }
-        if let Some(sub) = drafts::strip_unified_prefix(trimmed) {
-            if sub.is_empty() {
-                return Ok(self.paths.drafts.clone());
-            }
-            let drafts_canon = self
-                .paths
-                .drafts
-                .canonicalize()
-                .map_err(|e| ChanError::Io(format!("canonicalize drafts root: {e}")))?;
-            return fs_ops::resolve_safe_strict_canon(&self.paths.drafts, &drafts_canon, sub);
         }
         fs_ops::resolve_safe_strict_canon(self.root(), &self.root_canon, trimmed)
     }
@@ -558,7 +525,9 @@ impl Workspace {
     }
 
     /// Convert a real filesystem path back to chan's public path
-    /// namespace when it is inside the workspace root or Drafts metadata.
+    /// namespace when it is inside the workspace root. Drafts live
+    /// in-root under `<drafts_dir_name>/...`, so they fall out of the
+    /// normal root-relative mapping with no special case.
     pub fn physical_path_to_virtual(&self, path: &std::path::Path) -> Option<String> {
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if path == self.root_canon {
@@ -566,21 +535,6 @@ impl Workspace {
         }
         if let Ok(rel) = path.strip_prefix(&self.root_canon) {
             return Some(posix_path(rel));
-        }
-        let drafts_canon = self
-            .paths
-            .drafts
-            .canonicalize()
-            .unwrap_or_else(|_| self.paths.drafts.clone());
-        if path == drafts_canon {
-            return Some(drafts::UNIFIED_DRAFTS_ROOT.to_string());
-        }
-        if let Ok(rel) = path.strip_prefix(&drafts_canon) {
-            let rel = posix_path(rel);
-            if rel.is_empty() {
-                return Some(drafts::UNIFIED_DRAFTS_ROOT.to_string());
-            }
-            return Some(format!("{}/{rel}", drafts::UNIFIED_DRAFTS_ROOT));
         }
         None
     }
@@ -644,11 +598,6 @@ impl Workspace {
     /// workspace root; symlinks, FIFOs, sockets, and devices are
     /// rejected.
     pub fn read(&self, rel: &str) -> Result<Vec<u8>> {
-        // systacean-32: prefix-aware for Drafts/<...> paths,
-        // parallel to read_text + stat. Without this, reading a
-        // pasted image (or any non-text file) under
-        // `Drafts/untitled-N/...` would route to the workspace-root
-        // capfs + NotFound.
         let (dir, rel_path) = self.resolve_io(rel)?;
         ensure_regular_file_in(dir, &rel_path)?;
         let mut f = dir
@@ -705,10 +654,6 @@ impl Workspace {
         if !self.editable_text_gate(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        // systacean-26: route Drafts/-prefixed rels through the
-        // drafts-rooted cap-std handle. The full `rel` (with
-        // prefix) still flows through the editable-text gate
-        // above so the gate's per-extension rules apply uniformly.
         let (dir, rel_path) = self.resolve_io(rel)?;
         ensure_regular_file_in(dir, &rel_path)?;
         let mut f = dir
@@ -730,7 +675,6 @@ impl Workspace {
         if !self.editable_text_gate(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        // systacean-26: same Drafts routing as read_text.
         let (dir, rel_path) = self.resolve_io(rel)?;
         ensure_regular_file_in(dir, &rel_path)?;
         let mut f = dir
@@ -811,13 +755,6 @@ impl Workspace {
         if !self.editable_text_gate(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        // systacean-26: same Drafts routing as read_text. The
-        // editable-text gate + size gate + atomic-write semantics
-        // (tmp + fsync + rename + parent fsync) all apply
-        // uniformly whether the destination is workspace-root or
-        // drafts. Chan-server's `SelfWrites` tracker keys on the
-        // full unified rel so watcher self-write suppression
-        // works for drafts writes too.
         let (dir, rel_path) = self.resolve_io(rel)?;
         let prev = ensure_writable_in(dir, &rel_path)?;
         check_size(
@@ -869,11 +806,6 @@ impl Workspace {
         if !self.editable_text_gate(rel) {
             return Err(ChanError::NotEditableText(rel.to_string()));
         }
-        // systacean-26: same Drafts routing as write_text.
-        // Optimistic-concurrency mtime check uses the same dir
-        // handle for the prev stat + the atomic-write so the
-        // small TOCTOU window between mtime check + rename is no
-        // worse than the workspace-root path.
         let (dir, rel_path) = self.resolve_io(rel)?;
         let prev = ensure_writable_in(dir, &rel_path)?;
         let (current, exists, prev_size) = match prev.as_ref() {
@@ -920,10 +852,6 @@ impl Workspace {
     /// so a `true` return is a strong signal that a read will
     /// succeed.
     pub fn exists(&self, rel: &str) -> bool {
-        // systacean-32: prefix-aware for Drafts/<...> paths.
-        // Same routing as read / stat; without this, a SPA
-        // existence check on a draft file would always return
-        // false.
         let Ok((dir, rel_path)) = self.resolve_io(rel) else {
             return false;
         };
@@ -935,28 +863,10 @@ impl Workspace {
 
     /// Stat the path using `lstat` semantics (so a symlink reports
     /// as such, not as its target). Refuses paths that escape the
-    /// workspace root through a mid-path symlink.
-    ///
-    /// systacean-32: prefix-aware for `Drafts/<...>` paths, same
-    /// routing as `read_text` / `write_text` / `list` post-`-26` +
-    /// `-29`. Without this, `Workspace::stat("Drafts/<name>")` returned
-    /// NotFound (workspace-root capfs has no `Drafts` entry), which
-    /// silently dropped Drafts subdirectories from
-    /// `list_dir_entries` enumeration — the recurring `-a-66 b/c/d`
-    /// data-flow gap @@WebtestA caught.
+    /// workspace root through a mid-path symlink. Drafts under
+    /// `<drafts_dir_name>/...` resolve through the workspace-root
+    /// handle like any other in-tree path.
     pub fn stat(&self, rel: &str) -> Result<FileStat> {
-        if drafts::strip_unified_prefix(rel) == Some("") {
-            let meta = self
-                .drafts_dir_handle
-                .symlink_metadata(".")
-                .map_err(|e| ChanError::Io(e.to_string()))?;
-            return Ok(FileStat {
-                size: 0,
-                mtime: mtime_secs_cap(&meta),
-                mtime_ns: mtime_ns_cap(&meta),
-                is_dir: meta.is_dir(),
-            });
-        }
         let (dir, rel_path) = self.resolve_io(rel)?;
         let meta = dir
             .symlink_metadata(&rel_path)
@@ -985,32 +895,10 @@ impl Workspace {
     /// can act on the count later if needed.
     pub fn list(&self, rel: &str) -> Result<Vec<DirEntry>> {
         let at_root = rel.is_empty() || rel == "." || rel == "/";
-        // systacean-29: route Drafts/-prefixed rels through the
-        // drafts cap-std handle (parallels the -26 read_text /
-        // write_text routing). Three shapes:
-        //   * "Drafts/" or "Drafts" → list the drafts root
-        //     (returns each draft dir, e.g. `untitled-N`).
-        //   * "Drafts/<name>" or "Drafts/<name>/<sub>" → list
-        //     inside the drafts subtree.
-        //   * anything else → workspace-root path (unchanged).
-        let read = if rel == "Drafts" || rel == "Drafts/" {
-            self.drafts_dir_handle
-                .read_dir(".")
-                .map_err(|e| ChanError::Io(e.to_string()))?
-        } else if let Some(sub) = rel.strip_prefix("Drafts/") {
-            let sub = sub.trim_end_matches('/');
-            if sub.is_empty() {
-                // `Drafts/` after trimming → same as drafts root
-                self.drafts_dir_handle
-                    .read_dir(".")
-                    .map_err(|e| ChanError::Io(e.to_string()))?
-            } else {
-                let rel_path = fs_ops::validate_rel(sub)?;
-                self.drafts_dir_handle
-                    .read_dir(&rel_path)
-                    .map_err(|e| ChanError::Io(e.to_string()))?
-            }
-        } else if at_root {
+        // Drafts are real in-root files under `<drafts_dir_name>/...`,
+        // so `.Drafts/<name>` lists through the workspace-root handle
+        // like any other path.
+        let read = if at_root {
             self.dir
                 .read_dir(".")
                 .map_err(|e| ChanError::Io(e.to_string()))?
@@ -1072,18 +960,12 @@ impl Workspace {
         fs_ops::list_tree(self.root())
     }
 
-    /// Recursive listing in chan's public namespace, including the
-    /// virtual `Drafts` root backed by this workspace's metadata dir.
+    /// Recursive listing in chan's public namespace. Drafts now live
+    /// in-root under `<drafts_dir_name>/...`, so the plain `list_tree`
+    /// walk already surfaces them; this is a thin alias kept for the
+    /// chan-server callers that still address the unified view.
     pub fn list_tree_unified(&self) -> Result<Vec<TreeEntry>> {
-        let mut entries = self.list_tree()?;
-        entries.extend(self.list_tree_drafts_prefix(drafts::UNIFIED_DRAFTS_ROOT)?);
-        if entries.len() > fs_ops::LIST_TREE_LIMIT {
-            return Err(ChanError::ListingTooLarge {
-                observed: entries.len(),
-                limit: fs_ops::LIST_TREE_LIMIT,
-            });
-        }
-        Ok(entries)
+        self.list_tree()
     }
 
     /// Subtree variant of `list_tree`: walk only the descendants of
@@ -1108,17 +990,11 @@ impl Workspace {
         fs_ops::list_tree_prefix(self.root(), &resolved)
     }
 
-    /// Subtree variant of `list_tree_unified`. `Drafts` prefixes
-    /// walk the metadata-backed draft tree and return public
-    /// `Drafts/...` paths; every other prefix stays rooted at the
-    /// workspace.
+    /// Subtree variant of `list_tree_unified`. Drafts live in-root
+    /// under `<drafts_dir_name>/...`, so a `.Drafts/...` prefix walks
+    /// the workspace tree like any other prefix.
     pub fn list_tree_prefix_unified(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
-        let trimmed = prefix.trim_matches('/');
-        if drafts::is_unified_drafts_path(trimmed) {
-            self.list_tree_drafts_prefix(trimmed)
-        } else {
-            self.list_tree_prefix(trimmed)
-        }
+        self.list_tree_prefix(prefix.trim_matches('/'))
     }
 
     /// Filtered counterpart of `list_tree_unified`. Applies the
@@ -1129,96 +1005,16 @@ impl Workspace {
     /// raw `list_tree_unified` stays unfiltered for the editor's
     /// on-demand open-inside-a-noisy-dir path.
     pub fn list_tree_filtered_unified(&self) -> Result<Vec<TreeEntry>> {
-        let mut entries = fs_ops::list_tree_filtered(self.root(), &self.walk_filter)?;
-        entries.extend(self.list_tree_drafts_prefix(drafts::UNIFIED_DRAFTS_ROOT)?);
-        if entries.len() > fs_ops::LIST_TREE_LIMIT {
-            return Err(ChanError::ListingTooLarge {
-                observed: entries.len(),
-                limit: fs_ops::LIST_TREE_LIMIT,
-            });
-        }
-        Ok(entries)
+        fs_ops::list_tree_filtered(self.root(), &self.walk_filter)
     }
 
-    /// Filtered counterpart of `list_tree_prefix_unified`. Drafts
-    /// prefixes are unaffected (chan metadata, no blocklist); every
-    /// other prefix prunes the per-workspace `WalkFilter` dirs.
+    /// Filtered counterpart of `list_tree_prefix_unified`. Drafts live
+    /// in-root, so a `.Drafts/...` prefix prunes the per-workspace
+    /// `WalkFilter` dirs like any other prefix.
     pub fn list_tree_prefix_filtered_unified(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
         let trimmed = prefix.trim_matches('/');
-        if drafts::is_unified_drafts_path(trimmed) {
-            self.list_tree_drafts_prefix(trimmed)
-        } else {
-            let resolved = fs_ops::resolve_safe_strict(self.root(), trimmed)?;
-            fs_ops::list_tree_prefix_filtered(self.root(), &resolved, &self.walk_filter)
-        }
-    }
-
-    fn list_tree_drafts_prefix(&self, prefix: &str) -> Result<Vec<TreeEntry>> {
-        let Some(sub) = drafts::strip_unified_prefix(prefix) else {
-            return Ok(Vec::new());
-        };
-        let walk_from = if sub.is_empty() {
-            self.paths.drafts.clone()
-        } else {
-            self.paths.drafts.join(fs_ops::validate_rel(sub)?)
-        };
-        if !walk_from.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut out = Vec::new();
-        let walker = walkdir::WalkDir::new(&walk_from)
-            .min_depth(0)
-            .follow_links(false)
-            .same_file_system(true)
-            .into_iter()
-            .filter_entry(|entry| {
-                let ft = entry.file_type();
-                ft.is_dir() || ft.is_file()
-            });
-        for entry in walker {
-            if out.len() >= fs_ops::LIST_TREE_LIMIT {
-                return Err(ChanError::ListingTooLarge {
-                    observed: out.len(),
-                    limit: fs_ops::LIST_TREE_LIMIT,
-                });
-            }
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(e) => {
-                    tracing::warn!("drafts walkdir error: {e}");
-                    continue;
-                }
-            };
-            let ft = entry.file_type();
-            if !(ft.is_dir() || ft.is_file()) {
-                continue;
-            }
-            let rel = entry
-                .path()
-                .strip_prefix(&self.paths.drafts)
-                .map_err(|_| ChanError::PathEscape)?;
-            let suffix = posix_path(rel);
-            let path = if suffix.is_empty() {
-                drafts::UNIFIED_DRAFTS_ROOT.to_string()
-            } else {
-                format!("{}/{suffix}", drafts::UNIFIED_DRAFTS_ROOT)
-            };
-            let meta = match entry.metadata() {
-                Ok(meta) => meta,
-                Err(e) => {
-                    tracing::warn!(?path, ?e, "drafts metadata failed; skipping");
-                    continue;
-                }
-            };
-            out.push(TreeEntry {
-                path,
-                is_dir: meta.is_dir(),
-                mtime: mtime_secs_std(&meta),
-                size: if meta.is_dir() { 0 } else { meta.len() },
-            });
-        }
-        Ok(out)
+        let resolved = fs_ops::resolve_safe_strict(self.root(), trimmed)?;
+        fs_ops::list_tree_prefix_filtered(self.root(), &resolved, &self.walk_filter)
     }
 
     pub fn create_dir(&self, rel: &str) -> Result<()> {
@@ -1431,49 +1227,61 @@ impl Workspace {
         trash::purge_all(&self.paths.trash)
     }
 
-    // ---- drafts (systacean-24) ----
+    // ---- drafts ----
     //
-    // Per-workspace Drafts metadata folder. Parallels trash: lives in
-    // `~/.chan/workspaces/<metadata_key>/drafts/`, holds in-progress
-    // drafts as directories so users can paste images / drop config
-    // files alongside `draft.md`.
+    // In-root Drafts folder. Lives in `<root>/<drafts_dir_name>/`
+    // (default `.Drafts`), holds in-progress drafts as directories so
+    // users can paste images / drop config files alongside `draft.md`.
+    // Because the directory is inside the workspace root, drafts are
+    // real files the normal walk / index / watch already cover; the
+    // directory materializes lazily on the first `create_draft_dir`.
 
-    /// Per-workspace drafts root path. Always present on disk after
-    /// `Workspace::open` (eagerly created via `drafts::ensure_root`).
+    /// In-root drafts directory absolute path
+    /// (`<root>/<drafts_dir_name>`). May not exist on disk until the
+    /// first `create_draft_dir` lazily creates it.
     pub fn drafts_dir(&self) -> &std::path::Path {
-        &self.paths.drafts
+        &self.drafts_root
+    }
+
+    /// Configured in-root drafts directory name (single path segment,
+    /// e.g. `.Drafts`). chan-server composes public draft paths as
+    /// `<drafts_dir_name>/<name>/draft.md` from this.
+    pub fn drafts_dir_name(&self) -> &str {
+        &self.drafts_dir_name
     }
 
     /// Create a draft directory by name (e.g. `"untitled-1"`).
     /// Returns a handle with the leaf name + absolute path. Errors
     /// when the name contains a path separator / traversal segment /
-    /// already exists. Atomic via `fs::create_dir_all` on a
-    /// non-existing leaf.
+    /// already exists. Lazily creates the in-root drafts directory
+    /// first; this is the only place `<root>/<drafts_dir_name>` is
+    /// materialized.
     pub fn create_draft_dir(&self, name: &str) -> Result<DraftRef> {
-        drafts::create_dir(&self.paths.drafts, name)
+        drafts::ensure_root(&self.drafts_root)?;
+        drafts::create_dir(&self.drafts_root, name)
     }
 
     /// Enumerate drafts. Sorted by name. Empty when the drafts
-    /// root has never been written to. Skips stray non-directory
+    /// directory does not exist yet. Skips stray non-directory
     /// entries silently.
     pub fn list_drafts(&self) -> Result<Vec<DraftRef>> {
-        drafts::list(&self.paths.drafts)
+        drafts::list(&self.drafts_root)
     }
 
-    /// Inspect metadata drafts and report non-fatal
-    /// problems that should be surfaced on workspace boot.
+    /// Inspect drafts and report non-fatal problems that should be
+    /// surfaced on workspace boot.
     pub fn draft_preflight(&self) -> Result<Vec<drafts::DraftIssue>> {
-        drafts::preflight(&self.paths.drafts)
+        drafts::preflight(&self.drafts_root)
     }
 
     /// Inspect a draft before save or discard.
     pub fn inspect_draft(&self, name: &str) -> Result<drafts::DraftInspection> {
-        drafts::inspect(&self.paths.drafts, name)
+        drafts::inspect(&self.drafts_root, name)
     }
 
     /// Move a draft to metadata trash.
     pub fn discard_draft(&self, name: &str) -> Result<()> {
-        drafts::discard(&self.paths.drafts, &self.paths.trash.join("drafts"), name)
+        drafts::discard(&self.drafts_root, &self.paths.trash.join("drafts"), name)
     }
 
     /// Promote a draft into the workspace root with no-clobber
@@ -1486,7 +1294,7 @@ impl Workspace {
         target_rel: &str,
     ) -> Result<drafts::DraftPromoteReport> {
         drafts::promote(
-            &self.paths.drafts,
+            &self.drafts_root,
             self.root(),
             &self.root_canon,
             name,
@@ -1494,12 +1302,12 @@ impl Workspace {
         )
     }
 
-    /// systacean-26: pick the smallest unused `untitled-N` name
-    /// under the drafts root. Returns `"untitled"` on the first
-    /// call (no `untitled` dir exists); `"untitled-1"` if
-    /// `untitled` is taken; `"untitled-2"` if both are taken; etc.
-    /// The caller composes the full path (e.g.
-    /// `format!("Drafts/{name}/draft.md")`) when calling
+    /// Pick the smallest unused `untitled-N` name under the drafts
+    /// directory. Returns `"untitled"` on the first call (no
+    /// `untitled` dir exists); `"untitled-1"` if `untitled` is taken;
+    /// `"untitled-2"` if both are taken; etc. The caller composes the
+    /// full path (e.g. `format!("{}/{name}/draft.md",
+    /// workspace.drafts_dir_name())`) when calling
     /// `Workspace::write_text`. Race-window note: two concurrent
     /// callers can both observe the same gap and race on
     /// `create_draft_dir`; the loser's `create_draft_dir` errors
@@ -2237,19 +2045,9 @@ impl Workspace {
         self.clear_rebuild_marker();
         self.needs_rebuild
             .store(false, std::sync::atomic::Ordering::Release);
-        // systacean-34: walk the per-workspace Drafts subtree + index
-        // each indexable text file through `index_draft_file`.
-        // The watcher (`-25`) catches ongoing changes; this closes
-        // the boot-time gap where the initial corpus walk missed
-        // drafts files (graph payload had `synthesize_drafts_layer`
-        // wired but `files` was empty). Best-effort: any single-
-        // file failure logs at warn + the loop continues.
-        if let Err(e) = self.index_drafts_subtree() {
-            tracing::warn!(
-                error = %e,
-                "reindex: drafts subtree walk failed; drafts may be missing from graph + BM25"
-            );
-        }
+        // Drafts live in-root under `<drafts_dir_name>/...`, so the
+        // main reindex walk above already covers them; there is no
+        // separate drafts subtree to walk.
         // Drop the cumulative rename log: the freshly-rebuilt graph
         // already reflects every current path, so any prior in-process
         // translation is now a no-op (and would be wrong if the user
@@ -2273,42 +2071,6 @@ impl Workspace {
             }
         }
         Ok(summary)
-    }
-
-    /// systacean-34 + systacean-37: walk the per-workspace Drafts
-    /// subtree + invoke `index_draft_file` on each indexable
-    /// text file so the boot corpus includes drafts content.
-    ///
-    /// Called automatically at the end of
-    /// `Workspace::reindex_with_aggression` (`-34`) AND exposed
-    /// public for chan-server's `Indexer::spawn` boot path to
-    /// invoke unconditionally (`-37`). The latter closes the
-    /// gap where reindex doesn't fire (workspace non-empty at
-    /// startup, so the indexer's "indexed_docs == 0 ||
-    /// graph_empty" trigger stays false) but pre-existing
-    /// drafts still need a boot walk to land in BM25 + graph.
-    ///
-    /// Idempotent: `index_draft_file` overwrites existing graph
-    /// and BM25 entries, so calling this on every chan-server
-    /// boot is cheap when nothing changed and costs O(N) per
-    /// draft when something did.
-    ///
-    /// Walks the per-workspace drafts metadata dir directly via
-    /// `std::fs` (drafts are chan-workspace's own metadata; the cap-std
-    /// sandbox isn't a security concern here, same as
-    /// `index_draft_file`).
-    /// Emits paths in the unified `Drafts/<name>/<file>` keyspace
-    /// per the `-25`/`-26` contract.
-    ///
-    /// Per-file errors log + continue (best-effort; the watcher
-    /// will retry on the next change).
-    pub fn index_drafts_subtree(&self) -> Result<()> {
-        let drafts_root = &self.paths.drafts;
-        if !drafts_root.is_dir() {
-            return Ok(());
-        }
-        walk_drafts_recursive(drafts_root, drafts_root, self)?;
-        Ok(())
     }
 
     /// Stamp `paths.graph_dir/rebuild.inprogress`. Atomic write so a
@@ -2877,89 +2639,6 @@ impl Workspace {
         result
     }
 
-    /// systacean-25: index a draft file by its unified-keyspace
-    /// path (e.g. `"Drafts/untitled-1/draft.md"`). Reads the file
-    /// from `drafts_dir`, parses it for graph emit, and stores in
-    /// BM25 + graph DB under the `Drafts/...` key so search +
-    /// graph reflect Drafts content alongside workspace content.
-    ///
-    /// Skipped silently for non-indexable text (mirrors
-    /// `index_file`); errors propagate when the file is unreadable
-    /// or graph/index storage fails.
-    ///
-    /// Routed via `WatchHandle`'s multi-root dispatch: events
-    /// emerging under the drafts watch root arrive with the
-    /// `Drafts/` prefix already applied, and the indexer's
-    /// `apply_event` dispatches to this method instead of
-    /// `index_file`.
-    pub fn index_draft_file(&self, rel: &str) -> Result<()> {
-        tracing::debug!(rel, "index_draft_file: enter");
-        let Some(sub_rel) = rel.strip_prefix("Drafts/") else {
-            return Err(ChanError::Io(format!(
-                "index_draft_file called with non-Drafts/-prefixed rel `{rel}`"
-            )));
-        };
-        if !fs_ops::is_indexable_text(rel) {
-            tracing::debug!(rel, "index_draft_file: skip (not indexable text)");
-            return Ok(());
-        }
-        let abs = self.paths.drafts.join(sub_rel);
-        let meta = match std::fs::metadata(&abs) {
-            Ok(m) => m,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Drafts file vanished between the watcher event
-                // and our read. Forget any prior entry + carry on.
-                tracing::debug!(rel, abs = %abs.display(), "index_draft_file: NotFound, forgetting");
-                return self.forget_file(rel);
-            }
-            Err(e) => {
-                return Err(ChanError::Io(format!("stat draft {}: {e}", abs.display())));
-            }
-        };
-        if !meta.is_file() {
-            // A directory or special file under Drafts/. Nothing
-            // to index; do not error so a directory-Create event
-            // (e.g. user dropped a new untitled-N/) doesn't make
-            // the indexer panic.
-            tracing::debug!(rel, "index_draft_file: skip (not regular file)");
-            return Ok(());
-        }
-        let content = std::fs::read_to_string(&abs)
-            .map_err(|e| ChanError::Io(format!("read draft {}: {e}", abs.display())))?;
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64);
-        let size = i64::try_from(meta.len()).ok();
-        // Graph is Markdown-only (see `index_file_inner`): a `.txt` draft
-        // is BM25-searchable but never a graph document node.
-        if fs_ops::is_markdown_file(rel) {
-            let (title, node_kind, headings, edges, emails, aliases) =
-                parse_for_graph(rel, &content);
-            self.graph()?.replace_file(
-                rel,
-                title.as_deref(),
-                mtime,
-                size,
-                node_kind,
-                &edges,
-                &headings,
-                emails.as_deref(),
-                aliases.as_deref(),
-            )?;
-        } else {
-            self.graph()?.forget_file(rel)?;
-        }
-        self.index()?.index_one(rel, &content)?;
-        tracing::debug!(
-            rel,
-            content_len = content.len(),
-            "index_draft_file: wrote graph (md only) + BM25"
-        );
-        Ok(())
-    }
-
     fn forget_file_inner(&self, rel: &str) -> Result<()> {
         self.graph()?.forget_file(rel)?;
         self.index()?.forget(rel)?;
@@ -3273,16 +2952,10 @@ impl Workspace {
     pub fn watch(self: &Arc<Self>, cb: Arc<dyn WatchCallback>) -> Result<WatchHandle> {
         let report = self.report_state()?;
         let fan: Arc<dyn WatchCallback> = ReportFanOut::new(cb, report.clone());
-        // systacean-25: also watch the per-workspace drafts subtree
-        // so drafts content participates in the unified
-        // search + graph keyspace (paths emerge as
-        // `Drafts/<name>/...` to the indexer). The drafts dir is
-        // eagerly created in Workspace::open so the watch attaches
-        // cleanly even on a fresh workspace.
-        let roots = [
-            crate::watch::WatchRoot::workspace(self.root()),
-            crate::watch::WatchRoot::drafts(self.drafts_dir()),
-        ];
+        // Single recursive root watcher. Drafts live in-root under
+        // `<drafts_dir_name>/...`, so the workspace-root watcher already
+        // covers them; no separate drafts watch root is needed.
+        let roots = [crate::watch::WatchRoot::workspace(self.root())];
         // Same unified ignore set the bootstrap/index walk uses, so a
         // node_modules/target/venv/.git storm never reaches the
         // broadcast bus or the indexer.
@@ -3394,62 +3067,6 @@ impl Workspace {
 /// Effective limit = max(prev_size, limit). Refusal carries the
 /// effective limit so the editor can show the user the exact
 /// number it has to stay under.
-/// systacean-34: recursive walker for `Workspace::index_drafts_subtree`.
-/// Lives at module scope (not on `Workspace`) because the recursion
-/// keeps `dir` as a `&Path` parameter; the only `Workspace` capability
-/// used is the public `index_draft_file` entry.
-///
-/// `drafts_root` is the per-workspace drafts metadata dir; `dir` is the
-/// current subtree being walked. The path passed to
-/// `index_draft_file` is the unified
-/// `Drafts/<rel_under_drafts_root>` shape per the `-25`/`-26`
-/// contract.
-fn walk_drafts_recursive(
-    drafts_root: &std::path::Path,
-    dir: &std::path::Path,
-    workspace: &Workspace,
-) -> Result<()> {
-    let rd = match std::fs::read_dir(dir) {
-        Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(ChanError::Io(format!("walk drafts {}: {e}", dir.display()))),
-    };
-    for entry in rd.flatten() {
-        let path = entry.path();
-        let Ok(ft) = entry.file_type() else { continue };
-        if ft.is_dir() {
-            walk_drafts_recursive(drafts_root, &path, workspace)?;
-            continue;
-        }
-        if !ft.is_file() {
-            // Symlinks / FIFOs / sockets / devices: skip silently
-            // (mirrors the special-file refusal pattern elsewhere
-            // in chan-workspace).
-            continue;
-        }
-        let Ok(sub_rel) = path.strip_prefix(drafts_root) else {
-            continue;
-        };
-        let sub_rel_str = sub_rel.to_string_lossy().replace('\\', "/");
-        if sub_rel_str.is_empty() {
-            continue;
-        }
-        let unified = format!("Drafts/{sub_rel_str}");
-        if !fs_ops::is_indexable_text(&unified) {
-            continue;
-        }
-        match workspace.index_draft_file(&unified) {
-            Ok(()) => {}
-            Err(e) => tracing::warn!(
-                path = %unified,
-                error = %e,
-                "walk_drafts_recursive: index_draft_file failed; skipping",
-            ),
-        }
-    }
-    Ok(())
-}
-
 fn check_size(kind: &'static str, size: usize, limit: u64, prev_size: Option<u64>) -> Result<()> {
     let size = size as u64;
     let effective = std::cmp::max(prev_size.unwrap_or(0), limit);
@@ -3564,13 +3181,6 @@ fn mtime_secs_cap(meta: &cap_std::fs::Metadata) -> Option<i64> {
     meta.modified()
         .ok()
         .map(|t| t.into_std())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-}
-
-fn mtime_secs_std(meta: &std::fs::Metadata) -> Option<i64> {
-    meta.modified()
-        .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
 }
@@ -5686,22 +5296,25 @@ mod tests {
     }
 
     #[test]
-    fn write_bytes_routes_drafts_binary_to_metadata_dir() {
+    fn write_bytes_routes_drafts_binary_into_in_root_drafts_dir() {
         let (_cfg, root, workspace) = fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
+        // Drafts are real in-root files under `.Drafts/...`, so a
+        // pasted image writes and reads back through the normal path
+        // machinery and lands on disk inside the workspace root.
         workspace
-            .write_bytes("Drafts/untitled-1/pasted.png", &[0x89, b'P', b'N', b'G'])
+            .write_bytes(".Drafts/untitled-1/pasted.png", &[0x89, b'P', b'N', b'G'])
             .unwrap();
 
         assert_eq!(
-            workspace.read("Drafts/untitled-1/pasted.png").unwrap(),
+            workspace.read(".Drafts/untitled-1/pasted.png").unwrap(),
             vec![0x89, b'P', b'N', b'G']
         );
         assert!(workspace
             .drafts_dir()
             .join("untitled-1/pasted.png")
             .is_file());
-        assert!(!root.path().join("Drafts/untitled-1/pasted.png").exists());
+        assert!(root.path().join(".Drafts/untitled-1/pasted.png").is_file());
     }
 
     #[test]
@@ -5996,47 +5609,49 @@ mod tests {
     }
 
     #[test]
-    fn list_tree_unified_includes_drafts_metadata_namespace() {
+    fn list_tree_unified_includes_in_root_drafts_dir() {
         let (_cfg, _root, workspace) = fixture();
         workspace.write_text("notes/intro.md", "# intro\n").unwrap();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
         workspace
-            .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
+            .write_bytes(".Drafts/untitled-1/pasted.png", &[1, 2, 3])
             .unwrap();
 
+        // Drafts are in-root files, so the plain unified walk surfaces
+        // them under their real `.Drafts/...` relpaths.
         let entries = workspace.list_tree_unified().unwrap();
         let paths: Vec<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
         assert!(paths.contains(&"notes/intro.md"));
-        assert!(paths.contains(&"Drafts"));
-        assert!(paths.contains(&"Drafts/untitled-1"));
-        assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
-        assert!(paths.contains(&"Drafts/untitled-1/pasted.png"));
+        assert!(paths.contains(&".Drafts"));
+        assert!(paths.contains(&".Drafts/untitled-1"));
+        assert!(paths.contains(&".Drafts/untitled-1/draft.md"));
+        assert!(paths.contains(&".Drafts/untitled-1/pasted.png"));
     }
 
     #[test]
-    fn list_tree_prefix_unified_scopes_drafts_metadata_namespace() {
+    fn list_tree_prefix_unified_scopes_in_root_drafts_dir() {
         let (_cfg, _root, workspace) = fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace.create_draft_dir("untitled-2").unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
         workspace
-            .write_text("Drafts/untitled-2/draft.md", "# other\n")
+            .write_text(".Drafts/untitled-2/draft.md", "# other\n")
             .unwrap();
 
         let entries = workspace
-            .list_tree_prefix_unified("Drafts/untitled-1")
+            .list_tree_prefix_unified(".Drafts/untitled-1")
             .unwrap();
         let paths: Vec<_> = entries.iter().map(|entry| entry.path.as_str()).collect();
-        assert!(paths.contains(&"Drafts/untitled-1"));
-        assert!(paths.contains(&"Drafts/untitled-1/draft.md"));
+        assert!(paths.contains(&".Drafts/untitled-1"));
+        assert!(paths.contains(&".Drafts/untitled-1/draft.md"));
         assert!(!paths
             .iter()
-            .any(|path| path.starts_with("Drafts/untitled-2")));
+            .any(|path| path.starts_with(".Drafts/untitled-2")));
     }
 
     #[cfg(unix)]
@@ -6114,19 +5729,34 @@ mod tests {
         assert!(workspace.trash_list().unwrap().is_empty());
     }
 
-    // ---- drafts (systacean-24) ----
+    // ---- drafts ----
 
     #[test]
-    fn drafts_dir_exists_after_workspace_open() {
-        // systacean-24: Workspace::open eagerly ensures the drafts
-        // subtree exists so callers don't need to re-check.
+    fn drafts_dir_created_lazily_on_first_draft() {
+        // Drafts live in-root and the directory is created lazily: a
+        // fresh workspace has no `.Drafts` until the first
+        // `create_draft_dir`. `drafts_dir()` reports the configured
+        // default name under the root.
         let (_cfg, _root, workspace) = fixture();
+        assert_eq!(workspace.drafts_dir_name(), ".Drafts");
+        // `drafts_dir()` is the configured name joined onto the
+        // workspace root (the registry-canonicalized form).
+        assert_eq!(
+            workspace.drafts_dir(),
+            workspace.root().join(".Drafts"),
+            "drafts dir should be <root>/.Drafts"
+        );
         assert!(
-            workspace.drafts_dir().is_dir(),
-            "drafts dir should be ready after Workspace::open: {}",
-            workspace.drafts_dir().display()
+            !workspace.drafts_dir().exists(),
+            "drafts dir should not exist before the first draft"
         );
         assert!(workspace.list_drafts().unwrap().is_empty());
+
+        workspace.create_draft_dir("untitled-1").unwrap();
+        assert!(
+            workspace.drafts_dir().is_dir(),
+            "drafts dir should materialize after the first draft"
+        );
     }
 
     #[test]
@@ -6214,42 +5844,36 @@ mod tests {
     }
 
     #[test]
-    fn reindex_walks_drafts_subtree_into_graph_and_bm25() {
-        // systacean-34: closes the boot-walk gap. `-25` extended
-        // the watcher to multi-root but `Workspace::reindex` only
-        // walked workspace-root — so the initial corpus was empty
-        // under the `Drafts/` prefix even when draft files
-        // existed on disk. After this PR, reindex_with_aggression
-        // additionally walks drafts and pumps each file through
-        // index_draft_file.
+    fn reindex_walks_in_root_drafts_into_graph_and_bm25() {
+        // Drafts live in-root under `.Drafts/...`, so the normal
+        // reindex walk indexes them like any other file; there is no
+        // separate drafts subtree walk.
         let (_cfg, _root, workspace) = fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
         // Write the file directly (bypass write_text so the
-        // watcher doesn't catch it; we want to verify the BOOT
+        // watcher doesn't catch it; we want to verify the boot
         // walk picks it up).
         std::fs::write(
             workspace.drafts_dir().join("untitled-1").join("draft.md"),
-            "# hello\nboot-walk-marker-systacean-34 here\n",
+            "# hello\nboot-walk-marker here\n",
         )
         .unwrap();
 
         // Reindex (boot-equivalent path).
         workspace.reindex(None).unwrap();
 
-        // BM25 should now know about the draft under the unified
-        // `Drafts/untitled-1/draft.md` key.
+        // BM25 should now know about the draft under its real
+        // `.Drafts/untitled-1/draft.md` key.
         let opts = crate::workspace::SearchOpts {
             mode: SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        let hits = workspace
-            .search("boot-walk-marker-systacean-34", &opts)
-            .unwrap();
+        let hits = workspace.search("boot-walk-marker", &opts).unwrap();
         assert!(
             hits.hits
                 .iter()
-                .any(|h| h.path == "Drafts/untitled-1/draft.md"),
+                .any(|h| h.path == ".Drafts/untitled-1/draft.md"),
             "boot walk should have indexed the draft; got {:?}",
             hits.hits
         );
@@ -6260,34 +5884,30 @@ mod tests {
         let graph = workspace.graph().unwrap();
         let files = graph.files().unwrap();
         assert!(
-            files.iter().any(|p| p == "Drafts/untitled-1/draft.md"),
+            files.iter().any(|p| p == ".Drafts/untitled-1/draft.md"),
             "graph files() should include the draft; got {files:?}"
         );
     }
 
     #[test]
-    fn stat_unified_routes_drafts_paths_to_drafts_dir() {
-        // systacean-32: Workspace::stat is prefix-aware. Closes the
-        // recurring `-a-66 b/c/d` data-flow gap where
-        // `list_dir_entries` called `stat("Drafts/untitled-N")`
-        // on each child returned by `Workspace::list("Drafts/")` +
-        // got NotFound from the workspace-root cap-std handle, then
-        // skipped the entry → empty wire listing.
+    fn stat_routes_in_root_drafts_paths_through_root_handle() {
+        // Drafts are in-root files, so stat on `.Drafts/...` resolves
+        // through the workspace-root handle like any other path.
         let (_cfg, _root, workspace) = fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# hello\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# hello\n")
             .unwrap();
 
-        // Stat the draft directory.
-        let root_stat = workspace.stat("Drafts").unwrap();
+        // Stat the drafts directory.
+        let root_stat = workspace.stat(".Drafts").unwrap();
         assert!(root_stat.is_dir, "drafts root should stat as is_dir");
 
-        let dir_stat = workspace.stat("Drafts/untitled-1").unwrap();
+        let dir_stat = workspace.stat(".Drafts/untitled-1").unwrap();
         assert!(dir_stat.is_dir, "draft directory should stat as is_dir");
 
         // Stat a file inside the draft directory.
-        let file_stat = workspace.stat("Drafts/untitled-1/draft.md").unwrap();
+        let file_stat = workspace.stat(".Drafts/untitled-1/draft.md").unwrap();
         assert!(!file_stat.is_dir);
         // "# hello\n" is 8 bytes.
         assert_eq!(file_stat.size, 8);
@@ -6301,31 +5921,32 @@ mod tests {
     }
 
     #[test]
-    fn physical_path_resolution_maps_drafts_namespace() {
+    fn physical_path_resolution_maps_in_root_drafts() {
         let (_cfg, _root, workspace) = fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# hello\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# hello\n")
             .unwrap();
         workspace.write_text("notes/intro.md", "# intro\n").unwrap();
 
+        let root_canon = workspace.root().canonicalize().unwrap();
+        assert_eq!(workspace.resolve_physical_path("").unwrap(), root_canon);
+        // Drafts resolve under the root like any other in-tree path.
         assert_eq!(
-            workspace.resolve_physical_path("").unwrap(),
-            workspace.root().canonicalize().unwrap()
-        );
-        assert_eq!(
-            workspace.resolve_physical_path("Drafts").unwrap(),
-            workspace.drafts_dir().to_path_buf()
-        );
-        assert_eq!(
-            workspace.resolve_physical_dir("Drafts/untitled-1").unwrap(),
-            workspace.drafts_dir().join("untitled-1")
+            workspace.resolve_physical_path(".Drafts").unwrap(),
+            root_canon.join(".Drafts")
         );
         assert_eq!(
             workspace
-                .physical_path_to_virtual(&workspace.drafts_dir().join("untitled-1"))
+                .resolve_physical_dir(".Drafts/untitled-1")
                 .unwrap(),
-            "Drafts/untitled-1"
+            root_canon.join(".Drafts").join("untitled-1")
+        );
+        assert_eq!(
+            workspace
+                .physical_path_to_virtual(&root_canon.join(".Drafts").join("untitled-1"))
+                .unwrap(),
+            ".Drafts/untitled-1"
         );
         assert_eq!(
             workspace
@@ -6336,18 +5957,14 @@ mod tests {
     }
 
     #[test]
-    fn list_unified_routes_drafts_paths_to_drafts_dir() {
-        // systacean-29: Workspace::list is prefix-aware. Three shapes:
-        //   * "Drafts" or "Drafts/" lists the drafts root (each
-        //     entry is one `DraftRef::name`).
-        //   * "Drafts/<name>" lists inside that draft directory.
-        //   * "notes/" continues to list the workspace root (no
-        //     regression for existing callers).
+    fn list_routes_in_root_drafts_through_root_handle() {
+        // Drafts are in-root, so listing `.Drafts` / `.Drafts/<name>`
+        // routes through the workspace-root handle like any other path.
         let (_cfg, root, workspace) = fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace.create_draft_dir("untitled-2").unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# hello\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# hello\n")
             .unwrap();
         std::fs::write(
             workspace.drafts_dir().join("untitled-1").join("pasted.png"),
@@ -6355,18 +5972,18 @@ mod tests {
         )
         .unwrap();
 
-        // List the drafts root via "Drafts/".
-        let drafts_root_listing = workspace.list("Drafts/").unwrap();
+        // List the drafts directory via ".Drafts/".
+        let drafts_root_listing = workspace.list(".Drafts/").unwrap();
         let mut names: Vec<String> = drafts_root_listing.iter().map(|e| e.name.clone()).collect();
         names.sort();
         assert_eq!(names, ["untitled-1", "untitled-2"]);
 
-        // Same via bare "Drafts" (no trailing slash).
-        let bare = workspace.list("Drafts").unwrap();
+        // Same via bare ".Drafts" (no trailing slash).
+        let bare = workspace.list(".Drafts").unwrap();
         assert_eq!(bare.len(), 2);
 
         // List inside a draft directory.
-        let inside = workspace.list("Drafts/untitled-1").unwrap();
+        let inside = workspace.list(".Drafts/untitled-1").unwrap();
         let mut leaves: Vec<String> = inside.iter().map(|e| e.name.clone()).collect();
         leaves.sort();
         assert_eq!(leaves, ["draft.md", "pasted.png"]);
@@ -6383,45 +6000,40 @@ mod tests {
     }
 
     #[test]
-    fn list_drafts_root_empty_when_no_drafts() {
-        // systacean-29: Workspace::list("Drafts/") on a fresh workspace
-        // returns an empty Vec (drafts root exists but contains
-        // nothing). Pins the absent-drafts case so the FB
-        // renders the Drafts row without spurious children.
+    fn list_drafts_empty_when_no_drafts() {
+        // Drafts are created lazily: a fresh workspace has no `.Drafts`
+        // directory at all, so `list_drafts()` (the draft enumeration
+        // API) returns empty and the directory is absent on disk.
         let (_cfg, _root, workspace) = fixture();
-        let listing = workspace.list("Drafts/").unwrap();
-        assert!(listing.is_empty());
+        assert!(workspace.list_drafts().unwrap().is_empty());
+        assert!(!workspace.drafts_dir().exists());
     }
 
     #[test]
-    fn unified_path_read_write_roundtrip_for_drafts() {
-        // systacean-26: Workspace::read_text + Workspace::write_text are
-        // prefix-aware. A unified `Drafts/<name>/<file>` rel
-        // routes through the drafts-rooted cap-std handle so the
-        // editor's autosave path can target drafts without API
-        // branching.
+    fn in_root_draft_path_read_write_roundtrip() {
+        // A `.Drafts/<name>/<file>` rel reads/writes through the same
+        // path machinery as any in-root file, so the editor's autosave
+        // path can target drafts without API branching.
         let (_cfg, _root, workspace) = fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
 
-        let rel = "Drafts/untitled-1/draft.md";
+        let rel = ".Drafts/untitled-1/draft.md";
         workspace
             .write_text(rel, "# hello from a draft\n")
-            .expect("write_text should route to drafts dir");
+            .expect("write_text should land in the in-root drafts dir");
         let content = workspace
             .read_text(rel)
-            .expect("read_text should route to drafts dir");
+            .expect("read_text should read back the in-root draft");
         assert_eq!(content, "# hello from a draft\n");
     }
 
     #[test]
-    fn unified_path_write_text_atomic_for_drafts() {
-        // systacean-26: atomic-write parity. Overwriting an
-        // existing draft file via write_text replaces atomically
-        // (no zero-length window observable) — same semantics as
-        // workspace-root files via the shared `atomic_write_in`.
+    fn in_root_draft_path_write_text_atomic() {
+        // Atomic-write parity: overwriting an existing draft file via
+        // write_text replaces atomically, same as any in-root file.
         let (_cfg, _root, workspace) = fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
-        let rel = "Drafts/untitled-1/draft.md";
+        let rel = ".Drafts/untitled-1/draft.md";
         workspace.write_text(rel, "v1").unwrap();
         workspace.write_text(rel, "v2").unwrap();
         let content = workspace.read_text(rel).unwrap();
@@ -6429,27 +6041,23 @@ mod tests {
     }
 
     #[test]
-    fn unified_path_rejects_drafts_root_as_target() {
-        // systacean-26: `Drafts/` with no sub-path is not a valid
-        // target — there's no file to read or write at the drafts
-        // root itself. The helper surfaces this as an Io error
-        // rather than dispatching into the cap-std handle with an
-        // empty path.
+    fn drafts_dir_itself_is_not_a_valid_file_target() {
+        // The drafts directory itself is a directory, not a file, so
+        // read/write against it fails like any directory path.
         let (_cfg, _root, workspace) = fixture();
-        assert!(workspace.read_text("Drafts/").is_err());
-        assert!(workspace.write_text("Drafts/", "anything").is_err());
+        workspace.create_draft_dir("untitled-1").unwrap();
+        assert!(workspace.read_text(".Drafts/").is_err());
+        assert!(workspace.write_text(".Drafts/", "anything").is_err());
     }
 
     #[test]
-    fn unified_path_workspace_root_paths_unchanged() {
-        // systacean-26: backward-compat regression check. Paths
-        // without the `Drafts/` prefix continue to route through
-        // the workspace-root cap-std handle exactly as before.
+    fn non_draft_paths_land_outside_drafts_dir() {
+        // Regression check: paths outside `.Drafts/` continue to route
+        // through the workspace-root handle and land under the root,
+        // not inside the drafts dir.
         let (_cfg, root, workspace) = fixture();
         workspace.write_text("notes/intro.md", "# intro\n").unwrap();
         assert_eq!(workspace.read_text("notes/intro.md").unwrap(), "# intro\n");
-        // File landed on disk under the workspace root, NOT the
-        // drafts root.
         assert!(root.path().join("notes/intro.md").is_file());
         assert!(!workspace.drafts_dir().join("notes").exists());
     }
@@ -6647,14 +6255,12 @@ mod tests {
     }
 
     #[test]
-    fn unified_path_write_text_if_unchanged_for_drafts() {
-        // systacean-26: optimistic-concurrency parity. The mtime
-        // check uses the same dir handle for stat + atomic write
-        // so drafts edits get the same WriteConflict semantics as
-        // workspace-root edits.
+    fn in_root_draft_path_write_text_if_unchanged() {
+        // Optimistic-concurrency parity: in-root draft edits get the
+        // same WriteConflict semantics as any other in-root edit.
         let (_cfg, _root, workspace) = fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
-        let rel = "Drafts/untitled-1/draft.md";
+        let rel = ".Drafts/untitled-1/draft.md";
         // First write: file doesn't exist; expected_mtime=None
         // succeeds.
         workspace.write_text_if_unchanged(rel, None, "v1").unwrap();
@@ -6673,17 +6279,16 @@ mod tests {
 
     #[test]
     fn drafts_promote_rejects_when_target_exists() {
-        // systacean-24: promote_draft refuses to clobber an
-        // existing workspace-root file/directory. The draft remains
-        // in place for the caller to retry under a different
-        // target.
+        // promote_draft refuses to clobber an existing workspace-root
+        // file/directory. The draft remains in place for the caller to
+        // retry under a different target.
         let (_cfg, root, workspace) = fixture();
         workspace.create_draft_dir("untitled-1").unwrap();
         workspace
-            .write_text("Drafts/untitled-1/draft.md", "# draft\n")
+            .write_text(".Drafts/untitled-1/draft.md", "# draft\n")
             .unwrap();
         workspace
-            .write_bytes("Drafts/untitled-1/pasted.png", &[1, 2, 3])
+            .write_bytes(".Drafts/untitled-1/pasted.png", &[1, 2, 3])
             .unwrap();
         workspace.write_text("untitled-1/sentinel.md", "x").unwrap();
         workspace

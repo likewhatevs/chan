@@ -1,18 +1,19 @@
-//! systacean-24: Drafts metadata folder. Parallel to the existing
-//! `trash` subsystem: in-progress drafts live in
-//! `state_dir/drafts/<uuid>/` so the workspace root stays free of
-//! uncommitted scratch work.
-//!
-//! Each draft is a DIRECTORY (e.g. `untitled-1/draft.md`) so the
-//! user can paste images and drop config files alongside the
-//! markdown without committing them. The Cmd+N flow names new
-//! drafts `untitled-N`, but the lister and `create_dir` accept any
+//! Cmd+N drafts. In-progress drafts live in-tree under a
+//! configurable in-root directory (default `.Drafts`, set globally as
+//! `drafts_dir` in `~/.chan/config.toml`). Each draft is a DIRECTORY
+//! (e.g. `.Drafts/untitled-1/draft.md`) so the user can paste images
+//! and drop config files alongside the markdown. The Cmd+N flow names
+//! new drafts `untitled-N`, but the lister and `create_dir` accept any
 //! leaf name; nothing here assumes the `untitled-` prefix.
 //!
-//! The watcher + indexer integration that makes drafts
-//! participate in search + graph is implemented elsewhere (see
-//! the `indexer` + chan-server graph route hooks); this module
-//! is the filesystem primitive layer only.
+//! Drafts are real files inside the workspace root, so they sit in
+//! `<root>/<drafts_dir>/<name>/...` with no `~/.chan` metadata mirror
+//! and no virtual namespace. The normal workspace walker / indexer /
+//! watcher pick them up like any other in-root path; there is no
+//! special draft routing. This module is the filesystem primitive
+//! layer only (`create_dir`, `list`, `inspect`, `promote`, `discard`,
+//! `preflight`, `ensure_root`), each operating directly on the
+//! `<root>/<drafts_dir>` directory the caller passes in.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,27 +22,12 @@ use crate::error::{ChanError, Result};
 use crate::fs_ops;
 use crate::trash;
 
-pub const UNIFIED_DRAFTS_ROOT: &str = "Drafts";
-
-/// True when `rel` is inside the public `Drafts/` namespace.
-///
-/// Draft files live in chan metadata, outside the user's workspace root,
-/// but the rest of chan addresses them as `Drafts/<name>/...`.
-/// Centralizing the test keeps callers from inventing inconsistent
-/// metadata escape hatches.
-pub fn is_unified_drafts_path(rel: &str) -> bool {
-    strip_unified_prefix(rel).is_some()
-}
-
-/// Strip the public `Drafts` prefix. Returns an empty string for
-/// the Drafts root itself.
-pub fn strip_unified_prefix(rel: &str) -> Option<&str> {
-    let trimmed = rel.trim_matches('/');
-    if trimmed == UNIFIED_DRAFTS_ROOT {
-        return Some("");
-    }
-    trimmed.strip_prefix("Drafts/")
-}
+/// Trash original-path label prefix for a discarded draft. Drafts no
+/// longer have a virtual namespace, but the trash entry still records a
+/// stable human-readable origin label so the user can tell a trashed
+/// draft from a trashed workspace file. Kept a literal here so the
+/// caller does not have to thread the configured dir name through.
+const DRAFTS_TRASH_LABEL: &str = ".Drafts";
 
 /// Handle to a single draft directory under `drafts_dir`. `name`
 /// is the leaf component (e.g. `"untitled-1"`); `abs` is the
@@ -95,9 +81,10 @@ struct DraftEntry {
     is_dir: bool,
 }
 
-/// Ensure the per-workspace drafts directory exists. Caller decides
-/// when to invoke; `Workspace::open` does it eagerly so
-/// `create_draft_dir` etc. don't need to re-check.
+/// Ensure the in-root drafts directory exists. Created lazily: the
+/// only caller is `create_draft_dir`, which makes `<drafts_dir>/<name>`
+/// after this. A workspace with no drafts never materializes the
+/// directory, keeping the root clean until the user hits Cmd+N.
 pub(crate) fn ensure_root(drafts_dir: &Path) -> Result<()> {
     fs::create_dir_all(drafts_dir).map_err(|e| {
         ChanError::Io(format!(
@@ -230,19 +217,6 @@ pub fn list(drafts_dir: &Path) -> Result<Vec<DraftRef>> {
     Ok(out)
 }
 
-/// Return the draft name from a public `Drafts/<name>/...` path.
-pub fn name_from_unified_path(path: &str) -> Result<String> {
-    let Some(stripped) = strip_unified_prefix(path) else {
-        return Err(ChanError::PathEscape);
-    };
-    let mut parts = stripped.split('/').filter(|part| !part.is_empty());
-    let Some(name) = parts.next() else {
-        return Err(ChanError::PathEmpty);
-    };
-    validate_name(name)?;
-    Ok(name.to_string())
-}
-
 /// Inspect a draft directory and classify whether it is still a
 /// single-file draft or has directory attachments.
 pub fn inspect(drafts_dir: &Path, name: &str) -> Result<DraftInspection> {
@@ -266,7 +240,7 @@ pub fn discard(drafts_dir: &Path, draft_trash_dir: &Path, name: &str) -> Result<
     trash::move_into(
         draft_trash_dir,
         &src,
-        &format!("{UNIFIED_DRAFTS_ROOT}/{name}"),
+        &format!("{DRAFTS_TRASH_LABEL}/{name}"),
         true,
     )
 }
@@ -721,21 +695,6 @@ mod tests {
     }
 
     #[test]
-    fn unified_drafts_path_gate_matches_public_namespace() {
-        assert!(is_unified_drafts_path("Drafts"));
-        assert!(is_unified_drafts_path("/Drafts/"));
-        assert!(is_unified_drafts_path("Drafts/untitled/draft.md"));
-        assert_eq!(strip_unified_prefix("Drafts"), Some(""));
-        assert_eq!(
-            strip_unified_prefix("Drafts/untitled/draft.md"),
-            Some("untitled/draft.md")
-        );
-        assert!(!is_unified_drafts_path(""));
-        assert!(!is_unified_drafts_path("Draftsman/note.md"));
-        assert!(!is_unified_drafts_path("notes/Drafts/file.md"));
-    }
-
-    #[test]
     fn create_dir_rejects_existing() {
         let td = TempDir::new().unwrap();
         let root = td.path().join("drafts");
@@ -779,16 +738,6 @@ mod tests {
                 message: "draft root is not a directory".to_string(),
             }]
         );
-    }
-
-    #[test]
-    fn name_from_unified_path_returns_draft_name() {
-        assert_eq!(
-            name_from_unified_path("Drafts/untitled-1/draft.md").unwrap(),
-            "untitled-1"
-        );
-        assert!(name_from_unified_path("Drafts").is_err());
-        assert!(name_from_unified_path("notes/draft.md").is_err());
     }
 
     #[test]
@@ -985,7 +934,7 @@ mod tests {
         assert!(!drafts_root.join("untitled-1").exists());
         let trashed = trash::list(&trash_root).unwrap();
         assert_eq!(trashed.len(), 1);
-        assert_eq!(trashed[0].original_path, "Drafts/untitled-1");
+        assert_eq!(trashed[0].original_path, ".Drafts/untitled-1");
     }
 
     #[test]

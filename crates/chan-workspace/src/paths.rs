@@ -140,15 +140,6 @@ pub struct WorkspacePaths {
     /// ReportState writer thread. The report is regenerable from a
     /// full rescan if missing or corrupt.
     pub report: PathBuf,
-    /// systacean-24: per-workspace Drafts dir. Holds in-progress
-    /// drafts as `<name>/draft.md + companions` (e.g.
-    /// `untitled-1/draft.md` plus pasted images). The Drafts
-    /// subtree sits in `~/.chan/workspaces/<metadata_key>/drafts/` so
-    /// the user's workspace root stays clean of uncommitted scratch
-    /// work (SCM-friendly per the addendum-a spec). The watcher +
-    /// indexer walk this subtree alongside the workspace root so drafts
-    /// participate in search + graph.
-    pub drafts: PathBuf,
 }
 
 /// Resolve the per-workspace global paths for a metadata key. The key is
@@ -170,7 +161,6 @@ pub fn workspace_paths_for_metadata_key(metadata_key: &str) -> WorkspacePaths {
         tokens: root.join("tokens"),
         trash: root.join("trash"),
         report: root.join("report").join("report.jsonl"),
-        drafts: root.join("drafts"),
     }
 }
 
@@ -183,7 +173,6 @@ pub fn ensure_workspace_metadata_dirs(metadata_key: &str) -> std::io::Result<Wor
     std::fs::create_dir_all(&paths.lock)?;
     std::fs::create_dir_all(&paths.graph_dir)?;
     std::fs::create_dir_all(&paths.index)?;
-    std::fs::create_dir_all(&paths.drafts)?;
     std::fs::create_dir_all(&paths.tokens)?;
     Ok(paths)
 }
@@ -358,7 +347,6 @@ mod tests {
             &p.tokens,
             &p.trash,
             &p.graph_dir,
-            &p.drafts,
         ] {
             assert!(path.starts_with(&p.root));
         }
@@ -385,7 +373,6 @@ mod tests {
             &paths.lock,
             &paths.graph_dir,
             &paths.index,
-            &paths.drafts,
             &paths.tokens,
         ] {
             assert!(dir.is_dir(), "metadata subdir missing: {dir:?}");

@@ -131,6 +131,29 @@ impl Library {
         Arc::clone(&self.inner.walk_filter.lock().unwrap())
     }
 
+    /// Validated in-root drafts directory name from the registry
+    /// (`drafts_dir` in `~/.chan/config.toml`). Global and hand-edited,
+    /// NOT UI-configurable, so there is no setter. An invalid configured
+    /// value (separator, traversal, clash with `.git`/`.chan` or an
+    /// excluded dir) falls back to `DEFAULT_DRAFTS_DIR` with a warning,
+    /// mirroring the graceful handling of `index_excluded_dirs`.
+    /// `Workspace::open` re-validates the value it is handed, so this
+    /// always returns a usable single-segment name.
+    pub fn drafts_dir(&self) -> String {
+        let configured = self.inner.registry.lock().unwrap().drafts_dir.clone();
+        let excluded = &self.inner.walk_filter.lock().unwrap().excluded_dir_names;
+        if crate::registry::validate_drafts_dir(&configured, excluded) {
+            configured
+        } else {
+            tracing::warn!(
+                configured = %configured,
+                fallback = crate::registry::DEFAULT_DRAFTS_DIR,
+                "invalid drafts_dir in config; falling back to default"
+            );
+            crate::registry::DEFAULT_DRAFTS_DIR.to_string()
+        }
+    }
+
     /// Snapshot of all registered workspaces, most-recent first.
     pub fn list_workspaces(&self) -> Vec<KnownWorkspace> {
         self.inner.registry.lock().unwrap().workspaces.clone()
@@ -241,7 +264,8 @@ impl Library {
             }
         }
         let filter = Arc::clone(&self.inner.walk_filter.lock().unwrap());
-        let workspace = Workspace::open(entry, filter)?;
+        let drafts_dir = self.drafts_dir();
+        let workspace = Workspace::open(entry, filter, drafts_dir)?;
         self.inner
             .live_workspaces
             .lock()
@@ -623,6 +647,50 @@ mod tests {
         assert!(filter.is_excluded("NODE_MODULES"));
         assert!(filter.is_excluded("target"));
         assert!(!filter.is_excluded("notes"));
+    }
+
+    #[test]
+    fn drafts_dir_defaults_to_dot_drafts() {
+        let (lib, _cfg, _workspace) = lib();
+        assert_eq!(lib.drafts_dir(), ".Drafts");
+    }
+
+    #[test]
+    fn drafts_dir_reads_valid_config_value() {
+        let cfg = TempDir::new().unwrap();
+        let config_path = cfg.path().join("config.toml");
+        std::fs::write(&config_path, "drafts_dir = \"Scratch\"\nworkspaces = []\n").unwrap();
+        let lib = Library::open_at(config_path).unwrap();
+        assert_eq!(lib.drafts_dir(), "Scratch");
+    }
+
+    #[test]
+    fn drafts_dir_falls_back_when_config_value_invalid() {
+        // A drafts_dir that clashes with an excluded dir is rejected
+        // and falls back to the default rather than landing drafts in
+        // an unindexed subtree.
+        let cfg = TempDir::new().unwrap();
+        let config_path = cfg.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            "drafts_dir = \"node_modules\"\nworkspaces = []\n",
+        )
+        .unwrap();
+        let lib = Library::open_at(config_path).unwrap();
+        assert_eq!(lib.drafts_dir(), crate::registry::DEFAULT_DRAFTS_DIR);
+    }
+
+    #[test]
+    fn open_workspace_uses_configured_drafts_dir_name() {
+        let cfg = TempDir::new().unwrap();
+        let config_path = cfg.path().join("config.toml");
+        std::fs::write(&config_path, "drafts_dir = \"Scratch\"\nworkspaces = []\n").unwrap();
+        let lib = Library::open_at(config_path).unwrap();
+        let workspace = TempDir::new().unwrap();
+        lib.register_workspace(workspace.path()).unwrap();
+        let ws = lib.open_workspace(workspace.path()).unwrap();
+        assert_eq!(ws.drafts_dir_name(), "Scratch");
+        assert_eq!(ws.drafts_dir(), ws.root().join("Scratch"));
     }
 
     #[test]

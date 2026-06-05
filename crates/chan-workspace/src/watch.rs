@@ -82,13 +82,14 @@ pub trait WatchCallback: Send + Sync {
     fn on_event(&self, event: WatchEvent);
 }
 
-/// systacean-25: one of possibly several roots the watcher is
-/// attached to. `abs` is the absolute filesystem path being
-/// watched recursively; `prefix` is the optional keyspace prefix
-/// prepended to relative paths emitted for events under this
-/// root. Workspace root passes `prefix: None`; the Drafts subtree
-/// passes `prefix: Some("Drafts".into())` so events emerge in
-/// the indexer with a unified `Drafts/<name>/...` keyspace.
+/// One of possibly several roots the watcher is attached to. `abs`
+/// is the absolute filesystem path being watched recursively;
+/// `prefix` is the optional keyspace prefix prepended to relative
+/// paths emitted for events under this root. The workspace root passes
+/// `prefix: None`. The multi-root + prefix machinery is retained for
+/// callers that need to watch an out-of-root tree under a synthetic
+/// keyspace, but drafts no longer use it: they live in-root and emerge
+/// through the single workspace-root watcher like any other file.
 #[derive(Debug, Clone)]
 pub struct WatchRoot {
     pub abs: PathBuf,
@@ -101,14 +102,6 @@ impl WatchRoot {
         Self {
             abs: abs.to_path_buf(),
             prefix: None,
-        }
-    }
-
-    /// Drafts-root convenience: `Drafts/` keyspace prefix.
-    pub fn drafts(abs: &Path) -> Self {
-        Self {
-            abs: abs.to_path_buf(),
-            prefix: Some("Drafts".to_string()),
         }
     }
 }

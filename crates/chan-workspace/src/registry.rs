@@ -49,6 +49,17 @@ pub struct Registry {
     /// Matched at any depth by exact basename, case-insensitive.
     #[serde(default = "default_index_excluded_dirs")]
     pub index_excluded_dirs: Vec<String>,
+    /// In-root directory name that holds Cmd+N drafts. A single path
+    /// segment under the workspace root (default `.Drafts`). Drafts
+    /// are real files inside the workspace, addressed as
+    /// `<drafts_dir>/<name>/draft.md`, so they participate in the
+    /// normal walk / index / watch alongside the rest of the tree.
+    ///
+    /// Like `index_excluded_dirs`, this is global, hand-edited in
+    /// `~/.chan/config.toml`, and NOT UI-configurable. An invalid
+    /// value falls back to `.Drafts` at workspace-open time.
+    #[serde(default = "default_drafts_dir")]
+    pub drafts_dir: String,
     /// Known workspaces the user has opened on this machine. Sorted
     /// most-recent first by `last_seen_at`.
     #[serde(default)]
@@ -60,6 +71,7 @@ impl Default for Registry {
         Self {
             default_workspace_root: None,
             index_excluded_dirs: default_index_excluded_dirs(),
+            drafts_dir: default_drafts_dir(),
             workspaces: Vec::new(),
         }
     }
@@ -70,6 +82,38 @@ fn default_index_excluded_dirs() -> Vec<String> {
         .iter()
         .map(|name| (*name).to_owned())
         .collect()
+}
+
+/// Default in-root drafts directory name. Hidden (`.`-prefixed) so it
+/// stays out of the way in plain file listings while still being a
+/// real directory the workspace walker indexes and watches.
+pub const DEFAULT_DRAFTS_DIR: &str = ".Drafts";
+
+fn default_drafts_dir() -> String {
+    DEFAULT_DRAFTS_DIR.to_string()
+}
+
+/// Whether `name` is usable as the in-root drafts directory. Valid iff
+/// it is a single path segment that does not collide with chan's own
+/// reserved directories or the user's configured index-exclusion set:
+///
+///   * non-empty,
+///   * no path separator (`/` or `\`) and not `.` / `..`,
+///   * not `.git` or `.chan` (hard-skipped internal invariants),
+///   * not equal (case-insensitively) to any `excluded` entry, so a
+///     drafts dir can never land inside an excluded subtree and become
+///     invisible to search/graph.
+///
+/// An invalid value is rejected at workspace-open time and the caller
+/// falls back to `DEFAULT_DRAFTS_DIR`.
+pub fn validate_drafts_dir(name: &str, excluded: &[String]) -> bool {
+    if name.is_empty() || name.contains('/') || name.contains('\\') {
+        return false;
+    }
+    if name == "." || name == ".." || name == ".git" || name == ".chan" {
+        return false;
+    }
+    !excluded.iter().any(|e| e.eq_ignore_ascii_case(name))
 }
 
 /// One entry in the registry.
@@ -401,6 +445,34 @@ mod tests {
 
         assert_eq!(reg.workspaces.len(), 1);
         assert_eq!(reg.workspaces[0].metadata_key, key);
+    }
+
+    #[test]
+    fn load_missing_drafts_dir_uses_default() {
+        let tmp = TempDir::new().unwrap();
+        let cfg_path = tmp.path().join("config.toml");
+        std::fs::write(&cfg_path, "workspaces = []\n").unwrap();
+        let loaded = Registry::load_from(&cfg_path).unwrap();
+        assert_eq!(loaded.drafts_dir, DEFAULT_DRAFTS_DIR);
+    }
+
+    #[test]
+    fn validate_drafts_dir_rules() {
+        let excluded = vec!["node_modules".to_string(), "Target".to_string()];
+        assert!(validate_drafts_dir(".Drafts", &excluded));
+        assert!(validate_drafts_dir("Scratch", &excluded));
+        // Empty / separators / traversal.
+        assert!(!validate_drafts_dir("", &excluded));
+        assert!(!validate_drafts_dir("a/b", &excluded));
+        assert!(!validate_drafts_dir("a\\b", &excluded));
+        assert!(!validate_drafts_dir(".", &excluded));
+        assert!(!validate_drafts_dir("..", &excluded));
+        // Reserved internal dirs.
+        assert!(!validate_drafts_dir(".git", &excluded));
+        assert!(!validate_drafts_dir(".chan", &excluded));
+        // Case-insensitive clash with an excluded dir.
+        assert!(!validate_drafts_dir("node_modules", &excluded));
+        assert!(!validate_drafts_dir("TARGET", &excluded));
     }
 
     #[test]

@@ -231,18 +231,10 @@ fn run_loop(
             // file out of the index until the next save or a
             // reconcile. The journal in PR5 already protects
             // against partial-commit drift inside index_file
-            // itself.
-            // systacean-25: route drafts events (paths under the
-            // `Drafts/` unified-keyspace prefix) to the parallel
-            // draft-indexer entrypoint, which reads from the
-            // drafts subtree instead of the sandboxed workspace root.
-            // Non-prefixed paths go to the workspace-root indexer as
-            // before.
-            let result = if path.starts_with("Drafts/") {
-                workspace.index_draft_file(path)
-            } else {
-                workspace.index_file(path)
-            };
+            // itself. Drafts live in-root under `<drafts_dir>/...`,
+            // so they route through the normal `index_file` path with
+            // no special-casing.
+            let result = workspace.index_file(path);
             match result {
                 Ok(()) => {
                     state.indexed_total.fetch_add(1, Ordering::Relaxed);
@@ -474,13 +466,13 @@ mod tests {
     }
 
     #[test]
-    fn writes_to_drafts_subtree_get_indexed_under_drafts_prefix() {
-        // systacean-25: the multi-root watcher walks the per-workspace
-        // drafts dir alongside the workspace root. Writing a file under
-        // a draft directory fires a FSEvent + the indexer routes
-        // through Workspace::index_draft_file, which stores the BM25
-        // entry under `Drafts/<name>/...` so the unified keyspace
-        // returns drafts hits from regular workspace search.
+    fn writes_to_in_root_drafts_get_indexed() {
+        // Drafts live in-root under `.Drafts/...`, so the single
+        // workspace-root watcher covers them. Writing a file under a
+        // draft directory fires a FSEvent + the indexer routes through
+        // Workspace::index_file, which stores the BM25 entry under the
+        // file's real `.Drafts/<name>/...` relpath so it shows up in
+        // regular workspace search.
         let _serial = fs_test_lock();
         let (_cfg, _workspace_dir, workspace) = setup_workspace();
         let indexer = GraphIndexer::start_on(Arc::clone(&workspace), DEBOUNCE_TEST_MS).unwrap();
@@ -502,15 +494,15 @@ mod tests {
         .unwrap();
 
         // Poll the BM25 outcome (systacean-23 pattern): the draft must
-        // become searchable under its unified `Drafts/...` key once the
-        // watcher delivers the write and the indexer routes it through
-        // index_draft_file.
+        // become searchable under its real `.Drafts/...` relpath once
+        // the watcher delivers the write and the indexer routes it
+        // through index_file.
         let opts = crate::workspace::SearchOpts {
             mode: SearchMode::Bm25,
             limit: 10,
             scope: None,
         };
-        let expected_path = "Drafts/untitled-1/draft.md";
+        let expected_path = ".Drafts/untitled-1/draft.md";
         let visible = wait_for(FS_DELIVERY_BUDGET, || {
             workspace
                 .search("draft-marker-systacean-25", &opts)
@@ -530,7 +522,7 @@ mod tests {
             // didn't deliver -> skip; if it IS indexed but somehow not
             // searchable, that's a real regression -> fail. The drafts
             // -> BM25 + graph product path is covered deterministically
-            // (no OS watcher) by reindex_walks_drafts_subtree_into_graph_and_bm25.
+            // (no OS watcher) by reindex_walks_in_root_drafts_into_graph_and_bm25.
             let delivered = workspace
                 .indexed_paths()
                 .map(|paths| paths.iter().any(|p| p == expected_path))
@@ -538,10 +530,10 @@ mod tests {
             indexer.stop();
             if !delivered {
                 eprintln!(
-                    "skipping writes_to_drafts_subtree: the OS watcher did not deliver the \
+                    "skipping writes_to_in_root_drafts: the OS watcher did not deliver the \
                      drafts write within {FS_DELIVERY_BUDGET:?} (FSEvents/inotify coalescing \
                      under parallel load); product path covered by \
-                     reindex_walks_drafts_subtree_into_graph_and_bm25"
+                     reindex_walks_in_root_drafts_into_graph_and_bm25"
                 );
                 return;
             }

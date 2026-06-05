@@ -18,7 +18,7 @@ const MANIFEST_PATH: &str = "chan-metadata-v1/manifest.json";
 const PAYLOAD_ROOT: &str = "chan-metadata-v1/payload";
 const ARCHIVE_FORMAT_VERSION: u32 = 1;
 const PATH_KEY_SCHEME: &str = "canonical-absolute-path-slug-sha256-8hex";
-const INCLUDED_SUBTREES: &[&str] = &["index", "graph", "report", "sessions", "drafts"];
+const INCLUDED_SUBTREES: &[&str] = &["index", "graph", "report", "sessions"];
 const EXCLUDED_SUBTREES: &[&str] = &["locks", "tokens", "trash", "staging", "temp", "*.shm"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -402,7 +402,6 @@ fn source_subtree(paths: &WorkspacePaths, subtree: &str) -> PathBuf {
             .expect("report path has parent")
             .to_path_buf(),
         "sessions" => paths.sessions.clone(),
-        "drafts" => paths.drafts.clone(),
         _ => paths.root.join(subtree),
     }
 }
@@ -818,8 +817,6 @@ mod tests {
         )
         .unwrap();
         std::fs::write(paths.sessions.join("session.json"), b"session").unwrap();
-        std::fs::create_dir_all(paths.drafts.join("untitled")).unwrap();
-        std::fs::write(paths.drafts.join("untitled").join("draft.md"), b"draft").unwrap();
 
         let out_dir = TempDir::new().unwrap();
         let out = out_dir.path().join("metadata.tar.zst");
@@ -842,7 +839,9 @@ mod tests {
         assert!(paths.contains(&"chan-metadata-v1/payload/graph/graph.sqlite".into()));
         assert!(paths.contains(&"chan-metadata-v1/payload/report/report.jsonl".into()));
         assert!(paths.contains(&"chan-metadata-v1/payload/sessions/session.json".into()));
-        assert!(paths.contains(&"chan-metadata-v1/payload/drafts/untitled/draft.md".into()));
+        // Drafts now live in the workspace root (user content), not in
+        // the metadata bundle, so they never appear in the archive.
+        assert!(!paths.iter().any(|p| p.contains("payload/drafts")));
     }
 
     #[test]
@@ -921,8 +920,7 @@ mod tests {
     fn metadata_archive_import_restores_payload_subtrees() {
         let (lib, _cfg, root) = archive_fixture();
         let paths = lib.workspace_paths_for(root.path()).unwrap();
-        std::fs::create_dir_all(paths.drafts.join("untitled")).unwrap();
-        std::fs::write(paths.drafts.join("untitled").join("draft.md"), b"draft").unwrap();
+        std::fs::write(paths.index.join("config.toml"), b"index").unwrap();
         std::fs::write(paths.sessions.join("session.json"), b"session").unwrap();
         let out_dir = TempDir::new().unwrap();
         let out = out_dir.path().join("metadata.tar.zst");
@@ -934,7 +932,7 @@ mod tests {
             },
         )
         .unwrap();
-        std::fs::remove_dir_all(&paths.drafts).unwrap();
+        std::fs::remove_dir_all(&paths.index).unwrap();
         std::fs::remove_dir_all(&paths.sessions).unwrap();
 
         let report = lib
@@ -949,10 +947,13 @@ mod tests {
             .unwrap();
 
         assert!(!report.rescanned);
-        assert!(report.imported_subtrees.contains(&"drafts".to_string()));
+        assert!(report.imported_subtrees.contains(&"index".to_string()));
+        assert!(report.imported_subtrees.contains(&"sessions".to_string()));
+        // Drafts are in-root user content now, never in the bundle.
+        assert!(!report.imported_subtrees.contains(&"drafts".to_string()));
         assert_eq!(
-            std::fs::read_to_string(paths.drafts.join("untitled").join("draft.md")).unwrap(),
-            "draft"
+            std::fs::read_to_string(paths.index.join("config.toml")).unwrap(),
+            "index"
         );
         assert_eq!(
             std::fs::read_to_string(paths.sessions.join("session.json")).unwrap(),
