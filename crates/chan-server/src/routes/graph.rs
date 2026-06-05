@@ -1184,6 +1184,27 @@ fn apply_report_buckets(
     }
 }
 
+/// Stamp `node_kind: "contact"` on every File node whose path is a
+/// contact, regardless of which layer created it. The semantic batch
+/// only stamps contacts that survive `should_emit_contact_file`
+/// (i.e. `@@mention`-referenced ones); the filesystem tree layer then
+/// re-adds the rest as plain File nodes with `node_kind: None`. Without
+/// this pass a contact that is only cross-linked (not `@@`-mentioned)
+/// reaches the graph via the tree spine and renders with the generic
+/// markdown glyph instead of the contact treatment. Stamps existing
+/// nodes only; it never adds a node, so the `should_emit_contact_file`
+/// declutter (drop unreferenced standalone contacts) still holds.
+fn stamp_contact_kinds(
+    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
+    contact_paths: &std::collections::HashSet<String>,
+) {
+    for path in contact_paths {
+        if let Some(GraphNodeView::File { node_kind, .. }) = nodes.get_mut(path) {
+            *node_kind = Some("contact");
+        }
+    }
+}
+
 fn merge_language_layer(
     workspace: &chan_workspace::Workspace,
     _p: &GraphParams,
@@ -1775,6 +1796,10 @@ fn build_graph_view(
     apply_report_buckets(&mut nodes, &report_buckets);
     merge_filesystem_layer_with_buckets(&workspace, &p, &mut nodes, &mut edges, &report_buckets)?;
     merge_language_layer(&workspace, &p, &mut nodes, &mut edges)?;
+    // The filesystem tree layer adds contact files as plain File nodes;
+    // re-stamp the contact discriminator so cross-linked (not
+    // @@mentioned) contacts keep the contact glyph in the final batch.
+    stamp_contact_kinds(&mut nodes, &contact_paths);
 
     emit_graph_nodes(emit, nodes.values().cloned().collect())?;
     emit_graph_edges(emit, edges[emitted_edge_len..].to_vec())?;
@@ -2551,6 +2576,50 @@ mod tests {
             !json.contains("does-not-exist"),
             "unresolved link target must not surface as a ghost node or a \
              dangling edge: {json}"
+        );
+    }
+
+    #[test]
+    fn cross_linked_contact_keeps_contact_node_kind() {
+        // Regression: a contact file referenced only by a markdown LINK
+        // (not an @@mention) is dropped from the semantic batch by
+        // `should_emit_contact_file`, then re-added by the filesystem
+        // tree layer as a plain File node (`node_kind: None`). Without
+        // the `stamp_contact_kinds` re-stamp it renders with the generic
+        // markdown glyph instead of the contact treatment, so the built
+        // view must carry `node_kind: "contact"` on the contact node.
+        let (_cfg, _root, workspace) = open_workspace();
+        workspace
+            .write_text(
+                "contacts/alice.md",
+                "---\nchan:\n  kind: contact\n---\n# Alice\n",
+            )
+            .unwrap();
+        workspace
+            .write_text("note.md", "# Note\n\nSee [alice](contacts/alice.md).\n")
+            .unwrap();
+        workspace.index_file("contacts/alice.md").unwrap();
+        workspace.index_file("note.md").unwrap();
+
+        let params = GraphParams {
+            scope: GraphScope::Workspace,
+            path: String::new(),
+            depth: 6,
+        };
+        let mut emit = None;
+        let view = build_graph_view(workspace, params, &mut emit).unwrap();
+
+        let alice = view.nodes.iter().find_map(|n| match n {
+            GraphNodeView::File {
+                path, node_kind, ..
+            } if path == "contacts/alice.md" => Some(*node_kind),
+            _ => None,
+        });
+        assert_eq!(
+            alice,
+            Some(Some("contact")),
+            "a cross-linked (not @@mentioned) contact must reach the graph \
+             with node_kind=contact: {view:?}"
         );
     }
 
