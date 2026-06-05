@@ -24,9 +24,9 @@ describe("app.draft.new shortcut registry", () => {
 });
 
 describe("Cmd+N keymap branch", () => {
-  test("App.svelte keymap intercepts bare Cmd+N (no shift/alt/ctrl)", () => {
+  test("App.svelte keymap intercepts bare Mod+N per-OS (Cmd+N mac / Ctrl+N else)", () => {
     expect(app).toMatch(
-      /if \(meta && !e\.altKey && !e\.shiftKey && !e\.ctrlKey && e\.code === "KeyN"\) \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?void createDraftAndOpen\(\);/,
+      /const newDraftChord =[\s\S]{1,80}currentOS\(\) === "mac"[\s\S]{1,120}e\.metaKey && !e\.ctrlKey[\s\S]{1,80}e\.code === "KeyN"[\s\S]{1,120}: e\.ctrlKey && !e\.metaKey[\s\S]{1,80}e\.code === "KeyN";[\s\S]{1,200}void createDraftAndOpen\(\);/,
     );
   });
 

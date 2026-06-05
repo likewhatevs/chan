@@ -778,18 +778,30 @@
       void reloadWindow();
       return;
     }
-    // Cmd+N (Ctrl+N non-Mac) creates a new Draft via /api/drafts/new and
-    // opens the resulting path in the active pane. Cmd+Shift+N falls
-    // through to the desktop's New Window (or browser's New Incognito);
-    // only bare Cmd+N is intercepted here.
-    if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyN") {
+    // New draft (registry app.draft.new = Mod+N): Cmd+N on macOS, Ctrl+N
+    // on Linux/Windows. The earlier `meta && !e.ctrlKey` form was Mac-only
+    // by accident - `meta` is `metaKey || ctrlKey`, so `!e.ctrlKey` excluded
+    // the very Ctrl that Mod resolves to off macOS and Ctrl+N never fired.
+    // Mirror the reload chord's per-OS split; Cmd/Ctrl+Shift+N still falls
+    // through to the desktop's New Window.
+    const newDraftChord =
+      currentOS() === "mac"
+        ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyN"
+        : e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === "KeyN";
+    if (newDraftChord) {
       e.preventDefault();
       void createDraftAndOpen();
       return;
     }
     // Mod+E (Obsidian-style "Show Source Code") flips the active file tab
     // between source and rendered views. No-op when no file tab is active.
-    if (meta && !e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyE") {
+    // Same Mac-only slip as New Draft above; split per-OS so Ctrl+E reaches
+    // it off macOS (registry app.editor.toggleMode = Mod+E).
+    const toggleModeChord =
+      currentOS() === "mac"
+        ? e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyE"
+        : e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === "KeyE";
+    if (toggleModeChord) {
       e.preventDefault();
       toggleActiveFileTabMode();
       return;
