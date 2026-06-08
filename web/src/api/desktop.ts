@@ -84,6 +84,31 @@ export async function tauriInvoke<T = unknown>(
   return (await invoke(cmd, args)) as T;
 }
 
+/// Read clipboard text without tripping WebKit's DOM-paste "Paste" button.
+///
+/// In chan-desktop's WKWebView, any programmatic clipboard read via
+/// `navigator.clipboard.readText()` pops a native "Paste" permission
+/// button the user must click (a WebKit privacy feature with no JS
+/// opt-out). So on desktop we read it natively in Rust through the
+/// `read_clipboard_text` IPC, which goes straight to the OS clipboard
+/// and never shows the button. On web `navigator.clipboard.readText()`
+/// is fine — it is gesture-permitted and shows no persistent button in
+/// Chrome. Returns "" when the clipboard holds no text or the read fails
+/// (the caller treats empty as "nothing to paste"). Note Cmd+V does NOT
+/// use this: it rides xterm's native paste event (the user's own paste
+/// gesture), which is buttonless everywhere — this is only for the
+/// right-click menu's "Paste", where no paste gesture exists.
+export async function readClipboardText(): Promise<string> {
+  if (isTauriDesktop()) {
+    try {
+      return await tauriInvoke<string>("read_clipboard_text");
+    } catch (err) {
+      console.warn("readClipboardText: read_clipboard_text IPC failed", err);
+    }
+  }
+  return (await navigator.clipboard?.readText()) ?? "";
+}
+
 /// Reload the chan window. On chan-desktop calls the
 /// `reload_window` IPC which fires `WebviewWindow::reload()`.
 /// Falls back to `window.location.reload()` on web or on IPC

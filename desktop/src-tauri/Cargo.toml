@@ -30,6 +30,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
+# Native clipboard read for the terminal's right-click "Paste" (read_clipboard_text),
+# bypassing WKWebView's DOM-paste "Paste" button.
+arboard = { workspace = true }
 chan-workspace = { workspace = true, default-features = false }
 chan-server = { workspace = true, features = ["embeddings"] }
 # The `cs` control-socket client, so chan-desktop dispatches `cs` when

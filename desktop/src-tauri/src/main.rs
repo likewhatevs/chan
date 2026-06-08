@@ -989,6 +989,22 @@ fn platform_os() -> String {
     std::env::consts::OS.to_string()
 }
 
+/// Clipboard text for the terminal's right-click "Paste". Read natively
+/// via `arboard` rather than the webview's `navigator.clipboard.readText()`,
+/// which pops WKWebView's DOM-paste "Paste" button (a WebKit privacy
+/// affordance with no JS opt-out). Sync so it runs on the main thread,
+/// which macOS's NSPasteboard expects. An empty / non-text clipboard maps
+/// to "" so the SPA just treats it as nothing-to-paste; other failures
+/// surface as an Err the SPA logs before falling back to the web API.
+#[tauri::command]
+fn read_clipboard_text() -> Result<String, String> {
+    match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
+        Ok(text) => Ok(text),
+        Err(arboard::Error::ContentNotAvailable) => Ok(String::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// User's home directory as a plain string, for the Workspaces window
 /// to abbreviate paths to `~/...`. Returns an empty string when the
 /// platform can't resolve it.
@@ -1437,6 +1453,7 @@ fn main() {
             get_config,
             home_dir,
             platform_os,
+            read_clipboard_text,
             reveal_in_finder,
             reload_window,
             open_devtools,

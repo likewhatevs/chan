@@ -40,7 +40,9 @@ describe("TerminalTab WebGL renderer", () => {
     // typed text is drawn but not presented until a later event flushes it.
     // The DOM renderer paints through normal DOM mutation. Scoped to the
     // Linux desktop only: macOS WKWebView and every browser keep WebGL.
-    expect(tab).toMatch(/import \{ isTauriDesktop \} from "\.\.\/api\/desktop"/);
+    expect(tab).toMatch(
+      /import \{[^}]*\bisTauriDesktop\b[^}]*\} from "\.\.\/api\/desktop"/,
+    );
     expect(tab).toMatch(
       /if \(isTauriDesktop\(\) && currentOS\(\) === "linux"\) return;[\s\S]{0,40}try \{/,
     );

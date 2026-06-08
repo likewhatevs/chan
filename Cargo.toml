@@ -47,6 +47,12 @@ chan-tunnel-proto = { version = "0.28.0", path = "crates/chan-tunnel-proto" }
 chan-tunnel-server = { version = "0.28.0", path = "crates/chan-tunnel-server" }
 
 anyhow = "1"
+# Native OS clipboard read for chan-desktop's terminal "Paste" menu, so it
+# bypasses WKWebView's programmatic-paste "Paste" button. Desktop-only (gnu);
+# never pulled into the static-musl standalone `chan` binary. default-features
+# off drops the `image-data` feature (and its image/fax/moxcms deps): we only
+# read text via get_text().
+arboard = { version = "3", default-features = false }
 async-trait = "0.1"
 axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
 base64 = "0.22"

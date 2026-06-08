@@ -27,7 +27,7 @@
   import { WebglAddon } from "@xterm/addon-webgl";
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
-  import { isTauriDesktop } from "../api/desktop";
+  import { isTauriDesktop, readClipboardText } from "../api/desktop";
   import { openExternalUrl } from "../editor/external_links";
   import {
     chordFor,
@@ -1140,10 +1140,16 @@
     term?.focus();
   }
 
+  // The right-click menu's "Paste" entry. A menu click is NOT an OS paste
+  // gesture, so unlike Cmd+V (which rides xterm's native `paste` event) it must
+  // read the clipboard programmatically. `readClipboardText` does that natively
+  // in Rust under chan-desktop so it bypasses WKWebView's DOM-paste "Paste"
+  // button; on web it falls back to the gesture-permitted navigator.clipboard.
+  // Routing through `term.paste` keeps the menu path bracketed, matching Cmd+V.
   async function pasteClipboard(): Promise<void> {
     closeTabMenu();
-    const text = await navigator.clipboard?.readText();
-    if (text) sendUserInput(text);
+    const text = await readClipboardText();
+    if (text) term?.paste(text);
     term?.focus();
   }
 
@@ -1174,11 +1180,15 @@
     return isTerminalCopyChord(e);
   }
 
-  // Resolve a clipboard chord on keydown and run the action. Returns true
-  // when the event was a copy/paste chord so `handleTerminalKeyEvent` can
-  // tell xterm to skip it (no stray bytes, no SIGINT on Ctrl+Shift+C, no
-  // double-paste from xterm's native paste handler). preventDefault here
-  // also suppresses the browser's own copy/paste default.
+  // Resolve a clipboard chord on keydown. Returns true when the event was a
+  // copy/paste chord so `handleTerminalKeyEvent` can tell xterm to skip the
+  // keystroke (no stray bytes, no SIGINT on Ctrl+Shift+C).
+  //
+  // Copy preventDefaults + reads the selection itself. Paste does NEITHER: it
+  // lets the browser's native paste action fire so xterm's own `paste` listener
+  // receives the gesture-delivered clipboardData. Reading it ourselves with
+  // navigator.clipboard.readText() pops WKWebView's DOM-paste "Paste" button
+  // (no JS opt-out); the native path has no button and does bracketed paste.
   function handleTerminalClipboardChord(e: KeyboardEvent): boolean {
     if (e.type !== "keydown") return false;
     const key = e.key.toLowerCase();
@@ -1188,8 +1198,10 @@
       return true;
     }
     if (key === "v" && isTerminalPasteChord(e)) {
-      e.preventDefault();
-      void pasteClipboard();
+      // Do NOT preventDefault and do NOT read the clipboard here: the browser
+      // then performs its native paste -> xterm's `paste` listener -> bracketed
+      // paste -> onData -> handleXtermData. Returning true still makes
+      // handleTerminalKeyEvent return false so xterm skips the KEY (no ^V byte).
       return true;
     }
     return false;
@@ -1345,9 +1357,11 @@
     if (closeExitedTabFromKey(e)) return false;
     // Copy/paste chords act on the xterm selection / system clipboard, not
     // the PTY. Resolve them here (the custom handler runs before xterm
-    // processes the key) so no bytes reach the shell, Ctrl+Shift+C does not
-    // raise SIGINT, and xterm's native paste does not also fire. `false`
-    // tells xterm to skip the keystroke entirely.
+    // processes the key) so no bytes reach the shell and Ctrl+Shift+C does not
+    // raise SIGINT. `false` tells xterm to skip the keystroke. For paste this
+    // deliberately leaves the browser's native paste to fire so xterm's own
+    // `paste` listener handles it (see handleTerminalClipboardChord) - that is
+    // the buttonless, bracketed path, not a double-paste.
     if (handleTerminalClipboardChord(e)) return false;
     // Chord-escape registry. When the incoming event matches a
     // shortcut flagged `escapeTerminal: true` in shortcuts.ts, return
