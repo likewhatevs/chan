@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.28.1] - 2026-06-08
+
+### Fixed
+
+- Pasting into the terminal no longer pops a "Paste" button you have to
+  click first. Cmd+V now pastes directly through the terminal's native
+  paste path (which also restores bracketed paste for multi-line content),
+  and the right-click "Paste" menu reads the clipboard natively on
+  chan-desktop instead of through the WebKit clipboard prompt.
+
 ## [v0.28.0] - 2026-06-05
 
 Phase 19: a graph @@mention lens, a startup index-reconcile fix, the
