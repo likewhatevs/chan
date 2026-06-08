@@ -650,7 +650,11 @@ tags were cleaned up, so those versions (roughly v0.6.x through v0.15.x)
 carry no tags in this repository and are not detailed here. Their history
 lives in the per-phase reports under `docs/phases/`.
 
-[Unreleased]: https://github.com/fiorix/chan/compare/v0.26.2...HEAD
+[Unreleased]: https://github.com/fiorix/chan/compare/v0.28.1...HEAD
+[v0.28.1]: https://github.com/fiorix/chan/compare/v0.28.0...v0.28.1
+[v0.28.0]: https://github.com/fiorix/chan/compare/v0.27.1...v0.28.0
+[v0.27.1]: https://github.com/fiorix/chan/compare/v0.27.0...v0.27.1
+[v0.27.0]: https://github.com/fiorix/chan/compare/v0.26.2...v0.27.0
 [v0.26.2]: https://github.com/fiorix/chan/compare/v0.26.1...v0.26.2
 [v0.26.1]: https://github.com/fiorix/chan/compare/v0.26.0...v0.26.1
 [v0.26.0]: https://github.com/fiorix/chan/compare/v0.25.0...v0.26.0
