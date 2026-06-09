@@ -186,6 +186,11 @@ export const ui = $state<{
   /// New File Browser / New Graph / Set MCP env entries). In this mode
   /// `app.terminal.toggle` (Cmd+T) adds a terminal tab to the focused pane.
   terminalOnly: boolean;
+  /// Terminal-only windows close when their last terminal tab is closed (they
+  /// never sit empty). Set true by `bootstrapTerminalOnly` AFTER the first
+  /// terminal exists, so the transient empty layout during boot can't trip the
+  /// close-on-last-tab watcher in App.svelte. Always false in workspace mode.
+  terminalArmed: boolean;
 }>({
   status: null,
   statusKind: null,
@@ -197,6 +202,7 @@ export const ui = $state<{
   authMissing: false,
   disconnectBlocking: false,
   terminalOnly: isTerminalOnlyWindow(),
+  terminalArmed: false,
 });
 
 /// Detect terminal-only mode from the window URL. The `?kind=terminal`
@@ -1260,6 +1266,18 @@ async function bootstrapTerminalOnly(): Promise<void> {
     unwatch = openWatchSocket(onWatchEvent, onWatchStatus, onWatchReady);
   }
   // No index-status poller (no `/api/index/status` route in this tenant).
+
+  // A terminal-only window always holds at least one terminal: if nothing was
+  // restored (a fresh window), open the first tab so an empty pane never
+  // shows. A Cmd+R reload restores the saved layout instead and re-attaches to
+  // the surviving server-side PTYs, so this only fires on a genuinely fresh
+  // window.
+  if (allTerminalTabs().length === 0) {
+    openTerminalInActivePane({});
+  }
+  // Arm the close-on-last-tab watcher (App.svelte) only AFTER the first
+  // terminal exists, so the transient empty boot layout can't close the window.
+  ui.terminalArmed = true;
 }
 
 export async function bootstrap(): Promise<void> {

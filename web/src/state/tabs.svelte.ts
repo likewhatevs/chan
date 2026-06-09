@@ -719,6 +719,37 @@ export function uniqueTerminalName(desired: string, excludeTabId?: string): stri
   }
 }
 
+/// Apply the GLOBAL `Terminal-N` default name to a freshly-spawned terminal
+/// in terminal-only mode. The spawn helpers are synchronous and create the
+/// tab with the local `nextTerminalTitle()` placeholder; this fetches the
+/// process-global ordinal from the shared `/terminal` tenant and replaces the
+/// placeholder so numbering is consistent across every terminal window (a
+/// per-window count restarts at 1 in each new window). The server counter is
+/// atomic, so two quick Cmd+T presses each resolve a DISTINCT name against a
+/// DISTINCT tab object - no collision. `uniqueTerminalName` is a defensive
+/// dedup against the still-present local placeholder; `excludeTabId` skips the
+/// target tab so it never collides with its own placeholder. A failed fetch
+/// (offline, slim tenant without the route) leaves the local placeholder in
+/// place rather than throwing. Workspace mode keeps `nextTerminalTitle` /
+/// `uniqueTerminalName` as-is and never calls this.
+async function applyGlobalTerminalName(tab: TerminalTab): Promise<void> {
+  try {
+    const name = (await api.terminalNextName()).trim();
+    if (!name) return;
+    // Mutate the LIVE tab from the layout, NOT the passed reference. A tab
+    // object pushed into `$state` is only reactive through its Svelte proxy;
+    // writing `tab.title` on the original (pre-push) object updates the data
+    // but never re-renders the name. Re-find the proxy by id (this also
+    // covers the tab being closed / moved out mid-fetch -> not found -> skip).
+    const live = allTerminalTabs().find((t) => t.id === tab.id);
+    if (!live) return;
+    live.title = uniqueTerminalName(name, tab.id);
+  } catch {
+    // Keep the local placeholder name; the global counter is a nicety, not a
+    // correctness requirement.
+  }
+}
+
 /// Each pane (Hybrid in user-facing copy) holds an optional back-side
 /// slot. The back is a per-surface configuration view scoped to the
 /// type of the currently-active front tab. `pane.tabs` /
@@ -888,6 +919,16 @@ export function shouldCloseTabAfterDragEnd(
   tabId: string,
   dropEffect: string | undefined,
 ): boolean {
+  // A cross-window drop that a target accepted (dropEffect === "move") leaves
+  // the source tab still in this pane: remove it so the visual matches the
+  // cross-window result. This now ALSO applies to terminals: all standalone
+  // terminal windows share one `/terminal` tenant (one PTY registry), so the
+  // target window re-attached to this SAME live PTY by id - a true MOVE. The
+  // source close is made PTY-preserving by the drag-end's `markTerminalMovingOut`
+  // (the close-sink then skips the WS `close` frame), so the terminal leaves
+  // here with its shell + history intact and reappears in the target with no
+  // duplicate. If the source pane then becomes empty, the close-on-last-tab
+  // watcher closes the window - correct (no empty terminal window).
   if (dropEffect !== "move") return false;
   const localDrop = localTabDrops.delete(tabDropKey(paneId, tabId));
   const n = layout.nodes[paneId];
@@ -1077,6 +1118,83 @@ export function openTerminalInPane(
   p.tabs.push(tab);
   p.activeTabId = tab.id;
   layout.activePaneId = p.id;
+  // Terminal-only windows number from a GLOBAL counter so Terminal-N stays
+  // consistent across every terminal window. Only an UNNAMED spawn (no
+  // explicit title - e.g. `cs terminal new --tab-name` passes one) takes the
+  // global name; the fetch is async so the tab already exists with its local
+  // placeholder and the name is patched in when the response lands.
+  if (isTerminalWindow() && !title) {
+    void applyGlobalTerminalName(tab);
+  }
+  return tab;
+}
+
+/// Re-attach payload for a session-preserving cross-window terminal MOVE.
+/// Carried in the cross-window drag (CROSS_TAB_MIME) and consumed by
+/// `reattachTerminalInPane`. All standalone terminal windows share one
+/// `/terminal` tenant (one PTY registry), so the target window can attach to
+/// this SAME live PTY by `terminalSessionId` instead of spawning a fresh
+/// shell. The seq cursors + cwd + mcpEnv mirror what the source tab held so
+/// the re-attach replays from the right point and keeps the session's env.
+export type TerminalMovePayload = {
+  terminalSessionId: string;
+  title?: string;
+  lastSeq?: number;
+  lastAgentEchoSeq?: number;
+  sessionMcpEnv?: boolean;
+  mcpEnv?: boolean;
+  group?: string;
+  cwd?: string;
+};
+
+/// Re-attach a MOVED terminal to its existing live PTY in the target window's
+/// pane. Distinct from `openTerminalInPane({ sessionId })`: this preserves the
+/// moved terminal's NAME verbatim (NO renumber - it's the same terminal, just
+/// in a new window) and seeds the seq cursors so the WS re-attach replays from
+/// where the source window left off. The source tab is removed WITHOUT killing
+/// the PTY (see `closeTab`'s `keepSession`), so the net effect is the terminal
+/// leaving the source and appearing here with the same shell + history and no
+/// duplicate. The PTY lives in the shared registry, so the attach succeeds.
+export function reattachTerminalInPane(
+  paneId: string,
+  payload: TerminalMovePayload,
+): TerminalTab | null {
+  const p = layout.nodes[paneId];
+  if (!p || p.kind !== "leaf") return null;
+  const sessionId = payload.terminalSessionId?.trim();
+  if (!sessionId) return null;
+  const group = payload.group?.trim();
+  const tab: TerminalTab = {
+    kind: "terminal",
+    id: id("term"),
+    // Preserve the moved terminal's name. Dedup against THIS window's other
+    // terminals (a same-named terminal could already exist here) but never
+    // renumber away from the original unless there is an actual collision.
+    title: uniqueTerminalName(payload.title?.trim() || "Terminal"),
+    createdAt: Date.now(),
+    broadcastEnabled: false,
+    broadcastTargetIds: [],
+    mcpEnv: payload.mcpEnv ?? true,
+    sessionMcpEnv: payload.sessionMcpEnv,
+    terminalSessionId: sessionId,
+    controlledTerminal: undefined,
+    // Seed the seq cursors so the WS re-attach (`connect()` in TerminalTab.svelte
+    // sends `sessionId` + `lastSeq` + `agentEchoSince`) replays only the bytes
+    // this window has not seen yet, matching a same-window reattach on reload.
+    lastSeq: payload.lastSeq,
+    lastAgentEchoSeq: payload.lastAgentEchoSeq,
+    cwd: payload.cwd?.trim() || undefined,
+    seedInput: undefined,
+    group: group && group !== DEFAULT_TERMINAL_GROUP ? group : undefined,
+  };
+  p.tabs.push(tab);
+  p.activeTabId = tab.id;
+  layout.activePaneId = p.id;
+  // Pull keyboard focus to the just-dropped terminal: making it the active
+  // tab isn't enough on its own (the terminal's focus effect only grabs the
+  // xterm on a focus pulse), so fire the same pulse a chord-driven tab switch
+  // uses.
+  bumpTabFocusPulse();
   return tab;
 }
 
@@ -1405,6 +1523,30 @@ type TerminalInputSink = (data: string) => void;
 const terminalInputSinks = new Map<string, TerminalInputSink>();
 type TerminalCloseSink = () => boolean | void | Promise<boolean | void>;
 const terminalCloseSinks = new Map<string, TerminalCloseSink>();
+
+/// Tab ids that are LEAVING this window via a session-preserving cross-window
+/// move. When `closeTab` tears such a tab down, the terminal close-sink
+/// (`closeTerminalForTab` in TerminalTab.svelte) consults this set and SKIPS
+/// the WS `close` frame, so the PTY stays alive in the shared `/terminal`
+/// registry for the target window to re-attach to. Window-local cleanup
+/// (Rich Prompt draft, bubble entry) still runs - the tab really is gone from
+/// THIS window. The set is the seam because the close-sink takes no args; it
+/// is drained on consult (see `isTerminalMoving`) so a normal later close of a
+/// re-created tab with a colliding id still kills its PTY.
+const terminalsMovingOut = new Set<string>();
+
+/// Mark a terminal tab as moving out (PTY kept alive) for the duration of the
+/// drag-end close. Called by the source pane's drag-end before `closeTab`.
+export function markTerminalMovingOut(tabId: string): void {
+  terminalsMovingOut.add(tabId);
+}
+
+/// Whether `tabId` is leaving via a session-preserving move; consumes the
+/// flag (one-shot) so it can't leak into a later real close. The terminal
+/// close-sink calls this to decide whether to send the WS `close` frame.
+export function isTerminalMoving(tabId: string): boolean {
+  return terminalsMovingOut.delete(tabId);
+}
 
 export function registerTerminalInputSink(tabId: string, sink: TerminalInputSink): () => void {
   terminalInputSinks.set(tabId, sink);
@@ -2614,6 +2756,17 @@ function insertSiblingPaneIn(
 /// draft tree only; Enter seals the split and any tabs spawned during
 /// the mode, Esc rolls everything back. Structural actions are
 /// constrained to right + down.
+/// Standalone terminal windows carry `?kind=terminal`. Read here directly
+/// (rather than importing the store's `ui.terminalOnly`) to avoid a
+/// tabs <-> store import cycle.
+function isTerminalWindow(): boolean {
+  try {
+    return new URLSearchParams(location.search).get("kind") === "terminal";
+  } catch {
+    return false;
+  }
+}
+
 export function paneModeSplit(direction: "row" | "column"): void {
   const draft = draftLayout();
   if (!draft) return;
@@ -2627,6 +2780,9 @@ export function paneModeSplit(direction: "row" | "column"): void {
   };
   insertSiblingPaneIn(draft, original.id, newPane, direction, "after");
   draft.activePaneId = newPane.id;
+  // Terminal-only windows never have an empty pane: a freshly-split pane gets
+  // its own terminal so the new split is immediately usable.
+  if (isTerminalWindow()) paneModeOpenTerminal();
 }
 
 /// Context for a Pane Mode spawn key. The Cmd+K 1/2/3/4 handlers
@@ -2672,6 +2828,15 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
+  // Terminal-only windows number from the GLOBAL counter (see
+  // applyGlobalTerminalName). The tab lives in the pane-mode DRAFT here; its
+  // id survives the commit-time clone, and the async fetch resolves after the
+  // commit, so the guard inside the helper (skip if the id is no longer live)
+  // also correctly no-ops on an Esc rollback. A pane-mode spawn never carries
+  // an explicit title, so every terminal-only split-spawn is global-numbered.
+  if (isTerminalWindow()) {
+    void applyGlobalTerminalName(tab);
+  }
 }
 
 /// Cmd+K mode `2`. Spawn a fresh File Browser tab inside the draft's
@@ -2912,6 +3077,9 @@ export function canSplit(): boolean {
 
 export function splitActive(direction: "row" | "column"): void {
   splitPane(layout.activePaneId, direction, "after");
+  // Terminal-only windows never have an empty pane: the new split pane (now
+  // active) gets its own terminal.
+  if (isTerminalWindow()) openTerminalInActivePane({});
 }
 
 /// Materialize an R×C grid of panes starting from `startPaneId`.

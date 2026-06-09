@@ -45,6 +45,7 @@
     ensureTerminalKeyboardProtocol,
     flipHybrid,
     dismissTerminalEnvNamePrompt,
+    isTerminalMoving,
     markTerminalEnvNameRestarted,
     registerTerminalCloseSink,
     registerTerminalInputSink,
@@ -950,6 +951,11 @@
   function sendUserInput(data: string): void {
     sendInput(data);
     broadcastTerminalInput(tab, data);
+    // Cross-window broadcast: same-group members in OTHER windows live in the
+    // shared terminal registry and are unreachable from this window's SPA, so
+    // the server fans the input to them. Same-window members are covered by
+    // `broadcastTerminalInput` above.
+    if (tab.broadcastEnabled) send({ type: "broadcast-input", data });
   }
 
   function handleXtermData(data: string): void {
@@ -1107,7 +1113,17 @@
   }
 
   function closeTerminalForTab(): boolean {
-    explicitCloseSession();
+    // A session-preserving cross-window MOVE removes the tab from THIS window
+    // but the PTY must survive (it lives in the shared `/terminal` registry and
+    // the target window re-attaches to it by id). So skip the WS `close` frame
+    // that would kill the shell; just clear the local session binding so this
+    // window's WS doesn't reconnect during teardown. Window-local cleanup
+    // (Rich Prompt draft, bubble entry) below still runs - the tab is gone here.
+    if (isTerminalMoving(tab.id)) {
+      clearTerminalSession(tab);
+    } else {
+      explicitCloseSession();
+    }
     // Discard this terminal's Rich Prompt draft folder (draft.md + any pasted
     // media) so nothing leaks in Drafts (@@Host: the bubble's draft is tied to
     // the terminal lifecycle). Best-effort + fire-and-forget; the tab is going

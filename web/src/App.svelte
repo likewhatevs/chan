@@ -61,6 +61,7 @@
     activeFileTab,
     activePane,
     activeTerminalTab,
+    allTerminalTabs,
     closeFind,
     closePane,
     closeTab,
@@ -912,6 +913,16 @@
     killActivePane({ force: true });
     return true;
   }
+  // Terminal-only windows never sit empty: when the last terminal tab is
+  // closed (by any path - tab close, Cmd+W, pane close), close the window.
+  // `terminalArmed` is set by bootstrap only AFTER the first terminal exists,
+  // so the transient empty layout during boot can't trip this. No-op in
+  // workspace mode and on the web (requestCloseWindow gates on the desktop).
+  $effect(() => {
+    if (!ui.terminalOnly || !ui.terminalArmed) return;
+    if (allTerminalTabs().length > 0) return;
+    if (isTauriDesktop()) void requestCloseWindow();
+  });
   onMount(() => document.addEventListener("keydown", onWindowKey));
   onDestroy(() => document.removeEventListener("keydown", onWindowKey));
 
