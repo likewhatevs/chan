@@ -55,6 +55,12 @@ cards in [`.agents/roster/README.md`](../../.agents/roster/README.md).
 - [Phase 18](phase-18.md) - hybrid-surface bug sweep (editor lists, graph,
   File Browser, inspector pills, terminal), the repo/docs fold, and the
   v0.26.0 release wave.
+- [Phase 19](phase-19.md) - Linux/WebKitGTK desktop parity, the in-tree
+  Drafts model, the graph @@mention lens plus contact nodes and offline
+  reconcile, and the .agents/ docs fold (v0.26.1 through v0.28.1).
+- [Phase 20](phase-20.md) - chan-desktop refinements (plain-text update
+  prompt, unified About) and standalone terminal windows, run as an
+  orchestrator + subagents round.
 - [pub-site-release](pub-site-release.md) - a standalone branding and
   positioning re-steer plus marketing site refresh (not a numbered
   phase).
