@@ -1140,9 +1140,18 @@ async function maybeOfferUpdate() {
     return;
   }
   if (!update) return;
+  // Plain text only. The release notes (`update.body`) arrive as GitHub
+  // markdown; a native dialog renders it literally (asterisks, raw URL),
+  // so we drop it and show a single changelog link instead. The native
+  // dialog cannot make the URL clickable, but a bare compare link is
+  // selectable and self-explanatory. `currentVersion` is the installed
+  // build; `version` is the offered one.
+  const changelog = update.currentVersion
+    ? `https://github.com/fiorix/chan/compare/v${update.currentVersion}...v${update.version}`
+    : `https://github.com/fiorix/chan/releases/tag/v${update.version}`;
   const accepted = await ask(
     `A new version of Chan Desktop is available: ${update.version}.\n\n` +
-    (update.body ? update.body + '\n\n' : '') +
+    `Changelog: ${changelog}\n\n` +
     'Install and restart now?',
     { title: 'Chan Desktop update', okLabel: 'Install', cancelLabel: 'Later', kind: 'info' }
   );
