@@ -72,8 +72,8 @@ use routes::{
     api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
     api_search_files, api_storage_reset, api_survey_reply, api_team_config_read,
-    api_team_config_write, api_terminal_ws, api_upload_file, api_window_reply,
-    api_workspace_bootstrap, api_write_file, ws_upgrade,
+    api_team_config_write, api_terminal_next_name, api_terminal_ws, api_upload_file,
+    api_window_reply, api_workspace_bootstrap, api_write_file, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -635,6 +635,7 @@ async fn build_app(
         scope_registry,
         survey_bus,
         window_bus,
+        ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
@@ -761,6 +762,7 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
         scope_registry,
         survey_bus: Arc::new(survey::SurveyBus::new()),
         window_bus: Arc::new(window_bus::WindowBus::new()),
+        ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
     });
 
     // Nest under the prefix exactly like `build_app` so the host's
@@ -801,6 +803,10 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
 fn terminal_router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/api/terminal/ws", get(api_terminal_ws))
+        // Global Terminal-N name sequence shared across all terminal windows
+        // (they share this one tenant). Only the slim terminal router mounts
+        // it; workspace windows name terminals per-workspace locally.
+        .route("/api/terminal/next-name", get(api_terminal_next_name))
         .route("/api/terminals", post(api_create_terminal))
         .route("/api/terminals/:session", delete(api_delete_terminal))
         .route(

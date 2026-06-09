@@ -37,12 +37,30 @@ async fn blocking_response(
     }
 }
 
+/// Lock the workspace-less tenant's in-memory session store. Recovers from a
+/// poisoned lock (the critical sections are simple map ops that never leave
+/// it inconsistent) so a session request can never itself panic the server.
+fn ephemeral_lock(
+    state: &AppState,
+) -> std::sync::MutexGuard<'_, std::collections::HashMap<String, Vec<u8>>> {
+    state
+        .ephemeral_sessions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
 pub async fn api_get_session(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SessionQuery>,
 ) -> Response {
-    let workspace = state.workspace();
     let key = q.w;
+    let Ok(workspace) = state.try_workspace() else {
+        // Workspace-less terminal tenant: tenant-scoped in-memory store.
+        return match ephemeral_lock(&state).get(&key) {
+            Some(bytes) => raw_json_response(bytes.clone()),
+            None => StatusCode::NO_CONTENT.into_response(),
+        };
+    };
     blocking_response(
         move || match workspace.get_session(&key) {
             Ok(Some(bytes)) => raw_json_response(bytes),
@@ -62,8 +80,11 @@ pub async fn api_put_session(
     Query(q): Query<SessionQuery>,
     body: Bytes,
 ) -> Response {
-    let workspace = state.workspace();
     let key = q.w;
+    let Ok(workspace) = state.try_workspace() else {
+        ephemeral_lock(&state).insert(key, body.to_vec());
+        return StatusCode::NO_CONTENT.into_response();
+    };
     blocking_response(
         move || match workspace.put_session(&key, &body) {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -78,8 +99,11 @@ pub async fn api_delete_session(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SessionQuery>,
 ) -> Response {
-    let workspace = state.workspace();
     let key = q.w;
+    let Ok(workspace) = state.try_workspace() else {
+        ephemeral_lock(&state).remove(&key);
+        return StatusCode::NO_CONTENT.into_response();
+    };
     blocking_response(
         move || match workspace.delete_session(&key) {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -91,7 +115,10 @@ pub async fn api_delete_session(
 }
 
 pub async fn api_list_sessions(State(state): State<Arc<AppState>>) -> Response {
-    let workspace = state.workspace();
+    let Ok(workspace) = state.try_workspace() else {
+        let keys: Vec<String> = ephemeral_lock(&state).keys().cloned().collect();
+        return Json(keys).into_response();
+    };
     blocking_response(
         move || match workspace.list_sessions() {
             Ok(keys) => Json(keys).into_response(),

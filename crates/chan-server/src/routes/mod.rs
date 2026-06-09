@@ -82,7 +82,8 @@ pub use storage::api_storage_reset;
 pub use survey::api_survey_reply;
 pub use team_config::{api_team_config_read, api_team_config_write};
 pub use terminal::{
-    api_create_terminal, api_delete_terminal, api_restart_terminal, api_terminal_ws,
+    api_create_terminal, api_delete_terminal, api_restart_terminal, api_terminal_next_name,
+    api_terminal_ws,
 };
 pub use window::api_window_reply;
 pub use workspace::{
