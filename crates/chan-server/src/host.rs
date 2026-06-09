@@ -18,7 +18,9 @@ use chan_workspace::{Library, Workspace};
 use tower::ServiceExt;
 
 use crate::state::WorkspaceCell;
-use crate::{build_app, sanitize_prefix, AppArtifacts, Error, ServeConfig, ServeHandle};
+use crate::{
+    build_app, build_terminal_app, sanitize_prefix, AppArtifacts, Error, ServeConfig, ServeHandle,
+};
 
 /// One workspace mounted into a [`WorkspaceHost`].
 #[derive(Debug, Clone)]
@@ -124,6 +126,80 @@ impl WorkspaceHost {
         }
 
         let artifacts = build_app(self.library.clone(), workspace, &config).await?;
+        let handle = ServeHandle {
+            addr: config.addr,
+            prefix: prefix.clone(),
+            token: artifacts.token.clone(),
+        };
+        let hosted = HostedWorkspace {
+            root: root.clone(),
+            prefix: prefix.clone(),
+            handle,
+        };
+        let runtime = HostedWorkspaceRuntime { root, artifacts };
+
+        let mut workspaces = self
+            .workspaces
+            .write()
+            .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+        if workspaces.contains_key(&prefix) {
+            return Err(Error::Config(format!(
+                "workspace prefix already mounted: {}",
+                display_prefix(&prefix)
+            )));
+        }
+        workspaces.insert(prefix, runtime);
+        Ok(hosted)
+    }
+
+    /// Mount a workspace-less "terminal-only" tenant under
+    /// `config.prefix`.
+    ///
+    /// Mirrors [`open_workspace`](Self::open_workspace) but backs the
+    /// mount with [`build_terminal_app`] instead of `build_app`: no
+    /// `Arc<Workspace>`, no watcher / indexer / MCP bridge / control
+    /// socket. The slim tenant serves only the terminal + window-session
+    /// routes plus the SPA shell, so a standalone terminal window
+    /// (desktop webview in `?kind=terminal` mode) gets a PTY surface
+    /// without a workspace behind it.
+    ///
+    /// The tenant lands in the SAME `workspaces` map as workspace mounts
+    /// and is reached by the same `host_dispatch` prefix routing, so the
+    /// duplicate-prefix guard and `close_workspace` apply uniformly. The
+    /// returned [`HostedWorkspace::root`] is the PTY cwd (the user's home
+    /// dir) since there is no workspace root; `handle.launch_url()`
+    /// resolves against `config.addr`/`prefix`/token exactly like a
+    /// workspace mount.
+    pub async fn open_terminal_session(
+        &self,
+        mut config: ServeConfig,
+    ) -> Result<HostedWorkspace, Error> {
+        config.prefix = sanitize_prefix(&config.prefix).map_err(Error::Config)?;
+        let prefix = config.prefix.clone();
+
+        // Duplicate-prefix guard only: unlike a workspace mount there is
+        // no filesystem root to collide on, so two terminal tenants are
+        // free to share the home-dir PTY cwd. The check mirrors
+        // `open_workspace` so a prefix already serving a workspace can't
+        // be shadowed.
+        {
+            let workspaces = self
+                .workspaces
+                .read()
+                .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+            if workspaces.contains_key(&prefix) {
+                return Err(Error::Config(format!(
+                    "workspace prefix already mounted: {}",
+                    display_prefix(&prefix)
+                )));
+            }
+        }
+
+        let artifacts = build_terminal_app(self.library.clone(), &config).await?;
+        // Root reported for diagnostics / desktop correlation: the PTY
+        // cwd is the user's home dir, so surface that. Falls back to "/"
+        // to match `build_terminal_app`'s registry root resolution.
+        let root = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let handle = ServeHandle {
             addr: config.addr,
             prefix: prefix.clone(),
@@ -459,6 +535,69 @@ mod tests {
             .expect("fresh dir opens immediately after in-process register");
         let canonical = fresh.path().canonicalize().expect("canonical root");
         assert_eq!(hosted.root, canonical);
+    }
+
+    #[tokio::test]
+    async fn open_terminal_session_mounts_slim_tenant() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = Arc::new(WorkspaceHost::new(lib));
+
+        // No workspace path, no registration: a terminal tenant is
+        // backed by nothing but the embedded host.
+        host.open_terminal_session(serve_config("/terminal-x"))
+            .await
+            .expect("open terminal session");
+
+        let app = host.router();
+
+        // A workspace-free terminal-surface route is mounted and
+        // reachable. `build-info` is state-free, so it serves 200 even
+        // with no workspace cell. (`/api/health` is mounted too but
+        // reports 503 on a terminal tenant since it snapshots the
+        // absent indexer — mounted, but workspace-dependent.)
+        let build_info = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/terminal-x/api/build-info")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(build_info.status(), StatusCode::OK);
+
+        // A workspace-content route is ABSENT (the slim router never
+        // mounted it), so it 404s rather than panicking on the missing
+        // workspace cell.
+        let files = app
+            .oneshot(
+                Request::builder()
+                    .uri("/terminal-x/api/files")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(files.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn open_terminal_session_rejects_duplicate_prefix() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = Arc::new(WorkspaceHost::new(lib));
+
+        host.open_terminal_session(serve_config("/terminal-1"))
+            .await
+            .expect("open first terminal");
+        // Same prefix is refused by the shared duplicate-prefix guard.
+        let err = host
+            .open_terminal_session(serve_config("/terminal-1"))
+            .await
+            .expect_err("duplicate prefix must be rejected");
+        assert!(matches!(err, Error::Config(_)));
     }
 
     #[test]
