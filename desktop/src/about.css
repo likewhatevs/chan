@@ -14,7 +14,7 @@
   gap: 16px;
   max-width: 380px;
   margin: 0 auto;
-  padding: 26px 22px 22px;
+  padding: 26px 22px;
 }
 
 .about-head {
@@ -42,9 +42,6 @@
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.version-license {
-  margin-left: 6px;
 }
 
 .about-links {

@@ -1706,8 +1706,11 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
         WebviewUrl::App(format!("about.html?v={version}").into()),
     )
     .title("About Chan Desktop")
-    .inner_size(420.0, 600.0)
-    .min_inner_size(420.0, 480.0)
+    // Sized to fit the content with equal top/bottom margin: app head,
+    // links, the Fund-the-work card, separator, and the credits line.
+    // Fixed, since the window is non-resizable.
+    .inner_size(420.0, 426.0)
+    .min_inner_size(420.0, 380.0)
     .resizable(false)
     .build()
     .map_err(|e| format!("building about window: {e}"))?;
