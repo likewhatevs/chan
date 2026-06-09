@@ -523,30 +523,10 @@
           />
         </div>
 
-        <!-- Licenses / attribution section sits BELOW the QR + a
-             separator. The SIL OFL and MIT links point at canonical
-             upstream URLs, not embedded `/static/...` paths (those
-             resolve against 127.0.0.1 under chan-desktop's non-root
-             mount). Chan's own Apache 2.0 license moved up to the
-             version row (A6); only the third-party font + screensaver
-             attributions remain here. -->
+        <!-- Separator below the Fund-the-work QR, above the
+             free/open-source tagline. Chan's own Apache 2.0 license sits
+             on the version row (A6). -->
         <div class="about-sep" role="separator" aria-hidden="true"></div>
-        <div class="about-licenses">
-          <span class="k">terminal font</span>
-          <span class="v">
-            Source Code Pro Regular
-            <span class="muted">
-              (<a href="https://github.com/adobe-fonts/source-code-pro/blob/release/LICENSE.md" target="_blank" rel="noopener">SIL OFL 1.1</a>)
-            </span>
-          </span>
-          <span class="k">matrix screen lock</span>
-          <span class="v">
-            <a href="https://github.com/dcragusa/MatrixScreensaver" target="_blank" rel="noopener">dcragusa/MatrixScreensaver</a>
-            <span class="muted">
-              (<a href="https://github.com/dcragusa/MatrixScreensaver/blob/master/LICENSE" target="_blank" rel="noopener">MIT</a>)
-            </span>
-          </span>
-        </div>
 
         <!-- R2-1 (trimmed 2026-06-03 per @@Alex): a one-line statement that
              chan is built on open source + is itself free/open-source
@@ -905,35 +885,13 @@
     padding: 6px;
     flex-shrink: 0;
   }
-  /* C2: licenses block sits below the QR + a separator. The
-     2-column grid mirrors `.about-grid` so the key / value
-     alignment reads as a continuation of the top section. */
+  /* Separator between the Fund-the-work QR and the free/open-source
+     tagline below it. */
   .about-sep {
     height: 1px;
     background: var(--border);
     opacity: 0.6;
     margin: 0.25rem 0;
-  }
-  .about-licenses {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 6px 14px;
-    font-size: 13px;
-    width: 100%;
-  }
-  .about-licenses .k {
-    color: var(--text-secondary);
-  }
-  .about-licenses .v {
-    color: var(--text);
-  }
-  .about-licenses .muted {
-    color: var(--text-secondary);
-    opacity: 0.85;
-  }
-  .about-licenses a {
-    color: var(--link, var(--text));
-    text-decoration: underline;
   }
   /* R2-1: open-source attribution. A flowing credits paragraph rather
      than the k/v grid above, since the library list is long; same

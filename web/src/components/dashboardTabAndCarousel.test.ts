@@ -121,19 +121,12 @@ describe("carousel slides", () => {
     // the move.
     expect(carousel).not.toMatch(/>embeddings</);
     expect(carousel).not.toMatch(/features\.embeddings/);
-    expect(carousel).toMatch(/Source Code Pro Regular/);
-    expect(carousel).toMatch(/dcragusa\/MatrixScreensaver/);
-    // License links point to canonical upstream URLs rather than
-    // embedded /static/ paths (which resolve to 127.0.0.1 under the
-    // desktop non-root mount).
-    expect(carousel).toMatch(
-      /href="https:\/\/github\.com\/adobe-fonts\/source-code-pro\/blob\/release\/LICENSE\.md"/,
-    );
-    expect(carousel).toMatch(
-      /href="https:\/\/github\.com\/dcragusa\/MatrixScreensaver\/blob\/master\/LICENSE"/,
-    );
-    expect(carousel).not.toMatch(/href="\/static\/fonts\/OFL\.txt"/);
-    expect(carousel).not.toMatch(/href="\/static\/matrix\/LICENSE-MatrixScreensaver\.txt"/);
+    // The third-party font + screensaver attributions were dropped from
+    // the About slide; only chan's own Apache 2.0 (on the version row)
+    // and the website / source links remain.
+    expect(carousel).not.toMatch(/Source Code Pro Regular/);
+    expect(carousel).not.toMatch(/dcragusa\/MatrixScreensaver/);
+    expect(carousel).not.toMatch(/about-licenses/);
   });
 
   test("About widget loads buildInfo from the typed API", () => {
@@ -158,20 +151,19 @@ describe("carousel slides", () => {
     );
   });
 
-  test("A6: chan's Apache 2.0 sits on the version row; licenses block keeps only the third-party attributions", () => {
-    // A6 moved chan's own Apache 2.0 link off the `.about-licenses`
-    // block and onto the version row (`chan version {version}
-    // Apache 2.0`). The third-party font + screensaver attributions stay
-    // in the block below the Fund-the-work QR + the `.about-sep`.
+  test("A6: chan's Apache 2.0 sits on the version row; the licenses block is gone", () => {
+    // A6 moved chan's own Apache 2.0 link onto the version row
+    // (`chan version {version} Apache 2.0`). The third-party font +
+    // screensaver attributions and the `.about-licenses` block that held
+    // them were later dropped from the About slide.
     expect(carousel).toMatch(
       /<span class="k">chan version<\/span>[\s\S]{1,260}class="version-license"[\s\S]{1,160}Apache 2\.0<\/a>/,
     );
-    // The licenses block still sits after the QR + separator and still
-    // carries the two third-party attributions, in order.
-    expect(carousel).toMatch(
-      /<div class="about-fund">[\s\S]{1,2000}<div class="about-sep"[\s\S]{1,200}<div class="about-licenses">[\s\S]{1,1400}Source Code Pro Regular[\s\S]{1,1200}dcragusa\/MatrixScreensaver/,
-    );
-    // The chan / Apache 2.0 row no longer renders inside about-licenses
+    // No `.about-licenses` block (markup or CSS) and no attributions.
+    expect(carousel).not.toMatch(/about-licenses/);
+    expect(carousel).not.toMatch(/<span class="k">terminal font<\/span>/);
+    expect(carousel).not.toMatch(/<span class="k">matrix screen lock<\/span>/);
+    // The chan / Apache 2.0 row no longer renders inside a k/v block
     // ("chan version" on the grid does not match this exact-text span).
     expect(carousel).not.toMatch(/<span class="k">chan<\/span>/);
     // The LICENSE anchor appears exactly once now (only the version row).
@@ -179,22 +171,17 @@ describe("carousel slides", () => {
       /href="https:\/\/github\.com\/fiorix\/chan\/blob\/main\/LICENSE"/g,
     );
     expect(apacheMatches?.length ?? 0).toBe(1);
-    expect(carousel).toMatch(/\.about-licenses \{[\s\S]{1,400}grid-template-columns: max-content 1fr/);
+    // The separator below the Fund-the-work QR stays.
     expect(carousel).toMatch(/\.about-sep \{[\s\S]{1,400}background: var\(--border\)/);
-    // The terminal-font + matrix-screen-lock rows still appear EXACTLY
-    // ONCE in the source (inside `.about-licenses`).
-    const fontMatches = carousel.match(/<span class="k">terminal font<\/span>/g);
-    expect(fontMatches?.length ?? 0).toBe(1);
-    const matrixMatches = carousel.match(/<span class="k">matrix screen lock<\/span>/g);
-    expect(matrixMatches?.length ?? 0).toBe(1);
   });
 
-  test("R2-1: About widget shows the free/open-source tagline below the licenses block", () => {
-    // The credits block sits after `.about-licenses` and is now just the
-    // free/open-source tagline; the detailed dependency list was dropped
-    // per @@Alex 2026-06-03 (too much for the About page).
+  test("R2-1: About widget shows the free/open-source tagline below the separator", () => {
+    // The credits block sits after the Fund-the-work QR + the
+    // `.about-sep`, and is just the free/open-source tagline; the
+    // dependency list was dropped per @@Alex 2026-06-03 and the
+    // third-party attributions were later removed too.
     expect(carousel).toMatch(
-      /<div class="about-licenses">[\s\S]{1,1600}dcragusa\/MatrixScreensaver[\s\S]{1,1000}<div class="about-credits">/,
+      /<div class="about-fund">[\s\S]{1,2000}<div class="about-sep"[\s\S]{1,400}<div class="about-credits">/,
     );
     expect(carousel).toMatch(
       /Built on a strong open-source foundation\. Chan is free and[\s\S]{1,20}open-source software\./,
