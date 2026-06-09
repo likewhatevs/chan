@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "about",
+  "description": "Capabilities for the bundled About window (label: about). Static content plus external links that open in the system browser.",
+  "windows": ["about"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "opener:allow-open-url"
+  ]
+}

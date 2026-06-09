@@ -1,0 +1,103 @@
+/* About window. Tokens come from styles.css (the launcher base); this
+   layers the centered, narrow-column About layout that mirrors the SPA
+   Dashboard About slide. */
+
+.about-body {
+  /* Inert window chrome: no scrollbars unless content overflows the
+     fixed-size, non-resizable window. */
+  padding: 0;
+}
+
+.about-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 380px;
+  margin: 0 auto;
+  padding: 26px 22px 22px;
+}
+
+.about-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.about-mark {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+}
+.about-name {
+  font-size: 17px;
+  font-weight: 600;
+}
+.about-version {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+.about-version .mono {
+  color: var(--text);
+}
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.version-license {
+  margin-left: 6px;
+}
+
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 13px;
+}
+
+a.ext {
+  color: var(--link);
+  text-decoration: none;
+  cursor: pointer;
+}
+a.ext:hover {
+  text-decoration: underline;
+}
+
+.about-fund {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+.fund-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.fund-text {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.fund-qr {
+  flex: 0 0 auto;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.about-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0;
+}
+
+.about-credits {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}

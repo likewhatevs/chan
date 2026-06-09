@@ -1589,6 +1589,32 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
                 }
             }
         }
+        // Redirect the system "About Chan" item to our bundled About window
+        // so macOS shows the same About content as Linux/Windows (the
+        // Dashboard About slide). The App menu is the first submenu in the
+        // default macOS menubar: prepend a custom (non-predefined) About
+        // item routed to `chan-about`, then strip the predefined system
+        // About. The Predefined-only match below leaves our custom item.
+        if let Some(app_submenu) = menu
+            .items()
+            .ok()
+            .and_then(|items| items.into_iter().next())
+            .and_then(|k| k.as_submenu().cloned())
+        {
+            let about = MenuItemBuilder::with_id("chan-about", "About Chan").build(app)?;
+            app_submenu.prepend_items(&[&about])?;
+            if let Ok(items) = app_submenu.items() {
+                for item in items {
+                    if let MenuItemKind::Predefined(p) = &item {
+                        if let Ok(text) = p.text() {
+                            if text.to_lowercase().contains("about") {
+                                let _ = app_submenu.remove(&item);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         menu
     };
 
@@ -1647,9 +1673,10 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         "chan-settings" => {
             dispatch_to_focused_workspace(app, "app.settings.toggle");
         }
-        #[cfg(not(target_os = "macos"))]
         "chan-about" => {
-            show_about_dialog(app.clone());
+            if let Err(e) = open_about_window(app) {
+                tracing::warn!(error = %e, "open about window failed");
+            }
         }
         #[cfg(not(target_os = "macos"))]
         "chan-quit" => {
@@ -1660,95 +1687,31 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// File ▸ About on Linux / Windows (macOS keeps the system App-menu About
-/// panel). Shows the product name + version and offers a manual update
-/// check - the only manual self-update entry point off macOS, since the
-/// launcher window otherwise auto-checks once per launch. Runs on the
-/// menu-event thread, so the first dialog is non-blocking (`show`); the
-/// update flow it spawns blocks on its own task instead.
-#[cfg(not(target_os = "macos"))]
-fn show_about_dialog(app: tauri::AppHandle) {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+/// Open the bundled About window. Same content on every platform (mirrors
+/// the SPA Dashboard About slide: version, license, links, donation QR, and
+/// third-party attributions), replacing both the macOS system About panel
+/// and the old Linux/Windows version dialog with its manual update check.
+/// Singleton: focus an existing About window instead of stacking copies.
+/// The desktop version is passed as a query param so `about.html` needs no
+/// `app`-plugin capability just to render it.
+fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("about") {
+        let _ = win.set_focus();
+        return Ok(());
+    }
     let version = app.package_info().version.to_string();
-    app.dialog()
-        .message(format!("Chan Desktop\nVersion {version}"))
-        .title("About Chan Desktop")
-        .kind(MessageDialogKind::Info)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Check for updates".to_string(),
-            "OK".to_string(),
-        ))
-        .show(move |check_updates| {
-            if check_updates {
-                check_for_updates_interactive(app);
-            }
-        });
-}
-
-/// Manual update check behind File ▸ About ▸ "Check for updates". Mirrors
-/// the launcher window's auto-check (desktop/src/main.js) but in Rust so
-/// it works from any focused window and does not depend on the JS updater
-/// capability (granted only to the launcher windows). Spawns onto the
-/// async runtime; the result dialogs block that task, never the UI thread.
-#[cfg(not(target_os = "macos"))]
-fn check_for_updates_interactive(app: tauri::AppHandle) {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-    use tauri_plugin_updater::UpdaterExt;
-    tauri::async_runtime::spawn(async move {
-        let check = match app.updater() {
-            Ok(updater) => updater.check().await,
-            Err(e) => Err(e),
-        };
-        match check {
-            Ok(Some(update)) => {
-                let install = app
-                    .dialog()
-                    .message(format!(
-                        "A new version of Chan Desktop is available: {}.\n\n\
-                         Install and restart now?",
-                        update.version
-                    ))
-                    .title("Chan Desktop update")
-                    .kind(MessageDialogKind::Info)
-                    .buttons(MessageDialogButtons::OkCancelCustom(
-                        "Install".to_string(),
-                        "Later".to_string(),
-                    ))
-                    .blocking_show();
-                if install {
-                    match update.download_and_install(|_, _| {}, || {}).await {
-                        // restart() diverges (process exec), so this arm
-                        // never returns to the match.
-                        Ok(()) => app.restart(),
-                        Err(e) => {
-                            app.dialog()
-                                .message(format!("Update failed to install:\n{e}"))
-                                .title("Chan Desktop update")
-                                .kind(MessageDialogKind::Error)
-                                .blocking_show();
-                        }
-                    }
-                }
-            }
-            Ok(None) => {
-                let version = app.package_info().version.to_string();
-                app.dialog()
-                    .message(format!(
-                        "You're up to date.\n\nChan Desktop {version} is the latest version."
-                    ))
-                    .title("Chan Desktop update")
-                    .kind(MessageDialogKind::Info)
-                    .blocking_show();
-            }
-            Err(e) => {
-                app.dialog()
-                    .message(format!("Could not check for updates:\n{e}"))
-                    .title("Chan Desktop update")
-                    .kind(MessageDialogKind::Error)
-                    .blocking_show();
-            }
-        }
-    });
+    WebviewWindowBuilder::new(
+        app,
+        "about",
+        WebviewUrl::App(format!("about.html?v={version}").into()),
+    )
+    .title("About Chan Desktop")
+    .inner_size(420.0, 600.0)
+    .min_inner_size(420.0, 480.0)
+    .resizable(false)
+    .build()
+    .map_err(|e| format!("building about window: {e}"))?;
+    Ok(())
 }
 
 /// `fullstack-83`: spawn a fresh launcher (workspace-picker) window via

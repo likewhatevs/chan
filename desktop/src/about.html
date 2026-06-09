@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>About Chan Desktop</title>
+  <link rel="icon" type="image/png" href="chan-favicon.png" />
+  <link rel="apple-touch-icon" href="chan-favicon.png" />
+  <!-- Reuse the launcher token + base styles (read-only link) so the About
+       window reads as the same product, then layer About-specific rules on
+       top. Content mirrors the SPA Dashboard About slide
+       (web/src/components/EmptyPaneCarousel.svelte). -->
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="about.css" />
+</head>
+<body class="about-body">
+  <main class="about-wrap" role="main">
+    <div class="about-head">
+      <img class="about-mark" src="chan-mark.png" alt="" aria-hidden="true" />
+      <div class="about-headtext">
+        <div class="about-name">Chan Desktop</div>
+        <div class="about-version">
+          chan version <span class="mono" id="version">n/a</span>
+          <a class="ext version-license"
+             href="https://github.com/fiorix/chan/blob/main/LICENSE">Apache 2.0</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="about-links">
+      <a class="ext about-link" href="https://chan.app">chan.app</a>
+      <a class="ext about-link" href="https://github.com/fiorix/chan">github.com/fiorix/chan</a>
+    </div>
+
+    <div class="about-fund">
+      <div class="fund-copy">
+        <div class="fund-title">Fund the work</div>
+        <p class="fund-text">
+          Chan is independent software. Small tips help cover time spent on
+          releases, packaging, and documentation. Share the love, cheers!
+        </p>
+      </div>
+      <img class="fund-qr" src="qr-donate.png" alt="Donation QR code"
+           width="150" height="150" />
+    </div>
+
+    <div class="about-sep" role="separator" aria-hidden="true"></div>
+
+    <p class="about-credits">
+      Built on a strong open-source foundation. Chan is free and
+      open-source software.
+    </p>
+  </main>
+
+  <script src="about.js"></script>
+</body>
+</html>
