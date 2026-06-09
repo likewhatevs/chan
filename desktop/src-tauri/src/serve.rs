@@ -335,18 +335,17 @@ pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> 
     )
 }
 
-/// Spawn a standalone terminal-only window. Unlike a workspace window
-/// there is no registry entry and no On-toggle lifecycle: this mounts a
-/// fresh workspace-less tenant in the embedded host, opens one webview
-/// at it in `kind=terminal` mode, and the window's close handler tears
-/// the tenant back down (`close_terminal_tenant`).
+/// Spawn a standalone terminal-only window. Unlike a workspace window there
+/// is no registry entry and no On-toggle lifecycle: every terminal window
+/// loads the ONE shared `/terminal` tenant (mounted on first use), in
+/// `kind=terminal` mode.
 ///
-/// The window label is derived directly from the tenant's route prefix
-/// (`/terminal-<seq>` -> `terminal-<seq>`), so the label IS the prefix
-/// minus its leading slash. That one-to-one mapping is what lets the
-/// close handler recover the prefix to tear down without a side map.
-/// No config-stack restore (no `?w=` reuse / hash restore): each
-/// terminal window is a fresh ephemeral surface.
+/// Each window gets a unique `terminal-win-<seq>` label so its layout
+/// persists separately (keyed by `?w=`) and the OS window switcher
+/// disambiguates - the label is no longer the route prefix. The shared
+/// tenant is never torn down per window (it lives for the process lifetime;
+/// orphaned PTYs idle-prune), which is what lets a terminal moved into
+/// another window keep its live PTY.
 pub async fn spawn_local_terminal_window(
     app: AppHandle,
     state: Arc<AppState>,
@@ -355,22 +354,13 @@ pub async fn spawn_local_terminal_window(
         return Err("embedded local server is unavailable".to_string());
     };
     let url = embedded.open_terminal().await?;
-    let prefix = url_prefix_from_local_url(&url)?;
-    // `/terminal-<seq>` -> `terminal-<seq>`. The prefix is host-unique by
-    // construction (atomic seq), so the label is process-unique too.
-    let label = prefix.trim_start_matches('/').to_string();
-    if label.is_empty() {
-        // Defensive: open_terminal always mounts under /terminal-<seq>.
-        if let Err(e) = embedded.close_prefix(&prefix) {
-            tracing::warn!(error = %e, "closing orphaned terminal tenant failed");
-        }
-        return Err(format!("embedded terminal returned an empty prefix: {url}"));
-    }
+    let label = format!("terminal-win-{}", next_window_seq());
     // `config_key` is unused for terminal windows (no LRU restore), but
-    // `build_workspace_window` takes one; an empty key never matches a
-    // real workspace/tunnel/outbound key and the terminal close branch
-    // skips the capture entirely.
-    let build = build_workspace_window(
+    // `build_workspace_window` takes one; an empty key never matches a real
+    // workspace/tunnel/outbound key and the terminal close branch skips the
+    // capture entirely. No per-window tenant teardown on build failure: the
+    // tenant is shared and persistent.
+    build_workspace_window(
         &app,
         &label,
         "Terminal",
@@ -380,32 +370,7 @@ pub async fn spawn_local_terminal_window(
         1.0,
         None,
         Some("terminal"),
-    );
-    if let Err(e) = build {
-        // Window build failed: tear the just-mounted tenant back down so a
-        // failed spawn doesn't leak a route + PTY registry.
-        if let Err(close_err) = embedded.close_prefix(&prefix) {
-            tracing::warn!(error = %close_err, "closing terminal tenant after window-build failure failed");
-        }
-        return Err(e);
-    }
-    Ok(())
-}
-
-/// Tear down the embedded terminal tenant backing a closing terminal
-/// window. The window label encodes the route prefix
-/// (`terminal-<seq>` -> `/terminal-<seq>`), so no side map is needed.
-/// Best-effort: a missing embedded server or an already-closed prefix
-/// only logs.
-fn close_terminal_tenant(app: &AppHandle, window_label: &str) {
-    let state = app.state::<Arc<AppState>>();
-    let Some(embedded) = state.embedded.get() else {
-        return;
-    };
-    let prefix = format!("/{window_label}");
-    if let Err(e) = embedded.close_prefix(&prefix) {
-        tracing::warn!(label = %window_label, error = %e, "closing terminal tenant on window close failed");
-    }
+    )
 }
 
 /// Pop the top-of-stack window config for `config_key` only if the
@@ -577,15 +542,15 @@ fn build_workspace_window(
                 let key_for_close = config_key.clone();
                 window.on_window_event(move |event| {
                     if matches!(event, WindowEvent::CloseRequested { .. }) {
-                        // A standalone terminal window OWNS its embedded
-                        // tenant (no On-toggle lifecycle), so closing the
-                        // window tears the tenant down. Workspace / tunnel /
-                        // outbound windows keep their existing behaviour: the
-                        // runtime outlives the window and only the layout is
-                        // captured for the LRU restore stack.
-                        if label_for_close.starts_with("terminal-") {
-                            close_terminal_tenant(&app_for_close, &label_for_close);
-                        } else {
+                        // Standalone terminal windows share one persistent
+                        // `/terminal` tenant (it lives for the process lifetime;
+                        // orphaned PTYs idle-prune) and keep no LRU layout
+                        // restore, so a closing terminal window needs no
+                        // teardown or config capture. Workspace / tunnel /
+                        // outbound windows keep their behaviour: the runtime
+                        // outlives the window and the layout is captured for the
+                        // LRU restore stack.
+                        if !label_for_close.starts_with("terminal-") {
                             capture_window_config_on_close(
                                 &app_for_close,
                                 &label_for_close,

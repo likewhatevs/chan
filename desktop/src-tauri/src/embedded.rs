@@ -5,7 +5,6 @@
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::Router;
@@ -13,18 +12,17 @@ use tokio::sync::watch;
 
 use crate::serve;
 
-/// Per-process monotonic counter for standalone terminal tenants. Each
-/// terminal window mounts its own workspace-less tenant under a unique
-/// `/terminal-<seq>` prefix; this disambiguates them (the host's
-/// duplicate-prefix guard would reject a collision). Independent from the
-/// workspace-window seq in `serve.rs` because the two namespaces never
-/// share a route.
-static TERMINAL_SEQ: AtomicU64 = AtomicU64::new(0);
-
 pub struct EmbeddedServer {
     host: Arc<chan_server::WorkspaceHost>,
     addr: SocketAddr,
     shutdown_tx: watch::Sender<bool>,
+    /// Cached launch URL of the single shared `/terminal` tenant that backs
+    /// ALL standalone terminal windows, so their PTYs live in one registry
+    /// (cross-window terminal moves work) under one global Terminal-N
+    /// namespace. `None` until the first terminal window opens it; reused
+    /// thereafter. The async lock serializes concurrent first-opens so two
+    /// windows can't double-mount the prefix.
+    terminal_url: tokio::sync::Mutex<Option<String>>,
 }
 
 impl EmbeddedServer {
@@ -57,6 +55,7 @@ impl EmbeddedServer {
             host,
             addr,
             shutdown_tx,
+            terminal_url: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -111,22 +110,29 @@ impl EmbeddedServer {
         Ok(())
     }
 
-    /// Mount a standalone, workspace-less terminal tenant under a fresh
-    /// `/terminal-<seq>` prefix and return its tokened launch URL
-    /// (`http://<addr>/terminal-<seq>/index.html?t=<token>`). The caller
-    /// opens a webview at that URL and is responsible for tearing the
-    /// tenant down via `close_prefix("/terminal-<seq>")` when the window
-    /// closes (a terminal window has no On-toggle lifecycle; the window IS
-    /// the tenant). Unlike `open_workspace` there is no flock to contend
-    /// for, so no retry loop: the prefix is process-unique by construction.
+    /// Return the tokened launch URL of the single shared `/terminal` tenant
+    /// (`http://<addr>/terminal/index.html?t=<token>`), mounting it on first
+    /// use. ALL standalone terminal windows load this one URL (each with its
+    /// own `?w=<label>` appended by the caller), so their PTYs share a single
+    /// registry: cross-window terminal moves work and a global Terminal-N
+    /// sequence is possible. The tenant lives for the process lifetime; there
+    /// is no per-window teardown (orphaned PTYs idle-prune). The async lock is
+    /// held across the mount so two simultaneous first-opens can't both try to
+    /// mount `/terminal`.
     pub async fn open_terminal(&self) -> Result<String, String> {
-        let prefix = format!("/terminal-{}", TERMINAL_SEQ.fetch_add(1, Ordering::Relaxed));
+        const PREFIX: &str = "/terminal";
+        let mut cached = self.terminal_url.lock().await;
+        if let Some(url) = cached.as_ref() {
+            return Ok(url.clone());
+        }
         let hosted = self
             .host
-            .open_terminal_session(serve_config(self.addr, &prefix))
+            .open_terminal_session(serve_config(self.addr, PREFIX))
             .await
-            .map_err(|e| format!("opening embedded terminal {prefix}: {e}"))?;
-        Ok(hosted.handle.launch_url())
+            .map_err(|e| format!("opening the shared embedded terminal tenant: {e}"))?;
+        let url = hosted.handle.launch_url();
+        *cached = Some(url.clone());
+        Ok(url)
     }
 }
 
