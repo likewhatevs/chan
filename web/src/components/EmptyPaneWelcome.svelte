@@ -25,7 +25,7 @@
     currentPlatform,
     formatChord,
   } from "../state/shortcuts";
-  import { workspace } from "../state/store.svelte";
+  import { ui, workspace } from "../state/store.svelte";
 
   // EmptyPaneWelcome does not forward `oncontextmenu` to a parent
   // handler; the welcome surface is purely the click-driven spawn
@@ -50,7 +50,7 @@
     command: string;
     chordId: string;
   };
-  const spawnEntries: SpawnRow[] = [
+  const FULL_SPAWN_ENTRIES: SpawnRow[] = [
     {
       label: "New Draft",
       icon: FilePlus,
@@ -83,7 +83,7 @@
       chordId: "app.graph.toggle",
     },
   ];
-  const secondaryEntries: SpawnRow[] = [
+  const FULL_SECONDARY_ENTRIES: SpawnRow[] = [
     // The secondary row carries every chord-bound spawn entry a pane
     // offers (Search + Dashboard) so the welcome surface matches the
     // right-click menu and the pane hamburger.
@@ -100,6 +100,19 @@
       chordId: "app.dashboard.open",
     },
   ];
+  // In a `?kind=terminal` window the workspace surfaces (drafts / file
+  // browser / team work / graph / search / dashboard) don't exist, so the
+  // welcome grid collapses to just Terminal and the secondary info row
+  // drops out entirely. Filter the full lists so the terminal entry stays
+  // a single source of truth.
+  const spawnEntries = $derived(
+    ui.terminalOnly
+      ? FULL_SPAWN_ENTRIES.filter((r) => r.command === "app.terminal.toggle")
+      : FULL_SPAWN_ENTRIES,
+  );
+  const secondaryEntries = $derived(
+    ui.terminalOnly ? [] : FULL_SECONDARY_ENTRIES,
+  );
 
   function dispatchSpawn(command: string): void {
     window.dispatchEvent(
@@ -137,22 +150,24 @@
       </button>
     {/each}
   </div>
-  <div class="spawn-sep" role="separator" aria-hidden="true"></div>
-  <div class="spawn-row spawn-row-secondary" aria-label="info">
-    {#each secondaryEntries as row (row.command)}
-      {@const Icon = row.icon}
-      <button
-        type="button"
-        class="spawn-btn"
-        onclick={() => dispatchSpawn(row.command)}
-        title="{row.label} ({chordLabel(row.chordId)})"
-      >
-        <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
-        <span class="spawn-label">{row.label}</span>
-        <span class="spawn-chord">{chordLabel(row.chordId)}</span>
-      </button>
-    {/each}
-  </div>
+  {#if secondaryEntries.length > 0}
+    <div class="spawn-sep" role="separator" aria-hidden="true"></div>
+    <div class="spawn-row spawn-row-secondary" aria-label="info">
+      {#each secondaryEntries as row (row.command)}
+        {@const Icon = row.icon}
+        <button
+          type="button"
+          class="spawn-btn"
+          onclick={() => dispatchSpawn(row.command)}
+          title="{row.label} ({chordLabel(row.chordId)})"
+        >
+          <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
+          <span class="spawn-label">{row.label}</span>
+          <span class="spawn-chord">{chordLabel(row.chordId)}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
   <!-- No per-tab graph-scope hint here. Graph scope is
        picker-driven (workspace / dir / file / tag / git_repo) and
        that picker lives in the graph overlay's chrome, not the

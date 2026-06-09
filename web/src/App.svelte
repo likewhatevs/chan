@@ -297,6 +297,10 @@
       resumeTimer = setTimeout(() => {
         resumeTimer = null;
         reconnectWatcher();
+        // Workspace + tree refresh hit /api/files + /api/workspace, neither
+        // of which the terminal tenant serves; only the watcher reconnect
+        // matters for a terminal-only window.
+        if (ui.terminalOnly) return;
         void refreshTree();
         void refreshWorkspace();
       }, 300);
@@ -315,6 +319,9 @@
     scheduleSessionSave();
   }
   function spawnBrowserFromContext(): void {
+    // Terminal-only windows have no file browser surface (the slim server
+    // tenant serves no /api/files); the spawn is a no-op.
+    if (ui.terminalOnly) return;
     const ctx = resolveSpawnContext();
     const select = ctx.file ?? ctx.dir ?? null;
     // Prime the expanded-dirs map + browserSelection so the new
@@ -333,6 +340,9 @@
   /// The dialog owns Cancel (deletes the lead tab) and Bootstrap. The
   /// pane-mode "P" key spawns a plain Team Work terminal without the dialog.
   function spawnTeamWorkFromContext(): void {
+    // Team Work needs a workspace (the lead terminal arms the markdown
+    // editor + drafts dir); not available in terminal-only windows.
+    if (ui.terminalOnly) return;
     const ctx = resolveSpawnContext();
     const lead = createTeamWorkLeadTerminal({ cwd: ctx.dir });
     if (!lead) return;
@@ -340,6 +350,8 @@
     scheduleSessionSave();
   }
   function spawnGraphFromContext(): void {
+    // No graph surface in terminal-only windows (no /api/graph route).
+    if (ui.terminalOnly) return;
     const ctx = resolveSpawnContext();
     openGraphWithContext(ctx);
   }
@@ -520,6 +532,8 @@
         return;
       case "o":
       case "O": {
+        // File browser: no workspace surface in terminal-only mode.
+        if (ui.terminalOnly) return;
         const ctx = resolveSpawnContext();
         paneModeOpenBrowser(ctx);
         if (ctx.file) revealAndSelect(ctx.file);
@@ -530,6 +544,8 @@
       case "G":
       case "v":
       case "V":
+        // Graph: workspace-only.
+        if (ui.terminalOnly) return;
         paneModeOpenGraph(resolveSpawnContext());
         return;
       // Search lives in an OverlayShell, not a tab type. Open the overlay
@@ -537,6 +553,8 @@
       // commit the draft first so layout edits aren't dropped.
       case "f":
       case "F":
+        // Search: workspace-only (no /api/search route in terminal mode).
+        if (ui.terminalOnly) return;
         commitPaneMode();
         scheduleSessionSave();
         searchPanel.open = true;
@@ -561,6 +579,8 @@
       // Lock so layout edits aren't dropped.
       case "i":
       case "I":
+        // Dashboard: workspace-only surface.
+        if (ui.terminalOnly) return;
         commitPaneMode();
         scheduleSessionSave();
         paneModeHelpVisible = false;
@@ -572,6 +592,8 @@
       // before the round-trips fire so no orphan drafts are created.
       case "n":
       case "N":
+        // New draft editor: workspace-only (writes into the drafts dir).
+        if (ui.terminalOnly) return;
         paneModeStageDraftEditor();
         return;
       // `<` / `>` toggle the docked file browsers. Arrow direction is
@@ -580,11 +602,14 @@
       //   `>` (greater-than) -> left dock toggle
       // Same commit-then-act semantics as the other exit keys.
       case "<":
+        // Docked file browsers: workspace-only.
+        if (ui.terminalOnly) return;
         commitPaneMode();
         scheduleSessionSave();
         toggleBrowserSidePane("right");
         return;
       case ">":
+        if (ui.terminalOnly) return;
         commitPaneMode();
         scheduleSessionSave();
         toggleBrowserSidePane("left");
@@ -675,6 +700,8 @@
     // reachable via the terminal right-click "Show/Hide Rich Prompt" entry.
     if (e.metaKey && !e.altKey && e.shiftKey && !e.ctrlKey && e.code === "KeyP") {
       e.preventDefault();
+      // Rich Prompt is workspace-only; off in terminal-only windows.
+      if (ui.terminalOnly) return;
       const term = activeTerminalTab();
       if (term) toggleRichPromptForTab(term.id);
       return;
@@ -697,6 +724,8 @@
         : e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey;
       if (dashboardChord) {
         e.preventDefault();
+        // Dashboard is a workspace-only surface; no-op in terminal mode.
+        if (ui.terminalOnly) return;
         openDashboardInActivePane();
         return;
       }
@@ -723,6 +752,9 @@
     // is strikethrough in the editor.
     if (meta && !e.altKey && !e.shiftKey && e.code === "KeyS") {
       e.preventDefault();
+      // Search is workspace-only; swallow the chord in terminal mode so the
+      // browser save dialog still stays suppressed but nothing else fires.
+      if (ui.terminalOnly) return;
       searchPanel.open = !searchPanel.open;
       return;
     }
@@ -790,6 +822,8 @@
         : e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === "KeyN";
     if (newDraftChord) {
       e.preventDefault();
+      // New draft is workspace-only (writes into the drafts dir).
+      if (ui.terminalOnly) return;
       void createDraftAndOpen();
       return;
     }
@@ -934,7 +968,37 @@
   /// window event to trigger actions by stable string id without depending
   /// on any in-app key chord. Unknown ids are a no-op so hosts can ship
   /// ahead of chan adding the command.
+  /// Commands that remain valid in a terminal-only window. Everything
+  /// outside this set needs a workspace (editor / graph / file browser /
+  /// dashboard / rich-prompt / drafts / search), so it is dropped before
+  /// the dispatch switch when `ui.terminalOnly` is set. Terminal lifecycle,
+  /// pane/tab navigation, the settings flip, broadcast, and the screensaver
+  /// lock all work without a workspace and stay live.
+  const TERMINAL_ONLY_COMMANDS = new Set<string>([
+    "app.settings.toggle",
+    "app.terminal.toggle",
+    "app.terminal.broadcastToggle",
+    "app.screensaver.lock",
+    "app.pane.next",
+    "app.pane.prev",
+    "app.pane.closeTabs",
+    "app.pane.kill",
+    "app.pane.splitRight",
+    "app.pane.splitDown",
+    "app.tab.next",
+    "app.tab.prev",
+    "app.tab.jump",
+    "app.tab.close",
+    "app.find.open",
+    "app.find.next",
+    "app.find.prev",
+    "app.find.close",
+  ]);
+
   function runCommand(name: string, detail: Record<string, unknown>): void {
+    // In a terminal-only window, drop any workspace-only command (file
+    // browser, graph, dashboard, drafts, search, team work, rich prompt).
+    if (ui.terminalOnly && !TERMINAL_ONLY_COMMANDS.has(name)) return;
     switch (name) {
       case "app.settings.toggle":
         // Command id used by chan-desktop KEY_BRIDGE_JS (native Cmd+,);
@@ -1144,13 +1208,17 @@
 </script>
 
 <div class="app" class:pane-mode={paneMode.active}>
-  {#if browserSidePanes.left}
+  <!-- The docked file browsers never render in a terminal-only window:
+       there is no workspace and the slim server tenant serves no
+       /api/files. The pane layout (terminal splits + Hybrid Nav) is the
+       only surface. -->
+  {#if !ui.terminalOnly && browserSidePanes.left}
     <FileBrowserSidePane side="left" />
   {/if}
   <main>
     <Workspace />
   </main>
-  {#if browserSidePanes.right}
+  {#if !ui.terminalOnly && browserSidePanes.right}
     <FileBrowserSidePane side="right" />
   {/if}
 </div>

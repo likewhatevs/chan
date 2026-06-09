@@ -8,8 +8,11 @@ import app from "../App.svelte?raw";
 
 describe("spawnActions includes New Draft first", () => {
   test("`New Draft` entry sits at slot 0 of spawnActions", () => {
+    // The full (workspace-mode) spawn list lives in FULL_SPAWN_ACTIONS;
+    // `spawnActions` is derived from it (and collapses to just Terminal in
+    // a terminal-only window).
     expect(pane).toMatch(
-      /const spawnActions: EmptyMenuRow\[\] = \[[\s\S]*?label: "New Draft",[\s\S]*?icon: FilePlus,[\s\S]*?command: "app\.draft\.new",[\s\S]*?chordId: "app\.draft\.new",/,
+      /const FULL_SPAWN_ACTIONS: EmptyMenuRow\[\] = \[[\s\S]*?label: "New Draft",[\s\S]*?icon: FilePlus,[\s\S]*?command: "app\.draft\.new",[\s\S]*?chordId: "app\.draft\.new",/,
     );
   });
 

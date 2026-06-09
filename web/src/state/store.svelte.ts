@@ -176,6 +176,16 @@ export const ui = $state<{
   /// closing a tab) behind the overlay. Owned by DisconnectOverlay, which
   /// mirrors its `visible` here.
   disconnectBlocking: boolean;
+  /// True when the window loaded in terminal-only mode (`?kind=terminal`):
+  /// a workspace-less standalone terminal window backed by a slim server
+  /// tenant. There is no workspace, no file tree, no editor / graph /
+  /// file-browser / dashboard surfaces, no rich prompt, no team work.
+  /// Set once at bootstrap and never flipped. Surfaces gate their
+  /// workspace-only affordances off this flag (Hybrid staging spawns,
+  /// rich prompt, team work, the terminal context menu's New File /
+  /// New File Browser / New Graph / Set MCP env entries). In this mode
+  /// `app.terminal.toggle` (Cmd+T) adds a terminal tab to the focused pane.
+  terminalOnly: boolean;
 }>({
   status: null,
   statusKind: null,
@@ -186,7 +196,22 @@ export const ui = $state<{
   theme: effectiveTheme("system"),
   authMissing: false,
   disconnectBlocking: false,
+  terminalOnly: isTerminalOnlyWindow(),
 });
+
+/// Detect terminal-only mode from the window URL. The `?kind=terminal`
+/// query param (set by the desktop shell when it opens a standalone
+/// terminal window) is the ONLY signal; there is no server bootstrap
+/// marker. Read once at module load so the flag is stable before any
+/// component mounts. Guarded for non-browser (test) contexts where
+/// `location` may be undefined.
+export function isTerminalOnlyWindow(): boolean {
+  try {
+    return new URLSearchParams(location.search).get("kind") === "terminal";
+  } catch {
+    return false;
+  }
+}
 
 export const HYBRID_SURFACE_KINDS: readonly HybridSurfaceKind[] = [
   "editor",
@@ -1181,7 +1206,67 @@ async function workspaceWithRetry(): ReturnType<typeof api.workspace> {
   }
 }
 
+/// Terminal-only bootstrap. Runs when the window loaded with
+/// `?kind=terminal`: the server tenant is workspace-less and serves only
+/// the terminal/session/build-info routes (no `/api/workspace`,
+/// `/api/files`, `/api/config`, ...), so we MUST NOT hit any
+/// workspace-content endpoint or the SPA would 404 itself into an error.
+///
+/// We still restore the persisted window layout (`/api/session`, keyed by
+/// the desktop window label) so panes/tabs of terminals come back, and we
+/// still open the watcher socket (`/ws`) for the broadcast / pane bus that
+/// terminals use. Theme/preferences fall back to defaults: the slim tenant
+/// has no `/api/config`, so the only theme signal is the OS media query
+/// already wired by `watchSystemTheme()`.
+async function bootstrapTerminalOnly(): Promise<void> {
+  ui.terminalOnly = true;
+  // Force the docked file browsers off: they default to `left: true` and
+  // would fetch `/api/files`, which the terminal tenant does not serve.
+  browserSidePanes.left = false;
+  browserSidePanes.right = false;
+  bootstrapHydrated = false;
+  try {
+    // The fresh-window marker and the layout hash both apply here: a
+    // standalone terminal window may be opened fresh (empty pane) or
+    // restored from its label-scoped session blob.
+    const fresh = readAndConsumeFreshFlag();
+    const fromHash = fresh ? null : readLayoutHash();
+    try {
+      const remote = fresh ? null : await api.getSession();
+      if (fromHash) {
+        const sessionLayout = remote
+          ? isLegacyLayoutPayload(remote)
+            ? remote
+            : ((remote as SessionPayload).layout ?? null)
+          : null;
+        await restoreLayout(fromHash, sessionLayout);
+      } else if (remote) {
+        if (isLegacyLayoutPayload(remote)) {
+          await restoreLayout(remote);
+        } else {
+          await restoreSession(remote as SessionPayload);
+        }
+      }
+    } catch (e) {
+      ui.status = `restore failed: ${(e as Error).message}`;
+    }
+  } finally {
+    bootstrapHydrated = true;
+  }
+  // Watcher socket drives the broadcast / pane event bus terminals rely on.
+  // No FB scope resync (no file browser exists in terminal mode); the
+  // onWatchReady resync is a no-op when there are no browser instances.
+  if (!unwatch) {
+    unwatch = openWatchSocket(onWatchEvent, onWatchStatus, onWatchReady);
+  }
+  // No index-status poller (no `/api/index/status` route in this tenant).
+}
+
 export async function bootstrap(): Promise<void> {
+  if (ui.terminalOnly || isTerminalOnlyWindow()) {
+    await bootstrapTerminalOnly();
+    return;
+  }
   try {
     const info = await workspaceWithRetry();
     workspace.info = info;
@@ -1505,6 +1590,10 @@ export async function refreshWorkspace(): Promise<void> {
 /// to hammer the server with one /api/workspace call per event.
 let workspaceRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 export function scheduleWorkspaceRefresh(): void {
+  // No workspace payload to refresh in a terminal-only window (the slim
+  // tenant serves no /api/workspace); skip so a stray watcher frame can't
+  // fire a guaranteed 404.
+  if (ui.terminalOnly) return;
   if (workspaceRefreshTimer) return;
   workspaceRefreshTimer = setTimeout(() => {
     workspaceRefreshTimer = null;

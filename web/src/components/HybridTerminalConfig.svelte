@@ -3,7 +3,7 @@
 
   import { api } from "../api/client";
   import type { GlobalConfig, Preferences } from "../api/types";
-  import { workspace } from "../state/store.svelte";
+  import { ui, workspace } from "../state/store.svelte";
   import {
     clampScrollbackMb,
     SCROLLBACK_MB_DEFAULT,
@@ -38,6 +38,31 @@
   /// flight.
   let editing = $state<Preferences | null>(null);
   let saveStatus = $state<SaveStatus>("idle");
+
+  /// Terminal-only windows (desktop `?kind=terminal`) have NO
+  /// `workspace.info` to hydrate from, so the workspace.info effect
+  /// below never fires. Instead we pull the global config directly
+  /// (GET /api/config, which the slim terminal tenant serves) once,
+  /// and hold the server's authoritative preferences here as the
+  /// dirty-check reference + post-save re-sync source. `null` /
+  /// unused in workspace mode.
+  let terminalServerPrefs = $state<Preferences | null>(null);
+  let terminalHydrated = false;
+  $effect(() => {
+    if (!ui.terminalOnly || terminalHydrated) return;
+    terminalHydrated = true;
+    void api
+      .config()
+      .then((cfg) => {
+        terminalServerPrefs = cfg.preferences;
+        editing = normalizeTerminal(clone(cfg.preferences));
+      })
+      .catch(() => {
+        // Allow a retry on the next effect pass if the first fetch
+        // failed (e.g. a transient slow boot).
+        terminalHydrated = false;
+      });
+  });
 
   const AUTOSAVE_DELAY_MS = 500;
   const SAVED_FLASH_MS = 1500;
@@ -222,7 +247,11 @@
   /// surfaces).
   function terminalDirty(): boolean {
     if (!editing) return false;
-    const server = workspace.info?.preferences?.terminal;
+    // In terminal-only mode the authoritative server slice lives in
+    // `terminalServerPrefs` (there is no workspace.info).
+    const server = ui.terminalOnly
+      ? terminalServerPrefs?.terminal
+      : workspace.info?.preferences?.terminal;
     return (
       JSON.stringify(editing.terminal ?? null) !==
       JSON.stringify(server ?? null)
@@ -262,12 +291,20 @@
         workspaces: current.workspaces,
       };
       await api.updateConfig(cfgBody);
-      const info = await api.workspace();
-      workspace.info = info;
-      // Re-sync the local buffer to the server's authoritative
-      // value (cheap; the only field that differs is the one we
-      // just persisted, but normalize the result).
-      editing = normalizeTerminal(clone(info.preferences));
+      if (ui.terminalOnly) {
+        // No /api/workspace on the slim terminal tenant; re-sync from the
+        // global config instead and refresh the dirty-check reference.
+        const refreshed = await api.config();
+        terminalServerPrefs = refreshed.preferences;
+        editing = normalizeTerminal(clone(refreshed.preferences));
+      } else {
+        const info = await api.workspace();
+        workspace.info = info;
+        // Re-sync the local buffer to the server's authoritative
+        // value (cheap; the only field that differs is the one we
+        // just persisted, but normalize the result).
+        editing = normalizeTerminal(clone(info.preferences));
+      }
       lastSentSnapshot = terminalSnapshot();
       failedSaveSnap = null;
       saveStatus = "saved";

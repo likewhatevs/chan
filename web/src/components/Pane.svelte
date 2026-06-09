@@ -70,6 +70,7 @@
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import TerminalTab from "./TerminalTab.svelte";
   import {
+    ui,
     workspaceDisplayName,
     tree,
   } from "../state/store.svelte";
@@ -172,7 +173,7 @@
   // all three surfaces so they stay in lockstep (same 7 entries in
   // the same order). New Draft is the first entry (Cmd+N opens a
   // fresh `<draftsDir>/untitled-N/draft.md`).
-  const spawnActions: EmptyMenuRow[] = [
+  const FULL_SPAWN_ACTIONS: EmptyMenuRow[] = [
     {
       label: "New Draft",
       icon: FilePlus,
@@ -217,6 +218,14 @@
       chordId: "app.dashboard.open",
     },
   ];
+  // Terminal-only windows collapse the spawn menu to just Terminal: the
+  // other surfaces (drafts / file browser / team work / graph / search /
+  // dashboard) need a workspace, which a `?kind=terminal` window lacks.
+  const spawnActions = $derived(
+    ui.terminalOnly
+      ? FULL_SPAWN_ACTIONS.filter((r) => r.command === "app.terminal.toggle")
+      : FULL_SPAWN_ACTIONS,
+  );
   function chordLabel(id: string | undefined): string {
     if (!id) return "";
     const s = SHORTCUTS.find((x) => x.id === id);

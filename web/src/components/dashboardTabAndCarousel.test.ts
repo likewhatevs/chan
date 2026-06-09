@@ -86,7 +86,7 @@ describe("Dashboard command + spawnActions wiring", () => {
     // One spawnActions list backs both the pane hamburger and the
     // empty-pane right-click menu: ..., Graph, Search, Dashboard.
     expect(pane).toMatch(
-      /const spawnActions:[\s\S]{1,2000}label: "Graph",[\s\S]{1,400}command: "app\.graph\.toggle",[\s\S]{1,400}label: "Search",[\s\S]{1,400}command: "app\.search\.toggle",[\s\S]{1,400}label: "Dashboard",[\s\S]{1,400}command: "app\.dashboard\.open",/,
+      /const FULL_SPAWN_ACTIONS:[\s\S]{1,2000}label: "Graph",[\s\S]{1,400}command: "app\.graph\.toggle",[\s\S]{1,400}label: "Search",[\s\S]{1,400}command: "app\.search\.toggle",[\s\S]{1,400}label: "Dashboard",[\s\S]{1,400}command: "app\.dashboard\.open",/,
     );
     expect(pane).not.toMatch(/const emptyPaneExtraActions:/);
   });
@@ -414,12 +414,12 @@ describe("EmptyPaneWelcome static spawn surface", () => {
     const welcome = (await import("./EmptyPaneWelcome.svelte?raw"))
       .default as string;
     expect(welcome).toMatch(
-      /const spawnEntries: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Team Work",[\s\S]{1,800}label: "Graph",/,
+      /const FULL_SPAWN_ENTRIES: SpawnRow\[\] = \[[\s\S]{1,200}label: "New Draft",[\s\S]{1,1000}label: "Terminal",[\s\S]{1,800}label: "File Browser",[\s\S]{1,800}label: "Team Work",[\s\S]{1,800}label: "Graph",/,
     );
     // Secondary tile row: Search + Dashboard, both with chord hints
     // via chordLabel(row.chordId), in a 2-column grid.
     expect(welcome).toMatch(
-      /const secondaryEntries: SpawnRow\[\] = \[[\s\S]{1,800}label: "Search",[\s\S]{1,200}command: "app\.search\.toggle",[\s\S]{1,800}label: "Dashboard",[\s\S]{1,200}command: "app\.dashboard\.open",/,
+      /const FULL_SECONDARY_ENTRIES: SpawnRow\[\] = \[[\s\S]{1,800}label: "Search",[\s\S]{1,200}command: "app\.search\.toggle",[\s\S]{1,800}label: "Dashboard",[\s\S]{1,200}command: "app\.dashboard\.open",/,
     );
     expect(welcome).toMatch(
       /import \{[\s\S]{1,200}\bSearch\b[\s\S]{1,200}\} from "lucide-svelte"/,
