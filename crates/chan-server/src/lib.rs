@@ -54,7 +54,7 @@ pub use preferences::{
 };
 pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 
-use auth::{auth_middleware, load_or_create_token};
+use auth::{auth_middleware, load_or_create_token, random_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
     api_backlinks, api_build_info, api_cloud_workspaces, api_create_draft, api_create_file,
@@ -72,8 +72,8 @@ use routes::{
     api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
     api_search_files, api_storage_reset, api_survey_reply, api_team_config_read,
-    api_team_config_write, api_terminal_ws, api_upload_file, api_window_reply,
-    api_workspace_bootstrap, api_write_file, ws_upgrade,
+    api_team_config_write, api_terminal_next_name, api_terminal_ws, api_upload_file,
+    api_window_reply, api_workspace_bootstrap, api_write_file, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -97,6 +97,7 @@ pub mod tunnel {
 use self_writes::SelfWrites;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -634,6 +635,7 @@ async fn build_app(
         scope_registry,
         survey_bus,
         window_bus,
+        ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
@@ -658,6 +660,189 @@ async fn build_app(
         control_socket,
         shutdown_tx,
     })
+}
+
+/// Build a workspace-less "terminal-only" tenant: the same axum
+/// surface a [`WorkspaceHost`] mounts, minus everything that needs an
+/// `Arc<Workspace>`. Sibling to [`build_app`]; the embedded host calls
+/// this from `open_terminal_session` to back a standalone terminal
+/// window (a desktop webview loading the chan SPA in `?kind=terminal`
+/// mode).
+///
+/// Deliberately omits the watcher, indexer, MCP bridge, and control
+/// socket: there is no workspace to watch / index / expose, and a
+/// terminal tenant is short-lived and unprivileged relative to a
+/// workspace mount. The terminal registry's PTY cwd is `$HOME`, so a
+/// new pane lands in the user's home directory rather than a workspace
+/// root. The SLIM router (see [`terminal_router`]) mounts only the
+/// terminal + window-session routes, so a workspace-content request
+/// (`/api/files`, `/api/graph`, ...) 404s instead of panicking on the
+/// missing `workspace_cell`.
+async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<AppArtifacts, Error> {
+    let token = if config.no_token {
+        None
+    } else {
+        // In-memory only: a terminal tenant has no workspace token dir
+        // to persist into, and each window mints a fresh tenant anyway.
+        Some(random_token())
+    };
+
+    // Same fall-back-on-malformed policy as `build_app`. Only the
+    // `terminal` sub-config is consumed here (it seeds the registry);
+    // the indexer profile / editor prefs join is irrelevant with no
+    // workspace.
+    let server_config = ServerConfig::load().unwrap_or_else(|e| {
+        tracing::warn!("malformed server config, falling back to defaults: {e}");
+        ServerConfig::default()
+    });
+    // Install submit-chord overrides for the terminal poke path, same
+    // as `build_app`; this is workspace-independent config.
+    submit_config::install();
+
+    // Editor preferences still seed the SPA shell (theme / fonts) even
+    // in terminal mode, so load them with the same fall-back policy.
+    let editor_prefs = EditorPrefs::load().unwrap_or_else(|e| {
+        tracing::warn!("malformed editor preferences, falling back to defaults: {e}");
+        EditorPrefs::default()
+    });
+
+    // Same unified event channels as `build_app`: `/ws` subscribers get
+    // the JSON-envelope broadcast (pane bus, terminal frames), and the
+    // raw WatchEvent feed exists so AppState stays shape-compatible even
+    // though no watcher producer is wired in terminal mode.
+    let (events_tx, _) = broadcast::channel::<String>(256);
+    let (index_events_tx, _) = broadcast::channel::<WatchEvent>(1024);
+    let self_writes = Arc::new(SelfWrites::new());
+    let scope_registry = Arc::new(bus::ScopeRegistry::new());
+
+    let last_activity = Arc::new(AtomicU64::new(now_unix_secs()));
+    let prefix = Arc::new(RwLock::new(config.prefix.clone()));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let shutdown_tx = Arc::new(shutdown_tx);
+
+    // PTY cwd = $HOME (fallback "/"): a terminal window is not anchored
+    // to a workspace, so new sessions open in the user's home dir. No
+    // MCP / control socket: a terminal tenant doesn't expose either.
+    let workspace_root = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+    let terminal_sessions = Arc::new(TerminalRegistry::new(TerminalRegistryConfig {
+        workspace_root: workspace_root.clone(),
+        mcp_socket_path: None,
+        control_socket_path: None,
+        terminal: server_config.terminal.clone(),
+    }));
+    let terminal_pruner = terminal_sessions.clone().spawn_pruner(shutdown_rx.clone());
+    let terminal_drainer = terminal_sessions.clone().spawn_drainer(shutdown_rx.clone());
+
+    // Workspace-less cell: handlers reaching `state.workspace()` would
+    // panic, which is why the slim router mounts no workspace-content
+    // route. The serve loop's indexer-cancel side task tolerates a
+    // `None` cell (it no-ops), so the shared shutdown wiring is safe.
+    let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
+
+    let state = Arc::new(AppState {
+        // The host's shared registry handle: no terminal route reaches it,
+        // but `/api/config` joins `default_workspace_root` + the workspace
+        // list into the global config view, so reuse the live handle rather
+        // than leaking a throwaway per window.
+        library,
+        workspace_root,
+        workspace_cell: workspace_cell.clone(),
+        token: token.clone(),
+        prefix: prefix.clone(),
+        settings_disabled: config.settings_disabled,
+        tunnel_public: config.tunnel_public,
+        events_tx,
+        index_events_tx,
+        server_config: Mutex::new(server_config),
+        editor_prefs: Mutex::new(editor_prefs),
+        self_writes,
+        last_activity: last_activity.clone(),
+        terminal_sessions,
+        shutdown_rx,
+        scope_registry,
+        survey_bus: Arc::new(survey::SurveyBus::new()),
+        window_bus: Arc::new(window_bus::WindowBus::new()),
+        ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
+    });
+
+    // Nest under the prefix exactly like `build_app` so the host's
+    // prefix dispatch reaches `/terminal-<seq><route>` and handlers
+    // still see workspace-relative paths (`/api/...`, `/ws`).
+    let inner = terminal_router(state);
+    let app = if config.prefix.is_empty() {
+        inner
+    } else {
+        Router::new().nest(&config.prefix, inner)
+    };
+
+    Ok(AppArtifacts {
+        app,
+        token,
+        last_activity,
+        workspace_cell,
+        _terminal_pruner: terminal_pruner,
+        _terminal_drainer: terminal_drainer,
+        prefix,
+        // No workspace to bridge, no local CLI helpers to serve.
+        mcp_bridge: None,
+        control_socket: None,
+        shutdown_tx,
+    })
+}
+
+/// Slim sibling of [`router`] for a workspace-less terminal tenant.
+///
+/// Mounts ONLY the routes a terminal-only SPA needs: the terminal PTY
+/// surface (ws + CRUD + restart), the per-window session blob, the
+/// event/pane `/ws` bus, build-info / health, and the SPA shell
+/// fallback. No file / graph / index / drafts / contacts / inspector /
+/// settings route is present (they all reach `state.workspace()` and
+/// would panic on the `None` cell), so a stray workspace-content
+/// request 404s. Auth + serve_static are layered identically to
+/// [`router`] so `/api/*` stays tokened — a PTY is shell access.
+fn terminal_router(state: Arc<AppState>) -> Router {
+    let api = Router::new()
+        .route("/api/terminal/ws", get(api_terminal_ws))
+        // Global Terminal-N name sequence shared across all terminal windows
+        // (they share this one tenant). Only the slim terminal router mounts
+        // it; workspace windows name terminals per-workspace locally.
+        .route("/api/terminal/next-name", get(api_terminal_next_name))
+        .route("/api/terminals", post(api_create_terminal))
+        .route("/api/terminals/:session", delete(api_delete_terminal))
+        .route(
+            "/api/terminals/:session/restart",
+            post(api_restart_terminal),
+        )
+        .route("/api/build-info", get(api_build_info))
+        .route("/api/health", get(api_health))
+        // Global preferences: Cmd+, flips the pane to the terminal config
+        // back face, which reads and writes the `terminal` sub-config here.
+        // Both handlers are workspace-free (editor_prefs + server_config +
+        // the registry view), so they are safe on the slim tenant. PATCH
+        // skips the tunnel settings_guard: a terminal window is always a
+        // local desktop mount, never a tunnel run.
+        .route("/api/config", get(api_get_config).patch(api_patch_config))
+        // Per-window layout blob: the terminal SPA persists its split /
+        // tab layout here keyed by `?w=<window-label>`, same contract as
+        // workspace mode.
+        .route(
+            "/api/session",
+            get(api_get_session)
+                .put(api_put_session)
+                .delete(api_delete_session),
+        )
+        .route("/api/sessions", get(api_list_sessions))
+        // Events / broadcast / pane bus.
+        .route("/ws", get(ws_upgrade));
+    Router::new()
+        .merge(api)
+        .fallback(serve_static)
+        .layer(TraceLayer::new_for_http())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
+        .with_state(state)
 }
 
 /// Spawn the listener, build the router, and serve forever.

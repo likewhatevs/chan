@@ -80,8 +80,11 @@ describe("Cmd+K pane mode transactional staging", () => {
   });
 
   test("n / N stages a new draft editor onto the focused pane", () => {
+    // The terminal-only guard (`if (ui.terminalOnly) return;`) sits between
+    // the case labels and the stage call in a `?kind=terminal` window, so
+    // allow arbitrary intervening source here.
     expect(app).toMatch(
-      /case "n":\s*\n\s*case "N":\s*\n?\s*paneModeStageDraftEditor\(\);\s*\n\s*return;/,
+      /case "n":\s*\n\s*case "N":[\s\S]*?paneModeStageDraftEditor\(\);\s*\n\s*return;/,
     );
   });
 

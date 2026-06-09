@@ -45,6 +45,7 @@
     ensureTerminalKeyboardProtocol,
     flipHybrid,
     dismissTerminalEnvNamePrompt,
+    isTerminalMoving,
     markTerminalEnvNameRestarted,
     registerTerminalCloseSink,
     registerTerminalInputSink,
@@ -950,6 +951,11 @@
   function sendUserInput(data: string): void {
     sendInput(data);
     broadcastTerminalInput(tab, data);
+    // Cross-window broadcast: same-group members in OTHER windows live in the
+    // shared terminal registry and are unreachable from this window's SPA, so
+    // the server fans the input to them. Same-window members are covered by
+    // `broadcastTerminalInput` above.
+    if (tab.broadcastEnabled) send({ type: "broadcast-input", data });
   }
 
   function handleXtermData(data: string): void {
@@ -1107,7 +1113,17 @@
   }
 
   function closeTerminalForTab(): boolean {
-    explicitCloseSession();
+    // A session-preserving cross-window MOVE removes the tab from THIS window
+    // but the PTY must survive (it lives in the shared `/terminal` registry and
+    // the target window re-attaches to it by id). So skip the WS `close` frame
+    // that would kill the shell; just clear the local session binding so this
+    // window's WS doesn't reconnect during teardown. Window-local cleanup
+    // (Rich Prompt draft, bubble entry) below still runs - the tab is gone here.
+    if (isTerminalMoving(tab.id)) {
+      clearTerminalSession(tab);
+    } else {
+      explicitCloseSession();
+    }
     // Discard this terminal's Rich Prompt draft folder (draft.md + any pasted
     // media) so nothing leaks in Drafts (@@Host: the bubble's draft is tied to
     // the terminal lifecycle). Best-effort + fire-and-forget; the tab is going
@@ -1531,15 +1547,19 @@
             <span class="mbtn-label">Copy Scrollback</span>
             <span class="mbtn-chord"></span>
           </button>
-          <button class="mbtn" onclick={toggleRichPromptFromMenu}>
-            <span class="mbtn-icon">
-              <MessageSquare size={16} strokeWidth={1.75} aria-hidden="true" />
-            </span>
-            <span class="mbtn-label">
-              {isRichPromptVisible(tab.id) ? "Hide Rich Prompt" : "Show Rich Prompt"}
-            </span>
-            <span class="mbtn-chord">{richPromptChord}</span>
-          </button>
+          <!-- Rich Prompt drafts into the workspace drafts dir; not
+               available in a terminal-only window. -->
+          {#if !ui.terminalOnly}
+            <button class="mbtn" onclick={toggleRichPromptFromMenu}>
+              <span class="mbtn-icon">
+                <MessageSquare size={16} strokeWidth={1.75} aria-hidden="true" />
+              </span>
+              <span class="mbtn-label">
+                {isRichPromptVisible(tab.id) ? "Hide Rich Prompt" : "Show Rich Prompt"}
+              </span>
+              <span class="mbtn-chord">{richPromptChord}</span>
+            </button>
+          {/if}
         </div>
       {:else}
       <label class="rename-row">
@@ -1678,15 +1698,26 @@
              (McpEnvInfoModal.svelte). The "Show MCP env in terminal"
              button is the dialog's primary CTA; the menu row carries
              only the toggle + the info button. -->
+        <!-- Terminal-only windows have no MCP bridge (the slim server
+             tenant runs no MCP socket), so the "Set MCP env vars" WRITE
+             toggle is dropped. The read-only About-MCP info row stays so
+             the surface still explains what MCP env is. -->
         <div class="mcp-env-row">
-          <button class="mbtn" class:on={mcpEnvOn} onclick={toggleMcpEnv}>
-            <span class="mbtn-icon">
-              {#if mcpEnvOn}
-                <Check size={15} strokeWidth={2} aria-hidden="true" />
-              {/if}
+          {#if !ui.terminalOnly}
+            <button class="mbtn" class:on={mcpEnvOn} onclick={toggleMcpEnv}>
+              <span class="mbtn-icon">
+                {#if mcpEnvOn}
+                  <Check size={15} strokeWidth={2} aria-hidden="true" />
+                {/if}
+              </span>
+              <span class="mbtn-label">Set MCP env vars</span>
+            </button>
+          {:else}
+            <span class="mbtn mcp-env-readonly">
+              <span class="mbtn-icon"></span>
+              <span class="mbtn-label">MCP env vars unavailable</span>
             </span>
-            <span class="mbtn-label">Set MCP env vars</span>
-          </button>
+          {/if}
           <button
             type="button"
             class="info-btn"
@@ -1719,14 +1750,19 @@
              Terminal / FB / Graph fire the same `chan:command` events
              the chord-routing layer + the empty-pane carousel use, so
              handlers stay singular. -->
+        <!-- "From $CWD" band: in a terminal-only window the workspace
+             spawn targets (New File / New File Browser / New Graph) have
+             no surface to open, so only New Terminal survives. -->
         <div class="from-cwd-label">From $CWD</div>
-        <button class="mbtn" onclick={openNewFile}>
-          <span class="mbtn-icon">
-            <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">New File</span>
-          <span class="mbtn-chord">{chordFor("app.file.new") ?? ""}</span>
-        </button>
+        {#if !ui.terminalOnly}
+          <button class="mbtn" onclick={openNewFile}>
+            <span class="mbtn-icon">
+              <FilePlus size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">New File</span>
+            <span class="mbtn-chord">{chordFor("app.file.new") ?? ""}</span>
+          </button>
+        {/if}
         <button class="mbtn" onclick={openNewTerminal}>
           <span class="mbtn-icon">
             <TerminalIcon size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1734,20 +1770,22 @@
           <span class="mbtn-label">New Terminal</span>
           <span class="mbtn-chord">{chordFor("app.terminal.toggle") ?? ""}</span>
         </button>
-        <button class="mbtn" onclick={openNewFileBrowser}>
-          <span class="mbtn-icon">
-            <Folder size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">New File Browser</span>
-          <span class="mbtn-chord">{chordFor("app.files.toggle") ?? ""}</span>
-        </button>
-        <button class="mbtn" onclick={openNewGraph}>
-          <span class="mbtn-icon">
-            <Network size={16} strokeWidth={1.75} aria-hidden="true" />
-          </span>
-          <span class="mbtn-label">New Graph</span>
-          <span class="mbtn-chord">{chordFor("app.graph.toggle") ?? ""}</span>
-        </button>
+        {#if !ui.terminalOnly}
+          <button class="mbtn" onclick={openNewFileBrowser}>
+            <span class="mbtn-icon">
+              <Folder size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">New File Browser</span>
+            <span class="mbtn-chord">{chordFor("app.files.toggle") ?? ""}</span>
+          </button>
+          <button class="mbtn" onclick={openNewGraph}>
+            <span class="mbtn-icon">
+              <Network size={16} strokeWidth={1.75} aria-hidden="true" />
+            </span>
+            <span class="mbtn-label">New Graph</span>
+            <span class="mbtn-chord">{chordFor("app.graph.toggle") ?? ""}</span>
+          </button>
+        {/if}
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={flipToSettings}>
           <span class="mbtn-icon">
@@ -2065,6 +2103,16 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
+  }
+  /* Read-only MCP status shown in terminal-only windows in place of the
+     "Set MCP env vars" toggle: secondary text, no hover affordance. */
+  .mcp-env-readonly {
+    cursor: default;
+    color: var(--text-secondary);
+  }
+  .mcp-env-readonly:hover {
+    background: none;
+    transform: none;
   }
   .info-btn {
     width: 28px;

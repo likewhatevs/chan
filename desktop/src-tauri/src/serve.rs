@@ -225,11 +225,16 @@ pub fn new_outbound_window_label(id: &str) -> String {
     format!("{}-{}", outbound_window_prefix(id), next_window_seq())
 }
 
-/// True when a Tauri label belongs to a per-workspace webview.
+/// True when a Tauri label belongs to an embedded-served SPA webview
+/// (workspace / tunnel / outbound / standalone terminal). All four host
+/// the chan SPA and accept the `chan:command` dispatch bridge, so menu
+/// items that defer to the focused window (Settings, New Terminal's
+/// toggle branch) target any of them.
 pub fn is_workspace_webview_label(label: &str) -> bool {
     label.starts_with("workspace-")
         || label.starts_with("tunnel-")
         || label.starts_with("outbound-")
+        || label.starts_with("terminal-")
 }
 
 /// Spawn a new local-workspace webview window pointing at `url`. Each
@@ -258,7 +263,7 @@ pub fn spawn_local_workspace_window(app: &AppHandle, key: &str, url: &str) -> Re
     let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
     let title = workspace_title(key);
     build_workspace_window(
-        app, &label, &title, url, &url_hash, config_key, zoom_level, None,
+        app, &label, &title, url, &url_hash, config_key, zoom_level, None, None,
     )
 }
 
@@ -289,7 +294,7 @@ pub fn spawn_tunneled_workspace_window(
     // analogous to the local path / outbound URL.
     let title = format!("{ICON_INBOUND} {}", listen_addr_from_url(url));
     build_workspace_window(
-        app, &label, &title, url, &url_hash, config_key, zoom_level, None,
+        app, &label, &title, url, &url_hash, config_key, zoom_level, None, None,
     )
 }
 
@@ -326,6 +331,45 @@ pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> 
         config_key,
         zoom_level,
         Some(url),
+        None,
+    )
+}
+
+/// Spawn a standalone terminal-only window. Unlike a workspace window there
+/// is no registry entry and no On-toggle lifecycle: every terminal window
+/// loads the ONE shared `/terminal` tenant (mounted on first use), in
+/// `kind=terminal` mode.
+///
+/// Each window gets a unique `terminal-win-<seq>` label so its layout
+/// persists separately (keyed by `?w=`) and the OS window switcher
+/// disambiguates - the label is no longer the route prefix. The shared
+/// tenant is never torn down per window (it lives for the process lifetime;
+/// orphaned PTYs idle-prune), which is what lets a terminal moved into
+/// another window keep its live PTY.
+pub async fn spawn_local_terminal_window(
+    app: AppHandle,
+    state: Arc<AppState>,
+) -> Result<(), String> {
+    let Some(embedded) = state.embedded.get() else {
+        return Err("embedded local server is unavailable".to_string());
+    };
+    let url = embedded.open_terminal().await?;
+    let label = format!("terminal-win-{}", next_window_seq());
+    // `config_key` is unused for terminal windows (no LRU restore), but
+    // `build_workspace_window` takes one; an empty key never matches a real
+    // workspace/tunnel/outbound key and the terminal close branch skips the
+    // capture entirely. No per-window tenant teardown on build failure: the
+    // tenant is shared and persistent.
+    build_workspace_window(
+        &app,
+        &label,
+        "Terminal",
+        &url,
+        "",
+        String::new(),
+        1.0,
+        None,
+        Some("terminal"),
     )
 }
 
@@ -405,11 +449,18 @@ fn build_workspace_window(
     config_key: String,
     zoom_seed: f64,
     connecting: Option<&str>,
+    kind: Option<&str>,
 ) -> Result<(), String> {
     let Ok(mut parsed) = url.parse::<tauri::Url>() else {
         return Err(format!("bad chan URL for {window_label}: {url}"));
     };
     parsed.query_pairs_mut().append_pair("w", window_label);
+    // `kind=terminal` is the SPA's only signal to enter terminal-only mode
+    // (no workspace fetch, terminal panes only). Workspace/tunnel/outbound
+    // windows pass `None` and the SPA stays in full workspace mode.
+    if let Some(kind) = kind {
+        parsed.query_pairs_mut().append_pair("kind", kind);
+    }
     if !url_hash_seed.is_empty() {
         parsed.set_fragment(Some(url_hash_seed));
     }
@@ -491,11 +542,21 @@ fn build_workspace_window(
                 let key_for_close = config_key.clone();
                 window.on_window_event(move |event| {
                     if matches!(event, WindowEvent::CloseRequested { .. }) {
-                        capture_window_config_on_close(
-                            &app_for_close,
-                            &label_for_close,
-                            &key_for_close,
-                        );
+                        // Standalone terminal windows share one persistent
+                        // `/terminal` tenant (it lives for the process lifetime;
+                        // orphaned PTYs idle-prune) and keep no LRU layout
+                        // restore, so a closing terminal window needs no
+                        // teardown or config capture. Workspace / tunnel /
+                        // outbound windows keep their behaviour: the runtime
+                        // outlives the window and the layout is captured for the
+                        // LRU restore stack.
+                        if !label_for_close.starts_with("terminal-") {
+                            capture_window_config_on_close(
+                                &app_for_close,
+                                &label_for_close,
+                                &key_for_close,
+                            );
+                        }
                     }
                 });
             }

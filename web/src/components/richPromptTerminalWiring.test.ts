@@ -35,7 +35,7 @@ describe("TerminalTab Rich Prompt wiring", () => {
     // @@Host lifecycle: the draft (draft.md + pasted media) is tied to the
     // terminal; closing the terminal deletes the whole folder so nothing leaks.
     expect(terminal).toMatch(
-      /function closeTerminalForTab\(\): boolean \{[\s\S]{1,400}if \(tab\.richPromptDraftPath\) \{[\s\S]{1,120}api\.discardDraft\(tab\.richPromptDraftPath\)/,
+      /function closeTerminalForTab\(\): boolean \{[\s\S]{1,900}if \(tab\.richPromptDraftPath\) \{[\s\S]{1,120}api\.discardDraft\(tab\.richPromptDraftPath\)/,
     );
   });
 

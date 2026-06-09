@@ -108,6 +108,13 @@ impl TerminalMcpEnv {
 enum ClientFrame {
     #[serde(rename = "input")]
     Input { data: String },
+    /// Cross-window broadcast input. Fans `data` to same-group sessions in
+    /// OTHER windows (the shared terminal registry spans every standalone
+    /// terminal window). The source PTY and the same-window broadcast members
+    /// are covered by the normal `Input` frame plus the SPA's client-side fan;
+    /// this reaches the members one window's SPA cannot see.
+    #[serde(rename = "broadcast-input")]
+    BroadcastInput { data: String },
     #[serde(rename = "resize")]
     Resize { cols: u16, rows: u16 },
     #[serde(rename = "cwd")]
@@ -202,8 +209,7 @@ pub async fn api_terminal_ws(
     };
     let cwd = if query.session.is_some() {
         None
-    } else {
-        let workspace = state.workspace();
+    } else if let Ok(workspace) = state.try_workspace() {
         let cwd = query.cwd.clone();
         let result =
             tokio::task::spawn_blocking(move || resolve_terminal_cwd(&workspace, cwd.as_deref()))
@@ -219,6 +225,12 @@ pub async fn api_terminal_ws(
                     .into_response()
             }
         }
+    } else {
+        // Workspace-less terminal tenant (standalone terminal window): no
+        // workspace to resolve a relative cwd against, so new sessions open
+        // in the registry default ($HOME). The SPA gates off the
+        // From-$CWD spawn actions in this mode, so `query.cwd` is unset.
+        None
     };
     let opts = TerminalWsOptions {
         session_id: query.session,
@@ -508,7 +520,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
         return;
     }
     session.request_redraw();
-    let (cwd, cwd_rel) = terminal_cwd_payload(&state.workspace(), session.cwd());
+    let (cwd, cwd_rel) = terminal_cwd_payload(state.try_workspace().ok().as_deref(), session.cwd());
     let _ = send_frame(
         &mut socket,
         ServerFrame::Ready {
@@ -543,13 +555,20 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 session.send_input(data.as_bytes());
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
+                            Ok(ClientFrame::BroadcastInput { data }) => {
+                                state.terminal_sessions.broadcast_input_cross_window(
+                                    session.id(),
+                                    data.as_bytes(),
+                                );
+                                state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                            }
                             Ok(ClientFrame::Resize { cols, rows }) => {
                                 session.resize(pty_size(Some(cols), Some(rows)));
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
                             Ok(ClientFrame::Cwd) => {
                                 let (cwd, cwd_rel) =
-                                    terminal_cwd_payload(&state.workspace(), session.cwd());
+                                    terminal_cwd_payload(state.try_workspace().ok().as_deref(), session.cwd());
                                 let _ = send_frame(&mut socket, ServerFrame::Cwd { cwd, cwd_rel }).await;
                             }
                             Ok(ClientFrame::Focus { focused }) => {
@@ -660,12 +679,15 @@ fn path_to_wire(path: PathBuf) -> String {
 }
 
 fn terminal_cwd_payload(
-    workspace: &chan_workspace::Workspace,
+    workspace: Option<&chan_workspace::Workspace>,
     cwd: Option<PathBuf>,
 ) -> (Option<String>, Option<String>) {
     match cwd {
         Some(path) => {
-            let rel = workspace.physical_path_to_virtual(&path);
+            // Workspace-relative display path only when a workspace is bound;
+            // a standalone terminal window has none, so it shows the absolute
+            // cwd with no virtual rel.
+            let rel = workspace.and_then(|w| w.physical_path_to_virtual(&path));
             (Some(path_to_wire(path)), rel)
         }
         None => (None, None),
@@ -720,6 +742,22 @@ fn resolve_terminal_cwd(
         .resolve_physical_dir(rel)
         .map(Some)
         .map_err(|e| format!("invalid terminal cwd: {e}"))
+}
+
+/// Process-global monotonic terminal ordinal for the shared standalone-
+/// terminal namespace. Every standalone terminal window hits the one shared
+/// `/terminal` tenant, so a single counter here yields a global Terminal-N
+/// sequence (a per-window count would restart at 1 in each new window).
+/// Resets per server process, matching iTerm's per-session numbering.
+static TERMINAL_NAME_ORDINAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `GET /api/terminal/next-name`: hand out the next global default terminal
+/// name (`Terminal-1`, `Terminal-2`, ...). The standalone-terminal SPA calls
+/// this when opening a terminal so numbering stays consistent across all
+/// terminal windows. Plain-text body.
+pub async fn api_terminal_next_name() -> Response {
+    let n = TERMINAL_NAME_ORDINAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    format!("Terminal-{n}").into_response()
 }
 
 #[cfg(test)]
@@ -903,11 +941,16 @@ mod tests {
             Some(".Drafts/untitled-1".to_string())
         );
 
-        let (cwd_abs, cwd_rel) = terminal_cwd_payload(&workspace, Some(cwd));
+        let (cwd_abs, cwd_rel) = terminal_cwd_payload(Some(&workspace), Some(cwd.clone()));
         assert!(cwd_abs
             .as_deref()
             .is_some_and(|path| path.ends_with("untitled-1")));
         assert_eq!(cwd_rel.as_deref(), Some(".Drafts/untitled-1"));
+
+        // Workspace-less tenant: absolute cwd, no virtual rel.
+        let (cwd_abs_nw, cwd_rel_nw) = terminal_cwd_payload(None, Some(cwd));
+        assert!(cwd_abs_nw.is_some());
+        assert_eq!(cwd_rel_nw, None);
     }
 
     #[test]

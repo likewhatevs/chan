@@ -999,6 +999,22 @@ export const api = {
   // Non-blocking: create the `cs` terminal alias when it is missing from the
   // host's PATH (the pre-flight snapshot's `cs_link` offer).
   createCsLink: () => req<CsLinkResult>("POST", "/api/preflight/cs-link"),
+  /// Next GLOBAL default terminal name (`Terminal-1`, `Terminal-2`, ...).
+  /// Backed by a process-global atomic counter on the shared `/terminal`
+  /// tenant, so numbering stays consistent across EVERY standalone terminal
+  /// window (a per-window count would restart at 1 in each new window). The
+  /// route returns a PLAIN-TEXT body, not JSON, so we hit fetch directly and
+  /// read `.text()` rather than going through the JSON `req()` helper.
+  terminalNextName: async (): Promise<string> => {
+    const res = await fetch(apiPath("/api/terminal/next-name"), {
+      method: "GET",
+      headers: directAuthHeaders(),
+    });
+    if (!res.ok) {
+      await responseTextError(res);
+    }
+    return (await res.text()).trim();
+  },
   spawnTerminal: (body: TerminalSpawnRequest) =>
     req<TerminalSpawnResponse>("POST", "/api/terminals", body),
   restartTerminal: (sessionId: string, body?: TerminalRestartRequest) =>

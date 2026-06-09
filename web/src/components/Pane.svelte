@@ -13,9 +13,11 @@
     detachTabToPaneEdge,
     layout,
     markLocalTabDrop,
+    markTerminalMovingOut,
     moveTab,
     openInPane,
     openTerminalInPane,
+    reattachTerminalInPane,
     paneMode,
     paneModeSplit,
     paneModeSetGrab,
@@ -70,6 +72,7 @@
   import HamburgerMenu from "./HamburgerMenu.svelte";
   import TerminalTab from "./TerminalTab.svelte";
   import {
+    ui,
     workspaceDisplayName,
     tree,
   } from "../state/store.svelte";
@@ -172,7 +175,7 @@
   // all three surfaces so they stay in lockstep (same 7 entries in
   // the same order). New Draft is the first entry (Cmd+N opens a
   // fresh `<draftsDir>/untitled-N/draft.md`).
-  const spawnActions: EmptyMenuRow[] = [
+  const FULL_SPAWN_ACTIONS: EmptyMenuRow[] = [
     {
       label: "New Draft",
       icon: FilePlus,
@@ -217,6 +220,14 @@
       chordId: "app.dashboard.open",
     },
   ];
+  // Terminal-only windows collapse the spawn menu to just Terminal: the
+  // other surfaces (drafts / file browser / team work / graph / search /
+  // dashboard) need a workspace, which a `?kind=terminal` window lacks.
+  const spawnActions = $derived(
+    ui.terminalOnly
+      ? FULL_SPAWN_ACTIONS.filter((r) => r.command === "app.terminal.toggle")
+      : FULL_SPAWN_ACTIONS,
+  );
   function chordLabel(id: string | undefined): string {
     if (!id) return "";
     const s = SHORTCUTS.find((x) => x.id === id);
@@ -638,23 +649,46 @@
     );
     const t = pane.tabs.find((tab) => tab.id === tabId);
     if (t) {
-      e.dataTransfer.setData(
-        CROSS_TAB_MIME,
-        JSON.stringify(
-          t.kind === "file"
-            ? {
-                kind: "file",
-                path: t.path,
-                mode: t.mode,
-                inspectorOpen: t.inspectorOpen,
-              }
-            : {
-                kind: "terminal",
-                title: t.title,
-              },
-        ),
-      );
+      e.dataTransfer.setData(CROSS_TAB_MIME, JSON.stringify(crossWindowPayload(t)));
     }
+  }
+
+  /// Build the CROSS_TAB_MIME payload for a dragged tab. File tabs carry the
+  /// path + view state; terminal tabs carry the re-attach fields. All standalone
+  /// terminal windows share one `/terminal` tenant (one PTY registry), so a
+  /// terminal payload with a live `terminalSessionId` lets the target window
+  /// re-attach to the SAME PTY by id (a true MOVE) instead of spawning a fresh
+  /// shell; the seq cursors + cwd + mcpEnv mirror the source so the re-attach
+  /// replays from where this window left off. No session (never spawned /
+  /// exited) omits those fields so the target opens fresh. Other tab kinds keep
+  /// the historical title-only shape (window-bound on native).
+  function crossWindowPayload(t: Tab): Record<string, unknown> {
+    if (t.kind === "file") {
+      return {
+        kind: "file",
+        path: t.path,
+        mode: t.mode,
+        inspectorOpen: t.inspectorOpen,
+      };
+    }
+    if (t.kind === "terminal") {
+      return {
+        kind: "terminal",
+        title: t.title,
+        ...(t.terminalSessionId
+          ? {
+              terminalSessionId: t.terminalSessionId,
+              lastSeq: t.lastSeq,
+              lastAgentEchoSeq: t.lastAgentEchoSeq,
+              sessionMcpEnv: t.sessionMcpEnv,
+              mcpEnv: t.mcpEnv,
+              group: t.group,
+              cwd: t.cwd,
+            }
+          : {}),
+      };
+    }
+    return { kind: "terminal", title: t.title };
   }
 
   /// Fired on the SOURCE element after the drop completes (anywhere).
@@ -665,9 +699,21 @@
   /// landed in another window - close it locally so the visual
   /// matches the cross-window result.
   function onDragEnd(e: DragEvent, tabId: string): void {
-    if (shouldCloseTabAfterDragEnd(pane.id, tabId, e.dataTransfer?.dropEffect)) {
-      closeTab(pane.id, tabId);
+    if (!shouldCloseTabAfterDragEnd(pane.id, tabId, e.dataTransfer?.dropEffect)) {
+      return;
     }
+    const t = pane.tabs.find((tab) => tab.id === tabId);
+    if (t?.kind === "terminal" && t.terminalSessionId) {
+      // Session-preserving cross-window MOVE: the target window re-attached to
+      // this SAME live PTY (shared `/terminal` registry), so remove the source
+      // tab WITHOUT killing the shell. `markTerminalMovingOut` makes the
+      // close-sink skip the WS `close` frame; `force` skips the "live terminal
+      // still running, close anyway?" confirm (a move is not a destroy).
+      markTerminalMovingOut(tabId);
+      void closeTab(pane.id, tabId, { force: true });
+      return;
+    }
+    void closeTab(pane.id, tabId);
   }
 
   /// Open a cross-window tab payload in this pane. Used by the
@@ -676,13 +722,41 @@
   /// honoured for cross-window drops; the user can reorder within
   /// the strip afterwards.
   function acceptCrossWindowTab(payload: string): boolean {
-    let parsed: { kind?: string; path?: string };
+    let parsed: {
+      kind?: string;
+      path?: string;
+      title?: string;
+      terminalSessionId?: string;
+      lastSeq?: number;
+      lastAgentEchoSeq?: number;
+      sessionMcpEnv?: boolean;
+      mcpEnv?: boolean;
+      group?: string;
+      cwd?: string;
+    };
     try {
       parsed = JSON.parse(payload);
     } catch {
       return false;
     }
     if (parsed.kind === "terminal") {
+      // A payload carrying a live `terminalSessionId` is a session-preserving
+      // MOVE: re-attach to that SAME PTY in the shared `/terminal` registry,
+      // keeping its name. No session id (never-spawned / exited source) opens
+      // a fresh terminal as before.
+      if (parsed.terminalSessionId) {
+        reattachTerminalInPane(pane.id, {
+          terminalSessionId: parsed.terminalSessionId,
+          title: parsed.title,
+          lastSeq: parsed.lastSeq,
+          lastAgentEchoSeq: parsed.lastAgentEchoSeq,
+          sessionMcpEnv: parsed.sessionMcpEnv,
+          mcpEnv: parsed.mcpEnv,
+          group: parsed.group,
+          cwd: parsed.cwd,
+        });
+        return true;
+      }
       openTerminalInPane(pane.id);
       return true;
     }

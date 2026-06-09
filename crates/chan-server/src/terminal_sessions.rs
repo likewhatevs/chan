@@ -439,6 +439,42 @@ impl Registry {
         written
     }
 
+    /// Fan raw input from `source_id` to every OTHER live session in the same
+    /// broadcast group whose window differs from the source's. The source PTY
+    /// and the source window's broadcast members are handled by the SPA (the
+    /// normal `input` frame + the client-side fan, which also respects the
+    /// per-member selection); this covers only the cross-window members a
+    /// single standalone terminal window's SPA cannot reach, since they live
+    /// in this shared registry. Group resolves like `write_input_matching`
+    /// (absent = `DEFAULT_TERMINAL_GROUP`).
+    pub fn broadcast_input_cross_window(&self, source_id: &str, data: &[u8]) {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        let Some(source) = sessions.get(source_id) else {
+            return;
+        };
+        let source_group = source
+            .tab_group
+            .as_deref()
+            .unwrap_or(DEFAULT_TERMINAL_GROUP)
+            .to_string();
+        let source_window = source.window_id.clone();
+        for (id, session) in sessions.iter() {
+            if id == source_id || session.closed.load(Ordering::Relaxed) {
+                continue;
+            }
+            let group = session
+                .tab_group
+                .as_deref()
+                .unwrap_or(DEFAULT_TERMINAL_GROUP);
+            // Same group, different window: same-window members are fanned
+            // client-side, so skip them here to avoid double-delivery.
+            if group != source_group || session.window_id == source_window {
+                continue;
+            }
+            session.send_input(data);
+        }
+    }
+
     /// Enqueue `data` onto the write FIFO of every live session matching the
     /// given tab name and/or group, for `cs terminal write`. Same selector
     /// semantics as `write_input_matching` (a `None` axis matches all; both

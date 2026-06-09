@@ -16,6 +16,13 @@ pub struct EmbeddedServer {
     host: Arc<chan_server::WorkspaceHost>,
     addr: SocketAddr,
     shutdown_tx: watch::Sender<bool>,
+    /// Cached launch URL of the single shared `/terminal` tenant that backs
+    /// ALL standalone terminal windows, so their PTYs live in one registry
+    /// (cross-window terminal moves work) under one global Terminal-N
+    /// namespace. `None` until the first terminal window opens it; reused
+    /// thereafter. The async lock serializes concurrent first-opens so two
+    /// windows can't double-mount the prefix.
+    terminal_url: tokio::sync::Mutex<Option<String>>,
 }
 
 impl EmbeddedServer {
@@ -48,6 +55,7 @@ impl EmbeddedServer {
             host,
             addr,
             shutdown_tx,
+            terminal_url: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -100,6 +108,31 @@ impl EmbeddedServer {
             .close_workspace(prefix)
             .map_err(|e| format!("closing embedded route {prefix}: {e}"))?;
         Ok(())
+    }
+
+    /// Return the tokened launch URL of the single shared `/terminal` tenant
+    /// (`http://<addr>/terminal/index.html?t=<token>`), mounting it on first
+    /// use. ALL standalone terminal windows load this one URL (each with its
+    /// own `?w=<label>` appended by the caller), so their PTYs share a single
+    /// registry: cross-window terminal moves work and a global Terminal-N
+    /// sequence is possible. The tenant lives for the process lifetime; there
+    /// is no per-window teardown (orphaned PTYs idle-prune). The async lock is
+    /// held across the mount so two simultaneous first-opens can't both try to
+    /// mount `/terminal`.
+    pub async fn open_terminal(&self) -> Result<String, String> {
+        const PREFIX: &str = "/terminal";
+        let mut cached = self.terminal_url.lock().await;
+        if let Some(url) = cached.as_ref() {
+            return Ok(url.clone());
+        }
+        let hosted = self
+            .host
+            .open_terminal_session(serve_config(self.addr, PREFIX))
+            .await
+            .map_err(|e| format!("opening the shared embedded terminal tenant: {e}"))?;
+        let url = hosted.handle.launch_url();
+        *cached = Some(url.clone());
+        Ok(url)
     }
 }
 

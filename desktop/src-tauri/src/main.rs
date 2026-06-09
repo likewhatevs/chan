@@ -1555,6 +1555,17 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let new_window = MenuItemBuilder::with_id("app-new-window", "New Window")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
+    // `phase-20`: File ▸ New Terminal. Cmd+T, ALWAYS enabled on both
+    // platforms (no dynamic enable/disable: a disabled menu item still
+    // swallows the accelerator on macOS, so a launcher-focused Cmd+T would
+    // dead-end). The single handler routes by the FOCUSED window's kind: a
+    // launcher (main / main-*) opens a new standalone terminal window; any
+    // embedded SPA window (workspace-* / tunnel-* / outbound-* / terminal-*)
+    // gets `app.terminal.toggle` dispatched, which the SPA interprets per
+    // its mode (workspace: toggle a pane terminal; terminal: add a tab).
+    let new_terminal = MenuItemBuilder::with_id("app-new-terminal", "New Terminal")
+        .accelerator("CmdOrCtrl+T")
+        .build(app)?;
     let settings = MenuItemBuilder::with_id("chan-settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
@@ -1564,7 +1575,17 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // About / Exit are macOS-implicit.
     #[cfg(target_os = "macos")]
     let menu = {
+        use tauri::menu::SubmenuBuilder;
         let menu = Menu::default(app)?;
+        // `phase-20`: macOS `Menu::default` ships App / Edit / View / Window
+        // / Help but NO File submenu (About / Quit live in the App menu). Add
+        // a File submenu carrying New Terminal so Cmd+T has a menu home and a
+        // pre-empting accelerator on macOS too. Insert right after the App
+        // menu (index 0) so File sits in its conventional slot.
+        let file = SubmenuBuilder::new(app, "File")
+            .item(&new_terminal)
+            .build()?;
+        menu.insert(&file, 1)?;
         if let Some(window_submenu) = menu
             .get(WINDOW_SUBMENU_ID)
             .and_then(|k| k.as_submenu().cloned())
@@ -1638,6 +1659,8 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             .accelerator("CmdOrCtrl+Q")
             .build(app)?;
         let file = SubmenuBuilder::new(app, "File")
+            .item(&new_terminal)
+            .separator()
             .item(&about)
             .separator()
             .item(&quit)
@@ -1669,6 +1692,9 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             if let Err(e) = open_new_window_for_focused_workspace(app) {
                 tracing::warn!(error = %e, "open new window for focused workspace failed");
             }
+        }
+        "app-new-terminal" => {
+            handle_new_terminal(app);
         }
         "chan-settings" => {
             dispatch_to_focused_workspace(app, "app.settings.toggle");
@@ -1759,6 +1785,19 @@ fn open_new_launcher_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// or no running match), so the menu item never dead-ends. The
 /// "Workspaces" picker stays reachable via the `win-main` menu item.
 fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), String> {
+    // `phase-20`: a focused standalone terminal window opens ANOTHER
+    // terminal window (its workspace-less analogue of "new window of this
+    // workspace"), not the launcher. Checked first because a terminal-*
+    // window has no entry in the `serves` map for the workspace-recovery
+    // path below to match.
+    if app
+        .webview_windows()
+        .values()
+        .any(|w| w.label().starts_with("terminal-") && w.is_focused().unwrap_or(false))
+    {
+        spawn_terminal_window(app);
+        return Ok(());
+    }
     let Some(focused) = app
         .webview_windows()
         .into_values()
@@ -1831,6 +1870,52 @@ fn dispatch_to_focused_workspace(app: &tauri::AppHandle, command: &str) {
         serde_json::to_string(command).unwrap_or_else(|_| "\"\"".into())
     );
     let _ = w.eval(&js);
+}
+
+/// `phase-20`: route File ▸ New Terminal (Cmd+T) by the focused window's
+/// kind.
+///
+/// - An embedded SPA window (workspace-* / tunnel-* / outbound-* /
+///   terminal-*) gets `app.terminal.toggle` dispatched. The SPA decides
+///   what that means: a workspace window toggles a pane terminal (its
+///   existing behaviour); a terminal window adds a terminal tab.
+/// - Anything else (a focused launcher `main` / `main-*`, or no focused
+///   window at all) opens a fresh standalone terminal window.
+///
+/// The single always-enabled menu accelerator pre-empts the webview, so
+/// the KEY_BRIDGE_JS `KeyT` -> `app.terminal.toggle` case is harmlessly
+/// shadowed in the desktop; this routing reproduces the same dispatch for
+/// SPA windows while giving the launcher a working Cmd+T.
+fn handle_new_terminal(app: &tauri::AppHandle) {
+    let focused_spa = app
+        .webview_windows()
+        .into_values()
+        .any(|w| serve::is_workspace_webview_label(w.label()) && w.is_focused().unwrap_or(false));
+    if focused_spa {
+        dispatch_to_focused_workspace(app, "app.terminal.toggle");
+    } else {
+        spawn_terminal_window(app);
+    }
+}
+
+/// `phase-20`: open a standalone terminal-only window. Mounting the
+/// embedded tenant is async (`EmbeddedServer::open_terminal`), so this
+/// hands off to the Tauri async runtime; a failure surfaces as a system
+/// notice rather than blocking the menu-event thread. Mirrors how the
+/// IPC commands drive `serve::start`.
+fn spawn_terminal_window(app: &tauri::AppHandle) {
+    let app_for_task = app.clone();
+    let state = Arc::clone(&app.state::<Arc<AppState>>());
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = serve::spawn_local_terminal_window(app_for_task.clone(), state).await {
+            tracing::warn!(error = %e, "opening standalone terminal window failed");
+            emit_system_notice(
+                &app_for_task,
+                "error",
+                format!("Could not open terminal: {e}"),
+            );
+        }
+    });
 }
 
 #[cfg(test)]
