@@ -5,12 +5,21 @@
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::Router;
 use tokio::sync::watch;
 
 use crate::serve;
+
+/// Per-process monotonic counter for standalone terminal tenants. Each
+/// terminal window mounts its own workspace-less tenant under a unique
+/// `/terminal-<seq>` prefix; this disambiguates them (the host's
+/// duplicate-prefix guard would reject a collision). Independent from the
+/// workspace-window seq in `serve.rs` because the two namespaces never
+/// share a route.
+static TERMINAL_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub struct EmbeddedServer {
     host: Arc<chan_server::WorkspaceHost>,
@@ -100,6 +109,24 @@ impl EmbeddedServer {
             .close_workspace(prefix)
             .map_err(|e| format!("closing embedded route {prefix}: {e}"))?;
         Ok(())
+    }
+
+    /// Mount a standalone, workspace-less terminal tenant under a fresh
+    /// `/terminal-<seq>` prefix and return its tokened launch URL
+    /// (`http://<addr>/terminal-<seq>/index.html?t=<token>`). The caller
+    /// opens a webview at that URL and is responsible for tearing the
+    /// tenant down via `close_prefix("/terminal-<seq>")` when the window
+    /// closes (a terminal window has no On-toggle lifecycle; the window IS
+    /// the tenant). Unlike `open_workspace` there is no flock to contend
+    /// for, so no retry loop: the prefix is process-unique by construction.
+    pub async fn open_terminal(&self) -> Result<String, String> {
+        let prefix = format!("/terminal-{}", TERMINAL_SEQ.fetch_add(1, Ordering::Relaxed));
+        let hosted = self
+            .host
+            .open_terminal_session(serve_config(self.addr, &prefix))
+            .await
+            .map_err(|e| format!("opening embedded terminal {prefix}: {e}"))?;
+        Ok(hosted.handle.launch_url())
     }
 }
 
