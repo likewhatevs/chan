@@ -490,8 +490,17 @@ fn build_workspace_window(
         if let Some(old) = app_owned.get_webview_window(&label_owned) {
             let _ = old.destroy();
         }
+        // Suffix a reused, lowest-free display number so the OS Window
+        // menu disambiguates windows that share a base title (two
+        // windows on one workspace, several standalone terminals). The
+        // number is freed on close (Ok branch handler / Err branch
+        // below) so the next same-base window reuses it.
+        let window_number = app_owned
+            .state::<Arc<AppState>>()
+            .assign_window_number(&label_owned, &title_owned);
+        let display_title = format!("{title_owned} Window {window_number}");
         match WebviewWindowBuilder::new(&app_owned, &label_owned, webview_url)
-            .title(title_owned)
+            .title(display_title)
             .inner_size(1200.0, 800.0)
             .min_inner_size(640.0, 400.0)
             .resizable(true)
@@ -542,6 +551,12 @@ fn build_workspace_window(
                 let key_for_close = config_key.clone();
                 window.on_window_event(move |event| {
                     if matches!(event, WindowEvent::CloseRequested { .. }) {
+                        // Free the display number so the next same-base
+                        // window reuses it (all window kinds, including
+                        // standalone terminals).
+                        app_for_close
+                            .state::<Arc<AppState>>()
+                            .release_window_number(&label_for_close);
                         // Standalone terminal windows share one persistent
                         // `/terminal` tenant (it lives for the process lifetime;
                         // orphaned PTYs idle-prune) and keep no LRU layout
@@ -561,6 +576,11 @@ fn build_workspace_window(
                 });
             }
             Err(e) => {
+                // Build failed: hand the just-assigned number back so it
+                // isn't leaked out of the live set.
+                app_owned
+                    .state::<Arc<AppState>>()
+                    .release_window_number(&label_owned);
                 tracing::warn!(label = %label_owned, error = %e, "opening workspace window failed")
             }
         }
@@ -836,12 +856,15 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyG':         fire(e, 'app.find.prev');     return;
         case 'KeyT':         fire(e, 'app.tab.reopenClosed'); return;
         case 'KeyM':         fire(e, 'app.graph.toggle');  return;
-        // `lane-c addendum-3`: Cmd+Shift+I toggles broadcast-input
-        // select-all/deselect-all for the active terminal (mirrors
-        // iTerm). macOS ONLY: gate on metaKey so Linux Ctrl+Shift+I
-        // stays the webview DevTools chord (web has no binding at all -
-        // cmd+shift+i is the browser DevTools there too).
-        case 'KeyI': if (e.metaKey) fire(e, 'app.terminal.broadcastToggle'); return;
+        // `lane-c addendum-3`: Cmd+Shift+I (mac) / Ctrl+Shift+I (Linux,
+        // Windows) toggles broadcast-input select-all/deselect-all for the
+        // active terminal (mirrors iTerm). Ungated within the shift branch so
+        // both platform mods fire; DevTools lives on the ALT chord
+        // (Cmd+Opt+I / Ctrl+Alt+I, the `alt` branch above), and `fire()`
+        // preventDefaults so the webview's built-in Ctrl+Shift+I DevTools
+        // chord is suppressed. Web has no binding (cmd+shift+i is the browser
+        // DevTools there).
+        case 'KeyI': fire(e, 'app.terminal.broadcastToggle'); return;
         case 'BracketLeft':  fire(e, 'app.tab.prev');      return;
         case 'BracketRight': fire(e, 'app.tab.next');      return;
         // `desktop-fixes`: Cmd+Shift+/ (= Cmd+?) splits the active pane
@@ -897,12 +920,13 @@ mod tests {
     }
 
     #[test]
-    fn key_bridge_wires_cmd_shift_i_to_broadcast_toggle() {
-        // `lane-c addendum-3`: Cmd+Shift+I toggles broadcast-input
-        // select-all/deselect-all for the active terminal. macOS ONLY:
-        // gated on metaKey so Linux Ctrl+Shift+I stays the DevTools chord
-        // (and web has no binding - cmd+shift+i is DevTools there too).
-        assert!(KEY_BRIDGE_JS.contains("if (e.metaKey) fire(e, 'app.terminal.broadcastToggle')"));
+    fn key_bridge_wires_shift_i_to_broadcast_toggle_on_both_mods() {
+        // Cmd+Shift+I (mac) / Ctrl+Shift+I (Linux, Windows) toggles
+        // broadcast-input select-all/deselect-all for the active terminal.
+        // Ungated within the shift branch (no `metaKey` gate) so both
+        // platform mods fire; DevTools stays on the ALT chord.
+        assert!(KEY_BRIDGE_JS.contains("case 'KeyI': fire(e, 'app.terminal.broadcastToggle');"));
+        assert!(!KEY_BRIDGE_JS.contains("if (e.metaKey) fire(e, 'app.terminal.broadcastToggle')"));
     }
 
     #[test]

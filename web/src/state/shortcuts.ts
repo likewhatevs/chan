@@ -106,15 +106,17 @@ export const SHORTCUTS: readonly Shortcut[] = [
     escapeTerminal: true,
   },
   // Broadcast-input toggle for the active terminal (mirrors iTerm).
-  // macOS-native ONLY: cmd+shift+i is the browser DevTools chord on
-  // the web build, so there is no `web` binding. The native binding
-  // is gated on metaKey (= Cmd) so Linux ctrl+shift+i stays DevTools.
+  // Native only: cmd+shift+i is the browser DevTools chord on the web
+  // build, so there is no `web` binding. `Mod` renders Cmd on macOS /
+  // Ctrl on Linux+Windows, and KEY_BRIDGE_JS fires on both mods (its
+  // DevTools chord moved to the Alt variant), so it works on every
+  // desktop platform.
   {
     id: "app.terminal.broadcastToggle",
     label: "Toggle broadcast to all terminals",
-    native: "Cmd+Shift+I",
+    native: "Mod+Shift+I",
     group: "App",
-    note: "macOS native only (cmd+shift+i is DevTools on web / Linux)",
+    note: "native only (cmd/ctrl+shift+i is the browser DevTools chord on web)",
     escapeTerminal: true,
   },
   // File-browser top-level chord. Native uses Cmd+O; web fallback

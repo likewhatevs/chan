@@ -57,6 +57,15 @@ pub struct AppState {
     /// the next open. Missing entry reads as 1.0 (the chan-desktop
     /// default).
     pub live_window_zooms: Mutex<HashMap<String, f64>>,
+    /// Per-live-window display number, keyed by window label, with the
+    /// base title it was assigned under. Drives the `"{title} Window
+    /// {N}"` suffix so the OS Window menu disambiguates windows that
+    /// share a base title (two windows on the same workspace, several
+    /// standalone terminals). `N` is the lowest free number among live
+    /// windows with the SAME base title, so a number freed by a closed
+    /// window gets reused — mirroring `Registry::next_terminal_name`'s
+    /// lowest-free `Terminal-N` scheme. Freed on window close.
+    pub window_numbers: Mutex<HashMap<String, (String, u64)>>,
 }
 
 /// Defense-in-depth local runtime teardown: `RunEvent::Exit` is the
@@ -69,6 +78,26 @@ impl Drop for AppState {
     fn drop(&mut self) {
         serve::stop_all(self);
     }
+}
+
+/// Lowest free display number (`>= 1`) for `base` among the live
+/// window-number entries, ignoring any slot already held by `label`
+/// itself (so a re-assign of the same window keeps its number stable).
+/// Split out as a free function so the reuse logic is unit-testable
+/// without constructing a full `AppState`.
+fn lowest_free_window_number(
+    numbers: &HashMap<String, (String, u64)>,
+    label: &str,
+    base: &str,
+) -> u64 {
+    let taken: std::collections::HashSet<u64> = numbers
+        .iter()
+        .filter(|(l, (b, _))| l.as_str() != label && b == base)
+        .map(|(_, (_, n))| *n)
+        .collect();
+    (1u64..)
+        .find(|n| !taken.contains(n))
+        .expect("the naturals always contain a free slot")
 }
 
 impl AppState {
@@ -108,6 +137,27 @@ impl AppState {
             tracing::warn!(error = %e, "persisting window config stack failed");
         }
         Some(popped)
+    }
+
+    /// Assign the lowest-free display number for `base` among live
+    /// windows that share the same base title, record it under
+    /// `label`, and return it. The first window of a given base is
+    /// `1`; a number freed by `release_window_number` is handed back
+    /// out on the next assign — mirroring the lowest-free reuse of
+    /// `Registry::next_terminal_name`. Re-assigning the same `label`
+    /// (a defensive double-build) refreshes its slot.
+    pub fn assign_window_number(&self, label: &str, base: &str) -> u64 {
+        let mut numbers = self.window_numbers.lock().unwrap();
+        let n = lowest_free_window_number(&numbers, label, base);
+        numbers.insert(label.to_string(), (base.to_string(), n));
+        n
+    }
+
+    /// Release the display number held by `label` so it can be reused
+    /// by the next window with the same base title. Called from the
+    /// window-close handler. A no-op for an unknown label.
+    pub fn release_window_number(&self, label: &str) {
+        self.window_numbers.lock().unwrap().remove(label);
     }
 }
 
@@ -1079,15 +1129,29 @@ fn open_devtools(window: tauri::WebviewWindow) {
 
 /// `phase-12 lane-e` (addendum-2 Q6): close-cascade tail. The SPA
 /// invokes this when the last tab and then the last empty pane of a
-/// workspace window are closed: close the window and bring the launcher
-/// (the native-desktop workspace list) back to the foreground. The
-/// launcher's CloseRequested handler hides rather than destroys it
-/// (see the setup hook), so re-showing is instant. Show the launcher
-/// first so focus lands there without a flash of no-window focus,
-/// then close the calling workspace window.
+/// workspace window are closed: close the window, and — only if this
+/// was the LAST chan SPA window — bring the launcher (the
+/// native-desktop workspace list) back to the foreground so the user
+/// isn't left with no window. The launcher's CloseRequested handler
+/// hides rather than destroys it (see the setup hook), so re-showing
+/// is instant.
+///
+/// When OTHER SPA windows remain we must NOT raise the launcher: a
+/// cross-window terminal MOVE empties (and thus closes) the source
+/// window, and unconditionally focusing the launcher there stole focus
+/// from the drop-target window. Leaving the launcher alone lets the OS
+/// keep focus on the frontmost remaining window — the window the user
+/// just dropped the terminal into.
 #[tauri::command]
 fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
-    let _ = show_window(&app, "main");
+    let closing = window.label();
+    let others_remain = app
+        .webview_windows()
+        .keys()
+        .any(|label| label != closing && serve::is_workspace_webview_label(label));
+    if !others_remain {
+        let _ = show_window(&app, "main");
+    }
     window.close().map_err(err)
 }
 
@@ -1291,6 +1355,7 @@ fn main() {
         embedded: OnceLock::new(),
         tunnel: TunnelState::new(),
         live_window_zooms: Mutex::new(HashMap::new()),
+        window_numbers: Mutex::new(HashMap::new()),
     });
     let state_for_exit = Arc::clone(&state);
     let state_for_setup = Arc::clone(&state);
@@ -1342,6 +1407,11 @@ fn main() {
             // window cannot be brought back without quitting and
             // relaunching.
             if let Some(main) = app.get_webview_window("main") {
+                // Number the singleton launcher ("Chan Desktop Window 1") so
+                // it disambiguates from extra `main-N` launchers in the OS
+                // Window menu. It hides rather than destroys on close, so the
+                // number is stable for the process lifetime.
+                let _ = main.set_title(&launcher_window_title("main"));
                 let main_for_event = main.clone();
                 main.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
@@ -1786,7 +1856,7 @@ fn open_new_launcher_window(app: &tauri::AppHandle) -> Result<(), String> {
         return Err(format!("launcher label {label} already exists"));
     }
     WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
-        .title("Chan Desktop")
+        .title(launcher_window_title(&label))
         .inner_size(960.0, 600.0)
         .min_inner_size(720.0, 400.0)
         .resizable(true)
@@ -1848,6 +1918,30 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
         Some((key, url)) => serve::spawn_local_workspace_window(app, &key, &url),
         None => open_new_launcher_window(app),
     }
+}
+
+/// Display number for a launcher window, derived from its label:
+/// the singleton `main` is window 1; `main-N` is window N. Since
+/// `next_launcher_label` hands out the lowest-free `main-N` slot, a
+/// number freed by a closed launcher is already reused — so the
+/// label IS the reusable display number (no separate allocator
+/// needed; launchers never go through `build_workspace_window`).
+fn launcher_window_number(label: &str) -> u32 {
+    if label == "main" {
+        return 1;
+    }
+    label
+        .strip_prefix("main-")
+        .and_then(|n| n.parse::<u32>().ok())
+        .unwrap_or(1)
+}
+
+/// OS window title for a launcher window: `Chan Desktop Window N`, so
+/// the macOS Window menu disambiguates multiple open launchers
+/// (mirrors the `"{title} Window {N}"` scheme the workspace / terminal
+/// windows use).
+fn launcher_window_title(label: &str) -> String {
+    format!("Chan Desktop Window {}", launcher_window_number(label))
 }
 
 /// Pick the next free `main-N` label. Launchers spawn from the
@@ -2008,5 +2102,46 @@ mod tests {
         );
         let too_long = "x".repeat(OUTBOUND_LABEL_MAX_CHARS + 1);
         assert!(normalize_outbound_label(&too_long).is_err());
+    }
+
+    #[test]
+    fn window_numbers_are_lowest_free_per_base_with_reuse() {
+        let mut numbers: HashMap<String, (String, u64)> = HashMap::new();
+        // Helper mirroring AppState::assign_window_number against the
+        // local map (the method just locks + delegates to the same
+        // free function).
+        let assign = |numbers: &mut HashMap<String, (String, u64)>, label: &str, base: &str| {
+            let n = lowest_free_window_number(numbers, label, base);
+            numbers.insert(label.to_string(), (base.to_string(), n));
+            n
+        };
+
+        // First two terminal windows get 1, 2.
+        assert_eq!(assign(&mut numbers, "terminal-win-0", "Terminal"), 1);
+        assert_eq!(assign(&mut numbers, "terminal-win-1", "Terminal"), 2);
+        // A different base title starts its own sequence at 1.
+        assert_eq!(assign(&mut numbers, "workspace-aa-0", "🏠 /w"), 1);
+
+        // Free the first terminal; the next terminal reuses 1, not 3.
+        numbers.remove("terminal-win-0");
+        assert_eq!(assign(&mut numbers, "terminal-win-2", "Terminal"), 1);
+        // The unrelated base is untouched by the terminal churn.
+        assert_eq!(assign(&mut numbers, "workspace-aa-1", "🏠 /w"), 2);
+
+        // Re-assigning a live label keeps its slot (ignores itself).
+        assert_eq!(assign(&mut numbers, "terminal-win-1", "Terminal"), 2);
+    }
+
+    #[test]
+    fn launcher_window_number_derives_from_label() {
+        // The singleton launcher is window 1; `main-N` is window N.
+        assert_eq!(launcher_window_number("main"), 1);
+        assert_eq!(launcher_window_number("main-2"), 2);
+        assert_eq!(launcher_window_number("main-3"), 3);
+        // Malformed / unexpected labels fall back to 1 rather than panic.
+        assert_eq!(launcher_window_number("main-"), 1);
+        assert_eq!(launcher_window_number("main-x"), 1);
+        assert_eq!(launcher_window_title("main"), "Chan Desktop Window 1");
+        assert_eq!(launcher_window_title("main-4"), "Chan Desktop Window 4");
     }
 }
