@@ -7,37 +7,117 @@
     {
       "name": "chan-x86_64-unknown-linux-musl.tar.gz",
       "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-x86_64-unknown-linux-musl.tar.gz",
-      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "sha256": "d872b3b482b8cd7bc4bdb303d050e5e5f696094aa768148a4d41896efa7513f3"
     },
     {
       "name": "chan-aarch64-unknown-linux-musl.tar.gz",
       "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-aarch64-unknown-linux-musl.tar.gz",
-      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      "sha256": "5d443da5c67a114f073002df1acfa966d7edf540fa24586e5b8dff53bcbbe9da"
     },
     {
       "name": "chan-aarch64-apple-darwin.tar.gz",
       "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-aarch64-apple-darwin.tar.gz",
-      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      "sha256": "7fc83561ce5496d44d7f4fe2f82afffe939cd2bd7e740fb8647cd0534d6d8ce1"
+    },
+    {
+      "name": "chan-amd64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-amd64.deb",
+      "sha256": "c203d2460108e7426d8c872254d76047427fce5d370e8c30c45bcb0488e5b064"
+    },
+    {
+      "name": "chan-arm64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-arm64.deb",
+      "sha256": "bd2031ae08caf57c69ec843c891ceec67c23fe1b6ba2dc938d2f546ec626dfeb"
+    },
+    {
+      "name": "chan-amd64.rpm",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-amd64.rpm",
+      "sha256": "b1a08a7f73d728f6eae7622beb84f4b18e53db5f41472c0804da8de0d897a1eb"
+    },
+    {
+      "name": "chan-arm64.rpm",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-arm64.rpm",
+      "sha256": "0c70448ea7c0f1e7b794e64f683cb0b54260e682a78ae16f676c8acbbf4e0e98"
     },
     {
       "name": "Chan_0.15.4.dmg",
       "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/Chan_0.15.4.dmg",
-      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      "sha256": "91aa0c11b086dc58857db8456449b1b31c88f369147e975495a66dc044d36405"
     },
     {
       "name": "Chan_0.15.4_amd64.AppImage",
       "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/Chan_0.15.4_amd64.AppImage",
-      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      "sha256": "8b50930539ca2797e9908a2ad38d2053883a1ffe930b02fd91fd4fea9b734f60"
+    },
+    {
+      "name": "Chan_0.15.4_aarch64.AppImage",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/Chan_0.15.4_aarch64.AppImage",
+      "sha256": "1724be0e5096c39052f11ed6dbc1d8572ab2d1bdf576dbd9996d09a0ec7ea3bb"
     },
     {
       "name": "Chan_0.15.4_amd64.deb",
       "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/Chan_0.15.4_amd64.deb",
-      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      "sha256": "3e91aa3b0e120fb6148283c9f3b1a0e38a9dc857629d52851fa978944f6996dc"
+    },
+    {
+      "name": "Chan_0.15.4_arm64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/Chan_0.15.4_arm64.deb",
+      "sha256": "be576683d97d5887fdf483fea4249439eff6f553edca472da91c7988816a2407"
+    },
+    {
+      "name": "Chan-0.15.4-1.x86_64.rpm",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/Chan-0.15.4-1.x86_64.rpm",
+      "sha256": "dd384e201a467644c4374d38fe83d1d96b895102a334bbf724e4ca7c60149994"
+    },
+    {
+      "name": "Chan-0.15.4-1.aarch64.rpm",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/Chan-0.15.4-1.aarch64.rpm",
+      "sha256": "71a847b28fd97f3303c4eedb87d97b88edf849321ff430198e6a95ecaa245987"
+    },
+    {
+      "name": "chan-gateway-admin_0.15.4-1_amd64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-gateway-admin_0.15.4-1_amd64.deb",
+      "sha256": "239e7c8040c7c59973c4d4df14e65e97b11cb2ef1c6b53bd1f4903535df19db8"
+    },
+    {
+      "name": "chan-gateway-admin_0.15.4-1_arm64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-gateway-admin_0.15.4-1_arm64.deb",
+      "sha256": "3ee78759b14c9aab017de339126a387f21712fc84e5fd841b77930417d389d2c"
+    },
+    {
+      "name": "chan-gateway-identity_0.15.4-1_amd64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-gateway-identity_0.15.4-1_amd64.deb",
+      "sha256": "a7731671edc1d76d1a7137b4002870232bb6a30fc4fe1ffa2d34a477c944d1eb"
+    },
+    {
+      "name": "chan-gateway-identity_0.15.4-1_arm64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-gateway-identity_0.15.4-1_arm64.deb",
+      "sha256": "de27d63c74fcf8a68bb918d06bf2da2856d51ba4ff5d3b3aaf4ce1a9ea653abf"
+    },
+    {
+      "name": "chan-gateway-profile_0.15.4-1_amd64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-gateway-profile_0.15.4-1_amd64.deb",
+      "sha256": "219ed6ee6822a82b54b3aadda1d737685701f3e6b4d76ddc9360ac6cc5ac9668"
+    },
+    {
+      "name": "chan-gateway-profile_0.15.4-1_arm64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-gateway-profile_0.15.4-1_arm64.deb",
+      "sha256": "588a8f6ac0700c51291b6f0759753f297b078bfa5606a3c634659ef374528d18"
+    },
+    {
+      "name": "chan-gateway-workspace-proxy_0.15.4-1_amd64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-gateway-workspace-proxy_0.15.4-1_amd64.deb",
+      "sha256": "7a572e5f7e679e8e53d4482a0e8eed1e49f38f9ea69e9275c5bc6ceda9916a45"
+    },
+    {
+      "name": "chan-gateway-workspace-proxy_0.15.4-1_arm64.deb",
+      "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/chan-gateway-workspace-proxy_0.15.4-1_arm64.deb",
+      "sha256": "56c4eb59624db58d5bc386a2ee1e86d3dcd921f281b4dd49ab9e081ff98393fe"
     },
     {
       "name": "Chan_0.15.4_aarch64.app.tar.gz",
       "url": "https://github.com/fiorix/chan/releases/download/v0.15.4/Chan_0.15.4_aarch64.app.tar.gz",
-      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "sha256": "298fd5b95d7fa76a19eb9422140c42d570798e809ca6bf412c98b2d29f623a00",
       "updater_platform": "darwin-aarch64",
       "signature": "fixture-signature-darwin-aarch64"
     }

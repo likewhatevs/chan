@@ -10,12 +10,32 @@ import { fileURLToPath } from "node:url";
 const version = "0.15.4";
 const tag = `v${version}`;
 const names = [
+  // chan CLI (names[0] is reused below for the sha check)
   "chan-x86_64-unknown-linux-musl.tar.gz",
   "chan-aarch64-unknown-linux-musl.tar.gz",
   "chan-aarch64-apple-darwin.tar.gz",
+  "chan-amd64.deb",
+  "chan-arm64.deb",
+  "chan-amd64.rpm",
+  "chan-arm64.rpm",
+  // chan-desktop
   `Chan_${version}.dmg`,
   `Chan_${version}_amd64.AppImage`,
+  `Chan_${version}_aarch64.AppImage`,
   `Chan_${version}_amd64.deb`,
+  `Chan_${version}_arm64.deb`,
+  `Chan-${version}-1.x86_64.rpm`,
+  `Chan-${version}-1.aarch64.rpm`,
+  // chan-gateway
+  `chan-gateway-admin_${version}-1_amd64.deb`,
+  `chan-gateway-admin_${version}-1_arm64.deb`,
+  `chan-gateway-identity_${version}-1_amd64.deb`,
+  `chan-gateway-identity_${version}-1_arm64.deb`,
+  `chan-gateway-profile_${version}-1_amd64.deb`,
+  `chan-gateway-profile_${version}-1_arm64.deb`,
+  `chan-gateway-workspace-proxy_${version}-1_amd64.deb`,
+  `chan-gateway-workspace-proxy_${version}-1_arm64.deb`,
+  // signed desktop updater payload + detached signature
   `Chan_${version}_aarch64.app.tar.gz`,
   `Chan_${version}_aarch64.app.tar.gz.sig`,
 ];
@@ -58,7 +78,7 @@ try {
   const manifest = JSON.parse(readFileSync(out, "utf8"));
   assertEqual(manifest.version, version, "version");
   assertEqual(manifest.tag, tag, "tag");
-  assertEqual(manifest.assets.length, 7, "asset count excludes detached sig");
+  assertEqual(manifest.assets.length, 23, "asset count excludes detached sig");
 
   const cli = manifest.assets.find((asset) => asset.name === names[0]);
   assert(cli, "missing CLI asset");

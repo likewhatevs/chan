@@ -29,11 +29,12 @@ async function main() {
 
     assert(releases.latest === "0.15.4", "releases.json latest version");
     assert(releases.latest_tag === "v0.15.4", "releases.json latest tag");
-    assert(releases.releases?.[0]?.downloads?.length === 6, "release download count");
-    assert(
-      new Set(releases.releases[0].downloads.map((download) => download.id)).has("cli-linux-x64"),
-      "CLI download id present",
-    );
+    assert(releases.releases?.[0]?.downloads?.length === 22, "release download count");
+    const downloadIds = new Set(releases.releases[0].downloads.map((download) => download.id));
+    assert(downloadIds.has("cli-linux-x64"), "CLI tarball download id present");
+    assert(downloadIds.has("cli-linux-deb-arm64"), "CLI deb download id present");
+    assert(downloadIds.has("desktop-linux-rpm-amd64"), "desktop rpm download id present");
+    assert(downloadIds.has("gateway-profile-deb-amd64"), "gateway download id present");
     assert(cliLatest.version === "0.15.4", "CLI latest version");
     assert(JSON.stringify(cliLatest) === JSON.stringify(cliVersion), "CLI latest equals version file");
     assert(cliLatest.targets.length === 3, "CLI target count");

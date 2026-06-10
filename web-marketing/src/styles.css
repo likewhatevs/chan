@@ -349,6 +349,96 @@ code {
   color: var(--muted);
 }
 
+.minor a {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Full-width download section: heading on top, package groups below. The
+   install page uses it so the per-arch download matrix gets the full width
+   that the two-column .install-section layout can't give it. */
+.install-block {
+  border-top: 1px solid var(--rule);
+  padding: 42px 0;
+}
+
+.install-block > .section-heading {
+  margin-bottom: 24px;
+}
+
+.install-block .section-heading p {
+  color: var(--muted);
+}
+
+.download-group {
+  margin-top: 28px;
+}
+
+.download-group:first-of-type {
+  margin-top: 0;
+}
+
+.download-group h3 {
+  font-size: 1.05rem;
+  margin: 0 0 12px;
+}
+
+.download-group .group-note {
+  color: var(--muted);
+  font: 600 0.74rem var(--mono);
+  letter-spacing: 0;
+  margin-left: 8px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.download-group .minor {
+  margin: -2px 0 14px;
+}
+
+.download-matrix {
+  display: grid;
+  gap: 10px;
+}
+
+.download-row {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+}
+
+.download-label {
+  flex: 1 1 auto;
+  font-weight: 700;
+  min-width: 120px;
+}
+
+.arch-button {
+  align-items: center;
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--fg);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font: 700 0.85rem var(--mono);
+  justify-content: center;
+  min-height: 38px;
+  min-width: 88px;
+  padding: 0 14px;
+  text-decoration: none;
+}
+
+.arch-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .command-copy {
   align-items: stretch;
   background: var(--code-bg);

@@ -14,6 +14,8 @@ const checks = [
   { path: "/", status: 200, includes: 'data-release-download="desktop-macos-dmg"' },
   { path: "/install/", status: 200, includes: "Install Chan" },
   { path: "/install/", status: 200, includes: 'data-release-download="cli-linux-x64"' },
+  { path: "/install/", status: 200, includes: 'data-release-download="desktop-linux-rpm-amd64"' },
+  { path: "/install/", status: 200, includes: 'data-release-download="gateway-profile-deb-amd64"' },
   { path: "/manual/", status: 200, includes: "Chan Manual" },
   { path: "/manual/install/", status: 200, includes: "Install Choices" },
   {

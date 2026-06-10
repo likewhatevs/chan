@@ -13,12 +13,31 @@ const githubRepoUrl = "https://github.com/fiorix/chan";
 const cliMetadataBase = "https://chan.app/dl/cli";
 const releasesMetadataPath = "/dl/releases.json";
 const requiredDownloadIds = [
+  // chan-desktop
   "desktop-macos-dmg",
   "desktop-linux-appimage",
+  "desktop-linux-appimage-arm64",
   "desktop-linux-deb",
+  "desktop-linux-deb-arm64",
+  "desktop-linux-rpm-amd64",
+  "desktop-linux-rpm-arm64",
+  // chan CLI
+  "cli-macos-arm64",
   "cli-linux-x64",
   "cli-linux-arm64",
-  "cli-macos-arm64",
+  "cli-linux-deb-amd64",
+  "cli-linux-deb-arm64",
+  "cli-linux-rpm-amd64",
+  "cli-linux-rpm-arm64",
+  // chan-gateway
+  "gateway-admin-deb-amd64",
+  "gateway-admin-deb-arm64",
+  "gateway-identity-deb-amd64",
+  "gateway-identity-deb-arm64",
+  "gateway-profile-deb-amd64",
+  "gateway-profile-deb-arm64",
+  "gateway-workspace-proxy-deb-amd64",
+  "gateway-workspace-proxy-deb-arm64",
 ];
 
 const requiredInputs = [

@@ -22,6 +22,11 @@ const cliTargets = [
   },
 ];
 
+// The four gateway services ship one .deb each per arch. Single-sourced here
+// so a service rename only touches one list. Must match GATEWAY_RELEASE_CRATES
+// in the Makefile and the gateway packages release.yml uploads.
+const gatewayServices = ["admin", "identity", "profile", "workspace-proxy"];
+
 function desktopDownloads(version) {
   return [
     {
@@ -35,22 +40,57 @@ function desktopDownloads(version) {
     {
       id: "desktop-linux-appimage",
       kind: "desktop",
-      label: "Linux AppImage",
+      label: "Linux AppImage (amd64)",
       platform: "linux-x86_64",
       format: "appimage",
       asset: `Chan_${version}_amd64.AppImage`,
     },
     {
+      id: "desktop-linux-appimage-arm64",
+      kind: "desktop",
+      label: "Linux AppImage (aarch64)",
+      platform: "linux-aarch64",
+      format: "appimage",
+      asset: `Chan_${version}_aarch64.AppImage`,
+    },
+    {
       id: "desktop-linux-deb",
       kind: "desktop",
-      label: "Linux deb",
+      label: "Linux deb (amd64)",
       platform: "linux-x86_64",
       format: "deb",
       asset: `Chan_${version}_amd64.deb`,
     },
+    {
+      id: "desktop-linux-deb-arm64",
+      kind: "desktop",
+      label: "Linux deb (arm64)",
+      platform: "linux-aarch64",
+      format: "deb",
+      asset: `Chan_${version}_arm64.deb`,
+    },
+    {
+      id: "desktop-linux-rpm-amd64",
+      kind: "desktop",
+      label: "Linux rpm (x86_64)",
+      platform: "linux-x86_64",
+      format: "rpm",
+      asset: `Chan-${version}-1.x86_64.rpm`,
+    },
+    {
+      id: "desktop-linux-rpm-arm64",
+      kind: "desktop",
+      label: "Linux rpm (aarch64)",
+      platform: "linux-aarch64",
+      format: "rpm",
+      asset: `Chan-${version}-1.aarch64.rpm`,
+    },
   ];
 }
 
+// The standalone tarballs are the static musl/darwin self-upgrade targets;
+// the .deb/.rpm are the gnu distro packages release.yml renames to a
+// version-less chan-<arch>.<ext>. Both are direct downloads on the page.
 function cliDownloads() {
   return [
     {
@@ -77,7 +117,52 @@ function cliDownloads() {
       format: "tar.gz",
       asset: "chan-aarch64-apple-darwin.tar.gz",
     },
+    {
+      id: "cli-linux-deb-amd64",
+      kind: "cli",
+      label: "Linux deb (amd64)",
+      format: "deb",
+      asset: "chan-amd64.deb",
+    },
+    {
+      id: "cli-linux-deb-arm64",
+      kind: "cli",
+      label: "Linux deb (arm64)",
+      format: "deb",
+      asset: "chan-arm64.deb",
+    },
+    {
+      id: "cli-linux-rpm-amd64",
+      kind: "cli",
+      label: "Linux rpm (amd64)",
+      format: "rpm",
+      asset: "chan-amd64.rpm",
+    },
+    {
+      id: "cli-linux-rpm-arm64",
+      kind: "cli",
+      label: "Linux rpm (arm64)",
+      format: "rpm",
+      asset: "chan-arm64.rpm",
+    },
   ];
+}
+
+function gatewayDownloads(version) {
+  const downloads = [];
+  for (const service of gatewayServices) {
+    for (const arch of ["amd64", "arm64"]) {
+      downloads.push({
+        id: `gateway-${service}-deb-${arch}`,
+        kind: "gateway",
+        label: `chan-gateway-${service} deb (${arch})`,
+        platform: arch === "amd64" ? "linux-x86_64" : "linux-aarch64",
+        format: "deb",
+        asset: `chan-gateway-${service}_${version}-1_${arch}.deb`,
+      });
+    }
+  }
+  return downloads;
 }
 
 async function main() {
@@ -206,7 +291,11 @@ function buildMetadata(manifest) {
     }),
   };
 
-  const publicDownloads = [...desktopDownloads(manifest.version), ...cliDownloads()].map((download) => {
+  const publicDownloads = [
+    ...desktopDownloads(manifest.version),
+    ...cliDownloads(),
+    ...gatewayDownloads(manifest.version),
+  ].map((download) => {
     const asset = requireAsset(manifest, download.asset);
     return {
       ...download,

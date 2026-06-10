@@ -7,15 +7,20 @@ import path from "node:path";
 
 const defaultRepo = "fiorix/chan";
 
-// The standalone Linux CLI tarballs are musl (fully static); the gnu tarball
-// is no longer published. The .deb/.rpm packages stay gnu but are distro
-// packages, not these standalone tarballs, and are not collected here. Must
-// stay in sync with cliTargets in generate-release-metadata.mjs.
+// Every public download the install page links to is collected here so it
+// gets a SHA256 + browser URL in the manifest. Must stay in sync with the
+// download lists in generate-release-metadata.mjs. The standalone tarballs are
+// the musl/darwin self-upgrade targets; the .deb/.rpm are the gnu distro
+// packages release.yml renames to a version-less chan-<arch>.<ext>.
 function cliAssets() {
   return [
     "chan-x86_64-unknown-linux-musl.tar.gz",
     "chan-aarch64-unknown-linux-musl.tar.gz",
     "chan-aarch64-apple-darwin.tar.gz",
+    "chan-amd64.deb",
+    "chan-arm64.deb",
+    "chan-amd64.rpm",
+    "chan-arm64.rpm",
   ];
 }
 
@@ -23,8 +28,27 @@ function desktopAssets(version) {
   return [
     `Chan_${version}.dmg`,
     `Chan_${version}_amd64.AppImage`,
+    `Chan_${version}_aarch64.AppImage`,
     `Chan_${version}_amd64.deb`,
+    `Chan_${version}_arm64.deb`,
+    `Chan-${version}-1.x86_64.rpm`,
+    `Chan-${version}-1.aarch64.rpm`,
   ];
+}
+
+// The four gateway services ship one .deb each per arch. Must match
+// gatewayServices in generate-release-metadata.mjs and the gateway packages
+// release.yml uploads.
+const gatewayServices = ["admin", "identity", "profile", "workspace-proxy"];
+
+function gatewayAssets(version) {
+  const assets = [];
+  for (const service of gatewayServices) {
+    for (const arch of ["amd64", "arm64"]) {
+      assets.push(`chan-gateway-${service}_${version}-1_${arch}.deb`);
+    }
+  }
+  return assets;
 }
 
 function updaterAssets(version) {
@@ -143,7 +167,7 @@ async function collectManifest(release, options) {
   }
 
   const assets = [];
-  for (const name of [...cliAssets(), ...desktopAssets(version)]) {
+  for (const name of [...cliAssets(), ...desktopAssets(version), ...gatewayAssets(version)]) {
     assets.push(await collectAsset(name, releaseAssets, options));
   }
   for (const updater of updaterAssets(version)) {
