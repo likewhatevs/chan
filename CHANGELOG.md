@@ -6,6 +6,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.30.1] - 2026-06-10
+
+### Changed
+
+- The "Set MCP env vars" control moved from the terminal right-click menu into
+  Terminal Settings, where it is a single global toggle (off by default) that
+  applies to newly opened workspace terminals.
+- Desktop windows are now numbered in the Window menu — "<workspace> Window 1",
+  "Terminal Window 1", "Chan Desktop Window 1", and so on — with a number
+  reused when a window closes, so duplicate windows are no longer
+  indistinguishable.
+- The broadcast-input Select All / Deselect All shortcut now works on Linux and
+  Windows as Ctrl+Shift+I (Cmd+Shift+I on macOS); it previously had no binding
+  outside macOS.
+- The install script now also symlinks `cs` to `chan` in the install directory.
+
+### Fixed
+
+- Enabling MCP env vars now actually sets CHAN_MCP_* in newly opened workspace
+  terminals; the toggle had no effect after MCP was made off-by-default.
+  Standalone terminal windows have no workspace and still do not expose MCP.
+- Dragging a terminal tab into another window no longer pulls the Chan Desktop
+  launcher to the front when the source window closes — focus stays on the
+  window you dropped into.
+
 ## [v0.30.0] - 2026-06-10
 
 ### Changed
