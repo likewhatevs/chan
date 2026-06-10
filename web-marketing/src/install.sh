@@ -213,6 +213,12 @@ bin=$(find "$tmp" -type f -name chan -perm -u+x | head -n1 || true)
 install -m 0755 "$bin" "$bindir/chan"
 printf 'install: installed chan %s to %s\n' "$version" "$bindir/chan"
 
+# `cs` is the same multi-call binary under a different argv[0] (the
+# control-socket CLI: `cs terminal`, `cs poke`, ...). Relative target so
+# the link stays valid regardless of where PREFIX lives.
+ln -sf chan "$bindir/cs"
+printf 'install: linked cs -> chan in %s\n' "$bindir"
+
 case ":$PATH:" in
     *":$bindir:"*) ;;
     *)
