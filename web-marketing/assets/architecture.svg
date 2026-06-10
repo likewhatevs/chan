@@ -35,15 +35,15 @@
   <text class="grouptitle sub" x="56" y="88">chan-desktop (Chan.app)</text>
 
   <rect class="win" x="56" y="100" width="238" height="48" rx="6" />
-  <text class="label" x="72" y="120">Window</text>
+  <text class="label" x="72" y="120">Window 1</text>
   <text class="sub" x="72" y="138">Local workspace</text>
 
   <rect class="win" x="56" y="160" width="238" height="48" rx="6" />
-  <text class="label" x="72" y="180">Window</text>
+  <text class="label" x="72" y="180">Window 2</text>
   <text class="sub" x="72" y="198">localhost:8787</text>
 
   <rect class="win" x="56" y="220" width="238" height="48" rx="6" />
-  <text class="label" x="72" y="240">Window</text>
+  <text class="label" x="72" y="240">Window 3</text>
   <text class="sub" x="72" y="258">localhost:18787</text>
 
   <!-- Local disk store -->
@@ -71,15 +71,15 @@
   <text class="sub" x="676" y="290">listening on :18787</text>
 
   <!-- Edges -->
-  <!-- Local window -> disk -->
-  <path class="edge" marker-end="url(#arrow)" d="M120,148 L120,312" />
-  <!-- Lima window -> Lima serve (routed down the gutter right of the boxes) -->
-  <path class="edge" marker-end="url(#arrow)" d="M294,184 C340,184 340,450 294,450" />
-  <text class="edgelabel" x="348" y="312">localhost:8787</text>
-  <text class="edgelabel" x="348" y="328">(Lima host network)</text>
-  <!-- VPS window -> tunnel -->
+  <!-- Window 1 -> Local workspace on disk (off the left side, into the disk's left edge) -->
+  <path class="edge" marker-end="url(#arrow)" d="M56,124 C34,124 34,340 40,340" />
+  <!-- Window 2 -> Lima serve (down the left gutter, clear of the right-side lines) -->
+  <path class="edge" marker-end="url(#arrow)" d="M56,184 C24,184 24,450 56,450" />
+  <text class="edgelabel" x="320" y="446">localhost:8787</text>
+  <text class="edgelabel" x="320" y="462">(Lima host network)</text>
+  <!-- Window 3 -> SSH tunnel -->
   <path class="edge" marker-end="url(#arrow)" d="M294,244 C330,244 340,250 370,250" />
-  <text class="edgelabel" x="300" y="232">localhost:18787</text>
+  <text class="edgelabel" x="300" y="210">localhost:18787</text>
   <!-- tunnel -> VPS serve -->
   <path class="edge" marker-end="url(#arrow)" d="M560,250 C600,250 615,265 660,272" />
   <text class="edgelabel" x="566" y="240">ssh -L</text>
