@@ -41,6 +41,7 @@ import type {
   SemanticState,
   SemanticModelRegistry,
   TerminalRestartRequest,
+  TerminalRosterEntry,
   TerminalSpawnRequest,
   TerminalSpawnResponse,
   TreeEntry,
@@ -999,12 +1000,13 @@ export const api = {
   // Non-blocking: create the `cs` terminal alias when it is missing from the
   // host's PATH (the pre-flight snapshot's `cs_link` offer).
   createCsLink: () => req<CsLinkResult>("POST", "/api/preflight/cs-link"),
-  /// Next GLOBAL default terminal name (`Terminal-1`, `Terminal-2`, ...).
-  /// Backed by a process-global atomic counter on the shared `/terminal`
-  /// tenant, so numbering stays consistent across EVERY standalone terminal
-  /// window (a per-window count would restart at 1 in each new window). The
-  /// route returns a PLAIN-TEXT body, not JSON, so we hit fetch directly and
-  /// read `.text()` rather than going through the JSON `req()` helper.
+  /// Next per-tenant default terminal name (`Terminal-1`, `Terminal-2`, ...).
+  /// Backed by an atomic counter on the per-tenant terminal registry, so
+  /// numbering stays consistent across every window of the tenant: all
+  /// standalone terminal windows (one shared tenant), or all windows of a
+  /// workspace (that workspace's tenant). A per-window count would restart at
+  /// 1 in each new window. The route returns a PLAIN-TEXT body, not JSON, so
+  /// we hit fetch directly and read `.text()` rather than the JSON `req()`.
   terminalNextName: async (): Promise<string> => {
     const res = await fetch(apiPath("/api/terminal/next-name"), {
       method: "GET",
@@ -1015,12 +1017,35 @@ export const api = {
     }
     return (await res.text()).trim();
   },
+  /// One-shot snapshot of the cross-window terminal roster, for seeding the
+  /// SPA's roster on `/ws` (re)connect. Live updates then arrive as
+  /// `terminal_roster` frames over `/ws`; this closes the reconnect gap where
+  /// a window would miss the last push. Empty on the failure path so a missing
+  /// route (older server) degrades to local-only broadcast targets.
+  terminalRoster: async (): Promise<TerminalRosterEntry[]> => {
+    const res = await req<{ sessions?: TerminalRosterEntry[] }>(
+      "GET",
+      "/api/terminals/roster",
+    );
+    return res.sessions ?? [];
+  },
   spawnTerminal: (body: TerminalSpawnRequest) =>
     req<TerminalSpawnResponse>("POST", "/api/terminals", body),
   restartTerminal: (sessionId: string, body?: TerminalRestartRequest) =>
     req<void>("POST", `/api/terminals/${encodeURIComponent(sessionId)}/restart`, body),
   closeTerminal: (sessionId: string) =>
     req<void>("DELETE", `/api/terminals/${encodeURIComponent(sessionId)}`),
+  /// Set a terminal's broadcast toggle from another window. The server routes
+  /// a `terminal_broadcast` window-command to the session's owning window,
+  /// which flips its tab (re-syncing the flag + lighting the sign). Backs the
+  /// broadcast menu's group-wide Select All / per-row toggles for terminals
+  /// the local window does not host.
+  setTerminalSessionBroadcast: (sessionId: string, on: boolean) =>
+    req<void>(
+      "POST",
+      `/api/terminals/${encodeURIComponent(sessionId)}/broadcast`,
+      { on },
+    ),
   setBubbleOverlayMode: async (mode: BubbleOverlayMode): Promise<void> => {
     const cfg = await req<GlobalConfig>("GET", "/api/config");
     if (cfg.preferences.bubble_overlay_mode === mode) return;

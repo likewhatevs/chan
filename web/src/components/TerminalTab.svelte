@@ -38,8 +38,10 @@
   import {
     advanceTerminalSeq,
     allTerminalTabs,
+    applyGlobalTerminalName,
     broadcastTerminalInput,
     canReopenClosedTab,
+    crossWindowBroadcastMembers,
     closeTab,
     clearTerminalSession,
     ensureTerminalKeyboardProtocol,
@@ -54,6 +56,7 @@
     reopenClosedTab,
     setTerminalBroadcastEnabled,
     setTerminalBroadcastTarget,
+    toggleTerminalGroupBroadcast,
     setTerminalActivity,
     setTerminalActivityPulsing,
     setTerminalMcpEnv,
@@ -228,13 +231,19 @@
       }),
   );
   const selectedBroadcastTargets = $derived(new Set(terminalBroadcastMemberIds(tab)));
-  // "Select All" walks every row INCLUDING self so the bulk action
-  // stays consistent with the per-row UI.
+  // Same-group terminals in OTHER windows of this tenant. Listed below the
+  // local rows under an "other windows" label; toggling one routes through
+  // the server to its owning window (group-wide selection spans windows).
+  const crossWindowMembers = $derived(crossWindowBroadcastMembers(tab));
+  // "Select All" / "Deselect All" reflects the WHOLE group across windows:
+  // every local row (self via broadcastEnabled, others via selection) AND
+  // every cross-window member's own broadcast toggle.
   const allBroadcastTargetsSelected = $derived(
-    broadcastTargets.length > 0 &&
+    broadcastTargets.length + crossWindowMembers.length > 0 &&
       broadcastTargets.every((target) =>
         target.id === tab.id ? tab.broadcastEnabled : selectedBroadcastTargets.has(target.id),
-      ),
+      ) &&
+      crossWindowMembers.every((m) => m.broadcast),
   );
   const mcpEnvOn = $derived(terminalMcpEnvEnabled(tab));
   const showMcpEnvDisabled = $derived(tab.sessionMcpEnv === false);
@@ -685,12 +694,22 @@
     resizeObserver = new ResizeObserver(queueFit);
     resizeObserver.observe(host);
     queueFit();
-    connect();
+    void connect();
     if (focused) queueMicrotask(() => term?.focus());
   }
 
-  function connect(): void {
+  async function connect(): Promise<void> {
     if (!term) return;
+    // Resolve the per-tenant `Terminal-N` default name BEFORE opening the WS,
+    // so the session spawns with its final name (the cross-window roster and
+    // `cs term list` then show it, not the local placeholder). Only for a
+    // fresh auto-named terminal; a reattach already has its name + session.
+    // Clear the flag first so a concurrent reconnect cannot re-fetch.
+    if (!tab.terminalSessionId && tab.pendingGlobalName) {
+      tab.pendingGlobalName = false;
+      await applyGlobalTerminalName(tab);
+      if (!term) return; // torn down during the fetch
+    }
     closeSocket();
     status = "connecting";
     statusDetail = "";
@@ -890,6 +909,19 @@
     ws.send(JSON.stringify(frame));
     return true;
   }
+
+  // Sync this terminal's broadcast toggle to the server whenever it changes
+  // and on every (re)connect (the `status` dep re-fires the effect when the
+  // socket comes up). The server uses it to gate the cross-window input fan
+  // on the receiver's own toggle and to surface the state in the roster other
+  // windows read. Reads `tab.broadcastEnabled` + `status` so Svelte re-runs
+  // this on either change.
+  $effect(() => {
+    const on = tab.broadcastEnabled;
+    if (status === "connected") {
+      send({ type: "set-broadcast", on });
+    }
+  });
 
   function sendInput(data: string): void {
     send({ type: "input", data });
@@ -1440,14 +1472,8 @@
   }
 
   function toggleAllBroadcastTargets(): void {
-    const select = !allBroadcastTargetsSelected;
-    for (const target of broadcastTargets) {
-      if (target.id === tab.id) {
-        setTerminalBroadcastEnabled(tab, select);
-      } else {
-        setTerminalBroadcastTarget(tab, target.id, select);
-      }
-    }
+    // Group-wide: spans local tabs AND same-group terminals in other windows.
+    toggleTerminalGroupBroadcast(tab);
   }
 
   function toggleMcpEnv(): void {
@@ -1651,7 +1677,9 @@
           <span class="mbtn-label">
             {allBroadcastTargetsSelected ? "Deselect All" : "Select All"}
           </span>
-          <span class="mbtn-chord"></span>
+          <span class="mbtn-chord"
+            >{chordFor("app.terminal.broadcastToggle") ?? ""}</span
+          >
         </button>
         {#each broadcastTargets as target (target.id)}
           {@const isSelf = target.id === tab.id}
@@ -1684,6 +1712,35 @@
             </span>
           </label>
         {/each}
+        {#if crossWindowMembers.length > 0}
+          <!-- Same-group terminals in OTHER windows. Toggling one routes
+               through the server to its owning window, which flips its tab
+               (re-syncs the flag + lights its sign). Group-wide selection
+               spans windows; the checkbox reflects the member's own toggle
+               from the roster, updated reactively after the round-trip. -->
+          <div class="broadcast-other-windows-label">other windows</div>
+          {#each crossWindowMembers as member (member.id)}
+            <label class="target-row">
+              <span class="target-check">
+                <input
+                  type="checkbox"
+                  checked={member.broadcast}
+                  onchange={(e) =>
+                    void api.setTerminalSessionBroadcast(
+                      member.id,
+                      (e.currentTarget as HTMLInputElement).checked,
+                    )}
+                />
+                {#if member.broadcast}
+                  <Check size={13} strokeWidth={2} aria-hidden="true" />
+                {/if}
+              </span>
+              <span class="target-name">
+                {member.tab_name ?? "terminal"}
+              </span>
+            </label>
+          {/each}
+        {/if}
         <div class="msep" role="separator"></div>
         {#if sessionClosedReason}
           <button class="mbtn" onclick={() => void restart()}>
@@ -2182,6 +2239,13 @@
   }
   .target-row:hover {
     background: var(--hover-bg);
+  }
+  .broadcast-other-windows-label {
+    padding: 4px 8px 2px 34px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
   }
   .target-check {
     position: relative;
