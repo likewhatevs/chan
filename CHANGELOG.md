@@ -6,6 +6,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.30.0] - 2026-06-10
+
+### Changed
+
+- The Dashboard carousel now opens on Workspace first, then Search, then About
+  (previously About led).
+- The per-workspace config — your default workspace directory and the recent
+  workspaces list — moved off the Workspace dashboard slide and onto that
+  slot's settings. Flip the slide with Cmd+, to reach it, below chan-reports
+  and the metadata archive.
+- The workspace inspector's "Notes directories" section is now titled
+  "Workspaces".
+
+### Fixed
+
+- The chan-desktop menu bar no longer shows two "File" menus on macOS.
+- Cmd+W works again on the chan-desktop launcher (Workspaces) window, where it
+  closes the window; workspace and terminal windows still close the active tab.
+- New terminals reuse the lowest free number: open Terminal-1 and Terminal-2,
+  close Terminal-2, and the next terminal is Terminal-2 again instead of
+  Terminal-3.
+- Dragging a terminal to another window keeps its name when nothing clashes,
+  instead of always appending a "-N" suffix. A suffix is added only on a real
+  name conflict, and then the terminal shows the "$CHAN_TAB_NAME stays until
+  restart" notice so you can resync the env.
+
 ## [v0.29.0] - 2026-06-10
 
 ### Added
