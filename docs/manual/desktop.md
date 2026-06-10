@@ -30,12 +30,12 @@ The remote listens; the desktop connects to it over HTTP/2.
 
 1. On the remote machine, install chan and start a server:
 
-   ```sh
-   # On the remote host (e.g. a Linux VM):
-   curl -fsSL https://chan.app/install.sh | sh
-   git clone https://github.com/fiorix/chan
-   chan serve ./chan
-   ```
+```sh
+# On the remote host (e.g. a Linux VM):
+curl -fsSL https://chan.app/install.sh | sh
+git clone https://github.com/fiorix/chan
+chan serve ./chan
+```
 
    Copy the URL `chan serve` prints (it carries the per-launch bearer token).
 
