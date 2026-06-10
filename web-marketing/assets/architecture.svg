@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 560" role="img"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 320" role="img"
      aria-labelledby="arch-title arch-desc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
   <title id="arch-title">Chan running across three workspaces from one desktop app</title>
   <desc id="arch-desc">Chan Desktop on a Mac drives three windows: a local
@@ -27,7 +27,7 @@
   </defs>
 
   <!-- Laptop boundary -->
-  <rect class="group" x="20" y="20" width="560" height="520" rx="10" />
+  <rect class="group" x="20" y="20" width="640" height="280" rx="10" />
   <text class="grouptitle label" x="40" y="48">My Laptop (macOS)</text>
 
   <!-- chan-desktop group -->
@@ -46,41 +46,32 @@
   <text class="label" x="72" y="240">Window 3</text>
   <text class="sub" x="72" y="258">localhost:18787</text>
 
-  <!-- Local disk store -->
-  <rect class="store" x="40" y="312" width="270" height="56" rx="8" />
-  <text class="label" x="56" y="336">Local workspace on disk</text>
-  <text class="sub" x="56" y="354">iCloud / Google Drive / Dropbox</text>
+  <!-- Local disk store (right of Window 1) -->
+  <rect class="store" x="370" y="100" width="270" height="48" rx="8" />
+  <text class="label" x="386" y="120">Local workspace on disk</text>
+  <text class="sub" x="386" y="138">iCloud / Google Drive / Dropbox</text>
 
-  <!-- Lima VM group -->
-  <rect class="group" x="40" y="392" width="270" height="92" rx="8" />
-  <text class="grouptitle sub" x="56" y="416">Lima VM (Ubuntu)</text>
-  <rect class="serve" x="56" y="428" width="238" height="44" rx="6" />
-  <text class="sub" x="72" y="448">chan serve ./project</text>
-  <text class="sub" x="72" y="465">listening on :8787</text>
+  <!-- Lima VM serve (right of Window 2) -->
+  <rect class="serve" x="370" y="160" width="270" height="48" rx="8" />
+  <text class="label" x="386" y="180">Lima VM &#183; chan serve</text>
+  <text class="sub" x="386" y="198">listening on :8787</text>
 
-  <!-- SSH tunnel node -->
-  <rect class="net" x="370" y="220" width="190" height="60" rx="8" />
-  <text class="label" x="386" y="246">SSH tunnel</text>
-  <text class="sub" x="386" y="266">-L 18787:localhost:18787</text>
+  <!-- SSH tunnel node (right of Window 3) -->
+  <rect class="net" x="370" y="220" width="270" height="48" rx="8" />
+  <text class="label" x="386" y="240">SSH tunnel</text>
+  <text class="sub" x="386" y="258">-L 18787:localhost:18787</text>
 
   <!-- VPS boundary -->
-  <rect class="group" x="640" y="200" width="250" height="120" rx="10" />
-  <text class="grouptitle label" x="660" y="232">VPS (remote host)</text>
-  <rect class="serve" x="660" y="248" width="210" height="56" rx="6" />
-  <text class="sub" x="676" y="272">chan serve ./project</text>
-  <text class="sub" x="676" y="290">listening on :18787</text>
+  <rect class="group" x="720" y="180" width="250" height="120" rx="10" />
+  <text class="grouptitle label" x="740" y="208">VPS (remote host)</text>
+  <rect class="serve" x="740" y="220" width="210" height="48" rx="6" />
+  <text class="sub" x="756" y="240">chan serve ./project</text>
+  <text class="sub" x="756" y="258">listening on :18787</text>
 
-  <!-- Edges -->
-  <!-- Window 1 -> Local workspace on disk (off the left side, into the disk's left edge) -->
-  <path class="edge" marker-end="url(#arrow)" d="M56,124 C30,124 30,340 48,340" />
-  <!-- Window 2 -> Lima serve (down the left gutter, clear of the right-side lines) -->
-  <path class="edge" marker-end="url(#arrow)" d="M56,184 C22,184 22,450 64,450" />
-  <text class="edgelabel" x="320" y="446">localhost:8787</text>
-  <text class="edgelabel" x="320" y="462">(Lima host network)</text>
-  <!-- Window 3 -> SSH tunnel -->
-  <path class="edge" marker-end="url(#arrow)" d="M294,244 C330,244 340,250 370,250" />
-  <text class="edgelabel" x="300" y="210">localhost:18787</text>
-  <!-- tunnel -> VPS serve -->
-  <path class="edge" marker-end="url(#arrow)" d="M560,250 C600,250 615,265 660,272" />
-  <text class="edgelabel" x="566" y="240">ssh -L</text>
+  <!-- Edges: each window points right to the workspace it drives -->
+  <path class="edge" marker-end="url(#arrow)" d="M294,124 L370,124" />
+  <path class="edge" marker-end="url(#arrow)" d="M294,184 L370,184" />
+  <path class="edge" marker-end="url(#arrow)" d="M294,244 L370,244" />
+  <path class="edge" marker-end="url(#arrow)" d="M640,244 L740,244" />
+  <text class="edgelabel" x="672" y="236">ssh -L</text>
 </svg>
