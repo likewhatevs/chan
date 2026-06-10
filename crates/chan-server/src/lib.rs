@@ -71,9 +71,10 @@ use routes::{
     api_reports_disable, api_reports_enable, api_reports_state, api_resolve_link,
     api_restart_terminal, api_screensaver_clear_pin, api_screensaver_patch,
     api_screensaver_set_pin, api_screensaver_state, api_screensaver_verify, api_search_content,
-    api_search_files, api_storage_reset, api_survey_reply, api_team_config_read,
-    api_team_config_write, api_terminal_next_name, api_terminal_ws, api_upload_file,
-    api_window_reply, api_workspace_bootstrap, api_write_file, ws_upgrade,
+    api_search_files, api_set_terminal_broadcast, api_storage_reset, api_survey_reply,
+    api_team_config_read, api_team_config_write, api_terminal_next_name, api_terminal_ws,
+    api_terminals_roster, api_upload_file, api_window_reply, api_workspace_bootstrap,
+    api_write_file, spawn_roster_broadcaster, ws_upgrade,
 };
 #[cfg(feature = "embeddings")]
 use routes::{
@@ -283,6 +284,10 @@ struct AppArtifacts {
     /// The `cs terminal write` queue drainer (see terminal_sessions). Held
     /// alongside the pruner so dropping AppArtifacts aborts it too.
     _terminal_drainer: tokio::task::JoinHandle<()>,
+    /// Republishes the cross-window terminal roster onto `/ws` on every
+    /// change. Held alongside the pruner/drainer so dropping AppArtifacts
+    /// aborts it too.
+    _terminal_roster_broadcaster: tokio::task::JoinHandle<()>,
     /// Mutable handle to the URL prefix injected into the SPA shell
     /// as `<meta name="chan-prefix">`. Local serve sets it once at
     /// build time from `ServeConfig::prefix`; tunnel mode swaps in
@@ -615,6 +620,12 @@ async fn build_app(
     // Drain the per-session `cs terminal write` queues (deliver each next
     // poke when its agent goes idle). Sibling of the pruner.
     let terminal_drainer = terminal_sessions.clone().spawn_drainer(shutdown_rx.clone());
+    // Push cross-window roster snapshots onto `/ws` on every change.
+    let terminal_roster_broadcaster = spawn_roster_broadcaster(
+        terminal_sessions.clone(),
+        events_tx.clone(),
+        shutdown_rx.clone(),
+    );
 
     let state = Arc::new(AppState {
         library,
@@ -655,6 +666,7 @@ async fn build_app(
         workspace_cell: state_for_bridge.clone(),
         _terminal_pruner: terminal_pruner,
         _terminal_drainer: terminal_drainer,
+        _terminal_roster_broadcaster: terminal_roster_broadcaster,
         prefix,
         mcp_bridge,
         control_socket,
@@ -732,6 +744,11 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
     }));
     let terminal_pruner = terminal_sessions.clone().spawn_pruner(shutdown_rx.clone());
     let terminal_drainer = terminal_sessions.clone().spawn_drainer(shutdown_rx.clone());
+    let terminal_roster_broadcaster = spawn_roster_broadcaster(
+        terminal_sessions.clone(),
+        events_tx.clone(),
+        shutdown_rx.clone(),
+    );
 
     // Workspace-less cell: handlers reaching `state.workspace()` would
     // panic, which is why the slim router mounts no workspace-content
@@ -782,6 +799,7 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
         workspace_cell,
         _terminal_pruner: terminal_pruner,
         _terminal_drainer: terminal_drainer,
+        _terminal_roster_broadcaster: terminal_roster_broadcaster,
         prefix,
         // No workspace to bridge, no local CLI helpers to serve.
         mcp_bridge: None,
@@ -803,15 +821,22 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
 fn terminal_router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/api/terminal/ws", get(api_terminal_ws))
-        // Global Terminal-N name sequence shared across all terminal windows
-        // (they share this one tenant). Only the slim terminal router mounts
-        // it; workspace windows name terminals per-workspace locally.
+        // Per-tenant Terminal-N name sequence: standalone terminal windows
+        // share this one tenant -> one global sequence. The full router
+        // mounts the same route for per-workspace sequences.
         .route("/api/terminal/next-name", get(api_terminal_next_name))
+        // Cross-window roster seed; live updates ride the `/ws` bus.
+        .route("/api/terminals/roster", get(api_terminals_roster))
         .route("/api/terminals", post(api_create_terminal))
         .route("/api/terminals/:session", delete(api_delete_terminal))
         .route(
             "/api/terminals/:session/restart",
             post(api_restart_terminal),
+        )
+        // Cross-window broadcast toggle (Select All / per-row, other windows).
+        .route(
+            "/api/terminals/:session/broadcast",
+            post(api_set_terminal_broadcast),
         )
         .route("/api/build-info", get(api_build_info))
         .route("/api/health", get(api_health))
@@ -1344,11 +1369,20 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/health", get(api_health))
         .route("/api/terminal/ws", get(api_terminal_ws))
+        // Per-workspace Terminal-N sequence + cross-window roster seed.
+        // Same handlers as the slim terminal router; the per-tenant registry
+        // gives each workspace its own name sequence and roster.
+        .route("/api/terminal/next-name", get(api_terminal_next_name))
+        .route("/api/terminals/roster", get(api_terminals_roster))
         .route("/api/terminals", post(api_create_terminal))
         .route("/api/terminals/:session", delete(api_delete_terminal))
         .route(
             "/api/terminals/:session/restart",
             post(api_restart_terminal),
+        )
+        .route(
+            "/api/terminals/:session/broadcast",
+            post(api_set_terminal_broadcast),
         )
         .route("/ws", get(ws_upgrade))
         // `fullstack-b-12`: bundled font assets (Source Code Pro

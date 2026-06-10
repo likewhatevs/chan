@@ -121,6 +121,12 @@ enum ClientFrame {
     Cwd,
     #[serde(rename = "focus")]
     Focus { focused: bool },
+    /// Sync this session's broadcast toggle to the server. The SPA sends
+    /// it on toggle and on (re)connect, so the server can (1) gate the
+    /// cross-window input fan on the receiver's own toggle and (2) surface
+    /// the state in the cross-window roster other windows read.
+    #[serde(rename = "set-broadcast")]
+    SetBroadcast { on: bool },
     #[serde(rename = "close")]
     Close,
     /// Rich Prompt bubble submit (@@LaneB). Unlike `Input` (raw keystrokes
@@ -385,6 +391,63 @@ pub async fn api_delete_terminal(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SetBroadcastBody {
+    on: bool,
+}
+
+/// `POST /api/terminals/:session/broadcast`: set a terminal's broadcast
+/// toggle from ANOTHER window. The broadcast state is owned by the SPA window
+/// hosting the session (its tab drives the `set-broadcast` WS frame), so this
+/// does not flip the flag directly; it routes a `terminal_broadcast`
+/// window-command back to the OWNING window over `/ws`, and that window flips
+/// its tab (which re-syncs the flag + lights the sign). Lets the broadcast
+/// menu's Select All / per-row toggles act on same-group terminals in other
+/// windows, not just the local layout. 404 when no live session matches or it
+/// has no owning window (not remote-controllable).
+pub async fn api_set_terminal_broadcast(
+    State(state): State<Arc<AppState>>,
+    AxumPath(session): AxumPath<String>,
+    body: Result<Json<SetBroadcastBody>, JsonRejection>,
+) -> Response {
+    if state.tunnel_public {
+        return err_tunnel_public_locked();
+    }
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("invalid broadcast toggle: {e}"),
+            )
+                .into_response()
+        }
+    };
+    let window_id = match state.terminal_sessions.session_window_id(&session) {
+        Some(Some(window_id)) => window_id,
+        Some(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                "terminal session has no owning window",
+            )
+                .into_response()
+        }
+        None => return (StatusCode::NOT_FOUND, "terminal session not found").into_response(),
+    };
+    // Same envelope as control_socket's window commands: `{type, window_id,
+    // command, ...}`. Built inline (the WindowCommand enum is private to
+    // control_socket) to keep this route decoupled from that module.
+    let frame = serde_json::json!({
+        "type": "window_command",
+        "window_id": window_id,
+        "command": "terminal_broadcast",
+        "session_id": session,
+        "on": body.on,
+    });
+    let _ = state.events_tx.send(frame.to_string());
+    StatusCode::NO_CONTENT.into_response()
+}
+
 struct TerminalWsOptions {
     session_id: Option<String>,
     since: Option<u64>,
@@ -575,6 +638,14 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 session.set_focused(focused);
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
+                            Ok(ClientFrame::SetBroadcast { on }) => {
+                                session.set_broadcast(on);
+                                // The toggle is a session-field change the
+                                // registry map does not see, so nudge the
+                                // roster broadcaster explicitly.
+                                state.terminal_sessions.notify_roster_change();
+                                state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                            }
                             Ok(ClientFrame::Close) => {
                                 let id = session.id().to_owned();
                                 state.terminal_sessions.close(&id, CloseReason::Explicit);
@@ -744,20 +815,78 @@ fn resolve_terminal_cwd(
         .map_err(|e| format!("invalid terminal cwd: {e}"))
 }
 
-/// Process-global monotonic terminal ordinal for the shared standalone-
-/// terminal namespace. Every standalone terminal window hits the one shared
-/// `/terminal` tenant, so a single counter here yields a global Terminal-N
-/// sequence (a per-window count would restart at 1 in each new window).
-/// Resets per server process, matching iTerm's per-session numbering.
-static TERMINAL_NAME_ORDINAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// `GET /api/terminal/next-name`: hand out the next per-tenant default
+/// terminal name (`Terminal-1`, `Terminal-2`, ...). The counter lives on the
+/// per-tenant terminal registry, so it does the right thing in BOTH modes:
+/// every standalone terminal window shares one registry -> one global
+/// sequence; each workspace has its own registry -> a per-workspace sequence
+/// (a process-global static restarted at 1 for a second workspace window).
+/// The SPA calls this for default terminal names in both modes. Plain-text
+/// body.
+pub async fn api_terminal_next_name(State(state): State<Arc<AppState>>) -> Response {
+    state.terminal_sessions.next_terminal_name().into_response()
+}
 
-/// `GET /api/terminal/next-name`: hand out the next global default terminal
-/// name (`Terminal-1`, `Terminal-2`, ...). The standalone-terminal SPA calls
-/// this when opening a terminal so numbering stays consistent across all
-/// terminal windows. Plain-text body.
-pub async fn api_terminal_next_name() -> Response {
-    let n = TERMINAL_NAME_ORDINAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    format!("Terminal-{n}").into_response()
+#[derive(Debug, Serialize)]
+struct RosterResponse {
+    sessions: Vec<crate::terminal_sessions::RosterEntry>,
+}
+
+/// `GET /api/terminals/roster`: a one-shot snapshot of every live session in
+/// this tenant, for the SPA to seed its cross-window roster on `/ws`
+/// (re)connect. Live updates then arrive as `terminal_roster` frames over
+/// `/ws` (see [`spawn_roster_broadcaster`]); the endpoint closes the
+/// reconnect gap where a window misses the last push.
+pub async fn api_terminals_roster(State(state): State<Arc<AppState>>) -> Response {
+    if state.tunnel_public {
+        return err_tunnel_public_locked();
+    }
+    Json(RosterResponse {
+        sessions: state.terminal_sessions.roster(),
+    })
+    .into_response()
+}
+
+/// The `terminal_roster` `/ws` envelope: a full roster snapshot the SPA
+/// applies wholesale (idempotent, no delta reconciliation). Same `sessions`
+/// shape as [`RosterResponse`] so one client handler serves both the seed
+/// and the live push.
+#[derive(Debug, Serialize)]
+struct RosterFrame<'a> {
+    #[serde(rename = "type")]
+    frame_type: &'static str,
+    sessions: &'a [crate::terminal_sessions::RosterEntry],
+}
+
+/// Republish the terminal roster onto the global `/ws` bus whenever it
+/// changes. Awaits the registry's roster-change `Notify` (coalescing bursts
+/// into one push) and sends a `terminal_roster` snapshot to every connected
+/// window. A sibling of the registry's pruner/drainer tasks: own task,
+/// shuts down on the same signal. A send error means no `/ws` client is
+/// connected; the next connect re-seeds via `GET /api/terminals/roster`.
+pub fn spawn_roster_broadcaster(
+    registry: Arc<crate::terminal_sessions::Registry>,
+    events_tx: tokio::sync::broadcast::Sender<String>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
+    let notify = registry.roster_notify();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => break,
+                _ = notify.notified() => {
+                    let sessions = registry.roster();
+                    let frame = RosterFrame {
+                        frame_type: "terminal_roster",
+                        sessions: &sessions,
+                    };
+                    if let Ok(raw) = serde_json::to_string(&frame) {
+                        let _ = events_tx.send(raw);
+                    }
+                }
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -912,6 +1041,80 @@ mod tests {
             }
             other => panic!("expected Prompt, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn client_frame_set_broadcast_decodes() {
+        // The phase-21 toggle-sync contract: { type: "set-broadcast", on }.
+        // A Rust rename of the tag / field would break the SPA's wire at
+        // runtime with a green build, so pin the decode.
+        let on: ClientFrame =
+            serde_json::from_str(r#"{"type":"set-broadcast","on":true}"#).unwrap();
+        match on {
+            ClientFrame::SetBroadcast { on } => assert!(on),
+            other => panic!("expected SetBroadcast, got {other:?}"),
+        }
+        let off: ClientFrame =
+            serde_json::from_str(r#"{"type":"set-broadcast","on":false}"#).unwrap();
+        match off {
+            ClientFrame::SetBroadcast { on } => assert!(!on),
+            other => panic!("expected SetBroadcast, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_terminal_broadcast_emits_window_command_to_owning_window() {
+        // The cross-window toggle routes a `terminal_broadcast` window-command
+        // to the session's owning window over the `/ws` bus. Pin the wire
+        // shape the SPA's handleWindowCommand decodes.
+        let state = crate::state::test_support::make_test_state(false, false);
+        let handle = state
+            .terminal_sessions
+            .create(CreateOptions {
+                size: pty_size(None, None),
+                tab_name: Some("Term".into()),
+                tab_group: None,
+                window_id: Some("win-7".into()),
+                mcp_env: false,
+                cwd: None,
+                command: Some("sleep 5".into()),
+                env: Default::default(),
+            })
+            .expect("spawn");
+        let session = handle.id().to_string();
+        let mut rx = state.events_tx.subscribe();
+
+        let resp = api_set_terminal_broadcast(
+            State(state.clone()),
+            AxumPath(session.clone()),
+            Ok(Json(SetBroadcastBody { on: true })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+        let raw = rx.try_recv().expect("window_command frame emitted");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["type"], "window_command");
+        assert_eq!(v["window_id"], "win-7");
+        assert_eq!(v["command"], "terminal_broadcast");
+        assert_eq!(v["session_id"], session);
+        assert_eq!(v["on"], true);
+
+        state
+            .terminal_sessions
+            .close(&session, CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn set_terminal_broadcast_404_for_missing_session() {
+        let state = crate::state::test_support::make_test_state(false, false);
+        let resp = api_set_terminal_broadcast(
+            State(state),
+            AxumPath("nope".into()),
+            Ok(Json(SetBroadcastBody { on: true })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

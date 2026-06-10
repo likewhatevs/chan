@@ -175,6 +175,20 @@ export type TerminalSpawnResponse = {
   tab_label: string;
 };
 
+/// One live terminal session in the cross-window roster (the server's
+/// `RosterEntry`). The SPA reads these to render broadcast targets +
+/// indicators for terminals in OTHER windows of the same tenant, which its
+/// local layout cannot see. Seeded via `api.terminalRoster()` and refreshed
+/// by `terminal_roster` frames over `/ws`. `tab_group` is always resolved
+/// (never empty; "default" when unset) to match `terminalTabGroup`.
+export type TerminalRosterEntry = {
+  id: string;
+  tab_name: string | null;
+  tab_group: string;
+  window_id: string | null;
+  broadcast: boolean;
+};
+
 export type TerminalRestartRequest = {
   name?: string;
   /// Broadcast group for the respawned shell. Sets `$CHAN_TAB_GROUP`

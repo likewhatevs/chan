@@ -86,6 +86,7 @@
     tabLabel,
     tabLabelInPane,
     tabTooltip,
+    terminalBroadcastReachCount,
   } from "../state/tabs.svelte";
   import type { BrowserLabelCtx } from "../state/tabs.svelte";
   import {
@@ -1157,10 +1158,11 @@
             <Terminal size={14} strokeWidth={1.75} />
           </span>
           {#if t.broadcastEnabled}
+            {@const reach = terminalBroadcastReachCount(t)}
             <span
               class="broadcast-marker"
-              title={`Broadcasting to ${t.broadcastTargetIds.length} tab(s)`}
-              aria-label={`Broadcasting to ${t.broadcastTargetIds.length} tab(s)`}
+              title={`Broadcasting to ${reach} tab(s)`}
+              aria-label={`Broadcasting to ${reach} tab(s)`}
             >
               <Radio size={13} strokeWidth={1.9} aria-hidden="true" />
             </span>

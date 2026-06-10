@@ -8,6 +8,7 @@ import type {
   HybridSurfaceThemes,
   IndexStatus,
   SurfaceThemeChoice,
+  TerminalRosterEntry,
   TreeEntry,
 } from "../api/types";
 import {
@@ -59,10 +60,12 @@ import { setNotifyHandler } from "./notify.svelte";
 import { defaultScopeId } from "./scope.svelte";
 import {
   allTerminalTabs,
+  applyTerminalRoster,
   clearTabError,
   flagExternalChange,
   refreshTabFromDisk,
   rekeyTabsForRename,
+  setTerminalBroadcastBySession,
   tabsForPath,
 } from "./tabs.svelte";
 import { graphData, invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
@@ -631,6 +634,15 @@ export function onWatchEvent(e: unknown): void {
     );
     return;
   }
+  if (frameType === "terminal_roster") {
+    // Cross-window terminal roster snapshot (phase-21). Full snapshot, so
+    // apply wholesale; feeds the broadcast menu + indicator for terminals
+    // in other windows of this tenant.
+    applyTerminalRoster(
+      (e as { sessions?: TerminalRosterEntry[] } | null)?.sessions ?? [],
+    );
+    return;
+  }
   const kind = (e as { kind?: string } | null)?.kind;
   if (kind === "config_changed") {
     // A sibling window flipped a setting (theme, fonts,
@@ -784,6 +796,13 @@ type WindowCommandFrame =
       command: "team_spawned";
       group: string;
       members: { tab_name: string; session_id: string }[];
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "terminal_broadcast";
+      session_id: string;
+      on: boolean;
     };
 
 /// A tab's display title for `cs pane`: a file tab's basename, else its
@@ -1119,6 +1138,17 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     surfaceTeamSpawn(typeof frame.group === "string" ? frame.group : "", frame.members);
     return;
   }
+  if (
+    frame.command === "terminal_broadcast" &&
+    typeof frame.session_id === "string" &&
+    typeof frame.on === "boolean"
+  ) {
+    // Another window's broadcast menu toggled one of THIS window's terminals
+    // (group-wide Select All / per-row). Flip the local tab so the existing
+    // `set-broadcast` sync + sign + fan all run unchanged.
+    setTerminalBroadcastBySession(frame.session_id, frame.on);
+    return;
+  }
 }
 
 /// S1: surface a CLI-spawned team. The server already started each PTY; open
@@ -1159,6 +1189,21 @@ function onWatchStatus(status: WsStatus): void {
 /// import between store and fbWatch is benign.
 function onWatchReady(): void {
   fbWatchResyncAll();
+  // Seed the cross-window terminal roster on every (re)connect. Live updates
+  // ride `terminal_roster` `/ws` frames; this closes the window where a
+  // reconnecting client would miss the last push until the next change.
+  void seedTerminalRoster();
+}
+
+/// Fetch the current roster snapshot and apply it. Best-effort: a missing
+/// route (older server) or transient error leaves broadcast targets as
+/// local-only until the next push.
+async function seedTerminalRoster(): Promise<void> {
+  try {
+    applyTerminalRoster(await api.terminalRoster());
+  } catch {
+    // Local-only broadcast targets until the next `terminal_roster` push.
+  }
 }
 
 /// Tear down the existing watch subscription and start a new one.

@@ -11,9 +11,9 @@
 // Drag-rearrange of tabs is deferred; for v1 the menu offers explicit
 // actions instead.
 
-import { api } from "../api/client";
+import { api, sessionWindowId } from "../api/client";
 import { ApiError } from "../api/errors";
-import type { DraftPromoteResponse } from "../api/types";
+import type { DraftPromoteResponse, TerminalRosterEntry } from "../api/types";
 import type { FindRange } from "../editor/find";
 import { stripTrailingWhitespaceText } from "../editor/tools";
 import { uiConfirm } from "./confirm.svelte";
@@ -284,6 +284,14 @@ export type TerminalTab = {
   terminalActivityPulsing?: boolean;
   cwd?: string;
   seedInput?: string;
+  /// Transient: this freshly-spawned terminal still needs its per-tenant
+  /// `Terminal-N` default name resolved from the server. The spawn helpers
+  /// set it with a local placeholder; `TerminalTab.connect()` resolves the
+  /// real name BEFORE opening the WS (so the session spawns with its final
+  /// name and the cross-window roster / `cs term list` show it, not the
+  /// placeholder), then clears the flag. Never persisted: a restored tab
+  /// keeps its saved title and skips the fetch.
+  pendingGlobalName?: boolean;
   /// Rich Prompt per-terminal draft path (`<draftsDir>/<name>/draft.md`) backing
   /// the bubble: the draft.md IS the prompt text and the folder holds pasted
   /// media. Created lazily on first open; discarded on terminal close.
@@ -705,6 +713,12 @@ function nextTerminalTitle(state: LayoutState = layout): string {
 /// --tab-name` targets BY NAME, so a duplicate would double-deliver / ambiguously
 /// route the poke+queue, breaking the serialized-input model. `excludeTabId`
 /// skips the tab being renamed so it never collides with itself.
+///
+/// Uniqueness is TENANT-WIDE, not per-window: a rename in one window must avoid
+/// names already taken by terminals in OTHER windows (read from the
+/// cross-window roster), and across groups (a name unique only within a group
+/// would collide the moment a terminal is moved between groups). Comparison is
+/// case-sensitive, matching the server's by-name targeting.
 export function uniqueTerminalName(desired: string, excludeTabId?: string): string {
   const base = desired.trim() || "Terminal";
   const taken = new Set(
@@ -712,6 +726,19 @@ export function uniqueTerminalName(desired: string, excludeTabId?: string): stri
       .filter((t) => t.id !== excludeTabId)
       .map((t) => terminalTabName(t)),
   );
+  // Fold in terminals from OTHER windows. Skip this window's own entries (the
+  // local layout above is authoritative for them, and its names can be ahead
+  // of the roster on a not-yet-restarted rename) and this tab's own session
+  // (so a no-op rename can keep its current name).
+  const myWindow = sessionWindowId();
+  const ownSession = excludeTabId
+    ? terminalTabsIn(layout).find((t) => t.id === excludeTabId)?.terminalSessionId
+    : undefined;
+  for (const entry of terminalRoster) {
+    if (entry.window_id === myWindow) continue;
+    if (ownSession && entry.id === ownSession) continue;
+    if (entry.tab_name) taken.add(entry.tab_name);
+  }
   if (!taken.has(base)) return base;
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;
@@ -719,20 +746,21 @@ export function uniqueTerminalName(desired: string, excludeTabId?: string): stri
   }
 }
 
-/// Apply the GLOBAL `Terminal-N` default name to a freshly-spawned terminal
-/// in terminal-only mode. The spawn helpers are synchronous and create the
-/// tab with the local `nextTerminalTitle()` placeholder; this fetches the
-/// process-global ordinal from the shared `/terminal` tenant and replaces the
-/// placeholder so numbering is consistent across every terminal window (a
-/// per-window count restarts at 1 in each new window). The server counter is
-/// atomic, so two quick Cmd+T presses each resolve a DISTINCT name against a
-/// DISTINCT tab object - no collision. `uniqueTerminalName` is a defensive
-/// dedup against the still-present local placeholder; `excludeTabId` skips the
-/// target tab so it never collides with its own placeholder. A failed fetch
-/// (offline, slim tenant without the route) leaves the local placeholder in
-/// place rather than throwing. Workspace mode keeps `nextTerminalTitle` /
-/// `uniqueTerminalName` as-is and never calls this.
-async function applyGlobalTerminalName(tab: TerminalTab): Promise<void> {
+/// Apply the per-tenant `Terminal-N` default name to a freshly-spawned
+/// terminal, in BOTH terminal-only and workspace modes. The spawn helpers are
+/// synchronous and create the tab with the local `nextTerminalTitle()`
+/// placeholder; this fetches the next ordinal from the server and replaces the
+/// placeholder so numbering is consistent across every window of the tenant (a
+/// per-window count restarts at 1 in each new window). The counter is
+/// per-tenant: standalone terminal windows share one tenant -> one global
+/// sequence; each workspace has its own tenant -> a per-workspace sequence
+/// shared by that workspace's windows. The server counter is atomic, so two
+/// quick Cmd+T presses each resolve a DISTINCT name against a DISTINCT tab
+/// object - no collision. `uniqueTerminalName` is a defensive dedup against
+/// the still-present local placeholder; `excludeTabId` skips the target tab so
+/// it never collides with its own placeholder. A failed fetch (offline) leaves
+/// the local placeholder in place rather than throwing.
+export async function applyGlobalTerminalName(tab: TerminalTab): Promise<void> {
   try {
     const name = (await api.terminalNextName()).trim();
     if (!name) return;
@@ -1036,30 +1064,53 @@ export function activeTerminalTab(): TerminalTab | null {
 }
 
 /// Toggle broadcast SELECT-ALL / DESELECT-ALL for the active terminal.
-/// Chord-driven equivalent of the per-tab "Select All" / "Deselect All"
-/// button. Walks every terminal tab including self (self via
-/// broadcastEnabled, others via broadcast targets) so the bulk action
-/// matches the per-row UI. No-op when the active tab isn't a terminal.
+/// Chord-driven (Cmd+Shift+I) equivalent of the per-tab "Select All" /
+/// "Deselect All" button. No-op when the active tab isn't a terminal.
 export function toggleActiveTerminalBroadcastSelectAll(): void {
   const tab = activeTerminalTab();
-  if (!tab) return;
+  if (tab) toggleTerminalGroupBroadcast(tab);
+}
+
+/// Select-all / deselect-all for a terminal's whole broadcast GROUP, spanning
+/// every window of the tenant (not just the local layout). Local same-group
+/// tabs flip directly (self via broadcastEnabled, others via targets);
+/// same-group terminals in OTHER windows flip via the server, which routes a
+/// `terminal_broadcast` command to their owning window. "All on" is computed
+/// across both so one click consistently fills or clears the group. Backs the
+/// menu button and the Cmd+Shift+I chord.
+export function toggleTerminalGroupBroadcast(tab: TerminalTab): void {
   const group = terminalTabGroup(tab);
-  const targets = allTerminalTabs().filter(
+  const localTargets = allTerminalTabs().filter(
     (t) => terminalTabGroup(t) === group,
   );
-  if (targets.length === 0) return;
+  const crossMembers = crossWindowBroadcastMembers(tab);
+  if (localTargets.length === 0 && crossMembers.length === 0) return;
   const selected = new Set(terminalBroadcastMemberIds(tab));
-  const allSelected = targets.every((t) =>
+  const localAllOn = localTargets.every((t) =>
     t.id === tab.id ? tab.broadcastEnabled : selected.has(t.id),
   );
-  const select = !allSelected;
-  for (const target of targets) {
+  const crossAllOn = crossMembers.every((m) => m.broadcast);
+  const select = !(localAllOn && crossAllOn);
+  for (const target of localTargets) {
     if (target.id === tab.id) {
       setTerminalBroadcastEnabled(tab, select);
     } else {
       setTerminalBroadcastTarget(tab, target.id, select);
     }
   }
+  for (const member of crossMembers) {
+    void api.setTerminalSessionBroadcast(member.id, select);
+  }
+}
+
+/// Set a local terminal's broadcast toggle by its live session id. The seam
+/// for the `terminal_broadcast` window-command: another window's Select All /
+/// per-row toggle reaches the owning window here, which flips the matching
+/// tab so the normal `set-broadcast` sync + sign + fan run unchanged. No-op
+/// when no local tab hosts that session.
+export function setTerminalBroadcastBySession(sessionId: string, on: boolean): void {
+  const tab = allTerminalTabs().find((t) => t.terminalSessionId === sessionId);
+  if (tab) setTerminalBroadcastEnabled(tab, on);
 }
 
 /// Team Work lead-terminal factory. Spawns a fresh (normal) terminal in the
@@ -1118,13 +1169,14 @@ export function openTerminalInPane(
   p.tabs.push(tab);
   p.activeTabId = tab.id;
   layout.activePaneId = p.id;
-  // Terminal-only windows number from a GLOBAL counter so Terminal-N stays
-  // consistent across every terminal window. Only an UNNAMED spawn (no
-  // explicit title - e.g. `cs terminal new --tab-name` passes one) takes the
-  // global name; the fetch is async so the tab already exists with its local
-  // placeholder and the name is patched in when the response lands.
-  if (isTerminalWindow() && !title) {
-    void applyGlobalTerminalName(tab);
+  // Number from the per-tenant counter so Terminal-N stays consistent across
+  // every window of the tenant (all terminal windows, or all windows of one
+  // workspace). Only an UNNAMED spawn (no explicit title - e.g. `cs terminal
+  // new --tab-name` passes one) takes the server name. Flagged here; the name
+  // is resolved in `connect()` BEFORE the WS opens, so the session spawns
+  // with its final name (the placeholder never reaches the server).
+  if (!title) {
+    tab.pendingGlobalName = true;
   }
   return tab;
 }
@@ -1435,6 +1487,46 @@ function applyTerminalBroadcastMembers(members: Set<string>): void {
     tab.broadcastEnabled = true;
     tab.broadcastTargetIds = [...next].filter((id) => id !== tab.id);
   }
+}
+
+// --- Cross-window terminal roster (phase-21) ---
+// `allTerminalTabs()` is this window's local layout only. The roster carries
+// every live session across ALL windows of the tenant (all standalone
+// terminal windows, or all windows of one workspace), so a window can see
+// same-group terminals it does not host. Seeded from `api.terminalRoster()`
+// on `/ws` (re)connect and refreshed by `terminal_roster` `/ws` frames.
+let terminalRoster = $state<TerminalRosterEntry[]>([]);
+
+/// Replace the roster wholesale (the server pushes full snapshots, so there
+/// is no delta to reconcile). Called by the `/ws` `terminal_roster` handler
+/// and the reconnect seed.
+export function applyTerminalRoster(entries: TerminalRosterEntry[]): void {
+  terminalRoster = entries;
+}
+
+/// Same-group sessions in OTHER windows of this tenant. The broadcast menu
+/// lists these read-only (cross-window broadcast is group-level by nature -
+/// visible but not individually selectable) and the indicator counts the
+/// ones that have opted in. Sessions with no `window_id` are skipped: they
+/// cannot be attributed to a window, and this window's own sessions are
+/// excluded (already shown as local tabs).
+export function crossWindowBroadcastMembers(tab: TerminalTab): TerminalRosterEntry[] {
+  const group = terminalTabGroup(tab);
+  const myWindow = sessionWindowId();
+  return terminalRoster.filter(
+    (e) => e.tab_group === group && e.window_id != null && e.window_id !== myWindow,
+  );
+}
+
+/// How many OTHER terminals this terminal's broadcast input reaches: local
+/// same-window targets plus same-group cross-window members that have opted
+/// in (broadcast on). Mirrors the server's cross-window fan gate, which only
+/// delivers to members with their own broadcast toggle on. Drives the
+/// broadcast indicator's count.
+export function terminalBroadcastReachCount(tab: TerminalTab): number {
+  const local = tab.broadcastTargetIds.length;
+  const cross = crossWindowBroadcastMembers(tab).filter((e) => e.broadcast).length;
+  return local + cross;
 }
 
 export function terminalMcpEnvEnabled(tab: TerminalTab): boolean {
@@ -2381,6 +2473,7 @@ function cloneTab(src: Tab): Tab {
       lastAgentEchoSeq: src.lastAgentEchoSeq,
       cwd: src.cwd,
       seedInput: src.seedInput,
+      pendingGlobalName: src.pendingGlobalName,
     };
   }
   if (src.kind === "graph") {
@@ -2828,15 +2921,10 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
   };
   p.tabs.push(tab);
   p.activeTabId = tab.id;
-  // Terminal-only windows number from the GLOBAL counter (see
-  // applyGlobalTerminalName). The tab lives in the pane-mode DRAFT here; its
-  // id survives the commit-time clone, and the async fetch resolves after the
-  // commit, so the guard inside the helper (skip if the id is no longer live)
-  // also correctly no-ops on an Esc rollback. A pane-mode spawn never carries
-  // an explicit title, so every terminal-only split-spawn is global-numbered.
-  if (isTerminalWindow()) {
-    void applyGlobalTerminalName(tab);
-  }
+  // Number from the per-tenant counter (see applyGlobalTerminalName). A
+  // pane-mode spawn never carries an explicit title, so every split-spawn is
+  // server-numbered; the name resolves in `connect()` before the WS opens.
+  tab.pendingGlobalName = true;
 }
 
 /// Cmd+K mode `2`. Spawn a fresh File Browser tab inside the draft's

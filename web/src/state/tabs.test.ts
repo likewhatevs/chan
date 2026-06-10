@@ -7,6 +7,7 @@ import { pathPromptState, resolvePathPrompt } from "./store.svelte";
 import { editorToolsPrefs } from "./editorTools.svelte";
 import {
   activePane,
+  applyTerminalRoster,
   beginMissingFileReopen,
   broadcastTerminalInput,
   canReopenClosedTab,
@@ -70,6 +71,7 @@ import {
   setActivePane,
   setTerminalActivity,
   setTerminalActivityPulsing,
+  setTerminalBroadcastBySession,
   setTerminalBroadcastEnabled,
   setTerminalBroadcastTarget,
   setWindowFocusColor,
@@ -1286,6 +1288,23 @@ describe("pane state", () => {
     expect(uniqueTerminalName("agent")).toBe("agent-3");
     // excludeTabId lets a tab keep its own name (rename to the same value).
     expect(uniqueTerminalName("agent", "a")).toBe("agent");
+  });
+
+  test("uniqueTerminalName dedups against terminals in OTHER windows", () => {
+    resetLayout([terminalTab({ id: "local", title: "build" })]);
+    // Two terminals live in another window (per the cross-window roster):
+    // "Terminal-2" (group A) and "Terminal-1" (group B). A rename here must
+    // avoid them tenant-wide, across groups (the bug: renaming to a name only
+    // taken in another window used to collide).
+    applyTerminalRoster([
+      { id: "sess-x", tab_name: "Terminal-2", tab_group: "A", window_id: "other-win", broadcast: false },
+      { id: "sess-y", tab_name: "Terminal-1", tab_group: "B", window_id: "other-win", broadcast: false },
+    ]);
+    expect(uniqueTerminalName("Terminal-2")).toBe("Terminal-2-2");
+    expect(uniqueTerminalName("Terminal-1")).toBe("Terminal-1-2");
+    // A name free tenant-wide passes through.
+    expect(uniqueTerminalName("Terminal-9")).toBe("Terminal-9");
+    applyTerminalRoster([]);
   });
 
   test("renameTerminalTab enforces a unique name (auto -N, never rejects)", () => {
@@ -2689,6 +2708,50 @@ describe("terminal broadcast groups", () => {
       "term-a",
       "term-b",
     ]);
+  });
+
+  test("select-all spans windows: same-group cross-window members toggle via the server", () => {
+    const a = terminalTab({ id: "term-a", title: "A", terminalSessionId: "sess-a" });
+    resetLayout([a]);
+    // A same-group terminal in ANOTHER window (roster only, not local layout).
+    applyTerminalRoster([
+      { id: "sess-x", tab_name: "X", tab_group: "default", window_id: "other-win", broadcast: false },
+    ]);
+    const spy = vi
+      .spyOn(api, "setTerminalSessionBroadcast")
+      .mockResolvedValue(undefined);
+
+    // Nothing on -> Select All turns on self AND the cross-window member.
+    toggleActiveTerminalBroadcastSelectAll();
+    expect((activePane().tabs[0] as TerminalTab).broadcastEnabled).toBe(true);
+    expect(spy).toHaveBeenCalledWith("sess-x", true);
+
+    // Simulate the cross member now on (the round-trip), then Deselect All
+    // turns the whole group off, including the cross-window member.
+    applyTerminalRoster([
+      { id: "sess-x", tab_name: "X", tab_group: "default", window_id: "other-win", broadcast: true },
+    ]);
+    spy.mockClear();
+    toggleActiveTerminalBroadcastSelectAll();
+    expect((activePane().tabs[0] as TerminalTab).broadcastEnabled).toBe(false);
+    expect(spy).toHaveBeenCalledWith("sess-x", false);
+
+    spy.mockRestore();
+    applyTerminalRoster([]);
+  });
+
+  test("setTerminalBroadcastBySession flips the matching local terminal only", () => {
+    const a = terminalTab({ id: "term-a", title: "A", terminalSessionId: "sess-a" });
+    resetLayout([a]);
+    const tab = () => activePane().tabs[0] as TerminalTab;
+
+    setTerminalBroadcastBySession("sess-a", true);
+    expect(tab().broadcastEnabled).toBe(true);
+    setTerminalBroadcastBySession("sess-a", false);
+    expect(tab().broadcastEnabled).toBe(false);
+    // Unknown session id is a no-op (no local tab hosts it).
+    setTerminalBroadcastBySession("sess-nope", true);
+    expect(tab().broadcastEnabled).toBe(false);
   });
 });
 
