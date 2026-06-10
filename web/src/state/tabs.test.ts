@@ -59,6 +59,7 @@ import {
   markLocalTabDrop,
   markTerminalEnvNameRestarted,
   moveTab,
+  reattachTerminalInPane,
   renameTerminalTab,
   uniqueTerminalName,
   reopenClosedTab,
@@ -1305,6 +1306,82 @@ describe("pane state", () => {
     // A name free tenant-wide passes through.
     expect(uniqueTerminalName("Terminal-9")).toBe("Terminal-9");
     applyTerminalRoster([]);
+  });
+
+  test("uniqueTerminalName excludes a moved session's own roster entry", () => {
+    resetLayout([terminalTab({ id: "local", title: "shell" })]);
+    // The moved terminal "build" is still live in the SOURCE window's roster
+    // entry at drop time (a cross-window move closes the source only AFTER the
+    // drop). Without excluding it, dedup would treat it as a conflict.
+    applyTerminalRoster([
+      { id: "moved-sess", tab_name: "build", tab_group: "G", window_id: "other-win", broadcast: false },
+    ]);
+    expect(uniqueTerminalName("build")).toBe("build-2");
+    // Excluding the moved session itself -> the name passes through unchanged.
+    expect(uniqueTerminalName("build", undefined, "moved-sess")).toBe("build");
+    applyTerminalRoster([]);
+  });
+
+  test("reattachTerminalInPane keeps the name on a clash-free move (no suffix, env not stale)", () => {
+    const pane = resetLayout([terminalTab({ id: "local", title: "shell" })]);
+    // Moved terminal still present in the source window's roster at drop time.
+    applyTerminalRoster([
+      { id: "moved-sess", tab_name: "Terminal-2", tab_group: "G", window_id: "other-win", broadcast: false },
+    ]);
+    const tab = reattachTerminalInPane(pane.id, {
+      terminalSessionId: "moved-sess",
+      title: "Terminal-2",
+      terminalEnvTabName: "Terminal-2",
+    });
+    expect(tab).not.toBeNull();
+    expect(tab?.title).toBe("Terminal-2"); // Bug 1: no spurious -N
+    expect(tab?.terminalEnvTabName).toBe("Terminal-2"); // Bug 2: env carried
+    expect(terminalEnvTabNameStale(tab as TerminalTab)).toBe(false); // names match -> no warning
+    applyTerminalRoster([]);
+  });
+
+  test("reattachTerminalInPane suffixes + flags stale env only on a real conflict", () => {
+    // A DIFFERENT terminal already holds "Terminal-2" in this window.
+    const pane = resetLayout([terminalTab({ id: "local", title: "Terminal-2" })]);
+    const tab = reattachTerminalInPane(pane.id, {
+      terminalSessionId: "moved-sess",
+      title: "Terminal-2",
+      terminalEnvTabName: "Terminal-2",
+    });
+    expect(tab?.title).toBe("Terminal-2-2"); // forced suffix on real conflict
+    expect(tab?.terminalEnvTabName).toBe("Terminal-2"); // env is the original
+    expect(terminalEnvTabNameStale(tab as TerminalTab)).toBe(true); // title != env -> warning fires
+  });
+
+  test("reattachTerminalInPane preserves an already-stale env across the move", () => {
+    const pane = resetLayout([terminalTab({ id: "local", title: "shell" })]);
+    // Source was renamed (title "deploy") but not restarted (env still "build").
+    const tab = reattachTerminalInPane(pane.id, {
+      terminalSessionId: "moved-sess",
+      title: "deploy",
+      terminalEnvTabName: "build",
+    });
+    expect(tab?.title).toBe("deploy"); // no conflict -> no suffix
+    expect(tab?.terminalEnvTabName).toBe("build");
+    expect(terminalEnvTabNameStale(tab as TerminalTab)).toBe(true); // deploy != build -> warning persists
+  });
+
+  test("setTerminalSession keeps the carried env on a reattach (same id), resets on a new id", () => {
+    const pane = resetLayout([terminalTab({ id: "local", title: "Terminal-2" })]);
+    const tab = reattachTerminalInPane(pane.id, {
+      terminalSessionId: "moved-sess",
+      title: "Terminal-2",
+      terminalEnvTabName: "Terminal-2",
+    }) as TerminalTab;
+    // title suffixed to Terminal-2-2; env is the original Terminal-2.
+    // The move handshake re-attaches to the SAME session id -> env unchanged.
+    setTerminalSession(tab, "moved-sess", 5, true);
+    expect(tab.terminalEnvTabName).toBe("Terminal-2");
+    expect(terminalEnvTabNameStale(tab)).toBe(true);
+    // A DIFFERENT session id (cross-tenant fresh spawn) resets env to the title.
+    setTerminalSession(tab, "fresh-sess", 0, true);
+    expect(tab.terminalEnvTabName).toBe("Terminal-2-2");
+    expect(terminalEnvTabNameStale(tab)).toBe(false);
   });
 
   test("renameTerminalTab enforces a unique name (auto -N, never rejects)", () => {

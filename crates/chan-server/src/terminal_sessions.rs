@@ -4,7 +4,7 @@
 //! replay ring, and lifecycle policy live here so browser reloads can
 //! detach and reattach without killing the shell.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
@@ -65,14 +65,6 @@ pub struct RegistryConfig {
 pub struct Registry {
     config: RegistryConfig,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
-    /// Per-tenant monotonic terminal ordinal for default `Terminal-N`
-    /// names. One registry serves one tenant: standalone terminal windows
-    /// share a single registry (one global sequence across every terminal
-    /// window), and each workspace has its own registry (a per-workspace
-    /// sequence). Resets per server process, matching iTerm's per-session
-    /// numbering. Replaces the old process-global static, which restarted
-    /// at 1 for a second workspace window.
-    name_ordinal: AtomicU64,
     /// Fires whenever the live roster changes (create / close / restart /
     /// broadcast-toggle). The roster broadcaster task awaits this and
     /// republishes a fresh snapshot onto the `/ws` bus so every window's
@@ -80,6 +72,23 @@ pub struct Registry {
     /// bursts into one wakeup (natural debounce) and stores a permit when
     /// no waiter is parked, so a change is never missed.
     roster_notify: Arc<Notify>,
+}
+
+/// Parse the ordinal from a default `Terminal-N` name for lowest-free
+/// numbering. Bare `Terminal` counts as `1` (matching the frontend
+/// `nextTerminalTitle` regex `^Terminal(?:-(\d+))?$`). Any non-default name
+/// (`build`, a team `lead-2`, ...) returns `None` so it never occupies a
+/// numbering slot. `Terminal-0` and malformed forms (`Terminal-`,
+/// `Terminal-1x`) are rejected.
+fn parse_terminal_ordinal(name: &str) -> Option<u64> {
+    let rest = name.strip_prefix("Terminal")?;
+    if rest.is_empty() {
+        return Some(1);
+    }
+    rest.strip_prefix('-')?
+        .parse::<u64>()
+        .ok()
+        .filter(|&n| n >= 1)
 }
 
 /// Broadcast group default. A terminal with no explicit group belongs to
@@ -286,17 +295,34 @@ impl Registry {
         Self {
             config,
             sessions: Mutex::new(HashMap::new()),
-            name_ordinal: AtomicU64::new(0),
             roster_notify: Arc::new(Notify::new()),
         }
     }
 
-    /// Hand out the next per-tenant default terminal name (`Terminal-1`,
-    /// `Terminal-2`, ...). Backs `GET /api/terminal/next-name`. See
-    /// [`Registry::name_ordinal`] for why this is per-tenant rather than
-    /// a process-global static.
+    /// Hand out the next per-tenant default terminal name: the LOWEST-FREE
+    /// `Terminal-N` (`N >= 1`) not currently in use by a live session, so a
+    /// number freed by a closed terminal is reused (open Terminal-1 +
+    /// Terminal-2, close Terminal-2, the next open is Terminal-2 again).
+    /// Backs `GET /api/terminal/next-name`. Per-tenant because it scans only
+    /// THIS registry's sessions: standalone terminal windows share one
+    /// registry; each workspace has its own.
+    ///
+    /// This only SUGGESTS a name (the session isn't registered until the WS
+    /// spawn), so two near-simultaneous calls before either spawns can both
+    /// see the same free slot; the frontend `uniqueTerminalName` is the final
+    /// tenant-wide dedup that resolves that rare race.
     pub fn next_terminal_name(&self) -> String {
-        let n = self.name_ordinal.fetch_add(1, Ordering::Relaxed) + 1;
+        let taken: HashSet<u64> = {
+            let sessions = self.sessions.lock().expect("terminal registry poisoned");
+            sessions
+                .values()
+                .filter(|s| !s.closed.load(Ordering::Relaxed))
+                .filter_map(|s| s.tab_name.as_deref().and_then(parse_terminal_ordinal))
+                .collect()
+        };
+        let n = (1u64..)
+            .find(|n| !taken.contains(n))
+            .expect("the naturals always contain a free slot");
         format!("Terminal-{n}")
     }
 
@@ -2427,6 +2453,15 @@ mod tests {
             .insert(session.id.clone(), session);
     }
 
+    /// A live session carrying a `tab_name`, for exercising the lowest-free
+    /// `next_terminal_name` scan (which reads `tab_name`, not `id`).
+    fn named_session(id: &str, tab_name: &str) -> Arc<Session> {
+        let mut s = Arc::try_unwrap(test_session_with_ring(64)).expect("sole owner");
+        s.id = id.to_string();
+        s.tab_name = Some(tab_name.to_string());
+        Arc::new(s)
+    }
+
     fn was_delivered(registry: &Registry, id: &str) -> bool {
         registry
             .sessions
@@ -2491,15 +2526,51 @@ mod tests {
     }
 
     #[test]
-    fn next_terminal_name_is_a_per_tenant_sequence() {
+    fn next_terminal_name_is_per_tenant() {
         let one = Registry::new(test_config(64, 16, 600));
         let two = Registry::new(test_config(64, 16, 600));
-        assert_eq!(one.next_terminal_name(), "Terminal-1");
-        assert_eq!(one.next_terminal_name(), "Terminal-2");
-        // A second tenant has its own sequence (the bug a process-global
-        // static caused: a second workspace window restarting past 1).
+        insert_session(&one, named_session("a", "Terminal-1"));
+        // A second tenant has its own numbering (the bug a process-global
+        // static caused: a second workspace window restarting past 1). It is
+        // unaffected by `one`'s live terminals.
         assert_eq!(two.next_terminal_name(), "Terminal-1");
-        assert_eq!(one.next_terminal_name(), "Terminal-3");
+        // `one` already has Terminal-1 live -> next is 2.
+        assert_eq!(one.next_terminal_name(), "Terminal-2");
+    }
+
+    #[test]
+    fn next_terminal_name_reuses_the_lowest_free_slot() {
+        let reg = Registry::new(test_config(64, 16, 600));
+        // Empty registry starts at 1.
+        assert_eq!(reg.next_terminal_name(), "Terminal-1");
+        // Two live terminals -> next extends past the max.
+        insert_session(&reg, named_session("a", "Terminal-1"));
+        insert_session(&reg, named_session("b", "Terminal-2"));
+        assert_eq!(reg.next_terminal_name(), "Terminal-3");
+        // Free the middle one -> its number is REUSED (the reported bug:
+        // open 1+2, close 2, next should be 2, not 3).
+        reg.sessions.lock().unwrap().remove("b");
+        assert_eq!(reg.next_terminal_name(), "Terminal-2");
+        // A gap below the max is filled before extending: live {1, 3} -> 2.
+        insert_session(&reg, named_session("c", "Terminal-3"));
+        assert_eq!(reg.next_terminal_name(), "Terminal-2");
+        // Non-default names never occupy a slot; bare "Terminal" counts as 1.
+        let reg2 = Registry::new(test_config(64, 16, 600));
+        insert_session(&reg2, named_session("x", "build"));
+        insert_session(&reg2, named_session("y", "Terminal"));
+        assert_eq!(reg2.next_terminal_name(), "Terminal-2");
+    }
+
+    #[test]
+    fn parse_terminal_ordinal_parses_default_names_only() {
+        assert_eq!(parse_terminal_ordinal("Terminal-1"), Some(1));
+        assert_eq!(parse_terminal_ordinal("Terminal-12"), Some(12));
+        assert_eq!(parse_terminal_ordinal("Terminal"), Some(1));
+        assert_eq!(parse_terminal_ordinal("build"), None);
+        assert_eq!(parse_terminal_ordinal("lead-2"), None);
+        assert_eq!(parse_terminal_ordinal("Terminal-"), None);
+        assert_eq!(parse_terminal_ordinal("Terminal-1x"), None);
+        assert_eq!(parse_terminal_ordinal("Terminal-0"), None);
     }
 
     #[test]

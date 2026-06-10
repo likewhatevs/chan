@@ -719,7 +719,11 @@ function nextTerminalTitle(state: LayoutState = layout): string {
 /// cross-window roster), and across groups (a name unique only within a group
 /// would collide the moment a terminal is moved between groups). Comparison is
 /// case-sensitive, matching the server's by-name targeting.
-export function uniqueTerminalName(desired: string, excludeTabId?: string): string {
+export function uniqueTerminalName(
+  desired: string,
+  excludeTabId?: string,
+  excludeSessionId?: string,
+): string {
   const base = desired.trim() || "Terminal";
   const taken = new Set(
     terminalTabsIn(layout)
@@ -729,11 +733,16 @@ export function uniqueTerminalName(desired: string, excludeTabId?: string): stri
   // Fold in terminals from OTHER windows. Skip this window's own entries (the
   // local layout above is authoritative for them, and its names can be ahead
   // of the roster on a not-yet-restarted rename) and this tab's own session
-  // (so a no-op rename can keep its current name).
+  // (so a no-op rename can keep its current name). An explicit
+  // `excludeSessionId` (a cross-window MOVE re-attaching its OWN live PTY,
+  // still listed under the source window's roster entry at drop time) takes
+  // precedence so the moved terminal never collides with itself.
   const myWindow = sessionWindowId();
-  const ownSession = excludeTabId
-    ? terminalTabsIn(layout).find((t) => t.id === excludeTabId)?.terminalSessionId
-    : undefined;
+  const ownSession =
+    excludeSessionId ??
+    (excludeTabId
+      ? terminalTabsIn(layout).find((t) => t.id === excludeTabId)?.terminalSessionId
+      : undefined);
   for (const entry of terminalRoster) {
     if (entry.window_id === myWindow) continue;
     if (ownSession && entry.id === ownSession) continue;
@@ -1191,6 +1200,10 @@ export function openTerminalInPane(
 export type TerminalMovePayload = {
   terminalSessionId: string;
   title?: string;
+  /// The moved shell's real CHAN_TAB_NAME (the source tab's env-name snapshot),
+  /// so the target can tell whether a conflict-forced `-N` rename leaves the
+  /// env stale and must surface the restart warning.
+  terminalEnvTabName?: string;
   lastSeq?: number;
   lastAgentEchoSeq?: number;
   sessionMcpEnv?: boolean;
@@ -1219,16 +1232,24 @@ export function reattachTerminalInPane(
   const tab: TerminalTab = {
     kind: "terminal",
     id: id("term"),
-    // Preserve the moved terminal's name. Dedup against THIS window's other
-    // terminals (a same-named terminal could already exist here) but never
-    // renumber away from the original unless there is an actual collision.
-    title: uniqueTerminalName(payload.title?.trim() || "Terminal"),
+    // Preserve the moved terminal's name. Dedup against OTHER terminals only:
+    // exclude this same session (still live in the source window's roster
+    // entry at drop time) so the terminal never collides with ITSELF, and a
+    // `-N` suffix is added ONLY on a real conflict with a different terminal.
+    title: uniqueTerminalName(payload.title?.trim() || "Terminal", undefined, sessionId),
     createdAt: Date.now(),
     broadcastEnabled: false,
     broadcastTargetIds: [],
     mcpEnv: payload.mcpEnv ?? true,
     sessionMcpEnv: payload.sessionMcpEnv,
     terminalSessionId: sessionId,
+    // Carry the moved shell's real CHAN_TAB_NAME. The WS re-attaches to the
+    // SAME session id, so setTerminalSession's `wasFresh` stays false and does
+    // not overwrite this. If a conflict forced a `-N` suffix above (title !=
+    // env name), terminalEnvTabNameStale is then true and the existing
+    // stale-env warning fires (restart to sync CHAN_TAB_NAME); with no suffix
+    // the names match and no warning shows.
+    terminalEnvTabName: payload.terminalEnvTabName,
     controlledTerminal: undefined,
     // Seed the seq cursors so the WS re-attach (`connect()` in TerminalTab.svelte
     // sends `sessionId` + `lastSeq` + `agentEchoSince`) replays only the bytes

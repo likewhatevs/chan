@@ -679,6 +679,9 @@
         ...(t.terminalSessionId
           ? {
               terminalSessionId: t.terminalSessionId,
+              // The moved shell's real CHAN_TAB_NAME, so the target can decide
+              // whether a conflict-forced rename leaves the env stale (warning).
+              terminalEnvTabName: t.terminalEnvTabName,
               lastSeq: t.lastSeq,
               lastAgentEchoSeq: t.lastAgentEchoSeq,
               sessionMcpEnv: t.sessionMcpEnv,
@@ -728,6 +731,7 @@
       path?: string;
       title?: string;
       terminalSessionId?: string;
+      terminalEnvTabName?: string;
       lastSeq?: number;
       lastAgentEchoSeq?: number;
       sessionMcpEnv?: boolean;
@@ -749,6 +753,7 @@
         reattachTerminalInPane(pane.id, {
           terminalSessionId: parsed.terminalSessionId,
           title: parsed.title,
+          terminalEnvTabName: parsed.terminalEnvTabName,
           lastSeq: parsed.lastSeq,
           lastAgentEchoSeq: parsed.lastAgentEchoSeq,
           sessionMcpEnv: parsed.sessionMcpEnv,
