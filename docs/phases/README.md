@@ -61,6 +61,10 @@ cards in [`.agents/roster/README.md`](../../.agents/roster/README.md).
 - [Phase 20](phase-20.md) - chan-desktop refinements (plain-text update
   prompt, unified About) and standalone terminal windows, run as an
   orchestrator + subagents round.
+- [Phase 21](phase-21.md) - terminal cross-window awareness: a cross-window
+  broadcast roster (menu + indicators + toggle gate), per-tenant Terminal-N
+  naming, group-wide cross-window Select All, and tenant-wide name
+  uniqueness (v0.29.0, with phase-20).
 - [pub-site-release](pub-site-release.md) - a standalone branding and
   positioning re-steer plus marketing site refresh (not a numbered
   phase).

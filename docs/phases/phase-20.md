@@ -1,9 +1,10 @@
 # Phase 20 - chan-desktop refinements + standalone terminal windows
 
-Status: open. Code landed and gated green on two branches; desktop GUI smoke
-        and the release cut are pending (see Notes). Not yet merged to main.
-Span: 2026-06-09 (one day so far).
-Versions: none cut yet. Part A is staged for a point release; Part B follows.
+Status: closed. Merged to main and released in v0.29.0, together with
+        phase-21, which builds on and completes this work.
+Span: 2026-06-09 to 2026-06-10.
+Versions: v0.29.0 (Part A + Part B cut together with phase-21; no separate
+          point release).
 Tags: #desktop #terminal #about #updater #orchestration #docs
 
 ## Roadmap (the asks)
@@ -131,8 +132,9 @@ Cmd+T exactly. Lane S's first cut leaked a throwaway `Library` per window and
 left the Cmd+, config form inert (no `workspace.info`); both were closed in
 integration.
 
-**Deliberately deferred.** The desktop GUI smoke (Tauri can't be driven
-headless here) and the release cut are left to the human. The full pre-push's
+**Resolved in phase-21.** The desktop GUI smoke (Tauri can't be driven headless
+in-session) cleared on the human's pass against the rebuilt signed `Chan.app`,
+and the release cut happens there as v0.29.0. The full pre-push's
 `gateway-build` + `web-marketing-check` (unaffected by this work) run at push
 time.
 
@@ -173,8 +175,8 @@ time.
 
 ## Notes
 
-Two branches, not yet merged or released: `phase-20-refinements` (Part A + the
-About removal) and `worktree-phase-20-terminals` (Part B, off origin/main). The
-Part B wire contract lives in `dev/phase20/contract.md` (gitignored scratch).
-This report will move to Status: closed with the version once the desktop smoke
-clears and the release(s) cut.
+Both branches merged to main: `phase-20-refinements` (Part A + the About
+removal) and `worktree-phase-20-terminals` (Part B, off origin/main). The Part B
+wire contract lived in `dev/phase20/contract.md` (gitignored scratch). Closed
+and released as v0.29.0 alongside phase-21, which extends Part B's shared
+terminal tenant with cross-window awareness.
