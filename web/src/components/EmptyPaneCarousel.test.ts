@@ -30,15 +30,15 @@ async function renderCarousel(props: Record<string, any> = {}) {
 }
 
 describe("EmptyPaneCarousel", () => {
-  test("renders the About slide by default with three dots", async () => {
-    // Slide 0 is the About widget (version + attributions +
-    // donation QR + project links). Slide 1 hosts
-    // WorkspaceInfoBody; slide 2 is the indexing graph.
+  test("renders the Workspace slide by default with three dots", async () => {
+    // Slide 0 hosts WorkspaceInfoBody. Slide 1 is the indexing
+    // (Search) graph; slide 2 is the About widget (version +
+    // attributions + donation QR + project links).
     const target = await renderCarousel();
 
     expect(target.querySelectorAll(".dot-btn").length).toBe(3);
-    expect(target.querySelector(".slide-about")).not.toBeNull();
-    expect(target.querySelector(".slide-workspace")).toBeNull();
+    expect(target.querySelector(".slide-workspace")).not.toBeNull();
+    expect(target.querySelector(".slide-about")).toBeNull();
     expect(target.querySelector(".slide-indexing")).toBeNull();
     // Shortcuts / metadata slide bodies are not part of the
     // carousel.

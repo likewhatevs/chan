@@ -110,7 +110,7 @@ describe("carousel slide 1", () => {
 });
 
 describe("carousel slides", () => {
-  test("slide 0 is the About widget", () => {
+  test("slide 2 is the About widget", () => {
     expect(carousel).toMatch(
       /<div class="slide slide-about" aria-label="About">/,
     );
@@ -201,12 +201,12 @@ describe("carousel slides", () => {
     );
   });
 
-  test("slide 1 mounts WorkspaceInfoBody", () => {
+  test("slide 0 mounts WorkspaceInfoBody", () => {
     expect(carousel).toMatch(
       /import WorkspaceInfoBody from "\.\/WorkspaceInfoBody\.svelte";/,
     );
-    // variant="dashboard" so the Notes-directories config renders
-    // (the inspector variant drops it).
+    // variant="dashboard" drops the directory action row; the
+    // per-workspace config lives on the slot's flip-back now.
     expect(carousel).toMatch(
       /<div class="slide slide-workspace" aria-label="Workspace info">[\s\S]{1,400}<WorkspaceInfoBody[\s\S]{1,200}variant="dashboard"/,
     );
@@ -220,7 +220,7 @@ describe("carousel slides", () => {
     expect(carousel).not.toMatch(/from "\.\.\/state\/shortcuts"/);
   });
 
-  test("slide 2 is the read-only, spine-only indexing graph", () => {
+  test("slide 1 is the read-only, spine-only indexing graph", () => {
     expect(carousel).toMatch(/class="slide slide-indexing"/);
     // No inspector / scope picker / depth slider / filter chips; the
     // slide is a pure status read-out.
@@ -233,10 +233,10 @@ describe("carousel slides", () => {
     // slide-stage-wide drops the max-width cap; carousel-wide tightens
     // padding to ~10px so the canvas reads edge-to-edge.
     expect(carousel).toMatch(
-      /class="slide-stage" class:slide-stage-wide=\{slideIndex === 2\}/,
+      /class="slide-stage" class:slide-stage-wide=\{slideIndex === 1\}/,
     );
     expect(carousel).toMatch(
-      /class="carousel"\s*\n\s*class:carousel-wide=\{slideIndex === 2\}/,
+      /class="carousel"\s*\n\s*class:carousel-wide=\{slideIndex === 1\}/,
     );
     expect(carousel).toMatch(
       /\.slide-stage-wide \{[\s\S]{1,200}max-width: none;/,
@@ -320,7 +320,7 @@ describe("Dashboard back-of-card is per-slot (DashboardSlotBack)", () => {
     );
     // One checkbox row per carousel slide, driven by the tab helpers.
     expect(dashboard).toMatch(
-      /const SLOTS = \["About", "Workspace", "Search"\] as const;/,
+      /const SLOTS = \["Workspace", "Search", "About"\] as const;/,
     );
     expect(dashboard).toMatch(
       /\{#each SLOTS as label, i\}[\s\S]{1,400}role="menuitemcheckbox"[\s\S]{1,160}aria-checked=\{dashboardSlotEnabled\(tab, i\)\}[\s\S]{1,160}onclick=\{\(\) => onSlotToggle\(i\)\}/,
@@ -352,10 +352,10 @@ describe("Dashboard back-of-card is per-slot (DashboardSlotBack)", () => {
       /<HybridSurfaceConfigShell[\s\S]{1,200}title=\{SLOTS\[slot\]\}[\s\S]{1,120}surface="dashboard"[\s\S]{1,200}ariaLabel="Dashboard settings"[\s\S]{1,120}\{onDone\}/,
     );
     expect(dashboardBack).toMatch(
-      /const SLOTS = \["About", "Workspace", "Search"\] as const;/,
+      /const SLOTS = \["Workspace", "Search", "About"\] as const;/,
     );
     expect(dashboardBack).toMatch(
-      /\{#if slot === 0\}[\s\S]{1,80}<AboutSlotConfig \/>[\s\S]{1,160}<WorkspaceSlotConfig \/>[\s\S]{1,120}<SearchSlotConfig \/>/,
+      /\{#if slot === 0\}[\s\S]{1,80}<WorkspaceSlotConfig \/>[\s\S]{1,160}<SearchSlotConfig \/>[\s\S]{1,120}<AboutSlotConfig \/>/,
     );
     // Picking a slot moves the shared carousel cursor so the front
     // carousel lands on the same slot on flip-back.

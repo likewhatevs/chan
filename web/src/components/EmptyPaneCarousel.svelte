@@ -94,7 +94,7 @@
     void loadBuildInfo();
   });
 
-  // ---- shared index status label (slide 2 stub copy) -------------------------
+  // ---- shared index status label (Search slide stub copy) --------------------
 
   const indexLabel = $derived.by<string | null>(() => {
     const s = indexStatus.value;
@@ -108,12 +108,12 @@
     return null;
   });
 
-  // ---- slide 2 - indexing graph (read-only spine) ------------------------
+  // ---- Search slide (index 1) - indexing graph (read-only spine) ---------
 
-  /// Indexing state response cache. Re-fetched whenever slide 2
-  /// becomes active and again every 3 s while it stays active so
+  /// Indexing state response cache. Re-fetched whenever the Search
+  /// slide becomes active and again every 3 s while it stays active so
   /// orange (in-flight) nodes can flip to green as the indexer
-  /// makes progress. Polling stops the moment slide 2 hides; the
+  /// makes progress. Polling stops the moment the slide hides; the
   /// effect cleanup clears the timer.
   // Seed from the shared cache so a flip-back remount renders the graph
   // immediately instead of flashing empty (the poll below still refreshes
@@ -420,13 +420,13 @@
     }
   }
 
-  /// Re-fetch indexing state when slide 3 becomes active, and
-  /// poll every 3 s while it stays visible so orange (in-flight)
+  /// Re-fetch indexing state when the Search slide (index 1) becomes
+  /// active, and poll every 3 s while it stays visible so orange (in-flight)
   /// nodes can flip to green as the indexer makes progress. The
   /// cleanup clears the timer on slide change / unmount so we
   /// never hammer the server in the background.
   $effect(() => {
-    if (slideIndex !== 2 || !active) return;
+    if (slideIndex !== 1 || !active) return;
     void refreshIndexing();
     const handle = window.setInterval(() => {
       void refreshIndexing();
@@ -446,7 +446,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
   class="carousel"
-  class:carousel-wide={slideIndex === 2}
+  class:carousel-wide={slideIndex === 1}
   bind:this={containerEl}
   role="region"
   aria-label="empty pane carousel"
@@ -462,9 +462,14 @@
        fills the tab width/height (minus a 10px breathing border).
        The About + Workspace slides keep the centered column: their
        content is text-shaped and centered reads better there. -->
-  <div class="slide-stage" class:slide-stage-wide={slideIndex === 2}>
-    {#if slideIndex === 0}
-      <!-- Slide 0 is the About widget: version + attributions plus
+  <div class="slide-stage" class:slide-stage-wide={slideIndex === 1}>
+    <!-- Carousel slot order: 0 Workspace, 1 Search (indexing graph), 2
+         About. The blocks below stay in their original source order
+         (About, Workspace, indexing) but each guard now tests its NEW
+         index, so the `{:else}` indexing block catches the remaining
+         index 1. -->
+    {#if slideIndex === 2}
+      <!-- About slot (index 2 / last): version + attributions plus
            a "Fund the work" CTA with the donation QR + the website
            / source links, so the user has one self-contained
            surface to learn what chan is and how to support it. -->
@@ -539,12 +544,13 @@
           </p>
         </div>
       </div>
-    {:else if slideIndex === 1}
-      <!-- Slide 1 hosts `WorkspaceInfoBody`, the same inspector body
-           the file browser shows when the workspace-root row is
-           selected. Folder-mode parity plus the Workspaces
-           config. `WorkspaceInfoBody` owns its own scroll affordance
-           via the slide's `overflow: auto`. -->
+    {:else if slideIndex === 0}
+      <!-- Workspace slot (index 0 / first) hosts `WorkspaceInfoBody`,
+           the same inspector body the file browser shows when the
+           workspace-root row is selected. Folder-mode parity content;
+           the per-workspace config now lives on this slot's flip-back
+           (WorkspaceSlotConfig). `WorkspaceInfoBody` owns its own scroll
+           affordance via the slide's `overflow: auto`. -->
       <div class="slide slide-workspace" aria-label="Workspace info">
         <div class="slide-title">Workspace</div>
         <div class="workspace-info-host">
@@ -556,8 +562,8 @@
         </div>
       </div>
     {:else}
-      <!-- Slide 2 is the read-only, spine-only indexing graph. We
-           synthesize a directory-only `folder`-node spine from
+      <!-- Search slot (index 1 / middle): the read-only, spine-only
+           indexing graph. We synthesize a directory-only `folder`-node spine from
            `/api/indexing/state` and feed it to the same
            `GraphCanvas` the main Graph tab uses; the per-directory
            `indexState` drives the green / grey / pulsing-orange
@@ -594,7 +600,7 @@
           <div class="indexing-row">
             <div class="indexing-graph-host">
               <GraphCanvas
-                open={slideIndex === 2}
+                open={slideIndex === 1}
                 nodes={indexingGraph.nodes}
                 edges={indexingGraph.edges}
                 visibleNodeIds={indexingNodeIds}

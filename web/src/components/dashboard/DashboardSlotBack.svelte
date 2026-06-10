@@ -1,7 +1,7 @@
 <script lang="ts">
   // Per-slot Dashboard flip-back. Replaces the monolithic
   // HybridDashboardConfig: the back now mirrors the front carousel's
-  // current slot (About / Workspace / Search) and shows that slot's own
+  // current slot (Workspace / Search / About) and shows that slot's own
   // config body. A carousel navigator (prev/next chevrons + a dot pager +
   // a pause/play toggle) lets the user move between slot configs without
   // flipping back to the front; selecting a slot moves the shared
@@ -21,7 +21,7 @@
   type Props = { tab: DashboardTab; onDone?: () => void };
   let { tab, onDone }: Props = $props();
 
-  const SLOTS = ["About", "Workspace", "Search"] as const;
+  const SLOTS = ["Workspace", "Search", "About"] as const;
   // Clamp to the valid slot range; the front carousel uses the same
   // clamp so the two faces never disagree on which slot is active.
   const slot = $derived(
@@ -61,11 +61,11 @@
   footerBorder={false}
 >
   {#if slot === 0}
-    <AboutSlotConfig />
-  {:else if slot === 1}
     <WorkspaceSlotConfig />
-  {:else}
+  {:else if slot === 1}
     <SearchSlotConfig />
+  {:else}
+    <AboutSlotConfig />
   {/if}
 
   <!-- Carousel navigator. Mirrors the FRONT card's carousel controls

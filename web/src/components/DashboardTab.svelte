@@ -2,8 +2,8 @@
   // Dashboard tab body. The rotating carousel lives only INSIDE
   // this tab (the welcome surface is a static spawn grid via
   // EmptyPaneWelcome.svelte). The full carousel widget (rotation +
-  // play/pause + pagination + 3 slides: About / Workspace
-  // metadata / Search) renders here.
+  // play/pause + pagination + 3 slides: Workspace / Search /
+  // About) renders here.
   //
   // Cmd+, on a focused Hybrid surface flips it to its back-side;
   // Cmd+, again flips back.
@@ -11,7 +11,7 @@
   // The back-of-card body is per-slot now: Pane.svelte's back-side
   // switch mounts `dashboard/DashboardSlotBack.svelte` on the
   // `active?.kind === "dashboard"` arm, which mirrors the carousel's
-  // current slot (About / Workspace / Search) and shows that slot's
+  // current slot (Workspace / Search / About) and shows that slot's
   // config body. DashboardTab renders only the FRONT (the carousel)
   // plus a right-click Reload row.
 
@@ -83,9 +83,9 @@
   }
 
   // Slot labels mirror the carousel slide titles + DashboardSlotBack's
-  // SLOTS list; the array index is the slide identity (0 About, 1
-  // Workspace, 2 Search).
-  const SLOTS = ["About", "Workspace", "Search"] as const;
+  // SLOTS list; the array index is the slide identity (0 Workspace, 1
+  // Search, 2 About).
+  const SLOTS = ["Workspace", "Search", "About"] as const;
 
   function onSlotToggle(i: number): void {
     toggleDashboardSlot(tab, i);
