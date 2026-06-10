@@ -659,7 +659,7 @@
   /// terminal windows share one `/terminal` tenant (one PTY registry), so a
   /// terminal payload with a live `terminalSessionId` lets the target window
   /// re-attach to the SAME PTY by id (a true MOVE) instead of spawning a fresh
-  /// shell; the seq cursors + cwd + mcpEnv mirror the source so the re-attach
+  /// shell; the seq cursors + cwd mirror the source so the re-attach
   /// replays from where this window left off. No session (never spawned /
   /// exited) omits those fields so the target opens fresh. Other tab kinds keep
   /// the historical title-only shape (window-bound on native).
@@ -684,8 +684,6 @@
               terminalEnvTabName: t.terminalEnvTabName,
               lastSeq: t.lastSeq,
               lastAgentEchoSeq: t.lastAgentEchoSeq,
-              sessionMcpEnv: t.sessionMcpEnv,
-              mcpEnv: t.mcpEnv,
               group: t.group,
               cwd: t.cwd,
             }
@@ -734,8 +732,6 @@
       terminalEnvTabName?: string;
       lastSeq?: number;
       lastAgentEchoSeq?: number;
-      sessionMcpEnv?: boolean;
-      mcpEnv?: boolean;
       group?: string;
       cwd?: string;
     };
@@ -756,8 +752,6 @@
           terminalEnvTabName: parsed.terminalEnvTabName,
           lastSeq: parsed.lastSeq,
           lastAgentEchoSeq: parsed.lastAgentEchoSeq,
-          sessionMcpEnv: parsed.sessionMcpEnv,
-          mcpEnv: parsed.mcpEnv,
           group: parsed.group,
           cwd: parsed.cwd,
         });

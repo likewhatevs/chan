@@ -240,6 +240,18 @@
     }
   }
 
+  /// MCP env-var injection. Off by default; flipping this writes the
+  /// global `terminal.mcp_env` config that the spawn path consults
+  /// when the SPA doesn't force a per-request `?mcp_env=` override
+  /// (which it no longer does). Spawn-time only — existing terminals
+  /// keep whatever env they started with.
+  const mcpEnvOn = $derived(editing?.terminal?.mcp_env === true);
+
+  function setMcpEnv(next: boolean): void {
+    if (!editing) return;
+    editing.terminal = { ...editing.terminal, mcp_env: next };
+  }
+
   /// Compare the local terminal slice against the server's most
   /// recent workspace.info.preferences. The dirty check is scoped to
   /// the terminal subtree so we never trigger a PATCH for theme /
@@ -460,6 +472,31 @@
         <p class="hint sub-hint" role="status">{fontStatusMessage}</p>
       {/if}
     </div>
+
+    <div class="terminal-field">
+      <label class="terminal-label" for="hybrid-terminal-mcp-env">
+        <span>MCP env vars</span>
+      </label>
+      <div class="terminal-control">
+        <label class="mcp-toggle">
+          <input
+            id="hybrid-terminal-mcp-env"
+            type="checkbox"
+            checked={mcpEnvOn}
+            onchange={(e) =>
+              setMcpEnv((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span>Expose the chan MCP server to new terminals</span>
+        </label>
+      </div>
+      <p class="hint sub-hint">
+        When on, chan sets <code>CHAN_MCP_SOCKET</code>,
+        <code>CHAN_MCP_SERVER_JSON</code>, and friends in the PTY env
+        so external agent CLIs can discover the chan MCP server
+        automatically. Off launches a vanilla shell. Spawn-time only:
+        applies to newly spawned terminals.
+      </p>
+    </div>
 </HybridSurfaceConfigShell>
 
 <style>
@@ -528,6 +565,19 @@
   .terminal-field .sub-hint {
     margin: 0;
     font-size: 11.5px;
+  }
+  .mcp-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .mcp-toggle input[type="checkbox"] {
+    width: auto;
+    min-width: 0;
+    margin: 0;
   }
   .hint {
     margin: 0;

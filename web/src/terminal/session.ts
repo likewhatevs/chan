@@ -7,7 +7,6 @@ export type TerminalWsPathOpts = {
   sessionId?: string | null;
   lastSeq?: number | null;
   agentEchoSince?: number | null;
-  mcpEnv?: boolean | null;
   cwd?: string | null;
 };
 
@@ -35,7 +34,11 @@ export function terminalWsPath(opts: TerminalWsPathOpts): string {
   } else {
     const cwd = opts.cwd?.trim();
     if (cwd) params.set("cwd", cwd);
-    if (opts.mcpEnv === false) params.set("mcp_env", "off");
+    // MCP env injection is now governed by the global `terminal.mcp_env`
+    // server config (set from the Terminal Settings panel); the SPA no
+    // longer forces a per-terminal `?mcp_env=` override. The backend
+    // still honours an explicit query for `cs terminal new` / team
+    // spawns.
   }
   return `/api/terminal/ws?${params.toString()}`;
 }

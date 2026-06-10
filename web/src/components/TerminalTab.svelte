@@ -7,7 +7,6 @@
     FilePlus,
     Folder,
     History,
-    Info,
     MessageSquare,
     Network,
     Pencil,
@@ -59,12 +58,10 @@
     toggleTerminalGroupBroadcast,
     setTerminalActivity,
     setTerminalActivityPulsing,
-    setTerminalMcpEnv,
     setTerminalSession,
     tabFocusPulse,
     terminalBroadcastMemberIds,
     terminalEnvTabNameStale,
-    terminalMcpEnvEnabled,
     terminalTabGroup,
     terminalTabName,
     setTerminalGroup,
@@ -84,7 +81,6 @@
     handleTerminalMetaKey,
     installKeyboardProtocolHandlers,
   } from "../terminal/keymap";
-  import { injectShowMcpEnvCommand } from "../terminal/mcpEnv";
   import { installTerminalReportGuards } from "../terminal/xtermReports";
   import {
     clampScrollbackMb,
@@ -99,8 +95,6 @@
     openTabMenu,
     tabMenu,
   } from "../state/tabMenu.svelte";
-  import McpEnvInfoModal from "./McpEnvInfoModal.svelte";
-  import { markPaneModalOpen } from "../state/paneModalGuard.svelte";
   import RichPrompt from "./RichPrompt.svelte";
   import BubbleOverlay from "./BubbleOverlay.svelte";
   import {
@@ -172,15 +166,6 @@
   let sessionClosedReason = $state<CloseReason | null>(null);
   let findOpen = $state(false);
   let findQuery = $state("");
-  let mcpInfoOpen = $state(false);
-  // While the MCP-env info dialog is up it renders OVER this terminal
-  // pane and owns the keyboard. Register with the shared pane-modal
-  // guard so App.svelte's paneChordBlocked() bails on Cmd+, instead of
-  // flipping the pane hidden behind the dialog.
-  $effect(() => {
-    if (!mcpInfoOpen) return;
-    return markPaneModalOpen();
-  });
   let sawSessionControl = false;
   let pendingPromptSeed = "";
   let promptSeedSent = false;
@@ -245,8 +230,6 @@
       ) &&
       crossWindowMembers.every((m) => m.broadcast),
   );
-  const mcpEnvOn = $derived(terminalMcpEnvEnabled(tab));
-  const showMcpEnvDisabled = $derived(tab.sessionMcpEnv === false);
   const staleEnvName = $derived(terminalEnvTabNameStale(tab));
   const showStaleEnvPrompt = $derived(
     staleEnvName && !tab.terminalEnvNamePromptDismissed,
@@ -730,7 +713,6 @@
         sessionId: tab.terminalSessionId,
         lastSeq: tab.lastSeq,
         agentEchoSince: tab.lastAgentEchoSeq,
-        mcpEnv: mcpEnvOn,
         cwd: reattaching ? undefined : tab.cwd,
       }),
     );
@@ -770,7 +752,7 @@
         recoverTerminalRendererAfterHostResume();
       } else if (frame.type === "session") {
         sawSessionControl = true;
-        setTerminalSession(tab, frame.id, frame.seq, mcpEnvOn);
+        setTerminalSession(tab, frame.id, frame.seq);
         setTerminalActivity(tab, !focused && (frame.bytes_since_focus ?? 0) > 0);
         scheduleTerminalSessionSave();
         missedBytes = Math.max(0, Math.floor(frame.missed_bytes ?? 0));
@@ -1476,30 +1458,6 @@
     toggleTerminalGroupBroadcast(tab);
   }
 
-  function toggleMcpEnv(): void {
-    setTerminalMcpEnv(tab, !mcpEnvOn);
-    scheduleTerminalSessionSave();
-  }
-
-  function showMcpEnv(): void {
-    if (showMcpEnvDisabled) return;
-    injectShowMcpEnvCommand(sendUserInput);
-    term?.focus();
-  }
-
-  /// Open / close the MCP env info modal. Closing the menu when the
-  /// modal opens keeps the chrome from stacking: the modal sits at
-  /// z=26000 above the menu bubble, but the bubble would visually
-  /// compete for attention, so collapsing it on open keeps the dialog
-  /// the only focus.
-  function openMcpInfoModal(): void {
-    closeTabMenu();
-    mcpInfoOpen = true;
-  }
-  function closeMcpInfoModal(): void {
-    mcpInfoOpen = false;
-  }
-
   function onTerminalContextMenu(e: MouseEvent): void {
     e.preventDefault();
     requestTerminalCwd();
@@ -1751,39 +1709,6 @@
             <span class="mbtn-chord"></span>
           </button>
         {/if}
-        <!-- Info button opens a modal dialog
-             (McpEnvInfoModal.svelte). The "Show MCP env in terminal"
-             button is the dialog's primary CTA; the menu row carries
-             only the toggle + the info button. -->
-        <!-- Terminal-only windows have no MCP bridge (the slim server
-             tenant runs no MCP socket), so the "Set MCP env vars" WRITE
-             toggle is dropped. The read-only About-MCP info row stays so
-             the surface still explains what MCP env is. -->
-        <div class="mcp-env-row">
-          {#if !ui.terminalOnly}
-            <button class="mbtn" class:on={mcpEnvOn} onclick={toggleMcpEnv}>
-              <span class="mbtn-icon">
-                {#if mcpEnvOn}
-                  <Check size={15} strokeWidth={2} aria-hidden="true" />
-                {/if}
-              </span>
-              <span class="mbtn-label">Set MCP env vars</span>
-            </button>
-          {:else}
-            <span class="mbtn mcp-env-readonly">
-              <span class="mbtn-icon"></span>
-              <span class="mbtn-label">MCP env vars unavailable</span>
-            </span>
-          {/if}
-          <button
-            type="button"
-            class="info-btn"
-            aria-label="About MCP env vars"
-            onclick={openMcpInfoModal}
-          >
-            <Info size={15} strokeWidth={1.75} aria-hidden="true" />
-          </button>
-        </div>
         <button class="mbtn destructive" onclick={() => void restart()}>
           <span class="mbtn-icon">
             <RotateCcw size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -1909,13 +1834,6 @@
     <BubbleOverlay tabId={tab.id} />
   {/if}
 </div>
-
-<McpEnvInfoModal
-  open={mcpInfoOpen}
-  onClose={closeMcpInfoModal}
-  onShowInTerminal={showMcpEnv}
-  showInTerminalDisabled={showMcpEnvDisabled}
-/>
 
 <style>
   .terminal-tab {
@@ -2110,8 +2028,7 @@
       color 80ms ease,
       transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
-  .mbtn:hover,
-  .mbtn.on {
+  .mbtn:hover {
     background: var(--hover-bg);
   }
   .mbtn:hover:not(:disabled) {
@@ -2155,37 +2072,6 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-  }
-  .mcp-env-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-  }
-  /* Read-only MCP status shown in terminal-only windows in place of the
-     "Set MCP env vars" toggle: secondary text, no hover affordance. */
-  .mcp-env-readonly {
-    cursor: default;
-    color: var(--text-secondary);
-  }
-  .mcp-env-readonly:hover {
-    background: none;
-    transform: none;
-  }
-  .info-btn {
-    width: 28px;
-    height: 28px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--text-secondary);
-    cursor: pointer;
-  }
-  .info-btn:hover {
-    background: var(--hover-bg);
-    color: var(--text);
   }
   .mbtn-label,
   .target-name {

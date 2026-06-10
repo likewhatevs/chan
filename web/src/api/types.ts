@@ -147,6 +147,12 @@ export type TerminalPreferences = {
   /// (per-OS native mono). `source-code-pro` opts into Source
   /// Code Pro; the SPA triggers the download endpoint when needed.
   font?: TerminalFontChoice;
+  /// Whether newly-spawned terminals get the chan MCP discovery env
+  /// vars (`CHAN_MCP_*`) so external agent CLIs can find the chan MCP
+  /// server. Off by default (a stray env descriptor breaks some
+  /// agents). Spawn-time only; the per-request `?mcp_env=on|off`
+  /// query still overrides it for CLI / team spawns.
+  mcp_env?: boolean;
 };
 
 export type TerminalFontChoice = "os-default" | "source-code-pro";

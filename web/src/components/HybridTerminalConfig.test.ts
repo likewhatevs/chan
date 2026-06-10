@@ -156,6 +156,24 @@ describe("terminal-font dropdown + download flow", () => {
   });
 });
 
+describe("MCP env-var toggle", () => {
+  test("checkbox reads + writes the persisted mcp_env field", () => {
+    expect(source).toMatch(
+      /id="hybrid-terminal-mcp-env"[\s\S]{1,160}type="checkbox"[\s\S]{1,160}checked=\{mcpEnvOn\}/,
+    );
+    expect(source).toMatch(/const mcpEnvOn = \$derived\(editing\?\.terminal\?\.mcp_env === true\)/);
+    expect(source).toMatch(
+      /editing\.terminal = \{ \.\.\.editing\.terminal, mcp_env: next \}/,
+    );
+  });
+
+  test("hint names the CHAN_MCP_* discovery vars + spawn-time scope", () => {
+    expect(source).toContain("CHAN_MCP_SOCKET");
+    expect(source).toContain("CHAN_MCP_SERVER_JSON");
+    expect(source).toMatch(/applies to newly spawned terminals/);
+  });
+});
+
 describe("Wave 4: Terminal back-side controls", () => {
   test("OK button routes through onDone", () => {
     expect(source).toMatch(/<HybridSurfaceConfigShell[\s\S]*?\{onDone\}/);

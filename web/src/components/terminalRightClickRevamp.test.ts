@@ -79,21 +79,26 @@ describe("From-$CWD spawn band", () => {
   });
 });
 
-describe("header: MCP-env + Restart above the find/copy band", () => {
+describe("header: Restart above the find/copy band", () => {
   test("Restart entry exists with destructive class", () => {
     expect(terminal).toMatch(
       /<button class="mbtn destructive" onclick=\{\(\) => void restart\(\)\}>[\s\S]{1,400}<span class="mbtn-label">Restart<\/span>/,
     );
   });
 
-  test("Set MCP env vars row exists above the first separator inside action-list", () => {
-    // mcp-env-row → mcp-info conditional → Show MCP env in
-    // terminal → Restart → SEP → Copy path to $CWD is the ordering in
-    // the TAB menu (Find / Copy / Paste / Copy Scrollback moved to the
-    // body-context menu in F4). Pin the relative order.
+  test("Restart sits directly above the first separator + Copy path to $CWD", () => {
+    // The per-terminal "Set MCP env vars" row was removed (the toggle
+    // moved to the global Terminal Settings panel). Restart → SEP →
+    // Copy path to $CWD is now the top of the TAB menu (Find / Copy /
+    // Paste / Copy Scrollback live in the body-context menu since F4).
     expect(terminal).toMatch(
-      /<div class="mcp-env-row">[\s\S]{1,4000}<span class="mbtn-label">Restart<\/span>[\s\S]{1,400}<div class="msep" role="separator"><\/div>[\s\S]{1,800}<span class="mbtn-label">Copy path to \$CWD<\/span>/,
+      /<span class="mbtn-label">Restart<\/span>[\s\S]{1,400}<div class="msep" role="separator"><\/div>[\s\S]{1,800}<span class="mbtn-label">Copy path to \$CWD<\/span>/,
     );
+  });
+
+  test("no per-terminal MCP env toggle remains in the menu", () => {
+    expect(terminal).not.toContain("mcp-env-row");
+    expect(terminal).not.toContain("Set MCP env vars");
   });
 });
 

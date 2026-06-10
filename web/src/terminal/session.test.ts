@@ -72,15 +72,13 @@ describe("terminalWsPath", () => {
     );
   });
 
-  test("adds mcp_env off only for fresh opt-out sessions", () => {
+  test("never emits a per-terminal mcp_env override (now a global setting)", () => {
+    // The SPA no longer forces `?mcp_env=`; injection is governed by
+    // the global `terminal.mcp_env` server config. Neither a fresh
+    // spawn nor a reattach should carry the param.
     expect(
-      terminalWsPath({
-        cols: 80,
-        rows: 24,
-        tabName: "plain shell",
-        mcpEnv: false,
-      }),
-    ).toBe("/api/terminal/ws?cols=80&rows=24&tab_name=plain+shell&mcp_env=off");
+      terminalWsPath({ cols: 80, rows: 24, tabName: "plain shell" }),
+    ).not.toContain("mcp_env");
     expect(
       terminalWsPath({
         cols: 80,
@@ -88,7 +86,6 @@ describe("terminalWsPath", () => {
         tabName: "reattach",
         sessionId: "term_abc",
         lastSeq: 1,
-        mcpEnv: false,
       }),
     ).not.toContain("mcp_env");
   });

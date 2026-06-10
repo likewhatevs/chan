@@ -1375,11 +1375,11 @@ describe("pane state", () => {
     }) as TerminalTab;
     // title suffixed to Terminal-2-2; env is the original Terminal-2.
     // The move handshake re-attaches to the SAME session id -> env unchanged.
-    setTerminalSession(tab, "moved-sess", 5, true);
+    setTerminalSession(tab, "moved-sess", 5);
     expect(tab.terminalEnvTabName).toBe("Terminal-2");
     expect(terminalEnvTabNameStale(tab)).toBe(true);
     // A DIFFERENT session id (cross-tenant fresh spawn) resets env to the title.
-    setTerminalSession(tab, "fresh-sess", 0, true);
+    setTerminalSession(tab, "fresh-sess", 0);
     expect(tab.terminalEnvTabName).toBe("Terminal-2-2");
     expect(terminalEnvTabNameStale(tab)).toBe(false);
   });
@@ -2050,8 +2050,6 @@ describe("terminal session serialization", () => {
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
     expect(tab.title).toBe("build");
-    expect(tab.mcpEnv).toBe(true);
-    expect(tab.sessionMcpEnv).toBe(true);
     expect(tab.terminalSessionId).toBe("term_123");
     expect(tab.lastSeq).toBeUndefined();
   });
@@ -2123,36 +2121,6 @@ describe("terminal session serialization", () => {
     expect(tab.terminalSessionId).toBe("term_legacy");
     expect(tab.lastSeq).toBeUndefined();
   });
-
-  test("persists terminal MCP env opt-out only in session layouts", async () => {
-    resetLayout([
-      terminalTab({
-        title: "plain",
-        mcpEnv: false,
-        sessionMcpEnv: false,
-        terminalSessionId: "term_plain",
-        lastSeq: 7,
-      }),
-    ]);
-
-    const shareable = serializeLayout();
-    expect(JSON.stringify(shareable)).not.toContain("\"me\"");
-    expect(JSON.stringify(shareable)).not.toContain("\"sme\"");
-
-    const sessionSnapshot = serializeLayout({ terminalSessions: true });
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"me\":0");
-    expect(JSON.stringify(sessionSnapshot)).toContain("\"sme\":0");
-
-    await restoreLayout(sessionSnapshot!);
-
-    const [tab] = activePane().tabs;
-    expect(tab?.kind).toBe("terminal");
-    if (tab?.kind !== "terminal") return;
-    expect(tab.mcpEnv).toBe(false);
-    expect(tab.sessionMcpEnv).toBe(false);
-    expect(tab.terminalSessionId).toBe("term_plain");
-  });
-
 
   test("hydrates terminal session ids onto hash-restored terminal tabs", async () => {
     resetLayout([
@@ -2422,7 +2390,7 @@ describe("terminal tab naming", () => {
     const tab = terminalTab({ title: "build" });
     resetLayout([tab]);
 
-    setTerminalSession(tab, "term_live", 0, true);
+    setTerminalSession(tab, "term_live", 0);
     expect(tab.terminalEnvTabName).toBe("build");
     expect(terminalEnvTabNameStale(tab)).toBe(false);
 
@@ -2437,7 +2405,7 @@ describe("terminal tab naming", () => {
     renameTerminalTab(tab, "ship");
     expect(tab.terminalEnvNamePromptDismissed).toBe(false);
 
-    setTerminalSession(tab, "term_new", 0, true);
+    setTerminalSession(tab, "term_new", 0);
     expect(tab.terminalEnvTabName).toBe("ship");
     expect(terminalEnvTabNameStale(tab)).toBe(false);
   });

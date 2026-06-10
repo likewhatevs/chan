@@ -268,8 +268,6 @@ export type TerminalTab = {
   createdAt: number;
   broadcastEnabled: boolean;
   broadcastTargetIds: string[];
-  mcpEnv?: boolean;
-  sessionMcpEnv?: boolean;
   terminalEnvTabName?: string;
   terminalEnvNamePromptDismissed?: boolean;
   terminalSessionId?: string;
@@ -1019,7 +1017,6 @@ function tabForReopen(src: Tab): Tab {
     tab.controlledTerminal = undefined;
     tab.lastSeq = undefined;
     tab.lastAgentEchoSeq = undefined;
-    tab.sessionMcpEnv = undefined;
     tab.terminalEnvTabName = undefined;
     tab.terminalEnvNamePromptDismissed = undefined;
   }
@@ -1166,8 +1163,6 @@ export function openTerminalInPane(
     createdAt: Date.now(),
     broadcastEnabled: false,
     broadcastTargetIds: [],
-    mcpEnv: true,
-    sessionMcpEnv: undefined,
     terminalSessionId: opts.sessionId?.trim() || undefined,
     controlledTerminal: opts.controlledTerminal || undefined,
     lastSeq: undefined,
@@ -1195,8 +1190,8 @@ export function openTerminalInPane(
 /// `reattachTerminalInPane`. All standalone terminal windows share one
 /// `/terminal` tenant (one PTY registry), so the target window can attach to
 /// this SAME live PTY by `terminalSessionId` instead of spawning a fresh
-/// shell. The seq cursors + cwd + mcpEnv mirror what the source tab held so
-/// the re-attach replays from the right point and keeps the session's env.
+/// shell. The seq cursors + cwd mirror what the source tab held so the
+/// re-attach replays from the right point.
 export type TerminalMovePayload = {
   terminalSessionId: string;
   title?: string;
@@ -1206,8 +1201,6 @@ export type TerminalMovePayload = {
   terminalEnvTabName?: string;
   lastSeq?: number;
   lastAgentEchoSeq?: number;
-  sessionMcpEnv?: boolean;
-  mcpEnv?: boolean;
   group?: string;
   cwd?: string;
 };
@@ -1240,8 +1233,6 @@ export function reattachTerminalInPane(
     createdAt: Date.now(),
     broadcastEnabled: false,
     broadcastTargetIds: [],
-    mcpEnv: payload.mcpEnv ?? true,
-    sessionMcpEnv: payload.sessionMcpEnv,
     terminalSessionId: sessionId,
     // Carry the moved shell's real CHAN_TAB_NAME. The WS re-attaches to the
     // SAME session id, so setTerminalSession's `wasFresh` stays false and does
@@ -1550,26 +1541,16 @@ export function terminalBroadcastReachCount(tab: TerminalTab): number {
   return local + cross;
 }
 
-export function terminalMcpEnvEnabled(tab: TerminalTab): boolean {
-  return tab.mcpEnv !== false;
-}
-
-export function setTerminalMcpEnv(tab: TerminalTab, enabled: boolean): void {
-  tab.mcpEnv = enabled;
-}
-
 export function setTerminalSession(
   tab: TerminalTab,
   sessionId: string,
   lastSeq: number,
-  sessionMcpEnv?: boolean,
 ): void {
   const wasFresh = !tab.terminalSessionId || tab.terminalSessionId !== sessionId;
   tab.terminalSessionId = sessionId;
   tab.lastSeq = Math.max(0, Math.floor(lastSeq));
   if (wasFresh) {
     tab.lastAgentEchoSeq = undefined;
-    tab.sessionMcpEnv = sessionMcpEnv ?? terminalMcpEnvEnabled(tab);
     tab.terminalEnvTabName = terminalTabName(tab);
     tab.terminalEnvNamePromptDismissed = false;
   }
@@ -1599,7 +1580,6 @@ export function clearTerminalSession(tab: TerminalTab): void {
   tab.lastAgentEchoSeq = undefined;
   tab.terminalActivity = undefined;
   tab.terminalActivityPulsing = undefined;
-  tab.sessionMcpEnv = undefined;
   tab.terminalEnvTabName = undefined;
   tab.terminalEnvNamePromptDismissed = false;
 }
@@ -2484,8 +2464,6 @@ function cloneTab(src: Tab): Tab {
       createdAt: src.createdAt,
       broadcastEnabled: src.broadcastEnabled,
       broadcastTargetIds: [...src.broadcastTargetIds],
-      mcpEnv: src.mcpEnv,
-      sessionMcpEnv: src.sessionMcpEnv,
       terminalEnvTabName: src.terminalEnvTabName,
       terminalEnvNamePromptDismissed: src.terminalEnvNamePromptDismissed,
       terminalSessionId: src.terminalSessionId,
@@ -2932,8 +2910,6 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
     createdAt: Date.now(),
     broadcastEnabled: false,
     broadcastTargetIds: [],
-    mcpEnv: true,
-    sessionMcpEnv: undefined,
     terminalSessionId: undefined,
     controlledTerminal: undefined,
     lastSeq: undefined,
@@ -3684,10 +3660,6 @@ type SerTab = {
   /// Last injected agent-event echo sequence the browser handled.
   /// Used only for replaying missed Team Work watcher dispatches.
   tae?: number;
-  /// Desired MCP env injection for fresh terminal sessions. Default on.
-  me?: 0;
-  /// MCP env mode used by the persisted PTY session. Default on.
-  sme?: 0;
   /// Terminal broadcast group. Emitted only when non-default so a
   /// reattach after reload keeps the terminal in its group (and the
   /// SPA group stays consistent with the server's per-session tab_group).
@@ -3921,11 +3893,9 @@ function serializeTab(
       ...(terminalTabGroup(t) !== DEFAULT_TERMINAL_GROUP
         ? { tg: terminalTabGroup(t) }
         : {}),
-      ...(opts.terminalSessions && t.mcpEnv === false ? { me: 0 as const } : {}),
       ...(opts.terminalSessions && t.terminalSessionId
         ? {
             tsid: t.terminalSessionId,
-            ...(t.sessionMcpEnv === false ? { sme: 0 as const } : {}),
             ...(t.controlledTerminal ? { tc: 1 as const } : {}),
             ...(typeof t.lastAgentEchoSeq === "number" &&
             Number.isFinite(t.lastAgentEchoSeq) &&
@@ -4176,14 +4146,6 @@ export async function restoreLayout(
         if (kind === "t") {
           const savedTerm = savedTerms[termIndex++];
           const terminalSessionId = sertab.tsid ?? savedTerm?.tsid;
-          const mcpEnv =
-            sertab.me === 0 ? false : savedTerm?.me === 0 ? false : true;
-          const sessionMcpEnv =
-            terminalSessionId && (sertab.sme === 0 || savedTerm?.sme === 0)
-              ? false
-              : terminalSessionId
-                ? true
-                : undefined;
           const group = (sertab.tg ?? savedTerm?.tg)?.trim();
           // Restore the negotiated keyboard protocol for a reattaching
           // session so Shift+Enter -> newline survives a reload even when
@@ -4198,8 +4160,6 @@ export async function restoreLayout(
             createdAt: Date.now(),
             broadcastEnabled: false,
             broadcastTargetIds: [],
-            mcpEnv,
-            sessionMcpEnv,
             terminalSessionId,
             controlledTerminal: sertab.tc === 1 || savedTerm?.tc === 1,
             group: group && group !== DEFAULT_TERMINAL_GROUP ? group : undefined,
@@ -4399,8 +4359,6 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
       if (!savedTerm) continue;
       if (savedTerm.tsid) {
         liveTerms[j]!.terminalSessionId = savedTerm.tsid;
-        liveTerms[j]!.mcpEnv = savedTerm.me === 0 ? false : true;
-        liveTerms[j]!.sessionMcpEnv = savedTerm.sme === 0 ? false : true;
         liveTerms[j]!.lastSeq = undefined;
         liveTerms[j]!.lastAgentEchoSeq =
           typeof savedTerm.tae === "number" && Number.isFinite(savedTerm.tae)
