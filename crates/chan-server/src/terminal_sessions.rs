@@ -14,7 +14,7 @@ use std::time::Duration;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use rand::RngCore;
 use serde::Serialize;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, watch, Notify};
 use tokio::task::JoinHandle;
 
 use crate::config::TerminalConfig;
@@ -65,6 +65,21 @@ pub struct RegistryConfig {
 pub struct Registry {
     config: RegistryConfig,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    /// Per-tenant monotonic terminal ordinal for default `Terminal-N`
+    /// names. One registry serves one tenant: standalone terminal windows
+    /// share a single registry (one global sequence across every terminal
+    /// window), and each workspace has its own registry (a per-workspace
+    /// sequence). Resets per server process, matching iTerm's per-session
+    /// numbering. Replaces the old process-global static, which restarted
+    /// at 1 for a second workspace window.
+    name_ordinal: AtomicU64,
+    /// Fires whenever the live roster changes (create / close / restart /
+    /// broadcast-toggle). The roster broadcaster task awaits this and
+    /// republishes a fresh snapshot onto the `/ws` bus so every window's
+    /// SPA sees the same cross-window terminal set. `Notify` coalesces
+    /// bursts into one wakeup (natural debounce) and stores a permit when
+    /// no waiter is parked, so a change is never missed.
+    roster_notify: Arc<Notify>,
 }
 
 /// Broadcast group default. A terminal with no explicit group belongs to
@@ -97,6 +112,29 @@ pub struct TerminalSessionSummary {
     /// Resolved group (never empty; `DEFAULT_TERMINAL_GROUP` when unset).
     pub tab_group: String,
     pub cwd: Option<PathBuf>,
+}
+
+/// One live terminal session in the cross-window roster the SPA reads to
+/// render broadcast targets + indicators across every window of a tenant.
+/// Unlike [`TerminalSessionSummary`] (the `cs term list` view, grouped by
+/// `tab_group` with a live `cwd`), this carries the `window_id` and the
+/// per-session `broadcast` toggle and omits the (expensive) cwd lookup: the
+/// roster is pushed on every change, so it stays cheap to build. Serialized
+/// directly into the `/ws` `terminal_roster` frame and the
+/// `GET /api/terminals/roster` seed body.
+#[derive(Debug, Clone, Serialize)]
+pub struct RosterEntry {
+    pub id: String,
+    pub tab_name: Option<String>,
+    /// Resolved group (never empty; `DEFAULT_TERMINAL_GROUP` when unset),
+    /// matching the SPA's `terminalTabGroup` so a group compares equal on
+    /// both sides of the wire.
+    pub tab_group: String,
+    pub window_id: Option<String>,
+    /// The session's own broadcast toggle, synced from the SPA via the
+    /// `set-broadcast` WS frame. Cross-window input is only fanned to
+    /// members with this on (see [`Registry::broadcast_input_cross_window`]).
+    pub broadcast: bool,
 }
 
 /// Result of enqueuing a `cs terminal write` onto the matched sessions'
@@ -217,6 +255,13 @@ impl AttachHandle {
         self.session.set_focused(focused);
     }
 
+    /// Sync this session's broadcast toggle from the SPA. The caller
+    /// (`terminal_ws`) follows up with `Registry::notify_roster_change`
+    /// so the new state reaches other windows' rosters.
+    pub fn set_broadcast(&self, on: bool) {
+        self.session.set_broadcast(on);
+    }
+
     pub fn bytes_since_focus(&self) -> u64 {
         self.session.bytes_since_focus()
     }
@@ -241,7 +286,68 @@ impl Registry {
         Self {
             config,
             sessions: Mutex::new(HashMap::new()),
+            name_ordinal: AtomicU64::new(0),
+            roster_notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Hand out the next per-tenant default terminal name (`Terminal-1`,
+    /// `Terminal-2`, ...). Backs `GET /api/terminal/next-name`. See
+    /// [`Registry::name_ordinal`] for why this is per-tenant rather than
+    /// a process-global static.
+    pub fn next_terminal_name(&self) -> String {
+        let n = self.name_ordinal.fetch_add(1, Ordering::Relaxed) + 1;
+        format!("Terminal-{n}")
+    }
+
+    /// A handle to the roster-change signal for the broadcaster task to
+    /// await. Cloning the `Arc` is cheap; both the registry and the task
+    /// reference the same `Notify`.
+    pub fn roster_notify(&self) -> Arc<Notify> {
+        self.roster_notify.clone()
+    }
+
+    /// Wake the roster broadcaster so it republishes a fresh snapshot.
+    /// Called internally on every map mutation (create / close / restart)
+    /// and by the terminal WS handler after a `set-broadcast` toggle (a
+    /// session-field change the map does not see).
+    pub fn notify_roster_change(&self) {
+        self.roster_notify.notify_one();
+    }
+
+    /// The window that owns a live session, for routing a cross-window
+    /// broadcast-toggle command back to the right SPA window. Outer `None`
+    /// = no such live session; inner `None` = the session has no owning
+    /// window (created outside a browser window, so not remote-controllable).
+    pub fn session_window_id(&self, id: &str) -> Option<Option<String>> {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        let session = sessions.get(id)?;
+        if session.closed.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(session.window_id.clone())
+    }
+
+    /// Snapshot of every live session for the cross-window roster. Mirrors
+    /// [`Registry::session_summaries`] but carries `window_id` + the
+    /// `broadcast` toggle and skips the per-session cwd probe (the roster
+    /// is pushed on every change, so it must stay cheap).
+    pub fn roster(&self) -> Vec<RosterEntry> {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        sessions
+            .values()
+            .filter(|session| !session.closed.load(Ordering::Relaxed))
+            .map(|session| RosterEntry {
+                id: session.id.clone(),
+                tab_name: session.tab_name.clone(),
+                tab_group: session
+                    .tab_group
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_TERMINAL_GROUP.to_string()),
+                window_id: session.window_id.clone(),
+                broadcast: session.broadcast.load(Ordering::Relaxed),
+            })
+            .collect()
     }
 
     pub fn create(&self, opts: CreateOptions) -> Result<AttachHandle, CreateError> {
@@ -254,6 +360,8 @@ impl Registry {
         let session =
             Session::spawn(id.clone(), self.config.clone(), opts).map_err(CreateError::Spawn)?;
         sessions.insert(id.clone(), session.clone());
+        drop(sessions);
+        self.notify_roster_change();
         Ok(session.attach(Some(0)))
     }
 
@@ -310,6 +418,7 @@ impl Registry {
                 sessions.insert(id.to_string(), session);
                 drop(sessions);
                 old.close(CloseReason::Explicit);
+                self.notify_roster_change();
                 Ok(true)
             }
             Some(_) => Ok(false),
@@ -367,6 +476,7 @@ impl Registry {
             .remove(id);
         if let Some(session) = session {
             session.close(reason);
+            self.notify_roster_change();
             true
         } else {
             false
@@ -374,11 +484,16 @@ impl Registry {
     }
 
     pub fn remove(&self, id: &str) -> bool {
-        self.sessions
+        let removed = self
+            .sessions
             .lock()
             .expect("terminal registry poisoned")
             .remove(id)
-            .is_some()
+            .is_some();
+        if removed {
+            self.notify_roster_change();
+        }
+        removed
     }
 
     /// Snapshot of every live session, for `cs term list`. The control
@@ -469,6 +584,14 @@ impl Registry {
             // Same group, different window: same-window members are fanned
             // client-side, so skip them here to avoid double-delivery.
             if group != source_group || session.window_id == source_window {
+                continue;
+            }
+            // Respect the receiver's own broadcast toggle (synced via the
+            // `set-broadcast` WS frame). Without this the cross-window fan
+            // would reach group members with broadcast OFF, unlike the
+            // same-window fan which honors the per-member selection. A
+            // member that has not opted in does not receive.
+            if !session.broadcast.load(Ordering::Relaxed) {
                 continue;
             }
             session.send_input(data);
@@ -644,6 +767,7 @@ impl Registry {
         for session in sessions {
             session.close(reason);
         }
+        self.notify_roster_change();
     }
 
     pub fn prune_idle(&self) -> usize {
@@ -842,6 +966,12 @@ struct Session {
     bytes_since_focus: AtomicU64,
     in_alt_screen: AtomicBool,
     alt_screen_tail: Mutex<Vec<u8>>,
+    /// This session's broadcast toggle, synced from the SPA via the
+    /// `set-broadcast` WS frame on toggle and on (re)connect. Gates the
+    /// cross-window input fan (see `broadcast_input_cross_window`) and is
+    /// surfaced in the roster so other windows can render the broadcast
+    /// state of members they do not host.
+    broadcast: AtomicBool,
     closed: AtomicBool,
 }
 
@@ -969,6 +1099,7 @@ impl Session {
             bytes_since_focus: AtomicU64::new(0),
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
+            broadcast: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         });
 
@@ -1189,6 +1320,10 @@ impl Session {
 
     fn bytes_since_focus(&self) -> u64 {
         self.bytes_since_focus.load(Ordering::Relaxed)
+    }
+
+    fn set_broadcast(&self, on: bool) {
+        self.broadcast.store(on, Ordering::Relaxed);
     }
 
     fn request_redraw(&self) {
@@ -1631,6 +1766,7 @@ mod tests {
             bytes_since_focus: AtomicU64::new(0),
             in_alt_screen: AtomicBool::new(false),
             alt_screen_tail: Mutex::new(Vec::new()),
+            broadcast: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         })
     }
@@ -2256,5 +2392,134 @@ mod tests {
         }
         assert!(saw, "redraw did not re-apply the current PTY size");
         registry.close(first.id(), CloseReason::Explicit);
+    }
+
+    /// A registry session with a controllable id / window / group /
+    /// broadcast flag and NO real PTY. `send_input` still bumps
+    /// `last_activity` (the PTY write fails silently because the command
+    /// receiver is dropped), so a delivery is observable as a bumped
+    /// `last_activity` without spawning a shell.
+    fn dummy_session(
+        id: &str,
+        window_id: Option<&str>,
+        tab_group: Option<&str>,
+        broadcast: bool,
+    ) -> Arc<Session> {
+        // `test_session_with_ring` already drops the command/output
+        // receivers, so `send_input` fails silently but still bumps
+        // `last_activity` (the delivery signal). Sole owner, so unwrap to
+        // set the fields the cross-window fan reads (private, same module).
+        let mut s = Arc::try_unwrap(test_session_with_ring(64)).expect("sole owner");
+        s.id = id.to_string();
+        s.window_id = window_id.map(str::to_string);
+        s.tab_group = tab_group.map(str::to_string);
+        // Sentinel: 0 is distinguishable from any real `now_unix_secs()`.
+        s.last_activity = AtomicI64::new(0);
+        s.broadcast = AtomicBool::new(broadcast);
+        Arc::new(s)
+    }
+
+    fn insert_session(registry: &Registry, session: Arc<Session>) {
+        registry
+            .sessions
+            .lock()
+            .unwrap()
+            .insert(session.id.clone(), session);
+    }
+
+    fn was_delivered(registry: &Registry, id: &str) -> bool {
+        registry
+            .sessions
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|s| s.last_activity.load(Ordering::Relaxed) != 0)
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn cross_window_fan_respects_group_window_and_broadcast_toggle() {
+        let registry = Registry::new(test_config(64, 16, 600));
+        // Source in window A, group G.
+        insert_session(
+            &registry,
+            dummy_session("src", Some("winA"), Some("G"), true),
+        );
+        // Same group, other window, broadcast ON -> receives.
+        insert_session(
+            &registry,
+            dummy_session("on", Some("winB"), Some("G"), true),
+        );
+        // Same group, other window, broadcast OFF -> skipped (the fix).
+        insert_session(
+            &registry,
+            dummy_session("off", Some("winB"), Some("G"), false),
+        );
+        // Other group, other window, broadcast ON -> skipped (wrong group).
+        insert_session(
+            &registry,
+            dummy_session("other_group", Some("winB"), Some("H"), true),
+        );
+        // Same group, SAME window -> skipped (fanned client-side).
+        insert_session(
+            &registry,
+            dummy_session("same_window", Some("winA"), Some("G"), true),
+        );
+
+        registry.broadcast_input_cross_window("src", b"hi");
+
+        assert!(
+            was_delivered(&registry, "on"),
+            "broadcast-on member should receive"
+        );
+        assert!(
+            !was_delivered(&registry, "off"),
+            "broadcast-off member must not receive"
+        );
+        assert!(
+            !was_delivered(&registry, "other_group"),
+            "other-group member must not receive"
+        );
+        assert!(
+            !was_delivered(&registry, "same_window"),
+            "same-window member is handled client-side, not here"
+        );
+        assert!(
+            !was_delivered(&registry, "src"),
+            "source must not echo to itself"
+        );
+    }
+
+    #[test]
+    fn next_terminal_name_is_a_per_tenant_sequence() {
+        let one = Registry::new(test_config(64, 16, 600));
+        let two = Registry::new(test_config(64, 16, 600));
+        assert_eq!(one.next_terminal_name(), "Terminal-1");
+        assert_eq!(one.next_terminal_name(), "Terminal-2");
+        // A second tenant has its own sequence (the bug a process-global
+        // static caused: a second workspace window restarting past 1).
+        assert_eq!(two.next_terminal_name(), "Terminal-1");
+        assert_eq!(one.next_terminal_name(), "Terminal-3");
+    }
+
+    #[test]
+    fn roster_reports_window_group_and_broadcast() {
+        let registry = Registry::new(test_config(64, 16, 600));
+        insert_session(&registry, dummy_session("a", Some("winA"), Some("G"), true));
+        insert_session(&registry, dummy_session("b", Some("winB"), None, false));
+
+        let mut roster = registry.roster();
+        roster.sort_by(|x, y| x.id.cmp(&y.id));
+        assert_eq!(roster.len(), 2);
+
+        assert_eq!(roster[0].id, "a");
+        assert_eq!(roster[0].window_id.as_deref(), Some("winA"));
+        assert_eq!(roster[0].tab_group, "G");
+        assert!(roster[0].broadcast);
+
+        assert_eq!(roster[1].id, "b");
+        // No explicit group resolves to the default, matching the SPA.
+        assert_eq!(roster[1].tab_group, DEFAULT_TERMINAL_GROUP);
+        assert!(!roster[1].broadcast);
     }
 }
