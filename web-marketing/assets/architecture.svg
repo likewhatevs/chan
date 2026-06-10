@@ -72,9 +72,9 @@
 
   <!-- Edges -->
   <!-- Window 1 -> Local workspace on disk (off the left side, into the disk's left edge) -->
-  <path class="edge" marker-end="url(#arrow)" d="M56,124 C34,124 34,340 40,340" />
+  <path class="edge" marker-end="url(#arrow)" d="M56,124 C30,124 30,340 48,340" />
   <!-- Window 2 -> Lima serve (down the left gutter, clear of the right-side lines) -->
-  <path class="edge" marker-end="url(#arrow)" d="M56,184 C24,184 24,450 56,450" />
+  <path class="edge" marker-end="url(#arrow)" d="M56,184 C22,184 22,450 64,450" />
   <text class="edgelabel" x="320" y="446">localhost:8787</text>
   <text class="edgelabel" x="320" y="462">(Lima host network)</text>
   <!-- Window 3 -> SSH tunnel -->
