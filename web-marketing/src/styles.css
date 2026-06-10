@@ -449,6 +449,14 @@ code {
   overflow: hidden;
 }
 
+/* The static variant lists several commands and has no copy button, so
+   stack them one per line (matching the mobile layout). The flex row is
+   only right for the single-command + copy-button widget; with multiple
+   commands it squeezed each into a truncated column on desktop. */
+.command-copy.static {
+  display: grid;
+}
+
 .command-copy code {
   align-items: center;
   border: 0;
@@ -486,6 +494,37 @@ code {
 .command-copy.copied button {
   background: var(--accent);
   color: #fff;
+}
+
+/* Clickable screenshots open enlarged in a full-screen lightbox (site.js). */
+.hero-shot img.zoomable,
+.inline-shot img.zoomable {
+  cursor: zoom-in;
+}
+
+.lightbox {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.85);
+  cursor: zoom-out;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 4vmin;
+  position: fixed;
+  z-index: 1000;
+}
+
+.lightbox img {
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  height: auto;
+  max-height: 92vh;
+  max-width: 96vw;
+  width: auto;
+}
+
+body.lightbox-open {
+  overflow: hidden;
 }
 
 .manual-layout {

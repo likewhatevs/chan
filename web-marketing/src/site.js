@@ -90,3 +90,57 @@
     return true;
   }
 })();
+
+(function () {
+  // Click (or Enter/Space) a product screenshot to view it larger in a
+  // lightbox; click the backdrop or press Escape to close.
+  const shots = Array.from(
+    document.querySelectorAll(".hero-shot img, .inline-shot img"),
+  );
+  if (shots.length === 0) return;
+
+  let overlay = null;
+
+  function close() {
+    if (!overlay) return;
+    overlay.remove();
+    overlay = null;
+    document.body.classList.remove("lightbox-open");
+    document.removeEventListener("keydown", onKey);
+  }
+
+  function onKey(event) {
+    if (event.key === "Escape") close();
+  }
+
+  function open(src, alt) {
+    close();
+    overlay = document.createElement("div");
+    overlay.className = "lightbox";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", alt || "Screenshot");
+    const large = document.createElement("img");
+    large.src = src;
+    large.alt = alt || "";
+    overlay.appendChild(large);
+    overlay.addEventListener("click", close);
+    document.body.appendChild(overlay);
+    document.body.classList.add("lightbox-open");
+    document.addEventListener("keydown", onKey);
+  }
+
+  shots.forEach((img) => {
+    img.classList.add("zoomable");
+    img.setAttribute("role", "button");
+    img.setAttribute("tabindex", "0");
+    img.setAttribute("aria-label", `View larger: ${img.alt || "screenshot"}`);
+    img.addEventListener("click", () => open(img.currentSrc || img.src, img.alt));
+    img.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open(img.currentSrc || img.src, img.alt);
+      }
+    });
+  });
+})();
