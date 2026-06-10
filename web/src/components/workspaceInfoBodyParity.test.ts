@@ -84,7 +84,7 @@ describe("WorkspaceInfoBody variant split + directory action row", () => {
     // renders for the Dashboard. The {#if variant === "dashboard"} guard
     // wraps the Notes-directories <section>.
     expect(workspaceInfo).toMatch(
-      /\{#if variant === "dashboard"\}[\s\S]*?<h4>Notes directories<\/h4>/,
+      /\{#if variant === "dashboard"\}[\s\S]*?<h4>Workspaces<\/h4>/,
     );
     // The plumbing is preserved: the default-root field still binds and
     // autosaves.
@@ -93,10 +93,10 @@ describe("WorkspaceInfoBody variant split + directory action row", () => {
   });
 
   test("the Notes-directories section carries the divider", () => {
-    // A dashed top border separates COCOMO from Notes directories,
+    // A dashed top border separates COCOMO from the Workspaces section,
     // matching the COCOMO divider idiom.
     expect(workspaceInfo).toMatch(
-      /<section class="refs notes-dirs">[\s\S]*?<h4>Notes directories<\/h4>/,
+      /<section class="refs notes-dirs">[\s\S]*?<h4>Workspaces<\/h4>/,
     );
     expect(workspaceInfo).toMatch(
       /\.notes-dirs \{[\s\S]*?border-top: 1px dashed var\(--border\);/,

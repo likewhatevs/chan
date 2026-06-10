@@ -630,13 +630,12 @@
        (or Contacts) above is visually separated from the
        Notes-directories config. -->
   <section class="refs notes-dirs">
-    <h4>Notes directories</h4>
+    <h4>Workspaces</h4>
     <p class="hint">
-      Your default notes directory is where chan opens when launched
+      Your default workspace directory is where chan opens when launched
       without a specific one in mind. Leave empty to use the platform
       default (<code>~/Documents/Chan</code> on macOS,
-      <code>$XDG_DATA_HOME/chan/default</code> on Linux,
-      <code>%USERPROFILE%\Documents\Chan</code> on Windows).
+      <code>$XDG_DATA_HOME/chan/default</code> on Linux).
     </p>
     <label class="field">
       <span>Default</span>

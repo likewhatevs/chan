@@ -75,7 +75,7 @@ export type GlobalConfig = {
   /// When set, the resolver's fallback path becomes this; when
   /// unset, it falls back to the platform convention
   /// (`~/Documents/Chan` on macOS, `$XDG_DATA_HOME/chan/default`
-  /// on Linux, `%USERPROFILE%\Documents\Chan` on Windows).
+  /// on Linux).
   default_workspace_root?: string | null;
   /// Known workspaces the user has opened on this machine. Updated
   /// by the server on every spawn (touch existing or append).

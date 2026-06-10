@@ -542,7 +542,7 @@
     {:else if slideIndex === 1}
       <!-- Slide 1 hosts `WorkspaceInfoBody`, the same inspector body
            the file browser shows when the workspace-root row is
-           selected. Folder-mode parity plus the Notes directories
+           selected. Folder-mode parity plus the Workspaces
            config. `WorkspaceInfoBody` owns its own scroll affordance
            via the slide's `overflow: auto`. -->
       <div class="slide slide-workspace" aria-label="Workspace info">
