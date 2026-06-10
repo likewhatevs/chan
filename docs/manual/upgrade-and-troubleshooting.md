@@ -12,7 +12,7 @@ that metadata.
 
 ```sh
 chan upgrade
-chan upgrade --version 0.14.0
+chan upgrade --version X.Y.Z
 ```
 
 `--version` takes a bare version and reads
@@ -31,7 +31,7 @@ refuses special files and keeps workspace access sandboxed under the workspace r
 
 ## Install script fails
 
-The shell installer supports only the active standalone CLI release targets.
-For desktop installs, use the DMG, AppImage, or deb links on the install
-page. If release metadata cannot be fetched, the install page links to GitHub
-Releases instead of guessing asset URLs.
+The shell installer supports the active standalone CLI release targets. For
+desktop installs, use the [install page](/install/). If release metadata
+cannot be fetched, the install page links to GitHub Releases instead of
+guessing asset URLs.

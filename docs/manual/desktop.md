@@ -8,14 +8,9 @@ outbound and inbound.
 ## Install
 
 Download the desktop package for your platform from the
-[install page](/install/):
-
-- macOS: `.dmg` (the `.app` bundle).
-- Linux: AppImage or `.deb`.
-
-Desktop packages are release artifacts; the shell installer
-(`curl -fsSL https://chan.app/install.sh | sh`) installs only the standalone
-`chan` CLI, not the desktop app.
+[install page](/install/). Desktop packages are release artifacts; the shell
+installer (`curl -fsSL https://chan.app/install.sh | sh`) installs the
+standalone `chan` CLI, not the desktop app.
 
 ## Local workspaces
 
