@@ -13,6 +13,7 @@
   import { onDestroy, onMount } from "svelte";
   import { Download, Upload } from "lucide-svelte";
   import { api } from "../../api/client";
+  import type { GlobalConfig } from "../../api/types";
   import { formatSize } from "../../state/format";
 
   // No external props. Reports + metadata state are owned here and read
@@ -140,14 +141,110 @@
     }
   }
 
+  // Default workspace + recents config. Moved here from the front
+  // Workspace slide (WorkspaceInfoBody); owns its own globalConfig load +
+  // autosave, matching the reports/metadata sections above. The default
+  // root writes through the global config endpoint, debounced.
+  let globalConfig = $state<GlobalConfig | null>(null);
+  let editedDefaultRoot = $state<string>("");
+  let initialDefaultRoot = $state<string>("");
+  let saveError = $state<string | null>(null);
+
+  const AUTOSAVE_DELAY_MS = 500;
+  let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let inflight = false;
+
+  async function loadGlobalConfig(): Promise<void> {
+    try {
+      globalConfig = await api.config();
+      const cur = globalConfig.default_workspace_root ?? "";
+      editedDefaultRoot = cur;
+      initialDefaultRoot = cur;
+    } catch {
+      globalConfig = null;
+    }
+  }
+
+  function dirty(): boolean {
+    if (!globalConfig) return false;
+    return editedDefaultRoot !== initialDefaultRoot;
+  }
+
+  async function saveDefaultRoot(): Promise<void> {
+    if (!globalConfig || inflight) return;
+    inflight = true;
+    saveError = null;
+    const sent = editedDefaultRoot;
+    try {
+      const trimmed = sent.trim();
+      const body: GlobalConfig = {
+        preferences: globalConfig.preferences,
+        default_workspace_root: trimmed === "" ? null : trimmed,
+        workspaces: globalConfig.workspaces,
+      };
+      const cfg = await api.updateConfig(body);
+      globalConfig = cfg;
+      // Don't clobber further edits the user typed while in flight.
+      if (editedDefaultRoot === sent) {
+        const echoed = cfg.default_workspace_root ?? "";
+        editedDefaultRoot = echoed;
+        initialDefaultRoot = echoed;
+      } else {
+        initialDefaultRoot = cfg.default_workspace_root ?? "";
+      }
+    } catch (e) {
+      saveError = (e as Error).message;
+    } finally {
+      inflight = false;
+      if (dirty()) scheduleDefaultRootSave();
+    }
+  }
+
+  function scheduleDefaultRootSave(): void {
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => {
+      autosaveTimer = null;
+      void saveDefaultRoot();
+    }, AUTOSAVE_DELAY_MS);
+  }
+
+  $effect(() => {
+    void editedDefaultRoot;
+    if (!dirty()) return;
+    scheduleDefaultRootSave();
+  });
+
+  function displayPathLabel(path: string): string {
+    const stripped = path.replace(/[/\\]+$/, "");
+    if (!stripped) return path || "(root)";
+    const slash = Math.max(stripped.lastIndexOf("/"), stripped.lastIndexOf("\\"));
+    return slash < 0 ? stripped : stripped.slice(slash + 1);
+  }
+
+  function formatLastSeen(iso: string): string {
+    try {
+      const d = new Date(iso);
+      const yyyy = d.getUTCFullYear();
+      const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(d.getUTCDate()).padStart(2, "0");
+      const hh = String(d.getUTCHours()).padStart(2, "0");
+      const mi = String(d.getUTCMinutes()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd} ${hh}:${mi} UTC`;
+    } catch {
+      return iso;
+    }
+  }
+
   onMount(() => {
     void loadReportsState();
+    void loadGlobalConfig();
   });
 
   onDestroy(() => {
-    // No long-lived timers here: reports + metadata are request/response.
-    // Pending reload timeouts are harmless if the slot is switched away
-    // mid-flight, so nothing to clear.
+    // Reports + metadata are request/response; pending metadata reload
+    // timeouts are harmless if the slot is switched away mid-flight.
+    // Clear a pending default-root autosave so it can't fire post-unmount.
+    if (autosaveTimer) clearTimeout(autosaveTimer);
   });
 </script>
 
@@ -185,7 +282,7 @@
   {/if}
 </section>
 
-<section>
+<section class="divided">
   <h3>Metadata archive</h3>
   <div class="metadata-row">
     <button
@@ -262,6 +359,50 @@
   {/if}
   {#if metadataError}
     <p class="metadata-status error">{metadataError}</p>
+  {/if}
+</section>
+
+<!-- Default workspace + recents. Moved here from the front Workspace
+     slide (WorkspaceInfoBody): the global default-root config + the
+     recent-workspaces list now live on this slot's flip-back, below a
+     dashed divider matching the one between chan-reports and Metadata
+     archive above. -->
+<section class="divided">
+  <h3>Workspaces</h3>
+  <p class="hint">
+    Your default workspace directory is where chan opens when launched
+    without a specific one in mind. Leave empty to use the platform
+    default (<code>~/Documents/Chan</code> on macOS,
+    <code>$XDG_DATA_HOME/chan/default</code> on Linux).
+  </p>
+  <label class="field">
+    <span>Default</span>
+    <input
+      bind:value={editedDefaultRoot}
+      placeholder="(platform default)"
+      spellcheck="false"
+      autocomplete="off"
+    />
+  </label>
+  {#if saveError}
+    <div class="err-line">save failed: {saveError}</div>
+  {/if}
+
+  {#if globalConfig?.workspaces && globalConfig.workspaces.length > 0}
+    <h5 class="recents-head">Recent</h5>
+    <ul class="recents">
+      {#each globalConfig.workspaces as u (u.path)}
+        <li>
+          <span class="recents-time">{formatLastSeen(u.last_seen_at)}</span>
+          <span class="recents-name" title={u.path}>{displayPathLabel(u.path)}</span>
+          <span class="recents-path mono" title={u.path}>{u.path}</span>
+        </li>
+      {/each}
+    </ul>
+    <p class="hint">
+      Updated every time you open a directory. In-app open-from-list
+      lands in a follow-up; for now use the menu's Open Directory.
+    </p>
   {/if}
 </section>
 
@@ -382,4 +523,79 @@
   .metadata-status.error {
     color: var(--danger, #b42318);
   }
+  /* Dashed section divider, matching the workspace inspector idiom: a
+     rule between chan-reports / Metadata archive / Workspaces. The
+     shell's 1.25rem inter-section gap supplies the space above; the
+     padding spaces the heading below the rule. */
+  .divided {
+    padding-top: 0.7rem;
+    border-top: 1px dashed var(--border);
+  }
+  .hint code {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    background: var(--bg-card);
+    padding: 0 4px;
+    border-radius: 3px;
+  }
+  .field {
+    display: grid;
+    grid-template-columns: 6.5em 1fr;
+    gap: 0.5rem;
+    align-items: center;
+    margin: 0.25rem 0;
+  }
+  .field > span { color: var(--text-secondary); font-size: 14px; }
+  .field input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 4px 7px;
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+    width: 100%;
+  }
+  .field input:focus { border-color: var(--link); }
+  .err-line {
+    color: var(--warn-text);
+    font-size: 13px;
+    margin: 0.25rem 0;
+  }
+  .recents-head {
+    margin: 0.6rem 0 0.25rem 0;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+  }
+  .recents {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 0.4rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .recents li {
+    display: grid;
+    grid-template-columns: 12em auto 1fr;
+    gap: 0.6rem;
+    font-size: 13px;
+    color: var(--text);
+    align-items: baseline;
+  }
+  .recents-time {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .recents-name { color: var(--text); font-weight: 500; }
+  .recents-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 </style>

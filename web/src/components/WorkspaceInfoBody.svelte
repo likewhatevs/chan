@@ -1,24 +1,20 @@
 <script lang="ts">
   // Workspace inspector body. Shown in the file browser's Inspector pane
-  // when the user clicks the Directory row in the hamburger menu, and in
-  // the graph when the workspace-root node is selected. Houses
-  // the global Notes Directories config (default root + recent workspaces list).
-  // Search index status lives in the Search Status overlay.
+  // when the user clicks the Directory row in the hamburger menu, in the
+  // graph when the workspace-root node is selected, and on the Dashboard's
+  // front Workspace slide. Search index status lives in the Search Status
+  // overlay; the global default-workspace + recents config now lives on the
+  // Dashboard Workspace slot's flip-back (WorkspaceSlotConfig).
   //
   // Parity with FileInfoBody's directory mode: this body renders the same
   // aggregate stats (files, subdirs, size, last change), file-kind
   // counts, and code report a regular folder inspector shows. The
   // workspace chip + title up top stay distinct (workspace-rooted, not a
-  // generic folder), and the global Notes-directory config section sits
-  // below the parity content.
+  // generic folder). `variant` only toggles the directory action row
+  // (inspector) vs. nothing (dashboard front slide).
 
-  import { onMount } from "svelte";
   import { api } from "../api/client";
-  import type {
-    GlobalConfig,
-    InspectorPayload,
-    ReportPrefix,
-  } from "../api/types";
+  import type { InspectorPayload, ReportPrefix } from "../api/types";
   import { formatMtime, formatSize } from "../state/format";
   import {
     fileOps,
@@ -53,9 +49,10 @@
   /// `variant` selects between the two surfaces:
   ///   - "inspector" (default): render the standard directory ACTION
   ///     ROW (Upload / Download / Show in File Browser / Graph from
-  ///     here). The Notes-directories config does NOT render here.
-  ///   - "dashboard": render the Notes-directories config. The action
-  ///     row does NOT render.
+  ///     here).
+  ///   - "dashboard": the Dashboard front Workspace slide. The action
+  ///     row does NOT render (the per-workspace config lives on the
+  ///     slot's flip-back, WorkspaceSlotConfig).
   /// The aggregate stats grid, File Kinds, and Code/COCOMO sections
   /// render in both variants. `onReveal` wires the "Show in File
   /// Browser" button (inspector variant only).
@@ -162,96 +159,6 @@
       secondary,
     };
   });
-
-  let globalConfig = $state<GlobalConfig | null>(null);
-  let editedDefaultRoot = $state<string>("");
-  let initialDefaultRoot = $state<string>("");
-  let saveError = $state<string | null>(null);
-
-  const AUTOSAVE_DELAY_MS = 500;
-  let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
-  let inflight = false;
-
-  async function loadGlobalConfig(): Promise<void> {
-    try {
-      globalConfig = await api.config();
-      const cur = globalConfig.default_workspace_root ?? "";
-      editedDefaultRoot = cur;
-      initialDefaultRoot = cur;
-    } catch {
-      globalConfig = null;
-    }
-  }
-
-  function dirty(): boolean {
-    if (!globalConfig) return false;
-    return editedDefaultRoot !== initialDefaultRoot;
-  }
-
-  async function save(): Promise<void> {
-    if (!globalConfig || inflight) return;
-    inflight = true;
-    saveError = null;
-    const sent = editedDefaultRoot;
-    try {
-      const trimmed = sent.trim();
-      const body: GlobalConfig = {
-        preferences: globalConfig.preferences,
-        default_workspace_root: trimmed === "" ? null : trimmed,
-        workspaces: globalConfig.workspaces,
-      };
-      const cfg = await api.updateConfig(body);
-      globalConfig = cfg;
-      // Don't clobber further edits the user typed while in flight.
-      if (editedDefaultRoot === sent) {
-        const echoed = cfg.default_workspace_root ?? "";
-        editedDefaultRoot = echoed;
-        initialDefaultRoot = echoed;
-      } else {
-        initialDefaultRoot = cfg.default_workspace_root ?? "";
-      }
-    } catch (e) {
-      saveError = (e as Error).message;
-    } finally {
-      inflight = false;
-      if (dirty()) scheduleSave();
-    }
-  }
-
-  function scheduleSave(): void {
-    if (autosaveTimer) clearTimeout(autosaveTimer);
-    autosaveTimer = setTimeout(() => {
-      autosaveTimer = null;
-      void save();
-    }, AUTOSAVE_DELAY_MS);
-  }
-
-  $effect(() => {
-    void editedDefaultRoot;
-    if (!dirty()) return;
-    scheduleSave();
-  });
-
-  function displayPathLabel(path: string): string {
-    const stripped = path.replace(/[/\\]+$/, "");
-    if (!stripped) return path || "(root)";
-    const slash = Math.max(stripped.lastIndexOf("/"), stripped.lastIndexOf("\\"));
-    return slash < 0 ? stripped : stripped.slice(slash + 1);
-  }
-
-  function formatLastSeen(iso: string): string {
-    try {
-      const d = new Date(iso);
-      const yyyy = d.getUTCFullYear();
-      const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-      const dd = String(d.getUTCDate()).padStart(2, "0");
-      const hh = String(d.getUTCHours()).padStart(2, "0");
-      const mi = String(d.getUTCMinutes()).padStart(2, "0");
-      return `${yyyy}-${mm}-${dd} ${hh}:${mi} UTC`;
-    } catch {
-      return iso;
-    }
-  }
 
   /// Aggregate stats walked from the loaded file tree. Mirrors
   /// FileInfoBody's `dirStats` derivation for the workspace root: every
@@ -422,9 +329,6 @@
     return n >= 10 ? `${Math.round(n)}` : n.toFixed(1);
   }
 
-  onMount(() => {
-    void loadGlobalConfig();
-  });
 </script>
 
 <div class="info">
@@ -621,53 +525,6 @@
     </section>
   {/if}
 
-  {#if variant === "dashboard"}
-  <!-- The Notes-directories config is Dashboard-only. The inspector
-       variant drops it (the workspace root reads as a plain directory
-       there); the Dashboard carries the full
-       globalConfig/save/autosave plumbing. `.notes-dirs` adds an
-       explicit divider above the heading so the COCOMO / Code content
-       (or Contacts) above is visually separated from the
-       Notes-directories config. -->
-  <section class="refs notes-dirs">
-    <h4>Workspaces</h4>
-    <p class="hint">
-      Your default workspace directory is where chan opens when launched
-      without a specific one in mind. Leave empty to use the platform
-      default (<code>~/Documents/Chan</code> on macOS,
-      <code>$XDG_DATA_HOME/chan/default</code> on Linux).
-    </p>
-    <label class="field">
-      <span>Default</span>
-      <input
-        bind:value={editedDefaultRoot}
-        placeholder="(platform default)"
-        spellcheck="false"
-        autocomplete="off"
-      />
-    </label>
-    {#if saveError}
-      <div class="err-line">save failed: {saveError}</div>
-    {/if}
-
-    {#if globalConfig?.workspaces && globalConfig.workspaces.length > 0}
-      <h5 class="recents-head">Recent</h5>
-      <ul class="recents">
-        {#each globalConfig.workspaces as u (u.path)}
-          <li>
-            <span class="recents-time">{formatLastSeen(u.last_seen_at)}</span>
-            <span class="recents-name" title={u.path}>{displayPathLabel(u.path)}</span>
-            <span class="recents-path mono" title={u.path}>{u.path}</span>
-          </li>
-        {/each}
-      </ul>
-      <p class="hint">
-        Updated every time you open a directory. In-app open-from-list
-        lands in a follow-up; for now use the menu's Open Directory.
-      </p>
-    {/if}
-  </section>
-  {/if}
 </div>
 
 <style>
@@ -866,77 +723,6 @@
     -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
     mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 14c0-3 3-5 6-5s6 2 6 5z'/></svg>") center / contain no-repeat;
   }
-  .hint {
-    color: var(--text-secondary);
-    font-size: 11.5px;
-    margin: 0 0 0.5rem 0;
-  }
-  .hint code {
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    background: var(--bg-card);
-    padding: 0 4px;
-    border-radius: 3px;
-  }
-  .field {
-    display: grid;
-    grid-template-columns: 6.5em 1fr;
-    gap: 0.5rem;
-    align-items: center;
-    margin: 0.25rem 0;
-  }
-  .field > span { color: var(--text-secondary); font-size: 14px; }
-  .field input {
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 4px 7px;
-    font: inherit;
-    font-size: 14px;
-    outline: none;
-    width: 100%;
-  }
-  .field input:focus { border-color: var(--link); }
-  .err-line {
-    color: var(--warn-text);
-    font-size: 13px;
-    margin: 0.25rem 0;
-  }
-  .recents-head {
-    margin: 0.6rem 0 0.25rem 0;
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-secondary);
-  }
-  .recents {
-    list-style: none;
-    padding: 0;
-    margin: 0 0 0.4rem 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .recents li {
-    display: grid;
-    grid-template-columns: 12em auto 1fr;
-    gap: 0.6rem;
-    font-size: 13px;
-    color: var(--text);
-    align-items: baseline;
-  }
-  .recents-time {
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-  }
-  .recents-name { color: var(--text); font-weight: 500; }
-  .recents-path {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   /* Folder-parity sections (file kinds + code report). Visual style
      mirrors FileInfoBody so the workspace inspector and a regular
      folder inspector read as one feature. */
@@ -1015,15 +801,6 @@
     padding: 0;
   }
   .see-more:hover { text-decoration: underline; }
-  /* Divider between the Code/COCOMO (or Contacts) content above and
-     the Notes-directories config below. Matches the dashed rule the
-     COCOMO block uses so the dashboard inspector reads as cleanly
-     sectioned. The `.refs` margin-top supplies the gap above the
-     rule; padding-top spaces the heading below it. */
-  .notes-dirs {
-    padding-top: 0.7rem;
-    border-top: 1px dashed var(--border);
-  }
   .cocomo {
     margin-top: 0.5rem;
     padding-top: 0.4rem;

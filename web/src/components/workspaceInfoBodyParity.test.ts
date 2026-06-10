@@ -1,13 +1,16 @@
 import { describe, expect, test } from "vitest";
 import workspaceInfo from "./WorkspaceInfoBody.svelte?raw";
+import workspaceSlotConfig from "./dashboard/WorkspaceSlotConfig.svelte?raw";
 import carousel from "./EmptyPaneCarousel.svelte?raw";
 import graphPanel from "./GraphPanel.svelte?raw";
 import fbSurface from "./FileBrowserSurface.svelte?raw";
 
 // Workspace-root inspector behaves like any other directory. The
 // `inspector` variant renders the standard directory action row; the
-// `dashboard` variant renders the Notes-directories config. Source-level
-// pins lock the variant split, action row, config gating, and host wiring.
+// `dashboard` variant (Dashboard front slide) drops it. The per-workspace
+// default-root + recents config moved to WorkspaceSlotConfig (the slot's
+// flip-back). Source-level pins lock the variant split, action row, the
+// config's new home, and host wiring.
 
 describe("WorkspaceInfoBody variant split + directory action row", () => {
   test("a `variant` prop selects inspector vs dashboard", () => {
@@ -79,27 +82,30 @@ describe("WorkspaceInfoBody variant split + directory action row", () => {
     expect(workspaceInfo).toContain("clearDownloadTransfer");
   });
 
-  test("the Notes-directories section is gated to variant === dashboard", () => {
-    // The config section (heading + default-root field + recents) only
-    // renders for the Dashboard. The {#if variant === "dashboard"} guard
-    // wraps the Notes-directories <section>.
-    expect(workspaceInfo).toMatch(
-      /\{#if variant === "dashboard"\}[\s\S]*?<h4>Workspaces<\/h4>/,
-    );
-    // The plumbing is preserved: the default-root field still binds and
-    // autosaves.
-    expect(workspaceInfo).toContain("bind:value={editedDefaultRoot}");
-    expect(workspaceInfo).toContain("scheduleSave");
+  test("the Workspaces config moved off WorkspaceInfoBody into WorkspaceSlotConfig", () => {
+    // The default-root + recents config no longer lives on the front
+    // inspector body; its plumbing (default-root field + autosave) is gone
+    // from WorkspaceInfoBody and now lives in the slot's flip-back.
+    expect(workspaceInfo).not.toContain("editedDefaultRoot");
+    expect(workspaceInfo).not.toContain('class="notes-dirs"');
+
+    expect(workspaceSlotConfig).toMatch(/<h3>Workspaces<\/h3>/);
+    expect(workspaceSlotConfig).toContain("bind:value={editedDefaultRoot}");
+    expect(workspaceSlotConfig).toContain("scheduleDefaultRootSave");
+    expect(workspaceSlotConfig).toMatch(/globalConfig\?\.workspaces/);
   });
 
-  test("the Notes-directories section carries the divider", () => {
-    // A dashed top border separates COCOMO from the Workspaces section,
-    // matching the COCOMO divider idiom.
-    expect(workspaceInfo).toMatch(
-      /<section class="refs notes-dirs">[\s\S]*?<h4>Workspaces<\/h4>/,
+  test("WorkspaceSlotConfig divides chan-reports / Metadata archive / Workspaces", () => {
+    // Two dashed separators: one before Metadata archive, one before the
+    // Workspaces config, matching the workspace-inspector divider idiom.
+    expect(workspaceSlotConfig).toMatch(
+      /<section class="divided">\s*<h3>Metadata archive<\/h3>/,
     );
-    expect(workspaceInfo).toMatch(
-      /\.notes-dirs \{[\s\S]*?border-top: 1px dashed var\(--border\);/,
+    expect(workspaceSlotConfig).toMatch(
+      /<section class="divided">\s*<h3>Workspaces<\/h3>/,
+    );
+    expect(workspaceSlotConfig).toMatch(
+      /\.divided \{[\s\S]*?border-top: 1px dashed var\(--border\);/,
     );
   });
 
