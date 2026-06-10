@@ -6,6 +6,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.29.0] - 2026-06-10
+
+### Added
+
+- Standalone terminal windows on chan-desktop: File > New Terminal (Cmd+T)
+  opens a window that holds only a terminal, with no workspace. These windows
+  split panes, use Hybrid Nav, keep broadcast + shortcuts, and configure the
+  terminal via the Cmd+, tab flip; Cmd+T adds a tab and Cmd+Shift+N opens
+  another terminal window.
+- Broadcast input now spans terminal windows. A terminal's broadcast menu
+  lists same-group terminals in other windows, Select All / Deselect All
+  (Cmd+Shift+I on macOS) applies to the whole group across every window, and
+  every participating terminal shows the broadcast sign in its own window.
+
+### Changed
+
+- Terminal-N numbering is consistent across every window of a tenant: all
+  standalone terminal windows share one sequence, and all windows of a
+  workspace share that workspace's sequence, instead of restarting at 1 in each
+  new window.
+- The desktop About window is unified across macOS and Linux and shows the same
+  information as the in-app Dashboard.
+
+### Fixed
+
+- Cross-window broadcast respects group boundaries: a terminal with broadcast
+  turned off no longer receives input broadcast from another window.
+- Terminal names are unique across all windows, not just within one window, so
+  renaming or regrouping a terminal can no longer collide with a terminal in
+  another window.
+- The desktop update notification shows plain text plus a changelog link
+  instead of rendering the release notes as raw markdown.
+
 ## [v0.28.1] - 2026-06-08
 
 ### Fixed
