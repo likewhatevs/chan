@@ -1575,40 +1575,62 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // About / Exit are macOS-implicit.
     #[cfg(target_os = "macos")]
     let menu = {
-        use tauri::menu::SubmenuBuilder;
         let menu = Menu::default(app)?;
-        // `phase-20`: macOS `Menu::default` ships App / Edit / View / Window
-        // / Help but NO File submenu (About / Quit live in the App menu). Add
-        // a File submenu carrying New Terminal so Cmd+T has a menu home and a
-        // pre-empting accelerator on macOS too. Insert right after the App
-        // menu (index 0) so File sits in its conventional slot.
-        let file = SubmenuBuilder::new(app, "File")
-            .item(&new_terminal)
-            .build()?;
-        menu.insert(&file, 1)?;
+        // Strip muda's predefined "Close Window" from a submenu. We replace it
+        // with our own Cmd+W-bound item (see `close_window` below) so a single
+        // accelerator can route by the focused window's kind; leaving the
+        // predefined one would either double-bind Cmd+W or natively close the
+        // window unconditionally. Match by text since muda assigns predefined
+        // items an opaque generated id.
+        let strip_close = |submenu: &tauri::menu::Submenu<tauri::Wry>| {
+            if let Ok(items) = submenu.items() {
+                for item in items {
+                    if let MenuItemKind::Predefined(p) = &item {
+                        if let Ok(text) = p.text() {
+                            if text.to_lowercase().contains("close") {
+                                let _ = submenu.remove(&item);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        // `phase-21 fix`: File ▸ Close Window. A CUSTOM item (not the predefined
+        // close_window) carrying Cmd+W, routed by `handle_close_window`: a
+        // focused workspace webview closes the active TAB (dispatching the same
+        // `app.tab.close` the KEY_BRIDGE_JS KeyW case fires), while the launcher
+        // (`main`) and other plain windows close natively. The accelerator
+        // pre-empts the webview on macOS, so the KEY_BRIDGE_JS KeyW case is
+        // harmlessly shadowed here (same arrangement as New Terminal's Cmd+T).
+        let close_window = MenuItemBuilder::with_id("app-close-window", "Close Window")
+            .accelerator("CmdOrCtrl+W")
+            .build(app)?;
+        // `phase-20` / `phase-21 fix`: macOS `Menu::default` ALREADY ships a
+        // File submenu (carrying the predefined Close Window) alongside App /
+        // Edit / View / Window / Help. Reuse it rather than inserting a second
+        // one (which produced a duplicate "File" menu): strip the predefined
+        // Close Window, then rebuild File as New Terminal, a separator, and our
+        // routed Close Window. Match the submenu by title.
+        if let Some(file_submenu) = menu.items().ok().and_then(|items| {
+            items.into_iter().find_map(|k| {
+                k.as_submenu()
+                    .filter(|sm| sm.text().ok().as_deref() == Some("File"))
+                    .cloned()
+            })
+        }) {
+            strip_close(&file_submenu);
+            let sep = PredefinedMenuItem::separator(app)?;
+            file_submenu.prepend_items(&[&new_terminal, &sep, &close_window])?;
+        }
         if let Some(window_submenu) = menu
             .get(WINDOW_SUBMENU_ID)
             .and_then(|k| k.as_submenu().cloned())
         {
             let sep = PredefinedMenuItem::separator(app)?;
             window_submenu.prepend_items(&[&workspace_manager, &new_window, &settings, &sep])?;
-            // Strip the default "Close Window" item so Cmd+W reaches the
-            // workspace webview's key bridge (which dispatches `app.tab.close`
-            // to chan). The trade-off: non-workspace windows (main, console)
-            // lose their Cmd+W shortcut — closing them is still possible
-            // via the red traffic light. Match by text since muda assigns
-            // predefined items an opaque generated id.
-            if let Ok(items) = window_submenu.items() {
-                for item in items {
-                    if let MenuItemKind::Predefined(p) = &item {
-                        if let Ok(text) = p.text() {
-                            if text.to_lowercase().contains("close") {
-                                let _ = window_submenu.remove(&item);
-                            }
-                        }
-                    }
-                }
-            }
+            // Drop the Window submenu's own Close Window so Cmd+W is owned
+            // solely by File's routed item above (no double accelerator).
+            strip_close(&window_submenu);
         }
         // Redirect the system "About Chan" item to our bundled About window
         // so macOS shows the same About content as Linux/Windows (the
@@ -1695,6 +1717,10 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         }
         "app-new-terminal" => {
             handle_new_terminal(app);
+        }
+        #[cfg(target_os = "macos")]
+        "app-close-window" => {
+            handle_close_window(app);
         }
         "chan-settings" => {
             dispatch_to_focused_workspace(app, "app.settings.toggle");
@@ -1895,6 +1921,36 @@ fn handle_new_terminal(app: &tauri::AppHandle) {
         dispatch_to_focused_workspace(app, "app.terminal.toggle");
     } else {
         spawn_terminal_window(app);
+    }
+}
+
+/// `phase-21`: route File ▸ Close Window (Cmd+W) by the focused window's
+/// kind, mirroring `handle_new_terminal`.
+///
+/// - A focused workspace webview (workspace-* / tunnel-* / outbound-* /
+///   terminal-*) gets `app.tab.close` dispatched — the same CustomEvent the
+///   KEY_BRIDGE_JS KeyW case fires — so Cmd+W closes the active tab, not the
+///   window.
+/// - Any other focused window (the launcher `main` / `main-*`, the About
+///   window) is closed natively. The launcher's `CloseRequested` handler
+///   intercepts that to hide rather than destroy it, keeping reopen instant.
+///
+/// macOS-only: the File ▸ Close Window item exists only there. Off macOS the
+/// platform mod is Ctrl and Ctrl+W stays a terminal readline chord, so no
+/// menu accelerator claims it.
+#[cfg(target_os = "macos")]
+fn handle_close_window(app: &tauri::AppHandle) {
+    let Some(window) = app
+        .webview_windows()
+        .into_values()
+        .find(|w| w.is_focused().unwrap_or(false))
+    else {
+        return;
+    };
+    if serve::is_workspace_webview_label(window.label()) {
+        dispatch_to_focused_workspace(app, "app.tab.close");
+    } else {
+        let _ = window.close();
     }
 }
 
