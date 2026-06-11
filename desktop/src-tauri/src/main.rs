@@ -21,9 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
-use tauri::menu::MenuItemBuilder;
 #[cfg(target_os = "macos")]
-use tauri::menu::{Menu, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
+use tauri::menu::{Menu, PredefinedMenuItem, WINDOW_SUBMENU_ID};
+use tauri::menu::{MenuItemBuilder, MenuItemKind, Submenu};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use config::{Config, ConfigStore, OutboundWorkspace, WindowConfig, WorkspaceFeatures};
@@ -64,8 +64,80 @@ pub struct AppState {
     /// standalone terminals). `N` is the lowest free number among live
     /// windows with the SAME base title, so a number freed by a closed
     /// window gets reused — mirroring `Registry::next_terminal_name`'s
-    /// lowest-free `Terminal-N` scheme. Freed on window close.
+    /// lowest-free `Terminal-N` scheme. Freed on window destroy; a
+    /// BURIED (hidden) window keeps its number so its Window-menu entry
+    /// and title stay stable across the hide/reopen cycle.
     pub window_numbers: Mutex<HashMap<String, (String, u64)>>,
+    /// Windows hidden ("buried") by the OS close button instead of
+    /// destroyed, in bury order (most recent last). The webview stays
+    /// alive — live terminals keep running, layout state stays warm —
+    /// and the Window menu lists each entry for reopening (also
+    /// Cmd/Ctrl+Shift+N, which unburies the most recent of the focused
+    /// family). Entries leave the list on unbury or window destroy.
+    pub buried_windows: Mutex<Vec<BuriedWindow>>,
+    /// Reopenable REMOTE windows, keyed by remote window label: the
+    /// `saved && !connected` rows from each remote connection's
+    /// (outbound attachment / tunnel tenant) `GET /api/windows`,
+    /// refreshed by `refresh_remote_windows_menu`. The Window menu
+    /// lists them under `remote:` ids; clicking one opens a webview
+    /// with that exact label so the remote restores its session blob.
+    pub remote_reopen: Mutex<HashMap<String, RemoteReopen>>,
+}
+
+/// One reopenable remote window: see `AppState::remote_reopen`.
+#[derive(Debug, Clone)]
+pub struct RemoteReopen {
+    /// The connection's webview URL (outbound URL with its token /
+    /// tunnel per-tenant loopback URL).
+    pub url: String,
+    /// Base window title (`📤 <url>` / `📥 <host:port>`); the build
+    /// suffixes " Window N".
+    pub base_title: String,
+    /// Menu entry text (base title + the remote window's tail).
+    pub menu_title: String,
+    /// WindowConfig identity key for the connection (close/bury of the
+    /// reopened window captures restore state under it).
+    pub config_key: String,
+    /// Route through the connecting screen (outbound remotes; a down
+    /// remote must not paint a blank webview).
+    pub connecting: bool,
+}
+
+/// One buried (hidden, not closed) window: see `AppState::buried_windows`.
+#[derive(Debug, Clone)]
+pub struct BuriedWindow {
+    /// Tauri window label (`workspace-<16hex>-<seq>` / `terminal-win-<seq>` /
+    /// tunnel / outbound). Also the Window-menu item id suffix.
+    pub label: String,
+    /// OS display title at bury time ("🏠 /path Window 2",
+    /// "Terminal Window 1") — shown verbatim in the Window menu.
+    pub title: String,
+    /// Wall-clock millis at bury time; diagnostics only (the Vec's
+    /// push order is the recency authority).
+    pub buried_at: u64,
+}
+
+/// Family prefix for unbury matching: the label with its trailing
+/// `-<seq>` segment removed (everything through the LAST dash).
+/// `terminal-win-3` -> `terminal-win-` (all standalone terminals are
+/// one family); `workspace-<16hex>-2` -> `workspace-<16hex>-` (one
+/// family per workspace; same shape for tunnel / outbound labels).
+fn window_family_prefix(label: &str) -> &str {
+    match label.rfind('-') {
+        Some(idx) => &label[..=idx],
+        None => label,
+    }
+}
+
+/// Most recently buried label starting with `prefix`, scanning the
+/// bury-ordered slice from the newest end. Free function so the
+/// recency/family logic is unit-testable without an `AppState`.
+fn most_recent_buried_with_prefix<'a>(buried: &'a [BuriedWindow], prefix: &str) -> Option<&'a str> {
+    buried
+        .iter()
+        .rev()
+        .find(|b| b.label.starts_with(prefix))
+        .map(|b| b.label.as_str())
 }
 
 /// Defense-in-depth local runtime teardown: `RunEvent::Exit` is the
@@ -119,11 +191,16 @@ impl AppState {
         }
     }
 
-    /// Pop the most-recent WindowConfig matching `key`, removing
-    /// it from the stack on disk. Returns `None` when no entry
-    /// exists or the config file can't be read. Same best-effort
+    /// Pop the most-recent WindowConfig matching `key` whose label
+    /// isn't a live webview (see `config::pop_window_config`),
+    /// removing it from the stack on disk. Returns `None` when no
+    /// entry exists or the config file can't be read. Same best-effort
     /// posture as `push_window_config`.
-    pub fn pop_window_config(&self, key: &str) -> Option<WindowConfig> {
+    pub fn pop_window_config(
+        &self,
+        key: &str,
+        is_label_live: impl Fn(&str) -> bool,
+    ) -> Option<WindowConfig> {
         let mut store = self.store.lock().unwrap();
         let mut cfg = match store.get() {
             Ok(c) => c,
@@ -132,7 +209,7 @@ impl AppState {
                 return None;
             }
         };
-        let popped = config::pop_window_config(&mut cfg, key)?;
+        let popped = config::pop_window_config(&mut cfg, key, is_label_live)?;
         if let Err(e) = store.save(&cfg) {
             tracing::warn!(error = %e, "persisting window config stack failed");
         }
@@ -155,9 +232,51 @@ impl AppState {
 
     /// Release the display number held by `label` so it can be reused
     /// by the next window with the same base title. Called from the
-    /// window-close handler. A no-op for an unknown label.
+    /// window-destroy handler. A no-op for an unknown label.
     pub fn release_window_number(&self, label: &str) {
         self.window_numbers.lock().unwrap().remove(label);
+    }
+
+    /// Record `label` as buried (most recent). Re-burying a label
+    /// drops its older entry first so the list holds one entry per
+    /// window and recency stays truthful.
+    pub fn bury_window(&self, label: &str, title: &str) {
+        let mut buried = self.buried_windows.lock().unwrap();
+        buried.retain(|b| b.label != label);
+        buried.push(BuriedWindow {
+            label: label.to_string(),
+            title: title.to_string(),
+            buried_at: config::current_millis(),
+        });
+    }
+
+    /// Drop `label` from the buried list (unburied or destroyed).
+    /// Returns whether an entry was actually removed, so callers know
+    /// if the Window menu needs a rebuild.
+    pub fn remove_buried(&self, label: &str) -> bool {
+        let mut buried = self.buried_windows.lock().unwrap();
+        let before = buried.len();
+        buried.retain(|b| b.label != label);
+        buried.len() != before
+    }
+
+    /// Most recently buried window label whose label starts with
+    /// `prefix` (a window-family prefix, see `window_family_prefix`).
+    pub fn most_recent_buried(&self, prefix: &str) -> Option<String> {
+        let buried = self.buried_windows.lock().unwrap();
+        most_recent_buried_with_prefix(&buried, prefix).map(str::to_string)
+    }
+
+    /// (label, title) pairs of every buried window, most recent first
+    /// (Window-menu display order).
+    pub fn buried_snapshot(&self) -> Vec<(String, String)> {
+        self.buried_windows
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .map(|b| (b.label.clone(), b.title.clone()))
+            .collect()
     }
 }
 
@@ -1152,7 +1271,13 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
     if !others_remain {
         let _ = show_window(&app, "main");
     }
-    window.close().map_err(err)
+    // `destroy()`, not `close()`: this is the SPA's DELIBERATE
+    // close-cascade (last tab, then last pane, just closed — the window
+    // is empty). `close()` would fire `CloseRequested`, where the
+    // bury-on-close handler hides SPA windows instead of closing them;
+    // an empty window is worthless buried. Destroy skips the request
+    // phase and goes straight to the `Destroyed` cleanup.
+    window.destroy().map_err(err)
 }
 
 /// `fullstack-b-19`: browser-style zoom controls. Step size is
@@ -1356,6 +1481,8 @@ fn main() {
         tunnel: TunnelState::new(),
         live_window_zooms: Mutex::new(HashMap::new()),
         window_numbers: Mutex::new(HashMap::new()),
+        buried_windows: Mutex::new(Vec::new()),
+        remote_reopen: Mutex::new(HashMap::new()),
     });
     let state_for_exit = Arc::clone(&state);
     let state_for_setup = Arc::clone(&state);
@@ -1588,12 +1715,11 @@ fn main() {
 
 /// Build and install the application menu.
 ///
-/// The Window submenu carries Workspaces / New Window / Settings so a
-/// closed main window stays reachable by name. Settings has Cmd+, but no
-/// chan-desktop-owned UI behind it: chan owns the Settings concept
-/// per-workspace, so the handler dispatches `app.settings.toggle` into
-/// the focused workspace webview where chan's `runCommand` opens its
-/// settings overlay (a no-op when the Workspaces window is focused).
+/// The Window submenu carries Workspaces / New Window so a closed main
+/// window stays reachable by name. There is no Settings menu item: Cmd+,
+/// is the SPA's Hybrid-flip chord (`app.settings.toggle`), bound by the
+/// SPA itself, so no menu accelerator may claim Comma or the keydown
+/// never reaches the webview.
 ///
 /// macOS starts from Tauri's `Menu::default` (the system menubar already
 /// carries the App menu's About / Quit). Off macOS `Menu::default` has no
@@ -1636,10 +1762,6 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let new_terminal = MenuItemBuilder::with_id("app-new-terminal", "New Terminal")
         .accelerator("CmdOrCtrl+T")
         .build(app)?;
-    let settings = MenuItemBuilder::with_id("chan-settings", "Settings…")
-        .accelerator("CmdOrCtrl+,")
-        .build(app)?;
-
     // macOS: inject the window-nav items into the system menubar's Window
     // submenu. The App menu already owns About <app> and Quit, so File ▸
     // About / Exit are macOS-implicit.
@@ -1697,7 +1819,7 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             .and_then(|k| k.as_submenu().cloned())
         {
             let sep = PredefinedMenuItem::separator(app)?;
-            window_submenu.prepend_items(&[&workspace_manager, &new_window, &settings, &sep])?;
+            window_submenu.prepend_items(&[&workspace_manager, &new_window, &sep])?;
             // Drop the Window submenu's own Close Window so Cmd+W is owned
             // solely by File's routed item above (no double accelerator).
             strip_close(&window_submenu);
@@ -1763,10 +1885,9 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             .paste()
             .select_all()
             .build()?;
-        let window = SubmenuBuilder::new(app, "Window")
+        let window = SubmenuBuilder::with_id(app, LINUX_WINDOW_SUBMENU_ID, "Window")
             .item(&workspace_manager)
             .item(&new_window)
-            .item(&settings)
             .build()?;
         MenuBuilder::new(app)
             .item(&file)
@@ -1776,37 +1897,322 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     };
 
     app.set_menu(menu)?;
-    app.on_menu_event(|app, event| match event.id().as_ref() {
-        "win-main" => {
-            let _ = show_window(app, "main");
-        }
-        "app-new-window" => {
-            if let Err(e) = open_new_window_for_focused_workspace(app) {
-                tracing::warn!(error = %e, "open new window for focused workspace failed");
+    app.on_menu_event(|app, event| {
+        let id = event.id().as_ref();
+        // Dynamic Window-menu entries (buried windows) carry their
+        // window label in the id; route by prefix before the static
+        // match.
+        if let Some(label) = id.strip_prefix(BURIED_MENU_ID_PREFIX) {
+            if !unbury_window(app, label) {
+                tracing::warn!(label, "buried window menu entry pointed at a dead window");
             }
+            return;
         }
-        "app-new-terminal" => {
-            handle_new_terminal(app);
+        if let Some(label) = id.strip_prefix(REMOTE_MENU_ID_PREFIX) {
+            open_remote_window_from_menu(app, label);
+            return;
         }
-        #[cfg(target_os = "macos")]
-        "app-close-window" => {
-            handle_close_window(app);
-        }
-        "chan-settings" => {
-            dispatch_to_focused_workspace(app, "app.settings.toggle");
-        }
-        "chan-about" => {
-            if let Err(e) = open_about_window(app) {
-                tracing::warn!(error = %e, "open about window failed");
+        match id {
+            "win-main" => {
+                let _ = show_window(app, "main");
             }
+            "app-new-window" => {
+                if let Err(e) = open_new_window_for_focused_workspace(app) {
+                    tracing::warn!(error = %e, "open new window for focused workspace failed");
+                }
+            }
+            "app-new-terminal" => {
+                handle_new_terminal(app);
+            }
+            #[cfg(target_os = "macos")]
+            "app-close-window" => {
+                handle_close_window(app);
+            }
+            "chan-about" => {
+                if let Err(e) = open_about_window(app) {
+                    tracing::warn!(error = %e, "open about window failed");
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            "chan-quit" => {
+                app.exit(0);
+            }
+            _ => {}
         }
-        #[cfg(not(target_os = "macos"))]
-        "chan-quit" => {
-            app.exit(0);
-        }
-        _ => {}
     });
     Ok(())
+}
+
+/// Window-menu item id namespace for buried-window entries: the id is
+/// this prefix + the Tauri window label, so the menu handler recovers
+/// the label with a `strip_prefix`. The constant doubles as the marker
+/// `rebuild_window_menu` uses to find (and replace) its own entries.
+const BURIED_MENU_ID_PREFIX: &str = "buried:";
+/// Disabled section header above the buried entries.
+const BURIED_MENU_HEADER_ID: &str = "buried-header";
+/// Window-menu id namespace for reopenable remote windows (same
+/// prefix+label scheme as `buried:`).
+const REMOTE_MENU_ID_PREFIX: &str = "remote:";
+/// Disabled section header above the remote entries.
+const REMOTE_MENU_HEADER_ID: &str = "remote-header";
+/// Linux/Windows Window-submenu id (macOS uses the system
+/// `WINDOW_SUBMENU_ID` from `Menu::default`).
+#[cfg(not(target_os = "macos"))]
+const LINUX_WINDOW_SUBMENU_ID: &str = "chan-window-submenu";
+
+/// The app menubar's Window submenu, on any platform. `None` before
+/// `install_app_menu` ran (impossible in practice) or if the platform
+/// menu lost it.
+fn window_submenu(app: &tauri::AppHandle) -> Option<Submenu<tauri::Wry>> {
+    let menu = app.menu()?;
+    #[cfg(target_os = "macos")]
+    let key = WINDOW_SUBMENU_ID;
+    #[cfg(not(target_os = "macos"))]
+    let key = LINUX_WINDOW_SUBMENU_ID;
+    menu.get(key).and_then(|k| k.as_submenu().cloned())
+}
+
+/// Re-sync the Window submenu's dynamic tail: remove every
+/// previously-appended `buried:*` / `remote:*` entry (and the section
+/// headers), then append the current snapshots — buried windows most
+/// recent first, then reopenable remote windows sorted by title. Runs
+/// on the main thread — muda requires menu mutation there on macOS —
+/// and is best-effort throughout: a menu glitch must never take down a
+/// close/destroy handler.
+pub fn rebuild_window_menu(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        let Some(submenu) = window_submenu(&app) else {
+            return;
+        };
+        if let Ok(items) = submenu.items() {
+            for item in items {
+                let id = item.id().as_ref();
+                if id == BURIED_MENU_HEADER_ID
+                    || id == REMOTE_MENU_HEADER_ID
+                    || id.starts_with(BURIED_MENU_ID_PREFIX)
+                    || id.starts_with(REMOTE_MENU_ID_PREFIX)
+                {
+                    let _ = submenu.remove(&item);
+                }
+            }
+        }
+        let state = app.state::<Arc<AppState>>();
+        let buried = state.buried_snapshot();
+        let mut remote: Vec<(String, String)> = state
+            .remote_reopen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(label, entry)| (label.clone(), entry.menu_title.clone()))
+            .collect();
+        remote.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+        let append_section = |header_id: &str, header: &str, rows: &[(String, String)], id_prefix: &str| {
+            if rows.is_empty() {
+                return;
+            }
+            if let Ok(item) = MenuItemBuilder::with_id(header_id, header)
+                .enabled(false)
+                .build(&app)
+            {
+                let _ = submenu.append(&item);
+            }
+            for (label, title) in rows {
+                match MenuItemBuilder::with_id(format!("{id_prefix}{label}"), title).build(&app) {
+                    Ok(item) => {
+                        let _ = submenu.append(&item);
+                    }
+                    Err(e) => {
+                        tracing::warn!(label, error = %e, "building dynamic window menu item failed");
+                    }
+                }
+            }
+        };
+        append_section(
+            BURIED_MENU_HEADER_ID,
+            "Hidden Windows",
+            &buried,
+            BURIED_MENU_ID_PREFIX,
+        );
+        append_section(
+            REMOTE_MENU_HEADER_ID,
+            "Remote Windows",
+            &remote,
+            REMOTE_MENU_ID_PREFIX,
+        );
+    });
+}
+
+/// Re-poll every remote connection's `GET /api/windows` and replace the
+/// reopenable-remote-windows snapshot (then rebuild the menu). Spawned
+/// async: each remote gets a short timeout and a failed poll just
+/// leaves that connection out this round. Triggers: a tunnel/outbound
+/// window opening or being destroyed, and a `remote:` menu click.
+/// Tauri 2 exposes no menu-will-open hook, so event-driven refresh
+/// with tolerable staleness is the design.
+pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<Arc<AppState>>();
+
+        /// One remote connection to poll.
+        struct Conn {
+            family: String,
+            url: String,
+            base_title: String,
+            config_key: String,
+            connecting: bool,
+        }
+        let mut conns: Vec<Conn> = Vec::new();
+        let cfg = {
+            let store = state.store.lock().unwrap();
+            store.get().ok()
+        };
+        if let Some(cfg) = cfg {
+            for o in &cfg.outbound {
+                conns.push(Conn {
+                    family: format!("{}-", serve::outbound_window_prefix(&o.id)),
+                    url: o.url.clone(),
+                    base_title: serve::outbound_window_title(&o.url),
+                    config_key: config::outbound_window_key(&o.id),
+                    connecting: true,
+                });
+            }
+        }
+        for t in state.tunnel.snapshot() {
+            conns.push(Conn {
+                family: format!("{}-", serve::tunnel_window_prefix(&t.label, &t.workspace)),
+                url: t.url.clone(),
+                base_title: serve::tunnel_window_title(&t.url),
+                config_key: config::tunnel_window_key(&t.label, &t.workspace),
+                connecting: false,
+            });
+        }
+
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+        {
+            Ok(client) => client,
+            Err(e) => {
+                tracing::warn!(error = %e, "remote windows poll: building http client failed");
+                return;
+            }
+        };
+        let mut map: HashMap<String, RemoteReopen> = HashMap::new();
+        for conn in conns {
+            let rows = match fetch_remote_windows(&client, &conn.url).await {
+                Some(rows) => rows,
+                None => continue, // remote down / unparsable; skip this round
+            };
+            for row in rows {
+                // Reopenable = the remote has restore state for the label
+                // and no live socket holds it anywhere, and the label
+                // belongs to THIS connection (filters out browser-session
+                // ids and other desktops' families).
+                if !(row.saved && !row.connected && row.id.starts_with(&conn.family)) {
+                    continue;
+                }
+                map.insert(
+                    row.id.clone(),
+                    RemoteReopen {
+                        url: conn.url.clone(),
+                        base_title: conn.base_title.clone(),
+                        menu_title: format!(
+                            "{} — {}",
+                            conn.base_title,
+                            remote_window_tail(&row.id)
+                        ),
+                        config_key: conn.config_key.clone(),
+                        connecting: conn.connecting,
+                    },
+                );
+            }
+        }
+        *state.remote_reopen.lock().unwrap() = map;
+        rebuild_window_menu(&app);
+    });
+}
+
+/// Row shape of the remote `GET /api/windows` response. Field names are
+/// the wire contract pinned server-side
+/// (`routes::windows::WindowInfo`).
+#[derive(serde::Deserialize)]
+struct RemoteWindowRow {
+    id: String,
+    connected: bool,
+    saved: bool,
+}
+
+/// GET `<base>/api/windows` preserving the base URL's query (`?t=`
+/// token rides there for outbound attachments). `None` on any failure
+/// — the caller skips that connection for this refresh round.
+async fn fetch_remote_windows(
+    client: &reqwest::Client,
+    base: &str,
+) -> Option<Vec<RemoteWindowRow>> {
+    let base = tauri::Url::parse(base).ok()?;
+    let mut api = base.clone();
+    let mut path = base.path().to_string();
+    if !path.ends_with('/') {
+        path.push('/');
+    }
+    api.set_path(&format!("{path}api/windows"));
+    api.set_fragment(None);
+    let resp = client.get(api.as_str()).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<Vec<RemoteWindowRow>>().await.ok()
+}
+
+/// Human tail for a remote window label in the menu:
+/// `outbound-<16hex>-7` -> "window 7". Falls back to the raw label for
+/// anything unexpected.
+fn remote_window_tail(label: &str) -> String {
+    match label.rsplit('-').next().and_then(|n| n.parse::<u64>().ok()) {
+        Some(seq) => format!("window {seq}"),
+        None => label.to_string(),
+    }
+}
+
+/// `remote:` menu click: open a webview for the remote-known label.
+/// On success the label becomes `connected` remote-side, so a refresh
+/// drops it from the menu.
+fn open_remote_window_from_menu(app: &tauri::AppHandle, label: &str) {
+    let entry = {
+        let state = app.state::<Arc<AppState>>();
+        let map = state.remote_reopen.lock().unwrap();
+        map.get(label).cloned()
+    };
+    let Some(entry) = entry else {
+        tracing::warn!(label, "remote window menu entry has no stored connection");
+        return;
+    };
+    if let Err(e) = serve::reopen_remote_window(app, label, &entry) {
+        tracing::warn!(label, error = %e, "reopening remote window failed");
+    }
+}
+
+/// Re-show a buried window and drop it from the registry + menu.
+/// Returns `false` when the label no longer names a live window (it
+/// was destroyed underneath; the registry entry is cleaned up either
+/// way).
+pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
+    let removed = app.state::<Arc<AppState>>().remove_buried(label);
+    let shown = match app.get_webview_window(label) {
+        Some(w) => {
+            let _ = w.show();
+            let _ = w.set_focus();
+            true
+        }
+        None => false,
+    };
+    if removed {
+        rebuild_window_menu(app);
+    }
+    shown
 }
 
 /// Open the bundled About window. Same content on every platform (mirrors
@@ -1881,6 +2287,12 @@ fn open_new_launcher_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// or no running match), so the menu item never dead-ends. The
 /// "Workspaces" picker stays reachable via the `win-main` menu item.
 fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), String> {
+    // Buried windows take precedence in every family: Cmd+Shift+N on a
+    // window whose family has a hidden sibling REOPENS that sibling
+    // (most recent first) instead of spawning a fresh window — the
+    // hide-on-close counterpart of the old "reopens the last closed
+    // window" LRU behaviour, now with the live window state intact.
+    //
     // `phase-20`: a focused standalone terminal window opens ANOTHER
     // terminal window (its workspace-less analogue of "new window of this
     // workspace"), not the launcher. Checked first because a terminal-*
@@ -1891,18 +2303,37 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
         .values()
         .any(|w| w.label().starts_with("terminal-") && w.is_focused().unwrap_or(false))
     {
+        let state = app.state::<Arc<AppState>>();
+        if let Some(buried) = state.most_recent_buried("terminal-win-") {
+            if unbury_window(app, &buried) {
+                return Ok(());
+            }
+        }
         spawn_terminal_window(app);
         return Ok(());
     }
     let Some(focused) = app
         .webview_windows()
         .into_values()
-        .find(|w| w.label().starts_with("workspace-") && w.is_focused().unwrap_or(false))
+        .find(|w| serve::is_workspace_webview_label(w.label()) && w.is_focused().unwrap_or(false))
     else {
         return open_new_launcher_window(app);
     };
     let focused_label = focused.label().to_string();
     let state = app.state::<Arc<AppState>>();
+    // Family unbury first: workspace-, tunnel- and outbound- windows all
+    // group by their `<kind>-<16hex>-` label prefix.
+    if let Some(buried) = state.most_recent_buried(window_family_prefix(&focused_label)) {
+        if unbury_window(app, &buried) {
+            return Ok(());
+        }
+    }
+    if !focused_label.starts_with("workspace-") {
+        // No spawn path recovers a tunnel/outbound identity from its
+        // label alone; with nothing buried, fall back to the launcher
+        // (the pre-bury behaviour for these windows).
+        return open_new_launcher_window(app);
+    }
     let resolved = {
         let serves = state.serves.lock().unwrap();
         serves.iter().find_map(|(key, handle)| {
@@ -2130,6 +2561,62 @@ mod tests {
 
         // Re-assigning a live label keeps its slot (ignores itself).
         assert_eq!(assign(&mut numbers, "terminal-win-1", "Terminal"), 2);
+    }
+
+    #[test]
+    fn window_family_prefix_strips_the_seq_segment() {
+        // All standalone terminals are one family.
+        assert_eq!(window_family_prefix("terminal-win-0"), "terminal-win-");
+        assert_eq!(window_family_prefix("terminal-win-12"), "terminal-win-");
+        // Workspace / tunnel / outbound group per hash segment.
+        assert_eq!(
+            window_family_prefix("workspace-00deadbeef00aa11-3"),
+            "workspace-00deadbeef00aa11-",
+        );
+        assert_eq!(
+            window_family_prefix("outbound-00deadbeef00aa11-0"),
+            "outbound-00deadbeef00aa11-",
+        );
+        // Degenerate label without a dash stays itself (never matches a
+        // family-prefixed lookup, which always ends in '-').
+        assert_eq!(window_family_prefix("main"), "main");
+    }
+
+    #[test]
+    fn buried_lookup_is_most_recent_first_within_a_family() {
+        let buried = vec![
+            BuriedWindow {
+                label: "terminal-win-0".into(),
+                title: "Terminal Window 1".into(),
+                buried_at: 100,
+            },
+            BuriedWindow {
+                label: "workspace-aa-0".into(),
+                title: "🏠 /w Window 1".into(),
+                buried_at: 200,
+            },
+            BuriedWindow {
+                label: "terminal-win-2".into(),
+                title: "Terminal Window 3".into(),
+                buried_at: 300,
+            },
+        ];
+        // Most recently buried terminal wins; the workspace family is
+        // untouched by terminal churn.
+        assert_eq!(
+            most_recent_buried_with_prefix(&buried, "terminal-win-"),
+            Some("terminal-win-2"),
+        );
+        assert_eq!(
+            most_recent_buried_with_prefix(&buried, "workspace-aa-"),
+            Some("workspace-aa-0"),
+        );
+        // A family with nothing buried finds nothing — and a family
+        // prefix never matches another family's labels.
+        assert_eq!(
+            most_recent_buried_with_prefix(&buried, "workspace-bb-"),
+            None
+        );
     }
 
     #[test]

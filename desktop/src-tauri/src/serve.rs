@@ -249,6 +249,9 @@ pub fn is_workspace_webview_label(label: &str) -> bool {
 /// `close_local_workspace_windows` on runtime teardown) remains the single
 /// authority on workspace lifecycle.
 pub fn spawn_local_workspace_window(app: &AppHandle, key: &str, url: &str) -> Result<(), String> {
+    if unbury_instead_of_spawn(app, &workspace_window_prefix(key)) {
+        return Ok(());
+    }
     ensure_window_capacity(app, &workspace_window_prefix(key))?;
     let config_key = config::local_window_key(key);
     let restore = pop_compatible_config(app, &config_key, &workspace_window_prefix(key));
@@ -275,6 +278,9 @@ pub fn spawn_tunneled_workspace_window(
     workspace: &str,
     url: &str,
 ) -> Result<(), String> {
+    if unbury_instead_of_spawn(app, &tunnel_window_prefix(tenant_label, workspace)) {
+        return Ok(());
+    }
     ensure_window_capacity(app, &tunnel_window_prefix(tenant_label, workspace))?;
     let config_key = config::tunnel_window_key(tenant_label, workspace);
     let prefix = tunnel_window_prefix(tenant_label, workspace);
@@ -292,16 +298,23 @@ pub fn spawn_tunneled_workspace_window(
     // local per-tenant loopback listener; the window's `url` points at it.
     // Title with the inbound glyph + that listener's host:port, the locator
     // analogous to the local path / outbound URL.
-    let title = format!("{ICON_INBOUND} {}", listen_addr_from_url(url));
-    build_workspace_window(
+    let title = tunnel_window_title(url);
+    let built = build_workspace_window(
         app, &label, &title, url, &url_hash, config_key, zoom_level, None, None,
-    )
+    );
+    // A tunnel window just appeared: re-poll the remote's window list
+    // so the Window menu's remote section reflects it.
+    crate::refresh_remote_windows_menu(app);
+    built
 }
 
 /// Spawn a new outbound URL webview window. The desktop does not own
 /// the remote process; this only creates another webview pointed at
 /// the persisted URL.
 pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
+    if unbury_instead_of_spawn(app, &outbound_window_prefix(id)) {
+        return Ok(());
+    }
     ensure_window_capacity(app, &outbound_window_prefix(id))?;
     let config_key = config::outbound_window_key(id);
     let prefix = outbound_window_prefix(id);
@@ -317,12 +330,12 @@ pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> 
     let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
     // R1: outbound title is the outbound glyph + the URL (the locator),
     // not the user's label (which still names the launcher row).
-    let title = format!("{ICON_OUTBOUND} {url}");
+    let title = outbound_window_title(url);
     // Outbound = an outgoing connection to a remote we do not own. Route
     // through the connecting screen so a down remote shows a retrying
     // surface instead of a blank white webview. `url` is the display +
     // probe URL; `build_workspace_window` assembles the navigate target.
-    build_workspace_window(
+    let built = build_workspace_window(
         app,
         &label,
         &title,
@@ -332,7 +345,11 @@ pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> 
         zoom_level,
         Some(url),
         None,
-    )
+    );
+    // An outbound window just appeared: re-poll the remote's window
+    // list so the Window menu's remote section reflects it.
+    crate::refresh_remote_windows_menu(app);
+    built
 }
 
 /// Spawn a standalone terminal-only window. Unlike a workspace window there
@@ -373,34 +390,82 @@ pub async fn spawn_local_terminal_window(
     )
 }
 
+/// Base window title for an outbound (we-dial-out) workspace window.
+/// pub: the remote Window-menu refresh derives the same title without
+/// opening a window.
+pub fn outbound_window_title(url: &str) -> String {
+    format!("{ICON_OUTBOUND} {url}")
+}
+
+/// Base window title for a tunneled (remote-dials-in) workspace window.
+pub fn tunnel_window_title(url: &str) -> String {
+    format!("{ICON_INBOUND} {}", listen_addr_from_url(url))
+}
+
+/// Reopen a REMOTE-known window (a `saved && !connected` row from the
+/// remote serve's `GET /api/windows`) by building a webview with that
+/// exact label: the `?w=<label>` the build appends makes the remote
+/// hydrate that window's session blob, so the panes/tabs the user left
+/// there come back. No LRU pop — the restore state lives remote-side.
+pub fn reopen_remote_window(
+    app: &AppHandle,
+    label: &str,
+    entry: &crate::RemoteReopen,
+) -> Result<(), String> {
+    build_workspace_window(
+        app,
+        label,
+        &entry.base_title,
+        &entry.url,
+        "",
+        entry.config_key.clone(),
+        1.0,
+        // Outbound remotes route through the connecting screen like
+        // any other outbound window (a down remote must not paint a
+        // blank webview); tunnel loopbacks load directly.
+        entry.connecting.then_some(entry.url.as_str()),
+        None,
+    )
+}
+
+/// Reopen this workspace family's most recently buried window instead
+/// of spawning a new one, when one exists. Every "open a window for
+/// this workspace" entry point (launcher Open, Cmd/Ctrl+Shift+N's
+/// spawn fallback, deep links) funnels through the spawn fns, so the
+/// check lives here: a window the user put away via the close button
+/// IS the window they get back — the old "reopens the last closed
+/// window" LRU feel, now with live state. `prefix` is the family
+/// prefix WITHOUT the trailing dash (the spawn fns' label prefix).
+fn unbury_instead_of_spawn(app: &AppHandle, prefix: &str) -> bool {
+    let family = format!("{prefix}-");
+    let Some(buried) = app.state::<Arc<AppState>>().most_recent_buried(&family) else {
+        return false;
+    };
+    crate::unbury_window(app, &buried)
+}
+
 /// Pop the top-of-stack window config for `config_key` only if the
-/// stored label is safe to reuse. The label must still match the
-/// workspace's current hash prefix (defends against the workspace key
-/// changing canonicalisation under us) and must not already be
-/// live in this process (Tauri requires unique labels per
-/// process). When the popped entry fails either check, it gets
-/// dropped on the floor; we don't keep cycling through stale
-/// stack entries trying to find a usable one, since the next
-/// close will push a fresh entry anyway.
+/// stored label is safe to reuse. Live-label entries are SKIPPED in
+/// place (not popped): a buried window's entry must survive for the
+/// quit-while-buried restore, and Tauri labels are unique per process
+/// so reusing one would collide. The popped label must additionally
+/// match the workspace's current hash prefix (defends against the
+/// workspace key changing canonicalisation under us); a stale-prefix
+/// entry gets dropped on the floor — we don't keep cycling through
+/// stale stack entries, since the next bury pushes a fresh one anyway.
 fn pop_compatible_config(
     app: &AppHandle,
     config_key: &str,
     expected_prefix: &str,
 ) -> Option<WindowConfig> {
     let state = app.state::<Arc<AppState>>();
-    let entry = state.pop_window_config(config_key)?;
+    let entry =
+        state.pop_window_config(config_key, |label| app.get_webview_window(label).is_some())?;
     if !entry.window_label.starts_with(expected_prefix) {
         tracing::debug!(
             label = %entry.window_label,
             prefix = %expected_prefix,
             "discarding window config with stale prefix",
-        );
-        return None;
-    }
-    if app.get_webview_window(&entry.window_label).is_some() {
-        tracing::debug!(
-            label = %entry.window_label,
-            "discarding window config; label still live",
         );
         return None;
     }
@@ -549,30 +614,84 @@ fn build_workspace_window(
                 let app_for_close = app_owned.clone();
                 let label_for_close = label_owned.clone();
                 let key_for_close = config_key.clone();
-                window.on_window_event(move |event| {
-                    if matches!(event, WindowEvent::CloseRequested { .. }) {
-                        // Free the display number so the next same-base
-                        // window reuses it (all window kinds, including
-                        // standalone terminals).
-                        app_for_close
-                            .state::<Arc<AppState>>()
-                            .release_window_number(&label_for_close);
-                        // Standalone terminal windows share one persistent
-                        // `/terminal` tenant (it lives for the process lifetime;
-                        // orphaned PTYs idle-prune) and keep no LRU layout
-                        // restore, so a closing terminal window needs no
-                        // teardown or config capture. Workspace / tunnel /
-                        // outbound windows keep their behaviour: the runtime
-                        // outlives the window and the layout is captured for the
-                        // LRU restore stack.
+                window.on_window_event(move |event| match event {
+                    // The OS close button BURIES an SPA window instead of
+                    // destroying it: the webview hides, live terminals and
+                    // layout state stay warm, and the Window menu (or
+                    // Cmd/Ctrl+Shift+N) reopens it. One exception: a
+                    // standalone terminal window with NO live shells left
+                    // has nothing worth keeping and really closes.
+                    // Programmatic closes (the SPA's empty-window cascade,
+                    // workspace-off teardown, tunnel drop) call `destroy()`
+                    // and never reach this branch.
+                    WindowEvent::CloseRequested { api, .. } => {
+                        let state = app_for_close.state::<Arc<AppState>>();
+                        let bury = if label_for_close.starts_with("terminal-") {
+                            state
+                                .embedded
+                                .get()
+                                .map(|e| e.terminal_window_has_live_shells(&label_for_close))
+                                .unwrap_or(false)
+                        } else {
+                            true
+                        };
+                        if !bury {
+                            // Real close; the Destroyed branch cleans up.
+                            return;
+                        }
+                        api.prevent_close();
+                        // Capture the restore snapshot NOW (webview alive,
+                        // URL hash + zoom readable): burying replaces
+                        // closing as the moment "the user put this window
+                        // away", and the entry also covers an app quit
+                        // while buried. The zoom stays in
+                        // `live_window_zooms` (peek, not drain) — the
+                        // window is still alive and may be unburied.
                         if !label_for_close.starts_with("terminal-") {
-                            capture_window_config_on_close(
+                            capture_window_config(
                                 &app_for_close,
                                 &label_for_close,
                                 &key_for_close,
+                                false,
                             );
                         }
+                        let Some(window) = app_for_close.get_webview_window(&label_for_close)
+                        else {
+                            return;
+                        };
+                        let title = window.title().unwrap_or_else(|_| label_for_close.clone());
+                        let _ = window.hide();
+                        state.bury_window(&label_for_close, &title);
+                        crate::rebuild_window_menu(&app_for_close);
+                        show_bury_notice(&app_for_close, &title);
                     }
+                    // Single cleanup point for EVERY destroy path: the
+                    // no-live-shells close above, the SPA cascade destroy,
+                    // workspace-off / tunnel-drop / outbound-forget
+                    // teardown, and app exit. Frees the display number,
+                    // drops the zoom entry, and clears a stale buried
+                    // registry entry if the window died while hidden.
+                    WindowEvent::Destroyed => {
+                        let state = app_for_close.state::<Arc<AppState>>();
+                        state.release_window_number(&label_for_close);
+                        state
+                            .live_window_zooms
+                            .lock()
+                            .unwrap()
+                            .remove(&label_for_close);
+                        if state.remove_buried(&label_for_close) {
+                            crate::rebuild_window_menu(&app_for_close);
+                        }
+                        // A destroyed remote-backed window may now be a
+                        // reopenable `saved && !connected` row on the
+                        // remote — re-poll so the menu offers it.
+                        if label_for_close.starts_with("tunnel-")
+                            || label_for_close.starts_with("outbound-")
+                        {
+                            crate::refresh_remote_windows_menu(&app_for_close);
+                        }
+                    }
+                    _ => {}
                 });
             }
             Err(e) => {
@@ -588,18 +707,42 @@ fn build_workspace_window(
     res.map_err(|e| format!("scheduling workspace window for {window_label}: {e}"))
 }
 
-/// Snapshot the closing window's URL hash and push the resulting
-/// WindowConfig onto the LRU stack. Best-effort: a webview that's
-/// already torn down reports no URL and we skip the push. The
-/// hash is read from `WebviewWindow::url()` because the webview
-/// SPA writes the latest state to `location.hash` via
-/// `persistStateToHash`, and Tauri's URL reflection picks that up
+/// Informational notice shown EVERY time the OS close button buries a
+/// window (per @@Alex: the dialog is the teaching surface for the
+/// hide-not-close behaviour, and the smoke test asserts it). Async
+/// `.show` only — a blocking dialog on the event-loop thread deadlocks.
+fn show_bury_notice(app: &AppHandle, title: &str) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+    let chord = if cfg!(target_os = "macos") {
+        "Cmd+Shift+N"
+    } else {
+        "Ctrl+Shift+N"
+    };
+    app.dialog()
+        .message(format!(
+            "\"{title}\" is now hidden, not closed.\n\nIts terminals and layout keep running. Reopen it from the Window menu, or with {chord}."
+        ))
+        .title("Window Hidden")
+        .kind(MessageDialogKind::Info)
+        .show(|_| {});
+}
+
+/// Snapshot the window's URL hash and push the resulting WindowConfig
+/// onto the LRU stack. Called at BURY time (the hide-not-close moment;
+/// webview alive, URL readable) and from any explicit capture path.
+/// Best-effort: a webview that's already torn down reports no URL and
+/// we skip the push. The hash is read from `WebviewWindow::url()`
+/// because the webview SPA writes the latest state to `location.hash`
+/// via `persistStateToHash`, and Tauri's URL reflection picks that up
 /// on platforms with the WKWebView / WebView2 backends.
 ///
-/// `fullstack-b-19`: also drains the live zoom level for this
-/// window into `WindowConfig.zoom_level` so the next open of the
-/// same workspace restores the zoom.
-fn capture_window_config_on_close(app: &AppHandle, window_label: &str, config_key: &str) {
+/// `fullstack-b-19`: also captures the live zoom level for this window
+/// into `WindowConfig.zoom_level` so the next open of the same
+/// workspace restores the zoom. `drain_zoom` controls whether the
+/// `live_window_zooms` entry is removed (a window on its way out) or
+/// peeked (a buried window stays alive and keeps zooming rights; its
+/// entry is dropped by the `Destroyed` cleanup instead).
+fn capture_window_config(app: &AppHandle, window_label: &str, config_key: &str, drain_zoom: bool) {
     let Some(window) = app.get_webview_window(window_label) else {
         return;
     };
@@ -639,12 +782,15 @@ fn capture_window_config_on_close(app: &AppHandle, window_label: &str, config_ke
         }
     };
     let state = app.state::<Arc<AppState>>();
-    let zoom_level = state
-        .live_window_zooms
-        .lock()
-        .unwrap()
-        .remove(window_label)
-        .unwrap_or(1.0);
+    let zoom_level = {
+        let mut zooms = state.live_window_zooms.lock().unwrap();
+        if drain_zoom {
+            zooms.remove(window_label)
+        } else {
+            zooms.get(window_label).copied()
+        }
+        .unwrap_or(1.0)
+    };
     state.push_window_config(WindowConfig {
         key: config_key.to_string(),
         window_label: window_label.to_string(),

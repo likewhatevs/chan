@@ -134,6 +134,19 @@ impl EmbeddedServer {
         *cached = Some(url.clone());
         Ok(url)
     }
+
+    /// True when the shared `/terminal` tenant still has at least one
+    /// live PTY session bound to `window_label` (sessions carry the
+    /// SPA's `?w=` window id, which IS the Tauri label for desktop
+    /// windows). The close handler uses this to decide bury-vs-close
+    /// for a standalone terminal window: shells running -> hide the
+    /// window and keep them; none -> let the window really close.
+    /// Sync (read lock + roster snapshot), safe on the event-loop
+    /// thread. `false` when the tenant was never mounted.
+    pub fn terminal_window_has_live_shells(&self, window_label: &str) -> bool {
+        self.host
+            .tenant_has_window_sessions("/terminal", window_label)
+    }
 }
 
 impl Drop for EmbeddedServer {

@@ -257,12 +257,27 @@ pub fn push_window_config(cfg: &mut Config, mut entry: WindowConfig) {
     cfg.window_configs.truncate(MAX_WINDOW_CONFIGS);
 }
 
-/// Pop the most-recent WindowConfig matching `key`, removing it
-/// from the stack. Returns `None` when no entry exists. Callers
-/// save the config afterwards; this function only mutates the
-/// in-memory `Config`.
-pub fn pop_window_config(cfg: &mut Config, key: &str) -> Option<WindowConfig> {
-    let pos = cfg.window_configs.iter().position(|w| w.key == key)?;
+/// Pop the most-recent WindowConfig matching `key` whose label is NOT
+/// currently live, removing it from the stack. Returns `None` when no
+/// such entry exists. Callers save the config afterwards; this
+/// function only mutates the in-memory `Config`.
+///
+/// `is_label_live` exists for bury-on-close: a buried (hidden) window
+/// is still a live webview AND has a fresh stack entry captured at
+/// bury time. A new same-workspace window must neither reuse that
+/// label (Tauri labels are unique per process) nor pop-and-discard the
+/// entry — the buried window still needs it if the app quits before an
+/// unbury. Skipping live-label entries leaves them in place; across an
+/// app restart nothing is live and the stack pops normally.
+pub fn pop_window_config(
+    cfg: &mut Config,
+    key: &str,
+    is_label_live: impl Fn(&str) -> bool,
+) -> Option<WindowConfig> {
+    let pos = cfg
+        .window_configs
+        .iter()
+        .position(|w| w.key == key && !is_label_live(&w.window_label))?;
     Some(cfg.window_configs.remove(pos))
 }
 
@@ -353,11 +368,11 @@ mod tests {
             &mut cfg,
             entry("/workspace/a", "workspace-a-1", "newer", 300),
         );
-        let popped = pop_window_config(&mut cfg, "/workspace/a").unwrap();
+        let popped = pop_window_config(&mut cfg, "/workspace/a", |_| false).unwrap();
         assert_eq!(popped.window_label, "workspace-a-1");
         assert_eq!(popped.url_hash, "newer");
         // The older /workspace/a entry is still on the stack.
-        let popped2 = pop_window_config(&mut cfg, "/workspace/a").unwrap();
+        let popped2 = pop_window_config(&mut cfg, "/workspace/a", |_| false).unwrap();
         assert_eq!(popped2.window_label, "workspace-a-0");
         // /workspace/b is untouched.
         assert_eq!(cfg.window_configs.len(), 1);
@@ -368,7 +383,33 @@ mod tests {
     fn pop_returns_none_when_no_match() {
         let mut cfg = Config::default();
         push_window_config(&mut cfg, entry("/workspace/a", "workspace-a-0", "", 100));
-        assert!(pop_window_config(&mut cfg, "/workspace/missing").is_none());
+        assert!(pop_window_config(&mut cfg, "/workspace/missing", |_| false).is_none());
+        assert_eq!(cfg.window_configs.len(), 1);
+    }
+
+    #[test]
+    fn pop_skips_live_labels_and_leaves_them_on_the_stack() {
+        // Bury-on-close: `workspace-a-1` is a buried (hidden but live)
+        // window with a bury-time entry on the stack. A new window of
+        // the same workspace must pop PAST it to the older dead entry,
+        // leaving the live one in place for the quit-while-buried
+        // restore.
+        let mut cfg = Config::default();
+        push_window_config(
+            &mut cfg,
+            entry("/workspace/a", "workspace-a-0", "dead", 100),
+        );
+        push_window_config(
+            &mut cfg,
+            entry("/workspace/a", "workspace-a-1", "live", 200),
+        );
+        let popped =
+            pop_window_config(&mut cfg, "/workspace/a", |label| label == "workspace-a-1").unwrap();
+        assert_eq!(popped.window_label, "workspace-a-0");
+        assert_eq!(cfg.window_configs.len(), 1);
+        assert_eq!(cfg.window_configs[0].window_label, "workspace-a-1");
+        // Every entry live -> nothing pops, nothing is dropped.
+        assert!(pop_window_config(&mut cfg, "/workspace/a", |_| true).is_none());
         assert_eq!(cfg.window_configs.len(), 1);
     }
 
