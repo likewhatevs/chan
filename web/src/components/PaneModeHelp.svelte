@@ -12,6 +12,8 @@
   // keep the focus / Escape semantics inside App.svelte; this is
   // purely a passive informational panel.
 
+  import { ui } from "../state/store.svelte";
+
   type Cap = {
     /// Visible label on the kbd-shaped button (e.g. "↑", "W", "Tab").
     label: string;
@@ -23,8 +25,16 @@
     /// Optional aria-label override; defaults to "`label`: `action`".
     aria?: string;
   };
-  type Row = { caps: Cap[]; action: string };
-  type Group = { title: string; rows: Row[] };
+  type Row = {
+    caps: Cap[];
+    action: string;
+    /// Hidden in terminal-only windows (`?kind=terminal`): the action
+    /// targets a workspace surface (file browser, graph, drafts, search)
+    /// that does not exist there. Mirrors the `ui.terminalOnly` guards
+    /// on the matching cases in App.svelte's handlePaneModeKey.
+    workspaceOnly?: boolean;
+  };
+  type Group = { title: string; rows: Row[]; workspaceOnly?: boolean };
 
   function dispatchKey(key: string): void {
     // Synthetic KeyboardEvents are routed through the same document-
@@ -36,7 +46,7 @@
     );
   }
 
-  const groups: Group[] = [
+  const ALL_GROUPS: Group[] = [
     {
       title: "Move",
       rows: [
@@ -71,11 +81,11 @@
       title: "Stage (Enter to commit, Esc to discard)",
       rows: [
         { caps: [{ label: "t", key: "t" }], action: "Stage Terminal" },
-        { caps: [{ label: "o", key: "o" }], action: "Stage File Browser" },
-        { caps: [{ label: "p", key: "p" }], action: "Stage Team Work Terminal" },
-        { caps: [{ label: "g", key: "g" }], action: "Stage Graph" },
-        { caps: [{ label: "n", key: "n" }], action: "Stage New Draft" },
-        { caps: [{ label: "f", key: "f" }], action: "Search overlay" },
+        { caps: [{ label: "o", key: "o" }], action: "Stage File Browser", workspaceOnly: true },
+        { caps: [{ label: "p", key: "p" }], action: "Stage Team Work Terminal", workspaceOnly: true },
+        { caps: [{ label: "g", key: "g" }], action: "Stage Graph", workspaceOnly: true },
+        { caps: [{ label: "n", key: "n" }], action: "Stage New Draft", workspaceOnly: true },
+        { caps: [{ label: "f", key: "f" }], action: "Search overlay", workspaceOnly: true },
       ],
     },
     {
@@ -90,6 +100,7 @@
       // `<` opens the dock on the right, `>` opens the dock on the
       // left.
       title: "Dock",
+      workspaceOnly: true,
       rows: [
         { caps: [{ label: "<", key: "<" }], action: "Toggle right-side file browser dock" },
         { caps: [{ label: ">", key: ">" }], action: "Toggle left-side file browser dock" },
@@ -146,6 +157,17 @@
       ],
     },
   ];
+
+  // Terminal-only windows get the terminal-relevant subset (same
+  // filter shape as Pane.svelte's spawnActions). Pure derived - no
+  // $state mutation - and empty groups drop out entirely (Dock).
+  const groups = $derived(
+    ui.terminalOnly
+      ? ALL_GROUPS.filter((g) => !g.workspaceOnly)
+          .map((g) => ({ ...g, rows: g.rows.filter((r) => !r.workspaceOnly) }))
+          .filter((g) => g.rows.length > 0)
+      : ALL_GROUPS,
+  );
 
   function rowKey(row: Row): string {
     return row.caps.map((c) => c.label).join(" ");
