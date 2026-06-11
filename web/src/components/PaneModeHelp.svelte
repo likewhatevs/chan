@@ -82,7 +82,6 @@
       rows: [
         { caps: [{ label: "t", key: "t" }], action: "Stage Terminal" },
         { caps: [{ label: "o", key: "o" }], action: "Stage File Browser", workspaceOnly: true },
-        { caps: [{ label: "p", key: "p" }], action: "Stage Team Work Terminal", workspaceOnly: true },
         { caps: [{ label: "g", key: "g" }], action: "Stage Graph", workspaceOnly: true },
         { caps: [{ label: "n", key: "n" }], action: "Stage New Draft", workspaceOnly: true },
         { caps: [{ label: "f", key: "f" }], action: "Search overlay", workspaceOnly: true },

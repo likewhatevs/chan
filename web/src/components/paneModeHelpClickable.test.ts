@@ -29,16 +29,18 @@ describe("PaneModeHelp key-caps are clickable buttons", () => {
   });
 
   test("data carries the dispatch key for every clickable spawn / move / split cap", () => {
-    // The Spawn group is now Stage: T/O/P/G/E stage into the draft;
+    // The Spawn group is now Stage: T/O/G/N stage into the draft;
     // Enter materializes; Esc discards. `v` is a keymap alias only,
-    // not shown in the cheatsheet.
+    // not shown in the cheatsheet. `p` is GONE: Team Work spawning
+    // moved to the lead-only Cmd+P dialog and the pane-mode handler
+    // lost its case, so a `p` row would be a dead control.
     expect(paneModeHelp).toContain('key: "ArrowUp"');
     expect(paneModeHelp).toContain('key: "ArrowLeft"');
     expect(paneModeHelp).toContain('key: "ArrowDown"');
     expect(paneModeHelp).toContain('key: "ArrowRight"');
     expect(paneModeHelp).toContain('key: "t"');
     expect(paneModeHelp).toContain('key: "o"');
-    expect(paneModeHelp).toContain('key: "p"');
+    expect(paneModeHelp).not.toContain('key: "p"');
     expect(paneModeHelp).toContain('key: "g"');
     expect(paneModeHelp).toContain('key: "n"');
     expect(paneModeHelp).toContain('key: "Tab"');
@@ -65,11 +67,11 @@ describe("PaneModeHelp key-caps are clickable buttons", () => {
       /caps:\s*\[\s*\{\s*label:\s*"o",\s*key:\s*"o"\s*\}\s*\],?\s*action:\s*"Stage File Browser"/,
     );
     expect(paneModeHelp).toMatch(
-      /caps:\s*\[\s*\{\s*label:\s*"p",\s*key:\s*"p"\s*\}\s*\],?\s*action:\s*"Stage Team Work Terminal"/,
-    );
-    expect(paneModeHelp).toMatch(
       /caps:\s*\[\s*\{\s*label:\s*"g",\s*key:\s*"g"\s*\}\s*\],?\s*action:\s*"Stage Graph"/,
     );
+    // Team Work staging is gone entirely (lead-only Cmd+P dialog owns
+    // spawning); the cheatsheet must not resurrect the row.
+    expect(paneModeHelp).not.toContain("Stage Team Work Terminal");
     expect(paneModeHelp).toMatch(
       /caps:\s*\[\s*\{\s*label:\s*"n",\s*key:\s*"n"\s*\}\s*\],?\s*action:\s*"Stage New Draft"/,
     );

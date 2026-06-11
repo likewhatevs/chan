@@ -19,7 +19,6 @@ describe("PaneModeHelp terminal-only filtering", () => {
     // comment churn can't break them and a dropped tag fails loudly.
     for (const action of [
       "Stage File Browser",
-      "Stage Team Work Terminal",
       "Stage Graph",
       "Stage New Draft",
       "Search overlay",
