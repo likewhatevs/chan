@@ -677,6 +677,17 @@
     resizeObserver = new ResizeObserver(queueFit);
     resizeObserver.observe(host);
     queueFit();
+    // This xterm is brand-new and EMPTY, so the attach below must replay
+    // the session's full ring - a carried-over `lastSeq` would make the
+    // server skip everything already-seen by the PREVIOUS xterm (whose
+    // buffer died with term.dispose()), leaving only post-attach output
+    // on screen. That was the "terminal shows only its last line after a
+    // pane split" bug: any layout restructure (split, swap, cross-pane or
+    // cross-window move) remounts this component. Reload restores already
+    // do this (lastSeq: undefined in restoreSession); connect() runs only
+    // from here, so clearing at mount covers every path. Echo dedupe
+    // (lastAgentEchoSeq) is independent of screen content and survives.
+    tab.lastSeq = undefined;
     void connect();
     if (focused) queueMicrotask(() => term?.focus());
   }
