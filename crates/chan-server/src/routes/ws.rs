@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::response::Response;
 use serde::Deserialize;
 use tokio::sync::{broadcast, mpsc, watch};
@@ -22,12 +22,33 @@ use crate::bus::{ScopeRegistry, SubId};
 use crate::signal::now_unix_secs;
 use crate::state::AppState;
 
-pub async fn ws_upgrade(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> Response {
+/// Optional window identity on the event socket (`/ws?w=<id>`): the
+/// same per-window id that keys the `/api/session` blob. Tagged
+/// sockets register with `WindowPresence` so `GET /api/windows` can
+/// report which windows are currently connected. Absent on untagged
+/// clients (tests, curl) — they simply don't appear in presence.
+#[derive(Deserialize)]
+pub struct WsQuery {
+    w: Option<String>,
+}
+
+pub async fn ws_upgrade(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<WsQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
     let rx = state.events_tx.subscribe();
     let last_activity = state.last_activity.clone();
     let shutdown_rx = state.shutdown_rx.clone();
     let scopes = state.scope_registry.clone();
-    ws.on_upgrade(move |socket| ws_pump(socket, rx, last_activity, shutdown_rx, scopes))
+    let presence = state.window_presence.clone();
+    let window_id = q.w.map(|w| w.trim().to_string()).filter(|w| !w.is_empty());
+    ws.on_upgrade(move |socket| async move {
+        // RAII presence ref: held across the pump so EVERY exit path
+        // (clean close, network drop, shutdown) deregisters the window.
+        let _presence = window_id.map(|id| presence.connect(&id));
+        ws_pump(socket, rx, last_activity, shutdown_rx, scopes).await;
+    })
 }
 
 /// Client -> server frame: subscribe / unsubscribe this socket to a

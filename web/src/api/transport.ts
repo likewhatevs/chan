@@ -225,6 +225,7 @@ export function openWatch(
   onEvent: (e: unknown) => void,
   onStatus: (s: WsStatus) => void = () => {},
   onOpen: () => void = () => {},
+  windowId?: string,
 ): WatchSocket {
   let closed = false;
   let ws: WebSocket | null = null;
@@ -236,8 +237,17 @@ export function openWatch(
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     // withTokenQuery applies the server prefix and the ?t= token to
     // the path; the caller stitches on proto+host to produce the
-    // absolute WS URL.
-    const url = `${proto}//${window.location.host}${withTokenQuery("/ws")}`;
+    // absolute WS URL. `w=<windowId>` tags the socket with this
+    // window's session id so the server's WindowPresence (and thus
+    // GET /api/windows + `cs window list`) knows the window is
+    // connected. The caller supplies the id (client.ts owns the
+    // sessionWindowId logic; importing it here would cycle).
+    let path = withTokenQuery("/ws");
+    if (windowId) {
+      const sep = path.includes("?") ? "&" : "?";
+      path = `${path}${sep}w=${encodeURIComponent(windowId)}`;
+    }
+    const url = `${proto}//${window.location.host}${path}`;
     ws = new WebSocket(url);
     ws.onopen = () => {
       backoff = 500;

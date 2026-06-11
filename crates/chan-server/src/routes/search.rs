@@ -912,6 +912,7 @@ mod tests {
             survey_bus: std::sync::Arc::new(crate::survey::SurveyBus::new()),
             window_bus: std::sync::Arc::new(crate::window_bus::WindowBus::new()),
             ephemeral_sessions: std::sync::Mutex::new(std::collections::HashMap::new()),
+            window_presence: std::sync::Arc::new(crate::window_presence::WindowPresence::new()),
         });
 
         RouteTestApp {

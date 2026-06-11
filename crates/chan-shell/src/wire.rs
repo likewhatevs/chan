@@ -66,6 +66,11 @@ pub enum ControlRequest {
         data: String,
     },
     TermList,
+    // Category 2: list the windows this tenant knows about — the same
+    // `{id, connected, saved}` rows as `GET /api/windows` (saved session
+    // blobs ∪ live `/ws` presence), returned as JSON in `Ok.message` for
+    // the CLI to format. Works on both workspace and terminal tenants.
+    WindowList,
     TermRestart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_name: Option<String>,
@@ -475,6 +480,17 @@ mod survey_wire_tests {
         let raw = serde_json::to_string(&req).unwrap();
         let back: ControlRequest = serde_json::from_str(&raw).unwrap();
         assert!(matches!(back, ControlRequest::TermSurvey { .. }));
+    }
+
+    #[test]
+    fn window_list_request_tag() {
+        // The wire tag is `window_list` (a bare unit variant; no fields).
+        // A Rust rename that drifts it breaks the server's decode with a
+        // green build.
+        let v: serde_json::Value = serde_json::to_value(ControlRequest::WindowList).unwrap();
+        assert_eq!(v, serde_json::json!({"type": "window_list"}));
+        let back: ControlRequest = serde_json::from_str(r#"{"type":"window_list"}"#).unwrap();
+        assert!(matches!(back, ControlRequest::WindowList));
     }
 
     #[test]

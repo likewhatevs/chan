@@ -1311,7 +1311,10 @@ export function openWatchSocket(
   onStatus?: (s: import("./transport").WsStatus) => void,
   onReady?: () => void,
 ): WatchSubscription {
-  const socket: WatchSocket = openWatch(onEvent, onStatus, onReady);
+  // Tag the socket with this window's session id so the server's
+  // window-presence map (GET /api/windows, `cs window list`) sees the
+  // window as connected for the socket's lifetime.
+  const socket: WatchSocket = openWatch(onEvent, onStatus, onReady, sessionWindowId());
   const sub = (() => socket.close()) as WatchSubscription;
   sub.subscribeDir = (dir: WatchScopeDir) => socket.send({ type: "sub", dir });
   sub.unsubscribeDir = (dir: WatchScopeDir) => socket.send({ type: "unsub", dir });

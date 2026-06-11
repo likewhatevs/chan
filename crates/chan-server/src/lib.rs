@@ -42,6 +42,7 @@ mod terminal_sessions;
 mod tunnel_guard;
 mod util;
 mod window_bus;
+mod window_presence;
 
 pub use config::ServerConfig;
 pub use error::Error;
@@ -64,8 +65,8 @@ use routes::{
     api_get_contacts, api_get_mentions, api_get_server_config, api_get_session, api_get_workspace,
     api_graph, api_headings, api_health, api_index_rebuild, api_index_status, api_indexing_state,
     api_inspect_draft, api_inspector, api_language_graph, api_link_targets, api_links,
-    api_list_files, api_list_sessions, api_metadata_export, api_metadata_import, api_move,
-    api_patch_config, api_patch_server_config, api_patch_workspace, api_post_attachment,
+    api_list_files, api_list_sessions, api_list_windows, api_metadata_export, api_metadata_import,
+    api_move, api_patch_config, api_patch_server_config, api_patch_workspace, api_post_attachment,
     api_post_contacts_import, api_preflight, api_preflight_decision, api_promote_draft,
     api_put_session, api_read_file, api_report_dir, api_report_file, api_report_prefix,
     api_reports_disable, api_reports_enable, api_reports_state, api_resolve_link,
@@ -304,6 +305,11 @@ struct AppArtifacts {
     /// First-party control socket for local CLI helpers. Held for
     /// the same lifetime as the MCP bridge.
     control_socket: Option<control_socket::ControlHandle>,
+    /// Live PTY registry handle. The router's state owns it too; this
+    /// copy lets a host (chan-desktop's embedded server) answer
+    /// "does window X still have shells?" without going through HTTP
+    /// (see `WorkspaceHost::tenant_has_window_sessions`).
+    terminal_sessions: Arc<TerminalRegistry>,
     /// Shutdown signal sender. Fed by SIGINT/SIGTERM and (optionally)
     /// the idle-timeout watcher. Receivers live on `AppState` and in
     /// `serve()` / `serve_via_tunnel()` for the runloop select.
@@ -588,6 +594,9 @@ async fn build_app(
     // layout query. The control socket parks the query oneshot; the SPA's
     // `POST /api/window/reply` route completes it through AppState below.
     let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+    // Created before the control socket so `cs window list` and the
+    // `/ws` route share one presence map (cloned onto AppState below).
+    let window_presence = Arc::new(window_presence::WindowPresence::new());
     let control = control_socket::start(
         control_socket_path.clone(),
         state_for_bridge.clone(),
@@ -596,6 +605,8 @@ async fn build_app(
         terminal_registry_cell.clone(),
         survey_bus.clone(),
         window_bus.clone(),
+        window_presence.clone(),
+        control_socket::ControlTenant::Workspace,
     );
     let (control_socket_path, control_socket) = match control {
         Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
@@ -616,6 +627,7 @@ async fn build_app(
     // Hand the live registry to the control socket so cs term write / list
     // can resolve sessions. Set-once; ignore a second set (never happens).
     let _ = terminal_registry_cell.set(terminal_sessions.clone());
+    let terminal_sessions_handle = terminal_sessions.clone();
     let terminal_pruner = terminal_sessions.clone().spawn_pruner(shutdown_rx.clone());
     // Drain the per-session `cs terminal write` queues (deliver each next
     // poke when its agent goes idle). Sibling of the pruner.
@@ -647,6 +659,7 @@ async fn build_app(
         survey_bus,
         window_bus,
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
+        window_presence,
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
@@ -670,6 +683,7 @@ async fn build_app(
         prefix,
         mcp_bridge,
         control_socket,
+        terminal_sessions: terminal_sessions_handle,
         shutdown_tx,
     })
 }
@@ -681,12 +695,13 @@ async fn build_app(
 /// window (a desktop webview loading the chan SPA in `?kind=terminal`
 /// mode).
 ///
-/// Deliberately omits the watcher, indexer, MCP bridge, and control
-/// socket: there is no workspace to watch / index / expose, and a
-/// terminal tenant is short-lived and unprivileged relative to a
-/// workspace mount. The terminal registry's PTY cwd is `$HOME`, so a
-/// new pane lands in the user's home directory rather than a workspace
-/// root. The SLIM router (see [`terminal_router`]) mounts only the
+/// Deliberately omits the watcher, indexer, and MCP bridge: there is
+/// no workspace to watch / index / expose. It DOES start a control
+/// socket so `cs` works inside standalone terminals — terminal / pane
+/// / survey / window commands; workspace commands refuse with the
+/// terminal-only message. The terminal registry's PTY cwd is `$HOME`,
+/// so a new pane lands in the user's home directory rather than a
+/// workspace root. The SLIM router (see [`terminal_router`]) mounts only the
 /// terminal + window-session routes, so a workspace-content request
 /// (`/api/files`, `/api/graph`, ...) 404s instead of panicking on the
 /// missing `workspace_cell`.
@@ -734,14 +749,68 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
 
     // PTY cwd = $HOME (fallback "/"): a terminal window is not anchored
     // to a workspace, so new sessions open in the user's home dir. No
-    // MCP / control socket: a terminal tenant doesn't expose either.
+    // MCP bridge (nothing to expose without a workspace).
     let workspace_root = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+
+    // Workspace-less cell: handlers reaching `state.workspace()` would
+    // panic, which is why the slim router mounts no workspace-content
+    // route. The serve loop's indexer-cancel side task tolerates a
+    // `None` cell (it no-ops), so the shared shutdown wiring is safe.
+    // Created before the control socket, which shares it (and reports
+    // the terminal-only refusal for workspace commands).
+    let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
+
+    // Control socket: same first-party `cs` surface as a workspace
+    // serve, scoped to what a terminal tenant can answer. Terminal /
+    // pane / survey / window commands work; workspace commands
+    // (open / graph / dashboard / search / team) refuse with the
+    // terminal-only message. The buses are shared with AppState below
+    // so SPA replies (`/api/window/reply`, `/api/survey/reply`)
+    // complete the blocked `cs pane` / `cs terminal survey` calls.
+    // Socket paths are pid+random-suffixed (`/tmp/chan-control-<pid>-
+    // <8hex>.sock`), so concurrent serves and the desktop's workspace
+    // tenants can't collide.
+    let survey_bus = Arc::new(survey::SurveyBus::new());
+    let window_bus = Arc::new(window_bus::WindowBus::new());
+    let window_presence = Arc::new(window_presence::WindowPresence::new());
+    let terminal_registry_cell: control_socket::TerminalRegistryCell =
+        Arc::new(std::sync::OnceLock::new());
+    let control_socket_path = control_socket::pick_socket_path();
+    let control = control_socket::start(
+        control_socket_path.clone(),
+        workspace_cell.clone(),
+        events_tx.clone(),
+        self_writes.clone(),
+        terminal_registry_cell.clone(),
+        survey_bus.clone(),
+        window_bus.clone(),
+        window_presence.clone(),
+        control_socket::ControlTenant::TerminalOnly,
+    );
+    let (control_socket_path, control_socket) = match control {
+        Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
+        Err(e) => {
+            // Warn-and-degrade like the serve path: shells just won't
+            // have $CHAN_CONTROL_SOCKET.
+            tracing::warn!(
+                "terminal tenant control socket bind failed at {}: {e}",
+                control_socket_path.display()
+            );
+            (None, None)
+        }
+    };
     let terminal_sessions = Arc::new(TerminalRegistry::new(TerminalRegistryConfig {
         workspace_root: workspace_root.clone(),
         mcp_socket_path: None,
-        control_socket_path: None,
+        // Injected into every PTY as $CHAN_CONTROL_SOCKET so `cs`
+        // works inside standalone terminals.
+        control_socket_path,
         terminal: server_config.terminal.clone(),
     }));
+    // Hand the live registry to the control socket so cs term
+    // write / list can resolve sessions (mirrors build_app).
+    let _ = terminal_registry_cell.set(terminal_sessions.clone());
+    let terminal_sessions_handle = terminal_sessions.clone();
     let terminal_pruner = terminal_sessions.clone().spawn_pruner(shutdown_rx.clone());
     let terminal_drainer = terminal_sessions.clone().spawn_drainer(shutdown_rx.clone());
     let terminal_roster_broadcaster = spawn_roster_broadcaster(
@@ -749,12 +818,6 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
         events_tx.clone(),
         shutdown_rx.clone(),
     );
-
-    // Workspace-less cell: handlers reaching `state.workspace()` would
-    // panic, which is why the slim router mounts no workspace-content
-    // route. The serve loop's indexer-cancel side task tolerates a
-    // `None` cell (it no-ops), so the shared shutdown wiring is safe.
-    let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
 
     let state = Arc::new(AppState {
         // The host's shared registry handle: no terminal route reaches it,
@@ -777,9 +840,10 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
         terminal_sessions,
         shutdown_rx,
         scope_registry,
-        survey_bus: Arc::new(survey::SurveyBus::new()),
-        window_bus: Arc::new(window_bus::WindowBus::new()),
+        survey_bus,
+        window_bus,
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
+        window_presence,
     });
 
     // Nest under the prefix exactly like `build_app` so the host's
@@ -801,9 +865,11 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
         _terminal_drainer: terminal_drainer,
         _terminal_roster_broadcaster: terminal_roster_broadcaster,
         prefix,
-        // No workspace to bridge, no local CLI helpers to serve.
+        // No workspace to MCP-bridge; the control socket above IS the
+        // local CLI surface (terminal-scoped).
         mcp_bridge: None,
-        control_socket: None,
+        control_socket,
+        terminal_sessions: terminal_sessions_handle,
         shutdown_tx,
     })
 }
@@ -857,6 +923,15 @@ fn terminal_router(state: Arc<AppState>) -> Router {
                 .delete(api_delete_session),
         )
         .route("/api/sessions", get(api_list_sessions))
+        // Window enumeration (connected / saved): the desktop's
+        // remote Window menu and `cs window list` read this.
+        .route("/api/windows", get(api_list_windows))
+        // Blocked-CLI reply routes: the SPA completes `cs pane`
+        // (window bus) and `cs terminal survey` (survey bus) round
+        // trips here. Both buses are workspace-free, and the terminal
+        // tenant's control socket parks on the same Arcs.
+        .route("/api/window/reply", post(api_window_reply))
+        .route("/api/survey/reply", post(api_survey_reply))
         // Events / broadcast / pane bus.
         .route("/ws", get(ws_upgrade));
     Router::new()
@@ -1348,6 +1423,9 @@ fn router(state: Arc<AppState>) -> Router {
                 .delete(api_delete_session),
         )
         .route("/api/sessions", get(api_list_sessions))
+        // Window enumeration (connected / saved): the desktop's remote
+        // Window menu and `cs window list` read this.
+        .route("/api/windows", get(api_list_windows))
         .route(
             "/api/attachments",
             // Image attachments cap. Axum's default body limit is

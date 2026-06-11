@@ -226,6 +226,34 @@ impl WorkspaceHost {
         Ok(hosted)
     }
 
+    /// True when the tenant mounted at `prefix` has at least one live
+    /// terminal session bound to `window_id` (the desktop window label
+    /// the SPA forwards from its `?w=` query param).
+    ///
+    /// chan-desktop's close handler asks this before letting a
+    /// standalone terminal window really close: a window whose shells
+    /// are still alive gets hidden ("buried") instead, so the PTYs stay
+    /// reachable. Sync and cheap (one read lock + a roster snapshot);
+    /// safe to call from the Tauri event-loop thread. `false` when no
+    /// tenant is mounted at `prefix`.
+    pub fn tenant_has_window_sessions(&self, prefix: &str, window_id: &str) -> bool {
+        let Ok(prefix) = sanitize_prefix(prefix) else {
+            return false;
+        };
+        let Ok(workspaces) = self.workspaces.read() else {
+            return false;
+        };
+        let Some(runtime) = workspaces.get(&prefix) else {
+            return false;
+        };
+        runtime
+            .artifacts
+            .terminal_sessions
+            .roster()
+            .iter()
+            .any(|entry| entry.window_id.as_deref() == Some(window_id))
+    }
+
     /// Close the workspace mounted at `prefix`.
     ///
     /// Returns `Ok(false)` when no workspace is mounted there. Closing

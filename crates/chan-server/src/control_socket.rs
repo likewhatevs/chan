@@ -182,7 +182,28 @@ pub fn pick_socket_path() -> PathBuf {
     crate::mcp_bridge::pick_named_socket_path("control")
 }
 
+/// Which kind of tenant this control socket fronts. Workspace commands
+/// (`cs open/graph/dashboard/search`, team ops) need an actual
+/// workspace behind the cell; on a standalone terminal tenant the cell
+/// is None BY DESIGN, and the error must say so instead of the
+/// transient-sounding "workspace cell unavailable".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlTenant {
+    /// A workspace mount (`chan serve`, a desktop workspace tenant):
+    /// the cell is None only transiently (storage reset window).
+    Workspace,
+    /// chan-desktop's workspace-less `/terminal` tenant: terminal /
+    /// pane / window commands work, workspace commands never will.
+    TerminalOnly,
+}
+
+/// The workspace-only refusal for standalone terminals. A const so the
+/// CLI-facing wording is pinned by a test and greppable.
+pub const TERMINAL_ONLY_NEEDS_WORKSPACE: &str =
+    "this command needs a workspace; this is a standalone terminal session — run it from a terminal inside a workspace window";
+
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 pub fn start(
     socket_path: PathBuf,
     workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
@@ -191,6 +212,8 @@ pub fn start(
     terminal_registry: TerminalRegistryCell,
     survey_bus: Arc<crate::survey::SurveyBus>,
     window_bus: Arc<crate::window_bus::WindowBus>,
+    window_presence: Arc<crate::window_presence::WindowPresence>,
+    tenant: ControlTenant,
 ) -> std::io::Result<ControlHandle> {
     let _ = std::fs::remove_file(&socket_path);
     let listener = UnixListener::bind(&socket_path)?;
@@ -211,6 +234,7 @@ pub fn start(
             let terminal_registry = terminal_registry.clone();
             let survey_bus = survey_bus.clone();
             let window_bus = window_bus.clone();
+            let window_presence = window_presence.clone();
             tokio::spawn(async move {
                 let (read, mut write) = stream.into_split();
                 let mut reader = BufReader::new(read);
@@ -229,6 +253,8 @@ pub fn start(
                                 terminal_registry.get(),
                                 &survey_bus,
                                 &window_bus,
+                                &window_presence,
+                                tenant,
                             )
                             .await
                         }
@@ -255,6 +281,7 @@ pub fn start(
 }
 
 #[cfg(not(unix))]
+#[allow(clippy::too_many_arguments)]
 pub fn start(
     _socket_path: PathBuf,
     _workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
@@ -263,6 +290,8 @@ pub fn start(
     _terminal_registry: TerminalRegistryCell,
     _survey_bus: Arc<crate::survey::SurveyBus>,
     _window_bus: Arc<crate::window_bus::WindowBus>,
+    _window_presence: Arc<crate::window_presence::WindowPresence>,
+    _tenant: ControlTenant,
 ) -> std::io::Result<ControlHandle> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -273,6 +302,7 @@ pub fn start(
 // Async because of the one blocking variant (`TermSurvey`); every other
 // arm returns synchronously without awaiting.
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 async fn handle_request(
     req: ControlRequest,
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
@@ -281,13 +311,15 @@ async fn handle_request(
     terminal_registry: Option<&Arc<TerminalRegistry>>,
     survey_bus: &Arc<crate::survey::SurveyBus>,
     window_bus: &Arc<crate::window_bus::WindowBus>,
+    window_presence: &Arc<crate::window_presence::WindowPresence>,
+    tenant: ControlTenant,
 ) -> ControlResponse {
     match req {
         ControlRequest::OpenPath { window_id, path } => {
             if let Err(message) = require_window_id(&window_id) {
                 return ControlResponse::Error { message };
             }
-            let workspace = match workspace_from_cell(workspace_cell) {
+            let workspace = match workspace_from_cell(workspace_cell, tenant) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -303,7 +335,7 @@ async fn handle_request(
             if let Err(message) = require_window_id(&window_id) {
                 return ControlResponse::Error { message };
             }
-            let workspace = match workspace_from_cell(workspace_cell) {
+            let workspace = match workspace_from_cell(workspace_cell, tenant) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -323,7 +355,7 @@ async fn handle_request(
             if let Err(message) = require_window_id(&window_id) {
                 return ControlResponse::Error { message };
             }
-            let workspace = match workspace_from_cell(workspace_cell) {
+            let workspace = match workspace_from_cell(workspace_cell, tenant) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -399,8 +431,40 @@ async fn handle_request(
             };
             into_response(term_scrollback(registry, &tab_name))
         }
+        ControlRequest::WindowList => {
+            let connected = window_presence.connected_ids();
+            let saved = match tenant {
+                ControlTenant::Workspace => {
+                    let workspace = match workspace_from_cell(workspace_cell, tenant) {
+                        Ok(workspace) => workspace,
+                        Err(message) => return ControlResponse::Error { message },
+                    };
+                    match tokio::task::spawn_blocking(move || workspace.list_sessions()).await {
+                        Ok(Ok(keys)) => keys,
+                        Ok(Err(e)) => {
+                            return ControlResponse::Error {
+                                message: format!("listing saved windows: {e}"),
+                            }
+                        }
+                        Err(e) => {
+                            return ControlResponse::Error {
+                                message: format!("list windows task panicked: {e}"),
+                            }
+                        }
+                    }
+                }
+                // A standalone terminal tenant's saved blobs describe
+                // windows whose PTYs died with them — nothing reopenable.
+                // Live presence is the honest list there.
+                ControlTenant::TerminalOnly => Vec::new(),
+            };
+            let rows = crate::routes::windows::join_windows(saved, connected);
+            into_response(
+                serde_json::to_string(&rows).map_err(|e| format!("encoding window list: {e}")),
+            )
+        }
         ControlRequest::Search { query, limit } => {
-            let workspace = match workspace_from_cell(workspace_cell) {
+            let workspace = match workspace_from_cell(workspace_cell, tenant) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -430,6 +494,7 @@ async fn handle_request(
         } => {
             handle_team(
                 workspace_cell,
+                tenant,
                 terminal_registry,
                 &dir,
                 op,
@@ -492,6 +557,7 @@ async fn handle_request(
 #[cfg(unix)]
 async fn handle_team(
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
+    tenant: ControlTenant,
     terminal_registry: Option<&Arc<TerminalRegistry>>,
     dir: &str,
     op: TeamOp,
@@ -551,7 +617,7 @@ async fn handle_team(
                     message: generate_bootstrap_script(dir, &config),
                 };
             }
-            let workspace = match workspace_from_cell(workspace_cell) {
+            let workspace = match workspace_from_cell(workspace_cell, tenant) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -573,7 +639,7 @@ async fn handle_team(
             spawn_and_poke_team(registry, dir, &config, window_id.as_deref(), events_tx).await
         }
         TeamOp::Load => {
-            let workspace = match workspace_from_cell(workspace_cell) {
+            let workspace = match workspace_from_cell(workspace_cell, tenant) {
                 Ok(workspace) => workspace,
                 Err(message) => return ControlResponse::Error { message },
             };
@@ -1164,13 +1230,18 @@ fn search_workspace(
 #[cfg(unix)]
 fn workspace_from_cell(
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
+    tenant: ControlTenant,
 ) -> Result<Arc<Workspace>, String> {
     let cell = workspace_cell
         .read()
         .map_err(|_| "workspace cell lock poisoned".to_string())?;
-    let cell = cell
-        .as_ref()
-        .ok_or_else(|| "workspace cell unavailable".to_string())?;
+    let cell = cell.as_ref().ok_or_else(|| match tenant {
+        // A workspace tenant's cell is only empty transiently (the
+        // storage-reset swap window); a terminal tenant's is empty by
+        // design and the caller should hear that, not a flake.
+        ControlTenant::Workspace => "workspace cell unavailable".to_string(),
+        ControlTenant::TerminalOnly => TERMINAL_ONLY_NEEDS_WORKSPACE.to_string(),
+    })?;
     Ok(cell.workspace.clone())
 }
 
@@ -1558,6 +1629,7 @@ mod tests {
         let (tx, _) = broadcast::channel(1);
         let survey_bus = Arc::new(crate::survey::SurveyBus::new());
         let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+        let window_presence = Arc::new(crate::window_presence::WindowPresence::new());
 
         let response = handle_request(
             ControlRequest::OpenPath {
@@ -1570,6 +1642,8 @@ mod tests {
             None,
             &survey_bus,
             &window_bus,
+            &window_presence,
+            ControlTenant::Workspace,
         )
         .await;
 
@@ -1578,6 +1652,82 @@ mod tests {
                 assert_eq!(message, "workspace cell lock poisoned");
             }
             ControlResponse::Ok { message } => panic!("unexpected ok response: {message}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_commands_refuse_clearly_on_a_terminal_tenant() {
+        // A standalone terminal tenant has no workspace BY DESIGN; the
+        // refusal must say that (pinned wording) instead of the
+        // transient-sounding "workspace cell unavailable".
+        let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
+        let self_writes = crate::self_writes::SelfWrites::new();
+        let (tx, _) = broadcast::channel(1);
+        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
+        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+        let window_presence = Arc::new(crate::window_presence::WindowPresence::new());
+
+        let response = handle_request(
+            ControlRequest::Search {
+                query: "anything".into(),
+                limit: None,
+            },
+            &workspace_cell,
+            &tx,
+            &self_writes,
+            None,
+            &survey_bus,
+            &window_bus,
+            &window_presence,
+            ControlTenant::TerminalOnly,
+        )
+        .await;
+
+        match response {
+            ControlResponse::Error { message } => {
+                assert_eq!(message, TERMINAL_ONLY_NEEDS_WORKSPACE);
+                assert!(message.contains("standalone terminal"));
+            }
+            ControlResponse::Ok { message } => panic!("unexpected ok response: {message}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn window_list_on_a_terminal_tenant_reports_presence() {
+        // `cs window list` must WORK on a terminal tenant (presence-only
+        // rows), not refuse like the workspace commands.
+        let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
+        let self_writes = crate::self_writes::SelfWrites::new();
+        let (tx, _) = broadcast::channel(1);
+        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
+        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
+        let window_presence = Arc::new(crate::window_presence::WindowPresence::new());
+        let _guard = window_presence.connect("terminal-win-0");
+
+        let response = handle_request(
+            ControlRequest::WindowList,
+            &workspace_cell,
+            &tx,
+            &self_writes,
+            None,
+            &survey_bus,
+            &window_bus,
+            &window_presence,
+            ControlTenant::TerminalOnly,
+        )
+        .await;
+
+        match response {
+            ControlResponse::Ok { message } => {
+                let rows: Value = serde_json::from_str(&message).expect("rows JSON");
+                assert_eq!(
+                    rows,
+                    serde_json::json!([
+                        {"id": "terminal-win-0", "connected": true, "saved": false}
+                    ]),
+                );
+            }
+            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
         }
     }
 
@@ -1881,6 +2031,7 @@ agent = "codex"
         let cell = empty_cell();
         match handle_team(
             &cell,
+            ControlTenant::Workspace,
             None,
             "   ",
             TeamOp::New,
@@ -1898,6 +2049,7 @@ agent = "codex"
         }
         match handle_team(
             &cell,
+            ControlTenant::Workspace,
             None,
             "/abs/team",
             TeamOp::Load,
@@ -1920,6 +2072,7 @@ agent = "codex"
         let cell = empty_cell();
         match handle_team(
             &cell,
+            ControlTenant::Workspace,
             None,
             "new-team-1",
             TeamOp::New,
@@ -1944,6 +2097,7 @@ agent = "codex"
         let cell = empty_cell();
         match handle_team(
             &cell,
+            ControlTenant::Workspace,
             None,
             "new-team-1",
             TeamOp::New,
@@ -1968,6 +2122,7 @@ agent = "codex"
         let cell = empty_cell();
         match handle_team(
             &cell,
+            ControlTenant::Workspace,
             None,
             "new-team-1",
             TeamOp::New,
@@ -1997,6 +2152,7 @@ created_at = "2026-05-29T00:00:00Z"
 "#;
         match handle_team(
             &cell,
+            ControlTenant::Workspace,
             None,
             "new-team-1",
             TeamOp::New,
@@ -2392,6 +2548,7 @@ is_lead = false
         let registry = Arc::new(registry);
         match handle_team(
             &cell,
+            ControlTenant::Workspace,
             Some(&registry),
             "saved-team",
             TeamOp::Load,
@@ -2429,6 +2586,7 @@ is_lead = false
         let (_cfg, _root, cell) = bound_cell_with_shell_team("saved-team");
         match handle_team(
             &cell,
+            ControlTenant::Workspace,
             None,
             "saved-team",
             TeamOp::Load,

@@ -36,6 +36,10 @@ mod survey;
 pub(crate) mod team_config;
 mod terminal;
 mod window;
+// pub(crate) so the `cs window list` control-socket handler
+// (`crate::control_socket`) reuses `join_windows` + `WindowInfo` and
+// the CLI sees the exact rows `GET /api/windows` serves.
+pub(crate) mod windows;
 mod workspace;
 mod ws;
 
@@ -86,6 +90,7 @@ pub use terminal::{
     api_terminal_next_name, api_terminal_ws, api_terminals_roster, spawn_roster_broadcaster,
 };
 pub use window::api_window_reply;
+pub use windows::api_list_windows;
 pub use workspace::{
     api_cloud_workspaces, api_get_workspace, api_patch_workspace, api_workspace_bootstrap,
 };

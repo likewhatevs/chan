@@ -139,6 +139,10 @@ pub struct AppState {
     /// window closes and the tenant is torn down. Unused on workspace
     /// tenants, which take the disk path in the session handlers.
     pub ephemeral_sessions: Mutex<HashMap<String, Vec<u8>>>,
+    /// Which window ids currently hold a `/ws` socket (refcounted; see
+    /// the module docs). Feeds `GET /api/windows` and `cs window list`
+    /// with the connected/saved split.
+    pub window_presence: Arc<crate::window_presence::WindowPresence>,
 }
 
 /// Workspace + its notify watcher. Replaced wholesale by /api/storage/
@@ -280,6 +284,7 @@ pub(crate) mod test_support {
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),
             window_bus: Arc::new(crate::window_bus::WindowBus::new()),
             ephemeral_sessions: Mutex::new(HashMap::new()),
+            window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
         })
     }
 

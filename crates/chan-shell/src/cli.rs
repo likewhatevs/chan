@@ -100,6 +100,16 @@ pub enum ShellAction {
         #[arg(long)]
         pretty: bool,
     },
+    /// Window registry operations. `cs window list` (or `cs w l`) shows
+    /// every window chan knows about: `open` (a live event socket is
+    /// connected — includes windows chan-desktop has hidden via the
+    /// close button) and/or `saved` (a persisted per-window layout
+    /// exists, reopenable).
+    #[command(infer_subcommands = true)]
+    Window {
+        #[command(subcommand)]
+        action: WindowAction,
+    },
     /// Inspect or drive a window's tab/pane layout. Bare `cs pane` reports
     /// the layout (every pane, its tabs and which is selected); the
     /// subcommands focus a pane, split it right|bottom, resize it, or close a
@@ -123,6 +133,26 @@ pub enum ShellAction {
         /// A layout mutation. Omit for the read-only layout report.
         #[command(subcommand)]
         action: Option<PaneAction>,
+    },
+}
+
+/// `cs window <action>`: window-registry reads. List-only today;
+/// the enum exists so a future `cs window open <id>` lands as a
+/// sibling instead of a breaking flag change.
+#[derive(Subcommand, Debug)]
+pub enum WindowAction {
+    /// List the windows chan knows about (connected and/or with a
+    /// saved layout). Markdown by default; `--json [--pretty]` for
+    /// machine output.
+    List {
+        /// Emit the raw JSON rows instead of the markdown table.
+        /// Compact by default.
+        #[arg(long)]
+        json: bool,
+        /// With --json, pretty-print (indent) the JSON. Ignored
+        /// without --json.
+        #[arg(long)]
+        pretty: bool,
     },
 }
 
@@ -592,6 +622,9 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
             Ok(())
         }
         ShellAction::Terminal { action } => cmd_shell_terminal(action).await,
+        ShellAction::Window { action } => match action {
+            WindowAction::List { json, pretty } => cmd_window_list(json, pretty).await,
+        },
         ShellAction::Search {
             query,
             limit,
@@ -605,6 +638,61 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
             action,
         } => cmd_pane(tab_name, json, pretty, action).await,
     }
+}
+
+/// `cs window list`: fetch the server's window registry view (saved
+/// session blobs ∪ live `/ws` presence) and print it. Session-scoped
+/// like `cs terminal list`: needs only $CHAN_CONTROL_SOCKET, no
+/// window id.
+async fn cmd_window_list(json: bool, pretty: bool) -> Result<()> {
+    let socket = control_socket_env()?;
+    let raw = send_control_request(&socket, ControlRequest::WindowList).await?;
+    if json {
+        if pretty {
+            let value: serde_json::Value =
+                serde_json::from_str(&raw).context("parsing window list JSON")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).context("formatting window list JSON")?
+            );
+        } else {
+            println!("{raw}");
+        }
+    } else {
+        print!("{}", render_window_list_markdown(&raw)?);
+    }
+    Ok(())
+}
+
+/// Render the `cs window list` rows (`[{id, connected, saved}]`) as a
+/// markdown table. `open` = a live event socket exists somewhere (a
+/// hidden chan-desktop window still counts — the server can't tell
+/// hidden from visible); `saved` = a persisted layout exists.
+fn render_window_list_markdown(raw: &str) -> Result<String> {
+    let value: serde_json::Value = serde_json::from_str(raw).context("parsing window list JSON")?;
+    let rows = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("window list JSON is not an array"))?;
+    if rows.is_empty() {
+        return Ok("No windows.\n".to_string());
+    }
+    let mut out = String::from("| window | status |\n| --- | --- |\n");
+    for row in rows {
+        let id = row.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+        let connected = row
+            .get("connected")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let saved = row.get("saved").and_then(|v| v.as_bool()).unwrap_or(false);
+        let status = match (connected, saved) {
+            (true, true) => "open, saved",
+            (true, false) => "open",
+            (false, true) => "saved",
+            (false, false) => "?",
+        };
+        out.push_str(&format!("| {id} | {status} |\n"));
+    }
+    Ok(out)
 }
 
 /// `cs search <query>`: run the workspace content search on the running
