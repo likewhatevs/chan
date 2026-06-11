@@ -682,7 +682,6 @@
               // The moved shell's real CHAN_TAB_NAME, so the target can decide
               // whether a conflict-forced rename leaves the env stale (warning).
               terminalEnvTabName: t.terminalEnvTabName,
-              lastSeq: t.lastSeq,
               lastAgentEchoSeq: t.lastAgentEchoSeq,
               group: t.group,
               cwd: t.cwd,
@@ -730,7 +729,6 @@
       title?: string;
       terminalSessionId?: string;
       terminalEnvTabName?: string;
-      lastSeq?: number;
       lastAgentEchoSeq?: number;
       group?: string;
       cwd?: string;
@@ -750,7 +748,6 @@
           terminalSessionId: parsed.terminalSessionId,
           title: parsed.title,
           terminalEnvTabName: parsed.terminalEnvTabName,
-          lastSeq: parsed.lastSeq,
           lastAgentEchoSeq: parsed.lastAgentEchoSeq,
           group: parsed.group,
           cwd: parsed.cwd,
@@ -1812,6 +1809,12 @@
     max-width: 22ch;
     overflow: hidden;
     white-space: nowrap;
+    /* The fade covers the last 1.25rem of the BOX, and the box
+       shrink-fits short titles - without spare room the gradient eats
+       the final glyph ("Terminal-1" rendered with a washed-out "1").
+       5px of right padding widens the box (and the pill) so the text
+       sits mostly clear of the fade while long titles still taper. */
+    padding-right: 5px;
     mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
   }
