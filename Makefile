@@ -205,9 +205,18 @@ uninstall: ## Remove chan from PREFIX/bin.
 	@echo "removed $(PREFIX)/bin/chan"
 
 .PHONY: clean
-clean: ## Remove local build outputs.
+clean: ## Remove local build outputs (root workspace, web, gateway, desktop).
 	$(CARGO) clean
 	rm -rf web/dist web/node_modules web/pkg
+	rm -f $(WEB_BUILD_STAMP)
+	# gateway/ is its own cargo workspace: root `cargo clean` never
+	# touches gateway/target. The npm paths mirror gateway/.gitignore
+	# (monorepo node_modules + the rust-embed SPA dist).
+	cd gateway && $(CARGO) clean
+	rm -rf gateway/node_modules gateway/web-common/node_modules gateway/crates/*/web/node_modules gateway/crates/*/web/dist
+	# Desktop owns its extras (downloaded sidecar binaries); same
+	# delegation as the chan-desktop / desktop-dev build targets.
+	$(MAKE) -C desktop clean
 
 .PHONY: dev
 dev: chan ## Run chan serve against /tmp/chan-dev with no token.
