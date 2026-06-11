@@ -5,7 +5,6 @@ export type TerminalWsPathOpts = {
   tabGroup?: string | null;
   windowId?: string | null;
   sessionId?: string | null;
-  lastSeq?: number | null;
   agentEchoSince?: number | null;
   cwd?: string | null;
 };
@@ -26,7 +25,15 @@ export function terminalWsPath(opts: TerminalWsPathOpts): string {
   const sessionId = opts.sessionId?.trim();
   if (sessionId) {
     params.set("session", sessionId);
-    params.set("since", String(Math.max(0, Math.floor(opts.lastSeq ?? 0))));
+    // A reattach always feeds a brand-new EMPTY xterm, so it always
+    // wants the session's full replay ring: `since` is the constant 0,
+    // not a byte cursor (the cursor was removed - tracking it across
+    // remounts is what caused the "only the last line after a split"
+    // bug). Explicit 0 rather than absent: `Some(0)` makes the server
+    // report bytes lost to ring overflow via `missed_bytes` (the
+    // "terminal replay missed N bytes" notice); `None` would silently
+    // start at the ring head.
+    params.set("since", "0");
     params.set(
       "agent_echo_since",
       String(Math.max(0, Math.floor(opts.agentEchoSince ?? 0))),

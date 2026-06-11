@@ -96,7 +96,7 @@ describe("session persistence bootstrap guard", () => {
         status: 204,
       }),
     );
-    setTerminalLayout({ terminalSessionId: undefined, lastSeq: undefined });
+    setTerminalLayout({ terminalSessionId: undefined });
 
     __testSetBootstrapHydrated(false);
     scheduleSessionSave();
@@ -104,7 +104,6 @@ describe("session persistence bootstrap guard", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
 
     activeTerminal().terminalSessionId = "term_after_hydrate";
-    activeTerminal().lastSeq = 12;
     __testSetBootstrapHydrated(true);
     scheduleSessionSave();
     await vi.runAllTimersAsync();

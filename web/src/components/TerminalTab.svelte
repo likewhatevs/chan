@@ -35,7 +35,6 @@
     shouldEscapeTerminal,
   } from "../state/shortcuts";
   import {
-    advanceTerminalSeq,
     allTerminalTabs,
     applyGlobalTerminalName,
     broadcastTerminalInput,
@@ -677,17 +676,13 @@
     resizeObserver = new ResizeObserver(queueFit);
     resizeObserver.observe(host);
     queueFit();
-    // This xterm is brand-new and EMPTY, so the attach below must replay
-    // the session's full ring - a carried-over `lastSeq` would make the
-    // server skip everything already-seen by the PREVIOUS xterm (whose
-    // buffer died with term.dispose()), leaving only post-attach output
-    // on screen. That was the "terminal shows only its last line after a
-    // pane split" bug: any layout restructure (split, swap, cross-pane or
-    // cross-window move) remounts this component. Reload restores already
-    // do this (lastSeq: undefined in restoreSession); connect() runs only
-    // from here, so clearing at mount covers every path. Echo dedupe
-    // (lastAgentEchoSeq) is independent of screen content and survives.
-    tab.lastSeq = undefined;
+    // This xterm is brand-new and EMPTY, so the attach below carries no
+    // byte cursor and the server replays the session's full ring. A
+    // carried-over cursor once made the server skip everything the
+    // PREVIOUS xterm had seen (its buffer died with term.dispose()) -
+    // the "terminal shows only its last line after a pane split" bug;
+    // the cursor was removed outright. Echo dedupe (lastAgentEchoSeq)
+    // is independent of screen content and survives the remount.
     void connect();
     if (focused) queueMicrotask(() => term?.focus());
   }
@@ -722,7 +717,6 @@
         tabGroup: terminalTabGroup(tab),
         windowId: sessionWindowId(),
         sessionId: tab.terminalSessionId,
-        lastSeq: tab.lastSeq,
         agentEchoSince: tab.lastAgentEchoSeq,
         cwd: reattaching ? undefined : tab.cwd,
       }),
@@ -739,14 +733,14 @@
       if (event.data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(event.data);
         writePtyOutput(bytes);
-        recordOutputBytes(bytes.byteLength);
+        recordOutputActivity();
         maybeSeedPrompt();
         return;
       }
       if (event.data instanceof Blob) {
         const bytes = new Uint8Array(await event.data.arrayBuffer());
         writePtyOutput(bytes);
-        recordOutputBytes(bytes.byteLength);
+        recordOutputActivity();
         maybeSeedPrompt();
         return;
       }
@@ -763,7 +757,7 @@
         recoverTerminalRendererAfterHostResume();
       } else if (frame.type === "session") {
         sawSessionControl = true;
-        setTerminalSession(tab, frame.id, frame.seq);
+        setTerminalSession(tab, frame.id);
         setTerminalActivity(tab, !focused && (frame.bytes_since_focus ?? 0) > 0);
         scheduleTerminalSessionSave();
         missedBytes = Math.max(0, Math.floor(frame.missed_bytes ?? 0));
@@ -842,9 +836,7 @@
     };
   }
 
-  function recordOutputBytes(bytes: number): void {
-    advanceTerminalSeq(tab, bytes);
-    scheduleTerminalSessionSave();
+  function recordOutputActivity(): void {
     // Output arriving at an UNFOCUSED terminal is unseen: show the
     // dot and PULSE it while chunks keep coming. A
     // focused terminal is being watched, so no dot / pulse. Re-arm a

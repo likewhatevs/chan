@@ -272,7 +272,6 @@ export type TerminalTab = {
   terminalEnvNamePromptDismissed?: boolean;
   terminalSessionId?: string;
   controlledTerminal?: boolean;
-  lastSeq?: number;
   lastAgentEchoSeq?: number;
   terminalActivity?: boolean;
   /// Refines terminalActivity. True while output is actively ARRIVING at
@@ -1015,7 +1014,6 @@ function tabForReopen(src: Tab): Tab {
   if (tab.kind === "terminal") {
     tab.terminalSessionId = undefined;
     tab.controlledTerminal = undefined;
-    tab.lastSeq = undefined;
     tab.lastAgentEchoSeq = undefined;
     tab.terminalEnvTabName = undefined;
     tab.terminalEnvNamePromptDismissed = undefined;
@@ -1165,7 +1163,6 @@ export function openTerminalInPane(
     broadcastTargetIds: [],
     terminalSessionId: opts.sessionId?.trim() || undefined,
     controlledTerminal: opts.controlledTerminal || undefined,
-    lastSeq: undefined,
     cwd: cwd || undefined,
     seedInput: seedInput || undefined,
     group: group && group !== DEFAULT_TERMINAL_GROUP ? group : undefined,
@@ -1190,8 +1187,9 @@ export function openTerminalInPane(
 /// `reattachTerminalInPane`. All standalone terminal windows share one
 /// `/terminal` tenant (one PTY registry), so the target window can attach to
 /// this SAME live PTY by `terminalSessionId` instead of spawning a fresh
-/// shell. The seq cursors + cwd mirror what the source tab held so the
-/// re-attach replays from the right point.
+/// shell. The target's fresh xterm is empty, so its attach always replays
+/// the session's full ring (like a reload); only the echo-dedupe cursor
+/// travels with the move.
 export type TerminalMovePayload = {
   terminalSessionId: string;
   title?: string;
@@ -1199,7 +1197,6 @@ export type TerminalMovePayload = {
   /// so the target can tell whether a conflict-forced `-N` rename leaves the
   /// env stale and must surface the restart warning.
   terminalEnvTabName?: string;
-  lastSeq?: number;
   lastAgentEchoSeq?: number;
   group?: string;
   cwd?: string;
@@ -1208,8 +1205,8 @@ export type TerminalMovePayload = {
 /// Re-attach a MOVED terminal to its existing live PTY in the target window's
 /// pane. Distinct from `openTerminalInPane({ sessionId })`: this preserves the
 /// moved terminal's NAME verbatim (NO renumber - it's the same terminal, just
-/// in a new window) and seeds the seq cursors so the WS re-attach replays from
-/// where the source window left off. The source tab is removed WITHOUT killing
+/// in a new window) and carries the echo-dedupe cursor so agent echo replay
+/// stays suppressed. The source tab is removed WITHOUT killing
 /// the PTY (see `closeTab`'s `keepSession`), so the net effect is the terminal
 /// leaving the source and appearing here with the same shell + history and no
 /// duplicate. The PTY lives in the shared registry, so the attach succeeds.
@@ -1242,10 +1239,9 @@ export function reattachTerminalInPane(
     // the names match and no warning shows.
     terminalEnvTabName: payload.terminalEnvTabName,
     controlledTerminal: undefined,
-    // Seed the seq cursors so the WS re-attach (`connect()` in TerminalTab.svelte
-    // sends `sessionId` + `lastSeq` + `agentEchoSince`) replays only the bytes
-    // this window has not seen yet, matching a same-window reattach on reload.
-    lastSeq: payload.lastSeq,
+    // Carry the echo-dedupe cursor so the re-attach (`connect()` sends
+    // `sessionId` + `agentEchoSince`) keeps agent echoes suppressed. The
+    // fresh xterm replays the full ring, same as a reload.
     lastAgentEchoSeq: payload.lastAgentEchoSeq,
     cwd: payload.cwd?.trim() || undefined,
     seedInput: undefined,
@@ -1541,24 +1537,14 @@ export function terminalBroadcastReachCount(tab: TerminalTab): number {
   return local + cross;
 }
 
-export function setTerminalSession(
-  tab: TerminalTab,
-  sessionId: string,
-  lastSeq: number,
-): void {
+export function setTerminalSession(tab: TerminalTab, sessionId: string): void {
   const wasFresh = !tab.terminalSessionId || tab.terminalSessionId !== sessionId;
   tab.terminalSessionId = sessionId;
-  tab.lastSeq = Math.max(0, Math.floor(lastSeq));
   if (wasFresh) {
     tab.lastAgentEchoSeq = undefined;
     tab.terminalEnvTabName = terminalTabName(tab);
     tab.terminalEnvNamePromptDismissed = false;
   }
-}
-
-export function advanceTerminalSeq(tab: TerminalTab, bytes: number): void {
-  if (!tab.terminalSessionId || !Number.isFinite(bytes) || bytes <= 0) return;
-  tab.lastSeq = Math.max(0, Math.floor(tab.lastSeq ?? 0)) + Math.floor(bytes);
 }
 
 export function setTerminalActivity(tab: TerminalTab, active: boolean): void {
@@ -1576,7 +1562,6 @@ export function setTerminalActivityPulsing(tab: TerminalTab, pulsing: boolean): 
 
 export function clearTerminalSession(tab: TerminalTab): void {
   tab.terminalSessionId = undefined;
-  tab.lastSeq = undefined;
   tab.lastAgentEchoSeq = undefined;
   tab.terminalActivity = undefined;
   tab.terminalActivityPulsing = undefined;
@@ -2468,7 +2453,6 @@ function cloneTab(src: Tab): Tab {
       terminalEnvNamePromptDismissed: src.terminalEnvNamePromptDismissed,
       terminalSessionId: src.terminalSessionId,
       controlledTerminal: src.controlledTerminal,
-      lastSeq: src.lastSeq,
       lastAgentEchoSeq: src.lastAgentEchoSeq,
       cwd: src.cwd,
       seedInput: src.seedInput,
@@ -2912,7 +2896,6 @@ export function paneModeOpenTerminal(ctx?: SpawnContext): void {
     broadcastTargetIds: [],
     terminalSessionId: undefined,
     controlledTerminal: undefined,
-    lastSeq: undefined,
     cwd: cwd || undefined,
     seedInput: undefined,
   };
@@ -3654,9 +3637,6 @@ type SerTab = {
   /// Terminal was created through the HTTP control channel; restart
   /// uses the server-side restart endpoint.
   tc?: 1;
-  /// Legacy byte-sequence offset. Ignored on restore so a reload
-  /// replays the full server ring into a fresh xterm buffer.
-  tseq?: number;
   /// Last injected agent-event echo sequence the browser handled.
   /// Used only for replaying missed Team Work watcher dispatches.
   tae?: number;
@@ -4166,7 +4146,6 @@ export async function restoreLayout(
             keyboardProtocol: kpSnapshot
               ? restoreKeyboardProtocolState(kpSnapshot)
               : undefined,
-            lastSeq: undefined,
             lastAgentEchoSeq:
               terminalSessionId &&
               typeof (sertab.tae ?? savedTerm?.tae) === "number" &&
@@ -4342,7 +4321,7 @@ function serializedLeaves(node: SerNode | null, out: SerLeaf[] = []): SerLeaf[] 
 
 /// Copy terminal PTY session metadata from a per-window session layout
 /// onto the live layout after a shareable URL-hash layout restore.
-/// The hash deliberately omits `tsid`/`tseq`; this graft keeps reloads
+/// The hash deliberately omits `tsid`; this graft keeps reloads
 /// from abandoning the server-side PTY while still keeping copied URLs
 /// free of private terminal ids.
 export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null): void {
@@ -4359,7 +4338,6 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
       if (!savedTerm) continue;
       if (savedTerm.tsid) {
         liveTerms[j]!.terminalSessionId = savedTerm.tsid;
-        liveTerms[j]!.lastSeq = undefined;
         liveTerms[j]!.lastAgentEchoSeq =
           typeof savedTerm.tae === "number" && Number.isFinite(savedTerm.tae)
             ? Math.max(0, Math.floor(savedTerm.tae))

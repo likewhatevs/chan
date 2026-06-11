@@ -12,17 +12,19 @@ describe("terminalWsPath", () => {
     ).toBe("/api/terminal/ws?cols=100&rows=31&tab_name=Terminal");
   });
 
-  test("adds session and since fields when reattaching", () => {
+  test("reattach always requests the full ring (since=0)", () => {
+    // `since` is the CONSTANT 0, not a byte cursor: a reattach always
+    // feeds a fresh empty xterm, and explicit 0 (vs absent) makes the
+    // server report ring-overflow loss via missed_bytes.
     expect(
       terminalWsPath({
         cols: 80,
         rows: 24,
         tabName: "build log",
         sessionId: "term_abc",
-        lastSeq: 42,
       }),
     ).toBe(
-      "/api/terminal/ws?cols=80&rows=24&tab_name=build+log&session=term_abc&since=42&agent_echo_since=0",
+      "/api/terminal/ws?cols=80&rows=24&tab_name=build+log&session=term_abc&since=0&agent_echo_since=0",
     );
   });
 
@@ -37,25 +39,6 @@ describe("terminalWsPath", () => {
     ).toBe(
       "/api/terminal/ws?cols=80&rows=24&tab_name=shell&window_id=workspace-notes-7",
     );
-  });
-
-  test("reattach starts from zero when no sequence was persisted", () => {
-    expect(
-      terminalWsPath({
-        cols: 80,
-        rows: 24,
-        tabName: "shell",
-        sessionId: "term_abc",
-      }),
-    ).toContain("&since=0");
-    expect(
-      terminalWsPath({
-        cols: 80,
-        rows: 24,
-        tabName: "shell",
-        sessionId: "term_abc",
-      }),
-    ).toContain("&agent_echo_since=0");
   });
 
   test("adds agent event echo replay cursor when reattaching", () => {
@@ -85,7 +68,6 @@ describe("terminalWsPath", () => {
         rows: 24,
         tabName: "reattach",
         sessionId: "term_abc",
-        lastSeq: 1,
       }),
     ).not.toContain("mcp_env");
   });

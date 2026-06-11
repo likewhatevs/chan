@@ -1375,11 +1375,11 @@ describe("pane state", () => {
     }) as TerminalTab;
     // title suffixed to Terminal-2-2; env is the original Terminal-2.
     // The move handshake re-attaches to the SAME session id -> env unchanged.
-    setTerminalSession(tab, "moved-sess", 5);
+    setTerminalSession(tab, "moved-sess");
     expect(tab.terminalEnvTabName).toBe("Terminal-2");
     expect(terminalEnvTabNameStale(tab)).toBe(true);
     // A DIFFERENT session id (cross-tenant fresh spawn) resets env to the title.
-    setTerminalSession(tab, "fresh-sess", 0);
+    setTerminalSession(tab, "fresh-sess");
     expect(tab.terminalEnvTabName).toBe("Terminal-2-2");
     expect(terminalEnvTabNameStale(tab)).toBe(false);
   });
@@ -2005,7 +2005,6 @@ describe("terminal session serialization", () => {
   test("clearing a terminal session clears activity state", () => {
     const tab = terminalTab({
       terminalSessionId: "term_123",
-      lastSeq: 99,
       lastAgentEchoSeq: 7,
       terminalActivity: true,
     });
@@ -2013,7 +2012,6 @@ describe("terminal session serialization", () => {
     clearTerminalSession(tab);
 
     expect(tab.terminalSessionId).toBeUndefined();
-    expect(tab.lastSeq).toBeUndefined();
     expect(tab.lastAgentEchoSeq).toBeUndefined();
     expect(tab.terminalActivity).toBeUndefined();
   });
@@ -2022,27 +2020,23 @@ describe("terminal session serialization", () => {
     resetLayout([
       terminalTab({
         terminalSessionId: "term_123",
-        lastSeq: 99,
       }),
     ]);
 
     const layoutSnapshot = serializeLayout();
 
     expect(JSON.stringify(layoutSnapshot)).not.toContain("term_123");
-    expect(JSON.stringify(layoutSnapshot)).not.toContain("99");
   });
 
-  test("round-trips terminal session ids without reload cursors", async () => {
+  test("round-trips terminal session ids in session layouts", async () => {
     resetLayout([
       terminalTab({
         title: "build",
         terminalSessionId: "term_123",
-        lastSeq: 99,
       }),
     ]);
     const layoutSnapshot = serializeLayout({ terminalSessions: true });
     expect(JSON.stringify(layoutSnapshot)).toContain("term_123");
-    expect(JSON.stringify(layoutSnapshot)).not.toContain("99");
 
     await restoreLayout(layoutSnapshot!);
 
@@ -2051,7 +2045,6 @@ describe("terminal session serialization", () => {
     if (tab?.kind !== "terminal") return;
     expect(tab.title).toBe("build");
     expect(tab.terminalSessionId).toBe("term_123");
-    expect(tab.lastSeq).toBeUndefined();
   });
 
   test("round-trips terminal agent echo replay cursor only in session layouts", async () => {
@@ -2108,26 +2101,11 @@ describe("terminal session serialization", () => {
     expect(JSON.stringify(serializeLayout({ terminalSessions: true }))).not.toContain("\"kp\"");
   });
 
-  test("ignores legacy terminal sequence cursors on reload", async () => {
-    await restoreLayout({
-      k: "l",
-      t: [{ k: "t", n: "build", tsid: "term_legacy", tseq: 99, a: 1 }],
-      f: 1,
-    });
-
-    const [tab] = activePane().tabs;
-    expect(tab?.kind).toBe("terminal");
-    if (tab?.kind !== "terminal") return;
-    expect(tab.terminalSessionId).toBe("term_legacy");
-    expect(tab.lastSeq).toBeUndefined();
-  });
-
   test("hydrates terminal session ids onto hash-restored terminal tabs", async () => {
     resetLayout([
       terminalTab({
         title: "build",
         terminalSessionId: "term_abc",
-        lastSeq: 42,
       }),
     ]);
     const sessionLayout = serializeLayout({ terminalSessions: true });
@@ -2141,7 +2119,6 @@ describe("terminal session serialization", () => {
     if (tab?.kind !== "terminal") return;
     expect(tab.title).toBe("build");
     expect(tab.terminalSessionId).toBe("term_abc");
-    expect(tab.lastSeq).toBeUndefined();
     expect(tab.lastAgentEchoSeq).toBeUndefined();
   });
 
@@ -2150,7 +2127,6 @@ describe("terminal session serialization", () => {
       terminalTab({
         title: "build",
         terminalSessionId: "term_pre_mount",
-        lastSeq: 77,
       }),
     ]);
     const sessionLayout = serializeLayout({ terminalSessions: true });
@@ -2161,7 +2137,6 @@ describe("terminal session serialization", () => {
     expect(tab?.kind).toBe("terminal");
     if (tab?.kind !== "terminal") return;
     expect(tab.terminalSessionId).toBe("term_pre_mount");
-    expect(tab.lastSeq).toBeUndefined();
 
     await restored;
   });
@@ -2390,7 +2365,7 @@ describe("terminal tab naming", () => {
     const tab = terminalTab({ title: "build" });
     resetLayout([tab]);
 
-    setTerminalSession(tab, "term_live", 0);
+    setTerminalSession(tab, "term_live");
     expect(tab.terminalEnvTabName).toBe("build");
     expect(terminalEnvTabNameStale(tab)).toBe(false);
 
@@ -2405,7 +2380,7 @@ describe("terminal tab naming", () => {
     renameTerminalTab(tab, "ship");
     expect(tab.terminalEnvNamePromptDismissed).toBe(false);
 
-    setTerminalSession(tab, "term_new", 0);
+    setTerminalSession(tab, "term_new");
     expect(tab.terminalEnvTabName).toBe("ship");
     expect(terminalEnvTabNameStale(tab)).toBe(false);
   });
