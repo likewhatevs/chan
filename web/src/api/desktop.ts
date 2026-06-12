@@ -109,6 +109,24 @@ export async function readClipboardText(): Promise<string> {
   return (await navigator.clipboard?.readText()) ?? "";
 }
 
+/// Absolute paths of the OS files currently on the macOS drag
+/// pasteboard (the `read_dropped_paths` IPC). Only meaningful when
+/// called from inside a `drop` event handler — the drag pasteboard
+/// persists until the next drag starts. Returns `[]` in a plain
+/// browser, on non-macOS desktops, when the pasteboard holds no file
+/// items, or when the ACL refuses the command (remote-served window
+/// kinds don't get it) — every failure degrades to a silent no-op so
+/// the drop guard's no-takeover guarantee is all that remains.
+export async function readDroppedPaths(): Promise<string[]> {
+  if (!isTauriDesktop()) return [];
+  try {
+    return await tauriInvoke<string[]>("read_dropped_paths");
+  } catch {
+    // ACL refusal (tunnel/outbound windows) or pre-IPC desktop build.
+    return [];
+  }
+}
+
 /// Reload the chan window. On chan-desktop calls the
 /// `reload_window` IPC which fires `WebviewWindow::reload()`.
 /// Falls back to `window.location.reload()` on web or on IPC

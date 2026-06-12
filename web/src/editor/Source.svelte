@@ -414,7 +414,7 @@
   });
 </script>
 
-<div class="md-source" data-density={density} bind:this={host}></div>
+<div class="md-source" data-density={density} data-file-drop-zone bind:this={host}></div>
 
 <style>
   /* Keep the CodeMirror chrome wrapper themed. The CM6 editor itself

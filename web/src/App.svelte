@@ -16,6 +16,7 @@
   // Open-count of pane-LOCAL modals (MCP-env info, import-contacts) whose
   // visibility lives in component state App.svelte can't otherwise see.
   import { paneModalGuard } from "./state/paneModalGuard.svelte";
+  import { installFileDropGuard } from "./state/fileDropGuard";
   import { toggleRichPromptForTab } from "./state/richPrompt.svelte";
   import FileBrowserSidePane from "./components/FileBrowserSidePane.svelte";
   import MissingTokenOverlay from "./components/MissingTokenOverlay.svelte";
@@ -927,6 +928,11 @@
     if (isTauriDesktop()) void requestCloseWindow();
   });
   onMount(() => document.addEventListener("keydown", onWindowKey));
+  // SPA-global file-drop guard: an OS file dropped outside an
+  // intentional zone must never navigate the webview away from the
+  // SPA (see state/fileDropGuard.ts). Installed for the App's whole
+  // lifetime; in-page drags are untouched (Files-type gate).
+  onMount(() => installFileDropGuard());
   onDestroy(() => document.removeEventListener("keydown", onWindowKey));
 
   /// Ctrl+D: close the focused non-terminal tab. Terminal tabs forward

@@ -26,7 +26,8 @@
   import { WebglAddon } from "@xterm/addon-webgl";
   import "@xterm/xterm/css/xterm.css";
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
-  import { isTauriDesktop, readClipboardText } from "../api/desktop";
+  import { isTauriDesktop, readClipboardText, readDroppedPaths } from "../api/desktop";
+  import { isOsFileDrag, shellEscapePaths } from "../state/fileDropGuard";
   import { openExternalUrl } from "../editor/external_links";
   import { chordFor, currentOS, shouldEscapeTerminal } from "../state/shortcuts";
   import {
@@ -959,6 +960,23 @@
     }
   }
 
+  /// OS file dropped on this terminal: type the dropped files' absolute
+  /// paths at the cursor, shell-escaped and space-separated (macOS
+  /// Terminal behavior). The paths come from the desktop
+  /// `read_dropped_paths` IPC — the DOM File API never exposes OS
+  /// paths — so this is desktop-only by construction: in a plain
+  /// browser (or a window kind whose ACL refuses the IPC)
+  /// readDroppedPaths() resolves to [] and the drop is a silent no-op.
+  /// preventDefault always: with the handler owning the drop, the
+  /// webview must never fall through to its default drop-navigation.
+  async function onTerminalFileDrop(e: DragEvent): Promise<void> {
+    if (!isOsFileDrag(e)) return;
+    e.preventDefault();
+    const paths = await readDroppedPaths();
+    const typed = shellEscapePaths(paths);
+    if (typed) sendUserInput(typed);
+  }
+
   function sendUserInput(data: string): void {
     sendInput(data);
     broadcastTerminalInput(tab, data);
@@ -1813,7 +1831,18 @@
       />
     </div>
   {/if}
-  <div class="terminal-host" bind:this={host}></div>
+  <!-- data-file-drop-zone exempts the terminal from the global drop
+       guard's not-allowed cursor; onTerminalFileDrop owns the drop
+       (path-print on desktop, silent no-op in a plain browser). The
+       div is xterm's mount, not an interactive control — xterm
+       manages its own accessibility tree inside. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="terminal-host"
+    data-file-drop-zone
+    ondrop={onTerminalFileDrop}
+    bind:this={host}
+  ></div>
   <!-- Rich Prompt bubble floats over this terminal's bottom (the
        .terminal-tab is the position:absolute context). PER-TERMINAL: mounts
        only when THIS terminal's bubble is toggled on and the tab is active in

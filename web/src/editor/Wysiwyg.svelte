@@ -725,7 +725,7 @@
   }
 </script>
 
-<div class="md-wysiwyg-cm6" data-density={density} bind:this={host}></div>
+<div class="md-wysiwyg-cm6" data-density={density} data-file-drop-zone bind:this={host}></div>
 
 <style>
   /* Step 4 styles. Each rule is scoped to .md-wysiwyg-cm6 so we don't

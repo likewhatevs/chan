@@ -305,7 +305,7 @@
     onpointerup={onResizeEnd}
     onpointercancel={onResizeEnd}
   ></div>
-  <div class="rp-editor" bind:this={host}></div>
+  <div class="rp-editor" data-file-drop-zone bind:this={host}></div>
   <div class="rp-label" aria-hidden="true">{submitLabel}</div>
 </div>
 
