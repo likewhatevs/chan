@@ -99,11 +99,13 @@ pub async fn api_survey_reply(
             let result = tokio::task::spawn_blocking(move || {
                 create_followup_file(
                     &workspace,
-                    &followup.dir,
-                    &followup.from,
-                    &followup.to,
-                    title.as_deref(),
-                    &body_markdown,
+                    FollowupSpec {
+                        dir: &followup.dir,
+                        from: &followup.from,
+                        to: &followup.to,
+                        title: title.as_deref(),
+                        body: &body_markdown,
+                    },
                 )
             })
             .await;
@@ -139,6 +141,17 @@ pub async fn api_survey_reply(
     }
 }
 
+/// One follow-up request: the team dir it lands in plus the message
+/// half (`from`/`to` handles as given, optional title, the original
+/// prompt as `body`).
+pub struct FollowupSpec<'a> {
+    pub dir: &'a str,
+    pub from: &'a str,
+    pub to: &'a str,
+    pub title: Option<&'a str>,
+    pub body: &'a str,
+}
+
 /// Create `{dir}/followups/followup-{from}-{to}-{n}.md` through the Workspace
 /// sandbox, pre-populated per the plan, and return the workspace-relative
 /// path. `n` is the next free index for that from/to pair; from/to are bare
@@ -146,12 +159,15 @@ pub async fn api_survey_reply(
 /// clean, while the file body keeps the handles as given.
 pub fn create_followup_file(
     workspace: &Workspace,
-    dir: &str,
-    from: &str,
-    to: &str,
-    title: Option<&str>,
-    body: &str,
+    spec: FollowupSpec<'_>,
 ) -> Result<String, String> {
+    let FollowupSpec {
+        dir,
+        from,
+        to,
+        title,
+        body,
+    } = spec;
     let dir = dir.trim().trim_end_matches('/');
     if dir.is_empty() {
         return Err("followup dir is required".into());
@@ -281,11 +297,13 @@ mod tests {
 
         let p1 = create_followup_file(
             &workspace,
-            "new-team-1",
-            "@@Alice",
-            "@@Host",
-            Some("Pick a search backend"),
-            "Should search use BM25 or semantic?",
+            FollowupSpec {
+                dir: "new-team-1",
+                from: "@@Alice",
+                to: "@@Host",
+                title: Some("Pick a search backend"),
+                body: "Should search use BM25 or semantic?",
+            },
         )
         .unwrap();
         assert_eq!(p1, "new-team-1/followups/followup-Alice-Host-1.md");
@@ -294,18 +312,29 @@ mod tests {
         // Same from/to pair increments n; the dir already exists.
         let p2 = create_followup_file(
             &workspace,
-            "new-team-1",
-            "@@Alice",
-            "@@Host",
-            None,
-            "Second question",
+            FollowupSpec {
+                dir: "new-team-1",
+                from: "@@Alice",
+                to: "@@Host",
+                title: None,
+                body: "Second question",
+            },
         )
         .unwrap();
         assert_eq!(p2, "new-team-1/followups/followup-Alice-Host-2.md");
 
         // A different from/to pair restarts at 1.
-        let p3 =
-            create_followup_file(&workspace, "new-team-1", "@@Bob", "@@Host", None, "x").unwrap();
+        let p3 = create_followup_file(
+            &workspace,
+            FollowupSpec {
+                dir: "new-team-1",
+                from: "@@Bob",
+                to: "@@Host",
+                title: None,
+                body: "x",
+            },
+        )
+        .unwrap();
         assert_eq!(p3, "new-team-1/followups/followup-Bob-Host-1.md");
     }
 
@@ -314,11 +343,13 @@ mod tests {
         let (_cfg, _root, workspace) = test_workspace();
         let path = create_followup_file(
             &workspace,
-            "team",
-            "@@Alice",
-            "@@Host",
-            Some("Backend choice"),
-            "BM25 or semantic?",
+            FollowupSpec {
+                dir: "team",
+                from: "@@Alice",
+                to: "@@Host",
+                title: Some("Backend choice"),
+                body: "BM25 or semantic?",
+            },
         )
         .unwrap();
         let text = workspace.read_text(&path).unwrap();
@@ -337,7 +368,17 @@ mod tests {
     #[test]
     fn missing_title_falls_back_to_survey_heading() {
         let (_cfg, _root, workspace) = test_workspace();
-        let path = create_followup_file(&workspace, "team", "@@A", "@@B", None, "body").unwrap();
+        let path = create_followup_file(
+            &workspace,
+            FollowupSpec {
+                dir: "team",
+                from: "@@A",
+                to: "@@B",
+                title: None,
+                body: "body",
+            },
+        )
+        .unwrap();
         let text = workspace.read_text(&path).unwrap();
         assert!(text.contains("# Follow up: survey"));
     }
@@ -345,7 +386,17 @@ mod tests {
     #[test]
     fn empty_dir_is_rejected() {
         let (_cfg, _root, workspace) = test_workspace();
-        assert!(create_followup_file(&workspace, "  ", "@@A", "@@B", None, "x").is_err());
+        assert!(create_followup_file(
+            &workspace,
+            FollowupSpec {
+                dir: "  ",
+                from: "@@A",
+                to: "@@B",
+                title: None,
+                body: "x",
+            },
+        )
+        .is_err());
     }
 
     #[test]
