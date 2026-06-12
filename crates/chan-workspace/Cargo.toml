@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Filesystem, search, and graph primitives for chan-writer workspaces"
+description = "Filesystem, search, and graph primitives for chan workspaces"
 
 [dependencies]
 chan-report = { workspace = true }

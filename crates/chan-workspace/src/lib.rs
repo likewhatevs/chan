@@ -1,4 +1,4 @@
-// chan-workspace: filesystem, search, and graph primitives for chan-writer workspaces.
+// chan-workspace: filesystem, search, and graph primitives for chan workspaces.
 //
 // Public surface is path-based, all relative paths POSIX-style ("/" separator)
 // and rooted at a Workspace's `root`. Designed to be FFI-safe via uniffi later:
