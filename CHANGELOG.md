@@ -6,6 +6,69 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.31.0] - 2026-06-12
+
+### Added
+
+- Closing a desktop window with the OS close button now hides ("buries") it
+  instead of destroying it: terminals keep running, the layout stays warm, and
+  an informational dialog explains the behaviour. Buried windows are listed in
+  a "Hidden Windows" section of the Window menu for reopening; a standalone
+  terminal window with no shells left still closes for real.
+- Cmd/Ctrl+Shift+N now reopens the most recently hidden window of the focused
+  window's family before opening a new one, and "New Window" follows the
+  focused connection everywhere: another window of the same local workspace,
+  the same outbound or tunneled remote, or another standalone terminal window.
+- Remote windows are reopenable ad hoc: chan-server gained `GET /api/windows`
+  (saved per-window layouts joined with live socket presence), and chan-desktop
+  polls outbound/tunnel connections to offer their reopenable windows in a
+  "Remote Windows" menu section.
+- `cs window list` (or `cs w l`) shows every window the server knows about —
+  open (a live event socket is connected) and/or saved (a persisted layout
+  exists). Works in workspaces and standalone terminals.
+- Standalone terminal windows now expose the chan control socket: `cs terminal
+  list/write/restart/scrollback`, `cs pane`, `cs terminal survey`, and `cs
+  window list` work inside them, while workspace-only commands (open, graph,
+  dashboard, search, team) refuse with a clear "this is a standalone terminal
+  session" message.
+- Quitting Chan Desktop (Cmd+Q or the Quit menu) now asks for confirmation
+  while any window is open or hidden, since quitting stops their terminals and
+  local workspaces. A bare launcher still quits silently.
+- A window now reloads itself when the server process behind it restarts
+  (e.g. an outbound `chan serve` was ^C'd and re-run): previously the window
+  sat on a stale view with stuck terminals until a manual reload.
+
+### Changed
+
+- The workspace launcher is a singleton titled "Chan Desktop" (no more
+  "Window N" suffix), and Cmd/Ctrl+Shift+N on it opens a standalone terminal
+  window instead of another launcher.
+- The mislabeled "Settings… Cmd+," Window-menu item is gone; Cmd+, (the
+  Hybrid pane flip) is handled by the app itself and keeps working.
+- In standalone terminal windows, the Hybrid Nav cheatsheet now shows only
+  terminal-relevant commands; the workspace-only rows (File Browser, Graph,
+  New Draft, Search, docks) no longer render as dead controls.
+- `make clean` now also scrubs the gateway workspace (its own cargo target,
+  npm trees, and SPA dist), the desktop extras, and the web build stamp.
+- Tab titles get a little fade headroom so short names ("Terminal-1") keep
+  their trailing character legible instead of fading out.
+- CI macOS desktop builds select the newest Xcode on the runner so the shipped
+  app gets the modern window chrome (the look follows the SDK the binary was
+  linked against; older CI Xcode produced the legacy opaque title bar).
+
+### Fixed
+
+- Splitting a pane no longer leaves the original terminal showing only its
+  last line until a window reload. Root cause: a remounted terminal kept a
+  replay cursor and skipped the server's scrollback replay; the cursor was
+  removed and every remount (split, swap, drag, move, reload) now replays the
+  full ring.
+- Opening a standalone terminal window no longer logs a spurious
+  "503 Service Unavailable" error in the desktop console: `/api/health` now
+  answers on workspace-less tenants (the indexer block is simply null there).
+- The dead "p Stage Team Work Terminal" row was removed from the Hybrid Nav
+  cheatsheet; Team Work spawning lives in the lead-only Cmd+P dialog.
+
 ## [v0.30.1] - 2026-06-10
 
 ### Changed

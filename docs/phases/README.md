@@ -65,6 +65,10 @@ cards in [`.agents/roster/README.md`](../../.agents/roster/README.md).
   broadcast roster (menu + indicators + toggle gate), per-tenant Terminal-N
   naming, group-wide cross-window Select All, and tenant-wide name
   uniqueness (v0.29.0, with phase-20).
+- [Phase 22](phase-22.md) - window management: bury-on-close with a dynamic
+  Window menu, Cmd+Shift+N per-connection semantics, remote window reopening
+  over GET /api/windows, cs window list, the standalone-terminal control
+  socket, the split-pane replay fix, and quit confirmation (v0.31.0).
 - [pub-site-release](pub-site-release.md) - a standalone branding and
   positioning re-steer plus marketing site refresh (not a numbered
   phase).
