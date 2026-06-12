@@ -285,53 +285,42 @@ fn scan_draft(drafts_dir: &Path, name: &str) -> Result<DraftScan> {
         return Err(broken(name, "draft root is not a directory"));
     }
 
-    let mut entries = Vec::new();
-    let mut file_count = 0usize;
-    let mut dir_count = 0usize;
-    let mut total_size = 0u64;
-    let mut has_draft_md = false;
-    scan_entries(
-        name,
-        &src,
-        Path::new(""),
-        &mut entries,
-        &mut file_count,
-        &mut dir_count,
-        &mut total_size,
-        &mut has_draft_md,
-    )?;
-    if !has_draft_md {
+    let mut acc = DraftScanAccum::default();
+    scan_entries(name, &src, Path::new(""), &mut acc)?;
+    if !acc.has_draft_md {
         return Err(broken(name, "missing draft.md"));
     }
-    let has_attachments = !(file_count == 1
-        && dir_count == 0
-        && entries
+    let has_attachments = !(acc.file_count == 1
+        && acc.dir_count == 0
+        && acc
+            .entries
             .iter()
             .any(|entry| !entry.is_dir && entry.rel == Path::new("draft.md")));
     Ok(DraftScan {
         inspection: DraftInspection {
             name: name.to_string(),
-            file_count,
-            dir_count,
-            total_size,
+            file_count: acc.file_count,
+            dir_count: acc.dir_count,
+            total_size: acc.total_size,
             has_attachments,
         },
         src,
-        entries,
+        entries: acc.entries,
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn scan_entries(
-    name: &str,
-    root: &Path,
-    rel_dir: &Path,
-    entries: &mut Vec<DraftEntry>,
-    file_count: &mut usize,
-    dir_count: &mut usize,
-    total_size: &mut u64,
-    has_draft_md: &mut bool,
-) -> Result<()> {
+/// Accumulator for the recursive draft-tree walk; the counters and
+/// flag mirror what `scan_draft` folds into `DraftInspection`.
+#[derive(Default)]
+struct DraftScanAccum {
+    entries: Vec<DraftEntry>,
+    file_count: usize,
+    dir_count: usize,
+    total_size: u64,
+    has_draft_md: bool,
+}
+
+fn scan_entries(name: &str, root: &Path, rel_dir: &Path, acc: &mut DraftScanAccum) -> Result<()> {
     let dir = root.join(rel_dir);
     let mut read = fs::read_dir(&dir)
         .map_err(|e| broken(name, format!("failed to read {}: {e}", dir.display())))?;
@@ -350,28 +339,19 @@ fn scan_entries(
             return Err(broken(name, format!("refusing symlink {}", rel.display())));
         }
         if ft.is_dir() {
-            *dir_count += 1;
-            entries.push(DraftEntry {
+            acc.dir_count += 1;
+            acc.entries.push(DraftEntry {
                 rel: rel.clone(),
                 is_dir: true,
             });
-            scan_entries(
-                name,
-                root,
-                &rel,
-                entries,
-                file_count,
-                dir_count,
-                total_size,
-                has_draft_md,
-            )?;
+            scan_entries(name, root, &rel, acc)?;
         } else if ft.is_file() {
-            *file_count += 1;
-            *total_size = total_size.saturating_add(meta.len());
+            acc.file_count += 1;
+            acc.total_size = acc.total_size.saturating_add(meta.len());
             if rel == Path::new("draft.md") {
-                *has_draft_md = true;
+                acc.has_draft_md = true;
             }
-            entries.push(DraftEntry { rel, is_dir: false });
+            acc.entries.push(DraftEntry { rel, is_dir: false });
         } else {
             return Err(broken(
                 name,
