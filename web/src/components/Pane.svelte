@@ -1220,6 +1220,13 @@
             aria-label="terminal output since last focus"
           >●</span>
         {/if}
+        {#if t.kind === "terminal" && (t.queueDepth ?? 0) > 0}
+          <span
+            class="queue-pill"
+            title="queued terminal messages"
+            aria-label="queued terminal messages"
+          >{t.queueDepth}</span>
+        {/if}
         <button
           class="close"
           onclick={(e) => {
@@ -1699,6 +1706,7 @@
   .tabs.flipped .tab .tab-icon,
   .tabs.flipped .tab .path,
   .tabs.flipped .tab .dirty,
+  .tabs.flipped .tab .queue-pill,
   .tabs.flipped .tab .broadcast-marker,
   .tabs.flipped .tab .marker {
     transform: scaleX(-1);
@@ -1802,6 +1810,20 @@
   }
   .dirty.activity {
     color: var(--warn-text, #d29922);
+  }
+  /* Queued-message count for terminal tabs (Rich Prompt submits +
+     teammate pokes share the queue); same affordance family as the
+     activity dot, but a count needs a pill to read at 9px. */
+  .queue-pill {
+    flex: 0 0 auto;
+    min-width: 14px;
+    padding: 1px 4px;
+    border-radius: 7px;
+    font-size: 9px;
+    line-height: 1.2;
+    text-align: center;
+    color: var(--bg-card);
+    background: var(--info-text);
   }
   /* The unseen-output dot PULSES while output is actively arriving,
      then holds SOLID once it stops (still unseen). A smooth opacity

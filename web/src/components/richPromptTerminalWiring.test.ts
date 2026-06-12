@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import terminal from "./TerminalTab.svelte?raw";
+import pane from "./Pane.svelte?raw";
 
 // Rich Prompt - the terminal wiring: TerminalTab registers the prompt
 // sink (WS `prompt` frame, NOT raw input), mounts the bubble over the active
@@ -33,6 +34,19 @@ describe("TerminalTab Rich Prompt wiring", () => {
   test("session frame re-syncs queue depth on every (re)attach", () => {
     expect(terminal).toMatch(/queue_depth\?: number;/);
     expect(terminal).toMatch(/setTerminalQueueDepth\(tab, frame\.queue_depth \?\? 0\);/);
+  });
+
+  test("Pane tab strip shows the queue-depth pill for terminal tabs", () => {
+    // Same affordance family as the activity dot: only for terminal
+    // tabs, only when something is queued (0 collapses to undefined in
+    // the store, so truthiness alone would also work — the explicit
+    // guard documents the intent).
+    expect(pane).toMatch(
+      /\{#if t\.kind === "terminal" && \(t\.queueDepth \?\? 0\) > 0\}[\s\S]{1,220}title="queued terminal messages"[\s\S]{1,120}\{t\.queueDepth\}/,
+    );
+    // The flipped strip counter-mirrors text-bearing children; the
+    // pill's digit must be in that selector list or it renders mirrored.
+    expect(pane).toMatch(/\.tabs\.flipped \.tab \.queue-pill,/);
   });
 
   test("socket loss and session end fail the pending prompt and zero the badge", () => {
