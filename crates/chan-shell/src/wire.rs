@@ -259,8 +259,8 @@ pub enum SplitDir {
 /// the server mints the id before the SPA sees it, and the SPA echoes that id
 /// back in its [`SurveyReply`] so the server matches the parked oneshot.
 ///
-/// serde camelCase: this is the exact JSON the SPA reads
-/// (`round-3-survey-contract.md` pins it; C's TypeScript mirrors that doc).
+/// serde camelCase: this is the exact JSON the SPA reads; the SPA's
+/// TypeScript types mirror this struct field for field.
 /// Nullable fields (`title`, `followup`) serialize as `null` rather than
 /// being skipped, so the SPA-facing frame matches the contract's
 /// `string | null` / `{...} | null` shape exactly.
@@ -351,9 +351,9 @@ impl SurveyReply {
 #[cfg(test)]
 mod survey_wire_tests {
     //! These pin the EXACT on-wire JSON of the survey types. The serde
-    //! tags + camelCase are the C<->D contract (round-3-survey-contract.md);
-    //! a Rust rename that drifts them breaks the SPA / reply route at
-    //! runtime with a green build, so assert the bytes, not just round-trip.
+    //! tags + camelCase are the contract between the CLI and the SPA's
+    //! reply route; a Rust rename that drifts them breaks at runtime
+    //! with a green build, so assert the bytes, not just round-trip.
     use super::*;
 
     #[test]
@@ -365,8 +365,8 @@ mod survey_wire_tests {
             options: vec!["A".into(), "B".into()],
             followup: Some(SurveyFollowup {
                 dir: "team".into(),
-                from: "@@LaneD".into(),
-                to: "@@LaneC".into(),
+                from: "@@Alice".into(),
+                to: "@@Bob".into(),
             }),
         };
         let v: serde_json::Value = serde_json::to_value(&spec).unwrap();
@@ -376,8 +376,8 @@ mod survey_wire_tests {
         assert_eq!(v["bodyMarkdown"], "pick one");
         assert_eq!(v["options"], serde_json::json!(["A", "B"]));
         assert_eq!(v["followup"]["dir"], "team");
-        assert_eq!(v["followup"]["from"], "@@LaneD");
-        assert_eq!(v["followup"]["to"], "@@LaneC");
+        assert_eq!(v["followup"]["from"], "@@Alice");
+        assert_eq!(v["followup"]["to"], "@@Bob");
     }
 
     #[test]
@@ -432,7 +432,7 @@ mod survey_wire_tests {
 
     #[test]
     fn survey_reply_followup_without_path_is_a_bare_deferral() {
-        // Part C: [F] is standard on every survey. A survey raised without
+        // [F] is standard on every survey. A survey raised without
         // followup context defers with no file, so `followupPath` is omitted.
         let reply = SurveyReply::Followup {
             survey_id: "survey-9".into(),
@@ -446,7 +446,7 @@ mod survey_wire_tests {
 
     #[test]
     fn survey_reply_dismissed_tag_and_fields() {
-        // Part C: Dismiss is a distinct reply (no option index, no file) so
+        // Dismiss is a distinct reply (no option index, no file) so
         // the asking agent can tell the host dropped the survey.
         let reply = SurveyReply::Dismissed {
             survey_id: "survey-7".into(),
@@ -460,7 +460,7 @@ mod survey_wire_tests {
     #[test]
     fn term_survey_request_tag_and_spec_round_trip() {
         let req = ControlRequest::TermSurvey {
-            tab_name: Some("@@LaneC".into()),
+            tab_name: Some("@@Alice".into()),
             tab_group: None,
             spec: SurveySpec {
                 survey_id: String::new(),
@@ -472,7 +472,7 @@ mod survey_wire_tests {
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["type"], "term_survey");
-        assert_eq!(v["tab_name"], "@@LaneC");
+        assert_eq!(v["tab_name"], "@@Alice");
         // tab_group None is skipped on the wire (matches the sibling variants).
         assert!(v.get("tab_group").is_none());
         assert_eq!(v["spec"]["bodyMarkdown"], "q");
@@ -499,11 +499,11 @@ mod survey_wire_tests {
         // required string (no group axis, no skip). A Rust rename that
         // drifts either breaks the server's decode with a green build.
         let req = ControlRequest::TermScrollback {
-            tab_name: "@@LaneB".into(),
+            tab_name: "@@Alice".into(),
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["type"], "term_scrollback");
-        assert_eq!(v["tab_name"], "@@LaneB");
+        assert_eq!(v["tab_name"], "@@Alice");
         // Decodes back into the same variant (the server's path).
         let raw = serde_json::to_string(&req).unwrap();
         let back: ControlRequest = serde_json::from_str(&raw).unwrap();
@@ -529,10 +529,10 @@ mod survey_wire_tests {
 
         let by_tab = ControlRequest::PaneQuery {
             window_id: None,
-            tab_name: Some("@@LaneB".into()),
+            tab_name: Some("@@Alice".into()),
         };
         let v: serde_json::Value = serde_json::to_value(&by_tab).unwrap();
-        assert_eq!(v["tab_name"], "@@LaneB");
+        assert_eq!(v["tab_name"], "@@Alice");
         assert!(v.get("window_id").is_none(), "None window_id is skipped");
     }
 
@@ -542,7 +542,7 @@ mod survey_wire_tests {
         // which is internally tagged on `kind` and nests under `op`.
         let req = ControlRequest::PaneExec {
             window_id: None,
-            tab_name: Some("@@LaneB".into()),
+            tab_name: Some("@@Alice".into()),
             op: PaneOp::Split {
                 pane_id: Some("pane-1".into()),
                 dir: SplitDir::Bottom,
@@ -550,7 +550,7 @@ mod survey_wire_tests {
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["type"], "pane_exec");
-        assert_eq!(v["tab_name"], "@@LaneB");
+        assert_eq!(v["tab_name"], "@@Alice");
         assert_eq!(v["op"]["kind"], "split");
         assert_eq!(v["op"]["pane_id"], "pane-1");
         assert_eq!(v["op"]["dir"], "bottom");

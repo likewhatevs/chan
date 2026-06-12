@@ -289,7 +289,7 @@ file path on [F] when `--followup-dir` context was passed (else a bare "host
 deferred" line); or "survey dismissed" when the host drops it.
 
 Single question, two options:
-  cs terminal survey --tab-name @@LaneB \
+  cs terminal survey --tab-name @@Alice \
     --title "Merge order" --option "A first" --option "B first" \
     "Which patch lands first?"
 
@@ -326,7 +326,7 @@ survey target); passing --followup-dir is what makes [F] write the file:
     "title": null,
     "bodyMarkdown": "Ready to cut v0.23.0?",
     "options": ["Ship it", "Hold"],
-    "followup": { "dir": "teams/alpha", "from": "@@LaneA", "to": "@@Host" }
+    "followup": { "dir": "teams/alpha", "from": "@@Alice", "to": "@@Host" }
   }
 "#;
 
@@ -355,12 +355,12 @@ optional: the server stamps the current time when it is omitted.
   is_lead = true
 
   [[members]]
-  handle  = "@@LaneA"
+  handle  = "@@Alice"
   command = "codex"
 
   # A custom launcher the command can't reveal: name the agent explicitly.
   [[members]]
-  handle  = "@@LaneB"
+  handle  = "@@Bob"
   command = "./my-agent.sh"
   env     = { CHAN_AGENT = "gemini" }
 
@@ -1531,14 +1531,14 @@ mod tests {
     fn parses_pane_exec_subcommands_and_global_tab_name() {
         // --tab-name is global, so it works on a subcommand; focus carries
         // the pane id.
-        let cli = CsCli::parse_from(["cs", "pane", "--tab-name", "@@LaneB", "focus", "pane-1"]);
+        let cli = CsCli::parse_from(["cs", "pane", "--tab-name", "@@Alice", "focus", "pane-1"]);
         match cli.action {
             ShellAction::Pane {
                 tab_name,
                 action: Some(PaneAction::Focus { pane_id }),
                 ..
             } => {
-                assert_eq!(tab_name.as_deref(), Some("@@LaneB"));
+                assert_eq!(tab_name.as_deref(), Some("@@Alice"));
                 assert_eq!(pane_id, "pane-1");
             }
             other => panic!("unexpected parse: {other:?}"),
@@ -1622,7 +1622,7 @@ mod tests {
             "panes": [
                 { "id": "p1", "active": true, "activeTabId": "t3", "tabs": [
                     { "id": "t3", "kind": "file", "title": "notes.md", "active": true, "dirty": true },
-                    { "id": "t4", "kind": "terminal", "title": "@@LaneA", "live": true }
+                    { "id": "t4", "kind": "terminal", "title": "@@Alice", "live": true }
                 ] },
                 { "id": "p2", "active": false, "activeTabId": null, "tabs": [] }
             ]
@@ -1636,7 +1636,7 @@ mod tests {
         );
         // The active tab carries the `*` marker; flags carry dirty + live.
         assert!(out.contains("| t3* | file | notes.md | dirty |"), "{out}");
-        assert!(out.contains("| t4 | terminal | @@LaneA | live |"), "{out}");
+        assert!(out.contains("| t4 | terminal | @@Alice | live |"), "{out}");
         // An empty pane renders `(empty)`, not a header-only table.
         assert!(out.contains("(empty)"), "empty pane: {out}");
     }
@@ -1764,11 +1764,11 @@ mod tests {
 
     #[test]
     fn parses_terminal_scrollback_tab_name() {
-        let cli = CsCli::parse_from(["cs", "terminal", "scrollback", "--tab-name", "@@LaneB"]);
+        let cli = CsCli::parse_from(["cs", "terminal", "scrollback", "--tab-name", "@@Alice"]);
         match cli.action {
             ShellAction::Terminal {
                 action: TerminalAction::Scrollback { tab_name },
-            } => assert_eq!(tab_name, "@@LaneB"),
+            } => assert_eq!(tab_name, "@@Alice"),
             other => panic!("unexpected parse: {other:?}"),
         }
     }
@@ -1866,16 +1866,16 @@ mod tests {
         // the higher-priority sources are present.
         let f = resolve_followup(
             Some("team-a".into()),
-            Some("LaneD".into()),
+            Some("Alice".into()),
             Some("ignored-from".into()),
             Some("ignored-to".into()),
-            Some("Architect".into()),
+            Some("Bob".into()),
             Some("group-x".into()),
         )
         .expect("resolve");
         assert_eq!(f.dir, "team-a");
-        assert_eq!(f.from, "LaneD");
-        assert_eq!(f.to, "Architect");
+        assert_eq!(f.from, "Alice");
+        assert_eq!(f.to, "Bob");
     }
 
     #[test]
@@ -1896,7 +1896,7 @@ mod tests {
         // No tab name and no group -> --to fallback.
         let f = resolve_followup(
             Some("team-a".into()),
-            Some("LaneD".into()),
+            Some("Alice".into()),
             None,
             Some("flag-to".into()),
             None,
@@ -1911,10 +1911,10 @@ mod tests {
         // Missing / blank dir.
         assert!(resolve_followup(
             Some("  ".into()),
-            Some("LaneD".into()),
+            Some("Alice".into()),
             None,
             None,
-            Some("Architect".into()),
+            Some("Bob".into()),
             None,
         )
         .is_err());
@@ -1924,14 +1924,14 @@ mod tests {
             None,
             None,
             None,
-            Some("Architect".into()),
+            Some("Bob".into()),
             None,
         )
         .is_err());
         // No to anywhere.
         assert!(resolve_followup(
             Some("team-a".into()),
-            Some("LaneD".into()),
+            Some("Alice".into()),
             None,
             None,
             None,
