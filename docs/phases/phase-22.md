@@ -1,8 +1,8 @@
 # Phase 22 - window management: bury-on-close, remote windows, cs visibility
 
-Status: closed with v0.31.0.
+Status: closed with v0.31.0 + the v0.31.1 patch.
 Span: 2026-06-11 to 2026-06-12.
-Versions: v0.31.0.
+Versions: v0.31.0, v0.31.1.
 Tags: #desktop #windows #terminal #cs #bugfixes #release
 
 A solo round (one Claude session + @@Alex reviewing and desktop-testing),
@@ -128,5 +128,14 @@ green in the worktree before each merge-back.
   new-window-on-remote landed after @@Alex's main desktop pass; they
   ride v0.31.0 with compile + pin-test coverage and his release-build
   validation.
+- v0.31.1 (same day) fixed what his v0.31.0 validation caught: the
+  quit dialog never fired (macOS predefined Quit bypasses the
+  ExitRequested hook; replaced with a custom Quit item that asks
+  first) and connecting/retry windows were unclosable (red dot buried
+  them; now red dot / Cmd+W / Ctrl+Shift+W / Ctrl+D all cancel for
+  real, with the Cmd+W routing done in the key bridge, which consumes
+  the chord before the menu accelerator). It also added Linux's
+  Ctrl+Shift+W Close Window item and stripped the GTK menubar from
+  the About dialog.
 - The 400 GB stale `target/` discovered mid-round motivated the
   `make clean` expansion.

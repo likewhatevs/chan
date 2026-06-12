@@ -6,6 +6,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.31.1] - 2026-06-12
+
+### Added
+
+- Linux and Windows gained File > Close Window on Ctrl+Shift+W (plain Ctrl+W
+  remains a terminal readline chord): it closes the active tab in a workspace
+  window, cancels a connecting window, and closes other windows natively —
+  the same routing macOS has on Cmd+W.
+
+### Changed
+
+- The About window no longer shows the application menubar on Linux and
+  Windows; the fixed-size dialog is just the About content.
+
+### Fixed
+
+- Quitting (Cmd/Ctrl+Q or the Quit menu) now actually asks for confirmation
+  while windows are open or hidden. The v0.31.0 dialog never appeared on
+  macOS: the system's predefined Quit item exits through a flow the
+  confirmation hook cannot stop, so Quit is now Chan's own menu item that
+  asks before any exit begins.
+- Outbound connecting/retry windows are closable again: the close button
+  closes them for real instead of hiding an invisible retry loop, and
+  Cmd+W (macOS), Ctrl+Shift+W (Linux/Windows), and Ctrl+D all cancel the
+  connection attempt from the keyboard.
+
 ## [v0.31.0] - 2026-06-12
 
 ### Added
