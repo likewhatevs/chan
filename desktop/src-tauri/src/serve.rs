@@ -979,12 +979,13 @@ const KEY_BRIDGE_JS: &str = r#"
     }
   }
   // Chord policy: actions reachable through Pane Mode (Cmd+K) stay
-  // unbound here (Cmd+`, Cmd+[/Cmd+], Cmd+Shift+F) so the native
-  // layer claims as little as possible. Direct chords exist where
-  // Pane Mode is no substitute: Cmd+W (close tab; pairs with the
-  // SPA's context-aware Ctrl+D), Cmd+F/G (find on page), Cmd+1..9
-  // (jump to tab), Cmd+Shift+T (reopen closed), Cmd+Shift+[/] (tab
-  // nav), Cmd+Shift+G (find prev), plus the context-aware spawn
+  // unbound here (Cmd+`, Cmd+Shift+F) so the native layer claims as
+  // little as possible. Direct chords exist where Pane Mode is no
+  // substitute: Cmd+W (close tab; pairs with the SPA's context-aware
+  // Ctrl+D), Cmd+F/G (find on page), Cmd+1..9 (jump to tab),
+  // Cmd+[/Cmd+] (pane nav), Cmd+S (search), Cmd+/ and Cmd+Shift+/
+  // (split right / down), Cmd+Shift+T (reopen closed), Cmd+Shift+[/]
+  // (tab nav), Cmd+Shift+G (find prev), plus the context-aware spawn
   // family Cmd+T (terminal) / Cmd+O (File Browser) / Cmd+P (Team
   // Work) / Cmd+Shift+M (Graph), whose `app.files.toggle` /
   // `app.terminal.teamWork` / `app.graph.toggle` commands route

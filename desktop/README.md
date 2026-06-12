@@ -13,17 +13,17 @@ embedded server or by explicit remote attachments.
 
 ## Download
 
-Notarized macOS builds and Linux builds (`.deb` and `.AppImage`) are
-published on https://chan.app. Windows builds are not published yet.
+Notarized macOS builds and Linux builds (`.AppImage`, `.deb`, `.rpm`)
+are published on https://chan.app. Windows builds are not published yet.
 End users should grab the build from there rather than building from
 source.
 
 ## Build and run
 
 Requirements: stable Rust (pinned in `rust-toolchain.toml`) and npm for
-the embedded web build. The Makefile builds `chan` and installs
-`tauri-cli` v2 under `../target/tauri-cli` if `cargo-tauri` is not already
-on `$PATH`.
+the embedded web build. The Makefile builds the embedded web bundle
+(`web/dist`) and installs `tauri-cli` v2 under `../target/tauri-cli` if
+`cargo-tauri` is not already on `$PATH`.
 
 ```bash
 make dev      # cargo tauri dev (launch the desktop app in dev mode)
@@ -38,8 +38,6 @@ The desktop app stores its config at:
 - Linux: `~/.config/chan-desktop/config.json`
 - Windows: `%APPDATA%/Chan Desktop/config.json`
 
-"Forget all workspaces" in Settings deletes that file.
-
 ## Workspace modes
 
 - Local embedded: desktop owns the local workspace runtime through its
@@ -51,22 +49,6 @@ The desktop app stores its config at:
 
 There is no local sidecar fallback mode. Running `chan serve` directly
 is still supported, but desktop treats it as a remote attachment.
-
-## File Browser Drag-out
-
-Workspace webviews keep the browser drag payloads used by normal web and
-in-app drops. In chan-desktop, File Browser drag start also invokes the
-`start_file_browser_drag_out` Tauri command. That command downloads the
-existing token-bearing `/api/files/<path>?download=1` URL from the
-embedded or attached server, streams the response into a file under the
-OS temp directory, and starts a native file drag from that staged export on
-macOS.
-
-File exports preserve the server-provided basename. Directory exports
-stage the server-provided `.tar` archive. Tauri code does not read workspace
-content directly. Failed or cancelled drags remove their staging
-directory immediately; accepted drags use bounded cleanup and later drag
-starts sweep stale export directories.
 
 ## Layout
 
