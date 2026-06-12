@@ -302,26 +302,32 @@ pub(crate) fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> Stri
 
     out.push_str("## Reaching the host\n\n");
     out.push_str(&format!(
-        "When a decision needs {host_handle}, do NOT survey the host directly from a\n\
-         worker, and do NOT use a TUI / in-editor survey (AskUserQuestion). Cut the\n\
-         question to {lead_handle} (a task, or folded into your completion task).\n\
-         {lead_handle} consolidates the open questions and raises a survey to\n\
-         {host_handle} with `cs terminal survey` (a blocking overlay in the host's\n\
-         window), keeping each survey focused (one decision, up to 4 options) and\n\
-         batching or sequencing several pending questions rather than firing many\n\
-         tiny ones:\n\n"
+        "{lead_handle} reaches {host_handle} with `cs terminal survey` (a blocking\n\
+         overlay in the host's window) whenever possible - decisions, status\n\
+         checks, smoke requests - not only when a decision is needed. Never use a\n\
+         TUI / in-editor survey (AskUserQuestion), and never survey the host from\n\
+         a worker: workers cut their question to {lead_handle} (a task, or folded\n\
+         into the completion task). {lead_handle} consolidates the open questions,\n\
+         keeps each survey focused (one decision, up to 4 options), and batches or\n\
+         sequences several pending questions rather than firing many tiny ones:\n\n"
     ));
     out.push_str(&format!(
         "    cs terminal survey --tab-name={host_handle} --title '<topic>' \\\n\
         \x20       --option '<a>' --option '<b>' $'<question / context, markdown>'\n\n"
     ));
     out.push_str(&format!(
-        "Every survey also offers {host_handle} an `[F]` follow-up (defers with a\n\
-         paper-trail under {team_dir}/followups/) and a Dismiss, so the host can pick\n\
-         an option, follow up, or drop it; the reply tells {lead_handle} which.\n\
-         Prefer `cs terminal survey` over any TUI survey: it blocks in the host's\n\
-         window and routes the answer back to {lead_handle} (see `cs terminal survey\n\
-         --help` for the current flags).\n\n"
+        "`--tab-name` must match a live tab the host's WINDOW owns. When\n\
+         {host_handle} has no member tab of their own, target the lead's tab\n\
+         (`--tab-name={lead_handle}`) or the team's tab group instead; the overlay\n\
+         surfaces in the owning window either way.\n\n"
+    ));
+    out.push_str(&format!(
+        "The overlay is keyboard-first for the host: {host_handle} picks an option\n\
+         with 1..N (or a click), presses F to follow up (defers with a paper-trail\n\
+         under {team_dir}/followups/), or X to dismiss (Escape or the Dismiss\n\
+         button do the same). The reply routed back to {lead_handle} says which:\n\
+         an answer, a follow-up, or a dismissal (see `cs terminal survey --help`\n\
+         for the current flags).\n\n"
     ));
 
     out.push_str("## The poke 1-liner\n\n");
@@ -764,6 +770,29 @@ mod tests {
         assert!(
             bootstrap.contains("\\x1b[27;9;13~"),
             "poke submit chord literal present"
+        );
+        // Survey-first host comms: the lead surveys whenever possible,
+        // not only on decisions, and the host's keys are documented.
+        assert!(
+            bootstrap.contains("whenever possible"),
+            "survey-first 'whenever possible' language"
+        );
+        assert!(
+            bootstrap.contains("picks an option\nwith 1..N"),
+            "host 1..N pick documented"
+        );
+        assert!(
+            bootstrap.contains("presses F to follow up"),
+            "host F follow-up key documented"
+        );
+        assert!(
+            bootstrap.contains("X to dismiss"),
+            "host X dismiss key documented"
+        );
+        // The no-member-tab fallback: target a tab the host's window owns.
+        assert!(
+            bootstrap.contains("target the lead's tab"),
+            "--tab-name fallback guidance present"
         );
         // No em dashes; ASCII only.
         assert!(!bootstrap.contains('\u{2014}'), "no em dashes");
