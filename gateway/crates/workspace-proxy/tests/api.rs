@@ -1,7 +1,7 @@
 //! Integration tests for workspace-proxy.
 //!
-//! No Postgres in this suite: workspace-proxy no longer holds sessions
-//! or any DB state. The proxy gate is driven by workspace-gate JWTs
+//! No Postgres in this suite: workspace-proxy holds no sessions and
+//! no DB state. The proxy gate is driven by workspace-gate JWTs
 //! (HS256, shared `WORKSPACE_GATE_SECRET`), and tests mint those
 //! directly via `gateway_common::workspace_gate`.
 //!
