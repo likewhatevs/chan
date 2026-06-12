@@ -1,9 +1,11 @@
 ---
 name: syseng
-description: Linux systems engineering, low-level infrastructure, networking,
+description: >-
+  Linux systems engineering, low-level infrastructure, networking,
   containers, virtualization, storage, systemd, operational debugging, and
   shell/Python diagnostic tooling.
-when_to_use: Diagnosing an operational failure, working on infrastructure or
+when_to_use: >-
+  Diagnosing an operational failure, working on infrastructure or
   packaging, debugging the tunnel/networking path, or writing diagnostic
   tooling for chan.
 ---

@@ -1,8 +1,10 @@
 ---
 name: release
-description: Cut a chan release: bump every version pin, run the full gate, tag,
+description: >-
+  Cut a chan release: bump every version pin, run the full gate, tag,
   and let CI build and publish. Covers the dry-run and the macOS signing path.
-when_to_use: The user asks to cut a release, bump the version, tag a new vX.Y.Z,
+when_to_use: >-
+  The user asks to cut a release, bump the version, tag a new vX.Y.Z,
   or ship a build to chan.app.
 ---
 

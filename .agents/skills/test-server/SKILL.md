@@ -1,8 +1,10 @@
 ---
 name: test-server
-description: Spin up and tear down a local chan test server over a throwaway or
+description: >-
+  Spin up and tear down a local chan test server over a throwaway or
   existing workspace, including the rebuild cycle for frontend changes.
-when_to_use: The user asks to "spin up a test server", "try this in the browser",
+when_to_use: >-
+  The user asks to "spin up a test server", "try this in the browser",
   or otherwise wants a running chan instance to verify a change.
 ---
 

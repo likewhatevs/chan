@@ -1,8 +1,10 @@
 ---
 name: rustacean
-description: Rust code quality, idiomatic Rust, async/concurrency, Cargo
+description: >-
+  Rust code quality, idiomatic Rust, async/concurrency, Cargo
   hygiene, error handling, tests, reviews, and systems programming in Rust.
-when_to_use: Writing or reviewing Rust in this repo (chan-server, chan-workspace,
+when_to_use: >-
+  Writing or reviewing Rust in this repo (chan-server, chan-workspace,
   the tunnel crates, the desktop shell), shaping async/concurrency, or
   tightening error handling and tests.
 ---

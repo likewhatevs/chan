@@ -1,8 +1,10 @@
 ---
 name: webdev
-description: Frontend and web app work, especially TypeScript, Svelte 5, Vite,
+description: >-
+  Frontend and web app work, especially TypeScript, Svelte 5, Vite,
   SPA architecture, browser APIs, CodeMirror 6, and Rust-backed web frontends.
-when_to_use: Building or reviewing the chan SPA (`web/`), the marketing site, or
+when_to_use: >-
+  Building or reviewing the chan SPA (`web/`), the marketing site, or
   any browser/WebView surface; deciding shell vs feature boundaries, command and
   keyboard model, or Tauri host readiness.
 ---

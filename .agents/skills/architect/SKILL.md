@@ -1,9 +1,11 @@
 ---
 name: architect
-description: Code architecture, structural review, simplification, interface
+description: >-
+  Code architecture, structural review, simplification, interface
   boundaries, refactoring discipline, configuration design, and
   maintainability reviews.
-when_to_use: Reviewing or shaping structure and boundaries, simplifying an
+when_to_use: >-
+  Reviewing or shaping structure and boundaries, simplifying an
   over-engineered design, deciding what belongs public, or auditing a change
   for maintainability.
 ---

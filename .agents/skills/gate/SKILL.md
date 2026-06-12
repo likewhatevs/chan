@@ -1,9 +1,11 @@
 ---
 name: gate
-description: Run the chan pre-push gate (fmt, clippy, test, no-default-features
+description: >-
+  Run the chan pre-push gate (fmt, clippy, test, no-default-features
   build, gateway build, web checks, marketing checks) and the isolated/own-gate
   model for multi-agent rounds.
-when_to_use: Before any push, when CI fails, or when you need to validate a
+when_to_use: >-
+  Before any push, when CI fails, or when you need to validate a
   change against the same checks CI runs.
 ---
 

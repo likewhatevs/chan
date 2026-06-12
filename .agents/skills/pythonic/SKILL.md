@@ -1,8 +1,10 @@
 ---
 name: pythonic
-description: Python, asyncio, typed Python, data processing, SQL, pandas,
+description: >-
+  Python, asyncio, typed Python, data processing, SQL, pandas,
   document extraction, notebooks, scraping, APIs, and scientific computing.
-when_to_use: Writing or reviewing Python for tooling, data work, or quick
+when_to_use: >-
+  Writing or reviewing Python for tooling, data work, or quick
   prototypes around chan; pushing work to the right engine (SQL, NumPy/pandas,
   asyncio).
 ---
