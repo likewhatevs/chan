@@ -6,6 +6,47 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.32.0] - 2026-06-12
+
+### Added
+
+- Dropping files from Finder onto a terminal pane types their
+  shell-escaped absolute paths at the cursor, like macOS Terminal
+  (multiple files space-separated). macOS desktop only; remote
+  (tunnel/outbound) windows deliberately excluded.
+
+### Fixed
+
+- Dropping a file anywhere outside the editor on a desktop window no
+  longer navigates the webview into a bare image view with no way
+  back. Drops are now inert on every non-editor, non-terminal
+  surface, in the desktop app and the browser alike; editor image
+  embeds and in-page tab drags are unaffected.
+- SVG images embedded in documents render again: the file API served
+  SVG (valid UTF-8 text) as an editor JSON envelope instead of image
+  bytes, so the image widget showed "image not found". Image- and
+  PDF-class reads now return raw bytes with the correct content type.
+
+### Changed
+
+- The macOS bundle identifier is now `app.chan.desktop` (was
+  `com.chanwriter.desktop`). After upgrading, expect a one-time
+  keychain "Always Allow" prompt and a launcher theme reset;
+  workspaces, configuration, and self-update continuity are
+  unaffected.
+- Documentation overhaul: README content that duplicated the manual
+  is now pointed into it (serve flags, tunnel walkthrough), every
+  design document was rewritten against current source, and the
+  config reference was trued up field-by-field. Code comments and
+  help text no longer narrate project history; several stale claims
+  (a help text inverting the reports default, docs citing removed
+  commands and wrong env vars) were corrected.
+- Internal hygiene: compiler and frontend warnings are at zero
+  across every workspace; several many-parameter functions gained
+  config structs; the last ad-hoc keyboard shortcuts moved into the
+  chord registry (fixing a Linux menu label that displayed a chord
+  the handler ignores).
+
 ## [v0.31.1] - 2026-06-12
 
 ### Added
