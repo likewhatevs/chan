@@ -166,6 +166,15 @@ identifier = "allow-probe-url"
 description = "Enables the probe_url command."
 commands.allow = ["probe_url"]
 
+# Deliberately NOT in the workspace-window set: the macOS drag
+# pasteboard is system-wide, so this is granted only to locally-served
+# windows via capabilities/local-drop.json (workspace-*, terminal-*) —
+# never to the remote-served tunnel-*/outbound-* webviews.
+[[permission]]
+identifier = "allow-read-dropped-paths"
+description = "Enables the read_dropped_paths command (drag-pasteboard read at drop time)."
+commands.allow = ["read_dropped_paths"]
+
 [[permission]]
 identifier = "allow-add-outbound-workspace"
 description = "Enables the add_outbound_workspace command."

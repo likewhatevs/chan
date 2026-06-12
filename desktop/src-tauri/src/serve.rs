@@ -649,10 +649,18 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
             // workspace-* / tunnel-* / outbound-* windows per
             // capabilities/workspace.json.
             .zoom_hotkeys_enabled(true)
-            // Hand HTML5 drag-and-drop to the page. Tauri's OS-level
-            // drag handler swallows dragover events otherwise, so
-            // chan's pane-to-pane tab moves never see the highlight /
-            // drop the receiving pane expects.
+            // Hand HTML5 drag-and-drop to the page — this must stay
+            // disabled. With wry's native handler enabled, WebKit
+            // never sees ANY drag on macOS (wry forwards to the OS
+            // default only when the handler returns false, and
+            // tauri-runtime-wry's handler returns true
+            // unconditionally), which kills the editor/file-browser
+            // drop zones AND in-page pane-to-pane tab moves. The
+            // SPA's window-level drop guard owns the no-takeover
+            // guarantee for stray OS file drops, and the terminal
+            // path-print reads the drag pasteboard via
+            // `read_dropped_paths` (dropped_paths.rs) instead of
+            // native drag events.
             .disable_drag_drop_handler()
             .build()
         {
@@ -1537,6 +1545,7 @@ mod tests {
     // the permissions without the test catching it.
     const WORKSPACE_CAPABILITY_JSON: &str = include_str!("../capabilities/workspace.json");
     const DEFAULT_CAPABILITY_JSON: &str = include_str!("../capabilities/default.json");
+    const LOCAL_DROP_CAPABILITY_JSON: &str = include_str!("../capabilities/local-drop.json");
     const APP_PERMISSIONS_TOML: &str = include_str!("../permissions/app.toml");
 
     fn capability_permissions(raw: &str) -> Vec<String> {
@@ -1651,6 +1660,66 @@ mod tests {
                 "workspace-window app permission set must include {expected}: {workspace_set:?}",
             );
         }
+    }
+
+    #[test]
+    fn invoke_handler_registers_read_dropped_paths() {
+        // The SPA's terminal drop handler invokes `read_dropped_paths`
+        // at DOM drop time; it must be in `tauri::generate_handler!`
+        // or the IPC denies and the terminal path-print silently
+        // no-ops. generate_handler! doesn't catch missing entries at
+        // compile time, so pin it here.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains("dropped_paths::read_dropped_paths,"));
+        const DROPPED_PATHS_RS: &str = include_str!("dropped_paths.rs");
+        assert!(DROPPED_PATHS_RS.contains("pub async fn read_dropped_paths("));
+        // NSPasteboard is AppKit state: the read must run on the main
+        // thread, not the IPC worker thread.
+        assert!(DROPPED_PATHS_RS.contains("run_on_main_thread"));
+    }
+
+    #[test]
+    fn drag_pasteboard_read_is_scoped_to_locally_served_windows() {
+        // The macOS drag pasteboard is system-wide and persists after
+        // the drag ends: a remote-served SPA (tunnel-* / outbound-*
+        // windows) must NOT be able to poll `read_dropped_paths` and
+        // harvest paths the user drags around in other applications.
+        // The grant therefore lives in its own capability targeting
+        // only the locally-served window kinds...
+        let windows = capability_windows(LOCAL_DROP_CAPABILITY_JSON);
+        assert!(
+            windows.iter().any(|w| w == "workspace-*"),
+            "local-drop capability must cover workspace-* windows: {windows:?}",
+        );
+        assert!(
+            windows.iter().any(|w| w == "terminal-*"),
+            "local-drop capability must cover terminal-* windows: {windows:?}",
+        );
+        assert!(
+            windows
+                .iter()
+                .all(|w| w != "tunnel-*" && w != "outbound-*" && w != "main"),
+            "local-drop capability must stay off remote-served and launcher windows: {windows:?}",
+        );
+        let perms = capability_permissions(LOCAL_DROP_CAPABILITY_JSON);
+        assert!(
+            perms.iter().any(|p| p == "allow-read-dropped-paths"),
+            "local-drop capability must grant allow-read-dropped-paths: {perms:?}",
+        );
+        // ...and must not leak in through the broad surfaces that
+        // tunnel-* / outbound-* windows DO receive.
+        let workspace_perms = capability_permissions(WORKSPACE_CAPABILITY_JSON);
+        assert!(
+            workspace_perms
+                .iter()
+                .all(|p| p != "allow-read-dropped-paths"),
+            "workspace capability must not carry the drag-pasteboard grant: {workspace_perms:?}",
+        );
+        let workspace_set = app_permission_set("workspace-window");
+        assert!(
+            workspace_set.iter().all(|p| p != "allow-read-dropped-paths"),
+            "workspace-window permission set must not carry the drag-pasteboard grant: {workspace_set:?}",
+        );
     }
 
     #[test]

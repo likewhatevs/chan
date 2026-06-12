@@ -5,6 +5,7 @@ mod config;
 mod cs_install;
 mod default_workspace;
 mod download;
+mod dropped_paths;
 mod embedded;
 mod linux_gui_stack;
 #[cfg(target_os = "macos")]
@@ -1608,6 +1609,11 @@ fn main() {
             open_devtools,
             request_close_window,
             download::save_file_to_downloads,
+            // Registered on every platform; returns [] off macOS so the
+            // SPA's terminal drop handler needs no platform branching.
+            // ACL-scoped to locally-served windows (capabilities/
+            // local-drop.json) — the drag pasteboard is system-wide.
+            dropped_paths::read_dropped_paths,
             // Native vector PDF export. macOS-only: WKWebView's `createPDF`
             // has no Linux/Windows equivalent wired, and the SPA hides the
             // "Export to PDF" button off-macOS so this is never invoked

@@ -69,11 +69,13 @@ rust-embed = "8"
 objc2 = "0.6"
 # `NSPrintInfo` + `NSPrintOperation` drive the silent save-to-PDF print
 # job (see src/pdf.rs). The other features cover the offscreen NSWindow the
-# webview is parented in for layout.
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSResponder", "NSView", "NSWindow", "NSPrintInfo", "NSPrintOperation"] }
+# webview is parented in for layout. `NSPasteboard` backs the drag-
+# pasteboard read in src/dropped_paths.rs.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSPasteboard", "NSResponder", "NSView", "NSWindow", "NSPrintInfo", "NSPrintOperation"] }
 # `NSURL` builds the destination file URL and `NSDictionary` inserts it
 # into the print info's attributes dictionary under `NSPrintJobSavingURL`.
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSDictionary", "NSGeometry", "NSObject", "NSString", "NSURL", "objc2-core-foundation"] }
+# `NSArray` carries the drag pasteboard's filename property list.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSGeometry", "NSObject", "NSString", "NSURL", "objc2-core-foundation"] }
 # Paginating PDF export from the desktop shell. `win.print()` is a no-op
 # in WKWebView, so chan-desktop renders the themed print HTML through
 # WKWebView's native print pipeline (`printOperationWithPrintInfo:`, see
