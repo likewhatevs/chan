@@ -5,7 +5,7 @@
   // Enter) submits to the active terminal's write queue via the WS `prompt`
   // frame (NOT the raw keystroke path).
   //
-  // Drafts-backed (@@Host): the bubble edits a real per-terminal chan-workspace
+  // Drafts-backed: the bubble edits a real per-terminal chan-workspace
   // DRAFT (`tab.richPromptDraftPath` -> `<draftsDir>/<name>/draft.md`). That file IS
   // the prompt text, and pasted images land in the SAME draft folder via the
   // editor's image-paste machinery (imageDropHandlers) + insert `![](path)`.
@@ -30,7 +30,7 @@
     insertNewlineContinueMarkup,
     markdown,
   } from "@codemirror/lang-markdown";
-  // Reuse @@LaneC's editor list commands (import is shared; no change to
+  // Reuse the editor's list commands (import is shared; no change to
   // list.ts) so the rich prompt indents/outdents lists exactly like the main
   // editor instead of letting Tab escape to the browser.
   import {
@@ -106,7 +106,7 @@
   // plain SHELL (or gemini) announces NEITHER and submits on a bare CR - which
   // is the gemini chord. The old path sent NO agent, so the server defaulted to
   // the claude modifyOtherKeys CSI, which a shell can't read: it left the
-  // literal `...7;9;13~` at the prompt and never ran the command (@@Alex).
+  // literal `...7;9;13~` at the prompt and never ran the command.
   // Reuses the shared AGENT_SUBMIT_CHORDS map server-side via the agent name on
   // the prompt frame; no new chord map.
   function submitAgent(): string {
@@ -132,8 +132,8 @@
   // terminal: the bubble belongs to `tab`, so its text must land there. And we
   // do NOT reap the composer unless the `prompt` frame actually went out to
   // this terminal's OPEN socket (sendPromptToTerminal returns false on a
-  // closed / not-yet-connected socket). That is the data-loss guard @@Alex
-  // hit: the old path cleared the text on a local-sink-true that could route
+  // closed / not-yet-connected socket). That is a real data-loss
+  // guard: the old path cleared the text on a local-sink-true that could route
   // to the wrong terminal or nowhere visible. Keeping the text on a failed
   // send lets the user retry instead of losing it.
   function submit(): boolean {
@@ -187,7 +187,7 @@
           // (lists/quotes), falling through to a plain newline off-markup;
           // Backspace dedents markup. Tab indents the list item (Shift+Tab
           // outdents), falling back to plain indent so Tab NEVER escapes to the
-          // browser's focus nav (@@Alex). markdown({addKeymap:false}) keeps
+          // browser's focus nav. markdown({addKeymap:false}) keeps
           // syntax only so these bindings own Enter/Tab/Backspace unambiguously.
           Prec.high(
             keymap.of([
@@ -280,7 +280,9 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- The container-level keydown is an Escape trap for the bubble, not an
+     interactive control; role="group" labels the region for AT. -->
+<!-- svelte-ignore a11y_no_static_element_interactions, a11y_no_noninteractive_element_interactions -->
 <div
   class="rich-prompt"
   class:resized={customHeight !== null}
