@@ -17,15 +17,13 @@
 // user 200 imports. The orchestrator only returns `Err` for setup
 // failures (the destination dir can't be created, etc).
 
-use std::collections::HashSet;
-
 use chrono::Utc;
 
 use crate::error::Result;
 use crate::workspace::Workspace;
 
 use super::emit::{render_markdown, EmitContext};
-use super::slug::slug_for;
+use super::slug::SlugAllocator;
 use super::{Contact, ImportOpts, ImportOutcome, ImportSummary};
 
 pub fn run(
@@ -45,22 +43,16 @@ pub fn run(
         imported_at: Utc::now(),
     };
 
-    // Pre-seed: if a file already exists at the slugged path, the
-    // slugger should NOT pick a different name for the *natural*
-    // pick - we want to either overwrite (per opts) or report
-    // skipped, not silently rename around it. So `taken` starts
-    // empty and we let `slug_for` consult the disk only when it
-    // falls into its " (N)" suffix loop (so two contacts with the
-    // same display name in one batch don't accidentally clobber an
-    // unrelated existing file at the suffixed path).
-    let mut taken: HashSet<String> = HashSet::new();
-    let mut unnamed = 0usize;
     let mut summary = ImportSummary::default();
+    // Natural-slug picks deliberately land on existing files so the
+    // skip/overwrite decision below applies to the exact name; see
+    // SlugAllocator's doc for the no-pre-seed rationale.
     let on_disk = |p: &str| workspace.exists(p);
+    let mut slugs = SlugAllocator::new(&dir, &on_disk);
 
     let total = contacts.len() as u64;
     for (idx, c) in contacts.into_iter().enumerate() {
-        let path = slug_for(&c, &dir, &mut taken, &mut unnamed, &on_disk);
+        let path = slugs.slug_for(&c);
         progress.on_progress(ProgressEvent {
             stage: ProgressStage::Import,
             current: idx as u64,

@@ -1185,10 +1185,10 @@ side does not throttle.
 ```rust
 contacts::google::parse_google_csv(rdr: impl Read) -> Result<Vec<Contact>>
 contacts::emit::render_markdown(c: &Contact, ctx: &EmitContext) -> String
-contacts::slug::slug_for(c: &Contact, dir: &str,
-    taken: &mut HashSet<String>,
-    unnamed_counter: &mut usize,
-) -> String
+contacts::slug::SlugAllocator::new(dir: &str,
+    on_disk: &dyn Fn(&str) -> bool) -> SlugAllocator
+contacts::slug::SlugAllocator::slug_for(&mut self, c: &Contact)
+    -> String  // owns the batch's taken-set + unnamed counter
 
 ProviderKind::{Google}
 ProviderKind::as_str(self) -> &'static str

@@ -2618,9 +2618,8 @@ fn cmd_contacts_import_csv(
     workspace: Option<PathBuf>,
 ) -> Result<()> {
     use chan_workspace::contacts::{
-        google::parse_google_csv, slug::slug_for, ImportOpts, ProviderKind,
+        google::parse_google_csv, slug::SlugAllocator, ImportOpts, ProviderKind,
     };
-    use std::collections::HashSet;
 
     // Provider gate. Only Google CSV today; the flag exists so the
     // help text and the wire shape are stable when more land.
@@ -2656,15 +2655,14 @@ fn cmd_contacts_import_csv(
         // Mirror the orchestrator's slug + existence check loop
         // without writing. Existence checks against the live workspace
         // so SKIPPED / OVERWROTE labels are accurate.
-        let mut taken: HashSet<String> = HashSet::new();
-        let mut unnamed = 0usize;
         let dir_norm = into.trim_matches('/').to_string();
         let mut wrote = 0usize;
         let mut overwrote = 0usize;
         let mut skipped = 0usize;
         let on_disk = |p: &str| workspace.exists(p);
+        let mut slugs = SlugAllocator::new(&dir_norm, &on_disk);
         for c in &contacts {
-            let path = slug_for(c, &dir_norm, &mut taken, &mut unnamed, &on_disk);
+            let path = slugs.slug_for(c);
             let exists = workspace.exists(&path);
             if exists && !overwrite {
                 println!("WOULD SKIP      {path}  (exists)");
