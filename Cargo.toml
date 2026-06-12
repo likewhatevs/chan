@@ -18,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.30.1"
+version = "0.31.0"
 edition = "2021"
 # Mirrors `rust-toolchain.toml`; pre-push and CI compile under the
 # same compiler. Bumping requires updating both files in the same
@@ -33,18 +33,18 @@ repository = "https://github.com/fiorix/chan"
 # declare their own `embeddings` feature that enables this one).
 # Without `default-features = false` here, per-crate overrides are
 # silently ignored by Cargo.
-chan-workspace = { version = "0.30.1", path = "crates/chan-workspace", default-features = false }
-chan-llm = { version = "0.30.1", path = "crates/chan-llm" }
-chan-report = { version = "0.30.1", path = "crates/chan-report" }
-chan-server = { version = "0.30.1", path = "crates/chan-server", default-features = false }
+chan-workspace = { version = "0.31.0", path = "crates/chan-workspace", default-features = false }
+chan-llm = { version = "0.31.0", path = "crates/chan-llm" }
+chan-report = { version = "0.31.0", path = "crates/chan-report" }
+chan-server = { version = "0.31.0", path = "crates/chan-server", default-features = false }
 # default-features off so chan-server can pull just the wire types
 # (`ControlRequest` / `ControlResponse`) without the clap-backed `cs`
 # client; the binaries (chan / chan-desktop) re-enable the `client`
 # feature for the full surface.
-chan-shell = { version = "0.30.1", path = "crates/chan-shell", default-features = false }
-chan-tunnel-client = { version = "0.30.1", path = "crates/chan-tunnel-client" }
-chan-tunnel-proto = { version = "0.30.1", path = "crates/chan-tunnel-proto" }
-chan-tunnel-server = { version = "0.30.1", path = "crates/chan-tunnel-server" }
+chan-shell = { version = "0.31.0", path = "crates/chan-shell", default-features = false }
+chan-tunnel-client = { version = "0.31.0", path = "crates/chan-tunnel-client" }
+chan-tunnel-proto = { version = "0.31.0", path = "crates/chan-tunnel-proto" }
+chan-tunnel-server = { version = "0.31.0", path = "crates/chan-tunnel-server" }
 
 anyhow = "1"
 # Native OS clipboard read for chan-desktop's terminal "Paste" menu, so it
