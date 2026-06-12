@@ -143,6 +143,13 @@ pub struct AppState {
     /// the module docs). Feeds `GET /api/windows` and `cs window list`
     /// with the connected/saved split.
     pub window_presence: Arc<crate::window_presence::WindowPresence>,
+    /// Random id minted when this tenant was built, exposed via
+    /// `GET /api/health`. The SPA compares it across `/ws` reconnects:
+    /// a CHANGED id means the process behind the window was restarted
+    /// (a remote `chan serve` bounced) — its PTYs and in-memory state
+    /// are gone, so the SPA reloads itself instead of sitting on a
+    /// stale view with stuck terminals until a manual Cmd+R.
+    pub instance_id: String,
 }
 
 /// Workspace + its notify watcher. Replaced wholesale by /api/storage/
@@ -285,6 +292,7 @@ pub(crate) mod test_support {
             window_bus: Arc::new(crate::window_bus::WindowBus::new()),
             ephemeral_sessions: Mutex::new(HashMap::new()),
             window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
+            instance_id: "test-instance".to_string(),
         })
     }
 

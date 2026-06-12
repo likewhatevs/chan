@@ -784,6 +784,10 @@ export type IndexingStateResponse = {
 export type HealthIndexerStatus = "idle" | "settling" | "rebuilding" | "error";
 
 export type HealthResponse = {
+  /// Random id minted when the server tenant was built. Changes when
+  /// the process behind this window restarts; the store compares it
+  /// across /ws reconnects and reloads the window on a change.
+  instance?: string | null;
   indexer?: {
     status: HealthIndexerStatus;
     queue_depth: number;

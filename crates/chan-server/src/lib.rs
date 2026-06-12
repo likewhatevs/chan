@@ -660,6 +660,7 @@ async fn build_app(
         window_bus,
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
         window_presence,
+        instance_id: random_token(),
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
     // route reachable at `/foo<route>` without changing any handler.
@@ -844,6 +845,7 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
         window_bus,
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
         window_presence,
+        instance_id: random_token(),
     });
 
     // Nest under the prefix exactly like `build_app` so the host's

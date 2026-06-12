@@ -1193,6 +1193,41 @@ function onWatchReady(): void {
   // ride `terminal_roster` `/ws` frames; this closes the window where a
   // reconnecting client would miss the last push until the next change.
   void seedTerminalRoster();
+  // A reconnect may mean the server PROCESS was restarted (a remote
+  // `chan serve` bounced); detect that and reload rather than go stale.
+  void checkServerInstance();
+}
+
+/// The server instance id seen on the first watch-socket connect.
+/// `null` until the first successful health read.
+let serverInstance: string | null = null;
+
+/// Reload the window when the server process behind it changed.
+///
+/// Every watch-socket (re)connect reads `/api/health`'s `instance` (a
+/// random id minted at tenant build). Same id = a transient network
+/// blip; nothing to do. Different id = the process restarted: its PTYs
+/// and in-memory state are gone, and without a reload the window sits
+/// on a stale view with stuck terminals until a manual Cmd+R — the
+/// reload is that Cmd+R, automated. Reported against outbound remotes
+/// (^C + re-run of `chan serve`); applies to any tenant whose health
+/// route answers. Best-effort: a failed read (workspace-less terminal
+/// tenant, transient error) skips the check until the next reconnect.
+async function checkServerInstance(): Promise<void> {
+  try {
+    const instance = (await api.health()).instance?.trim();
+    if (!instance) return;
+    if (serverInstance === null) {
+      serverInstance = instance;
+      return;
+    }
+    if (serverInstance !== instance) {
+      window.location.reload();
+    }
+  } catch {
+    // No health answer (workspace-less tenant or transient failure):
+    // try again on the next reconnect.
+  }
 }
 
 /// Fetch the current roster snapshot and apply it. Best-effort: a missing

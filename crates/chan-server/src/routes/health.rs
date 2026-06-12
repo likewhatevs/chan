@@ -13,6 +13,11 @@ use crate::{error::err_state, state::AppState};
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: &'static str,
+    /// Random id minted at tenant build. The SPA compares it across
+    /// `/ws` reconnects: a changed id = the process was restarted (its
+    /// PTYs and in-memory state are gone) and the window reloads
+    /// itself instead of going stale.
+    instance: String,
     indexer: IndexerHealth,
 }
 
@@ -23,6 +28,7 @@ pub async fn api_health(State(state): State<Arc<AppState>>) -> Response {
     };
     Json(HealthResponse {
         status: "ok",
+        instance: state.instance_id.clone(),
         indexer: indexer.health_snapshot(),
     })
     .into_response()
@@ -37,6 +43,7 @@ mod tests {
     fn health_response_serializes_indexer_block() {
         let value = serde_json::to_value(HealthResponse {
             status: "ok",
+            instance: "boot-abc123".to_string(),
             indexer: IndexerHealth {
                 status: IndexerHealthStatus::Settling,
                 queue_depth: 2,
@@ -48,6 +55,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(value["status"], "ok");
+        // Wire pin: the SPA's restart-reload check reads `instance`.
+        assert_eq!(value["instance"], "boot-abc123");
         assert_eq!(value["indexer"]["status"], "settling");
         assert_eq!(value["indexer"]["queue_depth"], 2);
         assert_eq!(value["indexer"]["last_event_at"], 1_700_000_000);
