@@ -892,12 +892,14 @@ function render(workspaces) {
 
 /// Per-row "Open" split button: primary action opens the workspace in
 /// an in-app webview; caret reveals a menu with "Open in Browser"
-/// and (for local workspaces only) "Forget Workspace". The primary + caret
-/// are both gated by `hasUrl` so a workspace that isn't running can't
-/// be opened; Forget stays enabled regardless of URL state since
-/// it just removes the registry entry.
+/// and (for local workspaces only) "Forget Workspace". The primary
+/// Open is always enabled: for an off local workspace the launch
+/// handler turns it on first (remote rows only exist while their URL
+/// is live, so they never render off). "Open in Browser" needs the
+/// live URL and stays gated by `hasUrl`; Forget stays enabled
+/// regardless of URL state since it just removes the registry entry.
 function renderOpenSplit({ hasUrl, includeForget, forgetDisabledAttr, forgetLabel = 'Forget Workspace' }) {
-  const openDisabled = hasUrl ? '' : 'disabled';
+  const browserDisabled = hasUrl ? '' : 'disabled';
   const forgetDisabled = forgetDisabledAttr || '';
   const caretDisabled = hasUrl || (includeForget && !forgetDisabled) ? '' : 'disabled';
   const forgetItem = includeForget
@@ -905,13 +907,13 @@ function renderOpenSplit({ hasUrl, includeForget, forgetDisabledAttr, forgetLabe
     : '';
   return `
     <div class="split-btn">
-      <button class="btn primary" data-act="launch" ${openDisabled}>Open</button>
+      <button class="btn primary" data-act="launch">Open</button>
       <button class="btn primary split-caret" data-act="menu-toggle"
               aria-haspopup="true" aria-expanded="false" aria-label="More actions" ${caretDisabled}>
         <svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l4 4 4-4"/></svg>
       </button>
       <ul class="split-menu" hidden role="menu">
-        <li><button class="menu-item" data-act="open-browser" role="menuitem" ${openDisabled}>Open in Browser</button></li>
+        <li><button class="menu-item" data-act="open-browser" role="menuitem" ${browserDisabled}>Open in Browser</button></li>
         ${forgetItem}
       </ul>
     </div>`;
@@ -990,18 +992,43 @@ function bindRowEvents() {
       try {
         await invoke('set_workspace_on', { path, on: toggle.checked });
       } catch (err) {
-        showError(err);
+        // Turn-on failures get the modal with the real reason; the
+        // refresh below flips the pill back to off, the dialog says
+        // why. Turn-off failures keep the lightweight banner.
+        if (toggle.checked) {
+          showTurnOnFailureDialog(err);
+        } else {
+          showError(err);
+        }
       }
       await refresh(true);
     });
 
-    tr.querySelector('[data-act="launch"]').addEventListener('click', async () => {
+    tr.querySelector('[data-act="launch"]').addEventListener('click', async (e) => {
       // In-app Tauri webview; each click adds another window so
       // multi-window per workspace is the default.
+      const btn = e.currentTarget;
+      if (!tr.dataset.url) {
+        // Workspace is off: turn it on first, then open. The button
+        // stays disabled for the whole transition so a double-click
+        // can't race the still-starting serve (same hazard as the
+        // pill toggle above); refresh(true) re-renders the row from
+        // the true serve state on both outcomes.
+        btn.disabled = true;
+        try {
+          await invoke('set_workspace_on', { path, on: true });
+        } catch (err) {
+          showTurnOnFailureDialog(err);
+          btn.disabled = false;
+          await refresh(true);
+          return;
+        }
+        await refresh(true);
+      }
       try {
         await invoke('open_local_workspace', { path });
-      } catch (e) {
-        showError(e);
+      } catch (err) {
+        showError(err);
       }
     });
 
@@ -1093,6 +1120,69 @@ function showError(e) {
   banner.textContent = msg;
   main.prepend(banner);
   setTimeout(() => banner.remove(), 5000);
+}
+
+/// Modal for a failed workspace turn-on (pill toggle or Open's
+/// auto-turn-on). The Rust error string is already user-friendly —
+/// notably "open in another chan process" for the lock case — and the
+/// caller's refresh(true) reconciles the pill back to off behind the
+/// overlay, so the dialog only has to say why. Resolves on dismiss
+/// (OK / Escape / backdrop click); the keydown listener is removed in
+/// close() so repeated failures don't stack document listeners.
+function showTurnOnFailureDialog(reason) {
+  return new Promise((resolve) => {
+    const msg =
+      typeof reason === 'string' ? reason : (reason && reason.message) || String(reason);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'preflight-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'turn-on-failure-title');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'preflight-dialog';
+
+    const title = document.createElement('h2');
+    title.id = 'turn-on-failure-title';
+    title.textContent = 'Cannot turn on workspace';
+    dialog.appendChild(title);
+
+    const body = document.createElement('p');
+    body.className = 'preflight-intro';
+    body.textContent = msg;
+    dialog.appendChild(body);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'preflight-buttons';
+    const okBtn = document.createElement('button');
+    okBtn.className = 'btn primary';
+    okBtn.type = 'button';
+    okBtn.textContent = 'OK';
+    buttons.appendChild(okBtn);
+    dialog.appendChild(buttons);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    function close() {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve();
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      }
+    }
+    okBtn.addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    document.addEventListener('keydown', onKey);
+    okBtn.focus();
+  });
 }
 
 // Click-to-copy wiring for every `.snippet[data-copy]` under `scope`.
