@@ -215,7 +215,7 @@ pub struct Tag {
     pub count: u32,
 }
 
-/// systacean-35: one unique `@@<Name>` mention extracted from
+/// One unique `@@<Name>` mention extracted from
 /// the graph's mention edges. `name` carries the bare label
 /// (without the `@@` sigil); `count` is the number of mention
 /// edges in the graph that target it (i.e. how often the user
@@ -658,7 +658,7 @@ impl GraphView {
         Ok(out)
     }
 
-    /// systacean-35: enumerate unique `@@<Name>` mentions across
+    /// Enumerate unique `@@<Name>` mentions across
     /// the graph's mention edges, sorted by count desc + label
     /// asc (mirrors `tags()`'s shape). `name` is the bare label
     /// without the `@@` sigil. Consumers (e.g. chan-server's
@@ -718,7 +718,7 @@ impl GraphView {
     /// contact-kind files (`None` for File-kind, and `None` for
     /// contacts with no extractable address); see `FileGraph.emails`.
     /// `aliases` follows the same shape for the top-level
-    /// `aliases:` frontmatter array (phase 5 mention resolution).
+    /// `aliases:` frontmatter array (mention resolution).
     // Folding these into a struct would churn ~20 call sites (incl.
     // tests) for a style win; the function stays at 9 params.
     #[allow(clippy::too_many_arguments)]
@@ -1758,7 +1758,7 @@ mod tests {
 
     #[test]
     fn replace_file_keeps_two_anchors_to_the_same_target() {
-        // EDGES-PK (phase-15 round-3, @@LaneB's finding): a file that
+        // A file that
         // links the SAME target via two different anchors must keep BOTH
         // edges. The old PK (src, dst, kind) collapsed them on INSERT OR
         // IGNORE, keeping only the first; anchor is now in the PK.

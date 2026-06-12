@@ -1005,11 +1005,10 @@ mod tests {
         assert!(matches!(err, ChanError::WorkspaceAlreadyOpen));
     }
 
-    // systacean-20: gated on Unix because Windows lock primitive
-    // doesn't surface WorkspaceLocked the same way flock does. Real
-    // cross-platform fix tracked in phase-8-bugs.md "Windows lock
-    // contract parity"; revert this gate when the LockFileEx-backed
-    // bridge in lock.rs lands.
+    // Gated on Unix because the Windows lock primitive doesn't
+    // surface WorkspaceLocked the same way flock does — a known
+    // Windows lock-contract gap; revert this gate when a
+    // LockFileEx-backed bridge in lock.rs lands.
     #[cfg(unix)]
     #[test]
     fn reset_workspace_returns_locked_when_other_process_holds_lock() {

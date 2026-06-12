@@ -21,8 +21,7 @@ embeddings = ["chan-server/embeddings", "chan-workspace/embeddings"]
 # Bundle the default BGE-small model into the binary. Default-off
 # so plain `cargo build --release` produces a ~26 MB artifact. Build
 # with `cargo build --release --features embed-model` to get the
-# ~89 MB binary that ships the model bundled (the historical pre-
-# systacean-6 default). Implies `embeddings`. systacean-6.
+# ~89 MB binary that ships the model bundled. Implies `embeddings`.
 embed-model = ["embeddings", "chan-server/embed-model"]
 # Opt-in CUDA backend for candle. Linux only; build with
 # `cargo build --release --features cuda`. Requires CUDA Toolkit

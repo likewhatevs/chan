@@ -1,4 +1,4 @@
-//! End-to-end indexing benchmark (watcher-scalability spec, @@LaneB).
+//! End-to-end indexing benchmark.
 //!
 //! Measures wall-clock time to index a realistic workspace END-TO-END in two
 //! modes, timing the structural index and the chan-report scan separately
@@ -15,9 +15,9 @@
 //! `BuildOptions::default()` (`include_vectors = true`) and there is no
 //! public Workspace API to reindex BM25-only, so with the feature ON and a
 //! bge model present in the per-machine cache the reindex runs candle
-//! inference on every chunk, which both violates the spec ("embeddings
-//! DISABLED entirely") and dominates the wall time, hiding the structural
-//! plus chan-report cost the spec actually wants. With the feature OFF the
+//! inference on every chunk, which dominates the wall time, hiding the
+//! structural plus chan-report cost this benchmark is meant to measure
+//! (embeddings must stay disabled entirely). With the feature OFF the
 //! embed code is absent entirely, so `index_stats().indexed_vectors == 0`
 //! holds by construction. The test ASSERTS that, and FAILS loudly if run
 //! with embeddings on against a machine that has a cached model, so you
@@ -31,8 +31,8 @@
 //!
 //! `CHAN_BENCH_REPO=/path/to/a/repo` overrides the workspace source; with no
 //! env var it defaults to the chan-workspace crate's own repo root (the
-//! workspace this test ships in), benchmarking THIS repo, which is what
-//! the spec asks for (a filtered copy of this repo as the test workspace).
+//! workspace this test ships in), benchmarking a filtered copy of THIS
+//! repo as the test workspace.
 //!
 //! `CHAN_BENCH_MAX_FILES` caps how many tracked files are copied (default
 //! 250, `0` = the whole tree). With embeddings off (as required) even the

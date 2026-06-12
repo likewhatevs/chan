@@ -1,7 +1,6 @@
 //! chan-llm: MCP-facing prompts and tool sandbox for chan workspaces.
 //!
-//! The in-app Agent session layer was removed in phase 5. The
-//! supported surface is now the MCP server plus the shared tool
+//! The supported surface is the MCP server plus the shared tool
 //! implementations it exposes to external agents.
 
 #![forbid(unsafe_code)]

@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn query_subtokens_splits_on_punctuation() {
-        assert_eq!(query_subtokens("@@LaneA"), vec!["lanea".to_string()]);
+        assert_eq!(query_subtokens("@@Alice"), vec!["alice".to_string()]);
         assert_eq!(
             query_subtokens("a/b/c"),
             vec!["a".to_string(), "b".to_string(), "c".to_string()]
@@ -647,25 +647,26 @@ mod tests {
 
     #[test]
     fn mention_query_matches_handle_word() {
-        // BM25 strips the leading @@, so a query typed as "@@LaneA"
-        // must still find the note mentioning @@LaneA (indexed as the
-        // bare term "lanea"). Before the subtoken split this returned
+        // BM25 strips the leading @@, so a query typed as "@@Alice"
+        // must still find the note mentioning @@Alice (indexed as the
+        // bare term "alice"). Before the subtoken split this returned
         // nothing because the regex carried the literal @@.
         let (_tmp, idx) = fresh();
         idx.index_file(
             "team/roster.md",
-            "# Roster\nThe architect is @@LaneA and the host is @@Host.\n",
+            "# Roster\nThe coordinator is @@Alice and the host is @@Bob.\n",
             &Chunking::Headings,
         )
         .unwrap();
+        // Distractor doc: must not contain the searched term.
         idx.index_file(
             "team/process.md",
-            "# Process\nThe architect coordinates the round.\n",
+            "# Process\nThe coordinator runs the planning meeting.\n",
             &Chunking::Headings,
         )
         .unwrap();
         idx.commit().unwrap();
-        let hits = idx.search("@@LaneA", 10).unwrap();
+        let hits = idx.search("@@Alice", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, "team/roster.md");
     }

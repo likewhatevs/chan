@@ -58,7 +58,7 @@ pub struct Contact {
     /// interop stays cheap, and the indexer mirrors them into the
     /// graph node row alongside `emails` for the picker + the
     /// chan-server mention resolver. Empty list = "only the filename
-    /// stem resolves to this contact" (the pre-phase-5 default).
+    /// stem resolves to this contact".
     #[serde(default)]
     pub aliases: Vec<String>,
 }

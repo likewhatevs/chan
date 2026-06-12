@@ -98,7 +98,7 @@ fn write_notes(s: &mut String, notes: &str) {
 /// is rendered through `yaml_string` so an alias that happens to
 /// contain a comma / quote / colon round-trips without breaking the
 /// flow-list shape. Empty lists are skipped so untouched (non-
-/// aliased) contacts keep their pre-phase-5 frontmatter shape.
+/// aliased) contacts keep their original frontmatter shape.
 fn write_aliases_top(s: &mut String, c: &Contact) {
     if c.aliases.is_empty() {
         return;
@@ -306,7 +306,7 @@ mod tests {
 
         // Frontmatter parses cleanly via the same parser the
         // markdown indexer uses; confirms the chan classifier shape
-        // survives so Phase 4 graph + @ picker keep working.
+        // survives so the graph + @ picker keep working.
         let fm = crate::markdown::parse_frontmatter(&md);
         assert!(fm.body_offset > 0, "frontmatter not detected");
         let chan = fm.data.get("chan").expect("chan block");
@@ -324,7 +324,7 @@ mod tests {
             Some("people/c1")
         );
         // No aliases provided -> the top-level aliases array is
-        // omitted so non-aliased contacts keep the pre-phase-5
+        // omitted so non-aliased contacts keep their original
         // frontmatter shape on disk.
         assert!(fm.data.get("aliases").is_none());
     }

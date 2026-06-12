@@ -144,27 +144,27 @@ pub struct IndexConfig {
     /// embedder's `dim()` before writing more shards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vectors_dim: Option<u32>,
-    /// systacean-7: per-workspace Hybrid-search opt-in. Default-false so
-    /// workspaces stay BM25-only after the systacean-6 model split unless
+    /// Per-workspace Hybrid-search opt-in. Default-false so
+    /// workspaces stay BM25-only unless
     /// the user explicitly flips it on via
-    /// `chan index enable-semantic` (CLI) or the Settings UI
-    /// (`fullstack-a-21`). The query path reads this flag to decide
+    /// `chan index enable-semantic` (CLI) or the Settings UI.
+    /// The query path reads this flag to decide
     /// whether Hybrid is the default mode for the workspace; explicit
     /// `Mode::Hybrid` overrides on `search` still work regardless.
     #[serde(default)]
     pub semantic_enabled: bool,
-    /// systacean-27: per-workspace chan-report opt-in. Default ON as of
-    /// round-1 wave-3 (@@Host): a new workspace gets language detection +
+    /// Per-workspace chan-report opt-in. Default ON:
+    /// a new workspace gets language detection +
     /// SLOC roll-up + COCOMO out of the box. When true, `Workspace::report()`
     /// initializes the per-workspace `ReportState` + the watcher fanout keeps
     /// it current. The on-by-default lives in the struct `Default` (used for a
-    /// brand-new workspace); the `#[serde(default)]` here stays `false` so a
-    /// legacy config.toml that omits the field is NOT silently migrated on.
+    /// brand-new workspace); the `#[serde(default)]` here stays `false` so an
+    /// older config.toml that omits the field is NOT silently migrated on.
     /// Persists alongside `semantic_enabled` in the per-workspace
-    /// `IndexConfig` (Round-3 may refactor to a separate `features.toml`).
+    /// `IndexConfig`.
     #[serde(default)]
     pub reports_enabled: bool,
-    /// Round-1 wave-3 (@@Host): per-workspace directory BLOCKLIST additions.
+    /// Per-workspace directory BLOCKLIST additions.
     /// Directory basenames excluded from THIS workspace's index + graph walk,
     /// ON TOP of the global machine-wide baseline (`Registry::
     /// index_excluded_dirs`). The effective walk filter is
@@ -174,29 +174,29 @@ pub struct IndexConfig {
     /// list). Managed via `GET`/`PUT /api/index/excluded-dirs`.
     #[serde(default)]
     pub excluded_dirs: Vec<String>,
-    /// systacean-40: screensaver overlay opt-in. Default-false so
+    /// Screensaver overlay opt-in. Default-false so
     /// workspaces without the feature configured stay unchanged. SPA
     /// reads `Workspace::screensaver_enabled()` via the
     /// `/api/screensaver/state` endpoint + arms the overlay
     /// state machine when true.
     #[serde(default)]
     pub screensaver_enabled: bool,
-    /// systacean-40: idle window in seconds before the screensaver
+    /// Idle window in seconds before the screensaver
     /// overlay fires. Default 300 (5 minutes). The SPA computes
     /// "idle" client-side from last keystroke / pointer activity;
     /// chan-server just persists the threshold.
     #[serde(default = "default_screensaver_timeout_secs")]
     pub screensaver_timeout_secs: u32,
-    /// fullstack-a-99: visual theme for the screensaver overlay.
+    /// Visual theme for the screensaver overlay.
     /// Default plain keeps the lock screen quiet unless the user opts
     /// into an animated scene.
     #[serde(default)]
     pub screensaver_theme: ScreensaverTheme,
-    /// systacean-40: per-workspace PIN hash. `None` when no PIN is
+    /// Per-workspace PIN hash. `None` when no PIN is
     /// set (overlay still arms but auto-dismisses on any input).
     /// The bytes are whatever the SPA POSTs — chan-server stores
     /// without interpretation; the verify path is a byte-equality
-    /// compare. PBKDF2 happens client-side per `-a-77`.
+    /// compare. PBKDF2 happens client-side.
     ///
     /// NEVER serialized back over the wire in plaintext: the
     /// `/api/screensaver/state` endpoint reports `pin_set: bool`
@@ -209,7 +209,7 @@ fn default_screensaver_timeout_secs() -> u32 {
     300
 }
 
-/// systacean-40: serde adapter for `screensaver_pin_hash`. We
+/// Serde adapter for `screensaver_pin_hash`. We
 /// persist as base64 in the TOML so the file stays text-only +
 /// the bytes round-trip cleanly (raw `Vec<u8>` would land as a
 /// TOML array of integers — readable, but noisy + harder for
@@ -255,7 +255,7 @@ impl Default for IndexConfig {
             vectors_model: None,
             vectors_dim: None,
             semantic_enabled: false,
-            // Reports default ON (round-1 wave-3, @@Host): a freshly-created
+            // Reports default ON: a freshly-created
             // workspace opts into chan-report. This is the struct Default, used
             // by `load()` only when no config.toml exists yet (a new
             // workspace). An existing config.toml keeps its persisted value,
@@ -369,8 +369,8 @@ mod tests {
 
     #[test]
     fn semantic_enabled_defaults_false_and_round_trips_true() {
-        // systacean-7: pin the per-workspace Hybrid opt-in field. Default
-        // matches post-systacean-6 behaviour (BM25-only) so an existing
+        // Pin the per-workspace Hybrid opt-in field. Default
+        // is BM25-only so an existing
         // workspace whose config.toml predates this field stays BM25 on
         // upgrade. Round-tripping with the field set to true
         // verifies the toml shape is preserved across save/load.
@@ -389,9 +389,9 @@ mod tests {
 
     #[test]
     fn reports_enabled_defaults_true_for_new_workspace_but_legacy_file_stays_false() {
-        // Round-1 wave-3 (@@Host): reports default ON. A brand-new workspace
+        // Reports default ON. A brand-new workspace
         // has no config.toml, so `load()` returns `IndexConfig::default()` ->
-        // reports ON. But a legacy config.toml that omits the field must NOT be
+        // reports ON. But an older config.toml that omits the field must NOT be
         // migrated on: the field's `#[serde(default)]` keeps it false. This
         // test pins both halves so the "new on, existing unchanged" split can't
         // drift.
@@ -487,7 +487,7 @@ mod tests {
 
     #[test]
     fn load_works_while_workspace_lock_is_held() {
-        // systacean-8: chan index status reads IndexConfig without
+        // `chan index status` reads IndexConfig without
         // opening a Workspace (so no writer lock acquired), which means
         // a running `chan serve` against the workspace no longer blocks
         // the CLI. Pin the invariant: `config::load` doesn't touch
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn semantic_enabled_absent_in_old_file_loads_as_false() {
-        // Existing workspaces whose config.toml predates systacean-7 don't
+        // Older workspaces' config.toml may not
         // have the field at all. Pin that they load cleanly with the
         // default (false) rather than failing with a missing-field
         // error.

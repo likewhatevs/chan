@@ -19,7 +19,7 @@ fn file_type_policy_end_to_end() {
         .write_text(
             "notes/intro.md",
             "# Intro\n\nSee ![diagram](../media/diagram.png) and \
-             [whitepaper](../docs/spec.pdf).\n\nMore in notes/notes.txt.\n\n#phase2 @@teammate\n",
+             [whitepaper](../docs/spec.pdf).\n\nMore in notes/notes.txt.\n\n#roadmap @@teammate\n",
         )
         .unwrap();
     workspace
@@ -196,7 +196,7 @@ fn file_type_policy_end_to_end() {
     assert!(
         neighbors
             .iter()
-            .any(|e| e.kind == EdgeKind::Tag && e.dst == "#phase2"),
+            .any(|e| e.kind == EdgeKind::Tag && e.dst == "#roadmap"),
         "Markdown #tag edge missing; neighbors = {neighbors:?}",
     );
     assert!(
@@ -216,7 +216,7 @@ fn file_type_policy_end_to_end() {
 
     let tags = g.tags().unwrap();
     assert!(
-        tags.iter().any(|tag| tag.name == "phase2"),
+        tags.iter().any(|tag| tag.name == "roadmap"),
         "Markdown tag missing from graph tags: {tags:?}",
     );
     assert!(

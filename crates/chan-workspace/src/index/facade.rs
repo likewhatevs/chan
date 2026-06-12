@@ -28,7 +28,7 @@ use super::vectors::{VectorError, VectorStore};
 use crate::error::ChanError;
 use crate::fs_ops::{self, WalkFilter};
 
-/// systacean-19: emit a one-shot `tracing::warn!` when chan-workspace
+/// Emit a one-shot `tracing::warn!` when chan-workspace
 /// falls back to BM25-only because the BGE embedding model isn't
 /// downloaded. The fallback path runs in `write_file` +
 /// `flush_embed_batch`; both share the same warning so the user
@@ -36,7 +36,7 @@ use crate::fs_ops::{self, WalkFilter};
 /// many files trigger the fallback (a bulk reindex would
 /// otherwise spam the log with hundreds of identical warnings).
 ///
-/// Aligns with the systacean-6 / -7 opt-in architecture: default
+/// Aligns with the opt-in model-download design: default
 /// builds ship without the model bundled; users get working BM25
 /// keyword search out of the box; `chan index download-model`
 /// upgrades them to hybrid semantic+BM25 retrieval.
@@ -277,7 +277,7 @@ impl Index {
         Ok(self.bm25.known_paths()?)
     }
 
-    /// systacean-7: flip the per-workspace Hybrid-search opt-in.
+    /// Flip the per-workspace Hybrid-search opt-in.
     /// Idempotent — re-setting to the same value is a no-op (no
     /// config write). On change, writes `<index_dir>/config.toml`
     /// atomically so a `chan serve` restart honours the new
@@ -297,7 +297,7 @@ impl Index {
         Ok(())
     }
 
-    /// systacean-27: flip the per-workspace chan-report opt-in.
+    /// Flip the per-workspace chan-report opt-in.
     /// Idempotent — re-setting to the same value is a no-op.
     /// Atomic write parallels `set_semantic_enabled`.
     pub fn set_reports_enabled(&self, enabled: bool) -> Result<(), IndexError> {
@@ -330,7 +330,7 @@ impl Index {
         Ok(())
     }
 
-    /// systacean-40: flip the per-workspace screensaver-enabled flag.
+    /// Flip the per-workspace screensaver-enabled flag.
     /// Idempotent on no-change.
     pub fn set_screensaver_enabled(&self, enabled: bool) -> Result<(), IndexError> {
         let to_save = {
@@ -345,7 +345,7 @@ impl Index {
         Ok(())
     }
 
-    /// systacean-40: persist the screensaver idle window.
+    /// Persist the screensaver idle window.
     /// Idempotent on no-change.
     pub fn set_screensaver_timeout_secs(&self, secs: u32) -> Result<(), IndexError> {
         let to_save = {
@@ -360,7 +360,7 @@ impl Index {
         Ok(())
     }
 
-    /// fullstack-a-99: persist the screensaver visual theme.
+    /// Persist the screensaver visual theme.
     /// Idempotent on no-change.
     pub fn set_screensaver_theme(&self, theme: ScreensaverTheme) -> Result<(), IndexError> {
         let to_save = {
@@ -375,7 +375,7 @@ impl Index {
         Ok(())
     }
 
-    /// systacean-40: persist or clear the screensaver PIN hash.
+    /// Persist or clear the screensaver PIN hash.
     /// Idempotent on identical input (including None → None).
     pub fn set_screensaver_pin_hash(&self, hash: Option<Vec<u8>>) -> Result<(), IndexError> {
         let to_save = {
@@ -432,13 +432,13 @@ impl Index {
     /// happens. Once populated, every call returns a cheap Arc
     /// clone and never enters the slow path again.
     ///
-    /// systacean-6 / runtime resolver: `resolve_model` is called
+    /// Runtime resolver: `resolve_model` is called
     /// before `Embedder::open`. When the model isn't present on
     /// disk (`--features embed-model` off AND no prior download),
     /// the caller receives a structured `ModelNotDownloaded` error
     /// instead of `Embedder::open` triggering an hf-hub network
     /// fetch. When the model IS on disk (either bundled-and-seeded
-    /// or pre-downloaded via systacean-7's CLI / API), `resolve_model`
+    /// or pre-downloaded via the CLI / API), `resolve_model`
     /// returns the repo dir and `Embedder::open` finds the same
     /// path through hf-hub's cache lookup with no network.
     #[cfg(feature = "embeddings")]
@@ -455,7 +455,7 @@ impl Index {
         Ok(e)
     }
 
-    /// systacean-19: classify an embed-step error as "the model
+    /// Classify an embed-step error as "the model
     /// isn't downloaded, fall back to BM25-only" vs "something
     /// else, propagate". Single-shot `tracing::warn!` so the log
     /// doesn't spam on every per-file embed in a bulk reindex.
@@ -474,9 +474,9 @@ impl Index {
         }
     }
 
-    /// C-CAP file-count threshold: a cold full build over this many
-    /// indexable files skips the embed pass (BM25-only). Tunable; 2000
-    /// is the headline @@Host set. Typical notes workspaces sit well
+    /// File-count threshold: a cold full build over this many
+    /// indexable files skips the embed pass (BM25-only). Tunable;
+    /// 2000 is the headline cap. Typical notes workspaces sit well
     /// under it; large source trees (this repo is ~4k files) sit above
     /// and skip the multi-minute CPU embed.
     #[cfg(feature = "embeddings")]
@@ -498,7 +498,7 @@ impl Index {
     /// queued in this run; the on-disk index is left as it was at
     /// the start.
     ///
-    /// C-CAP (phase-15 round-2): a cold full build SKIPS the embedding
+    /// A cold full build SKIPS the embedding
     /// pass when the workspace has more than `EMBED_FILE_CAP` indexable
     /// files. The embed forward-pass is O(chunks) on CPU and dominates
     /// wall-clock; on a multi-thousand-file source tree it runs for many
@@ -546,7 +546,7 @@ impl Index {
         // do. Accumulate chunks across files and flush in
         // `EMBED_BATCH_CHUNKS`-sized groups so each forward pass
         // gets enough work to fill the device.
-        // C-CAP: skip the embed pass for an oversized cold full build.
+        // Skip the embed pass for an oversized cold full build.
         // do_vectors gates every embed branch below, so this single line
         // turns the build BM25-only without touching the drain loop.
         #[cfg(feature = "embeddings")]
@@ -558,7 +558,7 @@ impl Index {
             tracing::info!(
                 files = total,
                 cap = Self::EMBED_FILE_CAP,
-                "C-CAP: skipping embeddings for this cold full build (workspace \
+                "skipping embeddings for this cold full build (workspace \
                  exceeds the file cap); BM25 stays authoritative and per-file \
                  edits still embed"
             );
@@ -884,7 +884,7 @@ impl Index {
         if pending.is_empty() {
             return Ok(errors);
         }
-        // systacean-19: discriminator on the embed-step error.
+        // Discriminator on the embed-step error.
         // ModelNotDownloaded → log once, drop the pending batch
         // (vectors get skipped) but don't poison every queued
         // file with a per-file error in `errors`. The bulk reindex
@@ -892,7 +892,7 @@ impl Index {
         // loop (line ~468 self.bm25.index_chunks), so dropping
         // the vector commit leaves the BM25 index correct +
         // searchable. summary.errors stays clean, matching the
-        // default-build invariant after this fix lands.
+        // default-build invariant.
         let embedder = match self.embedder() {
             Ok(e) => e,
             Err(IndexError::Embed(EmbedError::ModelNotDownloaded { .. })) => {
@@ -992,7 +992,7 @@ impl Index {
                 if chunks.is_empty() {
                     self.vectors.replace_file(rel_path, &model, 0, vec![])?;
                 } else {
-                    // systacean-19: discriminator on the embed-step
+                    // Discriminator on the embed-step
                     // error. When the BGE model isn't downloaded
                     // (default-build install + no prior download),
                     // log once + skip the vector commit + fall
@@ -1402,7 +1402,7 @@ mod tests {
         }
     }
 
-    // systacean-19: direct unit coverage for the C2 fallback
+    // Direct unit coverage for the fallback
     // discriminator. The workstation has the BGE model cached so
     // the integration / end-to-end tests can never naturally trip
     // the fallback path; these tests synthesise the

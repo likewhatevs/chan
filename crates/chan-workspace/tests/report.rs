@@ -6,9 +6,9 @@
 
 // Arc/Mutex/Duration/Instant/WatchCallback/WatchEvent are consumed
 // only by the `#[cfg(unix)]`-gated watcher_keeps_report_current
-// test + its helpers below (systacean-20 smoke #2 fixup; Windows
-// watcher → ReportFanOut gap). Gate the imports on the same
-// predicate so Windows clippy doesn't flag them as `unused_imports`.
+// test + its helpers below (known Windows watcher → ReportFanOut
+// delivery gap). Gate the imports on the same predicate so Windows
+// clippy doesn't flag them as `unused_imports`.
 #[cfg(unix)]
 use std::sync::{Arc, Mutex};
 #[cfg(unix)]
@@ -31,7 +31,7 @@ fn put(root: &Path, rel: &str, content: &str) {
 }
 
 // Test helpers below are consumed only by watcher_keeps_report_current,
-// which is `#[cfg(unix)]`-gated per systacean-20 smoke #2 fixup
+// which is `#[cfg(unix)]`-gated
 // (Windows watcher → ReportFanOut delivery gap). Gate the helpers
 // on the same predicate so Windows clippy doesn't flag them as
 // `dead_code`. Revert this gate when the underlying Windows fanout
@@ -109,14 +109,13 @@ fn report_for_prefix_restricts_to_subtree() {
     assert!(scoped.files.iter().all(|f| f.path.starts_with("src/")));
 }
 
-// systacean-20 smoke #2 fixup: gated on Unix because the watcher
+// Gated on Unix because the watcher
 // → ReportFanOut → report-writer chain doesn't deliver fresh
 // file events to workspace.report() on Windows within 5s of polling
-// (verified empirically on systacean-18-smoke run 26250685864).
-// The wait_for poll body below stays for when the Round-3 polish
-// fix lands (root-cause the notify-crate / report-writer event
-// chain on Windows); revert this gate then. Tracked in
-// phase-8-bugs.md "Windows notify-crate / report-writer reliability".
+// (verified empirically on Windows CI). Known Windows limitation:
+// the notify-crate / report-writer event chain on Windows still
+// needs root-causing. The wait_for poll body below stays for when
+// that fix lands; revert this gate then.
 #[cfg(unix)]
 #[test]
 fn watcher_keeps_report_current() {

@@ -17,7 +17,7 @@ use crate::complexity;
 use crate::error::ChanReportError;
 use crate::summary::{FileBucket, FileStats};
 
-/// systacean-16: classify a tokei-recognized language into the
+/// Classify a tokei-recognized language into the
 /// source-code-shaped bucket axis. Markdown is the only special
 /// case (the graph G6 colour scheme distinguishes notes from
 /// source); everything else `tokei` recognizes falls under

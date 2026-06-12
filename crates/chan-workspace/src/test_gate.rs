@@ -1,6 +1,6 @@
 //! Cross-process serial gate for the FS-timing test class.
 //!
-//! SYSTEMIC de-flake (phase-11). A whole class of tests fights the same
+//! SYSTEMIC de-flake. A whole class of tests fights the same
 //! scarce resources under the full parallel `cargo test`: real `notify`
 //! FSEvents delivery, an indexer worker thread, real Tantivy
 //! commit/reader-refresh I/O, and (in chan-server) real PTY shell

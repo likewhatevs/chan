@@ -3,7 +3,7 @@
 // The workspace exposes, immediately on open, a lightweight structural
 // snapshot (directory tree shape, file counts, byte sizes) that the
 // UI renders before any index or report job runs. This is the "spine"
-// the round-11 partial-load rework hangs File Browser, Graph, and the
+// the partial-load flow hangs File Browser, Graph, and the
 // paced background jobs off of.
 //
 // What this is, and is NOT:

@@ -2299,16 +2299,16 @@ impl Workspace {
         Ok(self.index()?.known_paths()?)
     }
 
-    /// systacean-7: read the per-workspace Hybrid-search preference.
+    /// Read the per-workspace Hybrid-search preference.
     /// Mirrors `IndexConfig::semantic_enabled`; default-false on a
-    /// workspace that has never been touched by systacean-7's CLI / API.
+    /// workspace that has never set it via the CLI / API.
     /// Query-path callers consult this when no explicit `Mode` is
     /// passed.
     pub fn semantic_enabled(&self) -> Result<bool> {
         Ok(self.index()?.config().semantic_enabled)
     }
 
-    /// systacean-7: flip the per-workspace Hybrid-search preference.
+    /// Flip the per-workspace Hybrid-search preference.
     /// Idempotent — re-setting the current value is a no-op. The
     /// `chan index enable-semantic` / `disable-semantic` CLI and the
     /// `/api/index/semantic/{enable,disable}` endpoints both route
@@ -2319,14 +2319,14 @@ impl Workspace {
         Ok(())
     }
 
-    /// systacean-7: read the configured embedding model id from the
+    /// Read the configured embedding model id from the
     /// per-workspace index config. Used by the resolver so the model
     /// name flows through the same source as `set_model`.
     pub fn semantic_model(&self) -> Result<String> {
         Ok(self.index()?.config().model)
     }
 
-    /// Phase 9 carry-over: persist the per-workspace embedding model.
+    /// Persist the per-workspace embedding model.
     /// The index layer validates the curated model id, clears stale
     /// vector metadata, and preserves BM25.
     pub fn set_semantic_model(&self, model: &str) -> Result<()> {
@@ -2334,9 +2334,9 @@ impl Workspace {
         Ok(())
     }
 
-    /// systacean-27: read the per-workspace chan-report opt-in flag.
+    /// Read the per-workspace chan-report opt-in flag.
     /// Mirrors `IndexConfig::reports_enabled`; default-TRUE for a brand-new
-    /// workspace as of round-1 wave-3 (reports on by default), while an
+    /// workspace (reports on by default), while an
     /// existing workspace keeps its persisted value. Consumers gate
     /// `Workspace::report()` initialization + the per-workspace
     /// language-graph layer on this flag.
@@ -2344,7 +2344,7 @@ impl Workspace {
         Ok(self.index()?.config().reports_enabled)
     }
 
-    /// systacean-27: flip the per-workspace chan-report opt-in.
+    /// Flip the per-workspace chan-report opt-in.
     /// Idempotent on re-set. Enabling triggers a lazy
     /// initialization the next time `Workspace::report()` is called
     /// (no eager scan here so a flip from CLI returns fast);
@@ -2422,14 +2422,14 @@ impl Workspace {
         Ok(Arc::new(fs_ops::WalkFilter::new(names)))
     }
 
-    /// systacean-40: read the per-workspace screensaver-enabled flag.
+    /// Read the per-workspace screensaver-enabled flag.
     /// Default-false on workspaces that pre-date the field; SPA arms
     /// the overlay state machine when true.
     pub fn screensaver_enabled(&self) -> Result<bool> {
         Ok(self.index()?.config().screensaver_enabled)
     }
 
-    /// systacean-40: flip the per-workspace screensaver-enabled flag.
+    /// Flip the per-workspace screensaver-enabled flag.
     /// Idempotent. No filesystem side effects (unlike
     /// `set_reports_enabled`'s jsonl drop) — the overlay state
     /// lives entirely client-side; this just persists the toggle.
@@ -2438,13 +2438,13 @@ impl Workspace {
         Ok(())
     }
 
-    /// systacean-40: read the idle window (seconds) before the
+    /// Read the idle window (seconds) before the
     /// SPA arms the overlay. Default 300.
     pub fn screensaver_timeout_secs(&self) -> Result<u32> {
         Ok(self.index()?.config().screensaver_timeout_secs)
     }
 
-    /// systacean-40: persist the idle window. SPA enforces a
+    /// Persist the idle window. SPA enforces a
     /// minimum + maximum client-side; chan-workspace stores whatever
     /// value lands.
     pub fn set_screensaver_timeout_secs(&self, secs: u32) -> Result<()> {
@@ -2452,19 +2452,19 @@ impl Workspace {
         Ok(())
     }
 
-    /// fullstack-a-99: read the persisted visual theme. Default
+    /// Read the persisted visual theme. Default
     /// plain on workspaces that pre-date the field.
     pub fn screensaver_theme(&self) -> Result<ScreensaverTheme> {
         Ok(self.index()?.config().screensaver_theme)
     }
 
-    /// fullstack-a-99: persist the visual theme.
+    /// Persist the visual theme.
     pub fn set_screensaver_theme(&self, theme: ScreensaverTheme) -> Result<()> {
         self.index()?.set_screensaver_theme(theme)?;
         Ok(())
     }
 
-    /// systacean-40: read the persisted PIN hash. `None` means no
+    /// Read the persisted PIN hash. `None` means no
     /// PIN is set. The hash bytes themselves NEVER leave the
     /// server in plaintext — the `/api/screensaver/state` endpoint
     /// reports `pin_set: bool` and the verify endpoint compares
@@ -2474,15 +2474,15 @@ impl Workspace {
         Ok(self.index()?.config().screensaver_pin_hash.clone())
     }
 
-    /// systacean-40: persist or clear the PIN hash. `Some(bytes)`
-    /// stores them verbatim (SPA does PBKDF2 client-side per
-    /// `-a-77`); `None` clears the PIN.
+    /// Persist or clear the PIN hash. `Some(bytes)`
+    /// stores them verbatim (SPA does PBKDF2 client-side);
+    /// `None` clears the PIN.
     pub fn set_screensaver_pin_hash(&self, hash: Option<Vec<u8>>) -> Result<()> {
         self.index()?.set_screensaver_pin_hash(hash)?;
         Ok(())
     }
 
-    /// systacean-27: BOOT entry-point. Consumers call this after
+    /// BOOT entry-point. Consumers call this after
     /// `Workspace::open` to kick off the optional indexing layers
     /// (semantic + reports) per the persisted feature flags. The
     /// baseline BM25 + graph + watcher path runs regardless; this
@@ -3376,7 +3376,7 @@ fn parse_for_graph(
     } else {
         None
     };
-    // Alias extraction (phase 5): the `aliases:` top-level
+    // Alias extraction: the `aliases:` top-level
     // frontmatter array names alternate strings that `@@<alias>`
     // mentions should resolve to this contact. Skip for File-kind
     // nodes (regular notes have no resolver semantics tied to the
@@ -4328,7 +4328,7 @@ mod tests {
         // instead of hang. It is deliberately generous (seconds, not the
         // old 150 ms) so a loaded CI runner's scheduling jitter on a
         // tiny write cannot trip a false failure: the 150 ms budget
-        // red-lighted a release once (phase-13 r2 / addendum-1 #2). A
+        // red-lighted a release once. A
         // correct write finishes in microseconds; only the bug path ever
         // approaches this ceiling.
         let guard = workspace.write_serial.lock().unwrap();
@@ -5058,7 +5058,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual phase-5 checkout/resume profile; not a CI benchmark"]
+    #[ignore = "manual checkout/resume profile; not a CI benchmark"]
     fn checkout_and_resume_profile() {
         let cfg = TempDir::new().unwrap();
         let workspace_dir = TempDir::new().unwrap();
@@ -5518,11 +5518,10 @@ mod tests {
         assert!(workspace.exists("b/c.md"));
     }
 
-    // systacean-20: gated on Unix because Windows lock primitive
-    // doesn't surface WorkspaceLocked the same way flock does. Real
-    // cross-platform fix tracked in phase-8-bugs.md "Windows lock
-    // contract parity"; revert this gate when the LockFileEx-backed
-    // bridge in lock.rs lands.
+    // Gated on Unix because the Windows lock primitive doesn't
+    // surface WorkspaceLocked the same way flock does — a known
+    // Windows lock-contract gap; revert this gate when a
+    // LockFileEx-backed bridge in lock.rs lands.
     #[cfg(unix)]
     #[test]
     fn second_open_blocks_on_writer_lock() {
@@ -5865,7 +5864,7 @@ mod tests {
 
     #[test]
     fn drafts_create_list_and_promote_roundtrip() {
-        // systacean-24 round-trip: create two drafts, list them,
+        // Round-trip: create two drafts, list them,
         // promote one into the workspace root + verify the directory
         // moved + the draft is no longer listed.
         let (_cfg, root, workspace) = fixture();
@@ -5902,7 +5901,7 @@ mod tests {
 
     #[test]
     fn drafts_reject_traversal_and_existing() {
-        // systacean-24: name validation + collision detection.
+        // Name validation + collision detection.
         let (_cfg, _root, workspace) = fixture();
         assert!(workspace.create_draft_dir("").is_err());
         assert!(workspace.create_draft_dir("..").is_err());
@@ -5914,24 +5913,23 @@ mod tests {
 
     #[test]
     fn graph_mentions_aggregates_unique_handles_by_count() {
-        // systacean-35: graph::mentions() enumerates unique
+        // graph::mentions() enumerates unique
         // `@@<Name>` mention edges, sorted by count desc + label
         // asc (mirrors tags() shape). Consumed by chan-server's
         // /api/mentions for editor mention-completion.
         let (_cfg, root, workspace) = fixture();
-        // 3 files: 2 mention @@Architect, 1 mentions @@Alex
-        // + @@Architect, so @@Architect count = 3, @@Alex = 1.
+        // 3 files: 2 mention @@Bob, 1 mentions @@Alice
+        // + @@Bob, so @@Bob count = 3, @@Alice = 1. The
+        // higher-count handle sorts LAST alphabetically, so the
+        // expected order proves count-desc dominates label-asc.
         workspace
-            .write_text("notes/a.md", "Met @@Architect today.\n")
+            .write_text("notes/a.md", "Met @@Bob today.\n")
             .unwrap();
         workspace
-            .write_text("notes/b.md", "Discussed with @@Architect.\n")
+            .write_text("notes/b.md", "Discussed with @@Bob.\n")
             .unwrap();
         workspace
-            .write_text(
-                "notes/c.md",
-                "@@Alex and @@Architect synced on the design.\n",
-            )
+            .write_text("notes/c.md", "@@Alice and @@Bob synced on the design.\n")
             .unwrap();
         workspace.reindex(None).unwrap();
         assert!(root.path().join("notes/a.md").is_file());
@@ -5939,11 +5937,11 @@ mod tests {
         let graph = workspace.graph().unwrap();
         let mentions = graph.mentions().unwrap();
         // The bare names (no `@@` sigil) come back in count-desc
-        // + label-asc order. Architect = 3 > Alex = 1.
+        // + label-asc order. Bob = 3 > Alice = 1.
         assert_eq!(mentions.len(), 2, "got {mentions:?}");
-        assert_eq!(mentions[0].name, "Architect");
+        assert_eq!(mentions[0].name, "Bob");
         assert_eq!(mentions[0].count, 3);
-        assert_eq!(mentions[1].name, "Alex");
+        assert_eq!(mentions[1].name, "Alice");
         assert_eq!(mentions[1].count, 1);
     }
 
@@ -6168,7 +6166,7 @@ mod tests {
 
     #[test]
     fn screensaver_primitives_round_trip_and_default_correctly() {
-        // systacean-40: 6 Workspace::screensaver_* methods round-trip
+        // The 6 Workspace::screensaver_* methods round-trip
         // through IndexConfig + atomic write. Defaults: enabled
         // false, timeout 300, pin_hash None.
         let (_cfg, _root, workspace) = fixture();
@@ -6256,7 +6254,7 @@ mod tests {
 
     #[test]
     fn reports_enabled_defaults_true_round_trips_and_boot_kicks_off_initial_scan() {
-        // systacean-27 + round-1 wave-3: Workspace::reports_enabled defaults
+        // Workspace::reports_enabled defaults
         // TRUE for a new workspace (reports on by default); boot kicks off the
         // initial scan when the flag is on so the first `Workspace::report()`
         // consumer sees populated data; set_reports_enabled round-trips the
@@ -6295,7 +6293,7 @@ mod tests {
 
     #[test]
     fn excluded_dirs_additions_union_with_the_global_baseline() {
-        // Round-1 wave-3 blocklist (hybrid C): per-workspace additions union
+        // Per-workspace blocklist additions union
         // with the global baseline; the effective set drives the reindex walk.
         let (_cfg, _root, workspace) = fixture();
         // Fresh workspace: no additions; effective == the global baseline.
@@ -6325,10 +6323,10 @@ mod tests {
 
     #[test]
     fn boot_is_noop_when_features_disabled() {
-        // systacean-27: boot() with both feature flags off is a
+        // boot() with both feature flags off is a
         // pure no-op. No report scan kicked off; no eager
         // initialization that would slow down chan-server startup
-        // on a lean workspace. Reports now defaults ON (round-1 wave-3), so
+        // on a lean workspace. Reports default ON, so
         // explicitly turn it off to exercise the both-off no-op path.
         let (_cfg, _root, workspace) = fixture();
         workspace.set_reports_enabled(false).unwrap();
@@ -6342,7 +6340,7 @@ mod tests {
 
     #[test]
     fn next_untitled_draft_name_counts_up_through_gaps() {
-        // systacean-26: smallest-unused-N picker. First call
+        // Smallest-unused-N picker. First call
         // returns bare `untitled`. After `untitled` exists the
         // picker returns `untitled-1`, then `untitled-2`, etc.
         // Gaps in the existing-set ARE filled (smallest unused,

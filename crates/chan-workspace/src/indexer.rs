@@ -430,10 +430,10 @@ mod tests {
         let saw = wait_for(FS_DELIVERY_BUDGET, || indexer.indexed_total() >= 1);
         assert!(saw, "indexer did not pick up the file write");
 
-        // systacean-23: poll the BM25 search until watched.md
+        // Poll the BM25 search until watched.md
         // appears (or 5s timeout). `indexed_total >= 1` ticks at
         // the moment the indexer's index_file call returns Ok,
-        // but on macOS CI runners (ci-14-smoke 26274161414)
+        // but on macOS CI runners
         // there's been a window where BM25 reader visibility
         // can lag the writer commit AND/OR FSEvents fires the
         // Created event early enough that index_file reads
@@ -441,8 +441,8 @@ mod tests {
         // pick up the final state. Polling the actual outcome
         // (search reflects the file) instead of the proxy
         // (indexed_total counter) absorbs that race
-        // cross-platform. Same shape as the systacean-20
-        // smoke fixup that polled workspace.report() for
+        // cross-platform. Same shape as the
+        // workspace.report() polling in
         // chan-workspace/tests/report.rs.
         let opts = crate::workspace::SearchOpts {
             mode: SearchMode::Bm25,
@@ -489,11 +489,11 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         std::fs::write(
             draft.abs.join("draft.md"),
-            "# my draft\ndraft-marker-systacean-25 here\n",
+            "# my draft\ndraft-marker-token here\n",
         )
         .unwrap();
 
-        // Poll the BM25 outcome (systacean-23 pattern): the draft must
+        // Poll the BM25 outcome: the draft must
         // become searchable under its real `.Drafts/...` relpath once
         // the watcher delivers the write and the indexer routes it
         // through index_file.
@@ -505,7 +505,7 @@ mod tests {
         let expected_path = ".Drafts/untitled-1/draft.md";
         let visible = wait_for(FS_DELIVERY_BUDGET, || {
             workspace
-                .search("draft-marker-systacean-25", &opts)
+                .search("draft-marker-token", &opts)
                 .map(|hits| hits.hits.iter().any(|h| h.path == expected_path))
                 .unwrap_or(false)
         });
@@ -517,7 +517,7 @@ mod tests {
             // coalesces or drops the draft.md write event entirely -- no
             // budget recovers a dropped event. That is an environment
             // limitation, not a product regression, and it must not
-            // red-light CI / a release (addendum-1 #2). So distinguish
+            // red-light CI / a release. So distinguish
             // the two: if the draft never reached the index, the watcher
             // didn't deliver -> skip; if it IS indexed but somehow not
             // searchable, that's a real regression -> fail. The drafts

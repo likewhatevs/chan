@@ -47,8 +47,8 @@ fn end_to_end_import_into_workspace() {
     assert!(jane.starts_with("---\n"));
     assert!(jane.contains("kind: contact"));
     assert!(jane.contains("provider: google"));
-    // Body holds the contact data, NOT the frontmatter (Phase 0a:
-    // the editor doesn't strip frontmatter, so we keep the chan
+    // Body holds the contact data, NOT the frontmatter (the
+    // editor doesn't strip frontmatter, so we keep the chan
     // classifier slim and put the contact info where the user can
     // read it).
     assert!(!jane.contains("contact:"));
@@ -145,7 +145,7 @@ fn import_into_workspace_root() {
 
 #[test]
 fn imported_contacts_classified_as_contact_nodes_after_index() {
-    // Phase 4 wiring: imported notes carry chan.kind: contact in
+    // Imported notes carry chan.kind: contact in
     // their frontmatter, and the indexer should pick that up so
     // Workspace::contacts returns them and a regular .md does not.
     let cfg = TempDir::new().unwrap();

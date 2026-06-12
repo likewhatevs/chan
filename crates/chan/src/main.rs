@@ -135,20 +135,23 @@ enum Command {
     /// Register a directory as a chan workspace.
     ///
     /// The baseline filesystem walk + markdown read + documentation
-    /// graph + BM25 always runs. The two optional indexing layers
-    /// below add functionality on top and are off by default per
-    /// Round-2's lean-workspace policy (`systacean-27`).
+    /// graph + BM25 always runs. Semantic search is an optional
+    /// layer, off by default to keep workspaces lean. chan-reports
+    /// is on by default for new workspaces (`chan reports disable`
+    /// turns it off).
     Add {
         path: PathBuf,
-        /// systacean-27: enable per-workspace semantic search (BGE-small
+        /// Enable per-workspace semantic search (BGE-small
         /// dense vectors). Per-workspace footprint; needs the shared
         /// model (`chan index download-model`). Off by default.
         #[arg(long = "semantic-search")]
         semantic_search: bool,
-        /// systacean-27: enable per-workspace chan-reports (language
+        /// Force-enable per-workspace chan-reports (language
         /// detection + SLOC + COCOMO). Per-workspace footprint;
-        /// maintained incrementally from filesystem events. Off by
-        /// default.
+        /// maintained incrementally from filesystem events. Reports
+        /// are already on by default for new workspaces; the flag
+        /// persists the setting explicitly and runs the kickoff
+        /// scan at add time.
         #[arg(long = "reports")]
         reports: bool,
     },
@@ -304,18 +307,18 @@ enum Command {
         tunnel_public: bool,
     },
     /// Rebuild the search index + graph; manage the embedding
-    /// model + per-workspace Hybrid-search opt-in. systacean-7 restructured
-    /// this from a flat `chan index <path>` into a subcommand-driven
-    /// shape so the model + semantic-toggle controls live alongside
+    /// model + per-workspace Hybrid-search opt-in. Subcommand-driven
+    /// (rather than a flat `chan index <path>`)
+    /// so the model + semantic-toggle controls live alongside
     /// the rebuild action; mirrors `chan config <action>`.
     Index {
         #[command(subcommand)]
         action: IndexAction,
     },
-    /// systacean-27: enable/disable per-workspace chan-reports
-    /// (language detection + SLOC + COCOMO). Default off per
-    /// Round-2's lean-workspace baseline; opt in here or via the
-    /// pre-flight UI / Settings.
+    /// Enable/disable per-workspace chan-reports
+    /// (language detection + SLOC + COCOMO). On by default for
+    /// new workspaces; toggle here or via the pre-flight UI /
+    /// Settings.
     Reports {
         #[command(subcommand)]
         action: ReportsAction,
@@ -524,23 +527,23 @@ enum MetadataAction {
     },
 }
 
-/// systacean-7: subcommands for `chan index`. Restructured from the
-/// flat `chan index <path>` into a subcommand-driven shape that
+/// Subcommands for `chan index`. Subcommand-driven (rather than a
+/// flat `chan index <path>`) so the surface
 /// covers rebuild, model download, semantic-search toggle, and
-/// state inspection. Breaking change: `chan index <path>` is now
+/// state inspection. Older scripts' flat `chan index <path>` is now
 /// `chan index rebuild <path>`.
 ///
-/// Symmetric naming forward-compats the Round-2 `chan reports
+/// Symmetric naming matches the `chan reports
 /// enable/disable` parallel pair so scripted callers can pattern-
 /// match `<feature> enable / disable` across the surface.
 #[derive(Subcommand, Debug)]
 enum IndexAction {
-    /// Rebuild the search index + graph for a workspace. Was `chan
-    /// index <path>` pre-systacean-7; the explicit verb keeps it
+    /// Rebuild the search index + graph for a workspace. Older
+    /// scripts used a flat `chan index <path>`; the explicit verb keeps it
     /// alongside the model/semantic actions. Accepts either the
     /// positional `<PATH>` (backwards-compat) OR `--path <PATH>`
     /// (uniform with the other four subcommands so wrappers can
-    /// pass `--path` to all of them; systacean-8). At least one
+    /// pass `--path` to all of them). At least one
     /// must be supplied.
     Rebuild {
         /// Workspace root, positional form.
@@ -553,7 +556,7 @@ enum IndexAction {
     /// `<user-config>/chan/models/<model-name>/`. Idempotent: a
     /// re-run with the model already present is a fast no-op.
     /// Default model is `BAAI/bge-small-en-v1.5`; the
-    /// `--model` flag forward-compats the Round-3 multi-model
+    /// `--model` flag forward-compats a future multi-model
     /// picker.
     DownloadModel {
         /// HuggingFace model id, e.g. `BAAI/bge-small-en-v1.5`.
@@ -603,14 +606,14 @@ enum IndexAction {
     },
 }
 
-/// systacean-27: subcommands for `chan reports`. Mirrors
+/// Subcommands for `chan reports`. Mirrors
 /// `IndexAction::{EnableSemantic,DisableSemantic}`'s shape so
 /// scripted callers can pattern-match `<feature> enable / disable`
 /// uniformly across the surface (`chan index enable-semantic` /
 /// `chan reports enable`).
 ///
-/// Default state for both features is OFF per the Round-2
-/// lean-workspace baseline; explicit opt-in via this CLI / the
+/// Default state for both features is OFF (lean-workspace
+/// baseline); explicit opt-in via this CLI / the
 /// pre-flight UI / Settings flips them on.
 #[derive(Subcommand, Debug)]
 enum ReportsAction {
@@ -913,7 +916,7 @@ fn cmd_add(path: PathBuf, semantic_search: bool, reports: bool) -> Result<()> {
     }
     let lib = library()?;
     let entry = ensure_workspace_registered(&lib, &path)?;
-    // systacean-27: opt-in feature flags. Persist before
+    // Opt-in feature flags. Persist before
     // boot-time activation so a `chan add --reports` lands the
     // flag immediately + the kickoff scan runs once.
     if semantic_search || reports {
@@ -1314,14 +1317,14 @@ async fn maybe_handoff_to_desktop(root: &Path) -> Option<Result<()>> {
     }
 }
 
-/// systacean-27: dispatch the `chan reports {enable,disable}`
+/// Dispatch the `chan reports {enable,disable}`
 /// subcommands. Parallels `cmd_index_set_semantic`'s shape: open
 /// the workspace (with the path-resolution fallback to the registry's
 /// default), flip the per-workspace `reports_enabled` flag, surface
 /// the verb on stdout. `disable` is destructive — drops the
 /// persisted `report.jsonl` so re-enable triggers a fresh scan;
-/// gated on `--yes` or an interactive prompt to match Round-2's
-/// "explicit confirmation" requirement.
+/// gated on `--yes` or an interactive prompt (explicit
+/// confirmation for a destructive action).
 fn cmd_reports(action: ReportsAction) -> Result<()> {
     match action {
         ReportsAction::Enable { path } => cmd_reports_set(path, true, false),
@@ -1380,7 +1383,7 @@ fn cmd_reports_set(path: Option<PathBuf>, enabled: bool, skip_confirm: bool) -> 
 fn cmd_index(action: IndexAction) -> Result<()> {
     match action {
         IndexAction::Rebuild { path, path_flag } => {
-            // Either form works (systacean-8). Both supplied → the
+            // Either form works. Both supplied → the
             // flag wins; users have to be explicit anyway and the
             // flag is the canonical shape going forward. Neither
             // supplied → clean error, not a clap-default panic.
@@ -1490,7 +1493,7 @@ fn cmd_index_list_models(json: bool) -> Result<()> {
     Ok(())
 }
 
-/// systacean-7: stub when the binary is built without
+/// Stub when the binary is built without
 /// `--features embeddings`. The candle + hf-hub stack is gated
 /// behind that feature; without it there's nothing to download.
 /// Bail with a clear message instead of a missing-symbol error.
@@ -1514,7 +1517,7 @@ fn cmd_index_status(_path: Option<PathBuf>, _json: bool) -> Result<()> {
     anyhow::bail!("chan was built without `--features embeddings`; semantic search is unavailable")
 }
 
-/// systacean-7: download the embedding model into the per-machine
+/// Download the embedding model into the per-machine
 /// cache. Blocking; the hf-hub backend prints its own progress to
 /// stderr when stderr is a TTY. Idempotent — if the model is
 /// already laid out in the cache the call returns immediately.
@@ -1574,12 +1577,12 @@ fn cmd_index_set_model(path: Option<PathBuf>, model: &str) -> Result<()> {
     Ok(())
 }
 
-/// systacean-7: flip the per-workspace Hybrid-search opt-in. On enable,
+/// Flip the per-workspace Hybrid-search opt-in. On enable,
 /// refuses if the model isn't downloaded; the user is pointed at
 /// `chan index download-model`. On disable, always succeeds (the
 /// underlying `set_semantic_enabled` is idempotent).
 ///
-/// systacean-8 fix: no longer auto-registers an unregistered path.
+/// Deliberately does NOT auto-register an unregistered path.
 /// Refusing here surfaces a clean "not a chan workspace at <path>"
 /// instead of a registration side-effect that leaks the
 /// implementation detail.
@@ -1614,16 +1617,17 @@ fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
     Ok(())
 }
 
-/// systacean-7: print the per-workspace semantic-search state. Text by
+/// Print the per-workspace semantic-search state. Text by
 /// default; `--json` emits a `{workspaces:[{...}]}`-style object for
 /// scripting (single workspace in the response; the shape is plural so
 /// a future multi-workspace variant lands as a pure extension).
 ///
-/// systacean-8 fix: read-only access, lock-free + no auto-register.
-/// The pre-fix path took the writer lock via `Workspace::open` and
-/// auto-registered missing paths; against a live-served workspace that
-/// surfaced as "workspace is locked by another process", and against an
-/// unregistered path it leaked "Error: registering <path>". Now the
+/// Read-only access, lock-free + no auto-register.
+/// Taking the writer lock via `Workspace::open` (and
+/// auto-registering missing paths) would surface against a
+/// live-served workspace as "workspace is locked by another
+/// process", and against an
+/// unregistered path leak "Error: registering <path>". So the
 /// helper looks up the registered workspace's index dir directly and
 /// loads `IndexConfig` from disk — no Workspace handle, no flock, no
 /// side-effects. Missing-from-registry → clean
@@ -1669,7 +1673,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         "bm25"
     };
     if json {
-        // `fullstack-b-28b` slice ii: emit `reports_enabled`
+        // Emit `reports_enabled`
         // alongside `semantic_enabled` so chan-desktop's
         // `get_workspace_features` IPC can read both flags from one
         // CLI round-trip. `chan_workspace::index::config::load`
@@ -1711,13 +1715,13 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// systacean-8: user-facing message when a CLI subcommand is
+/// User-facing message when a CLI subcommand is
 /// pointed at a path the registry doesn't know. Surfaces a clear
 /// "not a chan workspace at <path>" hint with a `chan add` next-step
 /// instead of leaking the implementation detail (auto-register
 /// side-effect, `WorkspaceNotRegistered(<path>)`, etc.).
 ///
-/// systacean-8 follow-up: gated on `embeddings` to match both
+/// Gated on `embeddings` to match both
 /// call sites (`cmd_index_set_semantic`, `cmd_index_status`).
 /// Without the gate `--no-default-features` builds with
 /// `RUSTFLAGS=-D warnings` fail on dead_code.
@@ -2510,8 +2514,8 @@ fn parse_line_spacing(value: &str) -> Result<LineSpacing> {
     match value {
         "standard" => Ok(LineSpacing::Standard),
         "compact" => Ok(LineSpacing::Compact),
-        // Phase-3 renamed `tight` -> `compact` (same density target).
-        // Accept the legacy token so muscle memory and existing
+        // `tight` is an accepted legacy alias for `compact` (same
+        // density target), so muscle memory and existing
         // scripts keep working; the canonical reader (`config get`)
         // echoes back `compact` so the user is nudged toward the new
         // spelling without losing their preference.
@@ -3052,7 +3056,7 @@ mod tests {
 
     #[test]
     fn config_line_spacing_accepts_legacy_tight_alias() {
-        // Pre-phase-3 CLI scripts and muscle memory may still pass
+        // Older CLI scripts and muscle memory may still pass
         // `tight`; treat it as `compact` rather than erroring so
         // `chan config set` doesn't break those callers. The read
         // path normalizes the value back to `compact` (see

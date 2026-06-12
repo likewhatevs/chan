@@ -61,9 +61,9 @@ pub enum EmbedError {
     Config(String),
     #[error("operation cancelled")]
     Cancelled,
-    /// systacean-6: model not present on disk and the binary wasn't
+    /// Model not present on disk and the binary wasn't
     /// built with `--features embed-model`. Surfaces to the CLI / API
-    /// layer (systacean-7) so the user sees "model not downloaded;
+    /// layer so the user sees "model not downloaded;
     /// run `chan index download-model` or enable in Settings"
     /// instead of a silent hf-hub network fetch.
     #[error(
@@ -356,8 +356,7 @@ fn l2_normalize(t: &Tensor) -> Result<Tensor, EmbedError> {
 /// correcting how we submit/await the Metal command buffer), the GPU
 /// path must not be reachable out of the box. The code path is kept
 /// intact behind the opt-in so machines with a working Metal/CUDA
-/// stack can still use it for benchmarking. See the phase-11
-/// GPU-embed investigation, preserved in git history.
+/// stack can still use it for benchmarking.
 ///
 /// `CHAN_DISABLE_GPU` is accepted for back-compat. CPU is already the
 /// default, so it is now a no-op, but honoring it means existing
@@ -477,8 +476,8 @@ fn model_files_present(repo_dir: &Path) -> bool {
     false
 }
 
-/// systacean-6: runtime resolver for the embedding model. Indexes by
-/// model name (not a hardcoded path) so a Round-2 multi-model picker
+/// Runtime resolver for the embedding model. Indexes by
+/// model name (not a hardcoded path) so a multi-model picker
 /// can swap the active model without changing this function.
 ///
 /// Returns the repo directory under `global_models_dir()` when the
@@ -586,7 +585,7 @@ mod tests {
 
     #[test]
     fn resolve_model_returns_path_when_files_present() {
-        // systacean-6: pin the happy path. When refs/main + a
+        // Pin the happy path. When refs/main + a
         // complete snapshot trio are present, the resolver returns
         // the repo dir; callers proceed to `Embedder::open` against
         // the cached files without an hf-hub network round-trip.
@@ -600,7 +599,7 @@ mod tests {
     #[test]
     fn resolve_model_errors_when_dir_empty() {
         // Default-build runtime path: feature `embed-model` off + no
-        // prior systacean-7 download → resolver surfaces
+        // prior download → resolver surfaces
         // ModelNotDownloaded with the expected path. The CLI / API
         // layer turns this into the "run `chan index download-model`"
         // hint instead of triggering an hf-hub network fetch.

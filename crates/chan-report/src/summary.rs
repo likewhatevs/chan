@@ -11,8 +11,7 @@ use crate::cocomo::CocomoSummary;
 /// (Image / Pdf / Other for non-source files); the graph indexer
 /// composes the two: chan-report's `FileBucket` for the files it
 /// tracks (markdown + source code); chan-workspace's `FileClass` for
-/// everything else (media / binary / unknown). See systacean-16
-/// + the architect's option (c) routing for the design framing.
+/// everything else (media / binary / unknown).
 ///
 /// Only the buckets chan-report can populate from `tokei`'s
 /// language detection live here. Binary / Media / Other are NOT
@@ -51,9 +50,9 @@ pub struct FileStats {
     pub bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtime: Option<String>,
-    /// systacean-16: source-code-shaped classification axis for
-    /// the graph overhaul's G6 colour scheme. Optional + serde-
-    /// skipped when None so older JSONL files (pre-systacean-16)
+    /// Source-code-shaped classification axis for the graph's G6
+    /// colour scheme. Optional + serde-skipped when None so older
+    /// JSONL files (written before this field existed)
     /// load cleanly under the same SCHEMA_VERSION; the field
     /// just defaults to `None` on those rows + the consumer
     /// falls back to inspecting `language` directly.

@@ -6,8 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Per-team config persisted to `config.toml`. Schema per the
-/// addendum-b spec.
+/// Per-team config persisted to `config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TeamConfig {
     pub team_name: String,

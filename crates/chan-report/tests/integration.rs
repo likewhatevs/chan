@@ -426,7 +426,7 @@ fn dir_report_survives_jsonl_roundtrip() {
 
 #[test]
 fn file_bucket_is_markdown_for_md_files() {
-    // systacean-16: the graph G6 colour scheme distinguishes
+    // The graph G6 colour scheme distinguishes
     // markdown notes (orange) from source code (royalblue).
     // chan-report carries the Markdown bucket explicitly so the
     // graph layer doesn't have to re-detect the language at
@@ -507,12 +507,12 @@ fn file_bucket_round_trips_through_jsonl() {
 
 #[test]
 fn file_bucket_absent_in_old_jsonl_loads_as_none() {
-    // Backward-compat invariant: a JSONL file written BEFORE
-    // systacean-16 doesn't have the bucket field. The loader must
+    // Backward-compat invariant: a JSONL file written before the
+    // bucket field existed doesn't have it. The loader must
     // accept it cleanly + default the missing field to None, so
     // older workspaces don't trip schema-mismatch on first open.
     let d = tempdir().unwrap();
-    // Hand-write a JSONL stream with the pre-systacean-16 file row
+    // Hand-write a JSONL stream with the legacy file-row
     // shape (no `bucket` field). One meta + one file row.
     let old = format!(
         "{{\"kind\":\"meta\",\"schema\":{},\"root\":\"/abs\",\"generated_at\":\"2026-05-12T12:00:00Z\"}}\n\
