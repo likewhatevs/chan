@@ -22,6 +22,25 @@ chan serve ~/notes
 The command prints a loopback URL with a bearer token. Open that URL in a
 browser on the same machine.
 
+`chan add PATH` registers a workspace without serving it; `chan list` and
+`chan remove` manage the registry.
+
+Useful `chan serve` flags:
+
+- `-4` / `-6`: force IPv4 / IPv6 loopback (default 127.0.0.1).
+- `--host`, `--port`: bind elsewhere. No TLS; loud warning when binding
+  off-loopback.
+- `--prefix /seg`: mount under a URL prefix so a reverse proxy can
+  multiplex many `chan serve` instances under one host.
+- `--timeout 30s` / `5m` / `1h`: graceful shutdown after an idle window
+  with no HTTP / WebSocket activity. Designed for systemd
+  socket-activation.
+- `--no-token`: skip the bearer-token gate (loopback bind only).
+- `--standalone`: always bind a local listener; never hand the workspace
+  off to a running Chan Desktop.
+
+`chan --help` documents the full flag surface.
+
 ## Workspace contents
 
 Chan watches the workspace tree for external edits. The files are still yours:

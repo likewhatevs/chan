@@ -52,12 +52,15 @@ remotely"](#reach-a-workspace-remotely) below and the
 
 ```
 crates/
-  chan           binary. CLI + dispatch.
-  chan-workspace     filesystem, search, and graph primitives.
+  chan           binary. CLI + dispatch; also answers as `cs` behind
+                 a user-created symlink.
+  chan-workspace filesystem, search, and graph primitives.
   chan-llm       MCP server/tool sandbox used to expose a workspace to
                  terminal-launched agent CLIs.
   chan-report    language/SLOC/COCOMO report support.
   chan-server    HTTP + WebSocket surface; embeds the web bundle.
+  chan-shell     the `cs` terminal-control surface and its
+                 control-socket wire types.
   chan-tunnel-*  tunnel protocol, client, and server libraries.
   fetch-models   build helper for the embedding-model bundle.
 
@@ -67,6 +70,10 @@ desktop/         Tauri desktop shell. `desktop/src-tauri` is a
 
 web/             Svelte frontend, embedded into the binary at build
                  time via rust-embed.
+
+gateway/         self-hostable tunnel gateway (identity, workspace
+                 proxy, admin CLI); a nested Cargo workspace of its
+                 own.
 ```
 
 See [`design.md`](design.md) for the architecture and how the
@@ -127,24 +134,12 @@ The token is persisted at `<state>/tokens/token` so a `cargo build
 && chan serve` cycle does not invalidate the browser's cached
 sessionStorage token.
 
-Useful flags:
-
-- `-4` / `-6`: force IPv4 / IPv6 loopback (default 127.0.0.1).
-- `--host`, `--port`: bind elsewhere. No TLS; loud warning when
-  binding off-loopback.
-- `--prefix /seg`: mount under a URL prefix so a reverse proxy can
-  multiplex many `chan serve` instances under one host.
-- `--timeout 30s` / `5m` / `1h`: graceful shutdown after an idle
-  window with no HTTP / WebSocket activity. Designed for systemd
-  socket-activation.
-- `--no-token`: skip the bearer-token gate (loopback bind only).
-
-`chan upgrade` self-replaces the running binary against
-GitHub Releases at `github.com/fiorix/chan`, with SHA-256 verification. Set
-`CHAN_UPDATE_CHECK=0` to silence the once-per-day banner.
-
-Other subcommands: `chan list`, `chan remove`, `chan rename`, `chan
-index`, `chan search`. `chan --help` documents every flag.
+`chan --help` documents the full subcommand surface (serve, index,
+search, graph, status, config, metadata, reports, contacts, upgrade,
+...) and every flag. The [manual](https://chan.app/manual/) covers
+day-to-day use: serve flags and workspace registration live in
+[workspaces](docs/manual/workspaces.md), self-upgrade in
+[upgrade and troubleshooting](docs/manual/upgrade-and-troubleshooting.md).
 
 ## Reach a workspace remotely
 
@@ -154,26 +149,12 @@ to a gateway that reverse-proxies it back to you: no inbound ports, no
 router config. chan-desktop can also attach an inbound tunnel from a remote
 `chan serve`, or open a remote `chan serve` directly over HTTP/2.
 
-```
-export CHAN_TUNNEL_TOKEN=chan_pat_...     # a token your gateway issued
-chan serve ~/Notes --tunnel-url https://workspace.example.com/v1/tunnel
-```
-
-`chan` dials the gateway's `/v1/tunnel`, runs a Hello/HelloAck handshake
-that names the workspace, and serves every inbound request through the
-same axum router the local listener uses. The flag form `--tunnel-token
-<TOKEN>` works too but exposes the token in `ps`; prefer the env var.
-`--tunnel-url` selects the gateway, `--tunnel-workspace-name <name>`
-publishes under a different name (lowercase `[a-z0-9-]`, 1-32 chars), and
-`--tunnel-public` drops the gateway's auth gate so anyone with the URL can
-reach the workspace; without it the gateway returns a 404 to anyone but the
-workspace owner (or a user it granted access).
-
 The gateway is that server side, and it lives in this repo under `gateway/`
 for you to run yourself. `--tunnel-url` defaults to
 `https://workspace.chan.app/v1/tunnel`, the maintainer's own deployment of
-that code; it is experimental, with sign-in off by default. See
-[`gateway/README.md`](gateway/README.md) to stand up your own.
+that code; it is experimental, with sign-in off by default. Commands and
+flags are in the [tunnel manual](docs/manual/tunnel.md); see
+[`gateway/README.md`](gateway/README.md) to stand up your own gateway.
 
 ## Contributing
 
@@ -189,8 +170,8 @@ Install the pre-push hook once per clone:
 ./scripts/install-hooks
 ```
 
-The hook runs `cargo fmt --check`, `cargo clippy --all-targets --
--D warnings`, `cargo test --all-targets`, and `cargo build
---no-default-features` with `RUSTFLAGS=-D warnings` before every
-push, mirroring CI. A passing local push therefore will not fail in
-GitHub Actions.
+The hook runs `make pre-push` before every push: rustfmt, clippy and
+the test suite with warnings denied, a no-default-features build, the
+gateway workspace build, and the web checks (svelte-check, vitest,
+production bundles), mirroring CI. A passing local push therefore
+will not fail in GitHub Actions.
