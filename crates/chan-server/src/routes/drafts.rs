@@ -329,10 +329,10 @@ mod tests {
         assert!(!workspace.drafts_dir().join("untitled-1").exists());
     }
 
-    // ---- A4: draft-banner backend stress test -------------------------
+    // ---- Draft-banner backend stress test -----------------------------
     //
     // The false "unsaved changes from a previous session" banner
-    // (lane-b-plan-draft-restore-banner.md) is a frontend bug, but it
+    // is a frontend bug, but it
     // can only be exercised cleanly if the backend invariants it stands
     // on hold under load. This is the backend half of the e2e stress
     // test: it hammers create-draft -> autosave (CAS) -> re-read over

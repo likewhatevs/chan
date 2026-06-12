@@ -19,8 +19,8 @@
 //! the workspace. The CLI must therefore consult this module BEFORE it
 //! calls `open_workspace`, so it never double-opens.
 //!
-//! The bearer token never travels over argv/env/logs: in Option B
-//! (the ratified design) the desktop spawns its OWN native window
+//! The bearer token never travels over argv/env/logs: by design
+//! the desktop spawns its OWN native window
 //! against its OWN embedded server, so no token crosses this socket
 //! at all. The protocol still carries a version field so a
 //! desktop-vs-CLI skew falls back to standalone rather than doing

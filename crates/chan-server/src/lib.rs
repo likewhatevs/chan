@@ -145,7 +145,7 @@ pub struct ServeConfig {
     /// profile. When absent, the persisted server config decides.
     pub search_aggression: Option<SearchAggression>,
     /// Mirror of the CLI `-v/--verbose` flag. When true, the cold-start
-    /// stderr indexing progress (B10) carries per-phase detail
+    /// stderr indexing progress carries per-stage detail
     /// (current file / labels); when false it stays a throttled
     /// one-liner. Off for tunnel/desktop-spawned runs.
     pub verbose: bool,
@@ -333,8 +333,7 @@ impl ProgressCallback for TeeProgress {
 /// Don't surface a single stderr line until the initial build has been
 /// running this long: a small or already-warm workspace indexes in a
 /// blink and should stay silent. Only a genuinely long build (the
-/// large-tree case B10 targets) crosses this threshold and starts
-/// streaming.
+/// large-tree case) crosses this threshold and starts streaming.
 const STDERR_PROGRESS_MIN_ELAPSED: Duration = Duration::from_millis(800);
 /// Minimum spacing between stderr progress lines once they start, so a
 /// fast index loop emits a readable trickle rather than a flood.
@@ -436,7 +435,7 @@ async fn build_app(
     // every launch: skipped if the default model is already laid out
     // at the target. No-op (compile-gated out) on default builds;
     // they ship without the bundle and rely on the chan-workspace
-    // runtime resolver + the systacean-7 download flow instead.
+    // runtime resolver + the model download flow instead.
     #[cfg(feature = "embed-model")]
     embed_seed::seed_models_from_bundle();
 
@@ -475,12 +474,12 @@ async fn build_app(
     // editor. Indexer is NOT subject to this gate; in-app saves
     // must reindex.
     let self_writes = Arc::new(SelfWrites::new());
-    // phase-11 Slice C: the scoped pub/sub registry is created here so
-    // the watcher bridge can route scoped `fs` frames into it; the same
+    // The scoped pub/sub registry is created here so the watcher
+    // bridge can route scoped `fs` frames into it; the same
     // Arc is stored on AppState for the /ws handler and survives a
     // storage reset (the rebuilt bridge re-references it).
     let scope_registry = Arc::new(bus::ScopeRegistry::new());
-    // B10: detect a cold (empty) index BEFORE the potentially slow
+    // Detect a cold (empty) index BEFORE the potentially slow
     // pre-URL work (watcher registration on a large tree can take
     // several seconds, and the initial index build is about to run).
     // On a cold start we print one heads-up line right here, ahead of
@@ -1289,7 +1288,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/server/config", patch(api_patch_server_config))
         .route("/api/storage/reset", post(api_storage_reset))
         .route("/api/index/rebuild", post(api_index_rebuild));
-    // systacean-7: per-workspace semantic-search write endpoints. Same
+    // Per-workspace semantic-search write endpoints. Same
     // settings-gated lane as `/api/index/rebuild` since flipping
     // the workspace's `semantic_enabled` is a settings change and the
     // download path mutates the per-machine model cache.
@@ -1299,14 +1298,14 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/index/semantic/disable", post(api_semantic_disable))
         .route("/api/index/semantic/download", post(api_semantic_download))
         .route("/api/index/semantic/model", patch(api_semantic_model_patch));
-    // systacean-39: reports feature toggle endpoints. Mirror the
+    // Reports feature toggle endpoints. Mirror the
     // semantic shape but NOT gated on `embeddings`; reports are
     // part of the BM25-only baseline. Settings-writes lane because
     // flipping the toggle is a settings change.
     let settings_writes = settings_writes
         .route("/api/index/reports/enable", post(api_reports_enable))
         .route("/api/index/reports/disable", post(api_reports_disable));
-    // systacean-40: screensaver overlay state + PIN endpoints.
+    // Screensaver overlay state + PIN endpoints.
     // PATCH/state, POST/pin, DELETE/pin land in settings-writes.
     // POST/verify is a read-side action (checks the stored hash)
     // so it stays in the unrestricted lane below; non-owners
@@ -1315,7 +1314,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/screensaver/state", patch(api_screensaver_patch))
         .route("/api/screensaver/pin", post(api_screensaver_set_pin))
         .route("/api/screensaver/pin", delete(api_screensaver_clear_pin));
-    // `fullstack-b-30` slice b: Source Code Pro download endpoint.
+    // Source Code Pro download endpoint.
     // Settings-gated lane because activating the font is a
     // preference write + the download mutates the per-machine
     // user-config dir.
@@ -1356,14 +1355,14 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/drafts/inspect", post(api_inspect_draft))
         .route("/api/drafts/discard", post(api_discard_draft))
         .route("/api/drafts/promote", post(api_promote_draft))
-        // phase-13-r2 `lane-a-A3`: path-based chan-team.toml
-        // read/write for the Team Work dialog's New/Load flow.
+        // Path-based chan-team.toml read/write for the Team Work
+        // dialog's New/Load flow.
         // Deliberately outside the workspace sandbox (user path,
         // default /tmp); see routes/team_config.rs module docs.
         .route("/api/team-config/read", post(api_team_config_read))
         .route("/api/team-config/write", post(api_team_config_write))
-        // cs terminal survey reply: completes the parked survey oneshot on
-        // D's survey bus (round-3-survey-contract.md). Owned by @@LaneC.
+        // cs terminal survey reply: completes the parked survey
+        // oneshot on the survey bus.
         .route("/api/survey/reply", post(api_survey_reply))
         // cs pane reply: completes the parked window-bus oneshot with the
         // SPA's layout snapshot. The reply half of the `cs pane` channel.
@@ -1401,7 +1400,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/graph/languages", get(api_language_graph))
         .route("/api/fs-graph", get(api_fs_graph))
         .route("/api/inspector", get(api_inspector))
-        // systacean-35: prefix-matched mention completion. Editor
+        // Prefix-matched mention completion. Editor
         // queries this to surface `@@<Name>` references across the
         // broader markdown corpus (not just contacts).
         .route("/api/mentions", get(api_get_mentions))
@@ -1465,14 +1464,14 @@ fn router(state: Arc<AppState>) -> Router {
             post(api_set_terminal_broadcast),
         )
         .route("/ws", get(ws_upgrade))
-        // `fullstack-b-12`: bundled font assets (Source Code Pro
-        // Regular + OFL.txt) served from chan-server's rust-embed.
+        // Bundled font assets (Source Code Pro Regular + OFL.txt)
+        // served from chan-server's rust-embed.
         // The SPA's `@font-face` declaration points at this path; a
         // future expansion (italic / bold weights, additional faces)
         // drops more entries into `crates/chan-server/resources/fonts/`
         // and the same `:name` segment serves them.
         .route("/static/fonts/:name", get(serve_font));
-    // systacean-7: read-only semantic-search state. Gated on
+    // Read-only semantic-search state. Gated on
     // `embeddings` because the SemanticState payload + the
     // `chan-workspace` resolver behind it only exist when the candle
     // stack compiles in. Write routes (`enable` / `disable` /
@@ -1481,10 +1480,10 @@ fn router(state: Arc<AppState>) -> Router {
     let api = api
         .route("/api/index/semantic/state", get(api_semantic_state))
         .route("/api/index/semantic/models", get(api_semantic_models));
-    // systacean-39: reports state is read-only + not settings-
+    // Reports state is read-only + not settings-
     // gated (read-only views can land in any lane).
     let api = api.route("/api/index/reports/state", get(api_reports_state));
-    // systacean-40: screensaver state + verify are read-side.
+    // Screensaver state + verify are read-side.
     // /verify is unrestricted so non-owners can still unlock the
     // overlay on shared-machine scenarios.
     let api = api

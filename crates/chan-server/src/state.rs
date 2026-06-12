@@ -103,11 +103,11 @@ pub struct AppState {
     /// graceful drain returns in milliseconds instead of holding
     /// open until the hard deadline.
     pub shutdown_rx: watch::Receiver<bool>,
-    /// phase-11 Slice C: per-directory scoped watcher pub/sub. The
-    /// File Browser / Graph send `sub`/`unsub` frames over `/ws`; this
-    /// registry refcounts subscribers per directory and the watcher
-    /// bridge routes scoped `fs` frames here (derived from the single
-    /// recursive feed, Decision D1(b)). Survives `/api/storage/reset`:
+    /// Per-directory scoped watcher pub/sub. The File Browser /
+    /// Graph send `sub`/`unsub` frames over `/ws`; this registry
+    /// refcounts subscribers per directory and the watcher bridge
+    /// routes scoped `fs` frames here (derived from the single
+    /// recursive feed). Survives `/api/storage/reset`:
     /// the rebuilt bridge re-references the same registry so live
     /// subscriptions keep flowing onto the new workspace's events.
     pub scope_registry: Arc<crate::bus::ScopeRegistry>,
@@ -117,12 +117,9 @@ pub struct AppState {
     /// so both ends reach the same map. Survives nothing in particular: a
     /// survey is in-memory and transient by nature.
     ///
-    /// Read only by @@LaneC's `POST /api/survey/reply` route (the seam in
-    /// round-3-survey-contract.md). The producer side (the control socket's
-    /// `register`/`cancel`) gets its own clone in `build_app`, so until C's
-    /// route lands this field is write-only here; the allow keeps D's half
-    /// gated-green ahead of C's. Drop the allow when the reply route exists.
-    #[allow(dead_code)]
+    /// Read only by the `POST /api/survey/reply` route; the producer
+    /// side (the control socket's `register`/`cancel`) gets its own
+    /// clone in `build_app`.
     pub survey_bus: Arc<crate::survey::SurveyBus>,
     /// `cs pane` blocked-transport registry. Same shape + lifecycle as
     /// `survey_bus`: the control socket parks a oneshot here per in-flight

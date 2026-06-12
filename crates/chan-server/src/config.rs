@@ -71,7 +71,7 @@ pub struct TerminalConfig {
     /// terminals keep their original TERM until restart.
     #[serde(default = "default_terminal_default_term")]
     pub default_term: String,
-    /// `fullstack-b-30` slice b: user's terminal-font preference.
+    /// User's terminal-font preference.
     /// Default is `os-default` (per-OS native mono — SF Mono on
     /// macOS, Cascadia on Windows, DejaVu on Linux). Opt-in
     /// `source-code-pro` activates Source Code Pro by reordering
@@ -80,7 +80,7 @@ pub struct TerminalConfig {
     /// download flow before the activation completes.
     #[serde(default)]
     pub font: TerminalFontChoice,
-    /// B5: the non-team default for whether a newly-spawned terminal
+    /// The non-team default for whether a newly-spawned terminal
     /// gets the chan MCP discovery env vars (`CHAN_MCP_*`). Off by
     /// default for ALL agents (a stray env descriptor makes codex fail
     /// to start; it wants a file-based config). Plain `cs terminal new`
@@ -91,18 +91,18 @@ pub struct TerminalConfig {
     pub mcp_env: bool,
 }
 
-/// `fullstack-b-30` slice b: terminal-font preference. Wire shape
-/// kept narrow (string enum) so a future polish task could add a
-/// "Custom..." path without breaking existing config files.
+/// Terminal-font preference. Wire shape kept narrow (string enum)
+/// so a future polish task could add a "Custom..." path without
+/// breaking existing config files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum TerminalFontChoice {
-    /// Per-OS native mono. Lean-default baseline from slice a.
+    /// Per-OS native mono. The lean default.
     #[default]
     OsDefault,
     /// Source Code Pro Regular. Available either via `--features
     /// embed-font` (rust-embed bundle) or via the user-config-dir
-    /// path written by the slice b download flow.
+    /// path written by the font download flow.
     SourceCodePro,
 }
 
@@ -290,8 +290,8 @@ mod tests {
 
     #[test]
     fn terminal_config_legacy_file_fills_new_fields() {
-        // Pre-fullstack-b-11 server.toml didn't carry scrollback_mb
-        // or default_term. Serde's per-field defaults must fill them
+        // Older server.toml files didn't carry scrollback_mb or
+        // default_term. Serde's per-field defaults must fill them
         // so an upgrade doesn't trip the deserializer.
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("server.toml");

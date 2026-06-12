@@ -295,7 +295,7 @@ fn sanitize_terminal_config(mut cfg: TerminalConfig) -> TerminalConfig {
     if cfg.ring_bytes == 0 {
         cfg.ring_bytes = defaults.ring_bytes;
     }
-    // `fullstack-b-11`: scrollback clamps to the Settings slider
+    // Scrollback clamps to the Settings slider
     // bounds. A literal 0 (legacy / cleared field) snaps to the
     // default so an over-eager wipe can't strand new terminals with
     // an empty scrollback; any other out-of-range value clamps to

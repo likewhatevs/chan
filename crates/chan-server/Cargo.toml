@@ -21,7 +21,7 @@ embeddings = ["chan-workspace/embeddings"]
 # produces a ~26 MB binary instead of ~89 MB. With the feature off
 # the chan-workspace runtime resolver looks for the model under
 # `<user-config>/chan/models/<model-name>/`; the CLI / API layer
-# (systacean-7) downloads it on demand. With the feature on
+# downloads it on demand. With the feature on
 # `make models` prefetches the tarball into
 # `resources/models.tar.zst` and the seeder extracts it into the
 # per-machine cache on first server launch. Implies `embeddings`:
@@ -34,7 +34,7 @@ embed-model = ["embeddings", "dep:zstd"]
 # back to a user-config-dir copy at
 # `<user-config>/chan/fonts/SourceCodePro-Regular.otf.woff2`; the
 # Settings UI's "Source Code Pro" opt-in downloads the woff2 +
-# OFL.txt into that directory on enable (slice b follow-up).
+# OFL.txt into that directory on enable.
 # Implies nothing; the bundle is purely additive.
 embed-font = []
 # Pass-throughs for chan-workspace's GPU backends. The chan binary's
@@ -66,8 +66,8 @@ percent-encoding = "2"
 portable-pty = "0.8"
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
-# `fullstack-b-30` slice b: HTTP client for the Source Code Pro
-# download endpoint (`POST /api/fonts/source-code-pro/download`).
+# HTTP client for the Source Code Pro download endpoint
+# (`POST /api/fonts/source-code-pro/download`).
 # Mirrors chan-tunnel-server / chan binary deps; rustls keeps the
 # build OpenSSL-free.
 reqwest = { workspace = true }

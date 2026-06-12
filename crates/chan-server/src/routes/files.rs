@@ -1201,7 +1201,7 @@ mod write_tests {
 
     #[test]
     fn read_file_sync_sniffs_unknown_extension_text_as_text() {
-        // B11: an odd-suffix text file the extension classifier can't
+        // An odd-suffix text file the extension classifier can't
         // type (here `.service`) must still open in the editor. Created
         // via std::fs because write_text only creates known-text paths.
         let cfg = tempfile::TempDir::new().unwrap();

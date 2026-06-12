@@ -129,14 +129,14 @@ enum ClientFrame {
     SetBroadcast { on: bool },
     #[serde(rename = "close")]
     Close,
-    /// Rich Prompt bubble submit (@@LaneB). Unlike `Input` (raw keystrokes
+    /// Rich Prompt bubble submit. Unlike `Input` (raw keystrokes
     /// straight to the PTY), this ENQUEUES `data` onto this session's write
     /// queue -- the SAME FIFO the control socket's `cs terminal write` feeds
     /// -- so bubble prompts and CLI pokes serialize through one drain and
     /// submit one after another when the agent is idle. The server appends
     /// the submit chord for `agent` (claude / codex / gemini); `agent` is
-    /// optional and DEFAULTS to claude (the round's primary agent) when the
-    /// SPA does not know the terminal's launch command.
+    /// optional and DEFAULTS to claude when the SPA does not know the
+    /// terminal's launch command.
     #[serde(rename = "prompt")]
     Prompt {
         data: String,
@@ -200,7 +200,7 @@ pub async fn api_terminal_ws(
     let tab_name = query.tab_name.as_deref().and_then(normalize_tab_name);
     let tab_group = query.tab_group.as_deref().and_then(normalize_tab_group);
     let window_id = query.window_id.as_deref().and_then(normalize_window_id);
-    // B5: MCP env is off by default. An explicit `?mcp_env=on|off` query
+    // MCP env is off by default. An explicit `?mcp_env=on|off` query
     // wins (the SPA can force a per-terminal choice); when absent we fall
     // back to the non-team server-config default, which itself defaults
     // off. Team spawns don't reach here -- they read the team config's
@@ -285,7 +285,7 @@ pub async fn api_create_terminal(
         tab_name: Some(name.clone()),
         tab_group: body.group.as_deref().and_then(normalize_tab_group),
         window_id: body.window_id.as_deref().and_then(normalize_window_id),
-        // B5: off by default; honor the non-team server-config opt-in.
+        // Off by default; honor the non-team server-config opt-in.
         mcp_env: state
             .server_config
             .lock()
@@ -1019,7 +1019,7 @@ mod tests {
 
     #[test]
     fn client_frame_prompt_decodes_with_optional_agent() {
-        // The @@LaneB Rich Prompt contract: { type: "prompt", data, agent? }.
+        // The Rich Prompt contract: { type: "prompt", data, agent? }.
         // A Rust rename of the tag / fields would break the bubble's wire at
         // runtime with a green build, so pin the decode.
         let with_agent: ClientFrame =
@@ -1045,7 +1045,7 @@ mod tests {
 
     #[test]
     fn client_frame_set_broadcast_decodes() {
-        // The phase-21 toggle-sync contract: { type: "set-broadcast", on }.
+        // The broadcast toggle-sync contract: { type: "set-broadcast", on }.
         // A Rust rename of the tag / field would break the SPA's wire at
         // runtime with a green build, so pin the decode.
         let on: ClientFrame =
@@ -1276,8 +1276,8 @@ mod tests {
     #[tokio::test]
     async fn api_restart_terminal_respawns_same_session_command() {
         let state = crate::state::test_support::make_test_state(false, false);
-        let mut body = create_terminal_body("printf \"restart-$SYSTACEAN_RESTART\\n\"; sleep 1");
-        body.env.insert("SYSTACEAN_RESTART".into(), "one".into());
+        let mut body = create_terminal_body("printf \"restart-$CHAN_TEST_RESTART\\n\"; sleep 1");
+        body.env.insert("CHAN_TEST_RESTART".into(), "one".into());
         let response = api_create_terminal(State(state.clone()), Ok(Json(body))).await;
         let json = response_json(response).await;
         let session = json["session"].as_str().expect("session id").to_string();

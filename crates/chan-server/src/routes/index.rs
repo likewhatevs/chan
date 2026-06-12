@@ -1,4 +1,4 @@
-//! systacean-7: per-workspace semantic-search state + enablement.
+//! Per-workspace semantic-search state + enablement.
 //!
 //! Endpoints under `/api/index/semantic/`:
 //!
@@ -19,7 +19,7 @@
 //!
 //! Companion CLI: `chan index download-model | enable-semantic |
 //! disable-semantic | status` (see `crates/chan/src/main.rs`).
-//! Settings UI lands in `fullstack-a-21` against this contract.
+//! The Settings UI is built against this contract.
 
 #![cfg(feature = "embeddings")]
 

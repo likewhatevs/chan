@@ -59,11 +59,11 @@ pub struct EditorPrefs {
     pub bubble_overlay_mode: BubbleOverlayMode,
     #[serde(default)]
     pub hybrid_surface_themes: HybridSurfaceThemes,
-    /// Auto-rotate the empty-pane carousel introduced in
-    /// `fullstack-35`. Default true so first-launch behaviour matches
-    /// the original implementation; users who want a stationary
-    /// welcome state toggle it off and the choice persists. Pointer-
-    /// hover-pause remains independent of this flag.
+    /// Auto-rotate the empty-pane carousel. Default true so
+    /// first-launch behaviour matches the original implementation;
+    /// users who want a stationary welcome state toggle it off and
+    /// the choice persists. Pointer-hover-pause remains independent
+    /// of this flag.
     #[serde(default = "default_empty_pane_carousel_cycling")]
     pub empty_pane_carousel_cycling: bool,
 }
@@ -177,12 +177,11 @@ pub struct BrowserSidePanes {
 }
 
 impl Default for BrowserSidePanes {
-    /// `fullstack-a-88`: first-boot opens with the docked File
-    /// Browser on the LEFT-hand side instead of spawning an FB
-    /// tab. Replaces the old first-boot behavior @@Alex
-    /// retired 2026-05-22. Users who explicitly toggle the
-    /// left dock off keep their setting (serde reads their
-    /// persisted preferences before this default kicks in).
+    /// First-boot opens with the docked File Browser on the
+    /// LEFT-hand side instead of spawning an FB tab. Users who
+    /// explicitly toggle the left dock off keep their setting
+    /// (serde reads their persisted preferences before this
+    /// default kicks in).
     fn default() -> Self {
         Self {
             left: true,
@@ -202,7 +201,7 @@ pub enum BubbleOverlayMode {
 /// Editor density. `Standard` is the roomier default Google Docs /
 /// Word-style spacing; `Compact` tightens prose + list line-height
 /// for the Google Docs "single" look. The legacy `tight` value that
-/// pre-phase-3 workspaces wrote to preferences.toml deserializes as
+/// older workspaces wrote to preferences.toml deserializes as
 /// `Compact` so existing config files load without manual migration;
 /// the next save flushes the canonical `compact` token to disk.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -251,11 +250,10 @@ mod tests {
 
     #[test]
     fn browser_side_panes_default_is_left_docked() {
-        // `fullstack-a-88`: first-boot opens with the docked FB
-        // on the LEFT-hand side; right stays empty. Replaces
-        // the pre-`-a-88` `Default::default` (both false) which
-        // paired with an App.svelte first-boot openBrowser tab
-        // spawn @@Alex retired.
+        // First-boot opens with the docked FB on the LEFT-hand
+        // side; right stays empty. Replaces the old default
+        // (both false), which paired with a now-retired
+        // App.svelte first-boot openBrowser tab spawn.
         let bsp = BrowserSidePanes::default();
         assert!(bsp.left);
         assert!(!bsp.right);
@@ -343,7 +341,6 @@ mod tests {
 
     #[test]
     fn line_spacing_default_is_standard() {
-        // Phase-3 flipped the default from `tight` to `standard`.
         // The default is observable on a fresh workspace that never wrote
         // a preferences.toml; lock it down so a future refactor that
         // re-orders the variants doesn't silently change behavior.
@@ -382,7 +379,7 @@ mod tests {
 
     #[test]
     fn line_spacing_legacy_tight_loads_as_compact() {
-        // Pre-phase-3 workspaces have `line_spacing = "tight"` on disk.
+        // Older workspaces have `line_spacing = "tight"` on disk.
         // The serde alias lets those files load without manual
         // migration; the next save flushes the canonical `compact`
         // token, so this compatibility shim self-erodes over time.
@@ -408,11 +405,10 @@ mod tests {
 
     #[test]
     fn empty_pane_carousel_cycling_defaults_true_and_round_trips() {
-        // Fresh install defaults to true so the carousel auto-rotates
-        // the way fullstack-35 originally shipped; older preferences
-        // files that predate fullstack-44 don't carry the field, and
-        // serde's default fills it in on load. Re-saving promotes the
-        // default into the file.
+        // Fresh install defaults to true so the carousel
+        // auto-rotates; older preferences files don't carry the
+        // field, and serde's default fills it in on load.
+        // Re-saving promotes the default into the file.
         let prefs = EditorPrefs::default();
         assert!(prefs.empty_pane_carousel_cycling);
 

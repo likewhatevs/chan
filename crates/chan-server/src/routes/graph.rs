@@ -327,7 +327,7 @@ enum GraphNodeView {
         /// chan-workspace carries on every file node.
         #[serde(skip_serializing_if = "Option::is_none")]
         node_kind: Option<&'static str>,
-        /// systacean-22: chan-report's source-code-shaped bucket
+        /// chan-report's source-code-shaped bucket
         /// (`Markdown` / `SourceCode { language }`) from the file's
         /// per-file stats, populated when the path is in
         /// chan-report's tracked-file set (markdown + recognized
@@ -551,8 +551,8 @@ fn is_image_path(rel: &str) -> bool {
 ///      `sub/topic.md`, but when the workspace root is a repo root the
 ///      real file may live at `docs/sub/topic.md`. Joining the prefix to
 ///      the ancestor base `docs` lands on the real file instead of a
-///      false "does not exist" ghost
-///      (GI-3). Tried after the workspace-root + immediate-parent bases so
+///      false "does not exist" ghost.
+///      Tried after the workspace-root + immediate-parent bases so
 ///      it only acts as a fallback and a sibling/root match still wins.
 ///
 /// On miss, returns the percent-decoded target so the ghost node
@@ -821,7 +821,7 @@ fn path_class_for_graph(workspace: &chan_workspace::Workspace, path: &str) -> Op
     chan_workspace::fs_ops::classify_path(workspace.root(), path).ok()
 }
 
-/// systacean-22: should a per-file emit at `path` survive the
+/// Should a per-file emit at `path` survive the
 /// contact-node filter? The graph's job is "who-mentions-whom":
 /// contact-frontmatter files (imported address-book entries)
 /// that are NOT referenced by any resolved `@@mention` add
@@ -830,9 +830,9 @@ fn path_class_for_graph(workspace: &chan_workspace::Workspace, path: &str) -> Op
 /// in `referenced_contact_paths` (built from the mention-edge
 /// resolution pass earlier in `api_graph`).
 ///
-/// Empirical motivation: @@Alex's chan-source seed had 1973
+/// Empirical motivation: a real workspace seed had 1973
 /// imported contact files vs only ~49 unique `@@Handle` strings
-/// in markdown bodies. The pre-`-22` behaviour emitted all 1973
+/// in markdown bodies. The prior behaviour emitted all 1973
 /// contact File nodes; this filter collapses to the referenced
 /// subset (~49).
 fn should_emit_contact_file(
@@ -1211,16 +1211,15 @@ fn merge_language_layer(
     nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
     edges: &mut Vec<GraphEdgeView>,
 ) -> chan_workspace::Result<()> {
-    // Phase-13 round-1 closing (B9): the workspace-graph language
-    // layer now emits Language -> File edges directly so the
-    // language lens (1-hop BFS in GraphPanel) splays out to
-    // EVERY file of that language. The prior shape went through
-    // `build_language_graph`, which aggregates files into per-
-    // directory edges with a depth-bounded top-N rank — fine for
-    // the /api/graph/languages overview surface but it had the
-    // workspace lens showing only the top dir per language
-    // (regression @@Alex flagged: "clicked on Markdown, it is
-    // only showing 1 directory out of MANY"). The Workspace
+    // The workspace-graph language layer emits Language -> File
+    // edges directly so the language lens (1-hop BFS in GraphPanel)
+    // splays out to EVERY file of that language. The prior shape
+    // went through `build_language_graph`, which aggregates files
+    // into per-directory edges with a depth-bounded top-N rank —
+    // fine for the /api/graph/languages overview surface but it had
+    // the workspace lens showing only the top dir per language
+    // (clicking a language surfaced a single directory out of
+    // many). The Workspace
     // filesystem layer already emits each file as a node + the
     // contains-edges that anchor it to the spine, so per-file
     // language edges plug straight into the rendered graph.
@@ -1229,7 +1228,7 @@ fn merge_language_layer(
     // for the overview's directory rollup (with `?depth=N`
     // ranking); only the workspace lens path moves.
     //
-    // @@LaneC fix: the file-NODE set comes from the unified tree
+    // The file-NODE set comes from the unified tree
     // layer (the full File Browser namespace), but the language
     // EDGE set used to come from a scope-restricted report
     // (`report_for_prefix` / `report_for_files`). In directory and
@@ -1461,11 +1460,10 @@ fn build_graph_view(
     let disk_files = workspace_disk_files(&workspace);
     let image_files = image_subset(&disk_files);
     // Directory entries from the same walk. Markdown links whose
-    // target is a directory (e.g. `[notes](../alex/)` from a phase
-    // journal pointing at the lane's `alex/` directory) used to
+    // target is a directory (e.g. `[notes](../notes/)`) used to
     // fall through to ghost emission as `kind: file` missing nodes;
     // we filter them out of the ghost path and drop the corresponding
-    // edges below. See systacean-4.
+    // edges below.
     let disk_dirs = workspace_disk_dirs(&workspace);
     let present_files: std::collections::BTreeSet<&str> = files
         .iter()
@@ -1489,10 +1487,10 @@ fn build_graph_view(
     let contact_paths: std::collections::HashSet<String> =
         contact_rows.iter().map(|c| c.rel_path.clone()).collect();
     // Maps the lowercased mention name (the bit after `@@`) to the
-    // resolved contact file. The basename-stem entry is the legacy
-    // resolver (pre-phase-5: `@@alice` resolves to `Contacts/alice.md`
-    // by filename match). Phase 5 layers each contact's declared
-    // aliases on top: a contact with `aliases: [ali, smith]` adds
+    // resolved contact file. The basename-stem entry is the original
+    // resolver (`@@alice` resolves to `Contacts/alice.md` by
+    // filename match). Each contact's declared aliases layer
+    // on top: a contact with `aliases: [ali, smith]` adds
     // `(ali, path)` and `(smith, path)` entries so `@@ali` resolves
     // the same way `@@alice` does. When two contacts claim the same
     // alias the last writer wins; the picker UI surfaces aliases so
@@ -1545,15 +1543,15 @@ fn build_graph_view(
     // Unresolved mentions keep their `@@name` dst and fall through to
     // the synthesized Mention node below.
     //
-    // systacean-22: track the set of contact file paths that ARE
-    // referenced by some mention edge. This workspaces the per-file
+    // Track the set of contact file paths that ARE
+    // referenced by some mention edge. This drives the per-file
     // emit filter below: contact-frontmatter files that aren't
     // referenced anywhere get skipped from the graph (vs the prior
     // behaviour where every imported contact became a node, which
     // exploded the graph to 1973 contact nodes against ~49 unique
-    // referenced handles on @@Alex's seed). Resolved contacts ARE
-    // kept; unresolved mentions still synthesize a `@@name`
-    // Mention node via the existing mention_set loop.
+    // referenced handles on a real seed workspace). Resolved
+    // contacts ARE kept; unresolved mentions still synthesize a
+    // `@@name` Mention node via the existing mention_set loop.
     let mut referenced_contact_paths: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     for e in all_edges.iter_mut() {
@@ -1577,7 +1575,7 @@ fn build_graph_view(
     // in the graph. Unreferenced files would inflate the node count
     // without adding any edges, which is purely visual noise.
     //
-    // `referenced_disk_files` covers a phase-8 bug repro: a markdown
+    // `referenced_disk_files` covers the non-markdown case: a markdown
     // link to LICENSE / a .rs source / a shell script lands on a real
     // file node here instead of falling through to ghost_set as a
     // "missing" target.
@@ -1605,12 +1603,12 @@ fn build_graph_view(
     // nor on disk produces no node (and its edge is dropped below), so
     // graphing chan's own source shows no ghost clutter.
     //
-    // systacean-22 (filter): contact-frontmatter files that AREN'T
+    // Contact-frontmatter files that AREN'T
     // referenced by any `@@mention` resolution are skipped. The
     // graph view's job is "who-mentions-whom"; an imported contact
     // never mentioned anywhere contributes nothing to that picture.
-    // Before the filter @@Alex's seed surfaced 1973 contact nodes;
-    // after, only the ~49 referenced ones.
+    // Before the filter a real seed workspace surfaced 1973 contact
+    // nodes; after, only the ~49 referenced ones.
     //
     // The first node batch intentionally skips chan-report buckets
     // so streaming callers can draw the semantic graph before the
@@ -1721,9 +1719,9 @@ fn build_graph_view(
         );
     }
     // No ghost nodes. We used to synthesize a muted `File { missing:
-    // true }` per unresolved link target; @@Host asked that graphing
-    // chan's own source show no ghost nodes (they were pure clutter,
-    // never navigable). `ghost_set` now ONLY drives the edge drop in
+    // true }` per unresolved link target, but on a big tree (e.g.
+    // graphing a source checkout) they were pure clutter, never
+    // navigable. `ghost_set` now ONLY drives the edge drop in
     // the filter below, so a broken link contributes neither a node nor
     // a dangling edge. (Indexed files that vanished from disk still
     // render as `missing` via the `files` loop above; that is a stale-
@@ -1753,7 +1751,7 @@ fn build_graph_view(
             if e.src.is_empty() || e.dst.is_empty() {
                 return false;
             }
-            // systacean-4: drop link edges whose dst is a directory.
+            // Drop link edges whose dst is a directory.
             // They have no node to point at after the ghost-set
             // guard above.
             if matches!(e.kind, EdgeKind::Link) && disk_dirs.contains(&e.dst) {
@@ -2170,7 +2168,7 @@ mod tests {
 
     #[test]
     fn link_to_non_markdown_disk_file_resolves_to_real_file() {
-        // Regression for systacean-2: a markdown file linking to a
+        // Regression: a markdown file linking to a
         // non-graph regular file (LICENSE, src/lib.rs, ...) was being
         // classified as a broken link, with a synthesized ghost
         // File { missing: true } overriding the FS layer's real entry.
@@ -2223,7 +2221,7 @@ mod tests {
 
     #[test]
     fn workspace_disk_dirs_includes_directory_entries() {
-        // Pin the systacean-4 helper contract: every regular directory
+        // Pin the helper contract: every regular directory
         // the user might link to has to show up here so api_graph can
         // recognise `[label](some/dir/)` targets and keep them out of
         // ghost emission. The companion `workspace_disk_files` set is
@@ -2252,8 +2250,8 @@ mod tests {
 
     #[test]
     fn link_to_directory_does_not_synthesize_ghost_file_node() {
-        // Regression for systacean-4: a markdown link whose target is
-        // a directory (e.g. `[notes](../alex/)` from a phase journal)
+        // Regression: a markdown link whose target is
+        // a directory (e.g. `[notes](../notes/)`)
         // used to fall through `file_set` (graph_files filters to
         // markdown / contact; disk_files filters `!is_dir`) and land
         // in ghost_set as `File { missing: true }`. After the fix,
@@ -2283,9 +2281,9 @@ mod tests {
         let disk_files = workspace_disk_files(&workspace);
         let disk_dirs = workspace_disk_dirs(&workspace);
         assert!(disk_dirs.contains("some-dir"), "got {disk_dirs:?}");
-        // The link target is NOT a file on disk (it's the directory)
-        // Pinning this rules out the systacean-2 path accidentally
-        // covering the symptom.
+        // The link target is NOT a file on disk (it's the directory).
+        // Pinning this rules out the referenced-disk-file path
+        // accidentally covering the symptom.
         assert!(!disk_files.contains("some-dir"));
 
         // Simulate the api_graph ghost-set check: file_set is
@@ -2338,7 +2336,7 @@ mod tests {
 
     #[test]
     fn contact_dedup_end_to_end_drops_unreferenced_imported_contacts() {
-        // systacean-22 end-to-end: fixture workspace with 3 contact-
+        // End-to-end: fixture workspace with 3 contact-
         // frontmatter files (alice + bob + charlie) and one
         // markdown body mentioning only `@@alice`. Replays the
         // api_graph filter pipeline (workspace.contacts() →
@@ -2538,10 +2536,10 @@ mod tests {
 
     #[test]
     fn unresolved_link_target_produces_no_ghost_node_or_edge() {
-        // @@Host (phase-15 round-3): graphing chan's own source should
-        // show no ghost nodes. A markdown link whose target exists
-        // neither in the index nor on disk must contribute NEITHER a
-        // `File { missing: true }` node NOR a dangling edge.
+        // The graph shows no ghost nodes. A markdown link whose
+        // target exists neither in the index nor on disk must
+        // contribute NEITHER a `File { missing: true }` node NOR a
+        // dangling edge.
         let (_cfg, _root, workspace) = open_workspace();
         workspace
             .write_text(
@@ -2678,10 +2676,10 @@ mod tests {
 
     #[test]
     fn should_emit_contact_file_drops_unreferenced_keeps_referenced_and_non_contacts() {
-        // systacean-22: the contact-file emit filter pins the
+        // The contact-file emit filter pins the
         // graph view to "who-mentions-whom". Pre-fix behaviour
         // emitted every imported contact File node regardless of
-        // whether it was referenced; @@Alex's chan-source seed had
+        // whether it was referenced; a real seed workspace had
         // 1973 contact files vs ~49 unique @@Handle strings in
         // markdown bodies. After the fix, only referenced contacts
         // survive.
@@ -2761,15 +2759,13 @@ mod tests {
 
     #[test]
     fn merged_graph_language_layer_emits_language_to_file_edges_for_workspace_lens() {
-        // Phase-13 round-1 closing (B9): the workspace-graph
-        // language layer must emit one Language -> File edge per
-        // file of the language so the GraphPanel lens (1-hop BFS
-        // seeded on `language:<lang>`) renders the bubble plus
-        // every file. The prior shape went via
-        // `build_language_graph` which collapsed files into
-        // top-N per-directory edges - that's what reproduced as
-        // "Markdown lens shows only 1 directory" in @@Alex's
-        // smoke.
+        // The workspace-graph language layer must emit one
+        // Language -> File edge per file of the language so the
+        // GraphPanel lens (1-hop BFS seeded on `language:<lang>`)
+        // renders the bubble plus every file. The prior shape went
+        // via `build_language_graph` which collapsed files into
+        // top-N per-directory edges, which left the language lens
+        // showing a single directory instead of every file.
         let (_cfg, root, workspace) = open_workspace();
         put(root.path(), "notes/intro.md", b"# Intro\n");
         put(root.path(), "notes/deep/sub.md", b"# Sub\n");
@@ -2994,28 +2990,29 @@ mod tests {
 
     #[test]
     fn resolve_link_dst_partial_prefix_wikilink_lands_on_ancestor_file() {
-        // GI-3: a workspace-rooted wiki-link `[[phase-2/frontend-3.md]]`
-        // authored in a doc deep under the workspace (repo root workspace) is
-        // stored verbatim as `phase-2/frontend-3.md`. The real file is
-        // `docs/journals/phase-2/frontend-3.md`. Neither the workspace-root
-        // candidate (`phase-2/frontend-3.md`) nor the immediate-parent
-        // join (`docs/journals/phase-2/phase-2/frontend-3.md`) exists;
-        // the ancestor base `docs/journals` rescues it. Without the
+        // A wiki-link `[[sprint/notes-3.md]]` authored in a doc deep
+        // under the workspace (repo-root workspace) is stored
+        // workspace-rooted, verbatim as `sprint/notes-3.md`. The real
+        // file is nested deeper, at `docs/journals/sprint/notes-3.md`.
+        // Neither the workspace-root candidate (`sprint/notes-3.md`)
+        // nor the immediate-parent join
+        // (`docs/journals/sprint/sprint/notes-3.md`) exists; the
+        // ancestor base `docs/journals` rescues it. Without the
         // ancestor walk this rendered a false "file does not exist"
         // ghost even though the file is right there.
         let files: std::collections::BTreeSet<&str> = [
-            "docs/journals/phase-2/frontend-3.md",
-            "docs/journals/phase-2/journal.md",
+            "docs/journals/sprint/notes-3.md",
+            "docs/journals/sprint/journal.md",
         ]
         .into_iter()
         .collect();
         assert_eq!(
             resolve_link_dst(
-                "docs/journals/phase-2/journal.md",
-                "phase-2/frontend-3.md",
+                "docs/journals/sprint/journal.md",
+                "sprint/notes-3.md",
                 &files,
             ),
-            "docs/journals/phase-2/frontend-3.md",
+            "docs/journals/sprint/notes-3.md",
         );
     }
 

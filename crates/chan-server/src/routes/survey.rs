@@ -1,14 +1,13 @@
-//! Survey reply route + the `[F]` followup-file generator (the @@LaneC
+//! Survey reply route + the `[F]` followup-file generator (the SPA-reply
 //! side of `cs terminal survey`).
 //!
 //! A `cs terminal survey` call blocks in the control socket on a oneshot
-//! parked in the [`crate::survey::SurveyBus`] (D's side) keyed by a
+//! parked in the [`crate::survey::SurveyBus`] keyed by a
 //! server-minted `survey_id`. The SPA renders the overlay and, when the user
 //! answers, POSTs a [`SurveyReplyRequest`] here. This route turns that into a
 //! [`chan_shell::SurveyReply`] and calls [`SurveyBus::complete_survey`], which
 //! fires the oneshot and unblocks the CLI. Two halves of one stable
-//! `complete_survey` API keep the C<->D seam off a shared file
-//! (round-3-survey-contract.md + its 2026-06-01 followup amendment).
+//! `complete_survey` API keep the bus and the reply route decoupled.
 //!
 //! On `[F]` the SPA cannot know the minted followup path, so it echoes back
 //! the `followup { dir, from, to }` context the survey carried; THIS route
@@ -117,7 +116,7 @@ pub async fn api_survey_reply(
                 Err(join) => return err(StatusCode::INTERNAL_SERVER_ERROR, join.to_string()),
             }
         }
-        // Part C: [F] without team context is a plain deferral, no file.
+        // [F] without team context is a plain deferral, no file.
         SurveyReplyRequest::Followup {
             survey_id,
             followup: None,
@@ -270,7 +269,7 @@ mod tests {
 
     #[test]
     fn sanitize_strips_at_prefix_and_unsafe_chars() {
-        assert_eq!(sanitize_handle("@@LaneC"), "LaneC");
+        assert_eq!(sanitize_handle("@@Alice"), "Alice");
         assert_eq!(sanitize_handle("@@Host"), "Host");
         assert_eq!(sanitize_handle("a b/c"), "a-b-c");
         assert_eq!(sanitize_handle("@@"), "x");
@@ -283,31 +282,31 @@ mod tests {
         let p1 = create_followup_file(
             &workspace,
             "new-team-1",
-            "@@LaneC",
+            "@@Alice",
             "@@Host",
             Some("Pick a search backend"),
             "Should search use BM25 or semantic?",
         )
         .unwrap();
-        assert_eq!(p1, "new-team-1/followups/followup-LaneC-Host-1.md");
+        assert_eq!(p1, "new-team-1/followups/followup-Alice-Host-1.md");
         assert!(workspace.exists(&p1));
 
         // Same from/to pair increments n; the dir already exists.
         let p2 = create_followup_file(
             &workspace,
             "new-team-1",
-            "@@LaneC",
+            "@@Alice",
             "@@Host",
             None,
             "Second question",
         )
         .unwrap();
-        assert_eq!(p2, "new-team-1/followups/followup-LaneC-Host-2.md");
+        assert_eq!(p2, "new-team-1/followups/followup-Alice-Host-2.md");
 
         // A different from/to pair restarts at 1.
         let p3 =
-            create_followup_file(&workspace, "new-team-1", "@@LaneB", "@@Host", None, "x").unwrap();
-        assert_eq!(p3, "new-team-1/followups/followup-LaneB-Host-1.md");
+            create_followup_file(&workspace, "new-team-1", "@@Bob", "@@Host", None, "x").unwrap();
+        assert_eq!(p3, "new-team-1/followups/followup-Bob-Host-1.md");
     }
 
     #[test]
@@ -316,7 +315,7 @@ mod tests {
         let path = create_followup_file(
             &workspace,
             "team",
-            "@@LaneC",
+            "@@Alice",
             "@@Host",
             Some("Backend choice"),
             "BM25 or semantic?",
@@ -325,7 +324,7 @@ mod tests {
         let text = workspace.read_text(&path).unwrap();
 
         assert!(text.contains("# Follow up: Backend choice"));
-        assert!(text.contains("From: @@LaneC"));
+        assert!(text.contains("From: @@Alice"));
         assert!(text.contains("To: @@Host"));
         assert!(text.contains("Agents: this is a follow up, not ready; check again later."));
         assert!(text.contains("## Original prompt"));
@@ -369,7 +368,7 @@ mod tests {
 
     #[test]
     fn followup_reply_request_deserializes_with_null_context() {
-        // Part C: [F] is standard on every survey; a survey raised without
+        // [F] is standard on every survey; a survey raised without
         // followup context sends `followup: null` and the route treats it as a
         // plain deferral (no file).
         let json = r#"{"surveyId":"survey-9","kind":"followup",
@@ -392,7 +391,7 @@ mod tests {
 
     #[test]
     fn dismissed_reply_request_deserializes() {
-        // Part C: a dismiss carries only the survey id (no option, no file).
+        // A dismiss carries only the survey id (no option, no file).
         let json = r#"{"surveyId":"survey-4","kind":"dismissed"}"#;
         let req: SurveyReplyRequest = serde_json::from_str(json).unwrap();
         match req {
@@ -404,7 +403,7 @@ mod tests {
     #[test]
     fn followup_reply_request_deserializes_with_context() {
         let json = r#"{"surveyId":"survey-9","kind":"followup",
-            "followup":{"dir":"new-team-1","from":"@@LaneC","to":"@@Host"},
+            "followup":{"dir":"new-team-1","from":"@@Alice","to":"@@Host"},
             "title":"T","bodyMarkdown":"the question"}"#;
         let req: SurveyReplyRequest = serde_json::from_str(json).unwrap();
         match req {
@@ -417,7 +416,7 @@ mod tests {
                 assert_eq!(survey_id, "survey-9");
                 let followup = followup.expect("context present");
                 assert_eq!(followup.dir, "new-team-1");
-                assert_eq!(followup.from, "@@LaneC");
+                assert_eq!(followup.from, "@@Alice");
                 assert_eq!(followup.to, "@@Host");
                 assert_eq!(title.as_deref(), Some("T"));
                 assert_eq!(body_markdown, "the question");

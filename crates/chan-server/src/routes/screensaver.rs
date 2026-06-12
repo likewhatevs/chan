@@ -1,4 +1,4 @@
-//! systacean-40: per-workspace screensaver overlay state.
+//! Per-workspace screensaver overlay state.
 //!
 //! Five endpoints under `/api/screensaver/`:
 //!
@@ -10,7 +10,7 @@
 //!   update.
 //! * `POST /pin` body `{ hash: base64 }` - set the PIN hash.
 //!   Server stores the base64-decoded bytes verbatim. PBKDF2 is
-//!   client-side (`-a-77`).
+//!   client-side.
 //! * `DELETE /pin` - clear the PIN.
 //! * `POST /verify` body `{ hash: base64 }` - returns
 //!   `{ verified: bool }` from a byte-equality compare against
@@ -53,7 +53,7 @@ pub struct PatchPayload {
 #[derive(Debug, Deserialize)]
 pub struct PinPayload {
     /// Base64-encoded PIN hash bytes. SPA does PBKDF2 client-side
-    /// per `-a-77` + posts the digest here.
+    /// + posts the digest here.
     pub hash: String,
 }
 
@@ -333,7 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn screensaver_state_default_is_off_300s_no_pin() {
-        // systacean-40: a fresh workspace reports the documented
+        // A fresh workspace reports the documented
         // defaults: enabled=false, timeout=300, pin_set=false.
         let app = route_test_app();
         let router = crate::router(app.state);
@@ -347,7 +347,7 @@ mod tests {
 
     #[tokio::test]
     async fn screensaver_patch_updates_enabled_and_timeout() {
-        // systacean-40: PATCH accepts partial body, applies
+        // PATCH accepts partial body, applies
         // present fields, returns post-update state.
         let app = route_test_app();
         let router = crate::router(app.state);
@@ -413,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn screensaver_patch_rejects_timeout_outside_bounds() {
-        // fullstack-a-99: API boundary rejects values outside
+        // The API boundary rejects values outside
         // the UI-supported [10s, 3600s] range.
         let app = route_test_app();
         let router = crate::router(app.state);
@@ -430,7 +430,7 @@ mod tests {
 
     #[tokio::test]
     async fn screensaver_pin_set_verify_clear_round_trip() {
-        // systacean-40: full PIN lifecycle - set, verify (positive
+        // Full PIN lifecycle - set, verify (positive
         // + negative), clear, verify (always false). PIN hash
         // never appears in any response body.
         let app = route_test_app();
@@ -494,7 +494,7 @@ mod tests {
 
     #[tokio::test]
     async fn screensaver_set_pin_rejects_invalid_base64() {
-        // systacean-40: invalid base64 input returns 400.
+        // Invalid base64 input returns 400.
         let app = route_test_app();
         let router = crate::router(app.state);
         let (status, _) = request(
@@ -509,7 +509,7 @@ mod tests {
 
     #[tokio::test]
     async fn screensaver_endpoints_require_auth() {
-        // systacean-40: parity with other settings endpoints -
+        // Parity with other settings endpoints -
         // all routes are gated by the per-launch token.
         let app = route_test_app();
         let router = crate::router(app.state);

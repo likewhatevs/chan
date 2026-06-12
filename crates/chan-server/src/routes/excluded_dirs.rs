@@ -1,7 +1,7 @@
 //! `GET` / `PUT /api/index/excluded-dirs`: the per-workspace directory
-//! blocklist (round-1 wave-3, @@Host).
+//! blocklist.
 //!
-//! Hybrid model (option C): the global machine-wide baseline
+//! Hybrid model: the global machine-wide baseline
 //! (`Registry::index_excluded_dirs`) is READ-ONLY here; each workspace adds
 //! its own `excluded_dirs` (in the per-workspace `IndexConfig`), and the walk
 //! the index + graph rebuild use is `effective = union(defaults, additions)`.

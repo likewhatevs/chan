@@ -5,7 +5,7 @@
 //! frames from the `ScopeRegistry`.
 //!
 //! Client -> server: `sub` / `unsub` frames that add/drop this socket's
-//! per-directory scope subscriptions (phase-11 Slice C). The socket
+//! per-directory scope subscriptions. The socket
 //! registers with the `ScopeRegistry` on connect and unregisters on any
 //! exit path so a disconnect cannot leak scopes.
 

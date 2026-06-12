@@ -29,18 +29,17 @@ use crate::state::AppState;
 #[folder = "../../web/dist/"]
 struct WebAssets;
 
-/// Server-side resource bundle for runtime fonts (`fullstack-b-12`).
-/// Files at `crates/chan-server/resources/fonts/` are baked in via
+/// Server-side resource bundle for runtime fonts. Files at
+/// `crates/chan-server/resources/fonts/` are baked in via
 /// rust-embed and served under `/static/fonts/<name>`.
 ///
-/// `fullstack-b-30` slice a: gated behind the `embed-font` cargo
-/// feature (default off). Default `cargo build` produces a lean
-/// binary that uses per-OS native mono fonts. `cargo build
-/// --features embed-font` re-enables the bundle for power-user /
-/// offline-install builds. When the feature is off, `serve_font`
-/// falls back to reading from
+/// Gated behind the `embed-font` cargo feature (default off).
+/// Default `cargo build` produces a lean binary that uses per-OS
+/// native mono fonts. `cargo build --features embed-font`
+/// re-enables the bundle for power-user / offline-install builds.
+/// When the feature is off, `serve_font` falls back to reading from
 /// `<user-config>/chan/fonts/<name>` so a Settings-driven download
-/// (slice b) can persist the woff2 there without rebuilding.
+/// can persist the woff2 there without rebuilding.
 #[cfg(feature = "embed-font")]
 #[derive(RustEmbed)]
 #[folder = "resources/fonts/"]
@@ -187,8 +186,8 @@ pub fn content_type_for(path: &str) -> &'static str {
     }
 }
 
-/// Serve a bundled font asset under `/static/fonts/<name>`
-/// (`fullstack-b-12`). Path traversal is impossible because the
+/// Serve a bundled font asset under `/static/fonts/<name>`.
+/// Path traversal is impossible because the
 /// inner `name` is matched as a single segment by axum's `:name`
 /// pattern (no `/` allowed); we still reject anything that isn't a
 /// known embed entry rather than papering over with a generic 200.
@@ -196,10 +195,10 @@ pub fn content_type_for(path: &str) -> &'static str {
 /// policy: the font filename is stable per release and the bytes
 /// for that filename never change.
 pub async fn serve_font(Path(name): Path<String>) -> Response {
-    // `fullstack-b-30` slice a: try the rust-embed bundle first
+    // Try the rust-embed bundle first
     // (only present when the `embed-font` feature is on), then
     // fall back to a user-config-dir copy. The fallback lets the
-    // Settings-driven download (slice b) persist a woff2 to a
+    // Settings-driven download persist a woff2 to a
     // known location without rebuilding the binary. Path
     // traversal stays impossible because axum's `:name` matches a
     // single segment; we additionally restrict the filesystem
@@ -328,12 +327,12 @@ mod tests {
     #[cfg(feature = "embed-font")]
     #[test]
     fn font_bundle_includes_source_code_pro_and_ofl_notice() {
-        // `fullstack-b-12`: the binary must ship Source Code Pro and
+        // The binary must ship Source Code Pro and
         // its OFL license notice. Anyone who removes either file from
         // the resources directory must explicitly update this test +
         // the SettingsPanel attribution.
         //
-        // `fullstack-b-30` slice a: gated on `embed-font` because the
+        // Gated on `embed-font` because the
         // default build no longer ships the font (uses per-OS native
         // mono via the SPA's fontFamily fallback chain). The test
         // still runs on `--features embed-font` builds.
@@ -368,7 +367,7 @@ mod tests {
         // directly. The `Path<String>` extractor wants the matched
         // segment; we feed the same value axum would.
         //
-        // `fullstack-b-30` slice a: gated on `embed-font` since the
+        // Gated on `embed-font` since the
         // default build serves from user-config dir instead.
         let response = serve_font(Path("SourceCodePro-Regular.otf.woff2".into())).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -393,7 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn serve_font_rejects_path_traversal_attempts() {
-        // `fullstack-b-30` slice a: the filesystem-fallback path
+        // The filesystem-fallback path
         // could otherwise read arbitrary files via `..`-style names
         // (axum's `:name` match shouldn't allow `/` but
         // belt-and-braces). Reject `/`, `\`, and leading-dot names.

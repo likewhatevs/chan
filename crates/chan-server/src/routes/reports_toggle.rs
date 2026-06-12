@@ -1,4 +1,4 @@
-//! systacean-39: per-workspace reports feature toggle.
+//! Per-workspace reports feature toggle.
 //!
 //! Three endpoints under `/api/index/reports/`:
 //!
@@ -8,8 +8,8 @@
 //! * `POST /disable` - flip to false. Idempotent at the
 //!   `set_reports_enabled` layer.
 //!
-//! Unblocks `fullstack-a-76` (SPA Settings overlay's Features
-//! section). Mirrors the semantic-toggle shape from
+//! Consumed by the SPA Settings overlay's Features
+//! section. Mirrors the semantic-toggle shape from
 //! `routes/index.rs` BUT is NOT gated on the `embeddings` feature:
 //! reports are part of the BM25-only baseline.
 //!
@@ -205,7 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn reports_state_endpoint_requires_auth() {
-        // systacean-39: parity with the semantic endpoints -
+        // Parity with the semantic endpoints -
         // /state is read-only but still gated by the per-launch
         // token. Anonymous request gets 401.
         let app = route_test_app();
@@ -216,13 +216,13 @@ mod tests {
 
     #[tokio::test]
     async fn reports_round_trip_state_enable_disable() {
-        // systacean-39: full round-trip - initial state, flip
+        // Full round-trip - initial state, flip
         // enable, re-check, flip disable, re-check. Mirrors the
-        // shape FullStackA's `-a-76` Settings UI will exercise.
+        // shape the Settings UI exercises.
         let app = route_test_app();
         let router = crate::router(app.state);
 
-        // Initial state: reports defaults ON (round-1 wave-3).
+        // Initial state: reports defaults ON.
         let (status, body) = fetch_state(&router, true).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["enabled"], true);
@@ -249,10 +249,10 @@ mod tests {
 
     #[tokio::test]
     async fn reports_disable_is_idempotent_when_already_off() {
-        // systacean-39: chan-workspace's set_reports_enabled(false)
+        // chan-workspace's set_reports_enabled(false)
         // on an already-off workspace is a no-op + returns Ok. The
         // route must surface 200 + the current state, not error. Reports
-        // defaults ON now (round-1 wave-3), so the first disable turns it off;
+        // default ON, so the first disable turns it off;
         // the SECOND disable is the already-off idempotent case under test.
         let app = route_test_app();
         let router = crate::router(app.state);

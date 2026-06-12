@@ -745,7 +745,7 @@ mod tests {
         );
     }
 
-    /// Round-1 closing-11 (F2 fix-up 2): the initial Building
+    /// The initial Building
     /// window between `IndexStatus::Building { file: String::new(), .. }`
     /// (indexer.rs:310-314) and the first per-file event also
     /// signals "indexing in progress" - treat any `current_file`

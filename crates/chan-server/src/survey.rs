@@ -3,12 +3,10 @@
 //! A `cs terminal survey` call BLOCKS in the control socket until the user
 //! answers in the SPA. The control handler parks a oneshot here keyed by a
 //! server-minted `survey_id` and awaits it; the SPA's reply route
-//! (`POST /api/survey/reply`, owned by @@LaneC) deserializes the
-//! [`SurveyReply`] and calls [`SurveyBus::complete_survey`], which fires the
-//! oneshot and unblocks the handler. Keeping the bus here (D's side) and the
-//! reply route there (C's side) on the two ends of one stable
-//! `complete_survey` API is what keeps the C<->D seam from touching one file
-//! (round-3-survey-contract.md).
+//! (`POST /api/survey/reply`) deserializes the [`SurveyReply`] and calls
+//! [`SurveyBus::complete_survey`], which fires the oneshot and unblocks the
+//! handler. Keeping the bus and the reply route on the two ends of one
+//! stable `complete_survey` API keeps the seam between them narrow.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

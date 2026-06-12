@@ -63,13 +63,13 @@ impl WatchCallback for WatchBroadcast {
             return;
         }
         // Legacy global frame for the editor's open-document
-        // external-edit toast (D2: kept alongside the scoped `fs`
+        // external-edit toast (kept alongside the scoped `fs`
         // frame). Fans out to every /ws socket regardless of scope.
         let frame = serde_json::json!({"type": "watch", "event": event});
         if let Ok(s) = serde_json::to_string(&frame) {
             let _ = self.tx.send(s);
         }
-        // Scoped fan-out (D1(b)): derive per-directory `fs` frames
+        // Scoped fan-out: derive per-directory `fs` frames
         // from this single recursive feed by first-degree directory
         // match, and deliver them only to the sockets subscribed to
         // the matching scope. No extra OS watchers are attached.
@@ -98,16 +98,15 @@ fn event_is_self_echo(event: &WatchEvent, sw: &SelfWrites) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SubId(u64);
 
-/// Per-directory scoped watcher pub/sub registry (phase-11 Slice C,
-/// Decision D1(b)).
+/// Per-directory scoped watcher pub/sub registry.
 ///
 /// There is one recursive OS watcher on the workspace (it feeds the
 /// indexer); this registry does NOT attach per-directory OS watchers.
 /// Instead it derives per-directory `fs` frames from that single feed
 /// by first-degree directory match and delivers each frame only to the
-/// sockets subscribed to the matching scope. "Tear down the watcher"
-/// from the round-1 wording maps here to "drop the scope's bookkeeping
-/// and stop emitting frames for it" — the lifecycle and the
+/// sockets subscribed to the matching scope. "Tearing down the
+/// watcher" maps here to "drop the scope's bookkeeping and stop
+/// emitting frames for it" — the lifecycle and the
 /// sub1/sub2/unsub1/unsub2 refcount are identical to the real-OS-watcher
 /// design, just without the inotify-watch-count pressure on big trees.
 ///
@@ -222,8 +221,8 @@ impl ScopeRegistry {
 
     /// True when `dir` currently has a live scope entry. The "watcher
     /// exists" predicate the sub1/sub2/unsub1/unsub2 test asserts on;
-    /// under D1(b) the scope entry IS the watcher. Test-gated for the
-    /// same reason as `subscriber_count`.
+    /// in this derived-frame design the scope entry IS the watcher.
+    /// Test-gated for the same reason as `subscriber_count`.
     #[cfg(test)]
     pub fn scope_exists(&self, dir: &str) -> bool {
         let dir = normalize_dir(dir);
@@ -445,7 +444,7 @@ mod tests {
         assert_eq!(normalize_dir("/"), "");
     }
 
-    // The required hardening matrix from the spine contract. Under D1(b)
+    // The required hardening matrix from the spine contract. In this design
     // the "watcher" for a directory IS its scope entry in the registry, so
     // "the watcher exists / is torn down" is asserted via `scope_exists`,
     // and refcount stability across sub2/unsub1 via `subscriber_count`.

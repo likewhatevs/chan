@@ -126,12 +126,12 @@ fn member_agent(m: &Member) -> Option<&'static str> {
 /// the chord is the agent's DEFAULT template, overridable at runtime):
 /// claude uses the xterm
 /// modifyOtherKeys Cmd+Enter CSI; gemini submits on a bare CR; codex also
-/// ends in CR but its text must be bracketed-paste wrapped first (B8 -
-/// codex coalesces a single `text + CR` write into a paste burst whose
+/// ends in CR but its text must be bracketed-paste wrapped first
+/// (codex coalesces a single `text + CR` write into a paste burst whose
 /// trailing CR never submits), so a bare CR alone does NOT submit codex.
 fn submit_chord_literal(agent: Option<&str>) -> &'static str {
     match agent {
-        // B8: codex needs its text wrapped in bracketed paste before the CR.
+        // codex needs its text wrapped in bracketed paste before the CR.
         Some("codex") => "bracketed-paste + \\r",
         Some("gemini") => "\\r",
         // claude is the default chord for any agent member; a shell member
@@ -355,7 +355,7 @@ pub(crate) fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> Stri
     );
     out.push_str(
         "Task and followup filenames use the bare name (handle without the @@),\n\
-         e.g. tasks/task-Lead-LaneA-1.md.\n",
+         e.g. tasks/task-Lead-Alice-1.md.\n",
     );
 
     out
@@ -703,7 +703,7 @@ mod tests {
                     position: None,
                 },
                 Member {
-                    handle: "@@LaneA".into(),
+                    handle: "@@Alice".into(),
                     command: "codex".into(),
                     env: std::collections::BTreeMap::new(),
                     is_lead: false,
@@ -834,7 +834,7 @@ mod tests {
         );
         assert!(
             bootstrap.contains("--submit=codex (chord bracketed-paste + \\r)"),
-            "codex chord line reflects the B8 bracketed-paste wrap"
+            "codex chord line reflects the bracketed-paste wrap"
         );
         // Still pure ASCII, no em dashes.
         assert!(bootstrap.is_ascii(), "bootstrap must be pure ASCII");
@@ -932,7 +932,7 @@ mod tests {
         assert!(script.contains("## Roster"), "generated bootstrap body");
         // Lead spawns before the worker.
         let lead_pos = script.find("--tab-name='@@Lead'").expect("lead spawn");
-        let worker_pos = script.find("--tab-name='@@LaneA'").expect("worker spawn");
+        let worker_pos = script.find("--tab-name='@@Alice'").expect("worker spawn");
         assert!(lead_pos < worker_pos, "lead spawns before the worker");
         // Each agent is spawned into the team group, its command launched,
         // and poked with its own submit chord.
@@ -992,7 +992,7 @@ mod tests {
             "lead-specific guidance"
         );
         let worker_prompt = identity_prompt(&config, "new-team-1", &config.members[1]);
-        assert!(worker_prompt.contains("You are @@LaneA"));
+        assert!(worker_prompt.contains("You are @@Alice"));
         assert!(
             worker_prompt.contains("wait for @@Lead"),
             "worker waits for the lead"
@@ -1015,13 +1015,13 @@ mod tests {
 
     #[test]
     fn lead_first_order_puts_the_lead_first() {
-        // sample_config has @@LaneA (worker) first by index but @@Lead is the
-        // lead, so the lead must come out front.
+        // After the reverse below, @@Alice (worker) is first by index but
+        // @@Lead is the lead, so the lead must come out front.
         let mut config = sample_config();
         config.members.reverse(); // worker now at index 0, lead at index 1
         let order = lead_first_order(&config);
         assert_eq!(order[0].handle, "@@Lead", "lead first regardless of index");
-        assert_eq!(order[1].handle, "@@LaneA");
+        assert_eq!(order[1].handle, "@@Alice");
         assert_eq!(order.len(), config.members.len());
     }
 

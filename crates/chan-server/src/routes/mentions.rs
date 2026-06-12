@@ -1,7 +1,7 @@
-//! systacean-35: `GET /api/mentions?q=<prefix>&limit=<int>`.
+//! `GET /api/mentions?q=<prefix>&limit=<int>`.
 //!
 //! Returns prefix-matched mention handles from the per-workspace
-//! graph DB. Unblocks `-a-70`'s editor mention completion gap
+//! graph DB for the editor's mention completion
 //! (the editor previously queried only the contact list; this
 //! exposes the broader corpus of `@@<Name>` references across
 //! all indexed markdown).
@@ -37,8 +37,8 @@ pub struct MentionsQuery {
 
 #[derive(Serialize)]
 pub struct MentionItem {
-    /// Mention label WITHOUT the `@@` sigil (e.g. `"Architect"`,
-    /// `"Alex"`). The SPA reads this directly to populate the
+    /// Mention label WITHOUT the `@@` sigil (e.g. `"Alice"`,
+    /// `"Bob"`). The SPA reads this directly to populate the
     /// editor's mention-completion dropdown.
     pub label: String,
 }
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn limit_clamps_to_bounds() {
-        // systacean-35: client-supplied limit gets clamped to
+        // Client-supplied limit gets clamped to
         // `1..=200`. A `0` would otherwise return an empty
         // (useless) result; a giant N would let one request
         // pull the entire mention corpus.

@@ -94,7 +94,7 @@ pub async fn api_get_contacts(
                 // secondary line and so the caller can confirm an
                 // email-substring match. Aliases ride along so the picker
                 // can show `@@<alias>` shortcuts and so the editor's
-                // `@@` trigger (phase 5) can pick the alias to insert.
+                // `@@` trigger can pick the alias to insert.
                 let label = c.title.unwrap_or(c.basename);
                 serde_json::json!({
                     "path": c.rel_path,

@@ -425,11 +425,11 @@ impl Registry {
         if window_id.is_some() {
             opts.window_id = window_id;
         }
-        // `fullstack-a-79` slice 5 follow-up: the team-bootstrap
-        // orchestrator overrides command + env to flip the host's
-        // pre-existing PTY into the lead's session (e.g. host's
-        // shell -> lead's `claude` command). When None, restart
-        // preserves the original spawn command/env.
+        // The team-bootstrap orchestrator overrides command + env
+        // to flip the host's pre-existing PTY into the lead's
+        // session (e.g. host's shell -> lead's `claude` command).
+        // When None, restart preserves the original spawn
+        // command/env.
         if let Some(cmd) = command {
             opts.command = Some(cmd);
         }
@@ -1016,8 +1016,8 @@ impl Session {
             #[cfg(windows)]
             cmd.env("USERPROFILE", home);
         }
-        // `fullstack-b-11`: spawn-time TERM comes from settings. The
-        // value lives in `TerminalConfig::default_term`; the SPA can
+        // Spawn-time TERM comes from settings. The value lives in
+        // `TerminalConfig::default_term`; the SPA can
         // override the default via the Settings panel, and the change
         // takes effect on newly-spawned terminals (existing PTYs keep
         // whatever TERM they were started with).
@@ -1944,7 +1944,7 @@ mod tests {
         let handle = registry
             .create(CreateOptions {
                 size: test_size(),
-                tab_name: Some("@@LaneB".into()),
+                tab_name: Some("@@Alice".into()),
                 tab_group: None,
                 window_id: None,
                 mcp_env: true,
@@ -1955,7 +1955,7 @@ mod tests {
             .unwrap();
         // One session owns the tab name; a different name matches none. The
         // count is what the control socket's single-match policy gates on.
-        assert_eq!(registry.scrollback_matching("@@LaneB").len(), 1);
+        assert_eq!(registry.scrollback_matching("@@Alice").len(), 1);
         assert!(registry.scrollback_matching("@@Nope").is_empty());
         registry.close(handle.id(), CloseReason::Explicit);
     }
@@ -2293,7 +2293,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_uses_configured_default_term() {
-        // `fullstack-b-11`: TERM env var on the spawned shell honors
+        // TERM env var on the spawned shell honors
         // `TerminalConfig::default_term`. A bare `printf "$TERM"`
         // command exits immediately so the captured tail of output
         // contains the env value we set, not interactive shell noise.

@@ -1,14 +1,13 @@
-//! `fullstack-b-30` slice b: Source Code Pro download endpoint +
-//! `resolve_font` helper.
+//! Source Code Pro download endpoint + `resolve_font` helper.
 //!
-//! Slice a (`c009f9f`) shipped the cargo feature `embed-font` +
-//! the user-config-dir fallback on `serve_font`. This slice adds
-//! the user-facing piece: SettingsPanel dropdown fires the
+//! Complements the cargo feature `embed-font` and the
+//! user-config-dir fallback on `serve_font` with the user-facing
+//! piece: the SettingsPanel dropdown fires the
 //! `POST /api/fonts/source-code-pro/download` endpoint when the
 //! user opts into Source Code Pro on a build that lacks the
 //! embedded bundle. The endpoint fetches the woff2 + OFL.txt from
 //! Adobe's official GitHub release into `<user-config>/chan/fonts/`;
-//! a subsequent `GET /static/fonts/<name>` (via slice a's
+//! a subsequent `GET /static/fonts/<name>` (via the
 //! `serve_font` fallback) returns the bytes verbatim.
 //!
 //! The download URL is hardcoded to Adobe's `adobe-fonts/source-code-pro`
@@ -28,7 +27,7 @@ use axum::response::{IntoResponse, Response};
 /// plus the SIL OFL notice. Both written to
 /// `<user-config>/chan/fonts/` on a successful download. Names
 /// match the rust-embed bundle
-/// (`crates/chan-server/resources/fonts/<name>`) so the slice-a
+/// (`crates/chan-server/resources/fonts/<name>`) so the
 /// `serve_font` handler resolves them identically whether they
 /// came from the bundle or the download.
 const SOURCE_CODE_PRO_FILES: &[(&str, &str)] = &[
@@ -61,7 +60,7 @@ pub struct FontDownloadResult {
 }
 
 /// Where chan persists downloaded fonts.
-/// `<user-config>/chan/fonts/`. Mirrors slice a's
+/// `<user-config>/chan/fonts/`. Mirrors the static-assets
 /// `chan_fonts_user_dir` helper so the download target and the
 /// `serve_font` filesystem-fallback path match exactly.
 pub fn chan_fonts_user_dir() -> Option<PathBuf> {
@@ -70,7 +69,7 @@ pub fn chan_fonts_user_dir() -> Option<PathBuf> {
 
 /// `POST /api/fonts/source-code-pro/download`. The response arrives
 /// when the download completes (matches `api_semantic_download`'s
-/// caller-visible shape from `systacean-7`).
+/// caller-visible shape).
 /// Idempotent — if the target files already exist + have non-zero
 /// size the endpoint short-circuits without re-fetching. Network and
 /// filesystem work use async APIs so the route doesn't tie up the
@@ -152,10 +151,9 @@ mod tests {
 
     #[test]
     fn user_dir_lives_under_chan_fonts() {
-        // `fullstack-b-30` slice b: the download target + the slice
-        // a `serve_font` filesystem fallback must point at the
-        // same directory. Pin the path shape so the two helpers
-        // can't drift.
+        // The download target + the `serve_font` filesystem
+        // fallback must point at the same directory. Pin the path
+        // shape so the two helpers can't drift.
         let dir = chan_fonts_user_dir().expect("config dir resolvable in test");
         let s = dir.display().to_string();
         assert!(

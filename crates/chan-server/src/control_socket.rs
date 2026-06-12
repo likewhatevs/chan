@@ -90,7 +90,7 @@ enum WindowCommand {
     // reads `frame.survey` and POSTs a SurveyReply to the reply route.
     OpenSurvey {
         survey: SurveySpec,
-        // R2-3: the terminal this survey targets, so the SPA can anchor a
+        // The terminal this survey targets, so the SPA can anchor a
         // per-terminal survey instead of one window-wide modal. `cs terminal
         // survey --tab-name=X` -> Some(X); a `--tab-group` broadcast (or no
         // specific tab) -> None, where the SPA keeps its window-wide fallback.
@@ -115,7 +115,7 @@ enum WindowCommand {
         request_id: String,
         op: PaneOp,
     },
-    // S1: a CLI `cs terminal team new|load` spawned a team server-side; tell
+    // A CLI `cs terminal team new|load` spawned a team server-side; tell
     // the window that owns it to SURFACE the agents by opening a terminal tab
     // per member ATTACHED to the already-spawned `session_id` (not a fresh
     // session), grouped under `group`. Fire-and-forget (no reply / no window
@@ -566,7 +566,7 @@ async fn handle_team(
     // The caller's window ($CHAN_WINDOW_ID), when present: every spawned
     // agent session binds to it so the agents carry $CHAN_WINDOW_ID and the
     // window-targeting `cs` commands work from inside an agent. The same
-    // window receives the S1 `TeamSpawned` surfacing push.
+    // window receives the `TeamSpawned` surfacing push.
     window_id: Option<String>,
     events_tx: &broadcast::Sender<String>,
 ) -> ControlResponse {
@@ -683,7 +683,7 @@ async fn handle_team(
 /// boxes. Matches the `--script` form's inline `sleep 3`: a freshly-spawned
 /// agent needs a moment before its compose box accepts input, else the
 /// identity poke lands mid-startup and is lost. This is the one magic number
-/// in the spawn path; the Wave-2 live smoke validates it.
+/// in the spawn path; live smoke runs validated it.
 #[cfg(unix)]
 const TEAM_SPAWN_POKE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -711,7 +711,7 @@ struct TeamSpawn {
     /// the bare submit chord as a distinct write, since gemini coalesces a
     /// bulk text+CR). The delivery loop writes them with a gap between.
     pokes: Vec<(String, Vec<String>)>,
-    /// Each spawned member's tab name + live `session_id`, for the S1
+    /// Each spawned member's tab name + live `session_id`, for the
     /// SPA-surfacing push (`WindowCommand::TeamSpawned`).
     members: Vec<SpawnedMember>,
 }
@@ -786,7 +786,7 @@ fn spawn_team(
             // `window_ids_matching` finds the agent's window. None when the
             // caller is windowless (a native terminal), unchanged from before.
             window_id: window_id.map(str::to_string),
-            // B5: MCP env starts OFF; a team opts in via its config's
+            // MCP env starts OFF; a team opts in via its config's
             // `mcp_env` toggle (team setup dialog / `cs terminal team
             // new|load`). Off by default keeps codex (which wants a
             // file-based MCP config) from failing on a stray descriptor.
@@ -797,7 +797,7 @@ fn spawn_team(
         };
         match registry.create(opts) {
             Ok(handle) => {
-                // Capture the session id for the S1 surfacing push, then drop
+                // Capture the session id for the surfacing push, then drop
                 // the attach handle: the session stays in the registry map,
                 // and the boot-grace poke re-resolves it by tab-name + group.
                 spawned.push(m.handle.clone());
@@ -842,8 +842,8 @@ async fn spawn_and_poke_team(
 ) -> ControlResponse {
     let spawn = spawn_team(registry, dir, config, window_id);
 
-    // S1: surface the spawned team in the window that owns it (fix A bound
-    // each agent to `window_id`). The same window opens a terminal tab per
+    // Surface the spawned team in the window that owns it (each agent
+    // is bound to `window_id`). The same window opens a terminal tab per
     // member ATTACHED to the live session, so a CLI `cs terminal team new`
     // shows up in the running SPA instead of only on the SPA's next attach.
     // A windowless spawn has no window to surface into. Sent before the boot
@@ -1957,7 +1957,7 @@ mod tests {
                     pixel_width: 0,
                     pixel_height: 0,
                 },
-                tab_name: Some("@@LaneB".into()),
+                tab_name: Some("@@Alice".into()),
                 tab_group: None,
                 window_id: Some("win-b".into()),
                 mcp_env: true,
@@ -1967,7 +1967,7 @@ mod tests {
             })
             .expect("spawn session");
         assert_eq!(
-            resolve_pane_window(None, Some("@@LaneB"), Some(&registry)).unwrap(),
+            resolve_pane_window(None, Some("@@Alice"), Some(&registry)).unwrap(),
             "win-b"
         );
     }
@@ -2009,7 +2009,7 @@ is_lead = true
 agent = "claude"
 
 [[members]]
-handle = "@@LaneA"
+handle = "@@Alice"
 command = "codex"
 is_lead = false
 agent = "codex"
@@ -2020,7 +2020,7 @@ agent = "codex"
     }
 
     /// A throwaway events sender for `handle_team` / `spawn_and_poke_team` in
-    /// tests. The S1 `TeamSpawned` push goes here; with no receiver the
+    /// tests. The `TeamSpawned` push goes here; with no receiver the
     /// broadcast `send` is a harmless no-op, so the tests do not assert on it.
     fn test_events() -> broadcast::Sender<String> {
         broadcast::channel::<String>(8).0
@@ -2173,7 +2173,7 @@ created_at = "2026-05-29T00:00:00Z"
     // A team whose members run a benign shell (blank command -> default
     // login shell), so `spawn_team` brings them up in CI without needing the
     // real agent binaries on PATH. Lead @@Lead (claude submit chord), worker
-    // @@LaneA (codex), plus a shell member @@Shell (no agent -> no poke).
+    // @@Alice (codex), plus a shell member @@Shell (no agent -> no poke).
     const SPAWNABLE_TEAM_TOML: &str = r#"
 team_name = "spawnme"
 host_name = "Neo"
@@ -2187,7 +2187,7 @@ created_at = "2026-05-29T00:00:00Z"
 # agents vs the shell member. The command-sniff path is unit-tested in
 # chan_shell::submit.
 [[members]]
-handle = "@@LaneA"
+handle = "@@Alice"
 command = ""
 is_lead = false
 env = { CHAN_AGENT = "codex" }
@@ -2243,8 +2243,8 @@ is_lead = false
         let config = spawnable_config();
         let spawn = spawn_team(&registry, "new-team-1", &config, Some("win-spawn"));
 
-        // Lead first, then roster order: @@Lead, @@LaneA, @@Shell.
-        assert_eq!(spawn.spawned, vec!["@@Lead", "@@LaneA", "@@Shell"]);
+        // Lead first, then roster order: @@Lead, @@Alice, @@Shell.
+        assert_eq!(spawn.spawned, vec!["@@Lead", "@@Alice", "@@Shell"]);
         assert!(
             spawn.failed.is_empty(),
             "no spawn failed: {:?}",
@@ -2269,7 +2269,7 @@ is_lead = false
             "lead poke names the lead: {:?}",
             spawn.pokes[0].1
         );
-        assert_eq!(spawn.pokes[1].0, "@@LaneA");
+        assert_eq!(spawn.pokes[1].0, "@@Alice");
         // codex is a SINGLE write (bracketed-paste wrap) ending in CR.
         assert_eq!(spawn.pokes[1].1.len(), 1, "codex poke is one write");
         assert!(
@@ -2283,8 +2283,8 @@ is_lead = false
         assert_eq!(summaries.len(), 3);
         assert!(summaries.iter().all(|s| s.tab_group == "spawnme"));
 
-        // Window-id fix A: every spawned agent binds to the caller's window,
-        // so `window_ids_matching` (the survey / pane-selector resolver) finds
+        // Every spawned agent binds to the caller's window, so
+        // `window_ids_matching` (the survey / pane-selector resolver) finds
         // it. A windowless spawn (None) would leave nothing to match.
         assert_eq!(
             registry.window_ids_matching(None, Some("spawnme")),
@@ -2293,8 +2293,8 @@ is_lead = false
         );
     }
 
-    // R2-3 transport: the open_survey frame must carry the target tab as
-    // camelCase `tabName`. A green compile alone would not catch a snake_case
+    // The open_survey frame must carry the target tab as camelCase
+    // `tabName`. A green compile alone would not catch a snake_case
     // drift, so pin the wire string here.
     #[test]
     fn open_survey_frame_serializes_tab_name_as_camel_case_tabname() {
@@ -2342,7 +2342,7 @@ is_lead = false
         let root = tempfile::tempdir().expect("workspace root");
         let registry = TerminalRegistry::new(RegistryConfig {
             workspace_root: root.path().to_path_buf(),
-            mcp_socket_path: Some(std::path::PathBuf::from("/tmp/chan-test-b5-mcp.sock")),
+            mcp_socket_path: Some(std::path::PathBuf::from("/tmp/chan-test-mcp.sock")),
             control_socket_path: None,
             terminal: TerminalConfig::default(),
         });
@@ -2372,7 +2372,7 @@ is_lead = false
         }
     }
 
-    // B5 e2e: the team config `mcp_env` toggle must flow all the way to the
+    // E2E: the team config `mcp_env` toggle must flow all the way to the
     // spawned member's PTY env (TeamConfig.mcp_env -> CreateOptions.mcp_env in
     // spawn_team -> set_mcp_env on the child). mcp_env=true stamps
     // CHAN_MCP_SERVER_JSON; mcp_env=false omits it. Read off the member's PTY
@@ -2458,7 +2458,7 @@ is_lead = false
 
     #[tokio::test]
     async fn spawn_and_poke_team_surfaces_to_the_window() {
-        // S1: a windowed spawn pushes a `team_spawned` frame to that window
+        // A windowed spawn pushes a `team_spawned` frame to that window
         // carrying the group + each member's tab name and live session id, so
         // the SPA can open a terminal tab attached to the session.
         let (_root, registry) = empty_registry();
@@ -2541,7 +2541,7 @@ is_lead = false
 
     #[tokio::test]
     async fn handle_team_load_spawns_the_saved_team() {
-        // C1(b): `cs terminal team load` brings the saved team UP, not just
+        // `cs terminal team load` brings the saved team UP, not just
         // summarizes it. The two shell members come live in the registry.
         let (_cfg, _root, cell) = bound_cell_with_shell_team("saved-team");
         let (_rroot, registry) = empty_registry();
@@ -2570,7 +2570,7 @@ is_lead = false
             2,
             "both shell members are live after a load"
         );
-        // Window-id fix A applies to Load too: the loaded team's agents bind
+        // Window binding applies to Load too: the loaded team's agents bind
         // to the caller's window.
         assert_eq!(
             registry.window_ids_matching(None, Some("shellsquad")),

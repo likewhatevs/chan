@@ -1895,7 +1895,7 @@ mod tests {
         );
     }
 
-    // ---- A1: paced / paged delivery -----------------------------------
+    // ---- Paced / paged delivery ----------------------------------------
 
     fn seed_paged_workspace() -> (TempDir, TempDir, std::sync::Arc<chan_workspace::Workspace>) {
         let cfg = TempDir::new().unwrap();
