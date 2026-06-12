@@ -32,7 +32,6 @@ import {
   sendPromptToTerminal,
   setActivePane,
   setTerminalBroadcastEnabled,
-  setTerminalBroadcastTarget,
   terminalTabGroup,
   type TerminalTab,
 } from "./tabs.svelte";
@@ -393,7 +392,6 @@ export async function runTeamBootstrap(
 
   // 2b. Resolve real estate + spawn the workers into new tabs.
   const workerPanes = resolveWorkerPanes(config, ctx.leadPaneId);
-  const workerTabs: TerminalTab[] = [];
   for (let i = 0; i < config.members.length; i += 1) {
     const m = wire.members[i];
     if (m.is_lead) continue;
@@ -414,7 +412,6 @@ export async function runTeamBootstrap(
       });
       if (tab) {
         renameTerminalTab(tab, m.handle);
-        workerTabs.push(tab);
       }
     } catch (err) {
       notify(`spawn failed for ${m.handle}: ${(err as Error).message ?? err}`);
@@ -458,18 +455,14 @@ export async function runTeamBootstrap(
   // Restore focus to the lead's pane.
   setActivePane(ctx.leadPaneId);
 
-  // 5. Broadcast membership. First force-clear EVERY terminal's
-  //    broadcast (the spec's "Deselect all" equivalent) so no
-  //    pre-existing broadcast group leaks into the new team. Then
-  //    enable ONLY the lead + workers set. We use the
-  //    setTerminalBroadcast* primitives (force-clear+set), not the
-  //    toggle helper, so the final membership is deterministic.
+  // 5. Broadcast starts OFF for the whole team. Force-clear EVERY
+  //    terminal's broadcast (the spec's "Deselect all" equivalent) so
+  //    no pre-existing broadcast group leaks into the new team; the
+  //    host opts in manually when fan-out is actually wanted.
+  //    Identity prompts don't need broadcast - the server delivers
+  //    them per-member via the write queue (spawn_and_poke_team).
   for (const tab of allTerminalTabs()) {
     setTerminalBroadcastEnabled(tab, false);
-  }
-  setTerminalBroadcastEnabled(leadTab, true);
-  for (const tab of workerTabs) {
-    setTerminalBroadcastTarget(leadTab, tab.id, true);
   }
 
   notify(`Team "${wire.team_name}" bootstrapped.`);

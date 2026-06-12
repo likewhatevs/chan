@@ -17,7 +17,8 @@ import {
 // These tests pin: config written, lead launched FIRST into the
 // existing tab (restart, no respawn/close), workers spawned into
 // new tabs, identity prompt primed in the lead's embedded editor,
-// and the final broadcast membership set == {lead, workers} exactly.
+// and broadcast left OFF for every tab (the clear-all sweep still
+// runs so stale groups don't leak; nothing re-enables after it).
 
 function leadTerminalTab(partial: Partial<TerminalTab> = {}): TerminalTab {
   return {
@@ -173,22 +174,19 @@ describe("runTeamBootstrap: lead-first flow", () => {
     expect(src).not.toMatch(/primeTeamWork/);
   });
 
-  test("final broadcast membership == {lead, workers} exactly", async () => {
+  test("teams start with broadcast OFF: final membership is empty", async () => {
     resetLayoutWithLead(leadTerminalTab());
     mockApi();
     await runTeamBootstrap(tabsConfig(), {
       leadTabId: "lead-tab",
       leadPaneId: "pane-test",
     });
-    const lead = leadFromLayout();
-    const members = new Set(terminalBroadcastMemberIds(lead));
-    const all = allTerminalTabs();
-    const workerIds = all.filter((t) => t.id !== lead.id).map((t) => t.id);
-    // Lead + both workers are broadcast members; nothing else.
-    expect(members).toEqual(new Set([lead.id, ...workerIds]));
-    // Every team tab reads back as broadcast-enabled.
-    for (const tab of all) {
-      expect(tab.broadcastEnabled).toBe(true);
+    // Bootstrap never opts the team in - the host enables broadcast
+    // manually when fan-out is wanted (identity prompts are delivered
+    // server-side via the write queue, not via SPA broadcast).
+    expect(terminalBroadcastMemberIds(leadFromLayout())).toEqual([]);
+    for (const tab of allTerminalTabs()) {
+      expect(tab.broadcastEnabled).toBe(false);
     }
   });
 
