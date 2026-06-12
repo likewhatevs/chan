@@ -9,35 +9,48 @@ API shape, the locking model, or the schema versions.
 `chan-workspace` is the local-first storage layer for a single-user
 markdown editor. It owns the per-machine registry of known workspaces,
 exposes a path-based sandboxed filesystem API rooted at each workspace,
-and wraps the per-workspace search index and link graph. The same
-crate backs the `chan` CLI today and is shaped for native iOS /
-Android shells via uniffi later.
+and wraps the per-workspace search index, link graph, and code/SLOC
+report. The same crate backs the `chan` CLI, chan-server, and the
+desktop app, and its API is shaped to survive a uniffi boundary for
+native iOS / Android shells.
 
 In scope:
 
   - Filesystem primitives (`read` / `write` / `stat` / `list` /
-    `rename` / `remove` / `list_tree`) rooted at a workspace.
+    `rename` / `copy` / `remove` / `list_tree`) rooted at a
+    workspace.
   - Workspace registry persisted to `~/.chan/config.toml` (or the OS
     sandbox equivalent on iOS / Android).
   - Per-workspace search index (tantivy 0.24, BM25; optional dense
     via candle + BGE-small for hybrid).
   - Per-workspace graph database (sqlite, single writer, r2d2 pool
     for readers).
+  - Per-workspace code/SLOC report (chan-report `Index` kept current
+    by the watcher, persisted as JSONL).
   - Filesystem watcher (callback-based, workspace-scoped, drops
-    `.chan/` and `.git/` noise).
+    `.chan/` and walk-filtered noise) plus a built-in debounced
+    graph indexer on top of it.
   - Cross-process advisory writer lock (fs4 / flock / LockFileEx).
-  - Path-traversal sandboxing and editable-text whitelist.
+  - Path-traversal sandboxing and an editable-text gate
+    (extension classifier plus content sniff).
   - Atomic writes for every chan-workspace-managed file.
+  - Cmd+N drafts as ordinary in-tree files under a configurable
+    in-root directory.
   - Per-workspace blob storage for opaque host JSON: pane sessions.
     chan-workspace stores bytes keyed by a flat identifier; the
     schema is the host's choice.
+  - Stat-only bootstrap snapshot of the tree shape for UIs that
+    render before any index exists.
+  - Export / import of the per-workspace sidecar metadata as a
+    zstd-compressed tar archive.
+  - VCS-parent detection (pure stat-walk; no `git` invocation).
 
 Out of scope:
 
-  - HTTP, WebSocket, frontend bundle. Those live in
-    `chan-writer/chan`.
-  - LLM tool calls, API key storage, prompt content, and agent
-    transcript storage. App-level concern.
+  - HTTP, WebSocket, frontend bundle. Those live in `chan-server`
+    and the `chan` binary.
+  - LLM tool dispatch, API key storage, prompt content, and agent
+    transcript storage. `chan-llm` and app-level concerns.
   - Editor preferences (fonts, theme, keybindings, attachments
     dir). App-level; the consumer owns its own config file.
   - User authentication, multi-user collaboration, cloud sync of
@@ -64,7 +77,7 @@ Out of scope:
               |  | safe | tivy | (Mutex   | |
               |  |      |+cand.| + pool)  | |
               |  +------+------+----------+ |
-              |           Watcher           |
+              |     Watcher | Report        |
               +-----------------------------+
 ```
 
@@ -73,12 +86,15 @@ Out of scope:
     config-file path.
   - `Workspace` is one registered directory. Holds the writer lock
     for its lifetime; cheap reads (search query, graph
-    traversal) do not contend. Lazily initializes search and
-    graph state on first use via `OnceLock`.
+    traversal) do not contend. Lazily initializes search,
+    graph, and report state on first use via `OnceLock`.
   - `WatchHandle` is an opaque return value; drop to stop
     watching. The underlying `notify::RecommendedWatcher` runs
     on its own thread and dispatches into the consumer's
     `WatchCallback`.
+  - `GraphIndexer` is the built-in consumer of the watcher: a
+    worker thread that debounces per-path events into
+    `index_file` / `forget_file` / `reconcile` calls.
 
 ## 3. Components
 
@@ -93,7 +109,7 @@ holding the cross-process writer lock for its lifetime.
 
 Each registry row carries the canonical `root_path`, a stable
 `metadata_key`, and timestamps. The key is derived from the first
-registered path as a readable path slug plus a short hash suffix,
+registered path as a readable path slug plus an 8-hex sha256 suffix,
 and is preserved across `Library::move_workspace`. All per-workspace
 sidecar paths (graph DB, search index, sessions, tokens, trash,
 report) live under `~/.chan/workspaces/<metadata_key>/`. Consequences:
@@ -108,6 +124,11 @@ report) live under `~/.chan/workspaces/<metadata_key>/`. Consequences:
   - There is no user-managed workspace name in the registry. UIs derive
     labels from the path and show the full path where identity
     matters.
+
+The registry also holds two global, hand-edited policy fields:
+`index_excluded_dirs` (directory basenames the indexing walks skip;
+see "Walk filter") and `drafts_dir` (the in-root drafts directory
+name, default `.Drafts`; see "Drafts").
 
 `Library::sweep_orphans` reconciles the on-disk sidecar tree
 against the registry: any subdirectory under `~/.chan/workspaces/`
@@ -163,18 +184,32 @@ root (catches mid-path symlinks escaping the sandbox).
 
 Two gates guard the text-class APIs:
 
-  - **Editor gate** (`fs_ops::is_editable_text`): true for any
-    file the editor can round-trip through a UTF-8 buffer.
-    Covers markdown-class `.md` / `.txt` plus the wider
+  - **Editor gate** (`fs_ops::is_editable_text` plus
+    `Workspace::sniff_is_text`): a file the editor can round-trip
+    through a UTF-8 buffer. The extension classifier accepts
+    markdown-class `.md` / `.txt` plus the wider
     `FileClass::Text` set (source code, configs, shell scripts,
-    well-known no-extension files). Used by `read_text` /
-    `read_text_with_stat` / `read_text_with_stat_chunked` /
-    `write_text` / `write_text_if_unchanged`.
+    well-known no-extension files). Paths the classifier refuses
+    get a content-sniff fallback: read up to
+    `fs_ops::TEXT_SNIFF_BYTES` (8 KiB) and apply
+    `fs_ops::looks_like_text`, which is what lets the editor open
+    `.zshrc`, `*.service`, `Kconfig`, and other extensionless or
+    odd-suffix text files. A file that cannot be sampled (I/O
+    error, non-regular) stays non-editable. The classifier stays
+    a pure, I/O-free path predicate so hot index walks never pay
+    the sniff; only the per-file read/write path does. Used by
+    `read_text` / `read_text_with_stat` /
+    `read_text_with_stat_chunked` / `write_text` /
+    `write_text_if_unchanged`.
   - **Indexer gate** (`fs_ops::is_indexable_text`): true only
-    for `FileClass::EditableText` (markdown-class). Used by the
-    indexer, graph rebuild, link-rewrite on rename, and reindex-
-    after-restore. A `.py` is editable but **not** indexable so
-    `#include` doesn't read as a `#tag`.
+    for `FileClass::EditableText` (markdown-class `.md` / `.txt`).
+    Used by the indexer, graph rebuild, link-rewrite on rename,
+    and reindex-after-restore. A `.py` is editable but **not**
+    indexable so `#include` doesn't read as a `#tag`. Within the
+    indexable set, `fs_ops::is_markdown_file` narrows `#tag` /
+    `@@mention` token extraction to `.md` only: `.txt` indexes
+    for full-text, headings, and links, but incidental prose in a
+    plain note never becomes a graph tag.
 
 Binary I/O (`read` / `write_bytes`) routes around both gates:
 attachments and the future media browser still need it.
@@ -216,9 +251,7 @@ Behaviour by class:
     indexed and **not** a graph node: the indexer parses
     markdown semantics that source-class text doesn't carry,
     and treating `#include` as a `#tag` would pollute the
-    graph. Phase 3 may revisit full-text indexing for Text-
-    class files as plain content (no token / heading
-    extraction); until then they're walkable + editable + byte-
+    graph. Text-class files are walkable + editable + byte-
     readable but opaque to search.
   - **Image**: opaque bytes via `read` / `write_bytes`. Not
     indexed and not a graph node, but markdown embeds
@@ -227,19 +260,21 @@ Behaviour by class:
     it. The editor renders previews inline; rename / remove are
     supported.
   - **Pdf**: same I/O contract as Image. Held as a distinct
-    class because the editor / inspector pane will render PDFs
-    through a dedicated viewer (browser PDF.js today,
-    inspector-side preview later).
+    class because the editor / inspector pane renders PDFs
+    through a dedicated viewer.
   - **Other**: opaque bytes via `read` / `write_bytes`. Walkable,
     visible in `list_tree`, renameable, removeable into Trash.
-    Not indexed and not a graph node. No assumptions about
-    encoding or shape.
+    Unknown-extension files whose leading bytes sniff as text
+    additionally pass the editor gate (see above). Not indexed
+    and not a graph node.
 
-`rename` and `remove` operate on every class. Link rewriting in
-`rename_with_link_rewrite` only touches `EditableText` bodies
-(Text-class files, images, and other binaries have no markdown
-links to rewrite); the graph edge `dst` gets updated regardless
-of target class.
+`rename`, `copy`, and `remove` operate on every class. Link
+rewriting in `rename_with_link_rewrite` only touches
+`EditableText` bodies (Text-class files, images, and other
+binaries have no markdown links to rewrite); the graph edge `dst`
+gets updated regardless of target class. `resolve_free_name`
+computes a collision-free destination name for copy / promote
+flows.
 
 Typed markdown frontmatter is resolved through a `chan.kind`
 registry. In YAML, that means a nested `chan:` map with `kind:`
@@ -265,23 +300,23 @@ entities.
 Extension matching is ASCII case-insensitive. Files whose
 extension is unknown fall back to a basename check against
 well-known textual filenames (Makefile, Dockerfile, LICENSE,
-...) before collapsing to `Other`. No content sniffing in v1:
-a follow-up may add a "read first N bytes, treat as Text if
-valid UTF-8 and no NUL" fallback for truly unknown files.
+...), then to the content sniff on the read/write path.
 
 `read_text_with_stat` and `write_text_if_unchanged` are the
 optimistic-concurrency pair the editor uses to detect external
 edits. The editor reads `(content, stat)`, the user types, and
 the save round-trips through `write_text_if_unchanged(rel,
-Some(stat.mtime), new_content)`. If another process (terminal,
-sync daemon, second pane) has since modified the file, the write
-fails with `WriteConflict { current_mtime }` and the editor
-prompts to reload, merge, or overwrite. `write_text` (no CAS)
-remains for chan-workspace's own reindex helpers, bulk imports, and
-LLM-tool calls where last-write-wins is the intent. Residual
-race: between the mtime check and the atomic rename a foreign
-write can land; the watcher event for the foreign change fires
-on the next dispatch and the editor re-prompts.
+Some(stat.mtime_ns), new_content)`. The token is the nanosecond
+mtime so two edits within the same wall-clock second still
+conflict on filesystems with sub-second mtime. If another process
+(terminal, sync daemon, second pane) has since modified the file,
+the write fails with `WriteConflict { current_mtime_ns }` and the
+editor prompts to reload, merge, or overwrite. `write_text` (no
+CAS) remains for chan-workspace's own reindex helpers, bulk
+imports, and LLM-tool calls where last-write-wins is the intent.
+Residual race: between the mtime check and the atomic rename a
+foreign write can land; the watcher event for the foreign change
+fires on the next dispatch and the editor re-prompts.
 
 `read_text_with_stat_chunked` is the streaming form for large
 editor opens. It applies the same editable-text gate, sandbox
@@ -300,6 +335,35 @@ recursive-rm is satisfied by the restore path. Symlinks, FIFOs,
 sockets, and char/block devices are rejected with `SpecialFile`;
 the trash format only models regular files and directories, and
 chan-workspace never creates the other types itself.
+
+### Drafts
+
+Cmd+N scratch work lives in-tree as a real hidden directory at the
+workspace root, named by `Registry::drafts_dir` (default `.Drafts`).
+Each draft is a directory (`.Drafts/<name>/draft.md` plus
+companions such as pasted images) so attachments travel with the
+note. The directory is created lazily on the first Cmd+N; an
+untouched workspace has no `.Drafts/`.
+
+Drafts are ordinary relpaths, so search, graph, watcher, and the
+MCP tools see them through the normal machinery: no virtual
+namespace, no separate cap-std handle, no separate watch root, and
+no synthesized graph node. Users who do not want drafts tracked by
+SCM add `.Drafts/` to their `.gitignore`. `.Drafts` is
+deliberately NOT on the walk filter: drafts are real in-tree
+content and index and graph like any other file.
+
+The `drafts` module is the filesystem primitive layer; `Workspace`
+wraps it as `create_draft_dir`, `list_drafts`, `inspect_draft`,
+`promote_draft`, `discard_draft`, `draft_preflight`, and
+`next_untitled_draft_name`. Promotion moves the draft's contents
+to a destination in the main tree and reports the mode
+(`File` for a lone `draft.md`, `DirectoryCreated` /
+`DirectoryMerged` when companions exist). Discard routes through
+the Trash, with the trash entry's origin label prefixed `.Drafts`
+so a trashed draft is distinguishable from a trashed workspace
+file. `draft_preflight` reports broken drafts (e.g. a draft dir
+missing its `draft.md`) without failing the listing.
 
 ### Trash
 
@@ -320,7 +384,8 @@ pub struct TrashEntry {
   - **Location**:
     `~/.chan/workspaces/<metadata_key>/trash/<id>/{payload[/], meta.json}`.
     Trash lives outside the user's workspace directory because chan-
-    workspace stores zero state inside the workspace. Trade-off: the
+    workspace stores zero state inside the workspace (the drafts
+    dir is the one deliberate exception). Trade-off: the
     trash does not sync via iCloud / Dropbox / git. Acceptable;
     trash is per-machine recovery, not collaboration. A recorded
     `Library::move_workspace` preserves `metadata_key`, so trash follows
@@ -334,22 +399,20 @@ pub struct TrashEntry {
   - **Restore conflicts**: refused with `TrashOccupied`. The
     caller renames the live entry first, or `trash_purge` to
     give up. We never silently overwrite live content.
-  - **Auto-expiration**: lazy GC. `Workspace::open` and every
+  - **Auto-expiration**: lazy GC. Workspace open and every
     `trash_*` call sweep entries older than
     `TRASH_RETENTION_SECS` (30 days, `30 * 24 * 60 * 60`). No
     background thread; matches the codebase's sync-only rule.
-    Promote to a `Library` setting later if users want to tune
-    it.
   - **Crash recovery**: a half-written entry has no `meta.json`.
     Sweep treats meta-less entries as junk and reclaims them.
 
-What's NOT in v1 (deliberately):
+Deliberately not included:
 
   - Cross-workspace trash. Each workspace has its own.
-  - Sync to cloud storage (deliberate; trash is local-only state).
+  - Sync to cloud storage (trash is local-only state).
   - Background timer (lazy GC is enough for an editor that opens
     workspaces sporadically).
-  - Configurable retention. Hardcoded 30 days; revisit if needed.
+  - Configurable retention. Hardcoded 30 days.
 
 ### Search index
 
@@ -360,6 +423,17 @@ What's NOT in v1 (deliberately):
 `IndexConfig` struct (alongside the embedding model id and the
 chunking strategy). Mismatched versions trigger a wipe and full
 rebuild on next open; user data is unaffected.
+
+`<index_dir>/config.toml` doubles as the per-workspace settings
+store. Beyond the index fields it persists `semantic_enabled`
+(hybrid-search opt-in, default false), `reports_enabled`
+(chan-report opt-in, default on for newly created workspaces),
+`excluded_dirs` (per-workspace walk-filter additions), and the
+screensaver settings (`screensaver_enabled`, timeout, theme, and a
+base64-encoded PIN hash that is stored without interpretation and
+never echoed back over the wire). `Workspace` exposes typed
+accessors for all of these; writes go through the same atomic-write
+path as the rest of the config.
 
 Two additional config fields, `vectors_model` and `vectors_dim`,
 describe the model that produced the vectors currently on disk.
@@ -374,11 +448,15 @@ store. A schema-version bump still wipes everything and clears
 both tracking fields.
 
 With the `embeddings` feature on (default), the index also stores
-per-chunk dense vectors via candle + BGE-small. `SearchMode::Hybrid`
-runs BM25 and dense in parallel, then fuses with reciprocal-rank
-fusion. On builds where the embedder is unavailable
-(`--no-default-features`, currently iOS), hybrid falls back to
-BM25 silently.
+per-chunk dense vectors via candle + BGE-small
+(`DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"`). `SearchMode` is
+`Bm25` (default), `Semantic`, or `Hybrid`; hybrid runs BM25 and
+dense in parallel, then fuses with reciprocal-rank fusion. Dense
+search is a per-workspace opt-in (`semantic_enabled`); on builds
+where the embedder is unavailable (`--no-default-features`,
+currently iOS) or the model is not downloaded, semantic and hybrid
+queries degrade to BM25-only and the result's `mode` field says
+so.
 
 Chunking is configurable per-index via `Chunking` (`Headings`,
 `WholeDoc`, `Fixed { chars }`). The default is `Headings`
@@ -387,19 +465,28 @@ single whole-doc chunk).
 
 `reindex` is synchronous and blocking. It runs on the calling
 thread; the caller decides whether to spawn a worker.
-`reindex_with` accepts a progress callback driven by `BuildStage`
-and `BuildProgress`; both flavors return `BuildSummary`. This
-keeps the API uniffi-clean and avoids leaking an async runtime
-through the FFI boundary.
+`reindex_with` accepts a progress callback driven by
+`ProgressStage` events; `reindex_with_aggression` additionally
+takes a `SearchAggression`. All flavors return `BuildSummary`.
+This keeps the API uniffi-clean and avoids leaking an async
+runtime through the FFI boundary.
 
 `Index::build_all` runs the per-file read + markdown chunking on
-a bounded thread pool (`min(available_parallelism - 2, 6)` worker
-threads). Workers ship parsed chunks to the main thread over a
-bounded `sync_channel`; the main thread is the only writer into
-tantivy and the only producer of embed batches, so writer-mutex
-contention and embed ordering stay simple. Two cores are
-deliberately held back so the server's tokio runtime and the OS
-UI thread keep breathing during a reindex of a large workspace.
+a bounded thread pool. Worker count comes from `SearchAggression`:
+`Conservative` pins one reader, `Balanced` (the default) uses
+`available_parallelism - 2` clamped to [1, 6], `Aggressive` uses
+`available_parallelism - 1` clamped to [1, 8]. The
+file-descriptor budget (`fd_budget`) can cap the count further and
+paces workers when the process is near its `nofile` limit: the
+crate runs inside the editor process, where macOS commonly starts
+with a soft limit of 256, and an eager SQLite pool plus Tantivy
+fanout can otherwise exhaust the table during first boot on a
+large workspace. Workers ship parsed chunks to the main thread
+over a bounded `sync_channel` (workers * 4); the main thread is
+the only writer into tantivy and the only producer of embed
+batches, so writer-mutex contention and embed ordering stay
+simple. Cores are held back so the server's tokio runtime and the
+OS UI thread keep breathing during a reindex of a large workspace.
 Progress ticks remain monotonic from the consumer's perspective
 even when worker completions land out of order.
 
@@ -419,23 +506,32 @@ identical embeddings). The count of files that took the skip path
 surfaces as `BuildSummary.embeds_reused`, so the CLI and tests can
 observe partial-rebuild resumption rather than infer it.
 
-Shard format version bumped 1 -> 2 to carry `body_hash`; v1 shards
-fail the version check in `load_all` and are dropped, so the next
-build re-embeds them (one-time upgrade cost). The `--no-default-
-features` build excludes the entire embed path including the skip
-check; the field stays in `BuildSummary` and reads zero.
+Each per-file shard under `embeddings/` carries its own
+`FORMAT_VERSION` (currently 2), checked per shard in `load_all`; a
+mismatch drops the shard silently and the next `build_all`
+re-embeds that file. This is intentionally independent of the
+schema-version wipe path: a shard-format bump should NOT
+invalidate BM25 segments or other shards, only the shards that
+actually need re-encoding. The `--no-default-features` build
+excludes the entire embed path including the skip check; the
+`embeds_reused` field stays in `BuildSummary` and reads zero.
 
 #### Walk filter
 
 `WalkFilter` (in `fs_ops`) is a caller-supplied list of directory
 basenames that the reindex walks should not descend into. The
-default list lives in `Registry::index_excluded_dirs` and is
-persisted to `~/.chan/config.toml` so CLI and desktop use the same
-policy (`node_modules`, `target`, `__pycache__`, ...). `Library`
-loads that list on open, propagates it to every workspace opened
-against that Library, and forwards it into `Index` for the search
-side. `.git` and `.chan` stay hardcoded in `walk_workspace`: those are
-invariants of the on-disk layout, not policy.
+machine-wide baseline lives in `Registry::index_excluded_dirs` and
+is persisted to `~/.chan/config.toml` so CLI and desktop use the
+same policy (defaults: `.git`, `.hg`, `.svn`, `node_modules`,
+`target`, `__pycache__`, `.venv`, `venv`, `.tox`,
+`.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.cache`, `dist`,
+`build`). A per-workspace blocklist (`IndexConfig::excluded_dirs`,
+managed through the workspace settings API) is unioned on top:
+`Workspace::effective_excluded_dirs` is what the walks actually
+honor. Matching is exact basename at any depth, ASCII
+case-insensitive. `.git` and `.chan` stay hardcoded in
+`walk_workspace`: those are invariants of the on-disk layout, not
+policy.
 
 `Registry::drafts_dir` (default `.Drafts`) is modeled the same way as
 `index_excluded_dirs`: a global field in `~/.chan/config.toml`,
@@ -444,19 +540,28 @@ directory rather than a skip target, so it is deliberately NOT on the
 walk filter: drafts are real in-tree content and index and graph like
 any other file.
 
-The filter is honored by the indexing pipeline only:
-`rebuild_graph` and `Index::build_all` use `list_tree_filtered`
-and `walk_workspace_filtered`. The editor-visible APIs
-(`Workspace::list_tree`, `Workspace::list`, trash sweeps, restore) stay
-unfiltered so the user can still see and open files inside a
-blocked directory on demand.
+The filter is honored by the indexing pipeline, the bootstrap
+snapshot, the report walk, and the watcher feed (one ignore set,
+not several). The editor-visible APIs (`Workspace::list_tree`,
+`Workspace::list`, trash sweeps, restore) stay unfiltered so the
+user can still see and open files inside a blocked directory on
+demand; the `*_filtered_unified` tree listings exist for callers
+(the graph layer, the File Browser spine) that want the filtered
+default view.
 
 ### Graph
 
 `sqlite` (rusqlite, bundled) backs the per-workspace graph at
 `~/.chan/workspaces/<metadata_key>/graph/graph.sqlite`. Schema lives in `nodes`
 (files), `edges` (links + tags + mentions), and `headings`
-(in-file anchors).
+(in-file anchors). A `nodes` row carries `rel_path`, `kind`
+(`file` / `contact`), `mtime`, `size`, `title`, `basename`,
+`emails` (lowercased addresses extracted from contact bodies), and
+`aliases` (top-level `aliases:` frontmatter, used by the mention
+resolver to map `@@<alias>` to a contact file without re-parsing
+frontmatter per query). Edge rows are
+`(src, dst, kind, anchor)` with the anchor in the primary key so
+one file can link the same target via two distinct anchors.
 
 Single-writer semantics, multi-reader: the writer connection sits
 behind a `Mutex<Connection>` (sqlite's contract); reads pull from
@@ -468,7 +573,13 @@ init keep the writer and the pool agreeing on `journal_mode`,
 
 `replace_file` inserts outgoing edges (links + tag/mention tokens)
 and headings with computed anchors. `forget_file` removes a file
-and all its edges. `clear` wipes everything for a full rebuild.
+and all its edges; `forget_under` does the same for a directory
+prefix. `clear` wipes everything for a full rebuild. Full rebuilds
+parse into staging tables and swap atomically; see "Schema
+versioning" for the resumability model. Read surface:
+`neighbors`, `backlinks`, `tags`, `mentions`, `files_with_tag`,
+`files`, `files_with_stat`, `node_kind`, `headings_of`,
+`link_targets`, `contacts`, `contacts_filtered`.
 
 #### Link resolution
 
@@ -513,13 +624,11 @@ relative resolution (`[[../foo]]` from `notes/x.md` walks up to
 
 The same normalizer ships as a hand-port to TS for the editor's
 click handler so on-disk edges and in-editor navigation agree on
-the resolved path. Edges written before the normalizer landed
-keep their literal (unnormalized) `dst` until the next reindex
-rewrites the table.
+the resolved path.
 
 #### Link autocomplete (`[[`)
 
-`link_targets` workspaces the editor's `[[` typeahead: the user types
+`link_targets` backs the editor's `[[` typeahead: the user types
 a fragment and gets back files plus headings to anchor a wiki
 link to. The graph DB is the source of truth (`nodes` for files,
 `headings` for in-file anchors); BM25 over filename and heading
@@ -560,8 +669,8 @@ pub struct LinkTarget {
     not matched by a raw `%` query.
   - **Case folding**: ASCII only. SQLite's `LOWER` does not fold
     Unicode without ICU; non-ASCII queries match case-
-    sensitively. Acceptable for v1; revisit when a Unicode-aware
-    backend becomes a priority.
+    sensitively. Acceptable for a single-user picker; revisit if a
+    Unicode-aware backend becomes a priority.
 
 After picking a file, the editor calls
 `GraphView::headings_of(rel)` to populate the `[[file#` second
@@ -578,14 +687,91 @@ the trait by passing an `Arc<dyn WatchCallback>` (uniffi
 generates a wrapper around a foreign object). No closures cross
 the FFI.
 
-Filter chain in `watch::dispatch` short-circuits both `.chan/`
-and `.git/` subtrees. chan-workspace never writes inside the user's
-workspace directory, so any `.chan/` activity is foreign noise.
+The dispatch filter mirrors the walk's pruning so the watcher feed
+and the walks honor one ignore set, with two watcher-specific
+deviations:
+
+  - `.chan/` is always dropped via `is_chan_internal`,
+    regardless of the configurable filter: it is chan's own
+    state, an invariant the user cannot un-exclude.
+  - Paths with a walk-filtered directory component
+    (`node_modules`, `target`, `.git`, ...) are dropped, EXCEPT
+    VCS control files (`.git/HEAD`, `.git/index`,
+    `.hg/dirstate`): those are forwarded because the indexer
+    keys checkout-storm detection off them, while the walks
+    prune `.git` wholesale.
+
+When the report subsystem is active, the same watcher fan-outs
+each event into the report's incremental index before the user's
+callback runs (see "Report").
+
+### Built-in graph indexer
+
+`Workspace::start_graph_indexer(debounce_ms)` returns a
+`GraphIndexer` handle that owns a watcher subscription and one
+worker thread, so consumers (CLI, chan-server, native shells) do
+not each reinvent the same queue. `DEFAULT_DEBOUNCE_MS` is 150.
+
+  - Debouncing is per-path, trailing-edge: the first event for a
+    path schedules a deadline at `now + debounce`; further events
+    push it forward; the deadline maturing triggers `index_file`.
+  - `Removed` events and the source side of `Renamed` skip the
+    debounce: a stale graph row pointing at a missing file is the
+    user-visible failure mode, so deletions flush immediately.
+  - `ProviderError` and path-less events (the watcher's
+    "scope unknown" signal) clear the pending map and trigger a
+    full `Workspace::reconcile`, the same convergence path used
+    for cold-open catch-up.
+  - Counters (`pending_count`, `indexed_total`,
+    `forgotten_total`, `reconciles_total`) back the status
+    surface. Drop the handle (or call `stop()`) to tear down
+    synchronously: watcher first (closing the channel), then the
+    worker joined.
+
+### Bootstrap snapshot
+
+`Workspace::bootstrap()` returns a lightweight structural snapshot
+(directory tree shape, file counts, byte sizes) that the UI can
+render immediately on open, before any index or report job runs.
+It is a STAT-ONLY walk: no file content is read, no graph edge is
+parsed, so it does not pressure the fd budget the way the index /
+report jobs do. It honors the same `WalkFilter` as the indexer
+(one ignore policy), while the on-demand listing APIs stay
+unfiltered. The root response carries the first level eagerly
+(root files + dirs, each dir with recursive subtree stats) plus
+whole-workspace aggregates; deeper levels load lazily via
+`Workspace::bootstrap_dir(rel)` on File Browser expand or Graph
+depth-increase.
+
+### Report
+
+The per-workspace code/SLOC/COCOMO report wraps `chan-report`'s
+incremental `Index`. chan-workspace owns the persisted JSONL
+(`~/.chan/workspaces/<metadata_key>/report/report.jsonl`), the
+load-else-rescan open path (any load error — missing file, schema
+mismatch, partial write — falls back to a full scan that replaces
+the bad file on the next flush), and a dedicated writer thread
+that debounces flush signals (500 ms window) and atomic-writes the
+JSONL. Watch events fan into the in-memory index before the user's
+callback runs, so a handler that immediately calls
+`Workspace::report()` sees the change; `Unchanged` outcomes do not
+schedule a write. The walk applies the same excluded-dirs policy
+as the index walk so a source-tree workspace doesn't roll up its
+dependency trees.
+
+Public surface: `report()` (whole tree), `report_for_prefix`,
+`report_for_files`, `report_for_dir` (O(1) cached directory
+roll-up; `None` for untracked dirs so HTTP can 404), and
+`report_jsonl_path`. The subsystem is gated by the per-workspace
+`reports_enabled` flag and activated by `Workspace::boot()`, which
+consumers call after open to kick off the optional layers
+(reports; semantic search initializes lazily through the index
+accessor).
 
 ### Contacts
 
-Imports a third-party contact dump (Google Contacts CSV today,
-vCard / Outlook later) as one markdown note per contact.
+Imports a third-party contact dump (Google Contacts CSV) as one
+markdown note per contact.
 
 On-disk shape: slim YAML frontmatter holding only top-level
 `aliases` plus the chan-internal `chan:` block (`kind: contact`,
@@ -593,7 +779,6 @@ On-disk shape: slim YAML frontmatter holding only top-level
 `remote_id`); contact data (emails, phones, organizations, labels)
 lives in the body as bullet items so a chan editor that doesn't
 strip frontmatter shows a friendly note rather than a YAML dump.
-Notes from the import follow.
 
 Indexer reads the frontmatter in `parse_for_graph` to tag the
 corresponding `nodes` row as `kind = 'contact'`. Same row,
@@ -611,12 +796,14 @@ Pure-function split:
 | `google.rs`       | Google CSV parser; ` ::: ` multi-value form   |
 | `emit.rs`         | `Contact -> markdown`; hand-formatted YAML    |
 | `slug.rs`         | filename derivation, sanitization, collisions |
+| `extract.rs`      | email extraction from contact bodies          |
 | `import.rs`       | orchestrator: writes via `Workspace::write_text`  |
 
-The orchestrator is exposed as `Workspace::import_contacts` so the
-import flow inherits the path sandbox, editable-text gate, and
-atomic-rename rules. One bad contact does not abort a batch: per-
-file errors land in `ImportSummary` as `Failed` outcomes.
+The orchestrator is exposed as `Workspace::import_contacts` (and
+`import_contacts_with` for progress reporting) so the import flow
+inherits the path sandbox, editable-text gate, and atomic-rename
+rules. One bad contact does not abort a batch: per-file errors
+land in `ImportSummary` as `Failed` outcomes.
 
 Imported notes are user-owned the moment they land. chan does
 not re-edit them. Re-importing either skips existing files or
@@ -628,17 +815,29 @@ Sanitize path separators / control chars / Windows-reserved
 chars to `_`. Trim to 120 bytes UTF-8-safely. On collision
 within a batch, append ` (2)`, ` (3)`, etc. before the `.md`.
 
-Non-goals: OAuth, API integration, two-way sync, on-disk cache.
-Contact notes ARE the source of truth; the existing markdown
-indexer covers read.
+Non-goals: OAuth, API integration, two-way sync, on-disk cache,
+other provider formats. Contact notes ARE the source of truth;
+the existing markdown indexer covers read.
 
 Contact-aware filtering for the editor `@` picker and
 `GET /api/contacts` lives at the SQL layer:
 `GraphView::contacts_filtered(query, limit)` runs a case-
-insensitive `LIKE` against `title` and `basename` with the limit
-applied inside SQLite, so per-keystroke calls stay O(limit)
-instead of O(N). `GraphView::contacts()` is a convenience wrapper
-for callers that want the full list.
+insensitive `LIKE` against `title`, `basename`, and the `emails`
+column with the limit applied inside SQLite, so per-keystroke
+calls stay O(limit) instead of O(N). A typed `alice` finds both
+"Alice Anderson" and a contact whose only `alice` is in
+`alice@example.com`; the deduplicated email list comes back so
+the picker can render a secondary line under the contact's name.
+`GraphView::contacts()` is a convenience wrapper for callers that
+want the full list.
+
+The `emails` column is populated as contacts are parsed during a
+walk: the indexer's first pass over a fresh workspace fills it in for
+every contact-kind file, and per-file edits update it through
+`replace_file`. Contacts that lack an email body section keep
+`emails IS NULL` and simply don't match email-substring queries.
+The `aliases` column is populated the same way from top-level
+frontmatter and serves the `@@<alias>` mention resolver.
 
 Discovery is content-driven, not directory-driven. Any `.md` file
 whose frontmatter has nested `chan: { kind: contact }` is classified
@@ -647,23 +846,6 @@ user who hand-rolls a contact note in their own directory and drops
 it in is picked up by the next indexer pass; the `Contacts/`
 directory is just the importer's default destination, not a
 discovery requirement.
-
-Email-aware `@` picker matching is pushed down at v3. The graph
-schema gains a `nodes.emails TEXT` column populated at index time:
-`parse_for_graph` runs `contacts::extract_emails` over the body of
-every contact-kind file, joins the lowercased addresses with
-spaces, and stores them on the row. `contacts_filtered` adds a
-third `LIKE ... COLLATE NOCASE` predicate against that column, so
-a typed `alice` finds both "Alice Anderson" and a contact whose
-only `alice` is in `alice@example.com`. The picker also receives
-the deduplicated email list back so it can render a secondary line
-under the contact's name.
-
-The `emails` column is populated as contacts are parsed during a
-walk: the indexer's first pass over a fresh workspace fills it in for
-every contact-kind file, and per-file edits update it through
-`replace_file`. Contacts that lack an email body section keep
-`emails IS NULL` and simply don't match email-substring queries.
 
 The chan-llm tool sandbox (and the MCP server it backs) does not
 expose a contacts-aware tool, by design. Agents reach contacts
@@ -677,6 +859,34 @@ Adding a dedicated
 `Workspace::contacts_filtered` over a wire the model already has the
 primitives to traverse.
 
+### Metadata archive
+
+`metadata_archive` exports and imports the per-workspace sidecar
+state as a zstd-compressed tar so search/graph/report caches and
+session blobs can move between machines (or serve as a backup)
+without re-deriving them. Layout inside the archive:
+`chan-metadata-v1/manifest.json` plus
+`chan-metadata-v1/payload/<path_key>/...`, where the path key uses
+the same canonical-path slug + sha256 scheme as the metadata key.
+Included subtrees: `index`, `graph`, `report`, `sessions`.
+Excluded: `locks` (coordination, no data), `tokens` (machine-local
+secrets), `trash` (user data, not cache), and transient
+staging/temp/`*.shm` files. Entry paths are validated on both
+sides (`validate_archive_entry_path`) so a crafted archive cannot
+write outside the payload root. The manifest records the archive
+format version, the producing chan version, and per-workspace
+identity so import can match payloads to registry rows.
+
+### Teams config
+
+`teams` is a schema-only module: `TeamConfig` (team name, host
+name/handle, terminal tab group, `@`-prefix policy, MCP-env
+opt-in) plus `Member` / `Position`. The struct is persisted to a
+`config.toml` next to the team's working files and consumed by
+chan-server's `/api/team-config` route; chan-workspace owns the
+shape so serialization stays uniform across consumers, but no
+team behavior lives here.
+
 ## 4. Public API surface
 
 ### Library
@@ -689,6 +899,7 @@ Library::list_workspaces() -> Vec<KnownWorkspace>
 Library::default_workspace_root() -> Option<PathBuf>
 Library::set_default_workspace_root(root: Option<PathBuf>) -> Result<()>
 Library::effective_default_workspace_root() -> PathBuf
+Library::drafts_dir() -> String
 
 Library::register_workspace(root: &Path) -> Result<KnownWorkspace>
 Library::unregister_workspace(root: &Path) -> Result<bool>
@@ -697,6 +908,7 @@ Library::move_workspace(old: &Path, new: &Path) -> Result<bool>
 Library::open_workspace(root: &Path) -> Result<Arc<Workspace>>
 
 Library::reset_workspace(root: &Path, mode: ResetMode) -> Result<ResetReport>
+Library::reset_workspace_with(root, mode, progress) -> Result<ResetReport>
 Library::sweep_orphans() -> Result<SweepReport>
 
 Library::workspace_paths_for(root: &Path) -> Option<WorkspacePaths>
@@ -710,16 +922,18 @@ Library::walk_filter() -> Arc<WalkFilter>
 ```rust
 Workspace::root() -> &Path
 Workspace::paths() -> &WorkspacePaths
+Workspace::walk_filter() -> &WalkFilter
 
 Workspace::read(rel: &str) -> Result<Vec<u8>>
+Workspace::sniff_is_text(rel: &str) -> bool
 Workspace::read_text(rel: &str) -> Result<String>                  // gated
 Workspace::read_text_with_stat(rel: &str)                          // gated
     -> Result<(String, FileStat)>
-Workspace::read_text_with_stat_chunked(rel, chunk_size, callback)  // gated
+Workspace::read_text_with_stat_chunked(rel, chunk_size, on_event)  // gated
     -> Result<()>
 Workspace::write_text(rel: &str, content: &str) -> Result<()>      // gated
 Workspace::write_text_if_unchanged(rel: &str,                      // gated, CAS
-    expected_mtime: Option<i64>,
+    expected_mtime_ns: Option<i64>,
     content: &str,
 ) -> Result<()>
 Workspace::write_bytes(rel: &str, content: &[u8]) -> Result<()>
@@ -729,14 +943,37 @@ Workspace::stat(rel: &str) -> Result<FileStat>
 Workspace::list(rel: &str) -> Result<Vec<DirEntry>>
 Workspace::list_tree() -> Result<Vec<TreeEntry>>
 Workspace::list_tree_prefix(prefix: &str) -> Result<Vec<TreeEntry>>
+Workspace::list_tree_unified() / list_tree_prefix_unified(prefix)
+Workspace::list_tree_filtered_unified()
+Workspace::list_tree_prefix_filtered_unified(prefix)
 Workspace::create_dir(rel: &str) -> Result<()>
 Workspace::remove(rel: &str) -> Result<()>                 // soft-delete to trash
 Workspace::rename(from: &str, to: &str) -> Result<()>
+Workspace::rename_with_link_rewrite(from, to) -> Result<RenameOutcome>
+Workspace::copy(from: &str, to: &str) -> Result<CopyOutcome>
+Workspace::resolve_free_name(dest_dir: &str, name: &str) -> Result<String>
+
+Workspace::resolve_physical_path(rel: &str) -> Result<PathBuf>
+Workspace::resolve_physical_dir(rel: &str) -> Result<PathBuf>
+Workspace::physical_path_to_virtual(path: &Path) -> Option<String>
+
+Workspace::bootstrap() -> Result<BootstrapTree>
+Workspace::bootstrap_dir(rel: &str) -> Result<BootstrapTree>
 
 Workspace::trash_list() -> Result<Vec<TrashEntry>>
 Workspace::trash_restore(id: &str) -> Result<()>
 Workspace::trash_purge(id: &str) -> Result<()>
 Workspace::trash_empty() -> Result<()>
+
+Workspace::drafts_dir() -> &Path
+Workspace::drafts_dir_name() -> &str
+Workspace::create_draft_dir(name: &str) -> Result<DraftRef>
+Workspace::list_drafts() -> Result<Vec<DraftRef>>
+Workspace::inspect_draft(name: &str) -> Result<DraftInspection>
+Workspace::promote_draft(...) -> Result<DraftPromoteReport>
+Workspace::discard_draft(name: &str) -> Result<()>
+Workspace::draft_preflight() -> Result<Vec<DraftIssue>>
+Workspace::next_untitled_draft_name() -> Result<String>
 
 Workspace::put_session(key: &str, content: &[u8]) -> Result<()>
 Workspace::get_session(key: &str) -> Result<Option<Vec<u8>>>
@@ -747,26 +984,33 @@ Workspace::import_contacts(dir: &str,
     contacts: Vec<Contact>,
     opts: ImportOpts,
 ) -> Result<ImportSummary>
+Workspace::import_contacts_with(..., progress) -> Result<ImportSummary>
 Workspace::contacts() -> Result<Vec<ContactNode>>
 Workspace::contacts_filtered(query: Option<&str>, limit: usize)
     -> Result<Vec<ContactNode>>
-Workspace::contacts_need_email_backfill() -> Result<bool>
 ```
 
-`BYTES_WRITE_LIMIT` and `TEXT_WRITE_LIMIT` cap a single write
-call; callers exceeding them get `ChanError::TooLarge`.
+`TEXT_WRITE_LIMIT` (2 MiB) caps a single text write for new files;
+existing files may be rewritten up to their current size.
+`BYTES_WRITE_LIMIT` (50 MiB) caps `write_bytes`. Callers exceeding
+them get `ChanError::WriteTooLarge`. Tree listings cap at
+`LIST_TREE_LIMIT` (500k entries) and per-dir listings at
+`LIST_DIR_LIMIT` (50k); exceeding callers get `ListingTooLarge`.
 
-### Workspace: search and graph
+### Workspace: search, graph, report
 
 ```rust
 Workspace::search(query: &str, opts: &SearchOpts) -> Result<SearchResult>
 Workspace::reindex(cancel: Option<&AtomicBool>) -> Result<BuildSummary>
 Workspace::reindex_with(cancel: Option<&AtomicBool>,
     progress: &dyn ProgressCallback) -> Result<BuildSummary>
+Workspace::reindex_with_aggression(cancel, progress, aggression)
+    -> Result<BuildSummary>
 Workspace::index_file(rel: &str) -> Result<()>
 Workspace::forget_file(rel: &str) -> Result<()>
 Workspace::num_indexed() -> Result<u64>
 Workspace::index_stats() -> Result<IndexStats>
+Workspace::indexed_paths() -> Result<Vec<String>>
 Workspace::needs_rebuild() -> bool
 Workspace::is_reindexing() -> bool
 Workspace::needs_replay_writes() -> bool
@@ -776,25 +1020,50 @@ Workspace::reconcile() -> Result<ReconcileReport>
 Workspace::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>
 Workspace::resolve_link(target: &str) -> Option<ResolvedLink>
 
+Workspace::boot() -> Result<()>          // activate opted-in layers
+
+// Per-workspace settings (persisted in <index_dir>/config.toml).
+Workspace::semantic_enabled() / set_semantic_enabled(bool)
+Workspace::semantic_model() / set_semantic_model(&str)
+Workspace::reports_enabled() / set_reports_enabled(bool)
+Workspace::excluded_dirs() / set_excluded_dirs(Vec<String>)
+Workspace::global_excluded_dirs() / effective_excluded_dirs()
+Workspace::screensaver_enabled() / timeout_secs() / theme() /
+    pin_hash() (+ setters)
+
 Workspace::graph() -> Result<&GraphView>
 GraphView::neighbors(rel: &str) -> Result<Vec<Edge>>
 GraphView::backlinks(rel: &str) -> Result<Vec<Edge>>
 GraphView::tags() -> Result<Vec<Tag>>
+GraphView::mentions() -> Result<Vec<Mention>>
 GraphView::files_with_tag(tag: &str) -> Result<Vec<String>>
+GraphView::files() / files_with_stat() / node_kind(rel)
 GraphView::replace_file(rel, title, mtime, outgoing, headings)
     -> Result<()>
 GraphView::forget_file(rel: &str) -> Result<()>
+GraphView::forget_under(prefix: &str) -> Result<()>
 GraphView::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>
+GraphView::headings_of(rel: &str) -> Result<Vec<HeadingRow>>
+
+Workspace::report() -> Result<Report>
+Workspace::report_for_prefix(prefix: &str) -> Result<Report>
+Workspace::report_for_files(paths: &[String]) -> Result<Report>
+Workspace::report_for_dir(dir: &str) -> Result<Option<Report>>
+Workspace::report_jsonl_path() -> Result<PathBuf>
 ```
 
-### Workspace: watch
+### Workspace: watch and indexer
 
 ```rust
 Workspace::watch(cb: Arc<dyn WatchCallback>) -> Result<WatchHandle>
+Workspace::start_graph_indexer(debounce_ms: u64) -> Result<GraphIndexer>
 
 trait WatchCallback: Send + Sync {
     fn on_event(&self, event: WatchEvent);
 }
+
+GraphIndexer::pending_count() / indexed_total() / forgotten_total()
+    / reconciles_total() / stop()
 ```
 
 ### Workspace: progress and indexing status
@@ -860,7 +1129,7 @@ Pinned by `tests/progress_events.rs::progress_event_serializes_for_the_wire`,
 so a future change to the wire shape is an explicit edit, not
 silent breakage of every connected client.
 
-Push vs. pull, and how the three signals relate:
+Push vs. pull, and how the signals relate:
 
   - `ProgressCallback::on_progress` is the push side: zero or more
     events per long-running call, fired on the producer's thread.
@@ -871,11 +1140,11 @@ Push vs. pull, and how the three signals relate:
     exit path (success, error, cancellation, panic) via a RAII
     guard. A Web App / WebSocket client uses this on first connect
     to render "indexing..." without waiting for the next push.
-  - `Workspace::needs_rebuild()` is orthogonal: set by `Workspace::open`
-    when it finds a stale `rebuild.inprogress` marker from a prior
-    crashed reindex, cleared after the next successful `reindex_with`
-    commits. Survives across process restarts, which the in-memory
-    `is_reindexing()` cannot.
+  - `Workspace::needs_rebuild()` is orthogonal: set at workspace open
+    when a stale `rebuild.inprogress` marker from a prior
+    crashed reindex is found, cleared after the next successful
+    `reindex_with` commits. Survives across process restarts, which
+    the in-memory `is_reindexing()` cannot.
   - `Workspace::reconcile()` is the diff-based recovery path. Walks
     the live tree, compares each editable-text file's mtime against
     the graph row, and emits journal-bracketed `index_file` /
@@ -886,12 +1155,12 @@ Push vs. pull, and how the three signals relate:
     FSEvents coalesce-loss), post-`replay_pending_writes` sanity.
     The diff compares `(mtime, size)` tuples against the graph's
     stamped row; a same-mtime-different-size rewrite is caught
-    via the size delta. Legacy rows predating v5 carry `size =
-    NULL`, in which case reconcile falls back to mtime-only for
-    that row and a subsequent `index_file` backfills size.
+    via the size delta. Rows that carry `size = NULL` (stamped
+    before a size was recorded) fall back to mtime-only for
+    that row, and a subsequent `index_file` backfills size.
   - `Workspace::needs_replay_writes()` is the per-file companion: set
-    by `Workspace::open` when it finds a non-empty `pending_writes.json`
-    journal under `graph_dir/`. Each entry is a `(rel, op)` pair
+    at workspace open when a non-empty `pending_writes.json`
+    journal exists under `graph_dir/`. Each entry is a `(rel, op)` pair
     written by `index_file` / `forget_file` before either backend
     is touched and removed after both commit. A crash between the
     graph commit and the search-index commit leaves the entry
@@ -934,22 +1203,27 @@ NodeKind::{File, Contact}
 ContactNode { rel_path, basename, title }
 ```
 
-### VCS-parent detection
+### VCS detection
 
 ```rust
 vcs::detect_parent_vcs(path: &Path) -> Option<VcsParent>
+vcs::detect_workspace_vcs(root: &Path) -> Option<VcsKind>
+vcs::is_vcs_control_path(rel: &str) -> bool
 
 enum VcsKind { Git, Mercurial, Subversion }
 impl VcsKind { fn as_str(&self) -> &'static str }       // "git" | "hg" | "svn"
 struct VcsParent { kind: VcsKind, repo_root: PathBuf }
 ```
 
-Pure stat-walk. Used by `chan serve` (and any future shell) to
-decide whether a workspace path is inside a Git / Mercurial /
-Subversion working tree and would be better served at the repo
-root instead of an arbitrary subdir.
+Pure stat-walk. `detect_parent_vcs` is used by `chan serve` (and
+any future shell) to decide whether a workspace path is inside a
+Git / Mercurial / Subversion working tree and would be better
+served at the repo root instead of an arbitrary subdir.
+`detect_workspace_vcs` answers "is the root itself a checkout".
+`is_vcs_control_path` recognizes the control files the watcher
+forwards (`.git/HEAD`, `.git/index`, `.hg/dirstate`).
 
-Algorithm:
+`detect_parent_vcs` algorithm:
 
   - Canonicalize the input. Skip the leaf (we report only strict
     ancestors so a user who picked the repo root sees `None`).
@@ -972,15 +1246,20 @@ repo root, present a dialog, accept an explicit override).
 
 ### Public types (selected)
 
-`SearchMode { Bm25, Dense, Hybrid }`, `SearchOpts`, `SearchResult`,
-`Hit`, `Chunking { Headings, WholeDoc, Fixed { chars } }`,
+`SearchMode { Bm25, Semantic, Hybrid }`, `SearchAggression`,
+`SearchOpts`, `SearchResult`, `Hit`,
+`Chunking { Headings, WholeDoc, Fixed { chars } }`,
 `IndexConfig`, `IndexStats`, `BuildOptions`, `BuildSummary`.
 `ProgressCallback`, `ProgressEvent`, `ProgressStage`, `NoProgress`,
 `progress_fn`. `ResetMode { Cache, Everything }`, `ResetReport`.
-`KnownWorkspace`, `Registry`. `Edge`, `EdgeKind`, `Tag`, `HeadingRow`,
-`LinkTarget`, `LinkTargetKind`. `WatchEvent`, `WatchKind`,
-`WatchHandle`, `WatchCallback`. `VcsKind`, `VcsParent`. `ChanError`,
-`Result`.
+`KnownWorkspace`, `Registry`. `Edge`, `EdgeKind`, `Tag`, `Mention`,
+`HeadingRow`, `LinkTarget`, `LinkTargetKind`. `DraftRef`,
+`DraftInspection`, `DraftPromoteMode`, `DraftPromoteReport`.
+`BootstrapTree`, `BootstrapDir`, `BootstrapFile`, `SubtreeStats`.
+`MetadataExportOptions / Report`, `MetadataImportOptions / Report`,
+`MetadataManifest`. `TeamConfig`, `Member`, `Position`.
+`WatchEvent`, `WatchKind`, `WatchHandle`, `WatchCallback`.
+`VcsKind`, `VcsParent`. `ChanError`, `Result`.
 
 All public types are owned (no lifetimes) and `Send + Sync`.
 `WatchEvent`, `WatchKind`, `ProgressEvent`, and `ProgressStage`
@@ -1001,18 +1280,16 @@ across a WebSocket / FFI bridge without an intermediate copy type.
     `std::fs::symlink_metadata` so a symlink target can't mask
     the link. New ops touching user content must apply the same
     gate.
-  - `fs_ops::is_editable_text(rel)` is the editor gate: true for
-    `FileClass::EditableText | Text`, i.e. anything the editor can
-    round-trip through a UTF-8 buffer. `read_text` / `write_text`
-    enforce it; binary callers use `read` / `write_bytes`. The
-    narrower `fs_ops::is_indexable_text(rel)` is the indexer
-    gate: true only for `FileClass::EditableText` (.md / .txt),
-    used by the search index, graph rebuild, and link-rewrite
-    on rename.
+  - The editor gate (`is_editable_text` plus the content-sniff
+    fallback) guards `read_text` / `write_text`; binary callers
+    use `read` / `write_bytes`. The narrower
+    `fs_ops::is_indexable_text(rel)` is the indexer gate: true
+    only for `FileClass::EditableText` (.md / .txt), used by the
+    search index, graph rebuild, and link-rewrite on rename.
   - The crate also uses `cap-std` / `cap-tempfile` for sandboxed
-    Dir-relative atomic writes on hot paths, closing the TOCTOU
-    window between resolve and open by anchoring the open at a
-    pre-validated `Dir` handle.
+    Dir-relative reads and atomic writes on hot paths, closing the
+    TOCTOU window between resolve and open by anchoring the open
+    at a pre-validated `Dir` handle.
   - **Stat before read in `index_file`**: `Workspace::index_file_inner`
     stats the file (capturing `(mtime, size)`) BEFORE reading its
     content. A concurrent writer that lands in the window between
@@ -1057,20 +1334,20 @@ What's NOT closed today:
 
   - Pure-libstd TOCTOU on cold paths: a path that passes the
     strict resolve could in principle be swapped for a symlink
-    before a non-cap-std open syscall. The hot writer paths use
-    cap-std and so close this; cold paths rely on the strict
+    before a non-cap-std open syscall. The hot reader/writer paths
+    use cap-std and so close this; cold paths rely on the strict
     resolve plus single-user threat model. Closing fully on
     Linux requires `openat2(2)` with `RESOLVE_BENEATH |
     RESOLVE_NO_SYMLINKS` (Linux 5.6+) or per-component
-    `O_NOFOLLOW` on platforms without openat2. Tracked as
-    future hardening.
+    `O_NOFOLLOW` on platforms without openat2.
 
 ### Atomic writes
 
 Anything chan-workspace-managed (registry, sessions, blob storage,
 graph control records, atomic-write user files) routes through
-`fs_ops::atomic_write` (or its cap-std equivalent for sandboxed
-writes): tmpfile in the same directory, fsync the file, rename
+`fs_ops::atomic_write` (or its cap-std equivalent
+`atomic_write_in` for sandboxed writes): tmpfile in the same
+directory, fsync the file, rename
 into place, fsync the directory. Mode + xattrs (Finder tags on
 macOS, SELinux labels and capabilities on Linux) are captured
 from the existing target before the rename and restored on the
@@ -1113,14 +1390,15 @@ lets concurrent readers proceed alongside the writer.
 
 ### Workspace-internal noise filter
 
-chan-workspace stores ZERO files inside the user's workspace directory.
-The workspace is purely user content (markdown, attachments). This
-makes it safe to drop a workspace inside an existing git repo, an
-iCloud / Google Drive / Dropbox directory, or anywhere else. A stray
+Apart from the drafts directory (deliberate, user-visible,
+configurable), chan-workspace stores ZERO files inside the user's
+workspace directory. This makes it safe to drop a workspace inside
+an existing git repo, an iCloud / Google Drive / Dropbox
+directory, or anywhere else. A stray
 `.chan/` left over from an older install or created by a third-
-party tool is filtered out by `walk_workspace` and `watch::dispatch`;
-chan-workspace never emits events for it or includes it in
-`list_tree`.
+party tool is filtered out by `walk_workspace` and the watcher
+dispatch; chan-workspace never emits events for it or includes it
+in `list_tree`.
 
 ## 6. On-disk layout
 
@@ -1128,11 +1406,15 @@ chan-workspace never emits events for it or includes it in
 
 ```
 ~/.chan/                          (config_dir on desktop)
-  config.toml                     workspace registry + default workspace root
+  config.toml                     workspace registry, default workspace
+                                  root, index_excluded_dirs, drafts_dir
   workspaces/<metadata_key>/          per-workspace metadata root
     sessions/                     opaque session blobs
-    graph/graph.sqlite            graph DB and graph sidecars
-    locks/                        cross-process coordination
+    graph/graph.sqlite            graph DB
+    graph/                        graph sidecars: rebuild.inprogress
+                                  marker, pending_writes.json journal,
+                                  rename_log.json
+    locks/writer.lock             cross-process coordination
     tokens/                       bearer-token store allocated for
                                   apps such as chan-server
     trash/<id>/                   per-workspace Trash. Each entry holds
@@ -1143,7 +1425,8 @@ chan-workspace never emits events for it or includes it in
                                   less entries as crash leftovers.
     report/report.jsonl           chan-report cache
     index/                        tantivy segments + dense vectors +
-                                  config.toml
+                                  config.toml (index schema + per-
+                                  workspace settings)
 ```
 
 Drafts (the scratch namespace for Cmd+N) are NOT stored in this
@@ -1156,54 +1439,30 @@ canonical path at first registration. `Library::move_workspace`
 preserves it when the local path moves, so metadata follows without
 moving files on disk.
 
-Per platform:
-
-  Platform    config_dir          state_dir                cache_dir
-  ----------  ------------------  -----------------------  ------------------
-  macOS       ~/.chan             ~/.chan                  ~/.chan
-  Linux       ~/.chan             ~/.chan                  ~/.chan
-  Windows     C:\Users\u\.chan    C:\Users\u\.chan         C:\Users\u\.chan
-  iOS         (see below)         $sandbox/Library/        $sandbox/Library/
-                                  Application Support/     Caches/chan
-                                  chan
-  Android     (see below)         $sandbox/files/chan      $sandbox/cache/chan
-
-iOS and Android collapse `config_dir` onto `state_dir` because the
-home dir inside the app sandbox is not user-writable. The "brand-
-visible" argument for `~/.chan/` does not apply on mobile (the
-user cannot browse the sandbox anyway), so the registry lives
-alongside the rest of the per-app state.
+Per platform: desktop targets (macOS, Linux, Windows) use `~/.chan`
+(or the home-equivalent) for config, state, and cache alike — one
+visible directory, easy to inspect and delete. iOS and Android
+collapse `config_dir` onto the app-sandbox state dir because the
+home dir inside the sandbox is not user-writable and the
+"brand-visible" argument for `~/.chan/` does not apply on mobile
+(the user cannot browse the sandbox anyway).
 
 ### Workspace contents
 
 User content: markdown, attachments, whatever the user puts there.
-
-The one chan-managed subtree that lives inside the workspace root is
-the Drafts directory, named by `Registry::drafts_dir` (default
-`.Drafts`). It holds Cmd+N scratch work as `<name>/draft.md` plus
-companions (e.g. pasted images). It is dot-prefixed so it stays out
-of the way and is created lazily on the first Cmd+N, so an untouched
-workspace has no `.Drafts/`.
-
-Keeping drafts in-tree reverses the earlier design that parked them
-in chan metadata to keep the user's tree clean. The current tradeoff
-is the simpler uniform path: drafts are ordinary relpaths
-(`.Drafts/<name>/draft.md`), so search, graph, and the watcher pick
-them up through the normal machinery with no virtual namespace, no
-separate cap-std handle, no separate watch root, and no synthesized
-graph node. Users who do not want drafts tracked by SCM add `.Drafts/`
-to their `.gitignore`.
-
-The walker still hard-skips `.git` and `.chan` and honors
-`index_excluded_dirs`; `.Drafts` is not on the skip list, so drafts
-index and graph like any other content.
+The one chan-managed subtree inside the workspace root is the
+Drafts directory (see "Drafts" in section 3): ordinary in-tree
+files, created lazily on the first Cmd+N, indexed and graphed like
+any other content. The walker still hard-skips `.git` and `.chan`
+and honors the effective excluded-dirs set; `.Drafts` is not on
+the skip list.
 
 ## 7. Error model
 
 One umbrella `ChanError` enum so the Swift / Kotlin error type
 is a single tagged union. All foreign errors (`io`, `toml`,
 `rusqlite`, `notify`, `tantivy`) collapse into `ChanError::Io`,
-`::ConfigDecode`, `::Graph`, `::Watch`, `::Index` with their
+`::ConfigDecode`, `::Graph`, `::Watch`, `::Search` with their
 `Display` text preserved.
 
 Variants intentionally do not carry rich nested types: uniffi can
@@ -1213,31 +1472,41 @@ not round-trip cleanly across the FFI.
 Notable variants:
 
   - `WorkspaceLocked`: another process holds the writer lock.
-  - `WriteConflict { current_mtime }`: CAS write lost the race.
+  - `WorkspaceAlreadyOpen`: this process still holds a handle.
+  - `WriteConflict { current_mtime_ns }`: CAS write lost the race.
   - `TrashOccupied`: restore would clobber a live entry.
-  - `SpecialFile`: target is a symlink, FIFO, socket, or device.
-  - `TooLarge`: write exceeds `BYTES_WRITE_LIMIT` /
-    `TEXT_WRITE_LIMIT`.
+  - `SpecialFile { kind, path }`: target is a symlink, FIFO,
+    socket, or device.
+  - `WriteTooLarge { kind, size, limit }`: write exceeds
+    `TEXT_WRITE_LIMIT` / `BYTES_WRITE_LIMIT`.
+  - `ListingTooLarge { observed, limit }`: listing exceeds
+    `LIST_TREE_LIMIT` / `LIST_DIR_LIMIT`.
+  - `NotEditableText`, `PathEscape`, `SymlinkEscape`: gate and
+    sandbox refusals.
+  - `DraftBroken { name, message }`: draft dir failed inspection.
+  - `Cancelled`: a cancel flag stopped a reindex.
 
 ## 8. Schema versioning
 
   - **Graph DB**: `PRAGMA user_version`. Migrations are
     idempotent and applied on every `GraphView::open`. Current
-    version: 5 (v2 added basename, v3 added emails, v4 added
+    version: 6 (v2 added `basename`, v3 added `emails`, v4 added
     staging tables for resumable reindex, v5 added a `size` column
     on `nodes` + `staging_nodes` so `Workspace::reconcile` can detect
     same-mtime-different-content rewrites that a mtime-only diff
-    would miss). Each `v < N` block wraps its schema change and the
+    would miss, v6 added `aliases` so the mention resolver can map
+    `@@<alias>` to a contact without re-parsing frontmatter per
+    query). Each `v < N` block wraps its schema change and the
     `PRAGMA user_version = N` bump in a single
     `unchecked_transaction` so a crash mid-migration leaves the DB
     at the previous version with intact data. A `column_exists`
-    helper guards the `ALTER TABLE ADD COLUMN` calls (v3, v5) so a
+    helper guards the `ALTER TABLE ADD COLUMN` calls so a
     crash before commit, which leaves the column physically added
     but `user_version` at the prior value, is safely re-run on the
     next open without `duplicate column name` errors.
 
-  - **Reindex resumability** (v4): `rebuild_graph` parses each
-    file straight into `staging_nodes` / `staging_edges` /
+  - **Reindex resumability** (v4 staging): `rebuild_graph` parses
+    each file straight into `staging_nodes` / `staging_edges` /
     `staging_headings`. Each file's stage is its own committed
     transaction, so the parse cursor (`MAX(rel_path)` over
     `staging_nodes`) advances durably without holding a long-lived
@@ -1253,43 +1522,45 @@ Notable variants:
   - **Search index**: `IndexConfig.schema_version` field
     persisted at `<index_dir>/config.toml` alongside the
     embedding model id and chunking strategy. Current version:
-    3 (indexer widened from `.md`-only to every
-    `FileClass::EditableText` extension, i.e. `.md` + `.txt`).
+    3 (the indexer ingests every `FileClass::EditableText`
+    extension, i.e. `.md` + `.txt`).
     Mismatched versions wipe `bm25/` + `embeddings/` and
-    rebuild on next open. Model swaps force a rebuild because
-    embedding dimensions and numerical drift differ.
+    rebuild on next open. Model swaps force an embeddings rebuild
+    because embedding dimensions and numerical drift differ.
 
   - **Vector shards**: each per-file file under `embeddings/`
-    carries its own `FORMAT_VERSION` (currently 2; v2 added the
-    `body_hash` checkpoint field for embed-phase skip on partial
-    rebuilds). The version is checked per shard in `load_all`; a
-    mismatch drops the shard silently and the next `build_all`
-    re-embeds the file. This is intentionally independent of the
-    schema-version wipe path: a shard-format bump should NOT
-    invalidate BM25 segments or other shards, only the shards that
-    actually need re-encoding.
+    carries its own `FORMAT_VERSION` (currently 2; the format
+    includes the `body_hash` checkpoint field for embed-phase skip
+    on partial rebuilds). The version is checked per shard in
+    `load_all`; a mismatch drops the shard silently and the next
+    `build_all` re-embeds the file. This is intentionally
+    independent of the schema-version wipe path: a shard-format
+    bump should NOT invalidate BM25 segments or other shards, only
+    the shards that actually need re-encoding.
 
-A schema bump in either store is user-data-safe: only chan-
+  - **Report JSONL**: `chan-report`'s `SCHEMA_VERSION` (currently
+    1) is checked on load; a mismatch (or any parse error) makes
+    chan-workspace discard the cache and rescan.
+
+A schema bump in any store is user-data-safe: only chan-
 managed cache is destroyed; the user's notes are untouched.
 
 ## 9. Consumers
 
-`chan-workspace` is consumed by the following crates. The first three
-live in the sibling repo `chan-writer/chan` and are pulled as
-path deps for now; switch to git or crates.io deps when the
-repos go public. The fourth is forward-looking.
+`chan-workspace` is consumed by sibling crates in this repository.
 
-### `chan-writer/chan` :: `chan` (CLI binary)
+### `chan` (CLI binary, `crates/chan`)
 
 The `chan` binary parses CLI args (clap) and dispatches
-subcommands (`add`, `list`, `remove`, `serve`, `index`,
-`search`, `upgrade`, an internal `__mcp`). It depends on
-`chan-workspace` directly with `default-features = false`, then
-re-enables `embeddings` (and `metal` on macOS, `cuda` opt-in on
-Linux) through its own feature passthroughs so `--no-default-
-features` propagates end-to-end. It also depends on `chan-server`
-for the `serve` subcommand and on `chan-llm` (with `mcp`) for
-the in-process MCP server.
+subcommands (`add`, `list`, `remove`, `serve`, `shell`, `index`,
+`reports`, `search`, `graph`, `status`, `config`, `metadata`,
+`contacts`, `upgrade`, plus the hidden `__mcp` / `__mcp-proxy`).
+It depends on `chan-workspace` with `default-features = false`,
+then re-enables `embeddings` (and `metal` on macOS, `cuda` opt-in
+on Linux) through its own feature passthroughs so
+`--no-default-features` propagates end-to-end. It also depends on
+`chan-server` for the `serve` subcommand and on `chan-llm` (with
+`mcp`) for the in-process MCP server.
 
 Usage shape:
 
@@ -1300,54 +1571,55 @@ Usage shape:
     `workspace.search(...)`, `workspace.reindex(...)`, `workspace.list_tree()`
     for `index` / `search` / direct CLI access.
   - `Library::reset_workspace` for `chan reset`.
+  - `metadata_archive` export / import for `chan metadata`.
 
-### `chan-writer/chan` :: `chan-server` (HTTP + WebSocket)
+### `chan-server` (HTTP + WebSocket, `crates/chan-server`)
 
 `chan-server` wraps `chan-workspace`'s `Library` / `Workspace` handles in
 axum routes and serves the embedded Svelte frontend (rust-embed).
 It exposes REST endpoints for filesystem ops, search, graph
-traversal, link autocomplete, and trash management; a WebSocket
-channel for `WatchEvent`s; and session blob endpoints that proxy
-directly to `put_session`.
+traversal, link autocomplete, contacts, reports, drafts, and trash
+management; a WebSocket channel for `WatchEvent`s and
+`ProgressEvent`s; session blob endpoints that proxy directly to
+`put_session`; and the in-process MCP bridge that hosts chan-llm's
+tool service over a Unix-domain socket.
 
 It depends on `chan-workspace` with `default-features = false` and
 forwards `embeddings`, `metal`, `cuda` through its own feature
-gates. `chan-server`'s "embeddings on" UI badge reflects the
-chan-workspace feature state at compile time.
+gates. All HTTP filesystem ops route through `Workspace` so the
+sandbox, special-file refusal, atomic writes, and editable-
+text gate apply automatically; `chan-server` never reads or
+writes workspace contents directly. On WebSocket connect it
+answers a status probe with `Workspace::is_reindexing()` /
+`needs_rebuild()` / `index_stats()` so a freshly attached client
+can render indexing state without waiting for the next push.
 
-Usage shape:
+### `chan-llm` (`crates/chan-llm`)
 
-  - One `Arc<Library>` in the axum extension state.
-  - `Arc<Workspace>` per-workspace in a `RwLock<HashMap<WorkspaceKey,
-    Arc<Workspace>>>` populated lazily on first request.
-  - WebSocket handler installs a `WatchCallback` that
-    serializes `WatchEvent`s onto the socket; drops the
-    `WatchHandle` on disconnect. The same socket (or a sibling
-    one) carries `ProgressEvent`s by installing a
-    `ProgressCallback` that forwards each tick as JSON, and
-    answers a "status on connect" probe with
-    `Workspace::is_reindexing()` / `Workspace::needs_rebuild()` /
-    `Workspace::index_stats()` so a freshly attached Web App client
-    can render the indexing state without waiting for the next
-    push.
-  - All HTTP filesystem ops route through `Workspace` so the
-    sandbox, special-file refusal, atomic writes, and editable-
-    text gate apply automatically. `chan-server` never reads or
-    writes workspace contents directly.
+The MCP tool sandbox. Holds an `Arc<Workspace>` and dispatches
+every tool call (`read_file`, `write_file`, `list_files`,
+`resolve_path`, `search_content`, `repo_report`, graph tools,
+`read_media`) through the Workspace API so the sandbox and gates
+apply to agent-driven access.
 
-### `chan-writer/chan` :: `fetch-models` (build helper)
+### `chan-desktop` (`desktop/src-tauri`)
+
+The Tauri shell embeds chan-server and reuses the same
+`Library` / `Workspace` handles; the workspace lifecycle (open,
+serve handoff, registry) is identical to the CLI path.
+
+### `fetch-models` (build helper, `crates/fetch-models`)
 
 `fetch-models` is a build-time helper that pre-fetches the
-default embedding model (`BAAI/bge-small-en-v1.5`, ~130 MB) into
-`crates/chan-server/resources/models/` so chan-server's rust-
-embed step bundles it into the release binary. It depends on
+default embedding model (`chan_workspace::DEFAULT_MODEL`,
+`BAAI/bge-small-en-v1.5`) into
+`crates/chan-server/resources/models.tar.zst` so chan-server's
+rust-embed step bundles it into the release binary. It depends on
 `chan-workspace` with the `embeddings` feature explicitly enabled to
 reuse the same hf-hub + tokenizers stack the runtime uses, so a
 contributor's `cargo build` does not pay the model download
-unless `make models` (or `make build-release`) runs.
-
-The crate uses `chan_workspace::DEFAULT_MODEL` and the embedder's
-fetcher entry point; it does not open a `Workspace`.
+unless `make models` (or `make build-release`) runs. It uses the
+embedder's fetcher entry point and does not open a `Workspace`.
 
 ### Future native shells (iOS / Android)
 
@@ -1356,91 +1628,9 @@ boundary: no lifetimes on public types, owned `String` /
 `PathBuf` only, `Arc`-able handles, one umbrella `ChanError`
 enum with primitive payloads, callback-based streaming through
 `Arc<dyn WatchCallback>` instead of `impl Stream` or channels.
-The native shells will link the same crate via uniffi and share
-the atomic-write / sandbox / blob-storage semantics with the
+A native shell links the same crate and shares the
+atomic-write / sandbox / blob-storage semantics with the
 desktop chan-server without reimplementing them per platform.
 The `--no-default-features` build (BM25-only, no candle) is the
 expected starting point for iOS until candle-core builds cleanly
 for that target.
-
-## 10. What's wired vs. what's ahead
-
-Wired and tested:
-
-  - **Markdown parser** (`src/markdown/`): native-only port of
-    `chan-shared`'s frontmatter, ATX heading, link, and
-    reference-token extractors. Powers both the search title /
-    body extraction and the graph indexer. The wasm-only smart-
-    node serialization stays in the chan repo as an editor
-    concern.
-  - **Search index** (`src/index/`): tantivy 0.24 BM25 plus an
-    optional candle-backed dense path under the `embeddings`
-    feature. `Hybrid` mode runs both and fuses with reciprocal-
-    rank fusion. Schema versioned via `<index_dir>/config.toml`;
-    mismatches wipe and rebuild on next open. `Workspace::search`,
-    `Workspace::index_file`, `Workspace::reindex`, `Workspace::reindex_with`,
-    `Workspace::forget_file`, `Workspace::num_indexed`,
-    `Workspace::index_stats` all functional.
-  - **Graph reads + writes** (`src/graph.rs`): `neighbors`,
-    `backlinks`, `tags`, `files_with_tag`, `files`,
-    `headings_of` return real data. `replace_file` inserts
-    outgoing edges (links + tag/mention tokens) and headings
-    with computed anchors. `clear` wipes everything for a full
-    rebuild. WAL plus r2d2 reader pool; writer behind a Mutex.
-  - **Watcher** (`src/watch.rs`): `Workspace::watch` is wired and
-    filters workspace-internal noise (`.chan/`, `.git/`).
-  - **Built-in graph indexer** (`src/indexer.rs`):
-    `Workspace::start_graph_indexer(debounce_ms)` returns a
-    `GraphIndexer` handle that owns a watcher subscription and a
-    worker thread; per-path events are debounced, deletions and
-    rename sources flush immediately, and watcher-error / path-
-    less events workspace a `Workspace::reconcile`. Replaces the
-    duplicated indexer loop each consumer (chan binary, chan-
-    server) previously maintained.
-
-Still ahead:
-
-  - **Per-section search snippet breadcrumbs**: hits return per-
-    chunk snippets but the breadcrumb (`heading_path`) is not
-    fully populated for every chunking mode. Tightens relevance
-    for long files.
-  - **Wiki-link resolution**: `Workspace::resolve_link` exists for
-    direct (`recipes/pasta` to `recipes/pasta.md`) lookups.
-    Fuzzier resolution (prefix-match, alias table) lives at the
-    consumer layer for now. Could move into chan-workspace if every
-    consumer needs the same logic.
-  - **TOCTOU hardening on cold paths**: hot writer paths use
-    cap-std; cold paths rely on the strict resolve plus single-
-    user threat model. Migrate the rest to cap-std or
-    `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)` where
-    available.
-
-## 11. Future extensions
-
-Sketch only, not committed:
-
-  - (committed) `Workspace::start_graph_indexer(debounce_ms)`: returns
-    a `GraphIndexer` handle. The indexer owns a watcher
-    subscription and a worker thread; per-path events are debounced
-    with a trailing-edge window, deletions and the source side of
-    renames are flushed immediately, and `ProviderError` or
-    path-less events workspace a full `Workspace::reconcile`. Removes the
-    duplicated indexer loop from chan / chan-server. Counters
-    (`pending_count`, `indexed_total`, `forgotten_total`,
-    `reconciles_total`) workspace the status surface. Drop the handle
-    (or call `stop()`) to tear down synchronously.
-  - Remote-backed `Workspace` impl: a future trait split could let
-    a thin client call `read` / `write` / `search` against an
-    HTTP endpoint while the server runs the real chan-workspace.
-    Not designed for now; the API surface is shaped to allow
-    it later. The chan-tunnel crates already give us the
-    transport.
-  - Background reindex job handle: if synchronous reindex turns
-    out painful in practice, add a `JobHandle` returned by
-    `reindex_async()` that the caller polls. Defer until
-    needed; today the consumer spawns its own worker thread
-    around `reindex_with`.
-  - Configurable trash retention as a `Library` setting
-    (currently hardcoded to 30 days).
-  - Unicode-aware case folding for `link_targets` once an ICU-
-    or `unicase`-backed path is wired into the SQLite query.

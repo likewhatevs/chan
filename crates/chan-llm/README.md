@@ -5,24 +5,26 @@ tools. Filesystem access routes through `chan-workspace`, so the path
 sandbox, special-file refusal, atomic writes, and editable-text gate
 apply to every tool call.
 
-The supported integration point is MCP. The in-app Agent/session
-surface was removed in phase 5.
+The supported integration point is MCP; the crate has no in-app
+chat or agent-session surface.
 
 ## Add to your project
 
 ```toml
 [dependencies]
-chan-llm = "0.11"
+chan-llm = "0.31"
 
 # Optional: stdio MCP server module + the `chan-llm-mcp` binary.
 # Pulls rmcp + schemars; off by default.
-chan-llm = { version = "0.11", features = ["mcp"] }
+chan-llm = { version = "0.31", features = ["mcp"] }
 ```
 
 ## Public API
 
 ```text
-StandardTool         ReadFile | WriteFile | ListFiles | SearchContent.
+StandardTool         ReadFile | WriteFile | ListFiles | ResolvePath |
+                     SearchContent | RepoReport | GraphNeighbors |
+                     GraphTags | GraphFilesWithTag
 ToolContext          { workspace: Arc<Workspace> }
 ToolOutcome          Ok(json)
 tools::execute(name, args, &ctx) -> Result<ToolOutcome>
