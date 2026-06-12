@@ -202,19 +202,23 @@ pub enum ControlTenant {
 pub const TERMINAL_ONLY_NEEDS_WORKSPACE: &str =
     "this command needs a workspace; this is a standalone terminal session — run it from a terminal inside a workspace window";
 
+/// Shared server resources a control-socket connection needs, plus
+/// the tenant gate. One value per `start`; cloned per connection
+/// (every field is a cheap handle).
+#[derive(Clone)]
+pub struct ControlSocketCtx {
+    pub workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
+    pub events_tx: broadcast::Sender<String>,
+    pub self_writes: Arc<crate::self_writes::SelfWrites>,
+    pub terminal_registry: TerminalRegistryCell,
+    pub survey_bus: Arc<crate::survey::SurveyBus>,
+    pub window_bus: Arc<crate::window_bus::WindowBus>,
+    pub window_presence: Arc<crate::window_presence::WindowPresence>,
+    pub tenant: ControlTenant,
+}
+
 #[cfg(unix)]
-#[allow(clippy::too_many_arguments)]
-pub fn start(
-    socket_path: PathBuf,
-    workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
-    events_tx: broadcast::Sender<String>,
-    self_writes: Arc<crate::self_writes::SelfWrites>,
-    terminal_registry: TerminalRegistryCell,
-    survey_bus: Arc<crate::survey::SurveyBus>,
-    window_bus: Arc<crate::window_bus::WindowBus>,
-    window_presence: Arc<crate::window_presence::WindowPresence>,
-    tenant: ControlTenant,
-) -> std::io::Result<ControlHandle> {
+pub fn start(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Result<ControlHandle> {
     let _ = std::fs::remove_file(&socket_path);
     let listener = UnixListener::bind(&socket_path)?;
 
@@ -228,13 +232,7 @@ pub fn start(
                     continue;
                 }
             };
-            let workspace_cell = workspace_cell.clone();
-            let events_tx = events_tx.clone();
-            let self_writes = self_writes.clone();
-            let terminal_registry = terminal_registry.clone();
-            let survey_bus = survey_bus.clone();
-            let window_bus = window_bus.clone();
-            let window_presence = window_presence.clone();
+            let ctx = ctx.clone();
             tokio::spawn(async move {
                 let (read, mut write) = stream.into_split();
                 let mut reader = BufReader::new(read);
@@ -244,20 +242,7 @@ pub fn start(
                         message: "empty control request".into(),
                     },
                     Ok(_) => match serde_json::from_str::<ControlRequest>(&line) {
-                        Ok(req) => {
-                            handle_request(
-                                req,
-                                &workspace_cell,
-                                &events_tx,
-                                &self_writes,
-                                terminal_registry.get(),
-                                &survey_bus,
-                                &window_bus,
-                                &window_presence,
-                                tenant,
-                            )
-                            .await
-                        }
+                        Ok(req) => handle_request(req, &ctx).await,
                         Err(e) => ControlResponse::Error {
                             message: format!("invalid control request: {e}"),
                         },
@@ -281,18 +266,7 @@ pub fn start(
 }
 
 #[cfg(not(unix))]
-#[allow(clippy::too_many_arguments)]
-pub fn start(
-    _socket_path: PathBuf,
-    _workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
-    _events_tx: broadcast::Sender<String>,
-    _self_writes: Arc<crate::self_writes::SelfWrites>,
-    _terminal_registry: TerminalRegistryCell,
-    _survey_bus: Arc<crate::survey::SurveyBus>,
-    _window_bus: Arc<crate::window_bus::WindowBus>,
-    _window_presence: Arc<crate::window_presence::WindowPresence>,
-    _tenant: ControlTenant,
-) -> std::io::Result<ControlHandle> {
+pub fn start(_socket_path: PathBuf, _ctx: ControlSocketCtx) -> std::io::Result<ControlHandle> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "control socket requires unix-domain sockets",
@@ -302,18 +276,21 @@ pub fn start(
 // Async because of the one blocking variant (`TermSurvey`); every other
 // arm returns synchronously without awaiting.
 #[cfg(unix)]
-#[allow(clippy::too_many_arguments)]
-async fn handle_request(
-    req: ControlRequest,
-    workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
-    events_tx: &broadcast::Sender<String>,
-    self_writes: &crate::self_writes::SelfWrites,
-    terminal_registry: Option<&Arc<TerminalRegistry>>,
-    survey_bus: &Arc<crate::survey::SurveyBus>,
-    window_bus: &Arc<crate::window_bus::WindowBus>,
-    window_presence: &Arc<crate::window_presence::WindowPresence>,
-    tenant: ControlTenant,
-) -> ControlResponse {
+async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlResponse {
+    let ControlSocketCtx {
+        workspace_cell,
+        events_tx,
+        self_writes,
+        terminal_registry,
+        survey_bus,
+        window_bus,
+        window_presence,
+        tenant,
+    } = ctx;
+    // The registry is a set-once cell that may be filled after the
+    // socket starts; resolve it per request, exactly as before.
+    let terminal_registry = terminal_registry.get();
+    let tenant = *tenant;
     match req {
         ControlRequest::OpenPath { window_id, path } => {
             if let Err(message) = require_window_id(&window_id) {
@@ -1610,6 +1587,25 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
+    /// Fresh ControlSocketCtx around the given workspace cell: empty
+    /// terminal-registry cell, fresh buses, fresh presence map.
+    fn test_ctx(
+        workspace_cell: Arc<RwLock<Option<WorkspaceCell>>>,
+        tenant: ControlTenant,
+    ) -> ControlSocketCtx {
+        let (events_tx, _) = broadcast::channel(1);
+        ControlSocketCtx {
+            workspace_cell,
+            events_tx,
+            self_writes: Arc::new(crate::self_writes::SelfWrites::new()),
+            terminal_registry: Arc::new(std::sync::OnceLock::new()),
+            survey_bus: Arc::new(crate::survey::SurveyBus::new()),
+            window_bus: Arc::new(crate::window_bus::WindowBus::new()),
+            window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
+            tenant,
+        }
+    }
+
     #[test]
     fn parent_rel_returns_empty_for_root_file() {
         assert_eq!(parent_rel("a.png"), "");
@@ -1625,25 +1621,14 @@ mod tests {
             panic!("poison workspace cell");
         })
         .join();
-        let self_writes = crate::self_writes::SelfWrites::new();
-        let (tx, _) = broadcast::channel(1);
-        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
-        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
-        let window_presence = Arc::new(crate::window_presence::WindowPresence::new());
+        let ctx = test_ctx(workspace_cell.clone(), ControlTenant::Workspace);
 
         let response = handle_request(
             ControlRequest::OpenPath {
                 window_id: "window-a".to_string(),
                 path: PathBuf::from("/tmp/note.md"),
             },
-            &workspace_cell,
-            &tx,
-            &self_writes,
-            None,
-            &survey_bus,
-            &window_bus,
-            &window_presence,
-            ControlTenant::Workspace,
+            &ctx,
         )
         .await;
 
@@ -1661,25 +1646,14 @@ mod tests {
         // refusal must say that (pinned wording) instead of the
         // transient-sounding "workspace cell unavailable".
         let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
-        let self_writes = crate::self_writes::SelfWrites::new();
-        let (tx, _) = broadcast::channel(1);
-        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
-        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
-        let window_presence = Arc::new(crate::window_presence::WindowPresence::new());
+        let ctx = test_ctx(workspace_cell, ControlTenant::TerminalOnly);
 
         let response = handle_request(
             ControlRequest::Search {
                 query: "anything".into(),
                 limit: None,
             },
-            &workspace_cell,
-            &tx,
-            &self_writes,
-            None,
-            &survey_bus,
-            &window_bus,
-            &window_presence,
-            ControlTenant::TerminalOnly,
+            &ctx,
         )
         .await;
 
@@ -1697,25 +1671,10 @@ mod tests {
         // `cs window list` must WORK on a terminal tenant (presence-only
         // rows), not refuse like the workspace commands.
         let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
-        let self_writes = crate::self_writes::SelfWrites::new();
-        let (tx, _) = broadcast::channel(1);
-        let survey_bus = Arc::new(crate::survey::SurveyBus::new());
-        let window_bus = Arc::new(crate::window_bus::WindowBus::new());
-        let window_presence = Arc::new(crate::window_presence::WindowPresence::new());
-        let _guard = window_presence.connect("terminal-win-0");
+        let ctx = test_ctx(workspace_cell, ControlTenant::TerminalOnly);
+        let _guard = ctx.window_presence.connect("terminal-win-0");
 
-        let response = handle_request(
-            ControlRequest::WindowList,
-            &workspace_cell,
-            &tx,
-            &self_writes,
-            None,
-            &survey_bus,
-            &window_bus,
-            &window_presence,
-            ControlTenant::TerminalOnly,
-        )
-        .await;
+        let response = handle_request(ControlRequest::WindowList, &ctx).await;
 
         match response {
             ControlResponse::Ok { message } => {

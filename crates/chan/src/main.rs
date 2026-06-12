@@ -708,10 +708,10 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()
                 .context("building tokio runtime")?;
-            let res = rt.block_on(cmd_serve(
+            let res = rt.block_on(cmd_serve(ServeArgs {
                 addr,
                 prefix,
-                timeout,
+                idle_timeout: timeout,
                 path,
                 here,
                 no_token,
@@ -723,8 +723,8 @@ fn main() -> Result<()> {
                 tunnel_token,
                 tunnel_workspace_name,
                 tunnel_public,
-                cli.verbose > 0,
-            ));
+                verbose: cli.verbose > 0,
+            }));
             // Don't block on blocking-pool tasks (e.g. an in-flight
             // initial reindex on a large workspace): chan-workspace's reindex
             // is uncancellable today, so a normal Runtime drop would
@@ -1102,8 +1102,10 @@ fn print_vcs_parent_error(root: &Path, parent: &chan_workspace::VcsParent) {
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn cmd_serve(
+/// Resolved `chan serve` invocation: every CLI input after listen-addr
+/// and prefix resolution, grouped so the handler takes one argument
+/// instead of a 15-parameter tail.
+struct ServeArgs {
     addr: SocketAddr,
     prefix: String,
     idle_timeout: Option<Duration>,
@@ -1119,7 +1121,26 @@ async fn cmd_serve(
     tunnel_workspace_name: Option<String>,
     tunnel_public: bool,
     verbose: bool,
-) -> Result<()> {
+}
+
+async fn cmd_serve(args: ServeArgs) -> Result<()> {
+    let ServeArgs {
+        addr,
+        prefix,
+        idle_timeout,
+        path,
+        here,
+        no_token,
+        no_browser,
+        standalone,
+        search_aggression,
+        no_settings,
+        tunnel_url,
+        tunnel_token,
+        tunnel_workspace_name,
+        tunnel_public,
+        verbose,
+    } = args;
     let lib = library()?;
     // Resolve the workspace root: explicit arg first, then the registry
     // default, then the platform default. Auto-register so users

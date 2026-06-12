@@ -598,14 +598,16 @@ async fn build_app(
     let window_presence = Arc::new(window_presence::WindowPresence::new());
     let control = control_socket::start(
         control_socket_path.clone(),
-        state_for_bridge.clone(),
-        events_tx.clone(),
-        self_writes.clone(),
-        terminal_registry_cell.clone(),
-        survey_bus.clone(),
-        window_bus.clone(),
-        window_presence.clone(),
-        control_socket::ControlTenant::Workspace,
+        control_socket::ControlSocketCtx {
+            workspace_cell: state_for_bridge.clone(),
+            events_tx: events_tx.clone(),
+            self_writes: self_writes.clone(),
+            terminal_registry: terminal_registry_cell.clone(),
+            survey_bus: survey_bus.clone(),
+            window_bus: window_bus.clone(),
+            window_presence: window_presence.clone(),
+            tenant: control_socket::ControlTenant::Workspace,
+        },
     );
     let (control_socket_path, control_socket) = match control {
         Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
@@ -778,14 +780,16 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
     let control_socket_path = control_socket::pick_socket_path();
     let control = control_socket::start(
         control_socket_path.clone(),
-        workspace_cell.clone(),
-        events_tx.clone(),
-        self_writes.clone(),
-        terminal_registry_cell.clone(),
-        survey_bus.clone(),
-        window_bus.clone(),
-        window_presence.clone(),
-        control_socket::ControlTenant::TerminalOnly,
+        control_socket::ControlSocketCtx {
+            workspace_cell: workspace_cell.clone(),
+            events_tx: events_tx.clone(),
+            self_writes: self_writes.clone(),
+            terminal_registry: terminal_registry_cell.clone(),
+            survey_bus: survey_bus.clone(),
+            window_bus: window_bus.clone(),
+            window_presence: window_presence.clone(),
+            tenant: control_socket::ControlTenant::TerminalOnly,
+        },
     );
     let (control_socket_path, control_socket) = match control {
         Ok(handle) => (Some(handle.socket_path().to_path_buf()), Some(handle)),
