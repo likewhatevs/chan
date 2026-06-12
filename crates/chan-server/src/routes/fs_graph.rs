@@ -301,14 +301,7 @@ pub async fn api_fs_graph(
     let paged = p.limit.is_some() || p.cursor.is_some();
     let result = tokio::task::spawn_blocking(move || {
         if paged {
-            build_fs_graph_paged(
-                &workspace,
-                p.scope,
-                &p.path,
-                p.depth,
-                p.cursor.as_deref(),
-                p.limit,
-            )
+            build_fs_graph_paged(&workspace, &p)
         } else {
             build_fs_graph(&workspace, p.scope, &p.path, p.depth)
         }
@@ -447,12 +440,17 @@ pub fn build_fs_graph(
 /// the whole-scope path (`build_fs_graph`) keeps hardlinks intact.
 pub fn build_fs_graph_paged(
     workspace: &chan_workspace::Workspace,
-    scope: FsGraphScope,
-    path: &str,
-    requested_depth: usize,
-    cursor: Option<&str>,
-    limit: Option<usize>,
+    p: &FsGraphParams,
 ) -> Result<FsGraphResponse, FsGraphError> {
+    let FsGraphParams {
+        scope,
+        path,
+        depth: requested_depth,
+        cursor,
+        limit,
+    } = p;
+    let (scope, requested_depth, cursor, limit) =
+        (*scope, *requested_depth, cursor.as_deref(), *limit);
     let r = resolve_scope(workspace, scope, path, requested_depth)?;
 
     if scope == FsGraphScope::File {
@@ -1934,11 +1932,13 @@ mod tests {
         loop {
             let resp = build_fs_graph_paged(
                 ws,
-                FsGraphScope::Directory,
-                path,
-                depth,
-                cursor.as_deref(),
-                Some(batch),
+                &FsGraphParams {
+                    scope: FsGraphScope::Directory,
+                    path: path.to_string(),
+                    depth,
+                    cursor: cursor.clone(),
+                    limit: Some(batch),
+                },
             )
             .expect("paged batch");
             batches += 1;
@@ -2027,11 +2027,13 @@ mod tests {
         loop {
             let resp = build_fs_graph_paged(
                 &ws,
-                FsGraphScope::Directory,
-                "",
-                6,
-                cursor.as_deref(),
-                Some(batch),
+                &FsGraphParams {
+                    scope: FsGraphScope::Directory,
+                    path: String::new(),
+                    depth: 6,
+                    cursor: cursor.clone(),
+                    limit: Some(batch),
+                },
             )
             .unwrap();
             // Bounded by the budget plus the once-only root + ancestor
@@ -2051,13 +2053,17 @@ mod tests {
     #[test]
     fn paged_cursor_is_idempotent() {
         let (_cfg, _root, ws) = seed_paged_workspace();
-        let first =
-            build_fs_graph_paged(&ws, FsGraphScope::Directory, "", 6, None, Some(4)).unwrap();
+        let page = |cursor: Option<String>| FsGraphParams {
+            scope: FsGraphScope::Directory,
+            path: String::new(),
+            depth: 6,
+            cursor,
+            limit: Some(4),
+        };
+        let first = build_fs_graph_paged(&ws, &page(None)).unwrap();
         let cursor = first.cursor.expect("first batch has more");
-        let a = build_fs_graph_paged(&ws, FsGraphScope::Directory, "", 6, Some(&cursor), Some(4))
-            .unwrap();
-        let b = build_fs_graph_paged(&ws, FsGraphScope::Directory, "", 6, Some(&cursor), Some(4))
-            .unwrap();
+        let a = build_fs_graph_paged(&ws, &page(Some(cursor.clone()))).unwrap();
+        let b = build_fs_graph_paged(&ws, &page(Some(cursor.clone()))).unwrap();
         let ids = |r: &FsGraphResponse| r.nodes.iter().map(|n| n.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&a), ids(&b), "same cursor produced different batches");
         assert_eq!(a.cursor, b.cursor);
@@ -2066,12 +2072,17 @@ mod tests {
     #[test]
     fn paged_cursor_bound_to_scope_and_depth() {
         let (_cfg, _root, ws) = seed_paged_workspace();
-        let first =
-            build_fs_graph_paged(&ws, FsGraphScope::Directory, "", 2, None, Some(4)).unwrap();
+        let page = |depth: usize, cursor: Option<String>| FsGraphParams {
+            scope: FsGraphScope::Directory,
+            path: String::new(),
+            depth,
+            cursor,
+            limit: Some(4),
+        };
+        let first = build_fs_graph_paged(&ws, &page(2, None)).unwrap();
         let cursor = first.cursor.expect("more batches");
         // Same cursor, different depth -> rejected (new walk).
-        let err = build_fs_graph_paged(&ws, FsGraphScope::Directory, "", 3, Some(&cursor), Some(4))
-            .unwrap_err();
+        let err = build_fs_graph_paged(&ws, &page(3, Some(cursor.clone()))).unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(
             err.message.contains("does not match"),
@@ -2079,15 +2090,7 @@ mod tests {
             err.message
         );
         // Garbage cursor -> rejected.
-        let err = build_fs_graph_paged(
-            &ws,
-            FsGraphScope::Directory,
-            "",
-            2,
-            Some("@@nope@@"),
-            Some(4),
-        )
-        .unwrap_err();
+        let err = build_fs_graph_paged(&ws, &page(2, Some("@@nope@@".to_string()))).unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
         assert!(
             err.message.contains("invalid graph cursor"),
@@ -2119,8 +2122,17 @@ mod tests {
         let (_cfg, _root, ws) = seed_paged_workspace();
         // Even with a limit set, file scope returns the whole small
         // payload and reports done (the file + its parent spine).
-        let resp = build_fs_graph_paged(&ws, FsGraphScope::File, "dir0/file0.md", 0, None, Some(1))
-            .unwrap();
+        let resp = build_fs_graph_paged(
+            &ws,
+            &FsGraphParams {
+                scope: FsGraphScope::File,
+                path: "dir0/file0.md".to_string(),
+                depth: 0,
+                cursor: None,
+                limit: Some(1),
+            },
+        )
+        .unwrap();
         assert!(resp.done);
         assert!(resp.cursor.is_none());
         assert!(resp.nodes.iter().any(|n| n.id == "dir0/file0.md"));
