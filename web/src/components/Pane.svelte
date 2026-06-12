@@ -1109,6 +1109,20 @@
           if (t.kind === "terminal") setTerminalActivity(t, false);
           if (t.kind === "terminal" || t.kind === "file") bumpTabFocusPulse();
         }}
+        onmouseup={(e) => {
+          // Re-pulse on mouseup: the mousedown pulse above loses to the
+          // browser's mousedown DEFAULT ACTION, which focuses this
+          // tabindex="0" div AFTER the pulse's microtask ran (microtask
+          // checkpoints sit between listeners and the default action).
+          // Mouseup runs after focus has landed on the tab, so this
+          // second pulse's microtask focus is the last word. Not
+          // preventDefault on mousedown (kills HTML5 dragstart for tab
+          // DnD in WebKit/Firefox) and not onclick (the .path span's
+          // onclick stopPropagation()s label clicks away). A completed
+          // drag fires dragend, not mouseup, so reorders don't re-bump.
+          if (e.button !== 0) return;
+          if (t.kind === "terminal" || t.kind === "file") bumpTabFocusPulse();
+        }}
         onclick={() => {
           tabMouseDownPrevActive = null;
         }}

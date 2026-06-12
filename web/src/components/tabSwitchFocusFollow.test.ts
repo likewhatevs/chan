@@ -55,6 +55,19 @@ describe("tab header click refocuses input-capable tabs", () => {
       /onmousedown=\{\(\) => \{[\s\S]*?pane\.activeTabId = t\.id;[\s\S]*?if \(t\.kind === "terminal"\) setTerminalActivity\(t, false\);[\s\S]*?if \(t\.kind === "terminal" \|\| t\.kind === "file"\) bumpTabFocusPulse\(\);/,
     );
   });
+
+  test("tab mouseup re-pulses so the focus call outlives the mousedown default action", () => {
+    // The mousedown pulse alone is not enough: the browser's mousedown
+    // DEFAULT ACTION focuses the tabindex="0" .tab div AFTER the
+    // pulse's queueMicrotask focus ran (microtask checkpoints run
+    // between listeners, before the default action), so a clicked
+    // terminal tab activated without keyboard focus landing in xterm.
+    // The left-button mouseup re-pulse runs after focus settled on the
+    // tab, making the content-focus microtask the last word.
+    expect(pane).toMatch(
+      /onmouseup=\{\(e\) => \{[\s\S]*?if \(e\.button !== 0\) return;[\s\S]*?if \(t\.kind === "terminal" \|\| t\.kind === "file"\) bumpTabFocusPulse\(\);/,
+    );
+  });
 });
 
 describe("TerminalTab reacts to pulse", () => {
