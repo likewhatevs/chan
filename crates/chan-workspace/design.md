@@ -1038,8 +1038,9 @@ GraphView::tags() -> Result<Vec<Tag>>
 GraphView::mentions() -> Result<Vec<Mention>>
 GraphView::files_with_tag(tag: &str) -> Result<Vec<String>>
 GraphView::files() / files_with_stat() / node_kind(rel)
-GraphView::replace_file(rel, title, mtime, outgoing, headings)
-    -> Result<()>
+GraphView::replace_file(record: FileRecord<'_>) -> Result<()>
+    // FileRecord: rel, title, mtime, size, node_kind, outgoing,
+    // headings, emails, aliases
 GraphView::forget_file(rel: &str) -> Result<()>
 GraphView::forget_under(prefix: &str) -> Result<()>
 GraphView::link_targets(q: &str, limit: u32) -> Result<Vec<LinkTarget>>

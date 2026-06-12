@@ -95,6 +95,32 @@ impl NodeKind {
     }
 }
 
+/// Per-file graph row written by `GraphView::replace_file`: the
+/// node's metadata plus the outgoing edges and headings owned by
+/// `rel`.
+#[derive(Debug, Clone, Copy)]
+pub struct FileRecord<'a> {
+    pub rel: &'a str,
+    /// The file's display title (h1 or frontmatter `title`); stored
+    /// on the node for the link-autocomplete query (`link_targets`).
+    pub title: Option<&'a str>,
+    pub mtime: Option<i64>,
+    pub size: Option<i64>,
+    /// Tags the file as a regular note or as an imported contact;
+    /// the contact tag workspaces the editor `@` picker and lets graph
+    /// consumers filter without re-parsing frontmatter.
+    pub node_kind: NodeKind,
+    pub outgoing: &'a [Edge],
+    pub headings: &'a [markdown::Heading],
+    /// Pre-joined, space-separated lowercased address list for
+    /// contact-kind files (`None` for File-kind, and `None` for
+    /// contacts with no extractable address); see `FileGraph.emails`.
+    pub emails: Option<&'a str>,
+    /// Same shape as `emails` for the top-level `aliases:`
+    /// frontmatter array (mention resolution).
+    pub aliases: Option<&'a str>,
+}
+
 /// Lightweight projection of a contact-kind node, surfaced through
 /// `GraphView::contacts` for the editor `@` picker and
 /// `GET /api/contacts` (the wiki-link target the picker inserts is
@@ -707,33 +733,21 @@ impl GraphView {
     }
 
     /// Replace the graph data for one file: removes existing
-    /// edges/headings owned by `rel` and inserts the supplied ones
-    /// in a single transaction. `title` is the file's display title
-    /// (h1 or frontmatter `title`) and is stored on the node for
-    /// the link-autocomplete query (`link_targets`). `node_kind`
-    /// tags the file as a regular note or as an imported contact;
-    /// the contact tag workspaces the editor `@` picker and lets graph
-    /// consumers filter without re-parsing frontmatter. `emails` is
-    /// the pre-joined, space-separated lowercased address list for
-    /// contact-kind files (`None` for File-kind, and `None` for
-    /// contacts with no extractable address); see `FileGraph.emails`.
-    /// `aliases` follows the same shape for the top-level
-    /// `aliases:` frontmatter array (mention resolution).
-    // Folding these into a struct would churn ~20 call sites (incl.
-    // tests) for a style win; the function stays at 9 params.
-    #[allow(clippy::too_many_arguments)]
-    pub fn replace_file(
-        &self,
-        rel: &str,
-        title: Option<&str>,
-        mtime: Option<i64>,
-        size: Option<i64>,
-        node_kind: NodeKind,
-        outgoing: &[Edge],
-        headings: &[markdown::Heading],
-        emails: Option<&str>,
-        aliases: Option<&str>,
-    ) -> Result<()> {
+    /// edges/headings owned by `record.rel` and inserts the supplied
+    /// ones in a single transaction. See [`FileRecord`] for field
+    /// semantics.
+    pub fn replace_file(&self, record: FileRecord<'_>) -> Result<()> {
+        let FileRecord {
+            rel,
+            title,
+            mtime,
+            size,
+            node_kind,
+            outgoing,
+            headings,
+            emails,
+            aliases,
+        } = record;
         tracing::debug!(
             rel,
             kind = node_kind.as_str(),
@@ -1596,17 +1610,17 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let g = std::sync::Arc::new(GraphView::open(&tmp.path().join("g.sqlite")).unwrap());
         // Seed a row so the read returns predictable data.
-        g.replace_file(
-            "a.md",
-            Some("Alpha"),
-            Some(1),
-            None,
-            NodeKind::File,
-            &[],
-            &[],
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "a.md",
+            title: Some("Alpha"),
+            mtime: Some(1),
+            size: None,
+            node_kind: NodeKind::File,
+            outgoing: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
 
         // Three concurrent readers, one writer. Each reader does
@@ -1633,17 +1647,17 @@ mod tests {
             thread::spawn(move || {
                 b.wait();
                 for i in 0..50 {
-                    g.replace_file(
-                        "a.md",
-                        Some("Alpha"),
-                        Some(i),
-                        None,
-                        NodeKind::File,
-                        &[],
-                        &[],
-                        None,
-                        None,
-                    )
+                    g.replace_file(FileRecord {
+                        rel: "a.md",
+                        title: Some("Alpha"),
+                        mtime: Some(i),
+                        size: None,
+                        node_kind: NodeKind::File,
+                        outgoing: &[],
+                        headings: &[],
+                        emails: None,
+                        aliases: None,
+                    })
                     .expect("write");
                 }
             })
@@ -1659,17 +1673,17 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
         // Pre-populate so we can verify clear-and-replace semantics.
-        g.replace_file(
-            "old.md",
-            Some("Old"),
-            Some(1),
-            None,
-            NodeKind::File,
-            &[],
-            &[],
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "old.md",
+            title: Some("Old"),
+            mtime: Some(1),
+            size: None,
+            node_kind: NodeKind::File,
+            outgoing: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
         assert_eq!(
             count(&g, "SELECT COUNT(*) FROM nodes WHERE rel_path='old.md'"),
@@ -1727,17 +1741,17 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let db = tmp.path().join("graph.sqlite");
         let g = GraphView::open(&db).unwrap();
-        g.replace_file(
-            "notes/a.md",
-            Some("Hello"),
-            Some(1000),
-            None,
-            NodeKind::File,
-            &[],
-            &[],
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "notes/a.md",
+            title: Some("Hello"),
+            mtime: Some(1000),
+            size: None,
+            node_kind: NodeKind::File,
+            outgoing: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
         assert_eq!(
             count(
@@ -1770,17 +1784,17 @@ mod tests {
             kind: EdgeKind::Link,
             anchor: Some(anchor.to_string()),
         };
-        g.replace_file(
-            "notes/a.md",
-            None,
-            Some(1),
-            None,
-            NodeKind::File,
-            &[link("section-one"), link("section-two")],
-            &[],
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "notes/a.md",
+            title: None,
+            mtime: Some(1),
+            size: None,
+            node_kind: NodeKind::File,
+            outgoing: &[link("section-one"), link("section-two")],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
 
         let mut anchors: Vec<Option<String>> = g
@@ -1807,22 +1821,22 @@ mod tests {
         // Edge contract ("Some iff a real anchor") holds for callers.
         let tmp = TempDir::new().unwrap();
         let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
-        g.replace_file(
-            "notes/a.md",
-            None,
-            Some(1),
-            None,
-            NodeKind::File,
-            &[Edge {
+        g.replace_file(FileRecord {
+            rel: "notes/a.md",
+            title: None,
+            mtime: Some(1),
+            size: None,
+            node_kind: NodeKind::File,
+            outgoing: &[Edge {
                 src: "notes/a.md".to_string(),
                 dst: "notes/b.md".to_string(),
                 kind: EdgeKind::Link,
                 anchor: None,
             }],
-            &[],
-            None,
-            None,
-        )
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
         let edges = g.neighbors("notes/a.md").unwrap();
         assert_eq!(edges.len(), 1);
@@ -1831,17 +1845,17 @@ mod tests {
 
     fn populate(g: &GraphView, files: &[(&str, Option<&str>, Option<i64>)]) {
         for (rel, title, mtime) in files {
-            g.replace_file(
+            g.replace_file(FileRecord {
                 rel,
-                *title,
-                *mtime,
-                None,
-                NodeKind::File,
-                &[],
-                &[],
-                None,
-                None,
-            )
+                title: *title,
+                mtime: *mtime,
+                size: None,
+                node_kind: NodeKind::File,
+                outgoing: &[],
+                headings: &[],
+                emails: None,
+                aliases: None,
+            })
             .unwrap();
         }
     }
@@ -1850,29 +1864,29 @@ mod tests {
     fn node_kind_returns_indexed_kind_or_none() {
         let tmp = TempDir::new().unwrap();
         let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
-        g.replace_file(
-            "Contacts/Alice.md",
-            Some("Alice Anderson"),
-            Some(1),
-            None,
-            NodeKind::Contact,
-            &[],
-            &[],
-            Some("alice@example.com"),
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "Contacts/Alice.md",
+            title: Some("Alice Anderson"),
+            mtime: Some(1),
+            size: None,
+            node_kind: NodeKind::Contact,
+            outgoing: &[],
+            headings: &[],
+            emails: Some("alice@example.com"),
+            aliases: None,
+        })
         .unwrap();
-        g.replace_file(
-            "recipes/pasta.md",
-            Some("Pasta"),
-            Some(2),
-            None,
-            NodeKind::File,
-            &[],
-            &[],
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "recipes/pasta.md",
+            title: Some("Pasta"),
+            mtime: Some(2),
+            size: None,
+            node_kind: NodeKind::File,
+            outgoing: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
         assert_eq!(
             g.node_kind("Contacts/Alice.md").unwrap(),
@@ -1904,53 +1918,53 @@ mod tests {
         let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
         // Mix of contact and file nodes; filter must skip files even
         // when their title/basename matches.
-        g.replace_file(
-            "Contacts/Alice.md",
-            Some("Alice Anderson"),
-            Some(1),
-            None,
-            NodeKind::Contact,
-            &[],
-            &[],
-            Some("alice@example.com alice.work@example.com"),
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "Contacts/Alice.md",
+            title: Some("Alice Anderson"),
+            mtime: Some(1),
+            size: None,
+            node_kind: NodeKind::Contact,
+            outgoing: &[],
+            headings: &[],
+            emails: Some("alice@example.com alice.work@example.com"),
+            aliases: None,
+        })
         .unwrap();
-        g.replace_file(
-            "Contacts/Bob.md",
-            Some("Bob Brown"),
-            Some(2),
-            None,
-            NodeKind::Contact,
-            &[],
-            &[],
-            Some("bob@example.org"),
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "Contacts/Bob.md",
+            title: Some("Bob Brown"),
+            mtime: Some(2),
+            size: None,
+            node_kind: NodeKind::Contact,
+            outgoing: &[],
+            headings: &[],
+            emails: Some("bob@example.org"),
+            aliases: None,
+        })
         .unwrap();
-        g.replace_file(
-            "Contacts/Charlie.md",
-            Some("Charlie Cohen"),
-            Some(3),
-            None,
-            NodeKind::Contact,
-            &[],
-            &[],
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "Contacts/Charlie.md",
+            title: Some("Charlie Cohen"),
+            mtime: Some(3),
+            size: None,
+            node_kind: NodeKind::Contact,
+            outgoing: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
-        g.replace_file(
-            "notes/alice-mentioned.md",
-            Some("Alice Mentioned"),
-            Some(4),
-            None,
-            NodeKind::File,
-            &[],
-            &[],
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "notes/alice-mentioned.md",
+            title: Some("Alice Mentioned"),
+            mtime: Some(4),
+            size: None,
+            node_kind: NodeKind::File,
+            outgoing: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
 
         // Case-insensitive contains on title.
@@ -1999,29 +2013,29 @@ mod tests {
     fn contacts_filtered_escapes_like_wildcards() {
         let tmp = TempDir::new().unwrap();
         let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
-        g.replace_file(
-            "Contacts/100off.md",
-            Some("100% Off"),
-            Some(1),
-            None,
-            NodeKind::Contact,
-            &[],
-            &[],
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "Contacts/100off.md",
+            title: Some("100% Off"),
+            mtime: Some(1),
+            size: None,
+            node_kind: NodeKind::Contact,
+            outgoing: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
-        g.replace_file(
-            "Contacts/Bob.md",
-            Some("Bob"),
-            Some(2),
-            None,
-            NodeKind::Contact,
-            &[],
-            &[],
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "Contacts/Bob.md",
+            title: Some("Bob"),
+            mtime: Some(2),
+            size: None,
+            node_kind: NodeKind::Contact,
+            outgoing: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
         // A bare `%` would be a SQL LIKE wildcard matching everything.
         // After escaping it must match only the literal "%".
@@ -2092,17 +2106,17 @@ mod tests {
                 text: "Carbonara variant".into(),
             },
         ];
-        g.replace_file(
-            "notes/2026-05-06.md",
-            Some("Pasta night"),
-            Some(1),
-            None,
-            NodeKind::File,
-            &[],
-            &headings,
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "notes/2026-05-06.md",
+            title: Some("Pasta night"),
+            mtime: Some(1),
+            size: None,
+            node_kind: NodeKind::File,
+            outgoing: &[],
+            headings: &headings,
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
         let hits = g.link_targets("variant", 10).unwrap();
         assert_eq!(hits.len(), 1);
@@ -2151,17 +2165,17 @@ mod tests {
                 text: format!("note-{i}"),
             });
         }
-        g.replace_file(
-            "toc-heavy.md",
-            None,
-            Some(1),
-            None,
-            NodeKind::File,
-            &[],
-            &hs,
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "toc-heavy.md",
+            title: None,
+            mtime: Some(1),
+            size: None,
+            node_kind: NodeKind::File,
+            outgoing: &[],
+            headings: &hs,
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
         let hits = g.link_targets("note", 10).unwrap();
         // Cap at limit/2 = 5 heading hits, regardless of how many
@@ -2384,17 +2398,17 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
         // Seed live with a single file via the existing replace_file.
-        g.replace_file(
-            "old.md",
-            Some("Old"),
-            Some(1),
-            None,
-            NodeKind::File,
-            &[],
-            &[],
-            None,
-            None,
-        )
+        g.replace_file(FileRecord {
+            rel: "old.md",
+            title: Some("Old"),
+            mtime: Some(1),
+            size: None,
+            node_kind: NodeKind::File,
+            outgoing: &[],
+            headings: &[],
+            emails: None,
+            aliases: None,
+        })
         .unwrap();
         // Stage a different file. While we haven't swapped yet,
         // the live state still surfaces only the original entry.

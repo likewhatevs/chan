@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::drafts::{self, DraftRef};
 use crate::error::{ChanError, Result};
 use crate::fs_ops;
-use crate::graph::GraphView;
+use crate::graph::{FileRecord, GraphView};
 use crate::index::{
     BuildOptions, BuildSummary, Index, Mode as SearchMode, ScreensaverTheme, SearchAggression,
     SearchResult,
@@ -2570,17 +2570,17 @@ impl Workspace {
         if fs_ops::is_markdown_file(rel) {
             let (title, node_kind, headings, edges, emails, aliases) =
                 parse_for_graph(rel, &content);
-            self.graph()?.replace_file(
+            self.graph()?.replace_file(FileRecord {
                 rel,
-                title.as_deref(),
+                title: title.as_deref(),
                 mtime,
                 size,
                 node_kind,
-                &edges,
-                &headings,
-                emails.as_deref(),
-                aliases.as_deref(),
-            )?;
+                outgoing: &edges,
+                headings: &headings,
+                emails: emails.as_deref(),
+                aliases: aliases.as_deref(),
+            })?;
         } else {
             self.graph()?.forget_file(rel)?;
         }
