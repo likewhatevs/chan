@@ -15,15 +15,14 @@ Tracks [fiorix/chan#8][issue].
 
 [issue]: https://github.com/fiorix/chan/issues/8
 
-## Status
+## What's here
 
-v0, scoped to the web flow:
-
-- `profile`: internal HTTP API over Postgres. Users + linked OAuth
-  identities + usernames. **(done)**
-- `identity`: id.chan.app, OAuth2 sign-in (GitHub / Google /
-  GitLab), Postgres-backed sessions, embedded Svelte SPA, personal
-  access tokens. **(done)**
+- `profile`: internal HTTP API over Postgres. Users, linked OAuth
+  identities, workspaces + sharing grants, feature flags, auth audit.
+- `identity`: id.chan.app. OAuth2 sign-in (GitHub / Google / GitLab)
+  with PKCE, Postgres-backed sessions, embedded Svelte SPA, personal
+  access tokens (incl. the `chan://` desktop-authorize consent flow),
+  workspace-gate entry-token mint.
 - `workspace-proxy`: workspace.chan.app (apex) +
   `*.workspace.chan.app` (wildcard). Each `chan serve` instance dials
   `POST /v1/tunnel` (raw h2c) and registers over an authenticated
@@ -34,34 +33,41 @@ v0, scoped to the web flow:
   path-scoped `workspace_gate` cookie. `--tunnel-public` registrations
   skip the gate; everything else without a valid token / cookie 404s
   (same shape as an unknown workspace, so probes can't enumerate).
-  **(done)**
+- `admin`: operator CLI against profile's and workspace-proxy's admin
+  trees.
+- `gateway-common`: shared library (domain derivation, HTTP clients,
+  workspace-gate JWT, token bucket, validators).
 
-Personal access tokens (PATs) cover the chan CLI / chan-tunnel use
-case today. Signed JWT access tokens, refresh-token rotation, and
-entitlement bundles come back when desktop/mobile clients ship.
-Adding another OAuth provider is one new file under
-`crates/identity/src/providers/` plus wiring in `Config::from_env`.
-Microsoft and Apple are intentionally excluded (Microsoft because
-tenant admins can mint unverified-email accounts that defeat our
-email-as-link key; Apple because the OAuth setup is high-touch for
-the value at this scale).
+Personal access tokens (PATs, `chan_pat_...`) are the only credential
+the chan CLI / chan-tunnel side uses; they carry per-token scopes
+(`tunnel`, `tunnel.public`). Adding another OAuth provider is one new
+file under `crates/identity/src/providers/` plus wiring in
+`Config::from_env`. Microsoft and Apple are intentionally excluded
+(Microsoft because tenant admins can mint unverified-email accounts
+that defeat our email-as-link key; Apple because the OAuth setup is
+high-touch for the value at this scale).
 
 ## Layout
 
 ```
-chan-gateway/
+gateway/
   Cargo.toml                       # workspace
   crates/identity/                 # bin: identity-service (id.chan.app)
   crates/identity/web/             # SPA embedded into identity-service
-  crates/workspace-proxy/              # bin: workspace-proxy-service (workspace.chan.app)
-  crates/workspace-proxy/web/          # SPA embedded into workspace-proxy-service
+  crates/workspace-proxy/          # bin: workspace-proxy-service (workspace.chan.app)
   crates/profile/                  # bin: profile-service (internal)
+  crates/admin/                    # bin: chan-gateway-admin (operator CLI)
+  crates/gateway-common/           # lib: shared clients / JWT / validators
+  web-common/                      # shared theme CSS + fetch wrapper (npm)
   migrations/                      # sqlx migrations (Postgres)
+  packaging/                       # shared systemd/env templates
+  scripts/                         # build-debs.sh, dev stack, sdme files
+  docs/                            # dev-setup.md and friends
 ```
 
-The frontends match `chan-writer/chan/web/` so id.chan.app,
-workspace.chan.app and the editor read as the same product: Svelte 5 +
-Vite + TypeScript, dark default with the same CSS variable palette.
+The frontend matches `web/` at the repo root so id.chan.app and the
+editor read as the same product: Svelte 5 + Vite + TypeScript, dark
+default with the same CSS variable palette.
 
 ## Dev
 
@@ -84,19 +90,19 @@ createdb chan_gateway
 createdb chan_gateway_test         # used by `cargo test`
 ```
 
-### Frontends
+### Frontend
 
-The two SPAs share an npm workspace at the repo root, alongside a
-small `web-common` package (shared theme CSS, fetch wrapper, topbar
-component). One install builds both bundles:
+identity's SPA shares an npm workspace (at `gateway/`) with the small
+`web-common` package (shared theme CSS, fetch wrapper, topbar
+component). One install builds the bundle:
 
 ```sh
 npm install
 npm run build --workspaces
 ```
 
-`vite build` writes to `<crate>/web/dist/`, embedded by the matching
-binary via `rust-embed`.
+`vite build` writes to `crates/identity/web/dist/`, embedded by the
+identity binary via `rust-embed`. workspace-proxy ships no SPA.
 
 ### GitHub OAuth app
 
@@ -129,6 +135,8 @@ export BASE_URL=http://127.0.0.1:7000
 export COOKIE_SECURE=false
 export PROFILE_SERVICE_URL=http://127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-token
+export IDENTITY_INTERNAL_TOKEN=dev-internal-token
+export WORKSPACE_GATE_SECRET=dev-workspace-gate-secret
 export GITHUB_CLIENT_ID=...
 export GITHUB_CLIENT_SECRET=...
 cargo run -p identity
@@ -156,7 +164,6 @@ For frontend iteration without re-embedding:
 
 ```sh
 npm run dev -w crates/identity/web      # :5173, proxies to :7000
-npm run dev -w crates/workspace-proxy/web   # :5174, proxies to :7002
 ```
 
 ## Tests
@@ -193,7 +200,7 @@ brew install zig
 rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 cargo install cargo-zigbuild cargo-deb
 ./scripts/build-debs.sh
-ls dist/                                   # six .deb files (3 services x 2 archs)
+ls dist/                                   # eight .deb files (4 packages x 2 archs)
 ```
 
 ### Install on a Debian/Ubuntu host
@@ -293,14 +300,14 @@ chan-gateway-admin flag create my_feature --default-on --description "..."
 
 Add `--json` to any subcommand for jq-friendly output.
 
-The two seeded flags workspace the rollout posture. `oauth_login`
+The two seeded flags govern the rollout posture. `oauth_login`
 gates the OAuth callback; an account without the override is
 denied at sign-in with `?denied=oauth_login` in the redirect.
 `share_workspaces` is the SPA-side toggle for the per-workspace sharing
 UI; flipping it off hides the Workspaces tab and the share panel.
 Both default to off so a fresh deploy has to grant the first user
-out-of-band (or pre-create users via `chan-admin user create` and
-then `flag grant`).
+out-of-band (or pre-create users via `chan-gateway-admin user create`
+and then `flag grant`).
 
 The user account survives a block; deletion is via the SPA's
 "Delete account" disclosure (account holder only). Account delete

@@ -18,7 +18,7 @@ Small axum service in front of Postgres. Schema:
 - `identities (id, user_id, provider, provider_subject, email,
   created_at)` with `UNIQUE (provider, provider_subject)`
 - `api_tokens (id, user_id, label, token_hash, expires_at,
-  created_at, revoked_at, last_used_at)`
+  created_at, revoked_at, last_used_at, scopes)`
 - `api_token_audit (id, ts, token_id, action, ip, user_agent)`
 - `auth_audit (id, ts, user_id, action, ip, user_agent, note)`
 - `workspaces (id, owner_user_id, workspace_name, created_at)` with
@@ -99,11 +99,10 @@ which-token-matched timing.
 4. If still nothing, insert the user (with placeholder username) and
    the identity row in the same transaction.
 
-Collapses the legacy three-call `find_user_by_identity` /
-`create_user` / `link_identity` dance, which had a known orphan
-window when two browser tabs raced first-time login. Caller retries
-on `23505` up to twice; the retry hits step 1 or step 2 and
-converges.
+The single transaction is what closes the orphan window when two
+browser tabs race a first-time login. Concurrent calls can still
+collide on the unique indexes; a caller that retries on `23505` hits
+step 1 or step 2 on the retry and converges.
 
 ### Deterministic placeholder usernames
 
@@ -268,7 +267,8 @@ the substring as a bound parameter.
 - `identities` has `UNIQUE (provider, provider_subject)`.
 - `users.username_edits` only increases; never reset.
 - `users.blocked_at` is `NULL` or a timestamp; `NULL` means active.
-- `api_token_audit.action` is one of `created`, `used`, `revoked`.
+- `api_token_audit.action` is one of `created`,
+  `created_via_desktop`, `used`, `revoked`.
 - Block always: revokes every active PAT, fires the workspace-proxy
   eviction (if configured), appends one `auth_audit` row.
 - Bearer comparisons run at constant time.

@@ -110,6 +110,7 @@ Optional knobs:
 | `WORKSPACE_PUBLIC_PORT`    | unset                     | `:port` for dev       |
 | `WORKSPACE_ADMIN_URL`      | unset                     | workspace-proxy admin base |
 | `WORKSPACE_ADMIN_TOKEN`    | unset                     | enables tunnel evict on revoke / delete |
+| `RUSTRICT_ALLOWLIST`       | unset                     | comma-separated usernames exempt from the profanity filter |
 
 ## Routes
 
@@ -150,18 +151,27 @@ Public share landing (no auth at the door):
 |--------|-----------------------|-----------------------------------------|
 | GET    | `/s/:owner/:workspace`    | OAuth-then-mint entry token for grantees |
 
-Internal (Bearer-gated by `PROFILE_AUTH_TOKEN`):
+Desktop authorize (PAT mint for chan-desktop; consent is
+session-gated, entry bounces through sign-in when needed):
+
+| Method | Path                           | Purpose                        |
+|--------|--------------------------------|--------------------------------|
+| GET    | `/desktop/authorize`           | validate query, stash, bounce  |
+| GET    | `/desktop/authorize/consent`   | server-rendered consent page   |
+| POST   | `/desktop/authorize/confirm`   | allow / deny -> `chan://` redirect |
+
+Internal (Bearer-gated by `IDENTITY_INTERNAL_TOKEN`):
 
 | Method | Path                                   | Purpose                |
 |--------|----------------------------------------|------------------------|
 | POST   | `/internal/v1/tokens/validate`         | validate a PAT         |
 
-The internal route is called by chan-tunnel during tunnel
-handshake. PAT brute-force throttling runs one hop earlier in
-workspace-proxy, keyed on a hash of the candidate token; the previous
-per-IP governor at this hop saw only workspace-proxy's container IP
-and degenerated into a single global bucket. See identity's
-`design.md` for the rationale.
+The internal route is called by workspace-proxy during the tunnel
+handshake. The primary PAT brute-force throttle runs one hop earlier
+in workspace-proxy, keyed on a hash of the candidate token; this
+handler runs a defense-in-depth twin of the same throttle. A per-IP
+governor would be useless at either hop (every request arrives from
+one container IP). See identity's `design.md` for the rationale.
 
 ## Design rationale
 

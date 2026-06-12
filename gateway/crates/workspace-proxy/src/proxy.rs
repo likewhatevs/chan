@@ -217,9 +217,10 @@ pub async fn handle(state: AppState, user: String, req: Request) -> Response {
             Gate::Reject => return not_found_response(req.headers()),
         }
     }
-    // Registry-cached owner_id is no longer load-bearing on the proxy
-    // gate. Left in `Entry` for now in case admin tooling wants it; the
-    // proxy itself ignores it.
+    // The registry-cached owner_id is not consulted by the proxy gate
+    // (comparing `sub` against the owner would lock out grantees; the
+    // signed aud + drv claims are the authorization assertion). It
+    // stays in `Entry` as metadata for admin tooling.
     let _ = entry.owner_id;
 
     let upstream_path_and_query = strip_workspace_segment(req.uri());
@@ -403,8 +404,8 @@ fn percent_decode(s: &str) -> String {
 }
 
 /// Read the `workspace_gate` cookie value from the Cookie header(s).
-/// Manual parse: tower-cookies is no longer in this crate's dep tree
-/// (no sessions). RFC 6265 cookie-pair: `name=value; name=value; ...`.
+/// Manual parse: this crate deliberately carries no cookie / session
+/// dependency. RFC 6265 cookie-pair: `name=value; name=value; ...`.
 /// Returns every match in order so the caller can fall through stale
 /// duplicates (e.g. a browser sending an old + a fresh `workspace_gate`
 /// under different paths that both got attached to the same request).
@@ -582,10 +583,9 @@ async fn proxy_http(
         None => Body::new(body),
     };
     // Wrap the body when a deadline applies so:
-    //  * a slow-drip upstream is bounded end-to-end (item #2), and
+    //  * a slow-drip upstream is bounded end-to-end, and
     //  * dropping the body aborts the conn task so a client that
-    //    bails mid-response doesn't leak the yamux substream
-    //    (item #5).
+    //    bails mid-response doesn't leak the yamux substream.
     // When no deadline is configured we let the body stream
     // unwrapped; the conn task exits naturally when the upstream
     // half-closes the substream.

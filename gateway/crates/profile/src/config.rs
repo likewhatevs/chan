@@ -7,9 +7,9 @@ use url::Url;
 /// Runtime config sourced from environment variables.
 ///
 /// Keep the surface tiny: anything not in here is either a
-/// compile-time choice or belongs in a future config file. v0 is
-/// env-only so deploys can override per-environment without baking
-/// secrets into images.
+/// compile-time choice or belongs in a future config file. Env-only
+/// so deploys can override per-environment without baking secrets
+/// into images.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,

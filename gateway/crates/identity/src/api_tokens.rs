@@ -8,11 +8,11 @@
 //!
 //! Scope is intentionally flat: a token authenticates a user. Workspace
 //! ownership is enforced at the URL layer (`chan.app/{username}/...`)
-//! by chan-tunnel, not via per-token bindings -- mirrors the new
-//! GitHub fine-grained model.
+//! by chan-tunnel, not via per-token bindings.
 //!
-//! Every state change writes one row to `api_token_audit`. Three
-//! actions in v0: `created`, `used` (validate succeeded), `revoked`.
+//! Every state change writes one row to `api_token_audit`. Actions:
+//! `created` (SPA mint), `created_via_desktop` (desktop-authorize
+//! mint), `used` (validate succeeded), `revoked`.
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -38,9 +38,7 @@ pub const ACTION_REVOKED: &str = "revoked";
 /// records a distinct audit action so operators (and the user
 /// themselves) can tell apart tokens minted by the SPA's "create
 /// token" button from tokens minted by chan-desktop bouncing through
-/// `/desktop/authorize`. Existing `created` rows continue to mean
-/// SPA mint; the new `created_via_desktop` only appears for the
-/// desktop flow.
+/// `/desktop/authorize`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenOrigin {
     Spa,
@@ -113,6 +111,38 @@ pub struct ValidatedToken {
 /// an explicit step in the token-create call.
 pub const DEFAULT_TOKEN_SCOPES: &[&str] = &["tunnel"];
 
+/// Request-scoped audit context recorded alongside token mutations.
+/// Extracted from the HTTP request headers (`http::request_meta`);
+/// both fields are best-effort and audit-only — never used for
+/// authorization.
+#[derive(Debug, Clone, Default)]
+pub struct RequestMeta {
+    pub ip: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+impl RequestMeta {
+    fn ip(&self) -> Option<&str> {
+        self.ip.as_deref()
+    }
+
+    fn user_agent(&self) -> Option<&str> {
+        self.user_agent.as_deref()
+    }
+}
+
+/// Everything that defines a token being minted. Constructed with
+/// named fields at the call site; `create` validates the label and
+/// scope list.
+#[derive(Debug)]
+pub struct NewToken<'a> {
+    pub user_id: Uuid,
+    pub label: &'a str,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub scopes: &'a [String],
+    pub origin: TokenOrigin,
+}
+
 #[derive(Clone)]
 pub struct ApiTokenService {
     pool: PgPool,
@@ -123,29 +153,17 @@ impl ApiTokenService {
         Self { pool }
     }
 
-    // create() is the single PAT-mint entry point and grew one more
-    // parameter (origin) to differentiate SPA / desktop audit rows.
-    // Bundling these into a builder/struct adds an indirection for
-    // every caller without buying clarity.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn create(
-        &self,
-        user_id: Uuid,
-        label: &str,
-        expires_at: Option<DateTime<Utc>>,
-        scopes: &[String],
-        ip: Option<&str>,
-        user_agent: Option<&str>,
-        origin: TokenOrigin,
-    ) -> Result<CreatedToken> {
-        let label = label.trim();
+    /// Single PAT-mint entry point for both the SPA and the
+    /// desktop-authorize flow; `new.origin` picks the audit action.
+    pub async fn create(&self, new: NewToken<'_>, meta: &RequestMeta) -> Result<CreatedToken> {
+        let label = new.label.trim();
         if label.is_empty() {
             return Err(Error::BadRequest("label required".into()));
         }
         if label.len() > 64 {
             return Err(Error::BadRequest("label too long".into()));
         }
-        validate_scopes(scopes)?;
+        validate_scopes(new.scopes)?;
 
         let (secret, hash) = generate_token();
         let token = sqlx::query_as::<_, ApiToken>(
@@ -154,16 +172,16 @@ impl ApiTokenService {
              RETURNING id, user_id, label, expires_at, created_at, \
                        revoked_at, last_used_at, scopes",
         )
-        .bind(user_id)
+        .bind(new.user_id)
         .bind(label)
         .bind(&hash)
-        .bind(expires_at)
-        .bind(scopes)
+        .bind(new.expires_at)
+        .bind(new.scopes)
         .fetch_one(&self.pool)
         .await
         .map_err(map_db)?;
 
-        self.write_audit(token.id, origin.audit_action(), ip, user_agent)
+        self.write_audit(token.id, new.origin.audit_action(), meta)
             .await?;
 
         Ok(CreatedToken { token, secret })
@@ -186,13 +204,7 @@ impl ApiTokenService {
 
     /// Soft-revoke: keeps the row for audit history, but
     /// `validate()` skips revoked tokens.
-    pub async fn revoke(
-        &self,
-        user_id: Uuid,
-        token_id: Uuid,
-        ip: Option<&str>,
-        user_agent: Option<&str>,
-    ) -> Result<bool> {
+    pub async fn revoke(&self, user_id: Uuid, token_id: Uuid, meta: &RequestMeta) -> Result<bool> {
         let res = sqlx::query(
             "UPDATE api_tokens SET revoked_at = now() \
              WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL",
@@ -205,8 +217,7 @@ impl ApiTokenService {
         if res.rows_affected() == 0 {
             return Ok(false);
         }
-        self.write_audit(token_id, ACTION_REVOKED, ip, user_agent)
-            .await?;
+        self.write_audit(token_id, ACTION_REVOKED, meta).await?;
         Ok(true)
     }
 
@@ -248,12 +259,7 @@ impl ApiTokenService {
     /// Look up by token, enforce active + non-expired, bump
     /// `last_used_at` and write an audit row. Single statement so
     /// concurrent validates can't both write conflicting timestamps.
-    pub async fn validate(
-        &self,
-        token: &str,
-        ip: Option<&str>,
-        user_agent: Option<&str>,
-    ) -> Result<ValidatedToken> {
+    pub async fn validate(&self, token: &str, meta: &RequestMeta) -> Result<ValidatedToken> {
         if !token.starts_with(TOKEN_PREFIX) {
             return Err(Error::Unauthorized);
         }
@@ -281,7 +287,7 @@ impl ApiTokenService {
         .map_err(map_db)?
         .ok_or(Error::Unauthorized)?;
 
-        self.write_audit(row.0, ACTION_USED, ip, user_agent).await?;
+        self.write_audit(row.0, ACTION_USED, meta).await?;
 
         Ok(ValidatedToken {
             token_id: row.0,
@@ -292,21 +298,15 @@ impl ApiTokenService {
         })
     }
 
-    async fn write_audit(
-        &self,
-        token_id: Uuid,
-        action: &str,
-        ip: Option<&str>,
-        user_agent: Option<&str>,
-    ) -> Result<()> {
+    async fn write_audit(&self, token_id: Uuid, action: &str, meta: &RequestMeta) -> Result<()> {
         sqlx::query(
             "INSERT INTO api_token_audit (token_id, action, ip, user_agent) \
              VALUES ($1, $2, $3, $4)",
         )
         .bind(token_id)
         .bind(action)
-        .bind(ip)
-        .bind(user_agent)
+        .bind(meta.ip())
+        .bind(meta.user_agent())
         .execute(&self.pool)
         .await
         .map_err(map_db)?;

@@ -1,9 +1,10 @@
 //! chan-gateway-admin: command-line admin for the chan.app gateway.
 //!
-//! Talks to profile-service's `/v1/admin/*` tree (and the small
-//! handful of non-admin routes that already exist for cross-service
-//! reads). Authenticates with `CHAN_ADMIN_TOKEN`, which must match
-//! `PROFILE_ADMIN_TOKEN` on profile-service.
+//! Talks to profile-service's `/v1/admin/*` tree (plus the non-admin
+//! routes used for cross-service reads) and workspace-proxy's
+//! `/admin/v1/*` tree (tunnel ps / kill / watch). Authenticates with
+//! `CHAN_ADMIN_TOKEN`, which must match `PROFILE_ADMIN_TOKEN` on
+//! profile-service and `WORKSPACE_ADMIN_TOKEN` on workspace-proxy.
 //!
 //! Output is shell-friendly: human-readable tables on a TTY,
 //! `--json` everywhere for piping into jq. Exit codes:
@@ -12,9 +13,6 @@
 //!   1  upstream / network / config error
 //!   2  user input error (bad uuid, missing arg, etc.)
 //!   3  not found  (no row for the user/token id)
-//!
-//! Tunnel ps / kill / watch land in a follow-up that wires the
-//! workspace-proxy admin endpoint.
 
 use std::process::ExitCode;
 
@@ -33,7 +31,7 @@ const EXIT_NOT_FOUND: u8 = 3;
 #[command(
     name = "chan-gateway-admin",
     version,
-    about = "Admin CLI for chan-gateway (users, tokens, audit).",
+    about = "Admin CLI for chan-gateway (users, tokens, tunnels, flags, audit).",
     propagate_version = true
 )]
 struct Cli {

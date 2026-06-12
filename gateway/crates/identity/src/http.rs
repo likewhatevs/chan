@@ -18,8 +18,8 @@ use tower_sessions_sqlx_store::PostgresStore;
 use uuid::Uuid;
 
 use crate::api_tokens::{
-    ApiToken, ApiTokenService, AuditEntry, CreatedToken, TokenOrigin, ValidatedToken,
-    DEFAULT_TOKEN_SCOPES,
+    ApiToken, ApiTokenService, AuditEntry, CreatedToken, NewToken, RequestMeta, TokenOrigin,
+    ValidatedToken, DEFAULT_TOKEN_SCOPES,
 };
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -127,18 +127,19 @@ pub fn router(
         token_throttle,
     };
 
-    // /internal/* uses the shared bearer (PROFILE_AUTH_TOKEN). Kept on
-    // its own sub-router so the session layer doesn't try to load a
-    // cookie session for callers that don't have one.
+    // /internal/* is gated by IDENTITY_INTERNAL_TOKEN (distinct from
+    // PROFILE_AUTH_TOKEN; see internal_auth). Kept on its own
+    // sub-router so the session layer doesn't try to load a cookie
+    // session for callers that don't have one.
     //
-    // No rate limit here. The only caller is workspace-proxy, so a
-    // governor at this hop sees one peer IP regardless of how many
-    // distinct clients are probing tokens upstream: a single global
-    // bucket that can lock out legitimate `chan serve` handshakes
-    // while leaving real attacker shape invisible. The PAT
-    // brute-force gate now lives in workspace-proxy, keyed on a hash of
-    // the candidate token, where it can throttle guesses at a
-    // specific PAT regardless of source-IP distribution.
+    // No per-IP rate limit here. The only caller is workspace-proxy,
+    // so a governor at this hop sees one peer IP regardless of how
+    // many distinct clients are probing tokens upstream: a single
+    // global bucket that can lock out legitimate `chan serve`
+    // handshakes while leaving real attacker shape invisible. The
+    // primary PAT brute-force gate sits in workspace-proxy, keyed on
+    // a hash of the candidate token; `token_throttle` inside the
+    // validate handler is its defense-in-depth twin.
     let internal = Router::new()
         .route("/internal/v1/tokens/validate", post(validate_token))
         .route_layer(middleware::from_fn_with_state(state.clone(), internal_auth));
@@ -302,10 +303,10 @@ async fn auth_callback_inner(
     // One atomic round trip: find existing identity, else attach
     // identity to the existing user with this email, else create
     // user + identity. Avatar refresh on the steady-state branch is
-    // folded into the same tx server-side. Replaces the old three-
-    // call dance which leaked orphan user rows on concurrent
-    // first-time logins and 502'd on multi-provider sign-ins for an
-    // email already on file.
+    // folded into the same tx server-side. A single transaction is
+    // what prevents orphan user rows on concurrent first-time logins
+    // and lets a second provider attach to an existing user by email
+    // instead of failing on a duplicate.
     let upsert = state
         .cfg
         .profile_client
@@ -839,8 +840,6 @@ async fn tokens_create(
         .expires_in
         .filter(|s| *s > 0)
         .map(|s| Utc::now() + chrono::Duration::seconds(s));
-    let ip = client_ip(&headers);
-    let ua = user_agent(&headers);
 
     let scopes: Vec<String> = match body.scopes {
         Some(ref s) if !s.is_empty() => s.clone(),
@@ -852,13 +851,14 @@ async fn tokens_create(
     let CreatedToken { token, secret } = state
         .api_tokens
         .create(
-            uid,
-            &body.label,
-            expires_at,
-            &scopes,
-            ip.as_deref(),
-            ua.as_deref(),
-            TokenOrigin::Spa,
+            NewToken {
+                user_id: uid,
+                label: &body.label,
+                expires_at,
+                scopes: &scopes,
+                origin: TokenOrigin::Spa,
+            },
+            &request_meta(&headers),
         )
         .await?;
 
@@ -888,11 +888,9 @@ async fn tokens_revoke(
 ) -> Result<StatusCode> {
     let user = current_active_user(&state, &session).await?;
     let uid = user.id;
-    let ip = client_ip(&headers);
-    let ua = user_agent(&headers);
     if !state
         .api_tokens
-        .revoke(uid, id, ip.as_deref(), ua.as_deref())
+        .revoke(uid, id, &request_meta(&headers))
         .await?
     {
         return Err(Error::NotFound);
@@ -1326,13 +1324,20 @@ async fn validate_token(
     }
     // chan-tunnel forwards the originating client IP via
     // X-Forwarded-For; we record that as the validate-IP for audit.
-    let ip = client_ip(&headers);
-    let ua = user_agent(&headers);
     let v = state
         .api_tokens
-        .validate(&body.token, ip.as_deref(), ua.as_deref())
+        .validate(&body.token, &request_meta(&headers))
         .await?;
     Ok(Json(v))
+}
+
+/// Bundle the audit-only request context (`client_ip` + `user_agent`)
+/// for `ApiTokenService` calls.
+pub(crate) fn request_meta(headers: &HeaderMap) -> RequestMeta {
+    RequestMeta {
+        ip: client_ip(headers),
+        user_agent: user_agent(headers),
+    }
 }
 
 pub(crate) fn client_ip(headers: &HeaderMap) -> Option<String> {

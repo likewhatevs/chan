@@ -18,11 +18,11 @@ cd "$(dirname "$0")/.."
 CRATES=("profile" "identity" "workspace-proxy" "admin")
 TARGETS=("x86_64-unknown-linux-gnu" "aarch64-unknown-linux-gnu")
 
-# Frontend bundles. rust-embed bakes whatever is in <crate>/web/dist
-# into the binary at compile time, so we MUST build the SPAs first.
-# The two SPAs and the shared chan-web-common package live in one
-# npm workspace at the repo root.
-echo "==> building SPA bundles"
+# Frontend bundle. rust-embed bakes whatever is in
+# crates/identity/web/dist into the binary at compile time, so we
+# MUST build the SPA first. It shares one npm workspace (at gateway/)
+# with the chan-web-common package.
+echo "==> building SPA bundle"
 npm ci --silent
 npm run build --workspaces --if-present --silent
 

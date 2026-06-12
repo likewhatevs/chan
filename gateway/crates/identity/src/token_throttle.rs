@@ -14,11 +14,9 @@
 //! `try_admit`; the handler maps that to a 401, identical on the
 //! wire to "unknown token" so the throttle is not observable.
 
-use gateway_common::token_bucket::TokenBucket;
-
-const DEFAULT_REFILL_PER_SEC: f32 = 4.0;
-const DEFAULT_CAPACITY: f32 = 16.0;
-const DEFAULT_MAP_CAP: usize = 4096;
+use gateway_common::token_bucket::{
+    TokenBucket, DEFAULT_CAPACITY, DEFAULT_MAP_CAP, DEFAULT_REFILL_PER_SEC,
+};
 
 #[derive(Clone)]
 pub struct TokenThrottle {

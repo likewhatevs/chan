@@ -12,9 +12,9 @@
 //!
 //!   * lookup helpers that bundle the tunnel handle with the cached
 //!     `owner_id` and the SPA-facing metadata (`public`, `label`).
-//!     `public` and `label` aren't carried by the wire today;
-//!     defaults are applied here. Per-tunnel customisation is a
-//!     follow-up that extends the Hello frame in chan-tunnel-proto.
+//!     `label` isn't carried by the wire; the workspace slug is
+//!     applied as the default here. Per-tunnel labels would require
+//!     extending the Hello frame in chan-tunnel-proto.
 //!
 //! Cache invalidation: defensive. In normal flow the cache
 //! self-converges because `CapturingValidator::validate` runs
@@ -47,9 +47,8 @@ pub struct Registry {
 }
 
 /// Bundle returned by `Registry::get` for the proxy auth gate plus
-/// substream open. Keeps `public` here even though it's a constant
-/// today, so the auth-gate code path stays parameterised for the
-/// day per-tunnel `public` lands on the wire.
+/// substream open. `public` comes from the tunnel handshake
+/// (`chan serve --tunnel-public`) via the underlying `TunnelHandle`.
 #[derive(Clone)]
 pub struct Entry {
     pub handle: TunnelHandle,

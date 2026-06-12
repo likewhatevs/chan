@@ -17,6 +17,16 @@ fn default_scopes() -> Vec<String> {
     vec!["tunnel".to_string()]
 }
 
+/// Audit context with both fields populated, for tests asserting the
+/// recorded ip / user_agent. Use `RequestMeta::default()` when the
+/// test doesn't care.
+fn meta(ip: &str, ua: &str) -> RequestMeta {
+    RequestMeta {
+        ip: Some(ip.to_string()),
+        user_agent: Some(ua.to_string()),
+    }
+}
+
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
 use axum::Router;
@@ -35,7 +45,7 @@ use tower::ServiceExt;
 use tower_sessions_sqlx_store::PostgresStore;
 use uuid::Uuid;
 
-use identity::api_tokens::TokenOrigin;
+use identity::api_tokens::{NewToken, RequestMeta, TokenOrigin};
 use identity::config::Config;
 use identity::http;
 use identity::profile_client::ProfileClient;
@@ -205,13 +215,14 @@ async fn pat_create_validate_revoke_audit() {
     let created = env
         .api_tokens_service()
         .create(
-            uid,
-            "ci-runner",
-            None,
-            &default_scopes(),
-            Some("10.0.0.1"),
-            Some("test-ua"),
-            TokenOrigin::Spa,
+            NewToken {
+                user_id: uid,
+                label: "ci-runner",
+                expires_at: None,
+                scopes: &default_scopes(),
+                origin: TokenOrigin::Spa,
+            },
+            &meta("10.0.0.1", "test-ua"),
         )
         .await
         .expect("create");
@@ -221,7 +232,7 @@ async fn pat_create_validate_revoke_audit() {
     // Validate succeeds, returns user_id + username, bumps last_used.
     let v = env
         .api_tokens_service()
-        .validate(&created.secret, Some("10.0.0.2"), Some("tunneld"))
+        .validate(&created.secret, &meta("10.0.0.2", "tunneld"))
         .await
         .expect("validate");
     assert_eq!(v.user_id, uid);
@@ -231,13 +242,13 @@ async fn pat_create_validate_revoke_audit() {
     // Revoke kills the token; subsequent validate is unauthorized.
     let revoked = env
         .api_tokens_service()
-        .revoke(uid, created.token.id, Some("10.0.0.1"), Some("test-ua"))
+        .revoke(uid, created.token.id, &meta("10.0.0.1", "test-ua"))
         .await
         .expect("revoke");
     assert!(revoked);
     assert!(env
         .api_tokens_service()
-        .validate(&created.secret, None, None)
+        .validate(&created.secret, &RequestMeta::default())
         .await
         .is_err());
 
@@ -264,20 +275,21 @@ async fn pat_validate_skips_blocked_user() {
     let created = env
         .api_tokens_service()
         .create(
-            uid,
-            "ci",
-            None,
-            &default_scopes(),
-            None,
-            None,
-            TokenOrigin::Spa,
+            NewToken {
+                user_id: uid,
+                label: "ci",
+                expires_at: None,
+                scopes: &default_scopes(),
+                origin: TokenOrigin::Spa,
+            },
+            &RequestMeta::default(),
         )
         .await
         .expect("create");
 
     // Active path works.
     env.api_tokens_service()
-        .validate(&created.secret, None, None)
+        .validate(&created.secret, &RequestMeta::default())
         .await
         .expect("validate ok");
 
@@ -291,7 +303,7 @@ async fn pat_validate_skips_blocked_user() {
 
     let res = env
         .api_tokens_service()
-        .validate(&created.secret, None, None)
+        .validate(&created.secret, &RequestMeta::default())
         .await;
     assert!(res.is_err(), "blocked-user validate should fail");
     env.cleanup().await;
@@ -306,19 +318,20 @@ async fn pat_expired_is_unauthorized() {
     let created = env
         .api_tokens_service()
         .create(
-            uid,
-            "stale",
-            Some(past),
-            &default_scopes(),
-            None,
-            None,
-            TokenOrigin::Spa,
+            NewToken {
+                user_id: uid,
+                label: "stale",
+                expires_at: Some(past),
+                scopes: &default_scopes(),
+                origin: TokenOrigin::Spa,
+            },
+            &RequestMeta::default(),
         )
         .await
         .expect("create");
     assert!(env
         .api_tokens_service()
-        .validate(&created.secret, None, None)
+        .validate(&created.secret, &RequestMeta::default())
         .await
         .is_err());
     env.cleanup().await;
@@ -333,13 +346,14 @@ async fn pat_audit_scoped_to_owner() {
     let alice_token = env
         .api_tokens_service()
         .create(
-            alice,
-            "a",
-            None,
-            &default_scopes(),
-            None,
-            None,
-            TokenOrigin::Spa,
+            NewToken {
+                user_id: alice,
+                label: "a",
+                expires_at: None,
+                scopes: &default_scopes(),
+                origin: TokenOrigin::Spa,
+            },
+            &RequestMeta::default(),
         )
         .await
         .expect("create");
@@ -355,13 +369,13 @@ async fn pat_audit_scoped_to_owner() {
     // Alice's token continues to validate.
     let revoked = env
         .api_tokens_service()
-        .revoke(bob, alice_token.token.id, None, None)
+        .revoke(bob, alice_token.token.id, &RequestMeta::default())
         .await
         .expect("revoke call");
     assert!(!revoked);
     assert!(env
         .api_tokens_service()
-        .validate(&alice_token.secret, None, None)
+        .validate(&alice_token.secret, &RequestMeta::default())
         .await
         .is_ok());
 
@@ -376,13 +390,14 @@ async fn pat_validate_endpoint_requires_internal_bearer() {
     let created = env
         .api_tokens_service()
         .create(
-            uid,
-            "tunnel",
-            None,
-            &default_scopes(),
-            None,
-            None,
-            TokenOrigin::Spa,
+            NewToken {
+                user_id: uid,
+                label: "tunnel",
+                expires_at: None,
+                scopes: &default_scopes(),
+                origin: TokenOrigin::Spa,
+            },
+            &RequestMeta::default(),
         )
         .await
         .expect("create");

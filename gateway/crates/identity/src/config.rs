@@ -88,10 +88,8 @@ impl Config {
             std::env::var("PROFILE_AUTH_TOKEN").context("PROFILE_AUTH_TOKEN is required")?;
         let profile_client = ProfileClient::new(profile_url, profile_token)?;
 
-        // Required. No back-compat fallback: workspace-proxy holds the
-        // matching value via the same env var (or one of its legacy
-        // aliases), but on the identity side the only acceptable
-        // source is IDENTITY_INTERNAL_TOKEN. Rotating PROFILE_AUTH_TOKEN
+        // Required, no fallback. workspace-proxy holds the matching
+        // value via the same env var. Rotating PROFILE_AUTH_TOKEN
         // must never accidentally rotate the internal validate bearer.
         let internal_auth_token = std::env::var("IDENTITY_INTERNAL_TOKEN")
             .context("IDENTITY_INTERNAL_TOKEN is required")?;
@@ -151,11 +149,9 @@ impl Config {
             Err(_) => String::new(),
         };
 
-        // Same shape as before: WORKSPACE_ADMIN_TOKEN enables the
-        // admin-side calls (revoke, delete, /api/me workspaces merge).
-        // WORKSPACE_ADMIN_URL is now required when the token is set
-        // because there is no `WORKSPACES_URL` to fall back on (the
-        // dashboard surface is on identity, not on workspace-proxy).
+        // WORKSPACE_ADMIN_TOKEN enables the admin-side calls (revoke,
+        // delete, /api/me workspaces merge); WORKSPACE_ADMIN_URL is
+        // required whenever the token is set.
         let workspace_admin = std::env::var("WORKSPACE_ADMIN_TOKEN")
             .ok()
             .filter(|s| !s.is_empty())

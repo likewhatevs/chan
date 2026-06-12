@@ -1,16 +1,17 @@
 # profile-service
 
 Internal HTTP API in front of Postgres. Owns the canonical user
-record, linked OAuth identities, the `api_tokens` table, and the
-authentication audit log. Called only by sibling chan-gateway
-services (`identity-service`, `workspace-proxy`) and the operator CLI;
+record, linked OAuth identities, workspaces + sharing grants, feature
+flags, and the authentication audit log; serves the admin views over
+`api_tokens`. Called only by `identity-service` and the operator CLI;
 not exposed publicly.
 
 ## Role in the system
 
 profile-service is the single source of truth for "who is this
-user." Sessions live elsewhere (workspace-proxy and identity-service
-share a `tower_sessions` Postgres table). Cookie minting,
+user." Sessions live elsewhere (identity-service holds the only
+`tower_sessions` table), and PAT mint / validate is identity-service
+writing the shared `api_tokens` table directly. Cookie minting,
 profile-page rendering, and OAuth state are all someone else's
 problem; profile owns the rows.
 
@@ -66,6 +67,7 @@ Service API (`/v1/users/*`, `/v1/auth-audit`):
 | DELETE | `/v1/users/:id`                    | hard delete (cascades)        |
 | PATCH  | `/v1/users/:id/username`           | rename handle (cap 4)         |
 | GET    | `/v1/users/by-identity`            | lookup by (provider, subject) |
+| GET    | `/v1/users/by-username`            | case-insensitive handle lookup |
 | POST   | `/v1/users/upsert-by-identity`     | atomic find-or-create-or-link |
 | POST   | `/v1/users/:id/identities`         | attach OAuth identity         |
 | GET    | `/v1/users/:o/workspaces`              | list owner's workspaces           |
@@ -88,6 +90,7 @@ Admin API (`/v1/admin/*`):
 | GET    | `/v1/admin/users`                          | list, with filters          |
 | POST   | `/v1/admin/users/:id/block`                | block + revoke PATs         |
 | POST   | `/v1/admin/users/:id/unblock`              | clear block                 |
+| POST   | `/v1/admin/users/:id/email`                | rewrite email (audited)     |
 | GET    | `/v1/admin/users/:id/auth-audit`           | per-user audit log          |
 | GET    | `/v1/admin/users/:id/tokens`               | list user's PATs            |
 | POST   | `/v1/admin/tokens/:id/revoke`              | revoke a PAT                |

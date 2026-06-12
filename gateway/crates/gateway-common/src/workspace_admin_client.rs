@@ -104,8 +104,8 @@ impl WorkspaceAdminClient {
             tracing::warn!(%status, body = %body, "workspace-proxy admin upstream error");
             return Err(WorkspaceAdminError::Upstream(format!("{status}")));
         }
-        // The endpoint always returns 200 with a JSON body now, but
-        // tolerate 204 to leave room for a future "noop" optimisation.
+        // The endpoint returns 200 with a JSON body; tolerate 204 to
+        // leave room for a future "noop" optimisation.
         if status == StatusCode::NO_CONTENT {
             return Ok(0);
         }

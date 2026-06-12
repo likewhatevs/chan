@@ -46,9 +46,9 @@ async fn run() -> anyhow::Result<()> {
     let app = http::router(Arc::new(cfg.clone()), store, api_tokens, token_throttle);
     let listener = tokio::net::TcpListener::bind(cfg.bind_addr).await?;
     // ConnectInfo populates the peer-address extension some axum
-    // layers expect; identity-service no longer ships a per-IP
-    // governor (the validate path uses per-token-fingerprint
-    // throttling), but the extension is still cheap to provide.
+    // layers expect. Nothing in identity-service requires it today
+    // (the validate path throttles per token fingerprint, not per
+    // IP), but the extension is cheap to provide.
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),

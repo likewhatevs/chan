@@ -43,11 +43,11 @@
 //!     (not `created`) so operators and users can tell the desktop
 //!     flow apart from SPA mints.
 //!
-//! Follow-ups (not in v1):
-//!   * Per-session rate limit. Today a signed-in user spam-clicking
+//! Known limitation:
+//!   * No per-session rate limit. A signed-in user spam-clicking
 //!     `Authorize` mints PATs into their own table; audit-visible and
-//!     bounded by the user's own account, so we ship without a
-//!     server-side limit and watch the audit log.
+//!     bounded by the user's own account, so there is no server-side
+//!     limit — the audit log is the watch surface.
 
 use axum::extract::{Form, Query, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue};
@@ -61,9 +61,9 @@ use subtle::ConstantTimeEq;
 use tower_sessions::Session;
 use url::form_urlencoded::byte_serialize;
 
-use crate::api_tokens::{ApiToken, CreatedToken, TokenOrigin};
+use crate::api_tokens::{ApiToken, CreatedToken, NewToken, TokenOrigin};
 use crate::error::{Error, Result};
-use crate::http::{client_ip, current_user_id, current_user_id_optional, user_agent, AppState};
+use crate::http::{current_user_id, current_user_id_optional, request_meta, AppState};
 use crate::profile_client::User;
 
 /// Session key under which `/desktop/authorize` stashes a pending
@@ -256,18 +256,17 @@ async fn complete(
     user: &User,
 ) -> Result<Redirect> {
     let expires_at: DateTime<Utc> = Utc::now() + chrono::Duration::seconds(params.expires_in_secs);
-    let ip = client_ip(headers);
-    let ua = user_agent(headers);
     let CreatedToken { token, secret } = state
         .api_tokens
         .create(
-            user.id,
-            &params.label,
-            Some(expires_at),
-            &params.scopes,
-            ip.as_deref(),
-            ua.as_deref(),
-            TokenOrigin::Desktop,
+            NewToken {
+                user_id: user.id,
+                label: &params.label,
+                expires_at: Some(expires_at),
+                scopes: &params.scopes,
+                origin: TokenOrigin::Desktop,
+            },
+            &request_meta(headers),
         )
         .await
         .map_err(|e| {

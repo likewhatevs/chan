@@ -1,28 +1,35 @@
-# Workspace manifest for chan-gateway: identity + profile services
-# behind id.chan.app and workspace.chan.app.
+# Workspace manifest for chan-gateway: the services behind
+# id.chan.app and workspace.chan.app.
 #
-# Crates (more land in follow-up issues):
+# Crates:
 #
-#   - profile      internal HTTP API in front of Postgres. CRUD for
-#                  users, linked OAuth identities, and per-user workspace
-#                  URLs. Called only by other gateway services; not
-#                  exposed publicly.
+#   - profile      internal HTTP API in front of Postgres. Users,
+#                  linked OAuth identities, workspaces + sharing
+#                  grants, feature flags, auth audit. Called only by
+#                  identity-service and the operator CLI; not exposed
+#                  publicly.
 #
-#   - identity     public-facing service at id.chan.app. Runs OAuth2
-#                  sign-in (GitHub for v0), holds the session, serves
-#                  a small Svelte SPA where users manage workspace URLs.
-#                  Owns no domain data; calls profile-service over
-#                  HTTP.
+#   - identity     public-facing service at id.chan.app. OAuth2
+#                  sign-in (GitHub / Google / GitLab) with PKCE,
+#                  Postgres-backed sessions, personal access tokens,
+#                  the embedded Svelte dashboard SPA, and the
+#                  workspace-gate entry-token mint. Owns no domain
+#                  data; calls profile-service over HTTP.
 #
-#   - workspace-proxy  public-facing service at workspace.chan.app. Lists
-#                  the signed-in user's workspaces with online/offline
-#                  status. v0 opens workspaces in a new tab; the actual
-#                  reverse-proxy ships once chan-server's frontend
-#                  is path-prefix friendly (or we go subdomain-per-
-#                  workspace with a wildcard cert).
+#   - workspace-proxy  public-facing service at workspace.chan.app
+#                  (apex: tunnel + admin) and *.workspace.chan.app
+#                  (wildcard: tenant content). Terminates `chan serve`
+#                  tunnel registrations over h2c and reverse-proxies
+#                  HTTP + WebSocket traffic into them, gated by the
+#                  workspace-gate JWT handoff.
 #
-# See README.md for the project narrative and pointers to the
-# upstream issue tracker.
+#   - admin        operator CLI against profile's and workspace-proxy's
+#                  admin trees (users, tokens, tunnels, flags, audit).
+#
+#   - gateway-common  shared library: domain derivation, HTTP clients,
+#                  workspace-gate JWT, token bucket, validators.
+#
+# See README.md for the project narrative.
 
 [workspace]
 resolver = "2"
@@ -63,8 +70,8 @@ axum = { version = "0.7", features = ["macros", "ws"] }
 # workspace-proxy needs the Compat shim and TokioAsyncReadCompatExt to
 # bridge them onto tokio io.
 tokio-util = { version = "0.7", features = ["compat"] }
-# Workspace-proxy runs hyper's h1 client over yamux substreams to reach
-# `chan serve`; reqwest is no longer the upstream transport.
+# Workspace-proxy runs hyper's h1 client over yamux substreams to
+# reach `chan serve` (reqwest can't drive a caller-supplied stream).
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http = "1"

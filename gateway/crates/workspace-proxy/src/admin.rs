@@ -1,15 +1,19 @@
-//! Admin endpoints for the chan-gateway-admin CLI.
+//! Admin endpoints for the chan-gateway-admin CLI and the sibling
+//! services (identity reads the per-user snapshot for `/api/me`;
+//! identity + profile call the kill routes on revoke / delete / block).
 //!
-//! Three routes under `/admin/v1/`:
+//! Routes under `/admin/v1/`:
 //!
-//!   * `GET    /tunnels`            snapshot of every registered tunnel
-//!   * `POST   /tunnels/:user/:workspace/kill`  force a tunnel offline
-//!   * `GET    /tunnels/watch`      SSE stream of periodic snapshots
+//!   * `GET    /tunnels`                       snapshot of every registered tunnel
+//!   * `POST   /tunnels/:user/:workspace/kill` force one tunnel offline
+//!   * `GET    /users/:user/tunnels`           per-user snapshot
+//!   * `POST   /users/:user/tunnels/kill`      bulk evict for one user
+//!   * `GET    /tunnels/watch`                 SSE stream of periodic snapshots
 //!
 //! All gated by a single bearer token (`WORKSPACE_ADMIN_TOKEN`). The
 //! tunnel registry is in-memory and process-local, so admin reads
 //! always see exactly what this workspace-proxy instance is serving --
-//! no cross-process aggregation in v0 because the deployment runs
+//! there is no cross-process aggregation because the deployment runs
 //! a single workspace-proxy.
 
 use std::convert::Infallible;

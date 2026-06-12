@@ -62,14 +62,12 @@ pub struct CreateIdentity {
     pub email: Option<String>,
 }
 
-/// Atomic "find or create" by OAuth identity. Replaces the
-/// lookup-create-link dance identity-service used to do over three
-/// HTTP calls; folding it into a single transaction here closes the
-/// race that left orphan user rows on concurrent first-time logins
-/// and adds the email-based linking the schema's been promising
-/// since 0001 (sign-in with a second provider whose verified email
+/// Atomic "find or create" by OAuth identity, in one transaction.
+/// The single round trip is what prevents orphan user rows on
+/// concurrent first-time logins, and it carries the email-based
+/// linking rule: sign-in with a second provider whose verified email
 /// matches an existing user attaches to that user instead of
-/// failing with a duplicate-email conflict).
+/// failing with a duplicate-email conflict.
 #[derive(Debug, Deserialize)]
 pub struct UpsertByIdentity {
     pub provider: String,

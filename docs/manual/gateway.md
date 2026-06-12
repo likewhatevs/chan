@@ -35,8 +35,9 @@ identity         id.chan.app            OAuth sign-in (GitHub, Google,
                                         tokens, the account SPA
 workspace-proxy  workspace.chan.app     tunnel registration (POST /v1/tunnel)
                  + *.workspace.chan.app  + reverse proxy into each chan serve
-profile          internal               users, identities, tokens over
-                                        Postgres; called by the others
+profile          internal               users, identities, workspaces, flags
+                                        over Postgres; called by identity
+                                        and the admin CLI
 admin            CLI                     operator tooling against profile +
                                         workspace-proxy admin routes
 ```
@@ -58,10 +59,3 @@ config wiring.
 The full route tables, environment variables, trust boundaries, and dev setup
 are documented in the gateway README:
 [github.com/fiorix/chan/tree/main/gateway](https://github.com/fiorix/chan/tree/main/gateway).
-
-## Verification status
-
-The `chan serve --tunnel-url` command shape is verified against the documented
-flags. A full end-to-end run against a live gateway (tunnel registration ->
-browser access behind OAuth) requires a deployed gateway and is not exercised
-by the local audit; it is left for a deployment-time check.

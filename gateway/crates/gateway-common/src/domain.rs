@@ -7,11 +7,6 @@
 //! hostname from one base domain (`CHAN_DOMAIN`) through this module,
 //! so the id and workspace hosts cannot drift apart.
 //!
-//! This replaces the previous arrangement, where each service carried
-//! its own `workspace.chan.app` literal and workspace-proxy
-//! reconstructed the id host by string-swapping the `workspace.`
-//! prefix for `id.`.
-//!
 //! std-only on purpose: this type sits in the data layer next to the
 //! other dependency-light helpers, so consumers map any validation
 //! into their own error type.

@@ -45,9 +45,9 @@ sudo apt install ./chan-gateway-admin_*.deb
 
 Single-token deployments set `CHAN_ADMIN_TOKEN` to a value that
 matches both `PROFILE_ADMIN_TOKEN` (profile-service) and
-`WORKSPACE_ADMIN_TOKEN` (workspace-proxy). Deployments that rotate them
-independently can override per call by passing `--token` or
-exporting the per-service env vars instead.
+`WORKSPACE_ADMIN_TOKEN` (workspace-proxy). Deployments that rotate the
+two service tokens independently pass `--token` per invocation, with
+the value matching the service that invocation talks to.
 
 ## Commands
 
@@ -55,7 +55,8 @@ exporting the per-service env vars instead.
 chan-gateway-admin user list   [--blocked|--active] [--email PAT] [--username U]
 chan-gateway-admin user get    <ident>
 chan-gateway-admin user create --email <e> [--name <n>]
-chan-gateway-admin user update <ident> [--email <e>] [--name <n>]
+chan-gateway-admin user update <ident> --name <n>
+chan-gateway-admin user change-email <ident> --email <e> [--yes]
 chan-gateway-admin user rename <ident> <username>
 chan-gateway-admin user delete <ident> [--yes]
 chan-gateway-admin user block  <ident> [--reason <text>]

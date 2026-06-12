@@ -1,19 +1,16 @@
 //! Per-token-fingerprint rate limiter for the tunnel handshake.
 //!
-//! Identity-service used to run a `tower_governor` per-IP gate on
-//! `/internal/v1/tokens/validate`, but the only peer that endpoint
-//! ever sees is workspace-proxy itself: every request keys to the same
-//! container IP, the "per-IP" bucket degenerates into a single
-//! global one, and a noisy attacker can lock out legitimate
-//! handshakes while real source-IP diversity stays invisible.
+//! Why not a per-IP gate: every internal hop behind nginx sees one
+//! peer IP, so a "per-IP" bucket degenerates into a single global
+//! one — a noisy attacker can lock out legitimate handshakes while
+//! real source-IP diversity stays invisible.
 //!
-//! The brute-force surface lives one hop earlier, at the tunnel
-//! handshake in workspace-proxy. We can't easily key on the original
-//! client IP there (the listener is raw h2, not axum, and the
-//! gateway terminator wraps `chan-tunnel-server` from chan-core;
-//! plumbing X-Forwarded-For into the validator means a chan-core
-//! surface change). What we can do cheaply is throttle by the
-//! candidate token itself: hash the bytes to a 64-bit fingerprint
+//! The brute-force surface is the tunnel handshake. We can't easily
+//! key on the original client IP here (the listener is raw h2, not
+//! axum, and the gateway terminator wraps `chan-tunnel-server` from
+//! chan-core; plumbing X-Forwarded-For into the validator means a
+//! chan-core surface change). What we can do cheaply is throttle by
+//! the candidate token itself: hash the bytes to a 64-bit fingerprint
 //! and run a token-bucket per fingerprint. Guessing a specific
 //! (possibly leaked) PAT is bounded regardless of the attacker's
 //! IP distribution; random-tail brute force still has astronomical
@@ -33,23 +30,9 @@
 
 use async_trait::async_trait;
 use chan_tunnel_server::{ServerError, Validated, Validator};
-use gateway_common::token_bucket::TokenBucket;
-
-/// Default refill rate (tokens per second) per fingerprint. Matches
-/// the rate the old identity governor advertised so the overall
-/// budget for a single `chan serve` handshake loop is unchanged;
-/// just keyed correctly now.
-const DEFAULT_REFILL_PER_SEC: f32 = 4.0;
-
-/// Default bucket capacity (burst). Same shape as the old governor.
-const DEFAULT_CAPACITY: f32 = 16.0;
-
-/// Hard cap on tracked fingerprints. An attacker hammering with
-/// random tokens can fill the map; capping it bounds memory and
-/// the eviction step. 4096 is well above the steady-state working
-/// set (one entry per active PAT in the wild) and small enough
-/// that the O(n) eviction scan is negligible.
-const DEFAULT_MAP_CAP: usize = 4096;
+use gateway_common::token_bucket::{
+    TokenBucket, DEFAULT_CAPACITY, DEFAULT_MAP_CAP, DEFAULT_REFILL_PER_SEC,
+};
 
 pub struct ThrottlingValidator<V: Validator> {
     inner: V,

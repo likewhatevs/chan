@@ -2,76 +2,121 @@
 
 ## Problem
 
-identity-service, workspace-proxy and profile-service each had (or would
-have had) their own copies of:
+identity-service, workspace-proxy and profile-service need the same
+plumbing in several places:
 
-- a `ProfileClient` calling profile-service over HTTP, with
-  near-identical method signatures and a duplicate `User` struct;
-- a `WorkspaceAdminClient` calling workspace-proxy admin (used by identity on
-  revoke / delete and by profile on admin block);
-- a `static_files` handler embedding a Svelte SPA via `rust_embed`,
-  identical except for the embed folder and a "frontend not built"
-  banner string;
-- the shared JWT shape used by the workspace-gate handoff between
-  identity (mint) and workspace-proxy (verify + mint sessions).
+- a `ProfileClient` calling profile-service over HTTP;
+- a `WorkspaceAdminClient` calling workspace-proxy admin (used by
+  identity on revoke / delete / dashboard reads and by profile on
+  admin block);
+- the JWT shape used by the workspace-gate handoff between identity
+  (mint) and workspace-proxy (verify + mint sessions);
+- the public-hostname derivation both public services must agree on;
+- username validation rules that profile, identity and workspace-proxy
+  all enforce;
+- the token-bucket primitive both validate throttles wrap.
 
-Keeping the duplicates risked drift and made cross-cutting choices
-(timeouts, error mapping, MIME guessing, signing claims) live in
-multiple places.
+Per-crate copies would risk drift and make cross-cutting choices
+(timeouts, error mapping, MIME guessing, signing claims, throttle
+limits) live in multiple places.
 
 ## Architecture
 
-Library crate with four modules and no axum / IntoResponse coupling
+Library crate with eight modules and no axum / IntoResponse coupling
 in the data-layer types:
 
+- `domain` (`src/domain.rs`)
+  - `Domains`: public hostnames (`base`, `id_host`, `workspace_apex`,
+    `workspace_wildcard_suffix`) derived from one base domain via
+    `from_base` / `from_env` (`CHAN_DOMAIN`, default `localtest.me`).
+    identity and workspace-proxy derive the same hosts from the same
+    env, so the workspace-gate `aud` cannot drift. std-only.
 - `profile_client` (`src/profile_client.rs`)
   - `ProfileClient`: reqwest-backed client with a 10-second
     per-request timeout. Bearer token lives inside; callers do not
-    deal with auth.
-  - `User`, `Identity`, `UpsertResponse`: serde types matching
-    profile-service's wire shape. `User` is the superset of every
-    field profile returns; consumers ignore the fields they do not
-    need.
+    deal with auth. Idempotent GETs on the dashboard / OAuth-callback
+    read path retry once after 100 ms on connect error, timeout, or
+    5xx (`send_idempotent`); writes never retry.
+  - Serde types matching profile-service's wire shapes: `User`,
+    `Identity`, `UpsertResponse`, `FeatureFlag*`, `FlagMap`,
+    `Workspace`, `WorkspaceGrant`, `WorkspaceAccess`,
+    `OwnedWorkspaceSummary`, `IncomingShare`. `User` is the superset
+    of every field profile returns; consumers ignore the fields they
+    do not need.
   - `ProfileError`: thiserror enum with `NotFound`,
     `BadRequest(String)`, `Conflict(String)`, `Upstream(String)`,
     `Reqwest(reqwest::Error)`.
+- `shutdown` (`src/shutdown.rs`)
+  - `shutdown_signal()`: completes on the first of SIGTERM (Unix) or
+    Ctrl-C; every service binary gates its graceful shutdown on it.
+- `static_files` (`src/static_files.rs`)
+  - `serve<R: RustEmbed>(uri, banner) -> Response`: SPA fallback
+    handler. Tries the requested path, falls back to `index.html` for
+    paths without an extension, serves the banner (as 503, so a
+    missing bundle surfaces to monitoring) if no `index.html` is
+    embedded, else 404.
+- `token_bucket` (`src/token_bucket.rs`)
+  - `TokenBucket`: per-fingerprint token bucket with a bounded map
+    (LRU-style eviction at `map_cap`; new fingerprints start at one
+    token, not a full burst, so rotating fingerprints can't bank
+    capacity). `fingerprint` is a SipHash-64 of the candidate token.
+  - `DEFAULT_REFILL_PER_SEC` / `DEFAULT_CAPACITY` / `DEFAULT_MAP_CAP`:
+    the shared limits (4 rps, 16 burst, 4096 entries) both validate
+    throttles use, single-sourced so the defense-in-depth twins
+    cannot drift.
+- `validators` (`src/validators.rs`)
+  - `valid_username`: 3-32 chars, `[a-z0-9-]`, no boundary hyphens.
+  - `MAX_USERNAME_EDITS`: the lifetime rename cap (4).
 - `workspace_admin_client` (`src/workspace_admin_client.rs`)
   - `WorkspaceAdminClient`: reqwest-backed client for the apex
-    `https://workspace.chan.app` admin tree. 5-second timeout. Today
-    exposes `kill_user_tunnels(username) -> usize` and the helpers
-    needed by identity-side dashboard reads. Bearer token lives
-    inside.
+    admin tree. 5-second timeout. Exposes
+    `kill_user_tunnels(username) -> usize` and
+    `list_user_tunnels(username) -> Vec<TunnelView>`. Bearer token
+    lives inside.
   - `WorkspaceAdminError`: thiserror enum with `Upstream(String)` and
     `Reqwest(reqwest::Error)`.
 - `workspace_gate` (`src/workspace_gate.rs`)
   - `Claims`: serde struct matching the entry / session JWT envelope
     (`iss`, `sub`, `drv`, `aud`, `typ`, `iat`, `exp`).
-  - `TokenType::{Entry, Session}` and `encode_*` / `decode_*` helpers
+  - `TokenType::{Entry, Session}` and `encode_*` / `decode` helpers
     wrapping `jsonwebtoken` with HS256 hard-required. No `alg: none`
     path exists.
-  - `WorkspaceGateError`: thiserror enum covering expiry, signature,
-    aud / drv / typ mismatch, and decode failures.
-- `static_files` (`src/static_files.rs`)
-  - `serve<R: RustEmbed>(uri, banner) -> Response`: SPA fallback
-    handler. Tries the requested path, falls back to `index.html` for
-    paths without an extension, falls back to the banner if no
-    `index.html` is embedded (fresh checkout), else 404.
+  - `WorkspaceGateError`: thiserror enum covering decode/signature
+    failures, expiry, and aud / drv / typ mismatch.
 
 ## Public surface
 
 `profile_client::ProfileClient`:
 
-| Method                  | Purpose                                  |
-|-------------------------|------------------------------------------|
-| `get_user`              | by uuid                                  |
-| `find_user_by_identity` | by (provider, subject)                   |
-| `create_user`           | new user                                 |
-| `update_avatar`         | best-effort avatar refresh               |
-| `link_identity`         | attach OAuth identity to existing user   |
-| `upsert_by_identity`    | atomic find-or-create-or-link            |
-| `update_username`       | rename (consumes a slot)                 |
-| `write_auth_audit`      | append login / logout / block event      |
-| `delete_user`           | hard delete                              |
+| Method                       | Purpose                                  |
+|------------------------------|------------------------------------------|
+| `get_user`                   | by uuid                                  |
+| `find_user_by_username`      | case-insensitive handle lookup           |
+| `find_user_by_identity`      | by (provider, subject)                   |
+| `create_user`                | new user                                 |
+| `update_avatar`              | best-effort avatar refresh               |
+| `link_identity`              | attach OAuth identity to existing user   |
+| `upsert_by_identity`         | atomic find-or-create-or-link            |
+| `update_username`            | rename (consumes a slot)                 |
+| `write_auth_audit`           | append login / logout / block event      |
+| `delete_user`                | hard delete                              |
+| `get_user_flags`             | resolved feature-flag map for one user   |
+| `admin_list_flags`           | every flag + override count              |
+| `admin_upsert_flag`          | idempotent flag create / update          |
+| `admin_delete_flag`          | drop flag (cascades overrides)           |
+| `admin_list_flag_overrides`  | per-user overrides on a flag             |
+| `admin_upsert_flag_override` | set a per-user override                  |
+| `admin_delete_flag_override` | clear a per-user override                |
+| `create_workspace`           | idempotent workspace create              |
+| `list_workspaces`            | owner's workspaces                       |
+| `delete_workspace`           | drop workspace (cascades grants)         |
+| `create_workspace_grant`     | create-or-promote a share grant          |
+| `list_workspace_grants`      | grants on one workspace                  |
+| `delete_workspace_grant`     | owner-scoped grant revoke                |
+| `workspace_access`           | per-request access gate (`role` or 404)  |
+| `list_owned_workspaces`      | workspaces the user shares + counts      |
+| `list_incoming_shares`       | workspaces shared with the user          |
+| `claim_grants`               | claim pending grants by verified emails  |
 
 `workspace_admin_client::WorkspaceAdminClient`:
 
@@ -82,15 +127,17 @@ in the data-layer types:
 
 `workspace_gate`:
 
-| Item                            | Purpose                            |
-|---------------------------------|------------------------------------|
-| `Claims` (serde)                | entry + session JWT envelope       |
-| `encode_entry(secret, claims)`  | identity mints                     |
-| `encode_session(secret, claims)`| workspace-proxy mints                  |
-| `decode(secret, token, aud)`    | both verify; returns `Claims`      |
+| Item                                              | Purpose                       |
+|---------------------------------------------------|-------------------------------|
+| `Claims` (serde)                                  | entry + session JWT envelope  |
+| `encode_entry(secret, sub, drv, aud)`             | identity mints (30s exp)      |
+| `encode_session(secret, sub, drv, aud)`           | workspace-proxy mints (24h)   |
+| `decode(secret, token, typ, aud, drv)`            | verify; returns `Claims`      |
 
 `static_files::serve` is a single async function with one type
-parameter for the embedded asset set.
+parameter for the embedded asset set. `token_bucket::TokenBucket`,
+`validators::valid_username`, `domain::Domains`, and
+`shutdown_signal` are plain types / functions described above.
 
 ## Key decisions
 
@@ -126,9 +173,9 @@ function takes the `R: RustEmbed` type parameter and calls
 `R::get(path)`; the consumer site is two lines of declaration plus
 one call.
 
-After the wildcard-subdomain refactor workspace-proxy no longer has an
-SPA, so only identity-service uses this module today; it stays here
-in case a future service grows a UI.
+Only identity-service ships an SPA, so it is the module's only
+consumer; the module stays generic in case a future service grows a
+UI.
 
 ### Banners stay per-consumer
 
@@ -174,13 +221,13 @@ template would obscure that; each consumer ships its own
 
 `WorkspaceGateError`:
 
-| Variant            | Construction                          |
-|--------------------|---------------------------------------|
-| `Expired`          | `exp` in the past                     |
-| `InvalidSignature` | HMAC verify failed                    |
-| `WrongAudience`    | `aud` claim does not match            |
-| `WrongType`        | `typ` did not match expected value    |
-| `Decode`           | malformed token / unsupported alg     |
+| Variant          | Construction                                     |
+|------------------|--------------------------------------------------|
+| `Decode`         | malformed token, unsupported alg, or HMAC verify failed |
+| `Expired`        | `exp` in the past                                |
+| `WrongAudience`  | `aud` claim does not match                       |
+| `WrongWorkspace` | `drv` claim does not match                       |
+| `WrongType`      | `typ` did not match expected value               |
 
 Consumers map these into their local axum errors.
 
@@ -193,13 +240,16 @@ Consumers map these into their local axum errors.
 - `jsonwebtoken` for `workspace_gate`
 - `axum` (response types only), `mime_guess`, `rust-embed` for
   `static_files::serve`
+- std-only `domain`, `validators`, `token_bucket` (SipHash via
+  `DefaultHasher`); `tokio::signal` for `shutdown`
 
 ## What is not wired
 
 - Caching of profile responses (every call hits the upstream)
 - Connection pooling beyond reqwest defaults
-- Retries with exponential backoff (callers decide whether a failure
-  is fatal or fire-and-forget)
+- Retries beyond the single idempotent-GET retry in
+  `send_idempotent` (callers decide whether a write failure is fatal
+  or fire-and-forget)
 - Asymmetric JWT (HS256 is the only algorithm enabled)
 - An axum middleware that rewrites client errors into responses
   directly (consumers do the mapping in their own `IntoResponse`)

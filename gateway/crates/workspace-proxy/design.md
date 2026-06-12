@@ -91,9 +91,10 @@ Full route table is in [`README.md`](README.md). Critical paths:
 ### Tunnel registration (apex only)
 
 `POST /v1/tunnel` on `workspace.chan.app:443`. nginx routes this exact
-path to `grpc_pass grpc://chan-workspace:7003`; everything else on the
-apex `proxy_pass`es to the axum listener on `:7002`. The h2c handler
-in `chan-tunnel-server` validates the Bearer PAT via identity-service
+path to the h2c tunnel listener (`grpc_pass`, `TUNNEL_BIND_ADDR`,
+default `:7100`); everything else on the apex `proxy_pass`es to the
+axum listener on `:7002`. The h2c handler in `chan-tunnel-server`
+validates the Bearer PAT via identity-service
 `/internal/v1/tokens/validate`, then registers the workspace in the
 shared registry.
 
@@ -183,9 +184,12 @@ Routes:
 - `GET    /admin/v1/tunnels/watch`                 SSE snapshot stream
 
 All bearer-gated by `WORKSPACE_ADMIN_TOKEN` (constant-time compare via
-`subtle`) and rate-limited per source IP by `tower_governor`
-(4 rps + 16 burst). Lives on the apex hostname so tenant content
-cannot reach it via fetch.
+`subtle`). Lives on the apex hostname so tenant content cannot reach
+it via fetch. There is deliberately no per-IP rate limit on this
+tree: behind nginx every request arrives from one upstream IP, so a
+per-IP bucket degenerates into a single global one that an attacker
+could use to lock out the operator CLI; nginx is the rate-limit layer
+for this surface.
 
 ## Key decisions
 
@@ -223,22 +227,21 @@ day-to-day navigation is one click from the dashboard. Both signed
 with `WORKSPACE_GATE_SECRET` (HS256, no "alg: none" path; the validator
 hard-requires HS256). The crate is `jsonwebtoken`.
 
-Sliding session-cookie expiry is a follow-up if 24h proves annoying.
-Server-side revocation (an in-memory revoked-jti set) is also a
-follow-up; today rotation of `WORKSPACE_GATE_SECRET` is the only
-immediate invalidation knob.
+There is no sliding session-cookie expiry and no server-side
+revocation (revoked-jti set); rotation of `WORKSPACE_GATE_SECRET` is
+the only immediate invalidation knob.
 
 ### Username cache populated on handshake
 
 The tunnel validator returns `(user_id, username)`.
 `CapturingValidator` records that pair in the registry on every
-successful handshake. The proxy gate no longer reads `owner_id` for
-claim validation (that comparison locked grantees out of shared
-workspaces); the cache is retained as metadata for admin tooling and as
-a defense-in-depth signal for future enforcement that needs to
+successful handshake. The proxy gate does not compare `owner_id`
+against the token's `sub` (that comparison would lock grantees out of
+shared workspaces); the cache exists as metadata for admin tooling
+and as a defense-in-depth signal for future enforcement that needs to
 correlate the live tunnel with a specific account. A cache miss
-still reads as "unknown registration" -> 404 because tunnel presence
-is what the registry tracks.
+reads as "unknown registration" -> 404 because tunnel presence is
+what the registry tracks.
 
 ### Auth gate trust model
 
@@ -275,20 +278,17 @@ to make a guess loop glacial.
 
 ### Path strip is one segment
 
-The URL shape no longer carries `{user}` in the path. `{user}` lives
-in the host. The wildcard router strips exactly one segment
-(`/<workspace>`) before forwarding to the upstream, which still expects
-no prefix (chan serve in tunnel mode refuses `--prefix`).
+`{user}` lives in the host, not the path. The wildcard router strips
+exactly one segment (`/<workspace>`) before forwarding to the
+upstream, which expects no prefix (chan serve in tunnel mode refuses
+`--prefix`).
 
 ### Admin tree on the apex
 
 Admin routes intentionally live on `workspace.chan.app`, not on the
 wildcard. Tenant content has no way to call them: the wildcard
 router never proxies `/admin/v1/*` upstream, and the apex never
-serves tenant content. `tower_governor`'s `PeerIpKeyExtractor`
-requires `ConnectInfo<SocketAddr>`; production wires this via
-`into_make_service_with_connect_info`, tests inject it manually
-on `oneshot`.
+serves tenant content.
 
 ### Domain config is single-source
 
@@ -296,12 +296,11 @@ The apex, wildcard, and the dashboard redirect's id host all derive
 from one base domain (`CHAN_DOMAIN`, e.g. `chan.app`) plus
 `PUBLIC_SCHEME`, via `gateway_common::domain::Domains`. identity-service
 derives the same hosts from the same two vars, so the two cannot drift
-(the workspace-gate JWT `aud` is the inbound host and must match). This
-replaced the earlier `apex_host.strip_prefix("workspace.")` ->
-`id.<rest>` string-swap. `APEX_HOST`, `WILDCARD_SUFFIX`, and
-`DASHBOARD_URL` remain as explicit overrides; the wildcard still
-follows the apex unless set, and `DASHBOARD_URL` is still needed when
-the id host runs on a non-default port (the derived form carries none).
+(the workspace-gate JWT `aud` is the inbound host and must match).
+`APEX_HOST`, `WILDCARD_SUFFIX`, and `DASHBOARD_URL` are explicit
+overrides; the wildcard follows the apex unless set, and
+`DASHBOARD_URL` is needed when the id host runs on a non-default port
+(the derived form carries none).
 Defaults are dev-shaped (`localtest.me` / `http`); production sets
 `CHAN_DOMAIN` + `PUBLIC_SCHEME` once in the shared
 `/etc/chan-gateway/domain.env`, loaded by both systemd units.
@@ -336,7 +335,7 @@ Defaults are dev-shaped (`localtest.me` / `http`); production sets
 | BadRequest    | 400  | input or proxy precondition failure       |
 | Upstream      | 502  | tunnel disconnected, h1 handshake failed  |
 | Anyhow        | 500  | startup or unexpected                     |
-| Reqwest       | 502  | profile-service unreachable               |
+| Reqwest       | 502  | identity-service unreachable              |
 
 workspace-proxy carries no `Conflict` variant: nothing on this surface
 PATCHes a unique-constrained row.
@@ -348,10 +347,11 @@ PATCHes a unique-constrained row.
 - `hyper` h1 client over yamux substreams for the HTTP proxy path
 - `tokio_tungstenite::client_async` for the WebSocket proxy path
 - `http_body_util::Limited` for request and response byte caps
-- `tower::timeout` for the end-to-end HTTP request timeout
-- `tower_governor` rate limiter on the admin tree
-- `gateway-common` for the profile-service client, the shared
-  workspace_gate JWT type, and the workspace-admin types
+- `tokio::time::timeout_at` + the `DeadlineBody` wrapper for the
+  end-to-end HTTP request timeout
+- `gateway-common` for the shared workspace_gate JWT type, the
+  token-bucket primitive, the username validator, and the domain
+  derivation
 
 ## What is not wired
 

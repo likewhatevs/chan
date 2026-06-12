@@ -19,6 +19,23 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// Default refill rate (tokens per second) per fingerprint, shared by
+/// the two validate throttles (workspace-proxy's tunnel handshake and
+/// identity's `/internal/v1/tokens/validate`). The two are documented
+/// defense-in-depth twins; sourcing the limits here keeps them from
+/// drifting apart.
+pub const DEFAULT_REFILL_PER_SEC: f32 = 4.0;
+
+/// Default bucket capacity (burst) per fingerprint.
+pub const DEFAULT_CAPACITY: f32 = 16.0;
+
+/// Default cap on tracked fingerprints. An attacker hammering with
+/// random tokens can fill the map; the cap bounds memory and the
+/// eviction step. 4096 is well above the steady-state working set
+/// (one entry per active PAT in the wild) and small enough that the
+/// O(n) eviction scan is negligible.
+pub const DEFAULT_MAP_CAP: usize = 4096;
+
 #[derive(Clone)]
 pub struct TokenBucket {
     state: Arc<Mutex<State>>,

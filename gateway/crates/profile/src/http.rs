@@ -560,8 +560,9 @@ async fn try_upsert_once(
 /// handle (no-op success without burning an edit), or zero rows when
 /// the cap is exhausted or the user is missing. One follow-up SELECT
 /// distinguishes "cap reached" from "not found" in the zero-rows
-/// case. Replaces the prior TOCTOU window between the CAS UPDATE
-/// and the diagnostic SELECT.
+/// case. Folding the CAS and the no-op detection into one statement
+/// is what closes the TOCTOU window a separate diagnostic SELECT
+/// would open.
 async fn update_username(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,

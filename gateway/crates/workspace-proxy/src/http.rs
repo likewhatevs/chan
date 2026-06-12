@@ -10,9 +10,9 @@ use tower_http::trace::TraceLayer;
 use crate::config::Config;
 use crate::registry::Registry;
 
-/// Application state passed to every handler. Cookie- and
-/// session-related fields are gone; workspace-proxy reads no cookie
-/// other than the `workspace_gate` issued by the proxy gate itself.
+/// Application state passed to every handler. Holds no cookie or
+/// session machinery; workspace-proxy reads no cookie other than the
+/// `workspace_gate` issued by the proxy gate itself.
 #[derive(Clone)]
 pub struct AppState {
     pub cfg: Arc<Config>,

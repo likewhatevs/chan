@@ -234,7 +234,7 @@ real host changes only what is environment-specific, exactly as
   DNAT to chan-nginx in the zone.
 - **Certificates.** Swap mkcert for certbot with your provider's dns-01
   plugin to get the real `*.workspace.<domain>` wildcard (the wildcard
-  forces dns-01; @@Host uses Cloudflare, pick your own provider).
+  forces dns-01; any DNS provider with a certbot plugin works).
 - **Secrets.** Real per-service secrets bind-mounted from
   `/var/lib/chan/secrets` instead of the inlined dev values;
   `COOKIE_SECURE=true`.

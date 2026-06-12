@@ -47,7 +47,7 @@ errors with the `NotFound` exit code.
 
 ### `user block`
 
-The block flow now lives server-side: profile-service fans out to
+The block flow lives server-side: profile-service fans out to
 workspace-proxy in the same operation. The CLI still calls both for
 robustness against split deployments where the CLI's workspace-proxy URL
 may differ from the profile container's view of workspace-proxy, but the
@@ -101,12 +101,13 @@ is fine for CLI workloads.
 
 ## Key decisions
 
-### Single bearer, multiple knobs
+### Single bearer
 
-`CHAN_ADMIN_TOKEN` is the simple default: one secret, both services
-accept it (single-token deployments set `PROFILE_ADMIN_TOKEN` and
-`WORKSPACE_ADMIN_TOKEN` to the same value). Deployments that rotate the
-tokens independently can override per service via separate env vars.
+`CHAN_ADMIN_TOKEN` is the only credential knob: one secret, sent to
+both services (single-token deployments set `PROFILE_ADMIN_TOKEN` and
+`WORKSPACE_ADMIN_TOKEN` to the same value). Deployments that rotate
+the two service tokens independently pass `--token` per invocation
+with the value matching the service that invocation talks to.
 
 ### Exit codes are part of the contract
 

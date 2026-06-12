@@ -1,11 +1,28 @@
 //! Shared helpers for the chan-gateway crates.
 //!
-//! Five modules:
+//! Modules:
 //!
+//!   * `domain`: single-source public-hostname derivation from
+//!     `CHAN_DOMAIN`. identity and workspace-proxy derive the same
+//!     id / workspace hosts so the workspace-gate `aud` cannot drift.
 //!   * `profile_client`: typed HTTP client for profile-service. Used
-//!     by identity-service and workspace-proxy. Owns its own error enum
-//!     (`ProfileError`); each consumer maps it onto its local axum
-//!     error via a `From` impl.
+//!     by identity-service. Owns its own error enum (`ProfileError`);
+//!     the consumer maps it onto its local axum error via a `From`
+//!     impl.
+//!   * `shutdown`: graceful-shutdown future (SIGTERM or Ctrl-C) used
+//!     by every service binary.
+//!   * `static_files`: rust-embed-backed SPA-fallback handler. Each
+//!     consumer keeps its own `#[derive(Embed)]` (rust-embed resolves
+//!     the `#[folder]` path relative to the deriving crate) and calls
+//!     `static_files::serve::<Assets>(uri, banner)`. Used only by
+//!     identity-service; workspace-proxy ships no SPA.
+//!   * `token_bucket`: per-fingerprint token bucket with a bounded
+//!     map, plus the shared default limits. Backs the brute-force
+//!     throttle in `workspace_proxy::throttle_validator` and
+//!     `identity::token_throttle`; both wrap this primitive in a
+//!     thin trait-level adapter.
+//!   * `validators`: username shape validation and the lifetime
+//!     rename cap, shared by identity, profile, and workspace-proxy.
 //!   * `workspace_admin_client`: typed HTTP client for workspace-proxy's
 //!     `/admin/v1/*` tree. Used by identity-service (on revoke /
 //!     delete / dashboard reads) and profile-service (on admin
@@ -17,16 +34,6 @@
 //!     tokens; workspace-proxy verifies entry tokens and mints session
 //!     tokens. Same envelope, same secret (WORKSPACE_GATE_SECRET),
 //!     distinct `typ` claim.
-//!   * `static_files`: rust-embed-backed SPA-fallback handler. Each
-//!     consumer keeps its own `#[derive(Embed)]` (rust-embed resolves
-//!     the `#[folder]` path relative to the deriving crate) and calls
-//!     `static_files::serve::<Assets>(uri, banner)`. Used today only
-//!     by identity-service; workspace-proxy ships no SPA.
-//!   * `token_bucket`: per-fingerprint token bucket with a bounded
-//!     map. Backs the brute-force throttle in
-//!     `workspace_proxy::throttle_validator` and
-//!     `identity::token_throttle`; both wrap this primitive in a
-//!     thin trait-level adapter.
 
 pub mod domain;
 pub mod profile_client;

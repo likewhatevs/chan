@@ -86,8 +86,8 @@ Optional:
 ## Routes
 
 - Apex (`workspace.<domain>`): `POST /v1/tunnel` (raw h2c, on the
-  tunnel listener), the Bearer-gated `/admin/v1/*` tree (rate-limited
-  via `tower_governor`), and `/healthz`.
+  tunnel listener), the Bearer-gated `/admin/v1/*` tree, and
+  `/healthz`.
 - Wildcard (`{user}.workspace.<domain>`): the per-workspace reverse
   proxy under `/{workspace}/...`, gated by the `?t=` entry token /
   `workspace_gate` cookie.

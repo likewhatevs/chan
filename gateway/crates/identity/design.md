@@ -93,6 +93,15 @@ PAT shape: `chan_pat_<32 random bytes, base64url, no pad>`.
 - Random bytes from `rand::rngs::OsRng`.
 - Hash: `SHA-256(token)` stored in `api_tokens.token_hash`. Plaintext
   leaves on the create response and is never persisted.
+- Scopes: each token carries a scope list (`api_tokens.scopes`),
+  defaulting to `["tunnel"]` (dial chan-tunnel, private workspaces
+  only). `tunnel.public` additionally allows hosting an
+  anonymous-readable workspace; granting it is an explicit act at
+  create time. Validate returns the list and chan-tunnel-server
+  enforces it.
+- Origin: mints record `created` (SPA) or `created_via_desktop`
+  (desktop-authorize flow) in `api_token_audit`, so operators can
+  tell the two apart.
 - Validate (`/internal/v1/tokens/validate`):
   - Per-token-fingerprint throttle (4 rps refill, 16 burst,
     4096-entry LRU map). Throttled requests return 401, identical on
@@ -222,6 +231,25 @@ logs and continues so an unhealthy profile call does not block
 sign-in. Previous providers' emails are not resent — they were
 swept on their own callbacks.
 
+### Desktop authorize (PAT mint for chan-desktop)
+
+OAuth-style consent flow at `/desktop/authorize` (entry, validates
+the query and stashes it in the session), `/desktop/authorize/consent`
+(server-rendered HTML consent page, CSRF nonce, `frame-ancestors
+'none'`), and `POST /desktop/authorize/confirm` (allow / deny). On
+allow, a PAT is minted with `TokenOrigin::Desktop` and the browser is
+302'd to `chan://auth/callback#id=…&secret=…&state=…` — the secret
+rides in the URL fragment so it never reaches access logs. The
+`redirect_uri` is exact-matched against `chan://auth/callback`,
+`expires_in` is required and clamped to 90 days, and scopes are
+checked against a strict allowlist (`tunnel`, `tunnel.public`).
+Unauthenticated entries bounce through the SPA sign-in; the OAuth
+callback resumes the flow at the consent page. Deny paths
+(blocked account, `oauth_login` not granted, user cancel) redirect to
+the same `chan://` target with a stable `error=` reason so the
+desktop client can render it. See the `desktop_authorize` module doc
+for the full hardening posture.
+
 ### Account delete
 
 `DELETE /api/profile`:
@@ -259,13 +287,13 @@ from racing on the link.
 
 ### Username rules
 
-`valid_username` (in `http.rs`):
+`valid_username` (shared, in `gateway_common::validators`):
 
 - 3-32 chars total
 - first and last char in `[a-z0-9]`
 - inner chars in `[a-z0-9-]`
 
-Plus:
+Plus (in `http.rs`):
 
 - `RESERVED_USERNAMES` blocks anything that could collide with a
   top-level path under `chan.app/`. Sorted alphabetically; checked
@@ -395,8 +423,7 @@ sibling-service errors into the local enum so request handlers can
 
 - WebAuthn / passkeys
 - Magic-link sign-in
-- Device flow for headless clients
-- Per-PAT scopes (PATs authenticate a user; workspace-gate enforces workspace
-  ownership separately at the URL layer)
+- Device flow (RFC 8628) for browserless clients — chan-desktop's
+  `/desktop/authorize` flow still rides the user's browser
 - Refresh of the workspace-gate session cookie on the workspace.chan.app side
   (24h hard exp; users re-enter via the dashboard)

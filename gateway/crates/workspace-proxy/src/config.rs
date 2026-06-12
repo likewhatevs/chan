@@ -27,8 +27,8 @@ pub struct Config {
     /// PAT every `chan serve` presents in its tunnel handshake.
     pub identity_url: Url,
     /// Bearer workspace-proxy presents on identity-service's
-    /// `/internal/v1/tokens/validate`. Resolution order documented
-    /// in `from_env`.
+    /// `/internal/v1/tokens/validate`. Sourced from
+    /// `IDENTITY_INTERNAL_TOKEN`; required, no fallback.
     pub identity_auth_token: String,
     /// Absolute URL the wildcard root (`{user}.workspace.chan.app/`)
     /// 302s to. The dashboard lives at id.chan.app/workspaces in prod;
@@ -334,9 +334,9 @@ mod tests {
 
     #[test]
     fn multi_label_prefix_rejected() {
-        // `evil.alice.workspace.chan.app` would have matched the suffix
-        // before #18 and returned `"evil.alice"` as username. Now we
-        // require a single DNS label in the prefix.
+        // `evil.alice.workspace.chan.app` matches the wildcard suffix
+        // but must NOT resolve to username "evil.alice": the prefix
+        // is required to be a single DNS label.
         let c = cfg();
         assert_eq!(c.parse_wildcard_user("evil.alice.workspace.chan.app"), None);
         // Leading dot was already excluded by the substring length
