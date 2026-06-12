@@ -1697,67 +1697,29 @@ fn main() {
 
     app.run(move |_app, event| {
         match event {
-            // Cmd+Q / the Quit menu (macOS predefined Quit and Linux's
-            // chan-quit `app.exit(0)` both route through here, and both
-            // are preventable). With ANY SPA window alive — visible or
-            // buried (a buried window is a live hidden webview, so one
-            // `webview_windows()` scan covers both) — confirm before
-            // quitting: quitting silently kills standalone-terminal
-            // shells and stops local workspaces. A bare launcher (or
-            // About) quits without ceremony.
+            // Backstop for exit paths that do not come through the
+            // chan-quit menu item (which already confirmed via
+            // `request_quit`). NOTE this arm alone proved insufficient
+            // for Cmd+Q: the macOS PREDEFINED Quit item exits through a
+            // flow `prevent_exit` cannot reliably stop, so the menu now
+            // carries a custom Quit item that asks BEFORE any exit is
+            // requested. Kept for the code-None flows (e.g. last window
+            // destroyed) where prevention does work.
             RunEvent::ExitRequested { api, .. } => {
                 use std::sync::atomic::Ordering;
                 if state_for_exit.quit_confirmed.load(Ordering::SeqCst) {
                     return; // user already confirmed; let the exit run
                 }
-                let open: Vec<String> = _app
+                let open = _app
                     .webview_windows()
                     .into_keys()
                     .filter(|l| serve::is_workspace_webview_label(l))
-                    .collect();
-                if open.is_empty() {
+                    .count();
+                if open == 0 {
                     return; // nothing worth guarding; quit as before
                 }
                 api.prevent_exit();
-                // One dialog at a time: a second Cmd+Q while the ask is
-                // up must not stack another.
-                if state_for_exit
-                    .quit_prompt_open
-                    .swap(true, Ordering::SeqCst)
-                {
-                    return;
-                }
-                let hidden = state_for_exit.buried_windows.lock().unwrap().len();
-                let message = if hidden > 0 {
-                    format!(
-                        "Chan has {} window(s) ({hidden} hidden). Quitting stops their terminals and local workspaces; remote servers keep running.",
-                        open.len()
-                    )
-                } else {
-                    format!(
-                        "Chan has {} window(s) open. Quitting stops their terminals and local workspaces; remote servers keep running.",
-                        open.len()
-                    )
-                };
-                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                let state_for_reply = Arc::clone(&state_for_exit);
-                let app_for_reply = _app.clone();
-                _app.dialog()
-                    .message(message)
-                    .title("Quit Chan?")
-                    .buttons(MessageDialogButtons::OkCancelCustom(
-                        "Quit".into(),
-                        "Cancel".into(),
-                    ))
-                    .show(move |quit| {
-                        state_for_reply
-                            .quit_prompt_open
-                            .store(false, Ordering::SeqCst);
-                        if quit {
-                            state_for_reply.quit_confirmed.store(true, Ordering::SeqCst);
-                            app_for_reply.exit(0);
-                        }
-                    });
+                request_quit(_app);
             }
             RunEvent::Exit => {
                 // Best-effort: unmount every embedded local workspace
@@ -1899,6 +1861,13 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         // default macOS menubar: prepend a custom (non-predefined) About
         // item routed to `chan-about`, then strip the predefined system
         // About. The Predefined-only match below leaves our custom item.
+        //
+        // The predefined QUIT is replaced the same way: it exits through
+        // a flow `ExitRequested` + `prevent_exit` cannot reliably stop,
+        // so the v0.31.0 quit-confirmation dialog never appeared. Our
+        // custom item keeps Cmd+Q but routes through `request_quit`,
+        // which asks BEFORE any exit is requested. Appended (not
+        // prepended) so Quit stays at the App menu's bottom.
         if let Some(app_submenu) = menu
             .items()
             .ok()
@@ -1911,13 +1880,18 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
                 for item in items {
                     if let MenuItemKind::Predefined(p) = &item {
                         if let Ok(text) = p.text() {
-                            if text.to_lowercase().contains("about") {
+                            let text = text.to_lowercase();
+                            if text.contains("about") || text.contains("quit") {
                                 let _ = app_submenu.remove(&item);
                             }
                         }
                     }
                 }
             }
+            let quit = MenuItemBuilder::with_id("chan-quit", "Quit Chan")
+                .accelerator("CmdOrCtrl+Q")
+                .build(app)?;
+            app_submenu.append(&quit)?;
         }
         menu
     };
@@ -1930,8 +1904,8 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // Quit is a CUSTOM item, not PredefinedMenuItem::quit: muda has no GTK
     // handler for the predefined Quit (it is wired only on macOS / Windows),
     // so on Linux the predefined item is silently dropped and File showed no
-    // Exit at all. A custom item with an explicit app.exit(0) handler renders
-    // and works. Undo/Redo are likewise GTK-unsupported (dropped, and they
+    // Exit at all. The custom item routes through `request_quit` (confirm
+    // while windows exist). Undo/Redo are likewise GTK-unsupported (dropped, and they
     // would orphan a leading separator), so Edit sticks to the four clipboard
     // items muda does implement on GTK.
     #[cfg(not(target_os = "macos"))]
@@ -2002,9 +1976,10 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
                     tracing::warn!(error = %e, "open about window failed");
                 }
             }
-            #[cfg(not(target_os = "macos"))]
+            // Cross-platform: the custom Quit item (Cmd/Ctrl+Q) asks
+            // BEFORE exiting while SPA windows are open or hidden.
             "chan-quit" => {
-                app.exit(0);
+                request_quit(app);
             }
             _ => {}
         }
@@ -2436,6 +2411,64 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
 /// suffix to disambiguate.
 const LAUNCHER_WINDOW_TITLE: &str = "Chan Desktop";
 
+/// Quit, asking first while ANY SPA window is alive — visible or
+/// buried (a buried window is a live hidden webview, so one
+/// `webview_windows()` scan covers both): quitting silently kills
+/// standalone-terminal shells and stops local workspaces. A bare
+/// launcher (or About) quits without ceremony.
+///
+/// The confirmation lives HERE, before any exit is requested, because
+/// the macOS predefined Quit item exits through a flow
+/// `RunEvent::ExitRequested` + `prevent_exit` cannot reliably stop
+/// (the v0.31.0 dialog never appeared). The custom chan-quit menu item
+/// (Cmd/Ctrl+Q) routes here on every platform; on Quit the
+/// `quit_confirmed` flag lets the resulting `ExitRequested` pass.
+fn request_quit(app: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    let state = Arc::clone(&app.state::<Arc<AppState>>());
+    let open = app
+        .webview_windows()
+        .into_keys()
+        .filter(|l| serve::is_workspace_webview_label(l))
+        .count();
+    if open == 0 {
+        state.quit_confirmed.store(true, Ordering::SeqCst);
+        app.exit(0);
+        return;
+    }
+    // One dialog at a time: a second Cmd+Q while the ask is up must
+    // not stack another.
+    if state.quit_prompt_open.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let hidden = state.buried_windows.lock().unwrap().len();
+    let message = if hidden > 0 {
+        format!(
+            "Chan has {open} window(s) ({hidden} hidden). Quitting stops their terminals and local workspaces; remote servers keep running."
+        )
+    } else {
+        format!(
+            "Chan has {open} window(s) open. Quitting stops their terminals and local workspaces; remote servers keep running."
+        )
+    };
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    let app_for_reply = app.clone();
+    app.dialog()
+        .message(message)
+        .title("Quit Chan?")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Quit".into(),
+            "Cancel".into(),
+        ))
+        .show(move |quit| {
+            state.quit_prompt_open.store(false, Ordering::SeqCst);
+            if quit {
+                state.quit_confirmed.store(true, Ordering::SeqCst);
+                app_for_reply.exit(0);
+            }
+        });
+}
+
 /// Eval a `chan:command` dispatch on the currently-focused workspace
 /// webview. Used by menu items that should defer to chan's per-workspace
 /// behavior (Settings). No-op when the focused window isn't a workspace,
@@ -2654,10 +2687,18 @@ mod tests {
     #[test]
     fn quit_is_gated_behind_a_confirmation_while_windows_exist() {
         // Cmd+Q / Quit must prompt while any SPA window (open or
-        // buried) exists. Pin the ExitRequested arm and its
-        // prevent_exit so a RunEvent refactor can't silently drop the
-        // guard. concat! so the pins don't match this test's source.
+        // buried) exists. The confirmation runs BEFORE any exit is
+        // requested (`request_quit` behind the custom chan-quit item):
+        // the macOS PREDEFINED Quit exits through a flow prevent_exit
+        // cannot reliably stop, so it must be stripped and replaced.
+        // concat! so the pins don't match this test's source.
         const MAIN_RS: &str = include_str!("main.rs");
+        // The custom item exists with the Cmd+Q accelerator and routes
+        // to request_quit; the predefined one is stripped by text.
+        assert!(MAIN_RS.contains(concat!("fn request", "_quit(app: &tauri::AppHandle)")));
+        assert!(MAIN_RS.contains(r#"accelerator("CmdOrCtrl+Q")"#));
+        assert!(MAIN_RS.contains(concat!("text.contains(", "\"quit\")")));
+        // The ExitRequested backstop still guards non-menu exit paths.
         assert!(MAIN_RS.contains(concat!("RunEvent::Exit", "Requested { api, .. }")));
         assert!(MAIN_RS.contains(concat!("api.prevent", "_exit();")));
         assert!(MAIN_RS.contains(concat!("quit_", "confirmed.load")));
