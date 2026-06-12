@@ -45,7 +45,14 @@ pub async fn read_dropped_paths(app: tauri::AppHandle) -> Result<Vec<String>, St
 /// read of the same pasteboard so this parses exactly what the
 /// native drag layer would have reported. Empty when the most recent
 /// drag carried no files.
+//
+// `NSFilenamesPboardType` is deprecated (AppKit points at
+// `NSPasteboardTypeFileURL`), but wry 0.55.1 still reads exactly this
+// type in its drag handler, and parity with that read is the point:
+// one shared parse, no file-URL percent-decoding divergence. Migrate
+// together with wry if/when wry moves off it.
 #[cfg(target_os = "macos")]
+#[allow(deprecated)]
 fn drag_pasteboard_paths() -> Vec<String> {
     use objc2_app_kit::{NSFilenamesPboardType, NSPasteboard, NSPasteboardNameDrag};
     use objc2_foundation::{NSArray, NSString};
