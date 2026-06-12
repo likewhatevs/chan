@@ -76,7 +76,7 @@ describe("survey store", () => {
     const reply = vi.spyOn(api, "surveyReply").mockResolvedValue(undefined as never);
     showSurvey(
       spec({
-        followup: { dir: "new-team-1", from: "@@LaneC", to: "@@Host" },
+        followup: { dir: "teams/alpha", from: "@@Alice", to: "@@Host" },
       }),
       "t1",
     );
@@ -84,14 +84,14 @@ describe("survey store", () => {
     expect(reply).toHaveBeenCalledWith({
       surveyId: "survey-7",
       kind: "followup",
-      followup: { dir: "new-team-1", from: "@@LaneC", to: "@@Host" },
+      followup: { dir: "teams/alpha", from: "@@Alice", to: "@@Host" },
       title: "T",
       bodyMarkdown: "the question",
     });
     expect(surveyFor("t1")).toBeNull();
   });
 
-  test("requestFollowup without a context posts followup: null (Part C: F is standard)", async () => {
+  test("requestFollowup without a context posts followup: null (F is standard)", async () => {
     const reply = vi.spyOn(api, "surveyReply").mockResolvedValue(undefined as never);
     showSurvey(spec({ followup: null }), null);
     await requestFollowup(null);

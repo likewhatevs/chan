@@ -1,5 +1,5 @@
-// Fullscreen PDF viewer. Mirror of `imageZoom.ts` for the
-// media-kind PDFs introduced by phase 4 #27. Uses an `<embed>` tag
+// Fullscreen PDF viewer. Mirror of `imageZoom.ts` for
+// media-kind PDFs. Uses an `<embed>` tag
 // so the browser's built-in PDF viewer (Chrome's PDFium, Firefox's
 // pdf.js, Safari) renders the document with no JS bundle cost.
 // pdfjs-dist as a fallback is tracked as a follow-up if a browser

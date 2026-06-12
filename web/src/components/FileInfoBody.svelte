@@ -582,7 +582,7 @@
     // Browser tab), Upload, Download tarball and Graph-from-here don't
     // apply. The one meaningful action is to drop a terminal there, so
     // the Drafts node gets a SINGLE "Terminal from here" button and no
-    // dropdown (@@Alex).
+    // dropdown.
     if (entry.path === draftsDir()) {
       return {
         main: { label: "Terminal from here", onClick: newTerminalHere },
@@ -590,7 +590,7 @@
       };
     }
     // A draft FILE is scratch too, so Open / Show file / Download /
-    // Graph-from-here don't apply. @@Alex: a SINGLE "Terminal from
+    // Graph-from-here don't apply. A SINGLE "Terminal from
     // here" button (no dropdown) that opens a terminal seeded with
     // {cursor}{space}{ABSOLUTE-path-of-the-draft}. The absolute path comes
     // from the inspector payload (abs_path); cwd is the workspace root, so the

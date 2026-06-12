@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import terminal from "./TerminalTab.svelte?raw";
 
-// Rich Prompt - the terminal wiring (slice 2): TerminalTab registers the prompt
+// Rich Prompt - the terminal wiring: TerminalTab registers the prompt
 // sink (WS `prompt` frame, NOT raw input), mounts the bubble over the active
 // terminal, and exposes the right-click "Show/Hide Rich Prompt" entry. The
 // bubble component + toggle + send seam are covered in
@@ -32,7 +32,7 @@ describe("TerminalTab Rich Prompt wiring", () => {
   });
 
   test("discards the per-terminal Rich Prompt draft folder on terminal close", () => {
-    // @@Host lifecycle: the draft (draft.md + pasted media) is tied to the
+    // Draft lifecycle: the draft (draft.md + pasted media) is tied to the
     // terminal; closing the terminal deletes the whole folder so nothing leaks.
     expect(terminal).toMatch(
       /function closeTerminalForTab\(\): boolean \{[\s\S]{1,900}if \(tab\.richPromptDraftPath\) \{[\s\S]{1,120}api\.discardDraft\(tab\.richPromptDraftPath\)/,
@@ -44,7 +44,7 @@ describe("TerminalTab Rich Prompt wiring", () => {
       /onclick=\{toggleRichPromptFromMenu\}[\s\S]{1,260}isRichPromptVisible\(tab\.id\) \? "Hide Rich Prompt" : "Show Rich Prompt"[\s\S]{1,120}\{richPromptChord\}/,
     );
     expect(terminal).toMatch(
-      /const richPromptChord = formatChord\("Mod\+Shift\+P", currentOS\(\)\)/,
+      /const richPromptChord = chordFor\("terminal\.richPrompt"\) \?\? ""/,
     );
   });
 });

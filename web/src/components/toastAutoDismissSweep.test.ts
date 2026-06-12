@@ -4,11 +4,6 @@ import terminal from "./TerminalTab.svelte?raw";
 
 // Success-path status messages use auto-dismissing `setTransientStatus()`
 // across surfaces. Error paths and directive surfaces stay persistent.
-// The Team Work revamp removed the Spawn-agents-config copy, the
-// per-terminal submit-mode flip, and the agent-event watcher, so
-// their toast assertions are gone. Wave-1 also removed the bubble-mode
-// flip (the rich-prompt / bubble-stub is rebuilt in Wave 2), so its
-// "bubble mode failed" toast assertion is gone too.
 
 describe("confirmed same-shape success swaps", () => {
   test("FileEditorTab `Copied file path` uses setTransientStatus", () => {

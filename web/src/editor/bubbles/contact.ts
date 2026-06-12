@@ -3,7 +3,7 @@
 // Two trigger shapes, one bubble:
 //   - `@word`   (mode "wiki", legacy): commits `[[<path>|<label>]]`
 //     so the picked contact lands as a wiki-link pill in the source.
-//   - `@@word`  (mode "mention", phase 5): commits `@@<alias-or-stem>`
+//   - `@@word`  (mode "mention"): commits `@@<alias-or-stem>`
 //     so the picked contact lands as a mention pill that
 //     chan-server's mention_to_contact map resolves back to the
 //     contact file via aliases + basename stem.

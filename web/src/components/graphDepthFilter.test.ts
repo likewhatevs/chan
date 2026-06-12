@@ -125,9 +125,9 @@ describe("depth slider works in workspace path-scope", () => {
   });
 });
 
-describe("B9: directory expand/collapse in the rich semantic graph", () => {
+describe("directory expand/collapse in the rich semantic graph", () => {
   test("workspace + dir scope render the expanded-ancestor tree, keeping every layer", () => {
-    // B9 (a/b/c): the fresh Cmd+Shift+M graph is semantic and now
+    // The fresh Cmd+Shift+M graph is semantic and
     // supports directory expand/collapse without flipping to the
     // directories-only filesystem mode. Workspace + dir scope gate
     // file / folder visibility on `ancestorsExpanded` (the same tree
@@ -146,7 +146,7 @@ describe("B9: directory expand/collapse in the rich semantic graph", () => {
     expect(graph).toMatch(
       /ancestorsExpanded\(rootPath, n\.path, expanded\)/,
     );
-    // The pre-B9 flat depth filter is gone from the semantic branch.
+    // No flat depth filter remains in the semantic branch.
     expect(graph).not.toMatch(
       /relativeDepth\(rootPath, nodePath\) <= graphState\.depth/,
     );

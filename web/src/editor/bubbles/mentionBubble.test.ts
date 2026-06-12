@@ -10,9 +10,8 @@ describe("api.mentions client method", () => {
     );
   });
 
-  test("doc comment cross-references systacean-35 + the @@ sigil composition", () => {
-    expect(client).toMatch(/`fullstack-a-70`/);
-    expect(client).toMatch(/`systacean-35`/);
+  test("doc comment pins the mentions-route contract (@@ sigil composition)", () => {
+    expect(client).toMatch(/Mention-corpus prefix lookup/);
     expect(client).toMatch(/Labels[\s\S]{1,40}arrive WITH the `@@` sigil/i);
   });
 });

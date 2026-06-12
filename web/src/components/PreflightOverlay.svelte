@@ -139,7 +139,7 @@
     }
     onboardDismissTick += 1;
   }
-  // Inline layer controls (round-1 wave-3: the nudge became actionable). The
+  // Inline layer controls: the nudge is actionable in place. The
   // displayed state seeds from the summary and then tracks the toggle results,
   // so a click reflects immediately without re-polling the snapshot.
   let reportsOverride = $state<boolean | null>(null);

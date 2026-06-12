@@ -17,7 +17,7 @@ describe("mention lens BFS is bidirectional", () => {
   });
 
   test("mention arm pulls the directory spine before returning", () => {
-    // G1 re-anchor: every file the lens surfaced gets its `contains`
+    // Re-anchor: every file the lens surfaced gets its `contains`
     // spine pulled in so no file renders edgeless.
     expect(graphPanel).toMatch(
       /if \(currentScope\.kind === "mention"\) \{[\s\S]{1,1800}pullContainsSpine\(visited\);[\s\S]{0,80}return visited;/,

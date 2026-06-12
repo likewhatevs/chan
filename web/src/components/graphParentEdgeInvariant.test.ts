@@ -1,13 +1,13 @@
 import { describe, expect, test } from "vitest";
 import graph from "./GraphPanel.svelte?raw";
 
-// Graph parent-edge invariant. The G9 forward-only BFS from a seed file
+// Graph parent-edge invariant. The forward-only BFS from a seed file
 // walks source -> target only, so a `parent -> file` contains edge
-// never adds the parent to `scopedNodeIds`. Fix: a parent-pull pass
-// (`pullContainsSpine`) that iterates to a fixed point, adding
+// never adds the parent to `scopedNodeIds`. A parent-pull pass
+// (`pullContainsSpine`) iterates to a fixed point, adding
 // `e.source` for every contains edge whose `e.target` is already in
-// scope. G1 hoisted that pass into a shared helper so the tag /
-// contact / language lenses reuse it too (see graphLensSpine.test.ts).
+// scope. The pass is a shared helper so the tag / contact /
+// language lenses reuse it too (see graphLensSpine.test.ts).
 
 describe("parent-edge invariant", () => {
   test("the shared pull walks to a fixed point adding `e.source` of contains edges", () => {
@@ -20,10 +20,10 @@ describe("parent-edge invariant", () => {
 
   test("file scope pulls the spine AFTER the forward BFS (positional check)", () => {
     // Sitting after the depth-bounded BFS ensures ancestors pull at
-    // any depth. Anchored on the G9 comment then the pull call.
-    const matchBfs = graph.search(/`fullstack-a-52` G9: forward-only BFS/);
+    // any depth. Anchored on the BFS comment then the pull comment.
+    const matchBfs = graph.search(/Forward-only BFS: the walk follows edges source -> target/);
     const matchPull = graph.search(
-      /`fullstack-a-58` parent-edge invariant: every in-scope file/,
+      /Parent-edge invariant: every in-scope file/,
     );
     expect(matchBfs).toBeGreaterThan(-1);
     expect(matchPull).toBeGreaterThan(matchBfs);

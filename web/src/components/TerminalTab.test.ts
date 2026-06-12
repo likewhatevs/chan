@@ -247,7 +247,7 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
   });
 
   test("the Team Work bubble composer is fully removed", () => {
-    // @@Host: delete the Team Work bubble entirely. No <TeamWork> mount, no
+    // The Team Work bubble is deleted entirely. No <TeamWork> mount, no
     // submitTeamWork/teamWorkUsesAgentSubmit helpers, no tab.teamWork, no raw
     // AGENT_SUBMIT_CHORD path. Per-terminal text input is the Rich Prompt.
     expect(terminalSource).not.toMatch(/<TeamWork\b/);
@@ -257,8 +257,8 @@ describe("TerminalTab Team Work revamp (source contract)", () => {
     expect(terminalSource).not.toMatch(/AGENT_SUBMIT_CHORD/);
   });
 
-  test("mounts a PER-TERMINAL survey overlay (R2-3), keyed by tab.id", () => {
-    // R2-3 (@@Alex): surveys are per-terminal, not window-wide. Each visible
+  test("mounts a PER-TERMINAL survey overlay, keyed by tab.id", () => {
+    // Surveys are per-terminal, not window-wide. Each visible
     // terminal mounts its own <BubbleOverlay tabId={tab.id} />, anchored over
     // it; the App-root mount (tabId null) is the window-wide fallback.
     expect(terminalSource).toMatch(

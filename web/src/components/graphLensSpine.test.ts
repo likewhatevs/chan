@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import graphPanel from "./GraphPanel.svelte?raw";
 
-// G1: the tag / contact / language lenses BFS only along semantic
+// The tag / contact / language lenses BFS only along semantic
 // edges, so their file nodes used to render with no edge up to a
 // directory ("edgeless files"). The unified /api/graph payload already
 // carries the directory `contains` spine to root; the fix re-includes
@@ -13,7 +13,7 @@ import graphPanel from "./GraphPanel.svelte?raw";
 // graphTagLensBidirectionalBfs.test.ts). The real layout check is a
 // browser smoke of a lang= / hashtag / mention lens.
 
-describe("G1: filtered lenses anchor files to the directory spine", () => {
+describe("filtered lenses anchor files to the directory spine", () => {
   test("the shared ancestor-pull helper walks contains edges UP to a fixed point", () => {
     expect(graphPanel).toMatch(
       /function pullContainsSpine\(visited: Set<string>\): void \{[\s\S]{1,400}e\.kind === "contains" &&[\s\S]{1,120}visited\.has\(e\.target\) &&[\s\S]{1,120}!visited\.has\(e\.source\)[\s\S]{1,120}visited\.add\(e\.source\);/,

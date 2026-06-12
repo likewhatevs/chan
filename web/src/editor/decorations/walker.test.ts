@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import walker from "./walker.ts?raw";
 
-// BUG-EDITOR (round-2 part-2): conceal decorations reverted to raw markdown
+// Bug: conceal decorations reverted to raw markdown
 // markers in the lower viewport after a tab switch until a click/scroll. The
 // ViewPlugin recomputed only on docChanged / viewportChanged / selectionSet,
 // so the post-remount geometry-settle (which does not reliably fire

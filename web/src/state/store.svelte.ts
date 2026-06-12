@@ -635,7 +635,7 @@ export function onWatchEvent(e: unknown): void {
     return;
   }
   if (frameType === "terminal_roster") {
-    // Cross-window terminal roster snapshot (phase-21). Full snapshot, so
+    // Cross-window terminal roster snapshot. Full snapshot, so
     // apply wholesale; feeds the broadcast menu + indicator for terminals
     // in other windows of this tenant.
     applyTerminalRoster(
@@ -772,9 +772,9 @@ type WindowCommandFrame =
       window_id: string;
       command: "open_survey";
       survey: SurveySpec;
-      // R2-3: the target terminal's name (the survey's `--tab-name`), camelCase
-      // per the 2026-06-03 survey-contract amendment. Present => attach to that
-      // terminal only; absent/null => the window-wide fallback (pre-R2-3).
+      // The target terminal's name (the survey's `--tab-name`), camelCase
+      // per the survey contract. Present => attach to that
+      // terminal only; absent/null => the window-wide fallback.
       tabName?: string | null;
     }
   | {
@@ -1107,11 +1107,11 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     return;
   }
   if (frame.command === "open_survey" && frame.survey) {
-    // `cs terminal survey` raised a survey on this window. R2-3: when the frame
+    // `cs terminal survey` raised a survey on this window. When the frame
     // names a target terminal (`tabName`, the survey's --tab-name), attach the
     // survey to THAT terminal only; otherwise (a --tab-group broadcast, an
-    // unmatched name, or @@LaneD's transport not yet carrying tabName) fall back
-    // to the window-wide overlay - the pre-R2-3 behavior. Resolve the name to
+    // unmatched name, or a frame without tabName) fall back
+    // to the window-wide overlay. Resolve the name to
     // the SPA tab id (the slot the per-terminal overlay renders on). The reply
     // round-trip (POST /api/survey/reply) unblocks the waiting CLI. No session
     // save: a survey is transient, not layout.
@@ -2187,9 +2187,9 @@ export const DEFAULT_GRAPH_FILTERS: GraphFilters = {
 /// debounces the actual `/api/graph` request locally. `paths` carries
 /// the workspace-relative path(s) the event touched so each GraphPanel
 /// can gate its reload on whether the change is in ITS scope: editing a
-/// file that is not in the open graph must NOT reload it (@@Alex: "any
-/// change to any file in the workspace would trigger a graph reload,
-/// this is BAD"). Empty `paths` means "unknown" -> reload to stay safe.
+/// file that is not in the open graph must NOT reload it (without the
+/// gate, any change to any file in the workspace triggered a graph
+/// reload). Empty `paths` means "unknown" -> reload to stay safe.
 export const graphReloadSignal = $state<{ nonce: number; paths: string[] }>({
   nonce: 0,
   paths: [],
@@ -2315,11 +2315,11 @@ export function openFsGraphForDirectory(path: string): void {
   // Empty path is the workspace root, so use the "workspace" alias instead of
   // a sentinel `dir:` scope.
   //
-  // B9 (c): open the directory graph in SEMANTIC mode, not the
+  // Open the directory graph in SEMANTIC mode, not the
   // directories-only filesystem mode. The semantic dir-scope graph
   // carries every layer (files with their link / backlink / hashtag /
   // contact / language edges plus the directory `contains` spine), and
-  // GraphPanel now supports directory expand/collapse + the
+  // GraphPanel supports directory expand/collapse + the
   // depth-slider in semantic mode, so "Graph from here" on a directory
   // (from the file browser, mirroring the in-graph re-scope) keeps the
   // rich graph instead of collapsing to a bare directory tree.
@@ -2404,7 +2404,7 @@ export function openGraphForLanguage(language: string): void {
   scheduleSessionSave();
 }
 
-/** phase-18 "Copy link to graph": open a graph tab from a
+/** "Copy link to graph": open a graph tab from a
  *  `chan://graph?...` link (produced by the graph tab menu's "Copy link
  *  to graph"). Returns true when the link parsed and a tab was opened so
  *  the editor's link-click handler can fall through to normal handling

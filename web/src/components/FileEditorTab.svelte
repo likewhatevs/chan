@@ -831,7 +831,7 @@
              Paste is plain text (rich paste stays on Cmd+V). Find is
              always present; Search appears only with a selection
              (doOpenSearch auto-seeds from the highlighted text). Link
-             actions are a follow-up, held on @@Host's #3/#4. -->
+             actions are deferred as a follow-up. -->
         <div class="action-list">
           <button
             class="mbtn"

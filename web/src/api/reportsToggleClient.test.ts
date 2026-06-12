@@ -21,8 +21,8 @@ describe("reports client methods", () => {
   });
 
   test("doc comment references the reports route and indexing-pass trigger", () => {
-    expect(client).toMatch(/`fullstack-a-76`/);
-    expect(client).toMatch(/`systacean-39`/);
+    expect(client).toMatch(/Per-workspace chan-reports toggle/);
+    expect(client).toMatch(/reports_toggle\.rs/);
     expect(client).toMatch(/incremental indexing pass/i);
   });
 

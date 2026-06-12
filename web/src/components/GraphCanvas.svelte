@@ -73,8 +73,8 @@
     /// Where the single focal node sits in the viewport. "center" (default)
     /// centers it; "bottom" anchors it near the bottom edge so the cluster
     /// grows upward from it. The Dashboard search-index graph uses "bottom"
-    /// to seat the workspace-root node just above the carousel scroller
-    /// (@@Alex); every other surface keeps "center".
+    /// to seat the workspace-root node just above the carousel scroller;
+    /// every other surface keeps "center".
     focalAnchor?: "center" | "bottom";
   };
   let {

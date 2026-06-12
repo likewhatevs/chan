@@ -78,7 +78,7 @@ const BLOCK_LIMIT = 8;
 const PATH_LIMIT = 8;
 
 /// Build workspace-PATH completion candidates from the file tree.
-/// @@Alex's survey: `[[` completes BOTH names (/api/link-targets) AND
+/// `[[` completes BOTH names (/api/link-targets) AND
 /// workspace paths. Paths are done CLIENT-SIDE here off the existing
 /// /api/files tree listing - no backend route change.
 ///

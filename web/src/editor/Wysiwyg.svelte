@@ -772,9 +772,9 @@
   /* No `scroll-behavior: smooth` on `.cm-scroller`. `smooth` animates
      EVERY scrollTop write, including the height-estimation corrections
      CM6 makes itself while you scroll a tall, mostly-estimated document.
-     During a trackpad pan those animated corrections fight the pan - the
-     "scroll hangs, jumps the opposite way, then settles" stall @@Alex
-     reported. The Google-Docs page-lift effect comes from the 60px
+     During a trackpad pan those animated corrections fight the pan - a
+     "scroll hangs, jumps the opposite way, then settles" stall.
+     The Google-Docs page-lift effect comes from the 60px
      bottom padding + scrollMargin (breathing_room.ts), not from smooth,
      so leaving the scroller at its default (instant) scroll-behavior
      keeps the lift and removes the stall. */
@@ -1042,8 +1042,8 @@
      Geometric glyphs fill most of the em box, so they read larger than a
      normal bullet; 0.62em keeps the disc + open circle (a matched outer-
      diameter pair) optically even, vertical-align nudges them onto the
-     text center line. margin-right doubles the glyph-to-text gap (@@Alex:
-     "double the space between glyph and text"), keyed off the body size so
+     text center line. margin-right doubles the glyph-to-text gap,
+     keyed off the body size so
      it stays equal across glyphs and at every nesting depth. */
   :global(.md-wysiwyg-cm6 .cm-md-ul-glyph) {
     color: var(--text-secondary, #888);
@@ -1081,7 +1081,7 @@
     text-indent: calc(-1 * var(--cm-md-list-prefix));
     /* Outline indent: shift each nesting level right by ~one marker
        column so a nested item's glyph aligns under the FIRST TEXT
-       CHARACTER of its parent line (@@Alex, Google-Docs style). The
+       CHARACTER of its parent line (Google-Docs style). The
        markdown source only indents 2 spaces/level, which renders
        narrower than the marker column in the proportional body font, so
        the child glyph sat left of the parent text; this margin makes up
@@ -1103,7 +1103,7 @@
        is positioned in. Without compensation `left: 10px` would ride that
        shift, stepping every nested level's guide rightward so the bars no
        longer line up into continuous vertical alignment rails (the whole
-       point of them; @@Alex). Subtracting the same `margin-left` term pins
+       point of them). Subtracting the same `margin-left` term pins
        every list line's leftmost bar to content-left + 10px, so the
        level-k bar (at +k*2ch) is one continuous rail down the whole list. */
     left: calc(10px - var(--cm-md-list-depth, 0) * var(--chan-editor-body-size, 11pt) * 0.6);

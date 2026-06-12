@@ -28,12 +28,7 @@
   import { api, sessionWindowId, withTokenQuery } from "../api/client";
   import { isTauriDesktop, readClipboardText } from "../api/desktop";
   import { openExternalUrl } from "../editor/external_links";
-  import {
-    chordFor,
-    currentOS,
-    formatChord,
-    shouldEscapeTerminal,
-  } from "../state/shortcuts";
+  import { chordFor, currentOS, shouldEscapeTerminal } from "../state/shortcuts";
   import {
     allTerminalTabs,
     applyGlobalTerminalName,
@@ -919,15 +914,14 @@
   /// raw keystroke path bypasses the queue). Returns whether the WS was open so
   /// the orchestrator can retry a freshly-spawned lead. `agent` picks the chord
   /// (claude CSI / codex/gemini CR); omitted defaults to claude server-side.
-  /// Contract: @@LaneA event-lane-a.md 10:58 CONTRACT (3d6d144e).
   function sendPrompt(data: string, agent?: string): boolean {
     return send({ type: "prompt", data, ...(agent ? { agent } : {}) });
   }
 
   // Rich Prompt: the right-click "Show/Hide Rich Prompt" entry mirrors the
-  // Cmd+Shift+P chord (App.svelte onWindowKey). The chord label is formatted
-  // for the current OS (Cmd on macOS, Ctrl elsewhere).
-  const richPromptChord = formatChord("Mod+Shift+P", currentOS());
+  // `terminal.richPrompt` chord (App.svelte onWindowKey); the label comes
+  // from the shortcut store so menu and keymap can't drift.
+  const richPromptChord = chordFor("terminal.richPrompt") ?? "";
   function toggleRichPromptFromMenu(): void {
     closeTabMenu();
     toggleRichPromptForTab(tab.id);
@@ -1142,8 +1136,8 @@
       explicitCloseSession();
     }
     // Discard this terminal's Rich Prompt draft folder (draft.md + any pasted
-    // media) so nothing leaks in Drafts (@@Host: the bubble's draft is tied to
-    // the terminal lifecycle). Best-effort + fire-and-forget; the tab is going
+    // media) so nothing leaks in Drafts: the bubble's draft is tied to
+    // the terminal lifecycle. Best-effort + fire-and-forget; the tab is going
     // away regardless.
     if (tab.richPromptDraftPath) {
       void api.discardDraft(tab.richPromptDraftPath);
@@ -1427,8 +1421,10 @@
     if (closeExitedTabFromKey(e)) {
       return;
     }
-    // Team-work entry points are Cmd+P (native), Cmd+Alt+P (web
-    // Mac), and `Mod+. p` (Hybrid Nav).
+    // Team-work entry points are Cmd+P (native), Cmd+Alt+P (web Mac), and
+    // `Mod+. p` (Hybrid Nav) - nothing terminal-local here. The only chord
+    // this handler owns is `terminal.find` (registry entry in shortcuts.ts):
+    // the terminal-local find bar, accepting both Cmd and Ctrl forms.
     if (
       (e.metaKey || e.ctrlKey) &&
       !e.shiftKey &&
@@ -1500,11 +1496,10 @@
       onmousedown={(e) => e.stopPropagation()}
     >
       {#if tabMenu.source === "body"}
-        <!-- F4 body-context terminal menu (right-click in the terminal
+        <!-- Body-context terminal menu (right-click in the terminal
              body): Find + Copy (selection or scrollback) + Paste + Copy
              Scrollback. Name / Group / broadcast / MCP / spawn config
-             lives on the tab-name menu. Link actions held on @@Host's
-             #3/#4. -->
+             lives on the tab-name menu. -->
         <div class="action-list">
           <button class="mbtn" onclick={openFind}>
             <span class="mbtn-icon">
@@ -1827,7 +1822,7 @@
   {#if active && isRichPromptVisible(tab.id)}
     <RichPrompt {tab} />
   {/if}
-  <!-- Per-terminal survey overlay (R2-3): a survey raised on THIS terminal
+  <!-- Per-terminal survey overlay: a survey raised on THIS terminal
        (`cs terminal survey --tab-name`) renders anchored over it, keyed by
        tab.id, independent of other terminals. Self-gates on an active survey
        for this tab; only over the visible (active) tab so a background survey

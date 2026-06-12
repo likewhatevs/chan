@@ -163,7 +163,7 @@ describe("runTeamBootstrap: lead-first flow", () => {
     // connects - NOT primed into a bubble buffer. The prompt CONTENT is pinned
     // in teamLeadPrompt.test.ts; this pins the delivery wiring (the async retry
     // against a live WS is fragile to fake-time in a unit test, so assert the
-    // source seam; @@Host validates the live lead bootstrap on the rebuild).
+    // source seam; the live lead bootstrap is validated by hand on a rebuild).
     const src = (await import("../state/teamOrchestrator.svelte?raw"))
       .default as string;
     expect(src).toMatch(/void deliverLeadIdentity\(\s*leadTab\.id,\s*prompt,/);

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import tabs from "../state/tabs.svelte.ts?raw";
 import graph from "./GraphPanel.svelte?raw";
 
-// Phase 13 r2 Team Work entrypoint check:
+// Team Work entrypoint check:
 //
 // 1. Cmd+P instantiates a fresh Team Work Lead Terminal (a new
 //    terminal with the embedded editor armed open) and returns it
@@ -13,7 +13,7 @@ import graph from "./GraphPanel.svelte?raw";
 //    a `[max]` suffix so the user sees the slider is already at
 //    max without needing to drag.
 
-describe("Phase 13 Cmd+P Team Work lead terminal", () => {
+describe("Cmd+P Team Work lead terminal", () => {
   test("createTeamWorkLeadTerminal spawns a fresh (normal) terminal in the active pane and returns it", () => {
     // The Team Work bubble is gone: the lead is a normal terminal (the
     // orchestrator delivers its identity prompt via the queue), so this just

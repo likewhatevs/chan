@@ -1,6 +1,6 @@
 <script lang="ts">
   // File Browser back-side (Cmd+, on a File Browser). Hosts the
-  // per-workspace directory blocklist (round-1 wave-3): names of
+  // per-workspace directory blocklist: names of
   // directories to skip when indexing + building the graph. The walk
   // skips `effective = union(defaults, additions)`; `defaults` is the
   // global machine-wide baseline (read-only here), and this surface

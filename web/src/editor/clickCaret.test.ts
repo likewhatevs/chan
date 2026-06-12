@@ -29,8 +29,8 @@ describe("click-to-place-caret handler", () => {
   test("is wired into the editor", () => {
     expect(wysiwyg).toMatch(/clickToPlaceCaret\(\),/);
     expect(wysiwyg).toMatch(/import \{ clickToPlaceCaret \} from "\.\/click_caret";/);
-    // The bullet caret-snap (listCaretGuard) was removed in phase-18;
-    // markers are real-width glyphs, so only the blank-area helper remains.
+    // There is no bullet caret-snap (listCaretGuard): markers are
+    // real-width glyphs, so only the blank-area helper is wired in.
     expect(wysiwyg).not.toContain("listCaretGuard");
   });
 });

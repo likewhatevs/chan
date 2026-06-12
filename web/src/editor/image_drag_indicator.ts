@@ -1,4 +1,4 @@
-// Live source-row indicator for the image drag-to-move (wave-3). While
+// Live source-row indicator for the image drag-to-move. While
 // a rendered image atom is dragged to reposition it, this shows WHERE
 // its `![](src)` will land: a drop-line across the top of the target
 // source line (the insert point moveImageSource uses) plus a

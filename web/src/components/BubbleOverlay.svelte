@@ -1,7 +1,7 @@
 <!-- Survey overlay for `cs terminal survey`.
 
-     Renders ONE survey slot (R2-3 @@LaneB per-terminal): a markdown problem
-     body, up to 4 vertically aligned numbered options, and (Part C, standard on
+     Renders ONE survey slot (per-terminal): a markdown problem
+     body, up to 4 vertically aligned numbered options, and (standard on
      EVERY survey) an [F] follow-up plus a Dismiss. Picking an option (click or
      1..N), [F] (click or F), or Dismiss (click or Escape) POSTs the reply,
      which unblocks the waiting CLI. The overlay is modal over its slot; the CLI
@@ -40,7 +40,7 @@
   });
 
   // Number keys 1..N pick an option; F follows up; Escape dismisses. F and
-  // Escape are standard on every survey now (Part C). Scoped to the focused
+  // Escape are standard on every survey. Scoped to the focused
   // card (NOT the window) so each terminal's survey handles its own keys, a
   // focused terminal does not swallow the keystroke into its PTY, and a handled
   // Escape does not bubble out to close other overlays.
@@ -108,8 +108,8 @@
           </li>
         {/each}
       </ul>
-      <!-- Part C: F (follow up) + Dismiss are standard on every survey (no
-           longer an opt-in). F defers with a paper-trail file; Dismiss sends a
+      <!-- F (follow up) + Dismiss are standard on every survey (not an
+           opt-in). F defers with a paper-trail file; Dismiss sends a
            distinct "dismissed" reply (no file) so the asking agent can tell the
            host dropped it. -->
       <div class="survey-actions">
@@ -235,7 +235,7 @@
   .survey-option-label {
     flex: 1 1 auto;
   }
-  /* Part C actions row: [F] follow-up (dashed = soft defer, takes the width)
+  /* Actions row: [F] follow-up (dashed = soft defer, takes the width)
      and Dismiss (solid = firm drop, sits on the right). */
   .survey-actions {
     display: flex;

@@ -92,8 +92,8 @@ describe("RichPrompt.svelte component", () => {
 
   test("submitAgent picks the chord from the terminal's negotiated protocol", () => {
     // modifyOtherKeys -> claude; kitty -> codex; neither (shell / gemini) -> a
-    // bare CR = the gemini chord. Fixes @@Alex's shell case (the old no-agent
-    // path defaulted to claude's CSI, unreadable by a shell).
+    // bare CR = the gemini chord, which a plain shell also understands (the
+    // old no-agent path defaulted to claude's CSI, unreadable by a shell).
     expect(richPromptSrc).toMatch(/function submitAgent\(\): string/);
     expect(richPromptSrc).toMatch(
       /kp\.xtermModifyOtherKeys > 0\) return "claude"/,

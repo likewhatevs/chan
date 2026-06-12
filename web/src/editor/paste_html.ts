@@ -66,7 +66,7 @@ export function htmlPasteHandler(): Extension {
 /// what copying a link out of a list / web page yields) to
 /// `-   [url](url)` - a leading bullet marker. Inserting that verbatim
 /// into an existing `- ` bullet yields `- -   [url]`, which parses as a
-/// stray NESTED bullet: @@Alex's R2-2 "pasting a link indents the list".
+/// stray NESTED bullet - pasting a link indented the list.
 /// When the caret line is already a list item, strip a leading list
 /// marker from the FIRST pasted line so the content flows into the
 /// current bullet as a sibling instead of nesting under it. Only the

@@ -1,4 +1,4 @@
-// Mermaid code-block cursor-render (wave-3). Mirrors the image / table
+// Mermaid code-block cursor-render. Mirrors the image / table
 // atoms: while the cursor is INSIDE a ```mermaid block the normal code
 // block shows (blocks.ts is untouched, so it looks byte-for-byte as
 // before); when the cursor LEAVES a COMPLETE (closed) mermaid block it

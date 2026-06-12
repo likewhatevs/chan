@@ -485,8 +485,8 @@ class BulletGlyphWidget extends WidgetType {
 /// `cm-md-ul-hyphen` class styles the marker (color) but keeps the source
 /// `-` as a real visible character, so it gets default CodeMirror
 /// cursor / click behavior - the same path the `*`/`+` glyph widget and
-/// the ordered `1.` marker take. @@Alex's phase-17 google-docs request
-/// was for the `*` bullet style only, so hyphen lists stay a dash.
+/// the ordered `1.` marker take. The google-docs-style glyph treatment
+/// is for the `*` bullet style only, so hyphen lists stay a dash.
 const HYPHEN_MARK = Decoration.mark({
   class: "cm-md-ul-marker cm-md-ul-hyphen",
 });

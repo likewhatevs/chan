@@ -175,10 +175,10 @@ describe("carousel slides", () => {
     expect(carousel).toMatch(/\.about-sep \{[\s\S]{1,400}background: var\(--border\)/);
   });
 
-  test("R2-1: About widget shows the free/open-source tagline below the separator", () => {
+  test("About widget shows the free/open-source tagline below the separator", () => {
     // The credits block sits after the Fund-the-work QR + the
     // `.about-sep`, and is just the free/open-source tagline; the
-    // dependency list was dropped per @@Alex 2026-06-03 and the
+    // dependency list was dropped (too much for the About page) and the
     // third-party attributions were later removed too.
     expect(carousel).toMatch(
       /<div class="about-fund">[\s\S]{1,2000}<div class="about-sep"[\s\S]{1,400}<div class="about-credits">/,
@@ -300,10 +300,9 @@ describe("DashboardTab mounts the carousel", () => {
 });
 
 describe("Dashboard back-of-card is per-slot (DashboardSlotBack)", () => {
-  test("A3: DashboardTab right-click menu lists slot toggles + Settings + Reload", () => {
-    // A3 reverses the round-1 "only Reload" lock-out: the body
-    // right-click menu now carries a per-slot on/off checkbox row, a
-    // separator, a Settings (Cmd+,) row that flips to the config back,
+  test("DashboardTab right-click menu lists slot toggles + Settings + Reload", () => {
+    // The body right-click menu carries a per-slot on/off checkbox row,
+    // a separator, a Settings (Cmd+,) row that flips to the config back,
     // and Reload.
     expect(dashboard).toMatch(/import HamburgerMenu from "\.\/HamburgerMenu\.svelte";/);
     expect(dashboard).toMatch(/function onContextMenu\(e: MouseEvent\): void/);

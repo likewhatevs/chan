@@ -44,9 +44,9 @@ describe("filesystem-mode graph spine visibility", () => {
   });
 
   test("workspace + dir semantic scope use the expanded-ancestor tree model", () => {
-    // B9 (a/b/c): the pre-B9 flat `relativeDepth(root, path) <= depth`
-    // filter was replaced by the same expanded-ancestor tree model the
-    // filesystem mode uses, so directory nodes expand / collapse in the
+    // The semantic branch uses the same expanded-ancestor tree model the
+    // filesystem mode uses (not a flat `relativeDepth(root, path) <= depth`
+    // filter), so directory nodes expand / collapse in the
     // rich semantic graph. A file / folder renders only when every
     // ancestor up to the scope root is expanded; the workspace-root
     // anchor is always kept; tag / mention / language meta-nodes always

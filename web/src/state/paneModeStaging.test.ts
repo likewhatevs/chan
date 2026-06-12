@@ -76,8 +76,8 @@ describe("paneMode staging: ghost-tab rendering in Pane.svelte", () => {
 
 describe("paneMode staging: Esc kills staged terminal sessions", () => {
   // Staged panes RENDER, so a staged terminal mounts and spawns a real
-  // PTY; dropping the draft on Esc used to orphan that shell in the
-  // registry until idle-prune (phase-22 carryover). Cancel must run the
+  // PTY; dropping the draft on Esc would otherwise orphan that shell
+  // in the registry until idle-prune. Cancel must run the
   // staged terminals' close sinks (the closeTab kill path) BEFORE the
   // draft stops rendering, while the sinks are still mounted.
   test("cancelPaneMode kills draft-only terminals first", () => {

@@ -3,7 +3,7 @@
 // the small config-panel preview (MatrixRainPreview.svelte) render the SAME
 // rain from one source of truth and can never drift. The column state machine
 // used to live inline in MatrixRain.svelte and the preview faked it with a
-// static full grid; @@Host flagged that as "ridiculously inaccurate", so the
+// static full grid that looked nothing like the screensaver, so the
 // engine is now shared and the preview animates the real rain.
 //
 // High-fidelity Svelte adaptation of the MIT-licensed

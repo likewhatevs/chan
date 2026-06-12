@@ -150,8 +150,8 @@ function shiftListLines(view: EditorView, dir: 1 | -1): boolean {
       // top-level item (no leading indent) is already at the outermost
       // level, so Shift-Tab is a NO-OP there: it must NOT strip the
       // list marker. Stripping the prefix silently turned the bullet
-      // into a plain paragraph - exactly @@Alex's "cmd+shift+tab makes
-      // it worse" (R2-2). Leaving a list is Enter-on-an-empty-bullet,
+      // into a plain paragraph, which made cmd+shift+tab feel like it
+      // made things worse. Leaving a list is Enter-on-an-empty-bullet,
       // not outdent.
       let strip = 0;
       while (strip < INDENT_UNIT.length && line.text[strip] === " ") strip++;
@@ -175,14 +175,13 @@ export function listLineAt(state: EditorState, pos: number): {
   return prefix ? { from: line.from, to: line.to, prefix } : null;
 }
 
-// Bullet caret-snap scaffolding (clampListCaretPosition,
-// listAwareArrowDown/Up, listCaretGuard, isListEolClick) was removed in
-// phase-18: once `*`/`+` markers render as real-width glyph widgets
-// (blocks.ts BulletGlyphWidget) instead of a zero-width source char + CSS
-// ::before glyph, bullet lists get default CodeMirror cursor / click /
-// arrow behavior - the same path hyphen and ordered lists already used.
-// The snap logic existed only to compensate for that decoupling, so it is
-// gone. listLineAt above stays (consumed by the image-drop handler).
+// There is no bullet caret-snap scaffolding (clampListCaretPosition,
+// listAwareArrowDown/Up, listCaretGuard, isListEolClick): `*`/`+` markers
+// render as real-width glyph widgets (blocks.ts BulletGlyphWidget), not a
+// zero-width source char + CSS ::before glyph, so bullet lists get
+// default CodeMirror cursor / click / arrow behavior - the same path
+// hyphen and ordered lists use. Snap logic would only compensate for that
+// decoupling. listLineAt above stays (consumed by the image-drop handler).
 
 export function stripUnusedInlineImageSpaceOnEnter(view: EditorView): boolean {
   const sel = view.state.selection.main;

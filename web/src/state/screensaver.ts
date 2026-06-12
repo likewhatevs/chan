@@ -1,8 +1,7 @@
 // PBKDF2 PIN-hash helper. The screensaver feature hashes the
 // user's PIN client-side via
 // `crypto.subtle.deriveBits` and posts the base64-encoded
-// digest to `/api/screensaver/pin` (per `systacean-40`'s
-// endpoint contract). The server stores the bytes verbatim;
+// digest to `/api/screensaver/pin`. The server stores the bytes verbatim;
 // verification re-hashes the candidate the same way + the
 // server does a constant-time byte-equality compare.
 //

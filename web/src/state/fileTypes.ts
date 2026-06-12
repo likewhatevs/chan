@@ -256,8 +256,8 @@ export function classifyPath(
 }
 
 /// True for any path the editor can round-trip through a UTF-8
-/// buffer. Mirrors `chan_workspace::fs_ops::is_editable_text` after the
-/// phase 1 widening: markdown-class + source / config / shell text +
+/// buffer. Mirrors `chan_workspace::fs_ops::is_editable_text`:
+/// markdown-class + source / config / shell text +
 /// well-known basenames. Returns false for images, PDFs, archives,
 /// audio, video, and unknown extensions.
 export function isEditableText(path: string): boolean {

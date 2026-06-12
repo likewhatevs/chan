@@ -262,7 +262,7 @@
     opacity: 0.6;
   }
   .spawn-row-secondary {
-    /* B9: two secondary tiles (Search + Dashboard) sit side by
+    /* Two secondary tiles (Search + Dashboard) sit side by
        side. Width budget mirrors the carousel's old centered
        single-tile row so the overall surface still feels
        balanced under the 5-up primary grid. */

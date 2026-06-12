@@ -533,7 +533,7 @@
              on the version row (A6). -->
         <div class="about-sep" role="separator" aria-hidden="true"></div>
 
-        <!-- R2-1 (trimmed 2026-06-03 per @@Alex): a one-line statement that
+        <!-- A one-line statement that
              chan is built on open source + is itself free/open-source
              (Apache 2.0, on the version row above). The detailed dependency
              list was too much for the About page, so it was dropped. -->
@@ -571,7 +571,7 @@
            picker / depth slider / filter chips): the slide is purely
            a status read-out. -->
       <div class="slide slide-indexing" aria-label="Indexing graph">
-        <!-- Slot relabelled "Search" per the phase-15 Dashboard redesign:
+        <!-- The slot is labelled "Search":
              this front slot pairs with a Search config back (index status
              + semantic + embedding). The graph itself is still the
              indexing spine, so its aria-label stays "Indexing graph". -->
@@ -899,7 +899,7 @@
     opacity: 0.6;
     margin: 0.25rem 0;
   }
-  /* R2-1: open-source attribution. A flowing credits paragraph rather
+  /* Open-source attribution. A flowing credits paragraph rather
      than the k/v grid above, since the library list is long; same
      muted/underlined-link treatment as the licenses block. */
   .about-credits {

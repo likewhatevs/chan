@@ -72,8 +72,8 @@ describe("FilterKind + FILTER_COLORS extension", () => {
     expect(graph).toMatch(
       /function classifyFile\([\s\S]*?\): "doc" \| "img" \| "contact" \| "source" \| "binary"/,
     );
-    expect(graph).toMatch(/if \(MARKDOWN_EXT_RE_FA57\.test\(path\)\) return "doc"/);
-    expect(graph).toMatch(/if \(SOURCE_EXT_RE_FA57\.test\(path\)\) return "source"/);
+    expect(graph).toMatch(/if \(MARKDOWN_EXT_RE\.test\(path\)\) return "doc"/);
+    expect(graph).toMatch(/if \(SOURCE_EXT_RE\.test\(path\)\) return "source"/);
     expect(graph).toMatch(/return "binary"/);
   });
 });

@@ -2,19 +2,19 @@
 //
 // An agent runs `cs terminal survey --tab-name=<target>`; the server mints a
 // survey id, pushes an `open_survey` window command carrying a SurveySpec +
-// (R2-3) the target `tabName` to the owning window, and BLOCKS the CLI on a
+// the target `tabName` to the owning window, and BLOCKS the CLI on a
 // oneshot. store.svelte.ts routes that frame to `showSurvey`; the overlay
 // (BubbleOverlay.svelte) renders it and the user picks an option or [F]. The
 // reply POSTs to /api/survey/reply, which completes the oneshot and unblocks
 // the CLI.
 //
-// PER-TERMINAL (R2-3, @@Alex): surveys are keyed by terminal tab id (the B1
+// PER-TERMINAL: surveys are keyed by terminal tab id (the
 // rich-prompt pattern), so two terminals can each show their own survey without
 // colliding - answering/dismissing one does not touch the other. A survey with
 // no resolvable target (`tabName` absent/unmatched, or a --tab-group broadcast)
-// falls back to a single window-wide slot, the pre-R2-3 behavior.
+// falls back to a single window-wide slot.
 //
-// Part C (R2, @@LaneD): every survey overlay now offers its options PLUS an [F]
+// Every survey overlay offers its options PLUS an [F]
 // follow-up AND a Dismiss. The host can defer (F: writes a followup file and
 // unblocks) or dismiss (a distinct "dismissed" reply, no file, so the asking
 // agent can tell). Both are real replies that unblock the CLI, so a stray
@@ -92,8 +92,8 @@ export async function pickOption(slot: SurveySlot, index: number): Promise<void>
   }
 }
 
-/// Reply with [F] for the survey on `slot`. F is standard on every survey now
-/// (Part C), so it is no longer an opt-in affordance: when the survey carries
+/// Reply with [F] for the survey on `slot`. F is standard on every survey,
+/// not an opt-in affordance: when the survey carries
 /// followup context the route creates
 /// `{dir}/followups/followup-{from}-{to}-{n}.md` and unblocks with that path;
 /// when it does not (`followup: null`), the route treats it as a plain deferral
@@ -118,7 +118,7 @@ export async function requestFollowup(slot: SurveySlot): Promise<void> {
   }
 }
 
-/// Dismiss the survey on `slot` (Part C). Unlike [F], a dismiss creates no
+/// Dismiss the survey on `slot`. Unlike [F], a dismiss creates no
 /// file: it sends a distinct "dismissed" reply that carries only the surveyId,
 /// so the asking agent can tell the host dropped the survey rather than
 /// answering or deferring it. Still a real reply, so it unblocks the CLI.

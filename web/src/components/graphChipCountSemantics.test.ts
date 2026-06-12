@@ -47,6 +47,6 @@ describe("chip count loop is node-tally", () => {
   });
 
   test("comment block documents the semantic correction (chip counts are NODE tallies)", () => {
-    expect(graph).toMatch(/`fullstack-a-63` semantic correction: chip counts are NODE/i);
+    expect(graph).toMatch(/Counts are NODE counts, not edge counts/i);
   });
 });

@@ -109,10 +109,9 @@ describe("GraphPanel drops inspector/global Settings and keeps flip footer", () 
     expect(graph).not.toContain('onclick={doOpenSettings}');
   });
 
-  test("Depth slider + Copy-link (replaces Reload) + -a footer stay", () => {
+  test("Depth slider + Copy-link + footer stay", () => {
     expect(graph).toContain('class="mbtn depth-row"');
-    // phase-18: the Reload row was replaced by "Copy link to graph"
-    // (@@Alex: "where the Reload button is - we will remove it").
+    // No Reload row; "Copy link to graph" sits in its place.
     expect(graph).not.toContain('onclick={reloadGraph}');
     expect(graph).toContain('onclick={copyGraphLink}');
     expect(graph).toContain('<span class="mbtn-label">Copy link to graph</span>');

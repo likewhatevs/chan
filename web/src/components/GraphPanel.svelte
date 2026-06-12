@@ -111,10 +111,10 @@
   );
 
   /// Graph tabs carry six live scopeId prefixes today: workspace,
-  /// `file:` / `dir:` (path lens), `tag:` (tag lens, slice 2b's
-  /// pre-existing centering), `contact:` (slice 2b contact lens —
+  /// `file:` / `dir:` (path lens), `tag:` (tag lens, centered on
+  /// the tag node), `contact:` (contact lens —
   /// bidirectional BFS from the contact file picks up backlinks),
-  /// and `language:` (slice 2b language lens — 1-hop neighbours).
+  /// and `language:` (language lens — 1-hop neighbours).
   /// The wiped scope kinds (global, group, git_repo) are never
   /// produced for a graph, so this resolver only covers the live
   /// entry points; the dead kind-branches that used to handle the
@@ -163,7 +163,7 @@
     return null;
   }
 
-  /// `fullstack-a-33`: ancestor breadcrumb for the current scope. Each
+  /// Ancestor breadcrumb for the current scope. Each
   /// entry is one clickable hop in the path from the workspace root down
   /// to the current scope's root. Click an ancestor → mutate
   /// `graphState.scopeId` in place (no new tab). The chain renders
@@ -250,7 +250,7 @@
       void toggleDirExpand(selectedFsNode.path);
       return;
     }
-    // B9 (a): in semantic mode the directory spine ships in the
+    // In semantic mode the directory spine ships in the
     // already-loaded /api/graph payload, so a directory double-click
     // toggles its children purely client-side - no fs-graph fetch, no
     // mode flip. The fresh Cmd+Shift+M graph is semantic, so this is
@@ -399,15 +399,15 @@
     );
   }
 
-  /// B9 (b): re-establish the expanded set so the depth slider expands
+  /// Re-establish the expanded set so the depth slider expands
   /// the directory tree FROM THE CURRENTLY SELECTED directory downward
   /// by `depth` levels. Selecting the workspace root and cranking the
   /// slider to its max reveals the whole workspace; selecting a
   /// directory two levels deep expands only that subtree. The selected
   /// directory's ancestors stay expanded so the revealed subtree stays
   /// attached to the spine. When nothing (or a non-directory) is
-  /// selected the seed falls back to the scope root, preserving the
-  /// pre-B9 "find -d N from the scope root" behaviour. Authoritative:
+  /// selected the seed falls back to the scope root, keeping the
+  /// "find -d N from the scope root" behaviour. Authoritative:
   /// the slider overrides individual expand / collapse toggles.
   function seedExpandedFromSelected(depth: number): void {
     const scopeRoot = currentScope?.kind === "dir" ? currentScope.path : "";
@@ -479,14 +479,14 @@
     let scopeId: string;
     if (isDir) {
       scopeId = path ? `dir:${path}` : "workspace";
-      // B9 (c): STAY in semantic mode for a directory re-scope. The
-      // pre-B9 code flipped to filesystem mode here to get double-
-      // click expansion, but that mode emits directories ONLY - it
-      // dropped every other layer (files' link / backlink / hashtag /
-      // contact / language edges) the fresh Cmd+Shift+M graph showed.
+      // STAY in semantic mode for a directory re-scope. Flipping to
+      // filesystem mode here would get double-click expansion but
+      // that mode emits directories ONLY - it
+      // drops every other layer (files' link / backlink / hashtag /
+      // contact / language edges) the fresh Cmd+Shift+M graph shows.
       // The semantic dir-scope load already pulls all those layers
       // plus the directory `contains` spine, and double-click /
-      // depth-slider expansion now works in semantic mode
+      // depth-slider expansion works in semantic mode
       // (toggleSemanticDirExpand + the expanded-ancestor scopedNodeIds
       // branch), so re-scoping a directory keeps the rich graph.
       graphState.mode = "semantic";
@@ -540,19 +540,17 @@
   /// node filters: flipping them off hides every file node whose
   /// path classifies as image / directory, along with any edge
   /// touching one.
-  /// `fullstack-a-52` G10: `link` removed from the user-facing
-  /// FilterKind — link edges always render now (visibility is
+  /// `link` is intentionally absent from the user-facing
+  /// FilterKind — link edges always render (visibility is
   /// implicit via endpoint visibility). The `link` slot on
   /// `GraphFilters` (store.svelte.ts) stays for URL-hash
   /// back-compat but isn't consumed here.
-  /// `fullstack-a-57`: `markdown` + `source` FileBucket toggles
-  /// added; default ON. Consumes `-a-51`'s SPA-side
-  /// `classifyFile` helper to dispatch file nodes into the
-  /// markdown / source / binary buckets without a chan-server
-  /// emit change (the audit found `GraphNodeView::File` doesn't
-  /// carry the `bucket` field even though `systacean-16` added
-  /// it to `ReportFileStats`; reusing the client-side classifier
-  /// follows the `-a-51` precedent).
+  /// `markdown` + `source` FileBucket toggles, default ON. The
+  /// SPA-side `classifyFile` helper dispatches file nodes into
+  /// the markdown / source / binary buckets client-side:
+  /// `GraphNodeView::File` doesn't carry the `bucket` field
+  /// (`ReportFileStats` does), so classification happens here
+  /// rather than in a chan-server emit.
   type FilterKind =
     | "tag"
     | "mention"
@@ -580,7 +578,7 @@
   let appliedScopeKey: string | null = null;
   let workspaceDepthProbe: FsGraphResponse | null = $state(null);
   let workspaceDepthProbeLoading = $state(false);
-  /// GI-7: directory-scope depth probe. The depth slider's cap is the
+  /// Directory-scope depth probe. The depth slider's cap is the
   /// max relative depth REACHABLE under the scope, which we can only
   /// learn by walking deeper than the currently-loaded slice. At depth
   /// 1 the loaded fs-graph only contains depth-1 nodes, so a cap derived
@@ -600,11 +598,11 @@
   let graphLoadAbort: AbortController | null = null;
   let graphLoadSeq = 0;
 
-  // ---- per-instance scoped /ws subscriptions (phase-11 Slice F) ----------
+  // ---- per-instance scoped /ws subscriptions ------------------------------
   //
   // The Graph is a watcher-scope instance just like a File Browser
-  // surface (round-1: "subscribe to that directory's watcher, reuse the
-  // FB pub/sub"). It registers in the shared `fbTreeInstances` registry
+  // surface (subscribe to that directory's watcher, reuse the
+  // FB pub/sub). It registers in the shared `fbTreeInstances` registry
   // and subscribes to the directory scopes it currently displays; as the
   // depth slider loads the next degree the new directory nodes appear in
   // the rendered set and the reconcile effect subscribes them, and as
@@ -668,14 +666,15 @@
   /// link targets that simply aren't indexed yet surface as dead-end
   /// ("missing") nodes. Surface an "indexing" cue so an in-flight graph
   /// isn't trusted as complete; once the index is idle, any remaining
-  /// dead-end is a real broken link. (graph-loading-state-spec slice 1;
-  /// the per-scope ghost pull-back + parent-dir pulse is the follow-up.)
+  /// dead-end is a real broken link. (`hiddenMissingIds` below pulls
+  /// those dead-ends back while indexing; a per-parent-dir pulse is a
+  /// deferred refinement.)
   const indexBuilding = $derived(
     indexStatus.value?.state === "building" ||
       indexStatus.value?.state === "reindexing",
   );
 
-  /// `fullstack-a-56` shallow-scope cue: when the scope's
+  /// Shallow-scope cue: when the scope's
   /// `depthCap` is 1 (single-file graph with no further forward
   /// hops; tag scope with only direct neighbours; etc.) the
   /// slider can't meaningfully be dragged. Surface that via a
@@ -686,11 +685,11 @@
   /// enabled (depthDisabled is the workspace/global guard).
   const depthShallow = $derived.by(() => {
     if (languageMode) return false;
-    // Round-1 closing-2 (B7b): workspace scope no longer skips
-    // the shallow check. With the workspace depth probe feeding
-    // a meaningful `depthCap`, a workspace whose deepest dir
-    // sits at depth 1 reads as legitimately shallow and the
-    // `[max]` cue + disabled state mirrors the dir-scope shape.
+    // Workspace scope takes the shallow check too: with the
+    // workspace depth probe feeding a meaningful `depthCap`, a
+    // workspace whose deepest dir sits at depth 1 reads as
+    // legitimately shallow and the `[max]` cue + disabled state
+    // mirrors the dir-scope shape.
     if (!currentScope) return false;
     return depthCap <= 1;
   });
@@ -700,7 +699,7 @@
     if (loading && currentScope?.kind === "dir" && nodes.length === 0) {
       return DEPTH_MAX;
     }
-    // GI-7: for a directory scope the loaded fs-graph only reaches the
+    // For a directory scope the loaded fs-graph only reaches the
     // current depth, so deriving the cap from it pins the slider at the
     // loaded depth (it cannot grow to reveal a deeper layer). Prefer the
     // full-depth `dirDepthProbe` (mirrors what the workspace scope already
@@ -736,7 +735,7 @@
   // opening a file from here.
   let selectedId = $state<string | null>(null);
 
-  /// `fullstack-68`: tab right-click bubble state. Open when the
+  /// Tab right-click bubble state. Open when the
   /// shared tab-menu state addresses THIS tab; positioned via the
   /// stored anchor through `clampMenu` so the bubble stays on-
   /// screen even when the tab sits near the viewport edge.
@@ -781,37 +780,32 @@
   /// `contacts()` set, everything else is a doc. Mirrored here
   /// because `hiddenImageIds` / `counts` / `inspectorSelection`
   /// need the kind upfront for chip filtering.
-  /// `fullstack-a-57` extension: file-class buckets (`doc` for
-  /// markdown, `source` for code/config, `binary` for everything
-  /// else not covered by img/contact) added so the new markdown +
-  /// source filter chips can route file nodes into their buckets.
-  /// Mirrors `GraphCanvas.svelte`'s helper of the same name, with
-  /// the addition of `MARKDOWN_EXT_RE` + `SOURCE_EXT_RE` from
-  /// `-a-51`. The two helpers stay separate copies for now —
-  /// they're parallel SPA-side helpers with the same regex set; a
-  /// future cleanup task could extract them into a shared module.
-  const MEDIA_EXT_RE_FA57 = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i;
-  const MARKDOWN_EXT_RE_FA57 = /\.(md|txt)$/i;
-  const SOURCE_EXT_RE_FA57 =
+  /// File-class buckets (`doc` for markdown, `source` for
+  /// code/config, `binary` for everything else not covered by
+  /// img/contact) let the markdown + source filter chips route
+  /// file nodes into their buckets. Mirrors
+  /// `GraphCanvas.svelte`'s helper of the same name, plus
+  /// `MARKDOWN_EXT_RE` + `SOURCE_EXT_RE`. The two helpers stay
+  /// separate copies — they're parallel SPA-side helpers with the
+  /// same regex set; a future cleanup task could extract them
+  /// into a shared module.
+  const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i;
+  const MARKDOWN_EXT_RE = /\.(md|txt)$/i;
+  const SOURCE_EXT_RE =
     /\.(rs|py|ts|tsx|js|jsx|mjs|cjs|go|c|cc|cpp|cxx|h|hh|hpp|java|kt|swift|rb|php|cs|sh|bash|zsh|fish|pl|lua|toml|yaml|yml|json|jsonc|ini|conf|cfg|env|xml|html|htm|css|scss|sass|less|vue|svelte|sql|graphql|gql|proto|elm|ex|exs|erl|hs|lhs|ml|mli|fs|fsx|clj|cljs|cljc|edn|jl|nim|d|dart|zig|odin|v|vhd|vhdl|sv|verilog|asm|s|f|f90|f95|tex|R|r)$/i;
 
   function classifyFile(
     path: string,
     nodeKind: "contact" | undefined,
   ): "doc" | "img" | "contact" | "source" | "binary" {
-    if (MEDIA_EXT_RE_FA57.test(path)) return "img";
+    if (MEDIA_EXT_RE.test(path)) return "img";
     if (nodeKind === "contact") return "contact";
-    if (MARKDOWN_EXT_RE_FA57.test(path)) return "doc";
-    if (SOURCE_EXT_RE_FA57.test(path)) return "source";
+    if (MARKDOWN_EXT_RE.test(path)) return "doc";
+    if (SOURCE_EXT_RE.test(path)) return "source";
     return "binary";
   }
 
-  // `fullstack-64`: the overlay-maximize toggle helper was removed
-  // alongside its button. The maximize state machinery stays in
-  // `pageWidth.svelte` for any future consumer; this panel is no
-  // longer one.
-
-  /// phase-18 "Copy link to graph" (replaces the tab menu's Reload):
+  /// "Copy link to graph" (in the tab menu):
   /// serialize this tab to a `chan://graph?...` link and put it on the
   /// clipboard. Pasted into a markdown file, the link reopens this graph
   /// (scope / depth / mode / filters / selection) on click.
@@ -858,7 +852,7 @@
     }
   }
 
-  /// GI-7: probe a directory scope at the full fs-graph depth so the
+  /// Probe a directory scope at the full fs-graph depth so the
   /// slider cap reflects the deepest layer the user could reveal, not
   /// just the layer currently loaded. Keyed by `path`; a stale probe
   /// for a different directory is discarded by the caller's guard.
@@ -934,7 +928,7 @@
   /// contains subgraph is a forest (one parent per node) so this
   /// settles in O(depth) passes.
   ///
-  /// G1: the tag / contact / language lenses BFS only along semantic
+  /// The tag / contact / language lenses BFS only along semantic
   /// edges (tag / mention / language), so their file nodes used to
   /// render with no edge up to a directory ("edgeless files"). The
   /// spine already ships in the unified /api/graph payload (the
@@ -961,7 +955,7 @@
 
   const scopedNodeIds = $derived.by<Set<string> | null>(() => {
     if (!currentScope) return null;
-    // B9 (a/b/c): semantic-mode workspace + dir scope renders the
+    // Semantic-mode workspace + dir scope renders the
     // FULL rich graph (files + tags + mentions + languages + the
     // directory spine), with the directory tree expanded / collapsed
     // by the same `graphState.expanded` set the filesystem mode uses.
@@ -973,9 +967,9 @@
     // language meta-nodes always pass through (they get culled
     // naturally by the edges filter if no visible file references
     // them); the workspace-root anchor is unconditional so the spine
-    // always has a root to hang off. This replaces the pre-B9 flat
-    // `relativeDepth(root, path) <= depth` filter, which (1) couldn't
-    // be expanded / collapsed per-node and (2) forced "Graph from
+    // always has a root to hang off. A flat
+    // `relativeDepth(root, path) <= depth` filter would (1) not
+    // be expandable / collapsible per-node and (2) force "Graph from
     // here" on a directory into the directories-only filesystem mode
     // to get expansion, dropping every non-directory layer. File scope
     // keeps the hop-based BFS below; "Graph from here" on a single
@@ -1037,14 +1031,14 @@
     // those docs' edges (depth 2+). No path resolution needed —
     // the node id IS the seed.
     //
-    // Phase-13 round-1 closing (B8): the backend emits tag edges
-    // as `source: <file>, target: <tagId>` (file -> tag). A
-    // forward-only BFS from the tag id would never traverse the
-    // incoming file->tag edges and the lens renders empty. The
-    // BFS is now BIDIRECTIONAL (same shape as the contact arm
-    // below) so depth=1 captures every doc that references the
-    // tag (the backlinks the round-1 smoke expected to see) and
-    // deeper depths walk those docs' outgoing edges further out.
+    // The backend emits tag edges as `source: <file>, target:
+    // <tagId>` (file -> tag). A forward-only BFS from the tag id
+    // would never traverse the incoming file->tag edges and the
+    // lens renders empty. The BFS is BIDIRECTIONAL (same shape
+    // as the contact arm below) so depth=1 captures every doc
+    // that references the tag (the backlinks the lens exists to
+    // show) and deeper depths walk those docs' outgoing edges
+    // further out.
     if (currentScope.kind === "tag") {
       const seedIds = new Set<string>([currentScope.nodeId]);
       const visited = new Set(seedIds);
@@ -1064,7 +1058,7 @@
         if (next.size === 0) break;
         frontier = next;
       }
-      // G1: re-anchor every file the lens surfaced to its directory
+      // Re-anchor every file the lens surfaced to its directory
       // spine so no file renders edgeless.
       pullContainsSpine(visited);
       return visited;
@@ -1095,17 +1089,17 @@
         if (next.size === 0) break;
         frontier = next;
       }
-      // G1: re-anchor every file the lens surfaced to its directory
+      // Re-anchor every file the lens surfaced to its directory
       // spine so no file renders edgeless.
       pullContainsSpine(visited);
       return visited;
     }
-    // Phase-13 KIND slice 2b: contact lens. Seed is the contact
-    // file node (located by its rel_path); BFS expands
-    // BIDIRECTIONALLY so the resulting subgraph captures every
-    // doc that REFERENCES the contact (incoming mention/link
-    // edges = backlinks per the round-1 roadmap) plus everything
-    // the contact's own file links out to (outgoing edges).
+    // Contact lens. Seed is the contact file node (located by
+    // its rel_path); BFS expands BIDIRECTIONALLY so the
+    // resulting subgraph captures every doc that REFERENCES the
+    // contact (incoming mention/link edges = backlinks) plus
+    // everything the contact's own file links out to (outgoing
+    // edges).
     // Forward-only BFS would lose the backlink half of the lens.
     if (currentScope.kind === "contact") {
       const relPath = currentScope.relPath;
@@ -1131,14 +1125,14 @@
         if (next.size === 0) break;
         frontier = next;
       }
-      // G1: re-anchor every file the lens surfaced to its directory
+      // Re-anchor every file the lens surfaced to its directory
       // spine so no file renders edgeless.
       pullContainsSpine(visited);
       return visited;
     }
-    // Phase-13 KIND slice 2b: language lens. Seed is the language
+    // Language lens. Seed is the language
     // bubble (node id `language:<lang>`); the lens is always
-    // 1-hop (depth doesn't apply to language per the roadmap) so
+    // 1-hop (depth doesn't apply to language) so
     // the visible set is the bubble plus every direct neighbour
     // — which by construction is every file of that language
     // since the language node carries an edge to each.
@@ -1149,7 +1143,7 @@
         if (e.source === seedId) visited.add(e.target);
         if (e.target === seedId) visited.add(e.source);
       }
-      // G1: re-anchor every file of this language to its directory
+      // Re-anchor every file of this language to its directory
       // spine so no file renders edgeless.
       pullContainsSpine(visited);
       return visited;
@@ -1171,11 +1165,11 @@
     if (seedIds.size === 0) return seedIds;
     const visited = new Set(seedIds);
     let frontier = new Set(seedIds);
-    // `fullstack-a-52` G9: forward-only BFS. Previously the
-    // BFS followed edges in both directions
-    // (`frontier.has(e.source)` OR `frontier.has(e.target)`), which
-    // hid the "depth slider reveals forward nodes" semantic @@Alex
-    // wanted. Restricting to outgoing edges only makes the slider
+    // Forward-only BFS: the walk follows edges source -> target
+    // only. Following edges in both directions
+    // (`frontier.has(e.source)` OR `frontier.has(e.target)`) would
+    // hide the "depth slider reveals forward nodes" semantic.
+    // Restricting to outgoing edges only makes the slider
     // read as "expand from the root in the direction edges point"
     // — markdown links emanate from the root doc; contains edges
     // emanate from the root directory toward its children; etc.
@@ -1190,7 +1184,7 @@
       if (next.size === 0) break;
       frontier = next;
     }
-    // `fullstack-a-58` parent-edge invariant: every in-scope file
+    // Parent-edge invariant: every in-scope file
     // should hang off its parent directory so the user can click up
     // through the graph. The forward-only BFS above expands DOWN from
     // the seed; `pullContainsSpine` walks the contains-edge forest the
@@ -1241,8 +1235,8 @@
     return ids;
   });
 
-  /// `fullstack-a-57`: file nodes hidden when the markdown chip is OFF.
-  /// Bucket = `classifyFile === "doc"` (.md / .txt per `-a-51`'s
+  /// File nodes hidden when the markdown chip is OFF.
+  /// Bucket = `classifyFile === "doc"` (.md / .txt per the
   /// SPA-side classifier). The `contact` discriminator is gated by
   /// the `mention` chip (existing hiddenContactIds) and image-class
   /// files by `img`; this hidden-set covers markdown specifically.
@@ -1257,9 +1251,9 @@
     return ids;
   });
 
-  /// `fullstack-a-57`: file nodes hidden when the source chip is OFF.
+  /// File nodes hidden when the source chip is OFF.
   /// Bucket = `classifyFile === "source"` (recognised code / config
-  /// extensions per `-a-51`).
+  /// extensions).
   const hiddenSourceIds = $derived.by(() => {
     const ids = new Set<string>();
     if (show.source) return ids;
@@ -1271,14 +1265,14 @@
     return ids;
   });
 
-  /// graph-loading-state slice 2: while the index is still building, a
+  /// While the index is still building, a
   /// `missing` (dead-end / not-on-filesystem) node may simply be a link
   /// target that has not been indexed YET, not a genuinely broken link.
   /// Pull those nodes back (and the edges touching them) until the index
   /// settles, so the graph never presents not-yet-known data as a broken
   /// link. Once `indexBuilding` clears, the `missing` survivors are real
   /// broken links and render with the established dashed-ghost styling.
-  /// (The status bar's slice-1 "indexing" cue is the loading signal; a
+  /// (The status bar's "indexing" cue is the loading signal; a
   /// per-parent-dir pulse is a deferred refinement.)
   const hiddenMissingIds = $derived.by(() => {
     const ids = new Set<string>();
@@ -1292,8 +1286,8 @@
   function edgeVisibleByChip(kind: RenderedEdgeKind): boolean {
     if (kind === "contains") return show.folder;
     if (kind === "group") return true;
-    // `fullstack-a-52` G10: link edges always render. Per @@Alex's
-    // framing, the link filter doesn't make sense — link visibility
+    // Link edges always render — a link filter doesn't make
+    // sense because link visibility
     // is implicit (an edge renders iff both endpoints render under
     // the current node-type filters + depth). The `link` slot on
     // `GraphFilters` stays for wire-format / URL-hash back-compat
@@ -1312,14 +1306,14 @@
         !hiddenContactIds.has(e.target) &&
         !hiddenFolderIds.has(e.source) &&
         !hiddenFolderIds.has(e.target) &&
-        // `fullstack-a-57`: hide edges touching markdown / source
+        // Hide edges touching markdown / source
         // file nodes the user has filtered out. Symmetric with the
         // existing img / contact / folder gates.
         !hiddenMarkdownIds.has(e.source) &&
         !hiddenMarkdownIds.has(e.target) &&
         !hiddenSourceIds.has(e.source) &&
         !hiddenSourceIds.has(e.target) &&
-        // slice 2: drop edges to dead-end nodes pulled back while indexing.
+        // Drop edges to dead-end nodes pulled back while indexing.
         !hiddenMissingIds.has(e.source) &&
         !hiddenMissingIds.has(e.target) &&
         (scopedNodeIds === null ||
@@ -1331,7 +1325,7 @@
     for (const n of nodes) {
       if (scopedNodeIds !== null && !scopedNodeIds.has(n.id)) continue;
       if (hiddenFolderIds.has(n.id)) continue;
-      // `fullstack-a-57`: skip file nodes that the markdown / source
+      // Skip file nodes that the markdown / source
       // chips have hidden. The img + contact gates still apply.
       if (
         n.kind === "file" &&
@@ -1339,7 +1333,7 @@
         !hiddenContactIds.has(n.id) &&
         !hiddenMarkdownIds.has(n.id) &&
         !hiddenSourceIds.has(n.id) &&
-        // slice 2: pull back dead-end nodes while the index is building.
+        // Pull back dead-end nodes while the index is building.
         !hiddenMissingIds.has(n.id)
       ) {
         ids.add(n.id);
@@ -1356,10 +1350,10 @@
 
   /// Chip counts.
   ///
-  /// `fullstack-a-63` semantic correction: chip counts are NODE
-  /// counts, not edge counts. Pre-`-a-63` shape tallied edges per
-  /// kind (so mention chip showed 1973-2000 mention-edge fan-in
-  /// across only ~48 distinct contact nodes — ~40x over-tally).
+  /// Counts are NODE counts, not edge counts. Tallying edges
+  /// per kind would make the mention chip show mention-edge
+  /// fan-in (thousands) across only a few dozen distinct contact
+  /// nodes — a ~40x over-tally.
   /// User reads the chip as "how many of THIS thing is in the
   /// graph", which is the node count. Edge counts are the
   /// rendered-edge population, which is a different concept and
@@ -1436,11 +1430,11 @@
   /// True when the graph claims the node is a real file but the
   /// server's resolver couldn't find it on disk — i.e. a genuine
   /// broken-link / deleted-file ghost. The server is the source of
-  /// truth: post-`systacean-2` its resolver covers all on-disk files
-  /// (markdown + non-markdown), so the previous SPA-side fallback of
-  /// also checking the lazy-loaded FB tree's `tree.entries` was
-  /// flagging every real file under an un-expanded subtree as a
-  /// false ghost. Drop the lazy-tree check; trust the server flag.
+  /// truth: its resolver covers all on-disk files
+  /// (markdown + non-markdown). An SPA-side fallback that also
+  /// checked the lazy-loaded FB tree's `tree.entries` would flag
+  /// every real file under an un-expanded subtree as a false
+  /// ghost, so trust the server flag alone.
   const isFileGhost = $derived<boolean>(
     selectedNode != null &&
       selectedNode.kind === "file" &&
@@ -1619,7 +1613,7 @@
     graphState.inspectorOpen = true;
   }
 
-  /// `fullstack-a-67` slice 1b: click on the scope-header row in the
+  /// Click on the scope-header row in the
   /// graph tab-menu opens the inspector for the current scope. Maps
   /// the scope kind to the matching node id in the current graph
   /// nodes list; workspace root + tag have stable ids, file/dir need a
@@ -1655,7 +1649,7 @@
       );
       if (found) nodeId = found.id;
     } else if (currentScope.kind === "contact") {
-      // Phase-13 KIND slice 2b: contact lens header opens the
+      // Contact lens header opens the
       // contact's underlying file-node inspector. Same shape as
       // the file branch above — the seed for the contact lens IS
       // a file node located by rel_path.
@@ -1664,7 +1658,7 @@
       );
       if (found) nodeId = found.id;
     } else if (currentScope.kind === "language") {
-      // Phase-13 KIND slice 2b: language lens header opens the
+      // Language lens header opens the
       // language bubble inspector. Bubble node id is
       // `language:<lang>` by indexer convention.
       const found = nodes.find(
@@ -1710,8 +1704,8 @@
             }
           : selectedNode.kind === "folder"
             ? {
-                // `fullstack-a-50` G3: directory nodes route to
-                // DirectoryInfoBody via the new "directory" kind on
+                // Directory nodes route to
+                // DirectoryInfoBody via the "directory" kind on
                 // InspectorSelection. Backend emits `directory` for
                 // the main /api/graph filesystem layer; GraphPanel
                 // normalises that to `folder` for `RenderedNode`
@@ -1723,7 +1717,7 @@
               }
             : selectedNode.kind === "language"
               ? {
-                  // Phase-13 A3: language bubble inspector. Carries
+                  // Language bubble inspector. Carries
                   // the canonical language id plus the file / code
                   // counts the bubble already holds so the body can
                   // render stats without a second fetch.
@@ -1759,8 +1753,8 @@
     language: EDGE_COLORS.language,
     img: "var(--g-img)",
     folder: "var(--g-folder)",
-    // `fullstack-a-57`: FileBucket chip swatch colours. Markdown
-    // tracks `--g-doc` (orange) per `-a-51`'s G6 palette; source
+    // FileBucket chip swatch colours. Markdown
+    // tracks `--g-doc` (orange); source
     // tracks `--g-source` (royalblue). Binary nodes have no chip;
     // the `--g-binary` slot still workspaces their canvas fill but the
     // user can't toggle them on/off.
@@ -1812,7 +1806,7 @@
     // bidirectional BFS splays its referencing files around it,
     // matching the tag lens.
     if (currentScope.kind === "mention") return [currentScope.nodeId];
-    // Phase-13 KIND slice 2b: contact lens pins the contact's
+    // Contact lens pins the contact's
     // file node so the canvas centres on it like a regular
     // file-scope graph would; the bidirectional BFS in
     // computeScopedNodeSet pulls in the backlinks around it.
@@ -1823,7 +1817,7 @@
       }
       return ids;
     }
-    // Phase-13 KIND slice 2b: language lens pins the language
+    // Language lens pins the language
     // bubble itself; its 1-hop neighbours (every file of that
     // language) splay around it.
     if (currentScope.kind === "language") return [`language:${currentScope.language}`];
@@ -1864,7 +1858,7 @@
   /// path IS the node id, but a directory node's id is `directory:<path>`
   /// (graph.rs::directory_node_id), so a bare-path pending never matched
   /// and the originating directory was left unselected after the re-scope
-  /// (@@Alex: "we redraw but do not select the node"). Match by id first,
+  /// (the graph redrew but did not select the node). Match by id first,
   /// then fall back to a file/folder node whose `.path` equals the pend.
   function resolveSelectId(
     pending: string,
@@ -2036,7 +2030,7 @@
       } else if (pending !== null) {
         graphState.pendingSelectId = null;
       }
-      // B9 (b): re-seed the semantic-mode expanded set after the full
+      // Re-seed the semantic-mode expanded set after the full
       // spine lands. The first load (or a window-restore) trusts the
       // serialized `expanded` set; a later depth-slider move or rescope
       // re-establishes it from the selected directory to depth N
@@ -2096,7 +2090,7 @@
       // canvas classifies it by name (binary for an extension-less link,
       // doc for a `.md` link, etc.). Without this branch a "symlink" kind
       // fell through to the `mention` catch-all below and drew as a yellow
-      // contact silhouette (@@Alex's image-10). The symlink relationship
+      // contact silhouette. The symlink relationship
       // still reads via its distinct edge (mapFsEdges maps "symlink" ->
       // a tag-kind edge); the inspector keeps the BINARY + target body
       // off the raw `selectedFsNode`, which is unaffected by this mapping.
@@ -2246,8 +2240,8 @@
 
   /// Does a watcher event touching `paths` warrant reloading THIS graph?
   /// Pre-fix the graph reloaded on every workspace edit, even files not
-  /// in the open graph (@@Alex: "any change to any file in the workspace
-  /// would trigger a graph reload, this is BAD"). We reload only when the
+  /// in the open graph (any change to any file in the workspace
+  /// triggered a graph reload). We reload only when the
   /// change is in scope:
   ///   - workspace scope spans the whole tree -> always.
   ///   - dir / file scope -> a path inside the subtree (covers a NEW
@@ -2308,8 +2302,8 @@
     }, 250);
   });
 
-  /// Persist the live selection so it survives a window reload (@@Alex:
-  /// the selected node was lost on reload). The serializer already writes
+  /// Persist the live selection so it survives a window reload (the
+  /// selected node used to be lost on reload). The serializer already writes
   /// `gn`/`gnl` from graphState.selectedNodeId/Label, and restore reads
   /// them back into selectedNodeId + pendingSelectId - the missing link
   /// was the TRIGGER: App.svelte's layout-persist effect tracks the graph
@@ -2348,7 +2342,7 @@
     // below is free to capture this click.
     graphState.pendingSelectId = null;
     if (id !== null) graphState.inspectorOpen = true;
-    // `fullstack-81`: surface the selection to the tab so the
+    // Surface the selection to the tab so the
     // tab strip can derive the title from the selected node's
     // label. We cache the label too so the title renders before
     // the graph data finishes reloading (e.g. after a hard
@@ -2374,11 +2368,10 @@
 <svelte:window onkeydown={onTabMenuKeydown} onpointerdown={onTabMenuPointerDown} />
 
 <!-- The graph is always a first-class TAB (mounted only by Pane.svelte
-     with a `tab`). The pre-migration OverlayShell variant is gone -
-     OverlayShell now lives only in Search + Settings. `graphState` is the
-     tab, `visible` is constant, and the overlay-only bar has been removed.
-     The graphOverlay/browserOverlay STATE in store is being retired by the
-     scope-concept wipe (lane-a A5); GraphPanel no longer reads it. -->
+     with a `tab`); there is no overlay variant - OverlayShell lives only
+     in Search + Settings. `graphState` is the tab, `visible` is constant,
+     and GraphPanel does not read the store's graphOverlay/browserOverlay
+     state. -->
 {@render graphContent()}
 
 {#snippet graphContent()}
@@ -2389,29 +2382,22 @@
     role="presentation"
   >
   {#if tab && tabMenuOpen}
-    <!-- `fullstack-68`: Graph-tab right-click bubble. Anchored to
+    <!-- Graph-tab right-click bubble. Anchored to
          the tab-strip click position via clampMenu.
-         `fullstack-75`: row shape aligned with the standard
+         Row shape follows the standard
          hamburger-menu pattern from other tabs (TerminalTab /
          FileEditorTab / FileBrowserSurface) — `<button class="mbtn">`
          rows with optional icon + label + chord on the right; filters
          render vertically, one row per kind, with the kind colour as
          a dot + on/off cue via the `.on` class. -->
-    <!-- Round-1 closing-2 (B7b): the workspace path-scope no
-         longer pins the depth slider in the disabled state. The
-         user's reported failure was "depth slider does nothing"
-         — confirmed: dragging the slider on the default workspace
-         graph re-fired loadKey + load() correctly with the new
-         depth, but the slider's `disabled` attribute (driven by
-         `currentScope.kind === "workspace"`) blocked any input
-         from landing. Workspace scope has a valid `depthCap`
-         derived from `workspaceDepthProbe`; with that probe
-         feeding the cap the slider behaves like the dir scope's
-         depth control. Language mode keeps its own pinned-to-1
-         behaviour via the early-return in the clamp `$effect`
-         + depthCap. The remaining check `!currentScope` guards
-         the brief boot window where the scope hasn't resolved
-         yet. -->
+    <!-- The workspace path-scope does not pin the depth slider
+         in the disabled state: workspace scope has a valid
+         `depthCap` derived from `workspaceDepthProbe`, so the
+         slider behaves like the dir scope's depth control.
+         Language mode keeps its own pinned-to-1 behaviour via
+         the early-return in the clamp `$effect` + depthCap. The
+         `!currentScope` check guards the brief boot window where
+         the scope hasn't resolved yet. -->
     {@const depthDisabled = !languageMode && !currentScope}
     <div
       class="tab-menu-bubble"
@@ -2422,10 +2408,10 @@
       use:clampMenu={tabMenuPos}
       onmousedown={(e) => e.stopPropagation()}
     >
-      <!-- `fullstack-a-67` Graph slice: header row showing the
+      <!-- Header row showing the
            current scope path + a kind-appropriate icon. Mirrors
-           the path-row pattern @@Alex's addendum specs for the
-           Terminal / File Browser / Editor / Graph right-click
+           the path-row pattern of the
+           Terminal / File Browser / Editor right-click
            menus. Click on the row routes through the existing
            inspector-open path so the user can hop from the menu
            to the scope's inspector view. -->
@@ -2521,14 +2507,11 @@
       {#each ["tag", "mention", "language", "img", "folder", "markdown", "source"] as const as kind (kind)}
         {@const workspaceLike =
           currentScope?.kind === "workspace"}
-        <!-- Round-1 closing-3 (D4): the language filter chip used
-             to be workspace-only because the pre-B9 backend only
-             emitted Language -> File edges at workspace scope. B9
-             pushed the per-file language edges through
-             `scoped_report_files`, so dir-scoped graphs now have
-             language data too. Show the chip whenever the layout
-             is the semantic graph (not the filesystem / language
-             modes), regardless of path scope. -->
+        <!-- The backend emits per-file language edges through
+             `scoped_report_files`, so dir-scoped graphs have
+             language data too. Show the language chip whenever
+             the layout is the semantic graph (not the filesystem
+             / language modes), regardless of path scope. -->
         {#if (!filesystemMode || (kind !== "img" && kind !== "language")) && (languageMode ? kind === "language" : true) && (kind !== "folder" || filesystemMode || workspaceLike)}
           <button
             type="button"
@@ -2630,9 +2613,7 @@
       onClose={() => (graphState.inspectorOpen = false)}
     >
       {#if scopeAncestors.length > 0}
-        <!-- `fullstack-a-33`: ancestor breadcrumb. Replaces the
-             explicit "Graph from here" button that used to live on
-             every inspector body. Default render mode is "from
+        <!-- Ancestor breadcrumb. Default render mode is "from
              here", so navigating back up the path is the load-
              bearing affordance; the breadcrumb provides it for
              every path-based scope (workspace / dir: / file:). Click
@@ -2661,8 +2642,8 @@
              Differentiated visually by GraphCanvas painting the
              "workspace" sub-kind in a darker fill with the HardDrive
              glyph.
-             A1 (phase-13): the workspace root is now a regular
-             directory inspector. Wire both the directory actions:
+             The workspace root is a regular directory inspector
+             with both directory actions wired:
              "Show in File Browser" (revealPathInBrowserTab) and
              "Graph from here" (graphFromHere re-scopes the current
              tab to workspace root). variant defaults to inspector. -->
@@ -2679,10 +2660,10 @@
              through InspectorBody. FileInfoBody dispatches on
              entry.is_dir so the "file" selection variant covers both
              shapes. File keeps the "Open" extra editor action.
-             `fullstack-a-33`: dropped `onSetAsScope` — the
-             breadcrumb above handles upward navigation; new
-             from-here graphs come from chord spawn (Cmd+Shift+M,
-             wired in `fullstack-a-32`). -->
+             The breadcrumb above handles upward navigation;
+             "Graph from here" (`onSetAsScope` → `graphFromHere`)
+             re-roots this graph, and a fresh from-here graph tab
+             comes from chord spawn (Cmd+Shift+M). -->
         {@const fsPath = selectedFsNode.path}
         {@const fsKind = selectedFsNode.kind}
         {@const fsIsDir = isFsDirectory(selectedFsNode)}
@@ -2751,15 +2732,12 @@
           <div class="missing">{hint}</div>
         </div>
       {:else}
-        <!-- `fullstack-a-33`: dropped `onSetAsScope` for the
-             tag / mention / file paths — breadcrumb + chord
-             spawn cover those.
-             `fullstack-a-50` G3: directory nodes get
-             `onSetAsScope` back so the "Graph from here"
-             button in DirectoryInfoBody re-roots the current
-             graph at that directory via the existing
-             `rescopeFromHere` helper. Mirror's the breadcrumb
-             button's semantic. -->
+        <!-- `onSetAsScope` wires "Graph from here" per selection
+             kind: file / directory selections re-root the current
+             graph via `graphFromHere`; language / tag /
+             resolved-mention lenses re-scope via
+             `rescopeFromHere`. The breadcrumb covers upward
+             navigation, mirroring the same semantic. -->
         <InspectorBody
           selection={inspectorSelection}
           onOpen={
@@ -2789,13 +2767,13 @@
                     inspectorSelection.kind === "directory",
                   )
               : inspectorSelection?.kind === "language"
-                ? // Phase-13 A3: "Graph from here" on a language
+                ? // "Graph from here" on a language
                   // bubble re-scopes the current graph to that
                   // language's lens (mirrors the breadcrumb /
                   // dir re-scope path, stays in semantic mode).
                   () => rescopeFromHere(`language:${inspectorSelection.language}`)
                 : inspectorSelection?.kind === "tag"
-                  ? // Round-1 closing-3 (D1): tag inspector gets
+                  ? // The tag inspector gets
                     // the same "Graph from here" affordance as the
                     // language bubble. Re-scopes the current graph
                     // to the tag's lens (bidirectional BFS), so
@@ -2805,7 +2783,7 @@
                     // chip there.
                     () => rescopeFromHere(`tag:${inspectorSelection.nodeId}`)
                   : inspectorSelection?.kind === "mention" && selectedContactPath
-                    ? // Round-1 closing-10 (G2): mention inspector
+                    ? // The mention inspector
                       // gets the same "Graph from here" affordance
                       // as the tag inspector when the mention
                       // resolves to a contact file. Routes through
@@ -2897,7 +2875,7 @@
     font-variant-numeric: tabular-nums;
     color: var(--text);
   }
-  /* graph-loading-state slice 1: a soft pulse on the "indexing" cue,
+  /* A soft pulse on the "indexing" cue,
      mirroring the File Browser loader's "still working" feel so an
      in-flight index reads as not-yet-complete rather than final. */
   .indexing {
@@ -2953,7 +2931,7 @@
   .cy.dim {
     opacity: 0.4;
   }
-  /* `fullstack-a-33`: ancestor breadcrumb band. Sits at the top
+  /* Ancestor breadcrumb band. Sits at the top
      of the inspector body, always visible for path-based scopes.
      Wraps on narrow inspector widths; clickable hops dim until
      hover. The current segment renders as plain text (no button)
@@ -3058,8 +3036,8 @@
     pointer-events: none;
   }
 
-  /* `fullstack-68`: tab right-click bubble.
-     `fullstack-75`: rows align with the standard hamburger-menu
+  /* Tab right-click bubble.
+     Rows align with the standard hamburger-menu
      shape (`.mbtn` + `.msep`) used by TerminalTab / FileEditorTab
      / FileBrowserSurface. Filter rows pick up the same row chrome
      with a kind-coloured dot on the left, label in the middle,
@@ -3080,10 +3058,9 @@
     font-size: 13px;
     display: flex;
     flex-direction: column;
-    /* `fullstack-a-8`: easeOutBack bubble-pop matching every
+    /* easeOutBack bubble-pop matching every
        other tab-menu bubble (TerminalTab / FileEditorTab) and
-       the rest of the chrome. The phase-7 right-click rework
-       dropped the wobble here; @@Alex never asked for that. */
+       the rest of the chrome. */
     transform-origin: top left;
     animation: graph-tab-menu-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
     transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -3180,15 +3157,13 @@
     width: 1.6em;
     text-align: right;
   }
-  /* `fullstack-a-67`: Graph hamburger header row — kind icon +
+  /* Graph hamburger header row — kind icon +
      path label. Path fades at the right edge for long file
      paths so the menu width stays bounded; matches the
-     Pane.svelte tab-name + FileTree.svelte (`-a-62`) fade
-     pattern verbatim. The row is non-interactive in this
-     slice (display-only); click-to-inspect wiring can land in
-     a follow-up. */
+     Pane.svelte tab-name + FileTree.svelte fade
+     pattern verbatim. */
   .tab-menu-bubble .graph-scope-row {
-    /* `fullstack-a-67` slice 1b: click-to-inspector. Cursor:
+    /* Click-to-inspector. Cursor:
        pointer matches the rest of the menu's clickable rows so
        the affordance reads at a glance. */
     cursor: pointer;
@@ -3207,7 +3182,7 @@
     mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.25rem), transparent);
   }
-  /* `fullstack-a-56` shallow-scope cue: when the scope's
+  /* Shallow-scope cue: when the scope's
      depth-cap is 1 (single-file graph, etc.) show a `[max]`
      suffix on the depth value so the user can see at a glance
      that the slider can't be dragged further. The `.shallow`

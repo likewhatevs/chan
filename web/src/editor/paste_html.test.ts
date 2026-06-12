@@ -76,7 +76,7 @@ describe("pasted markdown is NOT escaped", () => {
   });
 });
 
-describe("dedentListPaste (R2-2: pasting a link must not indent the list)", () => {
+describe("dedentListPaste (pasting a link must not indent the list)", () => {
   // Pure function: build a doc state, paste markdown at a position.
   const paste = (doc: string, pos: number, md: string): string =>
     dedentListPaste(EditorState.create({ doc }), pos, md);

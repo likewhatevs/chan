@@ -3,10 +3,10 @@ import source from "./HybridFileBrowserConfig.svelte?raw";
 import shell from "./HybridSurfaceConfigShell.svelte?raw";
 
 // The File Browser back-side (Cmd+, on a File Browser) hosts the
-// per-workspace directory blocklist editor (round-1 wave-3): GET-then-
+// per-workspace directory blocklist editor: GET-then-
 // PUT the excluded-dirs set, with a datalist autocomplete and names-only
-// validation. Search, the embedding-model picker and chan-reports moved
-// to the Dashboard's Search + Workspace slot backs in phase 15 - they
+// validation. Search, the embedding-model picker and chan-reports live
+// on the Dashboard's Search + Workspace slot backs - they
 // must NOT reappear on this surface.
 
 describe("HybridFileBrowserConfig hosts the blocklist editor", () => {

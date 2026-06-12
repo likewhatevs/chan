@@ -4,10 +4,9 @@ import app from "../App.svelte?raw";
 import dashboard from "../components/dashboard/AboutSlotConfig.svelte?raw";
 
 // Screensaver Settings UI + Hybrid Nav lock chord. Tests pin the
-// architectural shape. The global Settings overlay is gone; Screen Lock
+// architectural shape: there is no global Settings overlay; Screen Lock
 // + Screensaver controls live on the Dashboard's back-of-card, in the
-// About slot body (dashboard/AboutSlotConfig.svelte) since the phase-15
-// per-slot redesign split the monolithic HybridDashboardConfig.
+// About slot body (dashboard/AboutSlotConfig.svelte).
 
 describe("Hybrid Nav lock chord", () => {
   test("shortcut registry advertises only Cmd+. L for screen lock", () => {

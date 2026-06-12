@@ -7,8 +7,8 @@ import BubbleOverlay from "./BubbleOverlay.svelte";
 import { surveyState } from "../state/survey.svelte";
 import type { SurveySpec } from "../api/client";
 
-// The survey overlay renders ONE slot's survey (R2-3 per-terminal): a markdown
-// body, numbered options, plus a standard [F] follow-up + Dismiss (Part C).
+// The survey overlay renders ONE slot's survey (per-terminal): a markdown
+// body, numbered options, plus a standard [F] follow-up + Dismiss.
 // `tabId` null = window-wide
 // fallback (centered modal); a tab id = per-terminal (anchored, `.per-terminal`
 // class). Renders nothing when that slot has no survey. Render assertions only
@@ -83,7 +83,7 @@ describe("survey overlay", () => {
     expect(other.querySelector(".survey-overlay")).toBeNull();
   });
 
-  // Part C: F (follow up) + Dismiss are STANDARD on every survey, not an opt-in
+  // F (follow up) + Dismiss are STANDARD on every survey, not an opt-in
   // and not gated on a followup context. The default spec() has followup:null,
   // so this is the bare case.
   test("[F] follow-up + Dismiss render on every survey (no context needed)", async () => {

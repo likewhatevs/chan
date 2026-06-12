@@ -1497,7 +1497,7 @@ function applyTerminalBroadcastMembers(members: Set<string>): void {
   }
 }
 
-// --- Cross-window terminal roster (phase-21) ---
+// --- Cross-window terminal roster ---
 // `allTerminalTabs()` is this window's local layout only. The roster carries
 // every live session across ALL windows of the tenant (all standalone
 // terminal windows, or all windows of one workspace), so a window can see
@@ -3825,7 +3825,7 @@ function restoreGraphMode(mode: SerTab["gm"]): GraphTab["mode"] {
   return "semantic";
 }
 
-/// phase-18 "Copy link to graph": a graph tab serializes to a
+/// "Copy link to graph": a graph tab serializes to a
 /// `chan://graph?...` URL that reproduces the view when opened from a
 /// markdown file. A custom-scheme URL survives a paste into markdown
 /// intact and is trivial to detect on a link click. Round-trips

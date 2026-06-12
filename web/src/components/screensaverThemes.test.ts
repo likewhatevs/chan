@@ -8,7 +8,7 @@ import matrixPreview from "./screensaver/MatrixRainPreview.svelte?raw";
 // (`stepRain`), and the static snapshot (`drawStaticMatrix`) - lives in the
 // shared `matrixRain.ts` helper (`matrixHelper`). The fullscreen screensaver
 // (`matrix`) and the config-panel preview (`matrixPreview`) both drive their
-// animation off that one engine so they can never drift (DB2). The intro and
+// animation off that one engine so they can never drift. The intro and
 // canvas markup/CSS stay in the screensaver component.
 
 describe("screensaver canvas themes", () => {
@@ -60,7 +60,7 @@ describe("screensaver canvas themes", () => {
     expect(matrixHelper).toMatch(/rgba\(0, 0, 0, 0\.05\)/);
   });
 
-  test("DB2: the static snapshot seeds sparse falling columns, not a full grid", () => {
+  test("the static snapshot seeds sparse falling columns, not a full grid", () => {
     // The old static frame filled EVERY cell. The snapshot now builds the rain
     // columns and scatters their heads so it reads as a moment of falling rain.
     expect(matrixHelper).toMatch(
@@ -68,7 +68,7 @@ describe("screensaver canvas themes", () => {
     );
   });
 
-  test("DB2: the config preview animates the real rain via the shared engine", () => {
+  test("the config preview animates the real rain via the shared engine", () => {
     // Preview drives the same engine (not a re-rolled static grid) and gates on
     // visibility (IntersectionObserver + document visibility + reduced-motion).
     expect(matrixPreview).toMatch(

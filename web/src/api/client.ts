@@ -511,14 +511,14 @@ export const api = {
       }>
     >("GET", `/api/contacts?${qs.toString()}`);
   },
-  /// `fullstack-a-70`: mention-corpus prefix lookup. Returns the
+  /// Mention-corpus prefix lookup. Returns the
   /// distinct `@@<Name>` tokens observed across the indexed
   /// markdown corpus, NOT just the contact files. The bubble
   /// merges these with `api.contacts` results so a name that
   /// has many `@@<Name>` references in body text but no contact
   /// file still surfaces in the completion dropdown.
   ///
-  /// Backed by `systacean-35`'s `GET /api/mentions?q=<prefix>&limit=<int>`
+  /// Backed by the `GET /api/mentions?q=<prefix>&limit=<int>`
   /// route. Labels arrive WITH the `@@` sigil (the route composes it).
   /// Empty `q` returns the full corpus capped at `limit` (default 10).
   mentions: (q = "", limit = 10) => {
@@ -1075,9 +1075,8 @@ export const api = {
   semanticDownload: () => req<SemanticState>("POST", "/api/index/semantic/download"),
   semanticEnable: () => req<SemanticState>("POST", "/api/index/semantic/enable"),
   semanticDisable: () => req<SemanticState>("POST", "/api/index/semantic/disable"),
-  /// `fullstack-a-76`: per-workspace chan-reports toggle. Mirrors the
+  /// Per-workspace chan-reports toggle. Mirrors the
   /// semantic-toggle shape (state / enable / disable). Backed by
-  /// `systacean-39` at
   /// `crates/chan-server/src/routes/reports_toggle.rs`. The
   /// `enable` call triggers an incremental indexing pass;
   /// `disable` is idempotent at the chan-workspace layer.
@@ -1087,7 +1086,7 @@ export const api = {
     req<{ enabled: boolean }>("POST", "/api/index/reports/enable"),
   reportsDisable: () =>
     req<{ enabled: boolean }>("POST", "/api/index/reports/disable"),
-  /// Per-workspace directory blocklist (round-1 wave-3). The index +
+  /// Per-workspace directory blocklist. The index +
   /// graph walk skips `effective = union(defaults, workspace)`; only the
   /// `workspace` additions are editable. PUT replaces the whole set
   /// (names only - case-insensitive basenames, no paths) and queues a
@@ -1217,7 +1216,7 @@ export interface TeamConfigWire {
 
 /// A survey pushed from the server to the SPA in an `open_survey` window
 /// command. Mirrors `chan_shell::wire::SurveySpec` (camelCase) byte-for-byte;
-/// the Rust half is the source of truth (round-3-survey-contract.md). The SPA
+/// the Rust half is the source of truth. The SPA
 /// renders the body as markdown, numbers the options [1]..[4], and echoes
 /// `surveyId` back in the reply.
 export interface SurveySpec {
@@ -1227,8 +1226,7 @@ export interface SurveySpec {
   options: string[];
   /// Followup context (team-dir + from/to) for the `[F]` affordance. Present
   /// only when the survey was raised with `--followup`; the reply route uses
-  /// it to create `{dir}/followups/followup-{from}-{to}-{n}.md`. Optional
-  /// pending the C<->D contract addendum (see round-3-part-2-lane-c.md).
+  /// it to create `{dir}/followups/followup-{from}-{to}-{n}.md`.
   followup?: SurveyFollowupContext | null;
 }
 
@@ -1243,7 +1241,7 @@ export interface SurveyFollowupContext {
 /// minted path, so it sends the echoed-back context and the route creates the
 /// file + synthesizes the path before completing the bus oneshot.
 ///
-/// Part C (R2): every survey overlay offers options PLUS an [F] follow-up AND a
+/// Every survey overlay offers options PLUS an [F] follow-up AND a
 /// Dismiss, so the reply has three kinds. `dismissed` carries only the
 /// `surveyId` (no option index), so the asking agent can tell a dismiss apart
 /// from an answer. `followup` now allows a null context: F is standard on every

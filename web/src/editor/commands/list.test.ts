@@ -138,7 +138,7 @@ describe("indentListItem / outdentListItem", () => {
   });
 
   test("Shift-Tab on a top-level list item is a no-op (keeps the bullet)", () => {
-    // R2-2: a top-level item is already at the outermost level, so
+    // A top-level item is already at the outermost level, so
     // outdent must NOT strip the marker (that silently demoted the
     // bullet to a plain paragraph). Still consumed (returns true) so
     // Shift-Tab never escapes the editor; the doc is unchanged.
@@ -181,9 +181,9 @@ describe("indentListItem / outdentListItem", () => {
 });
 
 describe("inline image paste helpers", () => {
-  // Bullet caret-snap (clampListCaretPosition / listAwareArrowDown-Up /
-  // isListEolClick) was removed in phase-18: `*`/`+` markers are real-
-  // width glyph widgets now, so cursor/click/arrow are plain CodeMirror
+  // There are no bullet caret-snap helpers (clampListCaretPosition /
+  // listAwareArrowDown-Up / isListEolClick): `*`/`+` markers are real-
+  // width glyph widgets, so cursor/click/arrow are plain CodeMirror
   // (browser-smoked) with no snap helpers to unit-test here.
   test("retracts one unused pasted-image space before list continuation", () => {
     const doc = "- ![](photo.png#w=250) ";

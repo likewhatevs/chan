@@ -1,14 +1,13 @@
 import { describe, expect, test } from "vitest";
 import dashboardBack from "./dashboard/DashboardSlotBack.svelte?raw";
 
-// DB1 (@@Host wave-3): the dashboard config back's segmented
-// About|Workspace|Search picker becomes a carousel navigator - prev/next
+// The dashboard config back's slot picker is a carousel navigator - prev/next
 // chevrons + a dot pager + a pause/play toggle - mirroring the front
 // carousel's control affordances. Asserted as source shape because the
 // markup is a Svelte component, not a pure function; the real interaction
 // is browser-smoked.
 
-describe("DB1: dashboard config slot selector is a carousel navigator", () => {
+describe("dashboard config slot selector is a carousel navigator", () => {
   test("imports the chevron + play/pause icons", () => {
     expect(dashboardBack).toMatch(
       /import \{[^}]*\bChevronLeft\b[^}]*\bChevronRight\b[^}]*\bPause\b[^}]*\bPlay\b[^}]*\} from "lucide-svelte"/,
@@ -46,7 +45,7 @@ describe("DB1: dashboard config slot selector is a carousel navigator", () => {
   });
 
   test("the nav rides the shell footer row (footerCenter), sharing it with OK", () => {
-    // @@Host: the nav now shares the OK footer row - centered, OK pinned
+    // The nav shares the OK footer row - centered, OK pinned
     // right, no divider - via the shell's `footerCenter` snippet +
     // `footerBorder={false}`, instead of a separate centered bottom row in
     // the body above the divider. The slot body still renders before the nav.

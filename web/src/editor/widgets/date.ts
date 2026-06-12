@@ -7,11 +7,9 @@
 // catalog evolution stays in one place.
 //
 // Rendering: per design.md #3 / #5, dates are atomic widgets.
-//   - When selection intersects the date range, suppress the widget
-//     so the user can edit the literal source. The boundary-inclusive
-//     intersection rule (selectionInRange semantics) means clicking
-//     the pill places the caret AT the pill's boundary, which counts
-//     as intersection on the next update tick - pill collapses to
+//   - When selection intersects the date range (boundary-inclusive,
+//     selectionInRange semantics - e.g. extending the selection into
+//     it), suppress the widget so the user can edit the literal
 //     source.
 //   - When selection doesn't intersect, emit Decoration.replace with
 //     a DateWidget; the widget's DOM is a styled span.
@@ -19,8 +17,12 @@
 // EditorView.atomicRanges registered for the same ranges so caret
 // motion (arrow keys) skips the pill in one keystroke.
 //
-// v1 scope: no calendar popover. Editing happens via "click → source
-// reveals → text edit". The calendar is v1.1 polish.
+// Clicking a pill does NOT place the caret (the widget owns the
+// mousedown); it opens the date popover (overlays/date_popover): a
+// month-grid calendar plus a format dropdown. Committing a day /
+// format rewrites the date text in place, lands the caret just past
+// the pill so it re-renders, and persists a format change as the new
+// default. Read-only surfaces get a non-interactive calendar.
 
 import { syntaxTree } from "@codemirror/language";
 import { type Extension } from "@codemirror/state";
