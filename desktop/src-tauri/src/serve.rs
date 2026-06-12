@@ -1721,6 +1721,20 @@ mod tests {
             workspace_set.iter().all(|p| p != "allow-read-dropped-paths"),
             "workspace-window permission set must not carry the drag-pasteboard grant: {workspace_set:?}",
         );
+        // Belt symmetry: the launcher (default capability) is
+        // locally-served and outside the harvest threat model, but it
+        // has no drop surface either — pin it off so the grant can't
+        // drift in through the third broad capability.
+        let default_perms = capability_permissions(DEFAULT_CAPABILITY_JSON);
+        assert!(
+            default_perms.iter().all(|p| p != "allow-read-dropped-paths"),
+            "launcher default capability must not carry the drag-pasteboard grant: {default_perms:?}",
+        );
+        let main_set = app_permission_set("main-window");
+        assert!(
+            main_set.iter().all(|p| p != "allow-read-dropped-paths"),
+            "main-window permission set must not carry the drag-pasteboard grant: {main_set:?}",
+        );
     }
 
     #[test]
