@@ -1396,6 +1396,10 @@ impl Session {
             });
             (q.len(), msg_depth(&q))
         };
+        // Outside the QUEUE guard. The enqueue_write_matching caller does
+        // hold the REGISTRY guard here, which is fine: broadcast::send is
+        // sync, takes only the channel's internal lock, and nothing it
+        // wakes can re-enter the registry synchronously.
         self.broadcast(SessionEvent::QueueDepth(depth));
         Some(len)
     }
