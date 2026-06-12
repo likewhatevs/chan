@@ -986,7 +986,24 @@ const KEY_BRIDGE_JS: &str = r#"
         // (context-aware via the SPA's onCtrlDCapture, which leaves a
         // focused terminal to its EOF). Gating on metaKey (Cmd) leaves
         // Linux Ctrl+W untouched (no preventDefault -> reaches xterm).
-        case 'KeyW': if (e.metaKey) fire(e, 'app.tab.close'); return;
+        case 'KeyW':
+          if (e.metaKey) {
+            // On the connecting/retry page there are no tabs and the
+            // app.tab.close dispatch is dead: Cmd+W means cancel, so
+            // close the window for real (request_close_window
+            // destroys, bypassing bury-on-close). The bridge claims
+            // KeyW with stopImmediatePropagation BEFORE the page's own
+            // listener AND before the File menu accelerator gets a
+            // look-in, so the routing must happen here. Gate on the
+            // CURRENT document (this init script re-runs after the
+            // success navigation, where Cmd+W must stay tab-close).
+            if (location.pathname.endsWith('/connecting.html')) {
+              invokeIpc(e, 'request_close_window');
+              return;
+            }
+            fire(e, 'app.tab.close');
+          }
+          return;
         case 'KeyS': fire(e, 'app.search.toggle');    return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
@@ -1597,6 +1614,13 @@ mod tests {
             "!window_on_connecting",
             "_screen(&app_for_close, &label_for_close)"
         )));
+        // KEY_BRIDGE_JS claims Cmd+W (window capture +
+        // stopImmediatePropagation) before BOTH the page's listener and
+        // the File-menu accelerator, so the bridge itself must route
+        // KeyW to request_close_window while on connecting.html — the
+        // page-level chord alone left Cmd+W dead (v0.31.0 follow-up).
+        assert!(SERVE_RS.contains(concat!("invokeIpc(e, 'request_close", "_window')")));
+        assert!(SERVE_RS.contains("location.pathname.endsWith('/connecting.html')"));
         const CONNECTING_JS: &str = include_str!("../../src/connecting.js");
         assert!(CONNECTING_JS.contains("request_close_window"));
         assert!(CONNECTING_JS.contains("key === 'd'"));
