@@ -74,20 +74,68 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/await api\.write\(draftPath, text\)/);
   });
 
-  test("submit routes to THIS terminal with its OWN submit agent, then clears draft.md text", () => {
+  test("submit routes to THIS terminal with its OWN agent and a tagged id, keeping the text", () => {
     // Routes to the bubble's OWN tab (not the focused pane's active terminal),
-    // submits with the chord THIS terminal reads (submitAgent()), and only
-    // reaps the composer when the frame actually went out (the data-loss guard:
-    // a failed send keeps the text instead of clearing it).
+    // submits with the chord THIS terminal reads (submitAgent()) plus a
+    // client-generated message id, and only begins a pending when the frame
+    // actually went out (the data-loss guard: a failed send keeps the text).
+    expect(richPromptSrc).toMatch(/const id = crypto\.randomUUID\(\);/);
     expect(richPromptSrc).toMatch(
-      /if \(!sendPromptToTerminal\(tab\.id, text, submitAgent\(\)\)\) return true;/,
+      /if \(!sendPromptToTerminal\(tab\.id, text, submitAgent\(\), id\)\) return true;/,
     );
-    // Reset = clear the doc + persist the empty draft.md; NO raw input frame,
-    // and NO folder/media delete on submit (that happens on terminal close).
-    expect(richPromptSrc).toMatch(/insert: "" \}/);
-    expect(richPromptSrc).toMatch(/void flushWrite\(\)/);
+    expect(richPromptSrc).toMatch(/beginPendingPrompt\(tab, id\);/);
+    // Queue visibility: submit does NOT clear the composer — the text stays
+    // (read-only) until the server's prompt-delivered. No raw input frame,
+    // no folder/media delete on submit (that happens on terminal close).
+    const submitBody = richPromptSrc.match(/function submit\(\): boolean \{[\s\S]*?\n  \}/)?.[0];
+    expect(submitBody).toBeTruthy();
+    expect(submitBody).not.toContain('insert: ""');
+    // Second Cmd+Enter while a message is in flight is a no-op (one message
+    // at a time; replace needs cancel-by-id, deferred to v2 together).
+    expect(submitBody).toContain("if (tab.pendingPrompt) return true;");
+    // The draft persists what was submitted (reload mid-pending restores it).
+    expect(submitBody).toContain("void flushWrite();");
     expect(richPromptSrc).not.toMatch(/type: "input"/);
     expect(richPromptSrc).not.toMatch(/discardDraft/);
+  });
+
+  test("delivered clears the composer + draft; rejected/failed unlock and keep the text", () => {
+    // The ONLY doc-clear lives in the terminal-phase consumer, on
+    // "delivered" (the agent consumed the message; the draft clears HERE).
+    expect(richPromptSrc).toMatch(
+      /function consumeTerminalPhase\([\s\S]{1,700}changes: \{ from: 0, to: view\.state\.doc\.length, insert: "" \}/,
+    );
+    expect(richPromptSrc).toMatch(
+      /if \(phase === "delivered"\) \{[\s\S]{1,400}void flushWrite\(\);[\s\S]{1,80}view\.focus\(\);/,
+    );
+    // Honest labels on the non-delivery exits; both keep the text.
+    expect(richPromptSrc).toMatch(/queue full — try again/);
+    expect(richPromptSrc).toMatch(/connection lost — message may still be queued/);
+  });
+
+  test("pending locks the editor via a CodeMirror compartment (readOnly + !editable)", () => {
+    expect(richPromptSrc).toMatch(
+      /\[EditorState\.readOnly\.of\(locked\), EditorView\.editable\.of\(!locked\)\]/,
+    );
+    // Locked from creation when the bubble mounts mid-pending (hide/show),
+    // reconfigured live on phase changes.
+    expect(richPromptSrc).toMatch(/lockCompartment\.of\(lockExtensions\(isPending\)\)/);
+    expect(richPromptSrc).toMatch(
+      /lockCompartment\.reconfigure\(lockExtensions\(locked\)\)/,
+    );
+  });
+
+  test("fast-path grace + ack timeout constants gate the chip and the dead-socket fail", () => {
+    // 300ms: an idle agent drains within ~1 tick — no chip flash on routine
+    // submits. 5s: no ack means the socket is effectively dead.
+    expect(richPromptSrc).toMatch(/PENDING_CHIP_GRACE_MS = 300/);
+    expect(richPromptSrc).toMatch(/PROMPT_ACK_TIMEOUT_MS = 5000/);
+    expect(richPromptSrc).toMatch(/failPendingPrompt\(tab\);/);
+  });
+
+  test("idle label surfaces teammate queue depth from the prompt itself", () => {
+    expect(richPromptSrc).toMatch(/\$\{tab\.queueDepth\} queued · \$\{submitLabel\}/);
+    expect(richPromptSrc).toMatch(/queued — waiting for agent/);
   });
 
   test("submitAgent picks the chord from the terminal's negotiated protocol", () => {
@@ -134,8 +182,10 @@ describe("App.svelte Cmd+Shift+P toggle", () => {
 describe("prompt-sink send seam (tabs.svelte.ts)", () => {
   test("registry + per-terminal sender exist, distinct from the input sink", () => {
     expect(tabs).toMatch(/export function registerTerminalPromptSink\(/);
+    // The trailing id is optional: the team orchestrator's lead-identity
+    // call sites pass none and stay legacy fire-and-forget.
     expect(tabs).toMatch(
-      /export function sendPromptToTerminal\(tabId: string, data: string, agent\?: string\): boolean/,
+      /export function sendPromptToTerminal\(\s*tabId: string,\s*data: string,\s*agent\?: string,\s*id\?: string,\s*\): boolean/,
     );
     expect(tabs).toMatch(/const terminalPromptSinks = new Map/);
   });

@@ -53,6 +53,9 @@
     toggleTerminalGroupBroadcast,
     setTerminalActivity,
     setTerminalActivityPulsing,
+    setTerminalQueueDepth,
+    resolvePendingPrompt,
+    failPendingPrompt,
     setTerminalSession,
     tabFocusPulse,
     terminalBroadcastMemberIds,
@@ -118,8 +121,19 @@
         seq: number;
         missed_bytes?: number;
         bytes_since_focus?: number;
+        /// MESSAGE depth of the shared write queue at attach time, so every
+        /// (re)attach re-syncs the badge (the tab field is never persisted).
+        queue_depth?: number;
       }
     | { type: "activity"; bytes_since_focus: number }
+    /// Queue-visibility frames (server: routes/terminal.rs). `queue` is the
+    /// absolute message depth on every change; `prompt-ack` answers THIS
+    /// socket's tagged `prompt` frame (queued=false: queue full, nothing
+    /// enqueued); `prompt-delivered` fires when a tagged message's LAST
+    /// write reaches the PTY. Non-owners ignore unknown ids, read depth.
+    | { type: "queue"; depth: number }
+    | { type: "prompt-ack"; id: string; queued: boolean; depth: number }
+    | { type: "prompt-delivered"; id: string; depth: number }
     | { type: "cwd"; cwd?: string | null; cwd_rel?: string | null }
     | { type: "resize"; cols: number; rows: number }
     | { type: "resize_other"; cols: number; rows: number }
@@ -755,6 +769,9 @@
         sawSessionControl = true;
         setTerminalSession(tab, frame.id);
         setTerminalActivity(tab, !focused && (frame.bytes_since_focus ?? 0) > 0);
+        // Re-sync the queue badge on every (re)attach: the depth is absolute
+        // server truth, never persisted client-side.
+        setTerminalQueueDepth(tab, frame.queue_depth ?? 0);
         scheduleTerminalSessionSave();
         missedBytes = Math.max(0, Math.floor(frame.missed_bytes ?? 0));
         status = "connected";
@@ -772,16 +789,32 @@
         terminalCwdVirtual = frame.cwd_rel ?? null;
       } else if (frame.type === "activity") {
         setTerminalActivity(tab, !focused && frame.bytes_since_focus > 0);
+      } else if (frame.type === "queue") {
+        setTerminalQueueDepth(tab, frame.depth);
+      } else if (frame.type === "prompt-ack") {
+        setTerminalQueueDepth(tab, frame.depth);
+        // queued ack: depth == the message's 1-based position; rejected ack
+        // (queue full, nothing enqueued) carries the unchanged depth.
+        resolvePendingPrompt(tab, frame.id, frame.queued ? "queued" : "rejected", frame.depth);
+      } else if (frame.type === "prompt-delivered") {
+        setTerminalQueueDepth(tab, frame.depth);
+        resolvePendingPrompt(tab, frame.id, "delivered", frame.depth);
       } else if (frame.type === "closed") {
         sessionClosedReason = frame.reason;
         status = "exited";
         statusDetail = `session ended (${frame.reason})`;
+        // The session (and its write queue) is gone: zero the badge and
+        // fail any in-flight prompt so the bubble unlocks with its text.
+        setTerminalQueueDepth(tab, 0);
+        failPendingPrompt(tab);
         clearTerminalSession(tab);
         scheduleTerminalSessionSave();
         term?.writeln(`\r\nsession ended (${frame.reason})`);
       } else if (frame.type === "exit") {
         status = "exited";
         statusDetail = `exit ${frame.code}`;
+        setTerminalQueueDepth(tab, 0);
+        failPendingPrompt(tab);
         clearTerminalSession(tab);
         scheduleTerminalSessionSave();
         term?.writeln(`\r\nprocess exited (${frame.code}); press Ctrl+D to close this tab`);
@@ -822,6 +855,12 @@
         scheduleTerminalSessionSave();
       }
       if (status !== "exited") status = "closed";
+      // Socket gone: any in-flight prompt can no longer observe its
+      // delivery — fail it (bubble unlocks, keeps text, labels honestly;
+      // the message may still be queued server-side). The badge zeroes and
+      // re-syncs from the session frame on reconnect.
+      failPendingPrompt(tab);
+      setTerminalQueueDepth(tab, 0);
     };
     ws.onerror = () => {
       statusDetail = "connection failed";
@@ -915,8 +954,10 @@
   /// raw keystroke path bypasses the queue). Returns whether the WS was open so
   /// the orchestrator can retry a freshly-spawned lead. `agent` picks the chord
   /// (claude CSI / codex/gemini CR); omitted defaults to claude server-side.
-  function sendPrompt(data: string, agent?: string): boolean {
-    return send({ type: "prompt", data, ...(agent ? { agent } : {}) });
+  /// `id` tags the message for prompt-ack / prompt-delivered tracking; omitted
+  /// = fire-and-forget (the orchestrator's lead-identity prompt stays so).
+  function sendPrompt(data: string, agent?: string, id?: string): boolean {
+    return send({ type: "prompt", data, ...(agent ? { agent } : {}), ...(id ? { id } : {}) });
   }
 
   // Rich Prompt: the right-click "Show/Hide Rich Prompt" entry mirrors the

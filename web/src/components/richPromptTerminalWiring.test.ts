@@ -11,7 +11,40 @@ describe("TerminalTab Rich Prompt wiring", () => {
   test("registers a prompt sink that sends the `prompt` frame (not raw input)", () => {
     expect(terminal).toMatch(/registerTerminalPromptSink\(tab\.id, sendPrompt\)/);
     expect(terminal).toMatch(
-      /function sendPrompt\(data: string, agent\?: string\): boolean \{[\s\S]{1,200}return send\(\{ type: "prompt", data, \.\.\.\(agent \? \{ agent \} : \{\}\) \}\)/,
+      /function sendPrompt\(data: string, agent\?: string, id\?: string\): boolean \{[\s\S]{1,260}return send\(\{ type: "prompt", data, \.\.\.\(agent \? \{ agent \} : \{\}\), \.\.\.\(id \? \{ id \} : \{\}\) \}\)/,
+    );
+  });
+
+  test("queue-visibility frames: queue / prompt-ack / prompt-delivered drive tab state", () => {
+    // `queue` is the absolute message depth on every change.
+    expect(terminal).toMatch(
+      /frame\.type === "queue"\) \{\s*setTerminalQueueDepth\(tab, frame\.depth\);/,
+    );
+    // prompt-ack resolves queued-or-rejected by id (stale/foreign ids no-op
+    // in the store); prompt-delivered resolves delivered. Both carry depth.
+    expect(terminal).toMatch(
+      /frame\.type === "prompt-ack"\) \{[\s\S]{1,400}resolvePendingPrompt\(tab, frame\.id, frame\.queued \? "queued" : "rejected", frame\.depth\);/,
+    );
+    expect(terminal).toMatch(
+      /frame\.type === "prompt-delivered"\) \{[\s\S]{1,260}resolvePendingPrompt\(tab, frame\.id, "delivered", frame\.depth\);/,
+    );
+  });
+
+  test("session frame re-syncs queue depth on every (re)attach", () => {
+    expect(terminal).toMatch(/queue_depth\?: number;/);
+    expect(terminal).toMatch(/setTerminalQueueDepth\(tab, frame\.queue_depth \?\? 0\);/);
+  });
+
+  test("socket loss and session end fail the pending prompt and zero the badge", () => {
+    expect(terminal).toMatch(
+      /ws\.onclose = \(\) => \{[\s\S]{1,800}failPendingPrompt\(tab\);\s*setTerminalQueueDepth\(tab, 0\);/,
+    );
+    // closed/exit arms: depth 0 + fail BEFORE clearTerminalSession.
+    expect(terminal).toMatch(
+      /frame\.type === "closed"\) \{[\s\S]{1,600}setTerminalQueueDepth\(tab, 0\);\s*failPendingPrompt\(tab\);\s*clearTerminalSession\(tab\);/,
+    );
+    expect(terminal).toMatch(
+      /frame\.type === "exit"\) \{[\s\S]{1,400}setTerminalQueueDepth\(tab, 0\);\s*failPendingPrompt\(tab\);\s*clearTerminalSession\(tab\);/,
     );
   });
 

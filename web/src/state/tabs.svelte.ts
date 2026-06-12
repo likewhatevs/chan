@@ -279,6 +279,25 @@ export type TerminalTab = {
   /// once output stops but is still unseen (the dot goes SOLID). Cleared
   /// with terminalActivity when the user sees it.
   terminalActivityPulsing?: boolean;
+  /// MESSAGE depth of this session's server-side write queue (Rich Prompt
+  /// messages + `cs terminal write` teammate pokes share one FIFO; a gemini
+  /// text+chord pair counts once). Drives the tab-strip badge and the idle
+  /// prompt label. 0 is stored as undefined (truthiness renders like
+  /// terminalActivity); never persisted — every (re)attach re-syncs it from
+  /// the WS `session` frame.
+  queueDepth?: number;
+  /// The ONE in-flight Rich Prompt message (submit is a no-op while set).
+  /// Lives on the TAB, not the bubble component, so hiding/showing the
+  /// bubble mid-pending keeps the state machine running. phase: "sent"
+  /// (frame out, no ack yet) -> "queued" (server ack; depth = the ack's
+  /// 1-based position) -> "delivered" (last write hit the PTY) | "rejected"
+  /// (queue full) | "failed" (WS close / ack timeout / session end). The
+  /// bubble's $effect consumes terminal phases and clears this field.
+  pendingPrompt?: {
+    id: string;
+    phase: "sent" | "queued" | "delivered" | "rejected" | "failed";
+    depth?: number;
+  };
   cwd?: string;
   seedInput?: string;
   /// Transient: this freshly-spawned terminal still needs its per-tenant
@@ -1560,6 +1579,42 @@ export function setTerminalActivityPulsing(tab: TerminalTab, pulsing: boolean): 
   tab.terminalActivityPulsing = pulsing || undefined;
 }
 
+/// MESSAGE depth of this terminal's server-side write queue. 0 collapses to
+/// undefined so badges/labels render on truthiness like terminalActivity.
+export function setTerminalQueueDepth(tab: TerminalTab, depth: number): void {
+  tab.queueDepth = depth > 0 ? depth : undefined;
+}
+
+/// Start tracking an in-flight Rich Prompt message: phase "sent" (the
+/// `prompt` frame went out on an open socket; no ack yet).
+export function beginPendingPrompt(tab: TerminalTab, id: string): void {
+  tab.pendingPrompt = { id, phase: "sent" };
+}
+
+/// Resolve the in-flight prompt by id. Stale/foreign ids no-op: every
+/// attached socket sees every `prompt-delivered`, so a second window (or a
+/// reattach replay) must not flip a pending message it does not own.
+export function resolvePendingPrompt(
+  tab: TerminalTab,
+  id: string,
+  phase: "queued" | "delivered" | "rejected",
+  depth?: number,
+): void {
+  const pending = tab.pendingPrompt;
+  if (!pending || pending.id !== id) return;
+  tab.pendingPrompt = { ...pending, phase, ...(depth !== undefined ? { depth } : {}) };
+}
+
+/// Fail the in-flight prompt unconditionally (WS close / session end / ack
+/// timeout — paths with no message id in hand). The bubble unlocks, keeps
+/// the text, and labels honestly: the message may still be queued
+/// server-side, but this client can no longer observe its delivery.
+export function failPendingPrompt(tab: TerminalTab): void {
+  const pending = tab.pendingPrompt;
+  if (!pending) return;
+  tab.pendingPrompt = { ...pending, phase: "failed" };
+}
+
 export function clearTerminalSession(tab: TerminalTab): void {
   tab.terminalSessionId = undefined;
   tab.lastAgentEchoSeq = undefined;
@@ -1641,7 +1696,7 @@ export function registerTerminalInputSink(tabId: string, sink: TerminalInputSink
 // terminal without touching TerminalTab internals. The sink returns whether the
 // frame actually went out (the WS was open) so callers can retry a freshly-
 // spawned terminal whose socket has not connected yet (the team lead bootstrap).
-type TerminalPromptSink = (data: string, agent?: string) => boolean;
+type TerminalPromptSink = (data: string, agent?: string, id?: string) => boolean;
 const terminalPromptSinks = new Map<string, TerminalPromptSink>();
 
 export function registerTerminalPromptSink(
@@ -1660,10 +1715,18 @@ export function registerTerminalPromptSink(
 /// to auto-deliver the lead's identity prompt to the freshly-spawned lead
 /// terminal once its socket connects (the lead is a normal terminal now - no
 /// bubble - so its identity arrives through the same queue as every prompt).
-export function sendPromptToTerminal(tabId: string, data: string, agent?: string): boolean {
+/// `id` tags the message for queue-visibility tracking (prompt-ack /
+/// prompt-delivered frames). Omitted = legacy fire-and-forget — the team
+/// orchestrator's lead-identity prompt stays untagged on purpose.
+export function sendPromptToTerminal(
+  tabId: string,
+  data: string,
+  agent?: string,
+  id?: string,
+): boolean {
   const sink = terminalPromptSinks.get(tabId);
   if (!sink) return false;
-  return sink(data, agent);
+  return sink(data, agent, id);
 }
 
 export function registerTerminalCloseSink(tabId: string, sink: TerminalCloseSink): () => void {

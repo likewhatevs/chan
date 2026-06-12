@@ -16,7 +16,7 @@
   // terminal closes (TerminalTab's close sink).
 
   import { onDestroy, onMount } from "svelte";
-  import { EditorState, Prec } from "@codemirror/state";
+  import { Compartment, EditorState, Prec } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
   import {
     defaultKeymap,
@@ -43,6 +43,8 @@
   import { currentOS } from "../state/shortcuts";
   import { hideRichPromptForTab } from "../state/richPrompt.svelte";
   import {
+    beginPendingPrompt,
+    failPendingPrompt,
     sendPromptToTerminal,
     type TerminalTab,
   } from "../state/tabs.svelte";
@@ -70,6 +72,116 @@
 
   const submitLabel =
     currentOS() === "mac" ? "submit with cmd+enter" : "submit with ctrl+enter";
+
+  // ---- Pending-message state machine (queue visibility) -----------------
+  // The in-flight message itself lives on the TAB (tab.pendingPrompt), so it
+  // survives hide/show of the bubble; this component owns only presentation
+  // state (chip grace, transient notes) and the editor lock.
+  //
+  // Fast-path grace: an idle agent consumes a submit within ~1 drainer tick,
+  // so the "queued" chip only appears after PENDING_CHIP_GRACE_MS — no label
+  // flash on routine submits. The lock applies immediately (the bytes are
+  // queued; edits would desync what the agent will read).
+  const PENDING_CHIP_GRACE_MS = 300;
+  // No prompt-ack within this window means the socket is effectively dead
+  // even if not yet closed: fail the pending (unlock, keep text).
+  const PROMPT_ACK_TIMEOUT_MS = 5000;
+  // How long the transient rejected/failed note replaces the idle label.
+  const TRANSIENT_NOTE_MS = 5000;
+
+  let pendingChipVisible = $state(false);
+  let transientNote = $state<string | null>(null);
+  let graceTimer: ReturnType<typeof setTimeout> | null = null;
+  let ackTimer: ReturnType<typeof setTimeout> | null = null;
+  let noteTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Read-only while a message is in flight ("sent"/"queued"); terminal
+  // phases are consumed (cleared) by the phase effect below, so they never
+  // hold the lock.
+  const isPending = $derived.by(() => {
+    const phase = tab.pendingPrompt?.phase;
+    return phase === "sent" || phase === "queued";
+  });
+
+  // CodeMirror lock seam: readOnly blocks transactions, editable drops the
+  // DOM contenteditable so the caret/IME can't type into a locked doc.
+  const lockCompartment = new Compartment();
+  function lockExtensions(locked: boolean) {
+    return [EditorState.readOnly.of(locked), EditorView.editable.of(!locked)];
+  }
+  $effect(() => {
+    const locked = isPending;
+    view?.dispatch({ effects: lockCompartment.reconfigure(lockExtensions(locked)) });
+  });
+
+  const labelText = $derived.by(() => {
+    const pending = tab.pendingPrompt;
+    if (pending && isPending && pendingChipVisible) {
+      const position =
+        pending.phase === "queued" && (pending.depth ?? 0) > 1 ? ` (#${pending.depth})` : "";
+      return `queued — waiting for agent${position}`;
+    }
+    if (transientNote) return transientNote;
+    // Teammate pokes (`cs terminal write`) share the queue: surface the
+    // depth in the idle label so the user sees them from the prompt itself.
+    if ((tab.queueDepth ?? 0) > 0) return `${tab.queueDepth} queued · ${submitLabel}`;
+    return submitLabel;
+  });
+
+  function clearPendingTimers(): void {
+    if (graceTimer !== null) clearTimeout(graceTimer);
+    if (ackTimer !== null) clearTimeout(ackTimer);
+    graceTimer = null;
+    ackTimer = null;
+  }
+
+  function showTransientNote(text: string): void {
+    transientNote = text;
+    if (noteTimer !== null) clearTimeout(noteTimer);
+    noteTimer = setTimeout(() => {
+      noteTimer = null;
+      transientNote = null;
+    }, TRANSIENT_NOTE_MS);
+  }
+
+  // Consume a terminal phase: unlock + clear tab.pendingPrompt. Runs from
+  // the phase effect (live transitions) and once post-mount (a phase that
+  // resolved while the bubble was hidden — the effect's first run sees it
+  // before the editor view exists, so it defers via the !view guard).
+  function consumeTerminalPhase(phase: "delivered" | "rejected" | "failed"): void {
+    if (!view) return;
+    clearPendingTimers();
+    pendingChipVisible = false;
+    if (phase === "delivered") {
+      // The agent consumed the message: NOW clear the composer + the draft
+      // (the draft held the text the whole time it was queued).
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "" },
+      });
+      void flushWrite();
+      view.focus();
+    } else if (phase === "rejected") {
+      // Queue full, nothing enqueued: keep the text for a retry.
+      showTransientNote("queue full — try again");
+    } else {
+      // WS close / ack timeout / session end: the message may still be
+      // queued server-side, but this client can't observe delivery anymore.
+      // Keep the text; a resubmit is a visible, recoverable duplicate.
+      showTransientNote("connection lost — message may still be queued");
+    }
+    tab.pendingPrompt = undefined;
+  }
+
+  $effect(() => {
+    const phase = tab.pendingPrompt?.phase;
+    if (phase === "queued") {
+      // Acked: the ack timeout is done; the grace timer keeps gating the chip.
+      if (ackTimer !== null) clearTimeout(ackTimer);
+      ackTimer = null;
+    } else if (phase === "delivered" || phase === "rejected" || phase === "failed") {
+      consumeTerminalPhase(phase);
+    }
+  });
 
   // Directory holding the draft (images upload here).
   // ".Drafts/x/draft.md" -> ".Drafts/x".
@@ -122,30 +234,42 @@
     return "gemini";
   }
 
-  // Cmd+Enter: submit the draft text through the queue, then RESET = clear
-  // draft.md TEXT but KEEP the folder + any pasted media (the agent reads the
-  // media AFTER submit; the folder is cleaned on terminal close). Always
-  // returns true so the chord never inserts a newline; empty/whitespace is
-  // swallowed.
+  // Cmd+Enter: submit the draft text through the queue and KEEP it visible
+  // (read-only) until the server reports the message's last write reached
+  // the PTY — the prompt-delivered resolution clears the composer + the
+  // draft text (folder + pasted media stay; the agent reads the media AFTER
+  // delivery; the folder is cleaned on terminal close). Always returns true
+  // so the chord never inserts a newline; empty/whitespace is swallowed, and
+  // a second Cmd+Enter while a message is in flight is a no-op (replace
+  // would need cancel-by-id; deferred together, v2).
   //
   // Routes to THIS bubble's OWN terminal (`tab`), NOT the focused pane's active
   // terminal: the bubble belongs to `tab`, so its text must land there. And we
-  // do NOT reap the composer unless the `prompt` frame actually went out to
+  // do NOT begin a pending unless the `prompt` frame actually went out to
   // this terminal's OPEN socket (sendPromptToTerminal returns false on a
   // closed / not-yet-connected socket). That is a real data-loss
-  // guard: the old path cleared the text on a local-sink-true that could route
-  // to the wrong terminal or nowhere visible. Keeping the text on a failed
-  // send lets the user retry instead of losing it.
+  // guard: keeping the text on a failed send lets the user retry instead of
+  // losing it.
   function submit(): boolean {
     if (!view) return true;
+    if (tab.pendingPrompt) return true;
     const text = view.state.doc.toString();
     if (!text.trim()) return true;
-    if (!sendPromptToTerminal(tab.id, text, submitAgent())) return true;
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: "" },
-    });
+    const id = crypto.randomUUID();
+    // Persist exactly what is being submitted: the draft holds the text
+    // while it is queued, so a reload mid-pending restores it.
     void flushWrite();
-    view.focus();
+    if (!sendPromptToTerminal(tab.id, text, submitAgent(), id)) return true;
+    beginPendingPrompt(tab, id);
+    pendingChipVisible = false;
+    graceTimer = setTimeout(() => {
+      graceTimer = null;
+      pendingChipVisible = true;
+    }, PENDING_CHIP_GRACE_MS);
+    ackTimer = setTimeout(() => {
+      ackTimer = null;
+      failPendingPrompt(tab);
+    }, PROMPT_ACK_TIMEOUT_MS);
     return true;
   }
 
@@ -181,6 +305,9 @@
       const state = EditorState.create({
         doc: content,
         extensions: [
+          // Locked from creation when a message is already in flight (the
+          // bubble was hidden mid-pending; the pending lives on the tab).
+          lockCompartment.of(lockExtensions(isPending)),
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           // High-prec: Mod-Enter submits; Enter continues markdown markup
@@ -218,11 +345,39 @@
       });
       view = new EditorView({ state, parent: host });
       view.focus();
+      // Catch up with the tab's pending state machine. A terminal phase
+      // that resolved while the bubble was hidden (no component to consume
+      // it) is applied now that the view + draft exist — e.g. "delivered"
+      // clears the already-consumed text instead of re-showing it. The
+      // phase $effect's first run saw it before the view existed and
+      // deferred (the !view guard).
+      const phase = tab.pendingPrompt?.phase;
+      if (phase === "delivered" || phase === "rejected" || phase === "failed") {
+        consumeTerminalPhase(phase);
+      } else if (phase === "sent" || phase === "queued") {
+        // Still in flight: show the chip immediately (it has been pending
+        // at least one hide/show round-trip; the grace window is for the
+        // routine submit-while-open fast path) and re-arm the ack guard
+        // for an unacked send.
+        pendingChipVisible = true;
+        if (phase === "sent" && ackTimer === null) {
+          ackTimer = setTimeout(() => {
+            ackTimer = null;
+            failPendingPrompt(tab);
+          }, PROMPT_ACK_TIMEOUT_MS);
+        }
+      }
     })();
   });
 
   onDestroy(() => {
     destroyed = true;
+    // Presentation timers die with the component; the pending itself lives
+    // on the tab (TerminalTab's WS handler keeps resolving it while the
+    // bubble is hidden, and the next mount catches up).
+    clearPendingTimers();
+    if (noteTimer !== null) clearTimeout(noteTimer);
+    noteTimer = null;
     // Persist the latest text on hide/unmount (reads the doc before destroy).
     void flushWrite();
     view?.destroy();
@@ -286,6 +441,7 @@
 <div
   class="rich-prompt"
   class:resized={customHeight !== null}
+  class:pending={isPending}
   role="group"
   aria-label="Rich Prompt"
   bind:this={rootEl}
@@ -306,7 +462,9 @@
     onpointercancel={onResizeEnd}
   ></div>
   <div class="rp-editor" data-file-drop-zone bind:this={host}></div>
-  <div class="rp-label" aria-hidden="true">{submitLabel}</div>
+  <div class="rp-label" class:queued={isPending && pendingChipVisible} aria-hidden="true">
+    {labelText}
+  </div>
 </div>
 
 <style>
@@ -378,5 +536,13 @@
     text-align: right;
     border-top: 1px solid var(--border);
     user-select: none;
+  }
+  /* In-flight message: the text stays visible but clearly inert (read-only
+     is enforced in the editor state; the dim is the affordance). */
+  .rich-prompt.pending .rp-editor {
+    opacity: 0.55;
+  }
+  .rich-prompt.pending .rp-label.queued {
+    color: var(--text-primary);
   }
 </style>
