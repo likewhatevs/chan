@@ -1534,11 +1534,7 @@ fn main() {
             // window cannot be brought back without quitting and
             // relaunching.
             if let Some(main) = app.get_webview_window("main") {
-                // Number the singleton launcher ("Chan Desktop Window 1") so
-                // it disambiguates from extra `main-N` launchers in the OS
-                // Window menu. It hides rather than destroys on close, so the
-                // number is stable for the process lifetime.
-                let _ = main.set_title(&launcher_window_title("main"));
+                let _ = main.set_title(LAUNCHER_WINDOW_TITLE);
                 let main_for_event = main.clone();
                 main.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
@@ -1733,21 +1729,18 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // bridge script in serve.rs). The menu entry still surfaces the
     // window by name.
     let workspace_manager = MenuItemBuilder::with_id("win-main", "Workspaces").build(app)?;
-    // `fullstack-83`: Cmd+N spawns a fresh launcher window. The
-    // existing "main" window stays untouched (singleton label);
-    // additional launchers land on `main-<N>` so each carries its
-    // own state independently. Convention for future chan-desktop
-    // shortcuts: declare a MenuItemBuilder here with the
+    // New Window opens another window of the FOCUSED window's
+    // connection (open_new_window_for_focused_workspace): local
+    // workspace, tunnel or outbound remote, or another standalone
+    // terminal window; with the launcher (or nothing) focused it opens
+    // a standalone terminal window — the launcher itself is a
+    // singleton and is never multiplied. Convention for future
+    // chan-desktop shortcuts: declare a MenuItemBuilder here with the
     // `CmdOrCtrl+<key>` accelerator, add it to the Window submenu, and
     // add a matching `on_menu_event` branch.
-    // `fullstack-b-27`: moved from `CmdOrCtrl+N` to
-    // `CmdOrCtrl+Shift+N` so the SPA's New Draft handler (per
-    // `fullstack-a-66`) can claim plain Cmd+N without the menu
+    // `fullstack-b-27`: `CmdOrCtrl+Shift+N` (not plain Cmd+N) so the
+    // SPA's New Draft handler can claim Cmd+N without the menu
     // accelerator intercepting first. Menu label stays "New Window".
-    // `phase-13 r2` (B-slice 3): the handler now opens a new window of
-    // the FOCUSED window's workspace (open_new_window_for_focused_workspace)
-    // instead of the workspace picker; the picker stays on the
-    // "Workspaces" (win-main) item.
     let new_window = MenuItemBuilder::with_id("app-new-window", "New Window")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
@@ -2245,32 +2238,6 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// `fullstack-83`: spawn a fresh launcher (workspace-picker) window via
-/// `WebviewWindowBuilder`. The label is picked from the next free
-/// `main-N` slot so each launcher carries its own per-window state
-/// (mirrors the `workspace-N` / `tunnel-N` convention). New windows use
-/// the same `index.html` entry as the singleton `main`, so the
-/// SPA's `boot()` path runs and the user lands on the workspace
-/// picker — never inheriting any existing launcher's runtime
-/// state.
-fn open_new_launcher_window(app: &tauri::AppHandle) -> Result<(), String> {
-    let label = next_launcher_label(app);
-    if app.get_webview_window(&label).is_some() {
-        // Defensive: the slot picker scans existing windows so a
-        // collision shouldn't happen. If it ever does, surface a
-        // clear error rather than panicking on `build`.
-        return Err(format!("launcher label {label} already exists"));
-    }
-    WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
-        .title(launcher_window_title(&label))
-        .inner_size(960.0, 600.0)
-        .min_inner_size(720.0, 400.0)
-        .resizable(true)
-        .build()
-        .map_err(|e| format!("building launcher window {label}: {e}"))?;
-    Ok(())
-}
-
 /// `phase-13 r2` (B-slice 3): open a new window of the workspace that
 /// owns the currently focused window. Replaces the old Cmd+Shift+N
 /// behaviour (which always opened the workspace-picker launcher) per
@@ -2282,10 +2249,15 @@ fn open_new_launcher_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// label across the running `serves` map, then reuse the same
 /// `spawn_local_workspace_window` path `open_local_workspace` uses.
 ///
-/// Falls back to the launcher picker when no LOCAL `workspace-*` window
-/// is focused (the launcher itself, a `tunnel-*` / `outbound-*` window,
-/// or no running match), so the menu item never dead-ends. The
-/// "Workspaces" picker stays reachable via the `win-main` menu item.
+/// A focused `tunnel-*` / `outbound-*` window opens a new window on the
+/// SAME remote (the connection is recovered from the label's hash
+/// prefix against the tunnel snapshot / outbound attachments). With the
+/// launcher (or nothing) focused, Cmd/Ctrl+Shift+N opens a standalone
+/// terminal window instead — launchers are a singleton now, never
+/// multiplied. The "Workspaces" picker stays reachable via the
+/// `win-main` menu item, which is also the fallback surface when a
+/// focused window's backing connection can't be resolved (stale
+/// window for a forgotten attachment).
 fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), String> {
     // Buried windows take precedence in every family: Cmd+Shift+N on a
     // window whose family has a hidden sibling REOPENS that sibling
@@ -2317,7 +2289,17 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
         .into_values()
         .find(|w| serve::is_workspace_webview_label(w.label()) && w.is_focused().unwrap_or(false))
     else {
-        return open_new_launcher_window(app);
+        // Launcher (or nothing) focused: New Window means a standalone
+        // terminal window. Like the terminal-focused branch, a buried
+        // terminal window is reopened first.
+        let state = app.state::<Arc<AppState>>();
+        if let Some(buried) = state.most_recent_buried("terminal-win-") {
+            if unbury_window(app, &buried) {
+                return Ok(());
+            }
+        }
+        spawn_terminal_window(app);
+        return Ok(());
     };
     let focused_label = focused.label().to_string();
     let state = app.state::<Arc<AppState>>();
@@ -2328,11 +2310,31 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
             return Ok(());
         }
     }
-    if !focused_label.starts_with("workspace-") {
-        // No spawn path recovers a tunnel/outbound identity from its
-        // label alone; with nothing buried, fall back to the launcher
-        // (the pre-bury behaviour for these windows).
-        return open_new_launcher_window(app);
+    if focused_label.starts_with("outbound-") {
+        // New window on the SAME outbound remote: recover the attachment
+        // by matching the focused label's hash prefix (labels are
+        // `outbound-<hash(id)>-<seq>`; the hash is one-way).
+        let cfg = state.store.lock().unwrap().get().map_err(err)?;
+        for o in &cfg.outbound {
+            let prefix = serve::outbound_window_prefix(&o.id);
+            if focused_label.starts_with(&format!("{prefix}-")) {
+                return serve::spawn_outbound_workspace_window(app, &o.id, &o.url);
+            }
+        }
+        // Stale window for a forgotten attachment: surface the picker.
+        return show_window(app, "main");
+    }
+    if focused_label.starts_with("tunnel-") {
+        // New window on the SAME inbound (tunneled) remote, recovered
+        // from the live tunnel snapshot by label-hash prefix.
+        for t in state.tunnel.snapshot() {
+            let prefix = serve::tunnel_window_prefix(&t.label, &t.workspace);
+            if focused_label.starts_with(&format!("{prefix}-")) {
+                return serve::spawn_tunneled_workspace_window(app, &t.label, &t.workspace, &t.url);
+            }
+        }
+        // The remote dropped out of the registry; surface the picker.
+        return show_window(app, "main");
     }
     let resolved = {
         let serves = state.serves.lock().unwrap();
@@ -2347,62 +2349,16 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
     };
     match resolved {
         Some((key, url)) => serve::spawn_local_workspace_window(app, &key, &url),
-        None => open_new_launcher_window(app),
+        // Workspace runtime gone under a live window: surface the picker.
+        None => show_window(app, "main"),
     }
 }
 
-/// Display number for a launcher window, derived from its label:
-/// the singleton `main` is window 1; `main-N` is window N. Since
-/// `next_launcher_label` hands out the lowest-free `main-N` slot, a
-/// number freed by a closed launcher is already reused — so the
-/// label IS the reusable display number (no separate allocator
-/// needed; launchers never go through `build_workspace_window`).
-fn launcher_window_number(label: &str) -> u32 {
-    if label == "main" {
-        return 1;
-    }
-    label
-        .strip_prefix("main-")
-        .and_then(|n| n.parse::<u32>().ok())
-        .unwrap_or(1)
-}
-
-/// OS window title for a launcher window: `Chan Desktop Window N`, so
-/// the macOS Window menu disambiguates multiple open launchers
-/// (mirrors the `"{title} Window {N}"` scheme the workspace / terminal
-/// windows use).
-fn launcher_window_title(label: &str) -> String {
-    format!("Chan Desktop Window {}", launcher_window_number(label))
-}
-
-/// Pick the next free `main-N` label. Launchers spawn from the
-/// File → New Window menu item; the singleton `main` from
-/// tauri.conf.json keeps its bare label so existing
-/// `show_window(app, "main")` callers and the `Workspaces` menu
-/// entry keep working.
-fn next_launcher_label(app: &tauri::AppHandle) -> String {
-    let existing: std::collections::HashSet<String> = app
-        .webview_windows()
-        .into_keys()
-        .filter(|l| l == "main" || l.starts_with("main-"))
-        .collect();
-    for n in 2u32..u32::MAX {
-        let candidate = format!("main-{n}");
-        if !existing.contains(&candidate) {
-            return candidate;
-        }
-    }
-    // Practically unreachable; falls back to a UUID-ish suffix so
-    // the menu action still does *something* if a hostile loop
-    // saturates the integer range.
-    format!(
-        "main-{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    )
-}
+/// OS window title for the singleton launcher. Launchers are never
+/// multiplied anymore (Cmd/Ctrl+Shift+N on the launcher opens a
+/// standalone terminal window instead), so there is no `Window N`
+/// suffix to disambiguate.
+const LAUNCHER_WINDOW_TITLE: &str = "Chan Desktop";
 
 /// Eval a `chan:command` dispatch on the currently-focused workspace
 /// webview. Used by menu items that should defer to chan's per-workspace
@@ -2620,15 +2576,14 @@ mod tests {
     }
 
     #[test]
-    fn launcher_window_number_derives_from_label() {
-        // The singleton launcher is window 1; `main-N` is window N.
-        assert_eq!(launcher_window_number("main"), 1);
-        assert_eq!(launcher_window_number("main-2"), 2);
-        assert_eq!(launcher_window_number("main-3"), 3);
-        // Malformed / unexpected labels fall back to 1 rather than panic.
-        assert_eq!(launcher_window_number("main-"), 1);
-        assert_eq!(launcher_window_number("main-x"), 1);
-        assert_eq!(launcher_window_title("main"), "Chan Desktop Window 1");
-        assert_eq!(launcher_window_title("main-4"), "Chan Desktop Window 4");
+    fn launcher_is_a_singleton_with_an_unsuffixed_title() {
+        // Launchers are never multiplied (Cmd/Ctrl+Shift+N on the
+        // launcher opens a standalone terminal window), so the title
+        // carries no "Window N" suffix and no main-N spawner exists.
+        assert_eq!(LAUNCHER_WINDOW_TITLE, "Chan Desktop");
+        // concat! so the pin doesn't match its own assertion source.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(!MAIN_RS.contains(concat!("fn ", "open_new_launcher_window")));
+        assert!(!MAIN_RS.contains(concat!("fn ", "next_launcher_label")));
     }
 }
