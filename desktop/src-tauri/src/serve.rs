@@ -1037,6 +1037,21 @@ const KEY_BRIDGE_JS: &str = r#"
         // the !shift branch above); the !metaKey form fires only for the
         // Ctrl+Shift+R that Linux/Windows users press.
         case 'KeyR': if (!e.metaKey) invokeIpc(e, 'reload_window'); return;
+        // Close on Linux/Windows: Ctrl+Shift+W (plain Ctrl+W stays
+        // readline delete-word inside a focused terminal, which is why
+        // the !shift branch never claims it off macOS). Gate on
+        // !metaKey so macOS keeps plain Cmd+W and Cmd+Shift+W stays
+        // unclaimed there. Same routing as Cmd+W: cancel-close on the
+        // connecting screen, tab-close everywhere else.
+        case 'KeyW':
+          if (!e.metaKey) {
+            if (location.pathname.endsWith('/connecting.html')) {
+              invokeIpc(e, 'request_close_window');
+              return;
+            }
+            fire(e, 'app.tab.close');
+          }
+          return;
         case 'KeyG':         fire(e, 'app.find.prev');     return;
         case 'KeyT':         fire(e, 'app.tab.reopenClosed'); return;
         case 'KeyM':         fire(e, 'app.graph.toggle');  return;
@@ -1614,12 +1629,15 @@ mod tests {
             "!window_on_connecting",
             "_screen(&app_for_close, &label_for_close)"
         )));
-        // KEY_BRIDGE_JS claims Cmd+W (window capture +
+        // KEY_BRIDGE_JS claims the close chord (window capture +
         // stopImmediatePropagation) before BOTH the page's listener and
         // the File-menu accelerator, so the bridge itself must route
         // KeyW to request_close_window while on connecting.html — the
         // page-level chord alone left Cmd+W dead (v0.31.0 follow-up).
-        assert!(SERVE_RS.contains(concat!("invokeIpc(e, 'request_close", "_window')")));
+        // TWO routings: macOS plain Cmd+W (!shift branch) and the
+        // Linux/Windows Ctrl+Shift+W (shift branch).
+        let close_invoke = concat!("invokeIpc(e, 'request_close", "_window')");
+        assert_eq!(SERVE_RS.matches(close_invoke).count(), 2);
         assert!(SERVE_RS.contains("location.pathname.endsWith('/connecting.html')"));
         const CONNECTING_JS: &str = include_str!("../../src/connecting.js");
         assert!(CONNECTING_JS.contains("request_close_window"));

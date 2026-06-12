@@ -1915,8 +1915,18 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         let quit = MenuItemBuilder::with_id("chan-quit", "Quit")
             .accelerator("CmdOrCtrl+Q")
             .build(app)?;
+        // Close Window on Linux/Windows rides Ctrl+Shift+W (plain
+        // Ctrl+W stays a terminal readline chord). Same routed handler
+        // as macOS's Cmd+W item: tab-close in SPA windows,
+        // cancel-close on the connecting screen, native close
+        // elsewhere. KEY_BRIDGE_JS claims the same chord inside SPA
+        // webviews, mirroring the macOS menu/bridge shadow pair.
+        let close_window = MenuItemBuilder::with_id("app-close-window", "Close Window")
+            .accelerator("CmdOrCtrl+Shift+W")
+            .build(app)?;
         let file = SubmenuBuilder::new(app, "File")
             .item(&new_terminal)
+            .item(&close_window)
             .separator()
             .item(&about)
             .separator()
@@ -1967,7 +1977,6 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             "app-new-terminal" => {
                 handle_new_terminal(app);
             }
-            #[cfg(target_os = "macos")]
             "app-close-window" => {
                 handle_close_window(app);
             }
@@ -2272,7 +2281,7 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let version = app.package_info().version.to_string();
-    WebviewWindowBuilder::new(
+    let win = WebviewWindowBuilder::new(
         app,
         "about",
         WebviewUrl::App(format!("about.html?v={version}").into()),
@@ -2286,6 +2295,14 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
     .resizable(false)
     .build()
     .map_err(|e| format!("building about window: {e}"))?;
+    // Off macOS the app menu renders as a per-window GTK menubar, and a
+    // File/Edit/Window bar on a fixed-size About dialog is noise (and
+    // eats its height). macOS keeps the global menubar — nothing to
+    // remove there. Best-effort: a failure just leaves the bar.
+    #[cfg(not(target_os = "macos"))]
+    let _ = win.remove_menu();
+    #[cfg(target_os = "macos")]
+    let _ = win;
     Ok(())
 }
 
@@ -2525,10 +2542,9 @@ fn handle_new_terminal(app: &tauri::AppHandle) {
 ///   window) is closed natively. The launcher's `CloseRequested` handler
 ///   intercepts that to hide rather than destroy it, keeping reopen instant.
 ///
-/// macOS-only: the File ▸ Close Window item exists only there. Off macOS the
-/// platform mod is Ctrl and Ctrl+W stays a terminal readline chord, so no
-/// menu accelerator claims it.
-#[cfg(target_os = "macos")]
+/// Cross-platform since the Linux File menu gained its own Close
+/// Window item: macOS binds Cmd+W; Linux/Windows bind Ctrl+Shift+W
+/// (plain Ctrl+W stays a terminal readline chord there).
 fn handle_close_window(app: &tauri::AppHandle) {
     let Some(window) = app
         .webview_windows()
