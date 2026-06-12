@@ -428,6 +428,23 @@ pub fn reopen_remote_window(
     )
 }
 
+/// True when the webview is still showing the bundled connecting/retry
+/// screen (`connecting.html`, the outbound pre-navigation page). Such a
+/// window has no per-window session, no shells, and nothing to restore,
+/// so close affordances treat it as cancel-and-really-close instead of
+/// burying. The URL read is guarded like `capture_window_config`: a
+/// dead webview's `url()` can panic on a nil URL, and any failure reads
+/// as "not the connecting screen" (bury — the safe pre-existing path).
+pub fn window_on_connecting_screen(app: &AppHandle, label: &str) -> bool {
+    let Some(window) = app.get_webview_window(label) else {
+        return false;
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| window.url())) {
+        Ok(Ok(url)) => url.path().ends_with("connecting.html"),
+        _ => false,
+    }
+}
+
 /// Reopen this workspace family's most recently buried window instead
 /// of spawning a new one, when one exists. Every "open a window for
 /// this workspace" entry point (launcher Open, Cmd/Ctrl+Shift+N's
@@ -618,9 +635,13 @@ fn build_workspace_window(
                     // The OS close button BURIES an SPA window instead of
                     // destroying it: the webview hides, live terminals and
                     // layout state stay warm, and the Window menu (or
-                    // Cmd/Ctrl+Shift+N) reopens it. One exception: a
-                    // standalone terminal window with NO live shells left
-                    // has nothing worth keeping and really closes.
+                    // Cmd/Ctrl+Shift+N) reopens it. Two exceptions really
+                    // close: a standalone terminal window with NO live
+                    // shells left, and a window still showing the
+                    // connecting/retry screen (no session, no shells —
+                    // burying it would leave an unkillable hidden retry
+                    // loop, the v0.31.0 "outbound window cannot be
+                    // closed/cancelled at all" bug).
                     // Programmatic closes (the SPA's empty-window cascade,
                     // workspace-off teardown, tunnel drop) call `destroy()`
                     // and never reach this branch.
@@ -633,7 +654,7 @@ fn build_workspace_window(
                                 .map(|e| e.terminal_window_has_live_shells(&label_for_close))
                                 .unwrap_or(false)
                         } else {
-                            true
+                            !window_on_connecting_screen(&app_for_close, &label_for_close)
                         };
                         if !bury {
                             // Real close; the Destroyed branch cleans up.
@@ -1561,6 +1582,25 @@ mod tests {
                 "workspace-window app permission set must include {expected}: {workspace_set:?}",
             );
         }
+    }
+
+    #[test]
+    fn connecting_screen_windows_close_for_real() {
+        // A window still on connecting.html must be CLOSABLE: the red
+        // dot really closes (no bury - a buried connecting window is an
+        // unkillable hidden retry loop), and the page itself offers
+        // Cmd/Ctrl+W + Ctrl+D chords that invoke request_close_window
+        // (destroy, bypassing the bury handler). concat! so the source
+        // pin doesn't match this test.
+        const SERVE_RS: &str = include_str!("serve.rs");
+        assert!(SERVE_RS.contains(concat!(
+            "!window_on_connecting",
+            "_screen(&app_for_close, &label_for_close)"
+        )));
+        const CONNECTING_JS: &str = include_str!("../../src/connecting.js");
+        assert!(CONNECTING_JS.contains("request_close_window"));
+        assert!(CONNECTING_JS.contains("key === 'd'"));
+        assert!(CONNECTING_JS.contains("key === 'w'"));
     }
 
     #[test]

@@ -274,3 +274,26 @@ function fmtElapsed(ms) {
 function pad2(n) {
   return String(n).padStart(2, '0');
 }
+
+// Close/cancel chords. The connecting window must be closable from the
+// keyboard: Cmd+W on macOS normally arrives via the File > Close Window
+// menu item (which destroys a connecting window for real), and this
+// listener covers Ctrl+D everywhere plus Cmd/Ctrl+W where no menu item
+// claims the chord (Linux has no Close Window accelerator). The invoked
+// request_close_window destroys the window outright, bypassing the
+// bury-on-close handler - on this screen there is no session or shell
+// worth keeping, only the retry loop being cancelled. Capture phase so
+// a focused element cannot swallow the chord first; no-op in the
+// standalone-browser dev mode (no Tauri, nothing to close).
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if (!invoke) return;
+    const key = (e.key || '').toLowerCase();
+    const close = ((e.metaKey || e.ctrlKey) && key === 'w') || (e.ctrlKey && key === 'd');
+    if (!close) return;
+    e.preventDefault();
+    invoke('request_close_window').catch(() => {});
+  },
+  true,
+);

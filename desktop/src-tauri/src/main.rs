@@ -2538,6 +2538,13 @@ fn handle_close_window(app: &tauri::AppHandle) {
         return;
     };
     if serve::is_workspace_webview_label(window.label()) {
+        // A window still on the connecting/retry screen has no tabs to
+        // close and nothing to bury: Cmd+W means cancel — destroy for
+        // real (destroy skips the bury-on-close handler).
+        if serve::window_on_connecting_screen(app, window.label()) {
+            let _ = window.destroy();
+            return;
+        }
         dispatch_to_focused_workspace(app, "app.tab.close");
     } else {
         let _ = window.close();
