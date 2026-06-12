@@ -470,15 +470,14 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             window_id,
         } => {
             handle_team(
-                workspace_cell,
-                tenant,
-                terminal_registry,
-                &dir,
-                op,
-                config_toml,
-                script,
-                window_id,
-                events_tx,
+                TeamRequest {
+                    dir,
+                    op,
+                    config_toml,
+                    script,
+                    window_id,
+                },
+                ctx,
             )
             .await
         }
@@ -513,6 +512,22 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
     }
 }
 
+/// `handle_team`'s dispatch payload: the `ControlRequest::TerminalTeam`
+/// variant's fields, bundled at the dispatch site. The wire enum itself
+/// stays flat (serde shape frozen).
+#[cfg(unix)]
+struct TeamRequest {
+    dir: String,
+    op: TeamOp,
+    config_toml: Option<String>,
+    script: bool,
+    /// The caller's window ($CHAN_WINDOW_ID), when present: every spawned
+    /// agent session binds to it so the agents carry $CHAN_WINDOW_ID and the
+    /// window-targeting `cs` commands work from inside an agent. The same
+    /// window receives the `TeamSpawned` surfacing push.
+    window_id: Option<String>,
+}
+
 /// The `cs terminal team new|load` path. `new` parses the supplied
 /// config.toml text, stamps `created_at` when omitted, validates, then
 /// either emits the paste-and-run bootstrap script (`--script`) or writes
@@ -527,30 +542,27 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
 /// async because the non-`--script` `new` spawns the team then blocks a
 /// boot grace before poking each agent's identity prompt (the same
 /// sequence the `--script` form runs inline with `sleep 3`).
-// Each arg is a distinct dispatch input forwarded from the control request +
-// the connection's shared handles; bundling them into a struct would only
-// move the noise, so allow the count here.
-#[allow(clippy::too_many_arguments)]
 #[cfg(unix)]
-async fn handle_team(
-    workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
-    tenant: ControlTenant,
-    terminal_registry: Option<&Arc<TerminalRegistry>>,
-    dir: &str,
-    op: TeamOp,
-    config_toml: Option<String>,
-    script: bool,
-    // The caller's window ($CHAN_WINDOW_ID), when present: every spawned
-    // agent session binds to it so the agents carry $CHAN_WINDOW_ID and the
-    // window-targeting `cs` commands work from inside an agent. The same
-    // window receives the `TeamSpawned` surfacing push.
-    window_id: Option<String>,
-    events_tx: &broadcast::Sender<String>,
-) -> ControlResponse {
+async fn handle_team(req: TeamRequest, ctx: &ControlSocketCtx) -> ControlResponse {
     use crate::routes::team_config::{
         ensure_created_at, generate_bootstrap_script, read_team_config, validate_team_config,
         write_team_config,
     };
+
+    let TeamRequest {
+        dir,
+        op,
+        config_toml,
+        script,
+        window_id,
+    } = req;
+    // The registry is a set-once cell that may be filled after the socket
+    // starts; resolve it per request, exactly as handle_request's dispatch
+    // arm used to do on this handler's behalf.
+    let terminal_registry = ctx.terminal_registry.get();
+    let workspace_cell = &ctx.workspace_cell;
+    let tenant = ctx.tenant;
+    let events_tx = &ctx.events_tx;
 
     // Mirror the route's dir guard so a bad dir is a clean message, not a
     // sandbox error deeper in the write path.
@@ -1987,17 +1999,16 @@ agent = "codex"
 
     #[tokio::test]
     async fn handle_team_rejects_empty_and_absolute_dir() {
-        let cell = empty_cell();
+        let ctx = test_ctx(empty_cell(), ControlTenant::Workspace);
         match handle_team(
-            &cell,
-            ControlTenant::Workspace,
-            None,
-            "   ",
-            TeamOp::New,
-            None,
-            false,
-            None,
-            &test_events(),
+            TeamRequest {
+                dir: "   ".to_string(),
+                op: TeamOp::New,
+                config_toml: None,
+                script: false,
+                window_id: None,
+            },
+            &ctx,
         )
         .await
         {
@@ -2007,15 +2018,14 @@ agent = "codex"
             ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
         }
         match handle_team(
-            &cell,
-            ControlTenant::Workspace,
-            None,
-            "/abs/team",
-            TeamOp::Load,
-            None,
-            false,
-            None,
-            &test_events(),
+            TeamRequest {
+                dir: "/abs/team".to_string(),
+                op: TeamOp::Load,
+                config_toml: None,
+                script: false,
+                window_id: None,
+            },
+            &ctx,
         )
         .await
         {
@@ -2028,17 +2038,16 @@ agent = "codex"
 
     #[tokio::test]
     async fn handle_team_new_requires_a_config() {
-        let cell = empty_cell();
+        let ctx = test_ctx(empty_cell(), ControlTenant::Workspace);
         match handle_team(
-            &cell,
-            ControlTenant::Workspace,
-            None,
-            "new-team-1",
-            TeamOp::New,
-            None,
-            false,
-            None,
-            &test_events(),
+            TeamRequest {
+                dir: "new-team-1".to_string(),
+                op: TeamOp::New,
+                config_toml: None,
+                script: false,
+                window_id: None,
+            },
+            &ctx,
         )
         .await
         {
@@ -2053,17 +2062,16 @@ agent = "codex"
     async fn handle_team_new_script_emits_bootstrap_without_a_workspace() {
         // `--script` is a pure generator: it returns the script even with
         // no workspace cell bound (no filesystem I/O on this path).
-        let cell = empty_cell();
+        let ctx = test_ctx(empty_cell(), ControlTenant::Workspace);
         match handle_team(
-            &cell,
-            ControlTenant::Workspace,
-            None,
-            "new-team-1",
-            TeamOp::New,
-            Some(SAMPLE_TEAM_TOML.into()),
-            true,
-            None,
-            &test_events(),
+            TeamRequest {
+                dir: "new-team-1".to_string(),
+                op: TeamOp::New,
+                config_toml: Some(SAMPLE_TEAM_TOML.into()),
+                script: true,
+                window_id: None,
+            },
+            &ctx,
         )
         .await
         {
@@ -2078,17 +2086,16 @@ agent = "codex"
 
     #[tokio::test]
     async fn handle_team_new_rejects_invalid_toml() {
-        let cell = empty_cell();
+        let ctx = test_ctx(empty_cell(), ControlTenant::Workspace);
         match handle_team(
-            &cell,
-            ControlTenant::Workspace,
-            None,
-            "new-team-1",
-            TeamOp::New,
-            Some("this is not = = toml".into()),
-            true,
-            None,
-            &test_events(),
+            TeamRequest {
+                dir: "new-team-1".to_string(),
+                op: TeamOp::New,
+                config_toml: Some("this is not = = toml".into()),
+                script: true,
+                window_id: None,
+            },
+            &ctx,
         )
         .await
         {
@@ -2110,15 +2117,14 @@ host_handle = "@@Neo"
 created_at = "2026-05-29T00:00:00Z"
 "#;
         match handle_team(
-            &cell,
-            ControlTenant::Workspace,
-            None,
-            "new-team-1",
-            TeamOp::New,
-            Some(toml_text.into()),
-            true,
-            None,
-            &test_events(),
+            TeamRequest {
+                dir: "new-team-1".to_string(),
+                op: TeamOp::New,
+                config_toml: Some(toml_text.into()),
+                script: true,
+                window_id: None,
+            },
+            &test_ctx(cell, ControlTenant::Workspace),
         )
         .await
         {
@@ -2505,16 +2511,20 @@ is_lead = false
         let (_cfg, _root, cell) = bound_cell_with_shell_team("saved-team");
         let (_rroot, registry) = empty_registry();
         let registry = Arc::new(registry);
+        let ctx = test_ctx(cell, ControlTenant::Workspace);
+        assert!(
+            ctx.terminal_registry.set(registry.clone()).is_ok(),
+            "fresh registry cell"
+        );
         match handle_team(
-            &cell,
-            ControlTenant::Workspace,
-            Some(&registry),
-            "saved-team",
-            TeamOp::Load,
-            None,
-            false,
-            Some("win-load".to_string()),
-            &test_events(),
+            TeamRequest {
+                dir: "saved-team".to_string(),
+                op: TeamOp::Load,
+                config_toml: None,
+                script: false,
+                window_id: Some("win-load".to_string()),
+            },
+            &ctx,
         )
         .await
         {
@@ -2544,15 +2554,14 @@ is_lead = false
         // still validates + summarizes instead of erroring.
         let (_cfg, _root, cell) = bound_cell_with_shell_team("saved-team");
         match handle_team(
-            &cell,
-            ControlTenant::Workspace,
-            None,
-            "saved-team",
-            TeamOp::Load,
-            None,
-            false,
-            None,
-            &test_events(),
+            TeamRequest {
+                dir: "saved-team".to_string(),
+                op: TeamOp::Load,
+                config_toml: None,
+                script: false,
+                window_id: None,
+            },
+            &test_ctx(cell, ControlTenant::Workspace),
         )
         .await
         {
