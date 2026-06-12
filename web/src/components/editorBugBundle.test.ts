@@ -60,7 +60,7 @@ describe("(3): New Directory dialog cursor at end", () => {
   });
 
   test("file+create stem selection preserved (case unchanged)", () => {
-    // The existing case shouldn't regress under -a-65.
+    // The existing file+create case must not regress.
     expect(pathPromptModal).toMatch(
       /pathPromptState\.kind === "file" &&\s*pathPromptState\.mode === "create"[\s\S]*?setSelectionRange\(\s*stemStart/,
     );

@@ -588,8 +588,8 @@ export function watchSystemTheme(): () => void {
 /// The live watcher socket handle. Callable as the disposer (the
 /// existing reconnect/teardown call sites use `unwatch()`); the
 /// `subscribeDir` / `unsubscribeDir` methods are the per-directory
-/// scope-subscription path that Slice E (File Browser) and Slice F
-/// (Graph) workspace. `watchSubscription()` exposes it to those surfaces
+/// scope-subscription path the File Browser and Graph surfaces use.
+/// `watchSubscription()` exposes it to those surfaces
 /// without re-opening a second socket.
 let unwatch: WatchSubscription | null = null;
 
@@ -2164,9 +2164,8 @@ export type GraphFilters = {
   /// nodes with `classifyFile === "source"` (any recognized code /
   /// config extension). Binary file nodes don't have their own chip
   /// (they ride the absence of a more specific classification and
-  /// always render). Mirrors the SPA-side
-  /// classification scheme established in `-a-51`'s G6 colour
-  /// rework; consumes the same `classifyFile` helper.
+  /// always render). Mirrors the SPA-side file-class
+  /// classification scheme; consumes the same `classifyFile` helper.
   markdown: boolean;
   source: boolean;
 };
@@ -3019,7 +3018,7 @@ export function fbTreeInstance(id: string): FbTreeInstance | null {
 
 /// Dispose an instance: drop its record from the registry. Callers should
 /// unsubscribe the instance's `subscribedDirs` from the watcher socket
-/// BEFORE calling this (Slice E wires that in); this only forgets the
+/// BEFORE calling this (the File Browser does); this only forgets the
 /// client-side metadata so a closed pane / collapsed graph stops counting
 /// toward the cross-instance refcount.
 export function disposeFbTreeInstance(id: string): void {
@@ -3031,7 +3030,7 @@ export function disposeFbTreeInstance(id: string): void {
 /// How many live instances currently subscribe to `dir`. This is the
 /// client-side cross-instance refcount: the first instance to reach 1
 /// triggers a `sub` frame, and the transition back to 0 triggers `unsub`
-/// (Slice E owns those transitions). The server keeps its own per-socket
+/// (the File Browser owns those transitions). The server keeps its own per-socket
 /// refcount, so this is purely a client-side dedupe of redundant frames.
 export function fbDirSubscriberCount(dir: string): number {
   let n = 0;

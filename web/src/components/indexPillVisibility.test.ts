@@ -66,8 +66,8 @@ describe("index progress pill visibility", () => {
     } as IndexStatus;
     expect(indexVisible(indexStatus.value)).toBe(true);
 
-    // Slice D guarantees the status reaches idle; with no background
-    // embedding left, the pill must hide.
+    // The indexer guarantees the status reaches idle; with no
+    // background embedding left, the pill must hide.
     indexStatus.value = { state: "idle" } as IndexStatus;
     expect(indexVisible(indexStatus.value)).toBe(false);
   });

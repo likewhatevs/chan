@@ -434,7 +434,7 @@
   }
 
   /// Palette colour for a file/document node kind. Mirrors the
-  /// node-fill mapping in the paint pass so `link` edges (Slice F)
+  /// node-fill mapping in the paint pass so `link` edges
   /// can be stroked in the SOURCE document's hue: a markdown link is
   /// orange (--g-doc), a source-file link royalblue (--g-source), and
   /// so on. Non-file kinds (tag / mention / language / folder / workspace)

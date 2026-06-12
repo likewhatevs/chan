@@ -1368,7 +1368,7 @@
   /// The img chip count covers media-class file nodes (the chip
   /// toggle hides those). The folder chip count covers folder-kind
   /// nodes (the chip toggle hides those). Markdown / source chips
-  /// added in `-a-57` already used node-tally semantics; preserved.
+  /// use the same node-tally semantics.
   const counts = $derived.by(() => {
     const c: Record<FilterKind, number> = {
       tag: 0,

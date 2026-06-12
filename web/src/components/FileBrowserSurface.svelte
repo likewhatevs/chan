@@ -127,9 +127,9 @@
   // collapse it subscribes / unsubscribes the matching dir scopes, with
   // the LAST instance to drop a dir tearing the server watcher down. The
   // expanded-dir set is read from the instance's OWN per-instance
-  // `expanded` map (Slice E), which is now also the render source: the
-  // tree and the subscription bookkeeping share one per-instance map, so
-  // expanding a dir in one surface no longer fans out to the others.
+  // `expanded` map, which is also the render source: the tree and the
+  // subscription bookkeeping share one per-instance map, so expanding
+  // a dir in one surface does not fan out to the others.
   const instanceId = $derived(
     isTab && tab ? `fb-tab-${tab.id}` : isDock ? `fb-dock-${side ?? "left"}` : "fb-overlay",
   );

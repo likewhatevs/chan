@@ -1539,7 +1539,7 @@ mod tests {
             // macOS runner's spawned PTY slave does not always present a
             // device path; there `tty` prints its documented "not a tty"
             // result instead. That is a runner limitation, not a product
-            // regression, and it must NOT gate CI (addendum-1 #2 / A5b).
+            // regression, and it must NOT gate CI.
             // So assert the device path ONLY when one is present, accept
             // the "not a tty" headless case as a skip, and still fail on
             // a probe that produced neither (a genuinely broken harness).

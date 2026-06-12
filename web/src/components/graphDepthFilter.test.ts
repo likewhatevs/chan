@@ -47,10 +47,10 @@ describe("forward-only BFS", () => {
 
 describe("link filter dropped", () => {
   test("FilterKind union no longer includes 'link'", () => {
-    // `-a-52` dropped link from FilterKind; subsequent tasks
-    // (`-a-57`) extend FilterKind with new bucket kinds. Pin the
-    // load-bearing absence (link) rather than the exact union
-    // shape so growing the kind set doesn't trip this guard.
+    // FilterKind deliberately has no `link` member; bucket kinds
+    // extend the union over time. Pin the load-bearing absence
+    // (link) rather than the exact union shape so growing the kind
+    // set doesn't trip this guard.
     expect(graph).toMatch(/type FilterKind =/);
     expect(graph).toMatch(/\| "tag"/);
     expect(graph).toMatch(/\| "mention"/);

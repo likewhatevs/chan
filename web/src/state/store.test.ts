@@ -758,7 +758,7 @@ describe("per-instance file browser tree registry", () => {
     expect(fbDirSubscriberCount("notes")).toBe(2);
 
     // Last instance to drop the dir takes the count back to zero (the
-    // transition Slice E maps to an `unsub` frame).
+    // transition that maps to an `unsub` frame).
     delete a.subscribedDirs["notes"];
     delete b.subscribedDirs["notes"];
     expect(fbDirSubscriberCount("notes")).toBe(0);

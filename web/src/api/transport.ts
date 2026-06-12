@@ -254,8 +254,8 @@ export function openWatch(
       onStatus("open");
       // The server's scope registry is per-socket, so a fresh socket
       // starts with no subscriptions. The owner re-establishes its
-      // active scopes here (Slice E wires the FB instances in); the
-      // transport does not buffer pre-open frames.
+      // active scopes here (the File Browser instances wire that in);
+      // the transport does not buffer pre-open frames.
       onOpen();
     };
     ws.onmessage = (m) => {
