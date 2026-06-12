@@ -1,15 +1,18 @@
 # Agents
 
-Contact cards and skill anchors for the agents that have worked
-on chan. Used as the link target for `@@{name}` references in
-the phase reports (`docs/phases/`).
+Contact cards and skill anchors for the agent handles that appear in
+the phase reports (`docs/phases/`). This directory is a historical
+index: teams are now provisioned per-round by the `cs terminal team`
+tooling with fresh handles, so nothing here is an "active" roster.
+The cards exist so any `@@{name}` reference in a report resolves to
+who that was.
 
 For the cross-phase operational lessons (coordination, the gate,
 verification, commit discipline, the pre-release norms) see the
 [playbook](../playbook.md). It is the "how we work and what went wrong when
 we did not" companion to these contact cards.
 
-## Active roster (phase 7)
+## Workspace team
 
 | Tag           | Contact                                  | Profile                              |
 |---------------|------------------------------------------|--------------------------------------|
@@ -20,9 +23,9 @@ we did not" companion to these contact cards.
 | @@WebtestA    | [webtest-a.md](webtest-a.md)   | Web test lane A.                 |
 | @@WebtestB    | [webtest-b.md](webtest-b.md)   | Web test lane B.                 |
 
-## Desktop + CI lanes (phase 8)
+## Desktop + CI lanes
 
-Phase 8 stood up a parallel chan-desktop team plus a dedicated CI lane.
+A parallel chan-desktop team plus a dedicated CI lane.
 
 | Tag          | Contact                        | Profile                       |
 |--------------|--------------------------------|-------------------------------|
@@ -33,10 +36,10 @@ Phase 8 stood up a parallel chan-desktop team plus a dedicated CI lane.
 
 ## Historical handles
 
-Older phases used different slot names. Each maps to its active
-successor below, so a `@@Backend` reference in a phase-2 report resolves
-to the current role. The standalone redirect cards were removed in the
-phase-18 docs cleanup; this map is now the single resolution point.
+Earlier phases used different slot names. Each maps to its successor
+below, so a `@@Backend` reference in an early report resolves to the
+role that absorbed it. The standalone redirect cards were removed;
+this map is the single resolution point.
 
 | Tag             | Active successor             |
 |-----------------|------------------------------|

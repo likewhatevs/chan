@@ -7,10 +7,11 @@ orchestrating agent (e.g. an `@@Architect` running
 inside a chan terminal) that needs to spawn helper
 agents on demand.
 
-> **Status note**: the contract below is the design
-> shape from `systacean-12`. If you're reading this
-> before that task lands, treat it as the target. After
-> it lands the description here is authoritative.
+> **Status note**: this contract is a retained design
+> blueprint. The watcher-driven runtime it rode on was
+> removed in the Team Work revamp and is planned to
+> return (see [README.md](README.md)); until then,
+> treat this as the target shape, not current runtime.
 
 ## Step 0: dispatched agents read the front door
 
@@ -104,13 +105,13 @@ watcher directory:
 }
 ```
 
-NOTE (phase-13 r2): the bubble overlay is now a frontend-only
-static stub and chan-server's event-reply endpoint was removed
-in the Team Work revamp; the live survey/reply flow below is
-retained as the blueprint for the returning implementation.
+NOTE: the bubble overlay is now a frontend-only static stub and
+chan-server's event-reply endpoint was removed in the Team Work
+revamp; the live survey/reply flow below is retained as the
+blueprint for the returning implementation.
 
 Previously, the Team Work bubble overlay rendered this as a
-normal single-topic survey (per `fullstack-18` / `fullstack-20`).
+normal single-topic survey.
 Reply via the SPA wrote the survey-reply through chan-server's
 reply endpoint; chan-server reacted:
 

@@ -7,7 +7,7 @@ named terminal tabs (the Team Work flow) and reach chan's
 MCP server through `CHAN_MCP_*` terminal environment
 variables.
 
-> Phase-13 r2 note: the fsnotify-driven event-coordination
+> Status note: the fsnotify-driven event-coordination
 > layer (typed event files -> watcher -> `poke` dispatch ->
 > notification bubbles) was REMOVED in the Team Work revamp,
 > along with the event-reply / submit-mode endpoints and the
@@ -35,7 +35,7 @@ to integrate with that surface.
   token auth (per-launch token printed on stderr; appended
   to the URL when chan launches a browser).
 * **Per-terminal-session fsnotify watcher** - REMOVED in
-  phase-13 r2 (Team Work revamp); planned to return. It
+  the Team Work revamp; planned to return. It
   ingested typed event files written into a user-chosen
   directory, dispatched `poke\n` to the matching agent's
   PTY, and surfaced events to the Team Work bubble overlay

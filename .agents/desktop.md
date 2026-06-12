@@ -130,7 +130,7 @@ Runbook: [`desktop/updater-bridge.md`](../desktop/updater-bridge.md).
 
 ### Bridge release required after key rotation
 
-The configured pubkey was rotated from the phase-8 DEV updater key
+The configured pubkey was rotated from the original DEV updater key
 to the production updater key on 2026-05-23. Existing installs that
 already trust the old DEV pubkey need a bridge release:
 

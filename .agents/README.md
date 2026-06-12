@@ -22,8 +22,9 @@ bundle embedded via rust-embed.
 1. [principles.md](principles.md) - the load-bearing project invariants.
 2. [writing-rules.md](writing-rules.md) - documentation and comment style.
 3. [patterns.md](patterns.md) - contributor patterns for code changes.
-4. [roster/README.md](roster/README.md) - agent roster and contact cards.
-5. [playbook.md](playbook.md) - cross-phase operational lessons.
+4. [playbook.md](playbook.md) - cross-phase operational lessons.
+5. [roster/README.md](roster/README.md) - the handle index for the
+   phase reports (historical reference, not an active roster).
 6. [skills/](skills/) - executable workflows (test server, release, gate)
    plus vendored general skill profiles.
 
@@ -39,28 +40,23 @@ crates/
                         Self-upgrade lives in src/update.rs.
   chan-server           HTTP + WebSocket surface. Wraps chan-workspace
                         in axum routes; exposes the in-process MCP
-                        server over a Unix-domain socket. Per-area
-                        handlers live in src/routes/{workspace, files,
-                        search, graph, fs_graph, report, sessions,
-                        attachments, storage, preferences, contacts,
-                        build_info, terminal, ws, health}.rs;
-                        lib.rs holds ServeConfig + build_app + serve
-                        + serve_via_tunnel + router(). Top-level
-                        modules: auth, bus, config, embed_seed,
-                        error, host, indexer, mcp_bridge, preferences,
-                        qr, self_writes, signal, state,
-                        static_assets, store, tunnel_guard, util.
+                        server over a Unix-domain socket. The
+                        per-module and per-route inventory lives in
+                        ../design.md (do not duplicate it here).
   chan-workspace        filesystem boundary, workspace registry, search
                         + graph indexer, watch, report engine. The
                         only crate that touches user content on
                         disk.
-  chan-llm              MCP-only library after Phase 5: the chan
-                        MCP `Server`, tool schemas, embedded prompt
-                        text, and the MCP key/config plumbing.
-                        chan-server consumes only
-                        `chan_llm::mcp::Server` via
+  chan-llm              MCP-only library: the chan MCP `Server`,
+                        tool schemas, embedded prompt text, and the
+                        MCP key/config plumbing. chan-server
+                        consumes only `chan_llm::mcp::Server` via
                         `crates/chan-server/src/mcp_bridge.rs`.
   chan-report           report engine shared with chan-workspace.
+  chan-shell            the `cs` surface: clap actions, the
+                        control-socket client, and the per-agent
+                        submit chords. chan-server links only its
+                        wire types.
   chan-tunnel-{proto,
     client, server}     h2/yamux workspace tunnel. chan-server pulls
                         chan-tunnel-client; the standalone tunnel
@@ -93,11 +89,10 @@ gateway/                Account / sign-in / reverse-proxy surface for
                         guide: .agents/gateway.md.
 ```
 
-Phase 5 collapsed the chan-core sibling workspace into this repo:
-chan-workspace, chan-llm, chan-report, and the three chan-tunnel-*
-crates are all workspace members here. Native shells (iOS / Android)
-still link `chan-workspace` via uniffi without dragging in this repo's
-HTTP stack.
+Every crate above (plus `desktop/src-tauri`) is a member of the root
+workspace; `gateway/` is the one nested workspace of its own. Native
+shells (iOS / Android) link `chan-workspace` via uniffi without
+dragging in this repo's HTTP stack.
 
 ## Build & Test
 

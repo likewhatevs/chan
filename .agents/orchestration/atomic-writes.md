@@ -88,16 +88,15 @@ infinite loop. Easy to do, hard to debug.
 
 ## Event schema
 
-The full survey / survey-reply schema is in the phase-7
-architect journal entry "Round 2 capacity proposal",
-preserved in git history. Minimal version:
+The full survey / survey-reply schema is preserved in git
+history. Minimal version:
 
 ```json
 {
   "id": "<unique-id>",
   "type": "survey",
   "from": "@@SomeAgent",
-  "to": "@@Alex",
+  "to": "@@Host",
   "topic": "<short-topic-tag>",
   "questions": [
     {

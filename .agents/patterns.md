@@ -18,7 +18,7 @@
   goes through `crate::store::{load_toml, save_toml}` so atomic
   writes + parent-dir fsync match the rest of the app. Don't roll
   a fresh `tempfile + rename` by hand.
-- **chan-llm is MCP-only**: after Phase 5 the crate exposes the
+- **chan-llm is MCP-only**: the crate exposes the
   chan MCP `Server`, its tool schemas, embedded prompts, and key
   resolution. There is no in-app agent session and no CLI
   backend wrappers; external agents connect through the in-process

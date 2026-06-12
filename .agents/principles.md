@@ -42,7 +42,7 @@ primitives in chan-server. When in doubt, read
 
 ## MCP server only, no in-app agent
 
-Phase 5 removed the in-app Agent overlay and the chan-server
+There is no in-app Agent overlay and no chan-server
 `/api/llm/*` / `/api/assistant/*` HTTP surface. External agents
 (claude, codex, gemini) connect through the in-process MCP server
 exposed over a Unix-domain socket by `mcp_bridge.rs`; the embedded
@@ -50,4 +50,4 @@ terminal exports `CHAN_MCP_SERVER_JSON` and companion `CHAN_MCP_*`
 discovery variables. Chan does not write CLI-owned env namespaces;
 tools can translate the `CHAN_` descriptor into their own MCP config
 shape. Do not reintroduce in-app agent UI or chan-server-side chat
-APIs without a phase-level decision.
+APIs without an explicit decision from the maintainer.
