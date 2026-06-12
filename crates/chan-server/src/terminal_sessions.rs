@@ -111,6 +111,24 @@ pub struct CreateOptions {
     pub env: BTreeMap<String, String>,
 }
 
+/// Optional per-call overrides for [`Registry::restart`], applied onto the
+/// session's own `restart_options()`. `default()` (every field `None`)
+/// restarts the session exactly as it was spawned.
+#[derive(Debug, Default)]
+pub struct RestartOverrides {
+    pub tab_name: Option<String>,
+    /// Outer `None` keeps the existing group; `Some(None)` sets the
+    /// default group; `Some(Some(g))` sets group `g`.
+    pub tab_group: Option<Option<String>>,
+    pub window_id: Option<String>,
+    /// The team-bootstrap orchestrator overrides command + env to flip the
+    /// host's pre-existing PTY into the lead's session (e.g. host's shell ->
+    /// lead's `claude` command). When `None`, restart preserves the original
+    /// spawn command/env.
+    pub command: Option<String>,
+    pub env: Option<BTreeMap<String, String>>,
+}
+
 /// Read-only view of a live terminal session, for the control socket's
 /// `cs term list`. The control socket holds a read handle to the
 /// `Registry` and renders these grouped by `tab_group`.
@@ -413,17 +431,14 @@ impl Registry {
         Ok(session.attach(Some(0)))
     }
 
-    pub fn restart(
-        &self,
-        id: &str,
-        tab_name: Option<String>,
-        // Outer `None` keeps the existing group; `Some(None)` sets the
-        // default group; `Some(Some(g))` sets group `g`.
-        tab_group: Option<Option<String>>,
-        window_id: Option<String>,
-        command: Option<String>,
-        env: Option<BTreeMap<String, String>>,
-    ) -> Result<bool, CreateError> {
+    pub fn restart(&self, id: &str, overrides: RestartOverrides) -> Result<bool, CreateError> {
+        let RestartOverrides {
+            tab_name,
+            tab_group,
+            window_id,
+            command,
+            env,
+        } = overrides;
         let old = self
             .sessions
             .lock()
@@ -447,11 +462,7 @@ impl Registry {
         if window_id.is_some() {
             opts.window_id = window_id;
         }
-        // The team-bootstrap orchestrator overrides command + env
-        // to flip the host's pre-existing PTY into the lead's
-        // session (e.g. host's shell -> lead's `claude` command).
-        // When None, restart preserves the original spawn
-        // command/env.
+        // Command/env override semantics: see [`RestartOverrides::command`].
         if let Some(cmd) = command {
             opts.command = Some(cmd);
         }
@@ -753,7 +764,7 @@ impl Registry {
         };
         let mut restarted = 0;
         for id in &ids {
-            if self.restart(id, None, None, None, None, None)? {
+            if self.restart(id, RestartOverrides::default())? {
                 restarted += 1;
             }
         }

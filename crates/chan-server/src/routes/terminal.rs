@@ -18,7 +18,8 @@ use crate::error::err_tunnel_public_locked;
 use crate::signal::now_unix_secs;
 use crate::state::AppState;
 use crate::terminal_sessions::{
-    CloseReason, CreateError, CreateOptions, SessionEvent, ALT_SCREEN_ATTACH_PRELUDE,
+    CloseReason, CreateError, CreateOptions, RestartOverrides, SessionEvent,
+    ALT_SCREEN_ATTACH_PRELUDE,
 };
 
 const DEFAULT_COLS: u16 = 80;
@@ -359,7 +360,7 @@ pub async fn api_restart_terminal(
     if state.tunnel_public {
         return err_tunnel_public_locked();
     }
-    let (tab_name, tab_group, window_id, command, env) = if let Some(Json(body)) = body {
+    let overrides = if let Some(Json(body)) = body {
         let tab_name = match body.name.as_deref() {
             Some(name) => match normalize_tab_name(name) {
                 Some(name) => Some(name),
@@ -383,14 +384,17 @@ pub async fn api_restart_terminal(
             },
             None => None,
         };
-        (tab_name, tab_group, window_id, body.command, body.env)
+        RestartOverrides {
+            tab_name,
+            tab_group,
+            window_id,
+            command: body.command,
+            env: body.env,
+        }
     } else {
-        (None, None, None, None, None)
+        RestartOverrides::default()
     };
-    match state
-        .terminal_sessions
-        .restart(&session, tab_name, tab_group, window_id, command, env)
-    {
+    match state.terminal_sessions.restart(&session, overrides) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "terminal session not found").into_response(),
         Err(CreateError::Capped) => {
