@@ -2634,6 +2634,7 @@ export function commitPaneMode(): void {
 }
 
 export function cancelPaneMode(): void {
+  killStagedTerminalSessions();
   paneMode.active = false;
   paneMode.draft = null;
   paneMode.spawnIntent = null;
@@ -2641,6 +2642,31 @@ export function cancelPaneMode(): void {
   paneMode.grabPaneId = null;
   paneMode.hoverPaneId = null;
   paneMode.stagedDraftEditors = [];
+}
+
+/// Kill the PTYs of terminals that exist ONLY in the draft. Staged
+/// panes RENDER, so a staged terminal's component mounts for real and
+/// spawns a shell (in terminal-only windows every staged split gets
+/// one automatically); just dropping the draft on Esc orphaned that
+/// shell in the registry until idle-prune. Run each staged terminal's
+/// registered close sink — the same explicit-close path `closeTab`
+/// uses (kills the session, discards the Rich Prompt draft) — BEFORE
+/// the draft stops rendering, while the components and their sinks are
+/// still mounted. Committed tabs share ids with the live layout and
+/// are never staged, so moves/clones are naturally excluded.
+function killStagedTerminalSessions(): void {
+  const draft = paneMode.draft;
+  if (!paneMode.active || !draft) return;
+  const staged = paneModeStagedTabIds();
+  if (staged.size === 0) return;
+  for (const node of Object.values(draft.nodes)) {
+    if (node.kind !== "leaf") continue;
+    for (const t of node.tabs) {
+      if (t.kind === "terminal" && staged.has(t.id)) {
+        void runTerminalCloseSink(t);
+      }
+    }
+  }
 }
 
 /// Stage a tab spawn for commit. Replaces any previously-staged intent;
