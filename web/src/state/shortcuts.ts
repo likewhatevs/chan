@@ -475,6 +475,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     web: "Cmd+Shift+P",
     native: "Cmd+Shift+P",
     group: "Terminal",
+    note: "physical Cmd on every platform",
     escapeTerminal: true,
   },
   // Terminal-local find (the terminal's own find bar). Dispatched by

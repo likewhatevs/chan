@@ -27,7 +27,7 @@ describe("File Browser upload via the Upload button", () => {
     expect(store).toContain("upload failed: '${target}' already exists");
   });
 
-  test("api client uses XHR so upload progress can workspace status", () => {
+  test("api client uses XHR so upload progress can feed the status bar", () => {
     expect(client).toContain("new XMLHttpRequest()");
     expect(client).toContain("xhr.upload.onprogress");
     expect(client).toContain('/api/files/upload');
