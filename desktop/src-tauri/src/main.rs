@@ -82,6 +82,13 @@ pub struct AppState {
     /// lists them under `remote:` ids; clicking one opens a webview
     /// with that exact label so the remote restores its session blob.
     pub remote_reopen: Mutex<HashMap<String, RemoteReopen>>,
+    /// Set when the user confirmed the quit dialog: the re-fired
+    /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
+    /// must pass instead of prompting again.
+    pub quit_confirmed: std::sync::atomic::AtomicBool,
+    /// True while the quit-confirmation dialog is showing, so a
+    /// repeated Cmd+Q doesn't stack a second dialog.
+    pub quit_prompt_open: std::sync::atomic::AtomicBool,
 }
 
 /// One reopenable remote window: see `AppState::remote_reopen`.
@@ -1483,6 +1490,8 @@ fn main() {
         window_numbers: Mutex::new(HashMap::new()),
         buried_windows: Mutex::new(Vec::new()),
         remote_reopen: Mutex::new(HashMap::new()),
+        quit_confirmed: std::sync::atomic::AtomicBool::new(false),
+        quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
     });
     let state_for_exit = Arc::clone(&state);
     let state_for_setup = Arc::clone(&state);
@@ -1683,6 +1692,68 @@ fn main() {
 
     app.run(move |_app, event| {
         match event {
+            // Cmd+Q / the Quit menu (macOS predefined Quit and Linux's
+            // chan-quit `app.exit(0)` both route through here, and both
+            // are preventable). With ANY SPA window alive — visible or
+            // buried (a buried window is a live hidden webview, so one
+            // `webview_windows()` scan covers both) — confirm before
+            // quitting: quitting silently kills standalone-terminal
+            // shells and stops local workspaces. A bare launcher (or
+            // About) quits without ceremony.
+            RunEvent::ExitRequested { api, .. } => {
+                use std::sync::atomic::Ordering;
+                if state_for_exit.quit_confirmed.load(Ordering::SeqCst) {
+                    return; // user already confirmed; let the exit run
+                }
+                let open: Vec<String> = _app
+                    .webview_windows()
+                    .into_keys()
+                    .filter(|l| serve::is_workspace_webview_label(l))
+                    .collect();
+                if open.is_empty() {
+                    return; // nothing worth guarding; quit as before
+                }
+                api.prevent_exit();
+                // One dialog at a time: a second Cmd+Q while the ask is
+                // up must not stack another.
+                if state_for_exit
+                    .quit_prompt_open
+                    .swap(true, Ordering::SeqCst)
+                {
+                    return;
+                }
+                let hidden = state_for_exit.buried_windows.lock().unwrap().len();
+                let message = if hidden > 0 {
+                    format!(
+                        "Chan has {} window(s) ({hidden} hidden). Quitting stops their terminals and local workspaces; remote servers keep running.",
+                        open.len()
+                    )
+                } else {
+                    format!(
+                        "Chan has {} window(s) open. Quitting stops their terminals and local workspaces; remote servers keep running.",
+                        open.len()
+                    )
+                };
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                let state_for_reply = Arc::clone(&state_for_exit);
+                let app_for_reply = _app.clone();
+                _app.dialog()
+                    .message(message)
+                    .title("Quit Chan?")
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Quit".into(),
+                        "Cancel".into(),
+                    ))
+                    .show(move |quit| {
+                        state_for_reply
+                            .quit_prompt_open
+                            .store(false, Ordering::SeqCst);
+                        if quit {
+                            state_for_reply.quit_confirmed.store(true, Ordering::SeqCst);
+                            app_for_reply.exit(0);
+                        }
+                    });
+            }
             RunEvent::Exit => {
                 // Best-effort: unmount every embedded local workspace
                 // before the desktop runtime exits.
@@ -2573,6 +2644,18 @@ mod tests {
             most_recent_buried_with_prefix(&buried, "workspace-bb-"),
             None
         );
+    }
+
+    #[test]
+    fn quit_is_gated_behind_a_confirmation_while_windows_exist() {
+        // Cmd+Q / Quit must prompt while any SPA window (open or
+        // buried) exists. Pin the ExitRequested arm and its
+        // prevent_exit so a RunEvent refactor can't silently drop the
+        // guard. concat! so the pins don't match this test's source.
+        const MAIN_RS: &str = include_str!("main.rs");
+        assert!(MAIN_RS.contains(concat!("RunEvent::Exit", "Requested { api, .. }")));
+        assert!(MAIN_RS.contains(concat!("api.prevent", "_exit();")));
+        assert!(MAIN_RS.contains(concat!("quit_", "confirmed.load")));
     }
 
     #[test]
