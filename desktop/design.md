@@ -11,7 +11,7 @@ chan-desktop is the native desktop shell for chan. For normal local
 workspaces it embeds chan-server in the desktop process and serves the
 same Svelte editor on a loopback HTTP port. It links `chan-workspace` and
 `chan-server` directly and ships no `chan` binary; registry mutations
-and feature toggles run in-process against the embedded `chan-workspace`
+run in-process against the embedded `chan-workspace`
 `Library`. The desktop app exists so that:
 
 - a non-CLI user can install one signed bundle and open a folder
@@ -81,7 +81,7 @@ server is on the same machine.
 
 The `chan` registry at `~/.chan/config.toml` is the single source of
 truth for the set of known workspaces. Desktop-driven mutations
-(add, remove, default-workspace reconciliation) and feature toggles
+(add, remove, default-workspace reconciliation)
 run in-process against the embedded host's shared
 `chan_workspace::Library` — the same code path the CLI uses, without
 spawning it. Routing everything through the one shared `Library` is
@@ -92,8 +92,8 @@ stale.
 The desktop owns a small config of its own at the
 platform-appropriate path. It holds desktop-only state: outbound URL
 attachments, tunnel listen preferences (port / label / workspace
-name), the closed-window restore stack (section 6.3), and the
-feature choice recorded at registration time. Nothing about whether
+name), and the closed-window restore stack (section 6.3). Nothing
+about whether
 a local workspace is currently *running* is persisted: the On column
 is derived live from the in-memory map of active local runtimes, so
 a desktop restart comes up with everything off and there is no
@@ -244,9 +244,7 @@ bundle, and none is required at runtime.
 
 Local workspaces open through the embedded chan-server
 `WorkspaceHost`, which owns a single `chan_workspace::Library`. Every
-registry mutation and feature toggle runs in-process against that
-`Library`, or against the live `Arc<Workspace>` the host already
-holds for a mounted workspace.
+registry mutation runs in-process against that `Library`.
 
 The single codesigned and notarised artifact is the chan-desktop
 app itself; there is no second binary to sign. External `chan serve`
@@ -481,8 +479,8 @@ launcher process launch.
 - Because the desktop ships no separate `chan` binary, there is no
   second executable to upgrade.
 
-Key rotation and the bridge-release procedure are documented in
-`.agents/desktop.md` ("Auto-upgrade signing") and the
+Key rotation and updater-payload signing/verification are documented
+in `.agents/desktop.md` ("Auto-upgrade signing") and the
 [`updater-bridge.md`](updater-bridge.md) runbook.
 
 ## 10. Sign-in

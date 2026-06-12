@@ -31,7 +31,7 @@ use tauri::menu::{Menu, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
 use tauri::menu::{MenuItemBuilder, Submenu};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use config::{Config, ConfigStore, OutboundWorkspace, WindowConfig, WorkspaceFeatures};
+use config::{Config, ConfigStore, OutboundWorkspace, WindowConfig};
 use serve::ServeHandle;
 use tunnel::TunnelState;
 
@@ -403,22 +403,16 @@ fn list_workspaces(state: State<Arc<AppState>>) -> Result<Vec<Workspace>, String
     Ok(merged)
 }
 
-/// Register a local workspace folder and open it. `features` lets a
-/// caller choose the optional Semantic / Reports layers at
-/// registration time so chan-workspace's BOOT process picks the
-/// chosen state up on the FIRST open (no stub + re-toggle cycle).
-/// The launcher's [New] modal omits it (the SPA's onboarding card
-/// enables layers post-boot); a missing or default `features` opens
-/// the workspace lean (BM25-only, no reports).
+/// Register a local workspace folder and open it. Registration is
+/// lean (BM25-only, no reports): the SPA's onboarding card enables
+/// the optional Semantic / Reports layers post-boot.
 #[tauri::command]
 async fn add_workspace(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     path: String,
-    features: Option<WorkspaceFeatures>,
 ) -> Result<(), String> {
     let path = canonical_key(Path::new(&path));
-    let features = features.unwrap_or_default();
     let Some(embedded) = state.embedded.get() else {
         return Err("embedded local server is unavailable".to_string());
     };
@@ -431,26 +425,15 @@ async fn add_workspace(
     let path_for_block = path.clone();
 
     emit_chan_busy(&app, true, "add", &path);
-    // register_workspace + boot run off the async executor: boot can
-    // walk a large workspace on first reports activation.
+    // register_workspace writes the registry on disk; run it off the
+    // async executor.
     let result =
-        tokio::task::spawn_blocking(move || register_and_boot(&library, &path_for_block, features))
+        tokio::task::spawn_blocking(move || register_workspace_path(&library, &path_for_block))
             .await;
     emit_chan_busy(&app, false, "add", &path);
     match result {
         Ok(inner) => inner?,
         Err(e) => return Err(format!("registering workspace panicked: {e}")),
-    }
-
-    // Mirror the chosen features into the persisted per-workspace
-    // desktop config. Write-only: chan-workspace owns the
-    // authoritative feature state; this records the
-    // registration-time choice.
-    if features != WorkspaceFeatures::default() {
-        let mut store = state.store.lock().unwrap();
-        let mut cfg = store.get().map_err(err)?;
-        cfg.workspaces.entry(path.clone()).or_default().features = features;
-        store.save(&cfg).map_err(err)?;
     }
 
     // Auto-start: opening a workspace from the desktop is the user's
@@ -462,48 +445,21 @@ async fn add_workspace(
     Ok(())
 }
 
-/// Register `path` with the shared embedded Library and, if any
-/// optional feature was requested, open the workspace once to persist
-/// the flags and kick the BOOT scan. Mirrors `chan/src/main.rs`'s
-/// `cmd_add`. The transient `Arc<Workspace>` is dropped before this
-/// returns so the immediately-following `serve::start` can mount
-/// the workspace without tripping `WorkspaceAlreadyOpen` against the
-/// lifetime flock. Blocking: `register_workspace` writes the registry
-/// and `boot()` can run a slow initial scan, so callers invoke it
-/// via `spawn_blocking`.
-fn register_and_boot(
-    library: &chan_workspace::Library,
-    path: &str,
-    features: WorkspaceFeatures,
-) -> Result<(), String> {
+/// Register `path` with the shared embedded Library, creating the
+/// directory for a fresh path. No workspace handle is held when this
+/// returns, so the immediately-following `serve::start` can mount the
+/// workspace without tripping `WorkspaceAlreadyOpen` against the
+/// lifetime flock. Blocking: `register_workspace` writes the registry,
+/// so callers invoke it via `spawn_blocking`.
+fn register_workspace_path(library: &chan_workspace::Library, path: &str) -> Result<(), String> {
     let root = Path::new(path);
     if !root.exists() {
         std::fs::create_dir_all(root)
             .map_err(|e| format!("creating workspace root {path}: {e}"))?;
     }
-    let entry = library
+    library
         .register_workspace(root)
         .map_err(|e| format!("registering workspace {path}: {e}"))?;
-    if features.bge || features.reports {
-        let workspace = library
-            .open_workspace(&entry.root_path)
-            .map_err(|e| format!("opening workspace {}: {e}", entry.root_path.display()))?;
-        if features.bge {
-            workspace
-                .set_semantic_enabled(true)
-                .map_err(|e| format!("enabling semantic search: {e}"))?;
-        }
-        if features.reports {
-            workspace
-                .set_reports_enabled(true)
-                .map_err(|e| format!("enabling reports: {e}"))?;
-        }
-        workspace
-            .boot()
-            .map_err(|e| format!("boot after enabling features: {e}"))?;
-        // Drop the transient handle before serve::start re-opens it.
-        drop(workspace);
-    }
     Ok(())
 }
 
@@ -534,11 +490,6 @@ async fn remove_workspace(
         Ok(inner) => inner?,
         Err(e) => return Err(format!("unregistering workspace panicked: {e}")),
     }
-
-    let mut store = state.store.lock().unwrap();
-    let mut cfg = store.get().map_err(err)?;
-    cfg.workspaces.remove(&key);
-    store.save(&cfg).map_err(err)?;
     Ok(())
 }
 
@@ -1006,7 +957,7 @@ fn open_workspace_from_handoff(
         return serve::spawn_local_workspace_window(&app, &key, &url);
     }
 
-    // Not running: register (creating the dir for a fresh path) + boot
+    // Not running: register (creating the dir for a fresh path)
     // through the shared Library, then mount + spawn the window. Off
     // the listener task so the CLI gets a prompt response.
     let Some(embedded) = state.embedded.get() else {
@@ -1018,11 +969,7 @@ fn open_workspace_from_handoff(
         let library_for_register = library.clone();
         let key_for_register = key_for_block.clone();
         let registered = tokio::task::spawn_blocking(move || {
-            register_and_boot(
-                &library_for_register,
-                &key_for_register,
-                WorkspaceFeatures::default(),
-            )
+            register_workspace_path(&library_for_register, &key_for_register)
         })
         .await;
         match registered {

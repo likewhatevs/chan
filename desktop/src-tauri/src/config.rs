@@ -4,9 +4,6 @@
 //! for which workspaces exist. This file holds only desktop-specific
 //! state that has no place in chan proper:
 //!
-//! - `workspaces`: per-workspace desktop cache, keyed by canonical workspace
-//!   path so a `mv` on disk doesn't silently revive stale state for
-//!   a different workspace.
 //! - `outbound`: remote-workspace URLs the user explicitly attached.
 //!   The desktop owns only the webview/window state for these
 //!   entries, not the remote process or token lifecycle.
@@ -21,7 +18,6 @@
 //! in memory while a serve is running, and the desktop webview
 //! reloads it fresh on every On toggle.
 
-use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -34,38 +30,6 @@ use serde::{Deserialize, Serialize};
 /// Twenty is roomy enough for several concurrently-open workspaces
 /// without risking unbounded growth from an open-close-reopen loop.
 pub const MAX_WINDOW_CONFIGS: usize = 20;
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct WorkspaceSettings {
-    /// Feature choice recorded when the workspace was registered with
-    /// explicit `features` (see `add_workspace`). Write-only:
-    /// chan-workspace owns the authoritative feature state, so
-    /// nothing reads this mirror back.
-    ///
-    /// Both default OFF (lean workspace; BM25-only).
-    #[serde(default)]
-    pub features: WorkspaceFeatures,
-}
-
-/// Per-workspace optional-layer toggles, accepted by `add_workspace`
-/// to enable layers at registration time. The pair is wide enough to
-/// absorb future toggles (chan-report variants, alternate embedding
-/// models, etc.) without re-shaping the IPC contract.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct WorkspaceFeatures {
-    /// Semantic search via BGE-small embeddings. Default OFF.
-    /// Enabling triggers a download of the shared model file
-    /// (~63 MB) + a per-workspace dense-vector index pass alongside
-    /// the BM25 walk.
-    #[serde(default)]
-    pub bge: bool,
-    /// File classification + stats reports (tokei + per-language
-    /// SLOC + Basic COCOMO). Default OFF. Enabling triggers a
-    /// chan-report pass maintained incrementally from filesystem
-    /// events.
-    #[serde(default)]
-    pub reports: bool,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TunnelConfig {
@@ -164,9 +128,6 @@ fn default_zoom() -> f64 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
-    /// Per-workspace UI state, keyed by canonical workspace path.
-    #[serde(default)]
-    pub workspaces: HashMap<String, WorkspaceSettings>,
     /// Explicit outbound URL attachments. These are non-owned
     /// remote workspaces that desktop opens by URL.
     #[serde(default)]
@@ -471,55 +432,5 @@ mod tests {
         assert_eq!(workspace.id, "remote-1");
         assert_eq!(workspace.label, "");
         assert_eq!(workspace.added_at, 0);
-    }
-
-    #[test]
-    fn workspace_features_default_off() {
-        // Per-workspace feature toggles default OFF
-        // so a lean workspace opens BM25-only; BGE + reports are
-        // explicit opt-ins.
-        let f = WorkspaceFeatures::default();
-        assert!(!f.bge);
-        assert!(!f.reports);
-    }
-
-    #[test]
-    fn workspace_settings_features_missing_field_defaults_off() {
-        // A `config.json` without the `features` field must stay
-        // loadable as `{bge: false, reports: false}` instead of
-        // failing the load and dropping the entire per-workspace map.
-        let missing_features = r#"{}"#;
-        let cfg: WorkspaceSettings = serde_json::from_str(missing_features).expect("legacy load");
-        assert!(!cfg.features.bge);
-        assert!(!cfg.features.reports);
-    }
-
-    #[test]
-    fn workspace_settings_features_round_trip() {
-        // The toggle pair survives a save+load cycle so a recorded
-        // choice sticks across desktop restarts.
-        let settings = WorkspaceSettings {
-            features: WorkspaceFeatures {
-                bge: true,
-                reports: false,
-            },
-        };
-        let json = serde_json::to_string(&settings).expect("serialize");
-        let back: WorkspaceSettings = serde_json::from_str(&json).expect("deserialize");
-        assert!(back.features.bge);
-        assert!(!back.features.reports);
-    }
-
-    #[test]
-    fn workspace_settings_features_missing_partial_field_defaults() {
-        // Partial migration: a future config might carry `bge: true`
-        // but not `reports`. The serde-default on each field keeps
-        // the missing one as false rather than failing the load.
-        let partial = r#"{
-            "features": { "bge": true }
-        }"#;
-        let cfg: WorkspaceSettings = serde_json::from_str(partial).expect("partial load");
-        assert!(cfg.features.bge);
-        assert!(!cfg.features.reports);
     }
 }

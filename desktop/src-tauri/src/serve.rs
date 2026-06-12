@@ -1290,11 +1290,12 @@ mod tests {
     }
 
     #[test]
-    fn registry_and_feature_commands_run_in_process_not_via_chan_cli() {
-        // chan-desktop runs without a `chan`
-        // binary: `add_workspace`, `remove_workspace`, and the
-        // feature commands route through the embedded host's shared
-        // `Library` / live `Arc<Workspace>` rather than spawning chan.
+    fn registry_commands_run_in_process_not_via_chan_cli() {
+        // chan-desktop runs without a `chan` binary: `add_workspace`
+        // and `remove_workspace` route through the embedded host's
+        // shared `Library` rather than spawning chan. (Optional-layer
+        // enablement is not a desktop concern at all: the SPA's
+        // onboarding card drives it post-boot through chan-server.)
         // Pin the in-process call shape so a future change can't
         // silently reintroduce a subprocess dependency, and assert
         // the deleted subprocess argument shapes are gone.
@@ -1306,10 +1307,6 @@ mod tests {
         assert!(
             MAIN_RS.contains("register_workspace") && MAIN_RS.contains("unregister_workspace"),
             "add_workspace/remove_workspace must use Library register/unregister in-process",
-        );
-        assert!(
-            MAIN_RS.contains("set_semantic_enabled") && MAIN_RS.contains("set_reports_enabled"),
-            "feature toggles must call chan-workspace set_* in-process",
         );
         assert!(
             !MAIN_RS.contains("read_features_via_chan_index_status"),

@@ -141,9 +141,6 @@ Source: `desktop/src-tauri/src/config.rs`.
 
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
-| `workspaces` | `HashMap<String, WorkspaceSettings>` | empty | launcher feature panel cache | per-local-workspace desktop cache keyed by canonical path |
-| `workspaces.{path}.features.bge` | `bool` | `false` | Launcher row expand panel | Mirror of chan-workspace's `IndexConfig.semantic_enabled`; refreshed on read through CLI when available |
-| `workspaces.{path}.features.reports` | `bool` | `false` | Launcher row expand panel | Mirror of chan-workspace's `IndexConfig.reports_enabled`; refreshed on read through CLI when available |
 | `outbound[]` | `Vec<OutboundWorkspace>` | empty | Attach URL panel | explicit non-owned remote URL attachments |
 | `outbound[].id` | `String` | generated UUID | Attach URL panel | row actions + outbound window restore key |
 | `outbound[].url` | `String` | required | Attach URL panel | token-bearing HTTP(S) URL opened by desktop |
@@ -155,12 +152,6 @@ Source: `desktop/src-tauri/src/config.rs`.
 | `window_configs[]` | `Vec<WindowConfig>` | empty | (auto on window close) | LRU pop on window open; preserves panes/tabs + URL hash + zoom level |
 
 `WindowConfig`: `key: String`, `window_label: String`, `url_hash: String`, `zoom_level: f64`, `saved_at: u64`.
-
-## Open findings
-
-| # | Finding | Recommended action | Owner | Priority |
-|---|---------|---------------------|-------|----------|
-| 1 | `WorkspaceFeatures` mirror in chan-desktop config can drift when users bypass chan-desktop's UI for feature toggles (e.g. `chan index enable-semantic` from terminal). | Keep the current refresh-on-read path or replace the mirror with a direct chan-workspace config API. | chan-desktop + chan-workspace | Low (corner case for power users) |
 
 ## Layout pointers
 
