@@ -1210,9 +1210,10 @@ let serverInstance: string | null = null;
 /// and in-memory state are gone, and without a reload the window sits
 /// on a stale view with stuck terminals until a manual Cmd+R — the
 /// reload is that Cmd+R, automated. Reported against outbound remotes
-/// (^C + re-run of `chan serve`); applies to any tenant whose health
-/// route answers. Best-effort: a failed read (workspace-less terminal
-/// tenant, transient error) skips the check until the next reconnect.
+/// (^C + re-run of `chan serve`); health answers on every tenant
+/// (terminal-only included), so the check applies everywhere.
+/// Best-effort: a transient read failure skips until the next
+/// reconnect.
 async function checkServerInstance(): Promise<void> {
   try {
     const instance = (await api.health()).instance?.trim();
