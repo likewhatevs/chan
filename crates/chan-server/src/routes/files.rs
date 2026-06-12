@@ -302,6 +302,20 @@ fn read_file_sync(
     workspace: &chan_workspace::Workspace,
     path: &str,
 ) -> chan_workspace::Result<ReadFileResult> {
+    // Image / PDF paths are consumed by `<img>` / `<embed>` tags
+    // pointing at this route, so they come back as raw bytes with an
+    // image content-type REGARDLESS of what their content looks like.
+    // Without this gate an SVG (XML text) passes the editable-text
+    // content sniff below and ships as the editor's JSON envelope —
+    // making every `<img src=.../api/files/x.svg>` render broken
+    // while binary formats (png/jpg) work fine. FileClass::Image's
+    // own contract is read-only via `read` / `write_bytes`.
+    match chan_workspace::fs_ops::classify(path) {
+        chan_workspace::fs_ops::FileClass::Image | chan_workspace::fs_ops::FileClass::Pdf => {
+            return workspace.read(path).map(ReadFileResult::Binary);
+        }
+        _ => {}
+    }
     // `read_text_with_stat` applies the content-aware editable gate, so
     // an extensionless / odd-suffix text file (`.zshrc`, `*.service`)
     // reads as text here. A genuinely binary file fails the gate with
@@ -1196,6 +1210,30 @@ mod write_tests {
         match result {
             ReadFileResult::Binary(bytes) => assert_eq!(bytes, vec![0, 1, 2, 3]),
             ReadFileResult::Text { .. } => panic!("expected binary result"),
+        }
+    }
+
+    #[test]
+    fn read_file_sync_serves_svg_as_binary_despite_text_content() {
+        // An SVG is XML text and would pass the editable-text content
+        // sniff, but Image-class paths must come back as raw bytes so
+        // `<img src=/api/files/x.svg>` renders (the route pairs the
+        // Binary arm with content_type_for -> image/svg+xml). The
+        // editor never opens Image-class paths as text, so nothing
+        // loses the text view. Fragment-bearing embeds
+        // (`./x.svg#w=250`) never reach this layer: the widget strips
+        // the fragment from the fetch URL client-side.
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n";
+        std::fs::write(root.path().join("logo.svg"), svg).unwrap();
+
+        match read_file_sync(&workspace, "logo.svg").unwrap() {
+            ReadFileResult::Binary(bytes) => assert_eq!(bytes, svg.as_bytes()),
+            ReadFileResult::Text { .. } => panic!("svg must serve as raw bytes, not editor JSON"),
         }
     }
 
