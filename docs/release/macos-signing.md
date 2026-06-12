@@ -148,7 +148,7 @@ Notarization metadata that CI submits with each upload:
 | Field      | Value                       | Source                       |
 |------------|-----------------------------|------------------------------|
 | Team ID    | (from enrollment)           | Account page / cert name     |
-| Bundle ID  | `com.chanwriter.desktop`    | `src-tauri/tauri.conf.json`  |
+| Bundle ID  | `app.chan.desktop`          | `src-tauri/tauri.conf.json`  |
 | Profile    | `developer-id`              | `notarytool submit` flag     |
 
 The Team ID is also embedded at the end of the signing
