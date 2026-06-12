@@ -357,6 +357,15 @@
     return true;
   }
 
+  /// Re-measure without focusing. Used by FileEditorTab's keep-alive
+  /// host when this tab becomes active WITHOUT gaining keyboard focus
+  /// (flip-back, pane-mode exit, tab switch in a non-active pane):
+  /// the visibility flip alone fires no resize/focus event, so this
+  /// nudges CM6 to converge any viewport work deferred while hidden.
+  export function remeasure(): void {
+    view?.requestMeasure();
+  }
+
   /// Place caret at end of doc and focus. Used by InlineAssist after
   /// content insertion / paste so the user can keep typing.
   export function focusEnd(): void {

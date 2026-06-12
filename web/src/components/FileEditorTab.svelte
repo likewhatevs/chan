@@ -139,13 +139,20 @@
   // entries; Cmd+R + the pane hamburger are the canonical surfaces
   // for those.
 
-  // `focused` is true only when this editor's pane is the active pane.
-  // It gates the focus effect below so a global tab-focus pulse (or a
-  // remount on flip) never pulls the caret into a NON-active pane's
-  // editor. Pane.svelte derives it from `activePaneId`; defaults false
-  // for any other mount site.
-  let { tab, focused = false }: { tab: FileTab; focused?: boolean } =
-    $props();
+  // Keep-alive: Pane.svelte keeps every file tab mounted (terminal
+  // precedent) and flips `active` — true only when this tab is the
+  // pane's selected, front-facing, non-pane-mode tab. It drives the
+  // visibility CSS on the root below. `focused` additionally requires
+  // the pane to be the active pane; it gates the focus effect below so
+  // a global tab-focus pulse never pulls the caret into a NON-active
+  // pane's (or a hidden) editor, and feeds the editors' autoFocus so
+  // background mounts at session restore never steal the caret. Both
+  // default false for any other mount site.
+  let { tab, active = false, focused = false }: {
+    tab: FileTab;
+    active?: boolean;
+    focused?: boolean;
+  } = $props();
   let editorTabEl: HTMLDivElement | undefined = $state();
 
   // Editor refs so the outline body can call scrollToHeading /
@@ -173,6 +180,17 @@
       if (tab.mode === "wysiwyg") wysiwygRef?.focus();
       else sourceRef?.focus();
     });
+  });
+
+  // Active-flip recovery, mirroring TerminalTab: a kept-alive tab can
+  // become active WITHOUT gaining focus (flip-back, pane-mode exit, a
+  // tab switch in a non-active pane), so the focus effect above never
+  // runs. Nudge CM6 to re-measure so any viewport work deferred while
+  // hidden converges as soon as the tab is visible again.
+  $effect(() => {
+    if (!active) return;
+    wysiwygRef?.remeasure();
+    sourceRef?.remeasure();
   });
 
   // Hang-recovery via localStorage (editorBuffer.ts). A force-reload
@@ -747,7 +765,10 @@
 
 <div
   class="editor-tab"
+  class:active
   bind:this={editorTabEl}
+  role="tabpanel"
+  aria-hidden={!active}
   data-theme={surfaceThemeOverride("editor")}
 >
   {#if recoveredBuffer}
@@ -1199,246 +1220,261 @@
       <span class="error">{tab.error}</span>
     </div>
   {/if}
-  {#key tab.id}
-    {#if tab.fileMissing}
-      <div class="missing-file-state">
-        <div class="missing-title">File moved or deleted</div>
-        <div class="missing-path">{tab.fileMissing.path}</div>
+  {#if tab.fileMissing}
+    <div class="missing-file-state">
+      <div class="missing-title">File moved or deleted</div>
+      <div class="missing-path">{tab.fileMissing.path}</div>
+      {#if tab.fileMissing.suggestedPath}
+        <div class="missing-suggest">
+          Looks like it moved to
+          <code>{tab.fileMissing.suggestedPath}</code>
+        </div>
+      {/if}
+      <div class="missing-actions">
         {#if tab.fileMissing.suggestedPath}
-          <div class="missing-suggest">
-            Looks like it moved to
-            <code>{tab.fileMissing.suggestedPath}</code>
-          </div>
-        {/if}
-        <div class="missing-actions">
-          {#if tab.fileMissing.suggestedPath}
-            <button
-              type="button"
-              class="suggest-reopen"
-              onclick={doReopenAtSuggested}
-            >
-              <Folder size={15} strokeWidth={1.75} aria-hidden="true" />
-              <span>Re-open there</span>
-            </button>
-          {/if}
-          <button type="button" onclick={doReopenMissing}>
+          <button
+            type="button"
+            class="suggest-reopen"
+            onclick={doReopenAtSuggested}
+          >
             <Folder size={15} strokeWidth={1.75} aria-hidden="true" />
-            <span>Re-open</span>
+            <span>Re-open there</span>
           </button>
-          <button type="button" onclick={doFindMissing}>
-            <SearchIcon size={15} strokeWidth={1.75} aria-hidden="true" />
-            <span>Find</span>
-          </button>
-          <button type="button" onclick={doCloseTab}>
-            <X size={15} strokeWidth={1.75} aria-hidden="true" />
-            <span>Close</span>
-          </button>
-        </div>
+        {/if}
+        <button type="button" onclick={doReopenMissing}>
+          <Folder size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Re-open</span>
+        </button>
+        <button type="button" onclick={doFindMissing}>
+          <SearchIcon size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Find</span>
+        </button>
+        <button type="button" onclick={doCloseTab}>
+          <X size={15} strokeWidth={1.75} aria-hidden="true" />
+          <span>Close</span>
+        </button>
       </div>
-    {:else if tab.error}
-      <div class="placeholder error-placeholder">{tab.error}</div>
-    {:else}
-      <div class="editor-inspector-row">
-      {#if tab.outlineOpen}
-        <Inspector
-          title="Outline"
-          side="left"
-          bind:width={
-            () => tab.outlineWidth ?? paneWidths.outline,
-            (v) => (tab.outlineWidth = v)
-          }
-          onResize={persistPaneWidths}
-          onClose={() => setTabOutlineOpen(tab, false)}
-        >
-          <OutlineBody content={tab.content} {caretLine} onSelect={jumpTo} />
-        </Inspector>
-      {/if}
-      {#if tab.mode === "wysiwyg"}
-        <!-- Wysiwyg + floating style toolbar share a positioned
-             host so the toolbar can pin to the top-left of the
-             editor canvas. Without `position: relative` here the
-             absolute toolbar would escape to the next ancestor
-             (the pane) and end up over the tab strip. The find
-             bar shares the same host so it can pin to the
-             top-right of the same canvas. -->
-        <div
-          class="editor-host"
-          style:--editor-top-pad={tab.styleToolbarOpen ? "2.5rem" : "0.5rem"}
-          oncontextmenu={onEditorContext}
-          role="presentation"
-        >
-          <Wysiwyg
-            bind:this={wysiwygRef}
-            bind:value={tab.content}
-            readonly={readOnly}
-            highlightTrailingWhitespace={tab.highlightTrailingWhitespace}
-            initialCaret={tab.caret ?? null}
-            onCaretChange={(from, to) => setTabCaret(tab, from, to)}
-            onSelectionChange={() => (selVer = selVer + 1)}
-            wikiPickerPrefix={tab.repoRoot}
-            currentPath={tab.path}
-            onWikiClick={(args) => {
-              // Navigation: click on a wikilink pill opens the
-              // target in the active pane (or a new pane on Cmd /
-              // Ctrl click).
-              void openInActivePane(args.target);
-            }}
-            onTagClick={(name) => openGraphForTag(`#${name}`, name)}
-            onMentionClick={(args) => {
-              // Mention widget resolved the contact via api.contacts
-              // and (in read-only contexts) already opened the preview
-              // popover. We get here on commit (Cmd/Ctrl+Enter from
-              // the popover) or on a writable plain click. A resolved
-              // contact opens its file; a standalone `@@name` with no
-              // contact file routes to the mention lens (focused graph
-              // around the `@@Name` meta-node), mirroring how a tag
-              // pill opens the tag lens.
-              if (args.path) void openInActivePane(args.path);
-              else openGraphForMention(`@@${args.name}`, args.name);
-            }}
-          />
-          {#if tab.styleToolbarOpen}
-            <!-- Parity with the team-work toolbar: separator +
-                 rendered/source toggle next to the formatting
-                 buttons. `mode` + `onModeToggle` pass through to the
-                 shared StyleToolbar component (the toggle is gated on
-                 these props being defined). The toggle calls
-                 `doToggleMode()` which swaps between source and the
-                 tab's rendered mode (wysiwyg / pretty / table). -->
-            <StyleToolbar
-              wysiwyg={wysiwygRef}
-              selVer={selVer}
-              disabled={readOnly}
-              mode="wysiwyg"
-              onModeToggle={hasRenderedMode ? () => doToggleMode() : undefined}
-            />
-          {/if}
-          {#if tab.find?.open}
-            <FindBar
-              find={tab.find}
-              adapter={findAdapter}
-              docText={tab.content}
-              tabId={tab.id}
-            />
-          {/if}
-        </div>
-      {:else if tab.mode === "pretty"}
-        <!-- Pretty / structured renderer (JSON tree today). The
-             buffer stays authoritative; we don't mount FindBar
-             here because the renderer is read-only -- edits happen
-             in source mode. -->
-        <div
-          class="editor-host"
-          oncontextmenu={onEditorContext}
-          role="presentation"
-        >
-          <JsonPretty value={tab.content} />
-        </div>
-      {:else if tab.mode === "table"}
-        <!-- Tabular renderer (CSV / TSV). Cell commits flow back
-             through the bound value prop; the autosave debouncer
-             picks them up like any other text edit. -->
-        <div
-          class="editor-host"
-          oncontextmenu={onEditorContext}
-          role="presentation"
-        >
-          <CsvTable
-            bind:value={tab.content}
-            delimiter={csvDelimiter(tab.path)}
-            readonly={readOnly}
-          />
-        </div>
-      {:else}
-        <!-- Source mode gets its own positioned host so FindBar
-             can pin to the same top-right spot it occupies in the
-             Wysiwyg view. -->
-        <div
-          class="editor-host"
-          oncontextmenu={onEditorContext}
-          role="presentation"
-        >
-          <Source
-            bind:this={sourceRef}
-            bind:value={tab.content}
-            path={tab.path}
-            readonly={readOnly}
-            syntaxHighlight={tab.syntaxHighlight}
-            highlightTrailingWhitespace={tab.highlightTrailingWhitespace}
-            initialCaret={tab.caret ?? null}
-            onCaretChange={(from, to) => setTabCaret(tab, from, to)}
-          />
-          {#if tab.styleToolbarOpen && hasRenderedMode}
-            <!-- Also mount the StyleToolbar in source mode so the
-                 rendered/source toggle stays reachable from inside
-                 source mode. `disabled` is on (the formatting row
-                 collapses) but the toggle sits OUTSIDE the formatting
-                 row (see the StyleToolbar's own design comment around
-                 its `.fbtn-row`) and stays clickable. Only mount for
-                 tabs with a rendered mode (markdown / JSON / CSV);
-                 plain `.py` / `.toml` source has no rendered
-                 counterpart, so there's no useful toggle
-                 direction. -->
-            <StyleToolbar
-              wysiwyg={undefined}
-              selVer={selVer}
-              disabled={true}
-              mode="source"
-              onModeToggle={() => doToggleMode()}
-            />
-          {/if}
-          {#if tab.find?.open}
-            <FindBar
-              find={tab.find}
-              adapter={findAdapter}
-              docText={tab.content}
-              tabId={tab.id}
-            />
-          {/if}
-        </div>
-      {/if}
-      {#if tab.inspectorOpen}
-        <Inspector
-          title="Details"
-          bind:width={
-            () => tab.inspectorWidth ?? paneWidths.inspector,
-            (v) => (tab.inspectorWidth = v)
-          }
-          onResize={persistPaneWidths}
-          onClose={() => setTabInspectorOpen(tab, false)}
-        >
-          <FileInfoBody
-            path={tab.path}
-            showRefs
-            onNavigate={(p) => void openInActivePane(p)}
-            onReveal={revealInBrowser}
-            onSetAsScope={() => openFsGraphForFile(tab.path)}
-          />
-        </Inspector>
-      {/if}
-      </div>
-      {#if tab.mode === "wysiwyg"}
-        <WikiStatusBar
-          path={tab.path}
-          content={tab.content}
-          fsWritable={tab.fsWritable}
-          bind:readMode={tab.readMode}
-        />
-      {/if}
+    </div>
+  {:else if tab.error}
+    <div class="placeholder error-placeholder">{tab.error}</div>
+  {:else}
+    <div class="editor-inspector-row">
+    {#if tab.outlineOpen}
+      <Inspector
+        title="Outline"
+        side="left"
+        bind:width={
+          () => tab.outlineWidth ?? paneWidths.outline,
+          (v) => (tab.outlineWidth = v)
+        }
+        onResize={persistPaneWidths}
+        onClose={() => setTabOutlineOpen(tab, false)}
+      >
+        <OutlineBody content={tab.content} {caretLine} onSelect={jumpTo} />
+      </Inspector>
     {/if}
-  {/key}
+    {#if tab.mode === "wysiwyg"}
+      <!-- Wysiwyg + floating style toolbar share a positioned
+           host so the toolbar can pin to the top-left of the
+           editor canvas. Without `position: relative` here the
+           absolute toolbar would escape to the next ancestor
+           (the pane) and end up over the tab strip. The find
+           bar shares the same host so it can pin to the
+           top-right of the same canvas. -->
+      <div
+        class="editor-host"
+        style:--editor-top-pad={tab.styleToolbarOpen ? "2.5rem" : "0.5rem"}
+        oncontextmenu={onEditorContext}
+        role="presentation"
+      >
+        <Wysiwyg
+          bind:this={wysiwygRef}
+          bind:value={tab.content}
+          autoFocus={focused}
+          readonly={readOnly}
+          highlightTrailingWhitespace={tab.highlightTrailingWhitespace}
+          initialCaret={tab.caret ?? null}
+          onCaretChange={(from, to) => setTabCaret(tab, from, to)}
+          onSelectionChange={() => (selVer = selVer + 1)}
+          wikiPickerPrefix={tab.repoRoot}
+          currentPath={tab.path}
+          onWikiClick={(args) => {
+            // Navigation: click on a wikilink pill opens the
+            // target in the active pane (or a new pane on Cmd /
+            // Ctrl click).
+            void openInActivePane(args.target);
+          }}
+          onTagClick={(name) => openGraphForTag(`#${name}`, name)}
+          onMentionClick={(args) => {
+            // Mention widget resolved the contact via api.contacts
+            // and (in read-only contexts) already opened the preview
+            // popover. We get here on commit (Cmd/Ctrl+Enter from
+            // the popover) or on a writable plain click. A resolved
+            // contact opens its file; a standalone `@@name` with no
+            // contact file routes to the mention lens (focused graph
+            // around the `@@Name` meta-node), mirroring how a tag
+            // pill opens the tag lens.
+            if (args.path) void openInActivePane(args.path);
+            else openGraphForMention(`@@${args.name}`, args.name);
+          }}
+        />
+        {#if tab.styleToolbarOpen}
+          <!-- Parity with the team-work toolbar: separator +
+               rendered/source toggle next to the formatting
+               buttons. `mode` + `onModeToggle` pass through to the
+               shared StyleToolbar component (the toggle is gated on
+               these props being defined). The toggle calls
+               `doToggleMode()` which swaps between source and the
+               tab's rendered mode (wysiwyg / pretty / table). -->
+          <StyleToolbar
+            wysiwyg={wysiwygRef}
+            selVer={selVer}
+            disabled={readOnly}
+            mode="wysiwyg"
+            onModeToggle={hasRenderedMode ? () => doToggleMode() : undefined}
+          />
+        {/if}
+        {#if tab.find?.open}
+          <FindBar
+            find={tab.find}
+            adapter={findAdapter}
+            docText={tab.content}
+            tabId={tab.id}
+          />
+        {/if}
+      </div>
+    {:else if tab.mode === "pretty"}
+      <!-- Pretty / structured renderer (JSON tree today). The
+           buffer stays authoritative; we don't mount FindBar
+           here because the renderer is read-only -- edits happen
+           in source mode. -->
+      <div
+        class="editor-host"
+        oncontextmenu={onEditorContext}
+        role="presentation"
+      >
+        <JsonPretty value={tab.content} />
+      </div>
+    {:else if tab.mode === "table"}
+      <!-- Tabular renderer (CSV / TSV). Cell commits flow back
+           through the bound value prop; the autosave debouncer
+           picks them up like any other text edit. -->
+      <div
+        class="editor-host"
+        oncontextmenu={onEditorContext}
+        role="presentation"
+      >
+        <CsvTable
+          bind:value={tab.content}
+          delimiter={csvDelimiter(tab.path)}
+          readonly={readOnly}
+        />
+      </div>
+    {:else}
+      <!-- Source mode gets its own positioned host so FindBar
+           can pin to the same top-right spot it occupies in the
+           Wysiwyg view. -->
+      <div
+        class="editor-host"
+        oncontextmenu={onEditorContext}
+        role="presentation"
+      >
+        <Source
+          bind:this={sourceRef}
+          bind:value={tab.content}
+          autoFocus={focused}
+          path={tab.path}
+          readonly={readOnly}
+          syntaxHighlight={tab.syntaxHighlight}
+          highlightTrailingWhitespace={tab.highlightTrailingWhitespace}
+          initialCaret={tab.caret ?? null}
+          onCaretChange={(from, to) => setTabCaret(tab, from, to)}
+        />
+        {#if tab.styleToolbarOpen && hasRenderedMode}
+          <!-- Also mount the StyleToolbar in source mode so the
+               rendered/source toggle stays reachable from inside
+               source mode. `disabled` is on (the formatting row
+               collapses) but the toggle sits OUTSIDE the formatting
+               row (see the StyleToolbar's own design comment around
+               its `.fbtn-row`) and stays clickable. Only mount for
+               tabs with a rendered mode (markdown / JSON / CSV);
+               plain `.py` / `.toml` source has no rendered
+               counterpart, so there's no useful toggle
+               direction. -->
+          <StyleToolbar
+            wysiwyg={undefined}
+            selVer={selVer}
+            disabled={true}
+            mode="source"
+            onModeToggle={() => doToggleMode()}
+          />
+        {/if}
+        {#if tab.find?.open}
+          <FindBar
+            find={tab.find}
+            adapter={findAdapter}
+            docText={tab.content}
+            tabId={tab.id}
+          />
+        {/if}
+      </div>
+    {/if}
+    {#if tab.inspectorOpen}
+      <Inspector
+        title="Details"
+        bind:width={
+          () => tab.inspectorWidth ?? paneWidths.inspector,
+          (v) => (tab.inspectorWidth = v)
+        }
+        onResize={persistPaneWidths}
+        onClose={() => setTabInspectorOpen(tab, false)}
+      >
+        <FileInfoBody
+          path={tab.path}
+          showRefs
+          onNavigate={(p) => void openInActivePane(p)}
+          onReveal={revealInBrowser}
+          onSetAsScope={() => openFsGraphForFile(tab.path)}
+        />
+      </Inspector>
+    {/if}
+    </div>
+    {#if tab.mode === "wysiwyg"}
+      <WikiStatusBar
+        path={tab.path}
+        content={tab.content}
+        fsWritable={tab.fsWritable}
+        bind:readMode={tab.readMode}
+      />
+    {/if}
+  {/if}
 </div>
 
 
 <style>
+  /* Keep-alive contract, copied from .terminal-tab: every file tab in
+     the pane stays mounted; inactive ones hide via visibility (NEVER
+     display:none) so CM6 keeps real layout geometry while hidden and
+     a re-shown editor never recomputes decorations from a pre-layout
+     viewport (the WKWebView raw-markdown flash). pointer-events: none
+     keeps hidden editors out of hit-testing (clicks, OS-file drop
+     targets). No `flex: 1` any more: the host is absolutely positioned
+     in the pane's .face.front now, not a flex child. */
   .editor-tab {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    flex: 1;
     min-height: 0;
     min-width: 0;
     background: var(--bg);
     color: var(--text);
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .editor-tab.active {
+    visibility: visible;
+    pointer-events: auto;
   }
   /* Hang-recovery banner. Sits at the very top of the editor-tab
      body, above the menu bubble + the editor host. Uses the

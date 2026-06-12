@@ -22,8 +22,11 @@ import indexingStatus from "../state/indexingStatus.svelte.ts?raw";
 // and Pane.svelte feeds it `activePaneId === pane.id`.
 describe("FileEditorTab focus follows the active pane", () => {
   test("declares a `focused` prop (defaulting false for non-pane hosts)", () => {
+    // `active` joined `focused` with the keep-alive change (see
+    // paneFileTabKeepAlive.test.ts); both default false so non-pane
+    // hosts stay hidden-safe and never pull focus.
     expect(fileEditorTab).toMatch(
-      /let \{ tab, focused = false \}: \{ tab: FileTab; focused\?: boolean \} =\s*\$props\(\);/,
+      /let \{ tab, active = false, focused = false \}: \{\s*tab: FileTab;\s*active\?: boolean;\s*focused\?: boolean;\s*\} = \$props\(\);/,
     );
   });
 
@@ -39,12 +42,13 @@ describe("FileEditorTab focus follows the active pane", () => {
 
   test("Pane.svelte gates FileEditorTab focus on active pane AND front-facing", () => {
     // The two-face card keeps the editor mounted on the rotated-away
-    // front face while flipped, so the focus gate gained `&&
-    // !pane.showingBack`: a flipped pane's editor must not pull DOM focus
-    // from the back config (it also mirrors the terminal gates and keeps
-    // the inert front face free of a focused descendant).
+    // front face while flipped, so the focus gate carries
+    // `!pane.showingBack`: a flipped pane's editor must not pull DOM
+    // focus from the back config. With the keep-alive each-block (see
+    // paneFileTabKeepAlive.test.ts) the gate also short-circuits on
+    // pane mode and on non-active sibling tabs, mirroring terminals.
     expect(pane).toMatch(
-      /<FileEditorTab\s+tab=\{active\}\s+focused=\{viewLayout\.activePaneId === pane\.id && !pane\.showingBack\}\s*\/>/,
+      /<FileEditorTab\s+tab=\{t\}\s+active=\{[^}]*\}\s+focused=\{!paneMode\.active && !pane\.showingBack && t\.id === pane\.activeTabId && viewLayout\.activePaneId === pane\.id\}\s*\/>/,
     );
   });
 });

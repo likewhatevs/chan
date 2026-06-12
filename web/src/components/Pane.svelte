@@ -1398,16 +1398,6 @@
                         : "no active tab"}
             </div>
           </div>
-        {:else if active?.kind === "file"}
-          <!-- `focused` gains `&& !pane.showingBack`: the editor stays
-               mounted on the (rotated-away) front face while flipped, so
-               it must not pull DOM focus from the back config. Mirrors
-               the terminal gates below; the inert front face also blocks
-               focus, this keeps the focus-follow intent explicit. -->
-          <FileEditorTab
-            tab={active}
-            focused={viewLayout.activePaneId === pane.id && !pane.showingBack}
-          />
         {:else if active?.kind === "graph"}
           <GraphPanel
             tab={active}
@@ -1468,6 +1458,26 @@
           <TerminalTab
             tab={t}
             paneId={pane.id}
+            active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
+            focused={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
+          />
+        {/each}
+        <!--
+          File tabs are kept mounted for the same reason as terminals
+          above: unmounting destroys the CM6 EditorView, and on remount
+          the decoration walker computes from a pre-layout viewport —
+          on WKWebView the document then shows raw un-decorated
+          markdown until a click, and scroll/caret/undo/FindBar state
+          is rebuilt from scratch. Keeping the editor alive (hidden via
+          the same visibility contract, never display:none, so layout
+          geometry stays real) removes that whole race category. The
+          inactive `active`/`focused` gates mirror the terminal ones;
+          `focused` additionally feeds the editors' autoFocus so a
+          session restore of N background tabs never steals the caret.
+        -->
+        {#each pane.tabs.filter((t) => t.kind === "file") as t (t.id)}
+          <FileEditorTab
+            tab={t}
             active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
             focused={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
           />

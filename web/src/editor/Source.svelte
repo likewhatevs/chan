@@ -153,6 +153,15 @@
     return true;
   }
 
+  /// Re-measure without focusing. Used by FileEditorTab's keep-alive
+  /// host when this tab becomes active WITHOUT gaining keyboard focus
+  /// (flip-back, pane-mode exit, tab switch in a non-active pane):
+  /// the visibility flip alone fires no resize/focus event, so this
+  /// nudges CM6 to converge any viewport work deferred while hidden.
+  export function remeasure(): void {
+    view?.requestMeasure();
+  }
+
   /// Place caret at a specific document offset and focus. Used by
   /// prompt surfaces that programmatically seed text before the
   /// editor mounts.
