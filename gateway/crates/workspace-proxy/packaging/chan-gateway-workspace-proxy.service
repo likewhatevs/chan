@@ -1,6 +1,6 @@
 [Unit]
 Description=chan-gateway workspace-proxy service (workspace.chan.app)
-Documentation=https://github.com/chan-writer/chan-gateway
+Documentation=https://github.com/fiorix/chan/tree/main/gateway
 After=network-online.target postgresql.service chan-gateway-profile.service
 Wants=network-online.target chan-gateway-profile.service
 
