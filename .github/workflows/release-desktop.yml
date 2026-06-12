@@ -36,6 +36,16 @@ jobs:
         with:
           workspaces: chan
 
+      # Match release.yml: window chrome follows the linked SDK, so
+      # build against the newest Xcode on the image (the default is
+      # older and ships the legacy opaque titlebar).
+      - if: matrix.os == 'macos-latest'
+        name: Select newest Xcode (window chrome follows the linked SDK)
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -n 1)"
+          xcodebuild -version
+          xcrun --show-sdk-version
+
       - uses: actions/setup-node@v6
         with:
           node-version: '20'

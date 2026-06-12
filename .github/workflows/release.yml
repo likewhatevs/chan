@@ -471,6 +471,18 @@ jobs:
         with:
           workspaces: chan
 
+      # macOS window chrome follows the SDK the binary was LINKED
+      # against: the runner's default Xcode is older than current, so
+      # the shipped app rendered the legacy opaque titlebar while a
+      # local build (current Xcode) gets the modern unified look.
+      # Select the newest Xcode on the image and log the SDK so a
+      # regression is visible in the build log.
+      - name: Select newest Xcode (window chrome follows the linked SDK)
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -n 1)"
+          xcodebuild -version
+          xcrun --show-sdk-version
+
       - uses: actions/setup-node@v6
         with:
           node-version: '20'
