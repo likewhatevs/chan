@@ -5,7 +5,7 @@
 # without re-typing Apple ID / team ID / app-specific password.
 #
 # Sources the app-specific password from the `chan-notary` generic-
-# password item already in @@Alex's Keychain (same item
+# password item already in the maintainer's Keychain (same item
 # populate-apple-secrets.sh reads to push the APPLE_PASSWORD GitHub
 # Actions secret). Apple ID + team ID match the constants in
 # populate-apple-secrets.sh; update both files together if values

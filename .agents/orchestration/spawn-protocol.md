@@ -3,7 +3,7 @@
 chan-server exposes an HTTP control channel for creating
 named terminal tabs, executing agent CLIs inside them,
 and managing their lifecycle. The intended caller is an
-orchestrating agent (e.g. an `@@Architect` running
+orchestrating agent (e.g. a team `@@Lead` running
 inside a chan terminal) that needs to spawn helper
 agents on demand.
 
@@ -88,7 +88,7 @@ watcher directory:
   "id": "<unique>",
   "type": "pre-flight",
   "from": "@@AgentName",
-  "to": "@@Architect",
+  "to": "@@Lead",
   "topic": "spawn-pre-flight",
   "questions": [
     {

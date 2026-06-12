@@ -3,11 +3,11 @@
 # repo's GitHub Actions Secrets, sourcing values from the local
 # macOS Keychain.
 #
-# Per the ci-3 brief (docs/release/macos-signing.md), release CI consumes
+# Per docs/release/macos-signing.md, release CI consumes
 # these six secrets to build + sign + notarize the chan-desktop DMG on an
 # approved vX.Y.Z release cut.
 #
-# This script is the one-shot setup helper @@Alex runs ONCE after
+# This script is the one-shot setup helper the maintainer runs ONCE after
 # their local Keychain has:
 #  - the Developer ID Application cert + private key imported
 #  - a generic Keychain item named `chan-notary` storing the
@@ -20,10 +20,10 @@
 #
 # Prereqs:
 #  - `gh` CLI installed + authenticated (gh auth status -> ✓)
-#  - macOS Keychain unlocked (default when @@Alex is logged in)
+#  - macOS Keychain unlocked (default when logged in)
 #  - The cert + chan-notary item already in the Keychain
 #
-# Macros below are CURRENT values from @@Alex's setup as of
+# Macros below are CURRENT values from the maintainer's setup as of
 # 2026-05-21. Update before running if any change.
 
 set -euo pipefail
