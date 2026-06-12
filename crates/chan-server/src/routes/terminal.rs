@@ -142,6 +142,14 @@ enum ClientFrame {
         data: String,
         #[serde(default)]
         agent: Option<String>,
+        /// Client-generated message id. When present the server acks the
+        /// enqueue (`prompt-ack`) and emits `prompt-delivered` when the
+        /// message's LAST write reaches the PTY, so the Rich Prompt can keep
+        /// the text visible until the agent consumes it. Absent = legacy
+        /// fire-and-forget (the team orchestrator's lead-identity prompt
+        /// stays untagged).
+        #[serde(default)]
+        id: Option<String>,
     },
 }
 
@@ -154,6 +162,10 @@ enum ServerFrame {
         seq: u64,
         missed_bytes: u64,
         bytes_since_focus: u64,
+        /// MESSAGE depth of the shared write queue at attach time (a gemini
+        /// text+chord pair counts once), so every (re)attach re-syncs the
+        /// SPA's queue badge.
+        queue_depth: usize,
     },
     #[serde(rename = "activity")]
     Activity { bytes_since_focus: u64 },
@@ -185,6 +197,27 @@ enum ServerFrame {
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<&'static str>,
     },
+    /// Ack for a tagged `prompt` frame, sent inline on the same socket.
+    /// `queued` says whether the WHOLE message fit the queue
+    /// (all-or-nothing); `depth` is the message depth after the push — the
+    /// message's 1-based position — on accept, or the unchanged depth on
+    /// reject.
+    #[serde(rename = "prompt-ack")]
+    PromptAck {
+        id: String,
+        queued: bool,
+        depth: usize,
+    },
+    /// A tagged message's LAST write reached the PTY; `depth` is the
+    /// remaining message depth. Broadcast to every attached socket —
+    /// non-owners ignore the unknown id but still read the depth.
+    #[serde(rename = "prompt-delivered")]
+    PromptDelivered { id: String, depth: usize },
+    /// MESSAGE depth of the shared write queue changed (an enqueue on either
+    /// path, or a message fully drained). Absolute count — idempotent under
+    /// duplicates, multi-window safe.
+    #[serde(rename = "queue")]
+    Queue { depth: usize },
 }
 
 pub async fn api_terminal_ws(
@@ -566,6 +599,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
             seq: session.seq,
             missed_bytes: session.missed_bytes,
             bytes_since_focus: session.bytes_since_focus(),
+            queue_depth: session.queue_depth(),
         },
     )
     .await;
@@ -650,7 +684,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 let id = session.id().to_owned();
                                 state.terminal_sessions.close(&id, CloseReason::Explicit);
                             }
-                            Ok(ClientFrame::Prompt { data, agent }) => {
+                            Ok(ClientFrame::Prompt { data, agent, id }) => {
                                 // Rich Prompt bubble: append the target agent's
                                 // submit chord (default claude when omitted),
                                 // then ENQUEUE onto the shared write queue so it
@@ -664,9 +698,29 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 // a newline); submit_writes returns two writes
                                 // for gemini, one for everyone else. Each
                                 // enqueued item drains idle-gated, so the CR
-                                // lands as a distinct keypress.
-                                for write in submit_writes(data, submit) {
-                                    let _ = session.enqueue_write(write.as_bytes());
+                                // lands as a distinct keypress. The list goes
+                                // in as ONE all-or-nothing message: a partial
+                                // push at the cap would deliver a body whose
+                                // chord was silently dropped.
+                                let writes: Vec<Vec<u8>> = submit_writes(data, submit)
+                                    .into_iter()
+                                    .map(String::into_bytes)
+                                    .collect();
+                                let outcome = session.enqueue_prompt(&writes, id.clone());
+                                if let Some(id) = id {
+                                    let frame = match outcome {
+                                        Some(depth) => ServerFrame::PromptAck {
+                                            id,
+                                            queued: true,
+                                            depth,
+                                        },
+                                        None => ServerFrame::PromptAck {
+                                            id,
+                                            queued: false,
+                                            depth: session.queue_depth(),
+                                        },
+                                    };
+                                    let _ = send_frame(&mut socket, frame).await;
                                 }
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
@@ -697,6 +751,16 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                     }
                     Ok(SessionEvent::Activity { bytes_since_focus }) => {
                         if send_frame(&mut socket, ServerFrame::Activity { bytes_since_focus }).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(SessionEvent::QueueDepth(depth)) => {
+                        if send_frame(&mut socket, ServerFrame::Queue { depth }).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(SessionEvent::PromptDelivered { id, depth }) => {
+                        if send_frame(&mut socket, ServerFrame::PromptDelivered { id, depth }).await.is_err() {
                             break;
                         }
                     }
@@ -1018,29 +1082,82 @@ mod tests {
     }
 
     #[test]
-    fn client_frame_prompt_decodes_with_optional_agent() {
-        // The Rich Prompt contract: { type: "prompt", data, agent? }.
+    fn client_frame_prompt_decodes_with_optional_agent_and_id() {
+        // The Rich Prompt contract: { type: "prompt", data, agent?, id? }.
         // A Rust rename of the tag / fields would break the bubble's wire at
         // runtime with a green build, so pin the decode.
-        let with_agent: ClientFrame =
-            serde_json::from_str(r#"{"type":"prompt","data":"hi","agent":"codex"}"#).unwrap();
-        match with_agent {
-            ClientFrame::Prompt { data, agent } => {
+        let tagged: ClientFrame =
+            serde_json::from_str(r#"{"type":"prompt","data":"hi","agent":"codex","id":"u-1"}"#)
+                .unwrap();
+        match tagged {
+            ClientFrame::Prompt { data, agent, id } => {
                 assert_eq!(data, "hi");
                 assert_eq!(agent.as_deref(), Some("codex"));
+                assert_eq!(id.as_deref(), Some("u-1"));
             }
             other => panic!("expected Prompt, got {other:?}"),
         }
-        // agent omitted -> None (the handler defaults the chord to claude).
-        let no_agent: ClientFrame =
-            serde_json::from_str(r#"{"type":"prompt","data":"yo"}"#).unwrap();
-        match no_agent {
-            ClientFrame::Prompt { data, agent } => {
+        // agent and id omitted -> None (chord defaults to claude; no id
+        // means legacy fire-and-forget: no ack, no delivered event — the
+        // team orchestrator's lead-identity prompt depends on this).
+        let bare: ClientFrame = serde_json::from_str(r#"{"type":"prompt","data":"yo"}"#).unwrap();
+        match bare {
+            ClientFrame::Prompt { data, agent, id } => {
                 assert_eq!(data, "yo");
                 assert!(agent.is_none());
+                assert!(id.is_none());
             }
             other => panic!("expected Prompt, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn server_frame_queue_wire_shapes() {
+        // The SPA's frame handler switches on these exact tags + field
+        // names; a Rust rename would break the wire at runtime with a green
+        // build, so pin the serialized JSON byte-for-byte.
+        let ack_queued = ServerFrame::PromptAck {
+            id: "u-1".into(),
+            queued: true,
+            depth: 2,
+        };
+        assert_eq!(
+            serde_json::to_string(&ack_queued).unwrap(),
+            r#"{"type":"prompt-ack","id":"u-1","queued":true,"depth":2}"#
+        );
+        let ack_rejected = ServerFrame::PromptAck {
+            id: "u-2".into(),
+            queued: false,
+            depth: 100,
+        };
+        assert_eq!(
+            serde_json::to_string(&ack_rejected).unwrap(),
+            r#"{"type":"prompt-ack","id":"u-2","queued":false,"depth":100}"#
+        );
+        let delivered = ServerFrame::PromptDelivered {
+            id: "u-1".into(),
+            depth: 1,
+        };
+        assert_eq!(
+            serde_json::to_string(&delivered).unwrap(),
+            r#"{"type":"prompt-delivered","id":"u-1","depth":1}"#
+        );
+        let queue = ServerFrame::Queue { depth: 3 };
+        assert_eq!(
+            serde_json::to_string(&queue).unwrap(),
+            r#"{"type":"queue","depth":3}"#
+        );
+        let session = ServerFrame::Session {
+            id: "abc".into(),
+            seq: 7,
+            missed_bytes: 0,
+            bytes_since_focus: 0,
+            queue_depth: 2,
+        };
+        assert_eq!(
+            serde_json::to_string(&session).unwrap(),
+            r#"{"type":"session","id":"abc","seq":7,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":2}"#
+        );
     }
 
     #[test]

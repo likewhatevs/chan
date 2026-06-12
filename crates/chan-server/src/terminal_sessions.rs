@@ -219,11 +219,25 @@ impl CloseReason {
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     Output(Vec<u8>),
-    Activity { bytes_since_focus: u64 },
+    Activity {
+        bytes_since_focus: u64,
+    },
     Resize(PtySize),
     Exit(u32),
     Error(String),
     Closed(CloseReason),
+    /// The write queue's MESSAGE depth changed (an enqueue on either path,
+    /// or a message's tail drained). The depth is the absolute message count
+    /// (see [`QueuedWrite::tail`]), so consumers stay idempotent under
+    /// duplicate events and multi-window attaches.
+    QueueDepth(usize),
+    /// A Rich Prompt message's LAST write reached the PTY. `depth` is the
+    /// message depth of the remainder, broadcast just before the matching
+    /// `QueueDepth` so a consumer resolving `id` already has the new count.
+    PromptDelivered {
+        id: String,
+        depth: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -246,14 +260,22 @@ impl AttachHandle {
         self.session.send_input(data);
     }
 
-    /// Enqueue `data` onto this session's `cs terminal write` FIFO instead of
-    /// writing it straight to the PTY. The Rich Prompt bubble's WS `prompt`
-    /// frame uses this so bubble prompts and CLI pokes share ONE queue + one
-    /// drain (the drain appends nothing; `data` already carries the submit
-    /// chord the caller chose). Returns the queue position, or `None` when
-    /// the queue is at `WRITE_QUEUE_CAP`.
-    pub fn enqueue_write(&self, data: &[u8]) -> Option<usize> {
-        self.session.enqueue_write(data)
+    /// Enqueue a Rich Prompt message onto this session's `cs terminal write`
+    /// FIFO instead of writing it straight to the PTY, so bubble prompts and
+    /// CLI pokes share ONE queue + one drain (the drain appends nothing;
+    /// `writes` is the ordered `submit_writes` list, chord included). The
+    /// whole message is all-or-nothing at the cap. Returns the message depth
+    /// after the push (the message's 1-based position), or `None` when the
+    /// message does not fit.
+    pub fn enqueue_prompt(&self, writes: &[Vec<u8>], prompt_id: Option<String>) -> Option<usize> {
+        self.session.enqueue_prompt(writes, prompt_id)
+    }
+
+    /// Current MESSAGE depth of this session's write queue (a gemini
+    /// text+chord pair counts once), for the `session` frame's depth re-sync
+    /// on every (re)attach.
+    pub fn queue_depth(&self) -> usize {
+        self.session.queue_depth()
     }
 
     pub fn resize(&self, size: PtySize) {
@@ -955,6 +977,31 @@ impl Drop for Registry {
     }
 }
 
+/// One entry in a session's write FIFO. A `cs terminal write` poke enqueues
+/// a single untagged tail entry; a Rich Prompt submit enqueues every write
+/// `submit_writes` produced (two for gemini, one otherwise) under one
+/// `prompt_id`, all-or-nothing.
+#[derive(Debug)]
+struct QueuedWrite {
+    /// Raw PTY bytes (the submit chord, if any, is already appended).
+    data: Vec<u8>,
+    /// Rich Prompt message id (`None` for `cs terminal write` pokes). Tagged
+    /// on EVERY write of the message, not just the tail, so a future
+    /// cancel-by-id is a pure retain-filter (documented v2).
+    prompt_id: Option<String>,
+    /// True on a message's FINAL write (every single-write message, and the
+    /// gemini chord). Depth counts tails; `PromptDelivered` fires on a
+    /// tagged tail's drain.
+    tail: bool,
+}
+
+/// Message depth of a write queue: the count of TAIL entries. A multi-write
+/// message contributes exactly one tail, so this counts messages, not raw
+/// writes — a queued gemini text+chord pair reads as ONE pending message.
+fn msg_depth(q: &VecDeque<QueuedWrite>) -> usize {
+    q.iter().filter(|w| w.tail).count()
+}
+
 #[derive(Debug)]
 struct Session {
     id: String,
@@ -974,12 +1021,14 @@ struct Session {
     /// bumps on input). The `cs terminal write` queue drains only when this
     /// has been quiet for `WRITE_QUEUE_QUIET_MS` (the agent is idle).
     last_output_at: AtomicI64,
-    /// FIFO of pending `cs terminal write` payloads for this session, drained
-    /// one at a time when the agent is idle. Each payload is the raw bytes
-    /// the CLI sent (the submit chord, if any, is already appended by
-    /// `--submit`). Bounded at `WRITE_QUEUE_CAP`; dropped on session recycle
-    /// (the session, and this queue with it, is replaced on restart/close).
-    write_queue: Mutex<VecDeque<Vec<u8>>>,
+    /// FIFO of pending writes for this session — `cs terminal write` pokes
+    /// and Rich Prompt messages share it — drained one entry at a time when
+    /// the agent is idle. Each entry carries raw PTY bytes plus message
+    /// tagging (see [`QueuedWrite`]). Bounded at `WRITE_QUEUE_CAP` raw
+    /// entries; dropped on session recycle (the session, and this queue with
+    /// it, is replaced on restart/close — attached clients get Closed/Exit
+    /// and re-sync their queue depth from the next attach's session frame).
+    write_queue: Mutex<VecDeque<QueuedWrite>>,
     /// Millis of the drainer's last delivery (0 when nothing is pending), to
     /// time the await-generation-start window after a deliver.
     last_deliver_at: AtomicI64,
@@ -1288,31 +1337,95 @@ impl Session {
         if now_ms - last_output < WRITE_QUEUE_QUIET_MS {
             return;
         }
-        let next = self
-            .write_queue
-            .lock()
-            .expect("terminal write queue poisoned")
-            .pop_front();
-        if let Some(data) = next {
-            self.send_input(&data);
+        let next = {
+            let mut q = self
+                .write_queue
+                .lock()
+                .expect("terminal write queue poisoned");
+            // Capture the remainder's message depth under the same lock so
+            // the broadcast below (outside the guard) carries a count that
+            // matches exactly this pop.
+            q.pop_front().map(|write| (write, msg_depth(&q)))
+        };
+        if let Some((write, depth)) = next {
+            self.send_input(&write.data);
             self.last_deliver_at.store(now_ms, Ordering::Relaxed);
             self.awaiting_gen.store(true, Ordering::Relaxed);
+            // Only a TAIL drain completes a message; a gemini body drain
+            // leaves its message pending until the chord lands, so it emits
+            // nothing (the message depth did not change).
+            if write.tail {
+                if let Some(id) = write.prompt_id {
+                    self.broadcast(SessionEvent::PromptDelivered { id, depth });
+                }
+                self.broadcast(SessionEvent::QueueDepth(depth));
+            }
         }
     }
 
-    /// Push a `cs terminal write` payload onto this session's FIFO. Returns
-    /// the queue length after the push (the caller's position), or `None`
-    /// when the queue is already at `WRITE_QUEUE_CAP` (the write is dropped).
+    /// Push a `cs terminal write` payload onto this session's FIFO as one
+    /// untagged single-write message. Returns the RAW queue length after the
+    /// push (the caller's position), or `None` when the queue is already at
+    /// `WRITE_QUEUE_CAP` (the write is dropped). The return value is raw
+    /// entries while the SPA's queue depth counts messages — a deliberate
+    /// divergence that keeps the CLI's stdout contract byte-for-byte stable.
     fn enqueue_write(&self, data: &[u8]) -> Option<usize> {
-        let mut q = self
-            .write_queue
-            .lock()
-            .expect("terminal write queue poisoned");
-        if q.len() >= WRITE_QUEUE_CAP {
-            return None;
-        }
-        q.push_back(data.to_vec());
-        Some(q.len())
+        let (len, depth) = {
+            let mut q = self
+                .write_queue
+                .lock()
+                .expect("terminal write queue poisoned");
+            if q.len() >= WRITE_QUEUE_CAP {
+                return None;
+            }
+            q.push_back(QueuedWrite {
+                data: data.to_vec(),
+                prompt_id: None,
+                tail: true,
+            });
+            (q.len(), msg_depth(&q))
+        };
+        self.broadcast(SessionEvent::QueueDepth(depth));
+        Some(len)
+    }
+
+    /// Push a Rich Prompt message onto this session's FIFO. `writes` is the
+    /// ordered `submit_writes` list (two entries for gemini, one otherwise),
+    /// enqueued as ONE message: all-or-nothing at the cap (a partial push
+    /// could deliver a body whose submit chord was silently dropped),
+    /// `prompt_id` on every entry, `tail` on the last. Returns the message
+    /// depth after the push — the message's 1-based queue position — or
+    /// `None` when the whole message does not fit (queue unchanged).
+    fn enqueue_prompt(&self, writes: &[Vec<u8>], prompt_id: Option<String>) -> Option<usize> {
+        let depth = {
+            let mut q = self
+                .write_queue
+                .lock()
+                .expect("terminal write queue poisoned");
+            if q.len() + writes.len() > WRITE_QUEUE_CAP {
+                return None;
+            }
+            for (i, data) in writes.iter().enumerate() {
+                q.push_back(QueuedWrite {
+                    data: data.clone(),
+                    prompt_id: prompt_id.clone(),
+                    tail: i == writes.len() - 1,
+                });
+            }
+            msg_depth(&q)
+        };
+        self.broadcast(SessionEvent::QueueDepth(depth));
+        Some(depth)
+    }
+
+    /// Current MESSAGE depth of the write queue (tail count).
+    fn queue_depth(&self) -> usize {
+        msg_depth(
+            &self
+                .write_queue
+                .lock()
+                .expect("terminal write queue poisoned"),
+        )
     }
 
     /// The full replay ring, flattened, for `cs terminal scrollback`.
@@ -2019,6 +2132,114 @@ mod tests {
         // delivers (idle the whole time).
         session.try_drain_one(t1 + WRITE_QUEUE_GEN_START_CAP_MS + 10);
         assert_eq!(session.write_queue.lock().expect("queue").len(), 0);
+    }
+
+    #[test]
+    fn enqueue_prompt_is_all_or_nothing_at_cap() {
+        // A 2-write message (gemini) near the cap must not split: the old
+        // per-write path enqueued the body at 99/100 and silently dropped
+        // the CR. The whole message is rejected, the queue untouched.
+        let session = test_session_with_ring(1024);
+        for _ in 1..WRITE_QUEUE_CAP {
+            session.enqueue_write(b"x");
+        }
+        let pair = vec![b"hi there".to_vec(), b"\r".to_vec()];
+        assert_eq!(
+            session.enqueue_prompt(&pair, Some("msg-1".into())),
+            None,
+            "2-write message must not split into the last slot"
+        );
+        assert_eq!(
+            session.write_queue.lock().expect("queue").len(),
+            WRITE_QUEUE_CAP - 1,
+            "rejected message leaves the queue unchanged"
+        );
+        // A single-write message still fits the remaining slot.
+        let single = vec![b"poke\x1b[27;9;13~".to_vec()];
+        assert_eq!(
+            session.enqueue_prompt(&single, Some("msg-2".into())),
+            Some(WRITE_QUEUE_CAP),
+            "1-write message fits; return is the message depth"
+        );
+    }
+
+    #[test]
+    fn queue_depth_counts_messages_not_writes() {
+        let session = test_session_with_ring(1024);
+        let pair = vec![b"hi there".to_vec(), b"\r".to_vec()];
+        assert_eq!(
+            session.enqueue_prompt(&pair, Some("gem-1".into())),
+            Some(1),
+            "first message -> depth/position 1"
+        );
+        assert_eq!(
+            session.write_queue.lock().expect("queue").len(),
+            2,
+            "a gemini pair is two raw entries"
+        );
+        assert_eq!(session.queue_depth(), 1, "but ONE message");
+        // A CLI poke behind it: raw position 3 (the frozen stdout contract),
+        // message depth 2 (what the SPA badge shows).
+        assert_eq!(session.enqueue_write(b"poke"), Some(3));
+        assert_eq!(session.queue_depth(), 2);
+    }
+
+    #[test]
+    fn drain_emits_delivered_on_last_write_only() {
+        let session = test_session_with_ring(1024);
+        let pair = vec![b"hi there".to_vec(), b"\r".to_vec()];
+        session.enqueue_prompt(&pair, Some("msg-1".into()));
+        // Subscribe AFTER the enqueue so its QueueDepth stays out of frame.
+        let mut rx = session.output_tx.subscribe();
+        let base = now_unix_millis();
+        session.last_output_at.store(base, Ordering::Relaxed);
+
+        // Body drain: one raw entry delivered, but the message is still
+        // pending (its chord is queued) -> no events.
+        let t1 = base + WRITE_QUEUE_QUIET_MS + 10;
+        session.try_drain_one(t1);
+        assert_eq!(session.write_queue.lock().expect("queue").len(), 1);
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "body drain emits nothing"
+        );
+
+        // Chord (tail) drain: no output ever arrives, so the gen-start cap
+        // unwedges; PromptDelivered fires first, then QueueDepth, both 0.
+        session.try_drain_one(t1 + WRITE_QUEUE_GEN_START_CAP_MS + 10);
+        assert_eq!(session.write_queue.lock().expect("queue").len(), 0);
+        match rx.try_recv() {
+            Ok(SessionEvent::PromptDelivered { id, depth }) => {
+                assert_eq!(id, "msg-1");
+                assert_eq!(depth, 0);
+            }
+            other => panic!("expected PromptDelivered first, got {other:?}"),
+        }
+        match rx.try_recv() {
+            Ok(SessionEvent::QueueDepth(depth)) => assert_eq!(depth, 0),
+            other => panic!("expected QueueDepth after PromptDelivered, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enqueue_broadcasts_queue_depth_on_both_paths() {
+        let session = test_session_with_ring(1024);
+        let mut rx = session.output_tx.subscribe();
+
+        // CLI path: returns the raw position, broadcasts the message depth.
+        assert_eq!(session.enqueue_write(b"poke"), Some(1));
+        match rx.try_recv() {
+            Ok(SessionEvent::QueueDepth(depth)) => assert_eq!(depth, 1),
+            other => panic!("expected QueueDepth, got {other:?}"),
+        }
+
+        // Prompt path: return == ack position == message depth.
+        let pair = vec![b"hi".to_vec(), b"\r".to_vec()];
+        assert_eq!(session.enqueue_prompt(&pair, Some("m".into())), Some(2));
+        match rx.try_recv() {
+            Ok(SessionEvent::QueueDepth(depth)) => assert_eq!(depth, 2),
+            other => panic!("expected QueueDepth, got {other:?}"),
+        }
     }
 
     #[test]
