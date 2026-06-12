@@ -66,11 +66,3 @@ to it.
 2. Copy the `chan serve ... --tunnel-url=<desktop-listener>` command the
    dialog shows, and run it on the remote machine. The workspace then appears
    in the desktop window.
-
-## Verification status
-
-- `chan serve` (local and on a remote host) is verified.
-- The in-app New -> Remote -> Outbound / Inbound click-paths run in the
-  desktop webview (WKWebView on macOS), which the automated tooling cannot
-  drive. They are PENDING a hand-smoke by the maintainer before this page is
-  presented as fully verified.
