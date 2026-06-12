@@ -899,114 +899,122 @@ fn contains_edge_key(source: &str, target: &str) -> (String, String, &'static st
     (source.to_string(), target.to_string(), "contains")
 }
 
-fn push_contains_edge(
-    edges: &mut Vec<GraphEdgeView>,
-    edge_set: &mut std::collections::BTreeSet<(String, String, &'static str)>,
-    source: String,
-    target: String,
-) {
-    if edge_set.insert(contains_edge_key(&source, &target)) {
-        edges.push(GraphEdgeView {
-            source,
-            target,
-            kind: "contains",
-            broken: None,
-            rank: None,
-            files: None,
-            code: None,
-        });
-    }
+/// Accumulators plus the read-only inputs threaded through the
+/// unified tree layer. `edge_set` is owned: it is seeded from the
+/// edges accumulated so far — so the contains-edge dedup sees the
+/// filesystem-layer edges pushed before the tree pass — and dies
+/// with the ctx.
+struct TreeMergeCtx<'a> {
+    workspace: &'a chan_workspace::Workspace,
+    report_buckets: &'a std::collections::HashMap<String, ReportFileBucket>,
+    nodes: &'a mut std::collections::BTreeMap<String, GraphNodeView>,
+    edges: &'a mut Vec<GraphEdgeView>,
+    edge_set: std::collections::BTreeSet<(String, String, &'static str)>,
 }
 
-fn ensure_directory_path(
-    workspace: &chan_workspace::Workspace,
-    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
-    edges: &mut Vec<GraphEdgeView>,
-    edge_set: &mut std::collections::BTreeSet<(String, String, &'static str)>,
-    path: &str,
-) {
-    let clean = path.trim_matches('/');
-    let id = directory_node_id(clean);
-    merge_directory_node(
-        nodes,
-        id.clone(),
-        directory_label(clean),
-        clean.to_string(),
-        path_class_for_graph(workspace, clean),
-        0,
-        0,
-    );
-    if clean.is_empty() {
-        return;
+impl<'a> TreeMergeCtx<'a> {
+    fn new(
+        workspace: &'a chan_workspace::Workspace,
+        report_buckets: &'a std::collections::HashMap<String, ReportFileBucket>,
+        nodes: &'a mut std::collections::BTreeMap<String, GraphNodeView>,
+        edges: &'a mut Vec<GraphEdgeView>,
+    ) -> Self {
+        let edge_set = edges
+            .iter()
+            .map(|edge| (edge.source.clone(), edge.target.clone(), edge.kind))
+            .collect();
+        Self {
+            workspace,
+            report_buckets,
+            nodes,
+            edges,
+            edge_set,
+        }
     }
-    let parent = parent_directory(clean);
-    ensure_directory_path(workspace, nodes, edges, edge_set, &parent);
-    push_contains_edge(edges, edge_set, directory_node_id(&parent), id);
-}
 
-fn merge_tree_file_node(
-    workspace: &chan_workspace::Workspace,
-    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
-    report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
-    path: &str,
-) {
-    let id = path.to_string();
-    let label = file_label(path);
-    let path_class = path_class_for_graph(workspace, path);
-    if is_media_graph_path(path) {
-        nodes.entry(id.clone()).or_insert(GraphNodeView::Media {
+    fn push_contains_edge(&mut self, source: String, target: String) {
+        if self.edge_set.insert(contains_edge_key(&source, &target)) {
+            self.edges.push(GraphEdgeView {
+                source,
+                target,
+                kind: "contains",
+                broken: None,
+                rank: None,
+                files: None,
+                code: None,
+            });
+        }
+    }
+
+    fn ensure_directory_path(&mut self, path: &str) {
+        let clean = path.trim_matches('/');
+        let id = directory_node_id(clean);
+        merge_directory_node(
+            self.nodes,
+            id.clone(),
+            directory_label(clean),
+            clean.to_string(),
+            path_class_for_graph(self.workspace, clean),
+            0,
+            0,
+        );
+        if clean.is_empty() {
+            return;
+        }
+        let parent = parent_directory(clean);
+        self.ensure_directory_path(&parent);
+        self.push_contains_edge(directory_node_id(&parent), id);
+    }
+
+    fn merge_tree_file_node(&mut self, path: &str) {
+        let id = path.to_string();
+        let label = file_label(path);
+        let path_class = path_class_for_graph(self.workspace, path);
+        if is_media_graph_path(path) {
+            self.nodes
+                .entry(id.clone())
+                .or_insert(GraphNodeView::Media {
+                    id,
+                    label,
+                    path: path.to_string(),
+                    path_class,
+                    missing: false,
+                });
+            return;
+        }
+
+        if let Some(GraphNodeView::File { bucket, .. }) = self.nodes.get_mut(&id) {
+            if bucket.is_none() {
+                *bucket = self.report_buckets.get(path).cloned();
+            }
+            return;
+        }
+
+        self.nodes.entry(id.clone()).or_insert(GraphNodeView::File {
             id,
             label,
             path: path.to_string(),
             path_class,
+            node_kind: None,
+            bucket: self.report_buckets.get(path).cloned(),
             missing: false,
         });
-        return;
     }
 
-    if let Some(GraphNodeView::File { bucket, .. }) = nodes.get_mut(&id) {
-        if bucket.is_none() {
-            *bucket = report_buckets.get(path).cloned();
+    fn merge_tree_entry(&mut self, entry: &chan_workspace::TreeEntry) {
+        let path = entry.path.trim_matches('/');
+        if path.is_empty() {
+            self.ensure_directory_path("");
+            return;
         }
-        return;
-    }
-
-    nodes.entry(id.clone()).or_insert(GraphNodeView::File {
-        id,
-        label,
-        path: path.to_string(),
-        path_class,
-        node_kind: None,
-        bucket: report_buckets.get(path).cloned(),
-        missing: false,
-    });
-}
-
-fn merge_tree_entry(
-    workspace: &chan_workspace::Workspace,
-    nodes: &mut std::collections::BTreeMap<String, GraphNodeView>,
-    edges: &mut Vec<GraphEdgeView>,
-    edge_set: &mut std::collections::BTreeSet<(String, String, &'static str)>,
-    report_buckets: &std::collections::HashMap<String, ReportFileBucket>,
-    entry: &chan_workspace::TreeEntry,
-) {
-    let path = entry.path.trim_matches('/');
-    if path.is_empty() {
-        ensure_directory_path(workspace, nodes, edges, edge_set, "");
-        return;
-    }
-    let parent = parent_directory(path);
-    ensure_directory_path(workspace, nodes, edges, edge_set, &parent);
-    if entry.is_dir {
-        ensure_directory_path(workspace, nodes, edges, edge_set, path);
-    } else {
-        merge_tree_file_node(workspace, nodes, report_buckets, path);
-        push_contains_edge(
-            edges,
-            edge_set,
-            directory_node_id(&parent),
-            path.to_string(),
-        );
+        let parent = parent_directory(path);
+        self.ensure_directory_path(&parent);
+        if entry.is_dir {
+            self.ensure_directory_path(path);
+        } else {
+            self.merge_tree_file_node(path);
+            self.push_contains_edge(directory_node_id(&parent), path.to_string());
+        }
     }
 }
 
@@ -1034,12 +1042,8 @@ fn merge_unified_tree_layer(
     };
     entries.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let mut edge_set: std::collections::BTreeSet<(String, String, &'static str)> = edges
-        .iter()
-        .map(|edge| (edge.source.clone(), edge.target.clone(), edge.kind))
-        .collect();
-
-    ensure_directory_path(workspace, nodes, edges, &mut edge_set, "");
+    let mut ctx = TreeMergeCtx::new(workspace, report_buckets, nodes, edges);
+    ctx.ensure_directory_path("");
     let mut blocked_dirs: Vec<String> = Vec::new();
     for entry in &entries {
         let entry_path = entry.path.trim_matches('/');
@@ -1049,14 +1053,7 @@ fn merge_unified_tree_layer(
         {
             continue;
         }
-        merge_tree_entry(
-            workspace,
-            nodes,
-            edges,
-            &mut edge_set,
-            report_buckets,
-            entry,
-        );
+        ctx.merge_tree_entry(entry);
         if entry.is_dir
             && matches!(
                 path_class_for_graph(workspace, entry_path),
