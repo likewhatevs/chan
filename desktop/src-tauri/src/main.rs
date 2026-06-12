@@ -21,9 +21,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
+// MenuItemKind is only NAMED by the macOS menu surgery (strip-close /
+// About matching); the dynamic Window-menu rebuild iterates items
+// without naming the kind, so off-macOS the import is unused and
+// `-D warnings` fails the Linux build (caught by CI, not the local
+// macOS gate, which never compiles the other cfg branch).
 #[cfg(target_os = "macos")]
-use tauri::menu::{Menu, PredefinedMenuItem, WINDOW_SUBMENU_ID};
-use tauri::menu::{MenuItemBuilder, MenuItemKind, Submenu};
+use tauri::menu::{Menu, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
+use tauri::menu::{MenuItemBuilder, Submenu};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use config::{Config, ConfigStore, OutboundWorkspace, WindowConfig, WorkspaceFeatures};
