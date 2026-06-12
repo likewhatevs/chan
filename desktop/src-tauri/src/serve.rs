@@ -157,9 +157,9 @@ pub fn new_workspace_window_label(key: &str) -> String {
 }
 
 /// Window title for a local-workspace webview: a kind glyph (home vs this
-/// machine) then the workspace path. `fullstack-b-14` made the path the
-/// locator (the disambiguating signal in the OS window switcher); R1 prefixes
-/// the home/computer glyph so the kind reads at a glance.
+/// machine) then the workspace path. The path is the locator (the
+/// disambiguating signal in the OS window switcher); the glyph prefix
+/// makes the kind read at a glance.
 fn workspace_title(key: &str) -> String {
     local_title(key, dirs::home_dir().as_deref())
 }
@@ -249,24 +249,27 @@ pub fn is_workspace_webview_label(label: &str) -> bool {
 /// `close_local_workspace_windows` on runtime teardown) remains the single
 /// authority on workspace lifecycle.
 pub fn spawn_local_workspace_window(app: &AppHandle, key: &str, url: &str) -> Result<(), String> {
-    if unbury_instead_of_spawn(app, &workspace_window_prefix(key)) {
-        return Ok(());
-    }
-    ensure_window_capacity(app, &workspace_window_prefix(key))?;
+    let prefix = workspace_window_prefix(key);
     let config_key = config::local_window_key(key);
-    let restore = pop_compatible_config(app, &config_key, &workspace_window_prefix(key));
-    let label = match restore.as_ref() {
-        Some(c) => c.window_label.clone(),
-        None => new_workspace_window_label(key),
+    let Some(restore) = unbury_or_restore(app, &prefix, &config_key, || {
+        new_workspace_window_label(key)
+    })?
+    else {
+        return Ok(());
     };
-    let url_hash = restore
-        .as_ref()
-        .map(|c| c.url_hash.clone())
-        .unwrap_or_default();
-    let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
     let title = workspace_title(key);
     build_workspace_window(
-        app, &label, &title, url, &url_hash, config_key, zoom_level, None, None,
+        app,
+        WindowSpec {
+            label: &restore.label,
+            title: &title,
+            url,
+            url_hash_seed: &restore.url_hash,
+            config_key,
+            zoom_seed: restore.zoom,
+            connecting: None,
+            kind: None,
+        },
     )
 }
 
@@ -278,29 +281,31 @@ pub fn spawn_tunneled_workspace_window(
     workspace: &str,
     url: &str,
 ) -> Result<(), String> {
-    if unbury_instead_of_spawn(app, &tunnel_window_prefix(tenant_label, workspace)) {
-        return Ok(());
-    }
-    ensure_window_capacity(app, &tunnel_window_prefix(tenant_label, workspace))?;
-    let config_key = config::tunnel_window_key(tenant_label, workspace);
     let prefix = tunnel_window_prefix(tenant_label, workspace);
-    let restore = pop_compatible_config(app, &config_key, &prefix);
-    let label = match restore.as_ref() {
-        Some(c) => c.window_label.clone(),
-        None => new_tunnel_window_label(tenant_label, workspace),
+    let config_key = config::tunnel_window_key(tenant_label, workspace);
+    let Some(restore) = unbury_or_restore(app, &prefix, &config_key, || {
+        new_tunnel_window_label(tenant_label, workspace)
+    })?
+    else {
+        return Ok(());
     };
-    let url_hash = restore
-        .as_ref()
-        .map(|c| c.url_hash.clone())
-        .unwrap_or_default();
-    let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
-    // R1: inbound (a remote dialed in over the tunnel) is reached through a
+    // Inbound (a remote dialed in over the tunnel) is reached through a
     // local per-tenant loopback listener; the window's `url` points at it.
     // Title with the inbound glyph + that listener's host:port, the locator
     // analogous to the local path / outbound URL.
     let title = tunnel_window_title(url);
     let built = build_workspace_window(
-        app, &label, &title, url, &url_hash, config_key, zoom_level, None, None,
+        app,
+        WindowSpec {
+            label: &restore.label,
+            title: &title,
+            url,
+            url_hash_seed: &restore.url_hash,
+            config_key,
+            zoom_seed: restore.zoom,
+            connecting: None,
+            kind: None,
+        },
     );
     // A tunnel window just appeared: re-poll the remote's window list
     // so the Window menu's remote section reflects it.
@@ -312,23 +317,14 @@ pub fn spawn_tunneled_workspace_window(
 /// the remote process; this only creates another webview pointed at
 /// the persisted URL.
 pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
-    if unbury_instead_of_spawn(app, &outbound_window_prefix(id)) {
-        return Ok(());
-    }
-    ensure_window_capacity(app, &outbound_window_prefix(id))?;
-    let config_key = config::outbound_window_key(id);
     let prefix = outbound_window_prefix(id);
-    let restore = pop_compatible_config(app, &config_key, &prefix);
-    let label = match restore.as_ref() {
-        Some(c) => c.window_label.clone(),
-        None => new_outbound_window_label(id),
+    let config_key = config::outbound_window_key(id);
+    let Some(restore) =
+        unbury_or_restore(app, &prefix, &config_key, || new_outbound_window_label(id))?
+    else {
+        return Ok(());
     };
-    let url_hash = restore
-        .as_ref()
-        .map(|c| c.url_hash.clone())
-        .unwrap_or_default();
-    let zoom_level = restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0);
-    // R1: outbound title is the outbound glyph + the URL (the locator),
+    // Outbound title is the outbound glyph + the URL (the locator),
     // not the user's label (which still names the launcher row).
     let title = outbound_window_title(url);
     // Outbound = an outgoing connection to a remote we do not own. Route
@@ -337,14 +333,16 @@ pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> 
     // probe URL; `build_workspace_window` assembles the navigate target.
     let built = build_workspace_window(
         app,
-        &label,
-        &title,
-        url,
-        &url_hash,
-        config_key,
-        zoom_level,
-        Some(url),
-        None,
+        WindowSpec {
+            label: &restore.label,
+            title: &title,
+            url,
+            url_hash_seed: &restore.url_hash,
+            config_key,
+            zoom_seed: restore.zoom,
+            connecting: Some(url),
+            kind: None,
+        },
     );
     // An outbound window just appeared: re-poll the remote's window
     // list so the Window menu's remote section reflects it.
@@ -359,7 +357,7 @@ pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> 
 ///
 /// Each window gets a unique `terminal-win-<seq>` label so its layout
 /// persists separately (keyed by `?w=`) and the OS window switcher
-/// disambiguates - the label is no longer the route prefix. The shared
+/// disambiguates - the label is not the route prefix. The shared
 /// tenant is never torn down per window (it lives for the process lifetime;
 /// orphaned PTYs idle-prune), which is what lets a terminal moved into
 /// another window keep its live PTY.
@@ -379,14 +377,16 @@ pub async fn spawn_local_terminal_window(
     // tenant is shared and persistent.
     build_workspace_window(
         &app,
-        &label,
-        "Terminal",
-        &url,
-        "",
-        String::new(),
-        1.0,
-        None,
-        Some("terminal"),
+        WindowSpec {
+            label: &label,
+            title: "Terminal",
+            url: &url,
+            url_hash_seed: "",
+            config_key: String::new(),
+            zoom_seed: 1.0,
+            connecting: None,
+            kind: Some("terminal"),
+        },
     )
 }
 
@@ -414,17 +414,19 @@ pub fn reopen_remote_window(
 ) -> Result<(), String> {
     build_workspace_window(
         app,
-        label,
-        &entry.base_title,
-        &entry.url,
-        "",
-        entry.config_key.clone(),
-        1.0,
-        // Outbound remotes route through the connecting screen like
-        // any other outbound window (a down remote must not paint a
-        // blank webview); tunnel loopbacks load directly.
-        entry.connecting.then_some(entry.url.as_str()),
-        None,
+        WindowSpec {
+            label,
+            title: &entry.base_title,
+            url: &entry.url,
+            url_hash_seed: "",
+            config_key: entry.config_key.clone(),
+            zoom_seed: 1.0,
+            // Outbound remotes route through the connecting screen like
+            // any other outbound window (a down remote must not paint a
+            // blank webview); tunnel loopbacks load directly.
+            connecting: entry.connecting.then_some(entry.url.as_str()),
+            kind: None,
+        },
     )
 }
 
@@ -450,8 +452,8 @@ pub fn window_on_connecting_screen(app: &AppHandle, label: &str) -> bool {
 /// this workspace" entry point (launcher Open, Cmd/Ctrl+Shift+N's
 /// spawn fallback, deep links) funnels through the spawn fns, so the
 /// check lives here: a window the user put away via the close button
-/// IS the window they get back — the old "reopens the last closed
-/// window" LRU feel, now with live state. `prefix` is the family
+/// IS the window they get back — a reopens-the-last-closed-window
+/// feel, with live state. `prefix` is the family
 /// prefix WITHOUT the trailing dash (the spawn fns' label prefix).
 fn unbury_instead_of_spawn(app: &AppHandle, prefix: &str) -> bool {
     let family = format!("{prefix}-");
@@ -459,6 +461,44 @@ fn unbury_instead_of_spawn(app: &AppHandle, prefix: &str) -> bool {
         return false;
     };
     crate::unbury_window(app, &buried)
+}
+
+/// Label + restore state for a window about to be (re)built, popped
+/// from the window-config stack or freshly minted.
+struct RestoredWindow {
+    label: String,
+    url_hash: String,
+    zoom: f64,
+}
+
+/// Shared open preamble for the local / tunnel / outbound spawn fns:
+/// prefer unburying the family's most recent hidden window, enforce the
+/// per-family window cap, then pop a compatible WindowConfig for the
+/// label + restore state (fresh label, empty hash, default zoom when
+/// nothing restorable exists). `Ok(None)` means an unburied window
+/// already satisfied the open and no new window should be built.
+fn unbury_or_restore(
+    app: &AppHandle,
+    prefix: &str,
+    config_key: &str,
+    fresh_label: impl FnOnce() -> String,
+) -> Result<Option<RestoredWindow>, String> {
+    if unbury_instead_of_spawn(app, prefix) {
+        return Ok(None);
+    }
+    ensure_window_capacity(app, prefix)?;
+    let restore = pop_compatible_config(app, config_key, prefix);
+    Ok(Some(RestoredWindow {
+        label: restore
+            .as_ref()
+            .map(|c| c.window_label.clone())
+            .unwrap_or_else(fresh_label),
+        url_hash: restore
+            .as_ref()
+            .map(|c| c.url_hash.clone())
+            .unwrap_or_default(),
+        zoom: restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0),
+    }))
 }
 
 /// Pop the top-of-stack window config for `config_key` only if the
@@ -489,6 +529,43 @@ fn pop_compatible_config(
     Some(entry)
 }
 
+/// Inputs for one SPA webview window build: identity (label/title),
+/// where to point it, what to restore, and how to load.
+struct WindowSpec<'a> {
+    /// Unique Tauri window label (also the `?w=` per-window session key).
+    label: &'a str,
+    /// Base title; the builder suffixes a reused " Window N" display number.
+    title: &'a str,
+    /// The workspace/terminal URL the webview ultimately shows.
+    url: &'a str,
+    /// URL fragment from the window-config stack: applied verbatim so
+    /// overlay state (file browser path, search query, graph scope)
+    /// restores alongside the panes/tabs that come back from
+    /// `session.json`. Empty when there's nothing to restore.
+    url_hash_seed: &'a str,
+    /// WindowConfig identity key (`local_window_key` or
+    /// `tunnel_window_key`). Stamped onto the close handler so a
+    /// user-initiated close pushes the window's final URL hash back
+    /// into the LRU stack. Empty for terminal windows (no LRU restore).
+    config_key: String,
+    /// Zoom level to restore; 1.0 (the default) skips the IPC round-trip.
+    zoom_seed: f64,
+    /// Load strategy. `None` (local + tunnel) loads `url` directly via
+    /// `WebviewUrl::External`: those backends are up before the window
+    /// opens. `Some(display_url)` (outbound) instead loads the bundled
+    /// `connecting.html` and hands it the display URL plus the assembled
+    /// navigate target through an injected `window.__CHAN_CONNECTING__`;
+    /// the page probes the remote via `probe_url` and navigates on
+    /// success. A direct External load of a down outbound remote paints a
+    /// blank white webview (WKWebView never finishes navigating, see
+    /// `capture_window_config`), which is the bug the connecting screen
+    /// fixes.
+    connecting: Option<&'a str>,
+    /// `Some("terminal")` makes the SPA boot in terminal-only mode (no
+    /// workspace fetch); `None` is full workspace mode.
+    kind: Option<&'a str>,
+}
+
 /// Build and show a chan-style workspace webview window on the main
 /// thread. Internal: call `spawn_local_workspace_window` /
 /// `spawn_tunneled_workspace_window` / `spawn_outbound_workspace_window`
@@ -496,43 +573,17 @@ fn pop_compatible_config(
 /// key-bridge JS, the size defaults, the zoom-hotkey polyfill, and
 /// the drag-drop handler off in one place means workspace UX changes
 /// don't fork between the local and tunneled paths.
-///
-/// `url_hash_seed` carries any popped URL hash from the
-/// window-config stack: applied verbatim to the URL fragment so
-/// overlay state (file browser path, search query, graph scope)
-/// restores alongside the panes/tabs that come back from
-/// `session.json`. Empty when there's nothing to restore.
-///
-/// `config_key` is the WindowConfig identity key (`local_window_key`
-/// or `tunnel_window_key`). Stamped onto the close handler so a
-/// user-initiated close pushes the window's final URL hash back
-/// into the LRU stack.
-///
-/// `connecting` switches the load strategy. `None` (local + tunnel)
-/// loads the workspace URL directly via `WebviewUrl::External`: those
-/// backends are up before the window opens. `Some(display_url)`
-/// (outbound) instead loads the bundled `connecting.html` and hands it
-/// the display URL plus the assembled navigate target through an
-/// injected `window.__CHAN_CONNECTING__`; the page probes the remote
-/// via `probe_url` and navigates on success. A direct External load of
-/// a down outbound remote paints a blank white webview (WKWebView never
-/// finishes navigating, see `capture_window_config_on_close`), which is
-/// the bug the connecting screen fixes.
-// All inputs are distinct primitives handed straight to the builder;
-// bundling them into a spec struct would only move the noise. Matches
-// the repo's existing `too_many_arguments` allows on similar builders.
-#[allow(clippy::too_many_arguments)]
-fn build_workspace_window(
-    app: &AppHandle,
-    window_label: &str,
-    title: &str,
-    url: &str,
-    url_hash_seed: &str,
-    config_key: String,
-    zoom_seed: f64,
-    connecting: Option<&str>,
-    kind: Option<&str>,
-) -> Result<(), String> {
+fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), String> {
+    let WindowSpec {
+        label: window_label,
+        title,
+        url,
+        url_hash_seed,
+        config_key,
+        zoom_seed,
+        connecting,
+        kind,
+    } = spec;
     let Ok(mut parsed) = url.parse::<tauri::Url>() else {
         return Err(format!("bad chan URL for {window_label}: {url}"));
     };
@@ -587,8 +638,8 @@ fn build_workspace_window(
             .min_inner_size(640.0, 400.0)
             .resizable(true)
             .initialization_script(init_script.as_str())
-            // `fullstack-b-19`: explicit `zoom_in` / `zoom_out` /
-            // `zoom_reset` IPC commands fired from KEY_BRIDGE_JS
+            // The explicit `zoom_in` / `zoom_out` / `zoom_reset`
+            // IPC commands fired from KEY_BRIDGE_JS
             // are the primary path; this Tauri-level polyfill stays
             // on as a mousewheel + pinch fallback (the chord
             // overlap is harmless because KEY_BRIDGE_JS's capture-
@@ -606,7 +657,7 @@ fn build_workspace_window(
             .build()
         {
             Ok(window) => {
-                // `fullstack-b-19`: restore the persisted zoom level from
+                // Restore the persisted zoom level from
                 // the popped WindowConfig (if any). 1.0 is the chan-
                 // desktop default; skip the IPC round-trip when there's
                 // nothing to apply. Best-effort: a Tauri set_zoom error
@@ -640,8 +691,7 @@ fn build_workspace_window(
                     // shells left, and a window still showing the
                     // connecting/retry screen (no session, no shells —
                     // burying it would leave an unkillable hidden retry
-                    // loop, the v0.31.0 "outbound window cannot be
-                    // closed/cancelled at all" bug).
+                    // loop).
                     // Programmatic closes (the SPA's empty-window cascade,
                     // workspace-off teardown, tunnel drop) call `destroy()`
                     // and never reach this branch.
@@ -729,8 +779,8 @@ fn build_workspace_window(
 }
 
 /// Informational notice shown EVERY time the OS close button buries a
-/// window (per @@Alex: the dialog is the teaching surface for the
-/// hide-not-close behaviour, and the smoke test asserts it). Async
+/// window: the dialog is the teaching surface for the hide-not-close
+/// behaviour (smoke tests assert it appears). Async
 /// `.show` only — a blocking dialog on the event-loop thread deadlocks.
 fn show_bury_notice(app: &AppHandle, title: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
@@ -757,7 +807,7 @@ fn show_bury_notice(app: &AppHandle, title: &str) {
 /// via `persistStateToHash`, and Tauri's URL reflection picks that up
 /// on platforms with the WKWebView / WebView2 backends.
 ///
-/// `fullstack-b-19`: also captures the live zoom level for this window
+/// Also captures the live zoom level for this window
 /// into `WindowConfig.zoom_level` so the next open of the same
 /// workspace restores the zoom. `drain_zoom` controls whether the
 /// `live_window_zooms` entry is removed (a window on its way out) or
@@ -906,7 +956,7 @@ const KEY_BRIDGE_JS: &str = r#"
     window.dispatchEvent(new CustomEvent('chan:command',
       { detail: Object.assign({ name: name }, detail || {}) }));
   }
-  // `fullstack-b-17`: Cmd+R reloads the webview, Cmd+Opt+I opens
+  // Cmd+R reloads the webview, Cmd+Opt+I opens
   // DevTools. Both bypass the SPA event bus and invoke their
   // Tauri IPC commands directly so a frozen Svelte runtime or a
   // broken chord registry can't lock the dev affordances away.
@@ -920,20 +970,18 @@ const KEY_BRIDGE_JS: &str = r#"
       });
     }
   }
-  // `fullstack-42` pruned every native chord whose action is now
-  // covered by Pane Mode (Cmd+K). Dropped: Cmd+P, Cmd+N, Cmd+`,
-  // Cmd+[/Cmd+], Cmd+Shift+M, Cmd+Shift+F. Kept: Cmd+W (close
-  // tab; pairs with Ctrl+D from fullstack-41), Cmd+F/G (find on page),
-  // Cmd+1..9 (jump to tab), Cmd+Shift+T (reopen closed),
-  // Cmd+Shift+[/] (tab nav), Cmd+Shift+G (find prev).
-  // `fullstack-b-2`: Cmd+T comes back as a direct chord for
-  // "new terminal in active pane".
-  // `fullstack-a-32`: Cmd+O / Cmd+P / Cmd+Shift+M added as direct
-  // chords for File Browser / Team Work / Graph (with the
-  // matching `app.files.toggle` / `app.terminal.teamWork` /
-  // `app.graph.toggle` commands routed through the context-aware
-  // helpers in App.svelte). Universal Hybrid NAV `t/o/p/v` covers
-  // the web/Win/Linux fallback path.
+  // Chord policy: actions reachable through Pane Mode (Cmd+K) stay
+  // unbound here (Cmd+`, Cmd+[/Cmd+], Cmd+Shift+F) so the native
+  // layer claims as little as possible. Direct chords exist where
+  // Pane Mode is no substitute: Cmd+W (close tab; pairs with the
+  // SPA's context-aware Ctrl+D), Cmd+F/G (find on page), Cmd+1..9
+  // (jump to tab), Cmd+Shift+T (reopen closed), Cmd+Shift+[/] (tab
+  // nav), Cmd+Shift+G (find prev), plus the context-aware spawn
+  // family Cmd+T (terminal) / Cmd+O (File Browser) / Cmd+P (Team
+  // Work) / Cmd+Shift+M (Graph), whose `app.files.toggle` /
+  // `app.terminal.teamWork` / `app.graph.toggle` commands route
+  // through the context-aware helpers in App.svelte. Universal
+  // Hybrid NAV `t/o/p/v` covers the web/Win/Linux fallback path.
   function onKey(e) {
     const meta = e.metaKey || e.ctrlKey;
     if (!meta) return;
@@ -949,7 +997,7 @@ const KEY_BRIDGE_JS: &str = r#"
       }
       return;
     }
-    // `fullstack-b-19`: zoom chords route regardless of shift so
+    // Zoom chords route regardless of shift so
     // Cmd+= (US) and Cmd+Shift+= (= Cmd++) both fire zoom_in.
     // NumpadAdd / NumpadSubtract similarly. Cmd+0 / Cmd+Numpad0
     // reset to 100 %.
@@ -979,7 +1027,7 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyT': fire(e, 'app.terminal.toggle'); return;
         case 'KeyO': fire(e, 'app.files.toggle');    return;
         case 'KeyP': fire(e, 'app.terminal.teamWork'); return;
-        // `phase-12 lane-e` (addendum-2 Q6/Q7): Cmd+W closes the tab
+        // Cmd+W closes the tab
         // on macOS. On Linux the platform mod is Ctrl and Ctrl+W is
         // readline delete-word inside a focused terminal, so DON'T
         // claim it - let it reach xterm. Linux closes tabs with Ctrl+D
@@ -1007,9 +1055,9 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyS': fire(e, 'app.search.toggle');    return;
         case 'KeyF': fire(e, 'app.find.open');        return;
         case 'KeyG': fire(e, 'app.find.next');        return;
-        // `phase-13 r2` (B-slice 2): Cmd+I no longer opens Dashboard.
-        // @@Alex freed it for the editor's italic chord (bound in
-        // Wysiwyg.svelte's CM6 keymap); Dashboard is reachable via
+        // Cmd+I does NOT open Dashboard; it is reserved for the
+        // editor's italic chord (bound in
+        // Wysiwyg.svelte's CM6 keymap). Dashboard is reachable via
         // Hybrid Nav `Cmd+. i` + the Dashboard hamburger. With no
         // `KeyI` case here, Cmd+I falls through to the focused webview
         // (the editor toggles italic; otherwise inert). Cmd+Opt+I
@@ -1017,11 +1065,11 @@ const KEY_BRIDGE_JS: &str = r#"
         // shift branch below) are unaffected.
         case 'BracketLeft':  fire(e, 'app.pane.prev'); return;
         case 'BracketRight': fire(e, 'app.pane.next'); return;
-        // `phase-12 lane-e` (addendum-2): Cmd+/ split right. Split
-        // bottom is Cmd+Shift+/ (shift branch below) - moved off Cmd+\
-        // in `desktop-fixes` because 1Password's system-wide Cmd+\
+        // Cmd+/ split right. Split
+        // bottom is Cmd+Shift+/ (shift branch below). Cmd+\ is
+        // deliberately NOT used: 1Password's system-wide Cmd+\
         // hotkey is dispatched by macOS before the key reaches this
-        // webview, so chan never received it. Web reaches splits via
+        // webview, so chan never receives it. Web reaches splits via
         // Hybrid Nav `/` and `?`.
         case 'Slash':        fire(e, 'app.pane.splitRight'); return;
       }
@@ -1055,7 +1103,7 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyG':         fire(e, 'app.find.prev');     return;
         case 'KeyT':         fire(e, 'app.tab.reopenClosed'); return;
         case 'KeyM':         fire(e, 'app.graph.toggle');  return;
-        // `lane-c addendum-3`: Cmd+Shift+I (mac) / Ctrl+Shift+I (Linux,
+        // Cmd+Shift+I (mac) / Ctrl+Shift+I (Linux,
         // Windows) toggles broadcast-input select-all/deselect-all for the
         // active terminal (mirrors iTerm). Ungated within the shift branch so
         // both platform mods fire; DevTools lives on the ALT chord
@@ -1066,9 +1114,9 @@ const KEY_BRIDGE_JS: &str = r#"
         case 'KeyI': fire(e, 'app.terminal.broadcastToggle'); return;
         case 'BracketLeft':  fire(e, 'app.tab.prev');      return;
         case 'BracketRight': fire(e, 'app.tab.next');      return;
-        // `desktop-fixes`: Cmd+Shift+/ (= Cmd+?) splits the active pane
-        // bottom, pairing with Cmd+/ split-right above. Replaces the old
-        // Cmd+\ binding that 1Password's global hotkey shadowed.
+        // Cmd+Shift+/ (= Cmd+?) splits the active pane
+        // bottom, pairing with Cmd+/ split-right above. Cmd+\ is
+        // avoided - 1Password's global hotkey shadows it.
         case 'Slash':        fire(e, 'app.pane.splitDown');  return;
       }
     }
@@ -1083,9 +1131,9 @@ mod tests {
 
     #[test]
     fn invoke_handler_registers_reload_window_and_open_devtools() {
-        // `fullstack-b-17`: the IPC commands `reload_window` and
+        // The IPC commands `reload_window` and
         // `open_devtools` MUST be in the `tauri::generate_handler!`
-        // list so the SPA's tab context-menu (via -a-36) and the
+        // list so the SPA's tab context-menu and the
         // accelerator path can reach them. The generate_handler!
         // macro does not catch a missing handler at compile time,
         // so we pin it here against the source file. Tests live in
@@ -1100,7 +1148,7 @@ mod tests {
 
     #[test]
     fn key_bridge_wires_zoom_chords_to_ipc() {
-        // `fullstack-b-19`: Cmd+= / Cmd+- / Cmd+0 (and their
+        // Cmd+= / Cmd+- / Cmd+0 (and their
         // Numpad variants) route directly to the chan-desktop
         // zoom IPC commands. Routed BEFORE the shift branch so
         // Cmd+Shift+= (= Cmd++) also zooms in. Capture-phase
@@ -1130,7 +1178,7 @@ mod tests {
 
     #[test]
     fn invoke_handler_registers_zoom_commands() {
-        // `fullstack-b-19`: zoom_in / zoom_out / zoom_reset must be
+        // zoom_in / zoom_out / zoom_reset must be
         // in `tauri::generate_handler!` so KEY_BRIDGE_JS's IPC
         // invocations reach a registered command. generate_handler!
         // doesn't catch missing entries at compile time; pin here.
@@ -1198,20 +1246,17 @@ mod tests {
 
     #[test]
     fn new_workspace_local_choice_has_no_desktop_preflight() {
-        // Phase-18: the desktop-side first-boot pre-flight was removed.
-        // @@Alex's v0.26.0 spec: "we should NOT have any pre-flight in the
-        // chan-desktop app anymore since this have moved over to chan's SPA"
-        // (PreflightOverlay.svelte, phase-17). The old desktop flow scanned
-        // the folder + rendered report rows + carried the BGE/reports
-        // toggles; it double-dialogged with, and raced, the SPA boot
-        // surface. The [New] modal's Local choice now just registers the
-        // folder and opens it; chan's SPA owns readiness + the optional
-        // Semantic / Reports layer toggles. Pin the new shape so a refactor
-        // can't reintroduce a desktop-side pre-flight.
+        // The desktop must not run its own first-boot pre-flight:
+        // chan's SPA owns workspace readiness (PreflightOverlay.svelte)
+        // plus the optional Semantic / Reports layer toggles, and a
+        // desktop-side scan would double-dialog with, and race, the
+        // SPA boot surface. The [New] modal's Local choice just
+        // registers the folder and opens it. Pin the shape so a
+        // refactor can't reintroduce a desktop-side pre-flight.
         const MAIN_JS: &str = include_str!("../../src/main.js");
         const MAIN_RS: &str = include_str!("main.rs");
-        // The [New] modal still exists and still registers via add_workspace,
-        // now WITHOUT threading a desktop-chosen feature pair (the SPA's
+        // The [New] modal registers via add_workspace
+        // WITHOUT threading a desktop-chosen feature pair (the SPA's
         // onboarding card enables the optional layers post-boot).
         assert!(
             MAIN_JS.contains("showNewWorkspaceDialog("),
@@ -1221,9 +1266,9 @@ mod tests {
             MAIN_JS.contains("invoke('add_workspace', { path: localPath }"),
             "the Local choice must register the chosen folder via add_workspace",
         );
-        // None of the removed desktop pre-flight wiring may survive: no scan
+        // No desktop pre-flight wiring may exist: no scan
         // IPC, no report renderer, no feature toggles, and none of the
-        // explanatory copy the SPA now owns.
+        // explanatory copy the SPA owns.
         for gone in [
             "compute_workspace_preflight",
             "renderPreflightReport",
@@ -1246,8 +1291,8 @@ mod tests {
 
     #[test]
     fn registry_and_feature_commands_run_in_process_not_via_chan_cli() {
-        // The in-process registry refactor dropped the `chan`
-        // binary entirely: `add_workspace`, `remove_workspace`, and the
+        // chan-desktop runs without a `chan`
+        // binary: `add_workspace`, `remove_workspace`, and the
         // feature commands route through the embedded host's shared
         // `Library` / live `Arc<Workspace>` rather than spawning chan.
         // Pin the in-process call shape so a future change can't
@@ -1278,8 +1323,8 @@ mod tests {
 
     #[test]
     fn bin_status_machinery_is_gone() {
-        // The bundled-binary preflight + gating was deleted with the
-        // subprocess paths. Pin the absence so a future change can't
+        // chan-desktop has no bundled-binary preflight or gating
+        // (no subprocess paths). Pin the absence so a future change can't
         // quietly re-add a `chan` binary dependency or its gating.
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(
@@ -1336,11 +1381,11 @@ mod tests {
 
     #[test]
     fn new_window_accelerator_uses_cmd_shift_n() {
-        // `fullstack-b-27`: the "New Window" menu item moves from
-        // `CmdOrCtrl+N` to `CmdOrCtrl+Shift+N` to free Cmd+N for
-        // the SPA's New Draft handler (`fullstack-a-66`). Pin the
-        // chord so a future menu edit can't silently revert to
-        // plain Cmd+N and re-clash with the SPA chord.
+        // The "New Window" menu item binds
+        // `CmdOrCtrl+Shift+N`; plain Cmd+N belongs to
+        // the SPA's New Draft handler. Pin the
+        // chord so a future menu edit can't silently land on
+        // plain Cmd+N and clash with the SPA chord.
         const MAIN_RS: &str = include_str!("main.rs");
         assert!(
             MAIN_RS.contains(".accelerator(\"CmdOrCtrl+Shift+N\")"),
@@ -1354,7 +1399,7 @@ mod tests {
 
     #[test]
     fn key_bridge_wires_reload_and_devtools_ipc() {
-        // `fullstack-b-17`: Cmd+R fires the `reload_window` IPC and
+        // Cmd+R fires the `reload_window` IPC and
         // Cmd+Opt+I fires `open_devtools`, bypassing the SPA event
         // bus so a frozen Svelte runtime can't lock the dev
         // affordances away. The accelerator path goes through
@@ -1403,17 +1448,12 @@ mod tests {
 
     #[test]
     fn key_bridge_drops_chords_covered_by_pane_mode() {
-        // `fullstack-42` pruned every native chord that now has a
-        // Pane Mode equivalent. `fullstack-b-2` brought
-        // `app.terminal.toggle` back (Cmd+T). `fullstack-a-32`
-        // brings back `app.files.toggle` (Cmd+O), `app.graph.toggle`
-        // (Cmd+Shift+M), and `app.terminal.teamWork` (Cmd+P) as
-        // direct chords with context-aware semantics. `phase-12
-        // lane-e` (addendum-2) brings `app.search.toggle` back as a
-        // direct chord too (Cmd+S = workspace-wide search), so it moves to
-        // the keeps-list below. The remaining absences catch
-        // accidental reverts of chords that should still go through
-        // Pane Mode only.
+        // Chords with a Pane Mode equivalent stay out of the native
+        // bridge. The direct-chord exceptions (Cmd+T terminal, Cmd+O
+        // files, Cmd+Shift+M graph, Cmd+P Team Work, Cmd+S search)
+        // are asserted in `key_bridge_keeps_independent_chords`; the
+        // absences here catch accidental reverts of chords that
+        // should go through Pane Mode only.
         assert!(!KEY_BRIDGE_JS.contains("app.file.new"));
         assert!(!KEY_BRIDGE_JS.contains("Backquote"));
     }
@@ -1423,7 +1463,7 @@ mod tests {
         // Tab close + reopen + Find on page + tab nav + tab jump
         // are NOT duplicated by Pane Mode and must stay reachable
         // through the native bridge. Cmd+T / Cmd+O / Cmd+P /
-        // Cmd+Shift+M are the `fullstack-a-32` context-aware
+        // Cmd+Shift+M are the context-aware
         // spawn chord family.
         assert!(KEY_BRIDGE_JS.contains("app.terminal.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.files.toggle"));
@@ -1437,24 +1477,24 @@ mod tests {
         assert!(KEY_BRIDGE_JS.contains("app.tab.jump"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.next"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.prev"));
-        // `phase-12 lane-e` (addendum-2): Cmd+S search + Cmd+/ (right)
+        // Cmd+S search + Cmd+/ (right)
         // / Cmd+Shift+/ (bottom) splits route through the native bridge
         // too.
         assert!(KEY_BRIDGE_JS.contains("app.search.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.splitRight"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.splitDown"));
-        // `phase-13 r2` (B-slice 2): Cmd+I was freed for the editor's
-        // italic chord, so the native bridge no longer maps it to
-        // Dashboard. Pin the removal so a regression that re-adds the
-        // case is caught (Dashboard is Hybrid-Nav-only now).
+        // Cmd+I is reserved for the editor's
+        // italic chord, so the native bridge must not map it to
+        // Dashboard. Pin the absence so a regression that re-adds the
+        // case is caught (Dashboard is Hybrid-Nav-only).
         assert!(!KEY_BRIDGE_JS.contains("app.dashboard.open"));
     }
 
     #[test]
     fn local_title_prefixes_home_vs_computer_glyph_then_path() {
-        // R1: the local title leads with the kind glyph (home when under the
+        // The local title leads with the kind glyph (home when under the
         // user's home dir, computer otherwise) then the path verbatim
-        // (`fullstack-b-14`: the path is the disambiguating window-switcher
+        // (the path is the disambiguating window-switcher
         // signal). `local_title` takes home explicitly so the test does not
         // depend on the process's real home dir.
         let home = Path::new("/Users/alex");
@@ -1476,7 +1516,7 @@ mod tests {
 
     #[test]
     fn listen_addr_from_url_extracts_host_port_authority() {
-        // R1: the inbound (tunnel) title locator is the per-tenant loopback
+        // The inbound (tunnel) title locator is the per-tenant loopback
         // host:port the window connects to.
         assert_eq!(
             listen_addr_from_url("http://127.0.0.1:54321/notes/?t=tok"),
@@ -1490,12 +1530,12 @@ mod tests {
         assert_eq!(listen_addr_from_url("not a url"), "not a url");
     }
 
-    // `fullstack-b-7`: workspace and tunnel webviews host the SPA, which
+    // Workspace and tunnel webviews host the SPA, which
     // routes external http(s) link clicks through tauri-plugin-opener
     // via the `plugin:opener|open_url` IPC. Without these permissions
     // the IPC denies, the SPA falls back to the clipboard-copy notify
     // branch, and "click external link" looks like a no-op to the
-    // user (the bug Alex reported on 2026-05-20). Pin the capability
+    // user. Pin the capability
     // shape here so a future capability-file edit can't silently drop
     // the permissions without the test catching it.
     const WORKSPACE_CAPABILITY_JSON: &str = include_str!("../capabilities/workspace.json");
@@ -1632,8 +1672,8 @@ mod tests {
         // KEY_BRIDGE_JS claims the close chord (window capture +
         // stopImmediatePropagation) before BOTH the page's listener and
         // the File-menu accelerator, so the bridge itself must route
-        // KeyW to request_close_window while on connecting.html — the
-        // page-level chord alone left Cmd+W dead (v0.31.0 follow-up).
+        // KeyW to request_close_window while on connecting.html — a
+        // page-level chord alone never sees the key (dead Cmd+W).
         // TWO routings: macOS plain Cmd+W (!shift branch) and the
         // Linux/Windows Ctrl+Shift+W (shift branch).
         let close_invoke = concat!("invokeIpc(e, 'request_close", "_window')");
@@ -1647,10 +1687,10 @@ mod tests {
 
     #[test]
     fn default_capability_covers_extra_launcher_windows() {
-        // `fullstack-83` lets Cmd+N spawn `main-N` launcher windows.
-        // They must inherit the same capability as `main`, or
-        // external link handling and other plugin IPCs break for the
-        // user the moment they open a second launcher.
+        // The default capability covers `main-*` alongside the
+        // singleton `main`: any launcher-class window must inherit
+        // the same capability as `main`, or external link handling
+        // and other plugin IPCs break the moment one exists.
         let windows = capability_windows(DEFAULT_CAPABILITY_JSON);
         assert!(
             windows.iter().any(|w| w == "main"),

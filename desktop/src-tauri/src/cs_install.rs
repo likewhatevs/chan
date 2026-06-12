@@ -1,5 +1,5 @@
 //! First-run install of a `cs` wrapper into `~/.local/bin` for AppImage
-//! users (round-3 @@Architect decision, option (a)).
+//! users.
 //!
 //! An AppImage is a single self-mounting file with no in-bundle symlink, so
 //! a desktop-only Linux user has no `cs` on PATH and cannot drive the

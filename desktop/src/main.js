@@ -89,7 +89,7 @@ listen('auth-error', (e) => {
 let booted = false;
 let homeDir = '';
 /// True while a registry add/remove is running in the embedded
-/// host. Add/remove and feature toggles run in-process now (no
+/// host. Add/remove and feature toggles run in-process (no
 /// `chan` binary), but `boot()` can still take a moment on a large
 /// workspace, so the launcher disables the relevant controls and shows
 /// a progress banner while busy.
@@ -135,7 +135,7 @@ function renderPath(full) {
     if (!rest) return house;
     return `${house}<span class="path-sep">/</span>${escapeHtml(rest)}`;
   }
-  // `fullstack-53`: symmetric computer-glyph branch. Matches the
+  // Symmetric computer-glyph branch. Matches the
   // home variant's 13x13 viewBox + currentColor stroke so theme
   // switches keep visual parity. There's no canonical "computer
   // root" to trim (unlike `$HOME`), so render the full path after
@@ -144,7 +144,7 @@ function renderPath(full) {
   return `${computer}<span class="path-sep">/</span>${escapeHtml(full.replace(/^\//, ''))}`;
 }
 
-// `new-team-1`: directional glyphs for the WHERE column on remote rows.
+// Directional glyphs for the WHERE column on remote rows.
 // out = arrow leaving a box (we connect OUT to a URL); in = arrow
 // arriving into a tray (we LISTEN for an incoming connection). Match
 // the ic-home / ic-computer style (13x13, currentColor, 1.8 stroke) so
@@ -155,8 +155,8 @@ const ICON_INBOUND = `<svg class="ic-inbound" viewBox="0 0 24 24" width="13" hei
 /// The WHERE cell, one renderer keyed on `kind`. Local reuses the
 /// home/computer path glyph; remote rows lead with a directional icon
 /// (outbound = we connect to a URL; inbound = we listen) plus a muted
-/// direction caption, which is the launcher's INBOUND vs OUTBOUND
-/// indication now that the ON-column text tags are gone.
+/// direction caption — the launcher's only INBOUND vs OUTBOUND
+/// indication (the ON column carries just the connection dot).
 function renderWhere(d) {
   if (d.kind === 'tunneled') {
     return `${ICON_INBOUND}<span class="where-text">${escapeHtml(d.label || '')}</span><span class="where-dir">inbound</span>`;
@@ -441,13 +441,9 @@ function setTunnelMode(mode) {
   localStorage.setItem(TUNNEL_MODE_KEY, mode === 'local' ? 'local' : 'tunnel');
 }
 
-/// The [New] workspace modal. Replaces the old [Open workspace] +
-/// [Attach] entry points with one overlay carrying three choices, each
-/// a different body (modeled on showPreflightDialog for the scaffold and
-/// on the Team Work dialog's real-estate toggle for the segmented switch
-/// that swaps the body per choice):
-///   - Local directory: a folder picker + in-body preflight scan + the
-///     two add-time feature toggles + Open (add_workspace).
+/// The [New] workspace modal: one overlay carrying three choices, a
+/// segmented switch swapping the body per choice:
+///   - Local directory: a folder picker + Open (add_workspace).
 ///   - Remote outbound: a URL + name form (add_outbound_workspace); we
 ///     dial out to the remote.
 ///   - Remote inbound: a port-listen form, then a listening state with
@@ -456,7 +452,7 @@ function setTunnelMode(mode) {
 /// ESC / backdrop / [X] dismiss. Dismiss NEVER stops a live inbound
 /// listener: it lives in the Rust supervisor and tunnel_status is the
 /// source of truth, so reopening New -> Inbound shows it still
-/// listening (matches the old always-visible Attach panel).
+/// listening.
 let activeNewDialog = null;
 
 function showNewWorkspaceDialog(initialChoice = 'local') {
@@ -577,10 +573,10 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
     }
     // Folder chosen: confirm the path, then register + open. The first-boot
     // pre-flight (the workspace scan, the index / seed progress, and the
-    // Semantic / Reports layer toggles) moved to chan's SPA
-    // (PreflightOverlay.svelte) in phase-17. The desktop must NOT run its own
-    // scan dialog here: it duplicates and races the SPA boot surface (the
-    // double-dialog @@Alex hit). add_workspace defaults both optional layers
+    // Semantic / Reports layer toggles) lives in chan's SPA
+    // (PreflightOverlay.svelte). The desktop must NOT run its own
+    // scan dialog here: it would duplicate and race the SPA boot surface
+    // (a double-dialog). add_workspace defaults both optional layers
     // off; the SPA's onboarding card turns them on after boot.
     body.innerHTML = `
       <p class="nw-intro">This folder will be registered as a chan workspace:</p>

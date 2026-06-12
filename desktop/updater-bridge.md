@@ -11,7 +11,7 @@ app accepts a downloaded update payload.
 
 ## Bridge Purpose
 
-Existing installs before `3c1435b` trust the old phase-8 DEV updater
+Existing installs before `3c1435b` trust the old DEV updater
 pubkey. Current builds embed the production updater pubkey.
 
 The bridge release must therefore have two properties:
@@ -74,10 +74,11 @@ cargo tauri build --bundles app,dmg
 ```
 
 The local `desktop/Makefile` produces app and DMG bundles. It does not
-currently create or publish updater feed files such as `latest.json`,
+create or publish updater feed files such as `latest.json`,
 per-platform payload URLs, or detached signature files. If the release
-publisher does not already assemble those artifacts, route CI/publisher
-work through @@Desktect and @@Alex rather than editing workflows here.
+publisher does not already assemble those artifacts, treat that as
+repo-level CI work for the release owner — do not edit workflows from
+this runbook's context.
 
 Sign the bridge updater payload with the old DEV key:
 
@@ -205,5 +206,5 @@ If the bridge version is not greater than the installed version, old
 installs will not request it.
 
 If update-feed generation or publishing needs GitHub Actions changes,
-stop and route the change through @@Desktect so @@Alex can coordinate
-with chan-core.
+stop and coordinate with the release owner: workflow files are shared
+repo infrastructure, not desktop-local.

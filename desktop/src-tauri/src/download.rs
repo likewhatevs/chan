@@ -4,8 +4,8 @@
 // browser's own download manager, which shows progress + drops the
 // file in the user's Downloads folder. chan-desktop's WKWebView /
 // WebView2 has no such download manager UI, so a plain `<a download>`
-// in the desktop shell silently does nothing useful. Bug 2 (round-1)
-// asks for a native download indicator that mimics the browser.
+// in the desktop shell silently does nothing useful; this command
+// backs a native download flow that mimics the browser.
 //
 // The split is: the SPA fetches the file over the same loopback
 // connection it already uses (via XHR, so it gets download progress

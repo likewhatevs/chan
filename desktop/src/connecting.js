@@ -3,15 +3,14 @@
 // The problem this solves: chan-desktop points an outbound
 // WebviewWindow straight at a remote chan URL it does not own. When
 // that remote is down the WKWebView just shows a blank white page with
-// no feedback. Instead the Rust side now opens this local page first;
+// no feedback. Instead the Rust side opens this local page first;
 // it shows a spinner + a live elapsed timer + one timestamped row per
 // connection attempt, retries until it succeeds (or the user closes the
 // window), and on success navigates the same window to the live
 // workspace.
 //
-// Window <-> page contract (page side). The Rust/Tauri half is owned by
-// @@LaneB; the original design spec (the phase-17 round-2
-// connecting-screen brief) is preserved in git history. Summary:
+// Window <-> page contract (page side; the Rust/Tauri half lives in
+// serve.rs `build_workspace_window`):
 //
 //   * Inputs are injected by an initialization_script that runs BEFORE
 //     this file, as a global object:
@@ -20,7 +19,7 @@
 //                and to hand to the probe.
 //       target = the full URL to NAVIGATE to on success: remote URL plus
 //                ?w=<window-label> plus any restored #fragment, assembled
-//                by Rust exactly as the old direct load did, so per-window
+//                by Rust exactly like a direct workspace load, so per-window
 //                SPA state + window-config restore survive the navigation.
 //   * Reachability is probed through a single Tauri command:
 //         invoke('probe_url', { url }) -> { reachable, status, detail }
@@ -160,7 +159,7 @@ async function runLoop() {
   }
 }
 
-// Probe the remote for reachability. In Tauri this is the LaneB-owned
+// Probe the remote for reachability. In Tauri this is the `probe_url`
 // Rust command (no CORS, owns its connect timeout). Standalone it is
 // simulated so the page can be developed without a desktop build.
 async function probe(url) {

@@ -3,7 +3,8 @@
 //! chan persists its registry of known workspaces at `~/.chan/config.toml`
 //! (see `chan_workspace::registry`). chan-desktop treats that file as the
 //! source of truth for which workspaces exist on this machine. We only
-//! parse the subset we need; mutation goes through the `chan` binary.
+//! parse the subset we need; mutation routes through the embedded
+//! host's shared `chan_workspace::Library`, never this mirror.
 
 use std::path::PathBuf;
 

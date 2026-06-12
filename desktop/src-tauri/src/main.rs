@@ -53,12 +53,12 @@ pub struct AppState {
     /// loopback listeners that proxy into registered remote
     /// `chan serve` instances.
     tunnel: Arc<TunnelState>,
-    /// `fullstack-b-19`: per-live-window zoom level. Tracks the
+    /// Per-live-window zoom level. Tracks the
     /// current zoom for every open webview keyed by window label so
     /// `zoom_in` / `zoom_out` / `zoom_reset` can compute the next
     /// level without spawning a JS eval round-trip to read the
     /// current. Drained into `WindowConfig.zoom_level` by the close
-    /// handler so the LRU restore from `-b-1` picks the level up on
+    /// handler so the LRU restore picks the level up on
     /// the next open. Missing entry reads as 1.0 (the chan-desktop
     /// default).
     pub live_window_zooms: Mutex<HashMap<String, f64>>,
@@ -403,18 +403,13 @@ fn list_workspaces(state: State<Arc<AppState>>) -> Result<Vec<Workspace>, String
     Ok(merged)
 }
 
-/// `fullstack-b-28b` slice iii: the pre-flight modal collects the
-/// user's feature choices BEFORE the workspace is registered + passes
-/// them through to `chan add`. The chan CLI's `--semantic-search`
-/// + `--reports` flags from `systacean-27` are the right
-/// registration-time entry point so chan-workspace's BOOT process
-/// picks up the chosen state on the FIRST open (no stub +
-/// re-toggle cycle).
-///
-/// `features` is optional for SPA-side backward compatibility +
-/// for the CLI-level `add_workspace` calls that don't surface the
-/// pre-flight UX. Missing or default `features` opens the workspace
-/// lean (BM25-only, no reports).
+/// Register a local workspace folder and open it. `features` lets a
+/// caller choose the optional Semantic / Reports layers at
+/// registration time so chan-workspace's BOOT process picks the
+/// chosen state up on the FIRST open (no stub + re-toggle cycle).
+/// The launcher's [New] modal omits it (the SPA's onboarding card
+/// enables layers post-boot); a missing or default `features` opens
+/// the workspace lean (BM25-only, no reports).
 #[tauri::command]
 async fn add_workspace(
     app: tauri::AppHandle,
@@ -447,10 +442,10 @@ async fn add_workspace(
         Err(e) => return Err(format!("registering workspace panicked: {e}")),
     }
 
-    // `fullstack-b-28b` slice iii: mirror the chosen features into
-    // the desktop cache so `get_workspace_features` returns the
-    // authoritative state immediately, before the user toggles
-    // anything in the launcher row.
+    // Mirror the chosen features into the persisted per-workspace
+    // desktop config. Write-only: chan-workspace owns the
+    // authoritative feature state; this records the
+    // registration-time choice.
     if features != WorkspaceFeatures::default() {
         let mut store = state.store.lock().unwrap();
         let mut cfg = store.get().map_err(err)?;
@@ -1230,8 +1225,8 @@ fn show_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Reload the calling webview window. Workspaces the SPA's tab
-/// context-menu "Reload" entry (via `fullstack-a-36`) AND the
+/// Reload the calling webview window. Backs the SPA's tab
+/// context-menu "Reload" entry AND the
 /// `Cmd+R` accelerator wired in `KEY_BRIDGE_JS`. The accelerator
 /// path bypasses the SPA event bus and invokes this command
 /// directly so a SPA-side fault (frozen Svelte runtime, JS error
@@ -1246,7 +1241,7 @@ fn reload_window(window: tauri::WebviewWindow) -> Result<(), String> {
 }
 
 /// Open the DevTools inspector on the calling webview. Mirrors
-/// the SPA's "Open Inspector" context-menu entry from `-a-36`
+/// the SPA's "Open Inspector" context-menu entry
 /// AND the `Cmd+Opt+I` accelerator in `KEY_BRIDGE_JS`. Requires
 /// the `devtools` Cargo feature on the `tauri` crate (enabled in
 /// `desktop/src-tauri/Cargo.toml`) so release builds carry the
@@ -1258,7 +1253,7 @@ fn open_devtools(window: tauri::WebviewWindow) {
     window.open_devtools();
 }
 
-/// `phase-12 lane-e` (addendum-2 Q6): close-cascade tail. The SPA
+/// Close-cascade tail. The SPA
 /// invokes this when the last tab and then the last empty pane of a
 /// workspace window are closed: close the window, and — only if this
 /// was the LAST chan SPA window — bring the launcher (the
@@ -1292,7 +1287,7 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
     window.destroy().map_err(err)
 }
 
-/// `fullstack-b-19`: browser-style zoom controls. Step size is
+/// Browser-style zoom controls. Step size is
 /// 10 % per Cmd++/Cmd+- press; the clamp range matches Tauri's own
 /// `zoom_hotkeys_enabled` polyfill semantics (0.25-5.0).
 const ZOOM_STEP: f64 = 0.10;
@@ -1776,13 +1771,13 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // chan-desktop shortcuts: declare a MenuItemBuilder here with the
     // `CmdOrCtrl+<key>` accelerator, add it to the Window submenu, and
     // add a matching `on_menu_event` branch.
-    // `fullstack-b-27`: `CmdOrCtrl+Shift+N` (not plain Cmd+N) so the
+    // `CmdOrCtrl+Shift+N` (not plain Cmd+N) so the
     // SPA's New Draft handler can claim Cmd+N without the menu
     // accelerator intercepting first. Menu label stays "New Window".
     let new_window = MenuItemBuilder::with_id("app-new-window", "New Window")
         .accelerator("CmdOrCtrl+Shift+N")
         .build(app)?;
-    // `phase-20`: File ▸ New Terminal. Cmd+T, ALWAYS enabled on both
+    // File ▸ New Terminal. Cmd+T, ALWAYS enabled on both
     // platforms (no dynamic enable/disable: a disabled menu item still
     // swallows the accelerator on macOS, so a launcher-focused Cmd+T would
     // dead-end). The single handler routes by the FOCUSED window's kind: a
@@ -1818,7 +1813,7 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
                 }
             }
         };
-        // `phase-21 fix`: File ▸ Close Window. A CUSTOM item (not the predefined
+        // File ▸ Close Window. A CUSTOM item (not the predefined
         // close_window) carrying Cmd+W, routed by `handle_close_window`: a
         // focused workspace webview closes the active TAB (dispatching the same
         // `app.tab.close` the KEY_BRIDGE_JS KeyW case fires), while the launcher
@@ -1828,7 +1823,7 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         let close_window = MenuItemBuilder::with_id("app-close-window", "Close Window")
             .accelerator("CmdOrCtrl+W")
             .build(app)?;
-        // `phase-20` / `phase-21 fix`: macOS `Menu::default` ALREADY ships a
+        // macOS `Menu::default` ALREADY ships a
         // File submenu (carrying the predefined Close Window) alongside App /
         // Edit / View / Window / Help. Reuse it rather than inserting a second
         // one (which produced a duplicate "File" menu): strip the predefined
@@ -2270,8 +2265,8 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
 
 /// Open the bundled About window. Same content on every platform (mirrors
 /// the SPA Dashboard About slide: version, license, links, donation QR, and
-/// third-party attributions), replacing both the macOS system About panel
-/// and the old Linux/Windows version dialog with its manual update check.
+/// third-party attributions); the macOS system About panel is redirected
+/// here so all platforms share one surface.
 /// Singleton: focus an existing About window instead of stacking copies.
 /// The desktop version is passed as a query param so `about.html` needs no
 /// `app`-plugin capability just to render it.
@@ -2306,10 +2301,8 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// `phase-13 r2` (B-slice 3): open a new window of the workspace that
-/// owns the currently focused window. Replaces the old Cmd+Shift+N
-/// behaviour (which always opened the workspace-picker launcher) per
-/// @@Alex: "open a new window of the currently open workspace".
+/// Open a new window of the workspace that owns the currently
+/// focused window (the Cmd/Ctrl+Shift+N "New Window" semantics).
 ///
 /// Window labels are `workspace-<hash(key)>-<seq>` and the hash is
 /// one-way, so we recover the workspace key by matching
@@ -2321,7 +2314,7 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// SAME remote (the connection is recovered from the label's hash
 /// prefix against the tunnel snapshot / outbound attachments). With the
 /// launcher (or nothing) focused, Cmd/Ctrl+Shift+N opens a standalone
-/// terminal window instead — launchers are a singleton now, never
+/// terminal window instead — the launcher is a singleton, never
 /// multiplied. The "Workspaces" picker stays reachable via the
 /// `win-main` menu item, which is also the fallback surface when a
 /// focused window's backing connection can't be resolved (stale
@@ -2329,11 +2322,11 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
 fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), String> {
     // Buried windows take precedence in every family: Cmd+Shift+N on a
     // window whose family has a hidden sibling REOPENS that sibling
-    // (most recent first) instead of spawning a fresh window — the
-    // hide-on-close counterpart of the old "reopens the last closed
-    // window" LRU behaviour, now with the live window state intact.
+    // (most recent first) instead of spawning a fresh window —
+    // reopen-the-last-closed-window feel, with the live window state
+    // intact.
     //
-    // `phase-20`: a focused standalone terminal window opens ANOTHER
+    // A focused standalone terminal window opens ANOTHER
     // terminal window (its workspace-less analogue of "new window of this
     // workspace"), not the launcher. Checked first because a terminal-*
     // window has no entry in the `serves` map for the workspace-recovery
@@ -2505,7 +2498,7 @@ fn dispatch_to_focused_workspace(app: &tauri::AppHandle, command: &str) {
     let _ = w.eval(&js);
 }
 
-/// `phase-20`: route File ▸ New Terminal (Cmd+T) by the focused window's
+/// Route File ▸ New Terminal (Cmd+T) by the focused window's
 /// kind.
 ///
 /// - An embedded SPA window (workspace-* / tunnel-* / outbound-* /
@@ -2531,7 +2524,7 @@ fn handle_new_terminal(app: &tauri::AppHandle) {
     }
 }
 
-/// `phase-21`: route File ▸ Close Window (Cmd+W) by the focused window's
+/// Route File ▸ Close Window (Cmd+W) by the focused window's
 /// kind, mirroring `handle_new_terminal`.
 ///
 /// - A focused workspace webview (workspace-* / tunnel-* / outbound-* /
@@ -2542,8 +2535,7 @@ fn handle_new_terminal(app: &tauri::AppHandle) {
 ///   window) is closed natively. The launcher's `CloseRequested` handler
 ///   intercepts that to hide rather than destroy it, keeping reopen instant.
 ///
-/// Cross-platform since the Linux File menu gained its own Close
-/// Window item: macOS binds Cmd+W; Linux/Windows bind Ctrl+Shift+W
+/// Cross-platform: macOS binds Cmd+W; Linux/Windows bind Ctrl+Shift+W
 /// (plain Ctrl+W stays a terminal readline chord there).
 fn handle_close_window(app: &tauri::AppHandle) {
     let Some(window) = app
@@ -2567,7 +2559,7 @@ fn handle_close_window(app: &tauri::AppHandle) {
     }
 }
 
-/// `phase-20`: open a standalone terminal-only window. Mounting the
+/// Open a standalone terminal-only window. Mounting the
 /// embedded tenant is async (`EmbeddedServer::open_terminal`), so this
 /// hands off to the Tauri async runtime; a failure surfaces as a system
 /// notice rather than blocking the menu-event thread. Mirrors how the

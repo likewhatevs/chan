@@ -31,43 +31,38 @@ use serde::{Deserialize, Serialize};
 
 /// Cap on how many window configs we retain in the LRU stack.
 /// Newest first; older entries past the cap are evicted on save.
-/// Twenty matches the bug report's "keep up to 20" ask and is
-/// roomy enough for several concurrently-open workspaces without
-/// risking unbounded growth from an open-close-reopen loop.
+/// Twenty is roomy enough for several concurrently-open workspaces
+/// without risking unbounded growth from an open-close-reopen loop.
 pub const MAX_WINDOW_CONFIGS: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WorkspaceSettings {
-    /// `fullstack-b-28a`: per-workspace feature toggle stub. Persisted
-    /// in chan-desktop's config until `systacean-27` lands
-    /// the chan-workspace-side config API; `-b-28b` will swap this stub
-    /// for the real API call without changing the SPA-facing IPC
-    /// shape.
+    /// Feature choice recorded when the workspace was registered with
+    /// explicit `features` (see `add_workspace`). Write-only:
+    /// chan-workspace owns the authoritative feature state, so
+    /// nothing reads this mirror back.
     ///
-    /// Both default OFF (lean workspace; BM25-only). Toggled via the
-    /// launcher row's expandable feature panel; `-a-76` will mirror
-    /// the same toggles into Settings.
+    /// Both default OFF (lean workspace; BM25-only).
     #[serde(default)]
     pub features: WorkspaceFeatures,
 }
 
-/// `fullstack-b-28a`: per-workspace feature toggles. Surfaced via the
-/// launcher row's expand panel. The pair is wide enough to absorb
-/// future toggles (chan-report variants, alternate embedding
+/// Per-workspace optional-layer toggles, accepted by `add_workspace`
+/// to enable layers at registration time. The pair is wide enough to
+/// absorb future toggles (chan-report variants, alternate embedding
 /// models, etc.) without re-shaping the IPC contract.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct WorkspaceFeatures {
     /// Semantic search via BGE-small embeddings. Default OFF.
-    /// Round-2-plan §"Pre-flight feature toggles": enabling
-    /// triggers a download of the shared model file (~63 MB) +
-    /// a per-workspace dense-vector index pass alongside the BM25
-    /// walk.
+    /// Enabling triggers a download of the shared model file
+    /// (~63 MB) + a per-workspace dense-vector index pass alongside
+    /// the BM25 walk.
     #[serde(default)]
     pub bge: bool,
     /// File classification + stats reports (tokei + per-language
-    /// SLOC + Basic COCOMO). Default OFF. Round-2-plan §"Pre-
-    /// flight feature toggles": enabling triggers a chan-report
-    /// pass maintained incrementally from filesystem events.
+    /// SLOC + Basic COCOMO). Default OFF. Enabling triggers a
+    /// chan-report pass maintained incrementally from filesystem
+    /// events.
     #[serde(default)]
     pub reports: bool,
 }
@@ -152,10 +147,10 @@ pub struct WindowConfig {
     #[serde(default)]
     pub url_hash: String,
     /// Browser-style zoom level, 1.0 = 100 %. Persists across the
-    /// close/open cycle so Cmd++ / Cmd+- / Cmd+0 chord state from
-    /// `fullstack-b-19` survives a session restart. `#[serde(default
-    /// = "default_zoom")]` keeps backward compat with pre-`-b-19`
-    /// `config.json` entries (missing field reads as 1.0).
+    /// close/open cycle so Cmd++ / Cmd+- / Cmd+0 chord state
+    /// survives a session restart. `#[serde(default
+    /// = "default_zoom")]` keeps `config.json` entries without the
+    /// field loadable (missing reads as 1.0).
     #[serde(default = "default_zoom")]
     pub zoom_level: f64,
     /// Wall-clock millis when this config was pushed. Newest first
@@ -415,17 +410,16 @@ mod tests {
 
     #[test]
     fn window_config_zoom_level_defaults_to_one_on_missing_field() {
-        // `fullstack-b-19`: existing `config.json` files predate
-        // the `zoom_level` field. The serde-default keeps them
-        // loadable as 1.0 instead of failing the load and dropping
-        // the entire window-config stack on the floor.
-        let pre_b19 = r#"{
+        // A `config.json` entry without a `zoom_level` field must
+        // stay loadable as 1.0 instead of failing the load and
+        // dropping the entire window-config stack on the floor.
+        let missing_zoom = r#"{
             "key": "/workspace/legacy",
             "window_label": "workspace-legacy-0",
             "url_hash": "files=1",
             "saved_at": 12345
         }"#;
-        let cfg: WindowConfig = serde_json::from_str(pre_b19).expect("legacy load");
+        let cfg: WindowConfig = serde_json::from_str(missing_zoom).expect("legacy load");
         assert_eq!(cfg.zoom_level, 1.0);
         assert_eq!(cfg.url_hash, "files=1");
     }
@@ -481,9 +475,9 @@ mod tests {
 
     #[test]
     fn workspace_features_default_off() {
-        // `fullstack-b-28a`: per-workspace feature toggles default OFF
-        // so a lean workspace opens BM25-only. The user opts into BGE +
-        // reports explicitly via the launcher's expand panel.
+        // Per-workspace feature toggles default OFF
+        // so a lean workspace opens BM25-only; BGE + reports are
+        // explicit opt-ins.
         let f = WorkspaceFeatures::default();
         assert!(!f.bge);
         assert!(!f.reports);
@@ -491,20 +485,19 @@ mod tests {
 
     #[test]
     fn workspace_settings_features_missing_field_defaults_off() {
-        // `fullstack-b-28a`: existing `config.json` predates the
-        // `features` field. The serde-default keeps legacy entries
+        // A `config.json` without the `features` field must stay
         // loadable as `{bge: false, reports: false}` instead of
         // failing the load and dropping the entire per-workspace map.
-        let pre_b28 = r#"{}"#;
-        let cfg: WorkspaceSettings = serde_json::from_str(pre_b28).expect("legacy load");
+        let missing_features = r#"{}"#;
+        let cfg: WorkspaceSettings = serde_json::from_str(missing_features).expect("legacy load");
         assert!(!cfg.features.bge);
         assert!(!cfg.features.reports);
     }
 
     #[test]
     fn workspace_settings_features_round_trip() {
-        // The toggle pair survives a save+load cycle so a flip in
-        // the launcher panel sticks across desktop restarts.
+        // The toggle pair survives a save+load cycle so a recorded
+        // choice sticks across desktop restarts.
         let settings = WorkspaceSettings {
             features: WorkspaceFeatures {
                 bge: true,

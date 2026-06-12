@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the singleton main launcher plus any additional main-N launchers spawned via File > New Window (fullstack-83).",
+  "description": "Default capability for the singleton main launcher; the main-* glob keeps any additional launcher-class window on the same permission set.",
   "windows": ["main", "main-*"],
   "permissions": [
     "main-window",

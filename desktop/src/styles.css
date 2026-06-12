@@ -188,9 +188,9 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   user-select: text;
 }
 .remote-cell:hover { color: var(--text-secondary); }
-/* Remote-row connection dot (replaces the old url/tunnel text tags).
+/* Remote-row connection dot.
    Green when the workspace has a live URL, grey otherwise. The
-   inbound/outbound direction now lives on the WHERE-column icon. */
+   inbound/outbound direction lives on the WHERE-column icon. */
 .conn-dot {
   display: inline-block;
   width: 8px;
@@ -277,7 +277,7 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
 /* New-workspace modal: overlay + segmented 3-choice switch + the
    per-choice bodies. Clones the preflight overlay scaffold and the
    Team Work real-estate toggle; the inbound listening state reuses the
-   seg-toggle + snippet rules (rehomed here from the old tunnel panel). */
+   seg-toggle + snippet rules below. */
 .nw-overlay {
   position: fixed;
   inset: 0;
@@ -501,8 +501,8 @@ button.btn.icon {
 
 /* Modal scaffold for the default-workspace chooser (the new-workspace
    local-path flow reuses .preflight-intro / -path here too). The first-boot
-   pre-flight scan + layer toggles moved to chan's SPA in phase-17, so these
-   are now a plain centered-dialog shell, not a scan surface. */
+   pre-flight scan + layer toggles live in chan's SPA, so these are a
+   plain centered-dialog shell, not a scan surface. */
 .preflight-overlay {
   position: fixed;
   inset: 0;
@@ -582,10 +582,9 @@ button.btn.icon {
   word-break: break-all;
 }
 
-/* The new-workspace local path no longer runs a desktop-side pre-flight
-   scan; chan's SPA (PreflightOverlay.svelte) owns first-boot readiness +
-   the Semantic / Reports layer toggles since phase-17, so the desktop's
-   .preflight-report* / .preflight-toggle* / .preflight-warn rules were
-   removed with the scan UI. The .preflight-overlay / -dialog / -intro /
-   -path / -buttons rules above stay: the default-workspace dialog uses
-   them. */
+/* The new-workspace local path runs no desktop-side pre-flight scan;
+   chan's SPA (PreflightOverlay.svelte) owns first-boot readiness +
+   the Semantic / Reports layer toggles, so there are no desktop
+   .preflight-report* / .preflight-toggle* / .preflight-warn rules.
+   The .preflight-overlay / -dialog / -intro / -path / -buttons rules
+   above stay: the default-workspace dialog uses them. */
