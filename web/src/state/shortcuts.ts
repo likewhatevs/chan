@@ -294,6 +294,18 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Mod+. Backspace",
     group: "Panes",
   },
+  // Mod+W closes the ACTIVE pane only when it is an EMPTY pane; with
+  // tabs present the chord falls through untouched (browser tab close
+  // on web, native window close on desktop). The conditional dispatch
+  // lives in App.svelte's onWindowKey.
+  {
+    id: "app.pane.closeEmpty",
+    label: "Close empty pane",
+    web: "Mod+W",
+    native: "Mod+W",
+    group: "Panes",
+    note: "empty panes only; otherwise the browser / window close fires",
+  },
   {
     id: "ui.overlay.dismiss",
     label: "Dismiss overlay",
@@ -449,6 +461,31 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Cmd+V",
     group: "Terminal",
     note: "Ctrl+Shift+V on Linux / Windows",
+  },
+  // Rich Prompt toggle for the focused pane's active terminal
+  // (workspace windows only; no-op when the focused tab is not a
+  // terminal). Dispatched by App.svelte's onWindowKey; the terminal
+  // right-click menu mirrors it and reads its label via `chordFor`.
+  // Literal Cmd on every platform: the handler matches the physical
+  // Command/Meta key, and neither the web build nor chan-desktop
+  // binds a Ctrl variant.
+  {
+    id: "terminal.richPrompt",
+    label: "Show/Hide Rich Prompt",
+    web: "Cmd+Shift+P",
+    native: "Cmd+Shift+P",
+    group: "Terminal",
+    escapeTerminal: true,
+  },
+  // Terminal-local find (the terminal's own find bar). Dispatched by
+  // the terminal's keydown handler like copy / paste, not the App
+  // keymap; the handler accepts both the Cmd and Ctrl forms.
+  {
+    id: "terminal.find",
+    label: "Find in terminal",
+    web: "Mod+F",
+    native: "Mod+F",
+    group: "Terminal",
   },
 ];
 

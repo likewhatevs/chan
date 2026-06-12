@@ -695,10 +695,11 @@
       spawnGraphFromContext();
       return;
     }
-    // Cmd+Shift+P toggles the Rich Prompt bubble, PER-TERMINAL, on the focused
-    // pane's active terminal only. No-op when the focused tab is not a terminal
-    // (nothing selected to prompt). Free chord (no command palette); also
-    // reachable via the terminal right-click "Show/Hide Rich Prompt" entry.
+    // `terminal.richPrompt` (Cmd+Shift+P) toggles the Rich Prompt bubble,
+    // PER-TERMINAL, on the focused pane's active terminal only. No-op when the
+    // focused tab is not a terminal (nothing selected to prompt). Also
+    // reachable via the terminal right-click "Show/Hide Rich Prompt" entry,
+    // whose label reads the shortcut store.
     if (e.metaKey && !e.altKey && e.shiftKey && !e.ctrlKey && e.code === "KeyP") {
       e.preventDefault();
       // Rich Prompt is workspace-only; off in terminal-only windows.
@@ -759,6 +760,8 @@
       searchPanel.open = !searchPanel.open;
       return;
     }
+    // `app.pane.closeEmpty` (Mod+W): only an EMPTY active pane closes;
+    // otherwise the chord falls through to the browser / native close.
     if (meta && !e.altKey && !e.shiftKey && e.code === "KeyW") {
       if (closeActiveEmptyPane()) {
         e.preventDefault();
@@ -1272,9 +1275,9 @@
      is unusable until they reopen the original URL. -->
 <MissingTokenOverlay />
 <PreflightOverlay />
-<!-- Survey overlay, WINDOW-WIDE FALLBACK (R2-3): renders a survey raised by
+<!-- Survey overlay, WINDOW-WIDE FALLBACK: renders a survey raised by
      `cs terminal survey` with no resolvable target terminal (a --tab-group
-     broadcast, an unmatched --tab-name, or @@LaneD's transport not yet carrying
+     broadcast, an unmatched --tab-name, or a frame without
      tabName) as a centered modal. Per-terminal surveys render over their own
      terminal (TerminalTab mounts <BubbleOverlay tabId={tab.id} />); this
      App-root mount (default tabId=null) is the fallback slot. Renders nothing

@@ -98,6 +98,7 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   Next pane                                    Alt+]
   Close all tabs in pane                       Cmd+. x
   Kill pane                                    Cmd+. Backspace
+  Close empty pane                             Cmd+W   (empty panes only; otherwise the browser / window close fires)
   
   Tabs
   ----
@@ -117,6 +118,8 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   --------
   Copy selection                               Cmd+C   (Ctrl+Shift+C on Linux / Windows)
   Paste                                        Cmd+V   (Ctrl+Shift+V on Linux / Windows)
+  Show/Hide Rich Prompt                        Cmd+Shift+P
+  Find in terminal                             Cmd+F
 ";
 
 #[derive(Parser, Debug)]
