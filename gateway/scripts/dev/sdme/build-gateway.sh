@@ -21,8 +21,8 @@
 #   macOS (lima):  SDME='limactl shell default sudo sdme'   (default)
 #   Linux host:    SDME='sudo sdme'
 #
-# Container facts inherited from build-chan-desktop.sh (learned the hard way
-# in the round-4 de-risk):
+# Container facts shared with build-chan-desktop.sh (both scripts must
+# honor them):
 #   - sdme mounts a small (~800M) tmpfs over /tmp; a cold cargo compile can
 #     overflow it, so the in-container build sets TMPDIR=/var/tmp (the
 #     disk-backed overlay).
