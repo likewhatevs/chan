@@ -87,10 +87,10 @@ describe("header: Restart above the find/copy band", () => {
   });
 
   test("Restart sits directly above the first separator + Copy path to $CWD", () => {
-    // The per-terminal "Set MCP env vars" row was removed (the toggle
-    // moved to the global Terminal Settings panel). Restart → SEP →
-    // Copy path to $CWD is now the top of the TAB menu (Find / Copy /
-    // Paste / Copy Scrollback live in the body-context menu since F4).
+    // There is no per-terminal "Set MCP env vars" row (the toggle
+    // lives in the global Terminal Settings panel). Restart → SEP →
+    // Copy path to $CWD is the top of the TAB menu (Find / Copy /
+    // Paste / Copy Scrollback live in the body-context menu).
     expect(terminal).toMatch(
       /<span class="mbtn-label">Restart<\/span>[\s\S]{1,400}<div class="msep" role="separator"><\/div>[\s\S]{1,800}<span class="mbtn-label">Copy path to \$CWD<\/span>/,
     );
@@ -102,7 +102,7 @@ describe("header: Restart above the find/copy band", () => {
   });
 });
 
-describe("F4: terminal body-context vs tab-context split", () => {
+describe("terminal body-context vs tab-context split", () => {
   test("body right-click opens the body source", () => {
     expect(terminal).toMatch(
       /function onTerminalContextMenu[\s\S]{1,200}openTabMenu\([\s\S]{1,300}"body",/,

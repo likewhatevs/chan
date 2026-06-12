@@ -174,7 +174,7 @@
     return toggleCodeBlocks(view);
   }
 
-  // F4 body-context clipboard entries (mirror Wysiwyg). Keyboard
+  // Body-context-menu clipboard entries (mirror Wysiwyg). Keyboard
   // Cmd+C/X/V keep their own handlers; these back the right-click menu.
   export function selectionText(): string {
     return view ? clip.selectionText(view) : "";
@@ -188,8 +188,8 @@
   export function pasteClipboard(): Promise<void> {
     return view ? clip.pasteClipboard(view) : Promise.resolve();
   }
-  // F4 link affordances: the openable external URL under the right-click
-  // point (the body menu anchors there), or null.
+  // Body-context-menu link affordances: the openable external URL under
+  // the right-click point (the body menu anchors there), or null.
   export function externalUrlAtCoords(x: number, y: number): string | null {
     return view ? resolveExternalUrlAtCoords(view, x, y) : null;
   }

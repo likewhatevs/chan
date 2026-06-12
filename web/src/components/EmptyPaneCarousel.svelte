@@ -302,11 +302,11 @@
     slide?: number;
     onSlideChange?: (slide: number) => void;
     active?: boolean;
-    /// Slide indices the user switched off in the Dashboard tab menu
-    /// (A3). Auto-rotate and arrow nav skip these, and the dots hide
+    /// Slide indices the user switched off in the Dashboard tab menu.
+    /// Auto-rotate and arrow nav skip these, and the dots hide
     /// them. Empty (the default) means every slot participates.
     disabledSlots?: number[];
-    /// Per-tab auto-rotate opt-out (CK-CAROUSEL). False suppresses
+    /// Per-tab auto-rotate opt-out. False suppresses
     /// auto-advance for this tab even when the global cycling pref is on;
     /// manual nav (arrows / dots) still works. Default true.
     autoRotate?: boolean;
@@ -530,7 +530,7 @@
 
         <!-- Separator below the Fund-the-work QR, above the
              free/open-source tagline. Chan's own Apache 2.0 license sits
-             on the version row (A6). -->
+             on the version row. -->
         <div class="about-sep" role="separator" aria-hidden="true"></div>
 
         <!-- A one-line statement that
@@ -629,7 +629,7 @@
                   >×</button>
                 </div>
                 <div class="indexing-inspector-body">
-                  <!-- A4: this index-graph inspector is directory-only and
+                  <!-- This index-graph inspector is directory-only and
                        read-only. Suppress Upload (allowUpload=false) and bind
                        the same dir helpers the File Browser tree menu uses, so
                        it offers Show Directory / Graph from here / New Terminal
@@ -834,7 +834,7 @@
   .about-grid .v.mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  /* A6: chan's own license sits on the version row, spaced from the
+  /* Chan's own license sits on the version row, spaced from the
      version string and styled as a link rather than mono text. */
   .about-grid .version-license {
     margin-left: 0.6rem;

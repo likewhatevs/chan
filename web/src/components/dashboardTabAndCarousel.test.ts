@@ -151,11 +151,11 @@ describe("carousel slides", () => {
     );
   });
 
-  test("A6: chan's Apache 2.0 sits on the version row; the licenses block is gone", () => {
-    // A6 moved chan's own Apache 2.0 link onto the version row
-    // (`chan version {version} Apache 2.0`). The third-party font +
-    // screensaver attributions and the `.about-licenses` block that held
-    // them were later dropped from the About slide.
+  test("chan's Apache 2.0 sits on the version row; the licenses block is gone", () => {
+    // Chan's own Apache 2.0 link sits on the version row
+    // (`chan version {version} Apache 2.0`). The About slide carries no
+    // third-party font / screensaver attributions and no
+    // `.about-licenses` block to hold them.
     expect(carousel).toMatch(
       /<span class="k">chan version<\/span>[\s\S]{1,260}class="version-license"[\s\S]{1,160}Apache 2\.0<\/a>/,
     );
@@ -442,7 +442,7 @@ describe("EmptyPaneWelcome static spawn surface", () => {
   });
 });
 
-describe("Dashboard slot on/off helpers + persistence (A3)", () => {
+describe("Dashboard slot on/off helpers + persistence", () => {
   test("DashboardTab carries an optional disabledSlots set", () => {
     expect(tabs).toMatch(/disabledSlots\?: number\[\];/);
   });
@@ -500,7 +500,7 @@ describe("Dashboard slot on/off helpers + persistence (A3)", () => {
   });
 });
 
-describe("Search-slot directory inspector actions (A4)", () => {
+describe("Search-slot directory inspector actions", () => {
   test("FileInfoBody gates Upload on allowUpload + adds a directory New Terminal", () => {
     expect(fileInfo).toMatch(/onNewTerminal\?: \(\) => void;/);
     expect(fileInfo).toMatch(/allowUpload\?: boolean;/);
@@ -551,7 +551,7 @@ describe("Search-slot directory inspector actions (A4)", () => {
   });
 });
 
-describe("About-back screensaver preview reacts to theme (A7)", () => {
+describe("About-back screensaver preview reacts to theme", () => {
   test("preview switches on screensaverTheme; hint tracks the theme", () => {
     expect(aboutSlot).toMatch(
       /import PlainScreensaverPreview from "\.\.\/screensaver\/PlainScreensaverPreview\.svelte";/,
@@ -584,7 +584,7 @@ describe("About-back screensaver preview reacts to theme (A7)", () => {
   });
 });
 
-describe("Per-tab auto-rotate opt-out (CK-CAROUSEL)", () => {
+describe("Per-tab auto-rotate opt-out", () => {
   test("DashboardTab carries optional autoRotate; serializer round-trips it as ar", () => {
     expect(tabs).toMatch(/autoRotate\?: boolean;/);
     expect(tabs).toMatch(/ar\?: boolean;/);
@@ -601,7 +601,7 @@ describe("Per-tab auto-rotate opt-out (CK-CAROUSEL)", () => {
   });
 });
 
-describe("Dashboard slot menu reachable from the tab title (A3)", () => {
+describe("Dashboard slot menu reachable from the tab title", () => {
   test("DashboardTab opens its menu from the shared tabMenu state", () => {
     // Pane.svelte's tab-title right-click routes every kind through
     // openTabMenu; DashboardTab translates a request targeting its tab

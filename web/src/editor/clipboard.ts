@@ -1,5 +1,5 @@
-// Menu-triggered clipboard actions for the CodeMirror editors (F4 body
-// context menu). The native Cmd+C/X/V keymap still owns keyboard
+// Menu-triggered clipboard actions for the CodeMirror editors (the
+// body-context menu). The native Cmd+C/X/V keymap still owns keyboard
 // clipboard (including the rich HTML paste handler in paste_html.ts);
 // these are the menu entries, which operate on plain text so a
 // right-click Cut/Copy/Paste is predictable. Each takes the live

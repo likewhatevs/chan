@@ -1,10 +1,10 @@
-// Internal-link markdown preview for the F4 body-context menu (#4).
+// Internal-link markdown preview for the body-context menu.
 // Resolves the wiki link ([[target]]) under a click point and opens the
 // shared read-only preview popover (marked + DOMPurify render) for its
-// target file. Scope this round: wiki pills only, which carry their
-// resolved target in `data-target`. Relative markdown links
-// ([text](./other.md)) are a follow-up (they need a syntax-tree walk +
-// normalizeHref rather than a rendered widget with the target attached).
+// target file. Handles wiki pills only, which carry their resolved
+// target in `data-target`. Relative markdown links ([text](./other.md))
+// are not handled (they would need a syntax-tree walk + normalizeHref
+// rather than a rendered widget with the target attached).
 
 import { openPreviewPopover } from "./overlays/preview_popover";
 

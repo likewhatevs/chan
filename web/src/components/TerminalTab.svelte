@@ -1635,8 +1635,8 @@
            Window` / `Open Inspector` entries; Cmd+R and the pane
            hamburger surface them. -->
       <div class="action-list">
-        <!-- Per-tab broadcast selector (F3: moved to the top of the menu,
-             right after the Group row). There is no umbrella "Broadcast
+        <!-- Per-tab broadcast selector, at the top of the menu right
+             after the Group row. There is no umbrella "Broadcast
              Input On/Off" rocker; the per-row checkboxes are the only
              controls. Self appears at the top of the list with a "self"
              marker. -->
@@ -1733,7 +1733,7 @@
           <span class="mbtn-chord"></span>
         </button>
         <!-- Find / Copy / Paste / Copy Scrollback live on the
-             body-context menu (F4); the tab menu keeps Copy path. -->
+             body-context menu; the tab menu keeps Copy path. -->
         <div class="msep" role="separator"></div>
         <button class="mbtn" onclick={copyTerminalCwd}>
           <span class="mbtn-icon">

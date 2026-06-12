@@ -4,7 +4,7 @@ import graph from "./GraphPanel.svelte?raw";
 // Graph right-click menu scope-header row: shows the current scope's
 // path + a kind-appropriate icon. Click wiring opens the inspector.
 
-describe("(Graph slice): scope-header row", () => {
+describe("Graph menu scope-header row", () => {
   test("Lucide icons imported (FileText / Folder / HardDrive / Hash)", () => {
     expect(graph).toMatch(
       /import \{[\s\S]*?\bFileText,[\s\S]*?\bFolder,[\s\S]*?\bHardDrive,[\s\S]*?\bHash,[\s\S]*?\} from "lucide-svelte";/,

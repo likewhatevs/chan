@@ -513,9 +513,8 @@
 
   // Link state for the body menu, captured at right-click time BEFORE
   // the menu portal covers the click point. `bodyLinkUrl` = the external
-  // URL under the cursor (F4 #3); `bodyPreviewHit` = the internal wiki
-  // link under the cursor (F4 #4). Both null when the click was off a
-  // link.
+  // URL under the cursor; `bodyPreviewHit` = the internal wiki link
+  // under the cursor. Both null when the click was off a link.
   let bodyLinkUrl = $state<string | null>(null);
   let bodyPreviewHit = $state<InternalLinkHit | null>(null);
 
@@ -584,8 +583,8 @@
   }
 
   /// Open the read-only markdown preview for the internal wiki link
-  /// under the cursor (F4 #4). The popover's Open button navigates to
-  /// the target in the active pane.
+  /// under the cursor. The popover's Open button navigates to the
+  /// target in the active pane.
   function doPreviewLink(): void {
     const hit = bodyPreviewHit;
     closeTabMenu();
@@ -826,12 +825,12 @@
            Reload Window / Open Inspector entries; Cmd+R + pane
            hamburger cover them. -->
       {#if tabMenu.source === "body"}
-        <!-- F4 body-context menu (right-click in the editor body): a
+        <!-- Body-context menu (right-click in the editor body): a
              tight, selection-aware set. Cut/Copy gate on a selection;
              Paste is plain text (rich paste stays on Cmd+V). Find is
              always present; Search appears only with a selection
              (doOpenSearch auto-seeds from the highlighted text). Link
-             actions are deferred as a follow-up. -->
+             actions appear only when the click landed on a link. -->
         <div class="action-list">
           <button
             class="mbtn"
@@ -1082,7 +1081,7 @@
           <span class="mbtn-chord"></span>
         </button>
         <div class="msep" role="separator"></div>
-        <!-- Find moved to the body-context menu (F4); the tab menu keeps
+        <!-- Find lives on the body-context menu; the tab menu keeps
              a plain workspace Search. -->
         <button class="mbtn" onclick={doOpenSearch}>
           <span class="mbtn-icon">
@@ -1112,8 +1111,8 @@
           <span class="mbtn-label">Reload from Disk</span>
           <span class="mbtn-chord"></span>
         </button>
-        <!-- A3-iii: PDF export moved out of this menu and into the file
-             Inspector (FileInfoBody), shown for markdown files. -->
+        <!-- PDF export lives in the file Inspector (FileInfoBody),
+             shown for markdown files, not in this menu. -->
         <div class="msep" role="separator"></div>
         <!-- From-$CWD spawn band, matching the Terminal tab: New
              File uses the existing dialog; New Terminal / New File

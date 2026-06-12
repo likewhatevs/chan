@@ -1320,7 +1320,7 @@
     padding: 0.6rem 0.7rem 0.8rem 0.7rem;
     font-size: 12.5px;
   }
-  /* F2: hairline dividers between the inspector's top-level sections
+  /* Hairline dividers between the inspector's top-level sections
      (buttons / file size / code / references). Target DIRECT children of
      `.info` so the nested COCOMO meta-grid (inside `.refs`) keeps its own
      dashed sub-divider and doesn't pick up a section rule. Each top-level

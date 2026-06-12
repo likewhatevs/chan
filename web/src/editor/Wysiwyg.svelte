@@ -321,8 +321,8 @@
   export function isActive(name: string): boolean {
     return view ? fmt.isActive(view, name) : false;
   }
-  // F4 body-context clipboard entries. Keyboard Cmd+C/X/V keep their own
-  // (rich) handlers; these back the right-click menu.
+  // Body-context-menu clipboard entries. Keyboard Cmd+C/X/V keep their
+  // own (rich) handlers; these back the right-click menu.
   export function selectionText(): string {
     return view ? clip.selectionText(view) : "";
   }
@@ -335,8 +335,8 @@
   export function pasteClipboard(): Promise<void> {
     return view ? clip.pasteClipboard(view) : Promise.resolve();
   }
-  // F4 link affordances: the openable external URL under the right-click
-  // point (the body menu anchors there), or null.
+  // Body-context-menu link affordances: the openable external URL under
+  // the right-click point (the body menu anchors there), or null.
   export function externalUrlAtCoords(x: number, y: number): string | null {
     return view ? resolveExternalUrlAtCoords(view, x, y) : null;
   }

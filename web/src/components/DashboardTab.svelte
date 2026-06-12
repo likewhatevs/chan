@@ -106,7 +106,7 @@
     flipHybrid(layout.activePaneId);
   }
 
-  // Tab-title right-click parity (A3): Pane.svelte routes every tab kind
+  // Tab-title right-click parity: Pane.svelte routes every tab kind
   // through the shared `tabMenu` state. Translate a request targeting
   // this dashboard tab into opening its HamburgerMenu at the click point,
   // so the slot toggles + Settings + Reload are reachable from the tab

@@ -104,10 +104,10 @@ describe("Find / Copy paths", () => {
     );
   });
 
-  test("Export to PDF is NOT in the editor menu (moved to the Inspector, A3-iii)", () => {
-    // A3-iii moved Export to PDF out of the editor right-click menu and into
-    // the file Inspector (FileInfoBody), shown for markdown files. The editor
-    // no longer references the print helper.
+  test("Export to PDF is NOT in the editor menu (lives in the Inspector)", () => {
+    // Export to PDF lives in the file Inspector (FileInfoBody), shown
+    // for markdown files, not in the editor right-click menu. The
+    // editor does not reference the print helper.
     expect(editor).not.toContain("Export to PDF");
     expect(editor).not.toContain("printMarkdownDocument");
   });
@@ -188,7 +188,7 @@ describe("imports", () => {
   });
 });
 
-describe("F4: editor body-context vs tab-context split", () => {
+describe("editor body-context vs tab-context split", () => {
   test("body right-click opens the body source", () => {
     expect(editor).toMatch(
       /function onEditorContext[\s\S]{1,500}openTabMenu\([\s\S]{1,300}"body",/,
@@ -221,7 +221,7 @@ describe("F4: editor body-context vs tab-context split", () => {
   });
 });
 
-describe("F4 #3/#4: link affordances (editor body menu)", () => {
+describe("link affordances (editor body menu)", () => {
   test("link state is captured at right-click, before the menu covers it", () => {
     // elementFromPoint would resolve the menu portal once it is on
     // screen, so onEditorContext samples the link under the cursor first.

@@ -55,7 +55,7 @@ describe("Screen lock + Screensaver UI on Dashboard back-of-card", () => {
     );
   });
 
-  test("Dashboard carries the slice-3 reactive state vars", () => {
+  test("Dashboard carries the screensaver-settings reactive state vars", () => {
     expect(dashboard).toMatch(
       /let screensaverEnabled = \$state<boolean \| null>\(null\);/,
     );

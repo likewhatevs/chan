@@ -227,13 +227,13 @@
   ///   - FILE: a file cannot be an fs-graph scope root, so re-root to its
   ///     PARENT folder (workspace root when the file is top-level) and select
   ///     the file inside that cohort.
-  ///   - DIRECTORY (GI-6): re-root to the DIRECTORY ITSELF (workspace root for
+  ///   - DIRECTORY: re-root to the DIRECTORY ITSELF (workspace root for
   ///     the empty/root path) so its subtree comes into view and the
-  ///     directory node stays selected. The previous code applied the
-  ///     file (parent) rule to directories too; when the clicked folder's
-  ///     parent already WAS the current scope that made re-rooting a
-  ///     no-op (scopeId unchanged -> no reload), and the unconsumed
-  ///     pendingSelectId left the inspector blank.
+  ///     directory node stays selected. Applying the file (parent) rule
+  ///     to directories would make re-rooting a no-op whenever the
+  ///     clicked folder's parent already IS the current scope (scopeId
+  ///     unchanged -> no reload), leaving the unconsumed pendingSelectId
+  ///     and a blank inspector.
   /// Double-click a graph node. For a directory node in filesystem mode
   /// this expands/collapses it in place (File Browser parity): expanding
   /// reveals the directory's next degree (find -d 1), collapsing hides its
@@ -518,13 +518,11 @@
   // graph index has stopped emitting date edges (issue #17), but
   // older indexes may still contain them.
   /// `group` is a synthetic edge kind: cytoscape-only, never emitted
-  /// by chan-workspace's graph index. It was used to fan `group` edges
+  /// by chan-workspace's graph index. It exists to fan `group` edges
   /// from a synthetic hub node (id `SCOPE_HUB_ID`) to the files in a
-  /// multi-file `group` scope. The scope-concept wipe retired the
-  /// group scope kind for graphs, so that synthesis is now
-  /// unreachable; the edge-kind + hub machinery is dead and slated
-  /// for a follow-up cleanup (left in place to keep this slice scoped
-  /// to the scope-kind branches).
+  /// multi-file `group` scope — but no graph scope kind produces a
+  /// group scope, so that synthesis is unreachable; the edge-kind +
+  /// hub machinery is dead and awaits a follow-up cleanup.
   type RenderedEdgeKind = "link" | "tag" | "mention" | "contains" | "language" | "group";
   /// Stable id for the synthetic scope hub node. Prefixed with `__`
   /// so it can't collide with a real file path.
@@ -880,7 +878,7 @@
     // Let the browser's native UI fire on real form controls.
     if (t?.closest("select, input")) return;
     e.preventDefault();
-    // A3-i: right-click ANYWHERE on the graph canvas / background opens the
+    // Right-click ANYWHERE on the graph canvas / background opens the
     // graph tab menu at the cursor, mirroring the editor's right-click-
     // anywhere. The tab-strip trigger anchors to its button rect; here we
     // anchor a zero-size rect at the pointer so tabMenuPos drops the bubble
@@ -1149,8 +1147,7 @@
       return visited;
     }
     // Only file scope reaches here in semantic mode:
-    //   - workspace + dir handled by the filesystem-depth branch above
-    //     (F1).
+    //   - workspace + dir handled by the filesystem-depth branch above.
     //   - tag / contact / language lenses return earlier.
     //   - filesystem mode bails at the top of the derivation.
     // File scope keeps the forward-BFS shape: "Graph from here" on a
@@ -1546,18 +1543,16 @@
 
   /// Tab-world reveal: open a File Browser TAB at `path`, select it, and
   /// expand its ancestor chain; for a directory expand the directory
-  /// ITSELF too so the browser opens AT it (GI-5 "enter the directory").
+  /// ITSELF too so the browser opens AT it ("enter the directory").
   /// Mirrors FileTree's `openSelectionInFileBrowser`.
   ///
-  /// GI-8: the graph is a TAB now, not an overlay, so the File Browser
-  /// opens as a sibling tab and the graph persists — there is no overlay
-  /// to dismiss. The previous handlers used the overlay-era
-  /// `revealPathInBrowser(...)` + `close()` chain; from a graph tab that
-  /// ran the directory fetch but opened no visible browser tab (the
-  /// `openBrowser`/`browserOverlay`/`close` machinery was built for the
-  /// pre-migration overlay), so Show Directory looked like a no-op /
-  /// graph re-layout. This routes through the same tab-world primitive
-  /// the File Browser's own "Open in File Browser" uses.
+  /// The graph is a tab, not an overlay, so the File Browser opens as a
+  /// sibling tab and the graph persists — there is no overlay to
+  /// dismiss. This routes through the same tab-world primitive the File
+  /// Browser's own "Open in File Browser" uses; an overlay-style
+  /// `revealPathInBrowser(...)` + `close()` chain would run the
+  /// directory fetch but open no visible browser tab, making Show
+  /// Directory look like a no-op / graph re-layout.
   function revealPathInBrowserTab(path: string, isDir: boolean): void {
     const parts = path.split("/").filter(Boolean);
     // Directory: expand itself + ancestors. File: ancestors only (select
@@ -2178,9 +2173,9 @@
   /// the effect track `load()`'s internal reads, because `load()` reads
   /// the `currentScope` $derived, whose object identity is recomputed by
   /// `availableGraphScopes()` whenever the WORKSPACE LAYOUT changes (a
-  /// new editor tab, a File Browser reveal). Tracking the object made the
-  /// inspector's "Open" / "Show File" actions reload the graph (GI-1 /
-  /// GI-2): they open a tab / reveal in the browser, the layout shifts,
+  /// new editor tab, a File Browser reveal). Tracking the object would
+  /// make the inspector's "Open" / "Show File" actions reload the
+  /// graph: they open a tab / reveal in the browser, the layout shifts,
   /// `currentScope` recomputes to an equal-but-new object, and the effect
   /// re-fired. The logical scope did NOT change, so anchoring on this
   /// value key keeps those actions from triggering a spurious reload.
@@ -2212,7 +2207,7 @@
     void loadWorkspaceDepthProbe();
   });
 
-  /// GI-7: keep the directory depth probe in sync with the dir scope.
+  /// Keep the directory depth probe in sync with the dir scope.
   /// Reset when the panel hides or the scope is not a directory; (re)run
   /// it whenever the scope path changes so the slider cap tracks the new
   /// directory's reachable depth.
