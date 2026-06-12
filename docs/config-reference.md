@@ -1,12 +1,11 @@
 # Chan Config Reference
 
-Canonical schema for every persisted config in chan, produced as
-the deliverable of `systacean-28` (phase-8 config currency audit).
+Canonical schema for every persisted config in chan.
 
 This doc tracks **what gets persisted, where, and who consumes
 it**. Per-field rows note serde defaults, the user-facing
 surface (CLI subcommand / Settings field / launcher panel),
-and any open findings flagged by the audit.
+and any open findings.
 
 When adding a new persisted field: extend the relevant section
 here in the same commit that lands the schema change so this
@@ -27,6 +26,8 @@ Source: `crates/chan-server/src/config.rs`.
 | `terminal.ring_bytes` | `usize` | `1 << 20` (1 MB) | `PATCH /api/server/config` | terminal ring buffer alloc |
 | `terminal.scrollback_mb` | `u32` | `50` (clamped `10..=500`) | `PATCH /api/server/config` | SPA xterm.js scrollback line cap |
 | `terminal.default_term` | `String` | `"xterm-256color"` | `PATCH /api/server/config` | PTY spawn `TERM` env |
+| `terminal.font` | `TerminalFontChoice` | `os-default` | `PATCH /api/server/config` + Settings | xterm.js fontFamily chain; `source-code-pro` opts into the bundled font (download flow on non-embed builds) |
+| `terminal.mcp_env` | `bool` | `false` | `PATCH /api/server/config` + Settings | whether new non-team terminals export `CHAN_MCP_*`; per-request `?mcp_env=on` overrides, team spawns use the team config's own `mcp_env` |
 
 Legacy `[reports] enabled = ...` blocks in `server.toml` are ignored
 on load and omitted on the next save. Per-workspace
@@ -51,6 +52,7 @@ Source: `crates/chan-server/src/preferences.rs`.
 | `date_format` | `String` | Settings | date rendering across SPA |
 | `strip_trailing_whitespace_on_save` | `bool` | Settings | editor save hook |
 | `bubble_overlay_mode` | `BubbleOverlayMode` | Bubble menu | overlay rendering |
+| `hybrid_surface_themes` | `HybridSurfaceThemes` | Settings | per-surface Hybrid Nav theming |
 | `empty_pane_carousel_cycling` | `bool` | Settings | empty-pane behavior |
 
 ## chan-workspace
@@ -63,11 +65,15 @@ Per-workspace entry persisted at registration time:
 
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
-| `path` | `PathBuf` | required | `chan add <path>` | workspace enumeration / open |
-| `uuid` | `String` (16 hex) | minted on add | (internal identity) | per-workspace sidecar keying |
-| `name` | `Option<String>` | basename | `chan add --name` / `chan rename` | window title + UI |
-| `last_opened` | `DateTime<Utc>` | now() | `chan list` | recency sort |
+| `root_path` | `PathBuf` | required | `chan add <path>` | workspace enumeration / open |
+| `metadata_key` | `String` | minted on add | (internal identity) | stable storage key under `~/.chan/workspaces/` |
+| `created_at` | `DateTime<Utc>` | now() on add | (internal) | registry bookkeeping |
+| `last_seen_at` | `DateTime<Utc>` | refreshed on open | `chan list --json` | recency sort |
 | `canonical_path` | transient (`#[serde(skip)]`) | n/a | (internal cache) | symlink-stable comparison |
+
+Workspaces have no persisted display name: the UI titles a workspace
+by its directory basename, and `PATCH /api/workspace` rejects `name`
+writes.
 
 Global registry fields (not per-workspace), persisted in the same
 `~/.chan/config.toml`:
@@ -97,19 +103,26 @@ Source: `crates/chan-workspace/src/index/config.rs`.
 | `chunking` | `Chunking` enum | `Headings` | (internal; no user surface yet) | indexer chunking strategy |
 | `vectors_model` | `Option<String>` | `None` | (internal stamp) | mismatch-wipe trigger on `Index::open` |
 | `vectors_dim` | `Option<u32>` | `None` | (internal stamp) | build-time defensive cross-check |
-| `semantic_enabled` | `bool` | `false` | `chan index enable-semantic/disable-semantic --path <workspace>` + Settings (`fullstack-a-21`) | `Workspace::search` Hybrid default mode |
-| `reports_enabled` | `bool` | `false` | `chan reports enable/disable --path <workspace> [-y]` + `chan add --reports` | `Workspace::report()` lazy init + `Workspace::boot()` |
+| `semantic_enabled` | `bool` | `false` | `chan index enable-semantic/disable-semantic --path <workspace>` + Settings | `Workspace::search` Hybrid default mode |
+| `reports_enabled` | `bool` | `true` on new workspaces; a legacy config.toml omitting the field stays `false` | `chan reports enable/disable --path <workspace> [-y]` + `chan add --reports` | `Workspace::report()` lazy init + `Workspace::boot()` |
+| `excluded_dirs` | `Vec<String>` | `[]` | `GET`/`PUT /api/index/excluded-dirs` | per-workspace additions to the global walk blocklist (exact basenames, any depth, case-insensitive) |
+| `screensaver_enabled` | `bool` | `false` | `PATCH /api/screensaver/state` + Settings | SPA screensaver overlay arming |
+| `screensaver_timeout_secs` | `u32` | `300` | `PATCH /api/screensaver/state` | SPA client-side idle threshold |
+| `screensaver_theme` | `ScreensaverTheme` | `plain` | `PATCH /api/screensaver/state` | overlay scene |
+| `screensaver_pin_hash` | `Option<Vec<u8>>` | `None` | `POST /api/screensaver/pin` | overlay PIN gate; the wire only ever reports `pin_set: bool` |
 
 ### `.Drafts/team-{name}/config.toml` — `TeamConfig`
 
-Source: `crates/chan-workspace/src/teams.rs` (post-`systacean-30`).
+Source: `crates/chan-workspace/src/teams.rs`.
 
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
-| `team_name` | `String` | required | `chan-server /api/teams/{name}/load + .../unload + GET .../loaded` (`systacean-31`) | team identification |
+| `team_name` | `String` | required | `chan-server /api/teams/{name}/load + .../unload + GET .../loaded` | team identification |
 | `host_name` | `String` | required | (set at create time) | UI rendering |
 | `host_handle` | `String` | required | (set at create time) | @@-prefix policy |
+| `tab_group` | `String` | team name | (set at create time) | terminal tab grouping for the team's members |
 | `auto_prefix_at` | `bool` | `true` | (set at create time; future Settings) | bubble overlay @@-auto-prefix |
+| `mcp_env` | `bool` | `false` | (set at create time) | whether team-spawned terminals export `CHAN_MCP_*` |
 | `created_at` | `String` (ISO 8601) | required | (set at create time) | sort + display |
 | `members[]` | `Vec<Member>` | empty | (future Settings) | team roster + position grid |
 
@@ -143,31 +156,34 @@ Source: `desktop/src-tauri/src/config.rs`.
 
 `WindowConfig`: `key: String`, `window_label: String`, `url_hash: String`, `zoom_level: f64`, `saved_at: u64`.
 
-## Open findings (systacean-28)
+## Open findings
 
 | # | Finding | Recommended action | Owner | Priority |
 |---|---------|---------------------|-------|----------|
 | 1 | `WorkspaceFeatures` mirror in chan-desktop config can drift when users bypass chan-desktop's UI for feature toggles (e.g. `chan index enable-semantic` from terminal). | Keep the current refresh-on-read path or replace the mirror with a direct chan-workspace config API. | chan-desktop + chan-workspace | Low (corner case for power users) |
 
-The removed `ServerConfig.reports.enabled` finding is closed in
-Track A. The SPA reports toggle now uses
-`/api/index/reports/{state,enable,disable}`.
-
 ## Layout pointers
 
-* Per-user config dir: `~/.chan/` (desktop) or `state_dir/` (iOS / Android).
-* Per-user state dir: `XDG_DATA_HOME/chan/` (Linux) / `~/Library/Application Support/chan/` (macOS).
-* Per-user cache dir: `XDG_CACHE_HOME/chan/` / `~/Library/Caches/chan/`.
+* Per-user config dir: `~/.chan/` on desktop targets; co-located
+  under the data dir on iOS / Android where the home dir isn't
+  user-writable. Holds the global `config.toml` (workspace registry).
+  The state and cache roots resolve to the same `~/.chan/`.
 
-Per-workspace subpaths key by `KnownWorkspace.uuid` (16 hex chars), assigned at registration:
+Per-workspace metadata lives under
+`~/.chan/workspaces/<metadata_key>/`, where `metadata_key` is a
+readable slug of the canonical workspace path plus an 8-hex hash
+suffix:
 
-* `state_dir/sessions/<uuid>/` — session blobs (window/pane layout).
-* `state_dir/graph/<uuid>/` — graph DB + sidecar markers.
-* `state_dir/locks/<uuid>/` — per-workspace index-writer lockfile.
-* `state_dir/tokens/<uuid>/` — chan-server bearer token (mode 0600).
-* `state_dir/trash/<uuid>/` — soft-deleted files (lazy GC).
-* `state_dir/report/<uuid>/report.jsonl` — chan-report state (lazy on opt-in post-`systacean-27`).
-* `cache_dir/index/<uuid>/` — tantivy search-index segments + `config.toml`.
+* `sessions/` — session blobs (window/pane layout).
+* `index/` — tantivy search-index segments + `config.toml`
+  (`IndexConfig` above).
+* `graph/` — graph DB (sqlite) + sidecar markers
+  (`rebuild.inprogress`, `rename_log.json`).
+* `locks/` — per-workspace index-writer lockfile.
+* `tokens/` — chan-server bearer token (mode 0600).
+* `trash/` — soft-deleted files (lazy GC).
+* `report/report.jsonl` — chan-report state (lazy, created on
+  reports opt-in).
 
 Drafts are NOT in this metadata tree. They live in-tree under the
 workspace root in the directory named by `Registry::drafts_dir`

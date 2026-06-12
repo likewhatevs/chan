@@ -1,135 +1,99 @@
 # How chan is developed
 
-If you've landed here from the issue tracker, a PR, or
-just browsing the repo, this doc explains the
-multi-agent development pattern behind the consolidated
-phase reports in [`phases/`](phases/). It's not a
-user-facing document; it's an explainer for outside
-contributors and curious readers.
+If you've landed here from a PR or just browsing the repo, this doc
+explains the multi-agent development pattern behind the consolidated
+phase reports in [`phases/`](phases/). It's not a user-facing
+document; it's an explainer for outside contributors and curious
+readers.
 
 ## TL;DR
 
-chan is built by a small team of AI coding assistants
-coordinated by the project owner. The assistants take
-on persistent roles (architect, backend engineer,
-frontend engineer, tester, etc.), communicate via
-append-only event channels and task files in the
-repo, and produce real commits on `main`. The owner is
-the bridge between roles and the source of strategic
-decisions.
+chan is built by small teams of AI coding assistants coordinated by
+the project owner, using chan's own Team Work tooling: each assistant
+runs in an embedded terminal tab, and the team coordinates through
+task files, append-only journals, and one-line pokes on disk. The
+owner sets scope, reviews, and is the source of strategic decisions.
+The work lands as real commits on `main`.
 
-This is unusual enough that it can look
-confusing without context. Hence this doc.
+This is unusual enough that it can look confusing without context.
+Hence this doc.
 
 ## Roles
 
-Two role types operate on the project:
+A team has three role types:
 
-* **Architect**: plans the phase, dispatches work,
-  brokers decisions with the owner. Carries no
-  implementation slot of its own. Writes task files
-  for working roles.
-* **Working roles**: backend, frontend, full-stack
-  (a mix), tester, CI/infrastructure. Each picks up
-  task files from the architect, implements them,
-  fires status updates back through the event
-  channels.
+* **Host**: the project owner. Sets scope, answers decision surveys,
+  tests releases, and is the only one who acts outside the team.
+* **Lead**: plans the round, cuts tasks, sequences the work, runs the
+  integration gate, and aggregates the workers' questions into
+  focused surveys for the host.
+* **Workers**: each owns a code surface (for example the core
+  workspace, the desktop shell, or the gateway). They pick up task
+  files from the lead, implement, and report back the same way.
 
-Roles are identified by handles starting with `@@`
-(e.g., `@@Architect`, `@@FullStackA`, `@@Systacean`,
-`@@CI`, `@@WebtestA`). Different sessions can occupy
-the same role over time; the role's persistent
-artifacts (its journal, its prior commits) carry
-forward across sessions.
-
-A second team operates on the chan-desktop side
-(`@@Desktect`, `@@Desktacean`, `@@Desktest`) with the
-same shape. The owner is the bridge between the two
-team leads.
+Teams are provisioned by the `cs terminal team` tooling: a config
+declares the members, and a generated `bootstrap.md` carries the
+process so every member starts from the same page. Members are
+identified by `@@`-prefixed tab handles; the handles are per-team and
+carry no meaning outside it.
 
 ## How work flows
 
-Phases organize the year-scale roadmap. A phase has:
+Phases organize the year-scale roadmap; a phase closes with a
+consolidated report in `docs/phases/` and usually a release tag.
+Within a phase, a round runs on a small set of on-disk artifacts in
+the team's working directory:
 
-1. **A request** (`request.md`) - the owner's
-   high-level ask for this phase.
-2. **A process** (`process.md`) - how the team
-   coordinates this phase. Usually inherits from the
-   previous phase with small deltas.
-3. **A bug list** (`phase-N-bugs.md`) - durable
-   audit-trail of every issue surfaced during the
-   phase, with dispatch status and resolution.
-4. **Task files** (`<role>/<role>-N.md`) - what each
-   role is asked to do. Append-only journals: once
-   started, new appends document progress, not
-   rewrites of prior sections.
-5. **Event channels** (`alex/event-<from>-<to>.md`) -
-   the coordination protocol. When a role finishes a
-   task or hits a blocker, they "poke" the architect
-   via an event channel. The architect routes
-   clearances + next work the same way.
-
-Rounds within a phase break work into waves. A
-typical phase has 2-4 rounds; each round closes with
-a release tag.
-
-These per-phase artifacts are consolidated into the
-phase report at close and preserved in git history;
-the shape above evolved over the project (see
-[`.agents/playbook.md`](../.agents/playbook.md)).
+1. **A scope** - the owner's high-level ask for the round.
+2. **Task files** (`tasks/task-{from}-{to}-{n}.md`) - what each
+   member is asked to do. Owned by the recipient, append-only; once
+   work starts, new asks become new tasks, not amendments.
+3. **Journals** (`journals/journal-{member}.md`) - each member's
+   append-only running log.
+4. **Pokes** - one-line pointers typed into the recipient's terminal
+   ("read this task file"). Context lives in the files, not the poke.
+5. **Surveys** - when a decision needs the owner, the lead raises a
+   blocking survey in the owner's window (`cs terminal survey`); the
+   answer routes back to the lead.
 
 ## Why this pattern
 
-A few design choices that show up everywhere:
-
-* **Append-only journals**: nothing gets rewritten
-  under another role. If a decision changes, a new
-  dated section appends; the prior section stays as
-  the audit trail.
-* **Lane boundaries**: roles own specific code
-  surfaces. Cross-lane work routes through the
-  architect. This prevents two roles from editing the
-  same file in parallel without coordination.
-* **The owner is the bridge**: cross-team decisions
-  (architect <-> desktect; or any major scope call)
-  flow through the owner explicitly. Direct
-  team-to-team chatter is allowed for breadcrumbs and
-  context-sharing, but decisional traffic is the
-  owner's bridge.
-* **Real commits, real CI**: every role's work lands
-  in `main` with normal commit hygiene. The reports
-  cite commit subject lines (not SHAs; multi-agent
-  rebases would invalidate SHAs).
+* **Append-only journals**: nothing gets rewritten under another
+  member. If a decision changes, a new dated section appends; the
+  prior section stays as the audit trail.
+* **Lane boundaries**: members own disjoint file surfaces.
+  Cross-lane work routes through the lead, so two members never edit
+  the same file in parallel without coordination.
+* **The owner decides**: scope calls and trade-offs route to the
+  host as focused surveys with concrete options; workers don't
+  improvise project decisions.
+* **Real commits, real CI**: every member's work lands in `main`
+  with normal commit hygiene, behind the same pre-push gate a human
+  contributor runs.
 
 ## What you'll see in the repo
 
-* `docs/phases/phase-N.md` - one consolidated report
-  per phase: its roadmap, rounds, waves, and
-  retrospective. The front door to the project history.
-* `.agents/roster/` - role contact cards; `.agents/playbook.md`
-  carries the cross-phase operational lessons (coordination,
-  the gate, verification, commit discipline, the pre-release
-  norms).
-* While a round is active, the team runs an
-  append-only coordination bus (task files plus
-  one-line pokes) under the phase's working directory.
-  It is distilled into the phase report when the round
-  closes; the raw per-phase working material is
-  preserved in git history, not the working tree.
+* `docs/phases/phase-N.md` - one consolidated report per phase: its
+  roadmap, rounds, and retrospective. The front door to the project
+  history.
+* `.agents/` - the operational playbook the assistants work from:
+  coordination, gating, verification, and commit discipline.
+* While a round is active, its working directory (config, bootstrap,
+  tasks, journals) is the live coordination bus; it is distilled into
+  the phase report at close.
 
 ## What this doc is not
 
 It's not a contributing guide (see
-[`../CONTRIBUTING.md`](../CONTRIBUTING.md)) or a code
-of conduct (see `CODE_OF_CONDUCT.md` once added).
-It's just context, so the history makes sense.
+[`../CONTRIBUTING.md`](../CONTRIBUTING.md)) or a code of conduct
+(see [`../CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md)). It's just
+context, so the history makes sense.
 
 ## Getting involved
 
-Contributions follow the standard GitHub PR flow as
-documented in `CONTRIBUTING.md`. You don't need to
-participate in or care about the multi-agent pattern.
-It's an internal coordination protocol, not a
-project requirement. PRs are reviewed the same way
-regardless of whether they come from a human
-contributor or a role acting on the project.
+Contributions follow the standard GitHub PR flow as documented in
+`CONTRIBUTING.md`. You don't need to participate in or care about
+the multi-agent pattern. It's an internal coordination protocol, not
+a project requirement. PRs are reviewed the same way regardless of
+whether they come from a human contributor or an agent working on
+the project.

@@ -1,15 +1,12 @@
-# macOS code signing + notarization brief
+# macOS code signing + notarization
 
-Owner: @@CI (research output for phase-8 ci-3)
-Date: 2026-05-20
-Status: pre-Round-2 reference. No workflow YAML lives here; the
-signing-aware release workflow lands in `ci-4` once @@Alex has
-provisioned the credentials below.
-
-This brief lists what @@Alex needs to obtain from Apple, how to
-export the signing material safely, how to store it in GitHub
-Actions Secrets, and the shape of the notarization flow the
-Round-2 release workflow will consume.
+Reference for the credentials behind chan-desktop's signed +
+notarized releases: what the maintainer obtains from Apple, how the
+signing material is exported safely, how it is stored in GitHub
+Actions Secrets, and the notarization flow
+`.github/workflows/release-desktop.yml` consumes. The workflow's
+missing-secret error points here; this is also the runbook for
+rotating or re-provisioning any of the credentials.
 
 ## Scope
 
@@ -18,10 +15,9 @@ In scope:
 * macOS Developer ID signing + notarization for the
   chan-desktop `.app` and `.dmg` produced by
   `desktop/Makefile`'s `app-notarized` target.
-* The GitHub Actions secret names the Round-2 workflow will
-  read.
-* The chronological checklist @@Alex follows before Round-2
-  work starts.
+* The GitHub Actions secret names the release workflow reads.
+* The chronological checklist for provisioning (or
+  re-provisioning) the credentials.
 
 Out of scope (separate briefs):
 
@@ -37,24 +33,19 @@ Out of scope (separate briefs):
 
 ## Background
 
-The unsigned tag-triggered workflow shipped in `ci-2`
-(`97b82df`, `.github/workflows/release-desktop.yml`) built
-chan-desktop on the old private `chan-v*` tag shape, ran
-`make build` (which calls `cargo tauri build`), and uploaded
-the bundle as a workflow artifact. End users could not install
-that artifact on a default-configured macOS without right-click
--> Open or `xattr` shell incantations; Gatekeeper rejected it
-because the bundle was not signed by a trusted Developer ID and
-had not been notarized by Apple.
+An unsigned bundle cannot be installed on a default-configured
+macOS without right-click -> Open or `xattr` shell incantations:
+Gatekeeper rejects anything not signed by a trusted Developer ID
+and notarized by Apple.
 
-`desktop/Makefile` already implements the local signed +
-notarized path via the `app-notarized` target. It expects four
-env vars (`APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`,
-`APPLE_ID`, `APPLE_PASSWORD`) and assumes the Developer ID
-cert is already imported into the local Keychain. The Round-2
-CI workflow's job is to reproduce that environment on a clean
-GitHub-hosted macOS runner: import the cert into a temp
-keychain, populate the env, and call `make app-notarized`.
+`desktop/Makefile` implements the local signed + notarized path via
+the `app-notarized` target. It expects four env vars
+(`APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_ID`,
+`APPLE_PASSWORD`) and assumes the Developer ID cert is already
+imported into the local Keychain. The CI workflow reproduces that
+environment on a clean GitHub-hosted macOS runner: it imports the
+cert into a temp keychain, populates the env, and calls
+`make app-notarized`.
 
 ## Apple Developer Program enrollment
 
@@ -66,13 +57,12 @@ the cert is issued against whichever account you enrolled.
 | Individual   | USD 99      | The enrollee     | Recommended for chan today  |
 | Organization | USD 99      | Legal entity     | Requires D-U-N-S number     |
 
-Recommendation: enroll as an Individual under @@Alex's Apple
-ID. chan is solo-maintained; the organization path adds D-U-N-S
-provisioning and legal-name verification that adds weeks for
-no functional benefit. Future migration from Individual to
-Organization is supported by Apple but requires a fresh cert
-and a Team ID change; budget that as a phase-N task if chan
-ever incorporates.
+Recommendation: enroll as an Individual under the maintainer's
+Apple ID. chan is solo-maintained; the organization path adds
+D-U-N-S provisioning and legal-name verification that adds weeks
+for no functional benefit. Future migration from Individual to
+Organization is supported by Apple but requires a fresh cert and a
+Team ID change; that only matters if chan ever incorporates.
 
 Enrollment URL: `https://developer.apple.com/programs/`. The
 review takes 24-48 hours typically. Apple emails the
@@ -170,12 +160,10 @@ to touch it.
 ## GitHub Actions Secrets shape
 
 Names below match what `desktop/Makefile`'s `app-notarized`
-target reads plus the two extra secrets the CI workflow needs
-to import the cert into the runner's keychain. The
-`release-desktop.yml` header comment already lists the
-`APPLE_*` names; this brief adds `APPLE_CERTIFICATE_BASE64`
-and `APPLE_CERTIFICATE_PASSWORD` for the import step that the
-local Makefile path does not need.
+target reads, plus the two extra secrets the CI workflow needs
+to import the cert into the runner's keychain
+(`APPLE_CERTIFICATE_BASE64` and `APPLE_CERTIFICATE_PASSWORD`,
+which the local Makefile path does not need).
 
 | Secret                       | Holds                                         |
 |------------------------------|-----------------------------------------------|
@@ -201,7 +189,7 @@ Notes on each:
   ID Application cert is in the runner's keychain (the
   Makefile auto-detects in that case), but setting it
   explicitly avoids ambiguity if multiple certs ever get
-  imported. Round-2 should set it.
+  imported. CI sets it explicitly.
 * `APPLE_TEAM_ID` is auto-derived from
   `APPLE_SIGNING_IDENTITY` by the Makefile. Set it explicitly
   in CI anyway so a renamed cert does not break notarization
@@ -220,11 +208,11 @@ a reason to gate releases on a protected environment.
 
 The clean-runner cert-import step has two reasonable shapes:
 
-* `apple-actions/import-codesign-certs@v3` (third-party action,
+* `apple-actions/import-codesign-certs@v7` (third-party action,
   widely used, ~200 LoC of shell under the hood).
 * A hand-rolled `security` block inside the workflow.
 
-Recommendation: `apple-actions/import-codesign-certs@v3`. It is
+Recommendation: `apple-actions/import-codesign-certs@v7`. It is
 the de-facto standard for this step, handles the temp-keychain
 creation + unlock + cert import + keychain add-to-search-list
 in one place, and reduces the workflow YAML to a single step.
@@ -232,11 +220,11 @@ The cost of the third-party dep is small (one pinned action
 version) and the benefit is not maintaining shell that handles
 edge cases like keychain locking on macos-14 runners.
 
-The shape Round-2's `ci-4` will land:
+The workflow step shape:
 
 ```yaml
 - name: Import Developer ID certificate
-  uses: apple-actions/import-codesign-certs@v3
+  uses: apple-actions/import-codesign-certs@v7
   with:
     p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
     p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -279,7 +267,7 @@ If the fallback path ever gets adopted, add `KEYCHAIN_PASSWORD`
 to the secret list above (currently it is generated per-run
 inside the workflow, so it does not need a stored secret).
 
-## @@Alex's pre-Round-2 checklist
+## Provisioning checklist
 
 Chronological. Items 1-3 are one-time per developer identity;
 items 4-6 are one-time per repository.
@@ -318,10 +306,9 @@ items 4-6 are one-time per repository.
    warning. This catches enrollment / cert / password issues
    before CI ever touches them.
 
-Once step 6 is complete, fire a poke event to @@Architect.
-The release workflow consumes the secrets by name, and the next
-approved `vX.Y.Z` release cut produces a notarized `.dmg` ready
-for GitHub Release upload. The same release workflow also checks
+The release workflow consumes the secrets by name, so once step 6
+is complete the next `vX.Y.Z` release cut produces a notarized
+`.dmg` ready for GitHub Release upload. The same release workflow also checks
 for the Tauri updater signing secret names documented in
 `.agents/desktop.md`; those keys are separate from Apple
 Developer ID signing.
@@ -345,8 +332,8 @@ hardware-token requirement also makes EV painful for CI
 (token attestation does not run on GitHub-hosted runners
 without custom hardware).
 
-Round-2 `ci-4` covers macOS only. Windows lands as a follow-up
-in a later Round-2 task once the macOS path is green.
+The release workflow signs macOS only today; Windows signing lands
+together with a Windows release lane.
 
 ## References
 

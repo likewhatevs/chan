@@ -26,6 +26,12 @@ crates/
   chan-llm              MCP-only library: chan MCP server, tool
                         schemas, embedded prompts, key resolution.
   chan-report           report engine shared with chan-workspace.
+  chan-shell            the `cs` surface: clap actions, the
+                        control-socket client, and the per-agent
+                        submit-chord map. Rides the chan and
+                        chan-desktop binaries; chan-server links only
+                        its wire types (ControlRequest /
+                        ControlResponse), not clap or the transport.
   chan-tunnel-{proto,
     client, server}     h2/yamux workspace tunnel: wire protocol, the
                         client chan-server dials, and the
@@ -63,13 +69,12 @@ gateway/                Account / sign-in / reverse-proxy surface for
                         gateway/design.md and per-crate design docs.
 ```
 
-Phase 5 collapsed the historical `chan-writer/chan-core` sibling
-workspace into this repo: chan-workspace, chan-llm, chan-report, and
-the three chan-tunnel-* crates are workspace members here, not
-path deps. The workspace split still keeps app-level HTTP / frontend
-concerns out of chan-workspace / chan-llm so native shells (iOS /
-Android, future) can link `chan-workspace` via uniffi without
-dragging in this repo's axum / tower / reqwest stack.
+Every crate above is a member of this repo's root workspace (gateway/
+is the one exception: a nested workspace of its own). The crate split
+keeps app-level HTTP / frontend concerns out of chan-workspace /
+chan-llm so native shells (iOS / Android, future) can link
+`chan-workspace` via uniffi without dragging in this repo's axum /
+tower / reqwest stack.
 
 ## Crate responsibilities
 
@@ -97,18 +102,34 @@ configuration.
 Subcommand surface today:
 
 ```
-chan add PATH [--name NAME]
-chan list
+chan add PATH [--semantic-search] [--reports]
+chan list [--json]
 chan remove PATH
-chan rename PATH NAME
-chan serve [PATH] [--host ...] [--port ...] [--prefix ...] ...
-chan index PATH
+chan serve [PATH] [--here] [--host|-4|-6] [--port] [--prefix]
+           [--timeout] [--no-token] [--no-browser] [--standalone]
+           [--no-settings] [--search-aggression]
+           [--tunnel-url] [--tunnel-token] [--tunnel-workspace-name]
+           [--tunnel-public]
+chan index <rebuild|status|set-model|download-model|list-models|
+            enable-semantic|disable-semantic>
+chan reports <...>                  per-workspace code-report toggle
 chan search PATH QUERY [--limit N]
+chan graph PATH [--scope all|file|directory] [--target] [--depth]
+chan status [PATH] [--json]
+chan config <...>                   settings persisted outside the workspace
+chan metadata <...>                 metadata archive import/export
 chan upgrade [-y] [--check] [--version V]
 chan contacts import csv FILE --into DIR
-                              [--provider google] [--dry-run]
-                              [--overwrite] [--workspace PATH]
+chan shell <action>                 the `cs` surface (see below)
+chan completions SHELL
 ```
+
+`chan shell` drives the chan window that spawned the current terminal
+through the server's control socket (`$CHAN_WINDOW_ID` +
+`$CHAN_CONTROL_SOCKET`). A user-created `cs -> chan` symlink on PATH
+is the short form: argv[0] rewriting maps `cs <action>` to
+`chan shell <action>`. The action surface (open, graph, dashboard,
+terminal, window, ...) lives in chan-shell.
 
 `chan contacts import csv` parses a Google Contacts CSV and
 writes one markdown note per contact under `--into` (workspace-
@@ -132,52 +153,84 @@ and on `chan-tunnel-client` for tunnel transport.
 Module layout (`crates/chan-server/src/`):
 
 ```
-auth.rs          per-launch bearer token + axum middleware
-bus.rs           watcher event bridge into the WS broadcast
-config.rs        ServerConfig (server.toml)
-embed_seed.rs    extract the baked-in model bundle on first launch
-error.rs         Error + err_*() response builders
-host.rs          in-process multi-workspace host runtime
-indexer.rs       background search/graph indexer (boot + per-event)
-mcp_bridge.rs    Unix-socket MCP server for external agent CLIs
-preferences.rs   EditorPrefs (preferences.toml)
-qr.rs            terminal QR for the launch banner
-self_writes.rs   suppress watcher events that echo our own writes
-signal.rs        SIGINT/SIGTERM + idle-timeout watchers; clock
-state.rs         AppState, WorkspaceCell
-static_assets.rs WebAssets (rust-embed) + SPA fallback
-store.rs         shared atomic load/save for TOML configs
-tunnel_guard.rs  middleware refusing settings writes in --tunnel-public
-util.rs          slug, h1, timestamp, opaque-JSON helpers
-lib.rs           ServeConfig, sanitize_prefix, build_app, serve,
-                 serve_via_tunnel, router
+auth.rs              per-launch bearer token + axum middleware
+bus.rs               watcher/progress bridge into the WS broadcast
+config.rs            ServerConfig (server.toml)
+control_socket.rs    first-party control socket for local `cs` helpers
+embed_seed.rs        extract the baked-in model bundle on first launch
+error.rs             Error + err_*() response builders
+handoff.rs           macOS CLI-to-desktop workspace handoff (per-user
+                     Unix-domain socket)
+host.rs              in-process multi-workspace host runtime
+indexer.rs           background search/graph indexer (boot + per-event)
+mcp_bridge.rs        Unix-socket MCP server for external agent CLIs
+preferences.rs       EditorPrefs (preferences.toml)
+qr.rs                terminal QR for the launch banner
+self_writes.rs       suppress watcher events that echo our own writes
+signal.rs            SIGINT/SIGTERM + idle-timeout watchers; clock
+state.rs             AppState, WorkspaceCell
+static_assets.rs     WebAssets (rust-embed) + SPA fallback
+store.rs             shared atomic load/save for TOML configs
+submit_config.rs     runtime overrides for the per-agent submit chords
+survey.rs            survey bus: blocked-transport side of
+                     `cs terminal survey`
+terminal_sessions.rs long-lived PTY session registry
+tunnel_guard.rs      middleware refusing settings writes in
+                     tunnel / --no-settings lockdown
+util.rs              slug + opaque-JSON route helpers
+window_bus.rs        window bus: blocked-transport side of `cs pane`
+window_presence.rs   which window ids currently hold a /ws socket
+lib.rs               ServeConfig, sanitize_prefix, build_app, serve,
+                     serve_via_tunnel, router
 
 routes/
-  attachments.rs   POST /api/attachments (multipart upload)
-  build_info.rs    GET /api/build-info
-  contacts.rs      POST /api/contacts/import (multipart CSV)
-  workspace.rs         GET/PATCH /api/workspace, GET /api/cloud-workspaces
-  files.rs         /api/files, /api/files/*path, /api/move.
-                   Editable file opens support JSON reads and
-                   NDJSON streaming reads through
-                   `GET /api/files/*path?stream=1`.
-  fs_graph.rs      GET /api/fs-graph (filesystem-shaped scopes)
-  graph.rs         /api/links, /api/graph, /api/graph/languages,
-                   /api/backlinks/*path, /api/link-targets,
-                   /api/resolve-link, /api/headings. `/api/graph`
-                   and `/api/backlinks/*path` also expose NDJSON
-                   streams with `?stream=1`.
-  health.rs        GET /api/health
-  preferences.rs   /api/server/config + /api/config (unified view)
-  report.rs        /api/report/{file,prefix}. Per-file reports also
-                   expose NDJSON with
-                   `GET /api/report/file?path=...&stream=1`.
-  search.rs        /api/search/{files,content}, /api/index/*
-  sessions.rs      /api/session* (per-window editor session blob)
-  storage.rs       POST /api/storage/reset
-  terminal.rs      GET /api/terminal/ws (PTY WebSocket; exports
-                   CHAN_MCP_* env by default)
-  ws.rs            GET /ws (watcher side channel)
+  attachments.rs     POST /api/attachments (multipart upload)
+  build_info.rs      GET /api/build-info
+  contacts.rs        POST /api/contacts/import (multipart CSV)
+  cs_link.rs         POST /api/preflight/cs-link (offer the `cs`
+                     symlink when it is missing from PATH)
+  drafts.rs          drafts surface (in-workspace .Drafts/)
+  excluded_dirs.rs   GET/PUT /api/index/excluded-dirs (per-workspace
+                     indexer blocklist)
+  files.rs           /api/files, /api/files/*path, /api/move.
+                     Editable file opens support JSON reads and
+                     NDJSON streaming reads through
+                     `GET /api/files/*path?stream=1`.
+  fonts.rs           bundled-font download endpoint
+  fs_graph.rs        GET /api/fs-graph (filesystem-shaped scopes)
+  graph.rs           /api/links, /api/graph, /api/graph/languages,
+                     /api/backlinks/*path, /api/link-targets,
+                     /api/resolve-link, /api/headings. `/api/graph`
+                     and `/api/backlinks/*path` also expose NDJSON
+                     streams with `?stream=1`.
+  health.rs          GET /api/health (per-process instance id; also
+                     answers on workspace-less tenants)
+  index.rs           per-workspace semantic-search state + enablement
+  inspector.rs       inspector payloads shared by file browser,
+                     graph, and search
+  mentions.rs        GET /api/mentions (@-mention typeahead)
+  metadata.rs        chan metadata archive routes
+  preferences.rs     /api/server/config + /api/config (unified view)
+  preflight.rs       GET /api/preflight + POST decision (first-boot
+                     workspace readiness overlay)
+  report.rs          /api/report/{file,prefix}. Per-file reports also
+                     expose NDJSON with
+                     `GET /api/report/file?path=...&stream=1`.
+  reports_toggle.rs  per-workspace reports feature toggle
+  screensaver.rs     per-workspace screensaver overlay state
+  search.rs          /api/search/{files,content}, /api/index/*
+  sessions.rs        /api/session* (per-window editor session blob)
+  storage.rs         POST /api/storage/reset
+  survey.rs          survey reply + `[F]` followup-file generator
+  team_config.rs     Team Work config, persisted inside the workspace
+  terminal.rs        PTY WebSocket + terminal control APIs (exports
+                     CHAN_MCP_* and CHAN_CONTROL_SOCKET env)
+  window.rs          window reply route (the SPA side of `cs pane`)
+  windows.rs         GET /api/windows (this tenant's known windows:
+                     {id, connected, saved})
+  workspace.rs       GET/PATCH /api/workspace, GET /api/cloud-workspaces
+  ws.rs              GET /ws (watcher side channel; ?w= window tag
+                     feeds window presence)
 ```
 
 Async HTTP handlers treat chan-workspace as a synchronous filesystem
@@ -198,14 +251,14 @@ cover editable UTF-8 text, including source and config files.
 `read_media` covers chan-workspace Image and Pdf classes: images return
 MCP image content, PDFs return MCP blob resources.
 
-Phase 5 narrowed chan-llm to this MCP-only surface. The in-app
-`LlmSession`, CLI backends (`claude_cli`, `codex_cli`,
-`gemini_cli`), and their associated tool-loop and listener
-plumbing were removed when the in-app Agent overlay was deleted.
-External agent CLIs (claude, codex, gemini) connect to the chan
-MCP server by reading the `CHAN_MCP_*` environment variables the
-embedded terminal exports and translating them to their own MCP
-configuration.
+chan-llm is MCP-only: it has no in-app chat session, no CLI
+backends, and no tool loop of its own. External agent CLIs (claude,
+codex, gemini) connect to the chan MCP server by reading the
+`CHAN_MCP_*` environment variables the embedded terminal exports and
+translating them to their own MCP configuration. The crate also
+ships `chan-llm-mcp`, a standalone stdio MCP server binary any MCP
+client (Claude Desktop, Cursor, ...) can spawn for
+chan-workspace-sandboxed access to a workspace.
 
 chan-server hosts the MCP server in-process behind a Unix-domain
 socket (`crates/chan-server/src/mcp_bridge.rs`). External
@@ -290,9 +343,8 @@ exit on grace expiry.
 
 ## On-disk layout
 
-`chan-workspace` owns the per-workspace state and registry; this repo
-inherits that layout unchanged. See
-`../chan-core/crates/chan-workspace/design.md`.
+`chan-workspace` owns the per-workspace state and registry. See
+[`crates/chan-workspace/design.md`](crates/chan-workspace/design.md).
 
 App-level state that lives outside chan-workspace:
 
@@ -311,6 +363,10 @@ App-level state that lives outside chan-workspace:
   + last-known-latest tag for the self-upgrade banner.
 - MCP socket: `/tmp/chan-mcp-<pid>-<8 hex>.sock`. Created at boot,
   unlinked when `serve()` returns.
+- Control socket: `/tmp/chan-control-<pid>-<suffix>.sock`. The
+  first-party `cs` transport; exported to embedded-terminal PTYs as
+  `CHAN_CONTROL_SOCKET`. Same boot/teardown lifecycle as the MCP
+  socket.
 
 Both TOML config files round-trip through `crate::store::{load_toml,
 save_toml}`, which write atomically through chan-workspace's `fs_ops`
@@ -342,9 +398,7 @@ writes.
 The split keeps app-level concerns (HTTP, WebSocket, frontend
 bundle, editor preferences, terminal PTY) out of chan-workspace so
 native shells can link the workspace layer via uniffi without
-dragging in axum / reqwest / the rest of the HTTP stack.
-
-The Tauri desktop / mobile shells are parked. They get
-`chan-writer/chan-desktop` (or similar) when the time comes and
-link `chan-workspace` via uniffi instead of going through the HTTP
-server.
+dragging in axum / reqwest / the rest of the HTTP stack. The Tauri
+desktop shell (`desktop/`) takes the other path: it embeds
+chan-server in-process and renders the same SPA in native webview
+windows — see [`desktop/design.md`](desktop/design.md).

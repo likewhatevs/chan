@@ -1,6 +1,6 @@
 # DNS cutover runbook: chan.app -> GitHub Pages (Cloudflare, DNS-only)
 
-This is a manual procedure for @@Alex to run in the Cloudflare dashboard
+This is a manual procedure for the maintainer to run in the Cloudflare dashboard
 plus the GitHub repo settings. It is not automatable from the repo. Run
 the steps in order. Because TTL is 300s, a full rollback propagates in
 ~5 minutes (step 8).

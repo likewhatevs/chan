@@ -157,7 +157,7 @@ the GUI:
 exec -a cs ./squashfs-root/usr/bin/chan-desktop terminal list   # rc=0, no GUI
 ```
 
-Known limitation (round-4): invoking the packaged AppImage through its
+Known limitation: invoking the packaged AppImage through its
 `cs` wrapper (`exec -a cs "$APPIMAGE"`) does NOT yet reach the inner
 binary as `cs`. linuxdeploy's generated `AppRun` re-execs
 `AppRun.wrapped` without preserving argv0, so the GUI launches instead.
