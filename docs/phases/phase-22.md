@@ -116,8 +116,9 @@ green in the worktree before each merge-back.
 - The CI Xcode selection is verified only by the next release run's
   log; if the runner's newest Xcode is still pre-26 the runner image
   needs bumping.
-- A staged-then-cancelled split in terminal-only mode leaves an
-  orphaned PTY (idle-pruned; pre-existing, surfaced by the smokes).
+- ~~A staged-then-cancelled split leaves an orphaned PTY~~ — fixed in
+  v0.31.1 (cancel runs the staged terminals' close sinks while the
+  draft still renders).
 - `MAX_WINDOWS_PER_WORKSPACE` (10) counts buried windows.
 - Buried windows keep their webviews alive — deliberate (warm state),
   but it is memory the user can't see.
@@ -135,7 +136,9 @@ green in the worktree before each merge-back.
   them; now red dot / Cmd+W / Ctrl+Shift+W / Ctrl+D all cancel for
   real, with the Cmd+W routing done in the key bridge, which consumes
   the chord before the menu accelerator). It also added Linux's
-  Ctrl+Shift+W Close Window item and stripped the GTK menubar from
-  the About dialog.
+  Ctrl+Shift+W Close Window item, stripped the GTK menubar from the
+  About dialog, closed the staged-split orphan-PTY carryover, and
+  de-flaked the PTY shell probes whose end markers could match their
+  own command echo (the v0.31.0 tag-run flake).
 - The 400 GB stale `target/` discovered mid-round motivated the
   `make clean` expansion.

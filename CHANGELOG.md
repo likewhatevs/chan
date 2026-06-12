@@ -31,6 +31,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   closes them for real instead of hiding an invisible retry loop, and
   Cmd+W (macOS), Ctrl+Shift+W (Linux/Windows), and Ctrl+D all cancel the
   connection attempt from the keyboard.
+- Discarding Hybrid Nav staging (Esc) now kills the shell a staged terminal
+  spawned; previously a staged-then-cancelled split left its shell running
+  invisibly until the idle pruner collected it.
 
 ## [v0.31.0] - 2026-06-12
 
