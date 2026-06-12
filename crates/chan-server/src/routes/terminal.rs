@@ -1420,7 +1420,23 @@ mod tests {
         }
     }
 
+    /// Type `command` into a real shell and collect output until `end`
+    /// appears (PROBE_BUDGET cap).
+    ///
+    /// INVARIANT: `end` must NOT appear literally in `command` — build
+    /// it in the shell instead (`printf '__X_%s__' END`). The `stty
+    /// -echo` below is best-effort: its settle window is two short
+    /// idle reads, and on a loaded runner the shell may not have
+    /// executed it before `command` is typed, so the command ECHOES.
+    /// A literal end marker then matches inside the echo and
+    /// collect_until returns the echo alone, before the command ever
+    /// ran — the v0.31.0 tag-run flake in the tty probe.
     async fn run_shell_probe(command: &str, end: &str) -> String {
+        assert!(
+            !command.contains(end),
+            "shell probe end marker {end:?} must not appear literally in the typed command \
+             (it would match the command's own echo); build it with printf '%s'"
+        );
         let tmp = tempfile::tempdir().expect("temp workspace");
         let mut terminal = TestTerminal::spawn(
             tmp.path().to_path_buf(),
@@ -1514,7 +1530,7 @@ mod tests {
         if command_available("tty") {
             ran += 1;
             let out = run_shell_probe(
-                "printf '\\n__TTY_BEGIN__\\n'; tty; printf '\\n__TTY_END__\\n'",
+                "printf '\\n__TTY_BEGIN__\\n'; tty; printf '\\n__TTY_%s__\\n' END",
                 "__TTY_END__",
             )
             .await;
@@ -1541,7 +1557,7 @@ mod tests {
         if command_available("stty") {
             ran += 1;
             let out = run_shell_probe(
-                "printf '\\n__STTY_BEGIN__\\n'; stty size; printf '\\n__STTY_END__\\n'",
+                "printf '\\n__STTY_BEGIN__\\n'; stty size; printf '\\n__STTY_%s__\\n' END",
                 "__STTY_END__",
             )
             .await;
@@ -1555,7 +1571,7 @@ mod tests {
         if command_available("tput") {
             ran += 1;
             let out = run_shell_probe(
-                "printf '\\n__TPUT_BEGIN__\\n'; tput cols; tput lines; printf '\\n__TPUT_END__\\n'",
+                "printf '\\n__TPUT_BEGIN__\\n'; tput cols; tput lines; printf '\\n__TPUT_%s__\\n' END",
                 "__TPUT_END__",
             )
             .await;
@@ -1656,7 +1672,7 @@ mod tests {
 
         if command_available("sh") {
             ran += 1;
-            let out = run_shell_probe("printf '\\n__READ_BEGIN__\\n'; sh -lc 'read x; printf \"<%s>\\\\n\" \"$x\"' <<'EOF'\nchan-term\nEOF\nprintf '\\n__READ_END__\\n'", "__READ_END__").await;
+            let out = run_shell_probe("printf '\\n__READ_BEGIN__\\n'; sh -lc 'read x; printf \"<%s>\\\\n\" \"$x\"' <<'EOF'\nchan-term\nEOF\nprintf '\\n__READ_%s__\\n' END", "__READ_END__").await;
             assert!(
                 out.contains("<chan-term>"),
                 "shell read/write probe should roundtrip input, got {out:?}"
