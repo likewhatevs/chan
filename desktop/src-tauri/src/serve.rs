@@ -879,11 +879,21 @@ fn capture_window_config(app: &AppHandle, window_label: &str, config_key: &str, 
     });
 }
 
+/// Cap the VISIBLE windows of one workspace. Buried (hidden, not
+/// closed) windows stay live as webviews but are excluded here: the
+/// cap exists to stop runaway window creation, and counting windows
+/// the user can't see surfaces a "close one before opening another"
+/// error that points at nothing on screen. Unbury can therefore
+/// raise the visible count past the cap — it shows an existing
+/// webview rather than creating one, so it stays uncapped.
 fn ensure_window_capacity(app: &AppHandle, prefix: &str) -> Result<(), String> {
+    let state = app.state::<Arc<AppState>>();
+    let buried = state.buried_windows.lock().unwrap();
     let count = app
         .webview_windows()
         .keys()
         .filter(|label| label.starts_with(prefix))
+        .filter(|label| !buried.iter().any(|b| b.label == label.as_str()))
         .count();
     if count >= MAX_WINDOWS_PER_WORKSPACE {
         return Err(format!(

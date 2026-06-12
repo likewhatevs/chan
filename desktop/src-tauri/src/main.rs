@@ -2030,9 +2030,13 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
                 }
             }
         };
+        // Count + cost hint in the header: buried webviews stay live
+        // (warm layout, running terminals), which is memory the user
+        // can't otherwise see.
+        let buried_header = format!("Hidden Windows ({}, kept warm in memory)", buried.len());
         append_section(
             BURIED_MENU_HEADER_ID,
-            "Hidden Windows",
+            &buried_header,
             &buried,
             BURIED_MENU_ID_PREFIX,
         );
