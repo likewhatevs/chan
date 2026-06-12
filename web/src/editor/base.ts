@@ -11,6 +11,7 @@ import {
   RangeSetBuilder,
   StateEffect,
   StateField,
+  Transaction,
   type Extension,
 } from "@codemirror/state";
 import {
@@ -247,6 +248,20 @@ export function createValueSync(): {
   ): void;
 } {
   let applying = false;
+  // True until this editor has seen real content. The editor mounts
+  // before the file's async load resolves, so the FIRST apply that
+  // fills the empty doc is the load itself, not a user-visible change:
+  // it must NOT enter the undo history. Without the annotation, Cmd+Z
+  // can walk back past the load boundary to the empty pre-load doc,
+  // and autosave then persists the EMPTY file to disk (data loss; made
+  // far more reachable once keep-alive let undo history survive tab
+  // switches). Scope is deliberately the initial fill ONLY: a dedupe
+  // on non-empty content (doc seeded at EditorState.create, e.g. mode
+  // toggle remounts) also clears the flag, so every LATER external
+  // apply — file-watch reload, sibling mirror — stays undoable;
+  // whether reloads should also be non-undoable is an open product
+  // question this helper does not decide.
+  let initialFillPending = true;
   return {
     onDocChanged(update, write) {
       if (applying) return;
@@ -255,7 +270,12 @@ export function createValueSync(): {
     applyExternal(view, value, opts) {
       if (!view) return;
       const cur = view.state.doc.toString();
-      if (cur === value) return;
+      if (cur === value) {
+        if (value !== "") initialFillPending = false;
+        return;
+      }
+      const initialFill = initialFillPending && cur === "";
+      initialFillPending = false;
       applying = true;
       try {
         // Preserve the user's selection across the external replace.
@@ -272,6 +292,9 @@ export function createValueSync(): {
             anchor: Math.min(prev.anchor, lim),
             head: Math.min(prev.head, lim),
           },
+          annotations: initialFill
+            ? Transaction.addToHistory.of(false)
+            : undefined,
         });
       } finally {
         applying = false;
