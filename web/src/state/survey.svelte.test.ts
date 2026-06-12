@@ -117,6 +117,19 @@ describe("survey store", () => {
     expect(surveyFor("t2")?.surveyId).toBe("survey-b");
   });
 
+  test("BubbleOverlay binds X alongside Escape to dismiss and labels the button", async () => {
+    // Source pin (?raw): the overlay card's keydown routes x/X/Escape to
+    // dismissSurvey and the button surfaces the key the way [F] does.
+    // Live keyboard behavior is exercised in the standalone-server
+    // walkthrough; this pins the binding against accidental removal.
+    const src = (await import("../components/BubbleOverlay.svelte?raw"))
+      .default as string;
+    expect(src).toMatch(
+      /e\.key === "x" \|\| e\.key === "X" \|\| e\.key === "Escape"/,
+    );
+    expect(src).toContain("[X] Dismiss");
+  });
+
   test("a failed dismiss keeps the survey up and clears busy", async () => {
     vi.spyOn(api, "surveyReply").mockRejectedValue(new Error("boom"));
     showSurvey(spec(), "t1");

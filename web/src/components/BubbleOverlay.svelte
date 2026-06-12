@@ -3,7 +3,7 @@
      Renders ONE survey slot (per-terminal): a markdown problem
      body, up to 4 vertically aligned numbered options, and (standard on
      EVERY survey) an [F] follow-up plus a Dismiss. Picking an option (click or
-     1..N), [F] (click or F), or Dismiss (click or Escape) POSTs the reply,
+     1..N), [F] (click or F), or Dismiss (click, X, or Escape) POSTs the reply,
      which unblocks the waiting CLI. The overlay is modal over its slot; the CLI
      is blocked on the reply, so the three exits are option / followup /
      dismissed - all real replies, no silent close that could hang the CLI.
@@ -39,8 +39,8 @@
     if (id && card) card.focus();
   });
 
-  // Number keys 1..N pick an option; F follows up; Escape dismisses. F and
-  // Escape are standard on every survey. Scoped to the focused
+  // Number keys 1..N pick an option; F follows up; X or Escape dismisses. F
+  // and X/Escape are standard on every survey. Scoped to the focused
   // card (NOT the window) so each terminal's survey handles its own keys, a
   // focused terminal does not swallow the keystroke into its PTY, and a handled
   // Escape does not bubble out to close other overlays.
@@ -62,7 +62,7 @@
       void requestFollowup(slot);
       return;
     }
-    if (e.key === "Escape") {
+    if (e.key === "x" || e.key === "X" || e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
       void dismissSurvey(slot);
@@ -78,7 +78,7 @@
     aria-modal="true"
   >
     <!-- The card is the focusable survey surface (tabindex -1, focused on
-         appear); its keydown is the 1..N / F shortcut handler, scoped here
+         appear); its keydown is the 1..N / F / X shortcut handler, scoped here
          rather than the window so each terminal's survey owns its own keys. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
@@ -127,7 +127,7 @@
           disabled={busy}
           onclick={() => dismissSurvey(slot)}
         >
-          Dismiss
+          [X] Dismiss
         </button>
       </div>
     </div>
