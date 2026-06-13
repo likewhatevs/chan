@@ -1099,3 +1099,176 @@ Append-only. Owner: @@Conductor (new-team-2 lead).
 - LOCAL COMMIT ONLY — no push (standing rule; @@Alex has not
   asked).
 - This is the journal's final entry; sealed with the bus commit.
+
+## 2026-06-13 — ROUND 2 (post-close add-on): graph keep-alive dispatched
+
+- @@Alex's pre-release item: stop the graph tab reloading on every
+  activation + re-add the Reload right-click menu item (Depth →
+  Reload → Copy link). Planned in plan mode (Explore + Plan agents),
+  approved by @@Alex. Root cause: GraphPanel remounts from the
+  active-tab if-chain (Pane.svelte:1408); the remount IS the
+  "reload-on-focus" he sees. Fix = keep-alive (the dadd5e64 pattern
+  extended to a third tab kind).
+- Ratified decisions (AskUserQuestion): keep-alive approach (not a
+  data cache); KEEP the file-watcher auto-reload (on-disk in-scope
+  edits still refresh the VISIBLE graph). Recommended + included:
+  GraphCanvas `paused` prop so hidden graphs do zero background
+  paint (the huge-workspace motivation — Linux kernel as workspace).
+- Verified the load-bearing anchors myself before dispatch:
+  Pane.svelte each-block precedents (terminal 1464 / file 1485);
+  .graph-tab CSS (display:flex; flex:1 → needs the .editor-tab
+  treatment, line 2815); GraphCanvas start() resets transform
+  (1323), stop() discards sim (1438), open effect toggles (1496) →
+  the latch design is mandatory, not optional.
+- DISPATCH (lean, proportional — NOT a full multi-phase round; one
+  coupled web feature): @@Editor implements end-to-end (owns all 3
+  files, it's their dadd5e64 surface); @@TeamFlow cross-reviews
+  (reviewed dadd5e64); @@Desktop builds the WKWebView gate;
+  @@PromptQueue + @@CtxPass PARKED (no server/parallel work).
+- Bus: spec self-contained in
+  new-team-2/designs/round-2-graph-keepalive.md (approved plan
+  transcribed); task-Conductor-Editor-39 cut + poked; review/build
+  lanes pre-read + standby; parked lanes told. Round-1 disciplines
+  carry (pathspec-atomic, real-flag own-gate, lean pokes,
+  verify-before-relay). Local commits only; B7 still the release
+  watch item. Holding for @@Editor's sha.
+
+## 2026-06-13 — Desktop standby ack (round 2)
+
+- @@Desktop confirmed WKWebView gate scope (graph keep-alive walk =
+  items 1/6/7 + console, same harness as round-1 item-1) and the
+  right sequencing: NOT pre-building against spec anchors; syncs the
+  worktree forward to the SETTLED HEAD when @@Editor lands, then
+  recreates the harness (minutes, base warm). Correct call — no
+  action. Holding for @@Editor's impl sha; build request fires after
+  it lands + own-gate green.
+
+## 2026-06-13 — round-2 impl landed; review routed, build held
+
+- @@Editor: graph keep-alive + Reload @ 3fdd4bfe, VERIFIED on main
+  (7 files +356/-36; invariants confirmed at the blob:
+  `const visible = $derived(active)`, GraphCanvas `if (paused)` guard,
+  the keyed graph each-block). Own-gate green (1765 tests). Strong
+  Chrome evidence via load() instrumentation (added+removed in-smoke,
+  gate re-run after): switch→0 reloads, hidden-edit→0+1-on-reactivation,
+  lazy restore→only active fetches, pan/zoom survive, console clean.
+- Editor's honest flags: (a) #5 out-of-scope hidden edit NOT
+  instrumentable (test graph is workspace-scoped → all edits in-scope);
+  reasoned via the unchanged changeAffectsScope filter; → WKWebView
+  dir/tag-scoped hand-check. (b) visible-watcher reload MULTIPLICITY
+  (2-3 /api/graph per edit) = PRE-EXISTING indexer event multiplicity,
+  visible path unchanged, NOT a regression → follow-ups.
+- Extra diff file noted for review: graphInspectorActionsHotfix.test.ts
+  (+10) not in the plan's test list — flagged to @@TeamFlow to confirm
+  it's a legit menu-structure accommodation, not scope creep.
+- SEQUENCING decision: review FIRST, build SECOND. Routed review to
+  @@TeamFlow (task-41, dadd5e64 surface, full target list). HELD
+  @@Desktop's build until the review clears so the expensive WKWebView
+  walk runs ONCE at a settled HEAD (review is the thing most likely to
+  move HEAD; it's fast + likely clean). Desktop acked the sync-forward
+  model; told them Editor drives the walk + the #5 dir/tag add.
+- No integrated full pre-push needed pre-review: web-only commit, no
+  Rust touched, own-gate (make web-check) already covers
+  svelte-check+vitest+build. The single round-2 integrated gate runs
+  at settled HEAD (post-review/fix), doubling as release-readiness.
+- Holding for @@TeamFlow's verdict.
+
+## 2026-06-13 — Desktop fixture pre-plan (round 2, standby)
+
+- @@Desktop folded the #5 add-in correctly: a dir/tag-scoped graph
+  needs a real scope BOUNDARY in the fixture (subdir graph + files
+  OUTSIDE it) or the out-of-scope hidden-edit assertion is vacuous.
+  They'll seed it on fixture recreate + spec the assertion with
+  @@Editor at walk start. Good anticipation; no action, still
+  standby. Build fires on @@TeamFlow's verdict.
+
+## 2026-06-13 — round-2 review CLEAN; WKWebView walk fired
+
+- task-TeamFlow-Conductor-42 ACCEPTED: 3fdd4bfe CLEAN PASS 7/7,
+  132/132 across 10 suites + svelte-check 0/0. Round-standard
+  mutation bite-tests on BOTH runtime-untestable risks: latch
+  reversion (open={canvasEverShown}→{active}) fails the latch test;
+  dropped loop() pause guard fails the short-circuit test. The two
+  ?raw pins genuinely catch the regressions the design flagged.
+  graphInspectorActionsHotfix.test.ts confirmed a legit pin-update
+  (it pinned the OLD load-effect string the restructure rewrote),
+  not scope creep. Visible-watcher multiplicity confirmed
+  pre-existing, not chased.
+- HEAD verified still 3fdd4bfe (no peer commit) → BUILD CLEARS at
+  this commit. Fired the joint WKWebView walk (task-43): @@Desktop
+  builds + owns the dir/tag scope-boundary fixture (for #5),
+  @@Editor drives the assertion specs (peer-to-peer). Checklist =
+  the @@Alex-visible no-redraw symptom (item 1) + Reload order +
+  lazy restore + hidden-dirty + #5 out-of-scope + resize-while-hidden
+  + console.
+- After the walk: single integrated full pre-push at HEAD
+  (release-readiness, doubles as round-2 close gate), then @@Alex
+  smoke if he wants it (the symptom is his), then round-2 close
+  (docs append to phase-24 or a short round-2 note + bus commit).
+- Holding for the walk report.
+
+## 2026-06-13 — round-2 WKWebView walk 30/30 GREEN
+
+- task-Desktop-Conductor-45 ACCEPTED (pending @@Editor co-sign):
+  30/30 machine-asserted, 0 FAIL, at served binary 36ae19d0 (=
+  3fdd4bfe + worktree-only instrumentation; clean smoke 36e7e132).
+  THE @@Alex symptom machine-proven: switch → load() 2→2 (zero
+  reload; fsProbe noise excluded via the __graphLoads gold counter)
+  + transform byte-identical via __xform. #5 OUT-of-scope hidden
+  edit empirically ZERO reload (the gap @@Editor couldn't hit in
+  Chrome — closed on the dir/tag scope-boundary fixture, with an
+  in-scope control proving the boundary is real). Item-6
+  resize-while-hidden via divider-drag: refit, transform preserved,
+  no remount/load. Console 0 state_unsafe_mutation on the real
+  engine.
+- METHODOLOGY CATCH (recorded, not a finding): `cs pane split`
+  remounts the graph via {#key split.a/b} in Workspace.svelte —
+  EXPECTED pane-tree-shape change, NOT a keep-alive bug; the feature
+  targets in-pane tab-switch = the divider-drag path (split.ratio,
+  no key change). Re-ran item 6 with divider-drag → green. Possible
+  1-line doc note only IF @@Alex ever expects pane-split to preserve
+  graph state — out of scope here. → follow-ups (doc-note candidate).
+- HAND-SMOKE residue for @@Alex (small): node-CLICK selection
+  survival (canvas hit-test, asserted via selection-hash proxy) +
+  the visual "no redraw on switch" — both mechanism-proven by
+  1a/1b, a human glance is confirmatory not load-bearing.
+- Integrated full pre-push FIRED at 3fdd4bfe (/tmp/conductor-gate,
+  warm; bg run4) — release-readiness + round-2 close gate, parallel
+  with the co-sign (gates committed code, co-sign-independent).
+- Endgame: co-sign → gate green → optional @@Alex glance → round-2
+  close (short docs note + bus commit). Holding for both.
+
+## 2026-06-13 — round-2 walk CO-SIGNED; gate running
+
+- task-Editor-Conductor-46 ACCEPTED: 30/30 co-signed, zero contests,
+  line-by-line vs their spec. 3fdd4bfe empirically validated on the
+  real engine: no-redraw symptom fixed (literal __xform transform
+  check, not a proxy), lazy-restore-EXACTLY-1 (their tightening from
+  <=2 — caught the mount-gating regression class it exists for), #5
+  out-of-scope ZERO + in-scope control +1 (boundary proven real),
+  console 0 state_unsafe_mutation (the canvasEverShown $state-in-
+  $effect safe on WebKit). Walk binary 36ae19d0 = 3fdd4bfe +
+  worktree-only instrumentation, never committed.
+- CROSS-CUTTING note (both lanes, recorded, NOT a finding):
+  Workspace.svelte {#key split.a/b} (lines 73/89) remounts ALL
+  keep-alive kinds on a pane SPLIT — terminal/file/graph alike. So
+  graph now behaves CONSISTENTLY; the keep-alive contract targets
+  tab-switch + flip + Hybrid-Nav (no pane-tree-shape change), split
+  is deliberately outside it. Round-close doc-line candidate, no
+  task, no code.
+- Only @@Alex hand-smoke: 1c node-CLICK selection survival (proxy
+  machine-asserted via selection-hash; literal canvas hit-test not
+  reliably synthesizable). Low-stakes — the headline no-redraw is
+  fully machine-covered.
+- Integrated full pre-push at 3fdd4bfe still running (Rust test
+  phase; bg run4). HOLDING for it before the @@Alex close survey —
+  won't tell him "clear" until the gate greens.
+
+## 2026-06-13 — Desktop standby ack (round-2 close)
+
+- @@Desktop: harness retained + verified intact (build base/drivers/
+  fixture/evidence, no stray app), ready for co-sign re-run; clean
+  dist rebuild + strip gated on my word before any release smoke.
+  Correct, no action. Gate (run4) now past Rust into the web build
+  phase — close to done. Holding for it before the @@Alex close
+  survey.

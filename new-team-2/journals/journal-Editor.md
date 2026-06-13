@@ -214,3 +214,139 @@ Append-only. Lane: items 4 → 1 (mandatory order), stretch B2 only on
 - Co-sign ACCEPTED; walk phase CLOSED bilaterally. Lane declared
   COMPLETE pending the awake smoke; @@Alex smokes the CLEAN rebuild
   per my provenance recommendation. Holding for round close.
+
+## 2026-06-13 — ROUND 1 CLOSED (@@Alex: "All clean")
+
+- Awake hand-smoke ALL CLEAN on the clean rebuild; all 22 round
+  commits shipped review-clean; bus committed by @@Conductor.
+- Lane totals: 3 commits shipped (ffbcc3ff item-4 focus, dadd5e64
+  keep-alive, bb877a87 undo boundary), 5 clean-pass reviews
+  delivered, walk specs + co-sign, 1 data-loss bug found and fixed
+  mid-round, 1 finding co-discovered (fit-loop) for next round.
+- STAY WARM: host has 1 more item queued before a release; awaiting
+  dispatch.
+
+## 2026-06-13 — round-2 add-on: graph keep-alive + Reload (task-39) COMPLETE
+
+- 3fdd4bfe: extended the dadd5e64 keep-alive pattern to graph tabs
+  (3rd tab kind). Pane each-block, GraphPanel active/visible + lazy/
+  dirty load gating (plain latches, no state_unsafe), GraphCanvas
+  open-latch + paused/resume, Reload menu re-added Depth→Reload→Copy.
+  New paneGraphTabKeepAlive.test.ts + 3 re-pins. Gate green after
+  final edit (1765 tests).
+- Chrome smoke via load() instrumentation (the gold signal — immune
+  to fs-graph/depth-probe noise; added + removed within the smoke,
+  gate re-run after removal): switch→0 loads; Reload→exactly 1;
+  hidden in-scope edit→0 while hidden + exactly 1 on reactivation
+  (dirty); pan/zoom/selection survive switch (0 reloads, only the
+  cheap fs-graph depth re-probe on return); lazy restore 3 graph tabs
+  →only active fetches; console clean.
+- Detour worth recording: net-count measurement of "reloads while
+  hidden" was contaminated (showed 2) by lingering indexer re-emits
+  bleeding into the window during rapid switching; the compiled-in
+  load() console.warn disproved it definitively (0 hidden loads).
+  Lesson: for graph reload counting, instrument load() directly, not
+  the fetch hook (depth probe + indexer re-emits are noise).
+- Flagged not-fixed: visible-watcher fires 2-3 /api/graph per single
+  in-scope edit (pre-existing nonce multiplicity from raw-modify +
+  index + embedding events >250ms apart; visible path unchanged by
+  this commit). Out-of-scope hidden #5 is logic-preserved
+  (changeAffectsScope unchanged, runs first) — empirical smoke
+  deferred to the WKWebView pass (workspace-scoped test graph can't
+  exercise it).
+- Completion task-Editor-Conductor-40 cut; sha routed for @@TeamFlow
+  review. WKWebView walk pending @@Desktop build.
+
+## 2026-06-13 — graph review accepted; round-2 WKWebView walk GO (task-43)
+
+- Graph keep-alive review CLEAN PASS (7/7 + 2 mutation bite-tests),
+  3fdd4bfe settled. @@Desktop building the WKWebView gate.
+- Wrote designs/round-2-graph-walk-editor-assertion-specs.md: the
+  gold signal is a load() counter (window.__graphLoads), NOT the
+  fetch hook — raw /api/graph counts are contaminated by the
+  fs-graph depth-probe (reactivation) + watcher nonce re-emits
+  (2-3x/edit), both pre-existing non-reloads (the lesson from the
+  Chrome smoke). 7 items: 1 no-redraw/pan-preserved (1a machine
+  load-count + 1b transform read-back or eyeball + 1c selection),
+  2 Reload menu order+single-fetch, 3 lazy restore (only active
+  fetches), 4 hidden→dirty→exactly-one, 5 out-of-scope (needs
+  @@Desktop's dir-scoped BOUNDARY fixture — the gap Chrome couldn't
+  hit), 6 resize-while-hidden resume (resize-not-start, transform
+  preserved), 7 console sweep (canvasEverShown $state-in-$effect is
+  the state_unsafe proof on the real engine).
+- Poked @@Desktop peer-to-peer; driving when their harness is up.
+  @@Desktop writes the table, I co-sign via @@Conductor.
+
+## 2026-06-13 — graph-walk harness Qs answered (task-44 → 45)
+
+- Q1 (pan/zoom): blessed @@Desktop's no-remount + zero-refetch proxy
+  as the machine PASS — proved it implies transform preservation
+  (start() + pendingInitialFit are the only reset paths, both
+  excluded by the open-latch + resume-resize-not-start). Literal
+  transform value isn't worth string-patching the minified chunk →
+  proxy PASS + one eyeball for the visual + machine-check selection
+  survival via hash gn.
+- Q2 (#5 boundary): confirmed dir-scope-on-scoped/ makes
+  outside-one.md out-of-scope (changeAffectsScope:2319 — not under
+  subtree, not a visible node). Told them to run the in-scope CONTROL
+  (scoped-a edit→+1) which empirically proves the boundary regardless
+  of scope.path trailing-slash details, and to keep no in-scope→outside
+  link.
+- CAUGHT + amended: their item-3 lazy-restore bound "<=2" would
+  false-PASS a mount-gating regression (2 graph tabs both loading on
+  mount = exactly 2, within <=2). Tightened to EXACTLY 1 (only active
+  fetches; /api/graph maps 1:1 to load() in semantic mode). This is
+  the assertion that actually catches the regression item 3 exists
+  for.
+- Mapping blessed; @@Desktop runs the scoring walk. I co-sign via
+  @@Conductor.
+
+## 2026-06-13 — graph walk running (@@Desktop driving)
+
+- Harness up: @@Desktop injected the load() counter AND a per-canvas
+  __xform hook (rebuilt + embedded, verified), seeded the
+  inside/outside boundary fixture, encoded specs 1a/1b/1c/2/3/4/
+  5+control/6/7. They operate + do shell-edits at need() handshakes.
+- The __xform hook UPGRADES item 1b/6: literal transform-value check
+  instead of my no-remount proxy + eyeball — item 1 core (1a
+  zero-reload + 1b transform-preserved) now fully machine-covered.
+- Accepted 1c (node-click selection) as hand-smoke — canvas hit-test
+  isn't reliably synthesizable, per my ledger. Selection-survival is
+  the only hand-smoke in item 1; the headline no-redraw is machine.
+- On the bus; co-sign the table when @@Desktop reports.
+
+## 2026-06-13 — graph walk 30/30, CO-SIGNED (task-45 → 46)
+
+- Co-signed task-Desktop-Conductor-45 line-by-line, zero contests.
+  My round-2 deliverable (3fdd4bfe) empirically validated on real
+  WKWebView: no-redraw symptom fixed (1a zero-reload + 1b literal
+  transform byte-identical via __xform + no remount), lazy restore
+  EXACTLY 1 (my tightening caught the regression class), hidden→
+  dirty→+1 cycle, #5 out-of-scope ZERO + in-scope control +1 (the
+  Chrome-impossible gap closed), console 0 state_unsafe
+  (canvasEverShown $state-in-$effect proven safe on WebKit).
+- Verified @@Desktop's item-6 method correction against source:
+  Workspace.svelte {#key split.a/b} (73/89) → cs pane split remounts
+  (expected, pane-tree shape change), divider-drag doesn't (ratio/
+  flex only) → correct resize path, PASS. Not a bug.
+- Cross-cutting note (not a finding): {#key split} remounts ALL
+  keep-alive kinds (terminal/editor/graph) on a pane SPLIT — graph is
+  now CONSISTENT with the others; split is deliberately outside the
+  keep-alive contract (tab-switch/flip/Hybrid-Nav). Candidate
+  round-close doc line, no task.
+- Only hand-smoke: 1c node-CLICK selection (canvas hit-test) — proxy
+  machine-passed via selection-hash; eyeball for @@Alex. Headline is
+  machine.
+- Lane: round-2 add-on COMPLETE + walk-validated. Pokes (co-sign to
+  @@Conductor, courtesy to @@Desktop) sent standalone after this
+  append (the bundled-write truncation lesson bit again). Holding.
+
+## 2026-06-13 — co-sign accepted; round-2 walk bilaterally validated (FYI)
+
+- @@Conductor accepted the co-sign; graph keep-alive (3fdd4bfe)
+  bilaterally validated, empirically green on WKWebView. The
+  {#key split} consistency note → round-close doc-line candidate, no
+  task. Integrated gate running; round-2 close (short docs + bus
+  commit) after it greens + @@Alex optional glance.
+- Lane state: round-2 add-on COMPLETE + walk-validated, nothing
+  outstanding. Holding for round close.

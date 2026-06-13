@@ -176,3 +176,21 @@ Append-only. Owner: @@PromptQueue.
   probe fd routing before scripting against CLI output. Also 3 pokes
   crossed mid-flight this round; the append-only bus absorbed every
   crossing cleanly (system worked as designed).
+
+## 2026-06-13 — ROUND 1 CLOSED
+
+- @@Alex hand-smoke "All clean"; all 22 round commits shipped
+  review-clean; bus being committed by @@Conductor. (If this entry
+  post-dates his snapshot, it rides the next docs commit —
+  append-only, no conflict.)
+- Staying warm per dispatch notice: one host item queued before a
+  release. Holding for the task poke; nothing to tear down (smoke rig
+  was removed at item-2 close).
+
+## 2026-06-13 — round-2 add-on: PARKED
+
+- @@Conductor: round-2 add-on is a single web feature (graph
+  keep-alive) on @@Editor + @@TeamFlow + @@Desktop. No server or
+  parallel work routed to me — parked for this item, staying warm.
+- No action; not touching the graph/Pane surfaces (other lanes own
+  them this round). Holding for the next dispatch or round close.

@@ -313,3 +313,72 @@ pending, surfaced by the awake walk.
   /private/tmp removed, b6gtk container removed (fs image kept);
   the conductor-gate worktree persists as the build base. Local
   commit only — no push (standing rule: push on explicit ask).
+
+## Round 2 (post-close add-on) — graph tab keep-alive + Reload menu item
+
+Status: verification-complete, release-ready (pending @@Alex's
+go-to-release). Span: 2026-06-13 (same day as the round-1 close).
+
+@@Alex's one pre-release item, planned in plan mode (Explore + Plan
+agents, approved) and dispatched lean — one coherent web feature, not
+a multi-phase round.
+
+**Problem.** Clicking onto a graph tab redrew the whole graph. Cause:
+`Pane.svelte` mounted `GraphPanel` inside the active-tab if-chain, so
+every activation *remounted* it — a fresh `/api/graph` fetch + canvas
+re-layout from scratch. The remount *was* the "reload on focus" the
+user saw. Cheap on small workspaces, painful on large ones (Linux
+source tree as a workspace).
+
+**Fix (commit `3fdd4bfe`, web-only, +356/-36 across 7 files).** Graph
+tabs join the keep-alive each-block family (terminals + file editors
+from round 1's `dadd5e64`): kept mounted, hidden via the
+`visibility:hidden` contract. No refetch, no re-layout, no
+pan/zoom/selection loss on tab switches. New gating preserves the
+old "fresh when you look at it" without background work: first load is
+lazy on first activation (not mount — so session restore with N graph
+tabs doesn't fire N loads); a hidden tab that misses an in-scope
+watcher edit sets a dirty flag and reloads exactly once on next
+activation. The `GraphCanvas` `open` prop now *latches* true once
+shown (its `start()` resets the pan/zoom transform, so toggling would
+kill it), and a new `paused` prop suspends the rAF loop while hidden
+(zero background paint for hidden graphs — the huge-workspace win).
+The **Reload** right-click menu item is restored (removed in
+`ae22d5a1`), between Depth and "Copy link to graph", for manual
+refetch control.
+
+**Host decisions (ratified before implementation):** keep-alive (not
+a data cache); KEEP the file-watcher auto-reload (on-disk in-scope
+edits still refresh the *visible* graph) — Reload is manual control on
+top, not a replacement.
+
+**Verification.** @@Editor own-gate `make web-check` green (1765
+tests) + Chrome smoke via load()-instrumentation. @@TeamFlow
+cross-review CLEAN PASS (7/7) with mutation bite-tests on both
+runtime-untestable risks (latch reversion, dropped pause guard — each
+caught statically). Joint WKWebView walk **30/30** (@@Desktop build +
+fixture, @@Editor specs), bilaterally co-signed: the no-redraw symptom
+machine-proven via a literal transform-value read; the out-of-scope
+hidden-edit path (Chrome structurally couldn't reach it) confirmed
+zero-reload on a dir-scoped boundary fixture with an in-scope control;
+lazy-restore-exactly-1; console 0 `state_unsafe_mutation` on WebKit.
+Integrated full `make pre-push` green at HEAD `3fdd4bfe`
+(release-readiness). Only hand-smoke left is the low-stakes 1c
+node-click selection survival (headline is fully machine-covered).
+
+**Follow-ups (round-2):**
+- `{#key split.a/b}` in `Workspace.svelte` remounts *all* keep-alive
+  tab kinds (terminal/file/graph) on a pane *split* — graph now
+  behaves consistently; the keep-alive contract targets
+  tab-switch/flip/Hybrid-Nav (no pane-tree-shape change), split is
+  deliberately outside it. Candidate one-line doc note only if a split
+  should ever preserve subtree state. No code.
+- Visible-watcher reload multiplicity (2-3 `/api/graph` per single
+  in-scope edit) — pre-existing indexer event multiplicity, predates
+  this commit; candidate: coalesce the reload nonce across indexer
+  re-emissions. Out of scope here.
+
+Bus: `new-team-2/designs/round-2-graph-keepalive.md` + the round-2
+task files + journals, committed alongside this section. Local commit
+only; no push. B7 (Xcode CI selection) remains the watch item that
+triggers on the release run.

@@ -133,3 +133,103 @@ Append-only.
   pane-mode round-trip resets scrollTop (flip preserves).
 - Report: tasks/task-Desktop-Conductor-38.md. Torn down; dist clean;
   Alex's hand-smoke ready on binary 8b64ec7d.
+
+## 2026-06-13 — ROUND 1 CLOSED (@@Alex hand-smoke "All clean"); teardown executed
+
+- Runbook teardown complete: all walk/fixture artifacts removed
+  (/tmp/chan-rc-*, /tmp/chan-item6-*, /tmp/rc-bin, walk-binary copy,
+  fixture HOME+ws), App Nap pref reverted, b6gtk container removed
+  (fs chan-desktop-ubuntu retained), no stray processes.
+- KEPT per order: worktree build base /tmp/chan-desktop-gate
+  (pristine at b82a0a27) + warm target dir — ready for the next
+  build request. Lane STAYING WARM: one host item queued pre-release.
+
+## 2026-06-13 — ROUND 2 add-on queued (graph keep-alive)
+
+- Spec read: designs/round-2-graph-keepalive.md. @@Editor owns the
+  web-only feature (graph tab keep-alive + Reload menu item,
+  extending their dadd5e64 keep-alive to a third tab kind); my role
+  is the WKWebView gate ONLY = walk items 1/6/7 + console sweep,
+  same surface/harness as the round-1 item-1 walk. Baseline 00a585b3.
+- STANDBY: build request routes through @@Conductor when @@Editor's
+  commits land + tree settles. At that point: re-sync worktree
+  forward to settled HEAD, rebuild web/dist + binary, recreate the
+  walk harness (drivers + report server were torn down at round-1
+  close; recoverable in minutes from the recorded synthetic-event
+  contract — e.code chords, front-via-unbury, /api/graph+fs-graph
+  network watch). Driver = file-keepalive driver retargeted to
+  .graph-tab + the network panel. NOT pre-building against spec
+  anchors (assert against landed code, not the spec).
+- @@Editor LANDED graph keep-alive @ 3fdd4bfe (own-gate green,
+  Chrome-verified). Build still HELD by @@Conductor pending
+  @@TeamFlow review — walk runs ONCE at settled HEAD, @@Editor drives
+  (same harness), @@Conductor pokes me when review clears.
+- ADDED walk item (@@Editor flag): out-of-scope hidden-edit on a
+  DIR/TAG-scoped graph — their workspace-scoped Chrome test couldn't
+  exercise spec verification #5 (workspace scope = everything
+  in-scope, no genuine "outside"). Harness implication for fixture
+  recreation: seed a scope boundary (subdir of linked notes + files
+  outside it); open `cs graph <subdir>/` (dir-scoped), hide, edit an
+  OUT-of-scope file on DISK (shell echo, not API — API dedupes), then
+  assert ZERO /api/graph on re-activation; pair with the in-scope
+  variant (#4) on the same graph for contrast. Assertion wording
+  settled with @@Editor at walk start.
+
+## 2026-06-13 — ROUND 2 BUILD GO (graph keep-alive @ 3fdd4bfe)
+
+- Worktree synced forward to 3fdd4bfe; clean smoke binary 36e7e132,
+  instrumented walk binary 36ae19d0 (debug IPCs + CSP + throttling).
+- Grounded the graph internals: load/reload = GET /api/graph (stream)
+  via graphStream; depth probe = /api/fs-graph; menu via right-click
+  (.mbtn, Reload between Depth/Copy-link); transform is a
+  component-local (not DOM-exposed) so pan/zoom-preservation proxies
+  via no-remount (canvas-node identity) + zero refetch.
+- changeAffectsScope (GraphPanel ~2318): workspace=always (why #5 was
+  unexercisable in Chrome); dir=under-subtree OR visible node; in
+  filesystem mode scopedNodeIds uses ancestorsExpanded up to the dir
+  root → files outside scoped/ are genuinely out-of-scope. Fixture
+  built on that: scoped/ subdir (3 linked #proj notes) + root
+  outside-one/two.md (#other) outside the scope.
+- Bring-up validated keep-alive structure live (2 .graph-tab mount
+  simultaneously; tab texts path=workspace / path=scoped/ — fixed the
+  driver's activate() targeting). Network watch via PerformanceObserver
+  + fetch wrap on /api/graph + /api/fs-graph.
+- Harness staged (report server, launcher + graph drivers, fixture).
+  Contract + 2 spec questions (Q1 pan/zoom proxy, Q2 #5 scope) sent
+  to @@Editor (task-Desktop-Editor-44); scoring run on their bless.
+- @@Editor's specs (round-2-graph-walk-editor-assertion-specs.md)
+  corrected the approach: raw /api/graph fetch counts are NOISY
+  (fs-graph depth-probe + watcher nonce re-emits), so GOLD signal =
+  window.__graphLoads (load() counter injected in source) + per-canvas
+  __xform hook for 1b/6 transform read-back. Re-instrumented the
+  SOURCE (GraphPanel.load() + GraphCanvas onMount), rebuilt web/dist
+  (binary reads dist from disk → no binary rebuild), adopted Editor's
+  inside/outside boundary fixture.
+- WALK RESULT: 30/30 machine-asserted PASS, 0 FAIL (full 7 items +
+  control). Headlines: 1a zero load() on switch (fsProbe noise
+  excluded), 1b transform byte-identical across switch, #5 OUT-of-scope
+  ZERO reload (the Chrome-impossible gap, now empirical) + in-scope
+  control +1, item-6 resume resize()-not-start() via divider-drag,
+  console sweep 0 state_unsafe_mutation (canvasEverShown $state-in-
+  $effect clean on the real engine).
+- Item-6 method correction: cs pane split REMOUNTS (Workspace.svelte
+  {#key split.a/b} = tree-shape change), expected + out of the
+  tab-switch feature scope; a divider-drag (split.ratio only, no
+  remount) is the correct resize and passed clean. No bug filed.
+- Report task-Desktop-Conductor-45 (Editor co-sign open). Harness +
+  fixture retained for amendments; rebuild clean dist + strip before
+  any release smoke. Round-2 walk DONE pending co-sign.
+- ACCEPTED both sides: @@Conductor accepted 30/30 pending co-sign
+  (split-vs-divider catch validated, #5 closed, item-6 verified,
+  console clean); @@Editor co-signing — confirmed the __xform hook
+  UPGRADED items 1b/6 from their proxy+eyeball to a literal
+  transform-value check (stronger than specced), 1c hand-smoke
+  accepted. Per @@Conductor: harness RETAINED for any co-sign re-run
+  (verified intact: build base + drivers + fixture + evidence, no
+  stray app), integrated gate running their side. STANDING BY for
+  round-2 close.
+- @@Editor co-sign FILED CLEAN (task-Editor-Conductor-46), zero
+  contests; they verified the {#key split.a/b} correction against
+  Workspace.svelte:73/89. Joint graph-keepalive walk CLOSED both
+  sides. Lane idle, harness retained, awaiting @@Conductor's round-2
+  close.

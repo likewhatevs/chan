@@ -249,3 +249,66 @@
   to the commit table (22 commits); N1 follow-up marked DONE. Matrix
   audit credited as institutionalized for the retro. Every round-1
   commit now has a clean review row — tracker fully resolved. Holding.
+
+## 2026-06-13 — round-2 add-on pre-read (graph keep-alive, cross-review pending on sha)
+
+- @@Editor extends their own dadd5e64 keep-alive to graph tabs (3rd
+  tab kind). I cross-review on the sha. Design: round-2-graph-keepalive.md.
+  Baseline 00a585b3 == HEAD == round-1 close; verified every design
+  anchor against the clean baseline blob (Pane.svelte already carries
+  @@Editor WIP, so I'll review the COMMIT, not the tree — same as
+  round 1).
+- Anchors confirmed at baseline: GraphPanel props {tab,onClose,onFlip}
+  (~84-92, +active); `const visible: boolean = true;` (line 100 →
+  $derived(active)); `.graph-tab` block = display:flex/flex:1/
+  flex-direction:column/min-h-0/min-w-0/bg (2815, drop flex:1 + add
+  visibility pair); GraphCanvas open prop (59/81), loop() (1147),
+  resize() (820), start() (1314), stop() (1438), open effect (1497).
+- Staged review targets (lead's + mine):
+  1. LATCH: the open effect (1497) `else { stop() }` is the killer —
+     stop() discards sim+node arrays, start() resets transform (1323).
+     open={canvasEverShown} must latch true-once-shown so hide never
+     calls stop(); reverting to open={active} kills pan/zoom with NO
+     runtime test catching it — confirm the ?raw pin guards it.
+  2. PAUSED short-circuit must sit at the TOP of loop() (before the
+     trailing requestAnimationFrame(loop) at 1173) or the loop re-arms
+     itself; resume effect must re-arm + resize() WITHOUT start()/
+     transform reset (pan/zoom preserved).
+  3. .graph-tab CSS: flex:1 dropped, position:absolute+inset:0+
+     visibility:hidden+pointer-events:none, .active restores; NEVER
+     display:none (0x0 → resize refits → loses pan/zoom).
+  4. onClose/onFlip capture `t`, not `active` (old branch closed
+     active.id) — the each-item closure bug.
+  5. Plus: latch/dirty load gating (!hasLoadedOnce||keyChanged||
+     graphDirty), lazy-on-first-activation not mount (N-load storm),
+     watcher hidden→graphDirty (no bg reload) vs visible→debounce,
+     no `focused` prop, terminal/file each-blocks byte-untouched,
+     menuTrims Reload order pin (Depth→Reload→Copy-link), new
+     paneGraphTabKeepAlive.test.ts non-tautology + mutation-bite where
+     cheap.
+- Held: review fires on @@Editor's sha. No deliverable yet.
+
+## 2026-06-13 — round-2 graph keep-alive review (3fdd4bfe) — CLEAN PASS, WKWebView build cleared
+
+- 7/7 targets clean, no riders. My verdict gated the @@Desktop build;
+  CLEARED at this HEAD. 132/132 across 10 graph/keep-alive/menu suites
+  + svelte-check 0/0 at the commit (isolated worktree).
+- Latch traced fully: canvasEverShown is monotonic (no false path), so
+  the open effect's `else stop()` never fires on hide → sim+transform
+  survive; paused guard at loop() TOP genuinely stops the rAF; resume
+  re-arms with resize() not start(). Load gating one-shot verified
+  (lazy-not-mount, graphDirty cleared after the single reactivation
+  reload, clean switch fires nothing). Plain latches, no $derived
+  reads them; canvasEverShown the only $state, written only in its
+  $effect. Watcher nonce advances for hidden tabs (no reprocess);
+  changeAffectsScope first.
+- graphInspectorActionsHotfix (unplanned diff) ruled legitimate: it
+  pinned the old load-effect string the restructure rewrote; re-pinned
+  same contract, correctly loosened. Not scope creep.
+- MUTATION bite-tests (round standard): open={active} fails the latch
+  pin; dropping the loop pause guard fails the loop pin — both
+  runtime-untestable risks the design flagged are caught statically.
+- 2 additive WKWebView walk items handed up: out-of-scope hidden edit
+  on a DIR/TAG-scoped graph (#5, @@Editor couldn't exercise in Chrome —
+  workspace-scoped test graph), and resize-while-hidden → reactivate.
+- Report: tasks/task-TeamFlow-Conductor-42.md; poked. Holding.
