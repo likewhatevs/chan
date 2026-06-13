@@ -12,11 +12,11 @@ chat or agent-session surface.
 
 ```toml
 [dependencies]
-chan-llm = "0.32"
+chan-llm = "0.33"
 
 # Optional: stdio MCP server module + the `chan-llm-mcp` binary.
 # Pulls rmcp + schemars; off by default.
-chan-llm = { version = "0.32", features = ["mcp"] }
+chan-llm = { version = "0.33", features = ["mcp"] }
 ```
 
 ## Public API

@@ -6,6 +6,49 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.33.0] - 2026-06-13
+
+### Added
+
+- The Rich Prompt keeps a submitted message visible until the agent
+  actually consumes it: the text stays in the prompt (read-only) with
+  a "queued" indicator, and the terminal tab shows a queue-depth badge
+  counting pending messages (including teammate pokes). Mirrors the
+  Claude/Codex desktop behavior.
+- The graph right-click menu has a Reload item again, between Depth and
+  Copy link to graph, for refetching the graph on demand.
+- The survey overlay can be dismissed from the keyboard with X (in
+  addition to Escape and the Dismiss button).
+- The desktop launcher's Open button is always enabled: opening a
+  stopped workspace turns it on automatically, and a turn-on failure
+  (for example, the workspace is already open in another process) now
+  shows a dialog explaining why instead of silently flipping the
+  toggle back.
+
+### Fixed
+
+- Switching away from and back to an editor tab no longer shows raw
+  un-decorated markdown until you click, and no longer resets the
+  scroll position. Editor tabs are kept alive across switches, so
+  scroll, caret, undo history, and find state are all preserved.
+- Switching to a graph tab no longer reloads and re-lays-out the
+  graph. Graph tabs are kept alive across switches; pan, zoom, and
+  selection survive, and large workspaces no longer pay a reload on
+  every tab focus. On-disk changes still refresh the visible graph,
+  and the new Reload item forces a manual refetch.
+- Clicking a terminal tab now lands keyboard focus in the terminal so
+  you can type immediately, matching the keyboard pane-switch shortcut.
+- Undo can no longer walk back past a file's initial load to an empty
+  document (which autosave would then have written to disk).
+
+### Changed
+
+- New teams start with broadcast off; enable it per tab when you want a
+  lead terminal to fan keystrokes to the others.
+- Buried desktop windows (closed but kept warm in memory) no longer
+  count against the per-workspace window cap, and the Window menu's
+  "Hidden Windows" header shows how many are kept warm.
+
 ## [v0.32.0] - 2026-06-12
 
 ### Added
@@ -867,7 +910,8 @@ tags were cleaned up, so those versions (roughly v0.6.x through v0.15.x)
 carry no tags in this repository and are not detailed here. Their history
 lives in the per-phase reports under `docs/phases/`.
 
-[Unreleased]: https://github.com/fiorix/chan/compare/v0.28.1...HEAD
+[Unreleased]: https://github.com/fiorix/chan/compare/v0.33.0...HEAD
+[v0.33.0]: https://github.com/fiorix/chan/compare/v0.32.0...v0.33.0
 [v0.28.1]: https://github.com/fiorix/chan/compare/v0.28.0...v0.28.1
 [v0.28.0]: https://github.com/fiorix/chan/compare/v0.27.1...v0.28.0
 [v0.27.1]: https://github.com/fiorix/chan/compare/v0.27.0...v0.27.1
