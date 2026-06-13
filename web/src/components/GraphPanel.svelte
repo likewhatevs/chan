@@ -69,6 +69,7 @@
     Hash,
     History,
     Link,
+    RotateCw,
     Settings2,
     X,
   } from "lucide-svelte";
@@ -83,21 +84,27 @@
 
   let {
     tab,
+    active = false,
     onClose,
     onFlip,
   }: {
     tab: GraphTab;
+    active?: boolean;
     onClose?: () => void;
     onFlip?: () => void;
   } = $props();
 
   // The graph is always a first-class TAB (Pane mounts GraphPanel only
   // with a `graph`-kind tab). The pre-migration overlay variant is gone,
-  // so the scope/state come straight from the tab and the panel is always
-  // visible. `visible` is kept (typed boolean) because the load + depth-
-  // probe effects gate on it; it is simply constant now.
+  // so the scope/state come straight from the tab. With keep-alive
+  // (round 2) every graph tab in the pane stays mounted and hidden via
+  // the visibility contract, so `visible` now tracks the `active` prop
+  // (was a constant `true` when only the active tab was ever mounted).
+  // The load + depth-probe + watcher effects gate on it: a hidden graph
+  // does no background fetch/paint and reloads once on re-activation if
+  // it missed an in-scope edit while hidden.
   const graphState = $derived(tab);
-  const visible: boolean = true;
+  const visible = $derived(active);
 
   /// The scope-selector dropdown is gone; "Graph from here", inspector
   /// reveal, and file-browser navigation are the canonical scope-setting
@@ -595,6 +602,32 @@
   let seenGraphReloadNonce = graphReloadSignal.nonce;
   let graphLoadAbort: AbortController | null = null;
   let graphLoadSeq = 0;
+  // Keep-alive load gating (round 2). PLAIN locals, never rendered:
+  // they are read/written only inside the load + watcher effects, so
+  // they cannot trip Svelte's state_unsafe_mutation guard (that fires
+  // on mutating $state inside a $derived). `hasLoadedOnce` makes the
+  // first load LAZY on first activation rather than on mount (the
+  // each-block mounts every graph tab at session restore; mount-gating
+  // would fire N loads at once). `graphDirty` records that a hidden
+  // graph missed an in-scope watcher edit, so it reloads exactly once
+  // when next shown. `lastLoadedKey` lets the visible-load decision
+  // tell a real scope/depth/mode change from an idempotent re-fire.
+  let hasLoadedOnce = false;
+  let graphDirty = false;
+  let lastLoadedKey: string | null = null;
+  // GraphCanvas `open` must LATCH true once the graph has been shown,
+  // never track `active` directly: GraphCanvas.start() resets the
+  // pan/zoom transform and stop() discards the sim + node arrays, so
+  // open={active} would kill pan/zoom/selection on every tab switch.
+  // This IS $state (it feeds the `open` prop, so it must be reactive)
+  // and is written only inside the effect below — not a $derived — so
+  // it stays clear of the state_unsafe_mutation guard. The companion
+  // `paused={!active}` prop suspends the canvas rAF loop while hidden
+  // so a latched-but-inactive graph does zero background paint.
+  let canvasEverShown = $state(false);
+  $effect(() => {
+    if (active) canvasEverShown = true;
+  });
 
   // ---- per-instance scoped /ws subscriptions ------------------------------
   //
@@ -801,6 +834,25 @@
     if (MARKDOWN_EXT_RE.test(path)) return "doc";
     if (SOURCE_EXT_RE.test(path)) return "source";
     return "binary";
+  }
+
+  /// Manual "Reload" (re-added to the tab menu in round 2). With
+  /// keep-alive the graph no longer reloads on tab activation and the
+  /// file-watcher only refreshes a VISIBLE in-scope graph, so this is
+  /// the explicit "refetch now" — forces a fresh /api/graph fetch and,
+  /// at workspace scope, re-runs the depth probe. Sync lastLoadedKey +
+  /// clear graphDirty so the load effect doesn't treat this fresh data
+  /// as stale on its next re-fire. (Restores the body removed in
+  /// ae22d5a1, plus the closeTabMenu + keep-alive bookkeeping.)
+  async function reloadGraph(): Promise<void> {
+    closeTabMenu();
+    if (currentScope?.kind === "workspace") {
+      workspaceDepthProbe = null;
+      await loadWorkspaceDepthProbe();
+    }
+    lastLoadedKey = loadKey;
+    graphDirty = false;
+    await load();
   }
 
   /// "Copy link to graph" (in the tab menu):
@@ -2183,17 +2235,37 @@
     `${graphState.scopeId}|${graphState.depth}|${graphState.mode}`,
   );
 
-  /// Refetch the graph whenever the overlay opens or the load key
-  /// changes, plus once on mount so the first open after a window reload
-  /// has data ready. Idle overlays don't pay for an /api/graph
-  /// round-trip. `load()` runs untracked so its internal reads (the
+  /// Keep-alive load gating. A graph tab is now kept mounted while
+  /// hidden, so this effect can no longer treat "visible" as "just
+  /// (re)mounted" — it must decide per activation whether a fetch is
+  /// actually warranted:
+  ///   - HIDDEN: never fetch (the whole point — no background load).
+  ///     If the load key changed while hidden, mark dirty so the next
+  ///     activation refetches once. (A hidden in-scope watcher edit
+  ///     also sets graphDirty, in the watcher effect below.)
+  ///   - VISIBLE: fetch only on the first activation (lazy, not mount),
+  ///     on a real scope/depth/mode change, or when dirty. Then latch
+  ///     hasLoadedOnce, record the key, and clear dirty.
+  /// `load()` still runs untracked so its internal reads (the
   /// layout-churny `currentScope` object, filters, etc.) don't register
   /// as reload triggers; only `visible` + `loadKey` do.
   $effect(() => {
     // Read both triggers up front so the effect tracks exactly them.
     const show = visible;
-    void loadKey;
-    if (show) untrack(() => void load());
+    const key = loadKey;
+    if (!show) {
+      // Hidden: defer. A key change becomes a one-shot reload on the
+      // next activation rather than a background fetch.
+      if (hasLoadedOnce && key !== lastLoadedKey) graphDirty = true;
+      return;
+    }
+    const keyChanged = key !== lastLoadedKey;
+    if (!hasLoadedOnce || keyChanged || graphDirty) {
+      hasLoadedOnce = true;
+      lastLoadedKey = key;
+      graphDirty = false;
+      untrack(() => void load());
+    }
   });
 
   $effect(() => {
@@ -2273,17 +2345,23 @@
 
   $effect(() => {
     const nonce = graphReloadSignal.nonce;
-    if (!visible) {
-      seenGraphReloadNonce = nonce;
-      return;
-    }
     if (nonce === seenGraphReloadNonce) return;
     seenGraphReloadNonce = nonce;
-    // Path-filter the reload: an out-of-scope edit must NOT reload this
-    // graph, and must NOT cancel an already-armed in-scope reload either
-    // (so we bail BEFORE touching the timer). `untrack` so reading the
-    // scope / node sets here doesn't make the effect re-fire on load.
+    // Path-filter FIRST: an out-of-scope edit is ignored on every graph,
+    // visible or hidden (it changes nothing this scope renders). `untrack`
+    // so reading the scope / node sets here doesn't make the effect
+    // re-fire on load.
     if (!untrack(() => changeAffectsScope(graphReloadSignal.paths))) return;
+    if (!visible) {
+      // Hidden + in-scope edit: don't reload in the background (the
+      // keep-alive win). Remember it so the next activation refetches
+      // once. The visible graph still live-reloads, per @@Alex.
+      graphDirty = true;
+      return;
+    }
+    // Visible + in-scope: debounce-reload as before. Sync lastLoadedKey
+    // so the load effect doesn't treat this fresh data as stale on the
+    // next re-fire, and clear dirty since we're refetching now.
     if (watchReloadTimer) clearTimeout(watchReloadTimer);
     watchReloadTimer = setTimeout(() => {
       watchReloadTimer = null;
@@ -2292,6 +2370,8 @@
           workspaceDepthProbe = null;
           void loadWorkspaceDepthProbe();
         }
+        lastLoadedKey = loadKey;
+        graphDirty = false;
         void load();
       }
     }, 250);
@@ -2372,9 +2452,11 @@
 {#snippet graphContent()}
   <div
     class="graph-tab"
+    class:active
     data-theme={tab ? surfaceThemeOverride("graph") : undefined}
     oncontextmenu={onGraphContextMenu}
-    role="presentation"
+    role="tabpanel"
+    aria-hidden={!active}
   >
   {#if tab && tabMenuOpen}
     <!-- Graph-tab right-click bubble. Anchored to
@@ -2491,6 +2573,14 @@
         </span>
       </div>
       <div class="msep" role="separator"></div>
+      <button class="mbtn" onclick={reloadGraph}>
+        <span class="mbtn-icon" aria-hidden="true">
+          <RotateCw size={16} strokeWidth={1.75} />
+        </span>
+        <span class="mbtn-label">Reload</span>
+        <span class="mbtn-chord"></span>
+      </button>
+      <div class="msep" role="separator"></div>
       <button class="mbtn" onclick={copyGraphLink}>
         <span class="mbtn-icon" aria-hidden="true">
           <Link size={16} strokeWidth={1.75} />
@@ -2583,7 +2673,8 @@
     {/if}
     <div class="cy" class:dim={!!error}>
       <GraphCanvas
-        open={visible}
+        open={canvasEverShown}
+        paused={!active}
         {nodes}
         {edges}
         {visibleNodeIds}
@@ -2812,13 +2903,29 @@
 {/snippet}
 
 <style>
+  /* Keep-alive contract, copied from .editor-tab / .terminal-tab: every
+     graph tab in the pane stays mounted; inactive ones hide via
+     visibility (NEVER display:none — a display:none host reports 0x0,
+     GraphCanvas.resize() then refits to nothing and pan/zoom is lost).
+     visibility:hidden keeps real layout geometry while the rAF loop is
+     paused, so a re-shown graph resumes its exact transform. No `flex:1`
+     any more: the host is absolutely positioned in the pane's
+     .face.front now, not a flex child. The inner flex column is kept
+     for the canvas + menu children. */
   .graph-tab {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    flex: 1;
     min-height: 0;
     min-width: 0;
     background: var(--bg);
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .graph-tab.active {
+    visibility: visible;
+    pointer-events: auto;
   }
   /* Slider row used inside the graph tab-menu bubble. Mirrors the
      file tab menu's page-width row so all in-menu sliders read alike. */

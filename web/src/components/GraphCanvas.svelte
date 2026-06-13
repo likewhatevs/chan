@@ -57,6 +57,15 @@
 
   type Props = {
     open: boolean;
+    /// Suspend the animation loop without tearing the canvas down.
+    /// Set by a keep-alive host (GraphPanel) when its tab is hidden:
+    /// `open` LATCHES true once the graph is first shown (so the sim +
+    /// pan/zoom transform survive a tab switch), and `paused` gates the
+    /// rAF loop so a latched-but-hidden graph does zero background
+    /// paint/sim. Unlike `open=false`, pausing never resets the
+    /// transform or discards node arrays. Default false (always-on
+    /// hosts like the Dashboard slide pass nothing).
+    paused?: boolean;
     nodes: RenderedNode[];
     edges: RenderedEdge[];
     visibleNodeIds: Set<string>;
@@ -79,6 +88,7 @@
   };
   let {
     open,
+    paused = false,
     nodes,
     edges,
     visibleNodeIds,
@@ -1145,6 +1155,14 @@
   }
 
   function loop(): void {
+    // Keep-alive pause: a hidden graph's host sets `paused`. Bail before
+    // any paint/fit work and null the handle so the loop is genuinely
+    // stopped (the resume effect re-arms it via requestAnimationFrame,
+    // never start() — so the transform + sim are untouched).
+    if (paused) {
+      rafId = null;
+      return;
+    }
     const now = performance.now();
     // While the refit window is open, retarget every frame so the
     // view tracks the cluster as the sim spreads / contracts. Once
@@ -1500,6 +1518,22 @@
     } else {
       stop();
     }
+  });
+
+  /// Keep-alive resume: when the host un-hides the graph, `paused`
+  /// flips false. The loop short-circuited itself to a stop while
+  /// hidden (rafId nulled in loop()), and `open` stayed latched true so
+  /// the open effect above never tore the sim down. Re-arm WITHOUT
+  /// start() — the pane may have resized while the tab was hidden, so
+  /// resize() first to match the canvas backing store to the new size
+  /// (it leaves the pan/zoom transform alone unless a first-fit is
+  /// still pending), then restart the rAF loop. No transform reset, no
+  /// sim rebuild: pan/zoom/selection are preserved across the switch.
+  $effect(() => {
+    if (paused) return;
+    if (!sim || rafId !== null) return;
+    resize();
+    rafId = requestAnimationFrame(loop);
   });
 
   /// Nodes / edges arrays changed (new graph payload from the

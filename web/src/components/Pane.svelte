@@ -1405,14 +1405,6 @@
                         : "no active tab"}
             </div>
           </div>
-        {:else if active?.kind === "graph"}
-          <GraphPanel
-            tab={active}
-            onClose={() => {
-              void closeTab(pane.id, active.id);
-            }}
-            onFlip={() => flipHybrid(pane.id)}
-          />
         {:else if active?.kind === "browser"}
           <FileBrowserSurface
             variant="tab"
@@ -1487,6 +1479,29 @@
             tab={t}
             active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
             focused={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId && viewLayout.activePaneId === pane.id}
+          />
+        {/each}
+        <!--
+          Graph tabs join the keep-alive family: rendering GraphPanel
+          inside the active-tab if-chain remounted it on every switch,
+          and GraphCanvas.start() refetches + re-lays-out from scratch
+          (transform reset, sim rebuilt) — the full redraw @@Alex saw
+          on activation, cheap on small workspaces but painful on a
+          large source tree. Kept mounted + hidden via the same
+          visibility contract, pan/zoom/selection survive a switch, and
+          GraphPanel gates its first load lazily on activation (not
+          mount, so N restored graph tabs don't all fetch at once). No
+          `focused` prop: a graph owns no keyboard caret (the canvas
+          focuses on click, the menu is portal-anchored).
+        -->
+        {#each pane.tabs.filter((t) => t.kind === "graph") as t (t.id)}
+          <GraphPanel
+            tab={t}
+            active={!paneMode.active && !pane.showingBack && t.id === pane.activeTabId}
+            onClose={() => {
+              void closeTab(pane.id, t.id);
+            }}
+            onFlip={() => flipHybrid(pane.id)}
           />
         {/each}
       </div>

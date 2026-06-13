@@ -109,14 +109,28 @@ describe("GraphPanel drops inspector/global Settings and keeps flip footer", () 
     expect(graph).not.toContain('onclick={doOpenSettings}');
   });
 
-  test("Depth slider + Copy-link + footer stay", () => {
+  test("Depth slider + Reload + Copy-link + footer stay", () => {
     expect(graph).toContain('class="mbtn depth-row"');
-    // No Reload row; "Copy link to graph" sits in its place.
-    expect(graph).not.toContain('onclick={reloadGraph}');
+    // Round 2: the Reload row is BACK (manual refetch on top of
+    // keep-alive + the visible-graph file watcher), sitting between
+    // Depth and "Copy link to graph".
+    expect(graph).toContain('onclick={reloadGraph}');
+    expect(graph).toContain('<span class="mbtn-label">Reload</span>');
     expect(graph).toContain('onclick={copyGraphLink}');
     expect(graph).toContain('<span class="mbtn-label">Copy link to graph</span>');
     expect(graph).toContain('onclick={flipToSettings}');
     expect(graph).toContain('onclick={doReopenClosedTab}');
     expect(graph).toContain('onclick={closeFromMenu}');
+  });
+
+  test("menu order is Depth -> Reload -> Copy link to graph", () => {
+    // Anchor on the three handlers' source positions so a future
+    // reshuffle that breaks the intended reading order fails loudly.
+    const depth = graph.indexOf('class="mbtn depth-row"');
+    const reload = graph.indexOf("onclick={reloadGraph}");
+    const copyLink = graph.indexOf("onclick={copyGraphLink}");
+    expect(depth).toBeGreaterThan(-1);
+    expect(reload).toBeGreaterThan(depth);
+    expect(copyLink).toBeGreaterThan(reload);
   });
 });

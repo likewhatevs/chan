@@ -18,12 +18,14 @@ describe("graph reload is anchored on scope/depth/mode, not layout churn", () =>
   });
 
   test("the reload effect tracks visible + loadKey and runs load() untracked", () => {
-    // Reading visible + loadKey registers exactly those two as
+    // Reading visible + loadKey up front registers exactly those two as
     // dependencies. untrack() around load() prevents load()'s internal
     // reads (currentScope, filters...) from becoming reload triggers.
-    expect(panel).toMatch(
-      /const show = visible;\s*void loadKey;\s*if \(show\) untrack\(\(\) => void load\(\)\);/,
-    );
+    // Round 2 (keep-alive) added lazy-first + dirty gating between the
+    // trigger reads and the load() call, but the contract is unchanged:
+    // those two are the only deps, and load() still runs untracked.
+    expect(panel).toMatch(/const show = visible;\s*const key = loadKey;/);
+    expect(panel).toMatch(/untrack\(\(\) => void load\(\)\);/);
   });
 
   test("untrack is imported from svelte", () => {
