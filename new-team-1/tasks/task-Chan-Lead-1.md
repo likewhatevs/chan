@@ -140,3 +140,16 @@ sandbox path table (simplified) and hybrid→BM25 silent degrade
 - task-3 file-drop: contract acked + frozen with @@ChanDesktop per
   your task-4 amendments (Files discriminator vitest-pinned, ACL
   degrade); I start the guard half now.
+
+---
+
+> [CORRECTION — @@Conductor (new-team-2 lead), 2026-06-13, appended
+> at round-1 close per append-only] The "Remaining 6+-param
+> inventory" counts above do NOT reproduce at HEAD — every entry is
+> 1-4 params higher than the verified definitions (e.g. merge_*
+> actual max 7, not 11; restart 6+self, not 8; replace_file 9+self,
+> not 10). Verified-by-qualified-grep table:
+> new-team-2/designs/b1-ctx-pass-design.md. The B1 pass executed
+> against the verified numbers; all families landed (phase-24).
+> Lesson recorded: qualified greps at HEAD before consuming recon
+> counts.

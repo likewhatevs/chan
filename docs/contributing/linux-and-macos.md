@@ -286,3 +286,15 @@ machine. The two are deliberately separate setups.
 
 Local `sdme` is the fast loop; CI is the canonical lane (and owns
 x86_64).
+
+## aarch64 Linux build note
+
+chan does not compile for aarch64-linux out of the box: gemm-common
+0.19 (a candle dependency) uses fp16 inline asm (`fmla .8h`) that the
+default `aarch64-unknown-linux-gnu` target lacks. On
+Apple-Silicon-hosted VMs (the lima/sdme flow above) the CPU supports
+it — build with:
+
+    RUSTFLAGS="-C target-feature=+fp16" cargo build ...
+
+x86_64 (CI's lane) is unaffected.
