@@ -144,9 +144,15 @@ in the container.
 
 ### Verifying the cs alias on the AppImage
 
-chan-desktop ships a `cs` control-socket client by re-execing itself
-with `argv[0]="cs"` (the `chan_shell::invoked_as_cs` argv0 detection,
-the AppImage first-run wrapper in `desktop/src-tauri/src/cs_install.rs`).
+chan-desktop runs as both `chan` and `cs` — the same binary re-execing
+itself with `argv[0]` set to the name (the
+`chan_shell::invoked_as_chan` / `invoked_as_cs` argv0 detection), so the
+CLI / control client runs instead of the GUI. On boot it owns the
+`~/.local/bin/{chan,cs}` shims (`desktop/src-tauri/src/cs_install.rs`):
+real symlinks to the installed binary for a `.app` or deb/rpm install,
+`exec -a` wrapper scripts for an AppImage (whose `current_exe()` is an
+ephemeral mount). The shims self-heal on a move or self-upgrade, are
+idempotent, and never clobber a `chan` / `cs` you installed yourself.
 To check the client path on a built artifact, point the inner binary at
 a running server's control socket and confirm it runs the client, not
 the GUI:
