@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.34.0] - 2026-06-14
+
 ### Added
 
 - `cs window` manages desktop windows from a terminal. `cs window list`
@@ -17,7 +19,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   like the close button, `rm <id>` removes it for good and drops its
   saved layout (prompting first when it still has running terminals, or
   `--force` to skip), and `title <id> <title>` sets a custom window title
-  (empty resets it). The lifecycle verbs need the desktop app.
+  (empty resets it; a title another window already shows is rejected so
+  window names stay unambiguous). The lifecycle verbs need the desktop app.
+
+### Fixed
+
+- `chan serve .` (or any relative path) on macOS could open a workspace on
+  the filesystem root when handed off to a running chan-desktop: the
+  relative path was resolved against the desktop's working directory
+  instead of the terminal's. The serve root is now made absolute before
+  the handoff.
 
 ## [v0.33.0] - 2026-06-13
 
@@ -923,7 +934,8 @@ tags were cleaned up, so those versions (roughly v0.6.x through v0.15.x)
 carry no tags in this repository and are not detailed here. Their history
 lives in the per-phase reports under `docs/phases/`.
 
-[Unreleased]: https://github.com/fiorix/chan/compare/v0.33.0...HEAD
+[Unreleased]: https://github.com/fiorix/chan/compare/v0.34.0...HEAD
+[v0.34.0]: https://github.com/fiorix/chan/compare/v0.33.0...v0.34.0
 [v0.33.0]: https://github.com/fiorix/chan/compare/v0.32.0...v0.33.0
 [v0.28.1]: https://github.com/fiorix/chan/compare/v0.28.0...v0.28.1
 [v0.28.0]: https://github.com/fiorix/chan/compare/v0.27.1...v0.28.0
