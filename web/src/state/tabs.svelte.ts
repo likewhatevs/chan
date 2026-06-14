@@ -2290,6 +2290,31 @@ async function closeTabAsync(
   // `closePane` action to dismiss the pane.
 }
 
+/// Remove a terminal tab whose session was EXPLICITLY closed server-side
+/// (the user / another window / `cs terminal close` deleted it — the
+/// `closed{reason:"explicit"}` frame in TerminalTab.svelte). Unlike
+/// `closeTab`, this skips the confirm prompt and the WS close sink: the
+/// session is already gone, so there is nothing to confirm or to tell the
+/// server. Drops the dead tab from its pane with the same active-tab /
+/// empty-pane bookkeeping as `closeTab` (no pane auto-collapse, not added to
+/// the reopen-closed list — the session can't be reattached). Under Option A
+/// a terminal-only window is ephemeral, so once the dead tab is gone the
+/// debounced session save deletes the window's blob if no durable content
+/// remains. No-op if the tab is no longer in the layout.
+export function removeExplicitlyClosedTerminalTab(tabId: string): void {
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    const idx = node.tabs.findIndex((t) => t.id === tabId);
+    if (idx < 0) continue;
+    node.tabs.splice(idx, 1);
+    if (node.activeTabId === tabId) {
+      node.activeTabId = node.tabs[Math.max(0, idx - 1)]?.id ?? null;
+    }
+    if (node.tabs.length === 0) node.showingBack = false;
+    return;
+  }
+}
+
 /// Server-side seed for a brand-new draft (see
 /// `crates/chan-server/src/routes/drafts.rs::NEW_DRAFT_CONTENT`).
 /// A draft whose buffer matches this string and is clean against disk

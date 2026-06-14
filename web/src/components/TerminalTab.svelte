@@ -46,6 +46,7 @@
     registerTerminalCloseSink,
     registerTerminalInputSink,
     registerTerminalPromptSink,
+    removeExplicitlyClosedTerminalTab,
     renameTerminalTab,
     reopenClosedTab,
     setTerminalBroadcastEnabled,
@@ -808,8 +809,23 @@
         setTerminalQueueDepth(tab, 0);
         failPendingPrompt(tab);
         clearTerminalSession(tab);
-        scheduleTerminalSessionSave();
-        term?.writeln(`\r\nsession ended (${frame.reason})`);
+        if (frame.reason === "explicit") {
+          // The user (or another window / `cs terminal close`) deleted this
+          // terminal. Under Option A the dead tab vanishes automatically; if
+          // the window is left with no durable content, the save below then
+          // deletes its blob (terminal-only windows are ephemeral). Only
+          // `explicit` removes the tab — `idle`/`shutdown`/`workspace`/`error`
+          // keep it (reconnect safety), and `exit` keeps it behind the
+          // "press Ctrl+D to read output" affordance below.
+          removeExplicitlyClosedTerminalTab(tab.id);
+          // Call the store save directly (not the throttled
+          // scheduleTerminalSessionSave) so the blob delete still fires after
+          // this component unmounts with the removed tab.
+          scheduleSessionSave();
+        } else {
+          scheduleTerminalSessionSave();
+          term?.writeln(`\r\nsession ended (${frame.reason})`);
+        }
       } else if (frame.type === "exit") {
         status = "exited";
         statusDetail = `exit ${frame.code}`;

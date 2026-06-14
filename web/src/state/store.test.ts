@@ -33,6 +33,7 @@ import {
   activePane,
   layout,
   paneMode,
+  removeExplicitlyClosedTerminalTab,
   type BrowserTab,
   type DashboardTab,
   type FileTab,
@@ -198,6 +199,43 @@ describe("session persistence bootstrap guard", () => {
 
     fetchSpy.mockRestore();
     vi.useRealTimers();
+  });
+});
+
+describe("explicitly-closed terminal tab self-clean", () => {
+  test("removes the dead terminal tab and moves the active tab to the survivor", () => {
+    setTerminalLayout({ terminalSessionId: "t1" });
+    addDashboardTab();
+    const pane = activePane();
+    const terminalId = pane.tabs[0]!.id;
+    pane.activeTabId = terminalId;
+
+    removeExplicitlyClosedTerminalTab(terminalId);
+
+    expect(pane.tabs.map((t) => t.kind)).toEqual(["dashboard"]);
+    expect(pane.activeTabId).toBe(pane.tabs[0]!.id);
+  });
+
+  test("removing the only terminal empties the pane (the window then self-cleans)", () => {
+    setTerminalLayout({ terminalSessionId: "t1" });
+    const pane = activePane();
+    const terminalId = pane.tabs[0]!.id;
+
+    removeExplicitlyClosedTerminalTab(terminalId);
+
+    // Empty terminal-only window: serializeSession returns null for this
+    // layout (see the ephemeral test above), so the debounced save deletes
+    // the blob.
+    expect(pane.tabs).toEqual([]);
+    expect(pane.activeTabId).toBeNull();
+  });
+
+  test("is a no-op for an unknown tab id", () => {
+    setTerminalLayout({ terminalSessionId: "t1" });
+    const pane = activePane();
+    const before = pane.tabs.length;
+    removeExplicitlyClosedTerminalTab("no-such-tab");
+    expect(pane.tabs.length).toBe(before);
   });
 });
 
