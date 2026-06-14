@@ -38,6 +38,7 @@ import {
   openInActivePane,
   openTerminalInActivePane,
   openDashboardInActivePane,
+  layoutHasDurableContent,
   registerDraftPromotionSink,
   restoreLayout,
   serializeLayout,
@@ -1923,14 +1924,19 @@ type SessionPayload = {
 
 function serializeSession(): SessionPayload | null {
   const layout = serializeLayout({ terminalSessions: true });
-  // A window with no pane/tab layout has no real content — even if a
-  // folder was toggled in the file browser (the tree root `""` is
-  // auto-seeded on every fresh window). Persisting a `treeExpanded`-only
-  // payload is exactly what accumulated phantom "saved windows with
-  // nothing in them"; treat layout-less as empty so the caller deletes
-  // the blob instead of saving it. `treeExpanded` only rides along when
-  // there's a layout to restore it into.
-  if (!layout) {
+  // A window with no durable content has nothing worth persisting, so
+  // delete the blob instead of saving it (the caller maps a null return to
+  // `api.deleteSession()`). "No durable content" means either:
+  //   - no pane/tab layout at all — even if a folder was toggled in the
+  //     file browser (the tree root `""` is auto-seeded on every fresh
+  //     window, so a `treeExpanded`-only payload was the original phantom); or
+  //   - a layout whose tabs are ALL terminals. Terminal tabs are ephemeral
+  //     (the PTY dies on restart; a saved `tsid` just respawns a fresh
+  //     shell), so a terminal-only window is not a durable saved window —
+  //     this is the dead-terminal case @@Alex's hand-smoke caught.
+  // `treeExpanded` only rides along when there's durable content to
+  // restore it into.
+  if (!layout || !layoutHasDurableContent(layout)) {
     return null;
   }
   const treeMap: Record<string, boolean> = {};

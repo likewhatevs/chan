@@ -4408,6 +4408,26 @@ function serializedLeaves(node: SerNode | null, out: SerLeaf[] = []): SerLeaf[] 
   return out;
 }
 
+/// True when a serialized layout carries durable content — at least one
+/// non-terminal tab (a file/browser/graph/hybrid/dashboard surface).
+/// Terminal tabs (`k:"t"`) are ephemeral: the PTY dies on restart and a
+/// saved `tsid` only respawns a fresh shell, so a window whose tabs are ALL
+/// terminals (or has none) is not worth persisting as a saved window. Used
+/// by `serializeSession()` so a terminal-only window deletes its blob
+/// instead of saving it; mirrors the backend `session_blob_is_empty`
+/// all-terminal rule (chan-workspace) that prunes existing such phantoms.
+export function layoutHasDurableContent(layout: SerNode | null): boolean {
+  for (const leaf of serializedLeaves(layout)) {
+    // Front tabs plus legacy Hybrid back-tabs (`bt`), for parity with the
+    // backend walk; `bt` is discarded on rehydrate but a stray non-terminal
+    // there still counts as content we should not silently drop.
+    for (const tab of [...leaf.t, ...(leaf.bt ?? [])]) {
+      if ((tab.k ?? "f") !== "t") return true;
+    }
+  }
+  return false;
+}
+
 /// Copy terminal PTY session metadata from a per-window session layout
 /// onto the live layout after a shareable URL-hash layout restore.
 /// The hash deliberately omits `tsid`; this graft keeps reloads

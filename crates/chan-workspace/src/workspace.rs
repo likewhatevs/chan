@@ -3525,26 +3525,77 @@ fn persist_rename_log(graph_dir: &std::path::Path, log: &HashMap<String, String>
 /// is therefore a phantom "saved window with nothing in it".
 ///
 /// The session schema is the host's (frontend's) concern and otherwise
-/// opaque to chan-workspace; this is the single place we peek, and only
-/// at the one top-level `layout` field that gates real content. It exists
-/// to GC blobs written by pre-fix builds: a `null` body (the old
-/// `putSession(null)` path) or a `treeExpanded`-only object (a folder was
-/// toggled in an otherwise empty window). The fixed frontend deletes such
-/// sessions instead of writing them, so no new phantoms appear.
+/// opaque to chan-workspace; this is the single place we peek, and only at
+/// the layout's `tab kind` shape. It GCs phantom blobs written by pre-fix
+/// builds and by the terminal-only case:
+///   - a `null` body (the old `putSession(null)` path);
+///   - a `treeExpanded`-only object (a folder toggled in an empty window);
+///   - a layout whose tabs are **all terminals** (`"k":"t"`). Terminal tabs
+///     are ephemeral (the PTY dies on restart; a saved `tsid` just respawns
+///     a fresh shell), so a terminal-only window has no durable content —
+///     it should neither persist nor survive the next open. This is the
+///     `9862dfa1` follow-up @@Alex's hand-smoke caught: a non-null layout
+///     with one dead-terminal tab was slipping through the old `layout`-
+///     non-null check.
 ///
-/// Conservative by design: we only prune shapes we positively recognize
-/// as empty. Empty/whitespace bytes and JSON `null` are empty; an object
-/// is empty iff it has no non-null `layout`; anything else (array,
-/// scalar, or unparseable bytes) is left untouched.
+/// The fixed frontend deletes such sessions instead of writing them, so no
+/// new phantoms appear; this clears the existing backlog on open.
+///
+/// Conservative by design: we only prune shapes we positively recognize as
+/// empty. Empty/whitespace bytes and JSON `null` are empty; an object is
+/// empty iff it has no non-null `layout`, or a layout with no non-terminal
+/// tab; anything else (array, scalar, an unknown node/tab shape, or
+/// unparseable bytes) is left untouched.
 fn session_blob_is_empty(bytes: &[u8]) -> bool {
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return true;
     }
     match serde_json::from_slice::<serde_json::Value>(bytes) {
         Ok(serde_json::Value::Null) => true,
-        Ok(serde_json::Value::Object(map)) => !matches!(map.get("layout"), Some(v) if !v.is_null()),
+        Ok(serde_json::Value::Object(map)) => match map.get("layout") {
+            // No layout (or explicit null): treeExpanded-only / empty blob.
+            None | Some(serde_json::Value::Null) => true,
+            // A layout is durable content only if it has a non-terminal tab.
+            Some(layout) => !layout_has_durable_content(layout),
+        },
         _ => false,
     }
+}
+
+/// Walk a serialized layout node tree; report whether any tab is a durable
+/// (non-terminal) surface. The serialized shape is the frontend's
+/// `serializeLayout()` output: a leaf `{"k":"l","t":[<tabs>],"bt":[…]?}` or a
+/// split `{"k":"s","a":<node>,"b":<node>}`; a tab's kind is `"k"` (terminal
+/// is `"t"`, defaulting to file when absent). Unknown node/tab shapes count
+/// as durable — we never prune something we don't positively understand.
+fn layout_has_durable_content(node: &serde_json::Value) -> bool {
+    let serde_json::Value::Object(map) = node else {
+        return true; // unknown shape: be conservative.
+    };
+    match map.get("k").and_then(serde_json::Value::as_str) {
+        Some("l") => {
+            // Durable iff any tab is non-terminal. Inspect front tabs `t`
+            // plus legacy back tabs `bt` (Hybrid). A leaf with no (or only
+            // terminal) tabs has no durable content.
+            ["t", "bt"]
+                .iter()
+                .filter_map(|key| map.get(*key))
+                .filter_map(serde_json::Value::as_array)
+                .flatten()
+                .any(|tab| !tab_is_terminal(tab))
+        }
+        Some("s") => {
+            let durable = |key| map.get(key).is_some_and(layout_has_durable_content);
+            durable("a") || durable("b")
+        }
+        _ => true, // unknown node kind: be conservative.
+    }
+}
+
+/// A serialized tab is a terminal iff its kind `"k"` is `"t"`. Kind defaults
+/// to file (`"f"`) when absent, so a tab with no `k` is non-terminal.
+fn tab_is_terminal(tab: &serde_json::Value) -> bool {
+    tab.get("k").and_then(serde_json::Value::as_str) == Some("t")
 }
 
 /// Best-effort GC of phantom (content-less) session blobs in `sessions`.
@@ -6547,13 +6598,53 @@ mod tests {
         assert!(session_blob_is_empty(
             br#"{"layout":null,"treeExpanded":{"docs":true}}"#
         ));
-        // A non-null layout is real content, kept.
-        assert!(!session_blob_is_empty(br#"{"layout":{"k":"l","t":[]}}"#));
-        assert!(!session_blob_is_empty(
-            br#"{"layout":{"k":"l","t":[{"k":"f"}]},"treeExpanded":{"":true}}"#
+        // A layout with no tabs, or whose tabs are ALL terminals, is an
+        // ephemeral terminal-only window → phantom. This is the exact
+        // dead-terminal shape @@Alex's hand-smoke caught (a single terminal
+        // tab carrying a now-dead tsid).
+        assert!(session_blob_is_empty(br#"{"layout":{"k":"l","t":[]}}"#));
+        assert!(session_blob_is_empty(
+            br#"{"layout":{"k":"l","t":[{"k":"t","n":"Terminal-2","tsid":"56bd5182f75a4ba055f7fe7bed7676a3","a":1}],"f":1},"treeExpanded":{"":true}}"#
         ));
+        // Multiple terminals, still no durable surface → phantom. Splits
+        // whose every leaf is terminal-only are also empty.
+        assert!(session_blob_is_empty(
+            br#"{"layout":{"k":"l","t":[{"k":"t"},{"k":"t"}]}}"#
+        ));
+        assert!(session_blob_is_empty(
+            br#"{"layout":{"k":"s","a":{"k":"l","t":[{"k":"t"}]},"b":{"k":"l","t":[{"k":"t"}]}}}"#
+        ));
+
+        // A layout with any non-terminal tab is durable content → kept.
+        assert!(!session_blob_is_empty(
+            br#"{"layout":{"k":"l","t":[{"k":"f","p":"note.md"}]}}"#
+        ));
+        // Kind defaults to file when absent → non-terminal → kept.
+        assert!(!session_blob_is_empty(br#"{"layout":{"k":"l","t":[{}]}}"#));
+        // Other durable surfaces (browser/graph/hybrid/dashboard) are kept.
+        for kind in ["b", "g", "h", "d", "s"] {
+            let blob = format!(r#"{{"layout":{{"k":"l","t":[{{"k":"{kind}"}}]}}}}"#);
+            assert!(
+                !session_blob_is_empty(blob.as_bytes()),
+                "kind {kind:?} is a durable tab and must not be pruned",
+            );
+        }
+        // A terminal alongside a file is durable (the file is real content).
+        assert!(!session_blob_is_empty(
+            br#"{"layout":{"k":"l","t":[{"k":"t"},{"k":"f"}]}}"#
+        ));
+        // A split with one durable leaf is kept.
+        assert!(!session_blob_is_empty(
+            br#"{"layout":{"k":"s","a":{"k":"l","t":[{"k":"t"}]},"b":{"k":"l","t":[{"k":"f"}]}}}"#
+        ));
+        // A non-terminal in the legacy Hybrid back-tabs `bt` is still durable.
+        assert!(!session_blob_is_empty(
+            br#"{"layout":{"k":"l","t":[{"k":"t"}],"bt":[{"k":"f"}]}}"#
+        ));
+
         // Conservative: shapes we don't positively recognize as empty
-        // (arrays, scalars, unparseable bytes) are left alone.
+        // (arrays, scalars, unknown node kinds, unparseable bytes) are kept.
+        assert!(!session_blob_is_empty(br#"{"layout":{"k":"?"}}"#));
         assert!(!session_blob_is_empty(b"[1,2,3]"));
         assert!(!session_blob_is_empty(b"\"a string\""));
         assert!(!session_blob_is_empty(b"not json at all"));
@@ -6571,6 +6662,13 @@ mod tests {
             .put_session("win-tree", br#"{"treeExpanded":{"":true}}"#)
             .unwrap();
         workspace.put_session("win-empty", b"").unwrap();
+        // The dead-terminal phantom shape: a real on-disk sdme blob.
+        workspace
+            .put_session(
+                "win-term",
+                br#"{"layout":{"k":"l","t":[{"k":"t","n":"Terminal-2","tsid":"56bd5182f75a4ba055f7fe7bed7676a3","a":1}],"f":1},"treeExpanded":{"":true}}"#,
+            )
+            .unwrap();
 
         prune_empty_sessions(sessions);
 

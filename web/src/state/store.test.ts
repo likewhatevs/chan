@@ -34,6 +34,7 @@ import {
   layout,
   paneMode,
   type BrowserTab,
+  type DashboardTab,
   type FileTab,
   type GraphTab,
   type LeafNode,
@@ -60,6 +61,14 @@ function setTerminalLayout(tab: Partial<TerminalTab> = {}): void {
   layout.rootId = pane.id;
   layout.activePaneId = pane.id;
   layout.nodes = { [pane.id]: pane };
+}
+
+/// Add a durable (non-terminal) tab to the active pane so the window has
+/// content worth persisting. Terminal-only windows are ephemeral and serialize
+/// to null (deleted, not saved), so tests that expect a PUT need this.
+function addDashboardTab(id = "dash-1"): void {
+  const dashboard: DashboardTab = { kind: "dashboard", id, title: "Dashboard" };
+  activePane().tabs.push(dashboard);
 }
 
 afterEach(() => {
@@ -97,6 +106,9 @@ describe("session persistence bootstrap guard", () => {
       }),
     );
     setTerminalLayout({ terminalSessionId: undefined });
+    // Pair the terminal with a durable tab so the window persists (a
+    // terminal-only window is ephemeral and would DELETE rather than PUT).
+    addDashboardTab();
 
     __testSetBootstrapHydrated(false);
     scheduleSessionSave();
@@ -110,6 +122,7 @@ describe("session persistence bootstrap guard", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [, init] = fetchSpy.mock.calls[0]!;
+    expect(init?.method).toBe("PUT");
     expect(String(init?.body)).toContain("term_after_hydrate");
 
     fetchSpy.mockRestore();
@@ -123,9 +136,10 @@ describe("session persistence bootstrap guard", () => {
     );
     __testSetBootstrapHydrated(true);
 
-    // 1) Window has real content (a terminal) plus a toggled folder:
+    // 1) Window has durable content (a dashboard tab) plus a toggled folder:
     //    persists a layout payload via PUT.
     setTerminalLayout({ terminalSessionId: "term_alive" });
+    addDashboardTab();
     treeExpanded.map = { "": true, docs: true };
     scheduleSessionSave();
     await vi.runAllTimersAsync();
@@ -145,6 +159,40 @@ describe("session persistence bootstrap guard", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     const [url, init] = fetchSpy.mock.calls[1]!;
+    expect(init?.method).toBe("DELETE");
+    expect(String(url)).toContain("/api/session");
+
+    fetchSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  test("a terminal-only window is ephemeral: deletes the blob instead of saving it", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+    __testSetBootstrapHydrated(true);
+
+    // 1) Durable window (a terminal alongside a dashboard) persists via PUT.
+    setTerminalLayout({ terminalSessionId: "term_live" });
+    addDashboardTab();
+    treeExpanded.map = { "": true, docs: true };
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+    expect(fetchSpy.mock.calls.at(-1)?.[1]?.method).toBe("PUT");
+
+    // 2) Remove the durable tab, leaving only the live terminal. Terminals are
+    //    ephemeral (the PTY dies on restart; a saved tsid just respawns a fresh
+    //    shell), so a terminal-only window is not durable: it must DELETE its
+    //    blob, not persist a dead-terminal layout that lingers as a phantom in
+    //    `cs window list`.
+    const pane = activePane();
+    pane.tabs = pane.tabs.filter((t) => t.kind === "terminal");
+    pane.activeTabId = pane.tabs[0]?.id ?? null;
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+
+    const [url, init] = fetchSpy.mock.calls.at(-1)!;
     expect(init?.method).toBe("DELETE");
     expect(String(url)).toContain("/api/session");
 
