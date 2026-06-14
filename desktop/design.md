@@ -10,9 +10,13 @@ of the two.
 chan-desktop is the native desktop shell for chan. For normal local
 workspaces it embeds chan-server in the desktop process and serves the
 same Svelte editor on a loopback HTTP port. It links `chan-workspace` and
-`chan-server` directly and ships no `chan` binary; registry mutations
-run in-process against the embedded `chan-workspace`
-`Library`. The desktop app exists so that:
+`chan-server` directly, and registry mutations run in-process against the
+embedded `chan-workspace` `Library`. The same binary also IS the `chan` /
+`cs` command line: invoked through a `chan` or `cs` name (argv0, or
+`$ARGV0` inside an AppImage) it dispatches the CLI before any GUI init, and
+on boot it owns the `~/.local/bin/{chan,cs}` shims (section 7) — so a
+desktop install ships the CLI *with* the app, nothing extra to download.
+The desktop app exists so that:
 
 - a non-CLI user can install one signed bundle and open a folder
   through a familiar OS dialog instead of a terminal,
@@ -26,11 +30,6 @@ Non-goals:
 - chan-desktop is not a second editor. The editor is the web app
   served by chan-server. The desktop manages workspaces and opens
   the editor in Tauri webview windows.
-- chan-desktop is not a `chan` CLI installer. It links `chan-workspace`
-  and `chan-server` directly rather than shipping a `chan` binary, so
-  installing the desktop does not put `chan` on your `$PATH` (the
-  Linux AppImage `cs` wrapper in section 7 is the one deliberate
-  exception).
 - chan-desktop is not a general web browser. Workspace windows are
   dedicated Tauri webviews pointed at local or attached chan URLs.
 
@@ -482,8 +481,18 @@ launcher process launch.
   manifest carries a top-level `version` plus a `platforms` map keyed
   by `{os}-{arch}` (e.g. `darwin-aarch64`); Tauri picks the running
   target's entry and compares `version`.
-- Because the desktop ships no separate `chan` binary, there is no
-  second executable to upgrade.
+- One executable to upgrade. The desktop binary IS `chan` (section 1),
+  so there is no second CLI to update — the `~/.local/bin/{chan,cs}`
+  shims point at the one binary. `chan upgrade` from the
+  desktop-dispatched binary (`Personality::Desktop`) does NOT replace a
+  tarball: it delegates over the well-known handoff socket to the running
+  desktop, which drives this same `tauri-plugin-updater`
+  (check → download → install → `restart()`). If no desktop is running
+  the CLI launches one first; after a successful install the desktop
+  re-affirms the shims (so they keep pointing at the upgraded binary).
+  `chan upgrade --check` reports availability synchronously without
+  installing. The standalone `chan` (install.sh) is the only path that
+  still self-upgrades by replacing its CLI tarball in place.
 
 Key rotation and updater-payload signing/verification are documented
 in `.agents/desktop.md` ("Auto-upgrade signing") and the
