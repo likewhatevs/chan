@@ -1299,24 +1299,28 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         .with_context(|| format!("running server on {addr}"))
 }
 
-/// Try to hand `root` off to a running same-user chan-desktop.
+/// Integrate a Desktop-personality `chan serve` with the desktop app.
 ///
 /// Returns:
-/// - `Some(Ok(()))` when the desktop opened the workspace window: the CLI
-///   exits cleanly WITHOUT opening the workspace (the desktop owns the
-///   flock).
-/// - `None` in every fallback case (no desktop, refused, stale
-///   socket, bad handshake, version skew, no GUI session, opted out):
-///   the caller continues to the unchanged standalone server path.
+/// - `Some(Ok(()))` when the desktop opened the workspace window (either a
+///   running desktop took the handoff, or we launched the GUI and it did):
+///   the CLI exits WITHOUT opening the workspace (the desktop owns the flock).
+/// - `Some(Err(..))` when desktop integration was attempted but failed hard
+///   (GUI launch failed / timed out). The caller propagates the error; a
+///   Desktop invocation does NOT silently fall back to the browser.
+/// - `None` only when desktop integration does not apply (opted out via
+///   `CHAN_NO_DESKTOP_HANDOFF`, no GUI session such as SSH, a running desktop
+///   of a skewed version, or a non-unix build): the caller falls back to the
+///   standalone server path. These are the cases where a browser/URL is the
+///   only sensible outcome.
 ///
-/// The caller already restricted this to the Desktop personality and
-/// excluded tunnel mode. Here we add the GUI-session + explicit-opt-out
-/// gates, then attempt the UDS handoff and translate the outcome into a
-/// user-facing note.
+/// The caller already restricted this to the Desktop personality and excluded
+/// tunnel mode. Here we add the GUI-session + explicit-opt-out gates, then
+/// hand off to a running desktop or launch one.
 async fn maybe_handoff_to_desktop(root: &Path) -> Option<Result<()>> {
-    // Explicit opt-out for automation, and the headless auto-skip: a
-    // workspace handed to a desktop the user can't see is worse than a
-    // printed URL. Both keep the load-bearing standalone path.
+    // Explicit opt-out for automation, and the headless auto-skip: over SSH
+    // (no GUI session) there's no window to show, so a printed URL is the
+    // only useful outcome. Both keep the load-bearing standalone path.
     if chan_server::handoff::handoff_opt_out() {
         return None;
     }
@@ -1336,11 +1340,15 @@ async fn maybe_handoff_to_desktop(root: &Path) -> Option<Result<()>> {
             desktop_version,
             desktop_protocol: _,
         } => {
-            // No silent cross-version IPC: name the versions and fall
-            // back to standalone.
+            // A running desktop of a DIFFERENT version (e.g. the binary was
+            // upgraded but the old desktop is still running). Launching our
+            // version would fight the old one for the singleton socket, so
+            // name the skew and fall back to a standalone server rather than
+            // risk two desktops.
             eprintln!(
                 "chan: chan-desktop is version {desktop_version}, CLI is {}; \
-                 cannot hand off. Starting a standalone server.",
+                 cannot hand off. Restart chan-desktop to pick up the new \
+                 version. Starting a standalone server for now.",
                 chan_server::handoff::CHAN_VERSION,
             );
             None
@@ -1352,10 +1360,137 @@ async fn maybe_handoff_to_desktop(root: &Path) -> Option<Result<()>> {
             );
             None
         }
-        // No desktop / refused / stale socket / bad handshake: silent
-        // fall-through to the standalone path, exactly like today.
-        chan_server::handoff::Outcome::NoDesktop => None,
+        // No running desktop: launch the GUI and open the workspace in it.
+        // A Desktop invocation never falls back to the browser here.
+        chan_server::handoff::Outcome::NoDesktop => maybe_launch_desktop(root).await,
     }
+}
+
+/// Launch the desktop GUI for a `chan serve` that found no running desktop,
+/// then hand it the workspace. Unix-only (the desktop + handoff socket are
+/// unix); off unix there's no GUI to launch, so fall back to standalone.
+#[cfg(unix)]
+async fn maybe_launch_desktop(root: &Path) -> Option<Result<()>> {
+    Some(launch_desktop_and_handoff(root).await)
+}
+
+#[cfg(not(unix))]
+async fn maybe_launch_desktop(_root: &Path) -> Option<Result<()>> {
+    None
+}
+
+/// Spawn the chan-desktop GUI and hand `root` to it once it's up.
+///
+/// Only reached from the Desktop personality, so `current_exe()` IS the
+/// chan-desktop binary. Spawns the GUI detached, then polls the well-known
+/// handoff socket — the GUI binds it during setup — re-attempting
+/// `try_handoff` until it opens the workspace or a generous deadline passes
+/// (a cold GUI boot starts the embedded server and a window, which takes a
+/// few seconds).
+#[cfg(unix)]
+async fn launch_desktop_and_handoff(root: &Path) -> Result<()> {
+    spawn_desktop_gui().context("launching chan-desktop")?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        match chan_server::handoff::try_handoff(root).await {
+            chan_server::handoff::Outcome::HandedOff => {
+                println!("chan: launched chan-desktop and opened {}.", root.display());
+                return Ok(());
+            }
+            // Not up yet (socket absent / connect refused): keep waiting.
+            chan_server::handoff::Outcome::NoDesktop => {}
+            // The desktop we just launched is up but won't take the handoff.
+            // Surface and stop retrying rather than spin to the deadline.
+            chan_server::handoff::Outcome::VersionSkew {
+                desktop_version, ..
+            } => {
+                anyhow::bail!(
+                    "launched chan-desktop is version {desktop_version}, CLI is {}; \
+                     cannot hand off",
+                    chan_server::handoff::CHAN_VERSION,
+                );
+            }
+            chan_server::handoff::Outcome::DesktopError { message } => {
+                anyhow::bail!("chan-desktop could not open the workspace: {message}");
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "timed out waiting for chan-desktop to start; run `chan serve` again \
+                 once it is up, or set CHAN_NO_DESKTOP_HANDOFF=1 for a standalone server"
+            );
+        }
+    }
+}
+
+/// Launch the chan-desktop GUI as a detached process.
+///
+/// `current_exe()` is the chan-desktop binary (this only runs for the Desktop
+/// personality). We start it with a clean argv0 (NOT `chan`/`cs`) so the
+/// pre-GUI argv probe falls through to a normal GUI launch instead of
+/// re-dispatching as the CLI.
+#[cfg(unix)]
+fn spawn_desktop_gui() -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let exe = std::env::current_exe()?;
+
+    // macOS: launching the bare Mach-O inside the `.app` can start the process
+    // without LaunchServices activating/foregrounding it. Prefer
+    // `open <Name>.app`, which hands launch to LaunchServices (proper
+    // activation + single-instance). Derive the bundle by climbing
+    // `…/<Name>.app/Contents/MacOS/<bin>`.
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(bundle) = macos_app_bundle(&exe) {
+            return Command::new("/usr/bin/open")
+                .arg(bundle)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map(|_| ());
+        }
+        // Not in a bundle (dev build): fall through to the direct exec below.
+    }
+
+    // Linux AppImage: `$APPIMAGE` is the real, relaunchable image, while
+    // `current_exe()` is the ephemeral `/tmp/.mount_*` path. Prefer
+    // `$APPIMAGE`; off an AppImage (deb/rpm) `current_exe()` is
+    // `/usr/bin/chan-desktop`, which relaunches fine.
+    let target = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .unwrap_or(exe);
+    Command::new(&target)
+        // Clean argv0 so the spawned process boots the GUI, not the alias.
+        .arg0(&target)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        // New process group so Ctrl-C in the launching terminal doesn't also
+        // kill the desktop we just started.
+        .process_group(0)
+        .spawn()
+        .map(|_| ())
+}
+
+/// Climb `…/<Name>.app/Contents/MacOS/<bin>` to the `.app` bundle dir, if
+/// `exe` is laid out that way. Returns None for a loose dev binary.
+#[cfg(target_os = "macos")]
+fn macos_app_bundle(exe: &Path) -> Option<PathBuf> {
+    let macos_dir = exe.parent()?; // …/Contents/MacOS
+    let contents = macos_dir.parent()?; // …/Contents
+    let bundle = contents.parent()?; // …/<Name>.app
+    let is_bundle = bundle.extension().map(|e| e == "app").unwrap_or(false)
+        && macos_dir.file_name().map(|n| n == "MacOS").unwrap_or(false)
+        && contents
+            .file_name()
+            .map(|n| n == "Contents")
+            .unwrap_or(false);
+    is_bundle.then(|| bundle.to_path_buf())
 }
 
 /// Dispatch the `chan reports {enable,disable}`
@@ -2732,6 +2867,28 @@ fn print_import_summary(summary: &chan_workspace::ImportSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_app_bundle_climbs_to_dot_app() {
+        // The real .app layout resolves to the bundle dir.
+        let exe = PathBuf::from("/Applications/Chan.app/Contents/MacOS/chan-desktop");
+        assert_eq!(
+            macos_app_bundle(&exe),
+            Some(PathBuf::from("/Applications/Chan.app"))
+        );
+        // A loose dev binary (cargo target dir) is not a bundle.
+        assert_eq!(
+            macos_app_bundle(&PathBuf::from("/Users/x/chan/target/debug/chan-desktop")),
+            None
+        );
+        // A path shaped like a bundle but without the .app extension is not
+        // a bundle either.
+        assert_eq!(
+            macos_app_bundle(&PathBuf::from("/x/Chan/Contents/MacOS/chan-desktop")),
+            None
+        );
+    }
 
     #[test]
     fn absolutize_serve_root_is_always_absolute() {
