@@ -113,16 +113,29 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/connection lost — message may still be queued/);
   });
 
-  test("pending locks the editor via a CodeMirror compartment (readOnly + !editable)", () => {
+  test("pending locks the editor read-only but keeps it editable so recall's keymap fires", () => {
+    // readOnly blocks doc edits; editable stays TRUE so the caret/keymap stay
+    // live and ArrowUp-at-doc-start can recall a queued message (GAP 1) — an
+    // editable:false editor would not receive the key.
     expect(richPromptSrc).toMatch(
-      /\[EditorState\.readOnly\.of\(locked\), EditorView\.editable\.of\(!locked\)\]/,
+      /\[EditorState\.readOnly\.of\(locked\), EditorView\.editable\.of\(true\)\]/,
     );
-    // Locked from creation when the bubble mounts mid-pending (hide/show),
-    // reconfigured live on phase changes.
+    // Locked from creation when the bubble mounts mid-pending (hide/show) or a
+    // reload restored a queued message; reconfigured live on phase changes.
     expect(richPromptSrc).toMatch(/lockCompartment\.of\(lockExtensions\(isPending\)\)/);
     expect(richPromptSrc).toMatch(
-      /lockCompartment\.reconfigure\(lockExtensions\(locked\)\)/,
+      /lockCompartment\.reconfigure\(lockExtensions\(isPending\)\)/,
     );
+  });
+
+  test("ArrowUp at doc-start recalls a queued message (GAP 1)", () => {
+    // Keymap entry + the doc-start / queued guards + the cancel send.
+    expect(richPromptSrc).toMatch(/\{ key: "ArrowUp", run: recall \}/);
+    expect(richPromptSrc).toMatch(/pending\.phase !== "queued"/);
+    expect(richPromptSrc).toMatch(/!sel\.empty \|\| sel\.from !== 0/);
+    expect(richPromptSrc).toMatch(/sendCancelToTerminal\(tab\.id, pending\.id\)/);
+    // recalled → keep text + unlock; drained → surface "already sent".
+    expect(richPromptSrc).toMatch(/already sent — too late to recall/);
   });
 
   test("fast-path grace + ack timeout constants gate the chip and the dead-socket fail", () => {

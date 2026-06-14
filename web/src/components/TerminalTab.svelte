@@ -43,12 +43,15 @@
     dismissTerminalEnvNamePrompt,
     isTerminalMoving,
     markTerminalEnvNameRestarted,
+    registerTerminalCancelSink,
     registerTerminalCloseSink,
     registerTerminalInputSink,
     registerTerminalPromptSink,
     removeExplicitlyClosedTerminalTab,
     renameTerminalTab,
     reopenClosedTab,
+    reproveRestoredPrompt,
+    resolvePromptCancelled,
     setTerminalBroadcastEnabled,
     setTerminalBroadcastTarget,
     toggleTerminalGroupBroadcast,
@@ -125,6 +128,12 @@
         /// MESSAGE depth of the shared write queue at attach time, so every
         /// (re)attach re-syncs the badge (the tab field is never persisted).
         queue_depth?: number;
+        /// The `prompt_id`s still in THIS session's write queue, FIFO order,
+        /// one per tail-bearing message. Lets a reloaded SPA re-prove its
+        /// restored pending Rich Prompt message is still queued at position
+        /// `index+1` (vs the anonymous `queue_depth`, which may count pokes
+        /// from other windows). Always present (`[]` when none). GAP 2.
+        queued_prompt_ids?: string[];
       }
     | { type: "activity"; bytes_since_focus: number }
     /// Queue-visibility frames (server: routes/terminal.rs). `queue` is the
@@ -135,6 +144,12 @@
     | { type: "queue"; depth: number }
     | { type: "prompt-ack"; id: string; queued: boolean; depth: number }
     | { type: "prompt-delivered"; id: string; depth: number }
+    /// Ack for a `cancel-prompt` recall (inline on the requesting socket, like
+    /// `prompt-ack`). `removed:true` = the still-queued message was pulled
+    /// before the PTY (safe to recall + edit); `removed:false` = it raced a
+    /// drain and already delivered. Depth (when it changed) arrives via the
+    /// existing `queue` frame, not here.
+    | { type: "prompt-cancelled"; id: string; removed: boolean }
     | { type: "cwd"; cwd?: string | null; cwd_rel?: string | null }
     | { type: "resize"; cols: number; rows: number }
     | { type: "resize_other"; cols: number; rows: number }
@@ -268,10 +283,13 @@
     // Rich Prompt bubble -> this session's WS `prompt` frame -> the server-side
     // write queue (NOT sendInput's raw keystroke path).
     const unregisterPrompt = registerTerminalPromptSink(tab.id, sendPrompt);
+    // Rich Prompt recall (ArrowUp at doc-start while queued) -> `cancel-prompt`.
+    const unregisterCancel = registerTerminalCancelSink(tab.id, sendCancelPrompt);
     return () => {
       unregisterInput();
       unregisterClose();
       unregisterPrompt();
+      unregisterCancel();
     };
   });
 
@@ -773,6 +791,12 @@
         // Re-sync the queue badge on every (re)attach: the depth is absolute
         // server truth, never persisted client-side.
         setTerminalQueueDepth(tab, frame.queue_depth ?? 0);
+        // Re-prove a RESTORED pending Rich Prompt message against the server's
+        // authoritative queue (GAP 2 / reload contract): re-lock + re-show it
+        // with its position if still queued, clear it if it already drained.
+        // Mutates tab state from this event handler (not a $derived); the
+        // bubble's own onMount/$effect re-shows it when the view exists.
+        reproveRestoredPrompt(tab, frame.queued_prompt_ids ?? []);
         scheduleTerminalSessionSave();
         missedBytes = Math.max(0, Math.floor(frame.missed_bytes ?? 0));
         status = "connected";
@@ -800,6 +824,12 @@
       } else if (frame.type === "prompt-delivered") {
         setTerminalQueueDepth(tab, frame.depth);
         resolvePendingPrompt(tab, frame.id, "delivered", frame.depth);
+      } else if (frame.type === "prompt-cancelled") {
+        // Recall ack. removed:true → the bubble unlocks + keeps the draft to
+        // edit/resubmit; removed:false → it raced a drain (already delivered),
+        // the bubble surfaces "already sent". The `queue` frame (if any)
+        // updates the badge separately. Stale/foreign ids no-op in the helper.
+        resolvePromptCancelled(tab, frame.id, frame.removed);
       } else if (frame.type === "closed") {
         sessionClosedReason = frame.reason;
         status = "exited";
@@ -974,6 +1004,14 @@
   /// = fire-and-forget (the orchestrator's lead-identity prompt stays so).
   function sendPrompt(data: string, agent?: string, id?: string): boolean {
     return send({ type: "prompt", data, ...(agent ? { agent } : {}), ...(id ? { id } : {}) });
+  }
+
+  /// Rich Prompt recall: ask the server to pull a still-queued message out of
+  /// this session's write queue by its `prompt_id`. The server replies with a
+  /// `prompt-cancelled` ack (removed: true|false). Returns whether the WS was
+  /// open. See the wire contract in task-LaneA-LaneC-1.
+  function sendCancelPrompt(id: string): boolean {
+    return send({ type: "cancel-prompt", id });
   }
 
   // Rich Prompt: the right-click "Show/Hide Rich Prompt" entry mirrors the

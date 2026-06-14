@@ -45,6 +45,7 @@
   import {
     beginPendingPrompt,
     failPendingPrompt,
+    sendCancelToTerminal,
     sendPromptToTerminal,
     type TerminalTab,
   } from "../state/tabs.svelte";
@@ -94,6 +95,11 @@
   let graceTimer: ReturnType<typeof setTimeout> | null = null;
   let ackTimer: ReturnType<typeof setTimeout> | null = null;
   let noteTimer: ReturnType<typeof setTimeout> | null = null;
+  // A `cancel-prompt` recall is in flight (ArrowUp pressed; awaiting the
+  // `prompt-cancelled` ack). Guards against double-sending while the editor
+  // stays locked through the round-trip. Cleared when a terminal phase
+  // resolves (consumeTerminalPhase).
+  let recallInFlight = false;
 
   // Read-only while a message is in flight ("sent"/"queued"); terminal
   // phases are consumed (cleared) by the phase effect below, so they never
@@ -103,15 +109,19 @@
     return phase === "sent" || phase === "queued";
   });
 
-  // CodeMirror lock seam: readOnly blocks transactions, editable drops the
-  // DOM contenteditable so the caret/IME can't type into a locked doc.
+  // CodeMirror lock seam. While a message is in flight ("sent"/"queued") the
+  // editor is readOnly (transactions that change the doc are dropped), but it
+  // stays EDITABLE (contenteditable) so the caret/keymap remain live — that is
+  // what lets ArrowUp-at-doc-start trigger recall while queued (GAP 1) and
+  // keeps focus through the pending round-trip. readOnly alone blocks typing,
+  // so the previous editable:false was redundant insurance; dropping it is what
+  // makes recall reliable (an editable:false editor doesn't receive the key).
   const lockCompartment = new Compartment();
   function lockExtensions(locked: boolean) {
-    return [EditorState.readOnly.of(locked), EditorView.editable.of(!locked)];
+    return [EditorState.readOnly.of(locked), EditorView.editable.of(true)];
   }
   $effect(() => {
-    const locked = isPending;
-    view?.dispatch({ effects: lockCompartment.reconfigure(lockExtensions(locked)) });
+    view?.dispatch({ effects: lockCompartment.reconfigure(lockExtensions(isPending)) });
   });
 
   const labelText = $derived.by(() => {
@@ -148,13 +158,32 @@
   // the phase effect (live transitions) and once post-mount (a phase that
   // resolved while the bubble was hidden — the effect's first run sees it
   // before the editor view exists, so it defers via the !view guard).
-  function consumeTerminalPhase(phase: "delivered" | "rejected" | "failed"): void {
+  function consumeTerminalPhase(
+    phase: "delivered" | "rejected" | "failed" | "recalled" | "drained",
+  ): void {
     if (!view) return;
     clearPendingTimers();
     pendingChipVisible = false;
+    recallInFlight = false;
     if (phase === "delivered") {
       // The agent consumed the message: NOW clear the composer + the draft
       // (the draft held the text the whole time it was queued).
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "" },
+      });
+      void flushWrite();
+      view.focus();
+    } else if (phase === "recalled") {
+      // Recall succeeded: the still-queued message was pulled before the PTY.
+      // KEEP the draft text and just unlock (clearing pendingPrompt below drops
+      // the lock) so the user edits and resubmits with a fresh id — no
+      // double-delivery, since the original is gone from the queue.
+      view.focus();
+    } else if (phase === "drained") {
+      // Recall raced a drain: the message already hit the PTY. Surface it and
+      // clear the composer like a normal delivery — do NOT silently re-edit a
+      // message that was already sent.
+      showTransientNote("already sent — too late to recall");
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: "" },
       });
@@ -178,10 +207,39 @@
       // Acked: the ack timeout is done; the grace timer keeps gating the chip.
       if (ackTimer !== null) clearTimeout(ackTimer);
       ackTimer = null;
-    } else if (phase === "delivered" || phase === "rejected" || phase === "failed") {
+    } else if (
+      phase === "delivered" ||
+      phase === "rejected" ||
+      phase === "failed" ||
+      phase === "recalled" ||
+      phase === "drained"
+    ) {
       consumeTerminalPhase(phase);
     }
   });
+
+  // Recall a still-queued message to edit it (GAP 1 "press up to edit"). Only
+  // while QUEUED (acked but not yet drained); "sent" (pre-ack) can't be safely
+  // cancelled by id yet, and a terminal phase has nothing to recall. Sends
+  // `cancel-prompt`; the editor stays locked until the `prompt-cancelled` ack
+  // resolves to "recalled" (unlock + keep text) or "drained" (already sent).
+  // Returns true to consume the ArrowUp; false lets it move the caret.
+  function recall(view: EditorView): boolean {
+    const pending = tab.pendingPrompt;
+    if (!pending || pending.phase !== "queued") return false;
+    // Only at the very start of the doc (empty selection at offset 0), so
+    // ArrowUp still navigates within a multi-line draft.
+    const sel = view.state.selection.main;
+    if (!sel.empty || sel.from !== 0) return false;
+    if (recallInFlight) return true;
+    if (!sendCancelToTerminal(tab.id, pending.id)) {
+      // Socket down: can't recall. Surface it; the message may still be queued.
+      showTransientNote("connection lost — can't recall");
+      return true;
+    }
+    recallInFlight = true;
+    return true;
+  }
 
   // Directory holding the draft (images upload here).
   // ".Drafts/x/draft.md" -> ".Drafts/x".
@@ -306,7 +364,8 @@
         doc: content,
         extensions: [
           // Locked from creation when a message is already in flight (the
-          // bubble was hidden mid-pending; the pending lives on the tab).
+          // bubble was hidden mid-pending, or a reload restored a queued
+          // message; the pending lives on the tab).
           lockCompartment.of(lockExtensions(isPending)),
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
@@ -321,6 +380,10 @@
               { key: "Mod-Enter", run: submit },
               { key: "Enter", run: insertNewlineContinueMarkup },
               { key: "Backspace", run: deleteMarkupBackward },
+              // ArrowUp at doc-start while queued recalls the message to edit
+              // (GAP 1). Off doc-start / not queued it returns false and falls
+              // through to default caret movement.
+              { key: "ArrowUp", run: recall },
               {
                 key: "Tab",
                 run: (v) => indentListItem(v) || indentMore(v),

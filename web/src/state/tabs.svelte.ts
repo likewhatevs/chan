@@ -29,6 +29,7 @@ import {
   type TerminalKeyboardProtocolState,
 } from "../terminal/keymap";
 import { notify } from "./notify.svelte";
+import { isRichPromptVisible, showRichPromptForTab } from "./richPrompt.svelte";
 // `isDraftPath` comes from the side-effect-free `workspace.svelte`
 // leaf module (NOT store.svelte), so importing it here doesn't trigger
 // store's eager draft-promotion-sink registration. See the cycle note
@@ -291,11 +292,15 @@ export type TerminalTab = {
   /// bubble mid-pending keeps the state machine running. phase: "sent"
   /// (frame out, no ack yet) -> "queued" (server ack; depth = the ack's
   /// 1-based position) -> "delivered" (last write hit the PTY) | "rejected"
-  /// (queue full) | "failed" (WS close / ack timeout / session end). The
+  /// (queue full) | "failed" (WS close / ack timeout / session end). Cancel/
+  /// recall adds two terminal phases the bubble consumes: "recalled" (the
+  /// `prompt-cancelled` ack removed a still-queued message — unlock + keep the
+  /// draft text to edit + resubmit) | "drained" (the cancel raced a drain; the
+  /// message already hit the PTY — surface it, don't silently re-edit). The
   /// bubble's $effect consumes terminal phases and clears this field.
   pendingPrompt?: {
     id: string;
-    phase: "sent" | "queued" | "delivered" | "rejected" | "failed";
+    phase: "sent" | "queued" | "delivered" | "rejected" | "failed" | "recalled" | "drained";
     depth?: number;
   };
   cwd?: string;
@@ -1605,6 +1610,43 @@ export function resolvePendingPrompt(
   tab.pendingPrompt = { ...pending, phase, ...(depth !== undefined ? { depth } : {}) };
 }
 
+/// Resolve a `prompt-cancelled` ack (the recall round-trip). `removed:true`
+/// means the still-queued message was pulled from the queue before it hit the
+/// PTY → phase "recalled" (the bubble unlocks + keeps the draft text so the
+/// user edits and resubmits with a fresh id, no double-delivery). `removed:
+/// false` means it raced a drain and already delivered → phase "drained" (the
+/// bubble surfaces "already sent" rather than letting the user silently
+/// re-edit a delivered message). Stale/foreign ids no-op (same guard as
+/// `resolvePendingPrompt` — every attached socket sees acks it doesn't own).
+export function resolvePromptCancelled(tab: TerminalTab, id: string, removed: boolean): void {
+  const pending = tab.pendingPrompt;
+  if (!pending || pending.id !== id) return;
+  tab.pendingPrompt = { ...pending, phase: removed ? "recalled" : "drained" };
+}
+
+/// On (re)attach, re-prove a RESTORED pending Rich Prompt message against the
+/// server's authoritative `queued_prompt_ids` (FIFO order) so a queued message
+/// survives a window reload (GAP 2 / the reload contract). If the restored id
+/// is still in the queue, re-lock + re-show it with its position (index + 1);
+/// if it's gone (drained/delivered before the reload) clear it so the editor
+/// unlocks. Only acts on a restored in-flight phase ("queued"/"sent"); a
+/// terminal phase is left for the bubble's own resolution. Mutates outside any
+/// `$derived` (caller is the WS `session`-frame handler).
+export function reproveRestoredPrompt(tab: TerminalTab, queuedIds: string[]): void {
+  const pending = tab.pendingPrompt;
+  if (!pending) return;
+  // Only re-prove a "queued" message (the persisted/acked state). A live "sent"
+  // (just submitted, pre-ack) is the ack flow's to resolve — a reattach session
+  // frame must not race-clear it before its prompt-ack arrives.
+  if (pending.phase !== "queued") return;
+  const idx = queuedIds.indexOf(pending.id);
+  if (idx >= 0) {
+    tab.pendingPrompt = { ...pending, phase: "queued", depth: idx + 1 };
+  } else {
+    tab.pendingPrompt = undefined;
+  }
+}
+
 /// Fail the in-flight prompt unconditionally (WS close / session end / ack
 /// timeout — paths with no message id in hand). The bubble unlocks, keeps
 /// the text, and labels honestly: the message may still be queued
@@ -1727,6 +1769,29 @@ export function sendPromptToTerminal(
   const sink = terminalPromptSinks.get(tabId);
   if (!sink) return false;
   return sink(data, agent, id);
+}
+
+/// Cancel/recall sink: send a `cancel-prompt` frame on a SPECIFIC terminal's
+/// WS so the server removes a still-queued message by its `prompt_id`. Mirrors
+/// the prompt sink so RichPrompt can reach the terminal's socket without owning
+/// it. Returns false when the terminal has no live sink / its WS is closed.
+type TerminalCancelSink = (id: string) => boolean;
+const terminalCancelSinks = new Map<string, TerminalCancelSink>();
+
+export function registerTerminalCancelSink(
+  tabId: string,
+  sink: TerminalCancelSink,
+): () => void {
+  terminalCancelSinks.set(tabId, sink);
+  return () => {
+    if (terminalCancelSinks.get(tabId) === sink) terminalCancelSinks.delete(tabId);
+  };
+}
+
+export function sendCancelToTerminal(tabId: string, id: string): boolean {
+  const sink = terminalCancelSinks.get(tabId);
+  if (!sink) return false;
+  return sink(id);
 }
 
 export function registerTerminalCloseSink(tabId: string, sink: TerminalCloseSink): () => void {
@@ -3767,6 +3832,15 @@ type SerTab = {
   /// so a reload rebinds the per-terminal Rich Prompt draft + the close
   /// cleanup deletes the right draft folder. Per-window session payloads only.
   rpd?: string;
+  /// Rich Prompt in-flight message (id + phase) so a queued message survives a
+  /// window reload (GAP 2 / the reload contract): on reattach it is re-proved
+  /// against the `session` frame's `queued_prompt_ids` (still queued → re-lock +
+  /// re-show with position; drained → clear). Only the actionable in-flight
+  /// phases ("sent"/"queued") are persisted. Per-window session payloads only.
+  pp?: { id: string; ph: "sent" | "queued" };
+  /// Rich Prompt bubble was visible — reshow it on reload so a restored queued
+  /// message is actionable without re-toggling Cmd+Shift+P. Session payloads only.
+  rpv?: 1;
   /// Graph tab state.
   gm?: "s" | "f" | "l";
   gs?: string;
@@ -4005,6 +4079,15 @@ function serializeTab(
       ...(opts.terminalSessions && t.richPromptDraftPath
         ? { rpd: t.richPromptDraftPath }
         : {}),
+      // Persist a QUEUED Rich Prompt message (id + phase) + bubble visibility
+      // so it survives a reload (GAP 2). Only "queued" (acked + in the queue)
+      // is persisted: "sent" is a sub-300ms pre-ack transient, and terminal
+      // phases resolve before any save. On reattach it's re-proved against the
+      // session frame's queued_prompt_ids (kept+positioned, or cleared).
+      ...(opts.terminalSessions && t.pendingPrompt?.phase === "queued"
+        ? { pp: { id: t.pendingPrompt.id, ph: "queued" as const } }
+        : {}),
+      ...(opts.terminalSessions && isRichPromptVisible(t.id) ? { rpv: 1 as const } : {}),
       ...active,
     };
   }
@@ -4247,6 +4330,11 @@ export async function restoreLayout(
           const kpSnapshot = terminalSessionId
             ? (sertab.kp ?? savedTerm?.kp)
             : undefined;
+          // Restore an in-flight Rich Prompt message (GAP 2). It re-locks the
+          // bubble on mount; the `session` frame's `queued_prompt_ids` then
+          // re-proves it (still queued → keep + position; drained → clear) via
+          // reproveRestoredPrompt.
+          const pp = sertab.pp ?? savedTerm?.pp;
           const tab: TerminalTab = {
             kind: "terminal",
             id: id("term"),
@@ -4267,9 +4355,15 @@ export async function restoreLayout(
                 ? Math.max(0, Math.floor((sertab.tae ?? savedTerm?.tae)!))
                 : undefined,
             richPromptDraftPath: (sertab.rpd ?? savedTerm?.rpd) || undefined,
+            ...(pp && (pp.ph === "sent" || pp.ph === "queued")
+              ? { pendingPrompt: { id: pp.id, phase: pp.ph } }
+              : {}),
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
+          // Reshow the bubble so the restored queued message is visible +
+          // actionable without re-toggling Cmd+Shift+P (GAP 2).
+          if (sertab.rpv ?? savedTerm?.rpv) showRichPromptForTab(tab.id);
           continue;
         }
         if (kind === "d") {

@@ -34,6 +34,8 @@ import {
   layout,
   paneMode,
   removeExplicitlyClosedTerminalTab,
+  reproveRestoredPrompt,
+  resolvePromptCancelled,
   type BrowserTab,
   type DashboardTab,
   type FileTab,
@@ -196,6 +198,77 @@ describe("session persistence bootstrap guard", () => {
     const [url, init] = fetchSpy.mock.calls.at(-1)!;
     expect(init?.method).toBe("DELETE");
     expect(String(url)).toContain("/api/session");
+
+    fetchSpy.mockRestore();
+    vi.useRealTimers();
+  });
+});
+
+describe("rich prompt recall + reload re-prove", () => {
+  test("resolvePromptCancelled: removed→recalled, drained, and stale ids no-op", () => {
+    setTerminalLayout({ terminalSessionId: "t1" });
+    const term = activeTerminal();
+
+    // removed:true → the message was pulled before the PTY → recalled.
+    term.pendingPrompt = { id: "m1", phase: "queued", depth: 2 };
+    resolvePromptCancelled(term, "m1", true);
+    expect(term.pendingPrompt?.phase).toBe("recalled");
+
+    // removed:false → it raced a drain (already delivered) → drained.
+    term.pendingPrompt = { id: "m2", phase: "queued" };
+    resolvePromptCancelled(term, "m2", false);
+    expect(term.pendingPrompt?.phase).toBe("drained");
+
+    // A foreign/stale id never flips a message it doesn't own.
+    term.pendingPrompt = { id: "m3", phase: "queued" };
+    resolvePromptCancelled(term, "not-mine", true);
+    expect(term.pendingPrompt?.phase).toBe("queued");
+  });
+
+  test("reproveRestoredPrompt: still-queued keeps + positions; drained clears; non-pending left alone", () => {
+    setTerminalLayout({ terminalSessionId: "t1" });
+    const term = activeTerminal();
+
+    // Restored id still in the FIFO at index 1 → queued at position 2.
+    term.pendingPrompt = { id: "m1", phase: "queued" };
+    reproveRestoredPrompt(term, ["m0", "m1", "m2"]);
+    expect(term.pendingPrompt?.phase).toBe("queued");
+    expect(term.pendingPrompt?.depth).toBe(2);
+
+    // Restored id no longer queued (drained before the reload) → cleared.
+    term.pendingPrompt = { id: "gone", phase: "queued" };
+    reproveRestoredPrompt(term, ["m0", "m1"]);
+    expect(term.pendingPrompt).toBeUndefined();
+
+    // No pending → no-op (and no throw).
+    term.pendingPrompt = undefined;
+    reproveRestoredPrompt(term, ["m0"]);
+    expect(term.pendingPrompt).toBeUndefined();
+
+    // A terminal phase is the bubble's to resolve — reprove leaves it.
+    term.pendingPrompt = { id: "d1", phase: "delivered" };
+    reproveRestoredPrompt(term, []);
+    expect(term.pendingPrompt?.phase).toBe("delivered");
+  });
+
+  test("a queued message is persisted (pp) in the session PUT so it survives reload", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+    __testSetBootstrapHydrated(true);
+
+    setTerminalLayout({ terminalSessionId: "t1" });
+    addDashboardTab(); // durable, so the window persists (PUT, not DELETE)
+    activeTerminal().pendingPrompt = { id: "msg-xyz", phase: "queued", depth: 2 };
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+
+    const [, init] = fetchSpy.mock.calls.at(-1)!;
+    expect(init?.method).toBe("PUT");
+    const body = String(init?.body);
+    expect(body).toContain('"pp"');
+    expect(body).toContain("msg-xyz");
 
     fetchSpy.mockRestore();
     vi.useRealTimers();
