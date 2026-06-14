@@ -14,6 +14,7 @@ mod registry;
 mod serve;
 mod tunnel;
 mod watcher;
+mod window_ops;
 
 use std::collections::HashMap;
 #[cfg(unix)]
@@ -74,6 +75,12 @@ pub struct AppState {
     /// BURIED (hidden) window keeps its number so its Window-menu entry
     /// and title stay stable across the hide/reopen cycle.
     pub window_numbers: Mutex<HashMap<String, (String, u64)>>,
+    /// Custom window titles set via `cs window title <id> <title>`, keyed
+    /// by window label. Consulted by `build_workspace_window` so the
+    /// override survives the bury/reopen cycle (the auto "{base} Window
+    /// {N}" scheme applies only when there's no override). Session-scoped:
+    /// not persisted across an app restart, like the display numbers.
+    pub window_title_overrides: Mutex<HashMap<String, String>>,
     /// Windows hidden ("buried") by the OS close button instead of
     /// destroyed, in bury order (most recent last). The webview stays
     /// alive — live terminals keep running, layout state stays warm —
@@ -248,6 +255,43 @@ impl AppState {
     /// window-destroy handler. A no-op for an unknown label.
     pub fn release_window_number(&self, label: &str) {
         self.window_numbers.lock().unwrap().remove(label);
+    }
+
+    /// The custom title set for `label` via `cs window title`, if any.
+    /// `build_workspace_window` prefers it over the auto scheme.
+    pub fn window_title_override(&self, label: &str) -> Option<String> {
+        self.window_title_overrides
+            .lock()
+            .unwrap()
+            .get(label)
+            .cloned()
+    }
+
+    /// Set (non-empty) or clear (empty) the custom title for `label`.
+    /// Returns the title to display: the override, or the recomputed
+    /// default "{base} Window {N}" on a reset, or the bare label when the
+    /// window has no recorded display number (shouldn't happen for a live
+    /// window).
+    pub fn set_window_title_override(&self, label: &str, title: &str) -> String {
+        let mut overrides = self.window_title_overrides.lock().unwrap();
+        if title.is_empty() {
+            overrides.remove(label);
+            return self
+                .default_window_title(label)
+                .unwrap_or_else(|| label.to_string());
+        }
+        overrides.insert(label.to_string(), title.to_string());
+        title.to_string()
+    }
+
+    /// Reconstruct the auto "{base} Window {N}" title for `label` from its
+    /// recorded display number. `None` for an unknown label.
+    pub fn default_window_title(&self, label: &str) -> Option<String> {
+        self.window_numbers
+            .lock()
+            .unwrap()
+            .get(label)
+            .map(|(base, n)| format!("{base} Window {n}"))
     }
 
     /// Record `label` as buried (most recent). Re-burying a label
@@ -821,7 +865,7 @@ fn open_outbound_workspace(
             .ok_or_else(|| format!("no outbound workspace attachment {id}"))?;
         outbound.url.clone()
     };
-    serve::spawn_outbound_workspace_window(&app, &id, &url)
+    serve::spawn_outbound_workspace_window(&app, &id, &url).map(|_| ())
 }
 
 /// Forget an outbound URL attachment. The remote server is not
@@ -955,7 +999,7 @@ fn open_workspace_from_handoff(
         .get(&key)
         .and_then(|h| h.url.clone());
     if let Some(url) = running_url {
-        return serve::spawn_local_workspace_window(&app, &key, &url);
+        return serve::spawn_local_workspace_window(&app, &key, &url).map(|_| ());
     }
 
     // Not running: register (creating the dir for a fresh path)
@@ -1436,6 +1480,7 @@ fn main() {
         tunnel: TunnelState::new(),
         live_window_zooms: Mutex::new(HashMap::new()),
         window_numbers: Mutex::new(HashMap::new()),
+        window_title_overrides: Mutex::new(HashMap::new()),
         buried_windows: Mutex::new(Vec::new()),
         remote_reopen: Mutex::new(HashMap::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
@@ -1458,6 +1503,23 @@ fn main() {
                 Ok(server) => {
                     if state_for_setup.embedded.set(server).is_err() {
                         tracing::warn!("embedded local server initialized more than once");
+                    }
+                    // Spawn the `cs window <op>` consumer now that the
+                    // AppHandle exists: it owns the bridge receiver and
+                    // turns lifecycle requests into Tauri window actions.
+                    // The task lives until the channel closes at exit.
+                    if let Some(rx) = state_for_setup
+                        .embedded
+                        .get()
+                        .and_then(|e| e.take_window_ops_rx())
+                    {
+                        let app_for_ops = app.handle().clone();
+                        let state_for_ops = Arc::clone(&state_for_setup);
+                        tauri::async_runtime::spawn(window_ops::run(
+                            app_for_ops,
+                            state_for_ops,
+                            rx,
+                        ));
                     }
                 }
                 Err(e) => {
@@ -2336,7 +2398,7 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
         for o in &cfg.outbound {
             let prefix = serve::outbound_window_prefix(&o.id);
             if focused_label.starts_with(&format!("{prefix}-")) {
-                return serve::spawn_outbound_workspace_window(app, &o.id, &o.url);
+                return serve::spawn_outbound_workspace_window(app, &o.id, &o.url).map(|_| ());
             }
         }
         // Stale window for a forgotten attachment: surface the picker.
@@ -2348,7 +2410,8 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
         for t in state.tunnel.snapshot() {
             let prefix = serve::tunnel_window_prefix(&t.label, &t.workspace);
             if focused_label.starts_with(&format!("{prefix}-")) {
-                return serve::spawn_tunneled_workspace_window(app, &t.label, &t.workspace, &t.url);
+                return serve::spawn_tunneled_workspace_window(app, &t.label, &t.workspace, &t.url)
+                    .map(|_| ());
             }
         }
         // The remote dropped out of the registry; surface the picker.
@@ -2366,7 +2429,7 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
         })
     };
     match resolved {
-        Some((key, url)) => serve::spawn_local_workspace_window(app, &key, &url),
+        Some((key, url)) => serve::spawn_local_workspace_window(app, &key, &url).map(|_| ()),
         // Workspace runtime gone under a live window: surface the picker.
         None => show_window(app, "main"),
     }

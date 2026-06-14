@@ -154,6 +154,7 @@ mod tests {
             window_bus: std::sync::Arc::new(crate::window_bus::WindowBus::new()),
             ephemeral_sessions: std::sync::Mutex::new(std::collections::HashMap::new()),
             window_presence: std::sync::Arc::new(crate::window_presence::WindowPresence::new()),
+            window_titles: std::sync::Arc::new(crate::window_titles::WindowTitles::new()),
             instance_id: "test-instance".to_string(),
         });
 

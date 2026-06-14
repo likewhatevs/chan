@@ -140,6 +140,11 @@ pub struct AppState {
     /// the module docs). Feeds `GET /api/windows` and `cs window list`
     /// with the connected/saved split.
     pub window_presence: Arc<crate::window_presence::WindowPresence>,
+    /// Desktop-written, server-read map of window id -> OS title + kind.
+    /// Empty unless chan-desktop is the embedder; `GET /api/windows` and
+    /// `cs window list` read it to show the real OS title alongside each
+    /// `{id, connected, saved}` row.
+    pub window_titles: crate::window_titles::SharedWindowTitles,
     /// Random id minted when this tenant was built, exposed via
     /// `GET /api/health`. The SPA compares it across `/ws` reconnects:
     /// a CHANGED id means the process behind the window was restarted
@@ -289,6 +294,7 @@ pub(crate) mod test_support {
             window_bus: Arc::new(crate::window_bus::WindowBus::new()),
             ephemeral_sessions: Mutex::new(HashMap::new()),
             window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
+            window_titles: Arc::new(crate::window_titles::WindowTitles::new()),
             instance_id: "test-instance".to_string(),
         })
     }

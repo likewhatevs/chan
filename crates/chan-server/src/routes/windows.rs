@@ -38,12 +38,24 @@ pub struct WindowInfo {
     pub connected: bool,
     /// A session blob exists for this id.
     pub saved: bool,
+    /// The real OS window title, when chan-desktop registered it (the
+    /// `<base> Window <N>` the title bar shows, or a `cs window title`
+    /// override). Absent in browser mode and for closed-but-`saved`
+    /// rows, so the existing `{id, connected, saved}` wire shape is
+    /// preserved byte-for-byte when there is no title to add.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The window flavour (`"terminal"` | `"workspace"`), from the same
+    /// desktop registration as `title`; absent under the same conditions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// Join saved blob keys and live socket ids into one sorted list.
 /// BTreeMap so the response order is deterministic (id-sorted).
 /// pub(crate): the `cs window list` control-socket handler serves the
-/// same rows.
+/// same rows. Rows carry no title/kind here — see
+/// [`join_windows_with_titles`] for the desktop-enriched variant.
 pub(crate) fn join_windows(saved: Vec<String>, connected: Vec<String>) -> Vec<WindowInfo> {
     let mut by_id: BTreeMap<String, (bool, bool)> = BTreeMap::new();
     for id in saved {
@@ -58,12 +70,34 @@ pub(crate) fn join_windows(saved: Vec<String>, connected: Vec<String>) -> Vec<Wi
             id,
             connected,
             saved,
+            title: None,
+            kind: None,
         })
         .collect()
 }
 
+/// [`join_windows`], then stamp each row with the desktop's OS title and
+/// kind from `titles` (empty in browser/standalone mode, so this is a
+/// no-op there). Closed-but-`saved` rows whose window the desktop already
+/// dropped carry no title — correct, there is no live OS title for them.
+pub(crate) fn join_windows_with_titles(
+    saved: Vec<String>,
+    connected: Vec<String>,
+    titles: &crate::window_titles::WindowTitles,
+) -> Vec<WindowInfo> {
+    let mut rows = join_windows(saved, connected);
+    for row in &mut rows {
+        if let Some(meta) = titles.get(&row.id) {
+            row.title = Some(meta.title);
+            row.kind = meta.kind;
+        }
+    }
+    rows
+}
+
 pub async fn api_list_windows(State(state): State<Arc<AppState>>) -> Response {
     let connected = state.window_presence.connected_ids();
+    let titles = state.window_titles.clone();
     let Ok(workspace) = state.try_workspace() else {
         // Workspace-less terminal tenant: blobs live in memory.
         let saved: Vec<String> = state
@@ -73,12 +107,12 @@ pub async fn api_list_windows(State(state): State<Arc<AppState>>) -> Response {
             .keys()
             .cloned()
             .collect();
-        return Json(join_windows(saved, connected)).into_response();
+        return Json(join_windows_with_titles(saved, connected, &titles)).into_response();
     };
     // Same spawn_blocking posture as the session routes: list_sessions
     // is sync disk I/O.
     match tokio::task::spawn_blocking(move || workspace.list_sessions()).await {
-        Ok(Ok(saved)) => Json(join_windows(saved, connected)).into_response(),
+        Ok(Ok(saved)) => Json(join_windows_with_titles(saved, connected, &titles)).into_response(),
         Ok(Err(e)) => err_from(&e),
         Err(e) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -114,18 +148,60 @@ mod tests {
 
     // Wire pin: the desktop and `cs window list` parse these exact
     // field names; a rename is a runtime break the type checker can't
-    // see across the HTTP boundary.
+    // see across the HTTP boundary. With no title (browser mode /
+    // closed-but-saved rows) the `title`/`kind` keys are SKIPPED, so the
+    // shape stays byte-identical to the pre-title contract.
     #[test]
     fn window_info_serializes_id_connected_saved() {
         let json = serde_json::to_string(&WindowInfo {
             id: "workspace-aa-0".into(),
             connected: true,
             saved: false,
+            title: None,
+            kind: None,
         })
         .unwrap();
         assert_eq!(
             json,
             r#"{"id":"workspace-aa-0","connected":true,"saved":false}"#,
         );
+    }
+
+    // Wire pin: when the desktop registered a title, the row carries
+    // `title` and `kind` after the base triple.
+    #[test]
+    fn window_info_serializes_title_and_kind_when_present() {
+        let json = serde_json::to_string(&WindowInfo {
+            id: "terminal-win-0".into(),
+            connected: true,
+            saved: false,
+            title: Some("Terminal Window 1".into()),
+            kind: Some("terminal".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"id":"terminal-win-0","connected":true,"saved":false,"title":"Terminal Window 1","kind":"terminal"}"#,
+        );
+    }
+
+    #[test]
+    fn join_with_titles_stamps_only_known_ids() {
+        let titles = crate::window_titles::WindowTitles::new();
+        titles.set(
+            "w-b",
+            crate::window_titles::WindowMeta {
+                title: "🏠 /notes Window 1".into(),
+                kind: Some("workspace".into()),
+            },
+        );
+        let rows = join_windows_with_titles(vec!["w-a".into()], vec!["w-b".into()], &titles);
+        let by_id = |id: &str| rows.iter().find(|r| r.id == id).unwrap();
+        // The closed-but-saved row has no live title.
+        assert_eq!(by_id("w-a").title, None);
+        assert_eq!(by_id("w-a").kind, None);
+        // The connected row picks up the desktop's title + kind.
+        assert_eq!(by_id("w-b").title.as_deref(), Some("🏠 /notes Window 1"));
+        assert_eq!(by_id("w-b").kind.as_deref(), Some("workspace"));
     }
 }

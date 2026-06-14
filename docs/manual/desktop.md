@@ -19,6 +19,19 @@ and mounts the editor in the window. This is the same single-user,
 single-machine model as the CLI; your files stay ordinary files under the
 workspace root.
 
+## Windows
+
+Each workspace or terminal you open gets its own native window, and a
+running workspace can have several. Closing a window with its title-bar
+button hides it rather than destroying it: its terminals keep running and
+its layout stays warm, and the Window menu lists hidden windows to bring
+back (the "Hidden Windows" header shows how many are kept warm). Hidden
+windows do not count against the per-workspace window cap.
+
+From inside a terminal, the `cs window` family manages these windows
+directly — list them, open and hide them, remove them for good, and rename
+them. See [Terminal](terminal.md) for the command reference.
+
 ## Remote workspaces
 
 A remote workspace is a `chan serve` running on another machine (a VM on your

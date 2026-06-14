@@ -248,16 +248,21 @@ pub fn is_workspace_webview_label(label: &str) -> bool {
 /// the underlying local runtime; the On toggle (plus
 /// `close_local_workspace_windows` on runtime teardown) remains the single
 /// authority on workspace lifecycle.
-pub fn spawn_local_workspace_window(app: &AppHandle, key: &str, url: &str) -> Result<(), String> {
+pub fn spawn_local_workspace_window(
+    app: &AppHandle,
+    key: &str,
+    url: &str,
+) -> Result<String, String> {
     let prefix = workspace_window_prefix(key);
     let config_key = config::local_window_key(key);
-    let Some(restore) = unbury_or_restore(app, &prefix, &config_key, || {
+    let restore = match unbury_or_restore(app, &prefix, &config_key, || {
         new_workspace_window_label(key)
-    })?
-    else {
-        return Ok(());
+    })? {
+        OpenOutcome::Unburied(label) => return Ok(label),
+        OpenOutcome::Build(restore) => restore,
     };
     let title = workspace_title(key);
+    let label = restore.label.clone();
     build_workspace_window(
         app,
         WindowSpec {
@@ -270,7 +275,8 @@ pub fn spawn_local_workspace_window(app: &AppHandle, key: &str, url: &str) -> Re
             connecting: None,
             kind: None,
         },
-    )
+    )?;
+    Ok(label)
 }
 
 /// Spawn a new tunneled-workspace webview window. Same multi-window
@@ -280,20 +286,25 @@ pub fn spawn_tunneled_workspace_window(
     tenant_label: &str,
     workspace: &str,
     url: &str,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let prefix = tunnel_window_prefix(tenant_label, workspace);
     let config_key = config::tunnel_window_key(tenant_label, workspace);
-    let Some(restore) = unbury_or_restore(app, &prefix, &config_key, || {
+    let restore = match unbury_or_restore(app, &prefix, &config_key, || {
         new_tunnel_window_label(tenant_label, workspace)
-    })?
-    else {
-        return Ok(());
+    })? {
+        OpenOutcome::Unburied(label) => {
+            // Re-poll the remote's window list so the menu reflects it.
+            crate::refresh_remote_windows_menu(app);
+            return Ok(label);
+        }
+        OpenOutcome::Build(restore) => restore,
     };
     // Inbound (a remote dialed in over the tunnel) is reached through a
     // local per-tenant loopback listener; the window's `url` points at it.
     // Title with the inbound glyph + that listener's host:port, the locator
     // analogous to the local path / outbound URL.
     let title = tunnel_window_title(url);
+    let label = restore.label.clone();
     let built = build_workspace_window(
         app,
         WindowSpec {
@@ -310,23 +321,31 @@ pub fn spawn_tunneled_workspace_window(
     // A tunnel window just appeared: re-poll the remote's window list
     // so the Window menu's remote section reflects it.
     crate::refresh_remote_windows_menu(app);
-    built
+    built.map(|()| label)
 }
 
 /// Spawn a new outbound URL webview window. The desktop does not own
 /// the remote process; this only creates another webview pointed at
 /// the persisted URL.
-pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
+pub fn spawn_outbound_workspace_window(
+    app: &AppHandle,
+    id: &str,
+    url: &str,
+) -> Result<String, String> {
     let prefix = outbound_window_prefix(id);
     let config_key = config::outbound_window_key(id);
-    let Some(restore) =
-        unbury_or_restore(app, &prefix, &config_key, || new_outbound_window_label(id))?
-    else {
-        return Ok(());
-    };
+    let restore =
+        match unbury_or_restore(app, &prefix, &config_key, || new_outbound_window_label(id))? {
+            OpenOutcome::Unburied(label) => {
+                crate::refresh_remote_windows_menu(app);
+                return Ok(label);
+            }
+            OpenOutcome::Build(restore) => restore,
+        };
     // Outbound title is the outbound glyph + the URL (the locator),
     // not the user's label (which still names the launcher row).
     let title = outbound_window_title(url);
+    let label = restore.label.clone();
     // Outbound = an outgoing connection to a remote we do not own. Route
     // through the connecting screen so a down remote shows a retrying
     // surface instead of a blank white webview. `url` is the display +
@@ -347,7 +366,7 @@ pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> 
     // An outbound window just appeared: re-poll the remote's window
     // list so the Window menu's remote section reflects it.
     crate::refresh_remote_windows_menu(app);
-    built
+    built.map(|()| label)
 }
 
 /// Spawn a standalone terminal-only window. Unlike a workspace window there
@@ -364,7 +383,7 @@ pub fn spawn_outbound_workspace_window(app: &AppHandle, id: &str, url: &str) -> 
 pub async fn spawn_local_terminal_window(
     app: AppHandle,
     state: Arc<AppState>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let Some(embedded) = state.embedded.get() else {
         return Err("embedded local server is unavailable".to_string());
     };
@@ -387,7 +406,82 @@ pub async fn spawn_local_terminal_window(
             connecting: None,
             kind: Some("terminal"),
         },
-    )
+    )?;
+    Ok(label)
+}
+
+/// `cs window open`: focus a live window, un-hide a buried one, or
+/// best-effort reopen a closed-but-saved workspace window whose
+/// workspace is still running. Errors when the id names nothing the
+/// desktop can act on.
+pub fn open_window_by_label(
+    app: &AppHandle,
+    state: &Arc<AppState>,
+    label: &str,
+) -> Result<(), String> {
+    if app.get_webview_window(label).is_some() {
+        // Live (visible or buried): `unbury_window` shows + focuses, and
+        // drops it from the buried list / Window menu if it was hidden.
+        crate::unbury_window(app, label);
+        return Ok(());
+    }
+    // Not live: best-effort reopen a saved workspace window if we can
+    // resolve a still-running workspace from the label's hash prefix.
+    // Terminal windows are ephemeral (never saved), so only workspace
+    // labels reach a useful branch here.
+    if let Some((key, url)) = running_workspace_for_label(state, label) {
+        let title = workspace_title(&key);
+        // Reuse the EXACT saved label so the SPA's `GET /api/session?w=`
+        // restores this window's panes/tabs.
+        build_workspace_window(
+            app,
+            WindowSpec {
+                label,
+                title: &title,
+                url: &url,
+                url_hash_seed: "",
+                config_key: config::local_window_key(&key),
+                zoom_seed: 1.0,
+                connecting: None,
+                kind: None,
+            },
+        )?;
+        return Ok(());
+    }
+    Err(format!(
+        "window {label} isn't open; if it's a saved workspace window, open its workspace first"
+    ))
+}
+
+/// (key, launch URL) of the running local workspace whose window-label
+/// family matches `label` (`workspace-<hash(key)>-<seq>`), or `None` when
+/// no running workspace owns that label.
+fn running_workspace_for_label(state: &Arc<AppState>, label: &str) -> Option<(String, String)> {
+    let serves = state.serves.lock().unwrap();
+    serves.iter().find_map(|(key, handle)| {
+        let prefix = workspace_window_prefix(key);
+        if label.starts_with(&format!("{prefix}-")) {
+            handle.url.clone().map(|url| (key.clone(), url))
+        } else {
+            None
+        }
+    })
+}
+
+/// True when `label`'s window still has at least one live PTY shell — the
+/// `cs window rm` confirmation gate. Resolves the shared terminal tenant
+/// for `terminal-*` labels and the owning workspace tenant otherwise.
+pub fn window_has_live_shells(state: &Arc<AppState>, label: &str) -> bool {
+    let Some(embedded) = state.embedded.get() else {
+        return false;
+    };
+    if label.starts_with("terminal-") {
+        embedded.terminal_window_has_live_shells(label)
+    } else if let Some((key, _)) = running_workspace_for_label(state, label) {
+        embedded.workspace_window_has_live_shells(&key, label)
+    } else {
+        false
+    }
 }
 
 /// Base window title for an outbound (we-dial-out) workspace window.
@@ -455,12 +549,17 @@ pub fn window_on_connecting_screen(app: &AppHandle, label: &str) -> bool {
 /// IS the window they get back — a reopens-the-last-closed-window
 /// feel, with live state. `prefix` is the family
 /// prefix WITHOUT the trailing dash (the spawn fns' label prefix).
-fn unbury_instead_of_spawn(app: &AppHandle, prefix: &str) -> bool {
+/// Raise the family's most recent hidden window instead of spawning a
+/// fresh one, returning that window's label when one was unburied. `None`
+/// means nothing was buried (so the caller should build a new window).
+fn unbury_instead_of_spawn(app: &AppHandle, prefix: &str) -> Option<String> {
     let family = format!("{prefix}-");
-    let Some(buried) = app.state::<Arc<AppState>>().most_recent_buried(&family) else {
-        return false;
-    };
-    crate::unbury_window(app, &buried)
+    let buried = app.state::<Arc<AppState>>().most_recent_buried(&family)?;
+    if crate::unbury_window(app, &buried) {
+        Some(buried)
+    } else {
+        None
+    }
 }
 
 /// Label + restore state for a window about to be (re)built, popped
@@ -482,13 +581,13 @@ fn unbury_or_restore(
     prefix: &str,
     config_key: &str,
     fresh_label: impl FnOnce() -> String,
-) -> Result<Option<RestoredWindow>, String> {
-    if unbury_instead_of_spawn(app, prefix) {
-        return Ok(None);
+) -> Result<OpenOutcome, String> {
+    if let Some(label) = unbury_instead_of_spawn(app, prefix) {
+        return Ok(OpenOutcome::Unburied(label));
     }
     ensure_window_capacity(app, prefix)?;
     let restore = pop_compatible_config(app, config_key, prefix);
-    Ok(Some(RestoredWindow {
+    Ok(OpenOutcome::Build(RestoredWindow {
         label: restore
             .as_ref()
             .map(|c| c.window_label.clone())
@@ -499,6 +598,14 @@ fn unbury_or_restore(
             .unwrap_or_default(),
         zoom: restore.as_ref().map(|c| c.zoom_level).unwrap_or(1.0),
     }))
+}
+
+/// Result of the open preamble: either an already-hidden window of the
+/// family was raised (no build needed), or a fresh/restored window should
+/// be built. Either way the caller can report the resolved window label.
+enum OpenOutcome {
+    Unburied(String),
+    Build(RestoredWindow),
 }
 
 /// Pop the top-of-stack window config for `config_key` only if the
@@ -615,6 +722,10 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     let app_owned = app.clone();
     let label_owned = window_label.to_string();
     let title_owned = title.to_string();
+    // `Some("terminal")` for terminal windows, else "workspace" (covers
+    // local / tunnel / outbound) — the kind `cs window list` shows.
+    // Captured owned so the 'static main-thread closure can hold it.
+    let kind_owned = kind.unwrap_or("workspace").to_string();
     let res = app.run_on_main_thread(move || {
         // Defensive: window labels are unique-per-instance now, so
         // a collision shouldn't happen. If it ever does (e.g. some
@@ -628,12 +739,17 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
         // windows on one workspace, several standalone terminals). The
         // number is freed on close (Ok branch handler / Err branch
         // below) so the next same-base window reuses it.
-        let window_number = app_owned
-            .state::<Arc<AppState>>()
-            .assign_window_number(&label_owned, &title_owned);
-        let display_title = format!("{title_owned} Window {window_number}");
+        let state = app_owned.state::<Arc<AppState>>();
+        let window_number = state.assign_window_number(&label_owned, &title_owned);
+        // A `cs window title` override (kept across the bury/reopen cycle)
+        // wins over the auto "{base} Window {N}" scheme; otherwise use the
+        // default. The resolved title is registered below once the window
+        // builds, so `cs window list` shows what the title bar shows.
+        let display_title = state
+            .window_title_override(&label_owned)
+            .unwrap_or_else(|| format!("{title_owned} Window {window_number}"));
         match WebviewWindowBuilder::new(&app_owned, &label_owned, webview_url)
-            .title(display_title)
+            .title(display_title.clone())
             .inner_size(1200.0, 800.0)
             .min_inner_size(640.0, 400.0)
             .resizable(true)
@@ -665,6 +781,19 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
             .build()
         {
             Ok(window) => {
+                // Register the OS title + kind so `cs window list` shows
+                // the same title the title bar does. The `Destroyed` arm
+                // below drops the entry. No-op without an embedded server
+                // (there always is one in the desktop).
+                if let Some(embedded) = state.embedded.get() {
+                    embedded.window_titles().set(
+                        &label_owned,
+                        chan_server::WindowMeta {
+                            title: display_title.clone(),
+                            kind: Some(kind_owned.clone()),
+                        },
+                    );
+                }
                 // Restore the persisted zoom level from
                 // the popped WindowConfig (if any). 1.0 is the chan-
                 // desktop default; skip the IPC round-trip when there's
@@ -753,6 +882,14 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                     WindowEvent::Destroyed => {
                         let state = app_for_close.state::<Arc<AppState>>();
                         state.release_window_number(&label_for_close);
+                        // Drop the registered OS title so `cs window list`
+                        // stops showing one for a window that's gone. The
+                        // `cs window title` override is intentionally KEPT:
+                        // a best-effort reopen reuses the same label and
+                        // should restore the custom title.
+                        if let Some(embedded) = state.embedded.get() {
+                            embedded.window_titles().remove(&label_for_close);
+                        }
                         state
                             .live_window_zooms
                             .lock()

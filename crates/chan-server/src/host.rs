@@ -17,6 +17,7 @@ use axum::Router;
 use chan_workspace::{Library, Workspace};
 use tower::ServiceExt;
 
+use crate::desktop_window_ops::DesktopBridge;
 use crate::state::WorkspaceCell;
 use crate::{
     build_app, build_terminal_app, sanitize_prefix, AppArtifacts, Error, ServeConfig, ServeHandle,
@@ -42,6 +43,10 @@ pub struct HostedWorkspace {
 pub struct WorkspaceHost {
     library: Library,
     workspaces: RwLock<HashMap<String, HostedWorkspaceRuntime>>,
+    /// Desktop integration shared by every tenant this host mounts: the
+    /// window-ops channel and the title map. `DesktopBridge::default()`
+    /// (no channel, empty map) when the embedder is not chan-desktop.
+    desktop: DesktopBridge,
 }
 
 struct HostedWorkspaceRuntime {
@@ -67,17 +72,34 @@ impl Drop for HostedWorkspaceRuntime {
 }
 
 impl WorkspaceHost {
-    /// Create an empty host backed by the caller's `Library`.
+    /// Create an empty host backed by the caller's `Library`, with no
+    /// desktop attached (window-lifecycle ops refuse; the title map stays
+    /// empty). The standalone and test path.
     pub fn new(library: Library) -> Self {
+        Self::with_desktop_bridge(library, DesktopBridge::default())
+    }
+
+    /// Create a host whose tenants share `desktop` — chan-desktop passes a
+    /// bridge carrying the window-ops channel and the title map so
+    /// `cs window <op>` reaches the Tauri app and `cs window list` shows
+    /// real titles.
+    pub fn with_desktop_bridge(library: Library, desktop: DesktopBridge) -> Self {
         Self {
             library,
             workspaces: RwLock::new(HashMap::new()),
+            desktop,
         }
     }
 
     /// Return the shared workspace registry handle.
     pub fn library(&self) -> &Library {
         &self.library
+    }
+
+    /// The desktop bridge shared across this host's tenants. chan-desktop
+    /// uses it to write window titles as it builds/destroys webviews.
+    pub fn desktop_bridge(&self) -> &DesktopBridge {
+        &self.desktop
     }
 
     /// Open a registered workspace path and mount it under
@@ -125,7 +147,13 @@ impl WorkspaceHost {
             }
         }
 
-        let artifacts = build_app(self.library.clone(), workspace, &config).await?;
+        let artifacts = build_app(
+            self.library.clone(),
+            workspace,
+            &config,
+            self.desktop.clone(),
+        )
+        .await?;
         let handle = ServeHandle {
             addr: config.addr,
             prefix: prefix.clone(),
@@ -195,7 +223,8 @@ impl WorkspaceHost {
             }
         }
 
-        let artifacts = build_terminal_app(self.library.clone(), &config).await?;
+        let artifacts =
+            build_terminal_app(self.library.clone(), &config, self.desktop.clone()).await?;
         // Root reported for diagnostics / desktop correlation: the PTY
         // cwd is the user's home dir, so surface that. Falls back to "/"
         // to match `build_terminal_app`'s registry root resolution.

@@ -67,10 +67,47 @@ pub enum ControlRequest {
     },
     TermList,
     // Category 2: list the windows this tenant knows about — the same
-    // `{id, connected, saved}` rows as `GET /api/windows` (saved session
-    // blobs ∪ live `/ws` presence), returned as JSON in `Ok.message` for
-    // the CLI to format. Works on both workspace and terminal tenants.
+    // `{id, connected, saved, title?, kind?}` rows as `GET /api/windows`
+    // (saved session blobs ∪ live `/ws` presence, enriched with the
+    // desktop-supplied OS title/kind), returned as JSON in `Ok.message`
+    // for the CLI to format. Works on both workspace and terminal tenants.
     WindowList,
+    // Category 4 (desktop window lifecycle): drive the desktop's OS
+    // windows from the terminal. These reach the Tauri app through the
+    // in-process bridge the embedded server installs; a standalone
+    // `chan serve` has no desktop attached and refuses them. `new` is the
+    // only one without an id: the server derives the kind from the calling
+    // tenant (a terminal tenant spawns a terminal window; a workspace
+    // tenant spawns another window of that workspace) and returns the new
+    // window id. The id-bearing verbs act on ANY window by id (the single
+    // desktop AppHandle is global), so an id need not belong to this tenant.
+    WindowNew,
+    // Focus a live window, or un-hide a buried one; best-effort reopens a
+    // closed-but-saved workspace window when its workspace is still running.
+    WindowOpen {
+        id: String,
+    },
+    // `cs window rm`: truly DESTROY a window (unlike the OS close button,
+    // which buries it) and delete its saved layout. When the window has
+    // live terminal shells and `force` is unset, the desktop raises a
+    // confirmation dialog and this request BLOCKS until the user answers;
+    // `force` skips the prompt and kills the shells.
+    WindowClose {
+        id: String,
+        #[serde(default)]
+        force: bool,
+    },
+    // `cs window hide`: replicate the OS close button — bury (hide) the
+    // window, keeping its terminals and layout warm and reopenable.
+    WindowHide {
+        id: String,
+    },
+    // Set a custom OS window title that survives reload/reopen; an empty
+    // string resets to the default `{base} Window {N}`.
+    WindowTitle {
+        id: String,
+        title: String,
+    },
     TermRestart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_name: Option<String>,
@@ -491,6 +528,86 @@ mod survey_wire_tests {
         assert_eq!(v, serde_json::json!({"type": "window_list"}));
         let back: ControlRequest = serde_json::from_str(r#"{"type":"window_list"}"#).unwrap();
         assert!(matches!(back, ControlRequest::WindowList));
+    }
+
+    #[test]
+    fn window_new_request_tag() {
+        // Bare unit variant; the server derives the kind from the tenant.
+        let v: serde_json::Value = serde_json::to_value(ControlRequest::WindowNew).unwrap();
+        assert_eq!(v, serde_json::json!({"type": "window_new"}));
+        let back: ControlRequest = serde_json::from_str(r#"{"type":"window_new"}"#).unwrap();
+        assert!(matches!(back, ControlRequest::WindowNew));
+    }
+
+    #[test]
+    fn window_open_request_tag_and_id() {
+        let req = ControlRequest::WindowOpen {
+            id: "terminal-win-2".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "window_open");
+        assert_eq!(v["id"], "terminal-win-2");
+        let back: ControlRequest =
+            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back, ControlRequest::WindowOpen { .. }));
+    }
+
+    #[test]
+    fn window_close_request_tag_id_and_force() {
+        // `cs window rm`: wire tag `window_close`, `force` defaults false
+        // and is omitted when false (matches the PaneOp force convention).
+        let req = ControlRequest::WindowClose {
+            id: "terminal-win-2".into(),
+            force: false,
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "window_close");
+        assert_eq!(v["id"], "terminal-win-2");
+        assert_eq!(v["force"], false);
+        let forced = ControlRequest::WindowClose {
+            id: "terminal-win-2".into(),
+            force: true,
+        };
+        // Tolerates a missing `force` on decode (server-side default).
+        let back: ControlRequest =
+            serde_json::from_str(r#"{"type":"window_close","id":"terminal-win-2"}"#).unwrap();
+        assert!(matches!(
+            back,
+            ControlRequest::WindowClose { force: false, .. }
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ControlRequest>(&serde_json::to_string(&forced).unwrap())
+                .unwrap(),
+            ControlRequest::WindowClose { force: true, .. }
+        ));
+    }
+
+    #[test]
+    fn window_hide_request_tag_and_id() {
+        let req = ControlRequest::WindowHide {
+            id: "workspace-aa-0".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "window_hide");
+        assert_eq!(v["id"], "workspace-aa-0");
+        let back: ControlRequest =
+            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back, ControlRequest::WindowHide { .. }));
+    }
+
+    #[test]
+    fn window_title_request_tag_and_fields() {
+        let req = ControlRequest::WindowTitle {
+            id: "terminal-win-2".into(),
+            title: "Build logs".into(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "window_title");
+        assert_eq!(v["id"], "terminal-win-2");
+        assert_eq!(v["title"], "Build logs");
+        let back: ControlRequest =
+            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back, ControlRequest::WindowTitle { .. }));
     }
 
     #[test]

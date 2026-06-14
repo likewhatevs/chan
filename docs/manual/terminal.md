@@ -43,6 +43,32 @@ CHAN_TAB_NAME) or `--tab-group <name>` (every session in a broadcast group).
   (the CLI form of the Cmd+P team dialog); `--script` emits the bootstrap
   as a runnable shell script instead of writing anything.
 
+## The `cs window` command family
+
+`cs window` inspects and manages the chan windows themselves — the OS
+windows, not the terminal tabs inside them. Prefix matching applies
+(`cs w l`, `cs w n`, `cs w o`); use `cs w hi` for `hide`, since a bare `h`
+is `help`. `cs window list` works anywhere; the rest drive the desktop app
+and report an error under a standalone `chan serve`, which has no windows
+to manage.
+
+- `list` shows every window chan knows about, with its id, kind (terminal
+  or workspace), title, and status (`open` and/or `saved`). `--json` for
+  machine output. The id is the handle the other verbs take.
+- `new` opens a window. From a standalone terminal it opens another
+  standalone terminal window; from a workspace it opens another window of
+  that workspace. It prints the new window id.
+- `open <id>` focuses a window, un-hiding it if it was hidden. A workspace
+  window that was closed but still has a saved layout reopens when its
+  workspace is running.
+- `hide <id>` hides a window — the same as its title-bar close button (see
+  [Chan Desktop](desktop.md)).
+- `rm <id>` removes a window for good — it does not come back — and drops
+  its saved layout. When the window still has running terminals it asks
+  for confirmation first; `--force` skips the prompt.
+- `title <id> <title>` sets a custom window title; an empty title resets
+  it to the default.
+
 ## Pokes
 
 A poke is how one agent hands work to another. `cs terminal write --submit

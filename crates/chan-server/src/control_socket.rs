@@ -22,6 +22,8 @@ use tokio::sync::broadcast;
 #[cfg(unix)]
 use tokio::task::JoinHandle;
 
+#[cfg(unix)]
+use crate::desktop_window_ops::DesktopWindowOp;
 use crate::state::WorkspaceCell;
 #[cfg(unix)]
 use crate::terminal_sessions::CreateOptions;
@@ -214,6 +216,10 @@ pub struct ControlSocketCtx {
     pub survey_bus: Arc<crate::survey::SurveyBus>,
     pub window_bus: Arc<crate::window_bus::WindowBus>,
     pub window_presence: Arc<crate::window_presence::WindowPresence>,
+    /// Desktop integration: the window-ops channel (`None` standalone)
+    /// and the shared title map. `cs window list` reads the titles; the
+    /// lifecycle verbs send ops down the channel.
+    pub desktop: crate::desktop_window_ops::DesktopBridge,
     pub tenant: ControlTenant,
 }
 
@@ -285,6 +291,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
         survey_bus,
         window_bus,
         window_presence,
+        desktop,
         tenant,
     } = ctx;
     // The registry is a set-once cell that may be filled after the
@@ -435,7 +442,11 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 // Live presence is the honest list there.
                 ControlTenant::TerminalOnly => Vec::new(),
             };
-            let rows = crate::routes::windows::join_windows(saved, connected);
+            let rows = crate::routes::windows::join_windows_with_titles(
+                saved,
+                connected,
+                &desktop.window_titles,
+            );
             into_response(
                 serde_json::to_string(&rows).map_err(|e| format!("encoding window list: {e}")),
             )
@@ -508,6 +519,45 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 terminal_registry,
             )
             .await
+        }
+        ControlRequest::WindowNew => handle_window_new(desktop, workspace_cell, tenant).await,
+        ControlRequest::WindowOpen { id } => into_response(
+            desktop
+                .dispatch(|reply| DesktopWindowOp::Open {
+                    id: id.clone(),
+                    reply,
+                })
+                .await
+                .map(|()| format!("opened window {id}")),
+        ),
+        ControlRequest::WindowClose { id, force } => {
+            handle_window_close(desktop, workspace_cell, tenant, id, force).await
+        }
+        ControlRequest::WindowHide { id } => into_response(
+            desktop
+                .dispatch(|reply| DesktopWindowOp::Hide {
+                    id: id.clone(),
+                    reply,
+                })
+                .await
+                .map(|()| format!("hid window {id}")),
+        ),
+        ControlRequest::WindowTitle { id, title } => {
+            let confirm = if title.is_empty() {
+                format!("reset title for window {id}")
+            } else {
+                format!("set title for window {id}")
+            };
+            into_response(
+                desktop
+                    .dispatch(|reply| DesktopWindowOp::Title {
+                        id: id.clone(),
+                        title,
+                        reply,
+                    })
+                    .await
+                    .map(|()| confirm),
+            )
         }
     }
 }
@@ -1169,6 +1219,107 @@ fn into_response(result: Result<String, String>) -> ControlResponse {
     }
 }
 
+/// `cs window new`: ask the desktop to spawn a window whose kind is
+/// derived from the calling tenant — a terminal tenant spawns a terminal
+/// window, a workspace tenant spawns another window of that workspace.
+/// Replies with the new window id. Refuses ([`crate::NO_DESKTOP`]) when
+/// no desktop is attached.
+#[cfg(unix)]
+async fn handle_window_new(
+    desktop: &crate::desktop_window_ops::DesktopBridge,
+    workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
+    tenant: ControlTenant,
+) -> ControlResponse {
+    use crate::desktop_window_ops::{DesktopWindowOp, NewWindowKind};
+    let kind = match tenant {
+        ControlTenant::TerminalOnly => NewWindowKind::Terminal,
+        ControlTenant::Workspace => {
+            let workspace = match workspace_from_cell(workspace_cell, tenant) {
+                Ok(workspace) => workspace,
+                Err(message) => return ControlResponse::Error { message },
+            };
+            NewWindowKind::Workspace {
+                key: workspace.root().to_string_lossy().into_owned(),
+            }
+        }
+    };
+    // The reply is the new window id, which is exactly the message the
+    // CLI prints.
+    into_response(
+        desktop
+            .dispatch(|reply| DesktopWindowOp::New { kind, reply })
+            .await,
+    )
+}
+
+/// `cs window rm`: destroy the window (the desktop prompts first when it
+/// has live terminals and `force` is unset, blocking this request until
+/// the user answers), then drop its saved layout so it can't reappear as
+/// a reopenable `saved` row. A row with neither a live window nor a saved
+/// blob is an unknown id and errors.
+#[cfg(unix)]
+async fn handle_window_close(
+    desktop: &crate::desktop_window_ops::DesktopBridge,
+    workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
+    tenant: ControlTenant,
+    id: String,
+    force: bool,
+) -> ControlResponse {
+    use crate::desktop_window_ops::DesktopWindowOp;
+    let destroyed = match desktop
+        .dispatch(|reply| DesktopWindowOp::Close {
+            id: id.clone(),
+            force,
+            reply,
+        })
+        .await
+    {
+        Ok(destroyed) => destroyed,
+        Err(message) => return ControlResponse::Error { message },
+    };
+    // Best-effort, current tenant only: a terminal tenant has no on-disk
+    // blob (its sessions are ephemeral), and an id belonging to another
+    // workspace can't be reached from here (its blob may persist — a
+    // known limitation). Check existence first so the reply is honest
+    // about whether a layout was actually removed.
+    let had_blob = if tenant == ControlTenant::Workspace {
+        match workspace_from_cell(workspace_cell, tenant) {
+            Ok(workspace) => {
+                let key = id.clone();
+                tokio::task::spawn_blocking(move || {
+                    let existed = workspace
+                        .get_session(&key)
+                        .map(|blob| blob.is_some())
+                        .unwrap_or(false);
+                    if existed {
+                        let _ = workspace.delete_session(&key);
+                    }
+                    existed
+                })
+                .await
+                .unwrap_or(false)
+            }
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+    match (destroyed, had_blob) {
+        (true, true) => ControlResponse::Ok {
+            message: format!("removed window {id} (destroyed; saved layout deleted)"),
+        },
+        (true, false) => ControlResponse::Ok {
+            message: format!("removed window {id} (destroyed)"),
+        },
+        (false, true) => ControlResponse::Ok {
+            message: format!("deleted saved layout for {id} (no live window)"),
+        },
+        (false, false) => ControlResponse::Error {
+            message: format!("no window or saved layout for {id}"),
+        },
+    }
+}
+
 /// `cs search`: run the same content search the UI does (`Workspace::search`,
 /// the `/api/search/content` path) and return the results as JSON on the
 /// connection, like `term list`. One row per file (best-ranked hit),
@@ -1614,6 +1765,9 @@ mod tests {
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),
             window_bus: Arc::new(crate::window_bus::WindowBus::new()),
             window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
+            // No desktop attached in unit tests: lifecycle ops refuse and
+            // the title map stays empty.
+            desktop: crate::desktop_window_ops::DesktopBridge::default(),
             tenant,
         }
     }

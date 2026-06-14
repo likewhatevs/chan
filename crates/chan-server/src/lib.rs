@@ -19,6 +19,7 @@ mod auth;
 mod bus;
 mod config;
 mod control_socket;
+mod desktop_window_ops;
 mod embed_seed;
 mod error;
 /// macOS CLI-to-desktop workspace handoff over a well-known per-user UDS.
@@ -43,8 +44,12 @@ mod tunnel_guard;
 mod util;
 mod window_bus;
 mod window_presence;
+mod window_titles;
 
 pub use config::ServerConfig;
+pub use desktop_window_ops::{
+    DesktopBridge, DesktopWindowOp, DesktopWindowSender, NewWindowKind, NO_DESKTOP,
+};
 pub use error::Error;
 pub use host::{HostedWorkspace, WorkspaceHost};
 #[cfg(unix)]
@@ -54,6 +59,7 @@ pub use preferences::{
     SurfaceThemeChoice, ThemeChoice,
 };
 pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
+pub use window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
 
 use auth::{auth_middleware, load_or_create_token, random_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
@@ -423,6 +429,7 @@ async fn build_app(
     library: Library,
     workspace: Arc<Workspace>,
     config: &ServeConfig,
+    desktop: crate::desktop_window_ops::DesktopBridge,
 ) -> Result<AppArtifacts, Error> {
     let token = if config.no_token {
         None
@@ -606,6 +613,7 @@ async fn build_app(
             survey_bus: survey_bus.clone(),
             window_bus: window_bus.clone(),
             window_presence: window_presence.clone(),
+            desktop: desktop.clone(),
             tenant: control_socket::ControlTenant::Workspace,
         },
     );
@@ -661,6 +669,7 @@ async fn build_app(
         window_bus,
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
         window_presence,
+        window_titles: desktop.window_titles.clone(),
         instance_id: random_token(),
     });
     // Nest under the prefix so `--prefix=/foo` makes every existing
@@ -707,7 +716,11 @@ async fn build_app(
 /// terminal + window-session routes, so a workspace-content request
 /// (`/api/files`, `/api/graph`, ...) 404s instead of panicking on the
 /// missing `workspace_cell`.
-async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<AppArtifacts, Error> {
+async fn build_terminal_app(
+    library: Library,
+    config: &ServeConfig,
+    desktop: crate::desktop_window_ops::DesktopBridge,
+) -> Result<AppArtifacts, Error> {
     let token = if config.no_token {
         None
     } else {
@@ -788,6 +801,7 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
             survey_bus: survey_bus.clone(),
             window_bus: window_bus.clone(),
             window_presence: window_presence.clone(),
+            desktop: desktop.clone(),
             tenant: control_socket::ControlTenant::TerminalOnly,
         },
     );
@@ -848,6 +862,7 @@ async fn build_terminal_app(library: Library, config: &ServeConfig) -> Result<Ap
         window_bus,
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
         window_presence,
+        window_titles: desktop.window_titles.clone(),
         instance_id: random_token(),
     });
 
@@ -963,7 +978,15 @@ pub async fn serve(
 ) -> Result<(), Error> {
     let listener = TcpListener::bind(config.addr).await?;
     let addr = listener.local_addr()?;
-    let artifacts = build_app(library, workspace, &config).await?;
+    // Standalone `chan serve`: no desktop attached, so no window-ops
+    // bridge and an empty (unwritten) title map.
+    let artifacts = build_app(
+        library,
+        workspace,
+        &config,
+        crate::desktop_window_ops::DesktopBridge::default(),
+    )
+    .await?;
     let handle = ServeHandle {
         addr,
         prefix: config.prefix.clone(),
@@ -1117,7 +1140,13 @@ pub async fn serve_via_tunnel(
         // redactions).
         tunnel_public: public,
     };
-    let artifacts = build_app(library, workspace, &server_config).await?;
+    let artifacts = build_app(
+        library,
+        workspace,
+        &server_config,
+        crate::desktop_window_ops::DesktopBridge::default(),
+    )
+    .await?;
     let prefix_handle = artifacts.prefix.clone();
     // Keep the MCP bridge alive for the tunnel session; bound here
     // so the socket file is unlinked when serve_via_tunnel returns.

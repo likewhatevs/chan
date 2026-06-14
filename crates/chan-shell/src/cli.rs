@@ -136,9 +136,11 @@ pub enum ShellAction {
     },
 }
 
-/// `cs window <action>`: window-registry reads. List-only today;
-/// the enum exists so a future `cs window open <id>` lands as a
-/// sibling instead of a breaking flag change.
+/// `cs window <action>`: read the window registry and drive the
+/// desktop's OS windows. The lifecycle verbs (`new`/`open`/`rm`/`hide`/
+/// `title`) need the chan desktop app; a standalone `chan serve` refuses
+/// them. `new` derives its kind from the calling tenant; the id-bearing
+/// verbs act on any window by id.
 #[derive(Subcommand, Debug)]
 pub enum WindowAction {
     /// List the windows chan knows about (connected and/or with a
@@ -153,6 +155,41 @@ pub enum WindowAction {
         /// without --json.
         #[arg(long)]
         pretty: bool,
+    },
+    /// Open a new desktop window. From a standalone terminal this spawns
+    /// another terminal window; from a workspace it spawns another window
+    /// of that workspace. Prints the new window id.
+    New,
+    /// Focus a window by id (un-hiding it if it was hidden). Best-effort
+    /// reopens a closed-but-saved workspace window when its workspace is
+    /// still running.
+    Open {
+        /// The window id (see `cs window list`).
+        id: String,
+    },
+    /// Remove a window by id: destroy it (unlike the close button, which
+    /// hides it) and delete its saved layout. Prompts before killing a
+    /// window with live terminals; `--force` skips the prompt.
+    Rm {
+        /// The window id (see `cs window list`).
+        id: String,
+        /// Destroy even with live terminal shells, without prompting.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Hide a window by id (the OS close-button behavior): keep its
+    /// terminals and layout warm and reopenable.
+    Hide {
+        /// The window id (see `cs window list`).
+        id: String,
+    },
+    /// Set a custom title on a window by id. An empty string resets it to
+    /// the default `<base> Window <N>`.
+    Title {
+        /// The window id (see `cs window list`).
+        id: String,
+        /// The new title (empty resets to the default).
+        title: String,
     },
 }
 
@@ -624,6 +661,15 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
         ShellAction::Terminal { action } => cmd_shell_terminal(action).await,
         ShellAction::Window { action } => match action {
             WindowAction::List { json, pretty } => cmd_window_list(json, pretty).await,
+            WindowAction::New => cmd_window_op(ControlRequest::WindowNew).await,
+            WindowAction::Open { id } => cmd_window_op(ControlRequest::WindowOpen { id }).await,
+            WindowAction::Rm { id, force } => {
+                cmd_window_op(ControlRequest::WindowClose { id, force }).await
+            }
+            WindowAction::Hide { id } => cmd_window_op(ControlRequest::WindowHide { id }).await,
+            WindowAction::Title { id, title } => {
+                cmd_window_op(ControlRequest::WindowTitle { id, title }).await
+            }
         },
         ShellAction::Search {
             query,
@@ -664,10 +710,25 @@ async fn cmd_window_list(json: bool, pretty: bool) -> Result<()> {
     Ok(())
 }
 
-/// Render the `cs window list` rows (`[{id, connected, saved}]`) as a
-/// markdown table. `open` = a live event socket exists somewhere (a
-/// hidden chan-desktop window still counts — the server can't tell
-/// hidden from visible); `saved` = a persisted layout exists.
+/// `cs window <new|open|rm|hide|title>`: send a one-shot window-lifecycle
+/// request and print the server's reply (the new window id for `new`, a
+/// short confirmation otherwise). Session-scoped like `cs window list`:
+/// needs only $CHAN_CONTROL_SOCKET, no window id. `rm` of a window with
+/// live terminals blocks here until the desktop's confirmation dialog is
+/// answered (or `--force` was passed).
+async fn cmd_window_op(req: ControlRequest) -> Result<()> {
+    let socket = control_socket_env()?;
+    let message = send_control_request(&socket, req).await?;
+    println!("{message}");
+    Ok(())
+}
+
+/// Render the `cs window list` rows (`[{id, connected, saved, title?,
+/// kind?}]`) as a markdown table. `title`/`kind` are present only when a
+/// desktop is attached (the OS title lives there); `open` = a live event
+/// socket exists somewhere (a hidden chan-desktop window still counts —
+/// the server can't tell hidden from visible); `saved` = a persisted
+/// layout exists.
 fn render_window_list_markdown(raw: &str) -> Result<String> {
     let value: serde_json::Value = serde_json::from_str(raw).context("parsing window list JSON")?;
     let rows = value
@@ -676,9 +737,11 @@ fn render_window_list_markdown(raw: &str) -> Result<String> {
     if rows.is_empty() {
         return Ok("No windows.\n".to_string());
     }
-    let mut out = String::from("| window | status |\n| --- | --- |\n");
+    let mut out = String::from("| window | kind | title | status |\n| --- | --- | --- | --- |\n");
     for row in rows {
         let id = row.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+        let kind = row.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("");
         let connected = row
             .get("connected")
             .and_then(|v| v.as_bool())
@@ -690,7 +753,7 @@ fn render_window_list_markdown(raw: &str) -> Result<String> {
             (false, true) => "saved",
             (false, false) => "?",
         };
-        out.push_str(&format!("| {id} | {status} |\n"));
+        out.push_str(&format!("| {id} | {kind} | {title} | {status} |\n"));
     }
     Ok(out)
 }
@@ -1579,6 +1642,108 @@ mod tests {
             } => assert!((delta - (-0.1)).abs() < 1e-9),
             other => panic!("unexpected parse: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_window_lifecycle_subcommands() {
+        // Full names.
+        let cli = CsCli::parse_from(["cs", "window", "new"]);
+        assert!(matches!(
+            cli.action,
+            ShellAction::Window {
+                action: WindowAction::New
+            }
+        ));
+
+        let cli = CsCli::parse_from(["cs", "window", "open", "terminal-win-2"]);
+        match cli.action {
+            ShellAction::Window {
+                action: WindowAction::Open { id },
+            } => assert_eq!(id, "terminal-win-2"),
+            other => panic!("unexpected parse: {other:?}"),
+        }
+
+        // rm with and without --force.
+        let cli = CsCli::parse_from(["cs", "window", "rm", "workspace-aa-0"]);
+        match cli.action {
+            ShellAction::Window {
+                action: WindowAction::Rm { id, force },
+            } => {
+                assert_eq!(id, "workspace-aa-0");
+                assert!(!force);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+        let cli = CsCli::parse_from(["cs", "window", "rm", "--force", "terminal-win-1"]);
+        match cli.action {
+            ShellAction::Window {
+                action: WindowAction::Rm { id, force },
+            } => {
+                assert_eq!(id, "terminal-win-1");
+                assert!(force);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+
+        let cli = CsCli::parse_from(["cs", "window", "hide", "terminal-win-3"]);
+        assert!(matches!(
+            cli.action,
+            ShellAction::Window {
+                action: WindowAction::Hide { .. }
+            }
+        ));
+
+        // title takes id + the new title (which may be empty to reset).
+        let cli = CsCli::parse_from(["cs", "window", "title", "terminal-win-3", "Build logs"]);
+        match cli.action {
+            ShellAction::Window {
+                action: WindowAction::Title { id, title },
+            } => {
+                assert_eq!(id, "terminal-win-3");
+                assert_eq!(title, "Build logs");
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn window_subcommand_prefixes_are_unambiguous() {
+        // `infer_subcommands` resolves each verb from a unique prefix — a
+        // regression here is a runtime break clap won't flag at compile
+        // time. Note `hide` needs "hi": a bare "h" is ambiguous with the
+        // auto-generated `help` subcommand, so it (correctly) does NOT
+        // resolve to `hide`.
+        type Case = (&'static str, fn(&WindowAction) -> bool);
+        let cases: [Case; 6] = [
+            ("l", |a| matches!(a, WindowAction::List { .. })),
+            ("n", |a| matches!(a, WindowAction::New)),
+            ("o", |a| matches!(a, WindowAction::Open { .. })),
+            ("hi", |a| matches!(a, WindowAction::Hide { .. })),
+            ("t", |a| matches!(a, WindowAction::Title { .. })),
+            ("r", |a| matches!(a, WindowAction::Rm { .. })),
+        ];
+        for (prefix, check) in cases {
+            // Each verb that needs args gets dummy ones; extras are ignored
+            // by the variants that don't take them.
+            let args = match prefix {
+                "o" | "hi" | "r" => vec!["cs", "window", prefix, "id-0"],
+                "t" => vec!["cs", "window", prefix, "id-0", "Title"],
+                _ => vec!["cs", "window", prefix],
+            };
+            let cli = CsCli::try_parse_from(args)
+                .unwrap_or_else(|e| panic!("`cs window {prefix}` failed to parse: {e}"));
+            match cli.action {
+                ShellAction::Window { action } => assert!(
+                    check(&action),
+                    "`cs window {prefix}` resolved wrong: {action:?}"
+                ),
+                other => panic!("unexpected parse for `cs window {prefix}`: {other:?}"),
+            }
+        }
+
+        // A bare "h" is ambiguous (help vs hide); confirm it's rejected so
+        // the comment above stays honest.
+        assert!(CsCli::try_parse_from(["cs", "window", "h", "id-0"]).is_err());
     }
 
     #[test]

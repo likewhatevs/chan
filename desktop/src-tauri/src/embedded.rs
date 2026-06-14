@@ -8,9 +8,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use axum::Router;
-use tokio::sync::watch;
+use chan_server::{DesktopBridge, DesktopWindowOp, SharedWindowTitles, WindowTitles};
+use tokio::sync::{mpsc, watch};
 
 use crate::serve;
+
+/// Bound on the window-ops channel: interactive `cs window` calls are
+/// low-rate, so 32 is far above any real concurrency while still capping a
+/// runaway caller.
+const WINDOW_OPS_CHANNEL_CAPACITY: usize = 32;
 
 pub struct EmbeddedServer {
     host: Arc<chan_server::WorkspaceHost>,
@@ -23,13 +29,29 @@ pub struct EmbeddedServer {
     /// thereafter. The async lock serializes concurrent first-opens so two
     /// windows can't double-mount the prefix.
     terminal_url: tokio::sync::Mutex<Option<String>>,
+    /// Receiver end of the `cs window <op>` bridge, parked here until Tauri
+    /// `.setup()` (where the `AppHandle` exists) takes it and spawns the
+    /// consumer task. `None` once taken, so a double-take can't spawn two
+    /// consumers. The sender lives inside the host's [`DesktopBridge`].
+    pending_window_ops: tokio::sync::Mutex<Option<mpsc::Receiver<DesktopWindowOp>>>,
 }
 
 impl EmbeddedServer {
     pub async fn start() -> Result<Self, String> {
         let library = chan_workspace::Library::open()
             .map_err(|e| format!("opening chan workspace registry for embedded server: {e}"))?;
-        let host = Arc::new(chan_server::WorkspaceHost::new(library));
+        // Install the desktop bridge: a window-ops channel (the consumer
+        // is spawned in Tauri `.setup()` once the AppHandle exists) plus a
+        // shared title map every tenant reads and the desktop writes as it
+        // builds/destroys webviews.
+        let (window_ops_tx, window_ops_rx) = mpsc::channel(WINDOW_OPS_CHANNEL_CAPACITY);
+        let bridge = DesktopBridge {
+            window_ops: Some(window_ops_tx),
+            window_titles: Arc::new(WindowTitles::new()),
+        };
+        let host = Arc::new(chan_server::WorkspaceHost::with_desktop_bridge(
+            library, bridge,
+        ));
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| format!("binding embedded chan server: {e}"))?;
         listener
@@ -56,7 +78,33 @@ impl EmbeddedServer {
             addr,
             shutdown_tx,
             terminal_url: tokio::sync::Mutex::new(None),
+            pending_window_ops: tokio::sync::Mutex::new(Some(window_ops_rx)),
         })
+    }
+
+    /// The shared window-title map the desktop writes (on window build /
+    /// rename / destroy) and the server reads for `cs window list`.
+    pub fn window_titles(&self) -> SharedWindowTitles {
+        self.host.desktop_bridge().window_titles.clone()
+    }
+
+    /// Take the `cs window <op>` receiver exactly once (in Tauri
+    /// `.setup()`). Returns `None` on a second call so a re-entrant setup
+    /// can't spawn two consumer tasks.
+    pub fn take_window_ops_rx(&self) -> Option<mpsc::Receiver<DesktopWindowOp>> {
+        self.pending_window_ops
+            .try_lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
+    }
+
+    /// True when the workspace mounted for `key` still has at least one
+    /// live PTY session bound to `window_label`. The `cs window rm`
+    /// confirmation uses this (alongside the terminal-tenant variant) to
+    /// decide whether to prompt before killing a window's shells.
+    pub fn workspace_window_has_live_shells(&self, key: &str, window_label: &str) -> bool {
+        self.host
+            .tenant_has_window_sessions(&prefix_for_key(key), window_label)
     }
 
     pub async fn open_workspace(&self, key: &str) -> Result<String, String> {

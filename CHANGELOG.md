@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `cs window` manages desktop windows from a terminal. `cs window list`
+  shows each window's real title and kind alongside its status, matching
+  the title bar and the Window menu, and the new verbs drive the desktop:
+  `new` opens a window (another standalone terminal window from a
+  standalone terminal, another window of the workspace from a workspace
+  terminal), `open <id>` focuses or un-hides one, `hide <id>` hides it
+  like the close button, `rm <id>` removes it for good and drops its
+  saved layout (prompting first when it still has running terminals, or
+  `--force` to skip), and `title <id> <title>` sets a custom window title
+  (empty resets it). The lifecycle verbs need the desktop app.
+
 ## [v0.33.0] - 2026-06-13
 
 ### Added
