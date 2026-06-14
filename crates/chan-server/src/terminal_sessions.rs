@@ -296,6 +296,22 @@ impl AttachHandle {
         self.session.queue_depth()
     }
 
+    /// Recall a still-queued Rich Prompt message by its `prompt_id`, removing
+    /// every queued write that shares it. Returns `true` if it was still
+    /// queued (and removed), `false` if it had already drained to the PTY.
+    /// Backs the `cancel-prompt` WS frame; the depth re-sync rides the normal
+    /// `QueueDepth` broadcast on a successful removal.
+    pub fn cancel_prompt(&self, prompt_id: &str) -> bool {
+        self.session.cancel_prompt(prompt_id)
+    }
+
+    /// The `prompt_id`s of the Rich Prompt messages still queued, in FIFO
+    /// order, for the `session` frame so a reattaching SPA can re-prove a
+    /// restored pending message is still queued (vs the anonymous depth).
+    pub fn queued_prompt_ids(&self) -> Vec<String> {
+        self.session.queued_prompt_ids()
+    }
+
     pub fn resize(&self, size: PtySize) {
         self.session.resize(size);
     }
@@ -1433,6 +1449,49 @@ impl Session {
         Some(depth)
     }
 
+    /// Recall a still-queued Rich Prompt message: drop EVERY queued write
+    /// sharing `prompt_id` (body + tail) atomically under the queue lock, so
+    /// the multi-write all-or-nothing invariant + `msg_depth` (tail count)
+    /// stay consistent — never a partial removal. Returns whether anything was
+    /// removed; on a removal, re-emit `QueueDepth` so every attached socket
+    /// re-syncs its badge.
+    ///
+    /// The in-flight message is `pop_front`'ed before delivery
+    /// (`try_drain_one`), so it is NOT in `write_queue`: the retain-filter can
+    /// never touch or reorder the message currently being delivered. The
+    /// cancel-vs-drain race is resolved here under the lock — if the message
+    /// drained the same tick, `removed` is `false` and the caller acks that so
+    /// the UI does not claim to recall a message that already hit the PTY.
+    fn cancel_prompt(&self, prompt_id: &str) -> bool {
+        let (removed, depth) = {
+            let mut q = self
+                .write_queue
+                .lock()
+                .expect("terminal write queue poisoned");
+            let before = q.len();
+            q.retain(|w| w.prompt_id.as_deref() != Some(prompt_id));
+            (q.len() != before, msg_depth(&q))
+        };
+        if removed {
+            self.broadcast(SessionEvent::QueueDepth(depth));
+        }
+        removed
+    }
+
+    /// The `prompt_id`s of the tail-bearing messages still queued, in FIFO
+    /// order — one id per Rich Prompt message. `cs terminal write` pokes carry
+    /// no `prompt_id` and are skipped, so membership is exact (a restored
+    /// pending id is in the list iff still queued).
+    fn queued_prompt_ids(&self) -> Vec<String> {
+        self.write_queue
+            .lock()
+            .expect("terminal write queue poisoned")
+            .iter()
+            .filter(|w| w.tail)
+            .filter_map(|w| w.prompt_id.clone())
+            .collect()
+    }
+
     /// Current MESSAGE depth of the write queue (tail count).
     fn queue_depth(&self) -> usize {
         msg_depth(
@@ -2197,6 +2256,68 @@ mod tests {
         // message depth 2 (what the SPA badge shows).
         assert_eq!(session.enqueue_write(b"poke"), Some(3));
         assert_eq!(session.queue_depth(), 2);
+    }
+
+    #[test]
+    fn cancel_prompt_removes_all_writes_of_the_id_atomically_and_reemits_depth() {
+        let session = test_session_with_ring(1024);
+        // m1 = single write; m2 = gemini pair (body + tail, same id); then a
+        // CLI poke (no id) behind them.
+        session.enqueue_prompt(&[b"first".to_vec()], Some("m1".into()));
+        session.enqueue_prompt(&[b"second".to_vec(), b"\r".to_vec()], Some("m2".into()));
+        session.enqueue_write(b"poke");
+        assert_eq!(session.queue_depth(), 3, "two prompts + one poke");
+
+        let mut rx = session.output_tx.subscribe();
+        // Cancel the gemini message: BOTH its raw writes (body + tail) go
+        // together — never a partial removal.
+        assert!(session.cancel_prompt("m2"), "m2 was still queued");
+        match rx.try_recv() {
+            Ok(SessionEvent::QueueDepth(depth)) => assert_eq!(depth, 2, "depth re-emitted"),
+            other => panic!("expected QueueDepth, got {other:?}"),
+        }
+        assert_eq!(session.queue_depth(), 2);
+        // m2's two entries are gone; m1 + the poke remain, ordering preserved.
+        let q = session.write_queue.lock().expect("queue");
+        assert_eq!(
+            q.len(),
+            2,
+            "m1 (1 write) + poke (1); m2's body+tail removed"
+        );
+        assert_eq!(q[0].prompt_id.as_deref(), Some("m1"));
+        assert_eq!(q[1].prompt_id, None, "the CLI poke stays, in order");
+    }
+
+    #[test]
+    fn cancel_prompt_on_an_absent_id_reports_not_removed_and_is_silent() {
+        let session = test_session_with_ring(1024);
+        session.enqueue_prompt(&[b"x".to_vec()], Some("m1".into()));
+        let mut rx = session.output_tx.subscribe();
+        // The id already drained (or never existed): nothing to remove, and a
+        // no-op cancel must not perturb depth (the cancel-vs-drain race: the
+        // caller acks removed=false so the UI does not recall a drained msg).
+        assert!(!session.cancel_prompt("gone"));
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "a no-op cancel must not re-emit depth"
+        );
+        assert_eq!(session.queue_depth(), 1, "m1 untouched");
+    }
+
+    #[test]
+    fn queued_prompt_ids_lists_rich_messages_in_fifo_order_skipping_pokes() {
+        let session = test_session_with_ring(1024);
+        session.enqueue_prompt(&[b"a".to_vec()], Some("m1".into()));
+        session.enqueue_write(b"poke"); // no prompt_id -> not listed
+        session.enqueue_prompt(&[b"b".to_vec(), b"\r".to_vec()], Some("m2".into())); // pair -> one id
+        assert_eq!(
+            session.queued_prompt_ids(),
+            vec!["m1".to_string(), "m2".to_string()],
+            "one id per rich message, FIFO, CLI poke skipped"
+        );
+        // Membership tracks cancellation: after recalling m1, only m2 remains.
+        assert!(session.cancel_prompt("m1"));
+        assert_eq!(session.queued_prompt_ids(), vec!["m2".to_string()]);
     }
 
     #[test]

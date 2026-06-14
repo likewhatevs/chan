@@ -152,6 +152,13 @@ enum ClientFrame {
         #[serde(default)]
         id: Option<String>,
     },
+    /// Recall a still-queued Rich Prompt message by its `prompt_id` (the `id`
+    /// from a `prompt` frame). Removes every queued write of that message
+    /// before it reaches the PTY; the server replies `prompt-cancelled`
+    /// (removed=true) so the SPA can pop the draft back to the editor without
+    /// double-delivery, or (removed=false) when it had already drained.
+    #[serde(rename = "cancel-prompt")]
+    CancelPrompt { id: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -167,6 +174,13 @@ enum ServerFrame {
         /// text+chord pair counts once), so every (re)attach re-syncs the
         /// SPA's queue badge.
         queue_depth: usize,
+        /// The `prompt_id`s of Rich Prompt messages still in this session's
+        /// write queue, in FIFO order (one per message; `cs terminal write`
+        /// pokes have no id and are skipped). Lets a reattaching SPA re-prove
+        /// its restored pending message is still queued (and its position)
+        /// instead of trusting the anonymous `queue_depth`. Always present
+        /// (empty when nothing tagged is queued).
+        queued_prompt_ids: Vec<String>,
     },
     #[serde(rename = "activity")]
     Activity { bytes_since_focus: u64 },
@@ -214,6 +228,13 @@ enum ServerFrame {
     /// non-owners ignore the unknown id but still read the depth.
     #[serde(rename = "prompt-delivered")]
     PromptDelivered { id: String, depth: usize },
+    /// Ack for a `cancel-prompt`, sent inline on the requesting socket.
+    /// `removed: true` = the message was still queued and every write of `id`
+    /// was dropped (a `queue` depth frame follows); `removed: false` = it had
+    /// already drained to the PTY, so the SPA must NOT recall it (treat as
+    /// delivered). Resolves the cancel-vs-drain race.
+    #[serde(rename = "prompt-cancelled")]
+    PromptCancelled { id: String, removed: bool },
     /// MESSAGE depth of the shared write queue changed (an enqueue on either
     /// path, or a message fully drained). Absolute count — idempotent under
     /// duplicates, multi-window safe.
@@ -604,6 +625,7 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
             missed_bytes: session.missed_bytes,
             bytes_since_focus: session.bytes_since_focus(),
             queue_depth: session.queue_depth(),
+            queued_prompt_ids: session.queued_prompt_ids(),
         },
     )
     .await;
@@ -726,6 +748,22 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                     };
                                     let _ = send_frame(&mut socket, frame).await;
                                 }
+                                state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
+                            }
+                            Ok(ClientFrame::CancelPrompt { id }) => {
+                                // Recall a still-queued Rich Prompt message. The
+                                // retain-filter is authoritative under the queue
+                                // lock; ack removed / already-drained so the SPA
+                                // never recalls a message that already hit the
+                                // PTY. On a removal, cancel_prompt re-broadcasts
+                                // QueueDepth -> the `queue` frame below re-syncs
+                                // the badge, so we only send the inline ack here.
+                                let removed = session.cancel_prompt(&id);
+                                let _ = send_frame(
+                                    &mut socket,
+                                    ServerFrame::PromptCancelled { id, removed },
+                                )
+                                .await;
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
                             Err(e) => {
@@ -1157,10 +1195,42 @@ mod tests {
             missed_bytes: 0,
             bytes_since_focus: 0,
             queue_depth: 2,
+            queued_prompt_ids: vec!["u-1".into(), "u-2".into()],
         };
         assert_eq!(
             serde_json::to_string(&session).unwrap(),
-            r#"{"type":"session","id":"abc","seq":7,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":2}"#
+            r#"{"type":"session","id":"abc","seq":7,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":2,"queued_prompt_ids":["u-1","u-2"]}"#
+        );
+        // Empty list still serializes as `[]` (always present; the SPA can
+        // assume the field exists — pre-release, no back-compat).
+        let session_empty = ServerFrame::Session {
+            id: "abc".into(),
+            seq: 0,
+            missed_bytes: 0,
+            bytes_since_focus: 0,
+            queue_depth: 0,
+            queued_prompt_ids: vec![],
+        };
+        assert_eq!(
+            serde_json::to_string(&session_empty).unwrap(),
+            r#"{"type":"session","id":"abc","seq":0,"missed_bytes":0,"bytes_since_focus":0,"queue_depth":0,"queued_prompt_ids":[]}"#
+        );
+        // cancel-prompt decode (client→server) — pin the tag + field so a
+        // rename can't silently break the SPA wire with a green build.
+        let cancel: ClientFrame =
+            serde_json::from_str(r#"{"type":"cancel-prompt","id":"u-1"}"#).unwrap();
+        match cancel {
+            ClientFrame::CancelPrompt { id } => assert_eq!(id, "u-1"),
+            other => panic!("expected CancelPrompt, got {other:?}"),
+        }
+        // prompt-cancelled serialize (server→client ack).
+        let cancelled = ServerFrame::PromptCancelled {
+            id: "u-1".into(),
+            removed: true,
+        };
+        assert_eq!(
+            serde_json::to_string(&cancelled).unwrap(),
+            r#"{"type":"prompt-cancelled","id":"u-1","removed":true}"#
         );
     }
 
