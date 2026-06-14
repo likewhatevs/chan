@@ -236,6 +236,26 @@ describe("all-terminal reload reattach snapshot", () => {
     fetchSpy.mockRestore();
     vi.useRealTimers();
   });
+
+  test("a tsid-less terminal (not yet connected) is NOT snapshotted — no stray PTY on restore", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+    __testSetBootstrapHydrated(true);
+
+    // A terminal with NO session id — it hasn't connected / been assigned a
+    // tsid yet. Nothing to reattach, so the reload snapshot must stay empty;
+    // otherwise a reload would restore a tsid-less terminal and spawn a stray
+    // fresh PTY (the dual-key orphan @@LaneB caught).
+    setTerminalLayout({ terminalSessionId: undefined });
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+    expect(__testReadLayoutReloadSnapshot()).toBeNull();
+
+    fetchSpy.mockRestore();
+    vi.useRealTimers();
+  });
 });
 
 describe("rich prompt recall + reload re-prove", () => {

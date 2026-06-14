@@ -4547,6 +4547,21 @@ export function layoutHasDurableContent(layout: SerNode | null): boolean {
   return false;
 }
 
+/// True when a serialized layout has at least one terminal tab carrying a
+/// `tsid` — i.e. a live server-side PTY to RE-ATTACH on reload. A terminal
+/// without a tsid (not yet connected, or its session ended) has nothing to
+/// reattach, so persisting a reload snapshot of it would only spawn a stray
+/// fresh PTY when restored. Gates the all-terminal reload snapshot in
+/// store.svelte.ts so a tsid-less terminal layout is never snapshotted.
+export function layoutHasReattachableTerminal(layout: SerNode | null): boolean {
+  for (const leaf of serializedLeaves(layout)) {
+    for (const tab of [...leaf.t, ...(leaf.bt ?? [])]) {
+      if ((tab.k ?? "f") === "t" && !!tab.tsid) return true;
+    }
+  }
+  return false;
+}
+
 /// Copy terminal PTY session metadata from a per-window session layout
 /// onto the live layout after a shareable URL-hash layout restore.
 /// The hash deliberately omits `tsid`; this graft keeps reloads

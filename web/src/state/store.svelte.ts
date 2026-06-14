@@ -39,6 +39,7 @@ import {
   openTerminalInActivePane,
   openDashboardInActivePane,
   layoutHasDurableContent,
+  layoutHasReattachableTerminal,
   registerDraftPromotionSink,
   restoreLayout,
   serializeLayout,
@@ -3156,9 +3157,16 @@ function applyTreeExpandedReloadSnapshot(): boolean {
 // leaves nothing behind (no phantom, no durable blob).
 const LAYOUT_RELOAD_KEY = "chan.layout.reload";
 
+/// Canonical per-window key. Deliberately NOT scoped by `workspace.info.root`:
+/// that loads async (bootstrap awaits `/api/workspace`), so an early save while
+/// `workspace.info` was still null wrote a SECOND key (`…:/`, the
+/// `location.pathname` fallback) carrying a tsid-LESS terminal — and a bootstrap
+/// restore from that key spawned a stray PTY (no `session=`). `sessionWindowId()`
+/// is stable from first paint and uniquely scopes the snapshot to this window
+/// (a window only ever reloads its own single workspace), so one key covers
+/// every save + the bootstrap read — no path-normalization mismatch.
 function layoutReloadKey(): string {
-  const workspaceKey = workspace.info?.root ?? window.location.pathname;
-  return `${LAYOUT_RELOAD_KEY}:${sessionWindowId()}:${workspaceKey}`;
+  return `${LAYOUT_RELOAD_KEY}:${sessionWindowId()}`;
 }
 
 function writeLayoutReloadSnapshot(layout: ReturnType<typeof serializeLayout>): void {
@@ -3191,14 +3199,29 @@ function readLayoutReloadSnapshot(): ReturnType<typeof serializeLayout> {
   }
 }
 
-/// Keep the all-terminal reattach snapshot in sync with each session save:
-/// when the on-disk blob is NOT written (serializeSession returned null) but a
-/// layout exists, persist it; otherwise (a durable on-disk blob is the source,
-/// or the window is truly empty) clear it. Called from both save paths BEFORE
-/// their on-disk dedup so a tsid change updates the snapshot even when the
-/// (null) on-disk payload is unchanged.
+/// Keep the all-terminal reattach snapshot in sync with each session save.
+/// Called from both save paths BEFORE their on-disk dedup so a tsid change
+/// updates the snapshot even when the (null) on-disk payload is unchanged.
+///   - durable window (payload non-null): the on-disk blob is the source → clear;
+///   - truly empty window (no layout): nothing to reattach → clear;
+///   - all-terminal layout WITH a reattachable tsid: persist it;
+///   - all-terminal layout with NO reattachable tsid (an early save before the
+///     terminal's session frame, or a session that ended): leave any prior good
+///     snapshot intact — never persist a tsid-less terminal (restoring it would
+///     spawn a stray fresh PTY).
 function syncLayoutReloadSnapshot(payload: SessionPayload | null): void {
-  writeLayoutReloadSnapshot(payload ? null : serializeLayout({ terminalSessions: true }));
+  if (payload) {
+    writeLayoutReloadSnapshot(null);
+    return;
+  }
+  const layout = serializeLayout({ terminalSessions: true });
+  if (!layout) {
+    writeLayoutReloadSnapshot(null);
+    return;
+  }
+  if (layoutHasReattachableTerminal(layout)) {
+    writeLayoutReloadSnapshot(layout);
+  }
 }
 
 export const __testReadLayoutReloadSnapshot = readLayoutReloadSnapshot;
