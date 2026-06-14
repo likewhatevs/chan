@@ -976,6 +976,7 @@ dependencies = [
  "arboard",
  "async-trait",
  "axum",
+ "chan",
  "chan-server",
  "chan-shell",
  "chan-tunnel-client",

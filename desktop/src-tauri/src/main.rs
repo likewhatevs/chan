@@ -1425,6 +1425,36 @@ fn run_as_cs_if_requested() -> Result<bool, String> {
     Ok(true)
 }
 
+/// When chan-desktop is invoked through a `chan` name (a `~/.local/bin/chan`
+/// symlink or AppImage wrapper, argv[0] stem == "chan"), run the whole `chan`
+/// CLI in-process with the Desktop personality and EXIT instead of launching
+/// the GUI. This is what makes a desktop install also provide `chan` with no
+/// separate download. Mirrors `run_as_cs_if_requested`: a pre-GUI argv probe
+/// that short-circuits `main`. The Desktop personality makes `chan serve`
+/// integrate with the running desktop (handoff / GUI launch) and `chan
+/// upgrade` drive the desktop updater rather than replacing a CLI tarball.
+/// Returns `Ok(true)` when it handled the invocation, `Ok(false)` for a
+/// normal GUI launch.
+fn run_as_chan_if_requested() -> Result<bool, String> {
+    let Some(arg0) = std::env::args_os().next() else {
+        return Ok(false);
+    };
+    if !chan_shell::invoked_as_chan(&arg0) {
+        return Ok(false);
+    }
+    // `chan serve` needs a multi-threaded runtime; everything else runs fine
+    // on it too. shutdown_background() detaches chan-workspace's uncancellable
+    // reindex pool on exit, matching the standalone `chan` binary's shim.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("building chan runtime: {e}"))?;
+    let res = rt.block_on(chan::run(std::env::args_os(), chan::Personality::Desktop));
+    rt.shutdown_background();
+    res.map_err(|e| format!("{e:#}"))?;
+    Ok(true)
+}
+
 #[cfg(unix)]
 async fn run_mcp_proxy(socket: PathBuf) -> Result<(), String> {
     chan_server::run_mcp_stdio_proxy(socket)
@@ -1444,6 +1474,17 @@ fn main() {
     // `cs` alias dispatch (argv[0] stem == "cs"): run the control client
     // and exit, before any GUI / runtime / config setup below.
     match run_as_cs_if_requested() {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+    // `chan` alias dispatch (argv[0] stem == "chan"): run the whole chan CLI
+    // in-process with the Desktop personality and exit, before any GUI /
+    // runtime / config setup below. Same pre-GUI argv probe as `cs`.
+    match run_as_chan_if_requested() {
         Ok(true) => return,
         Ok(false) => {}
         Err(e) => {

@@ -33,6 +33,11 @@ repository = "https://github.com/fiorix/chan"
 # declare their own `embeddings` feature that enables this one).
 # Without `default-features = false` here, per-crate overrides are
 # silently ignored by Cargo.
+# The `chan` CLI as a library, so chan-desktop can dispatch `chan`
+# in-process (`chan::run(.., Personality::Desktop)`) when invoked through a
+# `~/.local/bin/chan` shim. Default features (incl. `embeddings`) on; the
+# crate's own macOS target deps add candle's metal backend.
+chan = { version = "0.34.0", path = "crates/chan" }
 chan-workspace = { version = "0.34.0", path = "crates/chan-workspace", default-features = false }
 chan-llm = { version = "0.34.0", path = "crates/chan-llm" }
 chan-report = { version = "0.34.0", path = "crates/chan-report" }
