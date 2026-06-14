@@ -299,13 +299,6 @@ pub fn install_bin_shims() -> std::io::Result<u32> {
     Ok(0)
 }
 
-/// Legacy entry point. chan-desktop's `main()` still calls this; it delegates to
-/// [`install_bin_shims`] so the call site keeps compiling until it migrates to
-/// the new name. Returns `Ok(true)` when any shim was written/updated.
-pub fn install_appimage_cs_wrapper() -> std::io::Result<bool> {
-    install_bin_shims().map(|n| n > 0)
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

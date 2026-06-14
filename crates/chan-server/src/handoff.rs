@@ -67,14 +67,14 @@ pub struct Capabilities {
 }
 
 /// CLI -> desktop request. `tag = "type"` mirrors control_socket so
-/// the on-wire shape is `{"type":"open_workspace", ...}`.
+/// the on-wire shape is `{"type":"open_workspace", ...}`. Every variant
+/// carries the `protocol` + `cli_version` handshake fields; the listener
+/// checks `protocol` against its own PROTOCOL_VERSION before dispatching.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
     /// Ask the desktop to open the given workspace path in a native
-    /// window. `protocol` and `cli_version` are the handshake fields;
-    /// the desktop checks `protocol` against its own PROTOCOL_VERSION
-    /// before acting.
+    /// window.
     OpenWorkspace {
         protocol: u32,
         cli_version: String,
@@ -84,6 +84,38 @@ pub enum Request {
         /// JSON across platforms.
         workspace_path: String,
     },
+    /// Ask the running desktop to drive its `tauri-plugin-updater`. With
+    /// `check_only` the desktop reports whether an update is available and
+    /// does not install; otherwise it kicks off check -> download -> install
+    /// in the background (fire-and-return: the CLI gets `UpgradeStarted` at
+    /// once, the desktop owns the progress + self-relaunch). This is how a
+    /// `chan upgrade` from the desktop-dispatched `chan` binary updates the
+    /// app instead of replacing a CLI tarball.
+    Upgrade {
+        protocol: u32,
+        cli_version: String,
+        check_only: bool,
+    },
+}
+
+impl Request {
+    /// The handshake protocol version carried by any request variant.
+    pub fn protocol(&self) -> u32 {
+        match self {
+            Request::OpenWorkspace { protocol, .. } | Request::Upgrade { protocol, .. } => {
+                *protocol
+            }
+        }
+    }
+
+    /// The CLI's human version, for skew logging.
+    pub fn cli_version(&self) -> &str {
+        match self {
+            Request::OpenWorkspace { cli_version, .. } | Request::Upgrade { cli_version, .. } => {
+                cli_version
+            }
+        }
+    }
 }
 
 /// Desktop -> CLI response. `tag = "status"` mirrors
@@ -108,6 +140,17 @@ pub enum Response {
     /// mounting it). The CLI logs the reason and falls back to
     /// standalone rather than leaving the user with nothing.
     Error { message: String },
+    /// The desktop accepted an `Upgrade { check_only: false }` and kicked
+    /// off the install in the background. The CLI prints a note and exits;
+    /// the desktop owns the download/install/relaunch.
+    UpgradeStarted { desktop_version: String },
+    /// The desktop answered an `Upgrade { check_only: true }`: `available`
+    /// is the announced version when an update exists, or `None` when the
+    /// desktop is already current.
+    UpgradeChecked {
+        desktop_version: String,
+        available: Option<String>,
+    },
 }
 
 /// Resolve the well-known per-user socket path. Prefers
@@ -226,20 +269,25 @@ impl Drop for ListenerHandle {
     }
 }
 
-/// Bind the well-known socket and spawn an accept loop. Each
-/// connection carries one `Request`; the desktop responds with a
-/// `Response` and closes. `open_workspace` is the desktop callback that
-/// spawns/raises the native window for the requested workspace path; it
-/// returns `Ok(())` on success or `Err(message)` which the CLI sees
-/// as `Response::Error` and falls back to standalone.
+/// Bind the well-known socket and spawn an accept loop. Each connection
+/// carries one `Request`; the desktop's `handler` returns the `Response` and
+/// the connection closes. The listener applies the protocol-version gate
+/// before calling `handler`, so the handler only ever sees protocol-valid
+/// requests; a skew becomes `Response::VersionSkew` without invoking it.
 ///
-/// The socket is chmod 0600 immediately after bind so only the
-/// owning user can connect (defense in depth on top of the per-user
-/// directory). Must be called from within a tokio runtime.
+/// `handler` is `async` because an `Upgrade` request drives
+/// `tauri-plugin-updater`'s network check. `OpenWorkspace` work stays
+/// effectively synchronous (the desktop queues the window spawn onto its app
+/// handle and returns immediately).
+///
+/// The socket is chmod 0600 immediately after bind so only the owning user
+/// can connect (defense in depth on top of the per-user directory). Must be
+/// called from within a tokio runtime.
 #[cfg(unix)]
-pub fn start_listener<F>(socket_path: PathBuf, open_workspace: F) -> std::io::Result<ListenerHandle>
+pub fn start_listener<F, Fut>(socket_path: PathBuf, handler: F) -> std::io::Result<ListenerHandle>
 where
-    F: Fn(PathBuf) -> Result<(), String> + Send + Sync + 'static,
+    F: Fn(Request) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Response> + Send + 'static,
 {
     use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -254,7 +302,7 @@ where
     // directory placement is the primary boundary anyway.
     let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600));
 
-    let open_workspace = std::sync::Arc::new(open_workspace);
+    let handler = std::sync::Arc::new(handler);
     let accept_loop = tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
@@ -265,7 +313,7 @@ where
                     continue;
                 }
             };
-            let open_workspace = open_workspace.clone();
+            let handler = handler.clone();
             tokio::spawn(async move {
                 let (read, mut write) = stream.into_split();
                 let mut reader = BufReader::new(read);
@@ -275,7 +323,7 @@ where
                         message: "empty handoff request".into(),
                     },
                     Ok(_) => match serde_json::from_str::<Request>(&line) {
-                        Ok(req) => handle_request(req, open_workspace.as_ref()),
+                        Ok(req) => dispatch(req, handler.as_ref()).await,
                         Err(e) => Response::Error {
                             message: format!("invalid handoff request: {e}"),
                         },
@@ -299,12 +347,10 @@ where
 }
 
 #[cfg(not(unix))]
-pub fn start_listener<F>(
-    _socket_path: PathBuf,
-    _open_workspace: F,
-) -> std::io::Result<ListenerHandle>
+pub fn start_listener<F, Fut>(_socket_path: PathBuf, _handler: F) -> std::io::Result<ListenerHandle>
 where
-    F: Fn(PathBuf) -> Result<(), String> + Send + Sync + 'static,
+    F: Fn(Request) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Response> + Send + 'static,
 {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -312,54 +358,27 @@ where
     ))
 }
 
-/// Apply the protocol-version gate, then dispatch to the desktop's
-/// open-workspace callback. Kept synchronous: the callback itself queues
-/// the window spawn onto the desktop's app handle.
+/// Apply the protocol-version gate, then call the desktop's async `handler`.
+/// A skew short-circuits to `VersionSkew` and the handler never runs (so the
+/// desktop never acts on a request it can't fully understand).
 #[cfg(unix)]
-fn handle_request<F>(req: Request, open_workspace: &F) -> Response
+async fn dispatch<F, Fut>(req: Request, handler: &F) -> Response
 where
-    F: Fn(PathBuf) -> Result<(), String>,
+    F: Fn(Request) -> Fut,
+    Fut: std::future::Future<Output = Response>,
 {
-    match req {
-        Request::OpenWorkspace {
-            protocol,
-            cli_version,
-            workspace_path,
-        } => {
-            if protocol != PROTOCOL_VERSION {
-                tracing::info!(
-                    cli_version = %cli_version,
-                    cli_protocol = protocol,
-                    "handoff refused: protocol skew",
-                );
-                return Response::VersionSkew {
-                    desktop_version: CHAN_VERSION.into(),
-                    desktop_protocol: PROTOCOL_VERSION,
-                };
-            }
-            // Log the accepted open so the socket -> handler ->
-            // window-spawn chain is observable in the desktop log
-            // (the CLI prints its own "opened ... in chan-desktop"
-            // line; this is the matching desktop-side breadcrumb).
-            tracing::info!(
-                cli_version = %cli_version,
-                workspace_path = %workspace_path,
-                "handoff: opening workspace from CLI request",
-            );
-            match open_workspace(PathBuf::from(workspace_path)) {
-                Ok(()) => Response::Opened {
-                    desktop_version: CHAN_VERSION.into(),
-                    capabilities: Capabilities {
-                        open_local_workspace: true,
-                    },
-                },
-                Err(message) => {
-                    tracing::warn!(%message, "handoff: open_workspace callback failed");
-                    Response::Error { message }
-                }
-            }
-        }
+    if req.protocol() != PROTOCOL_VERSION {
+        tracing::info!(
+            cli_version = %req.cli_version(),
+            cli_protocol = req.protocol(),
+            "handoff refused: protocol skew",
+        );
+        return Response::VersionSkew {
+            desktop_version: CHAN_VERSION.into(),
+            desktop_protocol: PROTOCOL_VERSION,
+        };
     }
+    handler(req).await
 }
 
 // ---------------------------------------------------------------------------
@@ -456,15 +475,126 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
             desktop_protocol,
         },
         Ok(Response::Error { message }) => Outcome::DesktopError { message },
-        // A reply we can't parse means a desktop we can't talk to:
-        // fall back rather than guess.
-        Err(_) => Outcome::NoDesktop,
+        // A reply we can't parse, or an upgrade reply to an open-workspace
+        // request (a desktop we can't talk to sanely): fall back rather
+        // than guess.
+        Ok(Response::UpgradeStarted { .. }) | Ok(Response::UpgradeChecked { .. }) | Err(_) => {
+            Outcome::NoDesktop
+        }
     }
 }
 
 #[cfg(not(unix))]
 pub async fn try_handoff(_workspace_path: &std::path::Path) -> Outcome {
     Outcome::NoDesktop
+}
+
+/// Outcome of an upgrade-trigger attempt against the well-known socket.
+/// Mirrors [`Outcome`] for the `Upgrade` request: every non-`Started` /
+/// non-`Checked` variant means the CLI couldn't drive a running desktop.
+#[derive(Debug)]
+pub enum UpgradeOutcome {
+    /// The desktop kicked off the install in the background (`check_only` was
+    /// false). The CLI prints a note and exits.
+    Started { desktop_version: String },
+    /// The desktop reported an availability check (`check_only` was true).
+    /// `available` is `Some(version)` when an update exists, else `None`.
+    Checked {
+        desktop_version: String,
+        available: Option<String>,
+    },
+    /// No desktop discovered: no socket, connect refused, stale socket, read
+    /// error, or malformed reply. The caller may launch one and retry.
+    NoDesktop,
+    /// The desktop speaks a different protocol version.
+    VersionSkew {
+        desktop_version: String,
+        desktop_protocol: u32,
+    },
+    /// The desktop answered but the updater failed (e.g. unavailable / check
+    /// error).
+    DesktopError { message: String },
+}
+
+/// Ask a running same-user desktop to drive its updater. With `check_only`
+/// the desktop reports availability without installing; otherwise it starts
+/// the install in the background and returns at once (fire-and-return). Any
+/// connect failure / stale socket / read error / malformed reply maps to
+/// `UpgradeOutcome::NoDesktop` so the caller can launch a desktop and retry.
+#[cfg(unix)]
+pub async fn try_upgrade(check_only: bool) -> UpgradeOutcome {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixStream;
+
+    let Some(socket_path) = well_known_socket_path() else {
+        return UpgradeOutcome::NoDesktop;
+    };
+    if !socket_path.exists() {
+        return UpgradeOutcome::NoDesktop;
+    }
+
+    let connect = UnixStream::connect(&socket_path);
+    let stream = match tokio::time::timeout(Duration::from_millis(1500), connect).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(_)) | Err(_) => return UpgradeOutcome::NoDesktop,
+    };
+
+    let req = Request::Upgrade {
+        protocol: PROTOCOL_VERSION,
+        cli_version: CHAN_VERSION.into(),
+        check_only,
+    };
+    let mut payload = match serde_json::to_vec(&req) {
+        Ok(v) => v,
+        Err(_) => return UpgradeOutcome::NoDesktop,
+    };
+    payload.push(b'\n');
+
+    let (read, mut write) = stream.into_split();
+    let io = async {
+        write.write_all(&payload).await?;
+        write.flush().await?;
+        let mut reader = BufReader::new(read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        Ok::<String, std::io::Error>(line)
+    };
+    // A `check_only` round-trip hits the network on the desktop side
+    // (updater.check), so allow a longer read window than the open-workspace
+    // path; the install kickoff (check_only=false) still returns promptly.
+    let line = match tokio::time::timeout(Duration::from_secs(15), io).await {
+        Ok(Ok(line)) if !line.trim().is_empty() => line,
+        _ => return UpgradeOutcome::NoDesktop,
+    };
+
+    match serde_json::from_str::<Response>(&line) {
+        Ok(Response::UpgradeStarted { desktop_version }) => {
+            UpgradeOutcome::Started { desktop_version }
+        }
+        Ok(Response::UpgradeChecked {
+            desktop_version,
+            available,
+        }) => UpgradeOutcome::Checked {
+            desktop_version,
+            available,
+        },
+        Ok(Response::VersionSkew {
+            desktop_version,
+            desktop_protocol,
+        }) => UpgradeOutcome::VersionSkew {
+            desktop_version,
+            desktop_protocol,
+        },
+        Ok(Response::Error { message }) => UpgradeOutcome::DesktopError { message },
+        // An open-workspace reply to an upgrade request, or an unparseable
+        // line: a desktop we can't talk to sanely.
+        Ok(Response::Opened { .. }) | Err(_) => UpgradeOutcome::NoDesktop,
+    }
+}
+
+#[cfg(not(unix))]
+pub async fn try_upgrade(_check_only: bool) -> UpgradeOutcome {
+    UpgradeOutcome::NoDesktop
 }
 
 #[cfg(test)]
@@ -482,6 +612,17 @@ mod tests {
         assert!(json.contains("\"type\":\"open_workspace\""));
         let back: Request = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
+
+        let upgrade = Request::Upgrade {
+            protocol: PROTOCOL_VERSION,
+            cli_version: "9.9.9".into(),
+            check_only: true,
+        };
+        let json = serde_json::to_string(&upgrade).unwrap();
+        assert!(json.contains("\"type\":\"upgrade\""));
+        assert_eq!(upgrade, serde_json::from_str::<Request>(&json).unwrap());
+        assert_eq!(upgrade.protocol(), PROTOCOL_VERSION);
+        assert_eq!(upgrade.cli_version(), "9.9.9");
     }
 
     #[test]
@@ -504,6 +645,21 @@ mod tests {
         let json = serde_json::to_string(&skew).unwrap();
         assert!(json.contains("\"status\":\"version_skew\""));
         assert_eq!(skew, serde_json::from_str::<Response>(&json).unwrap());
+
+        let started = Response::UpgradeStarted {
+            desktop_version: CHAN_VERSION.into(),
+        };
+        let json = serde_json::to_string(&started).unwrap();
+        assert!(json.contains("\"status\":\"upgrade_started\""));
+        assert_eq!(started, serde_json::from_str::<Response>(&json).unwrap());
+
+        let checked = Response::UpgradeChecked {
+            desktop_version: CHAN_VERSION.into(),
+            available: Some("9.9.9".into()),
+        };
+        let json = serde_json::to_string(&checked).unwrap();
+        assert!(json.contains("\"status\":\"upgrade_checked\""));
+        assert_eq!(checked, serde_json::from_str::<Response>(&json).unwrap());
     }
 
     #[test]
@@ -535,18 +691,24 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn handle_request_rejects_protocol_skew() {
+    #[tokio::test]
+    async fn dispatch_rejects_protocol_skew() {
         let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION + 1,
             cli_version: "9.9.9".into(),
             workspace_path: "/tmp/notes".into(),
         };
-        // The callback must NOT run on skew: the closure asserts.
-        let resp = handle_request(req, &|_p| {
-            panic!("open_workspace must not run on protocol skew");
-        });
-        match resp {
+        // The handler returns a distinctive Opened; getting VersionSkew back
+        // proves dispatch short-circuited and never ran the handler.
+        let handler = |_r: Request| async {
+            Response::Opened {
+                desktop_version: CHAN_VERSION.into(),
+                capabilities: Capabilities {
+                    open_local_workspace: true,
+                },
+            }
+        };
+        match dispatch(req, &handler).await {
             Response::VersionSkew {
                 desktop_protocol, ..
             } => assert_eq!(desktop_protocol, PROTOCOL_VERSION),
@@ -555,15 +717,19 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn handle_request_surfaces_callback_error() {
+    #[tokio::test]
+    async fn dispatch_runs_handler_on_match() {
         let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION,
             cli_version: CHAN_VERSION.into(),
             workspace_path: "/tmp/notes".into(),
         };
-        let resp = handle_request(req, &|_p| Err("mount failed".to_string()));
-        match resp {
+        let handler = |_r: Request| async {
+            Response::Error {
+                message: "mount failed".to_string(),
+            }
+        };
+        match dispatch(req, &handler).await {
             Response::Error { message } => assert_eq!(message, "mount failed"),
             other => panic!("expected Error, got {other:?}"),
         }
@@ -582,10 +748,25 @@ mod tests {
         let sock = dir.path().join("hand.sock");
         let opened = Arc::new(AtomicBool::new(false));
         let opened_cb = opened.clone();
-        let _handle = start_listener(sock.clone(), move |path| {
-            assert_eq!(path, PathBuf::from("/tmp/notes"));
-            opened_cb.store(true, Ordering::SeqCst);
-            Ok(())
+        let _handle = start_listener(sock.clone(), move |req| {
+            let opened_cb = opened_cb.clone();
+            async move {
+                match req {
+                    Request::OpenWorkspace { workspace_path, .. } => {
+                        assert_eq!(workspace_path, "/tmp/notes");
+                        opened_cb.store(true, Ordering::SeqCst);
+                        Response::Opened {
+                            desktop_version: CHAN_VERSION.into(),
+                            capabilities: Capabilities {
+                                open_local_workspace: true,
+                            },
+                        }
+                    }
+                    Request::Upgrade { .. } => Response::Error {
+                        message: "unexpected upgrade".into(),
+                    },
+                }
+            }
         })
         .unwrap();
 
@@ -596,7 +777,7 @@ mod tests {
 
         let resp = request_over(&sock, "/tmp/notes").await;
         assert!(matches!(resp, Response::Opened { .. }));
-        assert!(opened.load(Ordering::SeqCst), "callback must have run");
+        assert!(opened.load(Ordering::SeqCst), "handler must have run");
     }
 
     #[cfg(unix)]
@@ -604,12 +785,44 @@ mod tests {
     async fn listener_round_trip_error() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("hand.sock");
-        let _handle =
-            start_listener(sock.clone(), move |_p| Err("no such workspace".to_string())).unwrap();
+        let _handle = start_listener(sock.clone(), move |_req| async move {
+            Response::Error {
+                message: "no such workspace".to_string(),
+            }
+        })
+        .unwrap();
         let resp = request_over(&sock, "/tmp/x").await;
         match resp {
             Response::Error { message } => assert_eq!(message, "no such workspace"),
             other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn listener_round_trip_upgrade_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("hand.sock");
+        let _handle = start_listener(sock.clone(), move |req| async move {
+            match req {
+                Request::Upgrade { check_only, .. } => {
+                    assert!(check_only, "test sends check_only=true");
+                    Response::UpgradeChecked {
+                        desktop_version: CHAN_VERSION.into(),
+                        available: Some("9.9.9".into()),
+                    }
+                }
+                Request::OpenWorkspace { .. } => Response::Error {
+                    message: "unexpected open".into(),
+                },
+            }
+        })
+        .unwrap();
+        match upgrade_over(&sock, true).await {
+            Response::UpgradeChecked { available, .. } => {
+                assert_eq!(available, Some("9.9.9".to_string()))
+            }
+            other => panic!("expected UpgradeChecked, got {other:?}"),
         }
     }
 
@@ -618,16 +831,32 @@ mod tests {
     /// test doesn't depend on the well-known path.
     #[cfg(unix)]
     async fn request_over(sock: &std::path::Path, workspace: &str) -> Response {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        use tokio::net::UnixStream;
-
-        let stream = UnixStream::connect(sock).await.unwrap();
         let req = Request::OpenWorkspace {
             protocol: PROTOCOL_VERSION,
             cli_version: CHAN_VERSION.into(),
             workspace_path: workspace.into(),
         };
-        let mut payload = serde_json::to_vec(&req).unwrap();
+        round_trip(sock, &req).await
+    }
+
+    /// Round-trip one `Upgrade` request, mirroring try_upgrade's framing.
+    #[cfg(unix)]
+    async fn upgrade_over(sock: &std::path::Path, check_only: bool) -> Response {
+        let req = Request::Upgrade {
+            protocol: PROTOCOL_VERSION,
+            cli_version: CHAN_VERSION.into(),
+            check_only,
+        };
+        round_trip(sock, &req).await
+    }
+
+    #[cfg(unix)]
+    async fn round_trip(sock: &std::path::Path, req: &Request) -> Response {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixStream;
+
+        let stream = UnixStream::connect(sock).await.unwrap();
+        let mut payload = serde_json::to_vec(req).unwrap();
         payload.push(b'\n');
         let (read, mut write) = stream.into_split();
         write.write_all(&payload).await.unwrap();

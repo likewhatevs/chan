@@ -776,15 +776,22 @@ where
             yes,
             check,
             version,
-        } => {
-            update::run_upgrade(update::UpgradeOptions {
-                assume_yes: yes,
-                check_only: check,
-                version_override: version,
-                verbose,
-            })
-            .await
-        }
+        } => match personality {
+            // Standalone (install.sh) replaces the CLI tarball in place.
+            Personality::Standalone => {
+                update::run_upgrade(update::UpgradeOptions {
+                    assume_yes: yes,
+                    check_only: check,
+                    version_override: version,
+                    verbose,
+                })
+                .await
+            }
+            // Desktop drives the running desktop's tauri-plugin-updater
+            // instead (no tarball). `yes` is moot — the fire-and-return flow
+            // has no prompt.
+            Personality::Desktop => cmd_upgrade_desktop(check, version).await,
+        },
         Command::Mcp { path } => cmd_mcp(path).await,
         Command::McpProxy { socket } => cmd_mcp_proxy(socket).await,
         Command::Contacts { action } => match action {
@@ -1491,6 +1498,108 @@ fn macos_app_bundle(exe: &Path) -> Option<PathBuf> {
             .map(|n| n == "Contents")
             .unwrap_or(false);
     is_bundle.then(|| bundle.to_path_buf())
+}
+
+/// `chan upgrade` for the Desktop personality: drive the running desktop's
+/// `tauri-plugin-updater` instead of replacing a CLI tarball.
+///
+/// With `check_only` we query a running desktop and report — we do NOT launch
+/// one just to check (that would pop a window). Otherwise we find or launch
+/// the desktop and trigger the install (fire-and-return: the desktop owns the
+/// download/install/relaunch). `--version` pinning is unsupported (the desktop
+/// updater always installs the latest published release).
+#[cfg(unix)]
+async fn cmd_upgrade_desktop(check_only: bool, version_override: Option<String>) -> Result<()> {
+    use chan_server::handoff::UpgradeOutcome;
+
+    if version_override.is_some() {
+        eprintln!(
+            "chan: --version is not supported for a desktop install; the desktop \
+             updater always installs the latest published release. Ignoring it."
+        );
+    }
+
+    match chan_server::handoff::try_upgrade(check_only).await {
+        UpgradeOutcome::Checked { available, .. } => {
+            match available {
+                Some(v) => {
+                    println!(
+                        "chan: chan-desktop {v} is available. Run `chan upgrade` to install it."
+                    )
+                }
+                None => println!("chan: chan-desktop is up to date."),
+            }
+            Ok(())
+        }
+        UpgradeOutcome::Started { .. } => {
+            println!(
+                "chan: chan-desktop is updating in the background; it will relaunch when done."
+            );
+            Ok(())
+        }
+        UpgradeOutcome::VersionSkew {
+            desktop_version, ..
+        } => anyhow::bail!(
+            "chan-desktop is version {desktop_version}, CLI is {}; restart chan-desktop, \
+             then run `chan upgrade` again",
+            chan_server::handoff::CHAN_VERSION,
+        ),
+        UpgradeOutcome::DesktopError { message } => {
+            anyhow::bail!("chan-desktop could not upgrade: {message}")
+        }
+        UpgradeOutcome::NoDesktop => {
+            if check_only {
+                // No running desktop to ask; launching one just to check would
+                // pop a window. Point the user at the install path instead.
+                anyhow::bail!(
+                    "no running chan-desktop to check. Open chan-desktop, or run \
+                     `chan upgrade` (without --check) to launch and update it"
+                );
+            }
+            launch_desktop_then_upgrade().await
+        }
+    }
+}
+
+/// Launch the desktop GUI (none was running) and trigger its updater once it
+/// is up. Mirrors `launch_desktop_and_handoff` but for the upgrade trigger.
+#[cfg(unix)]
+async fn launch_desktop_then_upgrade() -> Result<()> {
+    use chan_server::handoff::UpgradeOutcome;
+
+    spawn_desktop_gui().context("launching chan-desktop")?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        match chan_server::handoff::try_upgrade(false).await {
+            UpgradeOutcome::Started { .. } => {
+                println!("chan: launched chan-desktop; it is updating in the background.");
+                return Ok(());
+            }
+            // Not up yet (socket absent / connect refused): keep waiting.
+            UpgradeOutcome::NoDesktop => {}
+            // check_only=false never returns Checked, but be exhaustive.
+            UpgradeOutcome::Checked { .. } => return Ok(()),
+            UpgradeOutcome::VersionSkew {
+                desktop_version, ..
+            } => anyhow::bail!(
+                "launched chan-desktop is version {desktop_version}, CLI is {}; cannot upgrade",
+                chan_server::handoff::CHAN_VERSION,
+            ),
+            UpgradeOutcome::DesktopError { message } => {
+                anyhow::bail!("chan-desktop could not upgrade: {message}")
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for chan-desktop to start");
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn cmd_upgrade_desktop(_check_only: bool, _version_override: Option<String>) -> Result<()> {
+    anyhow::bail!("desktop `chan upgrade` is only supported on unix")
 }
 
 /// Dispatch the `chan reports {enable,disable}`

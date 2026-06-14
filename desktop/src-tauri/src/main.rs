@@ -1047,6 +1047,86 @@ fn open_workspace_from_handoff(
     Ok(())
 }
 
+/// Drive `tauri-plugin-updater` in response to a `chan upgrade` from the
+/// desktop-dispatched `chan` binary (handoff `Upgrade` request).
+///
+/// With `check_only` we report availability synchronously (the CLI prints
+/// it) without installing. Otherwise we kick off check -> download -> install
+/// on a background task and return `UpgradeStarted` at once (fire-and-return:
+/// the multi-MB download can't be awaited from the CLI socket round-trip);
+/// when it finishes we re-affirm the `~/.local/bin/{chan,cs}` shims and
+/// relaunch into the new version.
+#[cfg(unix)]
+async fn desktop_handle_upgrade(
+    app: tauri::AppHandle,
+    check_only: bool,
+) -> chan_server::handoff::Response {
+    use chan_server::handoff::{Response, CHAN_VERSION};
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            return Response::Error {
+                message: format!("updater unavailable: {e}"),
+            }
+        }
+    };
+
+    match updater.check().await {
+        Ok(Some(update)) => {
+            let version = update.version.clone();
+            if check_only {
+                return Response::UpgradeChecked {
+                    desktop_version: CHAN_VERSION.into(),
+                    available: Some(version),
+                };
+            }
+            // Fire-and-return: install in the background; the CLI already has
+            // its `UpgradeStarted` ack.
+            let app_bg = app.clone();
+            tauri::async_runtime::spawn(async move {
+                match update
+                    .download_and_install(|_chunk, _total| {}, || {})
+                    .await
+                {
+                    Ok(()) => {
+                        // Re-affirm the shims to the (possibly relocated)
+                        // binary before relaunching into the new version.
+                        match cs_install::install_bin_shims() {
+                            Ok(n) => {
+                                tracing::info!(shims = n, "re-affirmed bin shims after update")
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "re-affirming bin shims after update failed")
+                            }
+                        }
+                        tracing::info!(%version, "chan-desktop update installed; relaunching");
+                        app_bg.restart();
+                    }
+                    Err(e) => {
+                        emit_system_notice(
+                            &app_bg,
+                            "warning",
+                            format!("chan-desktop update failed: {e}"),
+                        );
+                    }
+                }
+            });
+            Response::UpgradeStarted {
+                desktop_version: CHAN_VERSION.into(),
+            }
+        }
+        Ok(None) => Response::UpgradeChecked {
+            desktop_version: CHAN_VERSION.into(),
+            available: None,
+        },
+        Err(e) => Response::Error {
+            message: format!("update check failed: {e}"),
+        },
+    }
+}
+
 /// Open an additional in-app Tauri webview for a tunneled workspace.
 /// Each call yields a NEW window — the first one is opened by the
 /// supervisor on registration, and the Launch button calls this
@@ -1498,13 +1578,15 @@ fn main() {
     // off Linux/AppImage and once already applied.
     linux_gui_stack::prefer_system_gui_stack();
     init_tracing();
-    // AppImage-only, best-effort: drop a `~/.local/bin/cs` wrapper so a
-    // desktop-only Linux user gets the `cs` control client without a
-    // separate `chan` binary. No-op off an AppImage; never fatal.
-    match cs_install::install_appimage_cs_wrapper() {
-        Ok(true) => tracing::info!("installed cs wrapper into ~/.local/bin"),
-        Ok(false) => {}
-        Err(e) => tracing::warn!(error = %e, "installing cs wrapper failed"),
+    // Best-effort on boot: own `~/.local/bin/{chan,cs}` so a desktop install
+    // also provides the `chan` + `cs` CLI without a separate download. Real
+    // symlinks / AppImage wrappers / deb-rpm symlinks per package kind,
+    // idempotent + marker-guarded + never clobbers a user-written shim. No-op
+    // for a dev build / unrecognized layout; never fatal to boot.
+    match cs_install::install_bin_shims() {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(shims = n, "installed chan/cs bin shims into ~/.local/bin"),
+        Err(e) => tracing::warn!(error = %e, "installing bin shims failed"),
     }
     let default_workspace_boot = match default_workspace::ensure_fresh_default_workspace() {
         Ok(created) => created,
@@ -1653,12 +1735,32 @@ fn main() {
                 // below use) so the bind + the spawned accept loop attach
                 // to it and survive after this returns.
                 let listener = tauri::async_runtime::block_on(async {
-                    chan_server::handoff::start_listener(sock, move |path| {
-                        open_workspace_from_handoff(
-                            app_for_handoff.clone(),
-                            Arc::clone(&state_for_handoff),
-                            path,
-                        )
+                    chan_server::handoff::start_listener(sock, move |req| {
+                        let app = app_for_handoff.clone();
+                        let state = Arc::clone(&state_for_handoff);
+                        async move {
+                            use chan_server::handoff::{Capabilities, Request, Response, CHAN_VERSION};
+                            match req {
+                                Request::OpenWorkspace { workspace_path, .. } => {
+                                    match open_workspace_from_handoff(
+                                        app,
+                                        state,
+                                        PathBuf::from(workspace_path),
+                                    ) {
+                                        Ok(()) => Response::Opened {
+                                            desktop_version: CHAN_VERSION.into(),
+                                            capabilities: Capabilities {
+                                                open_local_workspace: true,
+                                            },
+                                        },
+                                        Err(message) => Response::Error { message },
+                                    }
+                                }
+                                Request::Upgrade { check_only, .. } => {
+                                    desktop_handle_upgrade(app, check_only).await
+                                }
+                            }
+                        }
                     })
                 });
                 match listener {
