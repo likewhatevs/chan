@@ -382,21 +382,27 @@ The poll refreshes when remote-backed windows open or close.
 Non-goal: chan-desktop installation should be "drag Chan.app to
 /Applications". No installer, no scripts.
 
-chan-desktop ships no `chan` binary. Power users who want
-`chan serve` or shell-first workflows install the standalone `chan`
-separately (the `chan.app/install.sh` installer or a release
-tarball). The desktop app and the standalone CLI are independent
-installs that share the same `~/.chan` registry, so a workspace
-added by one shows up in the other.
+chan-desktop is also the `chan` / `cs` command line: on boot it owns
+`~/.local/bin/{chan,cs}` shims that resolve to the running desktop
+binary, so a desktop install gives you `chan serve` and the
+shell-first workflows with nothing extra to download. A standalone
+`chan` (the `chan.app/install.sh` installer or a release tarball) is
+still available and independent; the two share the same `~/.chan`
+registry, so a workspace added by one shows up in the other.
 
-One deliberate exception on Linux AppImage installs: a desktop-only
-AppImage user has no `cs` on PATH and cannot drive the running
-window from a terminal, so on launch from an AppImage the desktop
-installs a tiny `~/.local/bin/cs` wrapper that re-execs the AppImage
-with `argv[0]=cs` (the control-client path). Best-effort and
-idempotent: a marker line means only our own wrapper is ever
-rewritten, a stale wrapper self-heals on the next launch, and a `cs`
-the user installed themselves is never clobbered.
+The shims are installed per package kind
+(`src-tauri/src/cs_install.rs`, `install_bin_shims()`, called on
+boot): a macOS `.app` or Linux deb/rpm gets real symlinks to the
+installed binary; a Linux AppImage gets tiny `exec -a` wrapper
+scripts, because `current_exe()` inside an AppImage is the ephemeral
+mount. Both names resolve to the same binary, and the argv[0] stem
+dispatch (`chan_shell::invoked_arg0`, which prefers `$ARGV0` over
+`argv[0]` so an AppImage that lost argv[0] to `AppRun` still reaches
+the inner CLI instead of the GUI) selects the CLI / control-client /
+GUI path. Best-effort, idempotent, and self-healing: a shim we wrote
+is re-pointed or rewritten on the next launch when it goes stale (the
+binary moved, the AppImage updated), and a `chan` / `cs` the user
+installed themselves is never clobbered.
 
 ## 8. Distribution
 
