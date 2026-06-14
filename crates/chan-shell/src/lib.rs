@@ -68,10 +68,76 @@ fn invoked_as(arg0: &std::ffi::OsStr, name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The name this process was invoked as, for the `cs` / `chan` stem checks.
+///
+/// Prefers `$ARGV0` over `argv[0]`. On a packaged Linux AppImage, linuxdeploy's
+/// `AppRun` re-execs the inner binary WITHOUT preserving argv[0], so
+/// `std::env::args_os().next()` is the inner binary path — not the `cs` /
+/// `chan` the user invoked through an `exec -a <name> "$APPIMAGE"` shim. The
+/// type-2 AppImage runtime instead exports that `exec -a` name as `$ARGV0`, so
+/// reading it recovers the intended stem. Off an AppImage `$ARGV0` is unset and
+/// this is just `argv[0]`.
+///
+/// Only the STEM matters to callers ([`invoked_as_cs`] / [`invoked_as_chan`]);
+/// the args you actually parse should still come from `std::env::args_os()`
+/// (clap ignores the program-name slot).
+#[cfg(feature = "client")]
+pub fn invoked_arg0() -> std::ffi::OsString {
+    resolve_arg0(std::env::var_os("ARGV0"), || {
+        std::env::args_os().next().unwrap_or_default()
+    })
+}
+
+/// Pure core of [`invoked_arg0`], split out so the `$ARGV0` preference is
+/// testable without mutating the process environment.
+#[cfg(feature = "client")]
+fn resolve_arg0<F>(argv0_env: Option<std::ffi::OsString>, fallback: F) -> std::ffi::OsString
+where
+    F: FnOnce() -> std::ffi::OsString,
+{
+    match argv0_env {
+        Some(v) if !v.is_empty() => v,
+        _ => fallback(),
+    }
+}
+
 #[cfg(all(test, feature = "client"))]
 mod arg0_tests {
-    use super::{invoked_as_chan, invoked_as_cs};
-    use std::ffi::OsStr;
+    use super::{invoked_as_chan, invoked_as_cs, resolve_arg0};
+    use std::ffi::{OsStr, OsString};
+
+    #[test]
+    fn resolve_arg0_prefers_nonempty_argv0_env() {
+        // AppImage `exec -a cs "$APPIMAGE"`: the runtime exports $ARGV0=cs even
+        // though argv[0] is the inner binary path. The stem must resolve to cs.
+        let resolved = resolve_arg0(Some(OsString::from("cs")), || {
+            OsString::from("/tmp/.mount_ChanXX/usr/bin/chan-desktop")
+        });
+        assert_eq!(resolved, OsString::from("cs"));
+        assert!(invoked_as_cs(&resolved));
+        assert!(!invoked_as_chan(&resolved));
+
+        let resolved = resolve_arg0(Some(OsString::from("chan")), || {
+            OsString::from("/tmp/.mount_ChanXX/usr/bin/chan-desktop")
+        });
+        assert!(invoked_as_chan(&resolved));
+    }
+
+    #[test]
+    fn resolve_arg0_falls_back_when_argv0_env_absent_or_empty() {
+        // Off an AppImage: $ARGV0 unset → argv[0] (here a `cs` symlink).
+        assert_eq!(
+            resolve_arg0(None, || OsString::from("/usr/local/bin/cs")),
+            OsString::from("/usr/local/bin/cs")
+        );
+        // Empty $ARGV0 is treated as unset.
+        assert_eq!(
+            resolve_arg0(Some(OsString::new()), || OsString::from(
+                "/usr/bin/chan-desktop"
+            )),
+            OsString::from("/usr/bin/chan-desktop")
+        );
+    }
 
     #[test]
     fn cs_matches_bare_path_and_extension() {

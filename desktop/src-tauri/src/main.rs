@@ -1484,11 +1484,12 @@ fn run_hidden_mcp_proxy_if_requested() -> Result<bool, String> {
 /// it handled the invocation (caller returns), `Ok(false)` for a normal
 /// GUI launch.
 fn run_as_cs_if_requested() -> Result<bool, String> {
-    let mut argv = std::env::args_os();
-    let Some(arg0) = argv.next() else {
-        return Ok(false);
-    };
-    if !chan_shell::invoked_as_cs(&arg0) {
+    // Stem detection prefers `$ARGV0` (see `chan_shell::invoked_arg0`): a
+    // packaged AppImage invoked via `exec -a cs "$APPIMAGE"` loses argv[0] to
+    // AppRun, so keying on `args_os().next()` alone would launch the GUI
+    // instead of dispatching `cs`. The args we PASS keep the real argv (clap
+    // ignores the program-name slot).
+    if !chan_shell::invoked_as_cs(&chan_shell::invoked_arg0()) {
         return Ok(false);
     }
     // The `cs` client is a single round-trip over the control socket, so a
@@ -1499,8 +1500,7 @@ fn run_as_cs_if_requested() -> Result<bool, String> {
         .enable_all()
         .build()
         .map_err(|e| format!("building cs runtime: {e}"))?;
-    let args = std::iter::once(arg0).chain(argv);
-    rt.block_on(chan_shell::run_cs(args))
+    rt.block_on(chan_shell::run_cs(std::env::args_os()))
         .map_err(|e| format!("{e:#}"))?;
     Ok(true)
 }
@@ -1516,10 +1516,11 @@ fn run_as_cs_if_requested() -> Result<bool, String> {
 /// Returns `Ok(true)` when it handled the invocation, `Ok(false)` for a
 /// normal GUI launch.
 fn run_as_chan_if_requested() -> Result<bool, String> {
-    let Some(arg0) = std::env::args_os().next() else {
-        return Ok(false);
-    };
-    if !chan_shell::invoked_as_chan(&arg0) {
+    // Stem detection prefers `$ARGV0` (see `chan_shell::invoked_arg0`) so a
+    // packaged AppImage invoked via `exec -a chan "$APPIMAGE"` (AppRun drops
+    // argv[0]) still dispatches the CLI instead of launching the GUI. The args
+    // passed to `chan::run` keep the real argv (clap ignores arg[0]).
+    if !chan_shell::invoked_as_chan(&chan_shell::invoked_arg0()) {
         return Ok(false);
     }
     // `chan serve` needs a multi-threaded runtime; everything else runs fine

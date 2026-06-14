@@ -163,12 +163,13 @@ the GUI:
 exec -a cs ./squashfs-root/usr/bin/chan-desktop terminal list   # rc=0, no GUI
 ```
 
-Known limitation: invoking the packaged AppImage through its
-`cs` wrapper (`exec -a cs "$APPIMAGE"`) does NOT yet reach the inner
-binary as `cs`. linuxdeploy's generated `AppRun` re-execs
-`AppRun.wrapped` without preserving argv0, so the GUI launches instead.
-The AppImage runtime does export `ARGV0=cs`, which is the intended fix
-hook; tracked for a follow-up.
+Packaged-AppImage dispatch: invoking the AppImage through its `cs` / `chan`
+wrapper (`exec -a cs "$APPIMAGE"`) DOES reach the inner binary as the right
+name. linuxdeploy's `AppRun` re-execs `AppRun.wrapped` without preserving
+argv[0], but the type-2 AppImage runtime exports the `exec -a` name as
+`$ARGV0`, and the `cs` / `chan` stem probes read `$ARGV0` before `argv[0]`
+(`chan_shell::invoked_arg0`), so the CLI / control client runs instead of the
+GUI. Off an AppImage `$ARGV0` is unset and behavior is unchanged.
 
 ## CLI: build the static musl `chan` tarball
 
