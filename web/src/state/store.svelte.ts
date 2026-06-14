@@ -1321,12 +1321,16 @@ async function bootstrapTerminalOnly(): Promise<void> {
     const fromHash = fresh ? null : readLayoutHash();
     try {
       const remote = fresh ? null : await api.getSession();
+      // A standalone terminal window is all-terminal by definition, so its
+      // reattach layout lives in the sessionStorage reload snapshot (no on-disk
+      // blob); fall back to it so Cmd+R re-attaches the surviving PTYs.
+      const reloadLayout = fresh ? null : readLayoutReloadSnapshot();
       if (fromHash) {
         const sessionLayout = remote
           ? isLegacyLayoutPayload(remote)
             ? remote
             : ((remote as SessionPayload).layout ?? null)
-          : null;
+          : reloadLayout;
         await restoreLayout(fromHash, sessionLayout);
       } else if (remote) {
         if (isLegacyLayoutPayload(remote)) {
@@ -1334,6 +1338,8 @@ async function bootstrapTerminalOnly(): Promise<void> {
         } else {
           await restoreSession(remote as SessionPayload);
         }
+      } else if (reloadLayout) {
+        await restoreLayout(reloadLayout);
       }
     } catch (e) {
       ui.status = `restore failed: ${(e as Error).message}`;
@@ -1393,17 +1399,23 @@ export async function bootstrap(): Promise<void> {
     bootstrapHydrated = false;
     try {
       const remote = fresh ? null : await api.getSession();
+      // All-terminal windows write no on-disk blob (not durable saved windows),
+      // so their reattach layout (with tsids + rich-prompt pp/rpv) lives in the
+      // sessionStorage reload snapshot. Fall back to it when the server blob is
+      // absent so Cmd+R re-attaches the surviving PTYs instead of spawning fresh.
+      const reloadLayout = fresh ? null : readLayoutReloadSnapshot();
       if (fromHash) {
         // URL hash wins on layout (copy-pasted links must reproduce
         // tabs verbatim), but personal UI prefs like tree expansion
         // still come from session.json. The hash deliberately doesn't
         // carry these so a shared link doesn't leak the recipient's
-        // directory state into the sender's session.
+        // directory state into the sender's session. The tsid graft sources
+        // from the server blob, or the sessionStorage snapshot when absent.
         const sessionLayout = remote
           ? isLegacyLayoutPayload(remote)
             ? remote
             : ((remote as SessionPayload).layout ?? null)
-          : null;
+          : reloadLayout;
         await restoreLayout(fromHash, sessionLayout);
         if (remote && !isLegacyLayoutPayload(remote)) {
           applySessionSidecars(remote as SessionPayload);
@@ -1417,6 +1429,10 @@ export async function bootstrap(): Promise<void> {
         } else {
           await restoreSession(remote as SessionPayload);
         }
+      } else if (reloadLayout) {
+        // No hash and no server blob, but an all-terminal reload snapshot
+        // exists: restore the layout (its tsids reattach the live PTYs).
+        await restoreLayout(reloadLayout);
       }
       if (!fresh) applyTreeExpandedReloadSnapshot();
       // Per-overlay state from the hash lands on top of any
@@ -1993,6 +2009,9 @@ export function scheduleSessionSave(): void {
     sessionTimer = null;
     if (!bootstrapHydrated) return;
     const payload = serializeSession();
+    // Keep the all-terminal reload-reattach snapshot current (incl. a changed
+    // tsid) before the on-disk dedup short-circuits below.
+    syncLayoutReloadSnapshot(payload);
     const next = payload ? JSON.stringify(payload) : "";
     if (next === lastSessionSnapshot) return;
     lastSessionSnapshot = next;
@@ -2028,6 +2047,9 @@ function flushSessionSaveOnExit(): void {
     sessionTimer = null;
   }
   const payload = serializeSession();
+  // Persist the all-terminal reattach snapshot on exit too: a Cmd+R reload
+  // reads it back; a real window close clears sessionStorage (no phantom).
+  syncLayoutReloadSnapshot(payload);
   const next = payload ? JSON.stringify(payload) : "";
   if (next === lastSessionSnapshot) return;
   lastSessionSnapshot = next;
@@ -3118,6 +3140,68 @@ function applyTreeExpandedReloadSnapshot(): boolean {
     return false;
   }
 }
+
+// ---- all-terminal reload reattach snapshot --------------------------------
+//
+// An all-terminal window (its only tabs are terminals — e.g. a terminal plus
+// the file-browser dock, which is not a layout tab) is NOT a durable saved
+// window: `serializeSession()` returns null so no on-disk session blob is
+// written (that is what stops it lingering as a `cs window list` phantom after
+// close — step-5). But Cmd+R must still RE-ATTACH the surviving server-side
+// PTYs, and the reload tsid graft (tabs.svelte.ts) sources tsids from the
+// server session blob — which is now absent. So we mirror the live layout
+// (WITH tsids, plus the rich-prompt pp/rpv) into sessionStorage, which
+// survives a reload but is cleared when the window/tab closes. Same channel as
+// the treeExpanded reload snapshot above: reload reattaches, a real close
+// leaves nothing behind (no phantom, no durable blob).
+const LAYOUT_RELOAD_KEY = "chan.layout.reload";
+
+function layoutReloadKey(): string {
+  const workspaceKey = workspace.info?.root ?? window.location.pathname;
+  return `${LAYOUT_RELOAD_KEY}:${sessionWindowId()}:${workspaceKey}`;
+}
+
+function writeLayoutReloadSnapshot(layout: ReturnType<typeof serializeLayout>): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (layout) {
+      window.sessionStorage.setItem(layoutReloadKey(), JSON.stringify(layout));
+    } else {
+      window.sessionStorage.removeItem(layoutReloadKey());
+    }
+  } catch {
+    // sessionStorage unavailable: an all-terminal window degrades to a fresh
+    // PTY on reload (durable windows are unaffected — they use the on-disk blob).
+  }
+}
+
+function readLayoutReloadSnapshot(): ReturnType<typeof serializeLayout> {
+  if (typeof window === "undefined") return null;
+  let raw: string | null = null;
+  try {
+    raw = window.sessionStorage.getItem(layoutReloadKey());
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as ReturnType<typeof serializeLayout>;
+  } catch {
+    return null;
+  }
+}
+
+/// Keep the all-terminal reattach snapshot in sync with each session save:
+/// when the on-disk blob is NOT written (serializeSession returned null) but a
+/// layout exists, persist it; otherwise (a durable on-disk blob is the source,
+/// or the window is truly empty) clear it. Called from both save paths BEFORE
+/// their on-disk dedup so a tsid change updates the snapshot even when the
+/// (null) on-disk payload is unchanged.
+function syncLayoutReloadSnapshot(payload: SessionPayload | null): void {
+  writeLayoutReloadSnapshot(payload ? null : serializeLayout({ terminalSessions: true }));
+}
+
+export const __testReadLayoutReloadSnapshot = readLayoutReloadSnapshot;
 
 /// Trigger a session save so the change reaches disk. Pane / tab
 /// edits already call `scheduleSessionSave`; this thin wrapper keeps

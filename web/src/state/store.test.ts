@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   __testApplyTreeExpandedReloadSnapshot,
+  __testReadLayoutReloadSnapshot,
   __testSetBootstrapHydrated,
   __testApplyOverlaysFromHash,
   browserSelection,
@@ -198,6 +199,39 @@ describe("session persistence bootstrap guard", () => {
     const [url, init] = fetchSpy.mock.calls.at(-1)!;
     expect(init?.method).toBe("DELETE");
     expect(String(url)).toContain("/api/session");
+
+    fetchSpy.mockRestore();
+    vi.useRealTimers();
+  });
+});
+
+describe("all-terminal reload reattach snapshot", () => {
+  test("an all-terminal window mirrors its layout+tsid to sessionStorage; durable content clears it", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+    __testSetBootstrapHydrated(true);
+
+    // 1) Durable window (terminal + dashboard): the on-disk blob is the source
+    //    of truth (PUT), so the reload snapshot is cleared.
+    setTerminalLayout({ terminalSessionId: "tsid-keepalive" });
+    addDashboardTab();
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+    expect(fetchSpy.mock.calls.at(-1)?.[1]?.method).toBe("PUT");
+    expect(__testReadLayoutReloadSnapshot()).toBeNull();
+
+    // 2) Remove the durable tab → all-terminal window: no on-disk blob (DELETE),
+    //    but the reload snapshot now carries the layout + tsid so Cmd+R can
+    //    reattach the surviving PTY instead of spawning a fresh one.
+    const pane = activePane();
+    pane.tabs = pane.tabs.filter((t) => t.kind === "terminal");
+    pane.activeTabId = pane.tabs[0]?.id ?? null;
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+    expect(fetchSpy.mock.calls.at(-1)?.[1]?.method).toBe("DELETE");
+    expect(JSON.stringify(__testReadLayoutReloadSnapshot())).toContain("tsid-keepalive");
 
     fetchSpy.mockRestore();
     vi.useRealTimers();
