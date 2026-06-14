@@ -117,6 +117,8 @@ fn hide_window(app: &AppHandle, id: &str) -> Result<(), String> {
 /// `cs window title`: set (or, for an empty string, reset) the OS title
 /// and mirror it into the title registry so `cs window list` reflects it
 /// immediately. The override persists across the bury/reopen cycle.
+/// Rejects a custom title another window already shows, keeping window
+/// names unambiguous (auto "{base} Window N" titles are already unique).
 fn set_window_title(
     app: &AppHandle,
     state: &Arc<AppState>,
@@ -126,6 +128,24 @@ fn set_window_title(
     let Some(w) = app.get_webview_window(id) else {
         return Err(format!("no window {id}"));
     };
+    // Custom titles bypass the per-base numbering, so guard uniqueness
+    // here: refuse a title another SPA window (visible OR hidden — both
+    // are live webviews and both appear in the Window menu) already
+    // shows. The empty-string reset is exempt; it recomputes the unique
+    // default.
+    if !title.is_empty() {
+        let collision = app
+            .webview_windows()
+            .iter()
+            .filter(|(label, _)| label.as_str() != id && serve::is_workspace_webview_label(label))
+            .find(|(_, win)| win.title().map(|t| t == title).unwrap_or(false))
+            .map(|(label, _)| label.clone());
+        if let Some(other) = collision {
+            return Err(format!(
+                "title \"{title}\" is already used by window {other}"
+            ));
+        }
+    }
     let shown = state.set_window_title_override(id, title);
     w.set_title(&shown)
         .map_err(|e| format!("setting title on {id}: {e}"))?;

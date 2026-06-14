@@ -67,7 +67,8 @@ to manage.
   its saved layout. When the window still has running terminals it asks
   for confirmation first; `--force` skips the prompt.
 - `title <id> <title>` sets a custom window title; an empty title resets
-  it to the default.
+  it to the default. A title another open window already shows is
+  rejected, so window names stay unambiguous.
 
 ## Pokes
 

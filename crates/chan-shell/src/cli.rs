@@ -184,7 +184,8 @@ pub enum WindowAction {
         id: String,
     },
     /// Set a custom title on a window by id. An empty string resets it to
-    /// the default `<base> Window <N>`.
+    /// the default `<base> Window <N>`. A title another window already
+    /// shows is rejected, keeping window names unambiguous.
     Title {
         /// The window id (see `cs window list`).
         id: String,
