@@ -1126,6 +1126,19 @@ struct ServeArgs {
     verbose: bool,
 }
 
+/// Make a serve root absolute against the process cwd. `canonicalize`
+/// resolves symlinks for an existing dir; `std::path::absolute` makes a
+/// not-yet-created path absolute lexically (so `chan serve new-dir` still
+/// lands under the cwd); the final fallback returns the input unchanged
+/// (only reachable if both fail, e.g. an unreadable cwd). The result must
+/// be absolute so the desktop handoff — which runs with cwd "/" — and the
+/// canonical-path-keyed registry both see the directory the user ran in.
+fn absolutize_serve_root(root: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&root)
+        .or_else(|_| std::path::absolute(&root))
+        .unwrap_or(root)
+}
+
 async fn cmd_serve(args: ServeArgs) -> Result<()> {
     let ServeArgs {
         addr,
@@ -1151,6 +1164,13 @@ async fn cmd_serve(args: ServeArgs) -> Result<()> {
     let root = path
         .or_else(|| lib.default_workspace_root())
         .unwrap_or_else(|| lib.effective_default_workspace_root());
+    // Resolve to an absolute path against the CLI's cwd before anything
+    // downstream consumes it. The macOS desktop handoff opens the
+    // workspace in a process whose cwd is "/", and the workspace registry
+    // is keyed by the canonical path, so a bare `chan serve .` must not
+    // leak a relative root (the desktop would resolve it against "/" and
+    // open the filesystem root).
+    let root = absolutize_serve_root(root);
     // VCS-parent gate. If `root` is inside a Git / Mercurial /
     // Subversion working tree, refuse with a structured error so a
     // wrapping shell (chan-desktop) can parse the marker line and
@@ -2715,6 +2735,20 @@ fn print_import_summary(summary: &chan_workspace::ImportSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolutize_serve_root_is_always_absolute() {
+        // The bug: a relative root (`.`) handed to the desktop made it
+        // open "/". The invariant that fixes it is simply that the serve
+        // root is always absolute before the handoff — regardless of
+        // whether the dir exists yet.
+        assert!(absolutize_serve_root(PathBuf::from(".")).is_absolute());
+        assert!(absolutize_serve_root(PathBuf::from("does/not/exist/yet")).is_absolute());
+        assert!(absolutize_serve_root(PathBuf::from("/tmp")).is_absolute());
+        // A relative path lands under the cwd, not the filesystem root.
+        let cwd = std::env::current_dir().unwrap();
+        assert!(absolutize_serve_root(PathBuf::from("sub/dir")).starts_with(&cwd));
+    }
 
     fn ipv4(s: &str) -> IpAddr {
         s.parse().unwrap()
