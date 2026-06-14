@@ -12,6 +12,11 @@ generated bootstrap, task files, append-only journals, and one-line
 pokes. @@Alex set scope conversationally; everything else ran on the
 bus.
 
+> **Repo note (2026-06-14):** the round's raw coordination dir
+> `new-team-1/` (plan, tasks, journals) was later untracked from the repo
+> and kept local-only, so the paths under it referenced below no longer
+> resolve in-tree. This retrospective is the canonical record.
+
 ## Roadmap (the asks)
 
 1. **Archaeology scrub** - code comments and docs referencing phases,

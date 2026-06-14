@@ -21,6 +21,12 @@ poke queues item 2 makes visible, and six benign poke crossings were
 reconciled from the on-disk task files the lean-poke discipline
 mandates.
 
+> **Repo note (2026-06-14):** the round's raw coordination dir
+> `new-team-2/` (tasks, journals, designs, evidence, this report's data
+> file) and the prior round's `new-team-1/` were later untracked from the
+> repo and kept local-only, so the paths under them referenced below no
+> longer resolve in-tree. This retrospective is the canonical record.
+
 ## Roadmap (the asks)
 
 1. **Editor tab-switch** (item 1) — raw un-decorated markdown until
