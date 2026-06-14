@@ -15,6 +15,7 @@
   import { onMount, onDestroy } from "svelte";
   import { api } from "../api/client";
   import { ApiError } from "../api/errors";
+  import { isTauriDesktop } from "../api/desktop";
   import { workspace } from "../state/store.svelte";
   import type { PreflightSnapshot } from "../api/types";
 
@@ -47,7 +48,17 @@
   // Flip to the manual `ln -s` hint when one-click create is unavailable or
   // failed (e.g. a root-owned bin dir).
   let manualMode = $state(false);
-  const showCsCard = $derived(!!csOffer && !locked && !csDismissed);
+  // Never offer cs under the chan-desktop host: the desktop owns the
+  // `~/.local/bin/{chan,cs}` shims on boot, so this manual offer is redundant
+  // (and its `ln -s` hint points into the `.app`/AppImage mount — wrong for a
+  // desktop-owned install). The server's `cs_on_path()` suppression covers a
+  // browser-served window whose `$PATH` already has `~/.local/bin`, but a macOS
+  // GUI launch has a restricted launchd `$PATH` that misses it; gating on the
+  // host directly closes that stale-bubble gap. A plain browser `chan serve`
+  // (standalone CLI) is unaffected and still shows the offer.
+  const showCsCard = $derived(
+    !!csOffer && !locked && !csDismissed && !isTauriDesktop(),
+  );
 
   function readCsDismissed(): boolean {
     try {
