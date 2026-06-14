@@ -115,6 +115,42 @@ describe("session persistence bootstrap guard", () => {
     fetchSpy.mockRestore();
     vi.useRealTimers();
   });
+
+  test("deletes the session blob when the window empties out instead of saving null", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+    __testSetBootstrapHydrated(true);
+
+    // 1) Window has real content (a terminal) plus a toggled folder:
+    //    persists a layout payload via PUT.
+    setTerminalLayout({ terminalSessionId: "term_alive" });
+    treeExpanded.map = { "": true, docs: true };
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]![1]?.method).toBe("PUT");
+
+    // 2) User closes all tabs — layout serializes to null. Even though a
+    //    folder is still expanded, the now-empty window must DELETE its
+    //    blob (not write a treeExpanded-only / null payload) so it stops
+    //    appearing as a saved window.
+    const empty: LeafNode = { kind: "leaf", id: "p-empty", tabs: [], activeTabId: null };
+    layout.rootId = empty.id;
+    layout.activePaneId = empty.id;
+    layout.nodes = { [empty.id]: empty };
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchSpy.mock.calls[1]!;
+    expect(init?.method).toBe("DELETE");
+    expect(String(url)).toContain("/api/session");
+
+    fetchSpy.mockRestore();
+    vi.useRealTimers();
+  });
 });
 
 describe("file browser expansion reload persistence", () => {

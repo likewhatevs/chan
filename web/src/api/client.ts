@@ -902,6 +902,12 @@ export const api = {
   /// server; the frontend sends `serializeLayout()` output.
   putSession: (body: unknown) =>
     req<void>("PUT", sessionPath(), body),
+  /// Delete this window's persisted session blob. Called when the
+  /// window has no real content (layout serializes to null) so it
+  /// stops being reported as a `saved` window by `/api/windows` /
+  /// `cs window list`, instead of leaving an empty blob behind.
+  /// Idempotent on the server (missing key → 204).
+  deleteSession: () => req<void>("DELETE", sessionPath()),
   links: () => req<GraphSnapshot>("GET", "/api/links"),
   /// Typed graph payload powering the graph view tab.
   graph: (opts: { scope?: "workspace" | "directory" | "file"; path?: string; depth?: number } = {}) => {

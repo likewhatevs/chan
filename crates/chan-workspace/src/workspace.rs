@@ -384,6 +384,14 @@ impl Workspace {
         // Errors are swallowed: a corrupt trash dir must never block
         // a legitimate workspace open.
         let _ = trash::sweep_expired(&paths.trash, TRASH_RETENTION_SECS);
+        // Lazy GC: drop phantom "saved window with nothing in it" session
+        // blobs that pre-fix builds accumulated (a `null` body, or a
+        // `treeExpanded`-only object from a folder toggled in an otherwise
+        // empty window). The fixed frontend deletes such sessions instead
+        // of writing them, so this only clears the existing backlog. Same
+        // best-effort posture as the trash sweep: a hiccup here must never
+        // block a workspace open.
+        prune_empty_sessions(&paths.sessions);
         // Validate the configured in-root drafts dir name. An invalid
         // value (separator, traversal, clash with `.git`/`.chan` or an
         // excluded dir) falls back to the default rather than failing
@@ -3513,6 +3521,48 @@ fn persist_rename_log(graph_dir: &std::path::Path, log: &HashMap<String, String>
     fs_ops::atomic_write(&graph_dir.join(RENAME_LOG_FILE), &body)
 }
 
+/// True when a persisted session blob carries no real window content and
+/// is therefore a phantom "saved window with nothing in it".
+///
+/// The session schema is the host's (frontend's) concern and otherwise
+/// opaque to chan-workspace; this is the single place we peek, and only
+/// at the one top-level `layout` field that gates real content. It exists
+/// to GC blobs written by pre-fix builds: a `null` body (the old
+/// `putSession(null)` path) or a `treeExpanded`-only object (a folder was
+/// toggled in an otherwise empty window). The fixed frontend deletes such
+/// sessions instead of writing them, so no new phantoms appear.
+///
+/// Conservative by design: we only prune shapes we positively recognize
+/// as empty. Empty/whitespace bytes and JSON `null` are empty; an object
+/// is empty iff it has no non-null `layout`; anything else (array,
+/// scalar, or unparseable bytes) is left untouched.
+fn session_blob_is_empty(bytes: &[u8]) -> bool {
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return true;
+    }
+    match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(serde_json::Value::Null) => true,
+        Ok(serde_json::Value::Object(map)) => !matches!(map.get("layout"), Some(v) if !v.is_null()),
+        _ => false,
+    }
+}
+
+/// Best-effort GC of phantom (content-less) session blobs in `sessions`.
+/// See [`session_blob_is_empty`]. Every error is swallowed: a session
+/// read/delete hiccup must never block a workspace open.
+fn prune_empty_sessions(sessions: &std::path::Path) {
+    let Ok(keys) = crate::blob::list(sessions) else {
+        return;
+    };
+    for key in keys {
+        if let Ok(Some(bytes)) = crate::blob::get(sessions, &key) {
+            if session_blob_is_empty(&bytes) {
+                let _ = crate::blob::delete(sessions, &key);
+            }
+        }
+    }
+}
+
 /// Read the pending-writes journal from
 /// `graph_dir/pending_writes.json`. Same best-effort semantics as
 /// the rename log: missing file -> empty map; malformed -> warn +
@@ -6483,6 +6533,58 @@ mod tests {
         let (_cfg, _root, workspace) = fixture();
         let err = workspace.put_session("../escape", b"x").unwrap_err();
         assert!(matches!(err, ChanError::InvalidKey(_)));
+    }
+
+    #[test]
+    fn session_blob_is_empty_classifies_phantoms() {
+        // Empty / whitespace / JSON null bodies are phantoms.
+        assert!(session_blob_is_empty(b""));
+        assert!(session_blob_is_empty(b"   \n\t "));
+        assert!(session_blob_is_empty(b"null"));
+        // A `treeExpanded`-only object (folder toggled in an empty
+        // window) and an explicit-null layout are phantoms.
+        assert!(session_blob_is_empty(br#"{"treeExpanded":{"":true}}"#));
+        assert!(session_blob_is_empty(
+            br#"{"layout":null,"treeExpanded":{"docs":true}}"#
+        ));
+        // A non-null layout is real content, kept.
+        assert!(!session_blob_is_empty(br#"{"layout":{"k":"l","t":[]}}"#));
+        assert!(!session_blob_is_empty(
+            br#"{"layout":{"k":"l","t":[{"k":"f"}]},"treeExpanded":{"":true}}"#
+        ));
+        // Conservative: shapes we don't positively recognize as empty
+        // (arrays, scalars, unparseable bytes) are left alone.
+        assert!(!session_blob_is_empty(b"[1,2,3]"));
+        assert!(!session_blob_is_empty(b"\"a string\""));
+        assert!(!session_blob_is_empty(b"not json at all"));
+    }
+
+    #[test]
+    fn prune_empty_sessions_drops_phantoms_keeps_real() {
+        let (_cfg, _root, workspace) = fixture();
+        let sessions = &workspace.paths.sessions;
+        workspace
+            .put_session("win-real", br#"{"layout":{"k":"l","t":[{"k":"f"}]}}"#)
+            .unwrap();
+        workspace.put_session("win-null", b"null").unwrap();
+        workspace
+            .put_session("win-tree", br#"{"treeExpanded":{"":true}}"#)
+            .unwrap();
+        workspace.put_session("win-empty", b"").unwrap();
+
+        prune_empty_sessions(sessions);
+
+        let keys = workspace.list_sessions().unwrap();
+        assert_eq!(keys, vec!["win-real"]);
+        // Real content is byte-preserved, not just retained.
+        assert_eq!(
+            workspace.get_session("win-real").unwrap().unwrap(),
+            br#"{"layout":{"k":"l","t":[{"k":"f"}]}}"#
+        );
+
+        // Idempotent: a second sweep with no phantoms left is a no-op.
+        prune_empty_sessions(sessions);
+        assert_eq!(workspace.list_sessions().unwrap(), vec!["win-real"]);
     }
 
     // ---- resolve_link ----

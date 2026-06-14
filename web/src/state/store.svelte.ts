@@ -1923,16 +1923,22 @@ type SessionPayload = {
 
 function serializeSession(): SessionPayload | null {
   const layout = serializeLayout({ terminalSessions: true });
+  // A window with no pane/tab layout has no real content — even if a
+  // folder was toggled in the file browser (the tree root `""` is
+  // auto-seeded on every fresh window). Persisting a `treeExpanded`-only
+  // payload is exactly what accumulated phantom "saved windows with
+  // nothing in them"; treat layout-less as empty so the caller deletes
+  // the blob instead of saving it. `treeExpanded` only rides along when
+  // there's a layout to restore it into.
+  if (!layout) {
+    return null;
+  }
   const treeMap: Record<string, boolean> = {};
   for (const [k, v] of Object.entries(treeExpanded.map)) {
     if (v) treeMap[k] = true;
   }
-  // Skip when there's literally nothing worth persisting.
-  if (!layout && Object.keys(treeMap).length === 0) {
-    return null;
-  }
   return {
-    ...(layout ? { layout } : {}),
+    layout,
     ...(Object.keys(treeMap).length > 0 ? { treeExpanded: treeMap } : {}),
   };
 }
@@ -1985,9 +1991,10 @@ export function scheduleSessionSave(): void {
     if (next === lastSessionSnapshot) return;
     lastSessionSnapshot = next;
     if (!payload) {
-      // No canonical delete; overwrite with null. Server treats
-      // null on read as "no session yet".
-      void api.putSession(null);
+      // Window emptied out (layout serialized to null): delete the blob
+      // rather than writing an empty one, so this window stops appearing
+      // as `saved` in `/api/windows` / `cs window list`.
+      void api.deleteSession();
     } else {
       void api.putSession(payload);
     }
@@ -2019,14 +2026,19 @@ function flushSessionSaveOnExit(): void {
   if (next === lastSessionSnapshot) return;
   lastSessionSnapshot = next;
   const url = withTokenQuery(sessionPath());
-  const body = payload === null ? "null" : next;
   try {
-    fetch(url, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body,
-      keepalive: true,
-    }).catch(() => {});
+    if (payload === null) {
+      // Window emptied out: delete on exit so it doesn't linger as a
+      // saved window. keepalive lets the request outlive the unload.
+      fetch(url, { method: "DELETE", keepalive: true }).catch(() => {});
+    } else {
+      fetch(url, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: next,
+        keepalive: true,
+      }).catch(() => {});
+    }
   } catch {
     /* page is going away; nothing useful we can do */
   }
