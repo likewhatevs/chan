@@ -204,6 +204,13 @@ pub enum ControlTenant {
 pub const TERMINAL_ONLY_NEEDS_WORKSPACE: &str =
     "this command needs a workspace; this is a standalone terminal session — run it from a terminal inside a workspace window";
 
+/// `cs terminal new --path X` on a standalone terminal window: there is no
+/// workspace root to resolve the path against, so reject it clearly rather
+/// than silently dropping the requested cwd. `cs terminal new` with no path
+/// works (opens a terminal in the window by pure window routing).
+pub const TERM_NEW_PATH_NEEDS_WORKSPACE: &str =
+    "cannot resolve --path on a standalone terminal window (no workspace root); run it from a terminal inside a workspace window, or drop --path to open a terminal here";
+
 /// Shared server resources a control-socket connection needs, plus
 /// the tenant gate. One value per `start`; cloned per connection
 /// (every field is a cheap handle).
@@ -339,18 +346,37 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             if let Err(message) = require_window_id(&window_id) {
                 return ControlResponse::Error { message };
             }
-            let workspace = match workspace_from_cell(workspace_cell, tenant) {
-                Ok(workspace) => workspace,
-                Err(message) => return ControlResponse::Error { message },
-            };
-            into_response(open_term_new(
-                &workspace,
-                &window_id,
-                path.as_deref(),
-                tab_name,
-                tab_group,
-                events_tx,
-            ))
+            // Opening a terminal is window routing, not a workspace operation:
+            // the only workspace use is resolving an optional --path cwd. So a
+            // standalone terminal tenant CAN open a terminal (no cwd to
+            // resolve); it just can't resolve a --path against a workspace it
+            // doesn't have. This mirrors `WindowList`'s tenant branch.
+            match tenant {
+                ControlTenant::TerminalOnly => {
+                    if path.is_some() {
+                        return ControlResponse::Error {
+                            message: TERM_NEW_PATH_NEEDS_WORKSPACE.into(),
+                        };
+                    }
+                    into_response(open_term_new_standalone(
+                        &window_id, tab_name, tab_group, events_tx,
+                    ))
+                }
+                ControlTenant::Workspace => {
+                    let workspace = match workspace_from_cell(workspace_cell, tenant) {
+                        Ok(workspace) => workspace,
+                        Err(message) => return ControlResponse::Error { message },
+                    };
+                    into_response(open_term_new(
+                        &workspace,
+                        &window_id,
+                        path.as_deref(),
+                        tab_name,
+                        tab_group,
+                        events_tx,
+                    ))
+                }
+            }
         }
         ControlRequest::OpenDashboard {
             window_id,
@@ -1498,6 +1524,29 @@ fn open_term_new(
     })
 }
 
+/// Category 1, workspace-less: open a new terminal tab in a standalone
+/// terminal window. There is no workspace to resolve a cwd against, so the
+/// command carries no cwd — pure window routing, the same shape as
+/// `open_dashboard`. The caller has already rejected any `--path`.
+#[cfg(unix)]
+fn open_term_new_standalone(
+    window_id: &str,
+    tab_name: Option<String>,
+    tab_group: Option<String>,
+    events_tx: &broadcast::Sender<String>,
+) -> Result<String, String> {
+    send_window_command(
+        window_id,
+        WindowCommand::OpenTermNew {
+            cwd: None,
+            tab_name,
+            tab_group,
+        },
+        events_tx,
+    )?;
+    Ok("terminal request queued".into())
+}
+
 /// Category 1: open a Dashboard tab in the originating window.
 #[cfg(unix)]
 fn open_dashboard(
@@ -1853,6 +1902,64 @@ mod tests {
                 );
             }
             ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn open_term_new_on_a_terminal_tenant_opens_without_workspace() {
+        // `cs terminal new` (no path) must WORK on a standalone terminal
+        // window: it's window routing, not a workspace op. A live /ws
+        // subscriber stands in for the connected SPA window so
+        // send_window_command succeeds.
+        let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
+        let ctx = test_ctx(workspace_cell, ControlTenant::TerminalOnly);
+        let mut rx = ctx.events_tx.subscribe();
+
+        let response = handle_request(
+            ControlRequest::OpenTermNew {
+                window_id: "terminal-win-0".into(),
+                path: None,
+                tab_name: None,
+                tab_group: None,
+            },
+            &ctx,
+        )
+        .await;
+
+        match response {
+            ControlResponse::Ok { message } => assert_eq!(message, "terminal request queued"),
+            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+        }
+        // The window command was broadcast to the (stand-in) connected window.
+        let frame = rx.try_recv().expect("window command broadcast");
+        assert!(frame.contains("open_term_new"), "frame: {frame}");
+        assert!(frame.contains("terminal-win-0"), "frame: {frame}");
+    }
+
+    #[tokio::test]
+    async fn open_term_new_with_path_on_a_terminal_tenant_rejects() {
+        // `cs terminal new --path X` can't resolve against a workspace root
+        // that doesn't exist here; reject with the pinned message rather than
+        // silently dropping the requested cwd.
+        let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
+        let ctx = test_ctx(workspace_cell, ControlTenant::TerminalOnly);
+
+        let response = handle_request(
+            ControlRequest::OpenTermNew {
+                window_id: "terminal-win-0".into(),
+                path: Some(std::path::PathBuf::from("notes")),
+                tab_name: None,
+                tab_group: None,
+            },
+            &ctx,
+        )
+        .await;
+
+        match response {
+            ControlResponse::Error { message } => {
+                assert_eq!(message, TERM_NEW_PATH_NEEDS_WORKSPACE)
+            }
+            ControlResponse::Ok { message } => panic!("unexpected ok: {message}"),
         }
     }
 
