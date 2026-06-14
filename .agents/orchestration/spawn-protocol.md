@@ -1,34 +1,16 @@
 # Agent spawn protocol
 
-chan-server exposes an HTTP control channel for creating
-named terminal tabs, executing agent CLIs inside them,
-and managing their lifecycle. The intended caller is an
-orchestrating agent (e.g. a team `@@Lead` running
-inside a chan terminal) that needs to spawn helper
-agents on demand.
+chan-server exposes an HTTP control channel for creating named terminal tabs, executing agent CLIs inside them, and managing their lifecycle. The intended caller is an orchestrating agent (e.g. a team `@@Lead` running inside a chan terminal) that needs to spawn helper agents on demand.
 
-> **Status note**: this contract is a retained design
-> blueprint. The watcher-driven runtime it rode on was
-> removed in the Team Work revamp and is planned to
-> return (see [README.md](README.md)); until then,
-> treat this as the target shape, not current runtime.
+> **Status note**: this contract is a retained design blueprint. The watcher-driven runtime it rode on was removed in the Team Work revamp and is planned to return (see [README.md](README.md)); until then, treat this as the target shape, not current runtime.
 
 ## Step 0: dispatched agents read the front door
 
-Before reading its own task file, every dispatched agent reads
-[`.agents/README.md`](../README.md) (the canonical front door:
-principles, writing rules, patterns, roster, skills). The dispatch
-bootstrap is generated at runtime, so this is the durable place the
-read order is anchored. The root `CLAUDE.md` / `AGENTS.md` auto-load
-no longer exists; `.agents/README.md` is the replacement context
-agents start from.
+Before reading its own task file, every dispatched agent reads [`.agents/README.md`](../README.md) (the canonical front door: principles, writing rules, patterns, roster, skills). The dispatch bootstrap is generated at runtime, so this is the durable place the read order is anchored. The root `CLAUDE.md` / `AGENTS.md` auto-load no longer exists; `.agents/README.md` is the replacement context agents start from.
 
 ## Endpoints
 
-All routes are under the same chan-server origin and
-require the per-launch bearer token in the
-`Authorization: Bearer <token>` header (or the `t=<token>`
-query param that the SPA uses).
+All routes are under the same chan-server origin and require the per-launch bearer token in the `Authorization: Bearer <token>` header (or the `t=<token>` query param that the SPA uses).
 
 ### `POST /api/terminals`
 
@@ -46,16 +28,9 @@ Body:
 }
 ```
 
-* `name` - the tab's display name. The chan-server
-  event watcher uses this to route `poke\n` dispatches
-  by matching the `to` field of incoming events. Use
-  the `@@Name` convention.
-* `command` - the full CLI to run, including flags. No
-  argv-array form; chan splits on the shell quoting
-  you provide.
-* `env` - optional extras merged into the PTY
-  environment on top of chan's default `CHAN_*` env
-  plumbing.
+* `name` - the tab's display name. The chan-server event watcher uses this to route `poke\n` dispatches by matching the `to` field of incoming events. Use the `@@Name` convention.
+* `command` - the full CLI to run, including flags. No argv-array form; chan splits on the shell quoting you provide.
+* `env` - optional extras merged into the PTY environment on top of chan's default `CHAN_*` env plumbing.
 
 Response: `201 Created`
 
@@ -68,8 +43,7 @@ Response: `201 Created`
 
 ### `POST /api/terminals/<session>/restart`
 
-Restart the PTY in place (same name, same command).
-Returns `204 No Content`.
+Restart the PTY in place (same name, same command). Returns `204 No Content`.
 
 ### `DELETE /api/terminals/<session>`
 
@@ -77,11 +51,7 @@ Close the terminal tab. Returns `204 No Content`.
 
 ## Pre-flight signals
 
-When the spawned command emits stdout that matches one
-of chan-server's pre-flight patterns (login required,
-authentication needed, setup wizard, etc.), chan-server
-fires a `pre-flight` event into the orchestrating tab's
-watcher directory:
+When the spawned command emits stdout that matches one of chan-server's pre-flight patterns (login required, authentication needed, setup wizard, etc.), chan-server fires a `pre-flight` event into the orchestrating tab's watcher directory:
 
 ```json
 {
@@ -105,42 +75,23 @@ watcher directory:
 }
 ```
 
-NOTE: the bubble overlay is now a frontend-only static stub and
-chan-server's event-reply endpoint was removed in the Team Work
-revamp; the live survey/reply flow below is retained as the
-blueprint for the returning implementation.
+NOTE: the bubble overlay is now a frontend-only static stub and chan-server's event-reply endpoint was removed in the Team Work revamp; the live survey/reply flow below is retained as the blueprint for the returning implementation.
 
-Previously, the Team Work bubble overlay rendered this as a
-normal single-topic survey.
-Reply via the SPA wrote the survey-reply through chan-server's
-reply endpoint; chan-server reacted:
+Previously, the Team Work bubble overlay rendered this as a normal single-topic survey. Reply via the SPA wrote the survey-reply through chan-server's reply endpoint; chan-server reacted:
 
-* `1` → focus the spawn tab so the user can complete
-  setup interactively.
+* `1` → focus the spawn tab so the user can complete setup interactively.
 * `2` → `DELETE /api/terminals/<session>` to close.
 * `3` → `POST /api/terminals/<session>/restart` to retry.
 
 ## Sample workflow
 
-1. An orchestrating agent decides to spawn a helper
-   agent.
-2. It POSTs `/api/terminals` with the helper's name +
-   CLI.
-3. chan-server creates the tab, launches the PTY, gets
-   the tab name into the watcher dispatch registry.
-4. If the helper boots cleanly, that's it - the helper
-   is now reachable by routing events at `@@HelperName`.
-5. If the helper emits a pre-flight signal first,
-   chan-server fires the `pre-flight` event into the
-   orchestrator's watcher dir; user picks; chan-server
-   acts.
-6. Helper does its work, sends events back via atomic
-   writes (see [atomic-writes.md](./atomic-writes.md)).
+1. An orchestrating agent decides to spawn a helper agent.
+2. It POSTs `/api/terminals` with the helper's name + CLI.
+3. chan-server creates the tab, launches the PTY, gets the tab name into the watcher dispatch registry.
+4. If the helper boots cleanly, that's it - the helper is now reachable by routing events at `@@HelperName`.
+5. If the helper emits a pre-flight signal first, chan-server fires the `pre-flight` event into the orchestrator's watcher dir; user picks; chan-server acts.
+6. Helper does its work, sends events back via atomic writes (see [atomic-writes.md](./atomic-writes.md)).
 
 ## No state outside disk
 
-Spawned tabs participate in the per-window
-`session.json` layout persistence. A chan-server
-restart reattaches via the existing terminal-session
-machinery (or surfaces detached sessions, depending on
-the restart path).
+Spawned tabs participate in the per-window `session.json` layout persistence. A chan-server restart reattaches via the existing terminal-session machinery (or surfaces detached sessions, depending on the restart path).

@@ -1,41 +1,24 @@
 # Chan Desktop
 
-Chan Desktop is the native version of the IDE for macOS and Linux. It hosts
-the same workspace surface as `chan serve` in a native window (no browser
-chrome), and it can attach to workspaces running on other machines, both
-outbound and inbound.
+Chan Desktop is the native version of the IDE for macOS and Linux. It hosts the same workspace surface as `chan serve` in a native window (no browser chrome), and it can attach to workspaces running on other machines, both outbound and inbound.
 
 ## Install
 
-Download the desktop package for your platform from the
-[install page](/install/). Desktop packages are release artifacts; the shell
-installer (`curl -fsSL https://chan.app/install.sh | sh`) installs the
-standalone `chan` CLI, not the desktop app.
+Download the desktop package for your platform from the [install page](/install/). Desktop packages are release artifacts; the shell installer (`curl -fsSL https://chan.app/install.sh | sh`) installs the standalone `chan` CLI, not the desktop app.
 
 ## Local workspaces
 
-Open a folder on disk and Chan Desktop launches a local `chan serve` for it
-and mounts the editor in the window. This is the same single-user,
-single-machine model as the CLI; your files stay ordinary files under the
-workspace root.
+Open a folder on disk and Chan Desktop launches a local `chan serve` for it and mounts the editor in the window. This is the same single-user, single-machine model as the CLI; your files stay ordinary files under the workspace root.
 
 ## Windows
 
-Each workspace or terminal you open gets its own native window, and a
-running workspace can have several. Closing a window with its title-bar
-button hides it rather than destroying it: its terminals keep running and
-its layout stays warm, and the Window menu lists hidden windows to bring
-back (the "Hidden Windows" header shows how many are kept warm). Hidden
-windows do not count against the per-workspace window cap.
+Each workspace or terminal you open gets its own native window, and a running workspace can have several. Closing a window with its title-bar button hides it rather than destroying it: its terminals keep running and its layout stays warm, and the Window menu lists hidden windows to bring back (the "Hidden Windows" header shows how many are kept warm). Hidden windows do not count against the per-workspace window cap.
 
-From inside a terminal, the `cs window` family manages these windows
-directly — list them, open and hide them, remove them for good, and rename
-them. See [Terminal](terminal.md) for the command reference.
+From inside a terminal, the `cs window` family manages these windows directly — list them, open and hide them, remove them for good, and rename them. See [Terminal](terminal.md) for the command reference.
 
 ## Remote workspaces
 
-A remote workspace is a `chan serve` running on another machine (a VM on your
-laptop, a box on your LAN, a VPS). Chan Desktop reaches it two ways.
+A remote workspace is a `chan serve` running on another machine (a VM on your laptop, a box on your LAN, a VPS). Chan Desktop reaches it two ways.
 
 ### Outbound: you dial the remote
 
@@ -52,11 +35,9 @@ chan serve ./chan
 
    Copy the URL `chan serve` prints (it carries the per-launch bearer token).
 
-2. In Chan Desktop: New -> Remote -> Outbound, and paste that URL. The
-   workspace opens in a native window and feels local.
+2. In Chan Desktop: New -> Remote -> Outbound, and paste that URL. The workspace opens in a native window and feels local.
 
-If the remote port is not directly reachable, forward it over SSH first, then
-paste the resulting `http://localhost:<port>/...` URL:
+If the remote port is not directly reachable, forward it over SSH first, then paste the resulting `http://localhost:<port>/...` URL:
 
 ```sh
 ssh user@host -L 8787:localhost:8787
@@ -65,17 +46,11 @@ ssh user@host -L 8787:localhost:8787
 # paste the printed localhost URL into New -> Remote -> Outbound
 ```
 
-A Lima VM on a Mac is a convenient remote: it is a real Linux host reachable
-from the Mac, so the outbound flow exercises the full remote path locally.
+A Lima VM on a Mac is a convenient remote: it is a real Linux host reachable from the Mac, so the outbound flow exercises the full remote path locally.
 
 ### Inbound: the remote dials you
 
-When you cannot listen on the remote machine, Chan Desktop can accept a
-reverse tunnel: the desktop listens, and the remote `chan serve` dials back
-to it.
+When you cannot listen on the remote machine, Chan Desktop can accept a reverse tunnel: the desktop listens, and the remote `chan serve` dials back to it.
 
-1. In Chan Desktop: New -> Remote -> Inbound, and pick a port to listen on
-   (or `0` to let the OS choose).
-2. Copy the `chan serve ... --tunnel-url=<desktop-listener>` command the
-   dialog shows, and run it on the remote machine. The workspace then appears
-   in the desktop window.
+1. In Chan Desktop: New -> Remote -> Inbound, and pick a port to listen on (or `0` to let the OS choose).
+2. Copy the `chan serve ... --tunnel-url=<desktop-listener>` command the dialog shows, and run it on the remote machine. The workspace then appears in the desktop window.

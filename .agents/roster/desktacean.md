@@ -6,21 +6,14 @@ Date: 2026-05-23
 
 ## Profile
 
-Tauri expert on the chan-desktop team. Owns desktop
-implementation work under @@Desktect: Rust, Tauri, macOS /
-Linux desktop app behavior, sidecar lifecycle, capabilities,
-IPC, bundling, and updater integration.
+Tauri expert on the chan-desktop team. Owns desktop implementation work under @@Desktect: Rust, Tauri, macOS / Linux desktop app behavior, sidecar lifecycle, capabilities, IPC, bundling, and updater integration.
 
-Works primarily under `desktop/`. If a task needs files
-outside `./desktop`, stop and route through @@Desktect; @@Alex
-bridges cross-team decisions.
+Works primarily under `desktop/`. If a task needs files outside `./desktop`, stop and route through @@Desktect; @@Alex bridges cross-team decisions.
 
 ## Skills
 
-* rustacean - idiomatic Rust,
-  async/lifecycle, error handling, tests.
-* syseng - process lifecycle, OS
-  integration, filesystem/process diagnostics.
+* rustacean - idiomatic Rust, async/lifecycle, error handling, tests.
+* syseng - process lifecycle, OS integration, filesystem/process diagnostics.
 
 ## Team
 

@@ -1,16 +1,8 @@
 # Agents
 
-Contact cards and skill anchors for the agent handles that appear in
-the phase reports (`docs/phases/`). This directory is a historical
-index: teams are now provisioned per-round by the `cs terminal team`
-tooling with fresh handles, so nothing here is an "active" roster.
-The cards exist so any `@@{name}` reference in a report resolves to
-who that was.
+Contact cards and skill anchors for the agent handles that appear in the phase reports (`docs/phases/`). This directory is a historical index: teams are now provisioned per-round by the `cs terminal team` tooling with fresh handles, so nothing here is an "active" roster. The cards exist so any `@@{name}` reference in a report resolves to who that was.
 
-For the cross-phase operational lessons (coordination, the gate,
-verification, commit discipline, the pre-release norms) see the
-[playbook](../playbook.md). It is the "how we work and what went wrong when
-we did not" companion to these contact cards.
+For the cross-phase operational lessons (coordination, the gate, verification, commit discipline, the pre-release norms) see the [playbook](../playbook.md). It is the "how we work and what went wrong when we did not" companion to these contact cards.
 
 ## Workspace team
 
@@ -36,10 +28,7 @@ A parallel chan-desktop team plus a dedicated CI lane.
 
 ## Historical handles
 
-Earlier phases used different slot names. Each maps to its successor
-below, so a `@@Backend` reference in an early report resolves to the
-role that absorbed it. The standalone redirect cards were removed;
-this map is the single resolution point.
+Earlier phases used different slot names. Each maps to its successor below, so a `@@Backend` reference in an early report resolves to the role that absorbed it. The standalone redirect cards were removed; this map is the single resolution point.
 
 | Tag             | Active successor             |
 |-----------------|------------------------------|
@@ -54,17 +43,8 @@ this map is the single resolution point.
 
 ## Skills
 
-The stable general skill profiles (architect, rustacean, syseng,
-webdev, pythonic) are now vendored in-repo under
-[`../skills/`](../skills/), one copy each, alongside the chan-specific
-workflows (test-server, release, gate). The upstream source stays
-`~/dev/github.com/fiorix/dotfiles/ai/skills/`; the vendored copies are
-snapshots and may drift, re-synced on demand. The cards reference
-skills by name.
+The stable general skill profiles (architect, rustacean, syseng, webdev, pythonic) are now vendored in-repo under [`../skills/`](../skills/), one copy each, alongside the chan-specific workflows (test-server, release, gate). The upstream source stays `~/dev/github.com/fiorix/dotfiles/ai/skills/`; the vendored copies are snapshots and may drift, re-synced on demand. The cards reference skills by name.
 
 ## Why this directory exists
 
-We want the phase reports to be graphable: any `@@{name}` reference
-resolves to a single canonical contact card. Future tooling can crawl
-`docs/phases/**` for `@@{name}` mentions and join against this directory
-to render the dev-log graph.
+We want the phase reports to be graphable: any `@@{name}` reference resolves to a single canonical contact card. Future tooling can crawl `docs/phases/**` for `@@{name}` mentions and join against this directory to render the dev-log graph.

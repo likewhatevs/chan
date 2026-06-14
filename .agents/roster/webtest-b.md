@@ -6,14 +6,11 @@ Date: 2026-05-18
 
 ## Profile
 
-Second web-test lane. Same profile as @@WebtestA; runs in
-parallel for broader scenario coverage (different workspaces,
-different feature flags, different browser tabs).
+Second web-test lane. Same profile as @@WebtestA; runs in parallel for broader scenario coverage (different workspaces, different feature flags, different browser tabs).
 
 ## Skills
 
-* webdev - browser session driving, DOM
-  inspection, network/console traces.
+* webdev - browser session driving, DOM inspection, network/console traces.
 
 ## Predecessors
 

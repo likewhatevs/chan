@@ -1,8 +1,6 @@
 # MCP Discovery
 
-chan-server exposes its MCP bridge over a Unix-domain socket while
-`chan serve` is running. It does not publish that socket into external
-agent config files on startup.
+chan-server exposes its MCP bridge over a Unix-domain socket while `chan serve` is running. It does not publish that socket into external agent config files on startup.
 
 In particular, chan does not write:
 
@@ -10,8 +8,7 @@ In particular, chan does not write:
 * `~/.codex/config.toml`
 * `~/.gemini/settings.json`
 
-Chan-launched terminal sessions are the supported discovery path. When
-the MCP bridge is available, terminal processes receive:
+Chan-launched terminal sessions are the supported discovery path. When the MCP bridge is available, terminal processes receive:
 
 ```text
 CHAN_MCP_SERVER_NAME=chan
@@ -21,25 +18,20 @@ CHAN_MCP_COMMAND_JSON=...
 CHAN_MCP_SERVER_JSON=...
 ```
 
-External agent CLIs launched from that terminal can translate the
-`CHAN_` descriptor into their own MCP configuration shape.
+External agent CLIs launched from that terminal can translate the `CHAN_` descriptor into their own MCP configuration shape.
 
 ## Descriptor shape
 
-The command descriptor points at the chan binary itself running a small
-bridge subcommand:
+The command descriptor points at the chan binary itself running a small bridge subcommand:
 
 ```
 chan __mcp-proxy <unix-socket-path>
 ```
 
-The socket path is the active `chan serve` process's MCP bridge socket.
-chan-server rebinds it on each startup; terminal sessions get the live
-value through `CHAN_MCP_SOCKET` and `CHAN_MCP_SERVER_JSON`.
+The socket path is the active `chan serve` process's MCP bridge socket. chan-server rebinds it on each startup; terminal sessions get the live value through `CHAN_MCP_SOCKET` and `CHAN_MCP_SERVER_JSON`.
 
 ## Out of scope (today)
 
 * Publishing chan into global or user-scoped agent config files.
-* Removing stale entries created by older chan versions. Existing
-  entries remain a manual cleanup item.
+* Removing stale entries created by older chan versions. Existing entries remain a manual cleanup item.
 * Auto-discovery of agents outside chan-launched terminal sessions.

@@ -6,15 +6,11 @@ Date: 2026-05-18
 
 ## Profile
 
-Plans the phase, dispatches work, owns the canonical phase
-journal, brokers @@Architect ↔ Alex decisions, and signs off on
-commit grouping. Carries no implementation slot of its own.
+Plans the phase, dispatches work, owns the canonical phase journal, brokers @@Architect ↔ Alex decisions, and signs off on commit grouping. Carries no implementation slot of its own.
 
 ## Skills
 
-* architect - optimize for simple
-  structure, clear boundaries, maintainable contracts; flag
-  over-engineering early.
+* architect - optimize for simple structure, clear boundaries, maintainable contracts; flag over-engineering early.
 
 ## Predecessors
 

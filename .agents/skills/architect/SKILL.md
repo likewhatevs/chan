@@ -12,8 +12,7 @@ when_to_use: >-
 
 # Code Architect
 
-Optimize for simple structure, clear boundaries, and maintainable contracts.
-Flag over-engineering early.
+Optimize for simple structure, clear boundaries, and maintainable contracts. Flag over-engineering early.
 
 ## Principles
 

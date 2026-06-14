@@ -2,14 +2,9 @@
 
 Canonical schema for every persisted config in chan.
 
-This doc tracks **what gets persisted, where, and who consumes
-it**. Per-field rows note serde defaults, the user-facing
-surface (CLI subcommand / Settings field / launcher panel),
-and any open findings.
+This doc tracks **what gets persisted, where, and who consumes it**. Per-field rows note serde defaults, the user-facing surface (CLI subcommand / Settings field / launcher panel), and any open findings.
 
-When adding a new persisted field: extend the relevant section
-here in the same commit that lands the schema change so this
-reference stays in lockstep with the code.
+When adding a new persisted field: extend the relevant section here in the same commit that lands the schema change so this reference stays in lockstep with the code.
 
 ## chan-server
 
@@ -29,9 +24,7 @@ Source: `crates/chan-server/src/config.rs`.
 | `terminal.font` | `TerminalFontChoice` | `os-default` | `PATCH /api/server/config` + Settings | xterm.js fontFamily chain; `source-code-pro` opts into the bundled font (download flow on non-embed builds) |
 | `terminal.mcp_env` | `bool` | `false` | `PATCH /api/server/config` + Settings | whether new non-team terminals export `CHAN_MCP_*`; per-request `?mcp_env=on` overrides, team spawns use the team config's own `mcp_env` |
 
-Legacy `[reports] enabled = ...` blocks in `server.toml` are ignored
-on load and omitted on the next save. Per-workspace
-`IndexConfig.reports_enabled` is the only reports toggle source.
+Legacy `[reports] enabled = ...` blocks in `server.toml` are ignored on load and omitted on the next save. Per-workspace `IndexConfig.reports_enabled` is the only reports toggle source.
 
 ### `~/.chan/preferences.toml` — `EditorPrefs`
 
@@ -71,26 +64,16 @@ Per-workspace entry persisted at registration time:
 | `last_seen_at` | `DateTime<Utc>` | refreshed on open | `chan list --json` | recency sort |
 | `canonical_path` | transient (`#[serde(skip)]`) | n/a | (internal cache) | symlink-stable comparison |
 
-Workspaces have no persisted display name: the UI titles a workspace
-by its directory basename, and `PATCH /api/workspace` rejects `name`
-writes.
+Workspaces have no persisted display name: the UI titles a workspace by its directory basename, and `PATCH /api/workspace` rejects `name` writes.
 
-Global registry fields (not per-workspace), persisted in the same
-`~/.chan/config.toml`:
+Global registry fields (not per-workspace), persisted in the same `~/.chan/config.toml`:
 
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
 | `index_excluded_dirs` | `Vec<String>` | dev-junk set | hand-edited TOML only | walk filter for index + graph rebuild |
 | `drafts_dir` | `String` | `".Drafts"` | hand-edited TOML only | in-tree Drafts dir name for Cmd+N |
 
-Both `index_excluded_dirs` and `drafts_dir` are hand-edited in the
-TOML and have no UI surface. `drafts_dir` names a real hidden
-directory at the workspace root (default `.Drafts/`) that holds Cmd+N
-scratch work as `<name>/draft.md` plus companions. It is created
-lazily on the first Cmd+N, so an untouched workspace has no such
-directory. Because it lives in-tree it participates in search, graph,
-and watch through the normal machinery; add `.Drafts/` to a
-`.gitignore` to keep drafts out of SCM.
+Both `index_excluded_dirs` and `drafts_dir` are hand-edited in the TOML and have no UI surface. `drafts_dir` names a real hidden directory at the workspace root (default `.Drafts/`) that holds Cmd+N scratch work as `<name>/draft.md` plus companions. It is created lazily on the first Cmd+N, so an untouched workspace has no such directory. Because it lives in-tree it participates in search, graph, and watch through the normal machinery; add `.Drafts/` to a `.gitignore` to keep drafts out of SCM.
 
 ### `<state_dir>/index/<uuid>/config.toml` — `IndexConfig`
 
@@ -134,8 +117,7 @@ Source: `crates/chan-workspace/src/teams.rs`.
 
 ### Desktop `Config`
 
-Paths: `<config>/chan-desktop/config.json` on Linux and
-`<config>/Chan Desktop/config.json` elsewhere.
+Paths: `<config>/chan-desktop/config.json` on Linux and `<config>/Chan Desktop/config.json` elsewhere.
 
 Source: `desktop/src-tauri/src/config.rs`.
 
@@ -155,30 +137,18 @@ Source: `desktop/src-tauri/src/config.rs`.
 
 ## Layout pointers
 
-* Per-user config dir: `~/.chan/` on desktop targets; co-located
-  under the data dir on iOS / Android where the home dir isn't
-  user-writable. Holds the global `config.toml` (workspace registry).
-  The state and cache roots resolve to the same `~/.chan/`.
+* Per-user config dir: `~/.chan/` on desktop targets; co-located under the data dir on iOS / Android where the home dir isn't user-writable. Holds the global `config.toml` (workspace registry). The state and cache roots resolve to the same `~/.chan/`.
 
-Per-workspace metadata lives under
-`~/.chan/workspaces/<metadata_key>/`, where `metadata_key` is a
-readable slug of the canonical workspace path plus an 8-hex hash
-suffix:
+Per-workspace metadata lives under `~/.chan/workspaces/<metadata_key>/`, where `metadata_key` is a readable slug of the canonical workspace path plus an 8-hex hash suffix:
 
 * `sessions/` — session blobs (window/pane layout).
-* `index/` — tantivy search-index segments + `config.toml`
-  (`IndexConfig` above).
-* `graph/` — graph DB (sqlite) + sidecar markers
-  (`rebuild.inprogress`, `rename_log.json`).
+* `index/` — tantivy search-index segments + `config.toml` (`IndexConfig` above).
+* `graph/` — graph DB (sqlite) + sidecar markers (`rebuild.inprogress`, `rename_log.json`).
 * `locks/` — per-workspace index-writer lockfile.
 * `tokens/` — chan-server bearer token (mode 0600).
 * `trash/` — soft-deleted files (lazy GC).
-* `report/report.jsonl` — chan-report state (lazy, created on
-  reports opt-in).
+* `report/report.jsonl` — chan-report state (lazy, created on reports opt-in).
 
-Drafts are NOT in this metadata tree. They live in-tree under the
-workspace root in the directory named by `Registry::drafts_dir`
-(default `.Drafts/`), holding regular drafts (`untitled-N/`) and team
-workspaces (`team-{name}/`).
+Drafts are NOT in this metadata tree. They live in-tree under the workspace root in the directory named by `Registry::drafts_dir` (default `.Drafts/`), holding regular drafts (`untitled-N/`) and team workspaces (`team-{name}/`).
 
 See `crates/chan-workspace/src/paths.rs::WorkspacePaths` for the canonical computation.

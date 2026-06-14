@@ -1,30 +1,17 @@
 # identity-service
 
-Public-facing OAuth2 sign-in service for id.chan.app. Runs the
-GitHub / Google / GitLab auth-code flow with PKCE, holds the
-host-only `id_session` cookie, and serves a Svelte SPA where users
-manage their profile, personal access tokens (PATs), and workspaces.
-It mints the short-lived workspace-gate entry token that hands a user
-off to workspace-proxy.
+Public-facing OAuth2 sign-in service for id.chan.app. Runs the GitHub / Google / GitLab auth-code flow with PKCE, holds the host-only `id_session` cookie, and serves a Svelte SPA where users manage their profile, personal access tokens (PATs), and workspaces. It mints the short-lived workspace-gate entry token that hands a user off to workspace-proxy.
 
 ## Role in the system
 
-First public touch-point of chan-gateway. After a successful OAuth
-flow the browser holds the `id_session` cookie, which is host-only on
-id.chan.app and is NOT shared with workspace-proxy. To open a
-workspace, identity mints a short-lived workspace-gate entry token and
-303s the browser to `{user}.workspace.<domain>/{workspace}/?t=<jwt>`;
-workspace-proxy verifies it and mints its own host-scoped cookie. That
-split is the load-bearing piece of cross-tenant isolation: no
-`.chan.app`-scoped cookie exists.
+First public touch-point of chan-gateway. After a successful OAuth flow the browser holds the `id_session` cookie, which is host-only on id.chan.app and is NOT shared with workspace-proxy. To open a workspace, identity mints a short-lived workspace-gate entry token and 303s the browser to `{user}.workspace.<domain>/{workspace}/?t=<jwt>`; workspace-proxy verifies it and mints its own host-scoped cookie. That split is the load-bearing piece of cross-tenant isolation: no `.chan.app`-scoped cookie exists.
 
 Identity-service owns:
 
 - session table rows (via `tower_sessions_sqlx_store`)
 - `api_tokens` (PAT issuance, revoke, audit)
 
-It does not own user data. Every user lookup, write, or audit row
-goes through profile-service over HTTP.
+It does not own user data. Every user lookup, write, or audit row goes through profile-service over HTTP.
 
 ## Build
 
@@ -32,17 +19,14 @@ goes through profile-service over HTTP.
 cargo build -p identity
 ```
 
-Frontend baked in at build time via `rust_embed`. identity is the
-gateway's only SPA; it installs from the gateway npm workspace root:
+Frontend baked in at build time via `rust_embed`. identity is the gateway's only SPA; it installs from the gateway npm workspace root:
 
 ```bash
 npm install
 npm run build -w crates/identity/web
 ```
 
-A fresh checkout without `web/dist/` still builds; the SPA
-endpoints render a "frontend not built" banner that points at the
-build command.
+A fresh checkout without `web/dist/` still builds; the SPA endpoints render a "frontend not built" banner that points at the build command.
 
 ## Dev run
 
@@ -60,16 +44,10 @@ export GITHUB_CLIENT_SECRET=...
 cargo run -p identity
 ```
 
-Hostnames derive from `CHAN_DOMAIN` (default `localtest.me`) and
-`PUBLIC_SCHEME` (default `http`); `BASE_URL` defaults to
-`<scheme>://id.<domain>` and is set explicitly above only to pin the
-loopback port. For the full local stack, prefer `scripts/dev/setup.sh`
+Hostnames derive from `CHAN_DOMAIN` (default `localtest.me`) and `PUBLIC_SCHEME` (default `http`); `BASE_URL` defaults to `<scheme>://id.<domain>` and is set explicitly above only to pin the loopback port. For the full local stack, prefer `scripts/dev/setup.sh`
 + `scripts/dev/run.sh`.
 
-Register a GitHub OAuth app at
-`https://github.com/settings/developers` with callback
-`http://127.0.0.1:7000/auth/github/callback`. The other providers
-follow the same pattern.
+Register a GitHub OAuth app at `https://github.com/settings/developers` with callback `http://127.0.0.1:7000/auth/github/callback`. The other providers follow the same pattern.
 
 ## Env vars
 
@@ -84,8 +62,7 @@ Required:
 | `WORKSPACE_GATE_SECRET`   | HS256 secret; equals workspace-proxy's      |
 | At least one provider's `*_CLIENT_ID` + `*_CLIENT_SECRET` pair        |
 
-Provider credentials (each pair optional; leave both unset to
-disable):
+Provider credentials (each pair optional; leave both unset to disable):
 
 - `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
@@ -151,8 +128,7 @@ Public share landing (no auth at the door):
 |--------|-----------------------|-----------------------------------------|
 | GET    | `/s/:owner/:workspace`    | OAuth-then-mint entry token for grantees |
 
-Desktop authorize (PAT mint for chan-desktop; consent is
-session-gated, entry bounces through sign-in when needed):
+Desktop authorize (PAT mint for chan-desktop; consent is session-gated, entry bounces through sign-in when needed):
 
 | Method | Path                           | Purpose                        |
 |--------|--------------------------------|--------------------------------|
@@ -166,12 +142,7 @@ Internal (Bearer-gated by `IDENTITY_INTERNAL_TOKEN`):
 |--------|----------------------------------------|------------------------|
 | POST   | `/internal/v1/tokens/validate`         | validate a PAT         |
 
-The internal route is called by workspace-proxy during the tunnel
-handshake. The primary PAT brute-force throttle runs one hop earlier
-in workspace-proxy, keyed on a hash of the candidate token; this
-handler runs a defense-in-depth twin of the same throttle. A per-IP
-governor would be useless at either hop (every request arrives from
-one container IP). See identity's `design.md` for the rationale.
+The internal route is called by workspace-proxy during the tunnel handshake. The primary PAT brute-force throttle runs one hop earlier in workspace-proxy, keyed on a hash of the candidate token; this handler runs a defense-in-depth twin of the same throttle. A per-IP governor would be useless at either hop (every request arrives from one container IP). See identity's `design.md` for the rationale.
 
 ## Design rationale
 

@@ -11,17 +11,14 @@ when_to_use: >-
 
 # Pythonic
 
-Write modern, typed, idiomatic Python. Push work to the right engine: SQL for
-sets, NumPy/pandas for vectorized data work, asyncio for I/O concurrency.
+Write modern, typed, idiomatic Python. Push work to the right engine: SQL for sets, NumPy/pandas for vectorized data work, asyncio for I/O concurrency.
 
 ## Code
 
 - Type public function signatures and complex data structures.
 - Use dataclasses for internal structured data.
-- Use Pydantic at validation boundaries when the project already uses it or the
-  boundary is complex enough to justify it.
-- Prefer context managers for files, sockets, database connections, and temp
-  resources.
+- Use Pydantic at validation boundaries when the project already uses it or the boundary is complex enough to justify it.
+- Prefer context managers for files, sockets, database connections, and temp resources.
 - Catch specific exceptions and re-raise with context.
 
 ## Async

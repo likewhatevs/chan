@@ -1,12 +1,6 @@
 # chan-tunnel-proto
 
-Wire types and control frames for chan-tunnel: the length-prefixed
-JSON `Hello` / `HelloAck` pair, the workspace-name validator, and an
-`H2Duplex` adapter that turns an h2 `(SendStream, RecvStream)` pair
-into one `tokio::io` duplex. Pure data plus a minimal codec; no I/O,
-no async, no tokio runtime. Both `chan-tunnel-client` and
-`chan-tunnel-server` depend on it; bumping the on-the-wire shape is
-done here, not in the I/O crates.
+Wire types and control frames for chan-tunnel: the length-prefixed JSON `Hello` / `HelloAck` pair, the workspace-name validator, and an `H2Duplex` adapter that turns an h2 `(SendStream, RecvStream)` pair into one `tokio::io` duplex. Pure data plus a minimal codec; no I/O, no async, no tokio runtime. Both `chan-tunnel-client` and `chan-tunnel-server` depend on it; bumping the on-the-wire shape is done here, not in the I/O crates.
 
 ```toml
 [dependencies]
@@ -36,15 +30,11 @@ cargo build -p chan-tunnel-proto
 cargo test  -p chan-tunnel-proto
 ```
 
-The full workspace gate (used by CI and the pre-push hook) is
-`cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
-cargo test`.
+The full workspace gate (used by CI and the pre-push hook) is `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
 
 ## Design
 
-See [`design.md`](design.md) for the wire format, framing, workspace-
-name rules, the `MAX_CONTROL_FRAME_BYTES` rationale, the proto-stays-
-pure invariant, and the cross-crate context.
+See [`design.md`](design.md) for the wire format, framing, workspace-name rules, the `MAX_CONTROL_FRAME_BYTES` rationale, the proto-stays-pure invariant, and the cross-crate context.
 
 ## License
 

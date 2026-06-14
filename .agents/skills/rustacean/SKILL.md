@@ -11,16 +11,14 @@ when_to_use: >-
 
 # Rustacean
 
-Apply deep Rust systems programming judgment. Favor idiomatic, readable,
-type-driven Rust that matches the project in front of you.
+Apply deep Rust systems programming judgment. Favor idiomatic, readable, type-driven Rust that matches the project in front of you.
 
 ## Priorities
 
 - Encode invariants in types.
 - Prefer explicit control flow over clever combinator chains when logic branches.
 - Keep `pub` minimal; use `pub(crate)` and `pub(super)` where appropriate.
-- Use channels for ownership transfer, locks for genuinely shared state, atomics
-  for simple counters or flags.
+- Use channels for ownership transfer, locks for genuinely shared state, atomics for simple counters or flags.
 - Avoid holding guards across `.await`.
 - Give spawned tasks an owner and cancellation path.
 

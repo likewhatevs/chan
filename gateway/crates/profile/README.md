@@ -1,19 +1,10 @@
 # profile-service
 
-Internal HTTP API in front of Postgres. Owns the canonical user
-record, linked OAuth identities, workspaces + sharing grants, feature
-flags, and the authentication audit log; serves the admin views over
-`api_tokens`. Called only by `identity-service` and the operator CLI;
-not exposed publicly.
+Internal HTTP API in front of Postgres. Owns the canonical user record, linked OAuth identities, workspaces + sharing grants, feature flags, and the authentication audit log; serves the admin views over `api_tokens`. Called only by `identity-service` and the operator CLI; not exposed publicly.
 
 ## Role in the system
 
-profile-service is the single source of truth for "who is this
-user." Sessions live elsewhere (identity-service holds the only
-`tower_sessions` table), and PAT mint / validate is identity-service
-writing the shared `api_tokens` table directly. Cookie minting,
-profile-page rendering, and OAuth state are all someone else's
-problem; profile owns the rows.
+profile-service is the single source of truth for "who is this user." Sessions live elsewhere (identity-service holds the only `tower_sessions` table), and PAT mint / validate is identity-service writing the shared `api_tokens` table directly. Cookie minting, profile-page rendering, and OAuth state are all someone else's problem; profile owns the rows.
 
 ## Build
 
@@ -45,17 +36,11 @@ Migrations under `migrations/` run on startup.
 | `WORKSPACE_ADMIN_URL`  | no       | workspace-proxy admin base; set with the token |
 | `WORKSPACE_ADMIN_TOKEN`| no       | enables the admin-block fan-out that evicts the user's tunnels |
 
-A missing `PROFILE_ADMIN_TOKEN` makes every `/v1/admin/*` route
-return 401; that is the safe default for a fresh deploy. When
-`WORKSPACE_ADMIN_URL` + `WORKSPACE_ADMIN_TOKEN` are set, blocking a
-user also tells workspace-proxy to drop that user's live tunnels
-(best-effort).
+A missing `PROFILE_ADMIN_TOKEN` makes every `/v1/admin/*` route return 401; that is the safe default for a fresh deploy. When `WORKSPACE_ADMIN_URL` + `WORKSPACE_ADMIN_TOKEN` are set, blocking a user also tells workspace-proxy to drop that user's live tunnels (best-effort).
 
 ## Routes
 
-All routes Bearer-gated. The middleware accepts either the regular
-or admin token where both apply, so single-token deployments can set
-`PROFILE_ADMIN_TOKEN = PROFILE_AUTH_TOKEN`.
+All routes Bearer-gated. The middleware accepts either the regular or admin token where both apply, so single-token deployments can set `PROFILE_ADMIN_TOKEN = PROFILE_AUTH_TOKEN`.
 
 Service API (`/v1/users/*`, `/v1/auth-audit`):
 

@@ -1,24 +1,10 @@
 # workspace-proxy
 
-Public-facing service at workspace.chan.app (apex) and
-`*.workspace.chan.app` (wildcard). Reverse-proxies HTTP / WebSocket
-traffic into a user's running `chan serve` instances. Embeds
-`chan-tunnel-server` to terminate registrations from those instances
-on a separate h2c listener. No SPA, no database; it is a stateless
-proxy.
+Public-facing service at workspace.chan.app (apex) and `*.workspace.chan.app` (wildcard). Reverse-proxies HTTP / WebSocket traffic into a user's running `chan serve` instances. Embeds `chan-tunnel-server` to terminate registrations from those instances on a separate h2c listener. No SPA, no database; it is a stateless proxy.
 
 ## Role in the system
 
-workspace-proxy is the surface where a workspace is served in the
-browser. It does NOT read identity's `id_session` cookie. Entry is
-gated by the workspace-gate handoff: identity mints a short-lived
-entry JWT and 303s the browser to
-`{user}.workspace.<domain>/{workspace}/?t=<jwt>`; workspace-proxy
-verifies it (signature + `aud` = inbound host + `drv`), mints its own
-host-only, path-scoped `workspace_gate` cookie, and forwards
-authenticated traffic to the right `chan serve` peer through a yamux
-substream owned by an active tunnel. The `aud`-equals-inbound-host
-check is what enforces tenant isolation.
+workspace-proxy is the surface where a workspace is served in the browser. It does NOT read identity's `id_session` cookie. Entry is gated by the workspace-gate handoff: identity mints a short-lived entry JWT and 303s the browser to `{user}.workspace.<domain>/{workspace}/?t=<jwt>`; workspace-proxy verifies it (signature + `aud` = inbound host + `drv`), mints its own host-only, path-scoped `workspace_gate` cookie, and forwards authenticated traffic to the right `chan serve` peer through a yamux substream owned by an active tunnel. The `aud`-equals-inbound-host check is what enforces tenant isolation.
 
 ## Build
 
@@ -39,18 +25,14 @@ export WORKSPACE_GATE_SECRET=dev-workspace-gate-secret
 cargo run -p workspace-proxy
 ```
 
-For the full local stack (with identity + profile + Postgres), prefer
-`scripts/dev/setup.sh` + `scripts/dev/run.sh`. Two listeners come up:
+For the full local stack (with identity + profile + Postgres), prefer `scripts/dev/setup.sh` + `scripts/dev/run.sh`. Two listeners come up:
 
-- `BIND_ADDR` (7002): public HTTP. workspace.chan.app sits behind
-  nginx + TLS in production; loopback in dev.
-- `TUNNEL_BIND_ADDR` (7100): h2c. nginx `grpc_pass`es `/v1/tunnel` on
-  the apex here; `chan serve` instances dial it for the handshake.
+- `BIND_ADDR` (7002): public HTTP. workspace.chan.app sits behind nginx + TLS in production; loopback in dev.
+- `TUNNEL_BIND_ADDR` (7100): h2c. nginx `grpc_pass`es `/v1/tunnel` on the apex here; `chan serve` instances dial it for the handshake.
 
 ## Env vars
 
-Public hostnames come from the shared domain config
-([`gateway/packaging/domain.env`](../../packaging/domain.env)).
+Public hostnames come from the shared domain config ([`gateway/packaging/domain.env`](../../packaging/domain.env)).
 
 Required:
 
@@ -85,15 +67,10 @@ Optional:
 
 ## Routes
 
-- Apex (`workspace.<domain>`): `POST /v1/tunnel` (raw h2c, on the
-  tunnel listener), the Bearer-gated `/admin/v1/*` tree, and
-  `/healthz`.
-- Wildcard (`{user}.workspace.<domain>`): the per-workspace reverse
-  proxy under `/{workspace}/...`, gated by the `?t=` entry token /
-  `workspace_gate` cookie.
+- Apex (`workspace.<domain>`): `POST /v1/tunnel` (raw h2c, on the tunnel listener), the Bearer-gated `/admin/v1/*` tree, and `/healthz`.
+- Wildcard (`{user}.workspace.<domain>`): the per-workspace reverse proxy under `/{workspace}/...`, gated by the `?t=` entry token / `workspace_gate` cookie.
 
-See [`design.md`](design.md) for the authoritative route list, the
-auth-gate order, and the reverse-proxy hygiene rules.
+See [`design.md`](design.md) for the authoritative route list, the auth-gate order, and the reverse-proxy hygiene rules.
 
 ## Design rationale
 

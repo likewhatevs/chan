@@ -1,12 +1,8 @@
 # chan-llm
 
-MCP server and tool sandbox for exposing a chan workspace to local agent
-tools. Filesystem access routes through `chan-workspace`, so the path
-sandbox, special-file refusal, atomic writes, and editable-text gate
-apply to every tool call.
+MCP server and tool sandbox for exposing a chan workspace to local agent tools. Filesystem access routes through `chan-workspace`, so the path sandbox, special-file refusal, atomic writes, and editable-text gate apply to every tool call.
 
-The supported integration point is MCP; the crate has no in-app
-chat or agent-session surface.
+The supported integration point is MCP; the crate has no in-app chat or agent-session surface.
 
 ## Add to your project
 
@@ -38,27 +34,17 @@ feature "mcp":
   mcp::Server::serve_io(reader, writer)
 ```
 
-`read_media` is MCP-only. Text tools are also available through
-`tools::execute` for tests and hosts that need direct dispatch.
+`read_media` is MCP-only. Text tools are also available through `tools::execute` for tests and hosts that need direct dispatch.
 
 ## Contacts and the graph
 
-chan-workspace maintains a sqlite link graph next to every workspace
-(nodes, edges, headings, tags, contacts). The editor uses it for
-the `[[` link picker, the `@` contact picker, chip rendering, and
-the graph view. MCP exposes graph tools for note relationships and
-BM25 search for content discovery; typed contact APIs stay in
-chan-workspace.
+chan-workspace maintains a sqlite link graph next to every workspace (nodes, edges, headings, tags, contacts). The editor uses it for the `[[` link picker, the `@` contact picker, chip rendering, and the graph view. MCP exposes graph tools for note relationships and BM25 search for content discovery; typed contact APIs stay in chan-workspace.
 
 From an agent's perspective:
 
-  - **"Find Alice"**: `search_content "Alice"` (BM25 over bodies
-    and frontmatter).
-  - **"What contacts do I have?"**: `list_files` with a prefix
-    that matches the contacts directory, then `read_file` on
-    interesting hits.
-  - **"What links to this contact?"**: use `graph_neighbors` or
-    search for the filename.
+  - **"Find Alice"**: `search_content "Alice"` (BM25 over bodies and frontmatter).
+  - **"What contacts do I have?"**: `list_files` with a prefix that matches the contacts directory, then `read_file` on interesting hits.
+  - **"What links to this contact?"**: use `graph_neighbors` or search for the filename.
 
 ## Build and test
 
@@ -70,8 +56,7 @@ cargo build -p chan-llm --features mcp
 
 ## Design reference
 
-See [`design.md`](design.md) for the current MCP boundary and
-tool-sandbox invariants.
+See [`design.md`](design.md) for the current MCP boundary and tool-sandbox invariants.
 
 ## License
 
