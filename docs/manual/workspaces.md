@@ -36,8 +36,6 @@ Useful `chan serve` flags:
   with no HTTP / WebSocket activity. Designed for systemd
   socket-activation.
 - `--no-token`: skip the bearer-token gate (loopback bind only).
-- `--standalone`: always bind a local listener; never hand the workspace
-  off to a running Chan Desktop.
 
 `chan --help` documents the full flag surface.
 

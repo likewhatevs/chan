@@ -106,7 +106,7 @@ chan add PATH [--semantic-search] [--reports]
 chan list [--json]
 chan remove PATH
 chan serve [PATH] [--here] [--host|-4|-6] [--port] [--prefix]
-           [--timeout] [--no-token] [--no-browser] [--standalone]
+           [--timeout] [--no-token] [--no-browser]
            [--no-settings] [--search-aggression]
            [--tunnel-url] [--tunnel-token] [--tunnel-workspace-name]
            [--tunnel-public]
