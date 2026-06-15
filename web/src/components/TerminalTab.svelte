@@ -25,7 +25,7 @@
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import { WebglAddon } from "@xterm/addon-webgl";
   import "@xterm/xterm/css/xterm.css";
-  import { api, sessionWindowId, withTokenQuery } from "../api/client";
+  import { api, ApiError, sessionWindowId, withTokenQuery } from "../api/client";
   import { isTauriDesktop, readClipboardText, readDroppedPaths } from "../api/desktop";
   import { isOsFileDrag, shellEscapePaths } from "../state/fileDropGuard";
   import { openExternalUrl } from "../editor/external_links";
@@ -189,6 +189,15 @@
   let statusDetail = $state("");
   let missedBytes = $state(0);
   let sessionClosedReason = $state<CloseReason | null>(null);
+  // True when the server reports Git for Windows is missing — either the
+  // WS attach-or-create error frame (`reason: "git_bash_missing"`) or an
+  // HTTP 424 from the restart path. Renders a friendly in-app gate over
+  // the terminal pane instead of a raw error. Windows-only path; cleared
+  // on the next (re)connect attempt. Contract pinned in chan-server's
+  // terminal_sessions.rs (GIT_BASH_MISSING_REASON / _MESSAGE).
+  let gitBashMissing = $state(false);
+  const GIT_BASH_MISSING_REASON = "git_bash_missing";
+  const GIT_FOR_WINDOWS_URL = "https://gitforwindows.org/";
   let findOpen = $state(false);
   let findQuery = $state("");
   let sawSessionControl = false;
@@ -743,6 +752,7 @@
     missedBytes = 0;
     sessionClosedReason = null;
     sawSessionControl = false;
+    gitBashMissing = false;
     const reattaching = Boolean(tab.terminalSessionId);
     // Gate xterm replies to historical queries during the reattach replay
     // window; cleared on the `ready` frame. A fresh spawn has an empty replay,
@@ -882,9 +892,16 @@
         scheduleTerminalSessionSave();
         term?.writeln(`\r\nprocess exited (${frame.code}); press Ctrl+D to close this tab`);
       } else if (frame.type === "error") {
-        const detail = frame.message ?? frame.reason ?? "unknown error";
-        statusDetail = detail;
-        term?.writeln(`\r\nterminal error: ${detail}`);
+        // Git for Windows missing (Windows-only): render the friendly
+        // in-app gate instead of spewing the raw error into the terminal.
+        if (frame.reason === GIT_BASH_MISSING_REASON) {
+          gitBashMissing = true;
+          statusDetail = "Git for Windows required";
+        } else {
+          const detail = frame.message ?? frame.reason ?? "unknown error";
+          statusDetail = detail;
+          term?.writeln(`\r\nterminal error: ${detail}`);
+        }
       } else if (frame.type === "agent_event_echo") {
         // Server-side `dispatch_agent_event` (`terminal_sessions.rs`)
         // emits this frame instead of writing the `poke + chord`
@@ -1242,7 +1259,13 @@
         status = "connecting";
         statusDetail = "restart requested";
       } catch (err) {
-        statusDetail = `restart failed: ${(err as Error).message}`;
+        // 424 Failed Dependency = Git for Windows missing: show the gate.
+        if (err instanceof ApiError && err.status === 424) {
+          gitBashMissing = true;
+          statusDetail = "Git for Windows required";
+        } else {
+          statusDetail = `restart failed: ${(err as Error).message}`;
+        }
       }
       return;
     }
@@ -1961,6 +1984,26 @@
     ondrop={onTerminalFileDrop}
     bind:this={host}
   ></div>
+  <!-- Missing-Git gate (Windows only): the desktop terminal needs Git
+       for Windows (Git BASH). When the server signals it's absent — the
+       WS `git_bash_missing` error frame or an HTTP 424 on restart — show
+       a friendly install prompt over the pane instead of a raw error. -->
+  {#if gitBashMissing}
+    <div class="git-bash-gate" role="alert">
+      <div class="git-bash-gate-card">
+        <h2>Git for Windows is required for the terminal</h2>
+        <p>The desktop terminal runs on Git BASH — a real shell. Install Git
+          for Windows, then open a new terminal.</p>
+        <button
+          type="button"
+          class="git-bash-gate-install"
+          onclick={() => void openExternalUrl(GIT_FOR_WINDOWS_URL)}
+        >
+          Install Git for Windows
+        </button>
+      </div>
+    </div>
+  {/if}
   <!-- Rich Prompt bubble floats over this terminal's bottom (the
        .terminal-tab is the position:absolute context). PER-TERMINAL: mounts
        only when THIS terminal's bubble is toggled on and the tab is active in
@@ -2040,6 +2083,57 @@
   }
   .terminal-host :global(.xterm-viewport) {
     scrollbar-color: var(--separator) var(--bg);
+  }
+  /* Missing-Git gate: covers the terminal pane, centered card. */
+  .git-bash-gate {
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--bg);
+    pointer-events: auto;
+  }
+  .git-bash-gate-card {
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    text-align: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px 28px;
+  }
+  .git-bash-gate-card h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .git-bash-gate-card p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+  }
+  .git-bash-gate-install {
+    appearance: none;
+    margin-top: 4px;
+    padding: 8px 16px;
+    background: var(--brand);
+    color: #fff;
+    border: 1px solid var(--brand);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .git-bash-gate-install:hover {
+    filter: brightness(1.05);
   }
   .terminal-tab-menu-bubble {
     position: fixed;
