@@ -47,11 +47,7 @@ async function main() {
     `Chan_${version}_aarch64.app.tar.gz.sig`,
   ];
   const cliAssets = publicAssets.filter((name) => name.startsWith("chan-") && name.endsWith(".tar.gz"));
-  const manualAsset = `chan-manual-${version}.tar.gz`;
   const requiredAssets = [...publicAssets, ...updaterAssets];
-  if (!options.allowMissingManual) {
-    requiredAssets.push(manualAsset);
-  }
 
   const errors = [];
   const warnings = [];
@@ -60,9 +56,6 @@ async function main() {
     if (!assets.has(name)) {
       errors.push(`missing release asset: ${name}`);
     }
-  }
-  if (options.allowMissingManual && !assets.has(manualAsset)) {
-    warnings.push(`missing manual bundle allowed for this run: ${manualAsset}`);
   }
 
   if (assets.has("VERSION")) {
@@ -96,9 +89,6 @@ async function main() {
     for (const name of [...publicAssets, ...updaterAssets]) {
       await verifyAssetUrl(name, assets.get(name), errors);
     }
-    if (!options.allowMissingManual) {
-      await verifyAssetUrl(manualAsset, assets.get(manualAsset), errors);
-    }
   } else {
     warnings.push("asset URL HEAD checks skipped");
   }
@@ -119,14 +109,12 @@ async function main() {
 }
 
 function parseArgs(args) {
-  const options = { tag: null, allowMissingManual: false, skipAssetUrlHeads: false };
+  const options = { tag: null, skipAssetUrlHeads: false };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === "--tag") {
       options.tag = args[i + 1] ?? "";
       i += 1;
-    } else if (arg === "--allow-missing-manual") {
-      options.allowMissingManual = true;
     } else if (arg === "--skip-asset-url-heads" || arg === "--skip-latest-download-heads") {
       options.skipAssetUrlHeads = true;
     } else if (arg === "--help" || arg === "-h") {
@@ -141,7 +129,7 @@ function parseArgs(args) {
 }
 
 function printHelp() {
-  console.log(`usage: node scripts/verify-release-assets.mjs [--tag vX.Y.Z] [--allow-missing-manual] [--skip-asset-url-heads]
+  console.log(`usage: node scripts/verify-release-assets.mjs [--tag vX.Y.Z] [--skip-asset-url-heads]
 
 Without --tag, verifies the GitHub latest release and each asset URL exposed by
 the GitHub API. Desktop updater payloads must include detached signature

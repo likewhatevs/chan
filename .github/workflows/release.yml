@@ -641,29 +641,15 @@ jobs:
         working-directory: chan/web-marketing
         run: npm run build
 
-      - name: Stage manual bundle
-        working-directory: chan/web-marketing
-        env:
-          VERSION: ${{ needs.context.outputs.version }}
-        run: |
-          set -e
-          mkdir -p ../../release-extras
-          npm run bundle:manual -- \
-            --version "$VERSION" \
-            --out "../../release-extras/chan-manual-${VERSION}.tar.gz" \
-            --list
-
       - name: List release files
         run: |
           find artifacts -type f | sort
-          find release-extras -type f | sort
 
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.context.outputs.tag }}
           files: |
             artifacts/**/*
-            release-extras/chan-manual-*.tar.gz
           fail_on_unmatched_files: true
           generate_release_notes: true
 
