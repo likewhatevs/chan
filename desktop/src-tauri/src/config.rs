@@ -205,17 +205,14 @@ pub fn current_millis() -> u64 {
     now_millis()
 }
 
+/// chan-desktop keeps its config under `~/.chan/desktop/` — the same
+/// `~/.chan` home as the CLI registry (`config.toml`), not a separate
+/// OS app-data directory. On Windows that resolves to
+/// `%USERPROFILE%\.chan\desktop\config.json`.
 fn config_path() -> io::Result<PathBuf> {
-    let base = if cfg!(target_os = "linux") {
-        dirs::config_dir()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config dir"))?
-            .join("chan-desktop")
-    } else {
-        dirs::config_dir()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no config dir"))?
-            .join("Chan Desktop")
-    };
-    Ok(base.join("config.json"))
+    Ok(chan_workspace::paths::config_dir()
+        .join("desktop")
+        .join("config.json"))
 }
 
 #[cfg(test)]
