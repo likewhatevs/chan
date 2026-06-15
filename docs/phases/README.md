@@ -30,6 +30,10 @@ New agents should also read [`.agents/playbook.md`](../../.agents/playbook.md) (
 - [Phase 20](phase-20.md) - chan-desktop refinements (plain-text update prompt, unified About) and standalone terminal windows, run as an orchestrator + subagents round.
 - [Phase 21](phase-21.md) - terminal cross-window awareness: a cross-window broadcast roster (menu + indicators + toggle gate), per-tenant Terminal-N naming, group-wide cross-window Select All, and tenant-wide name uniqueness (v0.29.0, with phase-20).
 - [Phase 22](phase-22.md) - window management: bury-on-close with a dynamic Window menu, Cmd+Shift+N per-connection semantics, remote window reopening over GET /api/windows, cs window list, the standalone-terminal control socket, the split-pane replay fix, and quit confirmation (v0.31.0).
+- [Phase 23](phase-23.md) - the tidy-up: archaeology scrub, zero-warning hygiene, docs currency, the macOS file-drop takeover fix, and the chanwriter purge.
+- [Phase 24](phase-24.md) - the visibility round: editor keep-alive on tab switch, prompt-queue depth, buried-window memory and survey-first host comms, plus the standalone graph-keepalive web feature.
+- [Phase 25](phase-25.md) - chan-desktop acts as `chan` (one binary, no separate CLI download), the empty-pane window-save cleanup, and a folded-in rich-prompt enqueue/recall/reload round (v0.35.0).
+- [Phase 26](phase-26.md) - Windows-first chan-desktop: the named-pipe control socket, the Git BASH terminal with a missing-Git in-app gate, NSIS packaging plus the windows-latest CI arm, and markdown iframe embeds (land + CI-green only).
 - [pub-site-release](pub-site-release.md) - a standalone branding and positioning re-steer plus marketing site refresh (not a numbered phase).
 
 ## Conventions
