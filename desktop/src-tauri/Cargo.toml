@@ -64,6 +64,12 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 semver = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+# Broadcast WM_SETTINGCHANGE after the per-user PATH write (cs_install.rs) so
+# freshly-spawned shells pick up the chan bin dir without a logout. Raw FFI;
+# one SendMessageTimeoutW call, no higher-level wrapper needed.
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 # `NSPrintInfo` + `NSPrintOperation` drive the silent save-to-PDF print

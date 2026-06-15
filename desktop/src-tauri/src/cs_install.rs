@@ -311,12 +311,18 @@ pub fn install_bin_shims() -> std::io::Result<u32> {
     // is left alone (never pollute the user's PATH from an un-packaged build),
     // mirroring the unix `InstallKind::None` short-circuit.
     let Some(exe) = std::env::current_exe().ok() else {
+        tracing::debug!("chan/cs shim install skipped: current_exe() unavailable");
         return Ok(0);
     };
     if !windows_shim::is_installed_exe(&exe, &install_roots()) {
+        tracing::debug!(
+            exe = %exe.display(),
+            "chan/cs shim install skipped: not an installed chan-desktop.exe (dev build)",
+        );
         return Ok(0);
     }
     let Some(bin_dir) = shim_bin_dir() else {
+        tracing::warn!("chan/cs shim install skipped: %LOCALAPPDATA% bin dir unavailable");
         return Ok(0);
     };
 
@@ -363,6 +369,14 @@ mod windows_shim {
     /// Ownership substring: any wrapper containing this was written by some
     /// version of chan-desktop, so it is ours to rewrite.
     const WRAPPER_OWNS: &str = ":: chan-desktop";
+
+    /// Marker line for the extensionless POSIX shim (Git BASH runs a bare
+    /// `chan` / `cs`, not `chan.cmd`). `#` is an sh comment; a user's own
+    /// `chan` will not contain it.
+    const POSIX_MARKER: &str = "# chan-desktop bin shim";
+
+    /// Ownership substring for the POSIX shim, analogous to `WRAPPER_OWNS`.
+    const POSIX_OWNS: &str = "# chan-desktop";
 
     /// Per-user bin dir for the `.cmd` shims: `%LOCALAPPDATA%\chan\bin`, the
     /// Windows analogue of the unix `~/.local/bin`.
@@ -426,6 +440,24 @@ mod windows_shim {
         )
     }
 
+    /// The extensionless POSIX shim that Git BASH runs for a bare `chan` /
+    /// `cs`. Git BASH (MSYS, POSIX) does not consult `PATHEXT`, so it will not
+    /// run `chan.cmd` as `chan`; it needs a real shebang script named exactly
+    /// `chan`. Exports `ARGV0=<name>` — `chan_shell::invoked_arg0()` reads it
+    /// ahead of `argv[0]` — then execs the installed chan-desktop.exe so the
+    /// CLI / control-client dispatch fires instead of the GUI. Same ARGV0
+    /// mechanism as the Linux AppImage wrapper. Forward-slash target so MSYS
+    /// parses the path (backslashes are sh escapes); LF endings.
+    pub(super) fn posix_wrapper_script(name: &str, target: &Path) -> String {
+        let target = target.display().to_string().replace('\\', "/");
+        format!(
+            "#!/bin/sh\n\
+             {POSIX_MARKER}\n\
+             export ARGV0={name}\n\
+             exec \"{target}\" \"$@\"\n",
+        )
+    }
+
     /// What to do with a `.cmd` shim given the current file contents.
     #[derive(Debug, PartialEq, Eq)]
     pub(super) enum WrapperPlan {
@@ -435,30 +467,52 @@ mod windows_shim {
         Write(String),
     }
 
-    pub(super) fn plan_wrapper(name: &str, target: &Path, existing: Option<&str>) -> WrapperPlan {
-        let desired = wrapper_script(name, target);
+    /// Decide whether to (re)write a shim file given its current contents:
+    /// write when absent or ours-but-stale; skip a foreign file (no `owns`
+    /// marker) or one already current. Pure for testing — shared by the
+    /// `.cmd` and POSIX shims.
+    pub(super) fn plan_shim(desired: &str, owns: &str, existing: Option<&str>) -> WrapperPlan {
         match existing {
-            Some(content) if !content.contains(WRAPPER_OWNS) => WrapperPlan::Skip,
+            Some(content) if !content.contains(owns) => WrapperPlan::Skip,
             Some(content) if content == desired => WrapperPlan::Skip,
-            _ => WrapperPlan::Write(desired),
+            _ => WrapperPlan::Write(desired.to_string()),
         }
     }
 
-    /// Install (or refresh) one `.cmd` shim. `Ok(true)` when it wrote/updated,
-    /// `Ok(false)` when nothing was needed (foreign entry, already current).
+    /// Install (or refresh) BOTH shims for `name`: the `.cmd` (cmd.exe /
+    /// PowerShell) and the extensionless POSIX script (Git BASH). `Ok(true)`
+    /// when either was written/updated, `Ok(false)` when both were left alone
+    /// (foreign entry, already current).
     pub(super) fn install_one(target: &Path, bin_dir: &Path, name: &str) -> std::io::Result<bool> {
-        let path = bin_dir.join(format!("{name}.cmd"));
-        // An entry that exists but is not readable UTF-8 is foreign -> skip.
-        let existing = match std::fs::read_to_string(&path) {
+        let cmd = install_shim_file(
+            &bin_dir.join(format!("{name}.cmd")),
+            &wrapper_script(name, target),
+            WRAPPER_OWNS,
+        )?;
+        let posix = install_shim_file(
+            &bin_dir.join(name),
+            &posix_wrapper_script(name, target),
+            POSIX_OWNS,
+        )?;
+        Ok(cmd || posix)
+    }
+
+    /// Write `desired` to `path` when `plan_shim` says so, creating the bin
+    /// dir on demand. An entry that exists but is not readable UTF-8 is
+    /// foreign -> skip.
+    fn install_shim_file(path: &Path, desired: &str, owns: &str) -> std::io::Result<bool> {
+        let existing = match std::fs::read_to_string(path) {
             Ok(content) => Some(content),
             Err(_) if path.symlink_metadata().is_ok() => return Ok(false),
             Err(_) => None,
         };
-        match plan_wrapper(name, target, existing.as_deref()) {
+        match plan_shim(desired, owns, existing.as_deref()) {
             WrapperPlan::Skip => Ok(false),
             WrapperPlan::Write(script) => {
-                std::fs::create_dir_all(bin_dir)?;
-                std::fs::write(&path, script)?;
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(path, script)?;
                 Ok(true)
             }
         }
@@ -486,11 +540,13 @@ mod windows_shim {
     }
 
     /// Best-effort append of `dir` to the per-user `Path` (HKCU\Environment) via
-    /// `reg.exe` — no extra crate dependency, mirroring how `linux_gui_stack`
-    /// shells out to `ldconfig`. Reads the current value + type, appends only
-    /// when missing, and writes it back preserving the registry type. New
-    /// shells pick it up (no WM_SETTINGCHANGE broadcast; an already-open shell
-    /// needs a relaunch). Any failure is returned for the caller to log.
+    /// `reg.exe` — no extra crate dependency for the write itself, mirroring how
+    /// `linux_gui_stack` shells out to `ldconfig`. Reads the current value +
+    /// type, appends only when missing, and writes it back preserving the
+    /// registry type. After a successful write it broadcasts `WM_SETTINGCHANGE`
+    /// ("Environment") so processes spawned afterward (Explorer, new shells)
+    /// inherit the new PATH without a logout; an already-open shell still needs
+    /// a relaunch. Any failure is returned for the caller to log.
     pub(super) fn ensure_on_user_path(dir: &Path) -> std::io::Result<()> {
         use std::process::Command;
         let dir = dir.to_string_lossy().into_owned();
@@ -516,7 +572,39 @@ mod windows_shim {
                 "reg add HKCU\\Environment Path exited with {status}"
             )));
         }
+        broadcast_environment_change();
         Ok(())
+    }
+
+    /// Tell top-level windows (Explorer, and thus processes it spawns) that the
+    /// environment changed, so a fresh shell picks up the new PATH without a
+    /// logout. Best-effort and time-bounded: a hung listener cannot stall the
+    /// caller (`SMTO_ABORTIFHUNG` + a 5s timeout), and the result is ignored.
+    fn broadcast_environment_change() {
+        use windows_sys::Win32::Foundation::{LPARAM, WPARAM};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+        };
+        // "Environment" as a NUL-terminated UTF-16 buffer for lParam.
+        let env: Vec<u16> = "Environment"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut result: usize = 0;
+        // SAFETY: a standard WM_SETTINGCHANGE broadcast. `env` is a valid
+        // NUL-terminated UTF-16 buffer that outlives this synchronous, timed
+        // call; the out-param is a live stack `usize`.
+        unsafe {
+            SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0 as WPARAM,
+                env.as_ptr() as LPARAM,
+                SMTO_ABORTIFHUNG,
+                5000,
+                &mut result,
+            );
+        }
     }
 
     /// Current per-user `Path` value and its registry type (`REG_EXPAND_SZ` /
@@ -616,25 +704,72 @@ mod windows_shim {
         }
 
         #[test]
+        fn posix_shim_sets_argv0_and_execs_forward_slash_target() {
+            let s = posix_wrapper_script(
+                "chan",
+                Path::new("C:\\Program Files\\Chan\\chan-desktop.exe"),
+            );
+            assert!(s.starts_with("#!/bin/sh\n"));
+            assert!(s.contains(POSIX_MARKER));
+            assert!(s.contains("export ARGV0=chan\n"));
+            // Backslashes become forward slashes so MSYS/Git BASH parses the
+            // path; the whole script stays backslash-free.
+            assert!(s.contains("exec \"C:/Program Files/Chan/chan-desktop.exe\" \"$@\"\n"));
+            assert!(!s.contains('\\'));
+            // LF endings (not the `.cmd`'s CRLF).
+            assert!(!s.contains('\r'));
+            // Distinct script per name.
+            let cs = posix_wrapper_script("cs", Path::new("C:\\app\\chan-desktop.exe"));
+            assert!(cs.contains("export ARGV0=cs\n"));
+            assert_ne!(s, cs);
+        }
+
+        #[test]
+        fn plan_shim_skips_foreign_posix_file() {
+            let desired = posix_wrapper_script("chan", Path::new("C:\\app\\chan-desktop.exe"));
+            // A user's own `chan` (no ownership marker) is never clobbered.
+            assert_eq!(
+                plan_shim(
+                    &desired,
+                    POSIX_OWNS,
+                    Some("#!/bin/sh\nexec /usr/bin/chan \"$@\"\n")
+                ),
+                WrapperPlan::Skip,
+            );
+            // Absent -> write; ours-and-current -> skip.
+            assert!(matches!(
+                plan_shim(&desired, POSIX_OWNS, None),
+                WrapperPlan::Write(_)
+            ));
+            assert_eq!(
+                plan_shim(&desired, POSIX_OWNS, Some(&desired)),
+                WrapperPlan::Skip
+            );
+        }
+
+        #[test]
         fn plan_writes_when_absent_skips_foreign_rewrites_stale() {
             let target = Path::new("C:\\app\\chan-desktop.exe");
+            let desired = wrapper_script("cs", target);
             assert!(matches!(
-                plan_wrapper("cs", target, None),
+                plan_shim(&desired, WRAPPER_OWNS, None),
                 WrapperPlan::Write(_)
             ));
             // No marker -> someone else's cs.cmd. Hands off.
             let foreign = "@echo off\r\nC:\\other\\cs.exe %*\r\n";
-            assert_eq!(plan_wrapper("cs", target, Some(foreign)), WrapperPlan::Skip);
-            // Our wrapper, current -> skip.
-            let current = wrapper_script("cs", target);
             assert_eq!(
-                plan_wrapper("cs", target, Some(&current)),
+                plan_shim(&desired, WRAPPER_OWNS, Some(foreign)),
+                WrapperPlan::Skip
+            );
+            // Our wrapper, current -> skip.
+            assert_eq!(
+                plan_shim(&desired, WRAPPER_OWNS, Some(&desired)),
                 WrapperPlan::Skip
             );
             // Our wrapper, but the exe moved (self-upgrade) -> rewrite.
             let stale = wrapper_script("cs", Path::new("C:\\old\\chan-desktop.exe"));
             assert!(matches!(
-                plan_wrapper("cs", target, Some(&stale)),
+                plan_shim(&desired, WRAPPER_OWNS, Some(&stale)),
                 WrapperPlan::Write(_)
             ));
         }
