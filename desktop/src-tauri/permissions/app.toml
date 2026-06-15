@@ -14,10 +14,6 @@ permissions = [
   "allow-zoom-in",
   "allow-zoom-out",
   "allow-zoom-reset",
-  "allow-default-workspace-status",
-  "allow-choose-default-workspace",
-  "allow-create-default-workspace",
-  "allow-factory-reset-default-workspace",
   "allow-open-local-workspace",
   "allow-add-outbound-workspace",
   "allow-open-outbound-workspace",
@@ -111,26 +107,6 @@ commands.allow = ["zoom_out"]
 identifier = "allow-zoom-reset"
 description = "Enables the zoom_reset command."
 commands.allow = ["zoom_reset"]
-
-[[permission]]
-identifier = "allow-default-workspace-status"
-description = "Enables the default_workspace_status command."
-commands.allow = ["default_workspace_status"]
-
-[[permission]]
-identifier = "allow-choose-default-workspace"
-description = "Enables the choose_default_workspace command."
-commands.allow = ["choose_default_workspace"]
-
-[[permission]]
-identifier = "allow-create-default-workspace"
-description = "Enables the create_default_workspace command."
-commands.allow = ["create_default_workspace"]
-
-[[permission]]
-identifier = "allow-factory-reset-default-workspace"
-description = "Enables the factory_reset_default_workspace command."
-commands.allow = ["factory_reset_default_workspace"]
 
 [[permission]]
 identifier = "allow-open-local-workspace"

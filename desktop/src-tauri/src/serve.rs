@@ -1278,19 +1278,6 @@ mod tests {
     }
 
     #[test]
-    fn invoke_handler_registers_default_workspace_ipcs() {
-        const MAIN_RS: &str = include_str!("main.rs");
-        assert!(MAIN_RS.contains("default_workspace_status,"));
-        assert!(MAIN_RS.contains("choose_default_workspace,"));
-        assert!(MAIN_RS.contains("create_default_workspace,"));
-        assert!(MAIN_RS.contains("factory_reset_default_workspace,"));
-        assert!(MAIN_RS.contains("fn default_workspace_status("));
-        assert!(MAIN_RS.contains("fn choose_default_workspace("));
-        assert!(MAIN_RS.contains("fn create_default_workspace("));
-        assert!(MAIN_RS.contains("fn factory_reset_default_workspace("));
-    }
-
-    #[test]
     fn new_workspace_local_choice_has_no_desktop_preflight() {
         // The desktop must not run its own first-boot pre-flight:
         // chan's SPA owns workspace readiness (PreflightOverlay.svelte)
@@ -1390,35 +1377,6 @@ mod tests {
         assert!(
             !serve_rs.contains(&resolver_sig),
             "binary resolution helpers must be gone from serve.rs",
-        );
-    }
-
-    #[test]
-    fn launcher_prompts_for_existing_user_default_workspace() {
-        const MAIN_JS: &str = include_str!("../../src/main.js");
-        assert!(
-            MAIN_JS.contains("invoke('default_workspace_status'"),
-            "launcher must query default-workspace migration status",
-        );
-        assert!(
-            MAIN_JS.contains("showDefaultWorkspaceDialog"),
-            "launcher must prompt when a default workspace choice is needed",
-        );
-        assert!(
-            MAIN_JS.contains("invoke('choose_default_workspace'"),
-            "launcher must let users choose an existing default workspace",
-        );
-        assert!(
-            MAIN_JS.contains("invoke('create_default_workspace'"),
-            "launcher must let users create Documents/Chan as default",
-        );
-        assert!(
-            MAIN_JS.contains("showMissingDefaultWorkspaceDialog"),
-            "launcher must confirm before factory-resetting missing default workspace metadata",
-        );
-        assert!(
-            MAIN_JS.contains("invoke('factory_reset_default_workspace'"),
-            "launcher must route confirmed missing-default reset to Rust",
         );
     }
 

@@ -3,7 +3,6 @@
 mod auth;
 mod config;
 mod cs_install;
-mod default_workspace;
 mod download;
 mod dropped_paths;
 mod embedded;
@@ -547,64 +546,6 @@ fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
     state.store.lock().unwrap().get().map_err(err)
 }
 
-#[tauri::command]
-fn default_workspace_status() -> Result<default_workspace::DefaultWorkspaceStatus, String> {
-    default_workspace::status()
-}
-
-#[tauri::command]
-fn choose_default_workspace(path: String) -> Result<(), String> {
-    default_workspace::choose_existing(Path::new(&path)).map(|_| ())
-}
-
-#[tauri::command]
-async fn create_default_workspace(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    let created = default_workspace::create_default_workspace()?;
-    reconcile_default_workspace(&state, &created.root)?;
-    let key = canonical_key(&created.root);
-    serve::start(app, Arc::clone(&state), key).await
-}
-
-#[tauri::command]
-async fn factory_reset_default_workspace(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    let created = default_workspace::factory_reset_default_workspace()?;
-    reconcile_default_workspace(&state, &created.root)?;
-    let key = canonical_key(&created.root);
-    serve::start(app, Arc::clone(&state), key).await
-}
-
-/// `default_workspace` registers + seeds through its own throwaway
-/// `Library` handle. Mirror that registration into the embedded
-/// host's in-memory `Library` so the immediately-following
-/// `serve::start` opens against an up-to-date registry rather than
-/// the host's stale boot-time snapshot (the same staleness class as
-/// the "workspace not registered" bug). `register_workspace` is idempotent
-/// (touch + persist), so re-registering the row default_workspace just
-/// wrote is safe, and `set_default_workspace_root` keeps the in-memory
-/// default aligned with what default_workspace persisted.
-fn reconcile_default_workspace(state: &AppState, root: &Path) -> Result<(), String> {
-    let Some(embedded) = state.embedded.get() else {
-        // No embedded host (e.g. it failed to start at boot);
-        // default_workspace already persisted to disk, so a later serve
-        // through a fresh handle still sees the row.
-        return Ok(());
-    };
-    let library = embedded.library();
-    library
-        .register_workspace(root)
-        .map_err(|e| format!("reconciling default workspace {}: {e}", root.display()))?;
-    library
-        .set_default_workspace_root(Some(root.to_path_buf()))
-        .map_err(|e| format!("persisting default workspace root {}: {e}", root.display()))?;
-    Ok(())
-}
-
 const OUTBOUND_LABEL_MAX_CHARS: usize = 120;
 
 /// Persist an explicit outbound URL attachment and open it in a
@@ -780,8 +721,8 @@ fn open_local_workspace(
 /// task so the callback returns promptly and the CLI doesn't block on
 /// the handshake. The synchronous return therefore reports only that
 /// the request was accepted, not that the window is fully up; on a
-/// genuine mount failure the desktop emits a system notice (same as
-/// the first-launch default-workspace path) rather than blocking the CLI.
+/// genuine mount failure the desktop emits a system notice rather than
+/// blocking the CLI.
 #[cfg(unix)]
 fn open_workspace_from_handoff(
     app: tauri::AppHandle,
@@ -1361,13 +1302,6 @@ fn main() {
         Ok(n) => tracing::info!(shims = n, "installed chan/cs bin shims into ~/.local/bin"),
         Err(e) => tracing::warn!(error = %e, "installing bin shims failed"),
     }
-    let default_workspace_boot = match default_workspace::ensure_fresh_default_workspace() {
-        Ok(created) => created,
-        Err(e) => {
-            tracing::warn!(error = %e, "first-launch default workspace setup failed");
-            None
-        }
-    };
     let store = ConfigStore::new().expect("failed to init config store");
     let state = Arc::new(AppState {
         store: Mutex::new(store),
@@ -1539,31 +1473,6 @@ fn main() {
                 }
             }
 
-            if let Some(created) = default_workspace_boot.clone() {
-                let app_for_default = app.handle().clone();
-                let state_for_default = Arc::clone(&state_for_setup);
-                tauri::async_runtime::spawn(async move {
-                    let key = canonical_key(&created.root);
-                    if let Err(e) =
-                        serve::start(app_for_default.clone(), state_for_default, key).await
-                    {
-                        tracing::warn!(
-                            root = %created.root.display(),
-                            error = %e,
-                            "starting first-launch default workspace failed",
-                        );
-                        emit_system_notice(
-                            &app_for_default,
-                            "warning",
-                            format!(
-                                "Created the default Chan workspace at {}, but opening it failed: {e}",
-                                created.root.display(),
-                            ),
-                        );
-                    }
-                });
-            }
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1594,10 +1503,6 @@ fn main() {
             zoom_in,
             zoom_out,
             zoom_reset,
-            default_workspace_status,
-            choose_default_workspace,
-            create_default_workspace,
-            factory_reset_default_workspace,
             open_local_workspace,
             probe_url,
             add_outbound_workspace,
