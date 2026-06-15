@@ -1126,21 +1126,32 @@ impl Session {
             cmd.env("USERPROFILE", home);
         }
         // Windows: the terminal shell is Git BASH (a hard dependency). Prepend
-        // Git's `usr/bin` (+ `mingw64/bin`) to PATH so `git`, the coreutils,
-        // and the `cs` shim resolve for the login shell and anything it spawns.
+        // Git's `usr/bin` (+ `mingw64/bin`) so `git` and the coreutils resolve,
+        // and the chan bin dir (`%LOCALAPPDATA%\chan\bin`) so the `chan` / `cs`
+        // shims resolve (W2). The shim dir is only ever added to the HKCU PATH
+        // registry by `cs_install::ensure_on_user_path`, which never reaches
+        // this already-running process's inherited env — so prepend it here,
+        // independent of registry propagation. Must match `cs_install`'s
+        // `shim_bin_dir` (`dirs::data_local_dir().join("chan").join("bin")`).
         // Layered over any per-session PATH override, then the inherited PATH.
         #[cfg(windows)]
-        if let Some(git) = git_bash() {
-            if !git.path_prepend.is_empty() {
+        {
+            let mut prepend: Vec<PathBuf> = Vec::new();
+            if let Some(git) = git_bash() {
+                prepend.extend(git.path_prepend.iter().cloned());
+            }
+            if let Some(local) = dirs::data_local_dir() {
+                prepend.push(local.join("chan").join("bin"));
+            }
+            if !prepend.is_empty() {
                 let inherited = opts
                     .env
                     .get("PATH")
                     .cloned()
                     .or_else(|| std::env::var("PATH").ok())
                     .unwrap_or_default();
-                let mut entries = git.path_prepend.clone();
-                entries.extend(std::env::split_paths(&inherited));
-                if let Ok(joined) = std::env::join_paths(entries) {
+                prepend.extend(std::env::split_paths(&inherited));
+                if let Ok(joined) = std::env::join_paths(prepend) {
                     cmd.env("PATH", joined);
                 }
             }
@@ -1822,6 +1833,20 @@ struct GitBashInstall {
 fn git_bash() -> Option<&'static GitBashInstall> {
     static CACHE: std::sync::OnceLock<Option<GitBashInstall>> = std::sync::OnceLock::new();
     CACHE.get_or_init(resolve_git_bash).as_ref()
+}
+
+/// Force the [`git_bash`] cache to resolve eagerly, off the async request path.
+/// [`resolve_git_bash`] shells out (`git --exec-path`, `reg query` ×2, `where
+/// bash`) with blocking `std::process::Command`; resolving it lazily on the
+/// first terminal create — which runs on a tokio worker (the embedded server
+/// hosts the SPA, API, and WS on one runtime) — would block that worker and
+/// freeze the SPA (W1). The server primes this once on a blocking thread at
+/// startup, so the inline spawn gate
+/// ([`reject_terminal_spawn_if_git_bash_missing`]) and [`windows_command_builder`]
+/// only ever read the warm `OnceLock`.
+#[cfg(windows)]
+pub(crate) fn prime_git_bash() {
+    let _ = git_bash();
 }
 
 /// Discovery order (most reliable first), returning the first root whose

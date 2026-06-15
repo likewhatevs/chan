@@ -425,6 +425,19 @@ fn format_index_progress(event: &ProgressEvent, verbose: bool) -> String {
 /// indexer, config loads, router. Shared by `serve()` (local TCP
 /// listener) and `serve_via_tunnel()` (chan-tunnel-client transport)
 /// so the two paths serve byte-identical request handling.
+/// Prime the Windows Git BASH discovery cache off the async request path.
+/// Discovery shells out (`git --exec-path`, `reg query`, `where bash`) with
+/// blocking process spawns; resolving it lazily on the first terminal create
+/// would run those on a tokio worker and freeze the embedded SPA (W1). Fire it
+/// on a blocking thread at server-build time — before the router accepts any
+/// request — so the spawn-gate cache read is instant. A no-op off Windows.
+fn prime_terminal_shell() {
+    #[cfg(windows)]
+    {
+        let _ = tokio::task::spawn_blocking(terminal_sessions::prime_git_bash);
+    }
+}
+
 async fn build_app(
     library: Library,
     workspace: Arc<Workspace>,
@@ -627,6 +640,7 @@ async fn build_app(
             (None, None)
         }
     };
+    prime_terminal_shell();
     let terminal_sessions = Arc::new(TerminalRegistry::new(TerminalRegistryConfig {
         workspace_root: workspace_root.clone(),
         mcp_socket_path: mcp_socket_path.clone(),
@@ -817,6 +831,7 @@ async fn build_terminal_app(
             (None, None)
         }
     };
+    prime_terminal_shell();
     let terminal_sessions = Arc::new(TerminalRegistry::new(TerminalRegistryConfig {
         workspace_root: workspace_root.clone(),
         mcp_socket_path: None,
