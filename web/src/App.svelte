@@ -696,18 +696,30 @@
       spawnGraphFromContext();
       return;
     }
-    // `terminal.richPrompt` (Cmd+Shift+P) toggles the Rich Prompt bubble,
-    // PER-TERMINAL, on the focused pane's active terminal only. No-op when the
-    // focused tab is not a terminal (nothing selected to prompt). Also
-    // reachable via the terminal right-click "Show/Hide Rich Prompt" entry,
-    // whose label reads the shortcut store.
-    if (e.metaKey && !e.altKey && e.shiftKey && !e.ctrlKey && e.code === "KeyP") {
-      e.preventDefault();
-      // Rich Prompt is workspace-only; off in terminal-only windows.
-      if (ui.terminalOnly) return;
-      const term = activeTerminalTab();
-      if (term) toggleRichPromptForTab(term.id);
-      return;
+    // `terminal.richPrompt` toggles the Rich Prompt bubble, PER-TERMINAL,
+    // on the focused pane's active terminal only. No-op when the focused tab
+    // is not a terminal. macOS: Cmd+Shift+P. Off macOS the Win/Super key is
+    // ruled out, so the chord diverges by surface like the Dashboard chord —
+    // Ctrl+Shift+P in the desktop webview (free), Alt+Shift+P on web
+    // (Ctrl+Shift+P is the browser's private-window chord). Keep this in sync
+    // with `osChord`'s RICH_PROMPT_ID branch. Also reachable via the terminal
+    // right-click "Show/Hide Rich Prompt" entry, whose label reads the store.
+    if (e.code === "KeyP") {
+      const richPromptChord = isTauriDesktop()
+        ? currentOS() === "mac"
+          ? e.metaKey && !e.ctrlKey && !e.altKey && e.shiftKey
+          : e.ctrlKey && !e.metaKey && !e.altKey && e.shiftKey
+        : currentOS() === "mac"
+          ? e.metaKey && !e.ctrlKey && !e.altKey && e.shiftKey
+          : e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey;
+      if (richPromptChord) {
+        e.preventDefault();
+        // Rich Prompt is workspace-only; off in terminal-only windows.
+        if (ui.terminalOnly) return;
+        const term = activeTerminalTab();
+        if (term) toggleRichPromptForTab(term.id);
+        return;
+      }
     }
     // Dashboard direct chord, OUT of Hybrid Nav (Dashboard was the only
     // surface still mixed with it). Native (Tauri): Mod+Shift+D (Cmd+Shift+D

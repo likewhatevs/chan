@@ -466,16 +466,17 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // (workspace windows only; no-op when the focused tab is not a
   // terminal). Dispatched by App.svelte's onWindowKey; the terminal
   // right-click menu mirrors it and reads its label via `chordFor`.
-  // Literal Cmd on every platform: the handler matches the physical
-  // Command/Meta key, and neither the web build nor chan-desktop
-  // binds a Ctrl variant.
+  // macOS uses the physical Cmd; off macOS the Win / Super key is ruled
+  // out, so the chord diverges by surface in `osChord` (Ctrl+Shift+P
+  // native, Alt+Shift+P web — the Dashboard split). The registry stores
+  // the macOS form.
   {
     id: "terminal.richPrompt",
     label: "Show/Hide Rich Prompt",
     web: "Cmd+Shift+P",
     native: "Cmd+Shift+P",
     group: "Terminal",
-    note: "physical Cmd on every platform",
+    note: "Ctrl+Shift+P (desktop) / Alt+Shift+P (web) on Linux / Windows",
     escapeTerminal: true,
   },
   // Terminal-local find (the terminal's own find bar). Dispatched by
@@ -515,6 +516,7 @@ export function formatChord(chord: Chord, os: OS): string {
 const RELOAD_SHORTCUT_ID = "app.window.reload";
 const TERMINAL_COPY_ID = "terminal.copy";
 const TERMINAL_PASTE_ID = "terminal.paste";
+const RICH_PROMPT_ID = "terminal.richPrompt";
 
 /// Resolve a shortcut's chord for a platform with chan's OS-level chord
 /// overrides applied. Most chords differ only by LABEL (`Mod` -> Cmd/Ctrl);
@@ -539,6 +541,15 @@ export function osChord(
   if (s.id === RELOAD_SHORTCUT_ID && os !== "mac") return "Mod+Shift+R";
   if (s.id === TERMINAL_COPY_ID && os !== "mac") return "Mod+Shift+C";
   if (s.id === TERMINAL_PASTE_ID && os !== "mac") return "Mod+Shift+V";
+  // Rich Prompt: Cmd+Shift+P on macOS. Off macOS the Win / Super key is
+  // ruled out (the OS / shell eat most of those chords), so it diverges
+  // by SURFACE, mirroring the Dashboard split: native uses Ctrl+Shift+P
+  // (free in the Tauri webview), web uses Alt+Shift+P (Ctrl+Shift+P is
+  // the browser's private-window chord, unpreventable like the
+  // bookmark-all-tabs chord Dashboard dodges).
+  if (s.id === RICH_PROMPT_ID && os !== "mac") {
+    return platform === "native" ? "Mod+Shift+P" : "Alt+Shift+P";
+  }
   return chord;
 }
 

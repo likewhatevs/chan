@@ -192,15 +192,23 @@ describe("RichPrompt.svelte component", () => {
   });
 });
 
-describe("App.svelte Cmd+Shift+P toggle", () => {
-  test("imports + binds Cmd+Shift+P to the per-terminal toggle (shift, not alt)", () => {
+describe("App.svelte Rich Prompt toggle", () => {
+  test("imports + binds the per-terminal toggle on a KeyP chord", () => {
     expect(app).toMatch(
       /import \{ toggleRichPromptForTab \} from "\.\/state\/richPrompt\.svelte"/,
     );
-    // Resolves the focused terminal, then toggles ONLY that terminal; no-op
-    // when the focused tab is not a terminal.
+    // The chord diverges by surface/OS like the Dashboard chord: mac uses
+    // Cmd+Shift+P; off mac the Win/Super key is ruled out, so native uses
+    // Ctrl+Shift+P and web uses Alt+Shift+P. Resolved into a `richPromptChord`
+    // boolean gated on isTauriDesktop() + currentOS().
+    expect(app).toMatch(/const richPromptChord = isTauriDesktop\(\)/);
+    // mac path keeps metaKey; off-mac native is ctrlKey, web is altKey.
+    expect(app).toMatch(/e\.metaKey && !e\.ctrlKey && !e\.altKey && e\.shiftKey/);
+    expect(app).toMatch(/e\.ctrlKey && !e\.metaKey && !e\.altKey && e\.shiftKey/);
+    expect(app).toMatch(/e\.altKey && e\.shiftKey && !e\.metaKey && !e\.ctrlKey/);
+    // Toggles ONLY the focused terminal; no-op when it isn't a terminal.
     expect(app).toMatch(
-      /e\.metaKey && !e\.altKey && e\.shiftKey && !e\.ctrlKey && e\.code === "KeyP"[\s\S]{1,200}activeTerminalTab\(\)[\s\S]{1,80}toggleRichPromptForTab\(term\.id\)/,
+      /if \(richPromptChord\)[\s\S]{1,200}activeTerminalTab\(\)[\s\S]{1,80}toggleRichPromptForTab\(term\.id\)/,
     );
   });
 });

@@ -125,7 +125,7 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   --------
   Copy selection                               Cmd+C   (Ctrl+Shift+C on Linux / Windows)
   Paste                                        Cmd+V   (Ctrl+Shift+V on Linux / Windows)
-  Show/Hide Rich Prompt                        Cmd+Shift+P   (physical Cmd on every platform)
+  Show/Hide Rich Prompt                        Cmd+Shift+P   (Ctrl+Shift+P (desktop) / Alt+Shift+P (web) on Linux / Windows)
   Find in terminal                             Cmd+F
 ";
 
