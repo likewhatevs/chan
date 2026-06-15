@@ -476,10 +476,10 @@ button.btn.icon {
 .is-dark #theme-toggle .ic-sun { display: inline-block; }
 .is-light #theme-toggle .ic-moon { display: inline-block; }
 
-/* Modal scaffold for the default-workspace chooser (the new-workspace
-   local-path flow reuses .preflight-intro / -path here too). The first-boot
-   pre-flight scan + layer toggles live in chan's SPA, so these are a
-   plain centered-dialog shell, not a scan surface. */
+/* Centered modal scaffold, shared by the new-workspace local-path
+   confirm flow (.preflight-intro / -path) and the turn-on-failure
+   dialog. The first-boot pre-flight scan + layer toggles live in chan's
+   SPA, so these are a plain centered-dialog shell, not a scan surface. */
 .preflight-overlay {
   position: fixed;
   inset: 0;
@@ -532,36 +532,10 @@ button.btn.icon {
   justify-content: flex-end;
   gap: 8px;
 }
-.default-workspace-options {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 260px;
-  overflow: auto;
-}
-.default-workspace-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 8px 10px;
-  background: var(--btn-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.default-workspace-option input {
-  margin-top: 3px;
-}
-.default-workspace-path {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  color: var(--text);
-  word-break: break-all;
-}
 
 /* The new-workspace local path runs no desktop-side pre-flight scan;
    chan's SPA (PreflightOverlay.svelte) owns first-boot readiness +
    the Semantic / Reports layer toggles, so there are no desktop
    .preflight-report* / .preflight-toggle* / .preflight-warn rules.
    The .preflight-overlay / -dialog / -intro / -path / -buttons rules
-   above stay: the default-workspace dialog uses them. */
+   above stay: the local-path confirm + turn-on-failure dialogs use them. */
