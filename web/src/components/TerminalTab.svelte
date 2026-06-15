@@ -1931,7 +1931,7 @@
             <Settings2 size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
           <span class="mbtn-label">Settings</span>
-          <span class="mbtn-chord"></span>
+          <span class="mbtn-chord">{chordFor("app.settings.toggle") ?? ""}</span>
         </button>
         <div class="msep" role="separator"></div>
         <button

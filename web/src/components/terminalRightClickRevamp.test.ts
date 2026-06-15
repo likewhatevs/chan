@@ -126,6 +126,15 @@ describe("Settings + Reopen + Close anchor the foot", () => {
     );
   });
 
+  test("Settings entry shows the app.settings.toggle chord hint", () => {
+    expect(terminal).toMatch(
+      /<span class="mbtn-label">Settings<\/span>\s*<span class="mbtn-chord">\{chordFor\("app\.settings\.toggle"\) \?\? ""\}<\/span>/,
+    );
+    expect(terminal).not.toMatch(
+      /<span class="mbtn-label">Settings<\/span>\s*<span class="mbtn-chord"><\/span>/,
+    );
+  });
+
   test("flipToSettings calls flipHybrid(paneId)", () => {
     expect(terminal).toMatch(
       /function flipToSettings\(\): void \{[\s\S]{1,200}closeTabMenu\(\);[\s\S]{1,200}flipHybrid\(paneId\);/,

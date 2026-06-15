@@ -144,6 +144,15 @@ describe("Settings (flipHybrid) + Reopen + Close foot", () => {
     expect(editor).not.toMatch(/onclick=\{doOpenSettings\}/);
   });
 
+  test("Settings entry shows the app.settings.toggle chord hint", () => {
+    expect(editor).toMatch(
+      /<span class="mbtn-label">Settings<\/span>\s*<span class="mbtn-chord">\{chordLabel\("app\.settings\.toggle"\)\}<\/span>/,
+    );
+    expect(editor).not.toMatch(
+      /<span class="mbtn-label">Settings<\/span>\s*<span class="mbtn-chord"><\/span>/,
+    );
+  });
+
   test("Reopen Closed Tab + Close buttons land in the foot block in order", () => {
     expect(editor).toMatch(
       /<span class="mbtn-label">Settings<\/span>[\s\S]{1,1000}<div class="msep" role="separator"><\/div>[\s\S]{1,2000}<span class="mbtn-label">Reopen Closed Tab<\/span>[\s\S]{1,1000}<span class="mbtn-label">Close<\/span>/,
