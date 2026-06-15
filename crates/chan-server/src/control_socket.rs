@@ -8,24 +8,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
-#[cfg(unix)]
 use chan_workspace::{TeamConfig, Workspace};
-#[cfg(unix)]
 use portable_pty::PtySize;
-#[cfg(unix)]
 use serde::Serialize;
-#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-#[cfg(unix)]
-use tokio::net::UnixListener;
 use tokio::sync::broadcast;
-#[cfg(unix)]
 use tokio::task::JoinHandle;
 
-#[cfg(unix)]
 use crate::desktop_window_ops::DesktopWindowOp;
 use crate::state::WorkspaceCell;
-#[cfg(unix)]
 use crate::terminal_sessions::CreateOptions;
 use crate::terminal_sessions::Registry as TerminalRegistry;
 
@@ -38,17 +29,15 @@ pub type TerminalRegistryCell = Arc<OnceLock<Arc<TerminalRegistry>>>;
 
 // The control-socket wire contract (request + response) is shared with
 // the `cs` client through chan-shell, so a tag/field rename moves in
-// lockstep instead of silently breaking one side. The server only touches
-// these types on unix (the listener is unix-only).
-#[cfg(unix)]
+// lockstep instead of silently breaking one side. The transport seam is
+// the only `#[cfg]`-split surface now (unix socket vs. windows named pipe),
+// so these types and every handler below are platform-neutral.
 pub use chan_shell::{ControlRequest, ControlResponse};
 // The survey types are part of the same shared wire module; the handler
 // pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
 // TeamOp tags the `cs terminal team` op (new | load).
-#[cfg(unix)]
 use chan_shell::{submit_writes, PaneOp, SubmitAgent, SurveyReply, SurveySpec, TeamOp};
 
-#[cfg(unix)]
 #[derive(Debug, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 // The shared `Open` prefix is the wire contract: serde renames each
@@ -131,19 +120,16 @@ enum WindowCommand {
 /// One spawned team member in a [`WindowCommand::TeamSpawned`]: the tab name
 /// (the member handle) and the live `session_id` the SPA attaches its new
 /// terminal tab to.
-#[cfg(unix)]
 #[derive(Debug, Clone, Serialize)]
 struct SpawnedMember {
     tab_name: String,
     session_id: String,
 }
 
-#[cfg(unix)]
 fn is_false(value: &bool) -> bool {
     !*value
 }
 
-#[cfg(unix)]
 #[derive(Debug, Serialize)]
 struct WindowCommandFrame {
     #[serde(rename = "type")]
@@ -153,15 +139,9 @@ struct WindowCommandFrame {
     command: WindowCommand,
 }
 
-#[cfg(unix)]
 pub struct ControlHandle {
     socket_path: PathBuf,
-    accept_loop: Option<JoinHandle<()>>,
-}
-
-#[cfg(not(unix))]
-pub struct ControlHandle {
-    socket_path: PathBuf,
+    accept_loop: JoinHandle<()>,
 }
 
 impl ControlHandle {
@@ -170,18 +150,37 @@ impl ControlHandle {
     }
 }
 
-#[cfg(unix)]
 impl Drop for ControlHandle {
     fn drop(&mut self) {
-        if let Some(h) = self.accept_loop.take() {
-            h.abort();
-        }
+        self.accept_loop.abort();
+        // A Unix-domain socket leaves a filesystem node that must be
+        // unlinked; a Windows named pipe is reclaimed by the OS once the
+        // last handle (the accept loop's idle instance) drops, so only the
+        // unix path has anything to clean up.
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
     }
 }
 
+#[cfg(unix)]
 pub fn pick_socket_path() -> PathBuf {
     crate::mcp_bridge::pick_named_socket_path("control")
+}
+
+/// On Windows the control "socket" is a named pipe, so the path is the pipe
+/// name `\\.\pipe\chan-control-<pid>-<rand>`. It is carried verbatim through
+/// `$CHAN_CONTROL_SOCKET` and read identically by `cs` (a `PathBuf` holds the
+/// string unchanged), mirroring the unix socket-path contract.
+#[cfg(windows)]
+pub fn pick_socket_path() -> PathBuf {
+    use rand::RngCore;
+    let mut bytes = [0u8; 4];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let suffix: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    PathBuf::from(format!(
+        r"\\.\pipe\chan-control-{}-{suffix}",
+        std::process::id()
+    ))
 }
 
 /// Which kind of tenant this control socket fronts. Workspace commands
@@ -230,15 +229,13 @@ pub struct ControlSocketCtx {
     pub tenant: ControlTenant,
 }
 
-#[cfg(unix)]
 pub fn start(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Result<ControlHandle> {
-    let _ = std::fs::remove_file(&socket_path);
-    let listener = UnixListener::bind(&socket_path)?;
+    let mut listener = transport::bind(&socket_path)?;
 
     let accept_loop = tokio::spawn(async move {
         loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(pair) => pair,
+            let conn = match listener.accept().await {
+                Ok(conn) => conn,
                 Err(e) => {
                     tracing::warn!("control socket accept: {e}");
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -246,49 +243,142 @@ pub fn start(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Result<Con
                 }
             };
             let ctx = ctx.clone();
-            tokio::spawn(async move {
-                let (read, mut write) = stream.into_split();
-                let mut reader = BufReader::new(read);
-                let mut line = String::new();
-                let response = match reader.read_line(&mut line).await {
-                    Ok(0) => ControlResponse::Error {
-                        message: "empty control request".into(),
-                    },
-                    Ok(_) => match serde_json::from_str::<ControlRequest>(&line) {
-                        Ok(req) => handle_request(req, &ctx).await,
-                        Err(e) => ControlResponse::Error {
-                            message: format!("invalid control request: {e}"),
-                        },
-                    },
-                    Err(e) => ControlResponse::Error {
-                        message: format!("read control request: {e}"),
-                    },
-                };
-                if let Ok(mut out) = serde_json::to_vec(&response) {
-                    out.push(b'\n');
-                    let _ = write.write_all(&out).await;
-                }
-            });
+            tokio::spawn(serve_connection(conn, ctx));
         }
     });
 
     Ok(ControlHandle {
         socket_path,
-        accept_loop: Some(accept_loop),
+        accept_loop,
     })
 }
 
-#[cfg(not(unix))]
-pub fn start(_socket_path: PathBuf, _ctx: ControlSocketCtx) -> std::io::Result<ControlHandle> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "control socket requires unix-domain sockets",
-    ))
+/// Frame one accepted control connection: read a single line-framed JSON
+/// `ControlRequest`, dispatch it, and write the JSON `ControlResponse` line
+/// back. Platform-neutral — it works over whatever read/write halves the
+/// active `transport::Conn` yields (a unix stream or a windows named pipe).
+async fn serve_connection(conn: transport::Conn, ctx: ControlSocketCtx) {
+    let (read, mut write) = conn.into_split();
+    let mut reader = BufReader::new(read);
+    let mut line = String::new();
+    let response = match reader.read_line(&mut line).await {
+        Ok(0) => ControlResponse::Error {
+            message: "empty control request".into(),
+        },
+        Ok(_) => match serde_json::from_str::<ControlRequest>(&line) {
+            Ok(req) => handle_request(req, &ctx).await,
+            Err(e) => ControlResponse::Error {
+                message: format!("invalid control request: {e}"),
+            },
+        },
+        Err(e) => ControlResponse::Error {
+            message: format!("read control request: {e}"),
+        },
+    };
+    if let Ok(mut out) = serde_json::to_vec(&response) {
+        out.push(b'\n');
+        let _ = write.write_all(&out).await;
+    }
 }
+
+/// The control socket's cross-platform transport seam — the ONLY
+/// `#[cfg]`-split surface. unix uses a `UnixListener`; windows uses a
+/// `tokio::net::windows::named_pipe` server. Both yield a `Conn` whose
+/// `into_split()` gives line-framing-compatible read/write halves, so the
+/// accept loop, `serve_connection`, and every handler stay platform-neutral.
+/// tokio is `features=["full"]` workspace-wide, so neither path adds a dep.
+mod transport {
+    #[cfg(unix)]
+    mod imp {
+        use std::path::Path;
+
+        use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+        use tokio::net::{UnixListener, UnixStream};
+
+        pub struct Listener(UnixListener);
+        pub struct Conn(UnixStream);
+
+        /// Bind the Unix-domain socket, clearing any stale node first (a
+        /// crashed prior server can leave the path occupied).
+        pub fn bind(path: &Path) -> std::io::Result<Listener> {
+            let _ = std::fs::remove_file(path);
+            Ok(Listener(UnixListener::bind(path)?))
+        }
+
+        impl Listener {
+            pub async fn accept(&mut self) -> std::io::Result<Conn> {
+                let (stream, _peer) = self.0.accept().await?;
+                Ok(Conn(stream))
+            }
+        }
+
+        impl Conn {
+            pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
+                self.0.into_split()
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    mod imp {
+        use std::ffi::OsString;
+        use std::path::Path;
+
+        use tokio::io::{ReadHalf, WriteHalf};
+        use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+
+        /// A named-pipe "listener". tokio creates one pipe instance per
+        /// connection, so the listener always holds the next idle instance
+        /// and mints a fresh one each time a client connects. `pipe_name` is
+        /// the `\\.\pipe\...` string the socket "path" carries.
+        pub struct Listener {
+            pipe_name: OsString,
+            next: NamedPipeServer,
+        }
+        pub struct Conn(NamedPipeServer);
+
+        pub fn bind(path: &Path) -> std::io::Result<Listener> {
+            let pipe_name = path.as_os_str().to_owned();
+            // `first_pipe_instance(true)` makes the create fail if another
+            // process already owns this name — a squatter guard, mirroring
+            // how the unix bind owns its filesystem path.
+            let next = ServerOptions::new()
+                .first_pipe_instance(true)
+                .create(&pipe_name)?;
+            Ok(Listener { pipe_name, next })
+        }
+
+        impl Listener {
+            pub async fn accept(&mut self) -> std::io::Result<Conn> {
+                // Wait for a client on the idle instance, then swap in a
+                // fresh instance for the next client BEFORE handing this one
+                // back — so a client that connects during the swap still
+                // finds a server instance (the canonical tokio multi-client
+                // loop; otherwise the next client races to `NotFound`).
+                self.next.connect().await?;
+                let connected = std::mem::replace(
+                    &mut self.next,
+                    ServerOptions::new().create(&self.pipe_name)?,
+                );
+                Ok(Conn(connected))
+            }
+        }
+
+        impl Conn {
+            pub fn into_split(self) -> (ReadHalf<NamedPipeServer>, WriteHalf<NamedPipeServer>) {
+                tokio::io::split(self.0)
+            }
+        }
+    }
+
+    // `Listener` is reached only through `bind`'s inferred return type, so it
+    // needs no re-export; `Conn` names `serve_connection`'s parameter.
+    pub use imp::{bind, Conn};
+}
+// transport seam ends here; the request handlers below are platform-neutral.
 
 // Async because of the one blocking variant (`TermSurvey`); every other
 // arm returns synchronously without awaiting.
-#[cfg(unix)]
 async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlResponse {
     let ControlSocketCtx {
         workspace_cell,
@@ -591,7 +681,6 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
 /// `handle_team`'s dispatch payload: the `ControlRequest::TerminalTeam`
 /// variant's fields, bundled at the dispatch site. The wire enum itself
 /// stays flat (serde shape frozen).
-#[cfg(unix)]
 struct TeamRequest {
     dir: String,
     op: TeamOp,
@@ -618,7 +707,6 @@ struct TeamRequest {
 /// async because the non-`--script` `new` spawns the team then blocks a
 /// boot grace before poking each agent's identity prompt (the same
 /// sequence the `--script` form runs inline with `sleep 3`).
-#[cfg(unix)]
 async fn handle_team(req: TeamRequest, ctx: &ControlSocketCtx) -> ControlResponse {
     use crate::routes::team_config::{
         ensure_created_at, generate_bootstrap_script, read_team_config, validate_team_config,
@@ -749,7 +837,6 @@ async fn handle_team(req: TeamRequest, ctx: &ControlSocketCtx) -> ControlRespons
 /// agent needs a moment before its compose box accepts input, else the
 /// identity poke lands mid-startup and is lost. This is the one magic number
 /// in the spawn path; live smoke runs validated it.
-#[cfg(unix)]
 const TEAM_SPAWN_POKE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Gap between the body write and the submit-chord write of a multi-write
@@ -759,13 +846,11 @@ const TEAM_SPAWN_POKE_GRACE: std::time::Duration = std::time::Duration::from_sec
 /// queue-based poke paths (cs / Rich Prompt) get this separation for free
 /// from the drainer's idle-gating; this direct-write spawn path needs an
 /// explicit gap.
-#[cfg(unix)]
 const SUBMIT_SPLIT_GAP: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// What a server-side team spawn produced: the resolved group, the handles
 /// that came up, the ones that failed (with the spawn error), and the
 /// per-agent identity pokes to deliver after the boot grace.
-#[cfg(unix)]
 struct TeamSpawn {
     group: String,
     spawned: Vec<String>,
@@ -785,7 +870,6 @@ struct TeamSpawn {
 /// `-N` until unique so a new team never joins an existing group. Mirrors
 /// the SPA's `resolveTeamGroup` (teamOrchestrator.svelte.ts): it reads the
 /// same resolved-group set `cs terminal list` shows.
-#[cfg(unix)]
 fn resolve_team_group(registry: &TerminalRegistry, base: &str) -> String {
     let live: std::collections::HashSet<String> = registry
         .session_summaries()
@@ -813,7 +897,6 @@ fn resolve_team_group(registry: &TerminalRegistry, base: &str) -> String {
 /// in `failed` and does not abort the rest of the team (mirrors
 /// runTeamBootstrap's per-worker try/catch). This step is synchronous (the
 /// boot-grace wait + poke delivery happen in `spawn_and_poke_team`).
-#[cfg(unix)]
 fn spawn_team(
     registry: &TerminalRegistry,
     dir: &str,
@@ -897,7 +980,6 @@ fn spawn_team(
 /// the CLI returns only once the pokes are delivered (the same inline
 /// ordering the `--script` form runs: spawn -> sleep 3 -> poke). Returns a
 /// summary, or an error when nothing came up.
-#[cfg(unix)]
 async fn spawn_and_poke_team(
     registry: &Arc<TerminalRegistry>,
     dir: &str,
@@ -953,7 +1035,6 @@ async fn spawn_and_poke_team(
 /// nothing came up, else a one-line summary of the spawned + poked + failed
 /// counts. Pure (no I/O) so the wording is unit-tested without the boot-grace
 /// wait.
-#[cfg(unix)]
 fn team_spawn_summary(team_name: &str, spawn: &TeamSpawn) -> ControlResponse {
     if spawn.spawned.is_empty() {
         return ControlResponse::Error {
@@ -979,7 +1060,6 @@ fn team_spawn_summary(team_name: &str, spawn: &TeamSpawn) -> ControlResponse {
     ControlResponse::Ok { message }
 }
 
-#[cfg(unix)]
 fn fmt_spawn_failures(failed: &[(String, String)]) -> String {
     failed
         .iter()
@@ -994,7 +1074,6 @@ fn fmt_spawn_failures(failed: &[(String, String)]) -> String {
 /// `POST /api/survey/reply` -> `SurveyBus::complete_survey`). The returned
 /// message is what the CLI prints to stdout: the chosen option label, or the
 /// followup-file path the UI created on `[F]`.
-#[cfg(unix)]
 async fn handle_survey(
     mut spec: SurveySpec,
     tab_name: Option<&str>,
@@ -1067,7 +1146,6 @@ async fn handle_survey(
 /// a dismissal: the chosen option label; the `new follow up file created: ...`
 /// path on `[F]` with team context (or a bare-deferral line without); or the
 /// dismissed line (Part C).
-#[cfg(unix)]
 fn format_survey_reply(reply: &SurveyReply) -> String {
     match reply {
         SurveyReply::Option { option_label, .. } => option_label.clone(),
@@ -1090,7 +1168,6 @@ fn format_survey_reply(reply: &SurveyReply) -> String {
 /// only fires when the target window is not actually connected (e.g. the
 /// browser tab was closed while the terminal lived on), keeping `cs pane`
 /// from blocking forever in that case.
-#[cfg(unix)]
 const PANE_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Resolve the target SPA window for a `cs pane` command. Prefer the explicit
@@ -1099,7 +1176,6 @@ const PANE_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5
 /// the command works from a context with no $CHAN_WINDOW_ID (an unbound
 /// agent, a native terminal). Errors when neither is given, when a tab
 /// selector matches no window, or when it is ambiguous.
-#[cfg(unix)]
 fn resolve_pane_window(
     window_id: Option<String>,
     tab_name: Option<&str>,
@@ -1136,7 +1212,6 @@ fn resolve_pane_window(
 /// /api/window/reply` -> `WindowBus::complete`). The returned message is the
 /// reply payload JSON the CLI formats. Mirrors `handle_survey`'s register ->
 /// push -> await shape, with a timeout since no user is in the loop.
-#[cfg(unix)]
 async fn pane_round_trip<F>(
     window_id: &str,
     make_command: F,
@@ -1182,7 +1257,6 @@ where
 
 /// `cs pane` (layout query): resolve the target window, then round-trip a
 /// `pane_query`. The reply payload is the layout snapshot the CLI formats.
-#[cfg(unix)]
 async fn handle_pane_query(
     window_id: Option<String>,
     tab_name: Option<String>,
@@ -1206,7 +1280,6 @@ async fn handle_pane_query(
 /// `cs pane <exec>` (focus / split / resize / close): resolve the target
 /// window, then round-trip a `pane_exec` carrying the op. The reply payload
 /// is the exec result the CLI formats.
-#[cfg(unix)]
 async fn handle_pane_exec(
     window_id: Option<String>,
     tab_name: Option<String>,
@@ -1228,7 +1301,6 @@ async fn handle_pane_exec(
     .await
 }
 
-#[cfg(unix)]
 fn require_window_id(window_id: &str) -> Result<(), String> {
     if window_id.trim().is_empty() {
         Err("window_id is required".into())
@@ -1237,7 +1309,6 @@ fn require_window_id(window_id: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(unix)]
 fn into_response(result: Result<String, String>) -> ControlResponse {
     match result {
         Ok(message) => ControlResponse::Ok { message },
@@ -1250,7 +1321,6 @@ fn into_response(result: Result<String, String>) -> ControlResponse {
 /// window, a workspace tenant spawns another window of that workspace.
 /// Replies with the new window id. Refuses ([`crate::NO_DESKTOP`]) when
 /// no desktop is attached.
-#[cfg(unix)]
 async fn handle_window_new(
     desktop: &crate::desktop_window_ops::DesktopBridge,
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
@@ -1283,7 +1353,6 @@ async fn handle_window_new(
 /// the user answers), then drop its saved layout so it can't reappear as
 /// a reopenable `saved` row. A row with neither a live window nor a saved
 /// blob is an unknown id and errors.
-#[cfg(unix)]
 async fn handle_window_close(
     desktop: &crate::desktop_window_ops::DesktopBridge,
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
@@ -1351,7 +1420,6 @@ async fn handle_window_close(
 /// connection, like `term list`. One row per file (best-ranked hit),
 /// score-descending. The CLI side formats this JSON: markdown by default,
 /// compact `--json`, indented `--json --pretty`.
-#[cfg(unix)]
 fn search_workspace(
     workspace: &Workspace,
     query: &str,
@@ -1393,7 +1461,6 @@ fn search_workspace(
     serde_json::to_string(&payload).map_err(|e| format!("serialize: {e}"))
 }
 
-#[cfg(unix)]
 fn workspace_from_cell(
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
     tenant: ControlTenant,
@@ -1411,7 +1478,6 @@ fn workspace_from_cell(
     Ok(cell.workspace.clone())
 }
 
-#[cfg(unix)]
 fn send_window_command(
     window_id: &str,
     command: WindowCommand,
@@ -1443,7 +1509,6 @@ fn send_window_command(
 /// Resolve an optional requested path to a workspace-relative path plus
 /// whether it is a directory. `None` / the workspace root resolve to
 /// `(None, _)`, which the SPA treats as "no specific target".
-#[cfg(unix)]
 fn resolve_optional_rel(
     workspace: &Workspace,
     requested: Option<&Path>,
@@ -1464,7 +1529,6 @@ fn resolve_optional_rel(
 
 /// Category 1: open the documentation graph in the originating window,
 /// optionally focused on a file or directory.
-#[cfg(unix)]
 fn open_graph(
     workspace: &Workspace,
     window_id: &str,
@@ -1492,7 +1556,6 @@ fn open_graph(
 
 /// Category 1: open a new terminal tab in the originating window. A
 /// requested file resolves to its parent directory as the cwd.
-#[cfg(unix)]
 fn open_term_new(
     workspace: &Workspace,
     window_id: &str,
@@ -1528,7 +1591,6 @@ fn open_term_new(
 /// terminal window. There is no workspace to resolve a cwd against, so the
 /// command carries no cwd — pure window routing, the same shape as
 /// `open_dashboard`. The caller has already rejected any `--path`.
-#[cfg(unix)]
 fn open_term_new_standalone(
     window_id: &str,
     tab_name: Option<String>,
@@ -1548,7 +1610,6 @@ fn open_term_new_standalone(
 }
 
 /// Category 1: open a Dashboard tab in the originating window.
-#[cfg(unix)]
 fn open_dashboard(
     window_id: &str,
     carousel_index: Option<u32>,
@@ -1573,7 +1634,6 @@ fn open_dashboard(
 /// (the serialization the Rich Prompt / poke-chain workflow needs), so
 /// chained `cs terminal write`s submit one after another. `data` already
 /// carries the caller's submit chord (the CLI's `--submit`).
-#[cfg(unix)]
 fn term_write(
     registry: &TerminalRegistry,
     tab_name: Option<&str>,
@@ -1606,7 +1666,6 @@ fn term_write(
 /// The queue cap, surfaced in the "queue full" message. Kept in sync with
 /// `terminal_sessions::WRITE_QUEUE_CAP` (private there); a literal here
 /// avoids widening that module's surface just for an error string.
-#[cfg(unix)]
 const WRITE_QUEUE_CAP_MSG: usize = 100;
 
 /// Category 2: restart the matching live PTY sessions, preserving each
@@ -1615,7 +1674,6 @@ const WRITE_QUEUE_CAP_MSG: usize = 100;
 /// server path the Team Work self-restart needs: the bootstrap script
 /// runs `cs terminal restart` against its own tab, and the server
 /// respawns that session because a shell cannot restart itself.
-#[cfg(unix)]
 fn term_restart(
     registry: &TerminalRegistry,
     tab_name: Option<&str>,
@@ -1639,7 +1697,6 @@ fn term_restart(
 /// reads one terminal's history, so there is no group fan-out). The bytes
 /// are the raw PTY stream (the same a WS attach replays), UTF-8 decoded
 /// lossily for the text transport.
-#[cfg(unix)]
 fn term_scrollback(registry: &TerminalRegistry, tab_name: &str) -> Result<String, String> {
     let tab_name = tab_name.trim();
     if tab_name.is_empty() {
@@ -1659,7 +1716,6 @@ fn term_scrollback(registry: &TerminalRegistry, tab_name: &str) -> Result<String
 }
 
 /// Category 2: list live terminal sessions as JSON, grouped by group.
-#[cfg(unix)]
 fn term_list(registry: &TerminalRegistry) -> Result<String, String> {
     use std::collections::BTreeMap;
 
@@ -1676,7 +1732,6 @@ fn term_list(registry: &TerminalRegistry) -> Result<String, String> {
     serde_json::to_string(&payload).map_err(|e| format!("encode terminal list: {e}"))
 }
 
-#[cfg(unix)]
 fn open_path(
     workspace: &Workspace,
     self_writes: &crate::self_writes::SelfWrites,
@@ -1740,7 +1795,6 @@ fn open_path(
     Ok(format!("open request queued for {rel}"))
 }
 
-#[cfg(unix)]
 fn abs_to_workspace_rel(root: &Path, requested: &Path) -> Result<String, String> {
     if !requested.is_absolute() {
         return Err("control path must be absolute".into());
@@ -1776,7 +1830,6 @@ fn abs_to_workspace_rel(root: &Path, requested: &Path) -> Result<String, String>
     Ok(path_to_posix(rel))
 }
 
-#[cfg(unix)]
 fn path_to_posix(path: &Path) -> String {
     path.components()
         .filter_map(|c| match c {
@@ -1787,7 +1840,6 @@ fn path_to_posix(path: &Path) -> String {
         .join("/")
 }
 
-#[cfg(unix)]
 fn parent_rel(rel: &str) -> String {
     rel.rsplit_once('/')
         .map(|(parent, _)| parent.to_string())

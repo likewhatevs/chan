@@ -1,18 +1,15 @@
 //! Client side of the control socket: resolve the chan-terminal
 //! environment ($CHAN_WINDOW_ID / $CHAN_CONTROL_SOCKET), make paths
-//! absolute, and round-trip a [`ControlRequest`] over the Unix-domain
-//! socket to the chan-server the terminal belongs to.
+//! absolute, and round-trip a [`ControlRequest`] to the chan-server the
+//! terminal belongs to — over a Unix-domain socket on unix, a Windows
+//! named pipe on windows. Only the [`transport`] seam is `#[cfg]`-split;
+//! the wire (one JSON request line, one JSON response line) is identical.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-// ControlResponse is only decoded on the unix transport path; importing
-// it unconditionally would warn on a non-unix build (where the stub
-// below never reads a reply).
-use crate::wire::ControlRequest;
-#[cfg(unix)]
-use crate::wire::ControlResponse;
+use crate::wire::{ControlRequest, ControlResponse};
 
 /// The chan-terminal environment a window-targeting action needs: which
 /// window to act on and which server socket to reach it through.
@@ -82,21 +79,22 @@ pub fn absolutize(path: PathBuf) -> Result<PathBuf> {
 
 /// Connect to the control socket, write one JSON request line, and return
 /// the server's reply message (or its error, surfaced as an `Err`).
-#[cfg(unix)]
+/// Platform-neutral over the [`transport`] seam.
 pub async fn send_control_request(socket: &Path, request: ControlRequest) -> Result<String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::UnixStream;
 
-    let stream = UnixStream::connect(socket)
+    let (read, mut write) = transport::connect(socket)
         .await
         .with_context(|| format!("connecting to chan control socket {}", socket.display()))?;
-    let (read, mut write) = stream.into_split();
     let mut payload = serde_json::to_vec(&request).context("encoding control request")?;
     payload.push(b'\n');
     write
         .write_all(&payload)
         .await
         .context("writing control request")?;
+    // Harmless on both paths: a Unix stream half-closes its write side;
+    // tokio's named-pipe `poll_shutdown` is a no-op (the `\n` already frames
+    // the request, so the server reads it regardless).
     write.shutdown().await.context("closing control request")?;
 
     let mut line = String::new();
@@ -112,11 +110,61 @@ pub async fn send_control_request(socket: &Path, request: ControlRequest) -> Res
     }
 }
 
-/// Non-unix builds have no Unix-domain control socket; the `cs` surface
-/// fails fast instead of half-working.
-#[cfg(not(unix))]
-pub async fn send_control_request(_socket: &Path, _request: ControlRequest) -> Result<String> {
-    anyhow::bail!("chan shell requires unix-domain sockets on this build");
+/// The `cs` control client's transport seam — the only `#[cfg]`-split
+/// surface. unix connects a `UnixStream`; windows opens a
+/// `tokio::net::windows::named_pipe` client. Both yield read/write halves
+/// the line-framed round-trip above drives identically.
+mod transport {
+    use std::path::Path;
+
+    #[cfg(unix)]
+    pub async fn connect(
+        socket: &Path,
+    ) -> std::io::Result<(
+        tokio::net::unix::OwnedReadHalf,
+        tokio::net::unix::OwnedWriteHalf,
+    )> {
+        let stream = tokio::net::UnixStream::connect(socket).await?;
+        Ok(stream.into_split())
+    }
+
+    #[cfg(windows)]
+    pub async fn connect(
+        socket: &Path,
+    ) -> std::io::Result<(
+        tokio::io::ReadHalf<tokio::net::windows::named_pipe::NamedPipeClient>,
+        tokio::io::WriteHalf<tokio::net::windows::named_pipe::NamedPipeClient>,
+    )> {
+        use tokio::net::windows::named_pipe::ClientOptions;
+        use tokio::time::{sleep, Duration, Instant};
+
+        // ERROR_PIPE_BUSY (231): every pipe instance is momentarily in use;
+        // retry until one frees. Inlined to avoid a `windows-sys` dependency
+        // just for the constant.
+        const ERROR_PIPE_BUSY: i32 = 231;
+        // Bound the wait so a genuinely-absent server fails fast instead of
+        // hanging `cs`, mirroring the unix connect's immediate ENOENT.
+        let deadline = Instant::now() + Duration::from_secs(5);
+
+        let client = loop {
+            match ClientOptions::new().open(socket) {
+                Ok(client) => break client,
+                // Busy, or momentarily gone while the server swaps in a fresh
+                // instance between clients: wait briefly and retry.
+                Err(e)
+                    if e.raw_os_error() == Some(ERROR_PIPE_BUSY)
+                        || e.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    if Instant::now() >= deadline {
+                        return Err(e);
+                    }
+                    sleep(Duration::from_millis(20)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        };
+        Ok(tokio::io::split(client))
+    }
 }
 
 #[cfg(test)]
