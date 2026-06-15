@@ -1074,8 +1074,20 @@ function bindSplitMenu(tr) {
       const willOpen = menu.hasAttribute('hidden');
       closeAllSplitMenus();
       if (willOpen) {
+        menu.classList.remove('open-up');
         menu.removeAttribute('hidden');
         caret.setAttribute('aria-expanded', 'true');
+        // Flip the menu above the caret when opening downward would
+        // clip it below the scroll container's bottom edge (the
+        // last-row case). Measured after un-hiding so offsetHeight is
+        // real.
+        const scroller = document.getElementById('main');
+        const limit = scroller
+          ? scroller.getBoundingClientRect().bottom
+          : window.innerHeight;
+        if (caret.getBoundingClientRect().bottom + 4 + menu.offsetHeight > limit) {
+          menu.classList.add('open-up');
+        }
       }
     });
   }
@@ -1097,6 +1109,7 @@ function bindSplitMenu(tr) {
 function closeAllSplitMenus() {
   document.querySelectorAll('.split-menu:not([hidden])').forEach((m) => {
     m.setAttribute('hidden', '');
+    m.classList.remove('open-up');
   });
   document.querySelectorAll('[data-act="menu-toggle"][aria-expanded="true"]').forEach((b) => {
     b.setAttribute('aria-expanded', 'false');

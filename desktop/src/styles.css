@@ -64,6 +64,11 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%; }
+/* App-shell layout: the window is a flex column — a non-scrolling
+   header (and the persistent banner above it) plus `main` as the
+   single scroll container. This replaces the old dual-sticky setup
+   (sticky header + sticky `th` at a hardcoded top:53px) that left a
+   gap above the table header on scroll. */
 body {
   background: var(--bg);
   color: var(--text);
@@ -71,6 +76,8 @@ body {
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
 }
 ::selection { background: var(--brand); color: var(--bg); }
 
@@ -80,10 +87,8 @@ header.bar {
   justify-content: space-between;
   padding: 14px 18px;
   border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
   background: var(--bg);
-  z-index: 10;
+  flex: 0 0 auto;
 }
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand .enso {
@@ -137,7 +142,9 @@ button.btn[disabled] { opacity: .4; cursor: not-allowed; pointer-events: none; }
 .empty h2 { margin: 0; font-size: 17px; color: var(--text); font-weight: 700; }
 .empty p { margin: 0; max-width: 46ch; }
 
-main { padding: 0; }
+/* The single scroll container; `min-height:0` lets a flex child
+   actually scroll instead of growing the body past the viewport. */
+main { padding: 0; flex: 1; min-height: 0; overflow: auto; }
 
 table.workspaces {
   width: 100%;
@@ -158,7 +165,8 @@ table.workspaces th {
   text-transform: uppercase;
   background: var(--bg);
   position: sticky;
-  top: 53px;
+  top: 0;
+  z-index: 1;
 }
 table.workspaces tbody tr:nth-child(even) { background: var(--zebra-bg); }
 table.workspaces tbody tr:hover { background: var(--hover-bg); }
@@ -251,6 +259,13 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
   min-width: 160px;
   z-index: 20;
+}
+/* Last-row dropdowns would clip below `main`'s scroll edge when
+   opening downward; `bindSplitMenu` measures the caret against the
+   scroll-container bottom and adds `open-up` to flip above the caret. */
+.split-menu.open-up {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 .split-menu li { margin: 0; }
 .split-menu .menu-item {
@@ -432,14 +447,13 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   padding: 8px 14px;
   font-size: 13px;
 }
-/* Persistent variant for the add/remove progress banner. Lives at
-   the top of <body> (above the sticky header) so it does not
+/* Persistent variant for the add/remove progress banner. Inserted as
+   the first child of <body> (above the header) so it does not
    disappear with the next list re-render while the embedded host
-   registers or forgets a workspace. */
+   registers or forgets a workspace. As a non-scrolling flex child of
+   the body column it pins at the top on its own — no sticky needed. */
 .status-banner.persistent {
-  position: sticky;
-  top: 0;
-  z-index: 20;
+  flex: 0 0 auto;
   font-weight: 500;
 }
 /* Toggle switch disabled state — the regular `disabled` attribute
