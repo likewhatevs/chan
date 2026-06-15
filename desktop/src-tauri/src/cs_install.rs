@@ -28,6 +28,7 @@
 use std::ffi::OsStr;
 #[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::path::PathBuf;
 
 /// The two names we own. Both point at the same chan-desktop binary; argv[0]
@@ -55,7 +56,9 @@ const WRAPPER_OWNS: &str = "# chan-desktop";
 
 /// The AppImage path from `$APPIMAGE`, or `None` when not running from an
 /// AppImage (macOS, `cargo run`, a deb/rpm install). Also consumed by
-/// `linux_gui_stack` to gate the bundle-first loader fixups.
+/// `linux_gui_stack` to gate the bundle-first loader fixups. Unix-only: the
+/// AppImage / bundle-first loader concept does not exist on Windows.
+#[cfg(unix)]
 pub fn appimage_path() -> Option<PathBuf> {
     std::env::var_os("APPIMAGE")
         .map(PathBuf::from)
@@ -292,9 +295,398 @@ pub fn install_bin_shims() -> std::io::Result<u32> {
     Ok(changed)
 }
 
-/// Non-unix: chan-desktop ships macOS/Linux only, and the shim mechanisms
-/// (symlinks, `exec -a`) are unix, so there is nothing to install elsewhere.
-#[cfg(not(unix))]
+/// Windows: there is no `exec -a` to force argv[0] and no POSIX symlink, so the
+/// shims are `.cmd` wrappers in a per-user bin dir (`%LOCALAPPDATA%\chan\bin`)
+/// that set `ARGV0=<name>` before re-execing the installed chan-desktop.exe.
+/// `chan_shell::invoked_arg0()` reads `$ARGV0` ahead of `argv[0]`, so the
+/// `chan` / `cs` stem dispatch fires (CLI / control client) instead of the GUI
+/// — the same mechanism the Linux AppImage uses via `exec -a` exporting
+/// `$ARGV0`. Best-effort: also append the bin dir to the per-user `Path` so a
+/// fresh shell resolves `chan` / `cs`.
+#[cfg(windows)]
+pub fn install_bin_shims() -> std::io::Result<u32> {
+    use windows_shim::{ensure_on_user_path, install_one, install_roots, shim_bin_dir, SHIM_NAMES};
+
+    // Stable install path only: a dev `cargo run` from target\{debug,release}\
+    // is left alone (never pollute the user's PATH from an un-packaged build),
+    // mirroring the unix `InstallKind::None` short-circuit.
+    let Some(exe) = std::env::current_exe().ok() else {
+        return Ok(0);
+    };
+    if !windows_shim::is_installed_exe(&exe, &install_roots()) {
+        return Ok(0);
+    }
+    let Some(bin_dir) = shim_bin_dir() else {
+        return Ok(0);
+    };
+
+    let mut changed = 0u32;
+    for name in SHIM_NAMES {
+        match install_one(&exe, &bin_dir, name) {
+            Ok(true) => changed += 1,
+            Ok(false) => {}
+            Err(e) => tracing::warn!(error = %e, shim = name, "installing bin shim failed"),
+        }
+    }
+    // Put the bin dir on PATH so a new shell finds `chan` / `cs`. Best-effort:
+    // a registry failure is logged, never fatal, and the written shims still
+    // work via an absolute path or a manually-extended PATH.
+    if changed > 0 {
+        if let Err(e) = ensure_on_user_path(&bin_dir) {
+            tracing::warn!(error = %e, "adding chan bin dir to user PATH failed");
+        }
+    }
+    Ok(changed)
+}
+
+/// Windows shim mechanics: `.cmd` wrappers (no `exec -a` / symlinks on Windows),
+/// plus a best-effort per-user `Path` registration. Split into pure helpers so
+/// the wrapper text, the install-vs-dev classification, and the PATH-append
+/// string surgery are unit-testable without touching the registry or the FS.
+#[cfg(windows)]
+mod windows_shim {
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+
+    /// The two names we own. Both re-exec the same chan-desktop.exe; the
+    /// `ARGV0` the wrapper sets picks the behavior.
+    pub(super) const SHIM_NAMES: [&str; 2] = ["chan", "cs"];
+
+    /// File stem of the chan-desktop binary an installed exe must match (the
+    /// dev-build guard rejects anything else).
+    const DESKTOP_BIN_STEM: &str = "chan-desktop";
+
+    /// Marker line so we only ever rewrite a wrapper WE wrote; `::` is a batch
+    /// comment. A user's own `chan.cmd` will not contain it.
+    const WRAPPER_MARKER: &str = ":: chan-desktop bin shim";
+
+    /// Ownership substring: any wrapper containing this was written by some
+    /// version of chan-desktop, so it is ours to rewrite.
+    const WRAPPER_OWNS: &str = ":: chan-desktop";
+
+    /// Per-user bin dir for the `.cmd` shims: `%LOCALAPPDATA%\chan\bin`, the
+    /// Windows analogue of the unix `~/.local/bin`.
+    pub(super) fn shim_bin_dir() -> Option<PathBuf> {
+        dirs::data_local_dir().map(|d| d.join("chan").join("bin"))
+    }
+
+    /// Roots a packaged chan-desktop.exe can legitimately live under: the NSIS
+    /// `currentUser` install lands beneath `%LOCALAPPDATA%`; a `perMachine`
+    /// install lands beneath one of the Program Files dirs.
+    pub(super) fn install_roots() -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        if let Some(d) = dirs::data_local_dir() {
+            roots.push(d);
+        }
+        for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Some(v) = std::env::var_os(var) {
+                roots.push(PathBuf::from(v));
+            }
+        }
+        roots
+    }
+
+    /// Whether `exe` is an installed chan-desktop (the right stem, under a known
+    /// install root) versus a `cargo run` from `target\`. Pure for testing.
+    pub(super) fn is_installed_exe(exe: &Path, roots: &[PathBuf]) -> bool {
+        if exe.file_stem() != Some(OsStr::new(DESKTOP_BIN_STEM)) {
+            return false;
+        }
+        roots.iter().any(|root| path_starts_with_ci(exe, root))
+    }
+
+    /// Case-insensitive, boundary-aware path prefix test (Windows paths are
+    /// case-insensitive). `C:\Foo\bar` starts with `c:\foo` but not `C:\foobar`.
+    fn path_starts_with_ci(path: &Path, prefix: &Path) -> bool {
+        let p = path.to_string_lossy().to_lowercase();
+        let pre = prefix.to_string_lossy().to_lowercase();
+        let pre = pre.trim_end_matches(['\\', '/']);
+        if !p.starts_with(pre) {
+            return false;
+        }
+        match p[pre.len()..].chars().next() {
+            None => true,
+            Some(c) => c == '\\' || c == '/',
+        }
+    }
+
+    /// The `.cmd` wrapper that re-execs `target` as `name`. `set "ARGV0=<name>"`
+    /// makes `chan_shell::invoked_arg0()` report `<name>` so the CLI / control
+    /// client dispatch fires before any GUI init; `%*` forwards the args; `exit
+    /// /b` propagates the child's exit code. CRLF endings for `cmd.exe`.
+    pub(super) fn wrapper_script(name: &str, target: &Path) -> String {
+        format!(
+            "@echo off\r\n\
+             {WRAPPER_MARKER}\r\n\
+             setlocal\r\n\
+             set \"ARGV0={name}\"\r\n\
+             \"{target}\" %*\r\n\
+             exit /b %errorlevel%\r\n",
+            target = target.display(),
+        )
+    }
+
+    /// What to do with a `.cmd` shim given the current file contents.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) enum WrapperPlan {
+        /// Leave it: a user's own file (no marker), or already current.
+        Skip,
+        /// Write this script (absent, or ours-but-stale).
+        Write(String),
+    }
+
+    pub(super) fn plan_wrapper(name: &str, target: &Path, existing: Option<&str>) -> WrapperPlan {
+        let desired = wrapper_script(name, target);
+        match existing {
+            Some(content) if !content.contains(WRAPPER_OWNS) => WrapperPlan::Skip,
+            Some(content) if content == desired => WrapperPlan::Skip,
+            _ => WrapperPlan::Write(desired),
+        }
+    }
+
+    /// Install (or refresh) one `.cmd` shim. `Ok(true)` when it wrote/updated,
+    /// `Ok(false)` when nothing was needed (foreign entry, already current).
+    pub(super) fn install_one(target: &Path, bin_dir: &Path, name: &str) -> std::io::Result<bool> {
+        let path = bin_dir.join(format!("{name}.cmd"));
+        // An entry that exists but is not readable UTF-8 is foreign -> skip.
+        let existing = match std::fs::read_to_string(&path) {
+            Ok(content) => Some(content),
+            Err(_) if path.symlink_metadata().is_ok() => return Ok(false),
+            Err(_) => None,
+        };
+        match plan_wrapper(name, target, existing.as_deref()) {
+            WrapperPlan::Skip => Ok(false),
+            WrapperPlan::Write(script) => {
+                std::fs::create_dir_all(bin_dir)?;
+                std::fs::write(&path, script)?;
+                Ok(true)
+            }
+        }
+    }
+
+    /// The new per-user `Path` value once `dir` is appended, or `None` when
+    /// `dir` is already present (case-insensitive). Pure string surgery so the
+    /// membership + join logic is testable without the registry.
+    pub(super) fn path_with_dir_appended(current: &str, dir: &str) -> Option<String> {
+        let dir_norm = dir.trim_end_matches(['\\', '/']).to_lowercase();
+        let present = current
+            .split(';')
+            .map(|e| e.trim().trim_end_matches(['\\', '/']).to_lowercase())
+            .any(|e| e == dir_norm);
+        if present {
+            return None;
+        }
+        if current.is_empty() {
+            Some(dir.to_string())
+        } else if current.ends_with(';') {
+            Some(format!("{current}{dir}"))
+        } else {
+            Some(format!("{current};{dir}"))
+        }
+    }
+
+    /// Best-effort append of `dir` to the per-user `Path` (HKCU\Environment) via
+    /// `reg.exe` — no extra crate dependency, mirroring how `linux_gui_stack`
+    /// shells out to `ldconfig`. Reads the current value + type, appends only
+    /// when missing, and writes it back preserving the registry type. New
+    /// shells pick it up (no WM_SETTINGCHANGE broadcast; an already-open shell
+    /// needs a relaunch). Any failure is returned for the caller to log.
+    pub(super) fn ensure_on_user_path(dir: &Path) -> std::io::Result<()> {
+        use std::process::Command;
+        let dir = dir.to_string_lossy().into_owned();
+        let (current, kind) = read_user_path()?;
+        let Some(new_value) = path_with_dir_appended(&current, &dir) else {
+            return Ok(()); // already on PATH
+        };
+        let status = Command::new("reg")
+            .args([
+                "add",
+                "HKCU\\Environment",
+                "/v",
+                "Path",
+                "/t",
+                &kind,
+                "/d",
+                &new_value,
+                "/f",
+            ])
+            .status()?;
+        if !status.success() {
+            return Err(std::io::Error::other(format!(
+                "reg add HKCU\\Environment Path exited with {status}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Current per-user `Path` value and its registry type (`REG_EXPAND_SZ` /
+    /// `REG_SZ`). A fresh user with no `Path` value yields an empty string typed
+    /// `REG_EXPAND_SZ` (the default for an env var that may contain `%VAR%`).
+    fn read_user_path() -> std::io::Result<(String, String)> {
+        use std::process::Command;
+        let out = Command::new("reg")
+            .args(["query", "HKCU\\Environment", "/v", "Path"])
+            .output()?;
+        if !out.status.success() {
+            // No Path value yet: create it as REG_EXPAND_SZ.
+            return Ok((String::new(), "REG_EXPAND_SZ".to_string()));
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        Ok(parse_reg_query_path(&text)
+            .unwrap_or_else(|| (String::new(), "REG_EXPAND_SZ".to_string())))
+    }
+
+    /// Parse `reg query HKCU\Environment /v Path` output into (value, type).
+    /// The data line is `    Path    REG_EXPAND_SZ    <value>` (value may
+    /// contain spaces and `;`). Pure for testing.
+    fn parse_reg_query_path(text: &str) -> Option<(String, String)> {
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            // The data line is `Path    REG_TYPE    <value>`; skip every other
+            // line (header, blank). The char after the name must be whitespace
+            // so we don't match a different value like `PathExt`.
+            let Some(rest) = trimmed.strip_prefix("Path") else {
+                continue;
+            };
+            if !rest.starts_with(char::is_whitespace) {
+                continue;
+            }
+            let rest = rest.trim_start();
+            let mut it = rest.splitn(2, char::is_whitespace);
+            let Some(kind) = it.next() else {
+                continue;
+            };
+            if !kind.starts_with("REG_") {
+                continue;
+            }
+            let value = it.next().unwrap_or("").trim().to_string();
+            return Some((value, kind.to_string()));
+        }
+        None
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn installed_exe_accepts_localappdata_rejects_target() {
+            let roots = vec![PathBuf::from("C:\\Users\\me\\AppData\\Local")];
+            assert!(is_installed_exe(
+                Path::new("C:\\Users\\me\\AppData\\Local\\chan\\chan-desktop.exe"),
+                &roots,
+            ));
+            // Case-insensitive root match.
+            assert!(is_installed_exe(
+                Path::new("c:\\users\\me\\appdata\\local\\Chan\\chan-desktop.exe"),
+                &roots,
+            ));
+            // A dev cargo build is left alone.
+            assert!(!is_installed_exe(
+                Path::new("C:\\src\\chan\\target\\release\\chan-desktop.exe"),
+                &roots,
+            ));
+            // Boundary-aware: a sibling dir sharing a prefix is not "under" it.
+            assert!(!is_installed_exe(
+                Path::new("C:\\Users\\me\\AppData\\Localx\\chan-desktop.exe"),
+                &roots,
+            ));
+            // Wrong stem under a valid root.
+            assert!(!is_installed_exe(
+                Path::new("C:\\Users\\me\\AppData\\Local\\chan\\notepad.exe"),
+                &roots,
+            ));
+        }
+
+        #[test]
+        fn wrapper_sets_argv0_and_quotes_target() {
+            let s = wrapper_script(
+                "chan",
+                Path::new("C:\\Program Files\\Chan\\chan-desktop.exe"),
+            );
+            assert!(s.starts_with("@echo off\r\n"));
+            assert!(s.contains(WRAPPER_MARKER));
+            assert!(s.contains("set \"ARGV0=chan\"\r\n"));
+            assert!(s.contains("\"C:\\Program Files\\Chan\\chan-desktop.exe\" %*\r\n"));
+            assert!(s.contains("exit /b %errorlevel%\r\n"));
+            // Distinct script per name.
+            let cs = wrapper_script("cs", Path::new("C:\\Program Files\\Chan\\chan-desktop.exe"));
+            assert!(cs.contains("set \"ARGV0=cs\"\r\n"));
+            assert_ne!(s, cs);
+        }
+
+        #[test]
+        fn plan_writes_when_absent_skips_foreign_rewrites_stale() {
+            let target = Path::new("C:\\app\\chan-desktop.exe");
+            assert!(matches!(
+                plan_wrapper("cs", target, None),
+                WrapperPlan::Write(_)
+            ));
+            // No marker -> someone else's cs.cmd. Hands off.
+            let foreign = "@echo off\r\nC:\\other\\cs.exe %*\r\n";
+            assert_eq!(plan_wrapper("cs", target, Some(foreign)), WrapperPlan::Skip);
+            // Our wrapper, current -> skip.
+            let current = wrapper_script("cs", target);
+            assert_eq!(
+                plan_wrapper("cs", target, Some(&current)),
+                WrapperPlan::Skip
+            );
+            // Our wrapper, but the exe moved (self-upgrade) -> rewrite.
+            let stale = wrapper_script("cs", Path::new("C:\\old\\chan-desktop.exe"));
+            assert!(matches!(
+                plan_wrapper("cs", target, Some(&stale)),
+                WrapperPlan::Write(_)
+            ));
+        }
+
+        #[test]
+        fn path_append_is_idempotent_and_boundary_aware() {
+            let dir = "C:\\Users\\me\\AppData\\Local\\chan\\bin";
+            // Absent -> appended with a separator.
+            assert_eq!(
+                path_with_dir_appended("C:\\Windows;C:\\Windows\\System32", dir),
+                Some(format!("C:\\Windows;C:\\Windows\\System32;{dir}"))
+            );
+            // Empty PATH -> just the dir.
+            assert_eq!(path_with_dir_appended("", dir), Some(dir.to_string()));
+            // Trailing ';' -> no doubled separator.
+            assert_eq!(
+                path_with_dir_appended("C:\\Windows;", dir),
+                Some(format!("C:\\Windows;{dir}"))
+            );
+            // Already present (case-insensitive, trailing-slash tolerant) -> None.
+            assert_eq!(
+                path_with_dir_appended(
+                    "c:\\users\\me\\appdata\\local\\chan\\bin\\;C:\\Windows",
+                    dir
+                ),
+                None
+            );
+        }
+
+        #[test]
+        fn reg_query_parse_extracts_value_and_type() {
+            let out = "\r\nHKEY_CURRENT_USER\\Environment\r\n    \
+                Path    REG_EXPAND_SZ    %USERPROFILE%\\bin;C:\\tools\r\n\r\n";
+            assert_eq!(
+                parse_reg_query_path(out),
+                Some((
+                    "%USERPROFILE%\\bin;C:\\tools".to_string(),
+                    "REG_EXPAND_SZ".to_string()
+                ))
+            );
+            // No Path value present.
+            assert_eq!(
+                parse_reg_query_path("HKEY_CURRENT_USER\\Environment\r\n"),
+                None
+            );
+        }
+    }
+}
+
+/// Other non-unix platforms (none ship today): no shim mechanism, nothing to
+/// install.
+#[cfg(not(any(unix, windows)))]
 pub fn install_bin_shims() -> std::io::Result<u32> {
     Ok(0)
 }
