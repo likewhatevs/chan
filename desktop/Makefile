@@ -1,6 +1,6 @@
 .PHONY: dev build check fmt fmt-check lint test clean web tauri-cli \
         app-signed app-notarized sign-prereqs notarize-prereqs \
-        dmg-layout-proof
+        dmg-layout-proof xwin-prereqs xwin-check
 
 # Monorepo root. Override via CHAN_REPO=/path on CI.
 CHAN_REPO ?= ..
@@ -46,6 +46,39 @@ build: tauri-cli web
 
 check:
 	cd src-tauri && cargo check
+
+# ---------------------------------------------------------------------------
+# Windows cross-compile check (cargo-xwin) — fast local Windows compile proof.
+# ---------------------------------------------------------------------------
+#
+# cargo-xwin cross-compiles to the MSVC target from macOS/Linux by downloading
+# the MSVC CRT + Windows SDK headers on demand (no Windows host, no Wine — Wine
+# can't run WebView2 anyway). This is the team's FAST local proof that the
+# cfg(windows) arms compile. The AUTHORITATIVE Windows build + NSIS bundle +
+# headless smoke is the windows-latest job in
+# .github/workflows/release-desktop.yml.
+#
+# Crate set is the core (server/shell/workspace): those carry the cfg(windows)
+# transport + terminal arms and must compile before the desktop GUI build can.
+# The chan-desktop crate's full Windows build pulls the whole Tauri + WebView2
+# toolchain and is proven by the windows-latest CI job, not here.
+XWIN_TARGET ?= x86_64-pc-windows-msvc
+XWIN_CRATES ?= -p chan-server -p chan-shell -p chan-workspace
+
+# Install cargo-xwin + the Windows MSVC rust target on demand — same on-demand
+# posture as tauri-cli (a fresh workstation usually lacks both).
+xwin-prereqs:
+	@if ! command -v cargo-xwin >/dev/null 2>&1; then \
+	    echo "installing cargo-xwin"; \
+	    cargo install cargo-xwin --locked; \
+	fi
+	@rustup target add $(XWIN_TARGET) >/dev/null 2>&1 || true
+
+# Compile-check the core crates for Windows. Runs from the repo root so cargo
+# resolves the workspace; RUSTFLAGS parity with the integrated -D warnings gate.
+xwin-check: xwin-prereqs
+	cd $(CHAN_REPO) && RUSTFLAGS="-D warnings" cargo xwin check \
+	    --target $(XWIN_TARGET) $(XWIN_CRATES)
 
 fmt:
 	cd src-tauri && cargo fmt --all
