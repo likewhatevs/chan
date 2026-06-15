@@ -180,14 +180,32 @@ pub struct EnqueueOutcome {
 pub enum CreateError {
     Capped,
     FdPressure(FdPressure),
+    /// Windows only: Git BASH (the required terminal shell — see
+    /// [`command_builder`]) was not found. A distinct, structured variant so
+    /// the desktop/frontend can render the friendly "Install Git for Windows"
+    /// gate instead of treating it as a generic spawn failure. Constructed only
+    /// on windows (via [`reject_terminal_spawn_if_git_bash_missing`]); the
+    /// match arms that handle it stay compiled on every platform.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    GitBashMissing,
     Spawn(anyhow::Error),
 }
+
+/// The user-facing missing-Git message, pinned in one place so the gate copy
+/// and any test share a single source of truth (it carries the install URL).
+pub const GIT_BASH_MISSING_MESSAGE: &str =
+    "Git for Windows is required for the terminal — install it from https://gitforwindows.org/";
+
+/// The structured `reason` tag carried on the WS error frame and matched by
+/// the frontend gate, mirroring the existing `"fd_pressure"` tag.
+pub const GIT_BASH_MISSING_REASON: &str = "git_bash_missing";
 
 impl std::fmt::Display for CreateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CreateError::Capped => f.write_str("terminal session cap reached"),
             CreateError::FdPressure(pressure) => write!(f, "{pressure}"),
+            CreateError::GitBashMissing => f.write_str(GIT_BASH_MISSING_MESSAGE),
             CreateError::Spawn(e) => write!(f, "{e}"),
         }
     }
@@ -437,6 +455,7 @@ impl Registry {
         if sessions.len() >= self.config.terminal.session_cap {
             return Err(CreateError::Capped);
         }
+        reject_terminal_spawn_if_git_bash_missing()?;
         reject_terminal_spawn_if_fd_pressure()?;
         let id = self.unused_id(&sessions);
         let session =
@@ -467,6 +486,7 @@ impl Registry {
         if old.closed.load(Ordering::Relaxed) {
             return Ok(false);
         }
+        reject_terminal_spawn_if_git_bash_missing()?;
         reject_terminal_spawn_if_fd_pressure()?;
         let mut opts = old.restart_options();
         if tab_name.is_some() {
@@ -947,6 +967,19 @@ impl Registry {
     }
 }
 
+/// Gate every spawn path on the Git BASH hard dependency (Windows only). When
+/// it is absent there is no POSIX shell to spawn, so reject with the
+/// structured [`CreateError::GitBashMissing`] the frontend turns into the
+/// install gate — rather than silently falling back to `cmd` or surfacing an
+/// opaque spawn error. A no-op on every other platform.
+fn reject_terminal_spawn_if_git_bash_missing() -> Result<(), CreateError> {
+    #[cfg(windows)]
+    if git_bash().is_none() {
+        return Err(CreateError::GitBashMissing);
+    }
+    Ok(())
+}
+
 fn reject_terminal_spawn_if_fd_pressure() -> Result<(), CreateError> {
     let Some((open, limit)) = fd_snapshot() else {
         return Ok(());
@@ -1091,6 +1124,26 @@ impl Session {
             cmd.env("HOME", &home);
             #[cfg(windows)]
             cmd.env("USERPROFILE", home);
+        }
+        // Windows: the terminal shell is Git BASH (a hard dependency). Prepend
+        // Git's `usr/bin` (+ `mingw64/bin`) to PATH so `git`, the coreutils,
+        // and the `cs` shim resolve for the login shell and anything it spawns.
+        // Layered over any per-session PATH override, then the inherited PATH.
+        #[cfg(windows)]
+        if let Some(git) = git_bash() {
+            if !git.path_prepend.is_empty() {
+                let inherited = opts
+                    .env
+                    .get("PATH")
+                    .cloned()
+                    .or_else(|| std::env::var("PATH").ok())
+                    .unwrap_or_default();
+                let mut entries = git.path_prepend.clone();
+                entries.extend(std::env::split_paths(&inherited));
+                if let Ok(joined) = std::env::join_paths(entries) {
+                    cmd.env("PATH", joined);
+                }
+            }
         }
         // Spawn-time TERM comes from settings. The value lives in
         // `TerminalConfig::default_term`; the SPA can
@@ -1699,22 +1752,185 @@ fn locale_selects_utf8(requested: &BTreeMap<String, String>) -> bool {
 }
 
 fn command_builder(command: Option<&str>) -> CommandBuilder {
-    let Some(command) = command.map(str::trim).filter(|command| !command.is_empty()) else {
-        return CommandBuilder::new_default_prog();
-    };
+    let command = command.map(str::trim).filter(|command| !command.is_empty());
     #[cfg(windows)]
     {
-        let mut cmd = CommandBuilder::new("cmd");
-        cmd.args(["/C", command]);
-        cmd
+        windows_command_builder(command)
     }
     #[cfg(not(windows))]
     {
-        let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
-        let mut cmd = CommandBuilder::new(shell);
-        cmd.args(["-lc", command]);
-        cmd
+        match command {
+            // No command: the user's default interactive shell, exactly as
+            // before (portable_pty resolves $SHELL / the passwd entry).
+            None => CommandBuilder::new_default_prog(),
+            // One-shot: run it through a login shell so profile-exported PATH
+            // (where `cs` lives) is in scope.
+            Some(command) => {
+                let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
+                let mut cmd = CommandBuilder::new(shell);
+                cmd.args(["-lc", command]);
+                cmd
+            }
+        }
     }
+}
+
+/// Windows terminal shell: **Git BASH** (a hard dependency — see the phase-26
+/// design). Spawn it as a login shell (`bash -l`, `-lc` for one-shots) so its
+/// MSYS `/etc/profile` sets up the POSIX environment. The PATH prepend that
+/// makes `git`/coreutils/`cs` resolve happens in [`Session::spawn`] (it needs
+/// the live env). Callers gate on [`git_bash`] via
+/// [`reject_terminal_spawn_if_git_bash_missing`] before reaching here; the
+/// `cmd` fallback is purely defensive for any unguarded path.
+#[cfg(windows)]
+fn windows_command_builder(command: Option<&str>) -> CommandBuilder {
+    match git_bash() {
+        Some(git) => {
+            let mut cmd = CommandBuilder::new(&git.bash);
+            match command {
+                Some(command) => cmd.args(["-lc", command]),
+                None => cmd.args(["-l"]),
+            }
+            cmd
+        }
+        None => match command {
+            Some(command) => {
+                let mut cmd = CommandBuilder::new("cmd");
+                cmd.args(["/C", command]);
+                cmd
+            }
+            None => CommandBuilder::new_default_prog(),
+        },
+    }
+}
+
+/// A resolved Git for Windows BASH install.
+#[cfg(windows)]
+struct GitBashInstall {
+    /// `<root>\bin\bash.exe` — the launcher that initialises the MSYS env.
+    bash: PathBuf,
+    /// Extra Windows PATH entries (`<root>\usr\bin`, `<root>\mingw64\bin`) so
+    /// `git`, the coreutils, and the `cs` shim resolve for the login shell and
+    /// anything it spawns.
+    path_prepend: Vec<PathBuf>,
+}
+
+/// Resolve Git BASH once and cache the result (present or absent) for the
+/// process lifetime — discovery shells out, and a terminal spawn is on the
+/// interactive path.
+#[cfg(windows)]
+fn git_bash() -> Option<&'static GitBashInstall> {
+    static CACHE: std::sync::OnceLock<Option<GitBashInstall>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(resolve_git_bash).as_ref()
+}
+
+/// Discovery order (most reliable first), returning the first root whose
+/// `bin\bash.exe` exists:
+///   1. `git --exec-path` → walk up to the install root (skips WSL entirely).
+///   2. Well-known install dirs under Program Files / per-user.
+///   3. Registry `HKLM\...\GitForWindows\InstallPath` via `reg query`.
+///   4. `where bash`, filtering out System32 / WindowsApps (the WSL `bash.exe`
+///      launcher, which is NOT Git BASH).
+/// No registry/winapi crate is pulled — `git`/`reg`/`where` are shelled out.
+#[cfg(windows)]
+fn resolve_git_bash() -> Option<GitBashInstall> {
+    use std::process::Command;
+
+    // 1. Derive the root from `git --exec-path`
+    //    (`<root>\mingw64\libexec\git-core`): walk ancestors for `bin\bash.exe`.
+    if let Ok(output) = Command::new("git").arg("--exec-path").output() {
+        if output.status.success() {
+            let exec_path = String::from_utf8_lossy(&output.stdout);
+            let exec_path = PathBuf::from(exec_path.trim());
+            for root in exec_path.ancestors() {
+                if let Some(install) = git_bash_from_root(root) {
+                    return Some(install);
+                }
+            }
+        }
+    }
+
+    // 2. Well-known install roots.
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+        if let Some(dir) = std::env::var_os(var) {
+            roots.push(PathBuf::from(dir).join("Git"));
+        }
+    }
+    if let Some(local) = std::env::var_os("LocalAppData") {
+        roots.push(PathBuf::from(local).join("Programs").join("Git"));
+    }
+    for root in &roots {
+        if let Some(install) = git_bash_from_root(root) {
+            return Some(install);
+        }
+    }
+
+    // 3. Registry InstallPath (32- and 64-bit views).
+    for key in [
+        r"HKLM\SOFTWARE\GitForWindows",
+        r"HKLM\SOFTWARE\WOW6432Node\GitForWindows",
+    ] {
+        if let Ok(output) = Command::new("reg")
+            .args([key, "/v", "InstallPath"])
+            .output()
+        {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                // `    InstallPath    REG_SZ    C:\Program Files\Git`
+                if let Some(path) = text
+                    .lines()
+                    .find_map(|line| line.split("REG_SZ").nth(1))
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                {
+                    if let Some(install) = git_bash_from_root(Path::new(path)) {
+                        return Some(install);
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. `where bash`, skipping the WSL launcher under System32 / WindowsApps.
+    if let Ok(output) = Command::new("where").arg("bash").output() {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                let lower = line.to_ascii_lowercase();
+                if lower.contains(r"\system32\") || lower.contains(r"\windowsapps\") {
+                    continue;
+                }
+                // `where bash` points at `<root>\bin\bash.exe`, so the install
+                // root is two levels up.
+                if let Some(root) = Path::new(line).parent().and_then(Path::parent) {
+                    if let Some(install) = git_bash_from_root(root) {
+                        return Some(install);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Build a [`GitBashInstall`] from a candidate install root, or `None` if it
+/// has no `bin\bash.exe`.
+#[cfg(windows)]
+fn git_bash_from_root(root: &Path) -> Option<GitBashInstall> {
+    let bash = root.join("bin").join("bash.exe");
+    if !bash.is_file() {
+        return None;
+    }
+    let mut path_prepend = Vec::new();
+    for sub in [["usr", "bin"], ["mingw64", "bin"], ["mingw32", "bin"]] {
+        let dir = root.join(sub[0]).join(sub[1]);
+        if dir.is_dir() {
+            path_prepend.push(dir);
+        }
+    }
+    Some(GitBashInstall { bash, path_prepend })
 }
 
 fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
@@ -1917,6 +2133,20 @@ fn skip_ansi_escape(bytes: &[u8], mut i: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pin the missing-Git structured contract the frontend gate keys on: the
+    /// `reason` tag and the install URL carried by the message. A rename here
+    /// would silently break the "Install Git for Windows" gate, which the team
+    /// cannot smoke without Windows hardware.
+    #[test]
+    fn git_bash_missing_contract_is_stable() {
+        assert_eq!(GIT_BASH_MISSING_REASON, "git_bash_missing");
+        assert_eq!(
+            CreateError::GitBashMissing.to_string(),
+            GIT_BASH_MISSING_MESSAGE
+        );
+        assert!(GIT_BASH_MISSING_MESSAGE.contains("https://gitforwindows.org/"));
+    }
 
     fn test_config(ring_bytes: usize, cap: usize, idle: u64) -> RegistryConfig {
         let tmp = tempfile::tempdir().unwrap();
