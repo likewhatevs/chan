@@ -29,3 +29,34 @@ describe("survey body line breaks", () => {
     expect(html).not.toContain("<script");
   });
 });
+
+describe("markdown iframe embeds", () => {
+  test("a YouTube image link renders a youtube-nocookie iframe", () => {
+    const html = renderMarkdown("![](https://youtu.be/dQw4w9WgXcQ)");
+    expect(html).toContain("<iframe");
+    expect(html).toContain(
+      "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+    );
+    expect(html).toContain("sandbox");
+  });
+
+  test("a Google Maps image link renders a maps iframe", () => {
+    const html = renderMarkdown(
+      "![](https://www.google.com/maps/embed?pb=!1m18!1m12)",
+    );
+    expect(html).toContain("<iframe");
+    expect(html).toContain("https://www.google.com/maps/embed?pb=");
+  });
+
+  test("a plain image stays an <img>, not an iframe", () => {
+    const html = renderMarkdown("![cat](https://example.com/cat.png)");
+    expect(html).toContain("<img");
+    expect(html).not.toContain("<iframe");
+  });
+
+  test("a raw <iframe> on a non-allowlisted host is dropped", () => {
+    const html = renderMarkdown('<iframe src="https://evil.com/x"></iframe>');
+    expect(html).not.toContain("evil.com");
+    expect(html).not.toContain("<iframe");
+  });
+});

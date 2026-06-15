@@ -40,6 +40,7 @@ import {
   resolveImageSrc,
   setImageWidth,
 } from "../extensions/image";
+import { detectEmbed, embedRenderFromInfo } from "../../api/embed";
 import {
   clearImageDragIndicator,
   startImageDragIndicator,
@@ -303,8 +304,43 @@ class ImageWidget extends WidgetType {
     });
     if (this.standalone) wrap.dataset.standalone = "true";
     if (this.editing) wrap.dataset.editing = "true";
-    const { width, align } = parseImageSrc(this.src);
+    const { base, width, align } = parseImageSrc(this.src);
     if (align) wrap.dataset.align = align;
+
+    // Embeddable host (YouTube / Google Maps): render a sandboxed
+    // <iframe> instead of an <img>, reusing the `#w=` width hint. The
+    // image-only chrome (resize handle, copy-to-clipboard, zoom) does
+    // not apply, so we return early after wiring just enough for the
+    // shared keymap to still arrow-select + Delete the source.
+    const embedInfo = detectEmbed(base);
+    if (embedInfo) {
+      const r = embedRenderFromInfo(embedInfo, width);
+      wrap.dataset.embed = embedInfo.kind;
+      const frame = document.createElement("iframe");
+      frame.className = `cm-md-embed cm-md-embed-${embedInfo.kind}`;
+      frame.src = r.src;
+      frame.width = String(r.width);
+      frame.height = String(r.height);
+      frame.title = r.title;
+      frame.loading = "lazy";
+      frame.referrerPolicy = "no-referrer-when-downgrade";
+      frame.setAttribute("sandbox", r.sandbox);
+      frame.allow = r.allow;
+      frame.setAttribute("allowfullscreen", "");
+      frame.style.maxWidth = "100%";
+      frame.style.border = "0";
+      frame.style.borderRadius = "8px";
+      wrap.appendChild(frame);
+      // Same payload the document-level keymap reads (Delete / select).
+      (wrap as HTMLElement & { _chanImg?: ImageActionPayload })._chanImg = {
+        src: this.src,
+        alt: this.alt,
+        fromPath: this.fromPath,
+        nodePos: this.nodePos,
+        onClick: this.onClick,
+      };
+      return wrap;
+    }
 
     const img = document.createElement("img");
     img.alt = this.alt;
