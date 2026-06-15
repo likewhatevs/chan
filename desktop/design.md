@@ -35,11 +35,10 @@ One desktop process hosts many running local workspaces:
                     Tauri webview
 ```
 
-There are three workspace attachment modes:
+There are two workspace attachment modes:
 
 - **Local embedded**: a local registry entry opened by chan-desktop. The desktop mounts the workspace into its embedded `WorkspaceHost` and owns the runtime.
 - **Remote outbound**: an already-running chan server that chan-desktop opens by URL. Example: the user runs `chan serve /tmp/foo`, then adds that token-bearing URL as an outbound attachment. The desktop owns only the window, not the server.
-- **Remote inbound**: chan-desktop listens on a loopback tunnel endpoint and an external `chan serve` connects to it. Example: the desktop listens on `127.0.0.1:9999`, then the user runs `chan serve /tmp/foo --tunnel-url=http://127.0.0.1:9999`. The desktop owns the listener and per-workspace webview, not the remote server.
 
 There is no fallback serve mode. If a user wants to run `chan serve` directly, that is a remote attachment, even when the server is on the same machine.
 
@@ -49,7 +48,7 @@ There is no fallback serve mode. If a user wants to run `chan serve` directly, t
 
 The `chan` registry at `~/.chan/config.toml` is the single source of truth for the set of known workspaces. Desktop-driven mutations (add, remove, default-workspace reconciliation) run in-process against the embedded host's shared `chan_workspace::Library` — the same code path the CLI uses, without spawning it. Routing everything through the one shared `Library` is what keeps a freshly-added workspace openable immediately: mutating only the on-disk registry would leave the host's in-memory snapshot stale.
 
-The desktop owns a small config of its own at the platform-appropriate path. It holds desktop-only state: outbound URL attachments, tunnel listen preferences (port / label / workspace name), and the closed-window restore stack (section 6.3). Nothing about whether a local workspace is currently *running* is persisted: the On column is derived live from the in-memory map of active local runtimes, so a desktop restart comes up with everything off and there is no chance of a stale on=true sticking after a crash.
+The desktop owns a small config of its own at the platform-appropriate path. It holds desktop-only state: outbound URL attachments and the closed-window restore stack (section 6.3). Nothing about whether a local workspace is currently *running* is persisted: the On column is derived live from the in-memory map of active local runtimes, so a desktop restart comes up with everything off and there is no chance of a stale on=true sticking after a crash.
 
 A filesystem watcher (`notify` + debounce) runs over `~/.chan/` for the lifetime of the process and emits a `registry-changed` Tauri event when the registry file itself changes (events are filtered to that file: `preferences.toml` churn from pane drags must not storm the launcher). The frontend reacts by re-fetching `list_workspaces` and re-rendering. Concrete consequence: if the user runs `chan add ~/notes` from a terminal, the row appears in the desktop window without any explicit refresh.
 
@@ -60,7 +59,7 @@ The launcher (Tauri label `main`, title "Chan Desktop") is a singleton: it is ne
 | column  | meaning                                                  |
 |---------|----------------------------------------------------------|
 | On      | local rows: runtime toggle; remote rows: connection dot  |
-| Where   | kind glyph + locator: home/computer glyph + path (local), inbound glyph + label, outbound glyph + URL/label, plus an inbound/outbound caption on remote rows |
+| Where   | kind glyph + locator: home/computer glyph + path (local), outbound glyph + URL/label (remote) |
 | actions | Open split button (primary: in-app webview; caret menu: Open in Browser, Forget) |
 
 Clicking a local row's Where cell reveals the folder in the OS file manager. Workspace names are read-only in the desktop; renames happen through the CLI and the watcher reflects them.
@@ -71,11 +70,10 @@ On a fresh desktop launch with empty chan metadata, chan-desktop creates the pla
 
 When an existing registry has workspaces but no default workspace, the launcher prompts once per process to choose an existing registered workspace or create `Documents/Chan`. Choosing an existing workspace only sets `default_workspace_root`; it does not start, stop, move, or delete anything. When the registered default `Documents/Chan` path is missing, the launcher requires an explicit factory-reset confirmation before it clears chan metadata on this machine (user note folders outside chan metadata stay untouched), then recreates, seeds, registers, and opens `Documents/Chan`.
 
-The [New] button opens a single modal with a segmented three-way choice:
+The [New] button opens a single modal with a segmented two-way choice:
 
 - **Local directory**: native folder picker, then Open registers the folder via `add_workspace` and immediately starts + opens it. There is deliberately NO desktop-side pre-flight scan or feature toggle here: chan's SPA owns first-boot readiness (PreflightOverlay.svelte) and the optional Semantic / Reports layers post-boot. A desktop scan dialog would duplicate and race the SPA boot surface.
 - **Remote outbound**: URL + optional name form (`add_outbound_workspace`); we dial out.
-- **Remote inbound**: port/label/workspace form, then a listening state with copyable `ssh -R` + `chan serve` snippets (`tunnel_start` / `tunnel_stop`); we listen. Dismissing the modal never stops a live listener — `tunnel_status` is the source of truth and reopening the modal shows it still listening.
 
 The auto-start on add is specific to the desktop UI: the user's intent there is "make this workspace usable now". `chan add` from a terminal only registers; the desktop shows the new row with On = off.
 
@@ -114,7 +112,6 @@ The desktop avoids inventing durable validation rules. It defers to chan-workspa
 
 - **Workspace name**: not validated by the desktop at all. Names are read-only in the UI; the only writer is `chan rename`, which enforces `chan_tunnel_proto::is_valid_workspace_name` itself.
 - **Path**: canonicalised via `std::fs::canonicalize` before being registered or opened, so the registry key the desktop uses matches what the user sees. When canonicalisation fails (broken symlink, asleep network mount), the literal path is used.
-- **Tunnel label / workspace name**: sanitised on save against `chan_tunnel_proto::is_valid_username` / `is_valid_workspace_name` (section 11).
 
 ## 5. Self-contained runtime
 
@@ -132,11 +129,11 @@ Every window is a Tauri webview with a label prefix that encodes its kind, and T
 
 - `main` — the singleton launcher (section 3.1). The `main-*` glob is also covered by the launcher capability so any launcher-class window inherits the same permission set.
 - `workspace-<hash>-<seq>` — local workspace windows. The hash identifies the workspace (it is also the embedded route prefix), the per-process `seq` makes every label unique so multi-window works; the stable prefix is what teardown and capability matching key on.
-- `tunnel-<hash>-<seq>` / `outbound-<hash>-<seq>` — remote workspace windows, hashed from the tenant/attachment identity, namespaced apart from local labels.
+- `outbound-<hash>-<seq>` — remote workspace windows, hashed from the attachment identity, namespaced apart from local labels.
 - `terminal-win-<seq>` — standalone terminal windows (section 6.5).
 - `about` — the bundled About window: singleton, same content on every platform (mirrors the SPA Dashboard About slide), and the target the macOS system About item is redirected to.
 
-All embedded-SPA windows (workspace / tunnel / outbound / terminal) load the SPA with `?w=<label>` so per-window session state (`session.json` panes/tabs) is keyed by the window, and get a " Window N" title suffix where N is the lowest free number among live windows sharing a base title, so the OS window switcher disambiguates.
+All embedded-SPA windows (workspace / outbound / terminal) load the SPA with `?w=<label>` so per-window session state (`session.json` panes/tabs) is keyed by the window, and get a " Window N" title suffix where N is the lowest free number among live windows sharing a base title, so the OS window switcher disambiguates.
 
 ### 6.2 Menus and the chord bridge
 
@@ -153,7 +150,7 @@ Quitting prompts for confirmation once (running terminals and workspace runtimes
 
 ### 6.3 Bury-on-close and window restore
 
-The OS close button on an SPA window *buries* it instead of destroying it: the webview hides, live terminals and layout stay warm, and a notice dialog teaches the behaviour. Buried windows are listed in the Window menu and unburied from there or by Cmd+Shift+N on their family. Two cases really close: a standalone terminal window with no live shells, and a window still on the connecting screen (burying it would leave an unkillable hidden retry loop). Programmatic closes (the SPA's empty-window cascade, workspace-off teardown, tunnel drop) destroy outright and never bury.
+The OS close button on an SPA window *buries* it instead of destroying it: the webview hides, live terminals and layout stay warm, and a notice dialog teaches the behaviour. Buried windows are listed in the Window menu and unburied from there or by Cmd+Shift+N on their family. Two cases really close: a standalone terminal window with no live shells, and a window still on the connecting screen (burying it would leave an unkillable hidden retry loop). Programmatic closes (the SPA's empty-window cascade, workspace-off teardown) destroy outright and never bury.
 
 At bury time the desktop captures a restore snapshot — window label, URL hash, zoom level — onto a small LRU stack in the desktop config, keyed by workspace identity. The next open of that workspace pops a compatible entry and reuses the label (so `?w=` re-hydrates the panes/tabs from `session.json`), re-applies the URL hash (overlay state: file-browser path, search query, graph scope), and restores the zoom. The stack survives restarts, so "the window I had open" comes back across a quit, and entries whose label is still alive are skipped rather than popped (a buried window must keep its entry for the quit-while-buried case).
 
@@ -167,7 +164,7 @@ Standalone terminal windows host the SPA in terminal-only mode (`kind=terminal`:
 
 ### 6.6 Remote windows
 
-Remote-backed connections (outbound attachments, tunnel tenants) own their window state server-side. The desktop polls each connection's `GET /api/windows` and lists the reopenable rows (`saved` but not `connected`) in the Window menu; choosing one builds a webview with that exact label so the remote re-hydrates that window's session. The poll refreshes when remote-backed windows open or close.
+Remote-backed connections (outbound attachments) own their window state server-side. The desktop polls each connection's `GET /api/windows` and lists the reopenable rows (`saved` but not `connected`) in the Window menu; choosing one builds a webview with that exact label so the remote re-hydrates that window's session. The poll refreshes when remote-backed windows open or close.
 
 ## 7. Power users and the CLI tool
 
@@ -245,72 +242,6 @@ chan serve /tmp/foo
 ```
 
 The user copies the printed URL, including the bearer token, into the [New] modal's Remote outbound form. The desktop opens that URL in a workspace webview (through the connecting screen, section 6.4) and does not try to start, stop, reclaim, or inspect the server process. This works whether the URL points at another machine or at `127.0.0.1` on the same machine.
-
-### 12.2 Inbound tunnel attach
-
-chan-desktop embeds the `chan-tunnel-server` crate so a remote `chan serve` can register a workspace over an SSH tunnel and show up in the launcher alongside local workspaces. The remote workspace opens in a regular workspace webview pointed at a loopback URL on the laptop; the request body rides yamux substreams back through the SSH tunnel to the remote `chan serve`.
-
-The same shape also works on one machine for local testing:
-
-```
-# in chan-desktop: listen on 127.0.0.1:9999
-chan serve /tmp/foo --tunnel-url=http://127.0.0.1:9999
-```
-
-### 12.3 Topology
-
-```
-laptop (chan-desktop)               remote host
----------------------               -----------
-tunnel listener   127.0.0.1:7777  <- ssh -R 7777:localhost:7777
-   |
-   +-- Arc<Registry>: (label, workspace) -> TunnelHandle
-   |
-   +-- per-tenant axum listener  127.0.0.1:<port>
-        GET /<workspace>/...  ->  PrependPathLayer  ->  public_router
-                              (sees /<label>/<workspace>/...)
-```
-
-The user opens an SSH session like:
-
-```
-ssh -R 7777:localhost:7777 remote-host
-# on remote
-chan serve PATH \
-  --tunnel-url=http://127.0.0.1:7777 \
-  --tunnel-token=<label> \
-  --tunnel-workspace-name=<workspace>
-```
-
-`<label>` is opaque to the protocol; chan-desktop returns it verbatim as the validated username and renders it in the launcher. A natural convention is `<hostname>-<osuser>` (e.g. `alex-laptop`), which keeps multiple machines distinguishable. Charset is `chan_tunnel_proto::is_valid_username`: ASCII alphanumeric plus `-` and `_`, <=64, first char alphanumeric.
-
-### 12.4 Security boundary
-
-Both the tunnel listener and every per-tenant listener bind `127.0.0.1` only. There is no config knob to change the bind host.
-
-- The tunnel listener speaks h2c (cleartext). The SSH `-R` forward is what makes that safe; sshd's default `GatewayPorts no` keeps the remote's `:7777` reachable only by processes on the remote host itself. Operators who flip `GatewayPorts yes` expose `:7777` to the remote's network and should know what they're doing.
-- The bearer token is the tenant label; there is no shared secret and no mapping table. Any local process on the laptop that can open `127.0.0.1:7777` can register a workspace under any label. This matches the OS process-trust boundary of a single-user desktop app: every local process can already read your files. Raising the bar (a config-file secret) is deferred to when this surface gets shared between users.
-- Per-tenant listeners use separate origins (`127.0.0.1:<portA>` vs `127.0.0.1:<portB>`), so the browser's same-origin policy delivers cross-tenant isolation analogous to wildcard subdomain isolation in production. JS served from one tenant cannot fetch from another.
-- The audited `chan_tunnel_server::public_router` is used unchanged. A thin path-rewrite layer prepends `/<label>` to every incoming request before routing, so the upstream's `/:user/:workspace/*rest` match still picks the registered handle. The prepended segment is captured at listener bring-up from the desktop's tenant string; it is never derived from any request byte.
-
-### 12.5 Lifecycle
-
-- Explicit start. Boot does not bind anything; the user opens [New] ▸ Remote inbound and clicks Start, which invokes `tunnel_start` with an optional port (`0` / blank = OS-assigned) plus optional label / workspace-name suggestions. The actual bound port plus `ssh -R` and `chan serve` snippets appear in the same panel.
-- Persistence is limited to the user's preferences (port, label, workspace name — pre-filled on the next launch). The listening state itself is NOT persisted: every desktop start comes up off.
-- A supervisor task polls the registry every 500 ms and reconciles the per-tenant listener set: spin up a fresh `127.0.0.1:0` axum listener when a new label first appears, tear it down when its last workspace deregisters. Polling is fine for the tiny set involved; promote to a notify channel if this ever shows up in a profile. On every newly-observed `(label, workspace)` the supervisor emits `tunneled-workspace-ready`, which auto-opens a workspace webview for the freshly-registered workspace.
-- Eviction is upstream's last-writer-wins: two `chan serve` instances registering `(label, workspace)` collapse to the most recent. The previous yamux connection is closed; the client reconnects with backoff per `chan-tunnel-client`. The UI shows the current `peer_addr` and `connected_at` so collisions are visible.
-- Stop tears down the tunnel listener, the supervisor, and every per-tenant listener via a cascading cancel token, and closes every tunnel-backed webview window. The registry empties as yamux connections close. On app exit the same shutdown runs unconditionally.
-
-### 12.6 UI
-
-A tunneled workspace row in the launcher has a connection dot in the On column (no toggle; the remote owns the lifecycle), the inbound glyph + label + "inbound" caption in the Where column, and an Open split button: in-app webview window primary, Open in Browser in the caret menu. There is no Forget on a tunneled row; closing a tunneled workspace means shutting down `chan serve` on the remote.
-
-### 12.7 Deferred
-
-- Per-tenant listener port persistence across Stop/Start cycles and across desktop restarts. Open windows on a tunneled workspace lose their target on Stop.
-- Pre-shared secret in the token to raise the bar above "any local process can register". Add when shared / multi-user.
-- Notify-channel from registry (replaces 500 ms polling).
-- Surfacing Hello.public on the UI explicitly (currently in the row tooltip only).
 
 ## 13. Native file integrations
 

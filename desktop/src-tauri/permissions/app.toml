@@ -14,15 +14,11 @@ permissions = [
   "allow-zoom-in",
   "allow-zoom-out",
   "allow-zoom-reset",
-  "allow-tunnel-status",
-  "allow-tunnel-start",
-  "allow-tunnel-stop",
   "allow-default-workspace-status",
   "allow-choose-default-workspace",
   "allow-create-default-workspace",
   "allow-factory-reset-default-workspace",
   "allow-open-local-workspace",
-  "allow-open-tunneled-workspace",
   "allow-add-outbound-workspace",
   "allow-open-outbound-workspace",
   "allow-remove-outbound-workspace",
@@ -117,21 +113,6 @@ description = "Enables the zoom_reset command."
 commands.allow = ["zoom_reset"]
 
 [[permission]]
-identifier = "allow-tunnel-status"
-description = "Enables the tunnel_status command."
-commands.allow = ["tunnel_status"]
-
-[[permission]]
-identifier = "allow-tunnel-start"
-description = "Enables the tunnel_start command."
-commands.allow = ["tunnel_start"]
-
-[[permission]]
-identifier = "allow-tunnel-stop"
-description = "Enables the tunnel_stop command."
-commands.allow = ["tunnel_stop"]
-
-[[permission]]
 identifier = "allow-default-workspace-status"
 description = "Enables the default_workspace_status command."
 commands.allow = ["default_workspace_status"]
@@ -157,11 +138,6 @@ description = "Enables the open_local_workspace command."
 commands.allow = ["open_local_workspace"]
 
 [[permission]]
-identifier = "allow-open-tunneled-workspace"
-description = "Enables the open_tunneled_workspace command."
-commands.allow = ["open_tunneled_workspace"]
-
-[[permission]]
 identifier = "allow-probe-url"
 description = "Enables the probe_url command."
 commands.allow = ["probe_url"]
@@ -169,7 +145,7 @@ commands.allow = ["probe_url"]
 # Deliberately NOT in the workspace-window set: the macOS drag
 # pasteboard is system-wide, so this is granted only to locally-served
 # windows via capabilities/local-drop.json (workspace-*, terminal-*) —
-# never to the remote-served tunnel-*/outbound-* webviews.
+# never to the remote-served outbound-* webviews.
 [[permission]]
 identifier = "allow-read-dropped-paths"
 description = "Enables the read_dropped_paths command (drag-pasteboard read at drop time)."

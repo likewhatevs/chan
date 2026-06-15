@@ -31,33 +31,6 @@ use serde::{Deserialize, Serialize};
 /// without risking unbounded growth from an open-close-reopen loop.
 pub const MAX_WINDOW_CONFIGS: usize = 20;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct TunnelConfig {
-    /// Port the tunnel listener should try to bind on the next
-    /// "Listen On" toggle. `0` means "let the OS pick". Persisted
-    /// across desktop restarts so a user who has a specific port in
-    /// mind (matched by an `ssh -R` config) does not have to retype
-    /// it on every launch.
-    ///
-    /// The "listening" state itself is NOT persisted: every desktop
-    /// start comes up with the tunnel off, matching the explicit
-    /// click-to-listen UX.
-    #[serde(default)]
-    pub preferred_port: u16,
-    /// Last bearer/label the user typed into the listen panel.
-    /// Empty means "no preference; suggest a default". Persisted so
-    /// a user who picked a memorable label keeps it across restarts.
-    /// Sanitised before save: enforced to pass
-    /// `chan_tunnel_proto::is_valid_username` on the way in.
-    #[serde(default)]
-    pub preferred_label: String,
-    /// Last workspace name the user typed. Empty means "no preference".
-    /// Persisted with the same sanitisation contract as
-    /// `preferred_label` (`is_valid_workspace_name`).
-    #[serde(default)]
-    pub preferred_workspace: String,
-}
-
 /// An already-running chan server that chan-desktop opens by URL.
 /// The URL may carry a bearer token. It is persisted verbatim after
 /// validation because the remote server owns token rotation and
@@ -91,17 +64,14 @@ pub struct WindowConfig {
     /// Workspace identity:
     ///   * local workspaces: canonical filesystem path (matches the
     ///     `AppState.serves` key).
-    ///   * tunneled workspaces: `"tunnel:<label>/<workspace>"`, namespaced
-    ///     to keep local and remote workspaces with colliding names
-    ///     distinct.
     ///   * outbound workspaces: `"outbound:<id>"`, namespaced by the
     ///     desktop-local attachment id because the URL can change.
     pub key: String,
     /// Tauri window label this config was last bound to. The label
-    /// is hash-prefixed (`workspace-<16hex>-<seq>` /
-    /// `tunnel-<16hex>-<seq>`) so it implicitly encodes the workspace
-    /// identity too — reusing it produces the same prefix and the
-    /// per-workspace close-on-exit cleanup walker still matches.
+    /// is hash-prefixed (`workspace-<16hex>-<seq>`) so it implicitly
+    /// encodes the workspace identity too — reusing it produces the
+    /// same prefix and the per-workspace close-on-exit cleanup walker
+    /// still matches.
     pub window_label: String,
     /// URL hash (everything after `#`, without the leading hash
     /// character). Empty when the SPA never wrote a hash. Applied
@@ -132,10 +102,6 @@ pub struct Config {
     /// remote workspaces that desktop opens by URL.
     #[serde(default)]
     pub outbound: Vec<OutboundWorkspace>,
-    /// Tunnel listener preferences. Defaults to `preferred_port = 0`
-    /// (OS-assigned) until the user types a specific number.
-    #[serde(default)]
-    pub tunnel: TunnelConfig,
     /// LRU stack of closed window configs. Newest at index 0. A
     /// fresh workspace webview pops the most-recent matching entry on
     /// open so the user re-enters the same panes / tabs / overlays
@@ -183,15 +149,6 @@ impl ConfigStore {
 /// canonical-path normalisation as the workspace registry.
 pub fn local_window_key(workspace_key: &str) -> String {
     workspace_key.to_string()
-}
-
-/// Identity key for a tunneled-workspace WindowConfig. Namespaced so a
-/// local workspace at `/home/alex/notes` and a tunneled workspace with
-/// `(label, workspace) = (_, "notes")` don't share the same stack
-/// entry (they have different session.json files in different
-/// workspaces).
-pub fn tunnel_window_key(tenant_label: &str, workspace: &str) -> String {
-    format!("tunnel:{tenant_label}/{workspace}")
 }
 
 /// Identity key for an outbound URL attachment.
@@ -400,20 +357,9 @@ mod tests {
     }
 
     #[test]
-    fn tunnel_window_key_namespaced_apart_from_local() {
-        // A local workspace at /home/alex/notes and a tunneled workspace
-        // exposing `(_, "notes")` must not collide in the stack.
-        assert_ne!(
-            local_window_key("/home/alex/notes"),
-            tunnel_window_key("alice", "notes"),
-        );
-    }
-
-    #[test]
-    fn outbound_window_key_namespaced_apart_from_local_and_tunnel() {
+    fn outbound_window_key_namespaced_apart_from_local() {
         let outbound = outbound_window_key("remote-1");
         assert_ne!(local_window_key("remote-1"), outbound);
-        assert_ne!(tunnel_window_key("remote", "1"), outbound);
     }
 
     #[test]

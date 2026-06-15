@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 /// Per-process monotonic counter appended to every workspace-window
 /// label so the user can open more than one window for the same
-/// workspace (local or tunneled). Tauri requires unique window labels
-/// per process; the prefix encodes the workspace identity and the seq
-/// disambiguates instances.
+/// workspace. Tauri requires unique window labels per process; the
+/// prefix encodes the workspace identity and the seq disambiguates
+/// instances.
 static WINDOW_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn next_window_seq() -> u64 {
@@ -37,13 +37,12 @@ const MAX_WINDOWS_PER_WORKSPACE: usize = 10;
 
 /// Window-title kind glyphs. A workspace window's title leads with one of
 /// these so the OS title bar + window switcher encode the kind at a glance,
-/// then the locator (path / URL / listen address). Emoji render as color
-/// glyphs in the macOS title bar; named constants so swapping to a monochrome
-/// set (e.g. arrows for outbound/inbound) is a one-line change each.
+/// then the locator (path / URL). Emoji render as color glyphs in the macOS
+/// title bar; named constants so swapping to a monochrome set (e.g. arrows
+/// for outbound) is a one-line change each.
 const ICON_LOCAL_HOME: &str = "\u{1F3E0}"; // house: local disk, under $HOME
 const ICON_LOCAL_OTHER: &str = "\u{1F5A5}\u{FE0F}"; // desktop computer: local, elsewhere
 const ICON_OUTBOUND: &str = "\u{1F4E4}"; // outbox tray: we dial OUT to a URL
-const ICON_INBOUND: &str = "\u{1F4E5}"; // inbox tray: a remote dials IN to us
 
 /// Live state for one running serve. Held in `AppState.serves`
 /// keyed by canonical workspace path.
@@ -176,43 +175,6 @@ fn local_title(key: &str, home: Option<&Path>) -> String {
     format!("{icon} {key}")
 }
 
-/// The local listen address a tunneled-workspace window connects to: the
-/// host:port (authority) of the per-tenant loopback `url`. Used as the inbound
-/// title locator. Falls back to the raw `url` if it has no authority (a
-/// loopback workspace URL always does, so the fallback is defensive).
-fn listen_addr_from_url(url: &str) -> String {
-    url.parse::<url::Url>()
-        .ok()
-        .and_then(|u| {
-            let host = u.host_str()?.to_string();
-            Some(match u.port() {
-                Some(port) => format!("{host}:{port}"),
-                None => host,
-            })
-        })
-        .unwrap_or_else(|| url.to_string())
-}
-
-/// Stable window-label prefix for a tunneled workspace, namespaced
-/// separately from `workspace-*` so a local workspace path and a tunneled
-/// workspace slug don't collide.
-pub fn tunnel_window_prefix(tenant_label: &str, workspace: &str) -> String {
-    let mut h = DefaultHasher::new();
-    tenant_label.hash(&mut h);
-    workspace.hash(&mut h);
-    format!("tunnel-{:016x}", h.finish())
-}
-
-/// Fresh, unique window label for a tunneled workspace webview. Same
-/// shape as `new_workspace_window_label`.
-pub fn new_tunnel_window_label(tenant_label: &str, workspace: &str) -> String {
-    format!(
-        "{}-{}",
-        tunnel_window_prefix(tenant_label, workspace),
-        next_window_seq()
-    )
-}
-
 /// Stable window-label prefix for an outbound URL attachment.
 pub fn outbound_window_prefix(id: &str) -> String {
     let mut h = DefaultHasher::new();
@@ -226,13 +188,12 @@ pub fn new_outbound_window_label(id: &str) -> String {
 }
 
 /// True when a Tauri label belongs to an embedded-served SPA webview
-/// (workspace / tunnel / outbound / standalone terminal). All four host
-/// the chan SPA and accept the `chan:command` dispatch bridge, so menu
-/// items that defer to the focused window (Settings, New Terminal's
-/// toggle branch) target any of them.
+/// (workspace / outbound / standalone terminal). All three host the chan
+/// SPA and accept the `chan:command` dispatch bridge, so menu items that
+/// defer to the focused window (Settings, New Terminal's toggle branch)
+/// target any of them.
 pub fn is_workspace_webview_label(label: &str) -> bool {
     label.starts_with("workspace-")
-        || label.starts_with("tunnel-")
         || label.starts_with("outbound-")
         || label.starts_with("terminal-")
 }
@@ -277,51 +238,6 @@ pub fn spawn_local_workspace_window(
         },
     )?;
     Ok(label)
-}
-
-/// Spawn a new tunneled-workspace webview window. Same multi-window
-/// semantics and config-stack restore as the local variant.
-pub fn spawn_tunneled_workspace_window(
-    app: &AppHandle,
-    tenant_label: &str,
-    workspace: &str,
-    url: &str,
-) -> Result<String, String> {
-    let prefix = tunnel_window_prefix(tenant_label, workspace);
-    let config_key = config::tunnel_window_key(tenant_label, workspace);
-    let restore = match unbury_or_restore(app, &prefix, &config_key, || {
-        new_tunnel_window_label(tenant_label, workspace)
-    })? {
-        OpenOutcome::Unburied(label) => {
-            // Re-poll the remote's window list so the menu reflects it.
-            crate::refresh_remote_windows_menu(app);
-            return Ok(label);
-        }
-        OpenOutcome::Build(restore) => restore,
-    };
-    // Inbound (a remote dialed in over the tunnel) is reached through a
-    // local per-tenant loopback listener; the window's `url` points at it.
-    // Title with the inbound glyph + that listener's host:port, the locator
-    // analogous to the local path / outbound URL.
-    let title = tunnel_window_title(url);
-    let label = restore.label.clone();
-    let built = build_workspace_window(
-        app,
-        WindowSpec {
-            label: &restore.label,
-            title: &title,
-            url,
-            url_hash_seed: &restore.url_hash,
-            config_key,
-            zoom_seed: restore.zoom,
-            connecting: None,
-            kind: None,
-        },
-    );
-    // A tunnel window just appeared: re-poll the remote's window list
-    // so the Window menu's remote section reflects it.
-    crate::refresh_remote_windows_menu(app);
-    built.map(|()| label)
 }
 
 /// Spawn a new outbound URL webview window. The desktop does not own
@@ -391,7 +307,7 @@ pub async fn spawn_local_terminal_window(
     let label = format!("terminal-win-{}", next_window_seq());
     // `config_key` is unused for terminal windows (no LRU restore), but
     // `build_workspace_window` takes one; an empty key never matches a real
-    // workspace/tunnel/outbound key and the terminal close branch skips the
+    // workspace/outbound key and the terminal close branch skips the
     // capture entirely. No per-window tenant teardown on build failure: the
     // tenant is shared and persistent.
     build_workspace_window(
@@ -491,11 +407,6 @@ pub fn outbound_window_title(url: &str) -> String {
     format!("{ICON_OUTBOUND} {url}")
 }
 
-/// Base window title for a tunneled (remote-dials-in) workspace window.
-pub fn tunnel_window_title(url: &str) -> String {
-    format!("{ICON_INBOUND} {}", listen_addr_from_url(url))
-}
-
 /// Reopen a REMOTE-known window (a `saved && !connected` row from the
 /// remote serve's `GET /api/windows`) by building a webview with that
 /// exact label: the `?w=<label>` the build appends makes the remote
@@ -517,7 +428,7 @@ pub fn reopen_remote_window(
             zoom_seed: 1.0,
             // Outbound remotes route through the connecting screen like
             // any other outbound window (a down remote must not paint a
-            // blank webview); tunnel loopbacks load directly.
+            // blank webview).
             connecting: entry.connecting.then_some(entry.url.as_str()),
             kind: None,
         },
@@ -570,7 +481,7 @@ struct RestoredWindow {
     zoom: f64,
 }
 
-/// Shared open preamble for the local / tunnel / outbound spawn fns:
+/// Shared open preamble for the local / outbound spawn fns:
 /// prefer unburying the family's most recent hidden window, enforce the
 /// per-family window cap, then pop a compatible WindowConfig for the
 /// label + restore state (fresh label, empty hash, default zoom when
@@ -651,14 +562,14 @@ struct WindowSpec<'a> {
     /// `session.json`. Empty when there's nothing to restore.
     url_hash_seed: &'a str,
     /// WindowConfig identity key (`local_window_key` or
-    /// `tunnel_window_key`). Stamped onto the close handler so a
+    /// `outbound_window_key`). Stamped onto the close handler so a
     /// user-initiated close pushes the window's final URL hash back
     /// into the LRU stack. Empty for terminal windows (no LRU restore).
     config_key: String,
     /// Zoom level to restore; 1.0 (the default) skips the IPC round-trip.
     zoom_seed: f64,
-    /// Load strategy. `None` (local + tunnel) loads `url` directly via
-    /// `WebviewUrl::External`: those backends are up before the window
+    /// Load strategy. `None` (local) loads `url` directly via
+    /// `WebviewUrl::External`: that backend is up before the window
     /// opens. `Some(display_url)` (outbound) instead loads the bundled
     /// `connecting.html` and hands it the display URL plus the assembled
     /// navigate target through an injected `window.__CHAN_CONNECTING__`;
@@ -675,11 +586,10 @@ struct WindowSpec<'a> {
 
 /// Build and show a chan-style workspace webview window on the main
 /// thread. Internal: call `spawn_local_workspace_window` /
-/// `spawn_tunneled_workspace_window` / `spawn_outbound_workspace_window`
-/// from outside. Centralising the
+/// `spawn_outbound_workspace_window` from outside. Centralising the
 /// key-bridge JS, the size defaults, the zoom-hotkey polyfill, and
 /// the drag-drop handler off in one place means workspace UX changes
-/// don't fork between the local and tunneled paths.
+/// don't fork between the local and outbound paths.
 fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), String> {
     let WindowSpec {
         label: window_label,
@@ -696,7 +606,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     };
     parsed.query_pairs_mut().append_pair("w", window_label);
     // `kind=terminal` is the SPA's only signal to enter terminal-only mode
-    // (no workspace fetch, terminal panes only). Workspace/tunnel/outbound
+    // (no workspace fetch, terminal panes only). Workspace/outbound
     // windows pass `None` and the SPA stays in full workspace mode.
     if let Some(kind) = kind {
         parsed.query_pairs_mut().append_pair("kind", kind);
@@ -723,7 +633,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     let label_owned = window_label.to_string();
     let title_owned = title.to_string();
     // `Some("terminal")` for terminal windows, else "workspace" (covers
-    // local / tunnel / outbound) — the kind `cs window list` shows.
+    // local / outbound) — the kind `cs window list` shows.
     // Captured owned so the 'static main-thread closure can hold it.
     let kind_owned = kind.unwrap_or("workspace").to_string();
     let res = app.run_on_main_thread(move || {
@@ -762,7 +672,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
             // phase listener calls preventDefault before the
             // polyfill's bubble-phase listener sees the keydown).
             // Requires `core:webview:allow-set-webview-zoom` on
-            // workspace-* / tunnel-* / outbound-* windows per
+            // workspace-* / outbound-* windows per
             // capabilities/workspace.json.
             .zoom_hotkeys_enabled(true)
             // Hand HTML5 drag-and-drop to the page — this must stay
@@ -830,7 +740,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                     // burying it would leave an unkillable hidden retry
                     // loop).
                     // Programmatic closes (the SPA's empty-window cascade,
-                    // workspace-off teardown, tunnel drop) call `destroy()`
+                    // workspace-off teardown) call `destroy()`
                     // and never reach this branch.
                     WindowEvent::CloseRequested { api, .. } => {
                         let state = app_for_close.state::<Arc<AppState>>();
@@ -875,7 +785,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                     }
                     // Single cleanup point for EVERY destroy path: the
                     // no-live-shells close above, the SPA cascade destroy,
-                    // workspace-off / tunnel-drop / outbound-forget
+                    // workspace-off / outbound-forget
                     // teardown, and app exit. Frees the display number,
                     // drops the zoom entry, and clears a stale buried
                     // registry entry if the window died while hidden.
@@ -901,9 +811,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         // A destroyed remote-backed window may now be a
                         // reopenable `saved && !connected` row on the
                         // remote — re-poll so the menu offers it.
-                        if label_for_close.starts_with("tunnel-")
-                            || label_for_close.starts_with("outbound-")
-                        {
+                        if label_for_close.starts_with("outbound-") {
                             crate::refresh_remote_windows_menu(&app_for_close);
                         }
                     }
@@ -972,7 +880,7 @@ fn capture_window_config(app: &AppHandle, window_label: &str, config_key: &str, 
     //     down the WKWebView never finishes navigating and reports a nil URL.
     //     The hash is chan-SPA restore state, meaningless for an outbound
     //     remote, so skip the read entirely (no url() call, no panic).
-    //   - A local/tunnel window whose backend died before close can hit the
+    //   - A local window whose backend died before close can hit the
     //     same nil-URL panic, so guard that read with catch_unwind (the release
     //     profile unwinds, so this is catchable) and degrade to an empty hash.
     let url_hash = if window_label.starts_with("outbound-") {
@@ -1048,28 +956,10 @@ pub fn close_local_workspace_windows(app: &AppHandle, key: &str) {
     close_windows_with_prefix(app, &workspace_window_prefix(key))
 }
 
-/// Destroy every webview window opened for this tunneled workspace.
-/// Used by the tunnel supervisor when a (label, workspace) pair drops
-/// out of the registry; the remote has gone away, so the per-tenant
-/// listener no longer routes for it and any open window now points
-/// at nothing useful.
-pub fn close_tunneled_workspace_windows(app: &AppHandle, tenant_label: &str, workspace: &str) {
-    close_windows_with_prefix(app, &tunnel_window_prefix(tenant_label, workspace))
-}
-
 /// Destroy every webview window opened for this outbound URL
 /// attachment. Used when the user forgets the attachment row.
 pub fn close_outbound_workspace_windows(app: &AppHandle, id: &str) {
     close_windows_with_prefix(app, &outbound_window_prefix(id))
-}
-
-/// Destroy every tunneled-workspace webview window in the process,
-/// regardless of which (label, workspace) it belongs to. Used by the
-/// tunnel module on `stop_listening`: the tunnel listener and
-/// every per-tenant listener are about to be cancelled, so the
-/// open windows would all error on their next request anyway.
-pub fn close_all_tunneled_workspace_windows(app: &AppHandle) {
-    close_windows_with_prefix(app, "tunnel-")
 }
 
 fn close_windows_with_prefix(app: &AppHandle, prefix: &str) {
@@ -1667,23 +1557,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn listen_addr_from_url_extracts_host_port_authority() {
-        // The inbound (tunnel) title locator is the per-tenant loopback
-        // host:port the window connects to.
-        assert_eq!(
-            listen_addr_from_url("http://127.0.0.1:54321/notes/?t=tok"),
-            "127.0.0.1:54321",
-        );
-        assert_eq!(
-            listen_addr_from_url("http://localhost:8787/index.html"),
-            "localhost:8787",
-        );
-        // No authority to extract -> defensive fall back to the raw string.
-        assert_eq!(listen_addr_from_url("not a url"), "not a url");
-    }
-
-    // Workspace and tunnel webviews host the SPA, which
+    // Workspace and outbound webviews host the SPA, which
     // routes external http(s) link clicks through tauri-plugin-opener
     // via the `plugin:opener|open_url` IPC. Without these permissions
     // the IPC denies, the SPA falls back to the clipboard-copy notify
@@ -1746,15 +1620,11 @@ mod tests {
     }
 
     #[test]
-    fn workspace_capability_grants_opener_to_workspace_tunnel_and_outbound_windows() {
+    fn workspace_capability_grants_opener_to_workspace_and_outbound_windows() {
         let windows = capability_windows(WORKSPACE_CAPABILITY_JSON);
         assert!(
             windows.iter().any(|w| w == "workspace-*"),
             "workspace capability must target workspace-* windows: {windows:?}",
-        );
-        assert!(
-            windows.iter().any(|w| w == "tunnel-*"),
-            "workspace capability must target tunnel-* windows: {windows:?}",
         );
         assert!(
             windows.iter().any(|w| w == "outbound-*"),
@@ -1829,9 +1699,9 @@ mod tests {
     #[test]
     fn drag_pasteboard_read_is_scoped_to_locally_served_windows() {
         // The macOS drag pasteboard is system-wide and persists after
-        // the drag ends: a remote-served SPA (tunnel-* / outbound-*
-        // windows) must NOT be able to poll `read_dropped_paths` and
-        // harvest paths the user drags around in other applications.
+        // the drag ends: a remote-served SPA (outbound-* windows) must
+        // NOT be able to poll `read_dropped_paths` and harvest paths the
+        // user drags around in other applications.
         // The grant therefore lives in its own capability targeting
         // only the locally-served window kinds...
         let windows = capability_windows(LOCAL_DROP_CAPABILITY_JSON);
@@ -1844,9 +1714,7 @@ mod tests {
             "local-drop capability must cover terminal-* windows: {windows:?}",
         );
         assert!(
-            windows
-                .iter()
-                .all(|w| w != "tunnel-*" && w != "outbound-*" && w != "main"),
+            windows.iter().all(|w| w != "outbound-*" && w != "main"),
             "local-drop capability must stay off remote-served and launcher windows: {windows:?}",
         );
         let perms = capability_permissions(LOCAL_DROP_CAPABILITY_JSON);
@@ -1855,7 +1723,7 @@ mod tests {
             "local-drop capability must grant allow-read-dropped-paths: {perms:?}",
         );
         // ...and must not leak in through the broad surfaces that
-        // tunnel-* / outbound-* windows DO receive.
+        // outbound-* windows DO receive.
         let workspace_perms = capability_permissions(WORKSPACE_CAPABILITY_JSON);
         assert!(
             workspace_perms

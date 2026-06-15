@@ -12,7 +12,6 @@ mod linux_gui_stack;
 mod pdf;
 mod registry;
 mod serve;
-mod tunnel;
 mod watcher;
 mod window_ops;
 
@@ -35,7 +34,6 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder,
 
 use config::{Config, ConfigStore, OutboundWorkspace, WindowConfig};
 use serve::ServeHandle;
-use tunnel::TunnelState;
 
 const CHAN_BUSY_CHANGED: &str = "chan-busy";
 const SYSTEM_NOTICE: &str = "system-notice";
@@ -50,11 +48,6 @@ pub struct AppState {
     /// Initialized during Tauri setup, after the async runtime is
     /// available for Tokio listener registration.
     embedded: OnceLock<embedded::EmbeddedServer>,
-    /// Embedded chan-tunnel-server. Owns the tunnel listener on
-    /// 127.0.0.1:7777, the shared registry, and the per-tenant
-    /// loopback listeners that proxy into registered remote
-    /// `chan serve` instances.
-    tunnel: Arc<TunnelState>,
     /// Per-live-window zoom level. Tracks the
     /// current zoom for every open webview keyed by window label so
     /// `zoom_in` / `zoom_out` / `zoom_reset` can compute the next
@@ -90,7 +83,7 @@ pub struct AppState {
     pub buried_windows: Mutex<Vec<BuriedWindow>>,
     /// Reopenable REMOTE windows, keyed by remote window label: the
     /// `saved && !connected` rows from each remote connection's
-    /// (outbound attachment / tunnel tenant) `GET /api/windows`,
+    /// (outbound attachment) `GET /api/windows`,
     /// refreshed by `refresh_remote_windows_menu`. The Window menu
     /// lists them under `remote:` ids; clicking one opens a webview
     /// with that exact label so the remote restores its session blob.
@@ -107,10 +100,9 @@ pub struct AppState {
 /// One reopenable remote window: see `AppState::remote_reopen`.
 #[derive(Debug, Clone)]
 pub struct RemoteReopen {
-    /// The connection's webview URL (outbound URL with its token /
-    /// tunnel per-tenant loopback URL).
+    /// The connection's webview URL (outbound URL with its token).
     pub url: String,
-    /// Base window title (`📤 <url>` / `📥 <host:port>`); the build
+    /// Base window title (`📤 <url>`); the build
     /// suffixes " Window N".
     pub base_title: String,
     /// Menu entry text (base title + the remote window's tail).
@@ -127,7 +119,7 @@ pub struct RemoteReopen {
 #[derive(Debug, Clone)]
 pub struct BuriedWindow {
     /// Tauri window label (`workspace-<16hex>-<seq>` / `terminal-win-<seq>` /
-    /// tunnel / outbound). Also the Window-menu item id suffix.
+    /// outbound). Also the Window-menu item id suffix.
     pub label: String,
     /// OS display title at bury time ("🏠 /path Window 2",
     /// "Terminal Window 1") — shown verbatim in the Window menu.
@@ -141,7 +133,7 @@ pub struct BuriedWindow {
 /// `-<seq>` segment removed (everything through the LAST dash).
 /// `terminal-win-3` -> `terminal-win-` (all standalone terminals are
 /// one family); `workspace-<16hex>-2` -> `workspace-<16hex>-` (one
-/// family per workspace; same shape for tunnel / outbound labels).
+/// family per workspace; same shape for outbound labels).
 fn window_family_prefix(label: &str) -> &str {
     match label.rfind('-') {
         Some(idx) => &label[..=idx],
@@ -343,15 +335,12 @@ impl AppState {
 /// * `kind = "local"`: a chan-registry entry, backed by a
 ///   workspace mounted into the embedded server. Includes the canonical
 ///   filesystem path and live URL.
-/// * `kind = "tunneled"`: a remote `chan serve` that dialed into
-///   the embedded tunnel server. No path; `url` points at the
-///   per-tenant loopback listener.
 /// * `kind = "outbound"`: a remote `chan serve` explicitly attached
 ///   by URL. No desktop-owned lifecycle; `id` points at the stored
 ///   attachment row.
 ///
-/// Fields specific to tunneled rows are optional so the JSON shape
-/// is a strict superset of the local row; the renderer reads `kind`
+/// `id` / `label` are specific to outbound rows and optional so the JSON
+/// shape is a strict superset of the local row; the renderer reads `kind`
 /// once and chooses which optionals to surface.
 #[derive(Debug, Clone, Serialize)]
 struct Workspace {
@@ -363,14 +352,6 @@ struct Workspace {
     url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    workspace: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    public: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    peer_addr: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    connected_at: Option<String>,
 }
 
 #[tauri::command]
@@ -398,33 +379,9 @@ fn list_workspaces(state: State<Arc<AppState>>) -> Result<Vec<Workspace>, String
                 on,
                 url,
                 label: None,
-                workspace: None,
-                public: None,
-                peer_addr: None,
-                connected_at: None,
             }
         })
         .collect();
-
-    // Tunneled rows: one per registered (label, workspace) in the
-    // embedded chan-tunnel-server. URL is populated by the
-    // supervisor as soon as the per-tenant listener binds; an
-    // empty URL means "just registered, the listener will follow
-    // on the next 500ms tick".
-    for t in state.tunnel.snapshot() {
-        merged.push(Workspace {
-            kind: "tunneled",
-            id: None,
-            path: String::new(),
-            on: true,
-            url: t.url,
-            label: Some(t.label),
-            workspace: Some(t.workspace),
-            public: Some(t.public),
-            peer_addr: t.peer_addr,
-            connected_at: Some(t.connected_at),
-        });
-    }
 
     let outbound_workspaces = state.store.lock().unwrap().get().map_err(err)?.outbound;
     for outbound in outbound_workspaces {
@@ -438,10 +395,6 @@ fn list_workspaces(state: State<Arc<AppState>>) -> Result<Vec<Workspace>, String
             on: true,
             url,
             label,
-            workspace: None,
-            public: None,
-            peer_addr: None,
-            connected_at: None,
         });
     }
 
@@ -592,159 +545,6 @@ async fn set_workspace_on(
 #[tauri::command]
 fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
     state.store.lock().unwrap().get().map_err(err)
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct TunnelStatus {
-    /// True while the tunnel listener is bound.
-    listening: bool,
-    /// Actual bound port (only populated while `listening`).
-    port: Option<u16>,
-    /// User's preferred port from desktop config. `0` means
-    /// "let the OS assign one". UI uses this to populate the port
-    /// input field.
-    preferred_port: u16,
-    /// Either the user's saved label or a freshly-suggested one if
-    /// they've never typed anything. Suggestions avoid colliding
-    /// with labels currently registered in the running tunnel:
-    /// "tunnel" → "tunnel-1" → ... up to 999.
-    preferred_label: String,
-    /// User's saved workspace name or a default ("notes"). No
-    /// collision check — workspace uniqueness is scoped per label, and
-    /// the desktop doesn't track which labels are remotely
-    /// preferred.
-    preferred_workspace: String,
-    /// Pre-formatted `ssh -R` reverse-forward snippet. `None` when
-    /// the tunnel isn't listening (no port to reference yet).
-    ssh_snippet: Option<String>,
-    /// Pre-formatted `chan serve` command with the bound port,
-    /// canonical TUNNEL_PATH, and the user's chosen label/workspace
-    /// already substituted. Copy-paste ready.
-    chan_serve_snippet: Option<String>,
-}
-
-/// Build the `ssh -R` and `chan serve` snippets that the listen
-/// panel renders verbatim. Pre-formatting them here means JS does
-/// zero templating — and the canonical URL path (with
-/// `TUNNEL_PATH`) lives in exactly one place in the codebase.
-fn build_snippets(port: u16, label: &str, workspace: &str) -> (String, String) {
-    let ssh = format!("ssh -R {port}:localhost:{port} user@remote");
-    // `--no-browser` keeps chan serve from launching the remote's
-    // default browser at startup (it has nothing to point at — the
-    // visitor URL belongs to chan-desktop, which is what auto-opens
-    // the workspace webview on this side instead). `PATH` goes last so
-    // the user only needs to edit one trailing argument.
-    let chan = format!(
-        "chan serve --tunnel-url=http://127.0.0.1:{port}{path} \
-         --tunnel-token={label} --tunnel-workspace-name={workspace} --no-browser PATH",
-        path = chan_tunnel_proto::TUNNEL_PATH,
-    );
-    (ssh, chan)
-}
-
-/// Pick a label suggestion: if the user has one saved, use it
-/// verbatim. Otherwise try "tunnel"; if a remote is already
-/// registered under that label, walk "tunnel-1", "tunnel-2", ...
-/// until we find a free one. Falls back to `tunnel` at the end of
-/// the range (uniqueness is best-effort; the registry's
-/// last-writer-wins eviction is the real arbiter).
-fn suggest_label(saved: &str, state: &AppState) -> String {
-    if !saved.is_empty() {
-        return saved.to_string();
-    }
-    let in_use: std::collections::HashSet<String> = state
-        .tunnel
-        .snapshot()
-        .into_iter()
-        .map(|d| d.label)
-        .collect();
-    let base = "tunnel";
-    if !in_use.contains(base) {
-        return base.to_string();
-    }
-    for i in 1..1000 {
-        let candidate = format!("{base}-{i}");
-        if !in_use.contains(&candidate) {
-            return candidate;
-        }
-    }
-    base.to_string()
-}
-
-fn suggest_workspace(saved: &str) -> String {
-    if saved.is_empty() {
-        "notes".to_string()
-    } else {
-        saved.to_string()
-    }
-}
-
-#[tauri::command]
-fn tunnel_status(state: State<Arc<AppState>>) -> Result<TunnelStatus, String> {
-    let cfg = state.store.lock().unwrap().get().map_err(err)?.tunnel;
-    let preferred_label = suggest_label(&cfg.preferred_label, &state);
-    let preferred_workspace = suggest_workspace(&cfg.preferred_workspace);
-    let port = state.tunnel.tunnel_port();
-    let listening = state.tunnel.is_listening();
-    let (ssh_snippet, chan_serve_snippet) = match (listening, port) {
-        (true, Some(p)) => {
-            let (s, c) = build_snippets(p, &preferred_label, &preferred_workspace);
-            (Some(s), Some(c))
-        }
-        _ => (None, None),
-    };
-    Ok(TunnelStatus {
-        listening,
-        port,
-        preferred_port: cfg.preferred_port,
-        preferred_label,
-        preferred_workspace,
-        ssh_snippet,
-        chan_serve_snippet,
-    })
-}
-
-/// Start the tunnel listener with the user's chosen port, label,
-/// and workspace. Validates `label` / `workspace` against the protocol's
-/// charset rules so the rendered snippet matches what the wire
-/// will actually accept. Persists all three for the next session.
-#[tauri::command]
-async fn tunnel_start(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
-    preferred_port: u16,
-    label: String,
-    workspace: String,
-) -> Result<u16, String> {
-    let label = label.trim().to_string();
-    let workspace = workspace.trim().to_string();
-    if !chan_tunnel_proto::is_valid_username(&label) {
-        return Err(format!(
-            "invalid label {label:?}: ASCII alphanumerics plus '-' / '_', \
-             first char alphanumeric, ≤64 chars",
-        ));
-    }
-    if !chan_tunnel_proto::is_valid_workspace_name(&workspace) {
-        return Err(format!(
-            "invalid workspace name {workspace:?}: lowercase ASCII alphanumerics plus '-', \
-             first and last char alphanumeric, ≤32 chars",
-        ));
-    }
-    {
-        let mut store = state.store.lock().unwrap();
-        let mut cfg = store.get().map_err(err)?;
-        cfg.tunnel.preferred_port = preferred_port;
-        cfg.tunnel.preferred_label = label;
-        cfg.tunnel.preferred_workspace = workspace;
-        store.save(&cfg).map_err(err)?;
-    }
-    let tunnel = Arc::clone(&state.tunnel);
-    tunnel::start_listening(app, tunnel, preferred_port).await
-}
-
-#[tauri::command]
-fn tunnel_stop(app: tauri::AppHandle, state: State<Arc<AppState>>) {
-    tunnel::stop_listening(&app, &state.tunnel);
 }
 
 #[tauri::command]
@@ -1125,34 +925,6 @@ async fn desktop_handle_upgrade(
             message: format!("update check failed: {e}"),
         },
     }
-}
-
-/// Open an additional in-app Tauri webview for a tunneled workspace.
-/// Each call yields a NEW window — the first one is opened by the
-/// supervisor on registration, and the Launch button calls this
-/// for subsequent windows. Errors if the per-tenant listener
-/// hasn't bound yet (URL not formed).
-#[tauri::command]
-fn open_tunneled_workspace(
-    app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
-    label: String,
-    workspace: String,
-) -> Result<(), String> {
-    let url = state
-        .tunnel
-        .snapshot()
-        .into_iter()
-        .find(|d| d.label == label && d.workspace == workspace)
-        .map(|d| d.url)
-        .ok_or_else(|| format!("no tunneled workspace {label}/{workspace}"))?;
-    if url.is_empty() {
-        return Err(format!(
-            "tunneled workspace {label}/{workspace} has no URL yet; per-tenant listener still binding",
-        ));
-    }
-    serve::spawn_tunneled_workspace_window(&app, &label, &workspace, &url)?;
-    Ok(())
 }
 
 /// Result of a connecting-screen reachability probe. `reachable` is
@@ -1601,7 +1373,6 @@ fn main() {
         store: Mutex::new(store),
         serves: Mutex::new(HashMap::new()),
         embedded: OnceLock::new(),
-        tunnel: TunnelState::new(),
         live_window_zooms: Mutex::new(HashMap::new()),
         window_numbers: Mutex::new(HashMap::new()),
         window_title_overrides: Mutex::new(HashMap::new()),
@@ -1705,12 +1476,6 @@ fn main() {
                     );
                 }
             }
-
-            // Tunnel listener is OFF until the user explicitly
-            // clicks "Attach" in the Workspaces window. We just
-            // construct the empty TunnelState during boot; binding
-            // 127.0.0.1 happens on the IPC `tunnel_start` call.
-            let _ = state_for_setup.tunnel.clone();
 
             // macOS CLI-to-desktop handoff listener (ratified Option
             // B). Binds the well-known per-user UDS so a `chan serve
@@ -1829,15 +1594,11 @@ fn main() {
             zoom_in,
             zoom_out,
             zoom_reset,
-            tunnel_status,
-            tunnel_start,
-            tunnel_stop,
             default_workspace_status,
             choose_default_workspace,
             create_default_workspace,
             factory_reset_default_workspace,
             open_local_workspace,
-            open_tunneled_workspace,
             probe_url,
             add_outbound_workspace,
             open_outbound_workspace,
@@ -1879,11 +1640,6 @@ fn main() {
                 // Best-effort: unmount every embedded local workspace
                 // before the desktop runtime exits.
                 serve::stop_all(&state_for_exit);
-                // Cancel the tunnel listener (if active) and every
-                // per-tenant listener. Tasks exit when their cancel
-                // token fires; the process is on its way out, so we
-                // don't await them.
-                tunnel::shutdown(&state_for_exit.tunnel);
             }
             // macOS: Dock click or `open -a` while the process is
             // still alive. If no windows are visible (main has been
@@ -1923,7 +1679,7 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let workspace_manager = MenuItemBuilder::with_id("win-main", "Workspaces").build(app)?;
     // New Window opens another window of the FOCUSED window's
     // connection (open_new_window_for_focused_workspace): local
-    // workspace, tunnel or outbound remote, or another standalone
+    // workspace or outbound remote, or another standalone
     // terminal window; with the launcher (or nothing) focused it opens
     // a standalone terminal window — the launcher itself is a
     // singleton and is never multiplied. Convention for future
@@ -1941,7 +1697,7 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     // swallows the accelerator on macOS, so a launcher-focused Cmd+T would
     // dead-end). The single handler routes by the FOCUSED window's kind: a
     // launcher (main / main-*) opens a new standalone terminal window; any
-    // embedded SPA window (workspace-* / tunnel-* / outbound-* / terminal-*)
+    // embedded SPA window (workspace-* / outbound-* / terminal-*)
     // gets `app.terminal.toggle` dispatched, which the SPA interprets per
     // its mode (workspace: toggle a pane terminal; terminal: add a tab).
     let new_terminal = MenuItemBuilder::with_id("app-new-terminal", "New Terminal")
@@ -2258,7 +2014,7 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
 /// Re-poll every remote connection's `GET /api/windows` and replace the
 /// reopenable-remote-windows snapshot (then rebuild the menu). Spawned
 /// async: each remote gets a short timeout and a failed poll just
-/// leaves that connection out this round. Triggers: a tunnel/outbound
+/// leaves that connection out this round. Triggers: an outbound
 /// window opening or being destroyed, and a `remote:` menu click.
 /// Tauri 2 exposes no menu-will-open hook, so event-driven refresh
 /// with tolerable staleness is the design.
@@ -2290,15 +2046,6 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
                     connecting: true,
                 });
             }
-        }
-        for t in state.tunnel.snapshot() {
-            conns.push(Conn {
-                family: format!("{}-", serve::tunnel_window_prefix(&t.label, &t.workspace)),
-                url: t.url.clone(),
-                base_title: serve::tunnel_window_title(&t.url),
-                config_key: config::tunnel_window_key(&t.label, &t.workspace),
-                connecting: false,
-            });
         }
 
         let client = match reqwest::Client::builder()
@@ -2473,9 +2220,9 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// label across the running `serves` map, then reuse the same
 /// `spawn_local_workspace_window` path `open_local_workspace` uses.
 ///
-/// A focused `tunnel-*` / `outbound-*` window opens a new window on the
+/// A focused `outbound-*` window opens a new window on the
 /// SAME remote (the connection is recovered from the label's hash
-/// prefix against the tunnel snapshot / outbound attachments). With the
+/// prefix against the outbound attachments). With the
 /// launcher (or nothing) focused, Cmd/Ctrl+Shift+N opens a standalone
 /// terminal window instead — the launcher is a singleton, never
 /// multiplied. The "Workspaces" picker stays reachable via the
@@ -2527,7 +2274,7 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
     };
     let focused_label = focused.label().to_string();
     let state = app.state::<Arc<AppState>>();
-    // Family unbury first: workspace-, tunnel- and outbound- windows all
+    // Family unbury first: workspace- and outbound- windows all
     // group by their `<kind>-<16hex>-` label prefix.
     if let Some(buried) = state.most_recent_buried(window_family_prefix(&focused_label)) {
         if unbury_window(app, &buried) {
@@ -2546,19 +2293,6 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
             }
         }
         // Stale window for a forgotten attachment: surface the picker.
-        return show_window(app, "main");
-    }
-    if focused_label.starts_with("tunnel-") {
-        // New window on the SAME inbound (tunneled) remote, recovered
-        // from the live tunnel snapshot by label-hash prefix.
-        for t in state.tunnel.snapshot() {
-            let prefix = serve::tunnel_window_prefix(&t.label, &t.workspace);
-            if focused_label.starts_with(&format!("{prefix}-")) {
-                return serve::spawn_tunneled_workspace_window(app, &t.label, &t.workspace, &t.url)
-                    .map(|_| ());
-            }
-        }
-        // The remote dropped out of the registry; surface the picker.
         return show_window(app, "main");
     }
     let resolved = {
@@ -2665,7 +2399,7 @@ fn dispatch_to_focused_workspace(app: &tauri::AppHandle, command: &str) {
 /// Route File ▸ New Terminal (Cmd+T) by the focused window's
 /// kind.
 ///
-/// - An embedded SPA window (workspace-* / tunnel-* / outbound-* /
+/// - An embedded SPA window (workspace-* / outbound-* /
 ///   terminal-*) gets `app.terminal.toggle` dispatched. The SPA decides
 ///   what that means: a workspace window toggles a pane terminal (its
 ///   existing behaviour); a terminal window adds a terminal tab.
@@ -2691,7 +2425,7 @@ fn handle_new_terminal(app: &tauri::AppHandle) {
 /// Route File ▸ Close Window (Cmd+W) by the focused window's
 /// kind, mirroring `handle_new_terminal`.
 ///
-/// - A focused workspace webview (workspace-* / tunnel-* / outbound-* /
+/// - A focused workspace webview (workspace-* / outbound-* /
 ///   terminal-*) gets `app.tab.close` dispatched — the same CustomEvent the
 ///   KEY_BRIDGE_JS KeyW case fires — so Cmd+W closes the active tab, not the
 ///   window.
@@ -2812,7 +2546,7 @@ mod tests {
         // All standalone terminals are one family.
         assert_eq!(window_family_prefix("terminal-win-0"), "terminal-win-");
         assert_eq!(window_family_prefix("terminal-win-12"), "terminal-win-");
-        // Workspace / tunnel / outbound group per hash segment.
+        // Workspace / outbound group per hash segment.
         assert_eq!(
             window_family_prefix("workspace-00deadbeef00aa11-3"),
             "workspace-00deadbeef00aa11-",

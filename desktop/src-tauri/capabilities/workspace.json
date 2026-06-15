@@ -1,11 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "workspace",
-  "description": "Capabilities for per-workspace webview windows: workspace-* are locally-supervised chan serves, tunnel-* are remote workspaces reached over chan-tunnel, outbound-* are explicit URL attachments, terminal-* are standalone embedded-served terminal-only windows.",
+  "description": "Capabilities for per-workspace webview windows: workspace-* are locally-supervised chan serves, outbound-* are explicit URL attachments, terminal-* are standalone embedded-served terminal-only windows.",
   "remote": {
     "urls": ["http://127.0.0.1:*", "http://localhost:*"]
   },
-  "windows": ["workspace-*", "tunnel-*", "outbound-*", "terminal-*"],
+  "windows": ["workspace-*", "outbound-*", "terminal-*"],
   "permissions": [
     "workspace-window",
     "core:webview:allow-set-webview-zoom",

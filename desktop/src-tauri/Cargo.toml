@@ -53,14 +53,9 @@ getrandom = { workspace = true }
 gethostname = { workspace = true }
 reqwest = { workspace = true }
 
-# Embed chan-tunnel-server so a remote `chan serve --tunnel-url`
-# registers as a workspace in the desktop Workspaces window.
-chan-tunnel-server = { workspace = true }
-chan-tunnel-proto = { workspace = true }
-async-trait = { workspace = true }
+# The launcher's local workspace runtime serves the embedded SPA + API
+# over a loopback axum router (see src/embedded.rs).
 axum = { workspace = true }
-tower = { workspace = true }
-http = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "process"] }
 tokio-util = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
@@ -91,5 +86,4 @@ objc2-web-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFRunLoop", "CFDate"] }
 
 [dev-dependencies]
-chan-tunnel-client = { workspace = true }
 tempfile = { workspace = true }
