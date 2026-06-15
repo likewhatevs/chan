@@ -1,6 +1,6 @@
 # Phase 26 - Windows-first chan-desktop: the Git BASH terminal, named-pipe control socket, and markdown iframe embeds
 
-Status: landing (round 1; code-complete, @@Lead isolated full-tree gate green + `cargo xwin` windows-msvc check green at `7b2bfbdf`; **`windows-latest` CI green** — run 27548007231, all three OS jobs success: build + NSIS bundle + headless `/api/health` smoke; merged to `origin/main` on green per @@Alex's survey choice; @@Alex real-hardware Windows *runtime* smoke pending — the runtime is empirically unverified by the team, see Verification).
+Status: released (round 1; **shipped as v0.36.0** — @@Alex lifted the original land+CI-green-only scope and elected to ship). `windows-latest` CI green (run 27548007231: build + NSIS + headless `/api/health` smoke), `make pre-push` + `cargo xwin` windows-msvc green at `7b2bfbdf`, merged to `origin/main`, and the v0.36.0 publish run (27561543753) was green end-to-end: signed+notarized macOS desktop, GitHub Release, chan.app `/dl` metadata. The Windows *runtime* is still **empirically unverified** by the team — @@Alex's real-hardware smoke is best-effort, post-release (see Verification).
 Span: 2026-06-15.
 Tags: #desktop #windows #terminal #git-bash #ipc #packaging #ci #shortcuts #markdown #embed #team
 
@@ -85,4 +85,12 @@ Decisions ratified with @@Alex before the round (locked, not re-litigated):
 ## Notes
 
 - The round's coordination bus (`new-team-4/`: plan, tasks, journals) is the live dispatch during the round; per the convention it is committed alongside this report when the round fully closes (after the CI result and @@Alex's smoke land).
-- Versions: the round rides after **v0.35.0**; no release was cut within it (land + CI-green only — no public Windows release this phase). `windows-latest` CI is green and the round merged to `origin/main`; this report flips to `Status: closed` once @@Alex's real-hardware Windows runtime smoke (the named-pipe `cs` round-trip + Git BASH spawn + the missing-Git gate) is recorded.
+- Versions: **released as v0.36.0** (after v0.35.0). The round was scoped land+CI-green-only, but
+  @@Alex elected to ship on his explicit go ("merge onto main and release", best-effort Windows
+  smoke later); the version bump + tag + publish followed the standard release procedure (dry-run
+  publish=false green first → tag → publish run 27561543753). **No Authenticode / Windows updater
+  feed this cycle** (locked), so the Windows desktop installer is the CI dry-run artifact (run
+  27548007231), not a published signed installer — the Windows *code* ships in the v0.36.0 binary.
+  The one open item is @@Alex's real-hardware Windows runtime smoke (named-pipe `cs` round-trip +
+  Git BASH spawn + the missing-Git gate); he re-reports if it breaks (pre-release-merge-unverified
+  discipline).
