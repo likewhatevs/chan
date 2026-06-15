@@ -46,9 +46,9 @@ There is no fallback serve mode. If a user wants to run `chan serve` directly, t
 
 ### 3.0 Source of truth
 
-The `chan` registry at `~/.chan/config.toml` is the single source of truth for the set of known workspaces. Desktop-driven mutations (add, remove, default-workspace reconciliation) run in-process against the embedded host's shared `chan_workspace::Library` — the same code path the CLI uses, without spawning it. Routing everything through the one shared `Library` is what keeps a freshly-added workspace openable immediately: mutating only the on-disk registry would leave the host's in-memory snapshot stale.
+The `chan` registry at `~/.chan/config.toml` is the single source of truth for the set of known workspaces. Desktop-driven mutations (add, remove) run in-process against the embedded host's shared `chan_workspace::Library` — the same code path the CLI uses, without spawning it. Routing everything through the one shared `Library` is what keeps a freshly-added workspace openable immediately: mutating only the on-disk registry would leave the host's in-memory snapshot stale.
 
-The desktop owns a small config of its own at the platform-appropriate path. It holds desktop-only state: outbound URL attachments and the closed-window restore stack (section 6.3). Nothing about whether a local workspace is currently *running* is persisted: the On column is derived live from the in-memory map of active local runtimes, so a desktop restart comes up with everything off and there is no chance of a stale on=true sticking after a crash.
+The desktop owns a small config of its own at `~/.chan/desktop/config.json` — the same `~/.chan` home as the CLI registry, not a separate OS app-data directory. It holds desktop-only state: outbound URL attachments, the set of workspaces that were *on* (`enabled_workspaces`), and the closed-window restore stack (section 6.3). The On column is still derived live from the in-memory map of active local runtimes, but that on-set is persisted on every toggle and on clean shutdown, so a restart re-serves the workspaces the user left running (the §3.2 boot matrix). Accepted trade-off: a crash with an entry persisted re-serves it next boot; a re-serve failure there surfaces a notice and is left off (it drops from the set on the next clean shutdown).
 
 A filesystem watcher (`notify` + debounce) runs over `~/.chan/` for the lifetime of the process and emits a `registry-changed` Tauri event when the registry file itself changes (events are filtered to that file: `preferences.toml` churn from pane drags must not storm the launcher). The frontend reacts by re-fetching `list_workspaces` and re-rendering. Concrete consequence: if the user runs `chan add ~/notes` from a terminal, the row appears in the desktop window without any explicit refresh.
 
@@ -66,14 +66,15 @@ Clicking a local row's Where cell reveals the folder in the OS file manager. Wor
 
 ### 3.2 First launch and the [New] modal
 
-On a fresh desktop launch with empty chan metadata, chan-desktop creates the platform default workspace at `Documents/Chan`, seeds the embedded `docs/manual/` tree into it, registers it through `chan-workspace`, and opens it through the embedded local server.
+A workspace is opt-in: chan-desktop never creates one on your behalf. There is no default workspace, no `~/Documents/Chan`, and no embedded manual seeded anywhere. Boot opens the launcher and then follows the matrix:
 
-When an existing registry has workspaces but no default workspace, the launcher prompts once per process to choose an existing registered workspace or create `Documents/Chan`. Choosing an existing workspace only sets `default_workspace_root`; it does not start, stop, move, or delete anything. When the registered default `Documents/Chan` path is missing, the launcher requires an explicit factory-reset confirmation before it clears chan metadata on this machine (user note folders outside chan metadata stay untouched), then recreates, seeds, registers, and opens `Documents/Chan`.
+- **Nothing was on** (a fresh profile, or a registry whose workspaces are all off) — the launcher shows its (possibly empty) list and a **standalone terminal window** opens. That terminal is the workspace-less `kind=terminal` window you also get from Cmd+T / Cmd+Shift+N (section 6.5) — the "you always have a shell" floor.
+- **Workspaces were on at the last clean shutdown** (`enabled_workspaces`, section 3.0) — each is re-served and its window reopened; no standalone terminal opens (you already have windows). A workspace that fails to re-serve surfaces a system notice and is left off.
 
-The [New] button opens a single modal with a segmented two-way choice:
+The user creates or opens a workspace only when they want one, through the [New] modal. The [New] button opens a single modal with a segmented two-way choice:
 
 - **Local directory**: native folder picker, then Open registers the folder via `add_workspace` and immediately starts + opens it. There is deliberately NO desktop-side pre-flight scan or feature toggle here: chan's SPA owns first-boot readiness (PreflightOverlay.svelte) and the optional Semantic / Reports layers post-boot. A desktop scan dialog would duplicate and race the SPA boot surface.
-- **Remote outbound**: URL + optional name form (`add_outbound_workspace`); we dial out.
+- **Remote**: URL + optional name form (`add_outbound_workspace`); we dial out.
 
 The auto-start on add is specific to the desktop UI: the user's intent there is "make this workspace usable now". `chan add` from a terminal only registers; the desktop shows the new row with On = off.
 
@@ -241,7 +242,7 @@ Outbound attach means the server already exists and chan-desktop opens it by URL
 chan serve /tmp/foo
 ```
 
-The user copies the printed URL, including the bearer token, into the [New] modal's Remote outbound form. The desktop opens that URL in a workspace webview (through the connecting screen, section 6.4) and does not try to start, stop, reclaim, or inspect the server process. This works whether the URL points at another machine or at `127.0.0.1` on the same machine.
+The user copies the printed URL, including the bearer token, into the [New] modal's Remote form. The desktop opens that URL in a workspace webview (through the connecting screen, section 6.4) and does not try to start, stop, reclaim, or inspect the server process. This works whether the URL points at another machine or at `127.0.0.1` on the same machine.
 
 ## 13. Native file integrations
 
