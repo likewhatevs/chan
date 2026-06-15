@@ -43,6 +43,11 @@ struct WorkspaceGateState {
 }
 
 const LOW_LIMIT: u64 = 512;
+// The nofile/rlimit ceiling is a unix concept: both `nofile_limit` arms and
+// `effective_nofile_limit` are unix-only, so off unix (Windows) this const has
+// no users. `#[cfg(unix)]` keeps the windows build dead-code-clean under
+// `-D warnings`.
+#[cfg(unix)]
 const EFFECTIVE_NOFILE_CEILING: u64 = 4096;
 const TIGHT_HEADROOM: u64 = 96;
 const MODEST_HEADROOM: u64 = 192;
@@ -250,6 +255,10 @@ fn nofile_limit() -> Option<u64> {
     Some(EFFECTIVE_NOFILE_CEILING)
 }
 
+// Unix-only: called only from the linux/macos `nofile_limit` arm (clamping the
+// host rlimit). Off unix there is no rlimit to clamp, so gating it keeps the
+// windows build dead-code-clean.
+#[cfg(unix)]
 fn effective_nofile_limit(limit: Option<u64>) -> u64 {
     limit
         .unwrap_or(EFFECTIVE_NOFILE_CEILING)
@@ -332,6 +341,9 @@ mod tests {
         assert_eq!(active_workspace_capacity_for(snap), MAX_ACTIVE_WORKSPACES);
     }
 
+    // Exercises the unix-only `effective_nofile_limit` / `EFFECTIVE_NOFILE_CEILING`;
+    // gated to match so a windows `--tests` build stays clean.
+    #[cfg(unix)]
     #[test]
     fn unlimited_nofile_uses_internal_ceiling() {
         assert_eq!(effective_nofile_limit(None), EFFECTIVE_NOFILE_CEILING);
