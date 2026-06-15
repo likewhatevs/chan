@@ -24,6 +24,11 @@ jobs:
             artifact_name: linux-x86_64
           - os: macos-latest
             artifact_name: macos-aarch64
+          # Windows desktop dry-run (phase-26): build chan-desktop, bundle the
+          # NSIS installer, run a headless boot/health smoke. No Authenticode
+          # signing + no Windows updater feed this phase (land + CI-green only).
+          - os: windows-latest
+            artifact_name: windows-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -113,6 +118,52 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
         run: make macos-chan-dmg-notarised
+
+      - if: matrix.os == 'windows-latest'
+        name: Build Windows desktop package (NSIS)
+        working-directory: chan
+        shell: bash
+        run: |
+          set -euo pipefail
+          # chan-desktop embeds web/dist via rust-embed, so the SPA bundle must
+          # exist before the Rust crate compiles (mirrors `make chan-desktop`).
+          (cd web && npm install && npm run build)
+          # NSIS only: the cross-platform `bundle.targets: "all"` would also try
+          # the WiX MSI, which needs the WiX toolset we deliberately dropped.
+          (cd desktop/src-tauri && cargo tauri build --bundles nsis)
+
+      - if: matrix.os == 'windows-latest'
+        name: Headless boot + /api/health smoke
+        working-directory: chan
+        shell: bash
+        run: |
+          set -uo pipefail
+          # The desktop binary dispatches the chan CLI when its arg0 stem is
+          # `chan` (ARGV0 wins over argv[0] — chan_shell::invoked_arg0). Off
+          # unix, `chan serve` has no desktop GUI to hand off to, so it serves a
+          # normal standalone server — the headless proof that the Windows-built
+          # embedded server boots and answers. (The interactive GUI install is
+          # deferred to @@Alex on real hardware; there is no robust headless GUI
+          # smoke. This step stays RED until the core crates compile + serve for
+          # Windows — @@LaneA's transport seam.)
+          exe="target/release/chan-desktop.exe"
+          ws="$RUNNER_TEMP/chan-smoke-ws"   # outside the checkout: no VCS-parent refusal
+          mkdir -p "$ws"
+          ARGV0=chan CHAN_NO_DESKTOP_HANDOFF=1 "$exe" serve \
+            --no-browser --no-token --port 8799 "$ws" &
+          srv=$!
+          ok=
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8799/api/health | grep -q '"status":"ok"'; then
+              ok=1; echo "embedded server answered /api/health"; break
+            fi
+            sleep 2
+          done
+          kill "$srv" 2>/dev/null || true
+          if [ -z "$ok" ]; then
+            echo "::error::chan-desktop embedded server did not answer /api/health"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v7
         with:
