@@ -120,10 +120,11 @@
   <div>
     <p>
       The tunnel is core to chan, not a hosted service. Opt in and the same
-      workspace is reachable from another device: Chan Desktop attaches an
-      inbound tunnel from a remote <code>chan serve</code>, or opens one
-      directly over HTTP/2. The gateway that fronts it ships in the repo for
-      you to self-host. Nothing leaves your machine until you ask it to.
+      workspace is reachable from another device: <code>chan serve</code>
+      publishes a workspace over an outbound tunnel to a gateway, or Chan
+      Desktop opens a remote <code>chan serve</code> directly over HTTP/2. The
+      gateway that fronts it ships in the repo for you to self-host. Nothing
+      leaves your machine until you ask it to.
     </p>
   </div>
 </section>

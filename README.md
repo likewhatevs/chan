@@ -4,7 +4,7 @@ An AI-native IDE for the modern engineer. `chan` is a single static binary that 
 
 Modern engineers drive projects in Markdown, so `chan` is built for it: write your design docs, specs, and tasks, then put AI to work on them. Agents create, review, refine, and harden that work and then execute it. Multiple agents (Claude, Codex, Gemini) run in the embedded terminal and coordinate with each other through `chan`'s `cs` tooling and the in-process MCP server. Cross-file `[[wiki-link]]` autocomplete, BM25 + embedding hybrid search, a workspace graph, and code reports are built in.
 
-Single-user, single-machine. The HTTP server binds loopback by default. An opt-in tunnel reaches the same workspace from another device: chan-desktop attaches an inbound tunnel from a remote `chan serve`, or connects to one directly over HTTP/2. The tunnel's server side ships in this repo under `gateway/`, so you can self-host the whole path; the maintainer's own deployment at `workspace.chan.app` is experimental, with sign-in off by default, and is not the product.
+Single-user, single-machine. The HTTP server binds loopback by default. An opt-in tunnel reaches the same workspace from another device: `chan serve` publishes a workspace over an outbound tunnel to a gateway, or chan-desktop connects to a remote `chan serve` directly over HTTP/2. The tunnel's server side ships in this repo under `gateway/`, so you can self-host the whole path; the maintainer's own deployment at `workspace.chan.app` is experimental, with sign-in off by default, and is not the product.
 
 ## Quickstart
 
@@ -87,7 +87,7 @@ The first launch prints the URL on stderr and opens the user's default browser. 
 
 ## Reach a workspace remotely
 
-The tunnel is a core part of chan, not a hosted add-on. Instead of binding a local port, `chan serve` can publish a workspace over an outbound tunnel to a gateway that reverse-proxies it back to you: no inbound ports, no router config. chan-desktop can also attach an inbound tunnel from a remote `chan serve`, or open a remote `chan serve` directly over HTTP/2.
+The tunnel is a core part of chan, not a hosted add-on. Instead of binding a local port, `chan serve` can publish a workspace over an outbound tunnel to a gateway that reverse-proxies it back to you: no inbound ports, no router config. chan-desktop can also open a remote `chan serve` directly over HTTP/2.
 
 The gateway is that server side, and it lives in this repo under `gateway/` for you to run yourself. `--tunnel-url` defaults to `https://workspace.chan.app/v1/tunnel`, the maintainer's own deployment of that code; it is experimental, with sign-in off by default. Commands and flags are in the [tunnel manual](docs/manual/tunnel.md); see [`gateway/README.md`](gateway/README.md) to stand up your own gateway.
 

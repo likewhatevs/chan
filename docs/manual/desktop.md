@@ -1,6 +1,6 @@
 # Chan Desktop
 
-Chan Desktop is the native version of the IDE for macOS and Linux. It hosts the same workspace surface as `chan serve` in a native window (no browser chrome), and it can attach to workspaces running on other machines, both outbound and inbound.
+Chan Desktop is the native version of the IDE for macOS and Linux. It hosts the same workspace surface as `chan serve` in a native window (no browser chrome), and it can attach to a workspace running on another machine.
 
 ## Install
 
@@ -18,11 +18,7 @@ From inside a terminal, the `cs window` family manages these windows directly â€
 
 ## Remote workspaces
 
-A remote workspace is a `chan serve` running on another machine (a VM on your laptop, a box on your LAN, a VPS). Chan Desktop reaches it two ways.
-
-### Outbound: you dial the remote
-
-The remote listens; the desktop connects to it over HTTP/2.
+A remote workspace is a `chan serve` running on another machine (a VM on your laptop, a box on your LAN, a VPS). The remote listens; Chan Desktop connects to it over HTTP/2.
 
 1. On the remote machine, install chan and start a server:
 
@@ -35,7 +31,7 @@ chan serve ./chan
 
    Copy the URL `chan serve` prints (it carries the per-launch bearer token).
 
-2. In Chan Desktop: New -> Remote -> Outbound, and paste that URL. The workspace opens in a native window and feels local.
+2. In Chan Desktop: New -> Remote, and paste that URL. The workspace opens in a native window and feels local.
 
 If the remote port is not directly reachable, forward it over SSH first, then paste the resulting `http://localhost:<port>/...` URL:
 
@@ -43,14 +39,7 @@ If the remote port is not directly reachable, forward it over SSH first, then pa
 ssh user@host -L 8787:localhost:8787
 # then, in that session on the remote host:
 #   curl -fsSL https://chan.app/install.sh | sh && chan serve ./repo
-# paste the printed localhost URL into New -> Remote -> Outbound
+# paste the printed localhost URL into New -> Remote
 ```
 
 A Lima VM on a Mac is a convenient remote: it is a real Linux host reachable from the Mac, so the outbound flow exercises the full remote path locally.
-
-### Inbound: the remote dials you
-
-When you cannot listen on the remote machine, Chan Desktop can accept a reverse tunnel: the desktop listens, and the remote `chan serve` dials back to it.
-
-1. In Chan Desktop: New -> Remote -> Inbound, and pick a port to listen on (or `0` to let the OS choose).
-2. Copy the `chan serve ... --tunnel-url=<desktop-listener>` command the dialog shows, and run it on the remote machine. The workspace then appears in the desktop window.
