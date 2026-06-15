@@ -95,11 +95,12 @@
   let graceTimer: ReturnType<typeof setTimeout> | null = null;
   let ackTimer: ReturnType<typeof setTimeout> | null = null;
   let noteTimer: ReturnType<typeof setTimeout> | null = null;
-  // A `cancel-prompt` recall is in flight (ArrowUp pressed; awaiting the
-  // `prompt-cancelled` ack). Guards against double-sending while the editor
-  // stays locked through the round-trip. Cleared when a terminal phase
-  // resolves (consumeTerminalPhase).
-  let recallInFlight = false;
+  // A `cancel-prompt` is in flight (awaiting the `prompt-cancelled` ack), and
+  // the INTENT: "edit" (↑ recall — keep the draft to edit + resubmit) vs
+  // "cancel" (ESC — dequeue + DROP the draft). null = none in flight. Guards
+  // a double-send while the editor stays locked through the round-trip; the
+  // resolving phase reads + clears it (consumeTerminalPhase).
+  let recallMode: "edit" | "cancel" | null = null;
 
   // Read-only while a message is in flight ("sent"/"queued"); terminal
   // phases are consumed (cleared) by the phase effect below, so they never
@@ -129,7 +130,11 @@
     if (pending && isPending && pendingChipVisible) {
       const position =
         pending.phase === "queued" && (pending.depth ?? 0) > 1 ? ` (#${pending.depth})` : "";
-      return `queued — waiting for agent${position}`;
+      // Surface the queued-state affordances so the read-only card is
+      // self-explanatory: ↑ recalls the message to edit, Esc cancels (drops) it.
+      return pending.phase === "queued"
+        ? `queued${position} · ↑ edit · esc cancel`
+        : `queued — waiting for agent${position}`;
     }
     if (transientNote) return transientNote;
     // Teammate pokes (`cs terminal write`) share the queue: surface the
@@ -164,7 +169,8 @@
     if (!view) return;
     clearPendingTimers();
     pendingChipVisible = false;
-    recallInFlight = false;
+    const mode = recallMode;
+    recallMode = null;
     if (phase === "delivered") {
       // The agent consumed the message: NOW clear the composer + the draft
       // (the draft held the text the whole time it was queued).
@@ -174,10 +180,16 @@
       void flushWrite();
       view.focus();
     } else if (phase === "recalled") {
-      // Recall succeeded: the still-queued message was pulled before the PTY.
-      // KEEP the draft text and just unlock (clearing pendingPrompt below drops
-      // the lock) so the user edits and resubmits with a fresh id — no
-      // double-delivery, since the original is gone from the queue.
+      // The still-queued message was pulled before the PTY. ESC-cancel DROPS it
+      // (clear the composer + draft); ↑-recall KEEPS the draft so the user edits
+      // and resubmits with a fresh id (no double-delivery — the original is gone
+      // from the queue). Clearing pendingPrompt below drops the lock either way.
+      if (mode === "cancel") {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "" },
+        });
+        void flushWrite();
+      }
       view.focus();
     } else if (phase === "drained") {
       // Recall raced a drain: the message already hit the PTY. Surface it and
@@ -218,27 +230,41 @@
     }
   });
 
-  // Recall a still-queued message to edit it (GAP 1 "press up to edit"). Only
-  // while QUEUED (acked but not yet drained); "sent" (pre-ack) can't be safely
-  // cancelled by id yet, and a terminal phase has nothing to recall. Sends
-  // `cancel-prompt`; the editor stays locked until the `prompt-cancelled` ack
-  // resolves to "recalled" (unlock + keep text) or "drained" (already sent).
-  // Returns true to consume the ArrowUp; false lets it move the caret.
-  function recall(view: EditorView): boolean {
-    const pending = tab.pendingPrompt;
-    if (!pending || pending.phase !== "queued") return false;
-    // Only at the very start of the doc (empty selection at offset 0), so
-    // ArrowUp still navigates within a multi-line draft.
-    const sel = view.state.selection.main;
-    if (!sel.empty || sel.from !== 0) return false;
-    if (recallInFlight) return true;
-    if (!sendCancelToTerminal(tab.id, pending.id)) {
-      // Socket down: can't recall. Surface it; the message may still be queued.
-      showTransientNote("connection lost — can't recall");
-      return true;
-    }
-    recallInFlight = true;
+  // Recall a still-queued message to EDIT it (↑). Only while QUEUED (acked, not
+  // yet drained); "sent" (pre-ack) can't be safely cancelled by id, and a
+  // terminal phase has nothing to recall. Fires from ANYWHERE in the doc: the
+  // queued state reads as a read-only card (caret hidden), so there is no
+  // multi-line caret navigation to protect. Sends `cancel-prompt`; the editor
+  // stays locked until the `prompt-cancelled` ack resolves to "recalled" (keep
+  // the draft, unlock) or "drained" (already sent). When not queued, returns
+  // false so ArrowUp navigates the editable draft normally.
+  function recall(): boolean {
+    if (tab.pendingPrompt?.phase !== "queued") return false;
+    requestCancel("edit");
     return true;
+  }
+
+  // Cancel a still-queued message (ESC): dequeue it and DROP the draft (vs ↑,
+  // which keeps the draft to edit). Same `cancel-prompt` wire; the intent
+  // (`recallMode`) decides keep-vs-drop when the ack resolves.
+  function cancelQueued(): void {
+    if (tab.pendingPrompt?.phase !== "queued") return;
+    requestCancel("cancel");
+  }
+
+  function requestCancel(mode: "edit" | "cancel"): void {
+    const pending = tab.pendingPrompt;
+    if (!pending || pending.phase !== "queued") return;
+    if (recallMode !== null) return; // a recall/cancel is already in flight
+    if (!sendCancelToTerminal(tab.id, pending.id)) {
+      // Socket down: can't reach the queue. Surface it; the message may still
+      // be queued server-side.
+      showTransientNote(
+        mode === "cancel" ? "connection lost — can't cancel" : "connection lost — can't recall",
+      );
+      return;
+    }
+    recallMode = mode;
   }
 
   // Directory holding the draft (images upload here).
@@ -488,11 +514,17 @@
   }
 
   function onKeydown(e: KeyboardEvent): void {
-    // Escape hides the bubble (returns the user to the terminal). Stop it from
-    // reaching App.svelte's global Escape handling.
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      e.preventDefault();
+    if (e.key !== "Escape") return;
+    // Stop it from reaching App.svelte's global Escape handling.
+    e.stopPropagation();
+    e.preventDefault();
+    // While a message is QUEUED, Escape CANCELS it (dequeue + drop the draft) —
+    // one of the queued-state affordances (↑ edit · ESC cancel). Otherwise
+    // Escape dismisses the bubble back to the terminal (its normal meaning;
+    // hide/show is also Cmd+Shift+P).
+    if (tab.pendingPrompt?.phase === "queued") {
+      cancelQueued();
+    } else {
       hideRichPromptForTab(tab.id);
     }
   }
@@ -600,10 +632,20 @@
     border-top: 1px solid var(--border);
     user-select: none;
   }
-  /* In-flight message: the text stays visible but clearly inert (read-only
-     is enforced in the editor state; the dim is the affordance). */
+  /* In-flight message: the text stays visible but reads as a READ-ONLY card,
+     not an editable field. read-only is enforced in the editor state; the dim
+     + the hidden caret are the visual affordance (the keymap stays live so
+     ↑ recalls + Esc cancels). */
   .rich-prompt.pending .rp-editor {
     opacity: 0.55;
+  }
+  /* Hide the caret (native + drawn) so the queued card doesn't look editable. */
+  .rich-prompt.pending :global(.cm-content) {
+    caret-color: transparent;
+  }
+  .rich-prompt.pending :global(.cm-cursor),
+  .rich-prompt.pending :global(.cm-cursorLayer) {
+    display: none;
   }
   .rich-prompt.pending .rp-label.queued {
     color: var(--text-primary);

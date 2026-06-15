@@ -113,10 +113,9 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/connection lost — message may still be queued/);
   });
 
-  test("pending locks the editor read-only but keeps it editable so recall's keymap fires", () => {
+  test("pending locks the editor read-only + reads as a read-only card (caret hidden)", () => {
     // readOnly blocks doc edits; editable stays TRUE so the caret/keymap stay
-    // live and ArrowUp-at-doc-start can recall a queued message (GAP 1) — an
-    // editable:false editor would not receive the key.
+    // live for ↑/Esc — an editable:false editor would not receive the key.
     expect(richPromptSrc).toMatch(
       /\[EditorState\.readOnly\.of\(locked\), EditorView\.editable\.of\(true\)\]/,
     );
@@ -126,15 +125,29 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(
       /lockCompartment\.reconfigure\(lockExtensions\(isPending\)\)/,
     );
+    // The read-only LOOK: hide the caret while pending so it isn't an editable field.
+    expect(richPromptSrc).toMatch(
+      /\.rich-prompt\.pending :global\(\.cm-content\) \{\s*caret-color: transparent;/,
+    );
   });
 
-  test("ArrowUp at doc-start recalls a queued message (GAP 1)", () => {
-    // Keymap entry + the doc-start / queued guards + the cancel send.
+  test("queued state: ↑ recalls from anywhere, Esc cancels, affordances shown (GAP 1 UX)", () => {
+    // ArrowUp recalls to EDIT (no doc-start guard anymore — the card reads
+    // read-only, so there's no caret nav to protect).
     expect(richPromptSrc).toMatch(/\{ key: "ArrowUp", run: recall \}/);
-    expect(richPromptSrc).toMatch(/pending\.phase !== "queued"/);
-    expect(richPromptSrc).toMatch(/!sel\.empty \|\| sel\.from !== 0/);
+    expect(richPromptSrc).not.toMatch(/!sel\.empty \|\| sel\.from !== 0/);
+    // Esc while queued cancels (drops); else hides.
+    expect(richPromptSrc).toMatch(
+      /tab\.pendingPrompt\?\.phase === "queued"\)\s*\{\s*cancelQueued\(\);/,
+    );
+    // Both ↑ and Esc go through the one cancel-prompt wire; the intent decides
+    // keep-vs-drop.
+    expect(richPromptSrc).toMatch(/requestCancel\("edit"\)/);
+    expect(richPromptSrc).toMatch(/requestCancel\("cancel"\)/);
     expect(richPromptSrc).toMatch(/sendCancelToTerminal\(tab\.id, pending\.id\)/);
-    // recalled → keep text + unlock; drained → surface "already sent".
+    // The affordance hint in the queued label.
+    expect(richPromptSrc).toMatch(/queued\$\{position\} · ↑ edit · esc cancel/);
+    // recalled → keep text (edit) or drop (cancel); drained → "already sent".
     expect(richPromptSrc).toMatch(/already sent — too late to recall/);
   });
 
