@@ -538,7 +538,30 @@ async fn set_workspace_on(
     } else {
         serve::stop(Some(&app), &state, &key);
     }
+    persist_enabled_workspaces(&state);
     Ok(())
+}
+
+/// Snapshot the canonical keys of every currently-on local workspace
+/// into the desktop config so the next boot can re-serve them (the §3.2
+/// boot matrix). Called after each on/off toggle and on clean shutdown.
+/// Best-effort: a persistence failure is logged, never fatal to the
+/// toggle or the exit.
+fn persist_enabled_workspaces(state: &AppState) {
+    let mut keys: Vec<String> = state.serves.lock().unwrap().keys().cloned().collect();
+    keys.sort();
+    let mut store = state.store.lock().unwrap();
+    match store.get() {
+        Ok(mut cfg) => {
+            cfg.enabled_workspaces = keys;
+            if let Err(e) = store.save(&cfg) {
+                tracing::warn!(error = %e, "persisting enabled workspaces failed");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "reading config to persist enabled workspaces failed");
+        }
+    }
 }
 
 #[tauri::command]
@@ -1473,6 +1496,49 @@ fn main() {
                 }
             }
 
+            // Boot matrix (§3.2). A workspace is opt-in (B1), so boot
+            // never creates one. Either re-serve what the user left on,
+            // or drop to the always-available standalone terminal — the
+            // "you always have a shell" floor — when there's nothing to
+            // restore.
+            let enabled = state_for_setup
+                .store
+                .lock()
+                .unwrap()
+                .get()
+                .map(|cfg| cfg.enabled_workspaces)
+                .unwrap_or_default();
+            let handle = app.handle().clone();
+            if enabled.is_empty() {
+                // Fresh profile, or a registry whose workspaces are all
+                // off: the launcher shows its (possibly empty) list and
+                // we open a standalone terminal window.
+                spawn_terminal_window(&handle);
+            } else {
+                // Re-serve + reopen a window for each workspace that was
+                // on at the last clean shutdown. `serve::start` mounts the
+                // runtime AND opens its window. Serial so concurrent opens
+                // can't race the shared embedded host; on a re-serve
+                // failure surface a notice and leave it off (the key drops
+                // out of `enabled_workspaces` on the next clean shutdown).
+                let state_for_restore = Arc::clone(&state_for_setup);
+                tauri::async_runtime::spawn(async move {
+                    for key in enabled {
+                        if let Err(e) =
+                            serve::start(handle.clone(), Arc::clone(&state_for_restore), key.clone())
+                                .await
+                        {
+                            tracing::warn!(key = %key, error = %e, "restoring enabled workspace failed");
+                            emit_system_notice(
+                                &handle,
+                                "warning",
+                                format!("Could not re-open workspace {key}: {e}"),
+                            );
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1542,6 +1608,10 @@ fn main() {
                 request_quit(_app);
             }
             RunEvent::Exit => {
+                // Persist the on-set BEFORE teardown drains it, so the
+                // next boot re-serves exactly the workspaces that were
+                // on at this clean shutdown (the §3.2 boot matrix).
+                persist_enabled_workspaces(&state_for_exit);
                 // Best-effort: unmount every embedded local workspace
                 // before the desktop runtime exits.
                 serve::stop_all(&state_for_exit);

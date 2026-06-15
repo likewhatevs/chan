@@ -102,6 +102,16 @@ pub struct Config {
     /// remote workspaces that desktop opens by URL.
     #[serde(default)]
     pub outbound: Vec<OutboundWorkspace>,
+    /// Canonical keys of the local workspaces that were *on* (served) at
+    /// the last toggle / clean shutdown. Restored on the next boot (the
+    /// §3.2 boot matrix) so the desktop comes back up serving what the
+    /// user left running. Desktop-owned, so the CLI registry
+    /// (`~/.chan/config.toml`) stays pure. Trade-off: a crash with an
+    /// entry persisted re-serves it next boot; a re-serve failure there
+    /// surfaces a notice and is left off (it drops out of this set on the
+    /// next clean shutdown).
+    #[serde(default)]
+    pub enabled_workspaces: Vec<String>,
     /// LRU stack of closed window configs. Newest at index 0. A
     /// fresh workspace webview pops the most-recent matching entry on
     /// open so the user re-enters the same panes / tabs / overlays
@@ -363,6 +373,35 @@ mod tests {
     fn config_defaults_outbound_empty() {
         let cfg = Config::default();
         assert!(cfg.outbound.is_empty());
+    }
+
+    #[test]
+    fn config_defaults_enabled_workspaces_empty() {
+        // Fresh profile comes up with nothing on — the boot matrix
+        // opens the standalone terminal rather than re-serving anything.
+        let cfg = Config::default();
+        assert!(cfg.enabled_workspaces.is_empty());
+    }
+
+    #[test]
+    fn config_loads_without_enabled_workspaces_field() {
+        // A config.json that predates B4 (no enabled_workspaces key)
+        // must still load: serde(default) reads it as the empty set so
+        // the load never fails and drops the rest of the config.
+        let raw = r#"{ "outbound": [], "window_configs": [] }"#;
+        let cfg: Config = serde_json::from_str(raw).expect("load without enabled_workspaces");
+        assert!(cfg.enabled_workspaces.is_empty());
+    }
+
+    #[test]
+    fn config_enabled_workspaces_round_trip() {
+        let cfg = Config {
+            enabled_workspaces: vec!["/home/alex/notes".into(), "/tmp/scratch".into()],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let back: Config = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.enabled_workspaces, cfg.enabled_workspaces);
     }
 
     #[test]
