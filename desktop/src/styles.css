@@ -197,8 +197,7 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
 }
 .remote-cell:hover { color: var(--text-secondary); }
 /* Remote-row connection dot.
-   Green when the workspace has a live URL, grey otherwise. The
-   inbound/outbound direction lives on the WHERE-column icon. */
+   Green when the workspace has a live URL, grey otherwise. */
 .conn-dot {
   display: inline-block;
   width: 8px;
@@ -207,19 +206,10 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   background: var(--border);
 }
 .conn-dot.on { background: var(--accent); }
-/* WHERE-column directional glyphs for remote rows + the muted
-   inbound/outbound caption. Mirrors the .path-cell home/computer rules. */
-.where-cell .ic-outbound,
-.where-cell .ic-inbound {
+/* WHERE-column remote glyph. Mirrors the .path-cell home/computer rules. */
+.where-cell .ic-outbound {
   vertical-align: -2px;
   margin-right: 2px;
-}
-.where-dir {
-  color: var(--text-secondary);
-  font-size: 11px;
-  margin-left: 6px;
-  text-transform: uppercase;
-  letter-spacing: .04em;
 }
 
 /* Split button: primary "Open" + caret that toggles a small menu
@@ -289,10 +279,9 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   pointer-events: none;
 }
 
-/* New-workspace modal: overlay + segmented 3-choice switch + the
+/* New-workspace modal: overlay + segmented 2-choice switch + the
    per-choice bodies. Clones the preflight overlay scaffold and the
-   Team Work real-estate toggle; the inbound listening state reuses the
-   seg-toggle + snippet rules below. */
+   Team Work real-estate toggle. */
 .nw-overlay {
   position: fixed;
   inset: 0;
@@ -356,13 +345,13 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   gap: 10px;
   min-height: 80px;
 }
-.nw-intro, .nw-hint, .nw-muted {
+.nw-intro, .nw-muted {
   margin: 0;
   color: var(--text-secondary);
   line-height: 1.45;
 }
 .nw-intro { font-size: 13px; }
-.nw-hint, .nw-muted { font-size: 12px; }
+.nw-muted { font-size: 12px; }
 .nw-footer {
   display: flex;
   justify-content: flex-end;
@@ -381,7 +370,6 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   gap: 6px;
   color: var(--text-secondary);
 }
-.nw-row input[type="number"],
 .nw-row input[type="url"],
 .nw-row input[type="text"] {
   width: 110px;
@@ -394,32 +382,7 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
 }
 .nw-url-field { flex: 1 1 320px; }
 .nw-url-field input[type="url"] { width: 100%; min-width: 220px; }
-.nw-listening-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-/* seg-toggle + snippet are used inside the inbound listening state
-   (rehomed from the removed inline tunnel panel). */
-.seg-toggle {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-  font-size: 12px;
-}
-.seg-toggle .seg {
-  appearance: none;
-  background: transparent;
-  color: var(--text-secondary);
-  border: 0;
-  padding: 4px 10px;
-  cursor: pointer;
-  font: inherit;
-}
-.seg-toggle .seg + .seg { border-left: 1px solid var(--border); }
-.seg-toggle .seg.on { background: var(--accent); color: var(--bg); }
+/* snippet: click-to-copy command block in the Remote choice body. */
 .snippet {
   margin: 0;
   padding: 6px 8px;

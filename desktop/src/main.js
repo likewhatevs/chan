@@ -86,7 +86,6 @@ listen('auth-error', (e) => {
   refreshAuth();
 });
 
-let booted = false;
 let homeDir = '';
 /// True while a registry add/remove is running in the embedded
 /// host. Add/remove and feature toggles run in-process (no
@@ -144,40 +143,30 @@ function renderPath(full) {
   return `${computer}<span class="path-sep">/</span>${escapeHtml(full.replace(/^\//, ''))}`;
 }
 
-// Directional glyphs for the WHERE column on remote rows.
-// out = arrow leaving a box (we connect OUT to a URL); in = arrow
-// arriving into a tray (we LISTEN for an incoming connection). Match
-// the ic-home / ic-computer style (13x13, currentColor, 1.8 stroke) so
-// theme switches keep parity.
-const ICON_OUTBOUND = `<svg class="ic-outbound" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="outbound"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>`;
-const ICON_INBOUND = `<svg class="ic-inbound" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="inbound"><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/></svg>`;
+// Glyph for the WHERE column on a remote row: an arrow leaving a box
+// (we connect out to a URL). Matches the ic-home / ic-computer style
+// (13x13, currentColor, 1.8 stroke) so theme switches keep parity.
+const ICON_OUTBOUND = `<svg class="ic-outbound" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="remote"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>`;
 
 /// The WHERE cell, one renderer keyed on `kind`. Local reuses the
-/// home/computer path glyph; remote rows lead with a directional icon
-/// (outbound = we connect to a URL; inbound = we listen) plus a muted
-/// direction caption — the launcher's only INBOUND vs OUTBOUND
-/// indication (the ON column carries just the connection dot).
+/// home/computer path glyph; a remote row leads with the remote glyph
+/// plus the workspace label/URL.
 function renderWhere(d) {
-  if (d.kind === 'tunneled') {
-    return `${ICON_INBOUND}<span class="where-text">${escapeHtml(d.label || '')}</span><span class="where-dir">inbound</span>`;
-  }
   if (d.kind === 'outbound') {
     const display = d.label || d.url || 'Remote workspace';
-    return `${ICON_OUTBOUND}<span class="where-text">${escapeHtml(display)}</span><span class="where-dir">outbound</span>`;
+    return `${ICON_OUTBOUND}<span class="where-text">${escapeHtml(display)}</span>`;
   }
   return renderPath(d.path);
 }
 
 async function boot() {
-  let workspaces = await refresh();
+  // No forced new-workspace dialog: an empty list sits on the "No
+  // workspaces yet" empty state, and the standalone terminal window
+  // (opened by the desktop on boot) is the thing that appears. A
+  // workspace is opt-in via the empty-state New workspace button.
+  await refresh();
   await maybePromptDefaultWorkspace();
-  workspaces = await refresh();
-  if (!booted && workspaces.length === 0) {
-    booted = true;
-    showNewWorkspaceDialog('local');
-  } else {
-    booted = true;
-  }
+  await refresh();
 }
 
 async function maybePromptDefaultWorkspace() {
@@ -426,33 +415,13 @@ function applyChanBusyState(payload) {
   banner.textContent = `${op}...`;
 }
 
-/// Local|Tunnel snippet mode for the [New] -> Inbound listening state.
-/// `local` means "the remote chan serve runs on the same machine as
-/// this desktop, no SSH needed". `tunnel` means "chan serve lives on a
-/// remote host and an SSH reverse-forward bridges to this desktop's
-/// loopback port". Persisted in localStorage; the backend doesn't care
-/// since both snippets are pre-formatted.
-const TUNNEL_MODE_KEY = 'chanDesktopTunnelMode';
-function tunnelMode() {
-  const v = localStorage.getItem(TUNNEL_MODE_KEY);
-  return v === 'local' ? 'local' : 'tunnel';
-}
-function setTunnelMode(mode) {
-  localStorage.setItem(TUNNEL_MODE_KEY, mode === 'local' ? 'local' : 'tunnel');
-}
-
-/// The [New] workspace modal: one overlay carrying three choices, a
+/// The [New] workspace modal: one overlay carrying two choices, a
 /// segmented switch swapping the body per choice:
 ///   - Local directory: a folder picker + Open (add_workspace).
-///   - Remote outbound: a URL + name form (add_outbound_workspace); we
-///     dial out to the remote.
-///   - Remote inbound: a port-listen form, then a listening state with
-///     the chan serve snippet (tunnel_start / tunnel_stop); we listen.
+///   - Remote: a URL + name form (add_outbound_workspace); we dial out
+///     to a chan workspace already being served.
 ///
-/// ESC / backdrop / [X] dismiss. Dismiss NEVER stops a live inbound
-/// listener: it lives in the Rust supervisor and tunnel_status is the
-/// source of truth, so reopening New -> Inbound shows it still
-/// listening.
+/// ESC / backdrop / [X] dismiss.
 let activeNewDialog = null;
 
 function showNewWorkspaceDialog(initialChoice = 'local') {
@@ -493,8 +462,7 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
   choices.setAttribute('aria-label', 'New workspace type');
   const CHOICES = [
     ['local', 'Local directory'],
-    ['outbound', 'Remote outbound'],
-    ['inbound', 'Remote inbound'],
+    ['outbound', 'Remote'],
   ];
   const choiceButtons = {};
   for (const [key, label] of CHOICES) {
@@ -553,8 +521,7 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
     body.innerHTML = '';
     footer.innerHTML = '';
     if (choice === 'local') renderLocal();
-    else if (choice === 'outbound') renderOutbound();
-    else renderInbound();
+    else renderOutbound();
   }
 
   // ---- Local directory -------------------------------------------------
@@ -619,7 +586,7 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
     renderBody();
   }
 
-  // ---- Remote outbound (we connect to a URL) ---------------------------
+  // ---- Remote (we connect out to a URL) --------------------------------
   function renderOutbound() {
     body.innerHTML = `
       <p class="nw-intro">Connect to a chan workspace already being served at a URL (we dial out to it).</p>
@@ -672,124 +639,9 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
     await refresh();
   }
 
-  // ---- Remote inbound (we listen for an incoming connection) ----------
-  async function renderInbound() {
-    body.innerHTML = `<p class="nw-intro">Reading listener status…</p>`;
-    let status;
-    try {
-      status = await invoke('tunnel_status');
-    } catch (e) {
-      showError(e);
-      return;
-    }
-    // The user may have switched choices while tunnel_status was in
-    // flight; only paint if Inbound is still the active choice.
-    if (choice !== 'inbound') return;
-    if (status.listening && status.port != null) {
-      renderInboundListening(status);
-    } else {
-      renderInboundForm(status);
-    }
-  }
-
-  function renderInboundForm(status) {
-    body.innerHTML = `
-      <p class="nw-intro">Listen for incoming connections on a configurable port, or use 0 to let the OS pick one. Then connect to it:</p>
-      <pre class="snippet" data-copy="chan serve ./path/to/repo --tunnel-url={chan-desktop-listener}" title="click to copy">chan serve ./path/to/repo --tunnel-url={chan-desktop-listener}</pre>
-      <div class="nw-row">
-        <label>Port
-          <input id="nw-tunnel-port" type="number" min="0" max="65535" placeholder="auto"
-                 value="${status.preferred_port ? status.preferred_port : ''}"/>
-        </label>
-        <label>Label
-          <input id="nw-tunnel-label" type="text" maxlength="64"
-                 value="${escapeAttr(status.preferred_label || '')}"/>
-        </label>
-        <label>Workspace
-          <input id="nw-tunnel-workspace" type="text" maxlength="32"
-                 value="${escapeAttr(status.preferred_workspace || '')}"/>
-        </label>
-      </div>
-      <p class="nw-hint">Port 0 / empty lets the OS pick. Label appears as the first URL segment. Workspace name is lowercase ASCII + hyphens.</p>`;
-    const start = document.createElement('button');
-    start.className = 'btn primary';
-    start.type = 'button';
-    start.textContent = 'Start listening';
-    start.addEventListener('click', async () => {
-      const rawPort = (body.querySelector('#nw-tunnel-port').value || '').trim();
-      const preferred = rawPort === '' ? 0 : Math.max(0, Math.min(65535, Number(rawPort) | 0));
-      const label = (body.querySelector('#nw-tunnel-label').value || '').trim();
-      const workspace = (body.querySelector('#nw-tunnel-workspace').value || '').trim();
-      try {
-        await invoke('tunnel_start', { preferredPort: preferred, label, workspace });
-      } catch (e) {
-        showError(e);
-        return;
-      }
-      renderInbound();
-    });
-    footer.appendChild(start);
-    wireSnippetCopy(body);
-  }
-
-  function renderInboundListening(status) {
-    const ssh = status.ssh_snippet || '';
-    const cmd = status.chan_serve_snippet || '';
-    const mode = tunnelMode();
-    const isTunnel = mode === 'tunnel';
-    const sshBlock = isTunnel
-      ? `<p class="nw-muted">SSH from this machine to the remote with a reverse forward:</p>
-         <pre class="snippet" data-copy="${escapeAttr(ssh)}" title="click to copy">${escapeHtml(ssh)}</pre>
-         <p class="nw-muted">Then on the remote run:</p>`
-      : `<p class="nw-muted">On this machine, run:</p>`;
-    body.innerHTML = `
-      <div class="nw-listening-head">
-        <strong>Listening on 127.0.0.1:${status.port}</strong>
-        <div class="seg-toggle" role="tablist" aria-label="Where will chan serve run?">
-          <button class="seg ${mode === 'local' ? 'on' : ''}" data-mode="local" role="tab" aria-selected="${mode === 'local'}">Local</button>
-          <button class="seg ${mode === 'tunnel' ? 'on' : ''}" data-mode="tunnel" role="tab" aria-selected="${mode === 'tunnel'}">Tunnel</button>
-        </div>
-      </div>
-      ${sshBlock}
-      <pre class="snippet" data-copy="${escapeAttr(cmd)}" title="click to copy">${escapeHtml(cmd)}</pre>
-      <p class="nw-muted">Connected workspaces appear in the launcher list and open automatically.</p>`;
-    body.querySelectorAll('.seg-toggle .seg').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        setTunnelMode(btn.dataset.mode);
-        renderInboundListening(status);
-      });
-    });
-    wireSnippetCopy(body);
-    const stop = document.createElement('button');
-    stop.className = 'btn danger';
-    stop.type = 'button';
-    stop.textContent = 'Stop';
-    stop.addEventListener('click', async () => {
-      try {
-        await invoke('tunnel_stop');
-      } catch (e) {
-        showError(e);
-        return;
-      }
-      await refresh();
-      renderInbound();
-    });
-    const done = document.createElement('button');
-    done.className = 'btn';
-    done.type = 'button';
-    done.textContent = 'Done';
-    done.addEventListener('click', close);
-    footer.appendChild(stop);
-    footer.appendChild(done);
-  }
-
-  // Re-render hook so tunnel events can refresh a live inbound body
-  // while the modal is open (e.g. a remote connecting, or the listener
-  // stopping from elsewhere).
-  activeNewDialog = {
-    select,
-    refreshInbound() { if (choice === 'inbound') renderInbound(); },
-  };
+  // The singleton handle: a second [New] click switches the open
+  // modal's choice instead of stacking overlays.
+  activeNewDialog = { select };
 
   select(choice);
 }
@@ -814,31 +666,6 @@ function render(workspaces) {
     const hasUrl = !!d.url;
     const urlAttr = escapeAttr(d.url || '');
     const dotClass = hasUrl ? 'conn-dot on' : 'conn-dot';
-    if (d.kind === 'tunneled') {
-      // Tunneled row: no On toggle (the remote owns the lifecycle),
-      // no Path (it's a remote folder), no Forget (the remote drops
-      // the registration by shutting `chan serve` down). The label
-      // is the bearer token the remote chose; we show it verbatim
-      // and trust the user's naming convention.
-      const tip = [
-        d.peer_addr ? `peer ${d.peer_addr}` : null,
-        d.public ? 'public' : null,
-        d.connected_at ? `connected ${d.connected_at}` : null,
-      ].filter(Boolean).join(' · ');
-      return `
-      <tr data-kind="tunneled"
-          data-tunnel-label="${escapeAttr(d.label || '')}"
-          data-tunnel-workspace="${escapeAttr(d.workspace || '')}"
-          data-url="${urlAttr}">
-        <td><span class="${dotClass}" title="${escapeAttr(tip || 'inbound listener')}"></span></td>
-        <td class="path-cell remote-cell where-cell" title="${escapeAttr(d.url || '')}">${renderWhere(d)}</td>
-        <td>
-          <div class="row-actions">
-            ${renderOpenSplit({ hasUrl, includeForget: false, forgetDisabledAttr: 'disabled' })}
-          </div>
-        </td>
-      </tr>`;
-    }
     if (d.kind === 'outbound') {
       return `
       <tr data-kind="outbound"
@@ -920,29 +747,6 @@ function renderOpenSplit({ hasUrl, includeForget, forgetDisabledAttr, forgetLabe
 }
 
 function bindRowEvents() {
-  // Tunneled rows: Open + Open in Browser only. No toggle / reveal
-  // / Forget handlers because there is no desktop-side lifecycle
-  // to control — the remote `chan serve` owns it.
-  main.querySelectorAll('tr[data-kind="tunneled"]').forEach((tr) => {
-    const launch = tr.querySelector('[data-act="launch"]');
-    if (launch) {
-      launch.addEventListener('click', async () => {
-        // Open reuses the same in-app Tauri webview the supervisor
-        // opens on first registration. Going to the system browser
-        // is reachable through the dropdown's "Open in Browser".
-        const label = tr.dataset.tunnelLabel || '';
-        const workspace = tr.dataset.tunnelWorkspace || '';
-        if (!label || !workspace) return;
-        try {
-          await invoke('open_tunneled_workspace', { label, workspace });
-        } catch (e) {
-          showError(e);
-        }
-      });
-    }
-    bindSplitMenu(tr);
-  });
-
   main.querySelectorAll('tr[data-kind="outbound"]').forEach((tr) => {
     const id = tr.dataset.outboundId || '';
     const launch = tr.querySelector('[data-act="launch"]');
@@ -1044,8 +848,7 @@ function bindRowEvents() {
     if (forget) {
       // "Forget Workspace" removes the workspace entry from the chan
       // registry. Files on disk are untouched; the user can re-add
-      // the folder later via New workspace. Tunneled workspaces have no
-      // Forget — the remote `chan serve` owns that lifecycle.
+      // the folder later via New workspace.
       forget.addEventListener('click', async () => {
         closeAllSplitMenus();
         try {
@@ -1062,7 +865,7 @@ function bindRowEvents() {
 }
 
 /// Wire the split-button caret + dropdown items shared between
-/// local and tunneled rows. The "Open in Browser" item delegates
+/// local and remote rows. The "Open in Browser" item delegates
 /// to tauri-plugin-opener with the URL stored on the row's
 /// `data-url` attribute (populated by `render`).
 function bindSplitMenu(tr) {
@@ -1199,7 +1002,7 @@ function showTurnOnFailureDialog(reason) {
 }
 
 // Click-to-copy wiring for every `.snippet[data-copy]` under `scope`.
-// Shared by the outbound + inbound-form + inbound-listening code blocks.
+// Used by the Remote (outbound) choice body.
 function wireSnippetCopy(scope) {
   scope.querySelectorAll('.snippet[data-copy]').forEach((node) => {
     node.addEventListener('click', async () => {
@@ -1276,23 +1079,6 @@ listen('chan-busy', (e) => {
   applyChanBusyState(e.payload || {});
   lastWorkspacesJson = '';
   refresh().catch(showError);
-});
-
-// `tunneled-workspace-ready` is informational on this side: the Rust
-// supervisor already opened the in-app webview window the moment
-// the per-tenant listener bound. We just refresh the workspace table
-// so the new row shows up alongside its URL, and refresh the [New]
-// modal's inbound body if it happens to be open.
-listen('tunneled-workspace-ready', () => {
-  refresh().catch(showError);
-  if (activeNewDialog) activeNewDialog.refreshInbound();
-});
-
-// The listener state changed (started / stopped, possibly from
-// elsewhere). Refresh the [New] modal's inbound body if it's open and
-// showing inbound; the launcher list refreshes via serves-changed.
-listen('tunnel-state-changed', () => {
-  if (activeNewDialog) activeNewDialog.refreshInbound();
 });
 
 boot().catch(showError);
