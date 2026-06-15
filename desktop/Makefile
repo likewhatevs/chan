@@ -65,9 +65,32 @@ check:
 XWIN_TARGET ?= x86_64-pc-windows-msvc
 XWIN_CRATES ?= -p chan-server -p chan-shell -p chan-workspace
 
-# Install cargo-xwin + the Windows MSVC rust target on demand — same on-demand
-# posture as tauri-cli (a fresh workstation usually lacks both).
+# cargo-xwin needs the LLVM toolchain ON TOP OF cargo-xwin + the rust target:
+# cc-rs shells out to `llvm-lib` / `clang-cl` to build the C deps (ring), so a
+# host without LLVM dies with `failed to find tool "llvm-lib"` (hit by @@LaneA).
+# `check` needs llvm-lib + clang-cl (no linking); a full `xwin build` would also
+# need `lld-link` from the `lld` package.
+#   macOS:  brew install llvm        (keg-only; bin auto-added to PATH below)
+#   Debian: sudo apt-get install -y llvm clang lld
+# CI's windows-latest needs none of this — it builds with native MSVC.
+#
+# On macOS Homebrew's llvm is keg-only (its bin is NOT on the default PATH), so
+# auto-prepend it: a plain `brew install llvm` is then enough, no manual PATH
+# edit. Override with LLVM_BIN=/path on a non-Homebrew host.
+LLVM_BIN ?= $(shell command -v brew >/dev/null 2>&1 && echo "$$(brew --prefix llvm 2>/dev/null)/bin")
+XWIN_PATH := $(if $(LLVM_BIN),$(LLVM_BIN):$(PATH),$(PATH))
+
+# Install cargo-xwin + the Windows MSVC rust target on demand (same on-demand
+# posture as tauri-cli), and fail fast with install guidance when LLVM is
+# missing — cargo-xwin's own error is further down the build and less obvious.
 xwin-prereqs:
+	@PATH="$(XWIN_PATH)" command -v llvm-lib >/dev/null 2>&1 || { \
+	    echo "error: cargo-xwin needs the LLVM toolchain (llvm-lib / clang-cl) on PATH."; \
+	    echo "  macOS:  brew install llvm"; \
+	    echo "  Debian: sudo apt-get install -y llvm clang lld"; \
+	    echo "  (macOS keg-only llvm is auto-added to PATH; else set LLVM_BIN=/path)"; \
+	    exit 1; \
+	}
 	@if ! command -v cargo-xwin >/dev/null 2>&1; then \
 	    echo "installing cargo-xwin"; \
 	    cargo install cargo-xwin --locked; \
@@ -76,8 +99,9 @@ xwin-prereqs:
 
 # Compile-check the core crates for Windows. Runs from the repo root so cargo
 # resolves the workspace; RUSTFLAGS parity with the integrated -D warnings gate.
+# XWIN_PATH puts the LLVM tools on PATH for cc-rs (ring).
 xwin-check: xwin-prereqs
-	cd $(CHAN_REPO) && RUSTFLAGS="-D warnings" cargo xwin check \
+	cd $(CHAN_REPO) && PATH="$(XWIN_PATH)" RUSTFLAGS="-D warnings" cargo xwin check \
 	    --target $(XWIN_TARGET) $(XWIN_CRATES)
 
 fmt:
