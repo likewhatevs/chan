@@ -14,7 +14,7 @@
      the window-wide fallback (a centered modal over the whole window), mounted
      once at the App root for surveys with no resolvable target. -->
 <script lang="ts">
-  import { renderMarkdown } from "../api/markdown";
+  import { renderMarkdownWithBreaks } from "../api/markdown";
   import {
     surveyFor,
     surveyBusy,
@@ -90,9 +90,11 @@
       {#if active.title}
         <h2 class="survey-title">{active.title}</h2>
       {/if}
-      <!-- renderMarkdown is DOMPurify-sanitized (web/src/api/markdown.ts),
-           so {@html} is safe for the agent-supplied body. -->
-      <div class="survey-body">{@html renderMarkdown(active.bodyMarkdown)}</div>
+      <!-- renderMarkdownWithBreaks is DOMPurify-sanitized (web/src/api/markdown.ts),
+           so {@html} is safe for the agent-supplied body. `breaks: true` so a
+           single authored newline renders as a line break (survey bodies are
+           hand-written multi-line prompts). -->
+      <div class="survey-body">{@html renderMarkdownWithBreaks(active.bodyMarkdown)}</div>
       <ul class="survey-options">
         {#each active.options as option, i (i)}
           <li>
@@ -154,7 +156,9 @@
   .survey-overlay.per-terminal {
     position: absolute;
     z-index: 24000;
-    padding: 1rem;
+    /* 5% border all around the owning terminal: the card fills the padded
+       area below (~90% of the pane on every side), not a narrow 520px widget. */
+    padding: 5%;
   }
   .survey-card {
     width: min(520px, 92vw);
@@ -170,8 +174,11 @@
     outline: none;
   }
   .per-terminal .survey-card {
-    width: min(520px, 94%);
-    max-height: 92%;
+    /* Fill the 5%-padded overlay (~90% of the pane); drop the 520px cap so
+       it's the wide panel, not a centered narrow widget. Content scrolls
+       (overflow-y on .survey-card) when the body is long. */
+    width: 100%;
+    max-height: 100%;
   }
   .survey-title {
     margin: 0 0 0.75rem;

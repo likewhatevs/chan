@@ -25,3 +25,18 @@ export function renderMarkdown(input: string): string {
   const raw = marked.parse(input ?? "", { async: false }) as string;
   return DOMPurify.sanitize(raw);
 }
+
+/// Like `renderMarkdown` but with `breaks: true` so a SINGLE newline
+/// renders as a `<br>` (CommonMark soft-break = line break, not a space).
+/// For authored multi-line bodies where line breaks are intentional —
+/// e.g. a `cs terminal survey` prompt — without changing the global
+/// `breaks: false` (which preserves paragraph boundaries elsewhere). The
+/// per-call options merge over the instance defaults, so `gfm` stays on.
+export function renderMarkdownWithBreaks(input: string): string {
+  const raw = marked.parse(input ?? "", {
+    async: false,
+    breaks: true,
+    gfm: true,
+  }) as string;
+  return DOMPurify.sanitize(raw);
+}
