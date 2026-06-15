@@ -33,4 +33,21 @@ describe("TerminalTab generated reply routing", () => {
       /function handleXtermData\(data: string\): void \{[\s\S]*?if \(ptyOutputWriteDepth > 0\) \{[\s\S]*?sendInput\(data\);[\s\S]*?return;[\s\S]*?\}[\s\S]*?sendUserInput\(data\);/,
     );
   });
+
+  test("drops xterm replies during the reattach replay window (CPR-leak fix)", () => {
+    // A replayed historical query (e.g. ESC[6n) must NOT have its reply sent to
+    // the PTY — that lands it at the prompt + echoes. The gate is scoped to the
+    // replay window only (set on reattach, cleared on `ready`), so LIVE replies
+    // still forward.
+    expect(terminal).toContain("let replayingReattach = false;");
+    expect(terminal).toContain("replayingReattach = reattaching;");
+    // Cleared on the `ready` frame (the server sends it AFTER the replay ring).
+    expect(terminal).toMatch(
+      /frame\.type === "ready"[\s\S]*?replayingReattach = false;/,
+    );
+    // The drop: during the replay window, return without sendInput.
+    expect(terminal).toMatch(
+      /if \(ptyOutputWriteDepth > 0\) \{[\s\S]*?if \(replayingReattach\) return;[\s\S]*?sendInput\(data\);/,
+    );
+  });
 });

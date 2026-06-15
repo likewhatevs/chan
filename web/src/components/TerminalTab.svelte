@@ -199,6 +199,15 @@
   let webglRendererActive = false;
   let webglContextLossRetries = 0;
   let ptyOutputWriteDepth = 0;
+  // True while writing the initial reattach REPLAY (from connect until the
+  // server's `ready` frame, which it sends AFTER the replayed output ring —
+  // see crates/chan-server/src/routes/terminal.rs). xterm answers any
+  // HISTORICAL query (e.g. `ESC[6n` CPR) in the replayed bytes, but the
+  // original asker already got its answer when the query was live, so that
+  // reply must be DROPPED (handleXtermData) — forwarding it lands the reply at
+  // the shell prompt (`bash: 41R: command not found`) and echoes it. Live
+  // (post-`ready`) replies still forward (vim/readline need them).
+  let replayingReattach = false;
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
   let hostResumeListenerCleanup: (() => void) | null = null;
   // Wall-clock-gap sleep/wake detector. See
@@ -735,6 +744,10 @@
     sessionClosedReason = null;
     sawSessionControl = false;
     const reattaching = Boolean(tab.terminalSessionId);
+    // Gate xterm replies to historical queries during the reattach replay
+    // window; cleared on the `ready` frame. A fresh spawn has an empty replay,
+    // so this is only ever true (and only ever drops a reply) for a reattach.
+    replayingReattach = reattaching;
     pendingPromptSeed = reattaching ? "" : (tab.seedInput ?? "");
     promptSeedSent = false;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -780,6 +793,10 @@
         return;
       }
       if (frame.type === "ready") {
+        // The replay is fully written by the time `ready` arrives (server
+        // sends it AFTER the ring): end the replay window so LIVE query
+        // replies forward normally again.
+        replayingReattach = false;
         statusDetail = `${frame.cols}x${frame.rows}`;
         terminalCwdAbs = frame.cwd ?? null;
         terminalCwdVirtual = frame.cwd_rel ?? null;
@@ -1087,6 +1104,12 @@
     // replies. Replies belong only to the PTY that requested them;
     // they must not enter chan's broadcast fan-out.
     if (ptyOutputWriteDepth > 0) {
+      // A reply to a query in the bytes we just wrote. During the reattach
+      // replay window the query is HISTORICAL (the original asker already got
+      // its answer when it was live), so DROP the reply — forwarding it would
+      // inject it at the shell prompt + echo (`^[[…R`). Post-`ready` (live)
+      // replies still forward (vim/readline/CPR consumers need them).
+      if (replayingReattach) return;
       sendInput(data);
       return;
     }
