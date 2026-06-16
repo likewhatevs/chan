@@ -7,10 +7,11 @@ import fbSurface from "./FileBrowserSurface.svelte?raw";
 
 // Workspace-root inspector behaves like any other directory. The
 // `inspector` variant renders the standard directory action row; the
-// `dashboard` variant (Dashboard front slide) drops it. The per-workspace
-// default-root + recents config moved to WorkspaceSlotConfig (the slot's
-// flip-back). Source-level pins lock the variant split, action row, the
-// config's new home, and host wiring.
+// `dashboard` variant (Dashboard front slide) drops it. The read-only
+// recent-workspaces list lives on WorkspaceSlotConfig (the slot's
+// flip-back); the default-workspace concept was removed (chan serve
+// requires an explicit path). Source-level pins lock the variant split,
+// action row, the recents' home, and host wiring.
 
 describe("WorkspaceInfoBody variant split + directory action row", () => {
   test("a `variant` prop selects inspector vs dashboard", () => {
@@ -82,16 +83,18 @@ describe("WorkspaceInfoBody variant split + directory action row", () => {
     expect(workspaceInfo).toContain("clearDownloadTransfer");
   });
 
-  test("the Workspaces config moved off WorkspaceInfoBody into WorkspaceSlotConfig", () => {
-    // The default-root + recents config no longer lives on the front
-    // inspector body; its plumbing (default-root field + autosave) is gone
-    // from WorkspaceInfoBody and now lives in the slot's flip-back.
+  test("the default-workspace config is gone; only recents lives in WorkspaceSlotConfig", () => {
+    // The default-workspace concept was removed (chan serve requires an
+    // explicit path), so the default-root field + autosave plumbing is gone
+    // from both WorkspaceInfoBody and WorkspaceSlotConfig. The slot's
+    // flip-back keeps only the read-only recent-workspaces list.
     expect(workspaceInfo).not.toContain("editedDefaultRoot");
     expect(workspaceInfo).not.toContain('class="notes-dirs"');
 
     expect(workspaceSlotConfig).toMatch(/<h3>Workspaces<\/h3>/);
-    expect(workspaceSlotConfig).toContain("bind:value={editedDefaultRoot}");
-    expect(workspaceSlotConfig).toContain("scheduleDefaultRootSave");
+    expect(workspaceSlotConfig).not.toContain("editedDefaultRoot");
+    expect(workspaceSlotConfig).not.toContain("scheduleDefaultRootSave");
+    expect(workspaceSlotConfig).not.toContain("default_workspace_root");
     expect(workspaceSlotConfig).toMatch(/globalConfig\?\.workspaces/);
   });
 

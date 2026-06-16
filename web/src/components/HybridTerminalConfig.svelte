@@ -299,7 +299,6 @@
       const current = await api.config();
       const cfgBody: GlobalConfig = {
         preferences: { ...current.preferences, terminal: editing.terminal },
-        default_workspace_root: current.default_workspace_root,
         workspaces: current.workspaces,
       };
       await api.updateConfig(cfgBody);

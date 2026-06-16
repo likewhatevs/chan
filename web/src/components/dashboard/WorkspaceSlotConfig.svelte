@@ -10,7 +10,7 @@
   // HybridDashboardConfig back (export/import the per-workspace metadata
   // tarball). Both keep their original immediate-write behavior.
 
-  import { onDestroy, onMount } from "svelte";
+  import { onMount } from "svelte";
   import { Download, Upload } from "lucide-svelte";
   import { api } from "../../api/client";
   import type { GlobalConfig } from "../../api/types";
@@ -141,78 +141,19 @@
     }
   }
 
-  // Default workspace + recents config. Moved here from the front
-  // Workspace slide (WorkspaceInfoBody); owns its own globalConfig load +
-  // autosave, matching the reports/metadata sections above. The default
-  // root writes through the global config endpoint, debounced.
+  // Recent workspaces. Read-only list from the global config endpoint.
+  // The default-workspace concept was removed (chan serve now requires an
+  // explicit path), so this section only surfaces recently-opened
+  // workspaces; there is no editable default-root field anymore.
   let globalConfig = $state<GlobalConfig | null>(null);
-  let editedDefaultRoot = $state<string>("");
-  let initialDefaultRoot = $state<string>("");
-  let saveError = $state<string | null>(null);
-
-  const AUTOSAVE_DELAY_MS = 500;
-  let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
-  let inflight = false;
 
   async function loadGlobalConfig(): Promise<void> {
     try {
       globalConfig = await api.config();
-      const cur = globalConfig.default_workspace_root ?? "";
-      editedDefaultRoot = cur;
-      initialDefaultRoot = cur;
     } catch {
       globalConfig = null;
     }
   }
-
-  function dirty(): boolean {
-    if (!globalConfig) return false;
-    return editedDefaultRoot !== initialDefaultRoot;
-  }
-
-  async function saveDefaultRoot(): Promise<void> {
-    if (!globalConfig || inflight) return;
-    inflight = true;
-    saveError = null;
-    const sent = editedDefaultRoot;
-    try {
-      const trimmed = sent.trim();
-      const body: GlobalConfig = {
-        preferences: globalConfig.preferences,
-        default_workspace_root: trimmed === "" ? null : trimmed,
-        workspaces: globalConfig.workspaces,
-      };
-      const cfg = await api.updateConfig(body);
-      globalConfig = cfg;
-      // Don't clobber further edits the user typed while in flight.
-      if (editedDefaultRoot === sent) {
-        const echoed = cfg.default_workspace_root ?? "";
-        editedDefaultRoot = echoed;
-        initialDefaultRoot = echoed;
-      } else {
-        initialDefaultRoot = cfg.default_workspace_root ?? "";
-      }
-    } catch (e) {
-      saveError = (e as Error).message;
-    } finally {
-      inflight = false;
-      if (dirty()) scheduleDefaultRootSave();
-    }
-  }
-
-  function scheduleDefaultRootSave(): void {
-    if (autosaveTimer) clearTimeout(autosaveTimer);
-    autosaveTimer = setTimeout(() => {
-      autosaveTimer = null;
-      void saveDefaultRoot();
-    }, AUTOSAVE_DELAY_MS);
-  }
-
-  $effect(() => {
-    void editedDefaultRoot;
-    if (!dirty()) return;
-    scheduleDefaultRootSave();
-  });
 
   function displayPathLabel(path: string): string {
     const stripped = path.replace(/[/\\]+$/, "");
@@ -238,13 +179,6 @@
   onMount(() => {
     void loadReportsState();
     void loadGlobalConfig();
-  });
-
-  onDestroy(() => {
-    // Reports + metadata are request/response; pending metadata reload
-    // timeouts are harmless if the slot is switched away mid-flight.
-    // Clear a pending default-root autosave so it can't fire post-unmount.
-    if (autosaveTimer) clearTimeout(autosaveTimer);
   });
 </script>
 
@@ -362,31 +296,13 @@
   {/if}
 </section>
 
-<!-- Default workspace + recents. Moved here from the front Workspace
-     slide (WorkspaceInfoBody): the global default-root config + the
-     recent-workspaces list now live on this slot's flip-back, below a
-     dashed divider matching the one between chan-reports and Metadata
-     archive above. -->
+<!-- Recent workspaces. The default-workspace concept was removed (chan
+     serve requires an explicit path); this slot's flip-back now only
+     surfaces recently-opened workspaces, below a dashed divider matching
+     the one between chan-reports and Metadata archive above. -->
 <section class="divided">
   <h3>Workspaces</h3>
-  <p class="hint">
-    Your default workspace directory is where chan opens when launched
-    without a specific one in mind. Leave empty to use the platform
-    default (<code>~/Documents/Chan</code> on macOS,
-    <code>$XDG_DATA_HOME/chan/default</code> on Linux).
-  </p>
-  <label class="field">
-    <span>Default</span>
-    <input
-      bind:value={editedDefaultRoot}
-      placeholder="(platform default)"
-      spellcheck="false"
-      autocomplete="off"
-    />
-  </label>
-  {#if saveError}
-    <div class="err-line">save failed: {saveError}</div>
-  {/if}
+  <p class="hint">Workspaces you've recently opened on this machine.</p>
 
   {#if globalConfig?.workspaces && globalConfig.workspaces.length > 0}
     <h5 class="recents-head">Recent</h5>
@@ -537,31 +453,6 @@
     background: var(--bg-card);
     padding: 0 4px;
     border-radius: 3px;
-  }
-  .field {
-    display: grid;
-    grid-template-columns: 6.5em 1fr;
-    gap: 0.5rem;
-    align-items: center;
-    margin: 0.25rem 0;
-  }
-  .field > span { color: var(--text-secondary); font-size: 14px; }
-  .field input {
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 4px 7px;
-    font: inherit;
-    font-size: 14px;
-    outline: none;
-    width: 100%;
-  }
-  .field input:focus { border-color: var(--link); }
-  .err-line {
-    color: var(--warn-text);
-    font-size: 13px;
-    margin: 0.25rem 0;
   }
   .recents-head {
     margin: 0.6rem 0 0.25rem 0;

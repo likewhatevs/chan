@@ -72,11 +72,6 @@ export type MetadataManifest = {
 /// workspace override anymore; settings are always device-global).
 export type GlobalConfig = {
   preferences: Preferences;
-  /// When set, the resolver's fallback path becomes this; when
-  /// unset, it falls back to the platform convention
-  /// (`~/Documents/Chan` on macOS, `$XDG_DATA_HOME/chan/default`
-  /// on Linux).
-  default_workspace_root?: string | null;
   /// Known workspaces the user has opened on this machine. Updated
   /// by the server on every spawn (touch existing or append).
   /// Sorted most-recent first.

@@ -191,7 +191,6 @@
           strip_trailing_whitespace_on_save:
             editing.strip_trailing_whitespace_on_save,
         },
-        default_workspace_root: current.default_workspace_root,
         workspaces: current.workspaces,
       };
       await api.updateConfig(cfgBody);
