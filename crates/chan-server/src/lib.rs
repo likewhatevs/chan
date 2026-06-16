@@ -20,6 +20,14 @@ mod bus;
 mod config;
 mod control_socket;
 mod desktop_window_ops;
+mod devserver;
+/// Devserver management-API wire contract (HTTP/JSON), public so a
+/// chan-desktop client and the server build against the exact shapes.
+pub mod devserver_api;
+/// CLI-to-devserver workspace-registration RPC over a well-known per-user
+/// UDS. Public so the `chan` CLI (client) and the devserver (listener)
+/// share it; both already depend on chan-server.
+pub mod devserver_handoff;
 mod embed_seed;
 mod error;
 /// macOS CLI-to-desktop workspace handoff over a well-known per-user UDS.
@@ -50,6 +58,7 @@ pub use config::ServerConfig;
 pub use desktop_window_ops::{
     DesktopBridge, DesktopWindowOp, DesktopWindowSender, NewWindowKind, NO_DESKTOP,
 };
+pub use devserver::{run_devserver, DevserverConfig};
 pub use error::Error;
 pub use host::{HostedWorkspace, WorkspaceHost};
 #[cfg(unix)]
@@ -599,8 +608,16 @@ async fn build_app(
     // fs.inotify.max_user_watches) leaves the watcher absent and external edits
     // reconcile on demand, rather than failing the boot.
     let watch_cell = state_for_bridge.clone();
+    // Boot-timing anchor: on Linux this recursive registration installs one
+    // inotify watch per directory, so it is the step most sensitive to tree
+    // size now that the report scan is off this path.
+    let watch_t0 = Instant::now();
     match tokio::task::spawn_blocking(move || watch_workspace.watch(bridge)).await {
         Ok(Ok(handle)) => {
+            tracing::debug!(
+                t_watch_registered_ms = watch_t0.elapsed().as_millis() as u64,
+                "boot: filesystem watcher registered"
+            );
             if let Ok(mut cell) = watch_cell.write() {
                 if let Some(cell) = cell.as_mut() {
                     cell.watch_handle = Some(handle);
@@ -1035,8 +1052,17 @@ pub async fn serve(
     workspace: Arc<Workspace>,
     config: ServeConfig,
 ) -> Result<(), Error> {
+    // Boot-timing anchor: the listener bind is the first observable step, and
+    // the gap from here to the "ready" URL below is the cold-boot latency that
+    // a large workspace stresses. Logged so a slow boot can be attributed to
+    // the bind vs. the router build vs. the watcher registration.
+    let boot_t0 = Instant::now();
     let listener = TcpListener::bind(config.addr).await?;
     let addr = listener.local_addr()?;
+    tracing::debug!(
+        t_listener_ms = boot_t0.elapsed().as_millis() as u64,
+        "boot: listener bound"
+    );
     // Standalone `chan serve`: no desktop attached, so no window-ops
     // bridge and an empty (unwritten) title map.
     let artifacts = build_app(
@@ -1053,6 +1079,10 @@ pub async fn serve(
     };
     let url = handle.launch_url();
     eprintln!("chan is ready:\n{url}");
+    tracing::info!(
+        t_url_ms = boot_t0.elapsed().as_millis() as u64,
+        "boot: ready, URL printed"
+    );
     if should_open_browser(config.open_browser) {
         // Best-effort: on a headless host (no `xdg-open`/no display)
         // this returns an error; log a NOTE and keep serving.
