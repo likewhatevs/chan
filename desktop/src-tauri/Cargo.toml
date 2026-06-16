@@ -65,10 +65,17 @@ url = { workspace = true }
 semver = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-# Broadcast WM_SETTINGCHANGE after the per-user PATH write (cs_install.rs) so
-# freshly-spawned shells pick up the chan bin dir without a logout. Raw FFI;
-# one SendMessageTimeoutW call, no higher-level wrapper needed.
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# Raw Win32 FFI, no higher-level wrapper needed:
+# - WindowsAndMessaging: broadcast WM_SETTINGCHANGE after the per-user PATH
+#   write (cs_install.rs) so freshly-spawned shells pick up the chan bin dir
+#   without a logout.
+# - Console + Storage_FileSystem + Security: a release chan-desktop.exe is GUI
+#   subsystem (no console), so when it is invoked through a `chan`/`cs` shim and
+#   runs as a CLI it must AttachConsole(ATTACH_PARENT_PROCESS) and bind the std
+#   handles to CONOUT$/CONIN$, or every println! is discarded (see main.rs
+#   `attach_parent_console_for_cli`). CreateFileW pulls in Security for the
+#   SECURITY_ATTRIBUTES type in its signature even though we pass null.
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_Security"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

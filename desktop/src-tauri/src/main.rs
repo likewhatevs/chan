@@ -1279,7 +1279,97 @@ async fn run_mcp_proxy(socket: PathBuf) -> Result<(), String> {
         .map_err(|e| format!("running MCP proxy: {e}"))
 }
 
+/// Windows console attach for the `chan` / `cs` CLI dispatch.
+///
+/// A release `chan-desktop.exe` is built `windows_subsystem = "windows"` (GUI
+/// subsystem) so a normal double-click never flashes a console window. The cost:
+/// when the SAME exe is invoked through a `chan` / `cs` shim from a terminal and
+/// runs as a CLI (see `run_as_chan_if_requested` / `run_as_cs_if_requested`),
+/// the process starts with NO console and its standard handles are null, so
+/// every `println!` is silently discarded — `chan --version` "returns empty".
+/// Re-attaching to the parent shell's console (and binding any null std handle
+/// to it) is what routes the CLI output back to the terminal.
+///
+/// Gated on the CLI invocation: a normal GUI launch (argv[0] stem
+/// "chan-desktop") returns early and stays console-free.
+#[cfg(windows)]
+fn attach_parent_console_for_cli() {
+    let arg0 = chan_shell::invoked_arg0();
+    if !chan_shell::invoked_as_chan(&arg0) && !chan_shell::invoked_as_cs(&arg0) {
+        return;
+    }
+    win_console::attach_parent();
+}
+
+/// Win32 console-attach mechanics for the `chan` / `cs` CLI dispatch, kept in
+/// one place beside the dispatch probes. Raw FFI (no higher-level wrapper) like
+/// `cs_install`'s `WM_SETTINGCHANGE` broadcast.
+#[cfg(windows)]
+mod win_console {
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+
+    /// Attach to the parent process's console and bind any unset standard handle
+    /// to it so the `chan` / `cs` CLI output reaches the terminal. Best-effort:
+    /// `AttachConsole` fails when there is no parent console (a GUI launch from
+    /// Explorer) and we leave everything alone. An already-valid std handle (a
+    /// shell redirection like `chan ... > out.txt`, or one AttachConsole itself
+    /// wired up) is preserved, never clobbered.
+    pub(super) fn attach_parent() {
+        // SAFETY: standard Win32 console FFI. AttachConsole is guarded on its
+        // own return before any handle work; each std handle is validated before
+        // use; the CONOUT$/CONIN$ names are valid NUL-terminated UTF-16 buffers
+        // that outlive the synchronous CreateFileW call.
+        unsafe {
+            if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+                return; // no parent console — a normal GUI launch
+            }
+            bind(STD_OUTPUT_HANDLE, "CONOUT$", GENERIC_WRITE);
+            bind(STD_ERROR_HANDLE, "CONOUT$", GENERIC_WRITE);
+            bind(STD_INPUT_HANDLE, "CONIN$", GENERIC_READ);
+        }
+    }
+
+    /// Bind one standard handle to the console device `dev` (`CONOUT$` /
+    /// `CONIN$`) when it is currently unset (null / invalid). A valid handle — a
+    /// shell redirection, or one AttachConsole already populated — is left
+    /// untouched so redirection to a file/pipe still works. Best-effort: a
+    /// CreateFileW / SetStdHandle failure is ignored (nothing more we can do).
+    unsafe fn bind(std_id: STD_HANDLE, dev: &str, access: u32) {
+        let cur = GetStdHandle(std_id);
+        if !cur.is_null() && cur != INVALID_HANDLE_VALUE {
+            return; // already wired (redirection, or AttachConsole set it)
+        }
+        let wide: Vec<u16> = dev.encode_utf16().chain(std::iter::once(0)).collect();
+        let h = CreateFileW(
+            wide.as_ptr(),
+            access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+        if h != INVALID_HANDLE_VALUE {
+            SetStdHandle(std_id, h);
+        }
+    }
+}
+
 fn main() {
+    // Windows: a release chan-desktop.exe is GUI-subsystem (no console). When
+    // invoked as the `chan` / `cs` CLI through a shim, reattach to the parent
+    // shell's console FIRST so the CLI's stdout/stderr reach the terminal
+    // instead of vanishing. No-op for a GUI launch and off Windows.
+    #[cfg(windows)]
+    attach_parent_console_for_cli();
+
     match run_hidden_mcp_proxy_if_requested() {
         Ok(true) => return,
         Ok(false) => {}
