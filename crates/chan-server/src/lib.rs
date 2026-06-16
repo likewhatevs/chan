@@ -434,7 +434,14 @@ fn format_index_progress(event: &ProgressEvent, verbose: bool) -> String {
 fn prime_terminal_shell() {
     #[cfg(windows)]
     {
-        let _ = tokio::task::spawn_blocking(terminal_sessions::prime_git_bash);
+        // Detached on purpose: the blocking prime runs to completion on the
+        // blocking pool regardless of the dropped handle (spawn_blocking is not
+        // cancellable), and we never need its result — the warm cache is read
+        // later through the `OnceLock`. `drop` rather than `let _` keeps clippy's
+        // `let_underscore_future` happy.
+        drop(tokio::task::spawn_blocking(
+            terminal_sessions::prime_git_bash,
+        ));
     }
 }
 

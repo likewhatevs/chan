@@ -1856,6 +1856,7 @@ pub(crate) fn prime_git_bash() {
 ///   3. Registry `HKLM\...\GitForWindows\InstallPath` via `reg query`.
 ///   4. `where bash`, filtering out System32 / WindowsApps (the WSL `bash.exe`
 ///      launcher, which is NOT Git BASH).
+///
 /// No registry/winapi crate is pulled — `git`/`reg`/`where` are shelled out.
 #[cfg(windows)]
 fn resolve_git_bash() -> Option<GitBashInstall> {
