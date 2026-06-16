@@ -2,80 +2,38 @@
   <p class="eyebrow">install</p>
   <h1>Install Chan</h1>
   <p>
-    Use Chan Desktop for the normal editor experience. Use the standalone CLI
-    when you want <code>chan serve</code>, shell-first workflows, or a server
-    binary without the desktop shell. Direct download links resolve to the
-    latest release and fall back to GitHub Releases.
+    Most people want <strong>Chan Desktop</strong>, the native app. Installing
+    it also sets up the <code>chan</code> and <code>cs</code> command line, with
+    nothing extra to download. Choose the <strong>standalone CLI</strong>
+    instead when you want a terminal-first <code>chan serve</code> on a server
+    or over SSH, without the desktop shell. Download links resolve to the latest
+    release and fall back to GitHub Releases.
   </p>
 </section>
 
-<section class="install-section">
+<section class="install-block">
   <div class="section-heading">
-    <h2>Shell installer</h2>
+    <h2>Chan Desktop <span class="group-note">recommended</span></h2>
     <p>
-      The fastest way to get the <code>chan</code> CLI on macOS or Linux. It
-      installs only the CLI, not the desktop packages.
+      The native window for macOS and Linux. It includes the <code>chan</code>
+      and <code>cs</code> command line, so this is the only download most people
+      need. See the <a href="/manual/install/">install guide</a> for
+      step-by-step instructions.
     </p>
-  </div>
-  <div>
-    <div class="command-copy" data-copy-block>
-      <code><span>$</span><b data-copy-value>curl -fsSL https://chan.app/install.sh | sh</b></code>
-      <button type="button">Copy</button>
-    </div>
-    <p class="minor">
-      Set <code>PREFIX</code> to change the install directory. Set
-      <code>METADATA_URL</code> to test another release metadata source.
-      <a href="/install.sh">Read install.sh</a>.
-    </p>
-  </div>
-</section>
-
-<section class="install-block">
-  <div class="section-heading">
-    <h2>macOS</h2>
-    <p>Apple Silicon (aarch64) only.</p>
-  </div>
-  <div class="download-matrix">
-    <div class="download-row">
-      <span class="download-label">Chan Desktop</span>
-      <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-macos-dmg">DMG</a>
-    </div>
-    <div class="download-row">
-      <span class="download-label">chan CLI</span>
-      <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-macos-arm64">.tar.gz</a>
-    </div>
-  </div>
-</section>
-
-<section class="install-block">
-  <div class="section-heading">
-    <h2>Linux</h2>
-    <p>Every package ships for amd64 and aarch64.</p>
   </div>
 
   <div class="download-group">
-    <h3>chan (CLI)</h3>
+    <h3>macOS <span class="group-note">Apple Silicon</span></h3>
     <div class="download-matrix">
       <div class="download-row">
-        <span class="download-label">Static binary</span>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-x64">amd64</a>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-arm64">aarch64</a>
-      </div>
-      <div class="download-row">
-        <span class="download-label">Debian (.deb)</span>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-deb-amd64">amd64</a>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-deb-arm64">aarch64</a>
-      </div>
-      <div class="download-row">
-        <span class="download-label">Fedora (.rpm)</span>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-rpm-amd64">amd64</a>
-        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-rpm-arm64">aarch64</a>
+        <span class="download-label">Disk image</span>
+        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="desktop-macos-dmg">DMG</a>
       </div>
     </div>
   </div>
 
   <div class="download-group">
-    <h3>Chan Desktop</h3>
+    <h3>Linux <span class="group-note">amd64 + aarch64</span></h3>
     <div class="download-matrix">
       <div class="download-row">
         <span class="download-label">AppImage</span>
@@ -94,13 +52,86 @@
       </div>
     </div>
   </div>
+</section>
+
+<section class="install-block">
+  <div class="section-heading">
+    <h2>Standalone CLI</h2>
+    <p>
+      Just the <code>chan</code> CLI and its <code>cs</code> symlink — for a
+      terminal-first <code>chan serve</code>, an SSH workflow, or a headless
+      server. The shell installer is the fastest way on macOS or Linux:
+    </p>
+  </div>
+
+  <div class="command-copy" data-copy-block>
+    <code><span>$</span><b data-copy-value>curl -fsSL https://chan.app/install.sh | sh</b></code>
+    <button type="button">Copy</button>
+  </div>
+  <p class="minor">
+    Prefer a package or a manual download? Pick one below. For install options
+    (a custom prefix, a mirrored metadata source), see the
+    <a href="/manual/install/">install guide</a>.
+  </p>
 
   <div class="download-group">
-    <h3>Chan Gateway <span class="group-note">self-hosted tunnel</span></h3>
-    <p class="minor">
-      Self-host the tunnel that fronts remote workspaces. See the
-      <a href="/manual/gateway/">gateway manual</a> to set it up.
+    <h3>macOS <span class="group-note">Apple Silicon</span></h3>
+    <div class="download-matrix">
+      <div class="download-row">
+        <span class="download-label">Archive</span>
+        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-macos-arm64">.tar.gz</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="download-group">
+    <h3>Linux <span class="group-note">amd64 + aarch64</span></h3>
+    <div class="download-matrix">
+      <div class="download-row">
+        <span class="download-label">Static binary</span>
+        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-x64">amd64</a>
+        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-arm64">aarch64</a>
+      </div>
+      <div class="download-row">
+        <span class="download-label">Debian (.deb)</span>
+        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-deb-amd64">amd64</a>
+        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-deb-arm64">aarch64</a>
+      </div>
+      <div class="download-row">
+        <span class="download-label">Fedora (.rpm)</span>
+        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-rpm-amd64">amd64</a>
+        <a class="arch-button" href="{{githubReleasesUrl}}" data-release-download="cli-linux-rpm-arm64">aarch64</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="install-section">
+  <div class="section-heading">
+    <h2>After install</h2>
+  </div>
+  <div class="command-copy static">
+    <code><span>$</span><b>chan serve ~/notes</b></code>
+  </div>
+  <p>
+    The CLI starts a loopback server, prints the per-launch URL with its bearer
+    token, and serves the editor from the embedded web bundle.
+  </p>
+</section>
+
+<section class="install-block">
+  <div class="section-heading">
+    <h2>Chan Gateway <span class="group-note">self-hosting</span></h2>
+    <p>
+      You don't need this to use Chan. The gateway is the self-hosted tunnel
+      that fronts remote workspaces — install it only if you run your own.
+      The <a href="/manual/gateway/">gateway manual</a> covers setup and where
+      it sits in the architecture.
     </p>
+  </div>
+
+  <div class="download-group">
+    <h3>Linux <span class="group-note">Debian packages</span></h3>
     <div class="download-matrix">
       <div class="download-row">
         <span class="download-label">admin</span>
@@ -124,17 +155,4 @@
       </div>
     </div>
   </div>
-</section>
-
-<section class="install-section">
-  <div class="section-heading">
-    <h2>After install</h2>
-  </div>
-  <div class="command-copy static">
-    <code><span>$</span><b>chan serve ~/notes</b></code>
-  </div>
-  <p>
-    The CLI starts a loopback server, prints the per-launch URL with its bearer
-    token, and serves the editor from the embedded web bundle.
-  </p>
 </section>

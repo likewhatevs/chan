@@ -1,18 +1,44 @@
-# Install Choices
+# Installing Chan
 
-Use Chan Desktop for normal local editing. Use the standalone CLI when you want a terminal-first server, an SSH workflow, or explicit `chan serve` control.
+Chan ships two ways. **Chan Desktop** is the native app for macOS and Linux and is what most people want — installing it also sets up the `chan` and `cs` command line, so there is nothing else to download. The **standalone CLI** is just `chan` (plus a `cs` symlink) for a terminal-first `chan serve`, an SSH workflow, or a headless server.
 
-## Install page
+Pick your download from the [install page](/install/), then follow the steps below.
 
-The [install page](/install/) lists every released package — Chan Desktop, the standalone `chan` CLI, and the Chan Gateway components — for macOS and Linux, with links resolved from the published release metadata. Desktop packages are built by the desktop release workflow; the shell installer below does not install them. If metadata is unavailable, the install page falls back to the GitHub Releases page.
+## Chan Desktop
+
+### macOS (Apple Silicon)
+
+- Download the DMG from the [install page](/install/).
+- Open it and drag **Chan** into Applications.
+- Launch Chan. On first run it installs `chan` and `cs` into `~/.local/bin` — make sure that directory is on your `PATH`.
+
+### Linux (amd64 / aarch64)
+
+Download the AppImage, `.deb`, or `.rpm` from the [install page](/install/), then install it:
+
+- **AppImage:** `chmod +x Chan*.AppImage && ./Chan*.AppImage`
+- **Debian/Ubuntu:** `sudo apt install ./chan-desktop_*.deb`
+- **Fedora:** `sudo dnf install ./chan-desktop-*.rpm`
+
+Launch Chan; first run installs the `chan` and `cs` commands into `~/.local/bin`.
 
 ## Standalone CLI
 
-The POSIX installer installs the `chan` CLI into `PREFIX/bin` (default `~/.local/bin`) plus a `cs` symlink to it — the control-socket client behind `cs terminal`, `cs poke`, and friends. It does not install the desktop packages. The script is served from `chan.app`, reads release metadata from `chan.app/dl/cli/`, and downloads the matching asset URL named by that metadata:
+The fastest way on macOS or Linux is the shell installer. It installs the `chan` CLI into `PREFIX/bin` (default `~/.local/bin`) plus a `cs` symlink — the control-socket client behind `cs terminal`, `cs poke`, and friends. It reads release metadata from `chan.app/dl/cli/` and downloads the matching asset:
 
 ```sh
 curl -fsSL https://chan.app/install.sh | sh
 ```
+
+Verify the install:
+
+```sh
+chan --version
+```
+
+Prefer a package or a manual download? Grab the `.tar.gz` (macOS), or the static binary, `.deb`, or `.rpm` (Linux) from the [install page](/install/).
+
+### Installer options
 
 Use `PREFIX` to choose the install prefix:
 
@@ -32,9 +58,19 @@ Use `BASE` to point at another metadata directory. With `VERSION`, the installer
 BASE=https://mirror.example/dl/cli VERSION=X.Y.Z sh install.sh
 ```
 
-Unsupported OS and architecture pairs fail explicitly.
+Unsupported OS and architecture pairs fail explicitly. Read the script before piping it to a shell: [install.sh](/install.sh).
 
-## Release Metadata
+## First run
+
+Point chan at any folder — a git repo, your notes, anything:
+
+```sh
+chan serve ~/notes
+```
+
+The CLI starts a loopback server, prints a URL with a per-launch bearer token, and opens your browser. With Chan Desktop, opening a workspace gives you a native window instead. Next: [Creating or opening a workspace](workspaces.md).
+
+## Release metadata
 
 The static metadata files published under `chan.app/dl/` describe complete releases after all GitHub Release assets exist.
 

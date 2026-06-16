@@ -16,7 +16,7 @@ const checks = [
   { path: "/install/", status: 200, includes: 'data-release-download="desktop-linux-rpm-amd64"' },
   { path: "/install/", status: 200, includes: 'data-release-download="gateway-profile-deb-amd64"' },
   { path: "/manual/", status: 200, includes: "Chan Manual" },
-  { path: "/manual/install/", status: 200, includes: "Install Choices" },
+  { path: "/manual/install/", status: 200, includes: "Installing Chan" },
   {
     path: "/install.sh",
     status: 200,
