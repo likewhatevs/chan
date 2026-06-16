@@ -136,14 +136,10 @@ pub struct Indexer {
     /// "empty" state (no commit, graph cleared but not refilled),
     /// so the on-boot `indexed_docs == 0` trigger re-fires next run.
     cancel: Arc<AtomicBool>,
-    /// The spawned watcher + coordinator tasks, held for as long as the
-    /// indexer is. `Drop` aborts them; `shutdown` aborts AND awaits them so
-    /// the `Arc<Workspace>` clones they hold are released before it returns
-    /// (workspace close needs the writer flock free for an immediate reopen).
-    /// `Option` so `shutdown` can take and join the handles by value, which a
-    /// type with a `Drop` impl cannot otherwise move out.
-    _watcher_task: Option<JoinHandle<()>>,
-    _coordinator_task: Option<JoinHandle<()>>,
+    /// Held to keep the spawned tasks alive for as long as the
+    /// indexer is. Aborted on drop.
+    _watcher_task: JoinHandle<()>,
+    _coordinator_task: JoinHandle<()>,
 }
 
 impl std::fmt::Debug for Indexer {
@@ -155,15 +151,8 @@ impl std::fmt::Debug for Indexer {
 impl Drop for Indexer {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
-        // Abort-only: a plain drop cannot await. `shutdown` takes the handles
-        // before dropping, so these are `None` when it ran and these aborts are
-        // no-ops.
-        if let Some(task) = &self._watcher_task {
-            task.abort();
-        }
-        if let Some(task) = &self._coordinator_task {
-            task.abort();
-        }
+        self._watcher_task.abort();
+        self._coordinator_task.abort();
     }
 }
 
@@ -270,8 +259,8 @@ impl Indexer {
             telemetry,
             rebuild_tx,
             cancel,
-            _watcher_task: Some(watcher_task),
-            _coordinator_task: Some(coordinator_task),
+            _watcher_task: watcher_task,
+            _coordinator_task: coordinator_task,
         }
     }
 
@@ -280,32 +269,6 @@ impl Indexer {
     /// check.
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
-    }
-
-    /// Abort the watcher + coordinator tasks and AWAIT their termination, so no
-    /// spawned task still holds an `Arc<Workspace>` clone when this returns.
-    /// Workspace close uses this in place of dropping the indexer: an immediate
-    /// same-root reopen must not race a still-stopping task that keeps the
-    /// writer flock held. `Drop` stays abort-only (it cannot await), so a plain
-    /// drop still stops the tasks, just without the synchronous join.
-    // `clear_workspace_cell` (host.rs) replaces `drop(indexer)` with this call;
-    // the allow drops out once that wiring lands. A unit test already exercises
-    // it, so the behavior is covered in the meantime.
-    #[allow(dead_code)]
-    pub async fn shutdown(mut self) {
-        // Cooperative cancel first (an in-flight rebuild bails at its next
-        // per-file check), then abort to cut any task parked on a long await,
-        // then join so the abort has landed and the task's `Arc<Workspace>` is
-        // dropped before we return.
-        self.cancel.store(true, Ordering::Relaxed);
-        if let Some(task) = self._watcher_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
-        if let Some(task) = self._coordinator_task.take() {
-            task.abort();
-            let _ = task.await;
-        }
     }
 
     /// Snapshot the current status. Cheap.
@@ -1043,32 +1006,6 @@ mod tests {
                 vcs_kind: Some(VcsKind::Git),
             },
         )
-    }
-
-    #[tokio::test]
-    async fn shutdown_releases_the_workspace_so_it_can_be_dropped() {
-        let (_cfg, _ws_dir, workspace) = setup_workspace();
-        let weak = Arc::downgrade(&workspace);
-        let (_tx, rx) = broadcast::channel::<WatchEvent>(16);
-        let indexer = Indexer::spawn(
-            workspace.clone(),
-            rx,
-            false,
-            SearchAggression::Conservative,
-            Arc::new(chan_workspace::progress::NoProgress),
-        );
-        // shutdown aborts AND awaits the watcher + coordinator tasks, dropping
-        // the Arc<Workspace> clones they hold. Once it returns and the test
-        // releases its own clone, no strong reference remains, so the workspace
-        // (and its writer flock) tears down. A plain drop of the indexer would
-        // only abort, leaving a still-stopping task transiently holding a clone.
-        indexer.shutdown().await;
-        drop(workspace);
-        assert!(
-            weak.upgrade().is_none(),
-            "after shutdown the indexer holds no Arc<Workspace>, so dropping \
-             the last clone must tear the workspace down",
-        );
     }
 
     #[test]
