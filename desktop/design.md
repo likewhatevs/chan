@@ -212,13 +212,9 @@ chan-desktop updates itself through `tauri-plugin-updater`, gated by the `update
 - The client probes a single static manifest at `https://chan.app/dl/desktop/latest.json`, generated at release time by `web-marketing/scripts/generate-release-metadata.mjs` (run from `.github/workflows/release.yml`) and deployed to GitHub Pages with the rest of chan.app; there is no dynamic `/dl` server. The manifest carries a top-level `version` plus a `platforms` map keyed by `{os}-{arch}` (e.g. `darwin-aarch64`); Tauri picks the running target's entry and compares `version`.
 - One executable to upgrade. The desktop binary IS `chan` (section 1), so there is no second CLI to update — the `~/.local/bin/{chan,cs}` shims point at the one binary. `chan upgrade` from the desktop-dispatched binary (`Personality::Desktop`) does NOT replace a tarball: it delegates over the well-known handoff socket to the running desktop, which drives this same `tauri-plugin-updater` (check → download → install → `restart()`). If no desktop is running the CLI launches one first; after a successful install the desktop re-affirms the shims (so they keep pointing at the upgraded binary). `chan upgrade --check` reports availability synchronously without installing. The standalone `chan` (install.sh) is the only path that still self-upgrades by replacing its CLI tarball in place.
 
-Key rotation and updater-payload signing/verification are documented in `.agents/desktop.md` ("Auto-upgrade signing") and the [`updater-bridge.md`](updater-bridge.md) runbook.
+Key rotation and updater-payload signing/verification are documented in `.agents/desktop.md` ("Auto-upgrade signing") and the [`updater-bridge.md`](./updater-bridge.md) runbook.
 
-## 10. Sign-in
-
-The launcher's sign-in button drives an id.chan.app OAuth flow in the user's real browser (passkeys and autofill work natively there): the desktop generates a state nonce, opens `https://id.chan.app/desktop/authorize` with a `chan://auth/callback` redirect, and the deep-link plugin routes the callback back into the app. The minted 30-day `tunnel` PAT arrives in the URL fragment (never in any intermediate log), is validated against the nonce, and is stored in the OS keychain (service `chan-desktop`, account `id.chan.app`). Sign-out is local-only: it drops the keychain entry.
-
-## 11. Settings and developer controls
+## 10. Settings and developer controls
 
 chan owns the Settings surface per workspace. The desktop menu item dispatches `app.settings.toggle` into the focused workspace webview; it is a no-op when focus is not inside a workspace window.
 
@@ -230,11 +226,11 @@ Maintainer controls stay native:
 
 Future global settings additions are deferred until they have concrete demand. Tunnel publishing belongs in the workspace attachment surface rather than a generic app settings page.
 
-## 12. Remote workspaces
+## 11. Remote workspaces
 
 Remote workspaces are explicit attachments. They are not a fallback for failed embedded local serving.
 
-### 12.1 Outbound URL attach
+### 11.1 Outbound URL attach
 
 Outbound attach means the server already exists and chan-desktop opens it by URL. Example:
 
@@ -244,7 +240,7 @@ chan serve /tmp/foo
 
 The user copies the printed URL, including the bearer token, into the [New] modal's Remote form. The desktop opens that URL in a workspace webview (through the connecting screen, section 6.4) and does not try to start, stop, reclaim, or inspect the server process. This works whether the URL points at another machine or at `127.0.0.1` on the same machine.
 
-## 13. Native file integrations
+## 12. Native file integrations
 
 - **Download**: the SPA's Download action fetches the bytes over its existing loopback connection (XHR, so the in-app indicator gets progress) and hands them to a Tauri command that writes into the OS Downloads folder and returns the saved path — WKWebView/WebView2 have no download-manager UI, so `<a download>` would silently do nothing.
 - **Export to PDF** (macOS): `window.print()` is a no-op in WKWebView, so the desktop drives the real macOS print pipeline (`printOperationWithPrintInfo:`) silently to a file, which honours `@page`, auto-pagination, and explicit page breaks exactly like the browser's print-to-PDF path. The frontend gates the call to macOS desktop.
