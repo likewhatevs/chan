@@ -76,6 +76,17 @@ const REINDEX_RESERVE: u64 = 64;
 /// the cadence modest.
 const REINDEX_BACKOFF_STEP: std::time::Duration = std::time::Duration::from_millis(25);
 
+/// Non-Unix only: how many files a reindex worker processes between
+/// time-sliced yields (see `pace_reindex_worker_timesliced`). Unix paces
+/// off live fd pressure and ignores this. The value trades reindex
+/// throughput against interactive responsiveness: small enough that a
+/// busy graph DB drains often (a 25ms pause every 32 files yields the
+/// writer's tx window many times a second during a cold rebuild), large
+/// enough that the cumulative sleep is a small fraction of total reindex
+/// time on a real workspace.
+#[cfg(not(unix))]
+const REINDEX_TIMESLICE_FILES: u32 = 32;
+
 static WORKSPACE_GATE: OnceLock<WorkspaceGate> = OnceLock::new();
 
 pub(crate) fn snapshot() -> Option<FdSnapshot> {
@@ -146,10 +157,64 @@ pub(crate) fn pace_reindex_worker(cancel: Option<&std::sync::atomic::AtomicBool>
                 steps = steps.saturating_add(1);
                 std::thread::sleep(REINDEX_BACKOFF_STEP);
             }
-            // Clear headroom, or no probe available: don't pace.
-            _ => return steps,
+            // Clear headroom: don't pace. On platforms with a probe this
+            // is the common case.
+            Some(_) => return steps,
+            // No descriptor probe available: the fd-pressure heuristics
+            // above all key off `snapshot()`. On Unix `snapshot()` is
+            // always `Some`, so this arm is dead there. On non-Unix
+            // (Windows) it is the ONLY arm, and without pacing the cold
+            // rebuild would monopolise the graph DB — the Windows
+            // file-open hang. We can't measure fd pressure, so we fall
+            // back to a coarse time-sliced yield (see
+            // `pace_reindex_worker_timesliced`). Best-effort and
+            // bounded: it never blocks indefinitely.
+            None => return pace_no_probe(),
         }
     }
+}
+
+/// `None`-snapshot fallback for `pace_reindex_worker`. On Unix the probe
+/// is always available so this is never hit (and pacing without a probe
+/// would be wrong — Unix already has its fd-driven policy); on non-Unix
+/// it dispatches to the time-sliced yield.
+#[cfg(unix)]
+fn pace_no_probe() -> u32 {
+    0
+}
+
+#[cfg(not(unix))]
+fn pace_no_probe() -> u32 {
+    pace_reindex_worker_timesliced()
+}
+
+/// Non-Unix fallback throttle for `pace_reindex_worker`. Unix paces off
+/// live descriptor pressure; Windows has no `/dev/fd` probe, so we pace
+/// off a per-worker file counter instead: every
+/// `REINDEX_TIMESLICE_FILES` files a worker processes, it sleeps one
+/// `REINDEX_BACKOFF_STEP`. That brief, periodic pause is enough for the
+/// graph writer's transaction window to drain and for queued inspector /
+/// backlinks / graph reads to acquire the DB, so the workspace window
+/// stays responsive while the first index builds — without any Win32
+/// FFI. The counter is thread-local so each reindex worker paces
+/// independently and there is no shared atomic on the hot per-file path.
+#[cfg(not(unix))]
+fn pace_reindex_worker_timesliced() -> u32 {
+    use std::cell::Cell;
+    thread_local! {
+        static FILES_SINCE_YIELD: Cell<u32> = const { Cell::new(0) };
+    }
+    FILES_SINCE_YIELD.with(|c| {
+        let next = c.get() + 1;
+        if next >= REINDEX_TIMESLICE_FILES {
+            c.set(0);
+            std::thread::sleep(REINDEX_BACKOFF_STEP);
+            1
+        } else {
+            c.set(next);
+            0
+        }
+    })
 }
 
 /// Pure decision the pacing loop is built on: should a reindex worker

@@ -203,6 +203,11 @@ pub async fn api_headings(
 /// view without a follow-up request.
 pub async fn api_links(State(state): State<Arc<AppState>>) -> Response {
     let workspace = state.workspace();
+    // Empty while the first index builds (the link-edge walk hits the
+    // contended graph DB); the SPA re-fetches once indexing completes.
+    if workspace.is_reindexing() {
+        return Json(Vec::<chan_workspace::Edge>::new()).into_response();
+    }
     blocking_response(
         move || {
             let graph = match workspace.graph() {
@@ -1339,10 +1344,61 @@ pub async fn api_graph(
     let workspace = state.workspace();
     let stream = query_flag(&q.stream);
     let params = q.into_params();
+    // While the first index builds, the graph DB is saturated by the
+    // reindex writer (esp. on Windows, where reindex pacing can't read
+    // fd pressure). Reading it here would queue behind that work and
+    // freeze the workspace window's graph panel. Return an empty graph
+    // immediately instead; the SPA re-fetches when indexing completes
+    // (indexing-state poll + invalidateGraph), so the panel fills in
+    // once the build is done rather than hanging now.
+    if workspace.is_reindexing() {
+        if stream {
+            return empty_graph_stream_response(params).await;
+        }
+        return Json(GraphViewResponse {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        })
+        .into_response();
+    }
     if stream {
         return stream_graph_response(workspace, params).await;
     }
     blocking_response(move || api_graph_sync(workspace, params), "graph").await
+}
+
+/// Empty NDJSON graph stream (`meta` + `done`, no nodes/edges) returned
+/// while the first index builds. Mirrors the wire shape of a normal
+/// `?stream=1` response so the SPA's stream consumer completes cleanly
+/// and simply renders nothing until its post-index re-fetch.
+async fn empty_graph_stream_response(p: GraphParams) -> Response {
+    let mut bytes = match graph_ndjson_bytes(&GraphStreamEvent::Meta {
+        scope: p.scope,
+        path: p.path.clone(),
+        depth: p.depth,
+    }) {
+        Ok(b) => b.to_vec(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("graph stream meta encode: {e}"),
+            )
+                .into_response()
+        }
+    };
+    bytes.extend_from_slice(&graph_ndjson_error_bytes_or_done());
+    (
+        [(header::CONTENT_TYPE, "application/x-ndjson")],
+        Body::from(bytes),
+    )
+        .into_response()
+}
+
+fn graph_ndjson_error_bytes_or_done() -> Bytes {
+    match graph_ndjson_bytes(&GraphStreamEvent::Done) {
+        Ok(b) => b,
+        Err(e) => graph_ndjson_error_bytes(format!("graph stream done encode: {e}")),
+    }
 }
 
 fn api_graph_sync(workspace: Arc<chan_workspace::Workspace>, p: GraphParams) -> Response {
@@ -1849,10 +1905,49 @@ pub async fn api_backlinks(
     Query(query): Query<BacklinksQuery>,
 ) -> Response {
     let workspace = state.workspace();
-    if query_flag(&query.stream) {
+    let stream = query_flag(&query.stream);
+    // During the first index build the graph DB is contended; reading
+    // backlinks here would queue behind the reindex writer and freeze
+    // the inspector's "linked from" panel on file-open. Return empty
+    // now; the SPA re-fetches once indexing completes.
+    if workspace.is_reindexing() {
+        if stream {
+            return empty_backlinks_stream_response(path).await;
+        }
+        return Json(Vec::<ApiBacklinkEdge>::new()).into_response();
+    }
+    if stream {
         return stream_backlinks_response(workspace, path).await;
     }
     blocking_response(move || api_backlinks_sync(workspace, path), "backlinks").await
+}
+
+/// Empty NDJSON backlinks stream (`meta` + `done`) returned while the
+/// first index builds. Same wire shape as a normal `?stream=1` response
+/// so the SPA consumer completes cleanly with no edges.
+async fn empty_backlinks_stream_response(path: String) -> Response {
+    let mut bytes = match backlinks_ndjson_bytes(&BacklinksStreamEvent::Meta {
+        path: path.as_str(),
+    }) {
+        Ok(b) => b.to_vec(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("backlinks stream meta encode: {e}"),
+            )
+                .into_response()
+        }
+    };
+    let done = match backlinks_ndjson_bytes(&BacklinksStreamEvent::Done) {
+        Ok(b) => b,
+        Err(e) => backlinks_ndjson_error_bytes(format!("backlinks stream done encode: {e}")),
+    };
+    bytes.extend_from_slice(&done);
+    (
+        [(header::CONTENT_TYPE, "application/x-ndjson")],
+        Body::from(bytes),
+    )
+        .into_response()
 }
 
 fn api_backlinks_sync(workspace: Arc<chan_workspace::Workspace>, path: String) -> Response {

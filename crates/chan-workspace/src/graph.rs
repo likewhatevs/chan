@@ -48,6 +48,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -67,6 +68,25 @@ type ReaderConn = r2d2::PooledConnection<SqliteConnectionManager>;
 /// writer is single-threaded by SQLite contract and lives on its own
 /// Mutex<Connection> outside the pool.
 const READER_POOL_SIZE: u32 = 4;
+
+/// How long a `readers.get()` checkout waits for a free pooled
+/// connection before giving up with an error. r2d2's default is 30s,
+/// which is catastrophic here: during a cold reindex the graph DB is
+/// busy (the writer churns through the bulk `swap_staging` transaction
+/// and per-file staging), so the inspector/backlinks/graph reads a
+/// workspace window fires on file-open queue behind it. With the 30s
+/// default each of those reads parks for up to half a minute and the
+/// whole graph-reading surface of the window appears frozen — most
+/// visibly on Windows, where reindex pacing is otherwise a no-op (see
+/// `fd_budget::pace_reindex_worker`) so the rebuild runs flat-out and
+/// monopolises the DB. A short bound makes a contended read fail FAST;
+/// the route handlers already degrade a graph error into a (now
+/// near-instant) response instead of blocking the UI, and
+/// `is_reindexing()`-gated handlers skip the read entirely while the
+/// first build runs. 2s is comfortably longer than a healthy checkout
+/// (sub-millisecond) yet short enough that a stalled panel recovers
+/// quickly rather than hanging.
+const READER_CHECKOUT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Node kind. Distinguishes a regular markdown file from one that
 /// the contacts importer dropped (frontmatter `chan.kind: contact`).
@@ -301,8 +321,18 @@ impl GraphView {
         });
         let reader_pool_size = crate::fd_budget::graph_reader_pool_size(READER_POOL_SIZE);
         let readers = r2d2::Pool::builder()
+            // Bound the checkout wait. The r2d2 default is 30s; under a
+            // cold reindex that turns every contended graph read into a
+            // half-minute UI hang (see READER_CHECKOUT_TIMEOUT).
+            .connection_timeout(READER_CHECKOUT_TIMEOUT)
             .max_size(reader_pool_size)
-            .min_idle(Some(0))
+            // Pre-open the full set so the first burst of concurrent
+            // reads on file-open (inspector + backlinks + graph) don't
+            // each pay sqlite connect + WAL/pragma init latency while
+            // the DB is already busy. `min_idle == max_size` keeps the
+            // pool warm; idle connections cost a fd apiece, which the
+            // fd-budget already accounts for when it sizes the pool.
+            .min_idle(Some(reader_pool_size))
             .build(manager)
             .map_err(|e| ChanError::Graph(format!("graph reader pool: {e}")))?;
         tracing::debug!(
@@ -1666,6 +1696,70 @@ mod tests {
             h.join().expect("reader thread panicked");
         }
         writer.join().expect("writer thread panicked");
+    }
+
+    /// Regression guard for the Windows file-open hang: a reader
+    /// checkout that can't get a free connection must FAIL FAST, not
+    /// park on r2d2's 30s default.
+    ///
+    /// Reproduces the contention shape without a real reindex: hold
+    /// every connection in the pool (the cold-rebuild equivalent of the
+    /// DB being saturated) and then time a further checkout. With the
+    /// 30s default this call blocks for half a minute — the exact stall
+    /// that froze the workspace window's inspector/backlinks/graph reads
+    /// on file-open. With the explicit `READER_CHECKOUT_TIMEOUT` bound
+    /// it returns an `Err` promptly. We assert it returns in well under
+    /// the 30s default (so the bound is actually applied) and at/after
+    /// the configured 2s (so the timeout fires, rather than there being
+    /// a spare connection).
+    #[test]
+    fn reader_checkout_fails_fast_when_pool_is_saturated() {
+        use std::time::Instant;
+
+        let tmp = TempDir::new().unwrap();
+        let g = GraphView::open(&tmp.path().join("g.sqlite")).unwrap();
+
+        // Hold every connection the pool can hand out. `min_idle ==
+        // max_size` means the pool is fully provisioned, so this checks
+        // out the entire capacity and leaves zero free for the next
+        // caller — the same dead-end a backlog of reindex-contended
+        // reads hits.
+        let capacity = g.readers.max_size() as usize;
+        let held: Vec<ReaderConn> = (0..capacity)
+            .map(|_| g.reader().expect("seed checkout"))
+            .collect();
+        assert_eq!(held.len(), capacity, "pool should hand out its full size");
+
+        let start = Instant::now();
+        let result = g.reader();
+        let elapsed = start.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a saturated-pool checkout must error, not return a phantom connection",
+        );
+        // The whole point: nowhere near r2d2's 30s default. Generous
+        // upper bound (configured 2s + slack) keeps the test stable on
+        // a loaded CI box while still failing loudly if the timeout
+        // silently reverts to the default.
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "checkout took {elapsed:?}; expected ~{READER_CHECKOUT_TIMEOUT:?}, \
+             NOT the r2d2 30s default — connection_timeout was not applied",
+        );
+        // And it actually waited for the bound rather than erroring
+        // instantly, proving the timeout (not some other failure) is
+        // what fired. Small floor under the 2s config to tolerate timer
+        // granularity.
+        assert!(
+            elapsed >= Duration::from_millis(1500),
+            "checkout returned in {elapsed:?}, faster than the {READER_CHECKOUT_TIMEOUT:?} \
+             bound — the timeout did not gate the wait",
+        );
+
+        drop(held);
+        // Once a connection frees up, checkout succeeds again.
+        g.reader().expect("checkout after release");
     }
 
     #[test]
