@@ -97,7 +97,7 @@
     osChord,
   } from "../state/shortcuts";
   import { openTabMenu, tabMenu } from "../state/tabMenu.svelte";
-  import { sessionWindowId } from "../api/client";
+  import { sessionWindowId, windowDragScope } from "../api/client";
   import { onDestroy, onMount } from "svelte";
   import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
 
@@ -636,6 +636,11 @@
   const TAB_DRAG_MIME = "application/x-md-tab";
   const CROSS_TAB_MIME = "application/x-chan-tab+json";
   const FILE_DRAG_MIME = "application/x-md-file";
+  // The drag's scope (window kind + workspace identity) is carried as a MIME
+  // TYPE so a target can read it during `dragover` (when payload VALUES are
+  // not readable). See windowDragScope + isTabDragScopeCompatible.
+  const SCOPE_DRAG_MIME_PREFIX = "application/x-chan-tab-scope+";
+  const scopeMime = (scope: string): string => SCOPE_DRAG_MIME_PREFIX + scope;
 
   function onDragStart(e: DragEvent, tabId: string): void {
     if (!e.dataTransfer) return;
@@ -652,6 +657,10 @@
     if (t) {
       e.dataTransfer.setData(CROSS_TAB_MIME, JSON.stringify(crossWindowPayload(t)));
     }
+    // Stamp our drag scope as a type so the target can reject a cross-kind /
+    // cross-workspace drop at dragover (no-drop cursor) and on drop. Non-empty
+    // data avoids empty-value quirks; only the type string matters.
+    e.dataTransfer.setData(scopeMime(windowDragScope()), "1");
   }
 
   /// Build the CROSS_TAB_MIME payload for a dragged tab. File tabs carry the
@@ -772,8 +781,30 @@
     );
   }
 
+  /// A tab MOVE (vs a file-tree drag, which is same-window and always allowed).
+  function isTabMoveDrag(e: DragEvent): boolean {
+    const types = e.dataTransfer?.types;
+    return (
+      !!types &&
+      (types.includes(TAB_DRAG_MIME) || types.includes(CROSS_TAB_MIME))
+    );
+  }
+
+  /// Whether a tab move is scope-compatible with THIS window: it must carry our
+  /// own scope type, which the source stamped at dragstart. Same window, or a
+  /// window of the same kind+workspace, shares the scope (present → allowed);
+  /// terminal↔workspace and different-workspace drags carry a different scope
+  /// (absent → rejected). Blocks the cross-window drags that misbehave today.
+  function isTabDragScopeCompatible(e: DragEvent): boolean {
+    const types = e.dataTransfer?.types;
+    return !!types && types.includes(scopeMime(windowDragScope()));
+  }
+
   function onDragOver(e: DragEvent): void {
     if (!isAcceptedDrag(e)) return;
+    // Disallowed cross-window tab move (different kind / workspace): leave it
+    // un-prevented so the browser shows the no-drop cursor. File drags pass.
+    if (isTabMoveDrag(e) && !isTabDragScopeCompatible(e)) return;
     e.preventDefault();
     if (e.dataTransfer) {
       const isTabMove =
@@ -909,6 +940,11 @@
 
   function onTabDragOver(e: DragEvent, tabIdx: number): void {
     if (!isAcceptedDrag(e)) return;
+    // Disallowed cross-window tab move: bail before preventDefault so the
+    // browser shows the no-drop cursor and no insertion indicator appears.
+    // Returning before stopPropagation lets the strip-level handler also
+    // reject it consistently. File drags pass.
+    if (isTabMoveDrag(e) && !isTabDragScopeCompatible(e)) return;
     e.preventDefault();
     e.stopPropagation(); // don't let the strip-level handler also fire
     if (e.dataTransfer) {
@@ -967,6 +1003,9 @@
     }
     const crossRaw = dt.getData(CROSS_TAB_MIME);
     if (crossRaw) {
+      // Reject a cross-window drop from a different kind/workspace (no
+      // preventDefault ⇒ dropEffect "none" ⇒ the source keeps its tab).
+      if (!isTabDragScopeCompatible(e)) return;
       e.preventDefault();
       e.stopPropagation();
       acceptCrossWindowTab(crossRaw);
@@ -1021,6 +1060,9 @@
     }
     const crossRaw = dt.getData(CROSS_TAB_MIME);
     if (crossRaw) {
+      // Reject a cross-window drop from a different kind/workspace (no
+      // preventDefault ⇒ dropEffect "none" ⇒ the source keeps its tab).
+      if (!isTabDragScopeCompatible(e)) return;
       e.preventDefault();
       acceptCrossWindowTab(crossRaw);
       return;

@@ -636,7 +636,7 @@ describe("Pane cross-window tab DnD (pane-id collision fix)", () => {
       /TAB_DRAG_MIME,[\s\S]{1,160}fromWindow: sessionWindowId\(\)/,
     );
     expect(paneSource).toMatch(
-      /import \{ sessionWindowId \} from "\.\.\/api\/client"/,
+      /import \{ sessionWindowId, windowDragScope \} from "\.\.\/api\/client"/,
     );
   });
 
@@ -651,5 +651,40 @@ describe("Pane cross-window tab DnD (pane-id collision fix)", () => {
       /isIntraWindowDrag\(fromWindow\) && paneInThisWindow\(fromPaneId\)/g,
     );
     expect(intraGates?.length).toBe(2);
+  });
+});
+
+describe("Pane cross-kind / cross-workspace tab DnD guard", () => {
+  test("dragstart stamps the window's drag scope as a MIME type", () => {
+    // The scope rides a MIME TYPE so the target can read it during dragover
+    // (when payload values are not readable).
+    expect(paneSource).toMatch(/scopeMime\(windowDragScope\(\)\), "1"/);
+    expect(paneSource).toMatch(
+      /import \{ sessionWindowId, windowDragScope \} from "\.\.\/api\/client"/,
+    );
+  });
+
+  test("compatibility is the source scope type matching THIS window's scope", () => {
+    expect(paneSource).toMatch(
+      /function isTabDragScopeCompatible\(e: DragEvent\): boolean \{[\s\S]{1,160}includes\(scopeMime\(windowDragScope\(\)\)\)/,
+    );
+  });
+
+  test("both dragover handlers reject an incompatible tab move (no-drop cursor)", () => {
+    // Bail before preventDefault so the browser shows the no-drop cursor; file
+    // drags (not isTabMoveDrag) are unaffected.
+    const overGates = paneSource.match(
+      /if \(isTabMoveDrag\(e\) && !isTabDragScopeCompatible\(e\)\) return;/g,
+    );
+    expect(overGates?.length).toBe(2);
+  });
+
+  test("both drop handlers gate cross-window acceptance on scope compatibility", () => {
+    // The guard sits immediately before acceptCrossWindowTab so an incompatible
+    // drop returns without preventDefault (dropEffect "none" → source keeps it).
+    const dropGates = paneSource.match(
+      /if \(!isTabDragScopeCompatible\(e\)\) return;[\s\S]{1,120}acceptCrossWindowTab\(crossRaw\)/g,
+    );
+    expect(dropGates?.length).toBe(2);
   });
 });

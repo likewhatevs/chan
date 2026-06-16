@@ -125,6 +125,18 @@ export function sessionPath(): string {
   return `/api/session?w=${encodeURIComponent(sessionWindowId())}`;
 }
 
+/// Cross-window tab-DnD compatibility key. Two chan-desktop windows may
+/// exchange tabs only when these match. Derived from the `?w=` window label
+/// (`terminal-win-<seq>` / `workspace-<hash>-<seq>` / `outbound-<hash>-<seq>`)
+/// by dropping the trailing per-window seq, so windows of the SAME
+/// kind+workspace share one scope while different kinds (terminal vs
+/// workspace) and different workspaces get distinct scopes. A drag between
+/// windows of different scope (terminal↔workspace, workspace-A↔workspace-B) is
+/// rejected; same-workspace-multi-window and terminal↔terminal stay allowed.
+export function windowDragScope(): string {
+  return sessionWindowId().replace(/-\d+$/, "");
+}
+
 function req<T>(
   method: string,
   path: string,

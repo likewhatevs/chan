@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { api, sessionPath, sessionWindowId } from "./client";
+import { api, sessionPath, sessionWindowId, windowDragScope } from "./client";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -41,6 +41,45 @@ describe("sessionWindowId", () => {
 
     expect(sessionWindowId()).toBe("tunnel a/workspace 1");
     expect(sessionPath()).toBe("/api/session?w=tunnel%20a%2Fworkspace%201");
+  });
+});
+
+describe("windowDragScope", () => {
+  test("drops the per-window seq so a workspace's windows share one scope", () => {
+    window.history.replaceState(null, "", "/?w=workspace-deadbeef-3");
+    expect(windowDragScope()).toBe("workspace-deadbeef");
+  });
+
+  test("two windows of the SAME workspace get the SAME scope", () => {
+    window.history.replaceState(null, "", "/?w=workspace-deadbeef-3");
+    const win1 = windowDragScope();
+    window.history.replaceState(null, "", "/?w=workspace-deadbeef-7");
+    const win2 = windowDragScope();
+    expect(win1).toBe(win2);
+  });
+
+  test("different workspaces get DIFFERENT scopes", () => {
+    window.history.replaceState(null, "", "/?w=workspace-aaaaaaaa-1");
+    const a = windowDragScope();
+    window.history.replaceState(null, "", "/?w=workspace-bbbbbbbb-1");
+    const b = windowDragScope();
+    expect(a).not.toBe(b);
+  });
+
+  test("all standalone terminal windows share one scope, distinct from a workspace", () => {
+    window.history.replaceState(null, "", "/?w=terminal-win-5");
+    const term5 = windowDragScope();
+    window.history.replaceState(null, "", "/?w=terminal-win-9");
+    const term9 = windowDragScope();
+    expect(term5).toBe("terminal-win");
+    expect(term9).toBe("terminal-win");
+    window.history.replaceState(null, "", "/?w=workspace-deadbeef-1");
+    expect(windowDragScope()).not.toBe(term5);
+  });
+
+  test("outbound windows are scoped per remote workspace", () => {
+    window.history.replaceState(null, "", "/?w=outbound-c0ffee01-2");
+    expect(windowDragScope()).toBe("outbound-c0ffee01");
   });
 });
 
