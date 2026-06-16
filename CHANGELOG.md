@@ -6,6 +6,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- chan-desktop remembers which workspaces were on and re-serves them on the next launch, so the app comes back up showing what you left running.
+
+### Changed
+
+- A fresh chan-desktop launch no longer creates a default workspace: there is no `~/Documents/Chan` and no seeded manual. The launcher opens empty and a standalone terminal window opens alongside it; add a workspace when you want one.
+- chan-desktop configuration now lives under `~/.chan/desktop/config.json`.
+- The remote-workspace mode is now labeled simply **Remote**.
+
+### Removed
+
+- The first-run default-workspace prompt (create / choose / factory-reset) is gone end to end.
+- Remote **inbound** is removed from chan-desktop entirely (the embedded inbound tunnel listener is gone); only the outbound "Remote" mode remains. The standalone gateway's tunnel server is unaffected.
+- Releases no longer ship the separate manual tarball.
+
+### Fixed
+
+- Windows: opening a terminal no longer briefly hangs the app while Git BASH is being discovered — discovery is primed off the async request path.
+- Windows: `chan` and `cs` resolve from the desktop install in cmd, PowerShell, and Git BASH, and a freshly-opened shell picks them up without a logout.
+- Windows: `chan` / `cs` now actually print their output (for example `chan --version`) when run from a terminal — the desktop binary reattaches to the parent console for the CLI path; output redirection (`> out.txt`) still works.
+- Windows: `chan serve <path>` hands the workspace to a running chan-desktop (opening it in a window) instead of starting a standalone browser server and leaving the workspace stuck "off" in the launcher.
+- Windows: opening a markdown file no longer spins on "loading" forever; the editor finishes on the stream's explicit done signal instead of waiting on a connection close the webview doesn't surface.
+- The Settings shortcut (Ctrl+,) is shown in the terminal-tab and editor-tab right-click menus.
+- Tabs can no longer be dragged between a standalone terminal window and a workspace window, or between two different workspaces; such drops are refused. Reordering within a window, and moving a tab between two windows of the same workspace (or two terminal windows), still work.
+
 ## [v0.34.0] - 2026-06-14
 
 ### Added
