@@ -51,6 +51,45 @@ pub struct OutboundWorkspace {
     pub added_at: u64,
 }
 
+/// A devserver the desktop dials out to: a headless `chan devserver`
+/// running on some box (often reached over an `ssh -L` local forward).
+/// Unlike `OutboundWorkspace` (one remote URL = one workspace), a
+/// devserver is a multi-workspace aggregator: the desktop groups its
+/// workspaces under one `[DEVSERVER {host}]` launcher section and drives
+/// them through the devserver's management API.
+///
+/// This struct is the *local* connection recipe only — host/port for the
+/// tunnel endpoint plus the user's connect `script` (the CONTROL TERMINAL
+/// runs it; e.g. an `ssh -L` invocation). The devserver owns the
+/// per-workspace URLs/tokens and their lifecycle; the desktop persists
+/// just enough to re-offer the connection and re-open its windows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Devserver {
+    /// Stable desktop-local identifier used for row actions, window
+    /// restore, and the in-memory connection-state map. Not sent to the
+    /// devserver.
+    pub id: String,
+    /// Tunnel endpoint host the desktop dials (e.g. `127.0.0.1` for a
+    /// local `ssh -L` forward). Also the default `[DEVSERVER {host}]`
+    /// section label until the devserver reports its own `host_label`.
+    pub host: String,
+    /// Tunnel endpoint port the desktop dials.
+    pub port: u16,
+    /// The connect script the CONTROL TERMINAL runs in its PTY (typically
+    /// an `ssh user@box -L {port}:localhost:{port} chan devserver ...`).
+    /// It blocks for the life of the session; its return means the
+    /// session ended (the CONTROL TERMINAL then offers re-run / disconnect).
+    #[serde(default)]
+    pub script: String,
+    /// Optional user label for the launcher section header and window
+    /// titles. Empty falls back to `host`.
+    #[serde(default)]
+    pub label: String,
+    /// Wall-clock millis when the devserver was added.
+    #[serde(default)]
+    pub added_at: u64,
+}
+
 /// Per-window layout snapshot pushed when a workspace webview closes,
 /// popped when the same workspace opens its next webview. The Tauri
 /// window label is the join key: reusing it forwards the SPA's
@@ -102,6 +141,12 @@ pub struct Config {
     /// remote workspaces that desktop opens by URL.
     #[serde(default)]
     pub outbound: Vec<OutboundWorkspace>,
+    /// Configured devservers (multi-workspace aggregators the desktop
+    /// dials out to). Each renders its own `[DEVSERVER {host}]` launcher
+    /// section. The per-workspace URLs/tokens are NOT persisted (the
+    /// devserver rotates them); only the connection recipe is.
+    #[serde(default)]
+    pub devservers: Vec<Devserver>,
     /// Canonical keys of the local workspaces that were *on* (served) at
     /// the last toggle / clean shutdown. Restored on the next boot (the
     /// §3.2 boot matrix) so the desktop comes back up serving what the
@@ -414,5 +459,57 @@ mod tests {
         assert_eq!(workspace.id, "remote-1");
         assert_eq!(workspace.label, "");
         assert_eq!(workspace.added_at, 0);
+    }
+
+    #[test]
+    fn config_defaults_devservers_empty() {
+        let cfg = Config::default();
+        assert!(cfg.devservers.is_empty());
+    }
+
+    #[test]
+    fn config_loads_without_devservers_field() {
+        // A config.json that predates devservers must still load: serde
+        // reads the missing key as the empty set so the load never fails
+        // and drops the rest of the config.
+        let raw = r#"{ "outbound": [], "window_configs": [] }"#;
+        let cfg: Config = serde_json::from_str(raw).expect("load without devservers");
+        assert!(cfg.devservers.is_empty());
+    }
+
+    #[test]
+    fn config_devservers_round_trip() {
+        let cfg = Config {
+            devservers: vec![Devserver {
+                id: "ds-1".into(),
+                host: "127.0.0.1".into(),
+                port: 8787,
+                script: "ssh box -L 8787:localhost:8787 chan devserver".into(),
+                label: "lab box".into(),
+                added_at: 42,
+            }],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let back: Config = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.devservers, cfg.devservers);
+    }
+
+    #[test]
+    fn devserver_optional_fields_default() {
+        // Only the connection essentials are required; script/label/
+        // added_at default so a hand-written config stays loadable.
+        let raw = r#"{
+            "id": "ds-1",
+            "host": "127.0.0.1",
+            "port": 8787
+        }"#;
+        let ds: Devserver = serde_json::from_str(raw).expect("minimal load");
+        assert_eq!(ds.id, "ds-1");
+        assert_eq!(ds.host, "127.0.0.1");
+        assert_eq!(ds.port, 8787);
+        assert_eq!(ds.script, "");
+        assert_eq!(ds.label, "");
+        assert_eq!(ds.added_at, 0);
     }
 }

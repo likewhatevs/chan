@@ -212,6 +212,45 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   margin-right: 2px;
 }
 
+/* Launcher category headers: [LOCAL] over the local/outbound table, and
+   one [DEVSERVER {host}] section per configured devserver. These appear
+   only once a devserver exists; with none, the launcher stays the plain,
+   header-less table. The label treatment mirrors the table th
+   (uppercase, secondary) so the grouping reads as section dividers. */
+.ws-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.ws-group .ic-devserver { color: var(--text-secondary); }
+.ws-group-host { color: var(--text); }
+/* The endpoint (host:port) rides alongside the name in monospace, opted
+   out of the header's uppercase/letter-spacing so it reads as an address. */
+.ws-group-sub {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.ws-group-forget {
+  margin-left: auto;
+  padding: 3px 8px;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.ws-group-block { border-bottom: 1px solid var(--border); }
+.ws-group-pending { padding: 0 14px 12px; }
+
 /* Split button: primary "Open" + caret that toggles a small menu
    anchored to the row. The menu is absolutely positioned to the
    right edge of the split so it doesn't widen the actions column. */
@@ -394,6 +433,41 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   cursor: copy;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* New -> Devserver form fields. Host/Name flex to fill; Port is a fixed
+   narrow number input. The connect-command sits full-width below in a
+   monospace textarea (it's a shell command, often an ssh forward). */
+.nw-host-field { flex: 1 1 160px; }
+.nw-host-field input[type="text"] { width: 100%; }
+.nw-name-field { flex: 1 1 140px; }
+.nw-name-field input[type="text"] { width: 100%; }
+.nw-row input[type="number"] {
+  width: 90px;
+  padding: 4px 6px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+}
+.nw-script-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-secondary);
+}
+.nw-script {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  resize: vertical;
 }
 
 .error-banner {

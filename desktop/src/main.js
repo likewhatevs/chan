@@ -109,11 +109,14 @@ async function refresh(force = false) {
   if (!homeDir) {
     try { homeDir = await invoke('home_dir'); } catch { homeDir = ''; }
   }
-  const workspaces = await invoke('list_workspaces');
-  const json = JSON.stringify(workspaces);
+  const [workspaces, devservers] = await Promise.all([
+    invoke('list_workspaces'),
+    invoke('list_devservers'),
+  ]);
+  const json = JSON.stringify({ workspaces, devservers });
   if (force || json !== lastWorkspacesJson) {
     lastWorkspacesJson = json;
-    render(workspaces);
+    render(workspaces, devservers);
   }
   return workspaces;
 }
@@ -146,6 +149,11 @@ function renderPath(full) {
 // (we connect out to a URL). Matches the ic-home / ic-computer style
 // (13x13, currentColor, 1.8 stroke) so theme switches keep parity.
 const ICON_OUTBOUND = `<svg class="ic-outbound" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="remote"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>`;
+
+// Glyph for a [DEVSERVER] group header: stacked server racks (a
+// multi-workspace box). Matches the ic-outbound style (currentColor,
+// 1.8 stroke) so theme switches keep parity.
+const ICON_DEVSERVER = `<svg class="ic-devserver" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="devserver"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>`;
 
 /// The WHERE cell, one renderer keyed on `kind`. Local reuses the
 /// home/computer path glyph; a remote row leads with the remote glyph
@@ -191,11 +199,14 @@ function applyChanBusyState(payload) {
 ///   - Local directory: a folder picker + Open (add_workspace).
 ///   - Remote: a URL + name form (add_outbound_workspace); we dial out
 ///     to a chan workspace already being served.
+///   - Devserver: a HOST/PORT/SCRIPT form (add_devserver). The same form
+///     doubles as the round-2 Edit form: pass `editDevserver` to pre-fill
+///     it from an existing devserver (empty = New, pre-filled = Edit).
 ///
 /// ESC / backdrop / [X] dismiss.
 let activeNewDialog = null;
 
-function showNewWorkspaceDialog(initialChoice = 'local') {
+function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
   // Singleton: a second [New] click just switches the open modal's
   // choice instead of stacking overlays.
   if (activeNewDialog) {
@@ -234,6 +245,7 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
   const CHOICES = [
     ['local', 'Local directory'],
     ['outbound', 'Remote'],
+    ['devserver', 'Devserver'],
   ];
   const choiceButtons = {};
   for (const [key, label] of CHOICES) {
@@ -292,6 +304,7 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
     body.innerHTML = '';
     footer.innerHTML = '';
     if (choice === 'local') renderLocal();
+    else if (choice === 'devserver') renderDevserver(editDevserver);
     else renderOutbound();
   }
 
@@ -410,6 +423,87 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
     await refresh();
   }
 
+  // ---- Devserver (multi-workspace aggregator we dial out to) -----------
+  // `existing` is null for New (add a devserver) or a Devserver object for
+  // Edit (pre-fill host/port/script/label, "Save changes"). The Edit
+  // dropdown entry + the update_devserver persist command land in round-2;
+  // the form is parameterized here so round-2 is purely additive.
+  function renderDevserver(existing = null) {
+    const ds = existing || {};
+    const editing = !!existing;
+    body.innerHTML = `
+      <p class="nw-intro">Connect to a chan <em>devserver</em> — a headless box serving many workspaces at once. The desktop dials <b>host:port</b>; its workspaces appear in their own launcher group.</p>
+      <div class="nw-row">
+        <label class="nw-host-field">Host
+          <input id="nw-ds-host" type="text" autocomplete="off" spellcheck="false" placeholder="127.0.0.1" value="${escapeAttr(ds.host || '')}"/>
+        </label>
+        <label class="nw-port-field">Port
+          <input id="nw-ds-port" type="number" min="1" max="65535" autocomplete="off" placeholder="8787" value="${escapeAttr(ds.port != null ? String(ds.port) : '')}"/>
+        </label>
+        <label class="nw-name-field">Name
+          <input id="nw-ds-label" type="text" maxlength="120" autocomplete="off" placeholder="optional" value="${escapeAttr(ds.label || '')}"/>
+        </label>
+      </div>
+      <label class="nw-script-field">Connect command <span class="nw-muted">— optional; runs in a control terminal (e.g. an SSH local forward)</span>
+        <textarea id="nw-ds-script" class="nw-script" rows="2" autocomplete="off" spellcheck="false" placeholder="ssh user@box -L 8787:localhost:8787 chan devserver --bind 127.0.0.1 --port 8787">${escapeHtml(ds.script || '')}</textarea>
+      </label>
+      <p class="nw-muted">On the box, run a devserver, then register workspaces into it with <code>chan serve</code>:</p>
+      <pre class="snippet" data-copy="chan devserver --bind 127.0.0.1 --port 8787" title="click to copy">chan devserver --bind 127.0.0.1 --port 8787</pre>`;
+    const submit = document.createElement('button');
+    submit.className = 'btn primary';
+    submit.type = 'button';
+    submit.textContent = editing ? 'Save changes' : 'Add devserver';
+    submit.addEventListener('click', () => submitDevserver(existing));
+    footer.appendChild(submit);
+    // Enter submits from the single-line fields (not the multi-line
+    // script textarea, where Enter inserts a newline).
+    for (const sel of ['#nw-ds-host', '#nw-ds-port', '#nw-ds-label']) {
+      const inp = body.querySelector(sel);
+      if (inp) {
+        inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); submit.click(); }
+        });
+      }
+    }
+    wireSnippetCopy(body);
+    body.querySelector('#nw-ds-host').focus();
+  }
+
+  async function submitDevserver(existing = null) {
+    const host = (body.querySelector('#nw-ds-host')?.value || '').trim();
+    const portRaw = (body.querySelector('#nw-ds-port')?.value || '').trim();
+    const script = (body.querySelector('#nw-ds-script')?.value || '').trim();
+    const label = (body.querySelector('#nw-ds-label')?.value || '').trim();
+    if (!host) {
+      body.querySelector('#nw-ds-host')?.focus();
+      showError('Devserver host is required.');
+      return;
+    }
+    const port = Number.parseInt(portRaw, 10);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      body.querySelector('#nw-ds-port')?.focus();
+      showError('Devserver port must be a number between 1 and 65535.');
+      return;
+    }
+    if (existing) {
+      // Edit mode: the disconnected-only Edit dropdown entry that opens
+      // this form pre-filled, plus the update_devserver persist command,
+      // land in round-2 (round-plan: Edit/Forget ship with the disconnect
+      // lifecycle). No round-1 caller passes `existing`, so this branch is
+      // the reusable seam the form was parameterized for, not live yet.
+      showError('Editing a devserver lands in a later update.');
+      return;
+    }
+    try {
+      await invoke('add_devserver', { host, port, script, label });
+    } catch (e) {
+      showError(e);
+      return;
+    }
+    close();
+    await refresh();
+  }
+
   // The singleton handle: a second [New] click switches the open
   // modal's choice instead of stacking overlays.
   activeNewDialog = { select };
@@ -417,11 +511,11 @@ function showNewWorkspaceDialog(initialChoice = 'local') {
   select(choice);
 }
 
-function render(workspaces) {
+function render(workspaces, devservers = []) {
   const chanCommandDisabledAttr = chanBusy ? 'disabled' : '';
   const localRuntimeDisabledAttr = chanBusy ? 'disabled' : '';
 
-  if (!workspaces.length) {
+  if (!workspaces.length && !devservers.length) {
     main.innerHTML = `
       <div class="empty">
         <h2>No workspaces yet</h2>
@@ -473,7 +567,8 @@ function render(workspaces) {
     </tr>`;
   }).join('');
 
-  main.innerHTML = `
+  const localTable = workspaces.length
+    ? `
     <table class="workspaces">
       <thead>
         <tr>
@@ -483,9 +578,65 @@ function render(workspaces) {
         </tr>
       </thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table>`
+    : `<p class="nw-muted ws-group-pending">No local workspaces yet.</p>`;
+
+  // Category headers appear only once there's something to group (at
+  // least one devserver). With no devservers the launcher stays the
+  // plain, header-less table it has always been.
+  const grouped = devservers.length > 0;
+  let html = '';
+  if (grouped) {
+    html += `<h3 class="ws-group ws-group-local"><span class="ws-group-host">Local</span></h3>`;
+  }
+  html += localTable;
+  for (const ds of devservers) html += renderDevserverSection(ds);
+  main.innerHTML = html;
 
   bindRowEvents();
+  if (grouped) bindDevserverSectionEvents();
+}
+
+/// One `[DEVSERVER {host}]` launcher section. Round-1 renders the header
+/// (name + endpoint + Forget) over a "not connected yet" placeholder;
+/// the connect flow (control terminal + the devserver's live workspace
+/// rows from its management API) fills the body in step-4.
+function renderDevserverSection(ds) {
+  const name = (ds.label && ds.label.trim()) || ds.host || 'devserver';
+  const endpoint = `${ds.host}:${ds.port}`;
+  return `
+    <section class="ws-group-block" data-devserver-id="${escapeAttr(ds.id || '')}">
+      <h3 class="ws-group">
+        ${ICON_DEVSERVER}
+        <span class="ws-group-host">${escapeHtml(name)}</span>
+        <span class="ws-group-sub">${escapeHtml(endpoint)}</span>
+        <button class="btn danger ws-group-forget" data-act="forget-devserver" type="button"
+                title="Forget this devserver">Forget</button>
+      </h3>
+      <p class="nw-muted ws-group-pending">Not connected yet — the connect flow (control terminal + workspace list) lands with the devserver management API.</p>
+    </section>`;
+}
+
+/// Wire the Forget button on each `[DEVSERVER]` section. Removes the
+/// persisted devserver so its section disappears. (Window-lifecycle
+/// teardown joins this in step-4, once the connect flow spawns windows.)
+function bindDevserverSectionEvents() {
+  main.querySelectorAll('[data-devserver-id]').forEach((block) => {
+    const id = block.dataset.devserverId || '';
+    const forget = block.querySelector('[data-act="forget-devserver"]');
+    if (forget) {
+      forget.addEventListener('click', async () => {
+        if (!id) return;
+        try {
+          await invoke('remove_devserver', { id });
+        } catch (e) {
+          showError(e);
+          return;
+        }
+        await refresh();
+      });
+    }
+  });
 }
 
 /// Per-row "Open" split button: primary action opens the workspace in

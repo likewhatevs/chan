@@ -31,7 +31,7 @@ use tauri::menu::{Menu, MenuItemKind, PredefinedMenuItem, WINDOW_SUBMENU_ID};
 use tauri::menu::{MenuItemBuilder, Submenu};
 use tauri::{Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use config::{Config, ConfigStore, OutboundWorkspace, WindowConfig};
+use config::{Config, ConfigStore, Devserver, OutboundWorkspace, WindowConfig};
 use serve::ServeHandle;
 
 const CHAN_BUSY_CHANGED: &str = "chan-busy";
@@ -705,6 +705,130 @@ fn outbound_label(outbound: &OutboundWorkspace) -> Option<String> {
     } else {
         Some(label.to_string())
     }
+}
+
+const DEVSERVER_LABEL_MAX_CHARS: usize = 120;
+
+/// Persist a devserver connection recipe (the New -> Devserver form) and
+/// return its desktop-local id. A devserver is a multi-workspace
+/// aggregator the desktop dials out to; this records the connection
+/// recipe so it renders as a `[DEVSERVER {host}]` launcher section.
+///
+/// Idempotent on `host:port`: re-adding the same endpoint updates its
+/// script/label instead of stacking a duplicate, mirroring
+/// `add_outbound_workspace`'s URL dedup.
+///
+/// NOTE (step-4, blocked on the frozen management-API contract +
+/// the server-side custom-command-PTY seam): the connect flow — running
+/// the `script` in the CONTROL TERMINAL, the connecting window probing
+/// `GET /api/devserver/info`, opening a standalone terminal on connect,
+/// then auto-hiding the CONTROL TERMINAL — lands on top of this once those
+/// land. This command only persists today.
+#[tauri::command]
+fn add_devserver(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    host: String,
+    port: u16,
+    script: String,
+    label: String,
+) -> Result<String, String> {
+    let host = normalize_devserver_host(&host)?;
+    if port == 0 {
+        return Err("devserver port must be between 1 and 65535".to_string());
+    }
+    let script = script.trim().to_string();
+    let label = normalize_devserver_label(&label)?;
+    let id = {
+        let mut store = state.store.lock().unwrap();
+        let mut cfg = store.get().map_err(err)?;
+        let id = match cfg
+            .devservers
+            .iter_mut()
+            .find(|d| d.host == host && d.port == port)
+        {
+            Some(existing) => {
+                existing.script = script;
+                if !label.is_empty() {
+                    existing.label = label;
+                }
+                existing.id.clone()
+            }
+            None => {
+                let entry = Devserver {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    host,
+                    port,
+                    script,
+                    label,
+                    added_at: config::current_millis(),
+                };
+                let id = entry.id.clone();
+                cfg.devservers.push(entry);
+                id
+            }
+        };
+        store.save(&cfg).map_err(err)?;
+        id
+    };
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+    Ok(id)
+}
+
+/// The configured devservers, for the launcher's `[DEVSERVER {host}]`
+/// grouping. The per-devserver workspace ROWS (which workspaces are
+/// mounted/on) come from the devserver's `GET /api/devserver/workspaces`
+/// over the tunnel — step-4, blocked on the frozen contract.
+#[tauri::command]
+fn list_devservers(state: State<Arc<AppState>>) -> Result<Vec<Devserver>, String> {
+    Ok(state.store.lock().unwrap().get().map_err(err)?.devservers)
+}
+
+/// Forget a devserver. Removes the persisted connection recipe so its
+/// launcher section disappears.
+///
+/// NOTE (step-4/round-2): this does NOT yet tear down the CONTROL TERMINAL
+/// + connecting windows for the devserver (none are spawned until the
+/// connect flow lands). The full window-lifecycle teardown joins this once
+/// step-4 is in.
+#[tauri::command]
+fn remove_devserver(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    {
+        let mut store = state.store.lock().unwrap();
+        let mut cfg = store.get().map_err(err)?;
+        let before = cfg.devservers.len();
+        cfg.devservers.retain(|d| d.id != id);
+        if cfg.devservers.len() != before {
+            store.save(&cfg).map_err(err)?;
+        }
+    }
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+    Ok(())
+}
+
+fn normalize_devserver_host(raw: &str) -> Result<String, String> {
+    let host = raw.trim();
+    if host.is_empty() {
+        return Err("devserver host is required".to_string());
+    }
+    if host.chars().any(char::is_whitespace) {
+        return Err("devserver host must not contain spaces".to_string());
+    }
+    Ok(host.to_string())
+}
+
+fn normalize_devserver_label(raw: &str) -> Result<String, String> {
+    let label = raw.trim().to_string();
+    if label.chars().count() > DEVSERVER_LABEL_MAX_CHARS {
+        return Err(format!(
+            "devserver label must be {DEVSERVER_LABEL_MAX_CHARS} characters or fewer",
+        ));
+    }
+    Ok(label)
 }
 
 /// Open an additional in-app Tauri webview for a running local
@@ -1679,6 +1803,9 @@ fn main() {
             add_outbound_workspace,
             open_outbound_workspace,
             remove_outbound_workspace,
+            add_devserver,
+            list_devservers,
+            remove_devserver,
             auth::auth_status,
             auth::open_signin,
             auth::signout,
