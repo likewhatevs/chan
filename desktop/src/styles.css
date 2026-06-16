@@ -241,8 +241,13 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   color: var(--text-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.ws-group-forget {
+/* Right-aligned Connect/Disconnect + Forget cluster in a section header. */
+.ws-group-actions {
   margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.ws-group-btn {
   padding: 3px 8px;
   font-size: 11px;
   text-transform: none;
@@ -250,6 +255,9 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
 }
 .ws-group-block { border-bottom: 1px solid var(--border); }
 .ws-group-pending { padding: 0 14px 12px; }
+/* A connected devserver's workspace rows reuse the local table styling,
+   sitting flush under the section header. */
+.ds-workspaces table.workspaces { width: 100%; }
 
 /* Split button: primary "Open" + caret that toggles a small menu
    anchored to the row. The menu is absolutely positioned to the

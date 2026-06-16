@@ -591,35 +591,60 @@ function render(workspaces, devservers = []) {
   main.innerHTML = html;
 
   bindRowEvents();
-  if (grouped) bindDevserverSectionEvents();
+  if (grouped) {
+    bindDevserverSectionEvents();
+    // Fill the connected sections' workspace rows right after layout; the
+    // periodic interval keeps them fresh thereafter.
+    pollDevserverWorkspaces().catch(() => {});
+  }
 }
 
 /// One `[DEVSERVER {host}]` launcher section: a header (name + endpoint +
-/// Forget) over the section body. While the desktop is not connected to the
-/// devserver the body is a placeholder; once connected it lists the
-/// devserver's live workspace rows.
+/// Connect/Disconnect + Forget) over the section body. While disconnected
+/// the body is a placeholder; once connected it lists the devserver's live
+/// workspace rows, filled by `pollDevserverWorkspaces`.
 function renderDevserverSection(ds) {
   const name = (ds.label && ds.label.trim()) || ds.host || 'devserver';
   const endpoint = `${ds.host}:${ds.port}`;
+  const connectAct = ds.connected ? 'disconnect-devserver' : 'connect-devserver';
+  const connectLabel = ds.connected ? 'Disconnect' : 'Connect';
+  const body = ds.connected
+    ? `<div class="ds-workspaces"><p class="nw-muted ws-group-pending">Loading workspaces...</p></div>`
+    : `<p class="nw-muted ws-group-pending">Not connected.</p>`;
   return `
     <section class="ws-group-block" data-devserver-id="${escapeAttr(ds.id || '')}">
       <h3 class="ws-group">
         ${ICON_DEVSERVER}
         <span class="ws-group-host">${escapeHtml(name)}</span>
         <span class="ws-group-sub">${escapeHtml(endpoint)}</span>
-        <button class="btn danger ws-group-forget" data-act="forget-devserver" type="button"
-                title="Forget this devserver">Forget</button>
+        <span class="ws-group-actions">
+          <button class="btn ws-group-btn" data-act="${connectAct}" type="button">${connectLabel}</button>
+          <button class="btn danger ws-group-btn" data-act="forget-devserver" type="button"
+                  title="Forget this devserver">Forget</button>
+        </span>
       </h3>
-      <p class="nw-muted ws-group-pending">Not connected.</p>
+      ${body}
     </section>`;
 }
 
-/// Wire the Forget button on each `[DEVSERVER]` section. Removes the
-/// persisted devserver so its section disappears.
+/// One devserver workspace row: an outbound-style row whose Open button
+/// hands the pre-assembled tenant URL to `open_devserver_workspace`.
+function renderDevserverWorkspaceRow(ws) {
+  return `
+    <tr data-ds-prefix="${escapeAttr(ws.prefix)}" data-url="${escapeAttr(ws.url)}">
+      <td><span class="conn-dot on" title="Workspace"></span></td>
+      <td class="path-cell where-cell remote-cell" title="${escapeAttr(ws.path)}">${ICON_OUTBOUND}<span class="where-text">${escapeHtml(ws.label || ws.path)}</span></td>
+      <td><div class="row-actions"><button class="btn primary" data-act="open-ds-ws">Open</button></div></td>
+    </tr>`;
+}
+
+/// Wire the Connect/Disconnect and Forget buttons on each `[DEVSERVER]`
+/// section. Connect acquires the devserver token and opens a terminal;
+/// Disconnect drops the connection; Forget removes the persisted devserver.
 function bindDevserverSectionEvents() {
-  main.querySelectorAll('[data-devserver-id]').forEach((block) => {
-    const id = block.dataset.devserverId || '';
-    const forget = block.querySelector('[data-act="forget-devserver"]');
+  main.querySelectorAll('section[data-devserver-id]').forEach((section) => {
+    const id = section.dataset.devserverId || '';
+    const forget = section.querySelector('[data-act="forget-devserver"]');
     if (forget) {
       forget.addEventListener('click', async () => {
         if (!id) return;
@@ -632,7 +657,83 @@ function bindDevserverSectionEvents() {
         await refresh();
       });
     }
+    const connect = section.querySelector('[data-act="connect-devserver"]');
+    if (connect) {
+      connect.addEventListener('click', async () => {
+        if (!id) return;
+        connect.disabled = true;
+        connect.textContent = 'Connecting...';
+        try {
+          await invoke('connect_devserver', { id });
+        } catch (e) {
+          showError(e);
+        }
+        await refresh();
+      });
+    }
+    const disconnect = section.querySelector('[data-act="disconnect-devserver"]');
+    if (disconnect) {
+      disconnect.addEventListener('click', async () => {
+        if (!id) return;
+        try {
+          await invoke('disconnect_devserver', { id });
+        } catch (e) {
+          showError(e);
+        }
+        await refresh();
+      });
+    }
   });
+}
+
+// Per-devserver last-rendered workspace-rows JSON so the periodic poll only
+// touches the DOM when the list actually changed (no flicker at idle).
+const lastDevserverRowsJson = {};
+
+/// Fill each connected `[DEVSERVER]` section with its live workspace rows.
+/// Runs after a render and on a periodic interval; updates only the section
+/// bodies (not the whole launcher), so it never disturbs the local table.
+async function pollDevserverWorkspaces() {
+  const sections = [...main.querySelectorAll('section[data-devserver-id]')];
+  if (!sections.length) return;
+  let devservers;
+  try {
+    devservers = await invoke('list_devservers');
+  } catch {
+    return;
+  }
+  const byId = Object.fromEntries(devservers.map((d) => [d.id, d]));
+  for (const section of sections) {
+    const id = section.dataset.devserverId;
+    const ds = byId[id];
+    const container = section.querySelector('.ds-workspaces');
+    if (!ds || !ds.connected || !container) continue;
+    let rows;
+    try {
+      rows = await invoke('list_devserver_workspaces', { id });
+    } catch (e) {
+      container.innerHTML = `<p class="nw-muted ws-group-pending">${escapeHtml(String(e && e.message ? e.message : e))}</p>`;
+      continue;
+    }
+    const json = JSON.stringify(rows);
+    if (lastDevserverRowsJson[id] === json) continue;
+    lastDevserverRowsJson[id] = json;
+    container.innerHTML = rows.length
+      ? `<table class="workspaces"><tbody>${rows.map(renderDevserverWorkspaceRow).join('')}</tbody></table>`
+      : `<p class="nw-muted ws-group-pending">No workspaces on this devserver yet.</p>`;
+    container.querySelectorAll('tr[data-ds-prefix]').forEach((tr) => {
+      const open = tr.querySelector('[data-act="open-ds-ws"]');
+      if (open) {
+        open.addEventListener('click', async () => {
+          try {
+            await invoke('open_devserver_workspace', { prefix: tr.dataset.dsPrefix, url: tr.dataset.url });
+          } catch (e) {
+            showError(e);
+          }
+        });
+      }
+    });
+  }
 }
 
 /// Per-row "Open" split button: primary action opens the workspace in
@@ -1001,3 +1102,8 @@ listen('chan-busy', (e) => {
 
 boot().catch(showError);
 maybeOfferUpdate().catch((e) => console.warn('update flow error:', e));
+
+// Keep each connected devserver's workspace rows fresh. The poll only
+// touches the DOM when a list changed, so an idle launcher stays still; the
+// cadence mirrors the in-SPA indexing carousel.
+setInterval(() => { pollDevserverWorkspaces().catch(() => {}); }, 3000);

@@ -3,6 +3,7 @@
 mod auth;
 mod config;
 mod cs_install;
+mod devserver;
 mod download;
 mod dropped_paths;
 mod embedded;
@@ -87,6 +88,11 @@ pub struct AppState {
     /// lists them under `remote:` ids; clicking one opens a webview
     /// with that exact label so the remote restores its session blob.
     pub remote_reopen: Mutex<HashMap<String, RemoteReopen>>,
+    /// Live connections to devservers, keyed by `Devserver.id`. A devserver
+    /// present here is connected (the launcher polls its workspace list and
+    /// can open its tenants); absent means disconnected. In memory only:
+    /// the bearer token rotates, so it is re-acquired on each connect.
+    pub devservers: devserver::DevserverConns,
     /// Set when the user confirmed the quit dialog: the re-fired
     /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
     /// must pass instead of prompting again.
@@ -768,23 +774,131 @@ fn add_devserver(
     Ok(id)
 }
 
-/// The configured devservers, for the launcher's `[DEVSERVER {host}]`
-/// grouping. The per-devserver workspace rows (which workspaces are
-/// mounted and on) come from the devserver's `GET /api/devserver/workspaces`
-/// over the tunnel.
-#[tauri::command]
-fn list_devservers(state: State<Arc<AppState>>) -> Result<Vec<Devserver>, String> {
-    Ok(state.store.lock().unwrap().get().map_err(err)?.devservers)
+/// A configured devserver plus whether the desktop is currently connected
+/// to it. The launcher groups by these: a connected devserver shows its live
+/// workspace rows, a disconnected one shows the connect affordance.
+#[derive(Debug, Clone, Serialize)]
+struct DevserverView {
+    id: String,
+    host: String,
+    port: u16,
+    script: String,
+    label: String,
+    added_at: u64,
+    connected: bool,
 }
 
-/// Forget a devserver: removes the persisted connection recipe so its
-/// launcher section disappears.
+/// The configured devservers, for the launcher's `[DEVSERVER {host}]`
+/// grouping, each tagged with its live connection state. The per-devserver
+/// workspace rows come from `list_devserver_workspaces` once connected.
+#[tauri::command]
+fn list_devservers(state: State<Arc<AppState>>) -> Result<Vec<DevserverView>, String> {
+    let devservers = state.store.lock().unwrap().get().map_err(err)?.devservers;
+    Ok(devservers
+        .into_iter()
+        .map(|d| DevserverView {
+            connected: state.devservers.is_connected(&d.id),
+            id: d.id,
+            host: d.host,
+            port: d.port,
+            script: d.script,
+            label: d.label,
+            added_at: d.added_at,
+        })
+        .collect())
+}
+
+/// Stable window id for a devserver's auto-opened standalone terminal, so
+/// reopening it restores its layout and Forget can find it.
+fn devserver_terminal_window_id(id: &str) -> String {
+    format!("devserver-{id}-terminal")
+}
+
+/// Connect to a configured devserver: acquire its bearer token, confirm it
+/// answers, record the connection, and open a standalone terminal on it. On
+/// a local-loopback connection the token is read from the devserver's own
+/// `~/.chan/devserver/config.json`. Once connected the launcher polls the
+/// devserver's workspace list.
+#[tauri::command]
+async fn connect_devserver(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    let (host, port) = {
+        let cfg = state.store.lock().unwrap().get().map_err(err)?;
+        let ds = cfg
+            .devservers
+            .iter()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("no devserver {id}"))?;
+        (ds.host.clone(), ds.port)
+    };
+    let token = devserver::read_local_token()?;
+    // Confirm the devserver answers before recording the connection so a
+    // dead endpoint surfaces here rather than as silently empty polls.
+    devserver::fetch_info(&host, port).await?;
+    let conn = devserver::DevserverConn { host, port, token };
+    let terminal_url = devserver::open_terminal(&conn).await?;
+    state.devservers.set(id.clone(), conn);
+    serve::spawn_outbound_workspace_window(
+        &app,
+        &devserver_terminal_window_id(&id),
+        &terminal_url,
+    )?;
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+    Ok(())
+}
+
+/// Disconnect from a devserver: drop the live connection so its section
+/// returns to the connect affordance. Open tenant windows keep running until
+/// the user closes them.
+#[tauri::command]
+fn disconnect_devserver(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    state.devservers.remove(&id);
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+    Ok(())
+}
+
+/// The live workspace rows for a connected devserver, each with an assembled
+/// tenant URL. Empty when the devserver is not connected. The launcher polls
+/// this on an interval to track serve-driven additions and removals.
+#[tauri::command]
+async fn list_devserver_workspaces(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<Vec<devserver::DevserverWorkspaceRow>, String> {
+    let Some(conn) = state.devservers.get(&id) else {
+        return Ok(Vec::new());
+    };
+    devserver::fetch_workspaces(&conn).await
+}
+
+/// Open a devserver workspace tenant in a webview. `url` is the assembled
+/// tenant URL from `list_devserver_workspaces`; `prefix` keys the window so
+/// reopening restores its layout.
+#[tauri::command]
+fn open_devserver_workspace(
+    app: tauri::AppHandle,
+    prefix: String,
+    url: String,
+) -> Result<(), String> {
+    serve::spawn_outbound_workspace_window(&app, &prefix, &url).map(|_| ())
+}
+
+/// Forget a devserver: drops any live connection and removes the persisted
+/// connection recipe so its launcher section disappears.
 #[tauri::command]
 fn remove_devserver(
     app: tauri::AppHandle,
     state: State<Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
+    state.devservers.remove(&id);
     {
         let mut store = state.store.lock().unwrap();
         let mut cfg = store.get().map_err(err)?;
@@ -1552,6 +1666,7 @@ fn main() {
         window_title_overrides: Mutex::new(HashMap::new()),
         buried_windows: Mutex::new(Vec::new()),
         remote_reopen: Mutex::new(HashMap::new()),
+        devservers: devserver::DevserverConns::default(),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
     });
@@ -1794,6 +1909,10 @@ fn main() {
             add_devserver,
             list_devservers,
             remove_devserver,
+            connect_devserver,
+            disconnect_devserver,
+            list_devserver_workspaces,
+            open_devserver_workspace,
             auth::auth_status,
             auth::open_signin,
             auth::signout,
