@@ -7,7 +7,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::State;
@@ -71,15 +72,20 @@ impl HostedWorkspaceRuntime {
         self.artifacts.app.clone()
     }
 
-    fn shutdown(&self) {
+    /// Signal shutdown and tear the workspace cell down. Returns a `Weak`
+    /// to the workspace so a caller that needs the per-workspace flock
+    /// released before it returns (an in-process close then reopen) can
+    /// wait for the last strong `Arc` to drop. `None` when the cell was
+    /// already cleared (a second call, e.g. Drop after an explicit close).
+    fn shutdown(&self) -> Option<Weak<Workspace>> {
         let _ = self.artifacts.shutdown_tx.send(true);
-        clear_workspace_cell(&self.artifacts.workspace_cell);
+        clear_workspace_cell(&self.artifacts.workspace_cell)
     }
 }
 
 impl Drop for HostedWorkspaceRuntime {
     fn drop(&mut self) {
-        self.shutdown();
+        let _ = self.shutdown();
     }
 }
 
@@ -384,7 +390,21 @@ impl WorkspaceHost {
                 .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
             workspaces.remove(&prefix)
         };
-        Ok(runtime.is_some())
+        let Some(runtime) = runtime else {
+            return Ok(false);
+        };
+        // Tear down explicitly (rather than leaving it to Drop) so we hold a
+        // `Weak` to the workspace and can wait for the per-workspace flock to
+        // release before returning. Without this an in-process close then
+        // immediate reopen of the same root races teardown and trips
+        // `WorkspaceAlreadyOpen`. Drop re-runs shutdown on the now-cleared
+        // cell, which is a no-op.
+        let released = runtime.shutdown();
+        drop(runtime);
+        if let Some(weak) = released {
+            wait_for_workspace_release(&weak);
+        }
+        Ok(true)
     }
 
     /// Snapshot the mounted prefixes.
@@ -495,14 +515,14 @@ fn display_prefix(prefix: &str) -> &str {
     }
 }
 
-fn clear_workspace_cell(workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>) {
-    let cell = match workspace_cell.write() {
-        Ok(mut cell) => cell.take(),
-        Err(_) => return,
-    };
-    let Some(cell) = cell else {
-        return;
-    };
+/// Clear the workspace cell, signalling teardown and dropping the host's
+/// strong `Arc<Workspace>`. Returns a `Weak` to that workspace (or `None`
+/// when the cell was already empty) so the caller can wait for the last
+/// strong reference to drop and the flock to release.
+fn clear_workspace_cell(
+    workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
+) -> Option<Weak<Workspace>> {
+    let cell = workspace_cell.write().ok()?.take()?;
     let WorkspaceCell {
         workspace,
         watch_handle,
@@ -513,7 +533,29 @@ fn clear_workspace_cell(workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>) {
     indexer.cancel();
     drop(watch_handle);
     drop(indexer);
+    let weak = Arc::downgrade(&workspace);
     drop(workspace);
+    Some(weak)
+}
+
+/// Block (bounded) until the last strong `Arc<Workspace>` drops after
+/// teardown, which releases the per-workspace flock. The straggler is an
+/// in-flight reindex on the blocking pool: `clear_workspace_cell` set the
+/// indexer's cancel flag, and the reindex drops its `Arc` at its next
+/// per-file cancel check, on a separate blocking-pool thread that makes
+/// progress regardless of this wait. Close is an infrequent teardown and
+/// the wait is typically a few milliseconds. Bounded so a wedged reindex
+/// cannot hang close: past the deadline the caller sees the same
+/// lingering-flock behavior it would have had without the wait.
+fn wait_for_workspace_release(weak: &Weak<Workspace>) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while weak.strong_count() > 0 {
+        if Instant::now() >= deadline {
+            tracing::warn!("close_workspace: workspace handle still held 5s after teardown");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }
 
 #[cfg(test)]
