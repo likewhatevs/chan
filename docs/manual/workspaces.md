@@ -4,7 +4,7 @@ A workspace is a directory that contains markdown and related files. Chan treats
 
 ## Desktop
 
-On a fresh install, Chan Desktop creates a `Chan` workspace under your Documents folder and seeds it with this manual. From the workspaces window you can also open an existing folder, attach a running `chan serve` URL, or receive a remote workspace through the listener.
+On launch, Chan Desktop opens an empty workspaces window and a standalone terminal; it never creates a workspace for you (no `Chan` folder under Documents, no seeded manual). From the workspaces window, open an existing folder, attach a running `chan serve` URL, or receive a remote workspace through the listener.
 
 ## CLI
 
@@ -15,6 +15,8 @@ chan serve ~/notes
 ```
 
 The command prints a loopback URL with a bearer token. Open that URL in a browser on the same machine.
+
+The workspace path is required: `chan serve` with no path exits with an error asking you to pass one (for example `chan serve .`).
 
 `chan add PATH` registers a workspace without serving it; `chan list` and `chan remove` manage the registry.
 

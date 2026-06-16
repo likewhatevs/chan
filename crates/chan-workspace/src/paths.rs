@@ -6,10 +6,10 @@
 //                ----------------
 //   all          ~/.chan
 //
-// `~/.chan/config.toml` holds the registry of known workspaces and the
-// default-workspace setting (chan-workspace's responsibility). Editor / UI
-// preferences (fonts, theme, API keys) live elsewhere and are an
-// app-level concern; chan-workspace does not read or write them.
+// `~/.chan/config.toml` holds the registry of known workspaces
+// (chan-workspace's responsibility). Editor / UI preferences (fonts,
+// theme, API keys) live elsewhere and are an app-level concern;
+// chan-workspace does not read or write them.
 //
 // Per-workspace metadata lives under `~/.chan/workspaces/<metadata_key>/`.
 // The key is derived from the canonical workspace root at registration
@@ -19,21 +19,6 @@
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-
-/// Default workspace root for first-run / no-arg launches. The directory
-/// is NOT created here; callers decide whether to auto-create.
-///
-/// Falls back to the platform-specific data dir when the canonical
-/// "Documents" lookup fails (CI / headless boxes without a profile).
-pub fn default_workspace_root() -> PathBuf {
-    if let Some(docs) = dirs::document_dir() {
-        return docs.join("Chan");
-    }
-    if let Some(data) = dirs::data_dir() {
-        return data.join("chan").join("default");
-    }
-    PathBuf::from("chan")
-}
 
 /// Per-user config dir. Holds the global `config.toml` (workspace
 /// registry + default-workspace). `~/.chan/` on desktop targets;
@@ -206,8 +191,7 @@ pub struct DetectedCloud {
 /// Probe the OS for known cloud-storage mount points and return
 /// the ones that exist. Used by the first-launch workspace picker so
 /// users on iCloud / Google Drive / Dropbox can land their workspace
-/// somewhere syncing across devices instead of in a local-only
-/// `~/Documents/Chan`.
+/// somewhere syncing across devices instead of a local-only directory.
 ///
 /// Per-OS coverage:
 ///
@@ -225,8 +209,8 @@ pub struct DetectedCloud {
 ///   - iOS / Android: empty list. The platform's own document
 ///     picker handles cloud-storage discovery.
 ///
-/// Empty list = no cloud workspaces detected; the picker should fall
-/// back to "Local only" with `default_workspace_root()`.
+/// Empty list = no cloud workspaces detected; the picker falls back to
+/// prompting for an explicit local directory.
 pub fn detected_cloud_drives() -> Vec<DetectedCloud> {
     let mut out = Vec::new();
     let Some(home) = dirs::home_dir() else {
@@ -303,12 +287,6 @@ pub fn detected_cloud_drives() -> Vec<DetectedCloud> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn default_workspace_root_is_non_empty() {
-        let p = default_workspace_root();
-        assert!(!p.as_os_str().is_empty());
-    }
 
     #[test]
     fn global_config_path_ends_in_config_toml() {

@@ -249,8 +249,8 @@ pub(crate) mod test_support {
     /// (by design).
     pub fn make_test_state(settings_disabled: bool, tunnel_public: bool) -> Arc<AppState> {
         // The TempDir's path is what Library::open_at uses for any
-        // later registry writes (register_workspace, set_default_workspace_root,
-        // ...). Letting it drop here would delete the directory and
+        // later registry writes (register_workspace, ...). Letting it
+        // drop here would delete the directory and
         // make those writes fail with ENOENT, which is a subtle
         // footgun for any future test that uses make_test_state and
         // mutates the registry. Leak the guard so the directory

@@ -350,9 +350,6 @@ Library::open() -> Result<Self>
 Library::open_at(config_path: PathBuf) -> Result<Self>
 
 Library::list_workspaces() -> Vec<KnownWorkspace>
-Library::default_workspace_root() -> Option<PathBuf>
-Library::set_default_workspace_root(root: Option<PathBuf>) -> Result<()>
-Library::effective_default_workspace_root() -> PathBuf
 Library::drafts_dir() -> String
 
 Library::register_workspace(root: &Path) -> Result<KnownWorkspace>

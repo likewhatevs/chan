@@ -147,9 +147,6 @@ fn patch_server_config(
 #[derive(Serialize)]
 struct GlobalConfigView {
     preferences: PreferencesView,
-    /// Empty string serializes as None (the resolver falls back to the
-    /// platform default).
-    default_workspace_root: Option<String>,
     workspaces: Vec<KnownWorkspaceView>,
 }
 
@@ -167,8 +164,6 @@ pub struct PatchConfigBody {
     /// on every save.
     #[serde(default)]
     preferences: Option<PreferencesView>,
-    #[serde(default)]
-    default_workspace_root: Option<Option<String>>,
     /// Read-only on PATCH: workspaces are managed by path through the
     /// CLI (`chan add` / `remove`). Frontend sends the field for
     /// round-tripping; we just ignore it.
@@ -179,12 +174,11 @@ pub struct PatchConfigBody {
 
 fn global_config_view(state: &AppState) -> Result<GlobalConfigView, Error> {
     // On `--tunnel-public` runs we strip the whole "host machine"
-    // dimension of the response: anonymous visitors must not see
-    // `default_workspace_root` or the registry of other workspaces on the host.
+    // dimension of the response: anonymous visitors must not see the
+    // registry of other workspaces on the host.
     if state.tunnel_public {
         return Ok(GlobalConfigView {
             preferences: preferences_view(state)?,
-            default_workspace_root: None,
             workspaces: Vec::new(),
         });
     }
@@ -200,10 +194,6 @@ fn global_config_view(state: &AppState) -> Result<GlobalConfigView, Error> {
         .collect();
     Ok(GlobalConfigView {
         preferences: preferences_view(state)?,
-        default_workspace_root: state
-            .library
-            .default_workspace_root()
-            .map(|p| p.to_string_lossy().into_owned()),
         workspaces,
     })
 }
@@ -237,16 +227,6 @@ fn status_for_error(e: &Error) -> StatusCode {
 fn patch_config(state: &AppState, body: PatchConfigBody) -> Result<GlobalConfigView, Error> {
     if let Some(prefs) = body.preferences {
         apply_preferences(state, prefs)?;
-    }
-    if let Some(opt) = body.default_workspace_root {
-        let trimmed = opt.as_ref().map(|s| s.trim().to_string());
-        let value = match trimmed {
-            Some(s) if s.is_empty() => None,
-            other => other,
-        };
-        state
-            .library
-            .set_default_workspace_root(value.map(std::path::PathBuf::from))?;
     }
     global_config_view(state)
 }
@@ -333,7 +313,6 @@ mod tests {
         let state = make_test_state(true, true);
         let view = global_config_view(&state).expect("global config view");
         let json = to_json(&view);
-        assert_eq!(json["default_workspace_root"], serde_json::Value::Null);
         assert_eq!(json["workspaces"], serde_json::json!([]));
     }
 

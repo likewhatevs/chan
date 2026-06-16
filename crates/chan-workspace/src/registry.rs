@@ -1,10 +1,10 @@
 // Workspace registry: the per-machine list of directories the user has
 // registered as chan workspaces. Persisted to ~/.chan/config.toml.
 //
-// This file holds ONLY chan-workspace's own state: the registry and
-// default-workspace setting. Editor preferences (fonts, theme, API
-// keys) are an app-level concern and live in a separate file
-// owned by the consuming app.
+// This file holds ONLY chan-workspace's own state: the registry of
+// known workspaces. Editor preferences (fonts, theme, API keys) are an
+// app-level concern and live in a separate file owned by the consuming
+// app.
 
 use std::path::{Path, PathBuf};
 
@@ -41,10 +41,6 @@ pub const DEFAULT_INDEX_EXCLUDED_DIRS: &[&str] = &[
 /// On-disk shape of the chan-workspace config TOML.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registry {
-    /// Default workspace root for the no-arg launch. When None, the
-    /// resolver falls back to `paths::default_workspace_root()`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_workspace_root: Option<PathBuf>,
     /// Directory basenames skipped by index and graph rebuild walks.
     /// Matched at any depth by exact basename, case-insensitive.
     #[serde(default = "default_index_excluded_dirs")]
@@ -69,7 +65,6 @@ pub struct Registry {
 impl Default for Registry {
     fn default() -> Self {
         Self {
-            default_workspace_root: None,
             index_excluded_dirs: default_index_excluded_dirs(),
             drafts_dir: default_drafts_dir(),
             workspaces: Vec::new(),
@@ -288,16 +283,6 @@ fn position_match(workspaces: &[KnownWorkspace], canonical: &Path) -> Option<usi
     workspaces
         .iter()
         .position(|d| fresh_canonical(d) == *canonical)
-}
-
-/// Effective default workspace root: registry override wins, otherwise
-/// the platform default. Best-effort: a malformed registry falls
-/// back to the platform default so a user can still launch.
-pub fn effective_default_workspace_root() -> PathBuf {
-    Registry::load()
-        .ok()
-        .and_then(|r| r.default_workspace_root)
-        .unwrap_or_else(paths::default_workspace_root)
 }
 
 pub(crate) fn config_declares_index_excluded_dirs(path: &Path) -> bool {

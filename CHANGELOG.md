@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `chan serve` now requires an explicit workspace path. Running it with no path exits with an error asking you to pass one, instead of falling back to a default workspace.
+
+### Removed
+
+- The default-workspace concept is gone from the standalone CLI and server too (chan-desktop dropped it in v0.37.0): no `~/Documents/Chan` / `$XDG_DATA_HOME/chan/default` fallback, no per-machine default-workspace setting, and the Dashboard's "Workspaces → Default" field is removed.
+
 ## [v0.37.0] - 2026-06-16
 
 ### Added

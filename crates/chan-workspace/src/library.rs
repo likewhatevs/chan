@@ -159,30 +159,6 @@ impl Library {
         self.inner.registry.lock().unwrap().workspaces.clone()
     }
 
-    /// Configured default workspace root, if any.
-    pub fn default_workspace_root(&self) -> Option<PathBuf> {
-        self.inner
-            .registry
-            .lock()
-            .unwrap()
-            .default_workspace_root
-            .clone()
-    }
-
-    /// Set or clear the configured default workspace root. Persists.
-    pub fn set_default_workspace_root(&self, root: Option<PathBuf>) -> Result<()> {
-        let mut reg = self.inner.registry.lock().unwrap();
-        reg.default_workspace_root = root;
-        reg.save_to(&self.inner.config_path)
-    }
-
-    /// Effective default workspace root: explicit override wins,
-    /// otherwise the platform convention.
-    pub fn effective_default_workspace_root(&self) -> PathBuf {
-        self.default_workspace_root()
-            .unwrap_or_else(paths::default_workspace_root)
-    }
-
     /// Add a workspace to the registry. Idempotent: re-registering an
     /// existing workspace only updates `last_seen_at`, preserving its
     /// metadata key. The directory itself is NOT created here; pass
@@ -624,19 +600,6 @@ mod tests {
     fn unregister_returns_false_when_absent() {
         let (lib, _cfg, workspace) = lib();
         assert!(!lib.unregister_workspace(workspace.path()).unwrap());
-    }
-
-    #[test]
-    fn default_workspace_root_round_trip() {
-        let (lib, _cfg, workspace) = lib();
-        lib.set_default_workspace_root(Some(workspace.path().to_path_buf()))
-            .unwrap();
-        assert_eq!(
-            lib.default_workspace_root(),
-            Some(workspace.path().to_path_buf())
-        );
-        lib.set_default_workspace_root(None).unwrap();
-        assert!(lib.default_workspace_root().is_none());
     }
 
     #[test]

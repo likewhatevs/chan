@@ -4,7 +4,6 @@
 //! existing config files:
 //!
 //! - `attachments_dir`: ServerConfig
-//! - `default_workspace_root`: chan-workspace's Registry (config.toml)
 //! - `workspaces`: chan-workspace's Registry
 //!
 //! What's left lives here, persisted to
