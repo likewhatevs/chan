@@ -361,6 +361,17 @@ async function readFileStream(
     throw new Error(`unknown file stream event: ${String(type)}`);
   };
 
+  // True once we have the WHOLE file, by either independent signal — a load
+  // finishes on whichever arrives first:
+  //   1. the server's explicit `done` event, or
+  //   2. the received byte count reaching the size the `meta` event announced.
+  // Signal 2 is what makes Windows reliable: WebView2 delivers every chunk (so
+  // `loadedBytes` reaches `meta.size` and the content renders) but can withhold
+  // the trailing `done` line AND the body close, leaving the editor spinning on
+  // a fully-loaded file. Off Windows the `done` / EOF path is unchanged.
+  const haveWholeFile = (): boolean =>
+    done || (meta.size != null && loadedBytes >= meta.size);
+
   for (;;) {
     const { done: streamDone, value } = await reader.read();
     if (streamDone) break;
@@ -371,23 +382,17 @@ async function readFileStream(
       processLine(buffered.slice(0, nl));
       buffered = buffered.slice(nl + 1);
     }
-    // The server terminates the NDJSON stream with an explicit `done` event,
-    // so stop as soon as we've parsed it rather than blocking on the HTTP body
-    // to signal EOF. WebView2 (the Windows desktop webview) does not always
-    // surface the body close to fetch's ReadableStream, which would otherwise
-    // hang this read loop forever even though the whole file already arrived —
-    // the editor would spin on "loading" with the byte count already complete.
-    if (done) break;
+    if (haveWholeFile()) break;
   }
-  if (done) {
-    // We have everything; release the underlying connection instead of waiting
-    // on a body-close that may never arrive.
+  if (haveWholeFile()) {
+    // We have the whole file; release the underlying connection instead of
+    // blocking on a body close WebView2 may never surface.
     await reader.cancel().catch(() => {});
   } else {
     buffered += decoder.decode();
     if (buffered.trim()) processLine(buffered);
   }
-  if (!done) throw new Error("file stream ended before done");
+  if (!haveWholeFile()) throw new Error("file stream ended before done");
   return {
     path: meta.path,
     content,
