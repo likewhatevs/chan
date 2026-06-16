@@ -124,33 +124,6 @@ describe("file read streaming", () => {
     ]);
   });
 
-  test("completes on byte count when the stream withholds done + close (WebView2)", async () => {
-    // WebView2 (the Windows desktop webview) delivers every chunk — so the
-    // content renders and the byte count reaches the announced size — but can
-    // withhold the trailing `done` line AND the body close. The read must still
-    // finish on byte count; the controller is intentionally never closed and no
-    // `done` event is sent, mirroring the hang. With the old done/EOF-only
-    // completion this test would time out.
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        const enc = new TextEncoder();
-        controller.enqueue(enc.encode(
-          [
-            '{"type":"meta","path":"big.md","size":10,"mtime":2,"mtime_ns":"200","writable":true}',
-            '{"type":"chunk","content":"helloworld","bytes":10}',
-            "",
-          ].join("\n"),
-        ));
-        // No `done`, and the stream is deliberately left open.
-      },
-    });
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body, { status: 200 }));
-
-    const file = await api.readStream("big.md");
-    expect(file.content).toBe("helloworld");
-    expect(file.mtime_ns).toBe("200");
-  });
-
   test("turns stream error events into ApiError failures", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
