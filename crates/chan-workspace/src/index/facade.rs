@@ -1378,7 +1378,16 @@ fn list_indexable(root: &Path, filter: &WalkFilter) -> Result<Vec<String>, Index
         })
         .filter(|rel| fs_ops::is_indexable_text(rel))
         .collect();
-    out.sort();
+    // Shallow paths first, so root-level and top-level notes become
+    // searchable before deep leaf directories (the file browser shows the
+    // same spine first, so search fills matching what the user sees). The
+    // build's embed-resume keys off (model, body_hash), not file order, so
+    // this ordering does not affect reuse. Lexicographic within a depth keeps
+    // the result deterministic.
+    out.sort_by(|a, b| {
+        let depth = |s: &str| s.bytes().filter(|&c| c == b'/').count();
+        depth(a).cmp(&depth(b)).then_with(|| a.cmp(b))
+    });
     Ok(out)
 }
 
@@ -1424,6 +1433,25 @@ mod tests {
         let err = IndexError::Embed(EmbedError::Candle("synthetic".into()));
         let out = Index::handle_embed_load_error(err);
         assert!(matches!(out, Err(IndexError::Embed(EmbedError::Candle(_)))));
+    }
+
+    #[test]
+    fn list_indexable_orders_shallow_paths_first() {
+        let tmp = make_workspace();
+        let root = tmp.path();
+        let write = |rel: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "# x\n").unwrap();
+        };
+        write("z.md");
+        write("a/b/c/leaf.md");
+        write("m.md");
+        write("a/deep.md");
+        let files = list_indexable(root, &WalkFilter::default()).unwrap();
+        // Depth (count of '/') ascending, lexicographic within a depth: the
+        // root notes index before the deep leaf.
+        assert_eq!(files, vec!["m.md", "z.md", "a/deep.md", "a/b/c/leaf.md"]);
     }
 
     #[test]
