@@ -9,8 +9,8 @@ import fbSurface from "./FileBrowserSurface.svelte?raw";
 // `inspector` variant renders the standard directory action row; the
 // `dashboard` variant (Dashboard front slide) drops it. The read-only
 // recent-workspaces list lives on WorkspaceSlotConfig (the slot's
-// flip-back); the default-workspace concept was removed (chan serve
-// requires an explicit path). Source-level pins lock the variant split,
+// flip-back); there is no default-workspace concept, since chan serve
+// requires an explicit path. Source-level pins lock the variant split,
 // action row, the recents' home, and host wiring.
 
 describe("WorkspaceInfoBody variant split + directory action row", () => {
@@ -83,11 +83,11 @@ describe("WorkspaceInfoBody variant split + directory action row", () => {
     expect(workspaceInfo).toContain("clearDownloadTransfer");
   });
 
-  test("the default-workspace config is gone; only recents lives in WorkspaceSlotConfig", () => {
-    // The default-workspace concept was removed (chan serve requires an
-    // explicit path), so the default-root field + autosave plumbing is gone
-    // from both WorkspaceInfoBody and WorkspaceSlotConfig. The slot's
-    // flip-back keeps only the read-only recent-workspaces list.
+  test("WorkspaceSlotConfig carries no default-workspace config, only recents", () => {
+    // chan serve requires an explicit workspace path, so neither
+    // WorkspaceInfoBody nor WorkspaceSlotConfig carries a default-root field
+    // or its autosave plumbing. WorkspaceSlotConfig's flip-back holds only the
+    // read-only recent-workspaces list.
     expect(workspaceInfo).not.toContain("editedDefaultRoot");
     expect(workspaceInfo).not.toContain('class="notes-dirs"');
 

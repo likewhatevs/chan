@@ -141,10 +141,9 @@
     }
   }
 
-  // Recent workspaces. Read-only list from the global config endpoint.
-  // The default-workspace concept was removed (chan serve now requires an
-  // explicit path), so this section only surfaces recently-opened
-  // workspaces; there is no editable default-root field anymore.
+  // Recent workspaces: a read-only list from the global config endpoint.
+  // chan serve takes an explicit workspace path, so there is no default-root
+  // field to edit here; this section only surfaces recently-opened workspaces.
   let globalConfig = $state<GlobalConfig | null>(null);
 
   async function loadGlobalConfig(): Promise<void> {
@@ -296,10 +295,10 @@
   {/if}
 </section>
 
-<!-- Recent workspaces. The default-workspace concept was removed (chan
-     serve requires an explicit path); this slot's flip-back now only
-     surfaces recently-opened workspaces, below a dashed divider matching
-     the one between chan-reports and Metadata archive above. -->
+<!-- Recent workspaces. chan serve takes an explicit workspace path, so this
+     slot's flip-back surfaces only recently-opened workspaces, below a dashed
+     divider matching the one between chan-reports and Metadata archive
+     above. -->
 <section class="divided">
   <h3>Workspaces</h3>
   <p class="hint">Workspaces you've recently opened on this machine.</p>
