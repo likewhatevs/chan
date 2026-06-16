@@ -1507,8 +1507,8 @@ fn router(state: Arc<AppState>) -> Router {
             "/api/index/excluded-dirs",
             get(api_excluded_dirs_get).put(api_excluded_dirs_put),
         )
-        // First-boot workspace readiness for the locked OverlayShell
-        // (contracts §2): poll the snapshot, submit a step decision.
+        // First-boot workspace readiness for the locked OverlayShell:
+        // poll the snapshot, submit a step decision.
         .route("/api/preflight", get(api_preflight))
         .route("/api/preflight/decision", post(api_preflight_decision))
         // Non-blocking `cs` terminal-alias offer surfaced on the pre-flight
