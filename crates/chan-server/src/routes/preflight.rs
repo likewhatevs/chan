@@ -1,20 +1,20 @@
 //! `GET /api/preflight` + `POST /api/preflight/decision`: first-boot
-//! workspace readiness, rendered by the SPA on a locked OverlayShell
-//! (contracts §2). chan-server owns the readiness flow so local and
-//! remote (tunnel) workspaces get the identical experience; the desktop
-//! shell only picks a path and launches `chan serve`.
+//! workspace readiness, rendered by the SPA on a locked OverlayShell.
+//! chan-server owns the readiness flow so local and remote (tunnel)
+//! workspaces get the identical experience; the desktop shell only picks
+//! a path and launches `chan serve`.
 //!
 //! The snapshot is DERIVED from live state on every poll, so there is no
 //! first-boot flag to persist or reset:
 //!
 //!   - `index` step: the background indexer's `IndexStatus`. Indexing is
-//!     NON-BLOCKING (plan §2c) — it never locks the boot overlay. A fresh,
-//!     large workspace is usable as soon as the bootstrap spine exists; the
-//!     initial build runs in the background and its progress surfaces through
-//!     `/api/index/status` + the carousel, not here. This step reads `done`
-//!     for every healthy state (cold build, warm rebuild, incremental
-//!     reindex, idle) and flips to `failed` only on a genuine index error,
-//!     the sole index condition that gates the boot.
+//!     NON-BLOCKING: it never locks the boot overlay. A fresh, large
+//!     workspace is usable as soon as the bootstrap spine exists; the
+//!     initial build runs in the background and its progress surfaces
+//!     through `/api/index/status` + the carousel, not here. This step
+//!     reads `done` for every healthy state (cold build, warm rebuild,
+//!     incremental reindex, idle) and flips to `failed` only on a genuine
+//!     index error, the sole index condition that gates the boot.
 //!   - `model` step (embeddings builds only): when the workspace has
 //!     semantic search enabled but the embedding model is not on disk,
 //!     the user must choose -- download it or fall back to keyword
@@ -131,13 +131,13 @@ struct PreflightError {
 
 /// Map the indexer's status onto the `index` readiness step.
 ///
-/// Indexing is NON-BLOCKING (plan §2c). A cold initial build, a warm
-/// mid-session rebuild, an incremental watcher reindex, and an idle index
-/// all leave the bootstrap spine usable, so every healthy `IndexStatus`
-/// maps to `Done`. The initial-build PROGRESS is surfaced out of band
-/// through `/api/index/status` + the carousel, never the boot lock. The
-/// only index condition that gates the boot is a genuine `Error`, mapped
-/// to `Failed` so the shell can surface it.
+/// Indexing is NON-BLOCKING. A cold initial build, a warm mid-session
+/// rebuild, an incremental watcher reindex, and an idle index all leave the
+/// bootstrap spine usable, so every healthy `IndexStatus` maps to `Done`. The
+/// initial-build PROGRESS is surfaced out of band through the carousel and
+/// `/api/index/status`, never the boot lock. The only index condition that
+/// gates the boot is a genuine `Error`, mapped to `Failed` so the shell can
+/// surface it.
 fn index_step(status: &IndexStatus) -> PreflightStep {
     let base = PreflightStep {
         id: "index",
@@ -470,10 +470,10 @@ mod tests {
 
     #[test]
     fn cold_build_does_not_lock_the_boot() {
-        // §2c: indexing is non-blocking. A cold initial build (indexed_docs == 0,
-        // the OLD sole locking state) now reports phase Ready / locked:false so
-        // the SPA is usable at once; the build's progress surfaces through the
-        // carousel + /api/index/status, never the boot overlay.
+        // Indexing is non-blocking: a cold initial build (indexed_docs == 0)
+        // reports phase Ready / locked:false, so the SPA is usable at once and
+        // the build's progress surfaces through the carousel +
+        // /api/index/status, not the boot overlay.
         let (_c, _r, ws) = workspace();
         let snap = build_snapshot(
             &ws,
@@ -494,8 +494,7 @@ mod tests {
 
     #[test]
     fn reindexing_never_locks() {
-        // An incremental watcher reindex maps to a ready (unlocked) step.
-        // Mapping it to Running was the original Cmd+R hard-lock; now ALL
+        // An incremental watcher reindex maps to a ready (unlocked) step: all
         // index activity is non-blocking, so this holds by construction.
         assert_eq!(
             index_step(&IndexStatus::Reindexing {
@@ -508,9 +507,9 @@ mod tests {
 
     #[test]
     fn every_building_state_maps_to_done() {
-        // §2c: cold and warm builds are now indistinguishable — `index_step`
-        // is doc-count-independent, so a `Building` status never locks the
-        // boot regardless of how much is already committed.
+        // Cold and warm builds are indistinguishable here: `index_step` is
+        // doc-count-independent, so a `Building` status never locks the boot
+        // regardless of how much is already committed.
         let building = || IndexStatus::Building {
             current: 3,
             total: 10,
