@@ -818,19 +818,24 @@ fn devserver_terminal_window_id(id: &str) -> String {
 /// The connect script may take a moment to bring the devserver up, or prompt
 /// for credentials in the control terminal, so the wait is generous; a
 /// refused connection fails fast, so most attempts cost only the backoff.
-async fn wait_for_devserver(host: &str, port: u16) -> Result<(), String> {
+async fn wait_for_devserver(host: &str, port: u16) -> Result<devserver::DevserverInfo, String> {
     const MAX_ATTEMPTS: usize = 20;
     const BACKOFF: std::time::Duration = std::time::Duration::from_millis(1500);
+    let mut last_err = String::new();
     for attempt in 1..=MAX_ATTEMPTS {
-        if devserver::fetch_info(host, port).await.is_ok() {
-            return Ok(());
+        match devserver::fetch_info(host, port).await {
+            Ok(info) => return Ok(info),
+            Err(e) => {
+                last_err = e;
+                if attempt < MAX_ATTEMPTS {
+                    tokio::time::sleep(BACKOFF).await;
+                }
+            }
         }
-        if attempt == MAX_ATTEMPTS {
-            return Err(format!("devserver {host}:{port} did not come up in time"));
-        }
-        tokio::time::sleep(BACKOFF).await;
     }
-    unreachable!("the loop returns on the final attempt")
+    Err(format!(
+        "devserver {host}:{port} did not come up in time ({last_err})"
+    ))
 }
 
 /// Connect to a configured devserver: run its connect script in a control
@@ -865,7 +870,19 @@ async fn connect_devserver(
                 .await?,
         )
     };
-    wait_for_devserver(&host, port).await?;
+    let info = wait_for_devserver(&host, port).await?;
+    if info.protocol != devserver::DEVSERVER_API_PROTOCOL {
+        return Err(format!(
+            "devserver speaks management protocol {} but this desktop speaks {}; update whichever is older",
+            info.protocol,
+            devserver::DEVSERVER_API_PROTOCOL
+        ));
+    }
+    tracing::info!(
+        version = %info.devserver_version,
+        label = %info.host_label,
+        "connected to devserver"
+    );
     let token = devserver::read_local_token()?;
     let conn = devserver::DevserverConn { host, port, token };
     let terminal_url = devserver::open_terminal(&conn).await?;

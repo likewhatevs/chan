@@ -70,6 +70,11 @@ impl DevserverConns {
     }
 }
 
+/// The management-API protocol version this desktop speaks. A devserver
+/// reporting a different `protocol` is refused at connect rather than
+/// driven against shapes that may have shifted.
+pub const DEVSERVER_API_PROTOCOL: u32 = 1;
+
 /// `GET /api/devserver/info`: the unauthenticated health probe.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DevserverInfo {
