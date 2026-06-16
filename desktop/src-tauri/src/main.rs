@@ -709,7 +709,7 @@ fn outbound_label(outbound: &OutboundWorkspace) -> Option<String> {
 
 const DEVSERVER_LABEL_MAX_CHARS: usize = 120;
 
-/// Persist a devserver connection recipe (the New -> Devserver form) and
+/// Persist a devserver connection recipe (the New / Devserver form) and
 /// return its desktop-local id. A devserver is a multi-workspace
 /// aggregator the desktop dials out to; this records the connection
 /// recipe so it renders as a `[DEVSERVER {host}]` launcher section.
@@ -717,13 +717,6 @@ const DEVSERVER_LABEL_MAX_CHARS: usize = 120;
 /// Idempotent on `host:port`: re-adding the same endpoint updates its
 /// script/label instead of stacking a duplicate, mirroring
 /// `add_outbound_workspace`'s URL dedup.
-///
-/// NOTE (step-4, blocked on the frozen management-API contract +
-/// the server-side custom-command-PTY seam): the connect flow — running
-/// the `script` in the CONTROL TERMINAL, the connecting window probing
-/// `GET /api/devserver/info`, opening a standalone terminal on connect,
-/// then auto-hiding the CONTROL TERMINAL — lands on top of this once those
-/// land. This command only persists today.
 #[tauri::command]
 fn add_devserver(
     app: tauri::AppHandle,
@@ -776,21 +769,16 @@ fn add_devserver(
 }
 
 /// The configured devservers, for the launcher's `[DEVSERVER {host}]`
-/// grouping. The per-devserver workspace ROWS (which workspaces are
-/// mounted/on) come from the devserver's `GET /api/devserver/workspaces`
-/// over the tunnel — step-4, blocked on the frozen contract.
+/// grouping. The per-devserver workspace rows (which workspaces are
+/// mounted and on) come from the devserver's `GET /api/devserver/workspaces`
+/// over the tunnel.
 #[tauri::command]
 fn list_devservers(state: State<Arc<AppState>>) -> Result<Vec<Devserver>, String> {
     Ok(state.store.lock().unwrap().get().map_err(err)?.devservers)
 }
 
-/// Forget a devserver. Removes the persisted connection recipe so its
+/// Forget a devserver: removes the persisted connection recipe so its
 /// launcher section disappears.
-///
-/// NOTE (step-4/round-2): this does NOT yet tear down the CONTROL TERMINAL
-/// + connecting windows for the devserver (none are spawned until the
-/// connect flow lands). The full window-lifecycle teardown joins this once
-/// step-4 is in.
 #[tauri::command]
 fn remove_devserver(
     app: tauri::AppHandle,

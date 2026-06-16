@@ -58,9 +58,9 @@ pub struct OutboundWorkspace {
 /// workspaces under one `[DEVSERVER {host}]` launcher section and drives
 /// them through the devserver's management API.
 ///
-/// This struct is the *local* connection recipe only — host/port for the
-/// tunnel endpoint plus the user's connect `script` (the CONTROL TERMINAL
-/// runs it; e.g. an `ssh -L` invocation). The devserver owns the
+/// This struct is the *local* connection recipe only: host/port for the
+/// tunnel endpoint plus the user's connect `script` (the control terminal
+/// runs it, e.g. an `ssh -L` invocation). The devserver owns the
 /// per-workspace URLs/tokens and their lifecycle; the desktop persists
 /// just enough to re-offer the connection and re-open its windows.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

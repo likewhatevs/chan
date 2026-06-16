@@ -200,8 +200,8 @@ function applyChanBusyState(payload) {
 ///   - Remote: a URL + name form (add_outbound_workspace); we dial out
 ///     to a chan workspace already being served.
 ///   - Devserver: a HOST/PORT/SCRIPT form (add_devserver). The same form
-///     doubles as the round-2 Edit form: pass `editDevserver` to pre-fill
-///     it from an existing devserver (empty = New, pre-filled = Edit).
+///     doubles as an Edit form: pass `editDevserver` to pre-fill it from an
+///     existing devserver (empty = New, pre-filled = Edit).
 ///
 /// ESC / backdrop / [X] dismiss.
 let activeNewDialog = null;
@@ -425,14 +425,13 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
 
   // ---- Devserver (multi-workspace aggregator we dial out to) -----------
   // `existing` is null for New (add a devserver) or a Devserver object for
-  // Edit (pre-fill host/port/script/label, "Save changes"). The Edit
-  // dropdown entry + the update_devserver persist command land in round-2;
-  // the form is parameterized here so round-2 is purely additive.
+  // Edit (pre-fill host/port/script/label, "Save changes"). The entry point
+  // that supplies `existing` lives on the devserver row's dropdown.
   function renderDevserver(existing = null) {
     const ds = existing || {};
     const editing = !!existing;
     body.innerHTML = `
-      <p class="nw-intro">Connect to a chan <em>devserver</em> — a headless box serving many workspaces at once. The desktop dials <b>host:port</b>; its workspaces appear in their own launcher group.</p>
+      <p class="nw-intro">Connect to a chan <em>devserver</em>, a headless box serving many workspaces at once. The desktop dials <b>host:port</b>; its workspaces appear in their own launcher group.</p>
       <div class="nw-row">
         <label class="nw-host-field">Host
           <input id="nw-ds-host" type="text" autocomplete="off" spellcheck="false" placeholder="127.0.0.1" value="${escapeAttr(ds.host || '')}"/>
@@ -444,7 +443,7 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
           <input id="nw-ds-label" type="text" maxlength="120" autocomplete="off" placeholder="optional" value="${escapeAttr(ds.label || '')}"/>
         </label>
       </div>
-      <label class="nw-script-field">Connect command <span class="nw-muted">— optional; runs in a control terminal (e.g. an SSH local forward)</span>
+      <label class="nw-script-field">Connect command <span class="nw-muted">(optional; runs in a control terminal, e.g. an SSH local forward)</span>
         <textarea id="nw-ds-script" class="nw-script" rows="2" autocomplete="off" spellcheck="false" placeholder="ssh user@box -L 8787:localhost:8787 chan devserver --bind 127.0.0.1 --port 8787">${escapeHtml(ds.script || '')}</textarea>
       </label>
       <p class="nw-muted">On the box, run a devserver, then register workspaces into it with <code>chan serve</code>:</p>
@@ -486,12 +485,10 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
       return;
     }
     if (existing) {
-      // Edit mode: the disconnected-only Edit dropdown entry that opens
-      // this form pre-filled, plus the update_devserver persist command,
-      // land in round-2 (round-plan: Edit/Forget ship with the disconnect
-      // lifecycle). No round-1 caller passes `existing`, so this branch is
-      // the reusable seam the form was parameterized for, not live yet.
-      showError('Editing a devserver lands in a later update.');
+      // Edit mode persists through `update_devserver`, wired alongside the
+      // devserver row's Edit entry. Until that entry exists no caller passes
+      // `existing`, so this branch only guards the parameterized form.
+      showError('Editing a devserver is not available yet.');
       return;
     }
     try {
@@ -597,10 +594,10 @@ function render(workspaces, devservers = []) {
   if (grouped) bindDevserverSectionEvents();
 }
 
-/// One `[DEVSERVER {host}]` launcher section. Round-1 renders the header
-/// (name + endpoint + Forget) over a "not connected yet" placeholder;
-/// the connect flow (control terminal + the devserver's live workspace
-/// rows from its management API) fills the body in step-4.
+/// One `[DEVSERVER {host}]` launcher section: a header (name + endpoint +
+/// Forget) over the section body. While the desktop is not connected to the
+/// devserver the body is a placeholder; once connected it lists the
+/// devserver's live workspace rows.
 function renderDevserverSection(ds) {
   const name = (ds.label && ds.label.trim()) || ds.host || 'devserver';
   const endpoint = `${ds.host}:${ds.port}`;
@@ -613,13 +610,12 @@ function renderDevserverSection(ds) {
         <button class="btn danger ws-group-forget" data-act="forget-devserver" type="button"
                 title="Forget this devserver">Forget</button>
       </h3>
-      <p class="nw-muted ws-group-pending">Not connected yet — the connect flow (control terminal + workspace list) lands with the devserver management API.</p>
+      <p class="nw-muted ws-group-pending">Not connected.</p>
     </section>`;
 }
 
 /// Wire the Forget button on each `[DEVSERVER]` section. Removes the
-/// persisted devserver so its section disappears. (Window-lifecycle
-/// teardown joins this in step-4, once the connect flow spawns windows.)
+/// persisted devserver so its section disappears.
 function bindDevserverSectionEvents() {
   main.querySelectorAll('[data-devserver-id]').forEach((block) => {
     const id = block.dataset.devserverId || '';
