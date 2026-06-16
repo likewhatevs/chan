@@ -33,6 +33,7 @@
   } from "../state/graphData.svelte";
   import { openInActivePane } from "../state/tabs.svelte";
   import {
+    indexStatus,
     loadTreeDir,
     openFsGraphForFile,
     openGraphForMention,
@@ -102,6 +103,16 @@
   let loading = $state(false);
   let active = $state(0);
   let error = $state<string | null>(null);
+
+  // While the index is still building (cold boot on a large workspace) an
+  // empty result set means "not indexed yet", not "nothing here". Surface that
+  // so a zero-hit query reads as a transient state, not a dead end. A query
+  // during the build returns whatever is indexed so far; a transient failure
+  // still lands in the error branch above rather than crashing the panel.
+  const indexBuilding = $derived(
+    indexStatus.value?.state === "building" ||
+      indexStatus.value?.state === "reindexing",
+  );
 
   /// Debounce token. Bumped on every input change; any in-flight
   /// promise that resolves with a stale token discards its result.
@@ -901,7 +912,11 @@
         {:else if error}
           <span class="err">{error}</span>
         {:else if searchPanel.query.trim() && rows.length === 0}
-          <span>no matches</span>
+          {#if indexBuilding}
+            <span class="muted">still indexing - results will fill in</span>
+          {:else}
+            <span>no matches</span>
+          {/if}
         {:else if rows.length > 0}
           <span>
             {rows.length} hit{rows.length === 1 ? "" : "s"}
