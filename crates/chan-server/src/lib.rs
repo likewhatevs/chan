@@ -506,25 +506,28 @@ async fn build_app(
     // Arc is stored on AppState for the /ws handler and survives a
     // storage reset (the rebuilt bridge re-references it).
     let scope_registry = Arc::new(bus::ScopeRegistry::new());
-    // Detect a cold (empty) index BEFORE the potentially slow
-    // pre-URL work (watcher registration on a large tree can take
-    // several seconds, and the initial index build is about to run).
-    // On a cold start we print one heads-up line right here, ahead of
-    // everything below, so a foreground `chan serve` on a large tree
-    // shows a sign of life immediately instead of a long silent gap
-    // before the URL. A warm restart leaves the index non-empty and
-    // stays quiet. The same flag gates the stderr progress tee below.
+    // Detect a cold (empty) index before the potentially slow pre-URL work
+    // (the watcher registration on a large tree). On a cold start, print one
+    // heads-up line here so a foreground `chan serve` on a large tree shows a
+    // sign of life instead of a silent gap before the URL. A warm restart
+    // leaves the index non-empty and stays quiet. The same flag gates the
+    // stderr progress tee below.
     let cold_index = workspace.num_indexed().map(|n| n == 0).unwrap_or(false);
     if cold_index {
         eprintln!(
-            "chan: preparing this workspace (first run): registering the file \
-             watcher + building the search index. This can take a moment on a \
-             large tree; the URL prints below when the server is ready, and \
-             indexing then continues in the background."
+            "chan: first run on this workspace; the search index builds in the \
+             background after the URL below, so the editor and terminal are \
+             usable right away even on a large tree."
         );
     }
+    // The watch bridge fans filesystem events onto the /ws broadcast and the
+    // indexer feed. Registering the watcher is the one repo-size-scaling step on
+    // the boot path: `notify`'s recursive registration walks the whole tree, and
+    // on Linux inotify has no native recursive watch, so it installs one watch
+    // per directory. The report's content scan, the larger cost, stays off this
+    // path (it runs lazily on the first report query). Registration runs just
+    // below, after the cell exists.
     let bridge = make_watch_bridge(&events_tx, &index_events_tx, &self_writes, &scope_registry);
-    let watch_handle = workspace.watch(bridge)?;
     let workspace_root = workspace.root().to_path_buf();
     // Background indexer: subscribes to index_events_tx, runs the
     // initial build if the index is empty, debounces incremental
@@ -576,12 +579,46 @@ async fn build_app(
     // AppState, so the resolved socket path (or `None` on failure)
     // is part of the immutable state every handler observes.
     let socket_path = mcp_bridge::pick_socket_path();
+    // Clone the workspace handle for the watcher registration before the cell
+    // takes ownership of the original below.
+    let watch_workspace = workspace.clone();
     let state_for_bridge: Arc<RwLock<Option<WorkspaceCell>>> =
         Arc::new(RwLock::new(Some(WorkspaceCell {
             workspace,
-            watch_handle: Some(watch_handle),
+            // Filled by the registration step immediately below.
+            watch_handle: None,
             indexer,
         })));
+    // Register the filesystem watcher on the blocking pool and await it, so the
+    // cell carries a live handle before this function returns and no detached
+    // task is left holding a strong workspace handle (and its writer flock)
+    // across a later close. This step is the notify registration only: the
+    // report's content scan is lazy (first report query), so the awaited work
+    // is bounded by `notify`'s recursive directory registration. A registration
+    // failure (most often the Linux inotify watch limit,
+    // fs.inotify.max_user_watches) leaves the watcher absent and external edits
+    // reconcile on demand, rather than failing the boot.
+    let watch_cell = state_for_bridge.clone();
+    match tokio::task::spawn_blocking(move || watch_workspace.watch(bridge)).await {
+        Ok(Ok(handle)) => {
+            if let Ok(mut cell) = watch_cell.write() {
+                if let Some(cell) = cell.as_mut() {
+                    cell.watch_handle = Some(handle);
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("filesystem watcher registration failed: {e}");
+            eprintln!(
+                "NOTE: live file-watching is unavailable ({e}); external edits \
+                 reconcile on demand. On Linux, raise fs.inotify.max_user_watches \
+                 to re-enable it."
+            );
+        }
+        Err(join_err) => {
+            tracing::warn!("filesystem watcher registration task panicked: {join_err}");
+        }
+    }
     let bridge_workspace_cell = state_for_bridge.clone();
     let bridge = mcp_bridge::start(socket_path.clone(), move || {
         let cell = match bridge_workspace_cell.read() {
@@ -861,9 +898,9 @@ async fn build_terminal_app(
 
     let state = Arc::new(AppState {
         // The host's shared registry handle: no terminal route reaches it,
-        // but `/api/config` joins `default_workspace_root` + the workspace
-        // list into the global config view, so reuse the live handle rather
-        // than leaking a throwaway per window.
+        // but `/api/config` joins the workspace list into the global config
+        // view, so reuse the live handle rather than leaking a throwaway per
+        // window.
         library,
         workspace_root,
         workspace_cell: workspace_cell.clone(),

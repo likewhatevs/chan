@@ -312,11 +312,14 @@ pub struct Workspace {
     /// in-flight reindex.
     reindexing: std::sync::atomic::AtomicBool,
     /// Lazily-initialized SLOC / language / COCOMO report. First
-    /// touch (`report()` or `watch()`) does a full scan; further
-    /// access reads the cached state, and the watcher fanout
-    /// keeps it current incrementally. Kept behind `OnceLock` so
-    /// workspaces that never query the report skip the scan entirely.
-    report: std::sync::OnceLock<Arc<ReportState>>,
+    /// touch (`report()` / `boot()`) does a full scan; further access
+    /// reads the cached state, and the watcher fanout keeps it current
+    /// incrementally. Kept behind `OnceLock` so workspaces that never
+    /// query the report skip the scan entirely. Wrapped in `Arc` so the
+    /// watcher's `ReportFanOut` shares the same cell: `watch()` attaches
+    /// the fan-out without warming the report, and a later scan fills
+    /// this cell for both the query path and the fan-out at once.
+    report: Arc<std::sync::OnceLock<Arc<ReportState>>>,
     /// Directory-name blocklist applied to reindex walks (graph
     /// rebuild + index facade). Captured at `Workspace::open` time
     /// from the parent `Library`. Other walks (editor file tree,
@@ -463,7 +466,7 @@ impl Workspace {
             needs_replay_writes: std::sync::atomic::AtomicBool::new(needs_replay_writes),
             needs_rebuild: std::sync::atomic::AtomicBool::new(needs_rebuild),
             reindexing: std::sync::atomic::AtomicBool::new(false),
-            report: std::sync::OnceLock::new(),
+            report: Arc::new(std::sync::OnceLock::new()),
             walk_filter,
         });
 
@@ -2991,15 +2994,16 @@ impl Workspace {
     /// the returned `WatchHandle` to stop. Events for `.chan/`
     /// and `.git/` are filtered out.
     ///
-    /// Also warms the SLOC / language / COCOMO report so the
-    /// watcher can keep it current incrementally. The first
-    /// `watch()` call on a fresh workspace pays the initial-scan
-    /// cost; subsequent calls reuse the cached state. Workspaces
-    /// that never need the report can skip watching, or call
-    /// `report()` on demand instead.
+    /// This does not warm the SLOC / language / COCOMO report: that full
+    /// content scan is the biggest cold-boot cost and must not gate watcher
+    /// registration, so `watch()` performs only the notify registration. The
+    /// report is wired through a lazy fan-out keyed on the shared `self.report`
+    /// cell: once a scan fills the cell (via `report()` / `boot()`) the watcher
+    /// keeps the report current incrementally; until then report events are
+    /// dropped, since the scan reflects the on-disk state regardless. Callers
+    /// that need a warm report call `report()` / `boot()`.
     pub fn watch(self: &Arc<Self>, cb: Arc<dyn WatchCallback>) -> Result<WatchHandle> {
-        let report = self.report_state()?;
-        let fan: Arc<dyn WatchCallback> = ReportFanOut::new(cb, report.clone());
+        let fan: Arc<dyn WatchCallback> = ReportFanOut::new(cb, Arc::clone(&self.report));
         // Single recursive root watcher. Drafts live in-root under
         // `<drafts_dir_name>/...`, so the workspace-root watcher already
         // covers them; no separate drafts watch root is needed.

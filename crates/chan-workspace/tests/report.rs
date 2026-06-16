@@ -131,6 +131,14 @@ fn watcher_keeps_report_current() {
     let cb: Arc<dyn WatchCallback> = collector.clone();
     let _handle = workspace.watch(cb).unwrap();
 
+    // watch() does not warm the report (the content scan is kept off the
+    // watcher-registration path), so warm it explicitly here to give the
+    // fan-out a live report cell to forward incremental events into. This
+    // mirrors the server warming lazily on the first report query. Without it,
+    // the b.md event below is a no-op for the report and only a fresh scan
+    // would reflect it.
+    let _ = workspace.report().unwrap();
+
     // Add a file and wait for the watcher to deliver an event.
     workspace.write_text("b.md", "# b\n").unwrap();
     assert!(

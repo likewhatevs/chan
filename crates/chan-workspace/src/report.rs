@@ -9,7 +9,7 @@
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -224,20 +224,36 @@ impl Drop for ReportState {
 /// callback AND into the report state. Order: report first, so the
 /// index reflects the change by the time the user's handler runs
 /// (and might call Workspace::report()).
+///
+/// The report slot is the workspace's shared lazy `OnceLock`, not a scanned
+/// `ReportState`: `Workspace::watch()` attaches this fan-out without paying the
+/// report's content scan (the biggest cold-boot cost), so watcher registration
+/// stays fast. The scan runs separately (`Workspace::report()` / `boot()`) and
+/// fills the cell; until then report events are dropped, since the scan itself
+/// captures the current filesystem state. The user callback always sees every
+/// event.
 pub(crate) struct ReportFanOut {
     user_cb: Arc<dyn WatchCallback>,
-    report: Arc<ReportState>,
+    report: Arc<OnceLock<Arc<ReportState>>>,
 }
 
 impl ReportFanOut {
-    pub(crate) fn new(user_cb: Arc<dyn WatchCallback>, report: Arc<ReportState>) -> Arc<Self> {
+    pub(crate) fn new(
+        user_cb: Arc<dyn WatchCallback>,
+        report: Arc<OnceLock<Arc<ReportState>>>,
+    ) -> Arc<Self> {
         Arc::new(Self { user_cb, report })
     }
 }
 
 impl WatchCallback for ReportFanOut {
     fn on_event(&self, event: WatchEvent) {
-        self.report.on_event(&event);
+        // Forward into the report only once it has been scanned; before that
+        // the slot is empty and the event is a no-op for the report (the
+        // pending scan reflects this file's on-disk state anyway).
+        if let Some(report) = self.report.get() {
+            report.on_event(&event);
+        }
         self.user_cb.on_event(event);
     }
 }
