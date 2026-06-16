@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 400" role="img"
+     aria-labelledby="gw-title gw-desc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <title id="gw-title">Where Chan Gateway sits in the tunnel</title>
+  <desc id="gw-desc">Each chan serve dials out over an authenticated tunnel to a
+    self-hosted Chan Gateway. A browser signs in at the identity service and
+    reaches the workspace through the workspace-proxy, which reverse-proxies the
+    request back down the tunnel. The identity, workspace-proxy, and admin
+    services share a profile database on Postgres.</desc>
+
+  <style>
+    .label { fill: #191816; font-size: 14px; }
+    .sub   { fill: #69655d; font-size: 11.5px; }
+    .edge  { stroke: #69655d; stroke-width: 1.5; fill: none; }
+    .edgelabel { fill: #69655d; font-size: 11px; }
+    .group { fill: #fbfbf8; stroke: #dddad2; stroke-width: 1.5; }
+    .serve { fill: #fff; stroke: #2ea043; stroke-width: 1.5; }
+    .net   { fill: #fff; stroke: #8957e5; stroke-width: 1.5; }
+    .store { fill: #fff; stroke: #c45a2c; stroke-width: 1.5; }
+    .win   { fill: #fff; stroke: #1f6feb; stroke-width: 1.5; }
+    .grouptitle { font-size: 13px; font-weight: 700; }
+  </style>
+
+  <defs>
+    <marker id="gwarrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7"
+            markerHeight="7" orient="auto-start-end">
+      <path d="M0,0 L10,5 L0,10 z" fill="#69655d" />
+    </marker>
+  </defs>
+
+  <!-- Your machines -->
+  <rect class="group" x="24" y="96" width="236" height="212" rx="10" />
+  <text class="grouptitle label" x="44" y="124">Your machines</text>
+  <rect class="serve" x="44" y="140" width="196" height="62" rx="8" />
+  <text class="label" x="60" y="166">chan serve ~/notes</text>
+  <text class="sub" x="60" y="186">your laptop</text>
+  <rect class="serve" x="44" y="222" width="196" height="62" rx="8" />
+  <text class="label" x="60" y="248">chan serve ./project</text>
+  <text class="sub" x="60" y="268">a VPS or VM</text>
+
+  <!-- Chan Gateway. Boxes ordered to match the request flow: sign in at
+       identity first, then the workspace request hits the workspace-proxy. -->
+  <rect class="group" x="360" y="40" width="380" height="324" rx="10" />
+  <text class="grouptitle label" x="380" y="68">Chan Gateway</text>
+  <text class="sub" x="380" y="88">self-hosted &#183; Linux &#183; Postgres</text>
+
+  <rect class="net" x="380" y="100" width="340" height="62" rx="8" />
+  <text class="label" x="396" y="126">identity</text>
+  <text class="sub" x="396" y="146">id.example.com &#183; OAuth sign-in, tokens</text>
+
+  <rect class="net" x="380" y="174" width="340" height="62" rx="8" />
+  <text class="label" x="396" y="200">workspace-proxy</text>
+  <text class="sub" x="396" y="220">workspace.example.com &#183; /v1/tunnel + reverse proxy</text>
+
+  <rect class="store" x="380" y="248" width="200" height="62" rx="8" />
+  <text class="label" x="396" y="274">profile</text>
+  <text class="sub" x="396" y="294">internal &#183; users, workspaces</text>
+
+  <rect class="store" x="596" y="248" width="124" height="62" rx="8" />
+  <text class="label" x="612" y="282">Postgres</text>
+
+  <rect class="group" x="380" y="322" width="340" height="30" rx="6" />
+  <text class="sub" x="396" y="341">admin &#183; operator CLI against profile + workspace-proxy</text>
+
+  <!-- Browser -->
+  <rect class="group" x="824" y="120" width="192" height="172" rx="10" />
+  <text class="grouptitle label" x="844" y="148">Browser</text>
+  <text class="sub" x="844" y="168">anywhere</text>
+  <rect class="win" x="844" y="182" width="152" height="92" rx="8" />
+  <text class="label" x="860" y="208">1 &#183; sign in</text>
+  <text class="label" x="860" y="234">2 &#183; open workspace</text>
+  <text class="sub" x="860" y="254">{user}.workspace</text>
+  <text class="sub" x="860" y="268">.example.com/{ws}</text>
+
+  <!-- Each chan serve dials out into workspace-proxy. Both curves approach the
+       left edge horizontally so the line meets its arrowhead cleanly; they
+       straddle the tunnel label without touching it. -->
+  <path class="edge" marker-end="url(#gwarrow)" d="M240,171 C300,171 340,193 380,193" />
+  <path class="edge" marker-end="url(#gwarrow)" d="M240,253 C300,253 340,217 380,217" />
+  <text class="edgelabel" x="250" y="205">outbound tunnel</text>
+  <text class="edgelabel" x="250" y="221">CHAN_TUNNEL_TOKEN</text>
+
+  <!-- Browser: step 1 signs in at identity (top), step 2 opens the workspace
+       through workspace-proxy (below). Parallel, no crossing. -->
+  <path class="edge" marker-end="url(#gwarrow)" d="M824,206 C788,206 760,131 722,131" />
+  <path class="edge" marker-end="url(#gwarrow)" d="M824,232 C788,232 760,200 722,200" />
+
+  <!-- The services share the profile database on Postgres. -->
+  <path class="edge" marker-end="url(#gwarrow)" d="M470,236 L470,247" />
+  <text class="edgelabel" x="478" y="245">uses</text>
+  <path class="edge" marker-end="url(#gwarrow)" d="M580,279 L596,279" />
+</svg>

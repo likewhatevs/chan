@@ -401,6 +401,16 @@ function renderMarkdown(markdown, source, pageRel) {
       continue;
     }
 
+    // A line that is only an image becomes a figure (the manual's diagrams).
+    const image = line.match(/^!\[([^\]]*)]\(([^)]+)\)\s*$/);
+    if (image) {
+      html.push(
+        `<figure class="inline-shot"><img src="${escapeAttribute(image[2])}" alt="${escapeAttribute(image[1])}" /></figure>`,
+      );
+      i += 1;
+      continue;
+    }
+
     const paragraph = [line.trim()];
     i += 1;
     while (
@@ -408,7 +418,8 @@ function renderMarkdown(markdown, source, pageRel) {
       lines[i].trim() &&
       !lines[i].startsWith("```") &&
       !/^(#{1,4})\s+/.test(lines[i]) &&
-      !/^-+\s+/.test(lines[i])
+      !/^-+\s+/.test(lines[i]) &&
+      !/^!\[[^\]]*]\([^)]+\)\s*$/.test(lines[i])
     ) {
       paragraph.push(lines[i].trim());
       i += 1;
