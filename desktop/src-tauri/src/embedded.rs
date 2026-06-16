@@ -5,6 +5,7 @@
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::Router;
@@ -194,6 +195,24 @@ impl EmbeddedServer {
     pub fn terminal_window_has_live_shells(&self, window_label: &str) -> bool {
         self.host
             .tenant_has_window_sessions("/terminal", window_label)
+    }
+
+    /// Mount a fresh terminal tenant whose PTY runs `command` (a single
+    /// shell command line, through the login shell so an interactive
+    /// script gets a real PTY) and return its tokened launch URL. Each
+    /// call mounts its own tenant under a unique prefix, so a control
+    /// terminal running one devserver's connect script stays separate
+    /// from the shared standalone-terminal tenant and from other control
+    /// terminals.
+    pub async fn open_terminal_with_command(&self, command: String) -> Result<String, String> {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let prefix = format!("/control-{}", SEQ.fetch_add(1, Ordering::Relaxed));
+        let hosted = self
+            .host
+            .open_terminal_session_with_command(serve_config(self.addr, &prefix), Some(command))
+            .await
+            .map_err(|e| format!("opening a command terminal tenant: {e}"))?;
+        Ok(hosted.handle.launch_url())
     }
 }
 

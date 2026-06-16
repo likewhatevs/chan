@@ -326,6 +326,62 @@ pub async fn spawn_local_terminal_window(
     Ok(label)
 }
 
+/// Spawn a control terminal: a standalone terminal window whose PTY runs a
+/// devserver's connect script. The script brings the devserver up, possibly
+/// over an interactive ssh session whose prompts the user answers in the
+/// window. The label is stable per devserver so the connect flow can tuck
+/// the window away once connected and a later reopen finds the same window.
+pub async fn spawn_control_terminal_window(
+    app: AppHandle,
+    state: Arc<AppState>,
+    devserver_id: &str,
+    script: String,
+) -> Result<String, String> {
+    let Some(embedded) = state.embedded.get() else {
+        return Err("embedded local server is unavailable".to_string());
+    };
+    let url = embedded.open_terminal_with_command(script).await?;
+    let label = control_terminal_label(devserver_id);
+    build_workspace_window(
+        &app,
+        WindowSpec {
+            label: &label,
+            title: "Control Terminal",
+            url: &url,
+            url_hash_seed: "",
+            config_key: String::new(),
+            zoom_seed: 1.0,
+            connecting: None,
+            kind: Some("terminal"),
+        },
+    )?;
+    Ok(label)
+}
+
+/// Stable window label for a devserver's control terminal.
+pub fn control_terminal_label(devserver_id: &str) -> String {
+    format!("control-terminal-{devserver_id}")
+}
+
+/// Hide a window and record it as buried, so the user can reopen it from the
+/// Window menu. The connect flow uses this to tuck the control terminal away
+/// once the devserver is reached. Window operations run on the main thread.
+pub fn hide_and_bury_window(app: &AppHandle, label: &str) {
+    let app_owned = app.clone();
+    let label = label.to_string();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = app_owned.get_webview_window(&label) else {
+            return;
+        };
+        let title = window.title().unwrap_or_else(|_| label.clone());
+        let _ = window.hide();
+        app_owned
+            .state::<Arc<AppState>>()
+            .bury_window(&label, &title);
+        crate::rebuild_window_menu(&app_owned);
+    });
+}
+
 /// `cs window open`: focus a live window, un-hide a buried one, or
 /// best-effort reopen a closed-but-saved workspace window whose
 /// workspace is still running. Errors when the id names nothing the

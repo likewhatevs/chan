@@ -814,30 +814,59 @@ fn devserver_terminal_window_id(id: &str) -> String {
     format!("devserver-{id}-terminal")
 }
 
-/// Connect to a configured devserver: acquire its bearer token, confirm it
-/// answers, record the connection, and open a standalone terminal on it. On
-/// a local-loopback connection the token is read from the devserver's own
-/// `~/.chan/devserver/config.json`. Once connected the launcher polls the
-/// devserver's workspace list.
+/// Poll a devserver's info endpoint until it answers or the budget runs out.
+/// The connect script may take a moment to bring the devserver up, or prompt
+/// for credentials in the control terminal, so the wait is generous; a
+/// refused connection fails fast, so most attempts cost only the backoff.
+async fn wait_for_devserver(host: &str, port: u16) -> Result<(), String> {
+    const MAX_ATTEMPTS: usize = 20;
+    const BACKOFF: std::time::Duration = std::time::Duration::from_millis(1500);
+    for attempt in 1..=MAX_ATTEMPTS {
+        if devserver::fetch_info(host, port).await.is_ok() {
+            return Ok(());
+        }
+        if attempt == MAX_ATTEMPTS {
+            return Err(format!("devserver {host}:{port} did not come up in time"));
+        }
+        tokio::time::sleep(BACKOFF).await;
+    }
+    unreachable!("the loop returns on the final attempt")
+}
+
+/// Connect to a configured devserver: run its connect script in a control
+/// terminal (when one is set), wait for the devserver to answer, acquire its
+/// bearer token, record the connection, open a standalone terminal on it,
+/// then tuck the control terminal away. On a local-loopback connection the
+/// token is read from the devserver's own `~/.chan/devserver/config.json`.
+/// Once connected the launcher polls the devserver's workspace list.
 #[tauri::command]
 async fn connect_devserver(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    let (host, port) = {
+    let (host, port, script) = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         let ds = cfg
             .devservers
             .iter()
             .find(|d| d.id == id)
             .ok_or_else(|| format!("no devserver {id}"))?;
-        (ds.host.clone(), ds.port)
+        (ds.host.clone(), ds.port, ds.script.clone())
     };
+    // A configured script runs in a control terminal that brings the
+    // devserver up; with no script the devserver is expected to be running
+    // already.
+    let control_label = if script.trim().is_empty() {
+        None
+    } else {
+        Some(
+            serve::spawn_control_terminal_window(app.clone(), Arc::clone(&state), &id, script)
+                .await?,
+        )
+    };
+    wait_for_devserver(&host, port).await?;
     let token = devserver::read_local_token()?;
-    // Confirm the devserver answers before recording the connection so a
-    // dead endpoint surfaces here rather than as silently empty polls.
-    devserver::fetch_info(&host, port).await?;
     let conn = devserver::DevserverConn { host, port, token };
     let terminal_url = devserver::open_terminal(&conn).await?;
     state.devservers.set(id.clone(), conn);
@@ -846,6 +875,11 @@ async fn connect_devserver(
         &devserver_terminal_window_id(&id),
         &terminal_url,
     )?;
+    // The connection is up and its terminal is open, so put the control
+    // terminal away; the user can reopen it from the Window menu.
+    if let Some(label) = control_label {
+        serve::hide_and_bury_window(&app, &label);
+    }
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(())
 }
