@@ -353,7 +353,7 @@ enum Command {
     },
     /// Report workspace, index, graph, and code-report status.
     Status {
-        /// Workspace root. Defaults to the registered default workspace.
+        /// Workspace root (required; the default workspace was removed).
         path: Option<PathBuf>,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -457,7 +457,7 @@ enum ImportSource {
         /// OVERWROTE so it's clear which files moved.
         #[arg(long)]
         overwrite: bool,
-        /// Workspace root. Defaults to the registered default workspace.
+        /// Workspace root (required; the default workspace was removed).
         /// Auto-registers the path if not already known, so
         /// `chan contacts import csv ... --workspace /some/dir`
         /// works without a prior `chan add`.
@@ -570,7 +570,7 @@ enum IndexAction {
     },
     /// Set the embedding model configured for a workspace.
     SetModel {
-        /// Workspace root. Defaults to the registered default workspace.
+        /// Workspace root (required; the default workspace was removed).
         #[arg(long)]
         path: Option<PathBuf>,
         /// Curated HuggingFace model id.
@@ -583,20 +583,20 @@ enum IndexAction {
     /// `<index_dir>/config.toml` so it survives `chan serve`
     /// restarts.
     EnableSemantic {
-        /// Workspace root. Defaults to the registered default workspace.
+        /// Workspace root (required; the default workspace was removed).
         #[arg(long)]
         path: Option<PathBuf>,
     },
     /// Flip the workspace back to BM25-only.
     DisableSemantic {
-        /// Workspace root. Defaults to the registered default workspace.
+        /// Workspace root (required; the default workspace was removed).
         #[arg(long)]
         path: Option<PathBuf>,
     },
     /// Print the semantic-search state: current mode, model
     /// presence, model path + size, opt-in flag.
     Status {
-        /// Workspace root. Defaults to the registered default workspace.
+        /// Workspace root (required; the default workspace was removed).
         #[arg(long)]
         path: Option<PathBuf>,
         /// Emit machine-readable JSON.
@@ -621,8 +621,7 @@ enum ReportsAction {
     /// no persisted report exists. Idempotent: re-enable is a
     /// no-op.
     Enable {
-        /// Workspace root. Defaults to the registry's current workspace
-        /// when omitted.
+        /// Workspace root (required; the default workspace was removed).
         #[arg(long, value_name = "PATH")]
         path: Option<PathBuf>,
     },
@@ -1145,6 +1144,16 @@ fn absolutize_serve_root(root: PathBuf) -> PathBuf {
         .unwrap_or(root)
 }
 
+/// Error for a command that used to fall back to the now-removed default
+/// workspace and was invoked without a path. The default workspace was
+/// deleted, so the workspace root must be named explicitly; `hint` is a
+/// complete, valid example invocation to suggest.
+fn missing_workspace_path(cmd: &str, hint: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "chan {cmd} requires a workspace path (the default workspace was removed); e.g. `{hint}`"
+    )
+}
+
 async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     let ServeArgs {
         addr,
@@ -1163,12 +1172,10 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         verbose,
     } = args;
     let lib = library()?;
-    // Resolve the workspace root: explicit arg first, then the registry
-    // default, then the platform default. Auto-register so users
-    // can `chan serve /some/dir` without a prior `chan add`.
-    let root = path
-        .or_else(|| lib.default_workspace_root())
-        .unwrap_or_else(|| lib.effective_default_workspace_root());
+    // The default workspace was removed: `chan serve` with no path is a
+    // clear error. Auto-register still applies to an explicit path so
+    // users can `chan serve /some/dir` without a prior `chan add`.
+    let root = path.ok_or_else(|| missing_workspace_path("serve", "chan serve ."))?;
     // Resolve to an absolute path against the CLI's cwd before anything
     // downstream consumes it. The macOS desktop handoff opens the
     // workspace in a process whose cwd is "/", and the workspace registry
@@ -1619,9 +1626,14 @@ fn cmd_reports(action: ReportsAction) -> Result<()> {
 
 fn cmd_reports_set(path: Option<PathBuf>, enabled: bool, skip_confirm: bool) -> Result<()> {
     let lib = library()?;
-    let root = path
-        .or_else(|| lib.default_workspace_root())
-        .unwrap_or_else(|| lib.effective_default_workspace_root());
+    let root = path.ok_or_else(|| {
+        let (cmd, hint) = if enabled {
+            ("reports enable", "chan reports enable --path .")
+        } else {
+            ("reports disable", "chan reports disable --path .")
+        };
+        missing_workspace_path(cmd, hint)
+    })?;
     let workspace = lib
         .open_workspace(&root)
         .with_context(|| format!("opening workspace at {}", root.display()))?;
@@ -1846,9 +1858,12 @@ fn cmd_index_set_model(path: Option<PathBuf>, model: &str) -> Result<()> {
         );
     }
     let lib = library()?;
-    let root = path
-        .or_else(|| lib.default_workspace_root())
-        .unwrap_or_else(|| lib.effective_default_workspace_root());
+    let root = path.ok_or_else(|| {
+        missing_workspace_path(
+            "index set-model",
+            "chan index set-model --path . --model BAAI/bge-small-en-v1.5",
+        )
+    })?;
     let workspace = lib
         .open_workspace(&root)
         .with_context(|| not_a_chan_workspace_hint(&root))?;
@@ -1875,9 +1890,20 @@ fn cmd_index_set_model(path: Option<PathBuf>, model: &str) -> Result<()> {
 fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
     use chan_workspace::index::embeddings::resolve_model;
     let lib = library()?;
-    let root = path
-        .or_else(|| lib.default_workspace_root())
-        .unwrap_or_else(|| lib.effective_default_workspace_root());
+    let root = path.ok_or_else(|| {
+        let (cmd, hint) = if enabled {
+            (
+                "index enable-semantic",
+                "chan index enable-semantic --path .",
+            )
+        } else {
+            (
+                "index disable-semantic",
+                "chan index disable-semantic --path .",
+            )
+        };
+        missing_workspace_path(cmd, hint)
+    })?;
     let workspace = lib
         .open_workspace(&root)
         .with_context(|| not_a_chan_workspace_hint(&root))?;
@@ -1921,9 +1947,8 @@ fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
 fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     use chan_workspace::index::embeddings::{global_models_dir, repo_dir_name, resolve_model};
     let lib = library()?;
-    let root = path
-        .or_else(|| lib.default_workspace_root())
-        .unwrap_or_else(|| lib.effective_default_workspace_root());
+    let root =
+        path.ok_or_else(|| missing_workspace_path("index status", "chan index status --path ."))?;
     let workspace_paths = lib
         .workspace_paths_for(&root)
         .ok_or_else(|| anyhow::anyhow!(not_a_chan_workspace_hint(&root)))?;
@@ -2359,9 +2384,7 @@ fn print_filesystem_graph(out: &FsGraphResponse, limit: usize) {
 
 fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     let lib = library()?;
-    let root = path
-        .or_else(|| lib.default_workspace_root())
-        .unwrap_or_else(|| lib.effective_default_workspace_root());
+    let root = path.ok_or_else(|| missing_workspace_path("status", "chan status ."))?;
     ensure_workspace_registered(&lib, &root)?;
     let workspace = lib.open_workspace(&root)?;
     let known = lib
@@ -2902,9 +2925,12 @@ fn cmd_contacts_import_csv(
     }
 
     let lib = library()?;
-    let root = workspace
-        .or_else(|| lib.default_workspace_root())
-        .unwrap_or_else(|| lib.effective_default_workspace_root());
+    let root = workspace.ok_or_else(|| {
+        missing_workspace_path(
+            "contacts import csv",
+            "chan contacts import csv contacts.csv --workspace .",
+        )
+    })?;
     if !root.exists() {
         std::fs::create_dir_all(&root)
             .with_context(|| format!("creating workspace root {}", root.display()))?;
