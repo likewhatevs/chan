@@ -353,7 +353,7 @@ enum Command {
     },
     /// Report workspace, index, graph, and code-report status.
     Status {
-        /// Workspace root (required; the default workspace was removed).
+        /// Workspace root (required).
         path: Option<PathBuf>,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -457,7 +457,7 @@ enum ImportSource {
         /// OVERWROTE so it's clear which files moved.
         #[arg(long)]
         overwrite: bool,
-        /// Workspace root (required; the default workspace was removed).
+        /// Workspace root (required).
         /// Auto-registers the path if not already known, so
         /// `chan contacts import csv ... --workspace /some/dir`
         /// works without a prior `chan add`.
@@ -570,7 +570,7 @@ enum IndexAction {
     },
     /// Set the embedding model configured for a workspace.
     SetModel {
-        /// Workspace root (required; the default workspace was removed).
+        /// Workspace root (required).
         #[arg(long)]
         path: Option<PathBuf>,
         /// Curated HuggingFace model id.
@@ -583,20 +583,20 @@ enum IndexAction {
     /// `<index_dir>/config.toml` so it survives `chan serve`
     /// restarts.
     EnableSemantic {
-        /// Workspace root (required; the default workspace was removed).
+        /// Workspace root (required).
         #[arg(long)]
         path: Option<PathBuf>,
     },
     /// Flip the workspace back to BM25-only.
     DisableSemantic {
-        /// Workspace root (required; the default workspace was removed).
+        /// Workspace root (required).
         #[arg(long)]
         path: Option<PathBuf>,
     },
     /// Print the semantic-search state: current mode, model
     /// presence, model path + size, opt-in flag.
     Status {
-        /// Workspace root (required; the default workspace was removed).
+        /// Workspace root (required).
         #[arg(long)]
         path: Option<PathBuf>,
         /// Emit machine-readable JSON.
@@ -621,7 +621,7 @@ enum ReportsAction {
     /// no persisted report exists. Idempotent: re-enable is a
     /// no-op.
     Enable {
-        /// Workspace root (required; the default workspace was removed).
+        /// Workspace root (required).
         #[arg(long, value_name = "PATH")]
         path: Option<PathBuf>,
     },
@@ -1144,14 +1144,11 @@ fn absolutize_serve_root(root: PathBuf) -> PathBuf {
         .unwrap_or(root)
 }
 
-/// Error for a command that used to fall back to the now-removed default
-/// workspace and was invoked without a path. The default workspace was
-/// deleted, so the workspace root must be named explicitly; `hint` is a
-/// complete, valid example invocation to suggest.
+/// Error for a command invoked without its required workspace path. Every
+/// command names the workspace root explicitly; `hint` is a complete,
+/// valid example invocation to suggest.
 fn missing_workspace_path(cmd: &str, hint: &str) -> anyhow::Error {
-    anyhow::anyhow!(
-        "chan {cmd} requires a workspace path (the default workspace was removed); e.g. `{hint}`"
-    )
+    anyhow::anyhow!("chan {cmd} requires a workspace path; e.g. `{hint}`")
 }
 
 async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
@@ -1172,9 +1169,9 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         verbose,
     } = args;
     let lib = library()?;
-    // The default workspace was removed: `chan serve` with no path is a
-    // clear error. Auto-register still applies to an explicit path so
-    // users can `chan serve /some/dir` without a prior `chan add`.
+    // `chan serve` requires an explicit workspace root; with no path it is
+    // a clear error. An explicit path auto-registers, so `chan serve
+    // /some/dir` works without a prior `chan add`.
     let root = path.ok_or_else(|| missing_workspace_path("serve", "chan serve ."))?;
     // Resolve to an absolute path against the CLI's cwd before anything
     // downstream consumes it. The macOS desktop handoff opens the
