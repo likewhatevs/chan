@@ -559,12 +559,7 @@ export type FsGraphResponse = {
 // snapshot from live state on every poll; the SPA renders it on a locked
 // surface until `phase === "ready"`.
 export type PreflightPhase = "running" | "needs_decision" | "ready" | "failed";
-export type PreflightStepState =
-  | "pending"
-  | "running"
-  | "done"
-  | "needs_decision"
-  | "failed";
+export type PreflightStepState = "pending" | "done" | "needs_decision" | "failed";
 
 export type PreflightDecisionChoice = { id: string; label: string };
 export type PreflightDecision = {
@@ -575,10 +570,6 @@ export type PreflightStep = {
   id: string;
   label: string;
   state: PreflightStepState;
-  /// Progress counters for a running step (the index build); the locked
-  /// surface reads these as the single source of truth for its bar.
-  current?: number;
-  total?: number;
   /// Present when the step blocks on a user choice (`needs_decision`).
   decision?: PreflightDecision;
 };

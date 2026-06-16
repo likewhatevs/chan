@@ -272,11 +272,6 @@
     }
   }
 
-  function percent(current?: number, total?: number): number {
-    if (!total || total <= 0 || current === undefined) return 0;
-    return Math.min(100, Math.round((current / total) * 100));
-  }
-
   onMount(() => {
     void poll();
   });
@@ -293,12 +288,7 @@
       {#each snapshot.steps as step (step.id)}
         <li class="step" data-state={step.state}>
           <span class="label">{step.label}</span>
-          {#if step.state === "running" && step.total}
-            <div class="bar">
-              <div class="fill" style="width: {percent(step.current, step.total)}%"></div>
-            </div>
-            <span class="meta">{step.current ?? 0} / {step.total}</span>
-          {:else if step.state === "needs_decision" && step.decision}
+          {#if step.state === "needs_decision" && step.decision}
             <p class="prompt">{step.decision.prompt}</p>
             <div class="choices">
               {#each step.decision.choices as choice (choice.id)}
@@ -492,17 +482,6 @@
   }
   .label {
     font-size: 14px;
-  }
-  .bar {
-    height: 6px;
-    background: var(--border);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  .fill {
-    height: 100%;
-    background: var(--text);
-    transition: width 200ms ease;
   }
   .meta {
     font-size: 12px;
