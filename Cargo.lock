@@ -957,6 +957,7 @@ dependencies = [
  "clap 4.6.1",
  "clap_complete",
  "flate2",
+ "gethostname",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

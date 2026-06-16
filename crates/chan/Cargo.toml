@@ -49,6 +49,8 @@ chan-shell = { workspace = true, features = ["client"] }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 anyhow = { workspace = true }
+# Human label for the box in `chan devserver` (shown as [DEVSERVER {host}]).
+gethostname = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

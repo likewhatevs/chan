@@ -276,6 +276,13 @@ enum Command {
         /// workspace owner is not the operator at the keyboard.
         #[arg(long)]
         no_settings: bool,
+        /// Force a standalone server: bind this workspace directly and skip
+        /// both the chan-desktop handoff and the local devserver
+        /// registration, even when one is running on this box. The escape
+        /// hatch for automation and for serving a workspace the local
+        /// devserver / desktop should not take over.
+        #[arg(long)]
+        standalone: bool,
         /// Tunnel endpoint URL. With --tunnel-token, chan serve
         /// dials this instead of binding a local listener.
         #[arg(long, default_value = "https://workspace.chan.app/v1/tunnel")]
@@ -304,6 +311,30 @@ enum Command {
         /// it can't silently no-op on a non-tunnel run.
         #[arg(long, requires = "tunnel_token")]
         tunnel_public: bool,
+    },
+    /// Run a headless multi-workspace devserver on one address.
+    ///
+    /// Aggregates many workspaces behind one port: a `chan serve <path>`
+    /// on this box registers its workspace with the running devserver and
+    /// exits instead of binding its own server, so the devserver owns each
+    /// workspace's single-writer flock. A desktop client lists, opens, and
+    /// forgets workspaces over the management API. What was mounted comes
+    /// back on the next start.
+    Devserver {
+        /// Host address to bind. Default 127.0.0.1 (loopback). Use
+        /// 0.0.0.0 / :: to listen on all interfaces; there is no TLS and
+        /// only a bearer-token gate, so reach a remote devserver over an
+        /// `ssh -L` tunnel rather than binding it on a public interface.
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: IpAddr,
+        /// Port to bind.
+        #[arg(long, default_value_t = 8787)]
+        port: u16,
+        /// Run under a systemd user service (Linux), creating and following
+        /// it. Not yet available; a plain `chan devserver` runs in the
+        /// foreground for now.
+        #[arg(long)]
+        systemd: bool,
     },
     /// Rebuild the search index + graph; manage the embedding
     /// model + per-workspace Hybrid-search opt-in. Subcommand-driven
@@ -728,6 +759,7 @@ where
             no_browser,
             search_aggression,
             no_settings,
+            standalone,
             tunnel_url,
             tunnel_token,
             tunnel_workspace_name,
@@ -747,6 +779,7 @@ where
                     no_browser,
                     search_aggression,
                     no_settings,
+                    standalone,
                     tunnel_url,
                     tunnel_token,
                     tunnel_workspace_name,
@@ -757,6 +790,11 @@ where
             )
             .await
         }
+        Command::Devserver {
+            bind,
+            port,
+            systemd,
+        } => cmd_devserver(bind, port, systemd).await,
         Command::Index { action } => cmd_index(action),
         Command::Reports { action } => cmd_reports(action),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
@@ -1124,6 +1162,7 @@ struct ServeArgs {
     no_browser: bool,
     search_aggression: Option<SearchAggression>,
     no_settings: bool,
+    standalone: bool,
     tunnel_url: String,
     tunnel_token: Option<String>,
     tunnel_workspace_name: Option<String>,
@@ -1162,6 +1201,7 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         no_browser,
         search_aggression,
         no_settings,
+        standalone,
         tunnel_url,
         tunnel_token,
         tunnel_workspace_name,
@@ -1209,9 +1249,48 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     // never double-opens. Every fallback (no desktop, refused, stale socket,
     // bad handshake, version skew, GUI-absent, tunnel) drops through to the
     // standalone server path below.
-    if personality == Personality::Desktop && tunnel_token.is_none() {
+    if personality == Personality::Desktop && tunnel_token.is_none() && !standalone {
         if let Some(outcome) = maybe_handoff_to_desktop(&root).await {
             return outcome;
+        }
+    }
+
+    // CLI-to-devserver registration. Unlike the desktop handoff this runs
+    // for the standalone binary too and does NOT require a GUI session: a
+    // devserver is exactly where SSH-only boxes live. A running same-user
+    // devserver mounts this workspace and owns its flock, so the CLI prints
+    // a note and exits WITHOUT opening it (the single-writer invariant).
+    // Runs BEFORE `open_workspace` so a successful registration never
+    // double-opens. --standalone, tunnel mode, and CHAN_NO_DEVSERVER_HANDOFF
+    // opt out; every non-registered outcome drops through to the standalone
+    // server path below.
+    if !standalone
+        && tunnel_token.is_none()
+        && !chan_server::devserver_handoff::devserver_handoff_opt_out()
+    {
+        use chan_server::devserver_handoff::Outcome;
+        match chan_server::devserver_handoff::try_register_devserver(&root).await {
+            Outcome::Registered { prefix: _ } => {
+                println!(
+                    "chan: registered {} with the local devserver",
+                    root.display()
+                );
+                return Ok(());
+            }
+            Outcome::VersionSkew => {
+                eprintln!(
+                    "chan: a local devserver is running a different version; \
+                     cannot register. Starting a standalone server."
+                );
+            }
+            Outcome::Error(message) => {
+                eprintln!(
+                    "chan: the local devserver could not mount this workspace \
+                     ({message}); starting a standalone server."
+                );
+            }
+            // No devserver discovered: the load-bearing default path.
+            Outcome::NoDevserver => {}
         }
     }
 
@@ -1308,6 +1387,37 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     chan_server::serve(lib, workspace, config)
         .await
         .with_context(|| format!("running server on {addr}"))
+}
+
+/// Run a headless multi-workspace devserver bound to `bind:port`. Runs in
+/// the foreground; `--systemd` user-service supervision is not yet wired, so
+/// it prints a note and stays in the foreground.
+async fn cmd_devserver(bind: IpAddr, port: u16, systemd: bool) -> Result<()> {
+    if systemd {
+        eprintln!(
+            "chan devserver: NOTE: --systemd supervision is not yet available; \
+             running in the foreground."
+        );
+    }
+    let addr = SocketAddr::new(bind, port);
+    if !addr.ip().is_loopback() {
+        eprintln!(
+            "WARNING: binding to {} exposes the devserver on a non-loopback \
+             interface. There is no TLS and only a bearer-token gate; reach a \
+             remote devserver over `ssh -L` instead of binding it publicly.",
+            addr.ip()
+        );
+    }
+    let lib = library()?;
+    let host_label = gethostname::gethostname().to_string_lossy().into_owned();
+    let host_label = if host_label.trim().is_empty() {
+        "devserver".to_string()
+    } else {
+        host_label
+    };
+    chan_server::run_devserver(lib, chan_server::DevserverConfig { addr, host_label })
+        .await
+        .context("running devserver")
 }
 
 /// Integrate a Desktop-personality `chan serve` with the desktop app.
