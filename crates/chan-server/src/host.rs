@@ -180,8 +180,19 @@ impl WorkspaceHost {
         Ok(hosted)
     }
 
+    /// Mount a workspace-less "terminal-only" tenant whose terminals run
+    /// the user's default interactive shell. Shorthand for
+    /// [`open_terminal_session_with_command`](Self::open_terminal_session_with_command)
+    /// with no command.
+    pub async fn open_terminal_session(
+        &self,
+        config: ServeConfig,
+    ) -> Result<HostedWorkspace, Error> {
+        self.open_terminal_session_with_command(config, None).await
+    }
+
     /// Mount a workspace-less "terminal-only" tenant under
-    /// `config.prefix`.
+    /// `config.prefix`, optionally running `command` on its PTY.
     ///
     /// Mirrors [`open_workspace`](Self::open_workspace) but backs the
     /// mount with [`build_terminal_app`] instead of `build_app`: no
@@ -191,6 +202,13 @@ impl WorkspaceHost {
     /// (desktop webview in `?kind=terminal` mode) gets a PTY surface
     /// without a workspace behind it.
     ///
+    /// `command` is one shell command line, run through the login shell so
+    /// an interactive script (host-key / password prompts) gets a real
+    /// PTY; `None` keeps the default shell. It is the tenant default, so
+    /// every terminal opened in this tenant that names no command of its
+    /// own runs it (a single-purpose terminal window, e.g. one that runs a
+    /// connect script).
+    ///
     /// The tenant lands in the SAME `workspaces` map as workspace mounts
     /// and is reached by the same `host_dispatch` prefix routing, so the
     /// duplicate-prefix guard and `close_workspace` apply uniformly. The
@@ -198,9 +216,10 @@ impl WorkspaceHost {
     /// dir) since there is no workspace root; `handle.launch_url()`
     /// resolves against `config.addr`/`prefix`/token exactly like a
     /// workspace mount.
-    pub async fn open_terminal_session(
+    pub async fn open_terminal_session_with_command(
         &self,
         mut config: ServeConfig,
+        command: Option<String>,
     ) -> Result<HostedWorkspace, Error> {
         config.prefix = sanitize_prefix(&config.prefix).map_err(Error::Config)?;
         let prefix = config.prefix.clone();
@@ -225,6 +244,9 @@ impl WorkspaceHost {
 
         let artifacts =
             build_terminal_app(self.library.clone(), &config, self.desktop.clone()).await?;
+        // The tenant's terminals run `command` (when set) rather than the
+        // default shell; applied before the SPA can open the first one.
+        artifacts.terminal_sessions.set_default_command(command);
         // Root reported for diagnostics / desktop correlation: the PTY
         // cwd is the user's home dir, so surface that. Falls back to "/"
         // to match `build_terminal_app`'s registry root resolution.
@@ -655,6 +677,35 @@ mod tests {
             .await
             .expect_err("duplicate prefix must be rejected");
         assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[tokio::test]
+    async fn open_terminal_session_with_command_mounts_tenant() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = Arc::new(WorkspaceHost::new(lib));
+
+        // A command-carrying terminal tenant mounts like a default-shell
+        // one; the command becomes the tenant's PTY default (the running of
+        // it is covered by the registry tests).
+        host.open_terminal_session_with_command(
+            serve_config("/terminal-cmd"),
+            Some("printf hi".into()),
+        )
+        .await
+        .expect("open terminal session with command");
+
+        let app = host.router();
+        let build_info = app
+            .oneshot(
+                Request::builder()
+                    .uri("/terminal-cmd/api/build-info")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(build_info.status(), StatusCode::OK);
     }
 
     #[test]

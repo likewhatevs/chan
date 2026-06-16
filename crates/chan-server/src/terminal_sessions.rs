@@ -72,6 +72,11 @@ pub struct Registry {
     /// bursts into one wakeup (natural debounce) and stores a permit when
     /// no waiter is parked, so a change is never missed.
     roster_notify: Arc<Notify>,
+    /// Command this tenant's terminals run on their PTY when an open
+    /// request carries no command of its own. `None` keeps the user's
+    /// default interactive shell. A single-purpose terminal tenant (a
+    /// window whose PTY runs a connect script) sets it once at creation.
+    default_command: Mutex<Option<String>>,
 }
 
 /// Parse the ordinal from a default `Terminal-N` name for lowest-free
@@ -370,6 +375,7 @@ impl Registry {
             config,
             sessions: Mutex::new(HashMap::new()),
             roster_notify: Arc::new(Notify::new()),
+            default_command: Mutex::new(None),
         }
     }
 
@@ -450,13 +456,35 @@ impl Registry {
             .collect()
     }
 
-    pub fn create(&self, opts: CreateOptions) -> Result<AttachHandle, CreateError> {
+    /// Set the command this tenant's terminals run when an open request
+    /// carries no command of its own. `None` restores the default shell.
+    /// A single-purpose terminal tenant sets this once at creation so its
+    /// window's PTY runs a given command (e.g. an interactive connect
+    /// script) instead of an interactive shell.
+    pub fn set_default_command(&self, command: Option<String>) {
+        *self
+            .default_command
+            .lock()
+            .expect("terminal registry poisoned") = command;
+    }
+
+    pub fn create(&self, mut opts: CreateOptions) -> Result<AttachHandle, CreateError> {
         let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
         if sessions.len() >= self.config.terminal.session_cap {
             return Err(CreateError::Capped);
         }
         reject_terminal_spawn_if_git_bash_missing()?;
         reject_terminal_spawn_if_fd_pressure()?;
+        // A tenant opened to run a specific command applies it to any
+        // session that brings none of its own, so the window's terminal
+        // runs the command; an explicit per-session command wins.
+        if opts.command.is_none() {
+            opts.command = self
+                .default_command
+                .lock()
+                .expect("terminal registry poisoned")
+                .clone();
+        }
         let id = self.unused_id(&sessions);
         let session =
             Session::spawn(id.clone(), self.config.clone(), opts).map_err(CreateError::Spawn)?;
@@ -2930,6 +2958,62 @@ mod tests {
         assert!(
             out.contains("TERM=<tmux-256color>"),
             "PTY did not echo configured TERM: {out:?}"
+        );
+        registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn tenant_default_command_runs_when_session_omits_one() {
+        // A tenant default command set after construction runs on a session
+        // that brings none of its own, so a single-purpose terminal window's
+        // PTY runs the given command instead of an interactive shell.
+        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
+        registry.set_default_command(Some("printf 'DEFAULT=<ran>\\n'".into()));
+        let mut handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: None,
+                tab_group: None,
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+            })
+            .unwrap();
+        let out = collect_until(&mut handle, "DEFAULT=<ran>", Duration::from_secs(5)).await;
+        assert!(
+            out.contains("DEFAULT=<ran>"),
+            "tenant default command did not run: {out:?}"
+        );
+        registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn explicit_command_overrides_tenant_default() {
+        // An explicit per-session command wins over the tenant default.
+        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
+        registry.set_default_command(Some("printf 'PICK=<default>\\n'".into()));
+        let mut handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: None,
+                tab_group: None,
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: Some("printf 'PICK=<explicit>\\n'".into()),
+                env: Default::default(),
+            })
+            .unwrap();
+        let out = collect_until(&mut handle, "PICK=<explicit>", Duration::from_secs(5)).await;
+        assert!(
+            out.contains("PICK=<explicit>"),
+            "explicit command did not win over tenant default: {out:?}"
+        );
+        assert!(
+            !out.contains("PICK=<default>"),
+            "tenant default ran despite an explicit command: {out:?}"
         );
         registry.close(handle.id(), CloseReason::Explicit);
     }
