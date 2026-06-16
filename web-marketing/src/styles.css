@@ -214,6 +214,30 @@ code {
   color: var(--fg);
 }
 
+.value-points {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 24px 0 0;
+  max-width: 58ch;
+  padding: 0;
+}
+
+.value-points li {
+  color: var(--fg);
+  font-size: 1.02rem;
+  padding-left: 22px;
+  position: relative;
+}
+
+.value-points li::before {
+  color: var(--accent-2);
+  content: "→";
+  font-family: var(--mono);
+  left: 0;
+  position: absolute;
+}
+
 .hero-shot,
 .inline-shot {
   background: var(--panel);
@@ -228,6 +252,12 @@ code {
 .inline-shot img {
   display: block;
   width: 100%;
+}
+
+/* When a figure stacks more than one screenshot (e.g. the scriptable
+   section), rule between them so they read as separate shots. */
+.inline-shot img + img {
+  border-top: 1px solid var(--rule);
 }
 
 .hero-shot figcaption {

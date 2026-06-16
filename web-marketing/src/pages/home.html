@@ -1,23 +1,28 @@
 <section class="hero">
   <div class="hero-copy">
-    <p class="eyebrow">the AI-native IDE for the modern engineer</p>
+    <p class="eyebrow">drive a fleet of agents and ship faster</p>
     <h1>chan</h1>
     <p class="lede">
-      An IDE that moves at the speed of thought. Drive your projects in
-      Markdown and put a fleet of AI agents to work: they create, review,
-      refine, and harden your design docs and tasks, then execute,
-      coordinating with each other right in the terminal. Your editor, your
-      terminal, and your agents in one hybrid workspace.
+      The AI-native IDE for the modern engineer. Point it at any git repo and
+      drive your project in Markdown while a fleet of AI agents works alongside
+      you: they create, review, refine, and harden your design docs and tasks,
+      then execute and coordinate with each other right in the terminal.
     </p>
-    <p class="eyebrow">Simple stroke. Powerful engine.</p>
+    <ul class="value-points">
+      <li>Drive any number of parallel agents</li>
+      <li>Each agent a different specialist — Claude, Codex, Gemini</li>
+      <li>Agents coordinate with each other — no in-app chatbot</li>
+      <li>A Markdown workspace your agents read and write directly</li>
+      <li>Scriptable end to end, from one <code>cs</code> command line</li>
+    </ul>
     <div class="button-row">
       <a class="button primary" href="/install/">Install</a>
       <a class="button secondary" href="/manual/">Read the manual</a>
     </div>
   </div>
   <figure class="hero-shot">
-    <img src="/assets/team-work-fleet.png" alt="Four AI agents running side by side in Chan's Team Work" />
-    <figcaption>Chan running a fleet of agents in one workspace.</figcaption>
+    <img src="/assets/desktop-workspaces.png" alt="Chan Desktop's workspaces launcher with the New workspace dialog open" />
+    <figcaption>Open any git repo or folder, local or remote, as a workspace.</figcaption>
   </figure>
 </section>
 
@@ -42,44 +47,63 @@
   </div>
 </section>
 
-<section class="feature-grid" aria-label="Core behavior">
-  <article>
-    <h2>AI is the engine</h2>
-    <p>
-      Put agents to work on the docs and tasks that drive your project:
-      create, review, refine, harden, execute. Markdown-first, where your
-      project's thinking lives.
-    </p>
-  </article>
-  <article>
+<section class="split-section">
+  <div>
+    <p class="eyebrow">hybrid agent team work</p>
     <h2>A fleet that works together</h2>
     <p>
-      Run Claude, Codex, and Gemini side by side in the terminal and let them
-      coordinate with each other through Chan's <code>cs</code> tooling (poke,
-      broadcast, groups) and the MCP server. You conduct; they collaborate. No
-      in-app chatbot.
+      Compose a team of agents and watch them run side by side: Claude, Codex,
+      and Gemini in their own terminal sessions, each a different specialist
+      matched to the task. They coordinate with each other through Chan's
+      <code>cs</code> tooling — poke, broadcast, groups — and the built-in MCP
+      server. You conduct from one pane; they collaborate. No in-app chatbot.
     </p>
-  </article>
-  <article>
-    <h2>One hybrid workspace</h2>
-    <p>
-      Editor, terminal, Team Work, file browser, graph, and dashboard as
-      tiling tabs and panes, each with command-line tooling.
-    </p>
-  </article>
-  <article>
-    <h2>Knows your workspace</h2>
-    <p>
-      Hybrid BM25 and embedding search, a live graph over links, tags, and
-      mentions, and per-file and per-directory code reports (SLOC, COCOMO),
-      built in.
-    </p>
-  </article>
+  </div>
+  <figure class="inline-shot">
+    <img src="/assets/team-work-session.png" alt="AI agents coordinating in a Chan Team Work session" />
+  </figure>
 </section>
 
 <section class="split-section">
   <div>
-    <p class="eyebrow">markdown-first</p>
+    <p class="eyebrow">scriptable</p>
+    <h2>Drive every pane from the command line</h2>
+    <p>
+      The <code>cs</code> command line reaches into any terminal: write or queue
+      input, broadcast to a group, or pop an interactive survey in another
+      agent's session and read the answer back. Script your whole workflow — or
+      let agents drive each other. The same tooling powers the editor, file
+      browser, graph, and dashboard.
+    </p>
+  </div>
+  <figure class="inline-shot">
+    <img src="/assets/terminal-cs-write.png" alt="One Chan terminal using cs terminal write to queue a command into another terminal tab" />
+    <img src="/assets/terminal-cs-survey.png" alt="A survey overlay launched in one Chan terminal from another with cs terminal survey" />
+  </figure>
+</section>
+
+<section class="split-section">
+  <div>
+    <p class="eyebrow">ubiquitous</p>
+    <h2>Server, desktop, local, remote</h2>
+    <p>
+      Run chan wherever you work: a loopback server in your browser or a native
+      desktop window, on your laptop or across the network. Local use needs no
+      account and your files stay ordinary files under the workspace folder.
+      Opt in to the tunnel and the same workspace is reachable from another
+      device — <code>chan serve</code> publishes over an outbound tunnel to a
+      gateway, or Chan Desktop dials a remote <code>chan serve</code> directly
+      over HTTP/2. Local by default, remote by choice.
+    </p>
+  </div>
+  <figure class="inline-shot">
+    <img src="/assets/architecture.svg" alt="Chan Desktop driving a local workspace, a Lima VM workspace over localhost, and a remote VPS workspace over an SSH tunnel" />
+  </figure>
+</section>
+
+<section class="split-section">
+  <div>
+    <p class="eyebrow">markdown editor</p>
     <h2>Where your project's thinking lives</h2>
     <p>
       Write your design docs, specs, and tasks in Markdown, with a live
@@ -93,40 +117,36 @@
   </figure>
 </section>
 
-<section class="split-section">
-  <div>
-    <p class="eyebrow">team work</p>
-    <h2>See the fleet at work</h2>
+<section class="feature-grid" aria-label="Built in">
+  <article>
+    <h2>Live graph</h2>
     <p>
-      Compose a team of agents and watch them run side by side: Claude, Codex,
-      and Gemini in their own terminal sessions, coordinating through
-      <code>cs</code> and the MCP server while you conduct from one pane.
+      Navigate the workspace as a graph over directories and files, with layers
+      for Markdown links, tags, and <code>@mentions</code>. Export reproducible
+      <code>chan://</code> links straight into the editor.
     </p>
-  </div>
-  <figure class="inline-shot">
-    <img src="/assets/team-work-session.png" alt="AI agents coordinating in a Chan Team Work session" />
-  </figure>
-</section>
-
-<section class="split-section">
-  <div>
-    <p class="eyebrow">local-first</p>
-    <h2>Local by default, remote by choice</h2>
+  </article>
+  <article>
+    <h2>Hybrid search</h2>
     <p>
-      Local use needs no account. The HTTP server binds to loopback by
-      default, and your files stay ordinary files under the workspace folder.
+      Find anything with combined BM25 and embedding search across the whole
+      workspace — the same index your agents query through MCP.
     </p>
-  </div>
-  <div>
+  </article>
+  <article>
+    <h2>Code reports</h2>
     <p>
-      The tunnel is core to chan, not a hosted service. Opt in and the same
-      workspace is reachable from another device: <code>chan serve</code>
-      publishes a workspace over an outbound tunnel to a gateway, or Chan
-      Desktop opens a remote <code>chan serve</code> directly over HTTP/2. The
-      gateway that fronts it ships in the repo for you to self-host. Nothing
-      leaves your machine until you ask it to.
+      Per-file and per-directory code analysis (SLOC, COCOMO) in the inspector,
+      so you and your agents can see the shape of the codebase.
     </p>
-  </div>
+  </article>
+  <article>
+    <h2>Survives reload</h2>
+    <p>
+      Terminal sessions run server-side and tabs are restored, so you can close
+      or reload the window without losing your place.
+    </p>
+  </article>
 </section>
 
 <section class="support-section">

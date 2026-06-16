@@ -4,7 +4,7 @@ Chan is an AI-native IDE for the modern engineer. You point it at a folder on di
 
 Start here:
 
-- [Install choices](install.md)
+- [Installing chan](install.md)
 - [Creating or opening a workspace](workspaces.md)
 - [Editing markdown](editing-markdown.md)
 - [Wiki-links](wiki-links.md)
