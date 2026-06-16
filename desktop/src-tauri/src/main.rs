@@ -746,7 +746,7 @@ fn open_local_workspace(
 /// the request was accepted, not that the window is fully up; on a
 /// genuine mount failure the desktop emits a system notice rather than
 /// blocking the CLI.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn open_workspace_from_handoff(
     app: tauri::AppHandle,
     state: Arc<AppState>,
@@ -820,6 +820,21 @@ fn open_workspace_from_handoff(
 /// the multi-MB download can't be awaited from the CLI socket round-trip);
 /// when it finishes we re-affirm the `~/.local/bin/{chan,cs}` shims and
 /// relaunch into the new version.
+/// Windows: `chan upgrade` is not wired over the hand-off this phase (no Windows
+/// updater feed), and no Windows `chan` sends an `Upgrade` request, so this is
+/// effectively dead — it exists only so the (now cross-platform) hand-off
+/// listener's `Upgrade` arm compiles. Returns a clear error rather than
+/// pretending to upgrade.
+#[cfg(windows)]
+async fn desktop_handle_upgrade(
+    _app: tauri::AppHandle,
+    _check_only: bool,
+) -> chan_server::handoff::Response {
+    chan_server::handoff::Response::Error {
+        message: "desktop upgrade over hand-off is not supported on Windows yet".into(),
+    }
+}
+
 #[cfg(unix)]
 async fn desktop_handle_upgrade(
     app: tauri::AppHandle,
@@ -1524,22 +1539,22 @@ fn main() {
                 }
             }
 
-            // macOS CLI-to-desktop handoff listener (ratified Option
-            // B). Binds the well-known per-user UDS so a `chan serve
-            // <workspace>` in a terminal hands the workspace to this desktop
-            // window instead of failing on the per-workspace flock. Leaked
-            // for the process lifetime (the registry watcher above uses
-            // the same Box::leak pattern; the handle's Drop unlinks the
-            // socket but we want it live until exit, and RunEvent::Exit
-            // tears the process down anyway). A bind failure is
+            // CLI-to-desktop handoff listener (ratified Option B). Binds the
+            // well-known per-user endpoint (a UDS on unix, a named pipe on
+            // Windows) so a `chan serve <workspace>` in a terminal hands the
+            // workspace to this desktop window instead of failing on the
+            // per-workspace flock. Leaked for the process lifetime (the registry
+            // watcher above uses the same Box::leak pattern; the handle's Drop
+            // tears down the listener, but we want it live until exit, and
+            // RunEvent::Exit tears the process down anyway). A bind failure is
             // non-fatal: the CLI just falls back to its own server.
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if let Some(sock) = chan_server::handoff::well_known_socket_path() {
                 let app_for_handoff = app.handle().clone();
                 let state_for_handoff = Arc::clone(&state_for_setup);
-                // `start_listener` binds a tokio `UnixListener` and
-                // `tokio::spawn`s the accept loop, so it MUST run inside
-                // a tokio runtime context. The Tauri `setup` closure runs
+                // `start_listener` binds a tokio listener (UnixListener /
+                // named-pipe server) and `tokio::spawn`s the accept loop, so it
+                // MUST run inside a tokio runtime context. The Tauri `setup` runs
                 // on the main thread OUTSIDE any runtime, so calling it
                 // directly panics ("there is no reactor running"), which
                 // aborts the whole desktop on launch. Enter the Tauri-

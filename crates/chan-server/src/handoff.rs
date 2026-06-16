@@ -1,5 +1,5 @@
-//! macOS CLI-to-desktop workspace handoff over a well-known per-user
-//! Unix-domain socket.
+//! CLI-to-desktop workspace handoff over a well-known per-user endpoint:
+//! a Unix-domain socket on unix, a named pipe on Windows.
 //!
 //! When chan-desktop is running and the user types `chan serve
 //! ~/notes` in a terminal, the natural intent is "show me this workspace
@@ -7,11 +7,12 @@
 //! per-workspace flock." This module is the same-user IPC channel that
 //! makes that handoff possible.
 //!
-//! Discovery is a WELL-KNOWN per-user socket path (not the per-pid
-//! socket the mcp_bridge / control_socket use): the CLI must find the
-//! desktop without knowing its pid. Same-user is enforced by the
-//! socket living in a per-user runtime dir with 0600 perms and owned
-//! by the user; cross-user attach is simply not discoverable.
+//! Discovery is a WELL-KNOWN per-user endpoint (not the per-pid socket
+//! the mcp_bridge / control_socket use): the CLI must find the desktop
+//! without knowing its pid. On unix, same-user is enforced by the socket
+//! living in a per-user runtime dir with 0600 perms and owned by the
+//! user; on Windows, by the per-user pipe name plus the default named-pipe
+//! ACL (same-user access), matching control_socket.
 //!
 //! INVARIANT: exactly one process owns a workspace's writes (the
 //! chan-workspace per-workspace flock). In a successful handoff the DESKTOP
@@ -27,17 +28,17 @@
 //! silent cross-version IPC.
 //!
 //! Reuses the control_socket.rs shape: line-delimited JSON request +
-//! response, unlink-stale-before-bind, a Drop guard that unlinks on
-//! teardown. The protocol/types compile on every platform; the
-//! listener + client are unix-only (handoff is local-desktop only and
-//! the desktop ships on unix targets today).
+//! response and a Drop guard for teardown (unix unlinks the socket file;
+//! a Windows named pipe vanishes with the process). The protocol/types
+//! compile on every platform; the listener + client are implemented on
+//! unix (UDS) and Windows (named pipe), the desktop's two targets.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::path::Path;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::time::Duration;
 
 /// Wire-protocol version. Bump on any incompatible change to the
@@ -173,7 +174,26 @@ pub fn well_known_socket_path() -> Option<PathBuf> {
         let uid = current_uid();
         Some(std::env::temp_dir().join(format!("chan-desktop-{uid}.sock")))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // Named pipes share one machine-global namespace, so namespace by
+        // user to avoid cross-user collision (same-user access is the
+        // default pipe ACL, matching control_socket). The name is WELL-KNOWN
+        // (per-user, not per-pid) so the CLI finds the desktop without its
+        // pid. Sanitize the username to the chars a pipe name allows.
+        let user = std::env::var("USERNAME").unwrap_or_default();
+        let user: String = user
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        let user = if user.is_empty() {
+            "default".into()
+        } else {
+            user
+        };
+        Some(PathBuf::from(format!(r"\\.\pipe\chan-desktop-{user}")))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         None
     }
@@ -218,7 +238,14 @@ pub fn gui_session_present() -> bool {
         }
         std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // Windows is a GUI OS; an interactive (or RDP) session always has a
+        // desktop the user can see. The hand-off still only proceeds if a
+        // chan-desktop is actually running (try_handoff connects the pipe).
+        true
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         false
     }
@@ -242,13 +269,13 @@ pub fn handoff_opt_out() -> bool {
 /// and unlink the socket file, mirroring control_socket / mcp_bridge.
 /// A `kill -9` that skips Drop leaves a stale file; the next bind
 /// unlinks it first.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub struct ListenerHandle {
     socket_path: PathBuf,
     accept_loop: Option<tokio::task::JoinHandle<()>>,
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub struct ListenerHandle {
     socket_path: PathBuf,
 }
@@ -259,12 +286,15 @@ impl ListenerHandle {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Drop for ListenerHandle {
     fn drop(&mut self) {
         if let Some(h) = self.accept_loop.take() {
             h.abort();
         }
+        // A Unix socket leaves a filesystem node to unlink; a Windows named
+        // pipe vanishes when the owning process exits, so nothing to remove.
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
     }
 }
@@ -346,7 +376,81 @@ where
     })
 }
 
-#[cfg(not(unix))]
+/// Windows: the same handoff protocol over a named pipe (the cross-platform
+/// transport chan already uses for the `cs` control socket). Mirrors the
+/// control_socket accept loop: hold one idle pipe instance and, on each client
+/// connect, swap in a FRESH instance BEFORE handing the connected one to a task,
+/// so a client arriving during the swap still finds a live server instance.
+/// Same per-connection framing (read one JSON line -> `dispatch` -> write one
+/// JSON line) as the unix arm; `dispatch` applies the protocol-version gate.
+#[cfg(windows)]
+pub fn start_listener<F, Fut>(socket_path: PathBuf, handler: F) -> std::io::Result<ListenerHandle>
+where
+    F: Fn(Request) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Response> + Send + 'static,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let pipe_name = socket_path.as_os_str().to_owned();
+    // `first_pipe_instance(true)` fails if another process already owns this
+    // name — the singleton / squatter guard, mirroring how the unix bind owns
+    // its filesystem socket path.
+    let mut next = ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(&pipe_name)?;
+
+    let handler = std::sync::Arc::new(handler);
+    let accept_loop = tokio::spawn(async move {
+        loop {
+            if let Err(e) = next.connect().await {
+                tracing::warn!("handoff accept: {e}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            // Re-arm BEFORE serving so the next client doesn't race to NotFound.
+            let fresh = match ServerOptions::new().create(&pipe_name) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("handoff re-arm: {e}");
+                    break;
+                }
+            };
+            let connected = std::mem::replace(&mut next, fresh);
+            let handler = handler.clone();
+            tokio::spawn(async move {
+                let (read, mut write) = tokio::io::split(connected);
+                let mut reader = BufReader::new(read);
+                let mut line = String::new();
+                let response = match reader.read_line(&mut line).await {
+                    Ok(0) => Response::Error {
+                        message: "empty handoff request".into(),
+                    },
+                    Ok(_) => match serde_json::from_str::<Request>(&line) {
+                        Ok(req) => dispatch(req, handler.as_ref()).await,
+                        Err(e) => Response::Error {
+                            message: format!("invalid handoff request: {e}"),
+                        },
+                    },
+                    Err(e) => Response::Error {
+                        message: format!("read handoff request: {e}"),
+                    },
+                };
+                if let Ok(mut out) = serde_json::to_vec(&response) {
+                    out.push(b'\n');
+                    let _ = write.write_all(&out).await;
+                }
+            });
+        }
+    });
+
+    Ok(ListenerHandle {
+        socket_path,
+        accept_loop: Some(accept_loop),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn start_listener<F, Fut>(_socket_path: PathBuf, _handler: F) -> std::io::Result<ListenerHandle>
 where
     F: Fn(Request) -> Fut + Send + Sync + 'static,
@@ -354,14 +458,14 @@ where
 {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
-        "handoff listener requires unix-domain sockets",
+        "handoff listener requires unix-domain sockets or windows named pipes",
     ))
 }
 
 /// Apply the protocol-version gate, then call the desktop's async `handler`.
 /// A skew short-circuits to `VersionSkew` and the handler never runs (so the
 /// desktop never acts on a request it can't fully understand).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 async fn dispatch<F, Fut>(req: Request, handler: &F) -> Response
 where
     F: Fn(Request) -> Fut,
@@ -484,7 +588,80 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
     }
 }
 
-#[cfg(not(unix))]
+/// Windows: connect the well-known named pipe and round-trip one
+/// `OpenWorkspace`. A missing pipe (no desktop) maps to `NoDesktop` at once —
+/// it must NOT hang the common no-desktop `chan serve`; a momentarily-busy pipe
+/// (the desktop mid accept-swap) gets a short bounded retry. Same request /
+/// timed response / parse as the unix arm.
+#[cfg(windows)]
+pub async fn try_handoff(workspace_path: &Path) -> Outcome {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    // Win32 ERROR_PIPE_BUSY: all instances are busy; retry briefly.
+    const ERROR_PIPE_BUSY: i32 = 231;
+
+    let Some(socket_path) = well_known_socket_path() else {
+        return Outcome::NoDesktop;
+    };
+
+    let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+    let client = loop {
+        match ClientOptions::new().open(&socket_path) {
+            Ok(c) => break c,
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                if std::time::Instant::now() >= deadline {
+                    return Outcome::NoDesktop;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            // NotFound (no desktop listening) / refused / other: fall back.
+            Err(_) => return Outcome::NoDesktop,
+        }
+    };
+
+    let req = Request::OpenWorkspace {
+        protocol: PROTOCOL_VERSION,
+        cli_version: CHAN_VERSION.into(),
+        workspace_path: workspace_path.display().to_string(),
+    };
+    let mut payload = match serde_json::to_vec(&req) {
+        Ok(v) => v,
+        Err(_) => return Outcome::NoDesktop,
+    };
+    payload.push(b'\n');
+
+    let (read, mut write) = tokio::io::split(client);
+    let io = async {
+        write.write_all(&payload).await?;
+        write.flush().await?;
+        let mut reader = BufReader::new(read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        Ok::<String, std::io::Error>(line)
+    };
+    let line = match tokio::time::timeout(Duration::from_millis(3000), io).await {
+        Ok(Ok(line)) if !line.trim().is_empty() => line,
+        _ => return Outcome::NoDesktop,
+    };
+
+    match serde_json::from_str::<Response>(&line) {
+        Ok(Response::Opened { .. }) => Outcome::HandedOff,
+        Ok(Response::VersionSkew {
+            desktop_version,
+            desktop_protocol,
+        }) => Outcome::VersionSkew {
+            desktop_version,
+            desktop_protocol,
+        },
+        Ok(Response::Error { message }) => Outcome::DesktopError { message },
+        Ok(Response::UpgradeStarted { .. }) | Ok(Response::UpgradeChecked { .. }) | Err(_) => {
+            Outcome::NoDesktop
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 pub async fn try_handoff(_workspace_path: &std::path::Path) -> Outcome {
     Outcome::NoDesktop
 }
@@ -688,6 +865,18 @@ mod tests {
         let p = well_known_socket_path().expect("unix path");
         let s = p.to_string_lossy();
         assert!(s.contains("chan-desktop"), "unexpected path: {s}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn well_known_path_is_named_pipe_on_windows() {
+        // Windows resolves a per-user named pipe in the `\\.\pipe\` namespace.
+        let p = well_known_socket_path().expect("windows path");
+        let s = p.to_string_lossy();
+        assert!(
+            s.starts_with(r"\\.\pipe\chan-desktop-"),
+            "unexpected path: {s}"
+        );
     }
 
     #[cfg(unix)]
