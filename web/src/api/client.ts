@@ -359,9 +359,22 @@ async function readFileStream(
       processLine(buffered.slice(0, nl));
       buffered = buffered.slice(nl + 1);
     }
+    // The server terminates the NDJSON stream with an explicit `done` event,
+    // so stop as soon as we've parsed it rather than blocking on the HTTP body
+    // to signal EOF. WebView2 (the Windows desktop webview) does not always
+    // surface the body close to fetch's ReadableStream, which would otherwise
+    // hang this read loop forever even though the whole file already arrived —
+    // the editor would spin on "loading" with the byte count already complete.
+    if (done) break;
   }
-  buffered += decoder.decode();
-  if (buffered.trim()) processLine(buffered);
+  if (done) {
+    // We have everything; release the underlying connection instead of waiting
+    // on a body-close that may never arrive.
+    await reader.cancel().catch(() => {});
+  } else {
+    buffered += decoder.decode();
+    if (buffered.trim()) processLine(buffered);
+  }
   if (!done) throw new Error("file stream ended before done");
   return {
     path: meta.path,
