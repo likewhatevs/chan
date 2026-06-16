@@ -47,10 +47,22 @@ pub struct WorkspaceHost {
     /// window-ops channel and the title map. `DesktopBridge::default()`
     /// (no channel, empty map) when the embedder is not chan-desktop.
     desktop: DesktopBridge,
+    /// Serializes idempotent re-registration so two callers racing the same
+    /// root resolve to one mount. The winner holds the per-workspace flock
+    /// from its `Library::open_workspace` but only lands in `workspaces`
+    /// after `build_app`; without this gate a concurrent loser would see
+    /// neither the flock-free map nor the not-yet-inserted winner and fail
+    /// its own open. Held across the open's `.await`, so it is a tokio
+    /// mutex; registration is infrequent, so serializing it is cheap.
+    register_lock: tokio::sync::Mutex<()>,
 }
 
 struct HostedWorkspaceRuntime {
     root: PathBuf,
+    /// Launch handle captured at mount time (addr, prefix, token). Lets the
+    /// host hand back the existing mount on an idempotent re-register and
+    /// list every tenant without rebuilding one.
+    handle: ServeHandle,
     artifacts: AppArtifacts,
 }
 
@@ -88,6 +100,7 @@ impl WorkspaceHost {
             library,
             workspaces: RwLock::new(HashMap::new()),
             desktop,
+            register_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -116,6 +129,49 @@ impl WorkspaceHost {
     ) -> Result<HostedWorkspace, Error> {
         let workspace = self.library.open_workspace(root.as_ref())?;
         self.open_workspace(workspace, config).await
+    }
+
+    /// Mount the workspace at `root` under `config.prefix`, or return the
+    /// existing mount when that root is already mounted.
+    ///
+    /// Idempotent on the workspace ROOT: a root already mounted (under any
+    /// prefix) returns its existing [`HostedWorkspace`] without re-opening
+    /// it, so the per-workspace single-writer flock the running tenant
+    /// holds is never contended (a second `Library::open_workspace` on a
+    /// mounted root would fail `WorkspaceAlreadyOpen` anyway). A different
+    /// root that collides on `config.prefix` is still an error.
+    ///
+    /// Race-safe via the host's registration lock: callers racing the same
+    /// root serialize, so the first mounts and the rest observe that mount
+    /// in the pre-check and return it. A distinct root that collides on
+    /// `config.prefix` falls through to `open_registered_workspace` and its
+    /// duplicate-prefix error.
+    pub async fn open_or_get_registered_workspace(
+        &self,
+        root: impl AsRef<Path>,
+        config: ServeConfig,
+    ) -> Result<HostedWorkspace, Error> {
+        let root = root.as_ref();
+        let _registering = self.register_lock.lock().await;
+        if let Some(existing) = self.hosted_for_root(root)? {
+            return Ok(existing);
+        }
+        self.open_registered_workspace(root, config).await
+    }
+
+    /// The existing mount for `root`, matched by canonical form, or `None`
+    /// when no tenant owns that path. One read lock; the returned
+    /// [`HostedWorkspace`] is rebuilt from the handle captured at mount.
+    fn hosted_for_root(&self, root: &Path) -> Result<Option<HostedWorkspace>, Error> {
+        let target = canonical_key(root);
+        let workspaces = self
+            .workspaces
+            .read()
+            .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+        Ok(workspaces
+            .values()
+            .find(|runtime| canonical_key(&runtime.root) == target)
+            .map(hosted_from_runtime))
     }
 
     /// Mount an already-open workspace under `config.prefix`.
@@ -162,9 +218,13 @@ impl WorkspaceHost {
         let hosted = HostedWorkspace {
             root: root.clone(),
             prefix: prefix.clone(),
-            handle,
+            handle: handle.clone(),
         };
-        let runtime = HostedWorkspaceRuntime { root, artifacts };
+        let runtime = HostedWorkspaceRuntime {
+            root,
+            handle,
+            artifacts,
+        };
 
         let mut workspaces = self
             .workspaces
@@ -259,9 +319,13 @@ impl WorkspaceHost {
         let hosted = HostedWorkspace {
             root: root.clone(),
             prefix: prefix.clone(),
-            handle,
+            handle: handle.clone(),
         };
-        let runtime = HostedWorkspaceRuntime { root, artifacts };
+        let runtime = HostedWorkspaceRuntime {
+            root,
+            handle,
+            artifacts,
+        };
 
         let mut workspaces = self
             .workspaces
@@ -401,6 +465,17 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
         || path
             .strip_prefix(prefix)
             .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Rebuild the public [`HostedWorkspace`] view of a mounted runtime from
+/// the handle captured at mount time, for the idempotent re-register
+/// return and any tenant listing.
+fn hosted_from_runtime(runtime: &HostedWorkspaceRuntime) -> HostedWorkspace {
+    HostedWorkspace {
+        root: runtime.root.clone(),
+        prefix: runtime.handle.prefix.clone(),
+        handle: runtime.handle.clone(),
+    }
 }
 
 /// Canonical-form key for matching a caller path against a mounted
@@ -614,6 +689,89 @@ mod tests {
             .expect("fresh dir opens immediately after in-process register");
         let canonical = fresh.path().canonicalize().expect("canonical root");
         assert_eq!(hosted.root, canonical);
+    }
+
+    #[tokio::test]
+    async fn open_or_get_re_register_is_idempotent_on_root() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib));
+
+        let first = host
+            .open_or_get_registered_workspace(root.path(), serve_config("/first"))
+            .await
+            .expect("first mount");
+        assert_eq!(first.prefix, "/first");
+
+        // Re-registering the same root returns the EXISTING mount (its
+        // original prefix + token) without re-opening the flocked
+        // workspace, even when a different prefix is requested.
+        let again = host
+            .open_or_get_registered_workspace(root.path(), serve_config("/second"))
+            .await
+            .expect("idempotent re-register");
+        assert_eq!(
+            again.prefix, "/first",
+            "existing prefix, not the requested /second"
+        );
+        assert_eq!(
+            again.handle.token, first.handle.token,
+            "same tenant, same token"
+        );
+        assert_eq!(
+            host.mounted_prefixes().expect("prefixes"),
+            vec!["/first".to_string()],
+            "still one tenant"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_or_get_duplicate_prefix_on_different_root_still_errors() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let a = tempfile::tempdir().expect("ws a");
+        let b = tempfile::tempdir().expect("ws b");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(a.path()).expect("register a");
+        lib.register_workspace(b.path()).expect("register b");
+        let host = Arc::new(WorkspaceHost::new(lib));
+
+        host.open_or_get_registered_workspace(a.path(), serve_config("/shared"))
+            .await
+            .expect("mount a at /shared");
+
+        // A DIFFERENT root requesting an already-taken prefix is a genuine
+        // collision (not the same-root idempotent case) and still errors.
+        let err = host
+            .open_or_get_registered_workspace(b.path(), serve_config("/shared"))
+            .await
+            .expect_err("duplicate prefix on a different root must error");
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[tokio::test]
+    async fn open_or_get_concurrent_same_root_resolves_to_one_mount() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib));
+
+        // Two callers race the same fresh root. The registration lock
+        // serializes them: one mounts, the other observes that mount in the
+        // pre-check. Both resolve to a single tenant with the same prefix.
+        let (a, b) = tokio::join!(
+            host.open_or_get_registered_workspace(root.path(), serve_config("/race")),
+            host.open_or_get_registered_workspace(root.path(), serve_config("/race")),
+        );
+        assert_eq!(a.expect("first resolves").prefix, "/race");
+        assert_eq!(b.expect("second resolves").prefix, "/race");
+        assert_eq!(
+            host.mounted_prefixes().expect("prefixes"),
+            vec!["/race".to_string()],
+            "exactly one tenant mounted despite the race"
+        );
     }
 
     #[tokio::test]
