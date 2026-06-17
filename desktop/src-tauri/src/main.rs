@@ -835,6 +835,17 @@ fn devserver_terminal_window_id(id: &str) -> String {
     format!("devserver-{id}-terminal")
 }
 
+/// Display name for a devserver in the Window menu: its user label, or its
+/// host when unlabelled.
+fn devserver_display(d: &Devserver) -> String {
+    let label = d.label.trim();
+    if label.is_empty() {
+        d.host.clone()
+    } else {
+        label.to_string()
+    }
+}
+
 /// Record a window the desktop opened for a devserver, so a later disconnect
 /// can tear it down and a reconnect can re-open it.
 fn track_devserver_window(state: &AppState, id: &str, window: DevserverWindow) {
@@ -2567,7 +2578,9 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
         if let Ok(items) = submenu.items() {
             for item in items {
                 let id = item.id().as_ref();
-                if id == BURIED_MENU_HEADER_ID
+                // Buried headers are now one per group (local + each
+                // devserver), so match the header id by prefix.
+                if id.starts_with(BURIED_MENU_HEADER_ID)
                     || id == REMOTE_MENU_HEADER_ID
                     || id.starts_with(BURIED_MENU_ID_PREFIX)
                     || id.starts_with(REMOTE_MENU_ID_PREFIX)
@@ -2608,16 +2621,62 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
                 }
             }
         };
-        // Count + cost hint in the header: buried webviews stay live
-        // (warm layout, running terminals), which is memory the user
-        // can't otherwise see.
-        let buried_header = format!("Hidden Windows ({}, kept warm in memory)", buried.len());
-        append_section(
-            BURIED_MENU_HEADER_ID,
-            &buried_header,
-            &buried,
-            BURIED_MENU_ID_PREFIX,
-        );
+        // Group the hidden windows by the devserver that opened them, so a
+        // user with several devservers can tell their windows apart; a window
+        // tracked under no devserver is local. The devserver's tracked window
+        // labels (plus its control terminal) are the membership test.
+        let cfg = state.store.lock().unwrap().get().ok();
+        let mut devservers: Vec<(String, String, std::collections::HashSet<String>)> = {
+            let tracked = state.devserver_windows.lock().unwrap();
+            tracked
+                .iter()
+                .map(|(ds_id, windows)| {
+                    let display = cfg
+                        .as_ref()
+                        .and_then(|c| c.devservers.iter().find(|d| &d.id == ds_id))
+                        .map(devserver_display)
+                        .unwrap_or_else(|| ds_id.clone());
+                    let mut labels: std::collections::HashSet<String> =
+                        windows.iter().map(|w| w.label.clone()).collect();
+                    labels.insert(serve::control_terminal_label(ds_id));
+                    (ds_id.clone(), display, labels)
+                })
+                .collect()
+        };
+        devservers.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let mut local: Vec<(String, String)> = Vec::new();
+        let mut grouped: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for (label, title) in buried {
+            match devservers.iter().find(|(_, _, labels)| labels.contains(&label)) {
+                Some((ds_id, _, _)) => grouped
+                    .entry(ds_id.clone())
+                    .or_default()
+                    .push((label, title)),
+                None => local.push((label, title)),
+            }
+        }
+
+        // Count + cost hint in the header: buried webviews stay live (warm
+        // layout, running terminals), which is memory the user can't see.
+        if !local.is_empty() {
+            append_section(
+                BURIED_MENU_HEADER_ID,
+                &format!("Hidden Windows ({}, kept warm in memory)", local.len()),
+                &local,
+                BURIED_MENU_ID_PREFIX,
+            );
+        }
+        for (ds_id, display, _) in &devservers {
+            if let Some(rows) = grouped.get(ds_id) {
+                append_section(
+                    &format!("{BURIED_MENU_HEADER_ID}-{ds_id}"),
+                    &format!("{display} hidden windows ({})", rows.len()),
+                    rows,
+                    BURIED_MENU_ID_PREFIX,
+                );
+            }
+        }
         append_section(
             REMOTE_MENU_HEADER_ID,
             "Remote Windows",
