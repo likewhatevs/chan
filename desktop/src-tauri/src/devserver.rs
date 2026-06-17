@@ -262,6 +262,36 @@ pub async fn open_terminal(conn: &DevserverConn) -> Result<String, String> {
     assemble_tenant_url(&conn.host, conn.port, &terminal.prefix, &terminal.token)
 }
 
+/// The `DELETE` URL for unmounting a workspace tenant. The server route is
+/// an axum wildcard, so `prefix` (an absolute route path like
+/// `/api/notes-1a2b3c`) is appended verbatim after the collection path.
+fn workspace_delete_url(host: &str, port: u16, prefix: &str) -> String {
+    format!(
+        "{}/api/devserver/workspaces{}",
+        base_origin(host, port),
+        prefix
+    )
+}
+
+/// `DELETE /api/devserver/workspaces/{prefix}`: unmount a workspace tenant
+/// from the devserver (the "Forget" action).
+pub async fn forget_workspace(conn: &DevserverConn, prefix: &str) -> Result<(), String> {
+    let url = workspace_delete_url(&conn.host, conn.port, prefix);
+    let resp = http_client()?
+        .delete(&url)
+        .bearer_auth(&conn.token)
+        .send()
+        .await
+        .map_err(|e| format!("forgetting devserver workspace: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "devserver workspace delete returned HTTP {}",
+            resp.status()
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +336,14 @@ mod tests {
         assert_eq!(entries[0].label, "notes");
         assert!(entries[0].on);
         assert_eq!(entries[0].token, "tok_abc");
+    }
+
+    #[test]
+    fn workspace_delete_url_appends_the_prefix_verbatim() {
+        assert_eq!(
+            workspace_delete_url("127.0.0.1", 8787, "/api/notes-1a2b3c"),
+            "http://127.0.0.1:8787/api/devserver/workspaces/api/notes-1a2b3c"
+        );
     }
 
     #[test]

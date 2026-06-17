@@ -941,6 +941,70 @@ fn open_devserver_workspace(
     serve::spawn_outbound_workspace_window(&app, &prefix, &url).map(|_| ())
 }
 
+/// Update a devserver's connection recipe (host/port/script/label), from the
+/// Edit form. Rejected while connected: a live connection's parameters must
+/// not change underneath it. The new host:port must not collide with another
+/// configured devserver.
+#[tauri::command]
+fn update_devserver(
+    app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    id: String,
+    host: String,
+    port: u16,
+    script: String,
+    label: String,
+) -> Result<(), String> {
+    if state.devservers.is_connected(&id) {
+        return Err("disconnect this devserver before editing it".to_string());
+    }
+    let host = normalize_devserver_host(&host)?;
+    if port == 0 {
+        return Err("devserver port must be between 1 and 65535".to_string());
+    }
+    let script = script.trim().to_string();
+    let label = normalize_devserver_label(&label)?;
+    {
+        let mut store = state.store.lock().unwrap();
+        let mut cfg = store.get().map_err(err)?;
+        if cfg
+            .devservers
+            .iter()
+            .any(|d| d.id != id && d.host == host && d.port == port)
+        {
+            return Err(format!("another devserver is already at {host}:{port}"));
+        }
+        let ds = cfg
+            .devservers
+            .iter_mut()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("no devserver {id}"))?;
+        ds.host = host;
+        ds.port = port;
+        ds.script = script;
+        ds.label = label;
+        store.save(&cfg).map_err(err)?;
+    }
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+    Ok(())
+}
+
+/// Forget (unmount) a workspace on a connected devserver via its management
+/// API. The devserver stops serving that workspace; its files on the box are
+/// untouched and it can be re-mounted later.
+#[tauri::command]
+async fn forget_devserver_workspace(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    prefix: String,
+) -> Result<(), String> {
+    let conn = state
+        .devservers
+        .get(&id)
+        .ok_or_else(|| format!("devserver {id} is not connected"))?;
+    devserver::forget_workspace(&conn, &prefix).await
+}
+
 /// Forget a devserver: drops any live connection and removes the persisted
 /// connection recipe so its launcher section disappears.
 #[tauri::command]
@@ -1964,6 +2028,8 @@ fn main() {
             disconnect_devserver,
             list_devserver_workspaces,
             open_devserver_workspace,
+            update_devserver,
+            forget_devserver_workspace,
             auth::auth_status,
             auth::open_signin,
             auth::signout,

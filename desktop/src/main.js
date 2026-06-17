@@ -425,8 +425,8 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
 
   // ---- Devserver (multi-workspace aggregator we dial out to) -----------
   // `existing` is null for New (add a devserver) or a Devserver object for
-  // Edit (pre-fill host/port/script/label, "Save changes"). The entry point
-  // that supplies `existing` lives on the devserver row's dropdown.
+  // Edit (pre-fill host/port/script/label, "Save changes"). The Edit button
+  // on a disconnected devserver section supplies `existing`.
   function renderDevserver(existing = null) {
     const ds = existing || {};
     const editing = !!existing;
@@ -484,15 +484,12 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
       showError('Devserver port must be a number between 1 and 65535.');
       return;
     }
-    if (existing) {
-      // Edit mode persists through `update_devserver`, wired alongside the
-      // devserver row's Edit entry. Until that entry exists no caller passes
-      // `existing`, so this branch only guards the parameterized form.
-      showError('Editing a devserver is not available yet.');
-      return;
-    }
     try {
-      await invoke('add_devserver', { host, port, script, label });
+      if (existing) {
+        await invoke('update_devserver', { id: existing.id, host, port, script, label });
+      } else {
+        await invoke('add_devserver', { host, port, script, label });
+      }
     } catch (e) {
       showError(e);
       return;
@@ -592,7 +589,7 @@ function render(workspaces, devservers = []) {
 
   bindRowEvents();
   if (grouped) {
-    bindDevserverSectionEvents();
+    bindDevserverSectionEvents(devservers);
     // Fill the connected sections' workspace rows right after layout; the
     // periodic interval keeps them fresh thereafter.
     pollDevserverWorkspaces().catch(() => {});
@@ -608,6 +605,11 @@ function renderDevserverSection(ds) {
   const endpoint = `${ds.host}:${ds.port}`;
   const connectAct = ds.connected ? 'disconnect-devserver' : 'connect-devserver';
   const connectLabel = ds.connected ? 'Disconnect' : 'Connect';
+  // Edit changes the connection recipe, which must not move under a live
+  // connection, so it appears only while disconnected.
+  const editBtn = ds.connected
+    ? ''
+    : `<button class="btn ws-group-btn" data-act="edit-devserver" type="button">Edit</button>`;
   const body = ds.connected
     ? `<div class="ds-workspaces"><p class="nw-muted ws-group-pending">Loading workspaces...</p></div>`
     : `<p class="nw-muted ws-group-pending">Not connected.</p>`;
@@ -619,6 +621,7 @@ function renderDevserverSection(ds) {
         <span class="ws-group-sub">${escapeHtml(endpoint)}</span>
         <span class="ws-group-actions">
           <button class="btn ws-group-btn" data-act="${connectAct}" type="button">${connectLabel}</button>
+          ${editBtn}
           <button class="btn danger ws-group-btn" data-act="forget-devserver" type="button"
                   title="Forget this devserver">Forget</button>
         </span>
@@ -634,16 +637,28 @@ function renderDevserverWorkspaceRow(ws) {
     <tr data-ds-prefix="${escapeAttr(ws.prefix)}" data-url="${escapeAttr(ws.url)}">
       <td><span class="conn-dot on" title="Workspace"></span></td>
       <td class="path-cell where-cell remote-cell" title="${escapeAttr(ws.path)}">${ICON_OUTBOUND}<span class="where-text">${escapeHtml(ws.label || ws.path)}</span></td>
-      <td><div class="row-actions"><button class="btn primary" data-act="open-ds-ws">Open</button></div></td>
+      <td><div class="row-actions">
+        <button class="btn primary" data-act="open-ds-ws">Open</button>
+        <button class="btn danger" data-act="forget-ds-ws" title="Forget: unmount from the devserver">Forget</button>
+      </div></td>
     </tr>`;
 }
 
-/// Wire the Connect/Disconnect and Forget buttons on each `[DEVSERVER]`
-/// section. Connect acquires the devserver token and opens a terminal;
-/// Disconnect drops the connection; Forget removes the persisted devserver.
-function bindDevserverSectionEvents() {
+/// Wire the Connect/Disconnect, Edit, and Forget buttons on each
+/// `[DEVSERVER]` section. Connect acquires the devserver token and opens a
+/// terminal; Disconnect drops the connection; Edit (disconnected-only) opens
+/// the form pre-filled; Forget removes the persisted devserver.
+function bindDevserverSectionEvents(devservers) {
+  const byId = Object.fromEntries((devservers || []).map((d) => [d.id, d]));
   main.querySelectorAll('section[data-devserver-id]').forEach((section) => {
     const id = section.dataset.devserverId || '';
+    const edit = section.querySelector('[data-act="edit-devserver"]');
+    if (edit) {
+      edit.addEventListener('click', () => {
+        const ds = byId[id];
+        if (ds) showNewWorkspaceDialog('devserver', ds);
+      });
+    }
     const forget = section.querySelector('[data-act="forget-devserver"]');
     if (forget) {
       forget.addEventListener('click', async () => {
@@ -730,6 +745,20 @@ async function pollDevserverWorkspaces() {
           } catch (e) {
             showError(e);
           }
+        });
+      }
+      const forget = tr.querySelector('[data-act="forget-ds-ws"]');
+      if (forget) {
+        forget.addEventListener('click', async () => {
+          try {
+            await invoke('forget_devserver_workspace', { id, prefix: tr.dataset.dsPrefix });
+          } catch (e) {
+            showError(e);
+            return;
+          }
+          // Force the next poll to re-render the now-shorter list.
+          lastDevserverRowsJson[id] = null;
+          await pollDevserverWorkspaces();
         });
       }
     });
