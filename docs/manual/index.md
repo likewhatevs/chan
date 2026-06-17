@@ -12,6 +12,7 @@ Start here:
 - [Terminal](terminal.md)
 - [Tunnel basics](tunnel.md)
 - [Chan Desktop and remote workspaces](desktop.md)
+- [Devserver (many workspaces on one box)](devserver.md)
 - [Chan Gateway (self-hosted tunnel)](gateway.md)
 - [Upgrade and troubleshooting](upgrade-and-troubleshooting.md)
 

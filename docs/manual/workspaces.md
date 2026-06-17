@@ -40,7 +40,7 @@ chan devserver --bind 127.0.0.1 --port 8787
 
 With a devserver running, a `chan serve PATH` on that same box registers its workspace with the devserver and exits instead of binding its own port, so one process owns each workspace. `chan serve --standalone PATH` opts out and binds its own server as before. The devserver remembers which workspaces were mounted and brings them back when it restarts.
 
-There is no TLS and only a bearer-token gate, so keep the bind on loopback and reach a remote devserver over an `ssh -L` tunnel rather than binding it on a public interface. Chan Desktop attaches to a devserver and lists its workspaces in their own group (see [Chan Desktop](desktop.md)).
+There is no TLS and only a bearer-token gate, so keep the bind on loopback and reach a remote devserver over an `ssh -L` tunnel rather than binding it on a public interface. Chan Desktop attaches to a devserver and lists its workspaces in their own group (see [Chan Desktop](desktop.md)). For keeping a Linux devserver running across logout (`--systemd`) and reaching it from the desktop at `localhost` through a lima VM, an sdme container, or `ssh -L`, see [Devserver](devserver.md).
 
 ## Workspace contents
 

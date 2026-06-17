@@ -46,7 +46,7 @@ A Lima VM on a Mac is a convenient remote: it is a real Linux host reachable fro
 
 ## Devservers
 
-A devserver is a `chan devserver` running on a box that hosts many workspaces behind one port (see [workspaces](workspaces.md)). Chan Desktop attaches to it and lists its workspaces in their own launcher group.
+A devserver is a `chan devserver` running on a box that hosts many workspaces behind one port (see [workspaces](workspaces.md)). Chan Desktop attaches to it and lists its workspaces in their own launcher group. For running the devserver on Linux across logout (`--systemd`) and reaching it from the desktop at `localhost` through a lima VM, an sdme container, or `ssh -L`, see [Devserver](devserver.md).
 
 1. New -> Devserver, and fill in the host and port. An optional script runs to bring the devserver up before the desktop dials it, for example `ssh user@box -L 8787:localhost:8787 chan devserver --bind 127.0.0.1 --port 8787`. Adding a devserver connects to it right away.
 
