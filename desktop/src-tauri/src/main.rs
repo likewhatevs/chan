@@ -870,12 +870,34 @@ async fn wait_for_devserver(host: &str, port: u16) -> Result<devserver::Devserve
     ))
 }
 
+/// Poll a control terminal's output until the connect script's devserver
+/// prints its `token=` line, or the budget runs out. The script may take a
+/// moment, or prompt for credentials in the terminal, so the wait is
+/// generous.
+async fn scrape_control_terminal_token(state: &AppState, prefix: &str) -> Result<String, String> {
+    let Some(embedded) = state.embedded.get() else {
+        return Err("embedded local server is unavailable".to_string());
+    };
+    const MAX_ATTEMPTS: usize = 40;
+    const BACKOFF: std::time::Duration = std::time::Duration::from_millis(1500);
+    for _ in 0..MAX_ATTEMPTS {
+        if let Some(token) = devserver::scrape_token(&embedded.read_control_terminal_output(prefix))
+        {
+            return Ok(token);
+        }
+        tokio::time::sleep(BACKOFF).await;
+    }
+    Err("the devserver did not print its token in the control terminal in time".to_string())
+}
+
 /// Connect to a configured devserver: run its connect script in a control
-/// terminal (when one is set), wait for the devserver to answer, acquire its
-/// bearer token, record the connection, open a standalone terminal on it,
-/// then tuck the control terminal away. On a local-loopback connection the
-/// token is read from the devserver's own `~/.chan/devserver/config.json`.
-/// Once connected the launcher polls the devserver's workspace list.
+/// terminal (when one is set), acquire its bearer token, confirm it answers,
+/// record the connection, open a standalone terminal on it, then tuck the
+/// control terminal away. When a script ran it, the token is scraped from the
+/// control terminal's output (so a remote devserver whose config the desktop
+/// cannot read still works); with no script, the devserver runs locally and
+/// the token comes from its `~/.chan/devserver/config.json`. Once connected
+/// the launcher polls the devserver's workspace list.
 #[tauri::command]
 async fn connect_devserver(
     app: tauri::AppHandle,
@@ -894,13 +916,17 @@ async fn connect_devserver(
     // A configured script runs in a control terminal that brings the
     // devserver up; with no script the devserver is expected to be running
     // already.
-    let control_label = if script.trim().is_empty() {
+    let control = if script.trim().is_empty() {
         None
     } else {
         Some(
             serve::spawn_control_terminal_window(app.clone(), Arc::clone(&state), &id, script)
                 .await?,
         )
+    };
+    let token = match &control {
+        Some(ct) => scrape_control_terminal_token(&state, &ct.prefix).await?,
+        None => devserver::read_local_token()?,
     };
     let info = wait_for_devserver(&host, port).await?;
     if info.protocol != devserver::DEVSERVER_API_PROTOCOL {
@@ -915,7 +941,6 @@ async fn connect_devserver(
         label = %info.host_label,
         "connected to devserver"
     );
-    let token = devserver::read_local_token()?;
     let conn = devserver::DevserverConn { host, port, token };
     let terminal_url = devserver::open_terminal(&conn).await?;
     state.devservers.set(id.clone(), conn);
@@ -924,8 +949,8 @@ async fn connect_devserver(
     track_devserver_window(&state, &id, terminal_window_id);
     // The connection is up and its terminal is open, so put the control
     // terminal away; the user can reopen it from the Window menu.
-    if let Some(label) = control_label {
-        serve::hide_and_bury_window(&app, &label);
+    if let Some(ct) = control {
+        serve::hide_and_bury_window(&app, &ct.label);
     }
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(())

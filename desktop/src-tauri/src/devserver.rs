@@ -181,6 +181,25 @@ pub fn read_local_token() -> Result<String, String> {
     Ok(cfg.devserver_token)
 }
 
+/// Scrape the devserver bearer token from a control terminal's output. The
+/// devserver prints one line per start, `chan devserver: bind=<addr>
+/// token=<token>`, so the desktop can recover the token even for a remote
+/// devserver whose config file it cannot read.
+///
+/// `output` is raw PTY bytes (decoded lossily), so it carries ANSI escapes
+/// and possibly several `token=` occurrences across restarts. Take the LAST
+/// one and read the url-safe token run after it, which stops at the first
+/// non-token byte (whitespace, an ANSI escape, end of line).
+pub fn scrape_token(output: &str) -> Option<String> {
+    output.rmatch_indices("token=").find_map(|(i, marker)| {
+        let token: String = output[i + marker.len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        (!token.is_empty()).then_some(token)
+    })
+}
+
 /// `GET /api/devserver/info`: unauthenticated, used to confirm the devserver
 /// is up and read its version and label.
 pub async fn fetch_info(host: &str, port: u16) -> Result<DevserverInfo, String> {
@@ -352,6 +371,31 @@ mod tests {
         let term: MountedTerminal = serde_json::from_str(json).unwrap();
         assert_eq!(term.prefix, "/api/terminal-9z");
         assert_eq!(term.token, "tok_term");
+    }
+
+    #[test]
+    fn scrape_token_reads_the_devserver_line() {
+        let out = "some boot noise\nchan devserver: bind=127.0.0.1:8787 token=tok_abc123\n$ ";
+        assert_eq!(scrape_token(out).as_deref(), Some("tok_abc123"));
+    }
+
+    #[test]
+    fn scrape_token_takes_the_last_occurrence_across_restarts() {
+        let out = "chan devserver: bind=… token=old_TOKEN\n[restart]\nchan devserver: bind=… token=new-TOKEN_2\n";
+        assert_eq!(scrape_token(out).as_deref(), Some("new-TOKEN_2"));
+    }
+
+    #[test]
+    fn scrape_token_stops_at_ansi_or_whitespace() {
+        // Raw PTY bytes carry ANSI; the token run stops at the escape byte.
+        let out = "chan devserver: token=tok_xyz\x1b[0m extra";
+        assert_eq!(scrape_token(out).as_deref(), Some("tok_xyz"));
+    }
+
+    #[test]
+    fn scrape_token_none_when_absent_or_empty() {
+        assert_eq!(scrape_token("no token here\n$ "), None);
+        assert_eq!(scrape_token("token= \nnext"), None);
     }
 
     #[test]

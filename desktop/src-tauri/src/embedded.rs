@@ -204,7 +204,10 @@ impl EmbeddedServer {
     /// terminal running one devserver's connect script stays separate
     /// from the shared standalone-terminal tenant and from other control
     /// terminals.
-    pub async fn open_terminal_with_command(&self, command: String) -> Result<String, String> {
+    pub async fn open_terminal_with_command(
+        &self,
+        command: String,
+    ) -> Result<(String, String), String> {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let prefix = format!("/control-{}", SEQ.fetch_add(1, Ordering::Relaxed));
         let hosted = self
@@ -212,7 +215,14 @@ impl EmbeddedServer {
             .open_terminal_session_with_command(serve_config(self.addr, &prefix), Some(command))
             .await
             .map_err(|e| format!("opening a command terminal tenant: {e}"))?;
-        Ok(hosted.handle.launch_url())
+        Ok((hosted.handle.launch_url(), prefix))
+    }
+
+    /// Raw output (replay-ring scrollback) of the control-terminal tenant
+    /// mounted at `prefix`, decoded lossily. Lets the connect flow scrape a
+    /// token the connect script printed; empty when no such tenant exists.
+    pub fn read_control_terminal_output(&self, prefix: &str) -> String {
+        String::from_utf8_lossy(&self.host.terminal_tenant_scrollback(prefix)).into_owned()
     }
 }
 

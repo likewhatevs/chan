@@ -326,6 +326,14 @@ pub async fn spawn_local_terminal_window(
     Ok(label)
 }
 
+/// A spawned control terminal: its window label (to tuck away / track) and
+/// its terminal tenant prefix (to scrape the token the connect script
+/// prints).
+pub struct ControlTerminal {
+    pub label: String,
+    pub prefix: String,
+}
+
 /// Spawn a control terminal: a standalone terminal window whose PTY runs a
 /// devserver's connect script. The script brings the devserver up, possibly
 /// over an interactive ssh session whose prompts the user answers in the
@@ -336,11 +344,11 @@ pub async fn spawn_control_terminal_window(
     state: Arc<AppState>,
     devserver_id: &str,
     script: String,
-) -> Result<String, String> {
+) -> Result<ControlTerminal, String> {
     let Some(embedded) = state.embedded.get() else {
         return Err("embedded local server is unavailable".to_string());
     };
-    let url = embedded.open_terminal_with_command(script).await?;
+    let (url, prefix) = embedded.open_terminal_with_command(script).await?;
     let label = control_terminal_label(devserver_id);
     build_workspace_window(
         &app,
@@ -355,7 +363,7 @@ pub async fn spawn_control_terminal_window(
             kind: Some("terminal"),
         },
     )?;
-    Ok(label)
+    Ok(ControlTerminal { label, prefix })
 }
 
 /// Stable window label for a devserver's control terminal.
