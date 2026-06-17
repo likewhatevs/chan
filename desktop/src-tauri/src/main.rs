@@ -93,6 +93,10 @@ pub struct AppState {
     /// can open its tenants); absent means disconnected. In memory only:
     /// the bearer token rotates, so it is re-acquired on each connect.
     pub devservers: devserver::DevserverConns,
+    /// Outbound window ids the desktop opened for each devserver (its
+    /// standalone terminal and workspace tenants), keyed by `Devserver.id`.
+    /// Tracked so disconnecting a devserver tears down exactly its windows.
+    pub devserver_windows: Mutex<HashMap<String, Vec<String>>>,
     /// Set when the user confirmed the quit dialog: the re-fired
     /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
     /// must pass instead of prompting again.
@@ -814,6 +818,34 @@ fn devserver_terminal_window_id(id: &str) -> String {
     format!("devserver-{id}-terminal")
 }
 
+/// Record an outbound window id the desktop opened for a devserver, so a
+/// later disconnect can tear it down.
+fn track_devserver_window(state: &AppState, id: &str, window_id: String) {
+    state
+        .devserver_windows
+        .lock()
+        .unwrap()
+        .entry(id.to_string())
+        .or_default()
+        .push(window_id);
+}
+
+/// Close every window the desktop opened for a devserver (its standalone
+/// terminal, its workspace tenants, and its control terminal) and forget the
+/// tracking. Best-effort: a window the user already closed is a no-op.
+fn teardown_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str) {
+    let window_ids = state
+        .devserver_windows
+        .lock()
+        .unwrap()
+        .remove(id)
+        .unwrap_or_default();
+    for window_id in window_ids {
+        serve::close_outbound_workspace_windows(app, &window_id);
+    }
+    serve::close_window_by_label(app, &serve::control_terminal_label(id));
+}
+
 /// Poll a devserver's info endpoint until it answers or the budget runs out.
 /// The connect script may take a moment to bring the devserver up, or prompt
 /// for credentials in the control terminal, so the wait is generous; a
@@ -887,11 +919,9 @@ async fn connect_devserver(
     let conn = devserver::DevserverConn { host, port, token };
     let terminal_url = devserver::open_terminal(&conn).await?;
     state.devservers.set(id.clone(), conn);
-    serve::spawn_outbound_workspace_window(
-        &app,
-        &devserver_terminal_window_id(&id),
-        &terminal_url,
-    )?;
+    let terminal_window_id = devserver_terminal_window_id(&id);
+    serve::spawn_outbound_workspace_window(&app, &terminal_window_id, &terminal_url)?;
+    track_devserver_window(&state, &id, terminal_window_id);
     // The connection is up and its terminal is open, so put the control
     // terminal away; the user can reopen it from the Window menu.
     if let Some(label) = control_label {
@@ -901,9 +931,10 @@ async fn connect_devserver(
     Ok(())
 }
 
-/// Disconnect from a devserver: drop the live connection so its section
-/// returns to the connect affordance. Open tenant windows keep running until
-/// the user closes them.
+/// Disconnect from a devserver: drop the live connection and tear down the
+/// windows it opened (standalone terminal, workspace tenants, control
+/// terminal), so its section returns to the connect affordance with no orphan
+/// windows left pointing at a server the desktop no longer talks to.
 #[tauri::command]
 fn disconnect_devserver(
     app: tauri::AppHandle,
@@ -911,6 +942,7 @@ fn disconnect_devserver(
     id: String,
 ) -> Result<(), String> {
     state.devservers.remove(&id);
+    teardown_devserver_windows(&app, &state, &id);
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(())
 }
@@ -931,14 +963,19 @@ async fn list_devserver_workspaces(
 
 /// Open a devserver workspace tenant in a webview. `url` is the assembled
 /// tenant URL from `list_devserver_workspaces`; `prefix` keys the window so
-/// reopening restores its layout.
+/// reopening restores its layout. The window is tracked under `id` so a
+/// disconnect tears it down with the rest of the devserver's windows.
 #[tauri::command]
 fn open_devserver_workspace(
     app: tauri::AppHandle,
+    state: State<Arc<AppState>>,
+    id: String,
     prefix: String,
     url: String,
 ) -> Result<(), String> {
-    serve::spawn_outbound_workspace_window(&app, &prefix, &url).map(|_| ())
+    serve::spawn_outbound_workspace_window(&app, &prefix, &url)?;
+    track_devserver_window(&state, &id, prefix);
+    Ok(())
 }
 
 /// Update a devserver's connection recipe (host/port/script/label), from the
@@ -1005,8 +1042,8 @@ async fn forget_devserver_workspace(
     devserver::forget_workspace(&conn, &prefix).await
 }
 
-/// Forget a devserver: drops any live connection and removes the persisted
-/// connection recipe so its launcher section disappears.
+/// Forget a devserver: drops any live connection, tears down its windows, and
+/// removes the persisted connection recipe so its launcher section disappears.
 #[tauri::command]
 fn remove_devserver(
     app: tauri::AppHandle,
@@ -1014,6 +1051,7 @@ fn remove_devserver(
     id: String,
 ) -> Result<(), String> {
     state.devservers.remove(&id);
+    teardown_devserver_windows(&app, &state, &id);
     {
         let mut store = state.store.lock().unwrap();
         let mut cfg = store.get().map_err(err)?;
@@ -1782,6 +1820,7 @@ fn main() {
         buried_windows: Mutex::new(Vec::new()),
         remote_reopen: Mutex::new(HashMap::new()),
         devservers: devserver::DevserverConns::default(),
+        devserver_windows: Mutex::new(HashMap::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
     });

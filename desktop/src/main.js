@@ -741,7 +741,7 @@ async function pollDevserverWorkspaces() {
       if (open) {
         open.addEventListener('click', async () => {
           try {
-            await invoke('open_devserver_workspace', { prefix: tr.dataset.dsPrefix, url: tr.dataset.url });
+            await invoke('open_devserver_workspace', { id, prefix: tr.dataset.dsPrefix, url: tr.dataset.url });
           } catch (e) {
             showError(e);
           }

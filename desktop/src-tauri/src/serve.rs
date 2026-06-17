@@ -1018,6 +1018,19 @@ pub fn close_outbound_workspace_windows(app: &AppHandle, id: &str) {
     close_windows_with_prefix(app, &outbound_window_prefix(id))
 }
 
+/// Destroy a window by its exact label, if it exists. Best-effort; used to
+/// tear down a devserver's control terminal on disconnect. Window operations
+/// run on the main thread.
+pub fn close_window_by_label(app: &AppHandle, label: &str) {
+    let app_owned = app.clone();
+    let label = label.to_string();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(w) = app_owned.get_webview_window(&label) {
+            let _ = w.destroy();
+        }
+    });
+}
+
 fn close_windows_with_prefix(app: &AppHandle, prefix: &str) {
     let app_owned = app.clone();
     let prefix_owned = prefix.to_string();
