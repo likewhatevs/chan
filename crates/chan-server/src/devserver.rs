@@ -90,19 +90,38 @@ impl DevserverStore {
     }
 
     fn save(&self, cfg: &PersistedConfig) -> std::io::Result<()> {
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
+        let dir = match self.path.parent() {
+            Some(dir) => {
+                std::fs::create_dir_all(dir)?;
+                dir
+            }
+            None => Path::new("."),
+        };
         let bytes = serde_json::to_vec_pretty(cfg)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, &bytes)?;
+        // Write + fsync the tmp so its bytes are durable BEFORE the rename:
+        // renaming un-synced data is exactly the partial-config risk on a
+        // crash or power loss.
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(&bytes)?;
+            f.sync_all()?;
+        }
+        // 0600 on the tmp, before the rename, so the token file is never
+        // visible at its final path with looser permissions.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
         }
         std::fs::rename(&tmp, &self.path)?;
+        // fsync the parent directory so the new dirent survives a crash too;
+        // POSIX permits the rename to be lost otherwise. Matches the
+        // gold-standard `atomic_write`. Best-effort: durability hardening, not
+        // a reason to fail a save the rename already committed.
+        let _ = chan_workspace::fs_ops::sync_dir(dir);
         Ok(())
     }
 }
@@ -270,8 +289,20 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         .await
         .with_context(|| format!("binding devserver on {}", config.addr))?;
     println!("chan devserver: listening on http://{}", config.addr);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+
+    // Shutdown wiring mirrors `serve()`: a single watch channel fed by
+    // SIGINT/SIGTERM, plus a side task that cancels every tenant's in-flight
+    // reindex so the per-workspace flocks release promptly. `graceful_serve`
+    // owns the signal watcher and the hard drain deadline.
+    let signal_tx = Arc::new(tokio::sync::watch::channel(false).0);
+    let cancel_host = host.clone();
+    let mut cancel_rx = signal_tx.subscribe();
+    tokio::spawn(async move {
+        let _ = cancel_rx.changed().await;
+        cancel_host.cancel_all_reindex();
+    });
+
+    crate::signal::graceful_serve(listener, app, signal_tx)
         .await
         .context("running devserver")?;
     Ok(())
@@ -335,10 +366,6 @@ fn start_discovery_listener(
             None
         }
     }
-}
-
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -569,6 +596,9 @@ mod tests {
         let loaded = store.load();
         assert_eq!(loaded.devserver_token, "abc");
         assert_eq!(loaded.enabled_workspaces, vec!["/x".to_string()]);
+        // The atomic tmp+rename leaves no tmpfile behind after a save.
+        let tmp = dir.path().join("nested").join("config.json.tmp");
+        assert!(!tmp.exists(), "leftover tmpfile: {}", tmp.display());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

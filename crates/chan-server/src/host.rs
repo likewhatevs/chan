@@ -401,6 +401,13 @@ impl WorkspaceHost {
     /// sends the shared shutdown signal before dropping the runtime,
     /// so active WebSockets and terminal sessions get a clean exit
     /// path.
+    ///
+    /// This does NOT synchronously reap the tenant's PTYs: the shutdown
+    /// signal lets the per-tenant prune task close them on its own schedule.
+    /// That is fine for a workspace tenant (the devserver only mounts
+    /// workspaces through this), but a terminal-only tenant whose PTY must
+    /// stop at once — a control terminal running a connect script — should be
+    /// closed with [`close_terminal_tenant`](Self::close_terminal_tenant).
     pub fn close_workspace(&self, prefix: &str) -> Result<bool, Error> {
         let prefix = sanitize_prefix(prefix).map_err(Error::Config)?;
         let runtime = {
@@ -472,6 +479,28 @@ impl WorkspaceHost {
             wait_for_workspace_release(&weak);
         }
         Ok(true)
+    }
+
+    /// Cancel any in-flight reindex on every mounted tenant.
+    ///
+    /// On shutdown the devserver calls this so each tenant's blocking reindex
+    /// drops its `Arc<Workspace>` at the next per-file cancel check, releasing
+    /// the per-workspace flock promptly instead of waiting for the rebuild to
+    /// run to completion. Mirrors the single-tenant `indexer.cancel()` in
+    /// [`clear_workspace_cell`]. Read-only over the map and best-effort per
+    /// tenant: a poisoned cell or a terminal tenant (no workspace cell) is
+    /// skipped.
+    pub fn cancel_all_reindex(&self) {
+        let Ok(workspaces) = self.workspaces.read() else {
+            return;
+        };
+        for runtime in workspaces.values() {
+            if let Ok(cell) = runtime.artifacts.workspace_cell.read() {
+                if let Some(cell) = cell.as_ref() {
+                    cell.indexer.cancel();
+                }
+            }
+        }
     }
 
     /// Snapshot the mounted prefixes.
@@ -1054,6 +1083,38 @@ mod tests {
         assert!(!host
             .close_terminal_tenant("/absent")
             .expect("absent close is false"));
+    }
+
+    #[tokio::test]
+    async fn cancel_all_reindex_is_safe_across_tenants() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root_a = tempfile::tempdir().expect("workspace a");
+        let root_b = tempfile::tempdir().expect("workspace b");
+        std::fs::write(root_a.path().join("a.md"), "# A\n").expect("write a");
+        std::fs::write(root_b.path().join("b.md"), "# B\n").expect("write b");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root_a.path()).expect("register a");
+        lib.register_workspace(root_b.path()).expect("register b");
+        let host = Arc::new(WorkspaceHost::new(lib));
+        host.open_registered_workspace(root_a.path(), serve_config("/a"))
+            .await
+            .expect("open a");
+        host.open_registered_workspace(root_b.path(), serve_config("/b"))
+            .await
+            .expect("open b");
+        // A terminal tenant has no workspace cell; cancelling must skip it
+        // without panicking.
+        host.open_terminal_session(serve_config("/term"))
+            .await
+            .expect("open terminal tenant");
+
+        // Cancels every workspace tenant's indexer across the map.
+        host.cancel_all_reindex();
+
+        // Idempotent: still a no-op after a tenant is closed, and with an
+        // empty map.
+        assert!(host.close_workspace("/a").expect("close a"));
+        host.cancel_all_reindex();
     }
 
     #[test]

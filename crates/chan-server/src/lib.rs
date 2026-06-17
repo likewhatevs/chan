@@ -97,7 +97,9 @@ use routes::{
     api_semantic_disable, api_semantic_download, api_semantic_enable, api_semantic_model_patch,
     api_semantic_models, api_semantic_state,
 };
-use signal::{now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher};
+use signal::{
+    graceful_serve, now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher,
+};
 use state::{AppState, WorkspaceCell};
 use static_assets::{serve_font, serve_static};
 use terminal_sessions::{Registry as TerminalRegistry, RegistryConfig as TerminalRegistryConfig};
@@ -1108,19 +1110,17 @@ pub async fn serve(
     // channel itself was created inside build_app so AppState (for
     // ws_pump and other long-lived handlers) shares the same signal.
     let signal_tx = artifacts.shutdown_tx;
-    let mut signal_rx = signal_tx.subscribe();
 
     if let Some(timeout) = config.idle_timeout {
         spawn_idle_watcher(timeout, last_activity.clone(), signal_tx.clone());
     }
-    spawn_signal_watcher(signal_tx.clone());
 
     // Side task: when the shutdown signal fires, cancel any in-flight
     // reindex. The flag is checked at per-file boundaries inside
     // `Workspace::reindex`, so the blocking task lands within at most one
     // file's worth of work and the runtime drop can return cleanly.
     let cancel_workspace_cell = workspace_cell.clone();
-    let mut cancel_rx = signal_rx.clone();
+    let mut cancel_rx = signal_tx.subscribe();
     tokio::spawn(async move {
         let _ = cancel_rx.changed().await;
         if let Ok(cell) = cancel_workspace_cell.read() {
@@ -1130,29 +1130,12 @@ pub async fn serve(
         }
     });
 
-    let mut graceful_rx = signal_rx.clone();
-    let server_future = axum::serve(listener, app).with_graceful_shutdown(async move {
-        let _ = graceful_rx.changed().await;
-    });
-
-    // Hard deadline after the shutdown signal: long-lived WebSocket
-    // subscribers won't return on their own, so axum's graceful
-    // drain alone could hang forever. We `select!` the server
-    // future against "signal fired, then sleep GRACE seconds" and
-    // force exit on grace expiry. tokio drops in-flight tasks when
-    // we return.
-    const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
-    tokio::select! {
-        res = server_future => {
-            res.map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
-        }
-        _ = async move {
-            let _ = signal_rx.changed().await;
-            tokio::time::sleep(SHUTDOWN_GRACE).await;
-        } => {
-            eprintln!("chan: graceful shutdown exceeded {SHUTDOWN_GRACE:?}; forcing exit");
-        }
-    }
+    // Shared drain: spawns the SIGINT/SIGTERM watcher, hands axum the
+    // graceful-shutdown receiver, and force-exits after the grace window so
+    // a lingering WebSocket can't hang the process.
+    graceful_serve(listener, app, signal_tx)
+        .await
+        .map_err(Error::Io)?;
     Ok(())
 }
 
