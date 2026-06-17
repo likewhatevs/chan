@@ -64,7 +64,7 @@ Out of scope:
 
 ### Library
 
-Per-machine singleton-in-practice. Owns the `Registry` (`Mutex<Registry>` intra-process), the config-file path, and the default workspace root. `open_workspace` looks up the registry row for the caller's path and constructs a `Workspace` keyed by the row's `metadata_key`, holding the cross-process writer lock for its lifetime.
+Per-machine singleton-in-practice. Owns the `Registry` (`Mutex<Registry>` intra-process), the config-file path, and the directory-name blocklist for indexing walks. `open_workspace` looks up the registry row for the caller's path and constructs a `Workspace` keyed by the row's `metadata_key`, holding the cross-process writer lock for its lifetime.
 
 Each registry row carries the canonical `root_path`, a stable `metadata_key`, and timestamps. The key is derived from the first registered path as a readable path slug plus an 8-hex sha256 suffix, and is preserved across `Library::move_workspace`. All per-workspace sidecar paths (graph DB, search index, sessions, tokens, trash, report) live under `~/.chan/workspaces/<metadata_key>/`. Consequences:
 
@@ -688,8 +688,8 @@ Apart from the drafts directory (deliberate, user-visible, configurable), chan-w
 
 ```
 ~/.chan/                          (config_dir on desktop)
-  config.toml                     workspace registry, default workspace
-                                  root, index_excluded_dirs, drafts_dir
+  config.toml                     workspace registry, index_excluded_dirs,
+                                  drafts_dir
   workspaces/<metadata_key>/          per-workspace metadata root
     sessions/                     opaque session blobs
     graph/graph.sqlite            graph DB

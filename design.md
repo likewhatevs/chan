@@ -76,11 +76,12 @@ Subcommand surface today:
 chan add PATH [--semantic-search] [--reports]
 chan list [--json]
 chan remove PATH
-chan serve [PATH] [--here] [--host|-4|-6] [--port] [--prefix]
-           [--timeout] [--no-token] [--no-browser]
+chan serve PATH [--here] [--host|-4|-6] [--port] [--prefix]
+           [--timeout] [--no-token] [--no-browser] [--standalone]
            [--no-settings] [--search-aggression]
            [--tunnel-url] [--tunnel-token] [--tunnel-workspace-name]
            [--tunnel-public]
+chan devserver [--bind IP] [--port N] [--systemd]
 chan index <rebuild|status|set-model|download-model|list-models|
             enable-semantic|disable-semantic>
 chan reports <...>                  per-workspace code-report toggle
@@ -94,6 +95,8 @@ chan contacts import csv FILE --into DIR
 chan shell <action>                 the `cs` surface (see below)
 chan completions SHELL
 ```
+
+`chan serve` requires an explicit workspace root: with no path it exits with a hint to pass one (there is no default-workspace serving). An explicit path auto-registers, so `chan serve /some/dir` works without a prior `chan add`. On Linux and macOS, if a devserver is running on the box, `chan serve PATH` registers the workspace with it over the discovery socket and exits instead of binding its own listener; `--standalone` forces a standalone bind and skips both the devserver registration and the desktop handoff. `chan devserver` runs the aggregator those registrations attach to (see "Devserver and the multi-workspace host" below).
 
 `chan shell` drives the chan window that spawned the current terminal through the server's control socket (`$CHAN_WINDOW_ID` + `$CHAN_CONTROL_SOCKET`). A user-created `cs -> chan` symlink on PATH is the short form: argv[0] rewriting maps `cs <action>` to `chan shell <action>`. The action surface (open, graph, dashboard, terminal, window, ...) lives in chan-shell.
 
@@ -112,6 +115,14 @@ auth.rs              per-launch bearer token + axum middleware
 bus.rs               watcher/progress bridge into the WS broadcast
 config.rs            ServerConfig (server.toml)
 control_socket.rs    first-party control socket for local `cs` helpers
+devserver.rs         headless multi-workspace devserver runtime: binds a
+                     WorkspaceHost, mounts the /api/devserver/* management
+                     API + the CLI discovery socket, persists what is
+                     mounted across restarts
+devserver_api.rs     devserver management-API wire contract (versioned
+                     HTTP/JSON a desktop client drives)
+devserver_handoff.rs CLI-to-devserver workspace registration over a
+                     well-known per-user Unix socket
 embed_seed.rs        extract the baked-in model bundle on first launch
 error.rs             Error + err_*() response builders
 handoff.rs           macOS CLI-to-desktop workspace handoff (per-user
@@ -223,6 +234,17 @@ Single-page-app fallback: any path that isn't an `/api` route, a `/ws` upgrade, 
 
 Both paths install signal watchers (SIGINT / SIGTERM on Unix, Ctrl-C on Windows) that fire a single `tokio::sync::watch` channel the server future drains on. A side task uses the same channel to cancel any in-flight reindex so the runtime drop returns within at most one file's worth of work. After the signal fires, both paths race the server future against a 10-second grace timer and force exit on grace expiry.
 
+## Devserver and the multi-workspace host
+
+`WorkspaceHost` (`crates/chan-server/src/host.rs`) is an in-process owner that mounts several workspaces behind one runtime instead of one `chan serve` child per workspace. It is a thin owner around the existing per-workspace server: each mounted workspace builds its own `AppState`, watcher, indexer, MCP bridge, control socket, terminal registry, and route prefix, and the host dispatches by URL prefix without sharing route state across tenants. Two embedders use it. chan-desktop embeds a `WorkspaceHost` for local workspaces (see [`desktop/design.md`](desktop/design.md)). `chan devserver` (`crates/chan-server/src/devserver.rs`, `run_devserver`) binds one to a real address as a headless multi-workspace aggregator for boxes reached over SSH or a LAN.
+
+The devserver wraps the host in two surfaces:
+
+- A management HTTP/JSON API under the reserved `/api/devserver/*` namespace; `devserver_api.rs` is the versioned wire contract. It lists, mounts, and forgets workspaces and opens standalone terminals. Every workspace tenant mounts under a non-empty, legible prefix below `/api/`, so the management router answers first and an unmatched path falls through to the per-tenant router.
+- A per-user Unix discovery socket (`devserver_handoff.rs`). When a devserver is running on a box, a `chan serve PATH` there registers its workspace with the running devserver and exits instead of binding a second listener, so the devserver keeps the single-writer flock. Discovery is a well-known per-user endpoint (not the per-pid MCP / control sockets) and is a second endpoint alongside the macOS desktop handoff (`handoff.rs`); a box can run a devserver, a desktop, both, or neither. It is Unix-only: other targets resolve to "no devserver" and the CLI stays standalone. The registration handshake carries a protocol version, and a mismatch falls back to standalone rather than decoding an unknown shape. `chan serve --standalone` forces a standalone bind and skips both the devserver registration and the desktop handoff.
+
+What was mounted survives a restart. The enabled workspace roots and the devserver bearer token persist in `~/.chan/devserver/config.json` (0600); the enabled set is re-mounted on the next start, and the reused token keeps a reconnecting client working. Per-window pane and tab layout is not persisted by the devserver: each tenant is a full workspace mount that stores its own per-window SPA session, so a reconnecting client re-hydrates its panes from the tenant. Terminal PTY contents reset across a restart because PTYs are fresh processes.
+
 ## On-disk layout
 
 `chan-workspace` owns the per-workspace state and registry. See [`crates/chan-workspace/design.md`](crates/chan-workspace/design.md).
@@ -237,6 +259,7 @@ App-level state that lives outside chan-workspace:
   + last-known-latest tag for the self-upgrade banner.
 - MCP socket: `/tmp/chan-mcp-<pid>-<8 hex>.sock`. Created at boot, unlinked when `serve()` returns.
 - Control socket: `/tmp/chan-control-<pid>-<suffix>.sock`. The first-party `cs` transport; exported to embedded-terminal PTYs as `CHAN_CONTROL_SOCKET`. Same boot/teardown lifecycle as the MCP socket.
+- Devserver state: `~/.chan/devserver/config.json`, mode 0600 (it holds the devserver bearer token). Written atomically through a temp file plus rename. Carries the reused bearer token and the enabled workspace roots so `chan devserver` re-mounts them on the next start.
 
 Both TOML config files round-trip through `crate::store::{load_toml, save_toml}`, which write atomically through chan-workspace's `fs_ops` helper so the file + parent-dir fsync invariant matches user-content writes.
 
