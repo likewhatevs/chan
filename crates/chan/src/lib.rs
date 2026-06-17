@@ -1573,17 +1573,32 @@ fn systemd_user_unit_dir() -> Result<PathBuf> {
 /// longer active. A unit left in a failed state returns an error so the
 /// caller exits non-zero.
 async fn follow_unit_until_stopped() -> Result<()> {
+    // The unit's `is-active` state — NOT journalctl's lifetime — is the
+    // authoritative stop signal. journalctl can exit early for reasons that
+    // have nothing to do with the unit: most commonly a host where this user
+    // has no readable journal (a uid below SYS_UID_MAX, which journald treats
+    // as a system user and never gives a per-user journal, or a user outside
+    // the `systemd-journal`/`adm` groups). Conflating that with "the unit
+    // stopped" would declare a healthy devserver dead.
     let mut follow = tokio::process::Command::new("journalctl")
         .args(["--user", "-u", DEVSERVER_SYSTEMD_UNIT, "-f", "-n", "20"])
         .spawn()
         .context("spawning journalctl to follow the devserver service")?;
+    let mut streaming = true;
     loop {
         tokio::time::sleep(Duration::from_secs(2)).await;
         if !unit_is_active().await {
             break;
         }
-        if matches!(follow.try_wait(), Ok(Some(_))) {
-            break;
+        if streaming && matches!(follow.try_wait(), Ok(Some(_))) {
+            // Lost the log stream while the unit is still running: keep
+            // supervising via is-active, just without journal output.
+            eprintln!(
+                "chan devserver: journal streaming for {DEVSERVER_SYSTEMD_UNIT} \
+                 stopped (is this user in the `systemd-journal` group?); still \
+                 supervising the service"
+            );
+            streaming = false;
         }
     }
     let _ = follow.start_kill();
