@@ -97,15 +97,20 @@ Then attach from Chan Desktop at `localhost:8792` as above.
 
 ## A remote box: forward the port with ssh
 
-When the devserver is not on a host-network VM or container (a box on your LAN, a VPS, or a container that publishes a port), forward its loopback port to your Mac's localhost:
+When the devserver is not on a host-network VM or container (a box on your LAN, a VPS, or a container that publishes a port), reach it by forwarding its loopback port to your Mac's localhost. Chan Desktop's devserver form has a connect-script field for this; the recommended one-liner forwards the port and starts (or reattaches to) the devserver on the box in a single command:
 
 ```sh
-# With a devserver bound to 127.0.0.1:8791 on the box:
+ssh [user@]HOST -L PORT:127.0.0.1:PORT "chan devserver --port=PORT --systemd"
+```
+
+The quoted `chan devserver ...` is the command ssh runs on the box (ssh's positional remote command). `--systemd` starts the service on the first connect and reattaches to it on later ones, and ssh holds the `-L` forward open while it runs, so the desktop attaches at `localhost:PORT`. A scripted connect that fails keeps its terminal open and offers retry, edit, or abandon. See [Chan Desktop](desktop.md) for the attach lifecycle.
+
+If a devserver is already running on the box, a plain forward is enough:
+
+```sh
 ssh -f -N -L 8893:localhost:8791 user@host
 curl -sS http://localhost:8893/api/devserver/info
 ```
-
-Chan Desktop's devserver form has a script field for exactly this: put the `ssh -L ...` bring-up there and the desktop runs it before dialing `localhost:PORT` (see [Chan Desktop](desktop.md)). A scripted connect that fails keeps its terminal open and offers retry, edit, or abandon.
 
 ## Notes
 
