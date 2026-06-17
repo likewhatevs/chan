@@ -181,18 +181,22 @@ pub fn read_local_token() -> Result<String, String> {
     Ok(cfg.devserver_token)
 }
 
-/// Scrape the devserver bearer token from a control terminal's output. The
-/// devserver prints one line per start, `chan devserver: bind=<addr>
-/// token=<token>`, so the desktop can recover the token even for a remote
-/// devserver whose config file it cannot read.
+/// Scrape the devserver bearer token from a control terminal's output, matching
+/// the locked machine marker `CHAN_DEVSERVER_TOKEN=<token>` (the shared
+/// `chan_server::DEVSERVER_TOKEN_MARKER`) that `chan devserver` emits on every
+/// start AND `--systemd` re-attach. Single-sourcing the marker const keeps the
+/// emitter and this scraper from drifting. The desktop scrapes this fresh on
+/// every connect (and on a script re-run), so a recycled or rotated devserver is
+/// handled by construction -- no stored/stale token to reuse.
 ///
-/// `output` is raw PTY bytes (decoded lossily), so it carries ANSI escapes
-/// and possibly several `token=` occurrences across restarts. Take the LAST
-/// one and read the url-safe token run after it, which stops at the first
-/// non-token byte (whitespace, an ANSI escape, end of line).
+/// `output` is raw PTY bytes (decoded lossily), so it carries ANSI escapes and
+/// possibly several markers across restarts. Take the LAST one and read the
+/// url-safe token run after it, which stops at the first non-token byte
+/// (whitespace, an ANSI escape, end of line).
 pub fn scrape_token(output: &str) -> Option<String> {
-    output.rmatch_indices("token=").find_map(|(i, marker)| {
-        let token: String = output[i + marker.len()..]
+    let marker = chan_server::DEVSERVER_TOKEN_MARKER;
+    output.rmatch_indices(marker).find_map(|(i, m)| {
+        let token: String = output[i + m.len()..]
             .chars()
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
             .collect();
@@ -374,28 +378,34 @@ mod tests {
     }
 
     #[test]
-    fn scrape_token_reads_the_devserver_line() {
-        let out = "some boot noise\nchan devserver: bind=127.0.0.1:8787 token=tok_abc123\n$ ";
+    fn scrape_token_reads_the_marker_line() {
+        // The locked machine marker, e.g. surfaced through a journalctl follow.
+        let out = "some boot noise\nJun 17 host chan[12]: CHAN_DEVSERVER_TOKEN=tok_abc123\n$ ";
         assert_eq!(scrape_token(out).as_deref(), Some("tok_abc123"));
     }
 
     #[test]
     fn scrape_token_takes_the_last_occurrence_across_restarts() {
-        let out = "chan devserver: bind=… token=old_TOKEN\n[restart]\nchan devserver: bind=… token=new-TOKEN_2\n";
+        let out = "CHAN_DEVSERVER_TOKEN=old_TOKEN\n[restart]\nCHAN_DEVSERVER_TOKEN=new-TOKEN_2\n";
         assert_eq!(scrape_token(out).as_deref(), Some("new-TOKEN_2"));
     }
 
     #[test]
     fn scrape_token_stops_at_ansi_or_whitespace() {
         // Raw PTY bytes carry ANSI; the token run stops at the escape byte.
-        let out = "chan devserver: token=tok_xyz\x1b[0m extra";
+        let out = "CHAN_DEVSERVER_TOKEN=tok_xyz\x1b[0m extra";
         assert_eq!(scrape_token(out).as_deref(), Some("tok_xyz"));
     }
 
     #[test]
     fn scrape_token_none_when_absent_or_empty() {
         assert_eq!(scrape_token("no token here\n$ "), None);
-        assert_eq!(scrape_token("token= \nnext"), None);
+        assert_eq!(scrape_token("CHAN_DEVSERVER_TOKEN= \nnext"), None);
+        // A loose `token=` (human-readable line) is NOT the machine marker.
+        assert_eq!(
+            scrape_token("chan devserver: bind=… token=tok_loose\n"),
+            None
+        );
     }
 
     #[test]
