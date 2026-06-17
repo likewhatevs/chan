@@ -625,6 +625,13 @@ function render(workspaces, devservers = []) {
   html += localTable;
   for (const ds of devservers) html += renderDevserverSection(ds);
   main.innerHTML = html;
+  // The innerHTML rebuild replaced every .ds-workspaces container with a fresh
+  // "Loading..." placeholder, so the poll's per-devserver dedupe cache now
+  // describes DOM that no longer exists. Reset it so the post-render poll
+  // refills the placeholders. Without this, a disconnect -> reconnect with an
+  // unchanged workspace list (devserver still up, token stable) dedupes against
+  // the stale entry and the section sticks on "Loading workspaces...".
+  for (const key of Object.keys(lastDevserverRowsJson)) delete lastDevserverRowsJson[key];
 
   bindRowEvents();
   if (grouped) {
