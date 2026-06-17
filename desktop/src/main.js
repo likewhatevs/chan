@@ -671,25 +671,29 @@ function renderDevserverSection(ds) {
 /// (Forget). Edit is disconnected-only: a live connection's recipe must not
 /// change under it (update_devserver rejects a connected devserver).
 function renderDevserverActions(ds) {
-  const caret = `
-    <button class="btn ws-group-btn split-caret" data-act="menu-toggle" type="button"
+  // Reuse chan-desktop's existing button styling (the local Open-split classes):
+  // the GO action is primary (orange) like Open/New - Connect while
+  // disconnected; Disconnect (a teardown) and New Terminal are secondary. The
+  // caret inherits its split's primary/secondary look.
+  const caret = (cls) => `
+    <button class="btn ${cls} split-caret" data-act="menu-toggle" type="button"
             aria-haspopup="true" aria-expanded="false" aria-label="More actions">
       <svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l4 4 4-4"/></svg>
     </button>`;
   const forgetItem = `<li><button class="menu-item" data-act="forget-devserver" role="menuitem">Forget</button></li>`;
   if (ds.connected) {
     return `
-      <button class="btn ws-group-btn" data-act="new-terminal-devserver" type="button">New Terminal</button>
+      <button class="btn" data-act="new-terminal-devserver" type="button">New Terminal</button>
       <div class="split-btn">
-        <button class="btn ws-group-btn" data-act="disconnect-devserver" type="button">Disconnect</button>
-        ${caret}
+        <button class="btn" data-act="disconnect-devserver" type="button">Disconnect</button>
+        ${caret('')}
         <ul class="split-menu" hidden role="menu">${forgetItem}</ul>
       </div>`;
   }
   return `
     <div class="split-btn">
-      <button class="btn ws-group-btn" data-act="connect-devserver" type="button">Connect</button>
-      ${caret}
+      <button class="btn primary" data-act="connect-devserver" type="button">Connect</button>
+      ${caret('primary')}
       <ul class="split-menu" hidden role="menu">
         <li><button class="menu-item" data-act="edit-devserver" role="menuitem">Edit</button></li>
         ${forgetItem}
@@ -697,16 +701,18 @@ function renderDevserverActions(ds) {
     </div>`;
 }
 
-/// One devserver workspace row: an outbound-style row whose Open button
-/// hands the pre-assembled tenant URL to `open_devserver_workspace`.
+/// One devserver workspace row: an outbound-style row whose Open split button
+/// hands the pre-assembled tenant URL to `open_devserver_workspace`. Reuses the
+/// local row's `renderOpenSplit` (Open + caret menu: Open in Browser, Forget)
+/// so it matches chan-desktop's local workspace buttons; the caret + items are
+/// wired in `pollDevserverWorkspaces`.
 function renderDevserverWorkspaceRow(ws) {
   return `
     <tr data-ds-prefix="${escapeAttr(ws.prefix)}" data-url="${escapeAttr(ws.url)}">
       <td><span class="conn-dot on" title="Workspace"></span></td>
       <td class="path-cell where-cell remote-cell" title="${escapeAttr(ws.path)}">${ICON_OUTBOUND}<span class="where-text">${escapeHtml(ws.label || ws.path)}</span></td>
       <td><div class="row-actions">
-        <button class="btn primary" data-act="open-ds-ws">Open</button>
-        <button class="btn danger" data-act="forget-ds-ws" title="Forget: unmount from the devserver">Forget</button>
+        ${renderOpenSplit({ hasUrl: true, includeForget: true, forgetLabel: 'Forget' })}
       </div></td>
     </tr>`;
 }
@@ -848,7 +854,10 @@ async function pollDevserverWorkspaces() {
       ? `<table class="workspaces"><tbody>${rows.map(renderDevserverWorkspaceRow).join('')}</tbody></table>`
       : `<p class="nw-muted ws-group-pending">No workspaces on this devserver yet.</p>`;
     container.querySelectorAll('tr[data-ds-prefix]').forEach((tr) => {
-      const open = tr.querySelector('[data-act="open-ds-ws"]');
+      // The row reuses renderOpenSplit: primary "launch" opens the tenant,
+      // the caret menu's "open-browser" (wired by bindSplitMenu via data-url)
+      // opens it externally, and "remove" forgets (unmounts) it.
+      const open = tr.querySelector('[data-act="launch"]');
       if (open) {
         open.addEventListener('click', async () => {
           try {
@@ -858,9 +867,10 @@ async function pollDevserverWorkspaces() {
           }
         });
       }
-      const forget = tr.querySelector('[data-act="forget-ds-ws"]');
+      const forget = tr.querySelector('[data-act="remove"]');
       if (forget) {
         forget.addEventListener('click', async () => {
+          closeAllSplitMenus();
           try {
             await invoke('forget_devserver_workspace', { id, prefix: tr.dataset.dsPrefix });
           } catch (e) {
@@ -872,6 +882,7 @@ async function pollDevserverWorkspaces() {
           await pollDevserverWorkspaces();
         });
       }
+      bindSplitMenu(tr);
     });
   }
 }
