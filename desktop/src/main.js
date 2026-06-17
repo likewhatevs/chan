@@ -727,7 +727,12 @@ async function pollDevserverWorkspaces() {
     try {
       rows = await invoke('list_devserver_workspaces', { id });
     } catch (e) {
-      container.innerHTML = `<p class="nw-muted ws-group-pending">${escapeHtml(String(e && e.message ? e.message : e))}</p>`;
+      // Connected but unreachable: show a reconnecting state and try to
+      // recover (the devserver may have restarted with a fresh token). The
+      // next poll reflects success.
+      container.innerHTML = `<p class="nw-muted ws-group-pending">Reconnecting&hellip;</p>`;
+      lastDevserverRowsJson[id] = null;
+      invoke('reconnect_devserver', { id }).catch(() => {});
       continue;
     }
     const json = JSON.stringify(rows);

@@ -93,10 +93,11 @@ pub struct AppState {
     /// can open its tenants); absent means disconnected. In memory only:
     /// the bearer token rotates, so it is re-acquired on each connect.
     pub devservers: devserver::DevserverConns,
-    /// Outbound window ids the desktop opened for each devserver (its
-    /// standalone terminal and workspace tenants), keyed by `Devserver.id`.
-    /// Tracked so disconnecting a devserver tears down exactly its windows.
-    pub devserver_windows: Mutex<HashMap<String, Vec<String>>>,
+    /// Windows the desktop opened for each devserver (its standalone terminal
+    /// and workspace tenants), keyed by `Devserver.id`. Tracked so a
+    /// disconnect tears down exactly its windows, and a reconnect re-opens its
+    /// workspace windows with a fresh token under the same label.
+    pub devserver_windows: Mutex<HashMap<String, Vec<DevserverWindow>>>,
     /// Set when the user confirmed the quit dialog: the re-fired
     /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
     /// must pass instead of prompting again.
@@ -136,6 +137,22 @@ pub struct BuriedWindow {
     /// Wall-clock millis at bury time; diagnostics only (the Vec's
     /// push order is the recency authority).
     pub buried_at: u64,
+}
+
+/// One window the desktop opened for a devserver: see
+/// `AppState::devserver_windows`.
+#[derive(Debug, Clone)]
+pub struct DevserverWindow {
+    /// Outbound spawn id (the workspace tenant prefix, or the standalone
+    /// terminal id). Teardown closes the window by this.
+    pub window_id: String,
+    /// The actual Tauri window label. Reconnect re-opens the window under the
+    /// SAME label so the remote hydrates its `?w=<label>` session.
+    pub label: String,
+    /// Workspace tenant prefix for a workspace window (`None` for the
+    /// standalone terminal). Reconnect re-assembles a fresh tenant URL from
+    /// this and the rotated token.
+    pub prefix: Option<String>,
 }
 
 /// Family prefix for unbury matching: the label with its trailing
@@ -818,30 +835,30 @@ fn devserver_terminal_window_id(id: &str) -> String {
     format!("devserver-{id}-terminal")
 }
 
-/// Record an outbound window id the desktop opened for a devserver, so a
-/// later disconnect can tear it down.
-fn track_devserver_window(state: &AppState, id: &str, window_id: String) {
+/// Record a window the desktop opened for a devserver, so a later disconnect
+/// can tear it down and a reconnect can re-open it.
+fn track_devserver_window(state: &AppState, id: &str, window: DevserverWindow) {
     state
         .devserver_windows
         .lock()
         .unwrap()
         .entry(id.to_string())
         .or_default()
-        .push(window_id);
+        .push(window);
 }
 
 /// Close every window the desktop opened for a devserver (its standalone
 /// terminal, its workspace tenants, and its control terminal) and forget the
 /// tracking. Best-effort: a window the user already closed is a no-op.
 fn teardown_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str) {
-    let window_ids = state
+    let windows = state
         .devserver_windows
         .lock()
         .unwrap()
         .remove(id)
         .unwrap_or_default();
-    for window_id in window_ids {
-        serve::close_outbound_workspace_windows(app, &window_id);
+    for window in windows {
+        serve::close_outbound_workspace_windows(app, &window.window_id);
     }
     serve::close_window_by_label(app, &serve::control_terminal_label(id));
 }
@@ -945,8 +962,17 @@ async fn connect_devserver(
     let terminal_url = devserver::open_terminal(&conn).await?;
     state.devservers.set(id.clone(), conn);
     let terminal_window_id = devserver_terminal_window_id(&id);
-    serve::spawn_outbound_workspace_window(&app, &terminal_window_id, &terminal_url)?;
-    track_devserver_window(&state, &id, terminal_window_id);
+    let terminal_label =
+        serve::spawn_outbound_workspace_window(&app, &terminal_window_id, &terminal_url)?;
+    track_devserver_window(
+        &state,
+        &id,
+        DevserverWindow {
+            window_id: terminal_window_id,
+            label: terminal_label,
+            prefix: None,
+        },
+    );
     // The connection is up and its terminal is open, so put the control
     // terminal away; the user can reopen it from the Window menu.
     if let Some(ct) = control {
@@ -998,9 +1024,103 @@ fn open_devserver_workspace(
     prefix: String,
     url: String,
 ) -> Result<(), String> {
-    serve::spawn_outbound_workspace_window(&app, &prefix, &url)?;
-    track_devserver_window(&state, &id, prefix);
+    let label = serve::spawn_outbound_workspace_window(&app, &prefix, &url)?;
+    track_devserver_window(
+        &state,
+        &id,
+        DevserverWindow {
+            window_id: prefix.clone(),
+            label,
+            prefix: Some(prefix),
+        },
+    );
     Ok(())
+}
+
+/// Re-open a devserver's open workspace windows with fresh tenant URLs after
+/// the devserver rotated its token, each under its original label so the
+/// remote restores its `?w=<label>` session (the rebuild replaces the stale
+/// webview in place). The standalone terminal is not re-opened here (its
+/// tenant is gone after a restart); the user reopens one from the recovered
+/// section.
+fn reopen_devserver_workspace_windows(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    id: &str,
+    rows: &[devserver::DevserverWorkspaceRow],
+) {
+    let windows = state
+        .devserver_windows
+        .lock()
+        .unwrap()
+        .get(id)
+        .cloned()
+        .unwrap_or_default();
+    let fresh: HashMap<&str, &str> = rows
+        .iter()
+        .map(|r| (r.prefix.as_str(), r.url.as_str()))
+        .collect();
+    for window in windows {
+        let Some(prefix) = window.prefix.as_deref() else {
+            continue;
+        };
+        let Some(url) = fresh.get(prefix) else {
+            continue; // tenant no longer mounted
+        };
+        let entry = RemoteReopen {
+            url: url.to_string(),
+            base_title: serve::outbound_window_title(url),
+            menu_title: String::new(),
+            config_key: config::outbound_window_key(&window.window_id),
+            connecting: true,
+        };
+        let _ = serve::reopen_remote_window(app, &window.label, &entry);
+    }
+}
+
+/// Try to recover a connected devserver that went unreachable: re-acquire its
+/// (possibly rotated) token, confirm it answers, and if the token changed,
+/// re-open its workspace windows with fresh URLs. Returns true on recovery,
+/// false if it is still unreachable. The launcher calls this when a workspace
+/// poll fails.
+#[tauri::command]
+async fn reconnect_devserver(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<bool, String> {
+    let Some(conn) = state.devservers.get(&id) else {
+        return Ok(false);
+    };
+    // Try the current token first (a transient network blip keeps it valid),
+    // then the local devserver's config token (a local restart rotates it). A
+    // remote devserver's token is not in the local config, so it stays
+    // unreachable until its control terminal re-runs the connect script.
+    let mut candidates = vec![conn.token.clone()];
+    if let Ok(local) = devserver::read_local_token() {
+        if local != conn.token {
+            candidates.push(local);
+        }
+    }
+    for token in candidates {
+        let mut probe = conn.clone();
+        probe.token = token.clone();
+        if let Ok(rows) = devserver::fetch_workspaces(&probe).await {
+            // A disconnect that landed mid-probe already tore the windows
+            // down; do not resurrect the connection or re-open them.
+            if !state.devservers.is_connected(&id) {
+                return Ok(false);
+            }
+            let rotated = token != conn.token;
+            state.devservers.set(id.clone(), probe);
+            if rotated {
+                reopen_devserver_workspace_windows(&app, &state, &id, &rows);
+            }
+            let _ = app.emit(serve::SERVES_CHANGED, ());
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Update a devserver's connection recipe (host/port/script/label), from the
@@ -2092,6 +2212,7 @@ fn main() {
             disconnect_devserver,
             list_devserver_workspaces,
             open_devserver_workspace,
+            reconnect_devserver,
             update_devserver,
             forget_devserver_workspace,
             auth::auth_status,
