@@ -1203,61 +1203,52 @@ async function handleConnectFailure(ds, reason) {
   }
 }
 
-/// Modal survey for a failed connect to a scripted devserver. The control
-/// terminal stays open behind it so the user can read what went wrong; this
-/// offers the three recoveries from the spec. Resolves to
-/// 'retry' | 'edit' | 'abandon' | 'dismiss' (Esc / backdrop / Close dismiss).
-function showConnectFailureSurvey(ds, reason) {
+/// Generic devserver survey modal, shared by the connect-failure (D2) and
+/// control-terminal-closed (F7) recoveries. `actions` is an ordered array of
+/// `{ label, cls, value }`; the LAST is the default-focused primary. Resolves
+/// to the chosen value, or 'dismiss' on Esc / backdrop click.
+function showDevserverSurvey({ title, message, actions }) {
   return new Promise((resolve) => {
-    const name = (ds.label && ds.label.trim()) || ds.host || 'devserver';
-    const msg = typeof reason === 'string' ? reason : (reason && reason.message) || String(reason);
-
     const overlay = document.createElement('div');
     overlay.className = 'preflight-overlay';
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-modal', 'true');
-    overlay.setAttribute('aria-labelledby', 'ds-fail-title');
+    overlay.setAttribute('aria-labelledby', 'ds-survey-title');
 
     const dialog = document.createElement('div');
     dialog.className = 'preflight-dialog';
 
-    const title = document.createElement('h2');
-    title.id = 'ds-fail-title';
-    title.textContent = `Couldn't connect to ${name}`;
-    dialog.appendChild(title);
+    const titleEl = document.createElement('h2');
+    titleEl.id = 'ds-survey-title';
+    titleEl.textContent = title;
+    dialog.appendChild(titleEl);
 
     const body = document.createElement('p');
     body.className = 'preflight-intro';
-    body.textContent =
-      `The connect command didn't bring the devserver up: ${msg} ` +
-      'Its control terminal is still open so you can see what happened.';
+    body.textContent = message;
     dialog.appendChild(body);
 
     const buttons = document.createElement('div');
     buttons.className = 'preflight-buttons';
-    function mk(label, cls, action) {
+    let primary = null;
+    for (const a of actions) {
       const b = document.createElement('button');
-      b.className = `btn ${cls}`.trim();
+      b.className = `btn ${a.cls || ''}`.trim();
       b.type = 'button';
-      b.textContent = label;
-      b.addEventListener('click', () => finish(action));
-      return b;
+      b.textContent = a.label;
+      b.addEventListener('click', () => finish(a.value));
+      buttons.appendChild(b);
+      primary = b;
     }
-    // Abandon (destructive) on the far side from the default Retry, matching
-    // the launcher's other dialogs.
-    buttons.appendChild(mk('Abandon', 'danger', 'abandon'));
-    buttons.appendChild(mk('Edit', '', 'edit'));
-    const retry = mk('Retry', 'primary', 'retry');
-    buttons.appendChild(retry);
     dialog.appendChild(buttons);
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
-    function finish(action) {
+    function finish(value) {
       document.removeEventListener('keydown', onKey);
       overlay.remove();
-      resolve(action);
+      resolve(value);
     }
     function onKey(e) {
       if (e.key === 'Escape') {
@@ -1269,8 +1260,75 @@ function showConnectFailureSurvey(ds, reason) {
       if (e.target === overlay) finish('dismiss');
     });
     document.addEventListener('keydown', onKey);
-    retry.focus();
+    if (primary) primary.focus();
   });
+}
+
+/// Survey for a failed connect to a scripted devserver. The control terminal
+/// stays open behind it so the user can read what went wrong. Abandon
+/// (destructive) sits on the far side from the default Retry.
+function showConnectFailureSurvey(ds, reason) {
+  const name = (ds.label && ds.label.trim()) || ds.host || 'devserver';
+  const msg = typeof reason === 'string' ? reason : (reason && reason.message) || String(reason);
+  return showDevserverSurvey({
+    title: `Couldn't connect to ${name}`,
+    message:
+      `The connect command didn't bring the devserver up: ${msg} ` +
+      'Its control terminal is still open so you can see what happened.',
+    actions: [
+      { label: 'Abandon', cls: 'danger', value: 'abandon' },
+      { label: 'Edit', cls: '', value: 'edit' },
+      { label: 'Retry', cls: 'primary', value: 'retry' },
+    ],
+  });
+}
+
+/// React to a connected devserver's control terminal emptying (its
+/// connect-script tab was closed, or the script exited): that terminal is the
+/// connection endpoint, so the devserver is now unreachable. Survey re-run vs
+/// abandon. Driven by the `devserver-control-closed` event the backend emits
+/// from `request_close_window`.
+async function handleControlTerminalClosed(id) {
+  let ds = null;
+  try {
+    ds = (await invoke('list_devservers')).find((d) => d.id === id) || null;
+  } catch (e) {
+    console.warn('list_devservers for control-closed survey failed:', e);
+  }
+  const name = (ds && ds.label && ds.label.trim()) || (ds && ds.host) || 'The devserver';
+  const choice = await showDevserverSurvey({
+    title: `${name} disconnected`,
+    message:
+      "The control terminal's connect script stopped, so the devserver is no longer reachable. " +
+      'Re-run the script to reconnect, or abandon it.',
+    actions: [
+      { label: 'Abandon', cls: 'danger', value: 'abandon' },
+      { label: 'Re-run script', cls: 'primary', value: 'rerun' },
+    ],
+  });
+  if (choice === 'rerun') {
+    // Clear the dead connection (closes the orphaned standalone terminal,
+    // reaps any control remnant) then drive the section's Connect button so
+    // the script re-runs and a repeat failure re-surveys (D2).
+    try {
+      await invoke('disconnect_devserver', { id });
+    } catch (e) {
+      console.warn('clearing the dead devserver before re-run:', e);
+    }
+    await refresh(true);
+    const connect = main.querySelector(
+      `section[data-devserver-id="${id}"] [data-act="connect-devserver"]`,
+    );
+    if (connect) connect.click();
+  } else if (choice === 'abandon') {
+    try {
+      await invoke('disconnect_devserver', { id });
+    } catch (e) {
+      showError(e);
+      return;
+    }
+    await refresh(true);
+  }
 }
 
 // Click-to-copy wiring for every `.snippet[data-copy]` under `scope`.
@@ -1351,6 +1409,12 @@ listen('chan-busy', (e) => {
   applyChanBusyState(e.payload || {});
   lastWorkspacesJson = '';
   refresh().catch(showError);
+});
+// A connected devserver's control terminal emptied (its connect script's tab
+// was closed, or the script exited): survey re-run vs abandon.
+listen('devserver-control-closed', (e) => {
+  const id = typeof e.payload === 'string' ? e.payload : (e.payload && e.payload.id);
+  if (id) handleControlTerminalClosed(id).catch(showError);
 });
 
 boot().catch(showError);

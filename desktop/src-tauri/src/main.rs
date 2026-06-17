@@ -1690,6 +1690,23 @@ fn open_devtools(window: tauri::WebviewWindow) {
 #[tauri::command]
 fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
     let closing = window.label();
+    // A connected devserver's control terminal emptying (its connect-script
+    // tab was closed, or the script exited) takes the devserver connection
+    // down with it: that terminal IS the connection endpoint. Don't silently
+    // destroy into a dead state. Raise the launcher and survey the user
+    // (re-run the script / abandon), reusing the connect-failure pattern. Only
+    // while the devserver is still connected; a control terminal closed as
+    // part of a normal disconnect/forget goes through teardown's destroy, not
+    // this SPA close-cascade.
+    if let Some(id) = closing.strip_prefix("control-terminal-") {
+        let state = app.state::<Arc<AppState>>();
+        if state.devservers.is_connected(id) {
+            let id = id.to_string();
+            let _ = show_window(&app, "main");
+            let _ = app.emit("devserver-control-closed", id);
+            return window.destroy().map_err(err);
+        }
+    }
     let others_remain = app
         .webview_windows()
         .keys()
