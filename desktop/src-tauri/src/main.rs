@@ -2330,6 +2330,25 @@ fn main() {
                 // Best-effort: unmount every embedded local workspace
                 // before the desktop runtime exits.
                 serve::stop_all(&state_for_exit);
+                // Explicitly reap any devserver connect-script tenants (the
+                // control terminals): stop_all only unmounts workspaces, so
+                // without this their PTYs would ride process-death SIGHUP
+                // rather than a deterministic kill. Mirrors the
+                // disconnect/forget teardown. Best-effort; the prefixes are
+                // collected before the close calls so the lock isn't held
+                // across them.
+                if let Some(embedded) = state_for_exit.embedded.get() {
+                    let prefixes: Vec<String> = state_for_exit
+                        .control_terminal_prefixes
+                        .lock()
+                        .unwrap()
+                        .values()
+                        .cloned()
+                        .collect();
+                    for prefix in prefixes {
+                        let _ = embedded.close_control_terminal(&prefix);
+                    }
+                }
             }
             // macOS: Dock click or `open -a` while the process is
             // still alive. If no windows are visible (main has been
