@@ -510,18 +510,30 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
       showDialogError('Devserver port must be a number between 1 and 65535.');
       return;
     }
+    let addedId = null;
     try {
       if (existing) {
         await invoke('update_devserver', { id: existing.id, host, port, script, label });
       } else {
-        await invoke('add_devserver', { host, port, script, label });
+        addedId = await invoke('add_devserver', { host, port, script, label });
       }
     } catch (e) {
       showDialogError(e);
       return;
     }
     close();
-    await refresh();
+    await refresh(true);
+    if (addedId) {
+      // Adding a devserver auto-connects it (mirrors opening a local
+      // workspace right after registering it). Drive the new section's own
+      // Connect button so the user sees the same Connecting.../reconcile
+      // feedback and error handling as a manual connect. Edit never
+      // auto-connects.
+      const connect = main.querySelector(
+        `section[data-devserver-id="${addedId}"] [data-act="connect-devserver"]`,
+      );
+      if (connect) connect.click();
+    }
   }
 
   // The singleton handle: a second [New] click switches the open
@@ -629,13 +641,6 @@ function render(workspaces, devservers = []) {
 function renderDevserverSection(ds) {
   const name = (ds.label && ds.label.trim()) || ds.host || 'devserver';
   const endpoint = `${ds.host}:${ds.port}`;
-  const connectAct = ds.connected ? 'disconnect-devserver' : 'connect-devserver';
-  const connectLabel = ds.connected ? 'Disconnect' : 'Connect';
-  // Edit changes the connection recipe, which must not move under a live
-  // connection, so it appears only while disconnected.
-  const editBtn = ds.connected
-    ? ''
-    : `<button class="btn ws-group-btn" data-act="edit-devserver" type="button">Edit</button>`;
   const body = ds.connected
     ? `<div class="ds-workspaces"><p class="nw-muted ws-group-pending">Loading workspaces...</p></div>`
     : `<p class="nw-muted ws-group-pending">Not connected.</p>`;
@@ -645,15 +650,43 @@ function renderDevserverSection(ds) {
         ${ICON_DEVSERVER}
         <span class="ws-group-host">${escapeHtml(name)}</span>
         <span class="ws-group-sub">${escapeHtml(endpoint)}</span>
-        <span class="ws-group-actions">
-          <button class="btn ws-group-btn" data-act="${connectAct}" type="button">${connectLabel}</button>
-          ${editBtn}
-          <button class="btn danger ws-group-btn" data-act="forget-devserver" type="button"
-                  title="Forget this devserver">Forget</button>
-        </span>
+        <span class="ws-group-actions">${renderDevserverActions(ds)}</span>
       </h3>
       ${body}
     </section>`;
+}
+
+/// The action cluster for a `[DEVSERVER]` section header, mirroring the
+/// local-workspace split button. Disconnected: a primary Connect + a caret
+/// menu (Edit, Forget). Connected: a primary Disconnect, a New Terminal button
+/// (opens another standalone terminal on the devserver), and a caret menu
+/// (Forget). Edit is disconnected-only: a live connection's recipe must not
+/// change under it (update_devserver rejects a connected devserver).
+function renderDevserverActions(ds) {
+  const caret = `
+    <button class="btn ws-group-btn split-caret" data-act="menu-toggle" type="button"
+            aria-haspopup="true" aria-expanded="false" aria-label="More actions">
+      <svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l4 4 4-4"/></svg>
+    </button>`;
+  const forgetItem = `<li><button class="menu-item" data-act="forget-devserver" role="menuitem">Forget</button></li>`;
+  if (ds.connected) {
+    return `
+      <button class="btn ws-group-btn" data-act="new-terminal-devserver" type="button">New Terminal</button>
+      <div class="split-btn">
+        <button class="btn ws-group-btn" data-act="disconnect-devserver" type="button">Disconnect</button>
+        ${caret}
+        <ul class="split-menu" hidden role="menu">${forgetItem}</ul>
+      </div>`;
+  }
+  return `
+    <div class="split-btn">
+      <button class="btn ws-group-btn" data-act="connect-devserver" type="button">Connect</button>
+      ${caret}
+      <ul class="split-menu" hidden role="menu">
+        <li><button class="menu-item" data-act="edit-devserver" role="menuitem">Edit</button></li>
+        ${forgetItem}
+      </ul>
+    </div>`;
 }
 
 /// One devserver workspace row: an outbound-style row whose Open button
@@ -678,9 +711,11 @@ function bindDevserverSectionEvents(devservers) {
   const byId = Object.fromEntries((devservers || []).map((d) => [d.id, d]));
   main.querySelectorAll('section[data-devserver-id]').forEach((section) => {
     const id = section.dataset.devserverId || '';
+    wireSplitCaret(section);
     const edit = section.querySelector('[data-act="edit-devserver"]');
     if (edit) {
       edit.addEventListener('click', () => {
+        closeAllSplitMenus();
         const ds = byId[id];
         if (ds) showNewWorkspaceDialog('devserver', ds);
       });
@@ -689,13 +724,14 @@ function bindDevserverSectionEvents(devservers) {
     if (forget) {
       forget.addEventListener('click', async () => {
         if (!id) return;
+        closeAllSplitMenus();
         try {
           await invoke('remove_devserver', { id });
         } catch (e) {
           showError(e);
           return;
         }
-        await refresh();
+        await refresh(true);
       });
     }
     const connect = section.querySelector('[data-act="connect-devserver"]');
@@ -726,7 +762,21 @@ function bindDevserverSectionEvents(devservers) {
         } catch (e) {
           showError(e);
         }
-        await refresh();
+        await refresh(true);
+      });
+    }
+    const newTerminal = section.querySelector('[data-act="new-terminal-devserver"]');
+    if (newTerminal) {
+      // Open ANOTHER standalone terminal on the connected devserver (the
+      // connect flow already opened the first). Each click mounts a fresh
+      // remote terminal tenant in its own window.
+      newTerminal.addEventListener('click', async () => {
+        if (!id) return;
+        try {
+          await invoke('open_devserver_terminal', { id });
+        } catch (e) {
+          showError(e);
+        }
       });
     }
   });
@@ -952,32 +1002,34 @@ function bindRowEvents() {
 /// local and remote rows. The "Open in Browser" item delegates
 /// to tauri-plugin-opener with the URL stored on the row's
 /// `data-url` attribute (populated by `render`).
-function bindSplitMenu(tr) {
-  const caret = tr.querySelector('[data-act="menu-toggle"]');
-  const menu = tr.querySelector('.split-menu');
-  if (caret && menu) {
-    caret.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const willOpen = menu.hasAttribute('hidden');
-      closeAllSplitMenus();
-      if (willOpen) {
-        menu.classList.remove('open-up');
-        menu.removeAttribute('hidden');
-        caret.setAttribute('aria-expanded', 'true');
-        // Flip the menu above the caret when opening downward would
-        // clip it below the scroll container's bottom edge (the
-        // last-row case). Measured after un-hiding so offsetHeight is
-        // real.
-        const scroller = document.getElementById('main');
-        const limit = scroller
-          ? scroller.getBoundingClientRect().bottom
-          : window.innerHeight;
-        if (caret.getBoundingClientRect().bottom + 4 + menu.offsetHeight > limit) {
-          menu.classList.add('open-up');
-        }
+/// Wire a split-button caret to toggle its `.split-menu`, flipping the menu
+/// above the caret when opening downward would clip it past the scroll
+/// container's bottom edge. Shared by the local/remote rows and the devserver
+/// section header. `scope` is the element holding the one caret + menu.
+function wireSplitCaret(scope) {
+  const caret = scope.querySelector('[data-act="menu-toggle"]');
+  const menu = scope.querySelector('.split-menu');
+  if (!caret || !menu) return;
+  caret.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willOpen = menu.hasAttribute('hidden');
+    closeAllSplitMenus();
+    if (willOpen) {
+      menu.classList.remove('open-up');
+      menu.removeAttribute('hidden');
+      caret.setAttribute('aria-expanded', 'true');
+      // Measured after un-hiding so offsetHeight is real.
+      const scroller = document.getElementById('main');
+      const limit = scroller ? scroller.getBoundingClientRect().bottom : window.innerHeight;
+      if (caret.getBoundingClientRect().bottom + 4 + menu.offsetHeight > limit) {
+        menu.classList.add('open-up');
       }
-    });
-  }
+    }
+  });
+}
+
+function bindSplitMenu(tr) {
+  wireSplitCaret(tr);
   const openInBrowser = tr.querySelector('[data-act="open-browser"]');
   if (openInBrowser) {
     openInBrowser.addEventListener('click', async () => {

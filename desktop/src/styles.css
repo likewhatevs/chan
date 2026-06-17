@@ -253,6 +253,11 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   text-transform: none;
   letter-spacing: 0;
 }
+/* The devserver section's Connect/Disconnect split reuses the local-row
+   .split-btn, whose .btn padding is sized for the larger row buttons.
+   Keep it compact so it matches the small header buttons (New Terminal). */
+.ws-group-actions .split-btn > .btn { padding: 3px 8px; font-size: 11px; }
+.ws-group-actions .split-btn > .btn.split-caret { padding: 3px 6px; }
 .ws-group-block { border-bottom: 1px solid var(--border); }
 .ws-group-pending { padding: 0 14px 12px; }
 /* A connected devserver's workspace rows reuse the local table styling,

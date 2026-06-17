@@ -974,7 +974,7 @@ async fn connect_devserver(
     state.devservers.set(id.clone(), conn);
     let terminal_window_id = devserver_terminal_window_id(&id);
     let terminal_label =
-        serve::spawn_outbound_workspace_window(&app, &terminal_window_id, &terminal_url)?;
+        serve::spawn_devserver_terminal_window(&app, &terminal_window_id, &terminal_url)?;
     track_devserver_window(
         &state,
         &id,
@@ -1043,6 +1043,40 @@ fn open_devserver_workspace(
             window_id: prefix.clone(),
             label,
             prefix: Some(prefix),
+        },
+    );
+    Ok(())
+}
+
+/// Open another standalone terminal on a connected devserver (the connect flow
+/// opened the first). Mounts a fresh remote terminal tenant and opens it in its
+/// own terminal-mode window, tracked under the devserver so a disconnect tears
+/// it down with the rest. A unique window id per call keeps each New Terminal
+/// in its own window (unlike the connect flow's stable, reopenable terminal).
+#[tauri::command]
+async fn open_devserver_terminal(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    let conn = state
+        .devservers
+        .get(&id)
+        .ok_or_else(|| format!("devserver {id} is not connected"))?;
+    let terminal_url = devserver::open_terminal(&conn).await?;
+    let window_id = format!(
+        "{}-{}",
+        devserver_terminal_window_id(&id),
+        uuid::Uuid::new_v4()
+    );
+    let label = serve::spawn_devserver_terminal_window(&app, &window_id, &terminal_url)?;
+    track_devserver_window(
+        &state,
+        &id,
+        DevserverWindow {
+            window_id,
+            label,
+            prefix: None,
         },
     );
     Ok(())
@@ -2223,6 +2257,7 @@ fn main() {
             disconnect_devserver,
             list_devserver_workspaces,
             open_devserver_workspace,
+            open_devserver_terminal,
             reconnect_devserver,
             update_devserver,
             forget_devserver_workspace,

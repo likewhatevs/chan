@@ -28,6 +28,7 @@ permissions = [
   "allow-disconnect-devserver",
   "allow-list-devserver-workspaces",
   "allow-open-devserver-workspace",
+  "allow-open-devserver-terminal",
   "allow-reconnect-devserver",
   "allow-update-devserver",
   "allow-forget-devserver-workspace",
@@ -218,6 +219,11 @@ commands.allow = ["list_devserver_workspaces"]
 identifier = "allow-open-devserver-workspace"
 description = "Enables the open_devserver_workspace command."
 commands.allow = ["open_devserver_workspace"]
+
+[[permission]]
+identifier = "allow-open-devserver-terminal"
+description = "Enables the open_devserver_terminal command."
+commands.allow = ["open_devserver_terminal"]
 
 [[permission]]
 identifier = "allow-reconnect-devserver"

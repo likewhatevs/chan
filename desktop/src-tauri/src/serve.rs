@@ -285,6 +285,46 @@ pub fn spawn_outbound_workspace_window(
     built.map(|()| label)
 }
 
+/// Spawn a standalone terminal window on a connected devserver: a remote
+/// terminal tenant the desktop dialled, booted in terminal-only mode
+/// (`kind=terminal`). A devserver terminal is NOT a workspace, so it must
+/// not load through the workspace path (which fetches a workspace and docks a
+/// file browser, the "broken un-named workspace" the no-script connect used to
+/// show); `kind=terminal` makes the SPA boot terminal-only. The connect flow
+/// has already confirmed the devserver is reachable, so it loads the tenant
+/// URL directly rather than through the connecting/retry screen. Tracked under
+/// the outbound label family (`outbound_window_prefix(id)`) so a disconnect
+/// tears it down with the devserver's other windows, and a bury/reopen cycle
+/// (Window menu) restores the same window.
+pub fn spawn_devserver_terminal_window(
+    app: &AppHandle,
+    id: &str,
+    url: &str,
+) -> Result<String, String> {
+    let prefix = outbound_window_prefix(id);
+    let config_key = config::outbound_window_key(id);
+    let restore =
+        match unbury_or_restore(app, &prefix, &config_key, || new_outbound_window_label(id))? {
+            OpenOutcome::Unburied(label) => return Ok(label),
+            OpenOutcome::Build(restore) => restore,
+        };
+    let label = restore.label.clone();
+    build_workspace_window(
+        app,
+        WindowSpec {
+            label: &restore.label,
+            title: "Terminal",
+            url,
+            url_hash_seed: &restore.url_hash,
+            config_key,
+            zoom_seed: restore.zoom,
+            connecting: None,
+            kind: Some("terminal"),
+        },
+    )?;
+    Ok(label)
+}
+
 /// Spawn a standalone terminal-only window. Unlike a workspace window there
 /// is no registry entry and no On-toggle lifecycle: every terminal window
 /// loads the ONE shared `/terminal` tenant (mounted on first use), in
