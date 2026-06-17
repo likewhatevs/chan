@@ -288,7 +288,11 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     let listener = tokio::net::TcpListener::bind(config.addr)
         .await
         .with_context(|| format!("binding devserver on {}", config.addr))?;
-    println!("chan devserver: listening on http://{}", config.addr);
+    // Report the bound address, not the requested one, so `--port 0` prints
+    // the OS-assigned port (mirrors `chan serve`). Falls back to the request
+    // on the impossible local_addr() error rather than refusing to serve.
+    let local_addr = listener.local_addr().unwrap_or(config.addr);
+    println!("chan devserver: listening on http://{local_addr}");
 
     // Shutdown wiring mirrors `serve()`: a single watch channel fed by
     // SIGINT/SIGTERM, plus a side task that cancels every tenant's in-flight
@@ -534,6 +538,22 @@ fn workspace_label(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn port_zero_bind_resolves_to_a_concrete_port() {
+        // The ready line reports `listener.local_addr()`, not the requested
+        // addr, so `chan devserver --port 0` prints the OS-assigned port (the
+        // shape `chan serve` reports) instead of `:0`.
+        let requested: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let listener = tokio::net::TcpListener::bind(requested).await.unwrap();
+        let local_addr = listener.local_addr().unwrap_or(requested);
+        assert_eq!(local_addr.ip(), requested.ip());
+        assert_ne!(
+            local_addr.port(),
+            0,
+            "the OS assigns a concrete port for :0"
+        );
+    }
 
     #[test]
     fn slug_sanitizes_and_falls_back() {
