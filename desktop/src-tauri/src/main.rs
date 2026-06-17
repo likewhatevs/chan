@@ -1209,26 +1209,15 @@ async fn reconnect_devserver(
     let Some(conn) = state.devservers.get(&id) else {
         return Ok(false);
     };
-    let scripted = {
-        let cfg = state.store.lock().unwrap().get().map_err(err)?;
-        cfg.devservers
-            .iter()
-            .find(|d| d.id == id)
-            .map(|d| !d.script.trim().is_empty())
-            .unwrap_or(false)
-    };
-    // Try the current token first (a transient network blip keeps it valid).
-    // The local config token is consulted ONLY for a no-script (local)
-    // devserver, where a local restart rotates it there. A scripted (remote)
-    // devserver's token is the `CHAN_DEVSERVER_TOKEN=` marker its script
-    // re-emits, never the desktop's local config; a real rotation recovers via a
-    // script re-run (Connect / the control-terminal-closed survey), not here.
+    // Try the current token first (a transient network blip keeps it valid),
+    // then the local devserver's config token (a local restart rotates it). A
+    // remote devserver's token is not in the local config, so it stays
+    // unreachable until its control terminal re-runs the connect script (which
+    // re-emits the CHAN_DEVSERVER_TOKEN= marker the desktop scrapes fresh).
     let mut candidates = vec![conn.token.clone()];
-    if !scripted {
-        if let Ok(local) = devserver::read_local_token() {
-            if local != conn.token {
-                candidates.push(local);
-            }
+    if let Ok(local) = devserver::read_local_token() {
+        if local != conn.token {
+            candidates.push(local);
         }
     }
     for token in candidates {
