@@ -648,7 +648,7 @@ export function onWatchEvent(e: unknown): void {
   const kind = (e as { kind?: string } | null)?.kind;
   if (kind === "config_changed") {
     // A sibling window flipped a setting (theme, fonts,
-    // pane widths, default-workspace root). Re-fetch and reflect.
+    // pane widths). Re-fetch and reflect.
     scheduleWorkspaceRefresh();
     return;
   }

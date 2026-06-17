@@ -85,6 +85,7 @@ import {
   TAB_TITLE_MAX_LENGTH,
   terminalBroadcastMemberIds,
   terminalEnvTabNameStale,
+  terminalTabGroup,
   toggleActiveTerminalBroadcastSelectAll,
   truncateTabTitle,
   type BrowserTab,
@@ -1337,6 +1338,60 @@ describe("pane state", () => {
     expect(tab?.title).toBe("Terminal-2"); // Bug 1: no spurious -N
     expect(tab?.terminalEnvTabName).toBe("Terminal-2"); // Bug 2: env carried
     expect(terminalEnvTabNameStale(tab as TerminalTab)).toBe(false); // names match -> no warning
+    applyTerminalRoster([]);
+  });
+
+  test("applyTerminalRoster reconciles a local tab whose session the server moved out of band", () => {
+    // The lead's pre-existing tab is restarted out of band by a team-script
+    // bootstrap: the server moves its session to "v0380" but this window's
+    // tab.group still reads "default". The roster snapshot reconciles the
+    // local group so broadcast scoping groups the lead with the workers
+    // instead of stranding it alone in the stale group.
+    const lead = terminalTab({
+      id: "lead",
+      title: "@@Lead",
+      terminalSessionId: "lead-sess",
+      group: "default",
+    });
+    const worker = terminalTab({
+      id: "worker",
+      title: "@@Boot",
+      terminalSessionId: "worker-sess",
+      group: "v0380",
+    });
+    resetLayout([lead, worker]);
+    const tab = (id: string) =>
+      activePane().tabs.find((c) => c.id === id) as TerminalTab;
+
+    applyTerminalRoster([
+      { id: "lead-sess", tab_name: "@@Lead", tab_group: "v0380", window_id: "w1", broadcast: false },
+      { id: "worker-sess", tab_name: "@@Boot", tab_group: "v0380", window_id: "w1", broadcast: false },
+    ]);
+
+    expect(terminalTabGroup(tab("lead"))).toBe("v0380");
+    expect(terminalTabGroup(tab("worker"))).toBe("v0380");
+    applyTerminalRoster([]);
+  });
+
+  test("applyTerminalRoster leaves a matching group alone and skips sessions with no local tab", () => {
+    const a = terminalTab({
+      id: "a",
+      title: "A",
+      terminalSessionId: "sess-a",
+      group: "team",
+    });
+    resetLayout([a]);
+    const tab = (id: string) =>
+      activePane().tabs.find((c) => c.id === id) as TerminalTab;
+
+    // sess-a already matches; ghost-sess has no open local tab (must be a no-op,
+    // not a crash).
+    applyTerminalRoster([
+      { id: "sess-a", tab_name: "A", tab_group: "team", window_id: "w1", broadcast: false },
+      { id: "ghost-sess", tab_name: "Z", tab_group: "other", window_id: "w2", broadcast: false },
+    ]);
+
+    expect(terminalTabGroup(tab("a"))).toBe("team");
     applyTerminalRoster([]);
   });
 

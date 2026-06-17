@@ -1534,6 +1534,30 @@ let terminalRoster = $state<TerminalRosterEntry[]>([]);
 /// and the reconnect seed.
 export function applyTerminalRoster(entries: TerminalRosterEntry[]): void {
   terminalRoster = entries;
+  reconcileLocalGroupsFromRoster(entries);
+}
+
+/// Align each local tab's broadcast `group` with the server's roster truth.
+/// The server can move a live session's `tab_group` without the SPA driving
+/// it: a CLI / team-script bootstrap restarts the lead's pre-existing terminal
+/// out of band (a shell cannot restart the tab running its own script, so the
+/// server does it), which updates the session's server-side group but leaves
+/// this window's `tab.group` at its old value. Broadcast scoping keys on the
+/// local group, so without this the lead would sit alone in a stale group
+/// while the freshly-spawned workers share the team group.
+///
+/// Reconciling here is safe against an unsaved UI group edit: that edit lives
+/// in the component-local `groupDraft` and only reaches `tab.group` at a
+/// confirmed restart (which respawns the session, so the roster already agrees
+/// by the time it lands). A local/server mismatch therefore means the server
+/// moved an existing session, and the server is authoritative.
+function reconcileLocalGroupsFromRoster(entries: TerminalRosterEntry[]): void {
+  for (const entry of entries) {
+    const tab = findTerminalBySession(entry.id);
+    if (tab && terminalTabGroup(tab) !== entry.tab_group) {
+      setTerminalGroup(tab, entry.tab_group);
+    }
+  }
 }
 
 /// Same-group sessions in OTHER windows of this tenant. The broadcast menu
