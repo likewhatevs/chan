@@ -224,6 +224,21 @@ impl EmbeddedServer {
     pub fn read_control_terminal_output(&self, prefix: &str) -> String {
         String::from_utf8_lossy(&self.host.terminal_tenant_scrollback(prefix)).into_owned()
     }
+
+    /// Close the control-terminal tenant mounted at `prefix`, reaping its PTY
+    /// (the devserver connect script) synchronously. Called on disconnect and
+    /// forget: destroying the control-terminal window alone leaves the connect
+    /// script RUNNING on the host because the tenant outlives the window. Must
+    /// NOT route through `close_prefix`/`close_workspace`, whose terminal-PTY
+    /// reap rides a fragile prune-task drop race; `close_terminal_tenant` Kills
+    /// the children directly. A no-op when nothing is mounted there (idempotent
+    /// across a repeated teardown).
+    pub fn close_control_terminal(&self, prefix: &str) -> Result<(), String> {
+        self.host
+            .close_terminal_tenant(prefix)
+            .map(|_| ())
+            .map_err(|e| format!("closing control terminal {prefix}: {e}"))
+    }
 }
 
 impl Drop for EmbeddedServer {

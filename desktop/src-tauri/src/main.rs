@@ -98,6 +98,13 @@ pub struct AppState {
     /// disconnect tears down exactly its windows, and a reconnect re-opens its
     /// workspace windows with a fresh token under the same label.
     pub devserver_windows: Mutex<HashMap<String, Vec<DevserverWindow>>>,
+    /// The embedded control-terminal tenant prefix (`/control-N`) running each
+    /// scripted devserver's connect script, keyed by `Devserver.id`. Kept
+    /// separate from `devserver_windows` because this is a LOCAL embedded
+    /// tenant prefix, not a remote workspace prefix; teardown closes the tenant
+    /// (reaping the script PTY) on disconnect/forget, and reconnect must never
+    /// mistake it for a workspace window. Absent for a no-script devserver.
+    pub control_terminal_prefixes: Mutex<HashMap<String, String>>,
     /// Set when the user confirmed the quit dialog: the re-fired
     /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
     /// must pass instead of prompting again.
@@ -872,6 +879,17 @@ fn teardown_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str
         serve::close_outbound_workspace_windows(app, &window.window_id);
     }
     serve::close_window_by_label(app, &serve::control_terminal_label(id));
+    // Closing the control-terminal WINDOW doesn't stop the connect script: its
+    // tenant outlives the window. Reap the tenant (kills the script PTY) so a
+    // scripted devserver's disconnect/forget leaves nothing running.
+    let control_prefix = state.control_terminal_prefixes.lock().unwrap().remove(id);
+    if let Some(prefix) = control_prefix {
+        if let Some(embedded) = state.embedded.get() {
+            if let Err(e) = embedded.close_control_terminal(&prefix) {
+                tracing::warn!(devserver = %id, error = %e, "closing control terminal tenant failed");
+            }
+        }
+    }
 }
 
 /// Poll a devserver's info endpoint until it answers or the budget runs out.
@@ -985,8 +1003,15 @@ async fn connect_devserver(
         },
     );
     // The connection is up and its terminal is open, so put the control
-    // terminal away; the user can reopen it from the Window menu.
+    // terminal away; the user can reopen it from the Window menu. Record its
+    // tenant prefix so disconnect/forget can reap the connect script's PTY
+    // (closing the window alone leaves the script running on the host).
     if let Some(ct) = control {
+        state
+            .control_terminal_prefixes
+            .lock()
+            .unwrap()
+            .insert(id.clone(), ct.prefix.clone());
         serve::hide_and_bury_window(&app, &ct.label);
     }
     let _ = app.emit(serve::SERVES_CHANGED, ());
@@ -2011,6 +2036,7 @@ fn main() {
         remote_reopen: Mutex::new(HashMap::new()),
         devservers: devserver::DevserverConns::default(),
         devserver_windows: Mutex::new(HashMap::new()),
+        control_terminal_prefixes: Mutex::new(HashMap::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
     });
