@@ -283,12 +283,19 @@ function uploadAndInsertAll(
         // pasted images are almost always too big at intrinsic
         // size on a notes page, hence the small default.
         const onListLine = listLineAt(view.state, cursor) !== null;
-        const insert = onListLine
-          ? `![](${encPath}#w=${DEFAULT_INSERT_WIDTH_PX}) `
-          : `![](${encPath}#w=${DEFAULT_INSERT_WIDTH_PX})\n`;
+        const imageMarkdown = `![](${encPath}#w=${DEFAULT_INSERT_WIDTH_PX})`;
+        // Trailing separator keeps the next keystroke off the image:
+        // a space inline on a list line, a newline as its own block.
+        const insert = onListLine ? `${imageMarkdown} ` : `${imageMarkdown}\n`;
         view.dispatch({
           changes: { from: cursor, to: cursor, insert },
-          selection: { anchor: cursor + insert.length },
+          // Land the caret just past the image block, BEFORE the
+          // trailing separator, so it stays on the image's line
+          // instead of dropping to the next line / past the space.
+          // The atomic image widget renders the caret right after
+          // itself (see caret_mapping.ts: a caret at the image's end
+          // boundary is not "inside", so it maps through unchanged).
+          selection: { anchor: cursor + imageMarkdown.length },
           // Scroll the doc so the new caret stays in view.
           // Pasting / dropping at the bottom can push the cursor
           // off-screen; `scrollIntoView: true` tells CM6 to
