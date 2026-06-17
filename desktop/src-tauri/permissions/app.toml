@@ -18,7 +18,6 @@ permissions = [
   "allow-add-outbound-workspace",
   "allow-open-outbound-workspace",
   "allow-remove-outbound-workspace",
-  "allow-chan-bin-status",
   "allow-auth-status",
   "allow-open-signin",
   "allow-signout",
@@ -46,6 +45,9 @@ permissions = [
   "allow-zoom-out",
   "allow-zoom-reset",
   "allow-probe-url",
+  "allow-platform-os",
+  "allow-read-clipboard-text",
+  "allow-export-pdf-macos",
 ]
 
 [[permission]]
@@ -128,6 +130,21 @@ identifier = "allow-probe-url"
 description = "Enables the probe_url command."
 commands.allow = ["probe_url"]
 
+[[permission]]
+identifier = "allow-platform-os"
+description = "Enables the platform_os command."
+commands.allow = ["platform_os"]
+
+[[permission]]
+identifier = "allow-read-clipboard-text"
+description = "Enables the read_clipboard_text command."
+commands.allow = ["read_clipboard_text"]
+
+[[permission]]
+identifier = "allow-export-pdf-macos"
+description = "Enables the export_pdf_macos command (macOS native PDF export)."
+commands.allow = ["export_pdf_macos"]
+
 # Deliberately NOT in the workspace-window set: the macOS drag
 # pasteboard is system-wide, so this is granted only to locally-served
 # windows via capabilities/local-drop.json (workspace-*, terminal-*) —
@@ -151,11 +168,6 @@ commands.allow = ["open_outbound_workspace"]
 identifier = "allow-remove-outbound-workspace"
 description = "Enables the remove_outbound_workspace command."
 commands.allow = ["remove_outbound_workspace"]
-
-[[permission]]
-identifier = "allow-chan-bin-status"
-description = "Enables the chan_bin_status command."
-commands.allow = ["chan_bin_status"]
 
 [[permission]]
 identifier = "allow-auth-status"

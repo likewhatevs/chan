@@ -1699,6 +1699,46 @@ mod tests {
             .collect()
     }
 
+    /// Every command any `[[permission]]` block grants (regardless of which
+    /// set references it).
+    fn all_granted_app_commands() -> Vec<String> {
+        let v: toml::Value = toml::from_str(APP_PERMISSIONS_TOML).expect("app permissions parse");
+        v["permission"]
+            .as_array()
+            .expect("permission blocks")
+            .iter()
+            .flat_map(|p| {
+                p["commands"]["allow"]
+                    .as_array()
+                    .expect("commands.allow is an array")
+                    .iter()
+                    .map(|c| c.as_str().expect("command is a string").to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Command names a JS source passes to `call('cmd', ...)` (the literal
+    /// first argument). Used to read the launcher's `invoke('cmd')` sites.
+    fn js_invoke_commands(src: &str, call: &str) -> Vec<String> {
+        let needle = format!("{call}(");
+        src.split(needle.as_str())
+            .skip(1)
+            .filter_map(|part| {
+                let part = part.trim_start();
+                let quote = part.chars().next()?;
+                if quote != '"' && quote != '\'' {
+                    return None;
+                }
+                let rest = &part[1..];
+                let end = rest.find(quote)?;
+                let cmd = &rest[..end];
+                (!cmd.is_empty() && cmd.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                    .then(|| cmd.to_string())
+            })
+            .collect()
+    }
+
     #[test]
     fn workspace_capability_grants_opener_to_workspace_and_outbound_windows() {
         let windows = capability_windows(WORKSPACE_CAPABILITY_JSON);
@@ -1760,30 +1800,69 @@ mod tests {
         }
     }
 
+    // Tauri's ACL denies any `generate_handler!` command that no granted
+    // permission allows. The gate and the mock smoke both bypass the ACL (unit
+    // tests call the Rust fns directly; a mocked Tauri has no ACL), so a
+    // registered-but-ungranted command only fails in the real app. These three
+    // tests pin the command/ACL parity so drift reds the gate instead.
+
     #[test]
-    fn app_acl_grants_every_devserver_command_to_main_window() {
-        // Tauri's ACL denies any `generate_handler!` command that no granted
-        // permission allows. The gate and the mock smoke both bypass the ACL
-        // (unit tests call the Rust fns directly; a mocked Tauri has no ACL),
-        // so a registered-but-ungranted command only fails in the real app.
-        // Pin the parity: every launcher-invoked devserver command must be
-        // granted to the main-window set.
-        const MAIN_RS: &str = include_str!("main.rs");
-        let devserver_commands: Vec<String> = invoke_handler_commands(MAIN_RS)
-            .into_iter()
-            .filter(|c| c.contains("devserver"))
-            .collect();
+    fn app_acl_grants_every_launcher_command() {
+        // Every command the launcher (main.js) invokes must be granted to the
+        // main-window set. A throw from one denied invoke during the main
+        // render blanks the whole launcher (e.g. list_devservers in refresh).
+        const MAIN_JS: &str = include_str!("../../src/main.js");
+        let invoked = js_invoke_commands(MAIN_JS, "invoke");
         assert!(
-            devserver_commands.len() >= 10,
-            "expected the devserver commands in generate_handler!, found {devserver_commands:?}",
+            invoked.len() >= 20,
+            "expected the launcher's invoke() commands, found {invoked:?}",
         );
         let granted = app_permission_set_commands("main-window");
-        for command in &devserver_commands {
+        for command in &invoked {
             assert!(
                 granted.contains(command),
-                "`{command}` is registered in generate_handler! but not granted to the main-window \
-                 ACL set; add a permission for it to permissions/app.toml, or the launcher SPA's \
-                 invoke is denied at runtime",
+                "the launcher invokes `{command}` but it is not in the main-window ACL set; its IPC \
+                 is denied at runtime. Add a permission to permissions/app.toml.",
+            );
+        }
+    }
+
+    #[test]
+    fn app_acl_grants_every_registered_command() {
+        // Complete coverage: every command in generate_handler! must be
+        // grantable somewhere the SPA can reach it. App-command grants come
+        // from the two sets plus the local-drop capability (read_dropped_paths,
+        // scoped to locally-served windows). Catches a command the workspace
+        // SPA invokes (e.g. platform_os, read_clipboard_text) that no set
+        // grants.
+        const MAIN_RS: &str = include_str!("main.rs");
+        let mut granted: std::collections::HashSet<String> =
+            app_permission_set_commands("main-window")
+                .into_iter()
+                .chain(app_permission_set_commands("workspace-window"))
+                .collect();
+        granted.insert("read_dropped_paths".to_string());
+        for command in invoke_handler_commands(MAIN_RS) {
+            assert!(
+                granted.contains(&command),
+                "`{command}` is in generate_handler! but granted by no permission set or capability; \
+                 the launcher or workspace SPA invokes it and Tauri denies it at runtime",
+            );
+        }
+    }
+
+    #[test]
+    fn app_acl_has_no_stale_grants() {
+        // Reverse parity: every command app.toml grants must still exist in
+        // generate_handler!, so a removed command's grant doesn't linger.
+        const MAIN_RS: &str = include_str!("main.rs");
+        let registered: std::collections::HashSet<String> =
+            invoke_handler_commands(MAIN_RS).into_iter().collect();
+        for command in all_granted_app_commands() {
+            assert!(
+                registered.contains(&command),
+                "permissions/app.toml grants `{command}` but it is not in generate_handler! (a stale \
+                 grant; remove its permission)",
             );
         }
     }

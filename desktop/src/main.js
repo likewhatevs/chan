@@ -109,10 +109,15 @@ async function refresh(force = false) {
   if (!homeDir) {
     try { homeDir = await invoke('home_dir'); } catch { homeDir = ''; }
   }
-  const [workspaces, devservers] = await Promise.all([
-    invoke('list_workspaces'),
-    invoke('list_devservers'),
-  ]);
+  const workspaces = await invoke('list_workspaces');
+  // A devserver-list failure must not blank the whole launcher; degrade to no
+  // devserver sections (the workspace list still renders).
+  let devservers = [];
+  try {
+    devservers = await invoke('list_devservers');
+  } catch (e) {
+    console.warn('list_devservers failed:', e);
+  }
   const json = JSON.stringify({ workspaces, devservers });
   if (force || json !== lastWorkspacesJson) {
     lastWorkspacesJson = json;
