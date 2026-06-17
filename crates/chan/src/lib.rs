@@ -330,9 +330,10 @@ enum Command {
         /// Port to bind.
         #[arg(long, default_value_t = 8787)]
         port: u16,
-        /// Run under a systemd user service (Linux), creating and following
-        /// it. Not yet available; a plain `chan devserver` runs in the
-        /// foreground for now.
+        /// Run under a systemd user service (Linux): create and start the
+        /// `chan-devserver.service` user unit (re-attaching if it is already
+        /// running), so it survives the launching shell and logout, then
+        /// follow its journal. Off Linux, runs in the foreground.
         #[arg(long)]
         systemd: bool,
     },
@@ -1389,9 +1390,11 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         .with_context(|| format!("running server on {addr}"))
 }
 
-/// Run a headless multi-workspace devserver bound to `bind:port`. Runs in
-/// the foreground; `--systemd` user-service supervision is not yet wired, so
-/// it prints a note and stays in the foreground.
+/// Run a headless multi-workspace devserver bound to `bind:port`. By default
+/// it runs in the foreground. On Linux, `--systemd` supervises it under the
+/// `chan-devserver.service` systemd user service (surviving the launching
+/// shell and logout) and re-attaches when that unit is already running; off
+/// Linux it prints a note and runs in the foreground.
 async fn cmd_devserver(bind: IpAddr, port: u16, systemd: bool) -> Result<()> {
     let addr = SocketAddr::new(bind, port);
     if !addr.ip().is_loopback() {
