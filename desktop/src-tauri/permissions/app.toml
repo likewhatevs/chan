@@ -22,6 +22,16 @@ permissions = [
   "allow-auth-status",
   "allow-open-signin",
   "allow-signout",
+  "allow-add-devserver",
+  "allow-list-devservers",
+  "allow-remove-devserver",
+  "allow-connect-devserver",
+  "allow-disconnect-devserver",
+  "allow-list-devserver-workspaces",
+  "allow-open-devserver-workspace",
+  "allow-reconnect-devserver",
+  "allow-update-devserver",
+  "allow-forget-devserver-workspace",
 ]
 
 [[set]]
@@ -161,3 +171,53 @@ commands.allow = ["open_signin"]
 identifier = "allow-signout"
 description = "Enables the signout command."
 commands.allow = ["signout"]
+
+[[permission]]
+identifier = "allow-add-devserver"
+description = "Enables the add_devserver command."
+commands.allow = ["add_devserver"]
+
+[[permission]]
+identifier = "allow-list-devservers"
+description = "Enables the list_devservers command."
+commands.allow = ["list_devservers"]
+
+[[permission]]
+identifier = "allow-remove-devserver"
+description = "Enables the remove_devserver command."
+commands.allow = ["remove_devserver"]
+
+[[permission]]
+identifier = "allow-connect-devserver"
+description = "Enables the connect_devserver command."
+commands.allow = ["connect_devserver"]
+
+[[permission]]
+identifier = "allow-disconnect-devserver"
+description = "Enables the disconnect_devserver command."
+commands.allow = ["disconnect_devserver"]
+
+[[permission]]
+identifier = "allow-list-devserver-workspaces"
+description = "Enables the list_devserver_workspaces command."
+commands.allow = ["list_devserver_workspaces"]
+
+[[permission]]
+identifier = "allow-open-devserver-workspace"
+description = "Enables the open_devserver_workspace command."
+commands.allow = ["open_devserver_workspace"]
+
+[[permission]]
+identifier = "allow-reconnect-devserver"
+description = "Enables the reconnect_devserver command."
+commands.allow = ["reconnect_devserver"]
+
+[[permission]]
+identifier = "allow-update-devserver"
+description = "Enables the update_devserver command."
+commands.allow = ["update_devserver"]
+
+[[permission]]
+identifier = "allow-forget-devserver-workspace"
+description = "Enables the forget_devserver_workspace command."
+commands.allow = ["forget_devserver_workspace"]

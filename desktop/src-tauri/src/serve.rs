@@ -1654,6 +1654,51 @@ mod tests {
             .collect()
     }
 
+    /// Every command a permission set grants, resolved through the
+    /// `[[permission]]` blocks it references. Panics if the set names a
+    /// permission identifier that has no block (also a parity failure).
+    fn app_permission_set_commands(set_id: &str) -> Vec<String> {
+        let v: toml::Value = toml::from_str(APP_PERMISSIONS_TOML).expect("app permissions parse");
+        let blocks = v["permission"].as_array().expect("permission blocks");
+        app_permission_set(set_id)
+            .iter()
+            .flat_map(|id| {
+                let block = blocks
+                    .iter()
+                    .find(|p| p["identifier"].as_str() == Some(id))
+                    .unwrap_or_else(|| panic!("set references missing permission {id}"));
+                block["commands"]["allow"]
+                    .as_array()
+                    .expect("commands.allow is an array")
+                    .iter()
+                    .map(|c| c.as_str().expect("command is a string").to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// Command identifiers registered in `generate_handler![]`, module paths
+    /// stripped (`auth::auth_status` -> `auth_status`), comments and cfg
+    /// attributes dropped.
+    fn invoke_handler_commands(main_rs: &str) -> Vec<String> {
+        let marker = "generate_handler![";
+        let start = main_rs.find(marker).expect("generate_handler! present") + marker.len();
+        // The macro closes with `])`; a bare `]` would match a comment's `[]`
+        // (e.g. "returns [] off macOS") or a cfg attribute's `)]` first.
+        let len = main_rs[start..]
+            .find("])")
+            .expect("generate_handler! closes");
+        main_rs[start..start + len]
+            .lines()
+            .filter_map(|l| l.split("//").next())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .split(',')
+            .map(|t| t.rsplit("::").next().unwrap_or(t).trim().to_string())
+            .filter(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            .collect()
+    }
+
     #[test]
     fn workspace_capability_grants_opener_to_workspace_and_outbound_windows() {
         let windows = capability_windows(WORKSPACE_CAPABILITY_JSON);
@@ -1711,6 +1756,34 @@ mod tests {
             assert!(
                 workspace_set.iter().any(|p| p == expected),
                 "workspace-window app permission set must include {expected}: {workspace_set:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn app_acl_grants_every_devserver_command_to_main_window() {
+        // Tauri's ACL denies any `generate_handler!` command that no granted
+        // permission allows. The gate and the mock smoke both bypass the ACL
+        // (unit tests call the Rust fns directly; a mocked Tauri has no ACL),
+        // so a registered-but-ungranted command only fails in the real app.
+        // Pin the parity: every launcher-invoked devserver command must be
+        // granted to the main-window set.
+        const MAIN_RS: &str = include_str!("main.rs");
+        let devserver_commands: Vec<String> = invoke_handler_commands(MAIN_RS)
+            .into_iter()
+            .filter(|c| c.contains("devserver"))
+            .collect();
+        assert!(
+            devserver_commands.len() >= 10,
+            "expected the devserver commands in generate_handler!, found {devserver_commands:?}",
+        );
+        let granted = app_permission_set_commands("main-window");
+        for command in &devserver_commands {
+            assert!(
+                granted.contains(command),
+                "`{command}` is registered in generate_handler! but not granted to the main-window \
+                 ACL set; add a permission for it to permissions/app.toml, or the launcher SPA's \
+                 invoke is denied at runtime",
             );
         }
     }
