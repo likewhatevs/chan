@@ -87,7 +87,7 @@ The first launch prints the URL on stderr and opens the user's default browser. 
 
 ## Reach a workspace remotely
 
-The tunnel is a core part of chan, not a hosted add-on. Instead of binding a local port, `chan serve` can publish a workspace over an outbound tunnel to a gateway that reverse-proxies it back to you: no inbound ports, no router config. chan-desktop can also open a remote `chan serve` directly over HTTP/2.
+The tunnel is a core part of chan, not a hosted add-on. Instead of binding a local port, `chan serve` can publish a workspace over an outbound tunnel to a gateway that reverse-proxies it back to you: no inbound ports, no router config. chan-desktop can also open a remote `chan serve` directly over HTTP/2. A third path is `chan devserver`: one headless server on a box hosts many workspaces behind a single port, and chan-desktop attaches to it and lists them in their own group (reach it over `ssh -L`). See the [workspaces manual](docs/manual/workspaces.md).
 
 The gateway is that server side, and it lives in this repo under `gateway/` for you to run yourself. `--tunnel-url` defaults to `https://workspace.chan.app/v1/tunnel`, the maintainer's own deployment of that code; it is experimental, with sign-in off by default. Commands and flags are in the [tunnel manual](docs/manual/tunnel.md); see [`gateway/README.md`](gateway/README.md) to stand up your own gateway.
 

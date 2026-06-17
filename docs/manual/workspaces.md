@@ -30,6 +30,18 @@ Useful `chan serve` flags:
 
 `chan --help` documents the full flag surface.
 
+## Many workspaces on one box: `chan devserver`
+
+On a box you reach over SSH or a LAN, `chan devserver` runs one server that hosts many workspaces behind a single port:
+
+```sh
+chan devserver --bind 127.0.0.1 --port 8787
+```
+
+With a devserver running, a `chan serve PATH` on that same box registers its workspace with the devserver and exits instead of binding its own port, so one process owns each workspace. `chan serve --standalone PATH` opts out and binds its own server as before. The devserver remembers which workspaces were mounted and brings them back when it restarts.
+
+There is no TLS and only a bearer-token gate, so keep the bind on loopback and reach a remote devserver over an `ssh -L` tunnel rather than binding it on a public interface. Chan Desktop attaches to a devserver and lists its workspaces in their own group (see [Chan Desktop](desktop.md)).
+
 ## Workspace contents
 
 Chan watches the workspace tree for external edits. The files are still yours: edit them with another program, commit them to git, or move the folder as a normal directory.

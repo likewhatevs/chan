@@ -43,3 +43,19 @@ ssh user@host -L 8787:localhost:8787
 ```
 
 A Lima VM on a Mac is a convenient remote: it is a real Linux host reachable from the Mac, so the outbound flow exercises the full remote path locally.
+
+## Devservers
+
+A devserver is a `chan devserver` running on a box that hosts many workspaces behind one port (see [workspaces](workspaces.md)). Chan Desktop attaches to it and lists its workspaces in their own launcher group.
+
+1. New -> Devserver, and fill in the host and port. An optional script runs to bring the devserver up before the desktop dials it, for example `ssh user@box -L 8787:localhost:8787 chan devserver --bind 127.0.0.1 --port 8787`. Adding a devserver connects to it right away.
+
+2. The group header carries the lifecycle controls:
+
+   - **Connect / Disconnect** the devserver. While connected, the group lists its live workspace rows.
+   - **New Terminal** (connected only) opens another standalone terminal on the devserver.
+   - The caret menu holds **Edit** (disconnected only, so a live connection's recipe cannot change under it) and **Forget** (drops the saved devserver).
+
+3. Each workspace row has **Open** (opens that workspace in a native window) and **Forget** (unmounts it from the devserver).
+
+If a scripted connect fails, the desktop keeps the control terminal open showing why and offers to retry, edit the recipe, or abandon the devserver.
