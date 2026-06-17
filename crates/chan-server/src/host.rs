@@ -375,6 +375,25 @@ impl WorkspaceHost {
             .any(|entry| entry.window_id.as_deref() == Some(window_id))
     }
 
+    /// Raw replay-ring PTY bytes for the terminal tenant mounted at
+    /// `prefix` (empty when none is mounted there). Reaches into that
+    /// tenant's terminal registry like [`tenant_has_window_sessions`](
+    /// Self::tenant_has_window_sessions). Lets a desktop read a CONTROL
+    /// TERMINAL's output to scrape a token a connect script printed, in the
+    /// case where that output never reaches the desktop another way.
+    pub fn terminal_tenant_scrollback(&self, prefix: &str) -> Vec<u8> {
+        let Ok(prefix) = sanitize_prefix(prefix) else {
+            return Vec::new();
+        };
+        let Ok(workspaces) = self.workspaces.read() else {
+            return Vec::new();
+        };
+        workspaces
+            .get(&prefix)
+            .map(|runtime| runtime.artifacts.terminal_sessions.all_scrollback())
+            .unwrap_or_default()
+    }
+
     /// Close the workspace mounted at `prefix`.
     ///
     /// Returns `Ok(false)` when no workspace is mounted there. Closing
@@ -906,6 +925,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(build_info.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn terminal_tenant_scrollback_empty_when_no_output() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = Arc::new(WorkspaceHost::new(lib));
+
+        // No tenant mounted at the prefix -> empty (no panic).
+        assert!(host.terminal_tenant_scrollback("/absent").is_empty());
+
+        // A mounted terminal tenant with no session opened yet -> empty.
+        // (The actual byte capture is covered by the registry's
+        // `all_scrollback` test, which drives a session.)
+        host.open_terminal_session(serve_config("/term-sb"))
+            .await
+            .expect("open terminal tenant");
+        assert!(host.terminal_tenant_scrollback("/term-sb").is_empty());
     }
 
     #[test]

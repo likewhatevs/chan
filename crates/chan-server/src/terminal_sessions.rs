@@ -787,6 +787,21 @@ impl Registry {
             .collect()
     }
 
+    /// Raw replay-ring bytes of every live session in this registry,
+    /// concatenated. A standalone terminal tenant typically holds one
+    /// session, so this is its full PTY output for a caller that scrapes
+    /// it (e.g. reading a connect script's output to find a printed token).
+    pub fn all_scrollback(&self) -> Vec<u8> {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        let mut out = Vec::new();
+        for session in sessions.values() {
+            if !session.closed.load(Ordering::Relaxed) {
+                out.extend_from_slice(&session.scrollback());
+            }
+        }
+        out
+    }
+
     /// Restart every live session matching the given tab name and/or
     /// group, for `cs terminal restart`. Same selector semantics as
     /// `write_input_matching` (a `None` axis matches all; both narrow to
@@ -3014,6 +3029,30 @@ mod tests {
         assert!(
             !out.contains("PICK=<default>"),
             "tenant default ran despite an explicit command: {out:?}"
+        );
+        registry.close(handle.id(), CloseReason::Explicit);
+    }
+
+    #[tokio::test]
+    async fn all_scrollback_returns_session_output() {
+        let registry = Arc::new(Registry::new(test_config(4096, 4, 60)));
+        let mut handle = registry
+            .create(CreateOptions {
+                size: test_size(),
+                tab_name: None,
+                tab_group: None,
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: Some("printf 'SCRAPE=<tok123>\\n'".into()),
+                env: Default::default(),
+            })
+            .unwrap();
+        let _ = collect_until(&mut handle, "SCRAPE=<tok123>", Duration::from_secs(5)).await;
+        let text = String::from_utf8_lossy(&registry.all_scrollback()).into_owned();
+        assert!(
+            text.contains("SCRAPE=<tok123>"),
+            "all_scrollback missing the session output: {text:?}"
         );
         registry.close(handle.id(), CloseReason::Explicit);
     }
