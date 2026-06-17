@@ -712,14 +712,14 @@ fn write_xattrs(_path: &Path, _xattrs: &[(std::ffi::OsString, Vec<u8>)]) {}
 /// `FlushFileBuffers` is not supported on Windows, where NTFS commits
 /// dirent changes through the journal as part of the rename itself.
 #[cfg(unix)]
-fn sync_dir(dir: &Path) -> Result<()> {
+pub fn sync_dir(dir: &Path) -> Result<()> {
     let f = std::fs::File::open(dir)?;
     f.sync_all()?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> Result<()> {
+pub fn sync_dir(_dir: &Path) -> Result<()> {
     Ok(())
 }
 
