@@ -659,23 +659,18 @@ function ensureDeselectListener(view: EditorView): void {
       clearImageSelection(view);
       return;
     }
-    // Other modifier combos: leave alone so Cmd+A / Cmd+S / etc. keep
-    // working when the image happens to be selected.
-    if (hasMod || e.altKey) return;
-    if (e.key === "Backspace" || e.key === "Delete") {
-      e.preventDefault();
-      const range = imageNodeRange(view, hintPos);
-      if (!range) return;
-      // Delete the whole `![alt](src)` source. Caret lands where
-      // the image used to start so typing continues in place.
-      view.dispatch({
-        changes: { from: range.from, to: range.to, insert: "" },
-        selection: { anchor: range.from },
-      });
-      clearImageSelection(view);
-      view.focus();
-      return;
-    }
+    // Backspace / Delete are deliberately NOT handled here. The
+    // EditorView.atomicRanges entry (imageDecorations) already gives
+    // correct, DIRECTIONAL deletion: Backspace with the caret at the
+    // image's trailing edge (or Delete at the leading edge) removes the
+    // whole `![alt](src)` atom in one stroke, while a delete one or two
+    // positions OUTSIDE the image edits the adjacent character. A global
+    // delete keyed on the `data-selected` ring was non-directional and
+    // fired off a ring the caret had already left: a one-past Backspace
+    // deletes the char and lands the caret on the edge, which sets the
+    // ring synchronously, and the same keydown then nuked the image too
+    // (char + image gone in one press). Letting CM6's atomic deletion
+    // stand fixes that; the ring still drives Enter / Cmd+Enter / Cmd+C.
   });
 }
 
