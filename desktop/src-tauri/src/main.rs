@@ -965,10 +965,18 @@ async fn connect_devserver(
     let control = if script.trim().is_empty() {
         None
     } else {
-        Some(
-            serve::spawn_control_terminal_window(app.clone(), Arc::clone(&state), &id, script)
-                .await?,
-        )
+        let ct = serve::spawn_control_terminal_window(app.clone(), Arc::clone(&state), &id, script)
+            .await?;
+        // Track the control tenant prefix NOW, before the fallible scrape /
+        // wait / open below: a connect that fails partway leaves the script
+        // PTY running, and the failure survey's Retry / Edit / Abandon reap it
+        // through teardown_devserver_windows (which reads this map).
+        state
+            .control_terminal_prefixes
+            .lock()
+            .unwrap()
+            .insert(id.clone(), ct.prefix.clone());
+        Some(ct)
     };
     let token = match &control {
         Some(ct) => scrape_control_terminal_token(&state, &ct.prefix).await?,
@@ -1003,15 +1011,9 @@ async fn connect_devserver(
         },
     );
     // The connection is up and its terminal is open, so put the control
-    // terminal away; the user can reopen it from the Window menu. Record its
-    // tenant prefix so disconnect/forget can reap the connect script's PTY
-    // (closing the window alone leaves the script running on the host).
+    // terminal away; the user can reopen it from the Window menu. Its tenant
+    // prefix was tracked at spawn time so disconnect/forget reaps the script.
     if let Some(ct) = control {
-        state
-            .control_terminal_prefixes
-            .lock()
-            .unwrap()
-            .insert(id.clone(), ct.prefix.clone());
         serve::hide_and_bury_window(&app, &ct.label);
     }
     let _ = app.emit(serve::SERVES_CHANGED, ());

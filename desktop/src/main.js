@@ -211,7 +211,7 @@ function applyChanBusyState(payload) {
 /// ESC / backdrop / [X] dismiss.
 let activeNewDialog = null;
 
-function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
+function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null, autoConnectOnSave = false) {
   // Singleton: a second [New] click just switches the open modal's
   // choice instead of stacking overlays.
   if (activeNewDialog) {
@@ -523,14 +523,15 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
     }
     close();
     await refresh(true);
-    if (addedId) {
-      // Adding a devserver auto-connects it (mirrors opening a local
-      // workspace right after registering it). Drive the new section's own
-      // Connect button so the user sees the same Connecting.../reconcile
-      // feedback and error handling as a manual connect. Edit never
-      // auto-connects.
+    // Auto-connect after Add (always) and after an Edit reached from the
+    // connect-failure survey (autoConnectOnSave). Drive the section's own
+    // Connect button so the user sees the same Connecting.../reconcile
+    // feedback and failure survey as a manual connect. A plain Edit (from the
+    // section caret) never auto-connects.
+    const autoConnectId = addedId || (existing && autoConnectOnSave ? existing.id : null);
+    if (autoConnectId) {
       const connect = main.querySelector(
-        `section[data-devserver-id="${addedId}"] [data-act="connect-devserver"]`,
+        `section[data-devserver-id="${autoConnectId}"] [data-act="connect-devserver"]`,
       );
       if (connect) connect.click();
     }
@@ -740,10 +741,15 @@ function bindDevserverSectionEvents(devservers) {
         if (!id) return;
         connect.disabled = true;
         connect.textContent = 'Connecting...';
+        // Disable the caret too: Edit/Forget must not fire against the recipe
+        // an in-flight connect is using. The re-render below re-enables it.
+        const caret = section.querySelector('[data-act="menu-toggle"]');
+        if (caret) caret.disabled = true;
+        let failure = null;
         try {
           await invoke('connect_devserver', { id });
         } catch (e) {
-          showError(e);
+          failure = e;
         }
         // Force the re-render even when the devserver list JSON is
         // unchanged: a failed connect leaves the state disconnected, which
@@ -751,6 +757,18 @@ function bindDevserverSectionEvents(devservers) {
         // "Connecting...". Forcing reconciles it back to "Connect" (and to
         // "Disconnect" on success). Mirrors the local-workspace toggle.
         await refresh(true);
+        if (failure != null) {
+          const ds = byId[id];
+          // A scripted connect that failed gets the retry/edit/abandon
+          // survey (the control terminal stays open showing why). A no-script
+          // connect just surfaces the error; the button has already
+          // reconciled, so Connect/Edit/Forget remain available.
+          if (ds && ds.script && ds.script.trim()) {
+            await handleConnectFailure(ds, failure);
+          } else {
+            showError(failure);
+          }
+        }
       });
     }
     const disconnect = section.querySelector('[data-act="disconnect-devserver"]');
@@ -1134,6 +1152,117 @@ function showTurnOnFailureDialog(reason) {
     });
     document.addEventListener('keydown', onKey);
     okBtn.focus();
+  });
+}
+
+/// React to a failed connect to a SCRIPTED devserver: survey the user, then
+/// perform the chosen recovery. Retry re-runs the same connect command (after
+/// reaping the failed control terminal); Edit reaps it and reopens the recipe
+/// editor, which auto-connects on Save; Abandon forgets the devserver outright.
+/// Dismiss leaves the devserver disconnected with its control terminal open for
+/// inspection. Each recovery routes through the section's own Connect button so
+/// a repeated failure re-surveys.
+async function handleConnectFailure(ds, reason) {
+  const choice = await showConnectFailureSurvey(ds, reason);
+  if (choice === 'retry') {
+    // Reap the failed attempt's control terminal before re-running, then drive
+    // the section's Connect button so a repeated failure re-surveys.
+    try {
+      await invoke('disconnect_devserver', { id: ds.id });
+    } catch (e) {
+      console.warn('clearing the failed devserver connect before retry:', e);
+    }
+    await refresh(true);
+    const connect = main.querySelector(
+      `section[data-devserver-id="${ds.id}"] [data-act="connect-devserver"]`,
+    );
+    if (connect) connect.click();
+  } else if (choice === 'edit') {
+    try {
+      await invoke('disconnect_devserver', { id: ds.id });
+    } catch (e) {
+      console.warn('clearing the failed devserver connect before edit:', e);
+    }
+    await refresh(true);
+    showNewWorkspaceDialog('devserver', ds, true);
+  } else if (choice === 'abandon') {
+    try {
+      await invoke('remove_devserver', { id: ds.id });
+    } catch (e) {
+      showError(e);
+      return;
+    }
+    await refresh(true);
+  }
+}
+
+/// Modal survey for a failed connect to a scripted devserver. The control
+/// terminal stays open behind it so the user can read what went wrong; this
+/// offers the three recoveries from the spec. Resolves to
+/// 'retry' | 'edit' | 'abandon' | 'dismiss' (Esc / backdrop / Close dismiss).
+function showConnectFailureSurvey(ds, reason) {
+  return new Promise((resolve) => {
+    const name = (ds.label && ds.label.trim()) || ds.host || 'devserver';
+    const msg = typeof reason === 'string' ? reason : (reason && reason.message) || String(reason);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'preflight-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'ds-fail-title');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'preflight-dialog';
+
+    const title = document.createElement('h2');
+    title.id = 'ds-fail-title';
+    title.textContent = `Couldn't connect to ${name}`;
+    dialog.appendChild(title);
+
+    const body = document.createElement('p');
+    body.className = 'preflight-intro';
+    body.textContent =
+      `The connect command didn't bring the devserver up: ${msg} ` +
+      'Its control terminal is still open so you can see what happened.';
+    dialog.appendChild(body);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'preflight-buttons';
+    function mk(label, cls, action) {
+      const b = document.createElement('button');
+      b.className = `btn ${cls}`.trim();
+      b.type = 'button';
+      b.textContent = label;
+      b.addEventListener('click', () => finish(action));
+      return b;
+    }
+    // Abandon (destructive) on the far side from the default Retry, matching
+    // the launcher's other dialogs.
+    buttons.appendChild(mk('Abandon', 'danger', 'abandon'));
+    buttons.appendChild(mk('Edit', '', 'edit'));
+    const retry = mk('Retry', 'primary', 'retry');
+    buttons.appendChild(retry);
+    dialog.appendChild(buttons);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    function finish(action) {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(action);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        finish('dismiss');
+      }
+    }
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) finish('dismiss');
+    });
+    document.addEventListener('keydown', onKey);
+    retry.focus();
   });
 }
 
