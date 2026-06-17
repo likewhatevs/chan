@@ -1309,8 +1309,8 @@ async function workspaceWithRetry(): ReturnType<typeof api.workspace> {
 /// already wired by `watchSystemTheme()`.
 async function bootstrapTerminalOnly(): Promise<void> {
   ui.terminalOnly = true;
-  // Force the docked file browsers off: they default to `left: true` and
-  // would fetch `/api/files`, which the terminal tenant does not serve.
+  // Force the docked file browsers off: a user may have toggled one on,
+  // and it would fetch `/api/files`, which the terminal tenant does not serve.
   browserSidePanes.left = false;
   browserSidePanes.right = false;
   bootstrapHydrated = false;
@@ -2712,10 +2712,11 @@ export const browserSidePanes = $state<{
   left: boolean;
   right: boolean;
 }>({
-  // Docked FB on left by default: the launch surface for first-boot.
+  // No docked File Browser by default: a new workspace opens with
+  // just the empty pane.
   // chan-server's `BrowserSidePanes::default()` matches this
   // shape, so a fresh preferences.toml lands here cleanly.
-  left: true,
+  left: false,
   right: false,
 });
 

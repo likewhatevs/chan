@@ -176,14 +176,14 @@ pub struct BrowserSidePanes {
 }
 
 impl Default for BrowserSidePanes {
-    /// First-boot opens with the docked File Browser on the
-    /// LEFT-hand side instead of spawning an FB tab. Users who
-    /// explicitly toggle the left dock off keep their setting
-    /// (serde reads their persisted preferences before this
-    /// default kicks in).
+    /// A new workspace opens with just the empty pane: no docked
+    /// File Browser on either side. The SPA's `browserSidePanes`
+    /// default mirrors this shape. Users who explicitly toggle a
+    /// dock on keep their setting (serde reads their persisted
+    /// preferences before this default kicks in).
     fn default() -> Self {
         Self {
-            left: true,
+            left: false,
             right: false,
         }
     }
@@ -248,23 +248,21 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn browser_side_panes_default_is_left_docked() {
-        // First-boot opens with the docked FB on the LEFT-hand
-        // side; right stays empty. Replaces the old default
-        // (both false), which paired with a now-retired
-        // App.svelte first-boot openBrowser tab spawn.
+    fn browser_side_panes_default_is_undocked() {
+        // A new workspace opens with just the empty pane: both
+        // docks off. Mirrors the SPA `browserSidePanes` default.
         let bsp = BrowserSidePanes::default();
-        assert!(bsp.left);
+        assert!(!bsp.left);
         assert!(!bsp.right);
     }
 
     #[test]
-    fn editor_prefs_default_carries_left_docked_fb() {
-        // Cross-check: the prefs-level default also surfaces
-        // the docked-left FB so a missing preferences.toml
-        // produces the same first-boot UX as a fresh one.
+    fn editor_prefs_default_carries_undocked_fb() {
+        // Cross-check: the prefs-level default also keeps both
+        // docks off so a missing preferences.toml produces the
+        // same first-boot UX as a fresh one.
         let prefs = EditorPrefs::default();
-        assert!(prefs.browser_side_panes.left);
+        assert!(!prefs.browser_side_panes.left);
         assert!(!prefs.browser_side_panes.right);
     }
 
