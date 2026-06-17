@@ -790,6 +790,13 @@ fn add_devserver(
                 existing.id.clone()
             }
             None => {
+                // Keep this id a UUID, never a bare numeric counter: it rides in
+                // the control terminal's window label (`control-terminal-<id>`),
+                // and the SPA's cross-window drag scope strips a trailing
+                // `-<digits>` from the `?w=` label. A `control-terminal-3` would
+                // collapse to the bare `control-terminal` scope, letting tabs
+                // drag between two devservers' control terminals; a UUID keeps
+                // each scope distinct (the F6 d&d isolation).
                 let entry = Devserver {
                     id: uuid::Uuid::new_v4().to_string(),
                     host,
