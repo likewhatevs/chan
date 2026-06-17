@@ -20,6 +20,7 @@ use tower::ServiceExt;
 
 use crate::desktop_window_ops::DesktopBridge;
 use crate::state::WorkspaceCell;
+use crate::terminal_sessions::CloseReason;
 use crate::{
     build_app, build_terminal_app, sanitize_prefix, AppArtifacts, Error, ServeConfig, ServeHandle,
 };
@@ -426,6 +427,53 @@ impl WorkspaceHost {
         Ok(true)
     }
 
+    /// Close the terminal-only tenant mounted at `prefix`, reaping its PTYs.
+    ///
+    /// Returns `Ok(false)` when nothing is mounted there. chan-desktop calls
+    /// this on Disconnect AND Forget of a scripted devserver: destroying the
+    /// webview window alone leaves the control terminal's connect script
+    /// RUNNING on the host, because the tenant (mounted via
+    /// [`open_terminal_session_with_command`](Self::open_terminal_session_with_command))
+    /// outlives the window that drove it.
+    ///
+    /// This explicitly `close_all`s the tenant's terminal registry so every
+    /// PTY child is sent its `Kill` synchronously — the script process is
+    /// gone by the time this returns — rather than leaning on the per-tenant
+    /// prune task to later observe the shutdown signal. The shared shutdown
+    /// signal then stops the accept loops and background tasks before the
+    /// runtime drops. The flock-release tail mirrors
+    /// [`close_workspace`](Self::close_workspace) so pointing this at a
+    /// workspace tenant by mistake still tears it down race-free; a terminal
+    /// tenant has no workspace cell, so that wait is skipped.
+    pub fn close_terminal_tenant(&self, prefix: &str) -> Result<bool, Error> {
+        let prefix = sanitize_prefix(prefix).map_err(Error::Config)?;
+        let runtime = {
+            let mut workspaces = self
+                .workspaces
+                .write()
+                .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+            workspaces.remove(&prefix)
+        };
+        let Some(runtime) = runtime else {
+            return Ok(false);
+        };
+        // Reap every PTY now: an explicit Disconnect/Forget must stop the
+        // connect script's process at once, not whenever the prune task next
+        // wakes on the shutdown signal. `close_all` drains the session map
+        // and Kills each child; it is idempotent, so the shutdown-driven
+        // prune that follows is a no-op.
+        runtime
+            .artifacts
+            .terminal_sessions
+            .close_all(CloseReason::Shutdown);
+        let released = runtime.shutdown();
+        drop(runtime);
+        if let Some(weak) = released {
+            wait_for_workspace_release(&weak);
+        }
+        Ok(true)
+    }
+
     /// Snapshot the mounted prefixes.
     pub fn mounted_prefixes(&self) -> Result<Vec<String>, Error> {
         let workspaces = self
@@ -580,7 +628,9 @@ fn wait_for_workspace_release(weak: &Weak<Workspace>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal_sessions::CreateOptions;
     use axum::body::to_bytes;
+    use portable_pty::PtySize;
 
     fn serve_config(prefix: &str) -> ServeConfig {
         ServeConfig {
@@ -943,6 +993,67 @@ mod tests {
             .await
             .expect("open terminal tenant");
         assert!(host.terminal_tenant_scrollback("/term-sb").is_empty());
+    }
+
+    #[tokio::test]
+    async fn close_terminal_tenant_reaps_ptys_and_frees_the_prefix() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = Arc::new(WorkspaceHost::new(lib));
+
+        host.open_terminal_session(serve_config("/control"))
+            .await
+            .expect("open terminal tenant");
+
+        // Start a real PTY on the tenant's registry, standing in for the
+        // connect script the desktop runs in a control terminal. Reach the
+        // registry through the host's private map (same crate module).
+        let registry = {
+            let workspaces = host.workspaces.read().expect("host lock");
+            workspaces
+                .get("/control")
+                .expect("tenant mounted")
+                .artifacts
+                .terminal_sessions
+                .clone()
+        };
+        registry
+            .create(CreateOptions {
+                size: PtySize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                tab_name: None,
+                tab_group: None,
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+            })
+            .expect("spawn control PTY");
+        assert_eq!(registry.len(), 1, "one live PTY before close");
+
+        // Closing the tenant reaps the PTY synchronously: the registry is
+        // already drained on return, not eventually via the prune task. This
+        // is the D4 defense — an explicit Disconnect must stop the script now.
+        assert!(host
+            .close_terminal_tenant("/control")
+            .expect("close terminal tenant"));
+        assert_eq!(registry.len(), 0, "PTY reaped on tenant close");
+
+        // The prefix tore down cleanly and can be re-mounted at once.
+        host.open_terminal_session(serve_config("/control"))
+            .await
+            .expect("remount after close");
+
+        // An absent prefix is a no-op false, so Disconnect/Forget is
+        // idempotent (a second teardown call doesn't error).
+        assert!(!host
+            .close_terminal_tenant("/absent")
+            .expect("absent close is false"));
     }
 
     #[test]
