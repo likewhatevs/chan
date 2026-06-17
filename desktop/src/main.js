@@ -274,6 +274,14 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
   footer.className = 'nw-footer';
   dialog.appendChild(footer);
 
+  // Validation and submit errors render INSIDE the dialog: a banner in
+  // #main (showError) would sit behind this overlay, invisible. One slot
+  // reused by every choice's submit handler, cleared on each body switch.
+  const errorSlot = document.createElement('div');
+  errorSlot.className = 'nw-error';
+  errorSlot.hidden = true;
+  dialog.appendChild(errorSlot);
+
   document.body.appendChild(overlay);
 
   let choice = initialChoice;
@@ -305,7 +313,20 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
     renderBody();
   }
 
+  // Show / clear the in-dialog error slot. `showDialogError` mirrors
+  // showError's accept-string-or-Error shape so the IPC catch blocks can
+  // pass the raw rejection straight through.
+  function showDialogError(e) {
+    errorSlot.textContent = typeof e === 'string' ? e : (e && e.message) || String(e);
+    errorSlot.hidden = false;
+  }
+  function clearDialogError() {
+    errorSlot.textContent = '';
+    errorSlot.hidden = true;
+  }
+
   function renderBody() {
+    clearDialogError();
     body.innerHTML = '';
     footer.innerHTML = '';
     if (choice === 'local') renderLocal();
@@ -353,7 +374,7 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
       try {
         await invoke('add_workspace', { path: localPath });
       } catch (e) {
-        showError(e);
+        showDialogError(e);
         return;
       }
       close();
@@ -415,13 +436,13 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
     const label = (labelInput && labelInput.value || '').trim();
     if (!url) {
       if (urlInput) urlInput.focus();
-      showError('Remote URL is required.');
+      showDialogError('Remote URL is required.');
       return;
     }
     try {
       await invoke('add_outbound_workspace', { url, label });
     } catch (e) {
-      showError(e);
+      showDialogError(e);
       return;
     }
     close();
@@ -480,13 +501,13 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
     const label = (body.querySelector('#nw-ds-label')?.value || '').trim();
     if (!host) {
       body.querySelector('#nw-ds-host')?.focus();
-      showError('Devserver host is required.');
+      showDialogError('Devserver host is required.');
       return;
     }
     const port = Number.parseInt(portRaw, 10);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       body.querySelector('#nw-ds-port')?.focus();
-      showError('Devserver port must be a number between 1 and 65535.');
+      showDialogError('Devserver port must be a number between 1 and 65535.');
       return;
     }
     try {
@@ -496,7 +517,7 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null) {
         await invoke('add_devserver', { host, port, script, label });
       }
     } catch (e) {
-      showError(e);
+      showDialogError(e);
       return;
     }
     close();
@@ -688,7 +709,12 @@ function bindDevserverSectionEvents(devservers) {
         } catch (e) {
           showError(e);
         }
-        await refresh();
+        // Force the re-render even when the devserver list JSON is
+        // unchanged: a failed connect leaves the state disconnected, which
+        // the deduped refresh would skip, stranding the button disabled on
+        // "Connecting...". Forcing reconciles it back to "Connect" (and to
+        // "Disconnect" on success). Mirrors the local-workspace toggle.
+        await refresh(true);
       });
     }
     const disconnect = section.querySelector('[data-act="disconnect-devserver"]');

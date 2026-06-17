@@ -405,6 +405,16 @@ table.workspaces tbody tr:hover { background: var(--hover-bg); }
   gap: 8px;
   margin-top: 4px;
 }
+/* In-dialog validation / submit error. A banner in #main renders behind
+   the modal overlay, so the New-workspace dialog shows its own inline. */
+.nw-error {
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
 .nw-row {
   display: flex;
   align-items: center;
