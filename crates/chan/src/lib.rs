@@ -1484,6 +1484,15 @@ async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
 /// loudly with a manual hint when it cannot be ensured.
 async fn ensure_systemd_linger() -> Result<()> {
     let user = std::env::var("USER").ok().filter(|u| !u.is_empty());
+    // Already lingering? Then it is ensured. `loginctl enable-linger` does a
+    // polkit check on every call that a non-root user without an interactive
+    // authority is denied EVEN when linger is already on, so only call it
+    // when linger is actually off.
+    if let Some(user) = user.as_deref() {
+        if user_linger_enabled(user).await {
+            return Ok(());
+        }
+    }
     let mut args: Vec<&str> = vec!["enable-linger"];
     if let Some(user) = user.as_deref() {
         args.push(user);
@@ -1491,14 +1500,22 @@ async fn ensure_systemd_linger() -> Result<()> {
     let output = run_tool("loginctl", &args).await?;
     if !output.status.success() {
         anyhow::bail!(
-            "chan devserver --systemd: could not enable linger (so the service \
-             survives logout). `loginctl enable-linger` failed:\n{}\n\
-             enable it manually, possibly as root: sudo loginctl enable-linger {}",
+            "chan devserver --systemd: linger is off (so the service would not \
+             survive logout) and `loginctl enable-linger` was denied:\n{}\n\
+             enable it once, as root: sudo loginctl enable-linger {}",
             String::from_utf8_lossy(&output.stderr).trim(),
             user.as_deref().unwrap_or("$USER"),
         );
     }
     Ok(())
+}
+
+/// Whether `loginctl` reports `Linger=yes` for `user`.
+async fn user_linger_enabled(user: &str) -> bool {
+    matches!(
+        run_tool("loginctl", &["show-user", user, "-p", "Linger"]).await,
+        Ok(output) if String::from_utf8_lossy(&output.stdout).trim() == "Linger=yes"
+    )
 }
 
 /// Write `~/.config/systemd/user/chan-devserver.service` whose `ExecStart`
