@@ -49,7 +49,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chan_server::{
@@ -1393,12 +1393,6 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
 /// the foreground; `--systemd` user-service supervision is not yet wired, so
 /// it prints a note and stays in the foreground.
 async fn cmd_devserver(bind: IpAddr, port: u16, systemd: bool) -> Result<()> {
-    if systemd {
-        eprintln!(
-            "chan devserver: NOTE: --systemd supervision is not yet available; \
-             running in the foreground."
-        );
-    }
     let addr = SocketAddr::new(bind, port);
     if !addr.ip().is_loopback() {
         eprintln!(
@@ -1408,16 +1402,253 @@ async fn cmd_devserver(bind: IpAddr, port: u16, systemd: bool) -> Result<()> {
             addr.ip()
         );
     }
+    // `--systemd` supervises the foreground devserver under a systemd user
+    // service so it survives the launching terminal. There is no equivalent
+    // off Linux yet (launchd is not wired), so fall back to the foreground.
+    if systemd {
+        if cfg!(target_os = "linux") {
+            return run_devserver_under_systemd(addr).await;
+        }
+        eprintln!(
+            "chan devserver: NOTE: --systemd is Linux-only (launchd support is \
+             not yet available); running in the foreground."
+        );
+    }
+    run_devserver_foreground(addr).await
+}
+
+/// Run the devserver in the foreground. Both the no-`--systemd` default and
+/// the systemd unit's `ExecStart` land here.
+async fn run_devserver_foreground(addr: SocketAddr) -> Result<()> {
     let lib = library()?;
-    let host_label = gethostname::gethostname().to_string_lossy().into_owned();
-    let host_label = if host_label.trim().is_empty() {
+    chan_server::run_devserver(
+        lib,
+        chan_server::DevserverConfig {
+            addr,
+            host_label: devserver_host_label(),
+        },
+    )
+    .await
+    .context("running devserver")
+}
+
+/// Human label for the box, shown in the management API. Falls back to a
+/// generic label when the hostname is empty.
+fn devserver_host_label() -> String {
+    let host = gethostname::gethostname().to_string_lossy().into_owned();
+    if host.trim().is_empty() {
         "devserver".to_string()
     } else {
-        host_label
-    };
-    chan_server::run_devserver(lib, chan_server::DevserverConfig { addr, host_label })
+        host
+    }
+}
+
+/// The systemd user unit name for the devserver.
+const DEVSERVER_SYSTEMD_UNIT: &str = "chan-devserver.service";
+
+/// Supervise the devserver under a systemd user service: ensure linger,
+/// create + start the unit (or re-attach to a running one), then stream its
+/// journal until the unit stops. The controlling terminal sees the
+/// devserver's output and notices when it dies, and a unit that cannot
+/// start exits non-zero loudly so a watching desktop catches it.
+async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
+    ensure_systemd_linger().await?;
+
+    if unit_is_active().await {
+        eprintln!(
+            "chan devserver: re-attaching to the running systemd user service \
+             {DEVSERVER_SYSTEMD_UNIT}"
+        );
+    } else {
+        let unit_path = write_devserver_unit(addr)?;
+        eprintln!("chan devserver: wrote {}", unit_path.display());
+        systemctl_user(&["daemon-reload"]).await?;
+        systemctl_user(&["enable", "--now", DEVSERVER_SYSTEMD_UNIT]).await?;
+        if !wait_until_active(Duration::from_secs(10)).await {
+            anyhow::bail!(
+                "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} \
+                 failed to start:\n{}",
+                recent_unit_journal().await
+            );
+        }
+        eprintln!(
+            "chan devserver: started the systemd user service \
+             {DEVSERVER_SYSTEMD_UNIT} (bind={addr})"
+        );
+    }
+
+    follow_unit_until_stopped().await
+}
+
+/// Ensure lingering is enabled so the user service survives logout. Fails
+/// loudly with a manual hint when it cannot be ensured.
+async fn ensure_systemd_linger() -> Result<()> {
+    let user = std::env::var("USER").ok().filter(|u| !u.is_empty());
+    let mut args: Vec<&str> = vec!["enable-linger"];
+    if let Some(user) = user.as_deref() {
+        args.push(user);
+    }
+    let output = run_tool("loginctl", &args).await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "chan devserver --systemd: could not enable linger (so the service \
+             survives logout). `loginctl enable-linger` failed:\n{}\n\
+             enable it manually, possibly as root: sudo loginctl enable-linger {}",
+            String::from_utf8_lossy(&output.stderr).trim(),
+            user.as_deref().unwrap_or("$USER"),
+        );
+    }
+    Ok(())
+}
+
+/// Write `~/.config/systemd/user/chan-devserver.service` whose `ExecStart`
+/// runs THIS binary's foreground devserver on `addr`. Returns the unit path.
+fn write_devserver_unit(addr: SocketAddr) -> Result<PathBuf> {
+    let exe = std::env::current_exe()
+        .context("resolving the chan binary path for the systemd unit ExecStart")?;
+    let dir = systemd_user_unit_dir()?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let unit_path = dir.join(DEVSERVER_SYSTEMD_UNIT);
+    let unit = format!(
+        "[Unit]\n\
+         Description=chan devserver\n\
+         After=network.target\n\
+         \n\
+         [Service]\n\
+         ExecStart={exe} devserver --bind={ip} --port={port}\n\
+         Restart=on-failure\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n",
+        exe = exe.display(),
+        ip = addr.ip(),
+        port = addr.port(),
+    );
+    std::fs::write(&unit_path, unit).with_context(|| format!("writing {}", unit_path.display()))?;
+    Ok(unit_path)
+}
+
+/// `$XDG_CONFIG_HOME/systemd/user`, else `$HOME/.config/systemd/user`.
+fn systemd_user_unit_dir() -> Result<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(xdg).join("systemd").join("user"));
+    }
+    let home = std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .context("no HOME for the systemd user unit directory")?;
+    Ok(PathBuf::from(home)
+        .join(".config")
+        .join("systemd")
+        .join("user"))
+}
+
+/// Stream the unit's journal to stdout, returning when the unit is no
+/// longer active. A unit left in a failed state returns an error so the
+/// caller exits non-zero.
+async fn follow_unit_until_stopped() -> Result<()> {
+    let mut follow = tokio::process::Command::new("journalctl")
+        .args(["--user", "-u", DEVSERVER_SYSTEMD_UNIT, "-f", "-n", "20"])
+        .spawn()
+        .context("spawning journalctl to follow the devserver service")?;
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if !unit_is_active().await {
+            break;
+        }
+        if matches!(follow.try_wait(), Ok(Some(_))) {
+            break;
+        }
+    }
+    let _ = follow.start_kill();
+    let _ = follow.wait().await;
+    if unit_is_failed().await {
+        anyhow::bail!(
+            "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} \
+             entered a failed state:\n{}",
+            recent_unit_journal().await
+        );
+    }
+    eprintln!(
+        "chan devserver: the systemd user service {DEVSERVER_SYSTEMD_UNIT} is no \
+         longer active."
+    );
+    Ok(())
+}
+
+/// Poll until the unit is active, a failure is reported, or the deadline
+/// passes. Tolerates the brief `activating` window after `enable --now`.
+async fn wait_until_active(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if unit_is_active().await {
+            return true;
+        }
+        if unit_is_failed().await || Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
+async fn unit_is_active() -> bool {
+    matches!(
+        run_tool("systemctl", &["--user", "is-active", DEVSERVER_SYSTEMD_UNIT]).await,
+        Ok(output) if output.status.success()
+    )
+}
+
+async fn unit_is_failed() -> bool {
+    matches!(
+        run_tool("systemctl", &["--user", "is-failed", DEVSERVER_SYSTEMD_UNIT]).await,
+        Ok(output) if output.status.success()
+    )
+}
+
+/// Run `systemctl --user <args>`, erroring with stderr on a non-zero exit.
+async fn systemctl_user(args: &[&str]) -> Result<()> {
+    let mut full: Vec<&str> = vec!["--user"];
+    full.extend_from_slice(args);
+    let output = run_tool("systemctl", &full).await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "`systemctl --user {}` failed:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// The last lines of the unit's journal, for a failure message.
+async fn recent_unit_journal() -> String {
+    match run_tool(
+        "journalctl",
+        &[
+            "--user",
+            "-u",
+            DEVSERVER_SYSTEMD_UNIT,
+            "--no-pager",
+            "-n",
+            "30",
+        ],
+    )
+    .await
+    {
+        Ok(output) => String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_string(),
+        Err(e) => format!("(could not read the journal: {e})"),
+    }
+}
+
+/// Run a tool to completion, capturing its output. Errors only when the
+/// tool cannot be spawned (e.g. missing binary), not on a non-zero exit.
+async fn run_tool(program: &str, args: &[&str]) -> Result<std::process::Output> {
+    tokio::process::Command::new(program)
+        .args(args)
+        .output()
         .await
-        .context("running devserver")
+        .with_context(|| format!("running `{program} {}`", args.join(" ")))
 }
 
 /// Integrate a Desktop-personality `chan serve` with the desktop app.
