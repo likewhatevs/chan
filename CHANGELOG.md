@@ -4,11 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [v0.38.0] - 2026-06-17
+
+### Added
+
+- `chan devserver`: one process hosts many workspaces behind a single port. Register workspaces into it with `chan serve PATH` (each registers and exits instead of binding its own port, so one process owns each workspace). chan-desktop connects to a devserver and lists its workspaces in their own launcher group, with a New Terminal button that opens standalone terminals on the devserver.
+- `chan devserver --systemd` (Linux): run the devserver under a `chan-devserver.service` systemd user service so it survives the launching shell and logout; re-running re-attaches to the live service. Reach it from chan-desktop at `localhost` via a host-network lima VM or sdme container, or forward it from a remote box with `ssh -L`. A new Devserver page in the manual covers the workflow.
 
 ### Changed
 
 - `chan serve` now requires an explicit workspace path. Running it with no path exits with an error asking you to pass one, instead of falling back to a default workspace.
+- New workspaces open with no docked file browser — just the empty pane — across the web app, chan-desktop, and devserver workspaces.
+- A devserver's launcher section mirrors the local-workspace controls: a single Connect button with an Edit/Forget menu that becomes Disconnect plus a New Terminal button once connected; adding a devserver auto-connects it.
+- Per-devserver standalone terminals behave like local ones — Cmd+Shift+N opens another terminal on the same devserver, and terminal tabs drag and drop between that devserver's windows. Control terminals stay isolated from both.
+- Connecting to a scripted devserver reads its token from the connect-script's `CHAN_DEVSERVER_TOKEN=` output on every connect (including a `--systemd` re-attach), so reconnecting after a dropped connection or a devserver restart is seamless.
+
+### Fixed
+
+- Editor: pasting an image leaves the cursor just past the image instead of jumping to the next line.
+- Editor: backspacing near an inline image no longer deletes the whole image; deletion is directional, matching a normal text editor.
+- A failed scripted-devserver connect now offers retry / edit / abandon instead of getting stuck on "Connecting", and closing a control-terminal tab surveys the same way instead of leaving a broken window.
+- Disconnecting or forgetting a scripted devserver stops its connect script instead of leaving the process running, and quitting chan-desktop reaps a connected devserver's script.
+- Editing a devserver's port and reconnecting works without sticking on "Connecting"; New-workspace dialog validation errors render inside the dialog rather than behind it.
+- `chan devserver` shuts down promptly on SIGINT and SIGTERM with a hard deadline (matching `chan serve`) and writes its config durably; `chan devserver --port 0` reports the actual bound port.
 
 ### Removed
 
