@@ -58,7 +58,9 @@ pub use config::ServerConfig;
 pub use desktop_window_ops::{
     DesktopBridge, DesktopWindowOp, DesktopWindowSender, NewWindowKind, NO_DESKTOP,
 };
-pub use devserver::{run_devserver, DevserverConfig};
+pub use devserver::{
+    persisted_devserver_token, run_devserver, DevserverConfig, DEVSERVER_TOKEN_MARKER,
+};
 pub use error::Error;
 pub use host::{HostedWorkspace, WorkspaceHost};
 #[cfg(unix)]

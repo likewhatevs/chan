@@ -132,6 +132,24 @@ fn devserver_config_path() -> std::io::Result<PathBuf> {
     Ok(home.join(".chan").join("devserver").join("config.json"))
 }
 
+/// Machine-readable marker the desktop control terminal scrapes from the
+/// connect-script output to learn the devserver's bearer token, on every
+/// connect and reconnect; the token value runs from the `=` to end of line.
+/// LOCKED wire string: the desktop matches this exact prefix, so both the
+/// foreground emit and the `--systemd` re-attach emit build to it.
+pub const DEVSERVER_TOKEN_MARKER: &str = "CHAN_DEVSERVER_TOKEN=";
+
+/// Read the persisted devserver bearer token from
+/// `~/.chan/devserver/config.json`, or `None` when it is absent, unreadable,
+/// or tokenless. The `--systemd` re-attach path prints the
+/// [`DEVSERVER_TOKEN_MARKER`] from this, since a journal-follow does not
+/// re-emit the running unit's original start line.
+pub fn persisted_devserver_token() -> Option<String> {
+    let store = DevserverStore::at(devserver_config_path().ok()?);
+    let token = store.load().devserver_token;
+    (!token.is_empty()).then_some(token)
+}
+
 /// A mounted workspace as the devserver tracks it, the source of truth for
 /// `GET /api/devserver/workspaces`. Keyed by prefix in [`DevserverState`].
 struct WorkspaceRecord {
@@ -276,10 +294,6 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     // land even before the first management call.
     state.persist_enabled();
 
-    // Operator-visible line. The same token is also in the 0600 config a
-    // same-user local client reads directly.
-    println!("chan devserver: bind={} token={}", config.addr, token);
-
     // Serve-handoff discovery. A bind failure is non-fatal: the management
     // API still works, only the `chan serve` registration path is disabled.
     let _discovery = start_discovery_listener(state.clone());
@@ -293,6 +307,12 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     // on the impossible local_addr() error rather than refusing to serve.
     let local_addr = listener.local_addr().unwrap_or(config.addr);
     println!("chan devserver: listening on http://{local_addr}");
+    // Machine-readable token contract: the desktop control terminal scrapes
+    // this exact marker from the connect-script output on every connect and
+    // reconnect, as the source of truth for the bearer token. Emitted once the
+    // token and bound address are known; the `--systemd` first start surfaces
+    // it through the unit journal the launcher follows.
+    println!("{DEVSERVER_TOKEN_MARKER}{token}");
 
     // Shutdown wiring mirrors `serve()`: a single watch channel fed by
     // SIGINT/SIGTERM, plus a side task that cancels every tenant's in-flight
@@ -538,6 +558,15 @@ fn workspace_label(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_marker_is_the_locked_wire_string() {
+        // LOCKED contract: the desktop control terminal scrapes this exact
+        // prefix from the connect-script output. Both the foreground emit and
+        // the `--systemd` re-attach emit build to it, so pin it here — an
+        // accidental edit breaks reconnect.
+        assert_eq!(DEVSERVER_TOKEN_MARKER, "CHAN_DEVSERVER_TOKEN=");
+    }
 
     #[tokio::test]
     async fn port_zero_bind_resolves_to_a_concrete_port() {

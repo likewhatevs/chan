@@ -1458,6 +1458,13 @@ async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
     ensure_systemd_linger().await?;
 
     if unit_is_active().await {
+        // A journal-follow won't re-emit the running unit's original start
+        // line, so the re-attaching process re-provides the token contract
+        // itself, read from the same 0600 config the service persisted. The
+        // desktop scrapes this exact marker to reconnect seamlessly.
+        if let Some(token) = chan_server::persisted_devserver_token() {
+            println!("{}{token}", chan_server::DEVSERVER_TOKEN_MARKER);
+        }
         eprintln!(
             "chan devserver: re-attaching to the running systemd user service \
              {DEVSERVER_SYSTEMD_UNIT}"

@@ -191,9 +191,8 @@ async fn spawn_serve(sandbox: &Sandbox, root: &Path, no_token: bool) -> (Server,
 }
 
 /// Spawn `chan devserver` on a concrete port and return it with its bearer
-/// token. The devserver echoes `chan devserver: bind=<addr> token=<token>` to
-/// stdout; its listening line prints `config.addr`, so the test owns the port
-/// (a `:0` bind would print `:0`, not the OS-assigned port).
+/// token. The devserver prints a `listening on http://<local_addr>` line and
+/// the `CHAN_DEVSERVER_TOKEN=<token>` marker to stdout.
 async fn spawn_devserver(sandbox: &Sandbox, port: u16) -> (Server, SocketAddr) {
     let mut child = sandbox
         .command()
@@ -217,9 +216,9 @@ async fn spawn_devserver(sandbox: &Sandbox, port: u16) -> (Server, SocketAddr) {
 fn devserver_token(server: &Server) -> String {
     let line = server
         .out
-        .find("token=")
-        .unwrap_or_else(|| panic!("no devserver token line:\n{}", server.out.dump()));
-    line.rsplit("token=")
+        .find("CHAN_DEVSERVER_TOKEN=")
+        .unwrap_or_else(|| panic!("no devserver token marker:\n{}", server.out.dump()));
+    line.rsplit("CHAN_DEVSERVER_TOKEN=")
         .next()
         .unwrap()
         .split_whitespace()
