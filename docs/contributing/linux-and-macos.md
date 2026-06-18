@@ -8,8 +8,25 @@ This doc covers the local Linux flow. For the core build/test commands themselve
 
 ## Prerequisites
 
-- **Linux**: install `sdme` and the systemd/nspawn host tooling it needs. Run every `sdme ...` command below directly.
-- **macOS**: install `lima` and run `sdme` inside the VM. Every command below uses the explicit form `limactl shell default sudo sdme ...` (substitute your VM name for `default`; the docs name it `chan-dev`). Interactively you can set `alias sdme='limactl shell default sudo sdme'` and then the examples read verbatim.
+- **Linux**: install the systemd/nspawn host tooling sdme needs, then sdme itself. On Debian/Ubuntu:
+
+  ```sh
+  sudo apt install systemd-containers          # provides systemd-nspawn (systemd-container on older releases)
+  curl -fsSL https://sdme.io/install.sh | sudo sh
+  ```
+
+  Run every `sdme ...` command below directly (no `limactl` prefix, no alias).
+- **macOS**: sdme needs systemd, so it runs inside a Lima Ubuntu VM. Install Lima, start the VM, then install the same tooling + sdme **inside it**:
+
+  ```sh
+  brew install lima
+  limactl start default                                   # Ubuntu, systemd, host networking
+  limactl shell default -- sudo apt install -y systemd-containers
+  limactl shell default -- sh -c 'curl -fsSL https://sdme.io/install.sh | sudo sh'
+  alias sdme='limactl shell default sudo sdme'            # then the examples read verbatim
+  ```
+
+  Every command below uses the explicit `limactl shell default sudo sdme ...` form (substitute your VM name for `default`); the alias above collapses it to `sdme ...` interactively. The explicit form is what scripts and agents should use, where the interactive alias does not resolve.
 
 Two macOS specifics worth knowing:
 
@@ -125,6 +142,37 @@ file /tmp/chan          # -> ... statically linked
 ```
 
 CI builds these in `release.yml`'s `linux-cli-artifacts` job (zig via `mlugg/setup-zig` + cargo-zigbuild); the `.deb`/`.rpm` in that same job stay gnu. The `chan-tarball` Make target uses `cargo zigbuild` for musl targets and plain `cargo build` for gnu.
+
+## Devserver: the `--systemd` user-service path
+
+`chan devserver` and its supervision are Linux-specific. `chan devserver --systemd` runs the server under a `chan-devserver.service` systemd **user** service (it ensures linger, starts the unit, and re-attaches to an already-running one), and the `chan serve PATH` discovery socket that registers workspaces with it is Unix-only. On macOS `--systemd` is not yet wired to launchd — it prints a note and runs in the foreground — so to develop and exercise the supervised path on a Mac you run it inside lima/sdme, the same Linux flow as everyone else. The supervision shape and its token-delivery contract are in [`design.md`](../../design.md) ("Devserver and the multi-workspace host").
+
+The one thing this needs beyond the core gate's container is a **systemd user manager**: `--systemd` drives `loginctl enable-linger` and `systemctl --user`, which require a regular (non-root), lingering user with a live user session — not the root shell `sdme join` drops you into. Stand one up once:
+
+```sh
+limactl shell default sudo sdme create chan-devserver-dev -r ubuntu
+limactl shell default sudo sdme start  chan-devserver-dev
+
+# a lingering dev user whose `systemctl --user` manager is running
+limactl shell default sudo sdme exec chan-devserver-dev /bin/bash -c '
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq && apt-get install -y dbus-user-session sudo
+  id dev >/dev/null 2>&1 || useradd -m -s /bin/bash dev
+  loginctl enable-linger dev'
+```
+
+Seed the `chan` binary into the container the way the core gate seeds the tree (`git archive HEAD` + `sdme cp`, then build inside with the aarch64 flag from the build note below), and put it at a stable path such as `/usr/local/bin/chan` — the unit's `ExecStart` records the binary's resolved path, so a moving target dir would break a restart. Then run the devserver **as the dev user**, exporting that user's runtime dir and bus so `systemctl --user` resolves:
+
+```sh
+limactl shell default sudo sdme exec chan-devserver-dev /bin/bash -c '
+  U=$(id -u dev)
+  sudo -u dev -H env \
+    XDG_RUNTIME_DIR=/run/user/$U \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus \
+    chan devserver --systemd --bind 127.0.0.1 --port 7777'
+```
+
+Expect the locked `CHAN_DEVSERVER_TOKEN=<token>` marker on **stdout** (the contract the desktop control terminal scrapes), the unit at `~dev/.config/systemd/user/chan-devserver.service`, and `systemctl --user status chan-devserver.service` reporting active; a second run re-attaches to the running unit and re-emits the marker. This container is also where you reproduce the journal-readability edge the supervisor is hardened against — the token still reaches stdout when the user cannot read the unit journal (a uid below `SYS_UID_MAX`, or a user outside the `systemd-journal`/`adm` groups), because the supervisor reads the persisted token and emits the marker itself rather than relying on the journal follow. `--systemd` is not reachable from CI (the runner has no systemd user manager), so this local flow is how you exercise it.
 
 ## Gateway: Postgres-backed tests
 

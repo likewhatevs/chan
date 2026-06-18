@@ -35,7 +35,7 @@ Services bind their default ports (`7000/7001/7002/7100`) INSIDE their container
 Install sdme. On Linux, on the host:
 
 ```sh
-curl -fsSL https://fiorix.github.io/sdme/install.sh | sudo sh
+curl -fsSL https://sdme.io/install.sh | sudo sh
 ```
 
 On macOS, sdme runs inside a Lima VM; install Lima and then sdme inside the VM, per [macOS only: Lima shim](#macos-only-lima-shim). Either way the `sdme ...` commands below then work (on macOS through the alias). The examples use the explicit `limactl shell default sudo sdme ...` form; drop that prefix on Linux.
@@ -173,7 +173,7 @@ brew install lima
 limactl start default        # Ubuntu, host networking
 # install sdme inside the VM:
 limactl shell default -- sh -c \
-    'curl -fsSL https://fiorix.github.io/sdme/install.sh | sudo sh'
+    'curl -fsSL https://sdme.io/install.sh | sudo sh'
 alias sdme='limactl shell default sudo sdme'   # then every sdme example runs verbatim
 ```
 
