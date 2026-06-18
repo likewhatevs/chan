@@ -212,7 +212,11 @@ impl EmbeddedServer {
         let prefix = format!("/control-{}", SEQ.fetch_add(1, Ordering::Relaxed));
         let hosted = self
             .host
-            .open_terminal_session_with_command(serve_config(self.addr, &prefix), Some(command))
+            .open_terminal_session_with_command(
+                serve_config(self.addr, &prefix),
+                Some(command),
+                None,
+            )
             .await
             .map_err(|e| format!("opening a command terminal tenant: {e}"))?;
         Ok((hosted.handle.launch_url(), prefix))
