@@ -1014,30 +1014,55 @@ async fn wait_for_devserver(host: &str, port: u16) -> Result<devserver::Devserve
 /// prints its `token=` line, or the budget runs out. The script may take a
 /// moment, or prompt for credentials in the terminal, so the wait is
 /// generous.
-async fn scrape_control_terminal_token(state: &AppState, prefix: &str) -> Result<String, String> {
+async fn scrape_control_terminal_token(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    control_label: &str,
+    prefix: &str,
+) -> Result<String, String> {
     let Some(embedded) = state.embedded.get() else {
         return Err("embedded local server is unavailable".to_string());
     };
     const MAX_ATTEMPTS: usize = 40;
     const BACKOFF: std::time::Duration = std::time::Duration::from_millis(1500);
+    // `build_workspace_window` registers the control window on the main thread
+    // AFTER its spawn returns, so the first poll(s) here can run before the
+    // window exists. Latch once we've seen it, so a later disappearance reads as
+    // a user close (below) rather than the build race.
+    let mut window_seen = false;
     for _ in 0..MAX_ATTEMPTS {
         // Scrape the token FIRST: a script that prints the token then exits
         // cleanly is a success, and the scrollback survives the exit, so a
-        // token found this pass wins over the exit check below.
+        // token found this pass wins over the exit / close checks below.
         if let Some(token) = devserver::scrape_token(&embedded.read_control_terminal_output(prefix))
         {
             return Ok(token);
         }
         // No token yet, and the connect script's PTY has exited: a failed
-        // connect (bad credentials, script error, user closed the failing tab).
-        // Fail fast instead of waiting out the full backoff budget, so the
-        // launcher surveys (Re-run / Disconnect) promptly rather than sticking
-        // on "connecting". The exit status is the tenant's, independent of the
-        // control window, so this also catches the user closing the tab.
+        // connect (bad credentials, script error, a ^C-killed script). Fail fast
+        // instead of waiting out the full backoff budget, so the launcher
+        // surveys (abandon/edit/retry) promptly rather than sticking on
+        // "connecting". The exit status is the tenant's, independent of the
+        // control window, so this also catches the script dying in place.
         if let Some(code) = embedded.control_terminal_exit(prefix) {
             return Err(format!(
                 "the devserver connect script exited (status {code}) before printing its token"
             ));
+        }
+        // The user closed the control terminal (^W / red button) before it
+        // connected. A window close does NOT reap the tenant — the PTY outlives
+        // it (client WS detach keeps it warm), so `control_terminal_exit` above
+        // stays None and we'd otherwise strand on "connecting" until the budget
+        // runs out. Abort so the SAME failure survey fires at once. Gated on
+        // `window_seen` to ride out the build race above.
+        match app.get_webview_window(control_label) {
+            Some(_) => window_seen = true,
+            None if window_seen => {
+                return Err(
+                    "the control terminal was closed before the devserver connected".to_string(),
+                );
+            }
+            None => {}
         }
         tokio::time::sleep(BACKOFF).await;
     }
@@ -1087,7 +1112,15 @@ async fn connect_devserver(
         Some(ct)
     };
     let token = match &control {
-        Some(ct) => scrape_control_terminal_token(&state, &ct.prefix).await?,
+        Some(ct) => {
+            scrape_control_terminal_token(
+                &app,
+                &state,
+                &serve::control_terminal_label(&id),
+                &ct.prefix,
+            )
+            .await?
+        }
         None => devserver::read_local_token()?,
     };
     let info = wait_for_devserver(&host, port).await?;

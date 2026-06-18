@@ -1226,10 +1226,12 @@ function showTurnOnFailureDialog(reason) {
 /// React to a failed connect to a SCRIPTED devserver: survey the user, then
 /// perform the chosen recovery. Retry re-runs the same connect command (after
 /// reaping the failed control terminal); Edit reaps it and reopens the recipe
-/// editor, which auto-connects on Save; Abandon forgets the devserver outright.
-/// Dismiss leaves the devserver disconnected with its control terminal open for
-/// inspection. Each recovery routes through the section's own Connect button so
-/// a repeated failure re-surveys.
+/// editor, which auto-connects on Save; Abandon gives up on THIS connect attempt
+/// — it disconnects (reaping the control terminal + any half-open windows) and
+/// resets the row to 'Connect', leaving the devserver configured (Forget removes
+/// it). Dismiss leaves the devserver disconnected with its control terminal open
+/// for inspection. Each recovery routes through the section's own Connect button
+/// so a repeated failure re-surveys.
 async function handleConnectFailure(ds, reason) {
   const choice = await showConnectFailureSurvey(ds, reason);
   if (choice === 'retry') {
@@ -1254,8 +1256,12 @@ async function handleConnectFailure(ds, reason) {
     await refresh(true);
     showNewWorkspaceDialog('devserver', ds, true);
   } else if (choice === 'abandon') {
+    // Abandon the connect ATTEMPT, not the devserver: disconnect reaps the
+    // control terminal + any half-open windows (teardown_devserver_windows) and
+    // the refresh resets the row to 'Connect'. The devserver stays configured;
+    // Forget is the separate destructive action.
     try {
-      await invoke('remove_devserver', { id: ds.id });
+      await invoke('disconnect_devserver', { id: ds.id });
     } catch (e) {
       showError(e);
       return;
@@ -1330,11 +1336,16 @@ function showDevserverSurvey({ title, message, actions }) {
 /// (destructive) sits on the far side from the default Retry.
 function showConnectFailureSurvey(ds, reason) {
   const name = (ds.label && ds.label.trim()) || ds.host || 'devserver';
-  const msg = typeof reason === 'string' ? reason : (reason && reason.message) || String(reason);
+  const raw = typeof reason === 'string' ? reason : (reason && reason.message) || String(reason);
+  // Terminate the reason with a single period so it reads as its own sentence
+  // before "Its control terminal..." (don't double up if the error already ends
+  // in . ! or ?).
+  const msg = raw.trim();
+  const reasonSentence = /[.!?]$/.test(msg) ? msg : `${msg}.`;
   return showDevserverSurvey({
     title: `Couldn't connect to ${name}`,
     message:
-      `The connect command didn't bring the devserver up: ${msg} ` +
+      `The connect command didn't bring the devserver up: ${reasonSentence} ` +
       'Its control terminal is still open so you can see what happened.',
     actions: [
       { label: 'Abandon', cls: 'danger', value: 'abandon' },

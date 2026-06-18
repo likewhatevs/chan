@@ -889,6 +889,19 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                                 .get()
                                 .map(|e| e.terminal_window_has_live_shells(&label_for_close))
                                 .unwrap_or(false)
+                        } else if let Some(id) = label_for_close.strip_prefix("control-terminal-") {
+                            // A control terminal closed (red button) WHILE STILL
+                            // CONNECTING must NOT bury: a hidden control window
+                            // leaves the connect script running and strands the
+                            // launcher on "Connecting..." (the connect flow's
+                            // scrape loop keeps polling a window it can still
+                            // see). Destroy instead so the scrape loop sees it
+                            // gone, aborts, and surveys (abandon/edit/retry).
+                            // Once connected, burying is fine — the PTY is the
+                            // live connection endpoint and stays warm, hidden,
+                            // reopenable; only an actual close (^W / script exit)
+                            // takes the connection down via request_close_window.
+                            state.devservers.is_connected(id)
                         } else {
                             !window_on_connecting_screen(&app_for_close, &label_for_close)
                         };
