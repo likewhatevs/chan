@@ -99,20 +99,17 @@ pub struct SetWorkspaceOnRequest {
 }
 
 /// Body of `POST /api/devserver/terminals`: open (or, on the persistence
-/// path, re-open) a standalone terminal tenant. The body itself is OPTIONAL —
-/// a bodyless POST (no `label`) mounts an EPHEMERAL terminal: the connect-script
-/// control/landing singleton, reaped on disconnect and never persisted.
+/// path, re-open) a standalone terminal tenant. `label` is the client's
+/// stable window key — the `?w=<label>` value the SPA hydrates its layout
+/// from and the key the launcher persists the terminal under, so the SAME
+/// terminal re-mounts at the same route prefix across a devserver restart.
 /// `command` is the PTY's default command line (`None` = the login shell); a
 /// single-purpose terminal (e.g. one running a connect script) sets it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OpenTerminalRequest {
-    /// Stable window key (`?w=<label>`) for a PERSISTED terminal; the launcher
-    /// persists the terminal under it (the client owns the `<family>-<id>`
-    /// scheme), so the SAME terminal re-mounts at the same route prefix across a
-    /// devserver restart. `None` (a bodyless or no-`label` request) mounts an
-    /// ephemeral terminal instead.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
+    /// Stable window key (`?w=<label>`); the launcher persists the terminal
+    /// under it. The client owns the scheme (`<family>-<id>`).
+    pub label: String,
     /// PTY default command; omitted (`None`) runs the login shell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
@@ -240,7 +237,7 @@ mod tests {
     #[test]
     fn open_terminal_request_wire() {
         let req = OpenTerminalRequest {
-            label: Some("terminal-1a2b".into()),
+            label: "terminal-1a2b".into(),
             command: Some("ssh host".into()),
         };
         let v = serde_json::to_value(&req).unwrap();
@@ -251,22 +248,12 @@ mod tests {
         assert_eq!(req, serde_json::from_value(v).unwrap());
         // `command` is omitted when None (the tenant runs the login shell).
         let bare = OpenTerminalRequest {
-            label: Some("terminal-2".into()),
+            label: "terminal-2".into(),
             command: None,
         };
         assert_eq!(
             serde_json::to_value(&bare).unwrap(),
             json!({ "label": "terminal-2" })
-        );
-        // No label → the ephemeral control terminal: an EMPTY object on the
-        // wire, and an empty/bodyless body deserializes back to it.
-        let ephemeral = OpenTerminalRequest::default();
-        assert_eq!(ephemeral.label, None);
-        assert_eq!(serde_json::to_value(&ephemeral).unwrap(), json!({}));
-        assert_eq!(
-            ephemeral,
-            serde_json::from_value(json!({})).unwrap(),
-            "an empty body is a no-label (ephemeral) request"
         );
     }
 
