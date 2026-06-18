@@ -105,14 +105,6 @@ pub struct AppState {
     /// (reaping the script PTY) on disconnect/forget, and reconnect must never
     /// mistake it for a workspace window. Absent for a no-script devserver.
     pub control_terminal_prefixes: Mutex<HashMap<String, String>>,
-    /// The ONE shared standalone-terminal tenant URL per connected devserver,
-    /// keyed by `Devserver.id`, mirroring the local single `/terminal` tenant.
-    /// Every standalone-terminal window on a devserver loads this same URL (with
-    /// its own `?w=<label>`), so they share one remote PTY registry and the SPA
-    /// can move terminal tabs between them (cross-window d&d, Cmd+Shift+N).
-    /// Mounted on first need, cleared on disconnect and on a reconnect that
-    /// rotated the token (the old tenant is gone after a restart).
-    pub devserver_terminal_urls: Mutex<HashMap<String, String>>,
     /// Set when the user confirmed the quit dialog: the re-fired
     /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
     /// must pass instead of prompting again.
@@ -858,36 +850,6 @@ fn devserver_terminal_window_id(id: &str) -> String {
     format!("devserver-{id}-terminal")
 }
 
-/// Return the devserver's ONE shared standalone-terminal tenant URL, mounting it
-/// on first use and caching it. Every standalone terminal on the devserver loads
-/// this same URL so they share a remote PTY registry (cross-window terminal d&d,
-/// Cmd+Shift+N), mirroring the local single `/terminal` tenant. A concurrent
-/// first-open races to mount, but `or_insert` keeps the first winner (the loser's
-/// extra tenant idle-prunes on the devserver).
-async fn ensure_devserver_terminal_url(state: &AppState, id: &str) -> Result<String, String> {
-    if let Some(url) = state
-        .devserver_terminal_urls
-        .lock()
-        .unwrap()
-        .get(id)
-        .cloned()
-    {
-        return Ok(url);
-    }
-    let conn = state
-        .devservers
-        .get(id)
-        .ok_or_else(|| format!("devserver {id} is not connected"))?;
-    let url = devserver::open_terminal(&conn).await?;
-    Ok(state
-        .devserver_terminal_urls
-        .lock()
-        .unwrap()
-        .entry(id.to_string())
-        .or_insert(url)
-        .clone())
-}
-
 /// Display name for a devserver in the Window menu: its user label, or its
 /// host when unlabelled.
 fn devserver_display(d: &Devserver) -> String {
@@ -969,9 +931,6 @@ fn teardown_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str
     for window in windows {
         serve::close_outbound_workspace_windows(app, &window.window_id);
     }
-    // Drop the shared terminal-tenant URL cache: the tenant goes away with the
-    // connection, so a later reconnect must mount a fresh one.
-    state.devserver_terminal_urls.lock().unwrap().remove(id);
     serve::close_window_by_label(app, &serve::control_terminal_label(id));
     // Closing the control-terminal WINDOW doesn't stop the connect script: its
     // tenant outlives the window. Reap the tenant (kills the script PTY) so a
@@ -1141,21 +1100,10 @@ async fn connect_devserver(
     // W10: re-surface the devserver's persisted standalone terminals (Seam 4)
     // at their persisted labels (?w=<label>) so the SPA reattaches to the live
     // PTY. A fresh devserver with none gets one terminal so the user still lands
-    // on a terminal.
+    // on a terminal — a first-class persisted, per-tenant terminal (the labeled
+    // POST), so it re-surfaces on reconnect like the rest.
     if reopen_devserver_terminal_windows(&app, &state, &id).await == 0 {
-        let terminal_window_id = devserver_terminal_window_id(&id);
-        let terminal_url = ensure_devserver_terminal_url(&state, &id).await?;
-        let terminal_label =
-            serve::spawn_devserver_terminal_window(&app, &terminal_window_id, &terminal_url)?;
-        track_devserver_window(
-            &state,
-            &id,
-            DevserverWindow {
-                window_id: terminal_window_id,
-                label: terminal_label,
-                prefix: None,
-            },
-        );
+        open_devserver_terminal_window(&app, &state, &id).await?;
     }
     // The control terminal stays open after connect. It runs the connect
     // script, which may keep streaming or prompt for ssh credentials, so
@@ -1224,30 +1172,30 @@ fn open_devserver_workspace(
     Ok(())
 }
 
-/// Open a standalone terminal on a connected devserver. Each is a PERSISTED,
-/// per-window tenant (Seam 4): the desktop mints a window label in the
-/// devserver's terminal family, the devserver mounts + persists a tenant keyed
-/// by that label, and the window opens at it — so `fetch_terminals` re-surfaces
-/// it on reconnect. The labels share one window family (`devserver_terminal_
-/// window_id`) for Cmd+Shift+N / teardown grouping; the PTYs are per-tenant
-/// (no shared cross-window registry, unlike the old single shared terminal).
-#[tauri::command]
-async fn open_devserver_terminal(
-    app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
-    id: String,
+/// Open one standalone terminal on a connected devserver as a PERSISTED,
+/// per-window tenant (Seam 4): mint a window label in the devserver's terminal
+/// family, have the devserver mount + persist a tenant keyed by that label, and
+/// open the window at it — so `fetch_terminals` re-surfaces it on reconnect. The
+/// labels share one window family (`devserver_terminal_window_id`) for
+/// Cmd+Shift+N / teardown grouping; the PTYs are per-tenant (no shared
+/// cross-window registry). Shared by the New-Terminal command, the connect
+/// flow's first terminal, and Cmd+Shift+N on a focused devserver terminal.
+async fn open_devserver_terminal_window(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    id: &str,
 ) -> Result<(), String> {
     let conn = state
         .devservers
-        .get(&id)
+        .get(id)
         .ok_or_else(|| format!("devserver {id} is not connected"))?;
-    let window_id = devserver_terminal_window_id(&id);
+    let window_id = devserver_terminal_window_id(id);
     let label = serve::new_outbound_window_label(&window_id);
     let terminal_url = devserver::open_terminal_with_label(&conn, &label).await?;
-    serve::spawn_devserver_terminal_window_at_label(&app, &window_id, &label, &terminal_url)?;
+    serve::spawn_devserver_terminal_window_at_label(app, &window_id, &label, &terminal_url)?;
     track_devserver_window(
-        &state,
-        &id,
+        state,
+        id,
         DevserverWindow {
             window_id,
             label,
@@ -1255,6 +1203,17 @@ async fn open_devserver_terminal(
         },
     );
     Ok(())
+}
+
+/// Open a standalone terminal on a connected devserver (the New-Terminal
+/// affordance). Thin wrapper over [`open_devserver_terminal_window`].
+#[tauri::command]
+async fn open_devserver_terminal(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    open_devserver_terminal_window(&app, &state, &id).await
 }
 
 /// Re-open a devserver's open workspace windows with fresh tenant URLs after
@@ -1335,11 +1294,10 @@ async fn reconnect_devserver(
             let rotated = token != conn.token;
             state.devservers.set(id.clone(), probe);
             if rotated {
-                // A rotated token means the devserver restarted: its old shared
-                // terminal tenant is gone, so drop the cached URL (the next
-                // terminal mounts a fresh one). Workspace + persisted-terminal
-                // windows re-open below.
-                state.devserver_terminal_urls.lock().unwrap().remove(&id);
+                // A rotated token means the devserver restarted: its old tenants
+                // are gone. Workspace + persisted-terminal windows re-open below
+                // (the persisted terminals re-mount server-side at stable
+                // prefixes), each with the fresh token.
                 reopen_devserver_workspace_windows(&app, &state, &id, &rows);
                 // W10: the restart re-mounted the persisted standalone terminals
                 // server-side at stable prefixes — re-create their windows too
@@ -2233,7 +2191,6 @@ fn main() {
         devservers: devserver::DevserverConns::default(),
         devserver_windows: Mutex::new(HashMap::new()),
         control_terminal_prefixes: Mutex::new(HashMap::new()),
-        devserver_terminal_urls: Mutex::new(HashMap::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
     });
@@ -3236,38 +3193,25 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
     }
     if focused_label.starts_with("outbound-") {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
-        // A devserver standalone terminal: open ANOTHER on the same devserver's
-        // shared terminal tenant (Cmd+Shift+N parity with local standalone
-        // terminals). All a devserver's terminals share the stable window id, so
-        // their labels share one outbound hash prefix; recompute it per devserver
-        // to recover which one is focused. The shared URL is already cached (the
-        // connect flow mounted it when this window was opened).
+        // A devserver standalone terminal: open ANOTHER persisted per-tenant
+        // terminal on the same devserver (Cmd+Shift+N parity with New-Terminal).
+        // All a devserver's terminals share the stable window id, so their labels
+        // share one outbound hash prefix; recompute it per devserver to recover
+        // which one is focused. The mount is an async HTTP POST, so fire-and-
+        // forget it (like the local standalone-terminal case) and surface a
+        // failure as a warning rather than blocking the menu handler.
         for ds in &cfg.devservers {
             let prefix = serve::outbound_window_prefix(&devserver_terminal_window_id(&ds.id));
             if focused_label.starts_with(&format!("{prefix}-")) {
-                let url = state
-                    .devserver_terminal_urls
-                    .lock()
-                    .unwrap()
-                    .get(&ds.id)
-                    .cloned();
-                return match url {
-                    Some(url) => {
-                        let window_id = devserver_terminal_window_id(&ds.id);
-                        let label = serve::spawn_devserver_terminal_window(app, &window_id, &url)?;
-                        track_devserver_window(
-                            &state,
-                            &ds.id,
-                            DevserverWindow {
-                                window_id,
-                                label,
-                                prefix: None,
-                            },
-                        );
-                        Ok(())
+                let app = app.clone();
+                let id = ds.id.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app.state::<Arc<AppState>>();
+                    if let Err(e) = open_devserver_terminal_window(&app, &state, &id).await {
+                        tracing::warn!(devserver = %id, error = %e, "opening another devserver terminal failed");
                     }
-                    None => show_window(app, "main"),
-                };
+                });
+                return Ok(());
             }
         }
         // New window on the SAME outbound remote: recover the attachment

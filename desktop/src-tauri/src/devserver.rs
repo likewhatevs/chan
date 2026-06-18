@@ -280,32 +280,6 @@ fn row_from_entry(
     })
 }
 
-/// `POST /api/devserver/terminals`: mount a standalone terminal tenant and
-/// return its assembled tab URL.
-pub async fn open_terminal(conn: &DevserverConn) -> Result<String, String> {
-    let url = format!(
-        "{}/api/devserver/terminals",
-        base_origin(&conn.host, conn.port)
-    );
-    let resp = http_client()?
-        .post(&url)
-        .bearer_auth(&conn.token)
-        .send()
-        .await
-        .map_err(|e| format!("opening devserver terminal: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "devserver terminals returned HTTP {}",
-            resp.status()
-        ));
-    }
-    let terminal = resp
-        .json::<MountedTerminal>()
-        .await
-        .map_err(|e| format!("decoding devserver terminal: {e}"))?;
-    assemble_tenant_url(&conn.host, conn.port, &terminal.prefix, &terminal.token)
-}
-
 /// `POST /api/devserver/terminals` body carrying the desktop-assigned window
 /// `label` (the `?w=` key, in the desktop's outbound family). Per Seam 4
 /// Amendment 6 the devserver persists `{label, prefix, command}` keyed by the
