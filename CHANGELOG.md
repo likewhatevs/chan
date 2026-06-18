@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `chan devserver --launchd` (macOS): supervise the devserver under a per-user launchd LaunchAgent (`app.chan.devserver`) so it survives the launching shell; re-running re-attaches to the live agent. The macOS counterpart to `--systemd`. It outlives the GUI login session but not a full logout (launchd has no per-user linger without a root LaunchDaemon); stop it with `launchctl bootout gui/$(id -u)/app.chan.devserver`.
+
+### Fixed
+
+- `chan devserver --systemd`: a fresh start now surfaces the bearer token to the controlling terminal even when the invoking user cannot read the systemd journal (a uid below `SYS_UID_MAX`, or a user outside the `systemd-journal`/`adm` groups) — the supervisor emits the `CHAN_DEVSERVER_TOKEN=` marker directly from the persisted config rather than relying on the journal follow, and keeps supervising (or fails loud) instead of quitting when the journal stream ends.
+
 ## [v0.38.0] - 2026-06-17
 
 ### Added

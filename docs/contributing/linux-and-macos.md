@@ -174,6 +174,8 @@ limactl shell default sudo sdme exec chan-devserver-dev /bin/bash -c '
 
 Expect the locked `CHAN_DEVSERVER_TOKEN=<token>` marker on **stdout** (the contract the desktop control terminal scrapes), the unit at `~dev/.config/systemd/user/chan-devserver.service`, and `systemctl --user status chan-devserver.service` reporting active; a second run re-attaches to the running unit and re-emits the marker. This container is also where you reproduce the journal-readability edge the supervisor is hardened against — the token still reaches stdout when the user cannot read the unit journal (a uid below `SYS_UID_MAX`, or a user outside the `systemd-journal`/`adm` groups), because the supervisor reads the persisted token and emits the marker itself rather than relying on the journal follow. `--systemd` is not reachable from CI (the runner has no systemd user manager), so this local flow is how you exercise it.
 
+The macOS counterpart, `--launchd`, runs **natively** on your Mac — no container needed. `chan devserver --launchd` writes `~/Library/LaunchAgents/app.chan.devserver.plist`, bootstraps it into your `gui/$(id -u)` session, and emits the same `CHAN_DEVSERVER_TOKEN=` marker on stdout; inspect it with `launchctl print gui/$(id -u)/app.chan.devserver` and tear it down with `launchctl bootout gui/$(id -u)/app.chan.devserver`. Like `--systemd`, it is not reachable from CI (the runner has no GUI launchd domain), so exercise it locally.
+
 ## Gateway: Postgres-backed tests
 
 The gateway is a separate workspace with Postgres-backed integration tests. Its container setup (a `chan-psql` Postgres rootfs) and the test commands live in [`gateway/docs/testing-on-linux-and-macos.md`](../../gateway/docs/testing-on-linux-and-macos.md).

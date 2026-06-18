@@ -336,6 +336,12 @@ enum Command {
         /// follow its journal. Off Linux, runs in the foreground.
         #[arg(long)]
         systemd: bool,
+        /// Run under a macOS launchd LaunchAgent (`app.chan.devserver`):
+        /// write and load the agent (re-attaching if it is already running),
+        /// so it survives the launching shell, then follow its log. Off
+        /// macOS, runs in the foreground. Mutually exclusive with --systemd.
+        #[arg(long, conflicts_with = "systemd")]
+        launchd: bool,
     },
     /// Rebuild the search index + graph; manage the embedding
     /// model + per-workspace Hybrid-search opt-in. Subcommand-driven
@@ -795,7 +801,8 @@ where
             bind,
             port,
             systemd,
-        } => cmd_devserver(bind, port, systemd).await,
+            launchd,
+        } => cmd_devserver(bind, port, systemd, launchd).await,
         Command::Index { action } => cmd_index(action),
         Command::Reports { action } => cmd_reports(action),
         Command::Search { path, query, limit } => cmd_search(path, query, limit),
@@ -1391,11 +1398,12 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
 }
 
 /// Run a headless multi-workspace devserver bound to `bind:port`. By default
-/// it runs in the foreground. On Linux, `--systemd` supervises it under the
-/// `chan-devserver.service` systemd user service (surviving the launching
-/// shell and logout) and re-attaches when that unit is already running; off
-/// Linux it prints a note and runs in the foreground.
-async fn cmd_devserver(bind: IpAddr, port: u16, systemd: bool) -> Result<()> {
+/// it runs in the foreground. `--systemd` (Linux) supervises it under the
+/// `chan-devserver.service` user unit; `--launchd` (macOS) supervises it under
+/// the `app.chan.devserver` LaunchAgent. Either re-attaches when its service is
+/// already running; off its own OS each prints a note and runs in the
+/// foreground.
+async fn cmd_devserver(bind: IpAddr, port: u16, systemd: bool, launchd: bool) -> Result<()> {
     let addr = SocketAddr::new(bind, port);
     if !addr.ip().is_loopback() {
         eprintln!(
@@ -1405,23 +1413,27 @@ async fn cmd_devserver(bind: IpAddr, port: u16, systemd: bool) -> Result<()> {
             addr.ip()
         );
     }
-    // `--systemd` supervises the foreground devserver under a systemd user
-    // service so it survives the launching terminal. There is no equivalent
-    // off Linux yet (launchd is not wired), so fall back to the foreground.
+    // `--systemd` / `--launchd` supervise the foreground devserver under the
+    // platform service manager so it survives the launching terminal. Each is a
+    // no-op off its own OS (the other backend is not wired there), so fall back
+    // to the foreground.
     if systemd {
         if cfg!(target_os = "linux") {
             return run_devserver_under_systemd(addr).await;
         }
-        eprintln!(
-            "chan devserver: NOTE: --systemd is Linux-only (launchd support is \
-             not yet available); running in the foreground."
-        );
+        eprintln!("chan devserver: NOTE: --systemd is Linux-only; running in the foreground.");
+    }
+    if launchd {
+        if cfg!(target_os = "macos") {
+            return run_devserver_under_launchd(addr).await;
+        }
+        eprintln!("chan devserver: NOTE: --launchd is macOS-only; running in the foreground.");
     }
     run_devserver_foreground(addr).await
 }
 
-/// Run the devserver in the foreground. Both the no-`--systemd` default and
-/// the systemd unit's `ExecStart` land here.
+/// Run the devserver in the foreground. The no-supervisor default and the
+/// systemd unit's `ExecStart` / launchd agent's `ProgramArguments` all land here.
 async fn run_devserver_foreground(addr: SocketAddr) -> Result<()> {
     let lib = library()?;
     chan_server::run_devserver(
@@ -1538,7 +1550,7 @@ async fn emit_devserver_token_marker(timeout: Duration) -> Result<()> {
             Ok(())
         }
         None => anyhow::bail!(
-            "chan devserver: {DEVSERVER_SYSTEMD_UNIT} is active but its bearer \
+            "chan devserver: the supervised service is active but its bearer \
              token could not be read from ~/.chan/devserver/config.json; the \
              control terminal cannot authenticate to it"
         ),
@@ -1746,6 +1758,309 @@ async fn run_tool(program: &str, args: &[&str]) -> Result<std::process::Output> 
         .output()
         .await
         .with_context(|| format!("running `{program} {}`", args.join(" ")))
+}
+
+// ---------------------------------------------------------------------------
+// macOS launchd backend — mirrors the systemd backend above. The functions are
+// always compiled (they only shell out to `launchctl`) and called only under
+// `cfg!(target_os = "macos")`; the pure helpers stay unit-testable on any host.
+// ---------------------------------------------------------------------------
+
+/// The launchd LaunchAgent label for the devserver. Reverse-DNS off the app
+/// bundle id (`app.chan.desktop`).
+const DEVSERVER_LAUNCHD_LABEL: &str = "app.chan.devserver";
+
+/// Supervise the devserver under a per-user launchd LaunchAgent: write and load
+/// the agent (or re-attach to a running one), emit the token contract, then
+/// follow its log until it stops. Unlike systemd there is no linger to ensure —
+/// a LaunchAgent in the `gui/<uid>` domain already outlives the launching shell
+/// and the GUI login session (it does NOT survive a full logout; that would
+/// need a root LaunchDaemon).
+async fn run_devserver_under_launchd(addr: SocketAddr) -> Result<()> {
+    let uid = current_uid().await?;
+    let service = launchd_service_target(uid);
+
+    if launchd_is_active(uid).await {
+        // Re-attaching to a running agent. Its stdout (with the token marker)
+        // goes to the log file, not this terminal, so the supervisor re-provides
+        // the token contract itself (see emit_devserver_token_marker).
+        emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
+        eprintln!(
+            "chan devserver: re-attaching to the running launchd agent \
+             {DEVSERVER_LAUNCHD_LABEL}"
+        );
+    } else {
+        let plist = write_devserver_launch_agent(addr)?;
+        eprintln!("chan devserver: wrote {}", plist.display());
+        // Clear any stale (loaded-but-dead) registration so the freshly written
+        // plist takes effect; best-effort, it errors when nothing is loaded.
+        let _ = run_tool("launchctl", &["bootout", service.as_str()]).await;
+        launchctl(&["enable", service.as_str()]).await?;
+        let plist_arg = plist.to_string_lossy();
+        launchctl(&["bootstrap", &launchd_domain_target(uid), plist_arg.as_ref()]).await?;
+        if !wait_until_launchd_active(uid, Duration::from_secs(10)).await {
+            anyhow::bail!(
+                "chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} \
+                 failed to start:\n{}",
+                recent_launchd_log().await
+            );
+        }
+        // Same direct-emit contract as the systemd path: the service logs its
+        // own marker to the log file, invisible to this terminal, so surface it
+        // from the persisted config and fail loud if it never lands.
+        emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
+        eprintln!(
+            "chan devserver: started the launchd agent {DEVSERVER_LAUNCHD_LABEL} \
+             (bind={addr})"
+        );
+    }
+
+    follow_launchd_until_stopped(uid).await
+}
+
+/// The current user's numeric uid for the `gui/<uid>` domain target. Shells out
+/// to `id -u` rather than adding a libc dependency, mirroring the systemd
+/// backend's `$USER` discovery.
+async fn current_uid() -> Result<u32> {
+    let output = run_tool("id", &["-u"]).await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "`id -u` failed:\n{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .context("parsing the current uid from `id -u`")
+}
+
+/// `gui/<uid>` — the launchd domain target for the user's GUI login session.
+fn launchd_domain_target(uid: u32) -> String {
+    format!("gui/{uid}")
+}
+
+/// `gui/<uid>/<label>` — the launchd service target for the devserver agent.
+fn launchd_service_target(uid: u32) -> String {
+    format!("gui/{uid}/{DEVSERVER_LAUNCHD_LABEL}")
+}
+
+/// The user's home directory from `$HOME`, for the macOS launchd paths. Mirrors
+/// the `$HOME` resolution the systemd unit-dir helper uses (no `dirs` dep).
+fn home_dir() -> Result<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .context("no HOME for the launchd agent paths")
+}
+
+/// `~/Library/LaunchAgents/app.chan.devserver.plist`.
+fn launch_agent_path() -> Result<PathBuf> {
+    Ok(home_dir()?
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{DEVSERVER_LAUNCHD_LABEL}.plist")))
+}
+
+/// `~/.chan/devserver/devserver.log` — where the agent's stdout/stderr land
+/// (launchd has no journal). Co-located with the 0600 devserver config.
+fn devserver_log_path() -> Result<PathBuf> {
+    Ok(home_dir()?
+        .join(".chan")
+        .join("devserver")
+        .join("devserver.log"))
+}
+
+/// Write the LaunchAgent plist whose `ProgramArguments` run THIS binary's
+/// foreground devserver on `addr`. Returns the plist path.
+fn write_devserver_launch_agent(addr: SocketAddr) -> Result<PathBuf> {
+    let exe = std::env::current_exe()
+        .context("resolving the chan binary path for the launchd ProgramArguments")?;
+    let log = devserver_log_path()?;
+    if let Some(parent) = log.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let plist_path = launch_agent_path()?;
+    if let Some(parent) = plist_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let plist = devserver_launch_agent_plist(&exe, addr, &log);
+    std::fs::write(&plist_path, plist)
+        .with_context(|| format!("writing {}", plist_path.display()))?;
+    Ok(plist_path)
+}
+
+/// Build the LaunchAgent plist XML. `RunAtLoad` starts it on bootstrap;
+/// `KeepAlive`/`SuccessfulExit=false` restarts it only on a crash (the launchd
+/// analogue of systemd `Restart=on-failure`); stdout/stderr go to `log`.
+fn devserver_launch_agent_plist(exe: &Path, addr: SocketAddr, log: &Path) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{exe}</string>
+    <string>devserver</string>
+    <string>--bind={ip}</string>
+    <string>--port={port}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>{log}</string>
+  <key>StandardErrorPath</key>
+  <string>{log}</string>
+</dict>
+</plist>
+"#,
+        label = DEVSERVER_LAUNCHD_LABEL,
+        exe = xml_escape(&exe.to_string_lossy()),
+        ip = addr.ip(),
+        port = addr.port(),
+        log = xml_escape(&log.to_string_lossy()),
+    )
+}
+
+/// Minimal XML text escaping for plist `<string>` values (paths).
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Run `launchctl <args>`, erroring with stderr on a non-zero exit. For the
+/// must-succeed calls (`enable`, `bootstrap`); `bootout` runs best-effort.
+async fn launchctl(args: &[&str]) -> Result<()> {
+    let output = run_tool("launchctl", args).await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "`launchctl {}` failed:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Whether the agent is loaded AND running.
+async fn launchd_is_active(uid: u32) -> bool {
+    let service = launchd_service_target(uid);
+    matches!(
+        run_tool("launchctl", &["print", service.as_str()]).await,
+        Ok(output)
+            if output.status.success()
+                && launchd_print_running(&String::from_utf8_lossy(&output.stdout))
+    )
+}
+
+/// Whether the agent is loaded, not running, and last exited non-zero.
+async fn launchd_is_failed(uid: u32) -> bool {
+    let service = launchd_service_target(uid);
+    matches!(
+        run_tool("launchctl", &["print", service.as_str()]).await,
+        Ok(output)
+            if output.status.success()
+                && launchd_print_failed(&String::from_utf8_lossy(&output.stdout))
+    )
+}
+
+/// Parse `launchctl print` output for a running service (`state = running`).
+fn launchd_print_running(out: &str) -> bool {
+    out.lines().any(|l| l.trim() == "state = running")
+}
+
+/// Parse `launchctl print` output for a failed service: not running with a
+/// non-zero `last exit code`. `(never exited)` and `= 0` are not failures.
+fn launchd_print_failed(out: &str) -> bool {
+    let not_running = out.lines().any(|l| l.trim() == "state = not running");
+    let bad_exit = out.lines().find_map(|l| {
+        l.trim()
+            .strip_prefix("last exit code = ")
+            .and_then(|v| v.parse::<i32>().ok())
+    });
+    not_running && matches!(bad_exit, Some(code) if code != 0)
+}
+
+/// Poll until the agent is active, a failure is reported, or the deadline
+/// passes. Tolerates the brief window between bootstrap and first run.
+async fn wait_until_launchd_active(uid: u32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if launchd_is_active(uid).await {
+            return true;
+        }
+        if launchd_is_failed(uid).await || Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
+/// The last lines of the agent's log file, for a failure message.
+async fn recent_launchd_log() -> String {
+    let path = match devserver_log_path() {
+        Ok(p) => p,
+        Err(e) => return format!("(could not resolve the log path: {e})"),
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let mut tail: Vec<&str> = text.lines().rev().take(30).collect();
+            tail.reverse();
+            tail.join("\n")
+        }
+        Err(e) => format!("(could not read {}: {e})", path.display()),
+    }
+}
+
+/// Stream the agent's log to stdout, returning when the agent is no longer
+/// active. An agent left in a failed state returns an error so the caller exits
+/// non-zero. Mirrors `follow_unit_until_stopped`.
+async fn follow_launchd_until_stopped(uid: u32) -> Result<()> {
+    let log = devserver_log_path()?;
+    let mut follow = tokio::process::Command::new("tail")
+        .args(["-f", "-n", "20"])
+        .arg(&log)
+        .spawn()
+        .context("spawning tail to follow the devserver log")?;
+    let mut streaming = true;
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if !launchd_is_active(uid).await {
+            break;
+        }
+        if streaming && matches!(follow.try_wait(), Ok(Some(_))) {
+            eprintln!(
+                "chan devserver: log streaming for {DEVSERVER_LAUNCHD_LABEL} \
+                 stopped; still supervising the agent"
+            );
+            streaming = false;
+        }
+    }
+    let _ = follow.start_kill();
+    let _ = follow.wait().await;
+    if launchd_is_failed(uid).await {
+        anyhow::bail!(
+            "chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} entered \
+             a failed state:\n{}",
+            recent_launchd_log().await
+        );
+    }
+    eprintln!(
+        "chan devserver: the launchd agent {DEVSERVER_LAUNCHD_LABEL} is no \
+         longer active."
+    );
+    Ok(())
 }
 
 /// Integrate a Desktop-personality `chan serve` with the desktop app.
@@ -4014,5 +4329,59 @@ mod tests {
         // caller turns into a loud failure rather than supervising blind.
         let token = resolve_devserver_token(|| None, Duration::from_millis(150)).await;
         assert_eq!(token, None);
+    }
+
+    #[test]
+    fn launch_agent_plist_carries_program_and_keys() {
+        let plist = devserver_launch_agent_plist(
+            Path::new("/usr/local/bin/chan"),
+            "127.0.0.1:8799".parse().unwrap(),
+            Path::new("/Users/x/.chan/devserver/devserver.log"),
+        );
+        assert!(plist.contains("<string>app.chan.devserver</string>"));
+        assert!(plist.contains("<string>/usr/local/bin/chan</string>"));
+        assert!(plist.contains("<string>devserver</string>"));
+        assert!(plist.contains("<string>--bind=127.0.0.1</string>"));
+        assert!(plist.contains("<string>--port=8799</string>"));
+        assert!(plist.contains("<key>RunAtLoad</key>"));
+        assert!(plist.contains("<key>SuccessfulExit</key>"));
+        assert!(plist.contains("<string>/Users/x/.chan/devserver/devserver.log</string>"));
+    }
+
+    #[test]
+    fn launch_agent_plist_escapes_xml_in_paths() {
+        let plist = devserver_launch_agent_plist(
+            Path::new("/opt/a & b/chan"),
+            "127.0.0.1:1".parse().unwrap(),
+            Path::new("/tmp/log"),
+        );
+        assert!(plist.contains("/opt/a &amp; b/chan"));
+        assert!(!plist.contains("a & b/chan"));
+    }
+
+    #[test]
+    fn launchd_print_running_reads_state() {
+        // Tab-indented like real `launchctl print` output.
+        assert!(launchd_print_running(
+            "\tstate = running\n\tpid = 4321\n\tlast exit code = (never exited)\n"
+        ));
+        assert!(!launchd_print_running(
+            "\tstate = not running\n\tlast exit code = (never exited)\n"
+        ));
+    }
+
+    #[test]
+    fn launchd_print_failed_only_on_nonzero_exit() {
+        assert!(launchd_print_failed(
+            "\tstate = not running\n\tlast exit code = 1\n"
+        ));
+        // A clean exit, a never-run service, and a running service are not failures.
+        assert!(!launchd_print_failed(
+            "\tstate = not running\n\tlast exit code = 0\n"
+        ));
+        assert!(!launchd_print_failed(
+            "\tstate = not running\n\tlast exit code = (never exited)\n"
+        ));
+        assert!(!launchd_print_failed("\tstate = running\n\tpid = 5\n"));
     }
 }
