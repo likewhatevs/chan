@@ -1271,15 +1271,62 @@
     return ids;
   });
 
-  /// Directory node ids hidden when the folder chip is off. Only meaningful
-  /// in filesystem mode where directory-kind nodes are emitted; in
-  /// markdown / language modes there are no directory nodes so the set
-  /// stays empty and the toggle is a no-op.
+  /// Directory ids on the file→root containment SPINE: every directory that is
+  /// an ancestor (via `contains` edges) of an in-scope file. These anchor files
+  /// to the graph, so the folder chip must NOT hide them — hiding them is what
+  /// rendered file nodes "loose". Computed only when the folder chip is off
+  /// (when on, nothing is hidden so the spine is moot). Seeds from in-scope
+  /// files and walks `contains` upward, mirroring `pullContainsSpine`'s "no file
+  /// renders edgeless" invariant. Keyed off in-scope (not chip-visible) files
+  /// deliberately: keeping a directory whose only files are chip-filtered is
+  /// harmless declutter, whereas dropping a spine directory re-introduces loose
+  /// files (the safe direction is to over-keep anchors).
+  const spineFolderIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (show.folder) return ids;
+    const onSpine = new Set<string>();
+    for (const n of nodes) {
+      if (
+        n.kind === "file" &&
+        (scopedNodeIds === null || scopedNodeIds.has(n.id))
+      ) {
+        onSpine.add(n.id);
+      }
+    }
+    // `contains` = directory(source) -> child(target); pull each source whose
+    // target is already on the spine until no more ancestors are reachable.
+    let pulled = true;
+    while (pulled) {
+      pulled = false;
+      for (const e of edges) {
+        if (
+          e.kind === "contains" &&
+          onSpine.has(e.target) &&
+          !onSpine.has(e.source)
+        ) {
+          onSpine.add(e.source);
+          pulled = true;
+        }
+      }
+    }
+    for (const n of nodes) {
+      if (n.kind === "folder" && onSpine.has(n.id)) ids.add(n.id);
+    }
+    return ids;
+  });
+
+  /// Directory node ids hidden when the folder chip is off — directory-bubble
+  /// CLUTTER only. Directories on the file→parent spine (`spineFolderIds`) stay
+  /// visible so files keep their containment anchor; the folder chip declutters
+  /// directory bubbles, it does not cut the spine. Only meaningful in filesystem
+  /// mode where directory-kind nodes are emitted; in markdown / language modes
+  /// there are no directory nodes so the set stays empty and the toggle is a
+  /// no-op.
   const hiddenFolderIds = $derived.by(() => {
     const ids = new Set<string>();
     if (show.folder) return ids;
     for (const n of nodes) {
-      if (n.kind === "folder") ids.add(n.id);
+      if (n.kind === "folder" && !spineFolderIds.has(n.id)) ids.add(n.id);
     }
     return ids;
   });
@@ -1333,7 +1380,11 @@
   });
 
   function edgeVisibleByChip(kind: RenderedEdgeKind): boolean {
-    if (kind === "contains") return show.folder;
+    // `contains` is the file→parent spine, NOT folder-chip clutter: it renders
+    // whenever both endpoints are visible (the hiddenFolderIds gate keeps only
+    // non-spine directory bubbles out). Gating it on show.folder dropped the
+    // whole spine when the folder chip was off and made files render loose.
+    if (kind === "contains") return true;
     if (kind === "group") return true;
     // Link edges always render — a link filter doesn't make
     // sense because link visibility

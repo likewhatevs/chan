@@ -49,9 +49,30 @@ describe("parent-edge invariant", () => {
     expect(pullBlock![0]).toMatch(/visited\.add\(e\.source\)/);
   });
 
-  test("folder-filter hiding still kicks in via hiddenFolderIds (pull doesn't bypass)", () => {
-    // The pull adds the parent dir to scope, but folder-filter OFF
-    // still hides it via hiddenFolderIds in visibleNodeIds.
+  test("folder-filter hiding still gates visibleNodeIds via hiddenFolderIds", () => {
+    // The hiddenFolderIds gate stays in visibleNodeIds; what changed is its
+    // CONTENTS — it now excludes spine directories (spineFolderIds), so folder
+    // OFF hides only non-spine directory clutter, not the file→parent spine.
     expect(graph).toMatch(/if \(hiddenFolderIds\.has\(n\.id\)\) continue;/);
+  });
+
+  test("contains edges are NOT gated by the folder chip (spine survives folder OFF)", () => {
+    // The file→parent contains spine renders whenever both endpoints are
+    // visible, regardless of show.folder; gating it on the folder chip dropped
+    // the whole spine when folder was off and rendered files loose (the bug).
+    expect(graph).toMatch(/if \(kind === "contains"\) return true;/);
+    const fn = graph.match(/function edgeVisibleByChip[\s\S]*?\n {2}\}/);
+    expect(fn).not.toBeNull();
+    expect(fn![0]).not.toMatch(/kind === "contains"\) return show\.folder/);
+  });
+
+  test("the folder chip hides only NON-spine directory clutter", () => {
+    // spineFolderIds = directories anchoring an in-scope file (walked up the
+    // contains edges); hiddenFolderIds (folder OFF) excludes them, so spine
+    // directories stay visible and files keep their containment anchor.
+    expect(graph).toMatch(
+      /const spineFolderIds = \$derived\.by\(\(\) => \{[\s\S]*?e\.kind === "contains"[\s\S]*?onSpine\.has\(e\.target\)[\s\S]*?onSpine\.add\(e\.source\)/,
+    );
+    expect(graph).toMatch(/n\.kind === "folder" && !spineFolderIds\.has\(n\.id\)/);
   });
 });
