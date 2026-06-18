@@ -136,6 +136,14 @@ pub struct AppState {
     /// window closes and the tenant is torn down. Unused on workspace
     /// tenants, which take the disk path in the session handlers.
     pub ephemeral_sessions: Mutex<HashMap<String, Vec<u8>>>,
+    /// On-disk per-window session-blob store for a PERSISTED terminal tenant
+    /// (a standalone devserver terminal), so its pane/tab layout survives a
+    /// devserver restart. `Some(dir)` ⇒ the session handlers read/write
+    /// [`crate::terminal_blob`] at `dir`, keyed by the `?w=<window-label>`,
+    /// instead of `ephemeral_sessions`; `None` ⇒ the in-memory store above
+    /// (control terminals, and desktop-local terminals whose layout lives in
+    /// the desktop `Config`).
+    pub terminal_session_dir: Option<std::path::PathBuf>,
     /// Which window ids currently hold a `/ws` socket (refcounted; see
     /// the module docs). Feeds `GET /api/windows` and `cs window list`
     /// with the connected/saved split.
@@ -293,6 +301,7 @@ pub(crate) mod test_support {
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),
             window_bus: Arc::new(crate::window_bus::WindowBus::new()),
             ephemeral_sessions: Mutex::new(HashMap::new()),
+            terminal_session_dir: None,
             window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
             window_titles: Arc::new(crate::window_titles::WindowTitles::new()),
             instance_id: "test-instance".to_string(),

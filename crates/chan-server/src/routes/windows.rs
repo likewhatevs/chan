@@ -99,14 +99,18 @@ pub async fn api_list_windows(State(state): State<Arc<AppState>>) -> Response {
     let connected = state.window_presence.connected_ids();
     let titles = state.window_titles.clone();
     let Ok(workspace) = state.try_workspace() else {
-        // Workspace-less terminal tenant: blobs live in memory.
-        let saved: Vec<String> = state
-            .ephemeral_sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .keys()
-            .cloned()
-            .collect();
+        // Workspace-less terminal tenant: a persistent launcher store when one
+        // is configured (a persisted devserver terminal), else in memory.
+        let saved: Vec<String> = match &state.terminal_session_dir {
+            Some(dir) => crate::terminal_blob::list(dir).unwrap_or_default(),
+            None => state
+                .ephemeral_sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .keys()
+                .cloned()
+                .collect(),
+        };
         return Json(join_windows_with_titles(saved, connected, &titles)).into_response();
     };
     // Same spawn_blocking posture as the session routes: list_sessions

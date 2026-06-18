@@ -160,6 +160,20 @@ impl DevserverStore {
     }
 }
 
+/// The launcher session store for standalone terminals:
+/// `~/.chan/devserver/terminals/`. Each persisted terminal's per-window layout
+/// blob is keyed by its `?w=<label>` here, so the layout survives a devserver
+/// restart. `None` when there is no home dir (the terminal then falls back to
+/// the in-memory `ephemeral_sessions`).
+fn devserver_terminals_dir() -> Option<PathBuf> {
+    Some(
+        dirs::home_dir()?
+            .join(".chan")
+            .join("devserver")
+            .join("terminals"),
+    )
+}
+
 fn devserver_config_path() -> std::io::Result<PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no home directory"))?;
@@ -414,7 +428,11 @@ impl DevserverState {
         let prefix = allocate_terminal_prefix(&label)?;
         let hosted = self
             .host
-            .open_terminal_session_with_command(tenant_config(self.addr, &prefix), command.clone())
+            .open_terminal_session_with_command(
+                tenant_config(self.addr, &prefix),
+                command.clone(),
+                devserver_terminals_dir(),
+            )
             .await?;
         let token = hosted.handle.token.clone().unwrap_or_default();
         {
@@ -458,19 +476,24 @@ impl DevserverState {
     /// the next restart. Returns whether a terminal was registered there. The
     /// desktop's close-for-good (vs bury) routes here.
     fn forget_terminal(&self, prefix: &str) -> Result<bool, Error> {
-        let existed = {
+        let label = {
             let terminals = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
-            terminals.contains_key(prefix)
+            terminals.get(prefix).map(|record| record.label.clone())
         };
-        if !existed {
+        let Some(label) = label else {
             return Ok(false);
-        }
+        };
         // Reap the PTYs synchronously (close_terminal_tenant), then drop the
         // record + persist so the terminal is gone for good.
         self.host.close_terminal_tenant(prefix)?;
         {
             let mut terminals = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
             terminals.remove(prefix);
+        }
+        // Drop the persisted per-window layout blob too (best-effort), so a
+        // later terminal that reuses the label starts with a fresh layout.
+        if let Some(dir) = devserver_terminals_dir() {
+            let _ = crate::terminal_blob::delete(&dir, &label);
         }
         self.persist_state();
         Ok(true)
@@ -486,6 +509,7 @@ impl DevserverState {
             .open_terminal_session_with_command(
                 tenant_config(self.addr, &term.prefix),
                 term.command.clone(),
+                devserver_terminals_dir(),
             )
             .await?;
         let token = hosted.handle.token.clone().unwrap_or_default();

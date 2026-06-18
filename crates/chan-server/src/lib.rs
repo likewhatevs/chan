@@ -47,6 +47,7 @@ mod static_assets;
 mod store;
 mod submit_config;
 mod survey;
+mod terminal_blob;
 mod terminal_sessions;
 mod tunnel_guard;
 mod util;
@@ -762,6 +763,7 @@ async fn build_app(
         survey_bus,
         window_bus,
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
+        terminal_session_dir: None,
         window_presence,
         window_titles: desktop.window_titles.clone(),
         instance_id: random_token(),
@@ -815,6 +817,7 @@ async fn build_terminal_app(
     config: &ServeConfig,
     desktop: crate::desktop_window_ops::DesktopBridge,
     unserve: control_socket::UnserveMode,
+    session_dir: Option<std::path::PathBuf>,
 ) -> Result<AppArtifacts, Error> {
     let token = if config.no_token {
         None
@@ -967,6 +970,9 @@ async fn build_terminal_app(
         survey_bus,
         window_bus,
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
+        // A persisted devserver terminal sets this (its launcher session
+        // store); a control / desktop-local terminal passes None.
+        terminal_session_dir: session_dir,
         window_presence,
         window_titles: desktop.window_titles.clone(),
         instance_id: random_token(),

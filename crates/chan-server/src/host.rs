@@ -285,7 +285,10 @@ impl WorkspaceHost {
         &self,
         config: ServeConfig,
     ) -> Result<HostedWorkspace, Error> {
-        self.open_terminal_session_with_command(config, None).await
+        // Non-persistent terminal (no launcher session store): its layout
+        // lives in `ephemeral_sessions`.
+        self.open_terminal_session_with_command(config, None, None)
+            .await
     }
 
     /// Mount a workspace-less "terminal-only" tenant under
@@ -317,6 +320,7 @@ impl WorkspaceHost {
         &self,
         mut config: ServeConfig,
         command: Option<String>,
+        session_dir: Option<PathBuf>,
     ) -> Result<HostedWorkspace, Error> {
         config.prefix = sanitize_prefix(&config.prefix).map_err(Error::Config)?;
         let prefix = config.prefix.clone();
@@ -344,6 +348,7 @@ impl WorkspaceHost {
             &config,
             self.desktop.clone(),
             self.unserve_mode(),
+            session_dir,
         )
         .await?;
         // The tenant's terminals run `command` (when set) rather than the
@@ -1137,6 +1142,7 @@ mod tests {
         host.open_terminal_session_with_command(
             serve_config("/terminal-cmd"),
             Some("printf hi".into()),
+            None,
         )
         .await
         .expect("open terminal session with command");

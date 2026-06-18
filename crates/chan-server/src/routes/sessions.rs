@@ -55,7 +55,20 @@ pub async fn api_get_session(
 ) -> Response {
     let key = q.w;
     let Ok(workspace) = state.try_workspace() else {
-        // Workspace-less terminal tenant: tenant-scoped in-memory store.
+        // Workspace-less terminal tenant: a persistent launcher store when one
+        // is configured (a persisted devserver terminal), else the in-memory
+        // store (control / desktop-local terminals).
+        if let Some(dir) = state.terminal_session_dir.clone() {
+            return blocking_response(
+                move || match crate::terminal_blob::get(&dir, &key) {
+                    Ok(Some(bytes)) => raw_json_response(bytes),
+                    Ok(None) => StatusCode::NO_CONTENT.into_response(),
+                    Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                },
+                "get terminal session",
+            )
+            .await;
+        }
         return match ephemeral_lock(&state).get(&key) {
             Some(bytes) => raw_json_response(bytes.clone()),
             None => StatusCode::NO_CONTENT.into_response(),
@@ -82,6 +95,16 @@ pub async fn api_put_session(
 ) -> Response {
     let key = q.w;
     let Ok(workspace) = state.try_workspace() else {
+        if let Some(dir) = state.terminal_session_dir.clone() {
+            return blocking_response(
+                move || match crate::terminal_blob::put(&dir, &key, &body) {
+                    Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                    Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                },
+                "put terminal session",
+            )
+            .await;
+        }
         ephemeral_lock(&state).insert(key, body.to_vec());
         return StatusCode::NO_CONTENT.into_response();
     };
@@ -101,6 +124,16 @@ pub async fn api_delete_session(
 ) -> Response {
     let key = q.w;
     let Ok(workspace) = state.try_workspace() else {
+        if let Some(dir) = state.terminal_session_dir.clone() {
+            return blocking_response(
+                move || match crate::terminal_blob::delete(&dir, &key) {
+                    Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                    Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                },
+                "delete terminal session",
+            )
+            .await;
+        }
         ephemeral_lock(&state).remove(&key);
         return StatusCode::NO_CONTENT.into_response();
     };
@@ -116,6 +149,16 @@ pub async fn api_delete_session(
 
 pub async fn api_list_sessions(State(state): State<Arc<AppState>>) -> Response {
     let Ok(workspace) = state.try_workspace() else {
+        if let Some(dir) = state.terminal_session_dir.clone() {
+            return blocking_response(
+                move || match crate::terminal_blob::list(&dir) {
+                    Ok(keys) => Json(keys).into_response(),
+                    Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                },
+                "list terminal sessions",
+            )
+            .await;
+        }
         let keys: Vec<String> = ephemeral_lock(&state).keys().cloned().collect();
         return Json(keys).into_response();
     };
