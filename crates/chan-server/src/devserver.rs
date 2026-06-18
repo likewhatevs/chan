@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
@@ -236,6 +237,9 @@ struct DevserverState {
     /// Standalone terminal tenants by stable prefix, persisted so they survive
     /// a restart (re-mounted with fresh PTYs).
     terminals: Mutex<HashMap<String, TerminalRecord>>,
+    /// Monotonic counter minting throwaway prefixes for EPHEMERAL terminals
+    /// (the connect-script control/landing singleton, never persisted).
+    terminal_seq: AtomicU64,
     store: DevserverStore,
 }
 
@@ -416,38 +420,51 @@ impl DevserverState {
         entries
     }
 
-    /// Open (mount) a standalone terminal tenant for the client window `label`,
-    /// running `command` (or the login shell). Allocates a STABLE prefix from
-    /// the label so the same terminal re-mounts at the same route across a
-    /// restart, records it for persistence, and returns the prefix + token.
+    /// Open a standalone terminal tenant. A `Some(label)` request is a PERSISTED
+    /// user terminal: its prefix is derived from the label, and it is recorded +
+    /// persisted so it re-mounts at the same route across a restart. A `None`
+    /// request is the EPHEMERAL connect-script control/landing singleton: it
+    /// mounts at a throwaway prefix, is NOT recorded or persisted, and carries no
+    /// on-disk layout blob (it idle-prunes once the desktop abandons it).
     async fn open_terminal(
         &self,
-        label: String,
+        label: Option<String>,
         command: Option<String>,
     ) -> Result<MountedTerminal, Error> {
-        let prefix = allocate_terminal_prefix(&label)?;
+        let (prefix, session_dir) = match &label {
+            Some(label) => (allocate_terminal_prefix(label)?, devserver_terminals_dir()),
+            None => (
+                ephemeral_terminal_prefix(self.terminal_seq.fetch_add(1, Ordering::Relaxed))?,
+                None,
+            ),
+        };
         let hosted = self
             .host
             .open_terminal_session_with_command(
                 tenant_config(self.addr, &prefix),
                 command.clone(),
-                devserver_terminals_dir(),
+                session_dir,
             )
             .await?;
         let token = hosted.handle.token.clone().unwrap_or_default();
-        {
-            let mut terminals = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
-            terminals.insert(
-                hosted.prefix.clone(),
-                TerminalRecord {
-                    label,
-                    prefix: hosted.prefix.clone(),
-                    command,
-                    token: token.clone(),
-                },
-            );
+        // Only labelled terminals are tracked + persisted; an ephemeral one
+        // stays untracked so it never re-mounts on restart and never shows in
+        // the persisted-terminal list.
+        if let Some(label) = label {
+            {
+                let mut terminals = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
+                terminals.insert(
+                    hosted.prefix.clone(),
+                    TerminalRecord {
+                        label,
+                        prefix: hosted.prefix.clone(),
+                        command,
+                        token: token.clone(),
+                    },
+                );
+            }
+            self.persist_state();
         }
-        self.persist_state();
         Ok(MountedTerminal {
             prefix: hosted.prefix,
             token,
@@ -563,6 +580,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         host_label: config.host_label,
         workspaces: Mutex::new(HashMap::new()),
         terminals: Mutex::new(HashMap::new()),
+        terminal_seq: AtomicU64::new(0),
         store,
     });
 
@@ -789,11 +807,17 @@ async fn handle_forget_terminal(
     }
 }
 
+/// The body is OPTIONAL: a `{label}` POST mounts a persisted user terminal,
+/// while a bodyless POST (the connect-script control/landing singleton) mounts
+/// an ephemeral one. `Option<Json<_>>` is the key — a plain `Json<_>` extractor
+/// rejects a bodyless POST with 415 (no `Content-Type: application/json`), which
+/// is the v0.39.0 connect regression this endpoint must not reintroduce.
 async fn handle_open_terminal(
     State(state): State<Arc<DevserverState>>,
-    Json(req): Json<OpenTerminalRequest>,
+    req: Option<Json<OpenTerminalRequest>>,
 ) -> Response {
-    match state.open_terminal(req.label, req.command).await {
+    let OpenTerminalRequest { label, command } = req.map(|Json(req)| req).unwrap_or_default();
+    match state.open_terminal(label, command).await {
         Ok(mounted) => Json(mounted).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -875,6 +899,16 @@ fn allocate_terminal_prefix(label: &str) -> Result<String, Error> {
     let hash = hasher.finish();
     let slug = workspace_slug(Path::new(label));
     sanitize_prefix(&format!("/api/term-{slug}-{hash:x}")).map_err(Error::Config)
+}
+
+/// Allocate an EPHEMERAL terminal's mount prefix from a per-process sequence:
+/// `/api/ctl-{seq}`. Unlike [`allocate_terminal_prefix`] it is not derived from
+/// a label — these terminals are never persisted, so they need no stable prefix
+/// — and the distinct `ctl-` namespace keeps it clear of labelled terminals
+/// (`term-…`). The sequence only has to be unique within the process; the host's
+/// duplicate-prefix guard backstops the vanishingly unlikely clash.
+fn ephemeral_terminal_prefix(seq: u64) -> Result<String, Error> {
+    sanitize_prefix(&format!("/api/ctl-{seq}")).map_err(Error::Config)
 }
 
 /// Sanitize a path segment into a legible `[a-z0-9-]` slug for a prefix:
@@ -1091,7 +1125,7 @@ mod tests {
 
         // Open a standalone terminal: mounted in the host AND persisted.
         let mounted = state
-            .open_terminal("terminal-1a2b".into(), Some("printf hi".into()))
+            .open_terminal(Some("terminal-1a2b".into()), Some("printf hi".into()))
             .await
             .expect("open terminal");
         assert!(mounted.prefix.starts_with("/api/term-"));
@@ -1130,12 +1164,147 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_terminal_post_accepts_a_bodyless_request() {
+        // Regression guard for the v0.39.1 connect 415: W10 gave
+        // `POST /api/devserver/terminals` a required `Json<OpenTerminalRequest>`
+        // body, which 415'd the bodyless connect-control-terminal POST (no
+        // `Content-Type: application/json`). The body is OPTIONAL now, so a
+        // bodyless POST must SUCCEED (mounting an ephemeral terminal) and the
+        // `{label}` POST keeps working.
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+        let app = build_devserver_app(state, host);
+
+        // Bodyless POST (the connect-control-terminal shape) → 200, NOT 415.
+        let bodyless = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/devserver/terminals")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bodyless.status(), StatusCode::OK);
+
+        // Labeled JSON body → still 200.
+        let labeled = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/devserver/terminals")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"label":"terminal-deadbeef"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(labeled.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn bodyless_open_terminal_is_ephemeral_and_labelled_persists() {
+        // End-to-end connect-control-terminal regression — the test that would
+        // have caught the v0.39.0 415. Through the real router: a bodyless POST
+        // mounts an EPHEMERAL terminal (200, `ctl-` prefix, NOT listed by `GET
+        // /api/devserver/terminals`), while a `{label}` POST mounts a persisted
+        // one that IS listed.
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+        let app = build_devserver_app(state, host);
+
+        let post = |body: Option<&'static str>| {
+            let app = app.clone();
+            async move {
+                let mut req = HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/devserver/terminals")
+                    .header(header::AUTHORIZATION, "Bearer test-token");
+                let body = match body {
+                    Some(b) => {
+                        req = req.header(header::CONTENT_TYPE, "application/json");
+                        Body::from(b)
+                    }
+                    None => Body::empty(),
+                };
+                let resp = app.oneshot(req.body(body).unwrap()).await.unwrap();
+                let status = resp.status();
+                let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let json: serde_json::Value =
+                    serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+                (status, json)
+            }
+        };
+
+        // Bodyless → ephemeral mount under the `ctl-` namespace.
+        let (eph_status, eph) = post(None).await;
+        assert_eq!(eph_status, StatusCode::OK);
+        let ephemeral_prefix = eph["prefix"]
+            .as_str()
+            .expect("ephemeral prefix")
+            .to_string();
+        assert!(
+            ephemeral_prefix.starts_with("/api/ctl-"),
+            "ephemeral prefix: {ephemeral_prefix}"
+        );
+
+        // Labelled → persisted mount.
+        let (lab_status, lab) = post(Some(r#"{"label":"terminal-keepme"}"#)).await;
+        assert_eq!(lab_status, StatusCode::OK);
+        let labelled_prefix = lab["prefix"].as_str().expect("labelled prefix").to_string();
+
+        // The persisted list carries the labelled terminal but NOT the ephemeral.
+        let list = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("GET")
+                    .uri("/api/devserver/terminals")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let entries: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+        let prefixes: Vec<&str> = entries
+            .iter()
+            .filter_map(|e| e["prefix"].as_str())
+            .collect();
+        assert!(
+            prefixes.contains(&labelled_prefix.as_str()),
+            "labelled terminal must be listed: {prefixes:?}"
+        );
+        assert!(
+            !prefixes.contains(&ephemeral_prefix.as_str()),
+            "ephemeral terminal must NOT be listed (it is not persisted): {prefixes:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn terminal_forget_unmounts_and_drops_persistence() {
         let home = tempfile::tempdir().expect("home");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
         let mounted = state
-            .open_terminal("terminal-x".into(), None)
+            .open_terminal(Some("terminal-x".into()), None)
             .await
             .expect("open");
         assert_eq!(state.terminal_entries().len(), 1);
@@ -1205,6 +1374,7 @@ mod tests {
             host_label: "test".into(),
             workspaces: Mutex::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
+            terminal_seq: AtomicU64::new(0),
             store: DevserverStore::at(home.join("devserver").join("config.json")),
         })
     }
