@@ -505,7 +505,7 @@ mod tests {
             ..IndexConfig::default()
         };
         save(&index_dir, &on_disk).unwrap();
-        let _holder = WorkspaceLock::acquire(&lock_dir).unwrap();
+        let _holder = WorkspaceLock::acquire(&lock_dir, tmp.path()).unwrap();
         let loaded = load(&index_dir).unwrap();
         assert_eq!(loaded.model, "BAAI/bge-m3");
         assert!(loaded.semantic_enabled);

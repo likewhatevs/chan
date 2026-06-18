@@ -328,7 +328,7 @@ impl Library {
             return Ok(ResetReport { removed_entries: 0 });
         };
         let workspace_paths = paths::workspace_paths_for_metadata_key(&metadata_key);
-        let _lock = WorkspaceLock::acquire(&workspace_paths.lock)?;
+        let _lock = WorkspaceLock::acquire(&workspace_paths.lock, root)?;
         let mut removed = 0;
         let report_dir = workspace_paths
             .report
@@ -968,11 +968,9 @@ mod tests {
         assert!(matches!(err, ChanError::WorkspaceAlreadyOpen));
     }
 
-    // Gated on Unix because the Windows lock primitive doesn't
-    // surface WorkspaceLocked the same way flock does — a known
-    // Windows lock-contract gap; revert this gate when a
-    // LockFileEx-backed bridge in lock.rs lands.
-    #[cfg(unix)]
+    // Cross-platform: `lock::is_contended` maps the Windows LockFileEx
+    // error to contention too, so a lock held by another handle surfaces
+    // WorkspaceLocked on Windows the same as flock does on Unix.
     #[test]
     fn reset_workspace_returns_locked_when_other_process_holds_lock() {
         // Hand-crafted second Library handle on the same config to

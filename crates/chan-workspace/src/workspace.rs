@@ -381,7 +381,7 @@ impl Workspace {
         }
         let paths = ensure_workspace_metadata_dirs(&entry.metadata_key)
             .map_err(|e| ChanError::Io(format!("ensure workspace metadata dirs: {e}")))?;
-        let lock = WorkspaceLock::acquire(&paths.lock)?;
+        let lock = WorkspaceLock::acquire(&paths.lock, &root_canon)?;
         // Lazy GC: reclaim expired trash entries on every open. No
         // background thread, matches the codebase's sync-only rule.
         // Errors are swallowed: a corrupt trash dir must never block
@@ -5623,11 +5623,9 @@ mod tests {
         assert!(workspace.exists("b/c.md"));
     }
 
-    // Gated on Unix because the Windows lock primitive doesn't
-    // surface WorkspaceLocked the same way flock does — a known
-    // Windows lock-contract gap; revert this gate when a
-    // LockFileEx-backed bridge in lock.rs lands.
-    #[cfg(unix)]
+    // Cross-platform: `lock::is_contended` maps the Windows LockFileEx
+    // error to contention too, so a second open surfaces WorkspaceLocked
+    // on Windows the same as flock does on Unix.
     #[test]
     fn second_open_blocks_on_writer_lock() {
         let (cfg, root, _workspace) = fixture();
