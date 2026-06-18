@@ -1049,10 +1049,20 @@ async fn cmd_remove(path: PathBuf) -> Result<()> {
     // Best-effort — if we can't reach the holder, fall through and let the
     // reset surface the real error.
     let _ = unserve_running(&lib, &path).await;
+    // Capture the metadata root before `unregister_workspace` drops the
+    // registry key (after which the path no longer resolves to it).
+    let metadata_root = lib.workspace_paths_for(&path).map(|p| p.root);
     let removed = lib
         .unregister_workspace(&path)
         .with_context(|| format!("unregistering {}", path.display()))?;
     if removed {
+        // `reset_workspace(Everything)` deliberately preserves the trash +
+        // lock dirs (other callers rely on that). `chan remove` means
+        // "forget everything", so drop the whole metadata dir — trash
+        // included — leaving no `~/.chan/workspaces/<key>/` behind.
+        if let Some(root) = metadata_root {
+            let _ = std::fs::remove_dir_all(&root);
+        }
         println!("unregistered: {}", path.display());
     } else {
         println!("(not registered: {})", path.display());
