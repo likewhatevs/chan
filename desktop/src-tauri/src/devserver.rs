@@ -262,7 +262,10 @@ pub async fn fetch_workspaces(conn: &DevserverConn) -> Result<Vec<DevserverWorks
 /// from its token. An off (registered-but-unmounted) row carries `token:""` and
 /// gets an empty URL — it has no live tenant; the launcher renders it off and
 /// Open turns it on first (which mints a fresh token).
-fn row_from_entry(conn: &DevserverConn, e: WorkspaceEntry) -> Result<DevserverWorkspaceRow, String> {
+fn row_from_entry(
+    conn: &DevserverConn,
+    e: WorkspaceEntry,
+) -> Result<DevserverWorkspaceRow, String> {
     let url = if e.token.is_empty() {
         String::new()
     } else {
