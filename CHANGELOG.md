@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.39.1] - 2026-06-18
+
+A patch for three issues found smoke-testing the v0.39.0 `chan devserver` connect flow.
+
+### Fixed
+
+- Connecting to a remote devserver no longer fails with `HTTP 415 Unsupported Media Type`. The
+  connect flow's first terminal is now created as a first-class persisted, per-tenant terminal (like
+  every other devserver terminal), so it also re-surfaces on reconnect. This also fixes Cmd+Shift+N
+  on a focused devserver terminal silently falling back to the launcher.
+- The control terminal now surfaces the abandon / edit / retry dialog on every close or exit while
+  connecting — Ctrl-C, Ctrl-W, or the close button — not only when the connect script fails. Choosing
+  abandon disconnects and resets the launcher back to "Connect" instead of leaving it stuck on
+  "connecting".
+- Connect-failure error message: the missing period before "Its control terminal is still open …" is
+  restored.
+
 ## [v0.39.0] - 2026-06-18
 
 A hardening round on the `chan devserver` + chan-desktop surface: workspace lifecycle, lock
