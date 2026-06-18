@@ -29,9 +29,9 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -605,11 +605,17 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
         .with_context(|| format!("GET {archive_url}"))?
         .error_for_status()
         .with_context(|| format!("GET {archive_url} returned an HTTP error"))?;
+    // Trust the advertised size only up to the safety cap, so a bogus
+    // huge Content-Length can't make the percent/ETA meaningless before
+    // the byte-cap below trips.
+    let advertised = resp.content_length().filter(|n| *n <= MAX_ARCHIVE_SIZE);
 
     let mut archive_file = fs::File::create(&archive_path)
         .with_context(|| format!("creating {}", archive_path.display()))?;
     let mut hasher = Sha256::new();
     let mut total: u64 = 0;
+    let mut progress =
+        DownloadProgress::new(advertised, std::io::stderr().is_terminal(), opts.verbose);
     while let Some(chunk) = resp
         .chunk()
         .await
@@ -623,7 +629,9 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
         if total > MAX_ARCHIVE_SIZE {
             bail!("downloaded archive exceeds safety cap of {MAX_ARCHIVE_SIZE} bytes");
         }
+        progress.update(chunk.len());
     }
+    progress.finish();
     archive_file.flush()?;
     drop(archive_file);
 
@@ -657,6 +665,169 @@ pub async fn run_upgrade(opts: UpgradeOptions) -> Result<()> {
 
     println!("chan: {participle} to {target_version}");
     Ok(())
+}
+
+/// Plain-text download progress for `chan upgrade`, modeled on sdme's
+/// terminal output. On a TTY it rewrites a single line in place (`\r`):
+/// percent, downloaded / total size, elapsed, and ETA. On a pipe (no
+/// TTY) it stays quiet unless `--verbose`, then logs decile milestones
+/// (10%, 20%, …) as plain lines so a captured log still shows motion.
+/// Degrades gracefully when the server sends no Content-Length: shows
+/// bytes, elapsed, and average rate without a percent or ETA. No TUI,
+/// no extra deps — just stderr writes.
+struct DownloadProgress {
+    /// Advertised total from Content-Length, if any (already capped).
+    total: Option<u64>,
+    downloaded: u64,
+    start: Instant,
+    /// Last on-screen refresh; throttles TTY redraws to ~10 Hz.
+    last_render: Option<Instant>,
+    tty: bool,
+    verbose: bool,
+    /// Next decile milestone to log in non-TTY verbose mode.
+    next_decile: u64,
+    /// Whether an unterminated `\r` line is currently on screen.
+    line_open: bool,
+}
+
+impl DownloadProgress {
+    fn new(total: Option<u64>, tty: bool, verbose: bool) -> Self {
+        Self {
+            total,
+            downloaded: 0,
+            start: Instant::now(),
+            last_render: None,
+            tty,
+            verbose,
+            next_decile: 10,
+            line_open: false,
+        }
+    }
+
+    /// Account for `n` freshly written bytes and refresh the display,
+    /// throttled to ~10 Hz on a TTY.
+    fn update(&mut self, n: usize) {
+        self.downloaded += n as u64;
+        if self.tty {
+            let due = self
+                .last_render
+                .is_none_or(|t| t.elapsed() >= Duration::from_millis(100));
+            if due {
+                self.render_tty();
+            }
+        } else if self.verbose {
+            self.log_deciles();
+        }
+    }
+
+    /// Final refresh: draw the finished state and close the line with a
+    /// newline so later output starts clean. Idempotent.
+    fn finish(&mut self) {
+        if self.tty {
+            self.render_tty();
+            if self.line_open {
+                let _ = writeln!(std::io::stderr());
+                self.line_open = false;
+            }
+        } else if self.verbose {
+            // downloaded == total by now, so this flushes the 100% line.
+            self.log_deciles();
+        }
+    }
+
+    fn render_tty(&mut self) {
+        self.last_render = Some(Instant::now());
+        let elapsed = self.start.elapsed().as_secs();
+        let line = match self.total {
+            Some(total) if total > 0 => {
+                let pct = (self.downloaded.min(total) * 100 / total).min(100);
+                let eta = self
+                    .eta_secs(total)
+                    .map(|s| format!("  ETA {}", fmt_secs(s)))
+                    .unwrap_or_default();
+                format!(
+                    "chan: downloading {pct:>3}%  {} / {}  {}{eta}",
+                    fmt_bytes(self.downloaded),
+                    fmt_bytes(total),
+                    fmt_secs(elapsed),
+                )
+            }
+            _ => {
+                let rate = self.downloaded.checked_div(elapsed).unwrap_or(0);
+                format!(
+                    "chan: downloading {}  {}  {}/s",
+                    fmt_bytes(self.downloaded),
+                    fmt_secs(elapsed),
+                    fmt_bytes(rate),
+                )
+            }
+        };
+        let mut err = std::io::stderr().lock();
+        // Pad to clear any residue from a longer previous line.
+        let _ = write!(err, "\r{line:<60}");
+        let _ = err.flush();
+        self.line_open = true;
+    }
+
+    fn log_deciles(&mut self) {
+        let Some(total) = self.total.filter(|t| *t > 0) else {
+            return;
+        };
+        let pct = (self.downloaded.min(total) * 100 / total).min(100);
+        while self.next_decile <= pct && self.next_decile <= 100 {
+            eprintln!(
+                "chan: downloading {}%  {} / {}",
+                self.next_decile,
+                fmt_bytes(self.downloaded),
+                fmt_bytes(total),
+            );
+            self.next_decile += 10;
+        }
+    }
+
+    /// Linear-extrapolation ETA in seconds from the average rate so
+    /// far. `None` until there is enough to estimate, or once complete.
+    fn eta_secs(&self, total: u64) -> Option<u64> {
+        let elapsed = self.start.elapsed().as_secs_f64();
+        if self.downloaded == 0 || self.downloaded >= total || elapsed <= 0.0 {
+            return None;
+        }
+        let rate = self.downloaded as f64 / elapsed;
+        if rate <= 0.0 {
+            return None;
+        }
+        Some(((total - self.downloaded) as f64 / rate).ceil() as u64)
+    }
+}
+
+impl Drop for DownloadProgress {
+    fn drop(&mut self) {
+        // Close an in-place line so an early return (e.g. the size-cap
+        // bail) never leaves the cursor parked mid-line.
+        if self.line_open {
+            let _ = writeln!(std::io::stderr());
+        }
+    }
+}
+
+/// Human-readable byte count (1024-base), matching the `humanize_bytes`
+/// style used elsewhere in the CLI.
+fn fmt_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    let b = bytes as f64;
+    if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// `m:ss` elapsed/ETA formatting (sdme-style, minutes uncapped).
+fn fmt_secs(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
 }
 
 fn extract_binary(
@@ -973,5 +1144,47 @@ mod tests {
         // Only assert the running build's target resolves; the public
         // release matrix is tested above.
         let _ = current_target().expect("target supported");
+    }
+
+    #[test]
+    fn fmt_bytes_units() {
+        assert_eq!(fmt_bytes(0), "0 B");
+        assert_eq!(fmt_bytes(512), "512 B");
+        assert_eq!(fmt_bytes(1536), "1.5 KB");
+        assert_eq!(fmt_bytes(5 * 1024 * 1024), "5.0 MB");
+    }
+
+    #[test]
+    fn fmt_secs_mmss() {
+        assert_eq!(fmt_secs(0), "0:00");
+        assert_eq!(fmt_secs(8), "0:08");
+        assert_eq!(fmt_secs(83), "1:23");
+        assert_eq!(fmt_secs(605), "10:05");
+    }
+
+    #[test]
+    fn eta_guards_are_deterministic() {
+        // No ETA before any bytes land, or once the download is
+        // complete — the timing-dependent middle is intentionally not
+        // asserted (wall-clock).
+        let mut p = DownloadProgress::new(Some(1000), false, false);
+        assert_eq!(p.eta_secs(1000), None);
+        p.downloaded = 1000;
+        assert_eq!(p.eta_secs(1000), None);
+        p.downloaded = 2000; // past total (over-read) also yields None
+        assert_eq!(p.eta_secs(1000), None);
+    }
+
+    #[test]
+    fn deciles_log_each_threshold_once() {
+        // Non-TTY verbose mode advances the milestone past every decile
+        // it has reached and never repeats one.
+        let mut p = DownloadProgress::new(Some(100), false, true);
+        p.downloaded = 25;
+        p.log_deciles();
+        assert_eq!(p.next_decile, 30); // logged 10, 20
+        p.downloaded = 100;
+        p.log_deciles();
+        assert_eq!(p.next_decile, 110); // logged 30..=100
     }
 }
