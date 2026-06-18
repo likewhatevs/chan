@@ -205,6 +205,14 @@ enum Command {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: PathBuf,
     },
+    /// Tear down a running `chan serve` for a workspace, releasing its
+    /// writer lock, without forgetting the workspace. The inverse of
+    /// `chan serve`. `chan remove` runs this first so it can forget a
+    /// workspace that is currently being served.
+    Unserve {
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        path: PathBuf,
+    },
     /// Run the HTTP server. Defaults to 127.0.0.1 (loopback only).
     #[command(long_about = SERVE_LONG_ABOUT)]
     Serve {
@@ -752,7 +760,8 @@ where
         Command::List { json } => cmd_list(json),
         Command::Shell { action } => chan_shell::dispatch(action).await,
         Command::Completions { shell } => cmd_completions(shell),
-        Command::Remove { path } => cmd_remove(path),
+        Command::Remove { path } => cmd_remove(path).await,
+        Command::Unserve { path } => cmd_unserve(path).await,
         Command::Serve {
             path,
             here,
@@ -1033,8 +1042,13 @@ fn cmd_completions(shell: Shell) -> Result<()> {
     Ok(())
 }
 
-fn cmd_remove(path: PathBuf) -> Result<()> {
+async fn cmd_remove(path: PathBuf) -> Result<()> {
     let lib = library()?;
+    // Tear down a running serve first: `reset_workspace` takes the writer
+    // flock and would otherwise fail `WorkspaceLocked` on a live serve.
+    // Best-effort — if we can't reach the holder, fall through and let the
+    // reset surface the real error.
+    let _ = unserve_running(&lib, &path).await;
     let removed = lib
         .unregister_workspace(&path)
         .with_context(|| format!("unregistering {}", path.display()))?;
@@ -1044,6 +1058,89 @@ fn cmd_remove(path: PathBuf) -> Result<()> {
         println!("(not registered: {})", path.display());
     }
     Ok(())
+}
+
+/// Tear down a running `chan serve` (or other launcher) holding `path`,
+/// releasing its writer lock, without forgetting the workspace.
+async fn cmd_unserve(path: PathBuf) -> Result<()> {
+    let lib = library()?;
+    match unserve_running(&lib, &path).await? {
+        UnserveOutcome::Unserved => println!("unserved: {}", path.display()),
+        UnserveOutcome::NotServed => println!("(not served: {})", path.display()),
+    }
+    Ok(())
+}
+
+enum UnserveOutcome {
+    /// A live holder was reached and told to unserve; its flock released.
+    Unserved,
+    /// No live process holds the workspace (unregistered, no lock record,
+    /// or the recorded holder is gone).
+    NotServed,
+}
+
+/// Shared by `chan unserve` and `chan remove`. Discovers the process
+/// serving `path` from its `writer.lock` record, reaches it over its
+/// control socket, asks it to unserve (the server decides scope: a
+/// dedicated serve exits, a devserver/desktop unmounts just that tenant),
+/// and waits for the flock to release.
+async fn unserve_running(lib: &Library, path: &Path) -> Result<UnserveOutcome> {
+    let Some(paths) = lib.workspace_paths_for(path) else {
+        return Ok(UnserveOutcome::NotServed); // not registered => nothing serving
+    };
+    let Some(record) = chan_workspace::lock::read_lock_record(&paths.lock) else {
+        return Ok(UnserveOutcome::NotServed); // no holder record on disk
+    };
+    let Some(socket) = control_socket_for_pid(record.pid) else {
+        // A record but no reachable control socket: the holder is gone
+        // (stale record — the lock is free / steal-able) or runs no control
+        // socket. Nothing to tear down over the wire.
+        return Ok(UnserveOutcome::NotServed);
+    };
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    chan_shell::send_control_request(
+        &socket,
+        chan_shell::ControlRequest::Unserve { path: canonical },
+    )
+    .await
+    .with_context(|| format!("asking the server (pid {}) to unserve", record.pid))?;
+    wait_for_lock_release(&paths.lock);
+    Ok(UnserveOutcome::Unserved)
+}
+
+/// Find the per-process control socket for `pid` by its well-known name
+/// (`$TMPDIR/chan-control-<pid>-<rand>.sock`). One socket per process, so
+/// the first match is unambiguous. Returns `None` where the socket isn't a
+/// temp-dir file (Windows named pipes aren't enumerable here — unserve over
+/// the wire is unix-first this round).
+fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
+    control_socket_for_pid_in(&std::env::temp_dir(), pid)
+}
+
+fn control_socket_for_pid_in(dir: &Path, pid: u32) -> Option<PathBuf> {
+    let prefix = format!("chan-control-{pid}-");
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(&prefix) && name.ends_with(".sock") {
+            return Some(entry.path());
+        }
+    }
+    None
+}
+
+/// Block (bounded) until the writer lock for `lock_dir` is free after a
+/// serve was asked to unserve. The server drops the flock asynchronously
+/// during graceful shutdown, so a `chan serve` racing right behind would
+/// otherwise see a transient `WorkspaceLocked`.
+fn wait_for_lock_release(lock_dir: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !chan_workspace::lock::is_free(lock_dir) {
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Parse a `--timeout` value: an unsigned integer plus a `s` / `m`
@@ -3752,6 +3849,20 @@ fn print_import_summary(summary: &chan_workspace::ImportSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_socket_for_pid_matches_only_that_pid() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // A different pid's control socket and an unrelated chan socket are
+        // both ignored.
+        std::fs::write(dir.path().join("chan-control-999-abcd.sock"), b"").unwrap();
+        std::fs::write(dir.path().join("chan-mcp-4242-abcd.sock"), b"").unwrap();
+        assert_eq!(control_socket_for_pid_in(dir.path(), 4242), None);
+        // The matching pid's socket is found.
+        let want = dir.path().join("chan-control-4242-ef01.sock");
+        std::fs::write(&want, b"").unwrap();
+        assert_eq!(control_socket_for_pid_in(dir.path(), 4242), Some(want));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
