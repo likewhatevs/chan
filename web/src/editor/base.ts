@@ -269,9 +269,21 @@ export function createValueSync(): {
     },
     applyExternal(view, value, opts) {
       if (!view) return;
+      // CodeMirror stores its document with '\n' line endings (CM6
+      // normalizes any '\r\n' / '\r' on the way in). Compare and insert
+      // against the same normalization. A file checked out with CRLF
+      // endings (the Windows default) would otherwise leave `cur` (LF,
+      // from the live doc) permanently unequal to `value` (CRLF, from
+      // disk), so this guard never short-circuits: applyExternal
+      // re-dispatches on every run of the prop->doc $effect, and each
+      // dispatch's selectionSet write (onSelectionChange / onCaretChange)
+      // re-triggers that effect, an unbounded reactive loop that trips
+      // Svelte's effect_update_depth_exceeded and freezes the editor.
+      const normalized =
+        value.indexOf("\r") === -1 ? value : value.replace(/\r\n?/g, "\n");
       const cur = view.state.doc.toString();
-      if (cur === value) {
-        if (value !== "") initialFillPending = false;
+      if (cur === normalized) {
+        if (normalized !== "") initialFillPending = false;
         return;
       }
       const initialFill = initialFillPending && cur === "";
@@ -285,9 +297,9 @@ export function createValueSync(): {
         // We clamp to the new doc length so a shorter incoming value
         // cannot place the caret past the end.
         const prev = view.state.selection.main;
-        const lim = value.length;
+        const lim = normalized.length;
         view.dispatch({
-          changes: { from: 0, to: cur.length, insert: value },
+          changes: { from: 0, to: cur.length, insert: normalized },
           selection: {
             anchor: Math.min(prev.anchor, lim),
             head: Math.min(prev.head, lim),
