@@ -1060,22 +1060,58 @@ async fn connect_devserver(
     );
     let conn = devserver::DevserverConn { host, port, token };
     state.devservers.set(id.clone(), conn);
-    // Mount (and cache) the devserver's ONE shared standalone-terminal tenant,
-    // then open the first terminal window on it. Every later terminal on this
-    // devserver reuses the same URL so they share a PTY registry.
-    let terminal_url = ensure_devserver_terminal_url(&state, &id).await?;
+    // W10: re-surface the devserver's persisted standalone terminals (Seam 4).
+    // Each comes back at its persisted label (?w=<label>) so the SPA reattaches
+    // to the live PTY (scrollback + running processes intact); a fresh devserver
+    // with none gets one terminal so the user still lands on a terminal.
     let terminal_window_id = devserver_terminal_window_id(&id);
-    let terminal_label =
-        serve::spawn_devserver_terminal_window(&app, &terminal_window_id, &terminal_url)?;
-    track_devserver_window(
-        &state,
-        &id,
-        DevserverWindow {
-            window_id: terminal_window_id,
-            label: terminal_label,
-            prefix: None,
-        },
-    );
+    let persisted = {
+        let conn = state
+            .devservers
+            .get(&id)
+            .ok_or_else(|| format!("devserver {id} is not connected"))?;
+        devserver::fetch_terminals(&conn).await.unwrap_or_default()
+    };
+    if persisted.is_empty() {
+        let terminal_url = ensure_devserver_terminal_url(&state, &id).await?;
+        let terminal_label =
+            serve::spawn_devserver_terminal_window(&app, &terminal_window_id, &terminal_url)?;
+        track_devserver_window(
+            &state,
+            &id,
+            DevserverWindow {
+                window_id: terminal_window_id,
+                label: terminal_label,
+                prefix: None,
+            },
+        );
+    } else {
+        // Seed the window-seq past the persisted labels so a later New Terminal
+        // mint can't collide with a re-created one after a process restart reset
+        // the per-process counter to 0.
+        let labels: Vec<String> = persisted.iter().map(|t| t.label.clone()).collect();
+        serve::reserve_window_seq_above(&labels);
+        for t in persisted {
+            if let Err(e) = serve::spawn_devserver_terminal_window_at_label(
+                &app,
+                &terminal_window_id,
+                &t.label,
+                &t.url,
+            ) {
+                tracing::warn!(devserver = %id, label = %t.label, error = %e, "re-creating a persisted devserver terminal failed");
+                continue;
+            }
+            track_devserver_window(
+                &state,
+                &id,
+                DevserverWindow {
+                    window_id: terminal_window_id.clone(),
+                    label: t.label,
+                    prefix: None,
+                },
+            );
+        }
+    }
     // The control terminal stays open after connect. It runs the connect
     // script, which may keep streaming or prompt for ssh credentials, so
     // burying it on connect hid live output and read as a flash. The user
@@ -1143,21 +1179,27 @@ fn open_devserver_workspace(
     Ok(())
 }
 
-/// Open another standalone terminal on a connected devserver (the connect flow
-/// opened the first). Reuses the devserver's ONE shared terminal tenant so the
-/// new window shares the PTY registry with the others (cross-window terminal
-/// d&d), and the SAME stable window id so they form one window family
-/// (Cmd+Shift+N / unbury grouping). A new window is built unless a buried
-/// sibling can be reopened first.
+/// Open a standalone terminal on a connected devserver. Each is a PERSISTED,
+/// per-window tenant (Seam 4): the desktop mints a window label in the
+/// devserver's terminal family, the devserver mounts + persists a tenant keyed
+/// by that label, and the window opens at it — so `fetch_terminals` re-surfaces
+/// it on reconnect. The labels share one window family (`devserver_terminal_
+/// window_id`) for Cmd+Shift+N / teardown grouping; the PTYs are per-tenant
+/// (no shared cross-window registry, unlike the old single shared terminal).
 #[tauri::command]
 async fn open_devserver_terminal(
     app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    let terminal_url = ensure_devserver_terminal_url(&state, &id).await?;
+    let conn = state
+        .devservers
+        .get(&id)
+        .ok_or_else(|| format!("devserver {id} is not connected"))?;
     let window_id = devserver_terminal_window_id(&id);
-    let label = serve::spawn_devserver_terminal_window(&app, &window_id, &terminal_url)?;
+    let label = serve::new_outbound_window_label(&window_id);
+    let terminal_url = devserver::open_terminal_with_label(&conn, &label).await?;
+    serve::spawn_devserver_terminal_window_at_label(&app, &window_id, &label, &terminal_url)?;
     track_devserver_window(
         &state,
         &id,

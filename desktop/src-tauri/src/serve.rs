@@ -187,6 +187,22 @@ pub fn new_outbound_window_label(id: &str) -> String {
     format!("{}-{}", outbound_window_prefix(id), next_window_seq())
 }
 
+/// Reserve the per-process window-sequence counter above every `-<seq>` tail in
+/// `labels`, so a freshly-minted window label can't collide with a persisted
+/// one re-created after a restart reset the counter to 0 (a collision would let
+/// `build_workspace_window` destroy the re-created window). Non-numeric tails
+/// are ignored. Used by the W10 devserver-terminal re-create on connect.
+pub fn reserve_window_seq_above(labels: &[String]) {
+    let max = labels
+        .iter()
+        .filter_map(|l| l.rsplit('-').next())
+        .filter_map(|tail| tail.parse::<u64>().ok())
+        .max();
+    if let Some(max) = max {
+        WINDOW_SEQ.fetch_max(max + 1, Ordering::Relaxed);
+    }
+}
+
 /// True when a Tauri label belongs to an embedded-served SPA webview
 /// (workspace / outbound / standalone terminal). All three host the chan
 /// SPA and accept the `chan:command` dispatch bridge, so menu items that
@@ -323,6 +339,35 @@ pub fn spawn_devserver_terminal_window(
         },
     )?;
     Ok(label)
+}
+
+/// Re-create a devserver's PERSISTED standalone-terminal window at its EXACT
+/// persisted `label` (the `?w=` key the server remembers), rather than minting
+/// or restoring one via `unbury_or_restore` — so a reconnect brings back the
+/// SAME windows and the SPA reattaches to the live PTYs via `?w=<label>`.
+/// `family_id` is the window family the label belongs to
+/// (`devserver_terminal_window_id`), used for the config_key so close/zoom
+/// restore matches the rest of the devserver's terminals. kind=terminal,
+/// loaded directly (the connect flow already confirmed reachability). W10.
+pub fn spawn_devserver_terminal_window_at_label(
+    app: &AppHandle,
+    family_id: &str,
+    label: &str,
+    url: &str,
+) -> Result<(), String> {
+    build_workspace_window(
+        app,
+        WindowSpec {
+            label,
+            title: "Terminal",
+            url,
+            url_hash_seed: "",
+            config_key: config::outbound_window_key(family_id),
+            zoom_seed: 1.0,
+            connecting: None,
+            kind: Some("terminal"),
+        },
+    )
 }
 
 /// Spawn a standalone terminal-only window. Unlike a workspace window there

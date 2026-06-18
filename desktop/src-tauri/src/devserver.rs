@@ -306,6 +306,101 @@ pub async fn open_terminal(conn: &DevserverConn) -> Result<String, String> {
     assemble_tenant_url(&conn.host, conn.port, &terminal.prefix, &terminal.token)
 }
 
+/// `POST /api/devserver/terminals` body carrying the desktop-assigned window
+/// `label` (the `?w=` key, in the desktop's outbound family). Per Seam 4
+/// Amendment 6 the devserver persists `{label, prefix, command}` keyed by the
+/// label, so the same standalone terminal re-surfaces on reconnect.
+#[derive(Debug, serde::Serialize)]
+struct OpenTerminalRequest {
+    label: String,
+}
+
+/// `POST /api/devserver/terminals {label}`: mount a PERSISTED standalone
+/// terminal tenant under the desktop-assigned `label` and return its assembled
+/// tab URL. The label is the stable identity (echoed by `fetch_terminals` on
+/// reconnect); the per-mount prefix/token come back fresh.
+pub async fn open_terminal_with_label(conn: &DevserverConn, label: &str) -> Result<String, String> {
+    let url = format!(
+        "{}/api/devserver/terminals",
+        base_origin(&conn.host, conn.port)
+    );
+    let resp = http_client()?
+        .post(&url)
+        .bearer_auth(&conn.token)
+        .json(&OpenTerminalRequest {
+            label: label.to_string(),
+        })
+        .send()
+        .await
+        .map_err(|e| format!("opening devserver terminal: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "devserver terminals returned HTTP {}",
+            resp.status()
+        ));
+    }
+    let terminal = resp
+        .json::<MountedTerminal>()
+        .await
+        .map_err(|e| format!("decoding devserver terminal: {e}"))?;
+    assemble_tenant_url(&conn.host, conn.port, &terminal.prefix, &terminal.token)
+}
+
+/// One element of `GET /api/devserver/terminals`: a persisted standalone
+/// terminal the desktop re-creates as a window on connect. `label` is the
+/// stable `?w=` window key the desktop minted; `prefix`/`token` are the
+/// current mount (the prefix need not be byte-stable across restarts).
+#[derive(Debug, Clone, Deserialize)]
+struct PersistedTerminalEntry {
+    label: String,
+    prefix: String,
+    token: String,
+}
+
+/// A persisted devserver terminal as the desktop re-creates it: its stable
+/// window label + the assembled tenant URL.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DevserverTerminalRow {
+    pub label: String,
+    pub url: String,
+}
+
+/// `GET /api/devserver/terminals`: the devserver's persisted standalone
+/// terminals (Seam 4 Amendment 5), each with its assembled tenant URL, to
+/// re-surface as windows on connect/reconnect.
+pub async fn fetch_terminals(conn: &DevserverConn) -> Result<Vec<DevserverTerminalRow>, String> {
+    let url = format!(
+        "{}/api/devserver/terminals",
+        base_origin(&conn.host, conn.port)
+    );
+    let resp = http_client()?
+        .get(&url)
+        .bearer_auth(&conn.token)
+        .send()
+        .await
+        .map_err(|e| format!("listing devserver terminals: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "devserver terminals returned HTTP {}",
+            resp.status()
+        ));
+    }
+    let entries = resp
+        .json::<Vec<PersistedTerminalEntry>>()
+        .await
+        .map_err(|e| format!("decoding devserver terminals: {e}"))?;
+    entries
+        .into_iter()
+        .map(|e| {
+            let url = assemble_tenant_url(&conn.host, conn.port, &e.prefix, &e.token)?;
+            Ok(DevserverTerminalRow {
+                label: e.label,
+                url,
+            })
+        })
+        .collect()
+}
+
 /// The `DELETE` URL for unmounting a workspace tenant. The server route is
 /// an axum wildcard, so `prefix` (an absolute route path like
 /// `/api/notes-1a2b3c`) is appended verbatim after the collection path.
@@ -491,6 +586,27 @@ mod tests {
         let term: MountedTerminal = serde_json::from_str(json).unwrap();
         assert_eq!(term.prefix, "/api/terminal-9z");
         assert_eq!(term.token, "tok_term");
+    }
+
+    #[test]
+    fn open_terminal_request_serializes_label() {
+        assert_eq!(
+            serde_json::to_string(&OpenTerminalRequest {
+                label: "outbound-abc123-3".into()
+            })
+            .unwrap(),
+            r#"{"label":"outbound-abc123-3"}"#
+        );
+    }
+
+    #[test]
+    fn persisted_terminal_entry_decodes_a_bare_array_element() {
+        let json = r#"[{"label":"outbound-abc123-3","prefix":"/control-2","token":"tok_t"}]"#;
+        let entries: Vec<PersistedTerminalEntry> = serde_json::from_str(json).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].label, "outbound-abc123-3");
+        assert_eq!(entries[0].prefix, "/control-2");
+        assert_eq!(entries[0].token, "tok_t");
     }
 
     #[test]
