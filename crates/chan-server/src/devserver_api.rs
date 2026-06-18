@@ -1,7 +1,8 @@
 //! The devserver management-API wire contract.
 //!
 //! A small, versioned HTTP/JSON surface a chan-desktop client drives over
-//! the tunnel to list, mount, and forget workspaces on a headless box. It
+//! the tunnel to list, mount, toggle, and forget workspaces on a headless
+//! box. It
 //! is the reserved-root namespace of [`crate::devserver`]: the management
 //! router answers `/api/devserver/*`, and every workspace tenant mounts
 //! under a non-empty, legible prefix below it.
@@ -79,6 +80,22 @@ pub struct OpenWorkspaceRequest {
 pub struct MountedPrefix {
     /// Route prefix the tenant is mounted at, e.g. `/api/notes-1a2b3c`.
     pub prefix: String,
+}
+
+/// Body of `POST /api/devserver/workspaces/{prefix}/on`: set whether the
+/// registered workspace at `{prefix}` is mounted right now. This is
+/// **distinct from `DELETE`** (= Forget): toggling `on:false` unmounts the
+/// workspace (releasing its per-workspace flock) but keeps it registered and
+/// remembered as off, so the row stays in `GET workspaces` and re-mounts at
+/// the **same** prefix on `on:true`. The handler answers `200` with the
+/// updated [`WorkspaceEntry`] (a fresh `token` when `on:true`; `token:""`
+/// when off), or `404` when `{prefix}` is not a registered workspace. The
+/// call is idempotent in both directions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SetWorkspaceOnRequest {
+    /// Target mount state: `true` mounts the workspace (minting a fresh
+    /// per-mount token), `false` unmounts it but keeps it registered.
+    pub on: bool,
 }
 
 /// Response of `POST /api/devserver/terminals`: the prefix and per-tenant
@@ -195,6 +212,20 @@ mod tests {
         let v = serde_json::to_value(&resp).unwrap();
         assert_eq!(v, json!({ "prefix": "/api/term-1a2b3c", "token": "tok_t" }));
         assert_eq!(resp, serde_json::from_value(v).unwrap());
+    }
+
+    #[test]
+    fn set_workspace_on_request_wire() {
+        // The toggle body is a single `{ "on": bool }`. The client posts this
+        // exact shape to `.../{prefix}/on`; pin both directions so a rename
+        // fails the build instead of silently no-op-ing the toggle.
+        let off = SetWorkspaceOnRequest { on: false };
+        let v = serde_json::to_value(&off).unwrap();
+        assert_eq!(v, json!({ "on": false }));
+        assert_eq!(off, serde_json::from_value(v).unwrap());
+
+        let on = SetWorkspaceOnRequest { on: true };
+        assert_eq!(serde_json::to_value(&on).unwrap(), json!({ "on": true }));
     }
 
     #[test]

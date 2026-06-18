@@ -41,8 +41,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::random_token;
 use crate::devserver_api::{
-    DevserverInfo, MountedPrefix, MountedTerminal, OpenWorkspaceRequest, WorkspaceEntry,
-    DEVSERVER_API_PROTOCOL,
+    DevserverInfo, MountedPrefix, MountedTerminal, OpenWorkspaceRequest, SetWorkspaceOnRequest,
+    WorkspaceEntry, DEVSERVER_API_PROTOCOL,
 };
 use crate::host::WorkspaceHost;
 use crate::{sanitize_prefix, Error, ServeConfig};
@@ -58,14 +58,30 @@ pub struct DevserverConfig {
 }
 
 /// On-disk devserver state. The bearer token is minted once and reused so a
-/// reconnecting client keeps working across restarts; `enabled_workspaces`
-/// is the set of roots that were mounted, re-mounted on the next start.
+/// reconnecting client keeps working across restarts; `workspaces` is the set
+/// of registered workspaces with their mount state, so a restart comes back
+/// serving exactly what was on and remembering what was toggled off.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PersistedConfig {
     #[serde(default)]
     devserver_token: String,
+    /// Registered workspaces, on and off. Replaces the old
+    /// `enabled_workspaces: Vec<String>` outright (pre-release: no dual-read).
+    /// Renaming the key also lets an old-format file degrade cleanly: serde
+    /// ignores the now-unknown `enabled_workspaces` and keeps the token,
+    /// rather than failing the whole parse and minting a fresh one.
     #[serde(default)]
-    enabled_workspaces: Vec<String>,
+    workspaces: Vec<PersistedWorkspace>,
+}
+
+/// One registered workspace as persisted: where it lives, the stable route
+/// `prefix` it re-mounts at (allocated once, kept across off→on), and whether
+/// it was mounted (`on`) or unmounted-but-remembered (`off`) at the last save.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedWorkspace {
+    path: String,
+    prefix: String,
+    on: bool,
 }
 
 /// Persistence at `~/.chan/devserver/config.json`, written atomically and
@@ -150,12 +166,18 @@ pub fn persisted_devserver_token() -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
-/// A mounted workspace as the devserver tracks it, the source of truth for
-/// `GET /api/devserver/workspaces`. Keyed by prefix in [`DevserverState`].
+/// A registered workspace as the devserver tracks it, the source of truth for
+/// `GET /api/devserver/workspaces`. Keyed by its stable `prefix` in
+/// [`DevserverState`]. Either mounted (`on`, live in the host, carrying a
+/// per-mount `token`) or registered-but-unmounted (`!on`, absent from the
+/// host, empty `token`). Forget drops it entirely.
 struct WorkspaceRecord {
     root: PathBuf,
     prefix: String,
     label: String,
+    /// Whether the workspace is mounted in the host right now.
+    on: bool,
+    /// Per-mount bearer token while `on`; empty while off.
     token: String,
 }
 
@@ -166,8 +188,8 @@ struct DevserverState {
     /// Devserver-level bearer token, distinct from per-workspace tokens.
     token: String,
     host_label: String,
-    /// Mounted workspaces by prefix. Terminal tenants are NOT tracked here;
-    /// they are not listed and reset on restart.
+    /// Registered workspaces by stable prefix, on and off. Terminal tenants
+    /// are NOT tracked here; they are not listed and reset on restart.
     workspaces: Mutex<HashMap<String, WorkspaceRecord>>,
     store: DevserverStore,
     /// Monotonic source for standalone-terminal prefixes within a run.
@@ -175,86 +197,177 @@ struct DevserverState {
 }
 
 impl DevserverState {
-    /// Mount the workspace at `root` (registering it with the shared
-    /// `Library` first) and record it, idempotent on the root. Returns the
-    /// prefix it is mounted at. Used by `POST workspaces`, the discovery
-    /// socket, and restart re-mounting.
+    /// Register the workspace at `root` and mount it (on). Allocates the
+    /// stable prefix, mounts via [`mount_at`](Self::mount_at), persists, and
+    /// returns the prefix. Idempotent on the root (an already-mounted root
+    /// returns its existing prefix). Used by `POST workspaces` and the
+    /// discovery socket; `POST .../{prefix}/on` is the explicit-toggle sibling.
     async fn register_workspace(&self, root: &Path) -> Result<String, Error> {
         let prefix = allocate_workspace_prefix(root)?;
-        // The host opens through the shared `Library`, which requires the
-        // root to be registered; registering an already-known root is a
-        // no-op.
+        let mounted = self.mount_at(root, &prefix).await?;
+        self.persist_workspaces();
+        Ok(mounted)
+    }
+
+    /// Mount `root` at `prefix` in the host and record it as on. The host
+    /// opens through the shared `Library`, which requires the root to be
+    /// registered first; registering an already-known root is a no-op. Does
+    /// NOT persist — callers batch the save. Returns the prefix actually
+    /// mounted at (the host's idempotent re-register can return an existing
+    /// prefix; for a fresh mount it is `prefix`).
+    async fn mount_at(&self, root: &Path, prefix: &str) -> Result<String, Error> {
         self.host.library().register_workspace(root)?;
         let hosted = self
             .host
-            .open_or_get_registered_workspace(root, tenant_config(self.addr, &prefix))
+            .open_or_get_registered_workspace(root, tenant_config(self.addr, prefix))
             .await?;
         let record = WorkspaceRecord {
             root: hosted.root.clone(),
             prefix: hosted.prefix.clone(),
             label: workspace_label(&hosted.root),
+            on: true,
             // Tenants are configured with `no_token: false`, so the handle
             // always carries a token; default to empty rather than panic.
             token: hosted.handle.token.clone().unwrap_or_default(),
         };
-        {
-            let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
-            workspaces.insert(hosted.prefix.clone(), record);
-        }
-        self.persist_enabled();
+        let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
+        workspaces.insert(hosted.prefix.clone(), record);
         Ok(hosted.prefix)
     }
 
-    /// Unmount the tenant at `prefix` and drop it from the persisted set.
-    /// Returns whether a tenant was actually mounted there.
+    /// Track `root` at `prefix` as registered-but-off (remembered, not
+    /// mounted, no token). Re-surfaces an off row on restart and is the off
+    /// side of a toggle. Does NOT persist — callers batch the save.
+    fn track_off(&self, root: &Path, prefix: &str) {
+        let record = WorkspaceRecord {
+            root: root.to_path_buf(),
+            prefix: prefix.to_string(),
+            label: workspace_label(root),
+            on: false,
+            token: String::new(),
+        };
+        let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
+        workspaces.insert(prefix.to_string(), record);
+    }
+
+    /// Set whether the registered workspace at `prefix` is mounted, returning
+    /// the updated row (`None` ⇒ no workspace registered there ⇒ the handler
+    /// answers 404). `on:false` unmounts (releasing the per-workspace flock)
+    /// but keeps the registration with an empty token; `on:true` remounts at
+    /// the SAME prefix with a freshly-minted token. Idempotent in both
+    /// directions. Distinct from Forget, which drops the registration.
+    async fn set_workspace_on(
+        &self,
+        prefix: &str,
+        on: bool,
+    ) -> Result<Option<WorkspaceEntry>, Error> {
+        // Snapshot under the lock, then release it before the mount/unmount:
+        // `close_workspace` blocks on the bounded flock wait and the remount
+        // awaits, and the list endpoint must stay responsive meanwhile.
+        let current = {
+            let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
+            workspaces
+                .get(prefix)
+                .map(|record| (record.on, record.root.clone()))
+        };
+        let Some((currently_on, root)) = current else {
+            return Ok(None);
+        };
+        if currently_on == on {
+            // Already in the requested state: idempotent no-op, current row.
+            return Ok(self.entry_for(prefix));
+        }
+        if on {
+            // Off → on: remount at the SAME prefix, minting a fresh token.
+            self.mount_at(&root, prefix).await?;
+        } else {
+            // On → off: unmount, release the flock, keep the registration.
+            self.host.close_workspace(prefix)?;
+            let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(record) = workspaces.get_mut(prefix) {
+                record.on = false;
+                record.token.clear();
+            }
+        }
+        self.persist_workspaces();
+        Ok(self.entry_for(prefix))
+    }
+
+    /// The current [`WorkspaceEntry`] for `prefix`, or `None` when no
+    /// workspace is registered there.
+    fn entry_for(&self, prefix: &str) -> Option<WorkspaceEntry> {
+        let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
+        workspaces.get(prefix).map(entry_from_record)
+    }
+
+    /// Forget the workspace at `prefix`: unmount it if on, then drop the
+    /// registration entirely. Returns whether a registered workspace existed
+    /// there — existence, NOT whether the host had it mounted, is the
+    /// "removed" signal, since an off row is registered-but-unmounted and
+    /// forgetting it must still report success. Distinct from on/off.
     fn forget_workspace(&self, prefix: &str) -> Result<bool, Error> {
-        let closed = self.host.close_workspace(prefix)?;
+        let existed = {
+            let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
+            workspaces.contains_key(prefix)
+        };
+        if !existed {
+            return Ok(false);
+        }
+        // Unmount if mounted; a no-op false when the row is off (not in host).
+        self.host.close_workspace(prefix)?;
         {
             let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
             workspaces.remove(prefix);
         }
-        self.persist_enabled();
-        Ok(closed)
+        self.persist_workspaces();
+        Ok(true)
     }
 
-    /// Persist the bearer token plus the currently-mounted workspace roots,
-    /// so a restart comes back serving exactly what is mounted now.
-    fn persist_enabled(&self) {
-        let enabled_workspaces: Vec<String> = {
-            let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
-            let mut roots: Vec<String> = workspaces
+    /// Persist the bearer token plus every registered workspace with its
+    /// mount state, so a restart comes back serving exactly what was on and
+    /// remembering what was off. Sorted by prefix for a stable file.
+    fn persist_workspaces(&self) {
+        let workspaces: Vec<PersistedWorkspace> = {
+            let map = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
+            let mut v: Vec<PersistedWorkspace> = map
                 .values()
-                .map(|record| record.root.to_string_lossy().into_owned())
+                .map(|record| PersistedWorkspace {
+                    path: record.root.to_string_lossy().into_owned(),
+                    prefix: record.prefix.clone(),
+                    on: record.on,
+                })
                 .collect();
-            roots.sort();
-            roots
+            v.sort_by(|a, b| a.prefix.cmp(&b.prefix));
+            v
         };
         let cfg = PersistedConfig {
             devserver_token: self.token.clone(),
-            enabled_workspaces,
+            workspaces,
         };
         if let Err(e) = self.store.save(&cfg) {
             tracing::warn!("persisting devserver config: {e}");
         }
     }
 
-    /// Snapshot the mounted workspaces for the list endpoint, sorted by
-    /// prefix for a stable listing. Mounted means on, so `on` is always true
-    /// for a listed entry in this round.
+    /// Snapshot the registered workspaces for the list endpoint, on and off,
+    /// sorted by prefix for a stable listing.
     fn workspace_entries(&self) -> Vec<WorkspaceEntry> {
         let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
-        let mut entries: Vec<WorkspaceEntry> = workspaces
-            .values()
-            .map(|record| WorkspaceEntry {
-                prefix: record.prefix.clone(),
-                path: record.root.to_string_lossy().into_owned(),
-                label: record.label.clone(),
-                on: true,
-                token: record.token.clone(),
-            })
-            .collect();
+        let mut entries: Vec<WorkspaceEntry> = workspaces.values().map(entry_from_record).collect();
         entries.sort_by(|a, b| a.prefix.cmp(&b.prefix));
         entries
+    }
+}
+
+/// Build the wire [`WorkspaceEntry`] for a registered workspace record: an
+/// off row reports `on:false` with an empty token; an on row its live token.
+fn entry_from_record(record: &WorkspaceRecord) -> WorkspaceEntry {
+    WorkspaceEntry {
+        prefix: record.prefix.clone(),
+        path: record.root.to_string_lossy().into_owned(),
+        label: record.label.clone(),
+        on: record.on,
+        token: record.token.clone(),
     }
 }
 
@@ -282,17 +395,24 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         terminal_seq: AtomicU64::new(0),
     });
 
-    // Re-mount what was on. A root that fails to re-mount surfaces a note
-    // and is left off; persist below records the survivors.
-    for root in &persisted.enabled_workspaces {
-        let path = PathBuf::from(root);
-        if let Err(e) = state.register_workspace(&path).await {
-            eprintln!("chan devserver: NOTE: could not re-mount {root}: {e}");
+    // Restore the registered workspaces. `on` rows re-mount at their persisted
+    // (stable) prefix; `off` rows are tracked as registered-but-unmounted so
+    // the client still sees them and can toggle them on. A root that fails to
+    // re-mount is downgraded to off so its row still surfaces.
+    for ws in &persisted.workspaces {
+        let path = PathBuf::from(&ws.path);
+        if ws.on {
+            if let Err(e) = state.mount_at(&path, &ws.prefix).await {
+                eprintln!("chan devserver: NOTE: could not re-mount {}: {e}", ws.path);
+                state.track_off(&path, &ws.prefix);
+            }
+        } else {
+            state.track_off(&path, &ws.prefix);
         }
     }
-    // Persist once now so a newly-minted token + the surviving enabled set
-    // land even before the first management call.
-    state.persist_enabled();
+    // Persist once now so a newly-minted token + the restored set (with any
+    // failed re-mounts downgraded to off) land even before the first call.
+    state.persist_workspaces();
 
     // Serve-handoff discovery. A bind failure is non-fatal: the management
     // API still works, only the `chan serve` registration path is disabled.
@@ -345,7 +465,10 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             "/api/devserver/workspaces",
             get(handle_list).post(handle_open),
         )
-        .route("/api/devserver/workspaces/*prefix", delete(handle_forget))
+        .route(
+            "/api/devserver/workspaces/*prefix",
+            delete(handle_forget).post(handle_set_workspace_on),
+        )
         .route("/api/devserver/terminals", post(handle_open_terminal))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -428,6 +551,30 @@ async fn handle_forget(
     match state.forget_workspace(&prefix) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Set whether the registered workspace addressed by the route is mounted.
+/// The catch-all captures `<prefix>/on` (the client appends the prefix
+/// verbatim then `/on`, mirroring the `DELETE` convention — an axum catch-all
+/// can't carry a fixed `/on` suffix, so the suffix rides inside the capture);
+/// we recover the prefix by stripping the trailing `/on`. A capture that is
+/// not `<prefix>/on` is not this endpoint and 404s. The body is
+/// [`SetWorkspaceOnRequest`]; the response is the updated [`WorkspaceEntry`]
+/// (404 when the prefix is not a registered workspace).
+async fn handle_set_workspace_on(
+    State(state): State<Arc<DevserverState>>,
+    AxumPath(captured): AxumPath<String>,
+    Json(req): Json<SetWorkspaceOnRequest>,
+) -> Response {
+    let Some(prefix_tail) = captured.trim_start_matches('/').strip_suffix("/on") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let prefix = format!("/{}", prefix_tail.trim_start_matches('/'));
+    match state.set_workspace_on(&prefix, req.on).await {
+        Ok(Some(entry)) => Json(entry).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -619,16 +766,59 @@ mod tests {
     fn persisted_config_round_trips() {
         let cfg = PersistedConfig {
             devserver_token: "tok".into(),
-            enabled_workspaces: vec!["/a".into(), "/b".into()],
+            workspaces: vec![
+                PersistedWorkspace {
+                    path: "/a".into(),
+                    prefix: "/api/a-0".into(),
+                    on: true,
+                },
+                PersistedWorkspace {
+                    path: "/b".into(),
+                    prefix: "/api/b-0".into(),
+                    on: false,
+                },
+            ],
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: PersistedConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.devserver_token, "tok");
-        assert_eq!(back.enabled_workspaces, vec!["/a".to_string(), "/b".into()]);
+        assert_eq!(back.workspaces.len(), 2);
+        assert_eq!(back.workspaces[0].path, "/a");
+        assert!(back.workspaces[0].on);
+        assert_eq!(back.workspaces[1].prefix, "/api/b-0");
+        assert!(!back.workspaces[1].on);
         // Tolerant of a missing/empty file shape.
         let empty: PersistedConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.devserver_token, "");
-        assert!(empty.enabled_workspaces.is_empty());
+        assert!(empty.workspaces.is_empty());
+        // An old-format file (`enabled_workspaces: Vec<String>`) degrades to an
+        // empty workspace set but KEEPS the token: the renamed key is ignored
+        // rather than failing the whole parse and minting a fresh token.
+        let legacy = r#"{"devserver_token":"keep","enabled_workspaces":["/x","/y"]}"#;
+        let migrated: PersistedConfig = serde_json::from_str(legacy).unwrap();
+        assert_eq!(migrated.devserver_token, "keep");
+        assert!(migrated.workspaces.is_empty());
+    }
+
+    #[test]
+    fn persisted_workspace_pins_field_names() {
+        // The on-disk record field names are part of the persisted contract;
+        // pin them so a rename is a visible, deliberate change.
+        let ws = PersistedWorkspace {
+            path: "/home/u/notes".into(),
+            prefix: "/api/notes-1a2b3c".into(),
+            on: true,
+        };
+        let v = serde_json::to_value(&ws).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "path": "/home/u/notes",
+                "prefix": "/api/notes-1a2b3c",
+                "on": true,
+            })
+        );
+        assert_eq!(ws, serde_json::from_value(v).unwrap());
     }
 
     #[test]
@@ -639,12 +829,18 @@ mod tests {
         assert_eq!(store.load().devserver_token, "");
         let cfg = PersistedConfig {
             devserver_token: "abc".into(),
-            enabled_workspaces: vec!["/x".into()],
+            workspaces: vec![PersistedWorkspace {
+                path: "/x".into(),
+                prefix: "/api/x-0".into(),
+                on: true,
+            }],
         };
         store.save(&cfg).unwrap();
         let loaded = store.load();
         assert_eq!(loaded.devserver_token, "abc");
-        assert_eq!(loaded.enabled_workspaces, vec!["/x".to_string()]);
+        assert_eq!(loaded.workspaces.len(), 1);
+        assert_eq!(loaded.workspaces[0].path, "/x");
+        assert!(loaded.workspaces[0].on);
         // The atomic tmp+rename leaves no tmpfile behind after a save.
         let tmp = dir.path().join("nested").join("config.json.tmp");
         assert!(!tmp.exists(), "leftover tmpfile: {}", tmp.display());
@@ -658,5 +854,139 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o600, "config must be 0600");
         }
+    }
+
+    /// Build a `DevserverState` over a sandbox dir for the on/off
+    /// state-machine tests: a fresh `Library`, an empty host, and a devserver
+    /// store under `home`.
+    fn test_state(home: &Path, addr: SocketAddr) -> Arc<DevserverState> {
+        let lib = Library::open_at(home.join("config.toml")).expect("library");
+        let host = Arc::new(WorkspaceHost::new(lib));
+        Arc::new(DevserverState {
+            host,
+            addr,
+            token: "test-token".into(),
+            host_label: "test".into(),
+            workspaces: Mutex::new(HashMap::new()),
+            store: DevserverStore::at(home.join("devserver").join("config.json")),
+            terminal_seq: AtomicU64::new(0),
+        })
+    }
+
+    #[tokio::test]
+    async fn workspace_on_off_toggle_round_trip() {
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        std::fs::write(ws.path().join("a.md"), "# A\n").expect("seed");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        // Mount it on: one listed row, on, carrying a token.
+        let prefix = state.register_workspace(ws.path()).await.expect("mount");
+        let entries = state.workspace_entries();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].on);
+        assert!(!entries[0].token.is_empty(), "on row carries a token");
+        let token_on = entries[0].token.clone();
+
+        // Toggle off: unmounted in the host, still registered, empty token,
+        // SAME prefix.
+        let row = state
+            .set_workspace_on(&prefix, false)
+            .await
+            .expect("toggle off")
+            .expect("row present");
+        assert!(!row.on);
+        assert!(row.token.is_empty(), "off row drops its token");
+        assert_eq!(row.prefix, prefix, "prefix stays stable across off");
+        assert_eq!(state.workspace_entries().len(), 1, "off row still listed");
+        assert!(
+            state.host.mounted_prefixes().unwrap().is_empty(),
+            "off workspace is unmounted in the host"
+        );
+
+        // Idempotent off.
+        let row = state
+            .set_workspace_on(&prefix, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!row.on);
+
+        // Toggle on: remounted at the SAME prefix. chan's per-workspace token
+        // is persisted, so the on row carries that SAME stable token (the off
+        // row merely hid it on the wire). The client rebuilds the tenant URL
+        // from whatever the on row carries — a stable token keeps the URL
+        // bookmarkable across off→on, which is the behavior we want.
+        let row = state
+            .set_workspace_on(&prefix, true)
+            .await
+            .expect("toggle on")
+            .expect("row present");
+        assert!(row.on);
+        assert_eq!(row.prefix, prefix);
+        assert!(!row.token.is_empty(), "on row carries the workspace token");
+        assert_eq!(
+            row.token, token_on,
+            "per-workspace token is stable across off→on (persisted, not per-mount)"
+        );
+        assert_eq!(state.host.mounted_prefixes().unwrap(), vec![prefix.clone()]);
+
+        // An unknown prefix is a 404 (None), not an error.
+        assert!(state
+            .set_workspace_on("/api/nope-0", true)
+            .await
+            .expect("no error")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn forget_removes_registered_on_or_off() {
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        // Forget a mounted (on) workspace: removed + unmounted.
+        let prefix = state.register_workspace(ws.path()).await.expect("mount");
+        assert!(state.forget_workspace(&prefix).expect("forget on"));
+        assert!(state.workspace_entries().is_empty());
+        // Idempotent / false for an unknown row.
+        assert!(!state.forget_workspace(&prefix).expect("forget absent"));
+
+        // Forget an OFF workspace still reports removed — the case a
+        // host-unmount-only signal would wrongly report as not-found.
+        let prefix = state.register_workspace(ws.path()).await.expect("remount");
+        state
+            .set_workspace_on(&prefix, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(state.forget_workspace(&prefix).expect("forget off"));
+        assert!(state.workspace_entries().is_empty());
+    }
+
+    #[tokio::test]
+    async fn off_state_persists_to_store() {
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        let prefix = state.register_workspace(ws.path()).await.expect("mount");
+        state
+            .set_workspace_on(&prefix, false)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // The on-disk config records the workspace registered-but-off, with
+        // its stable prefix, alongside the preserved bearer token. On restart,
+        // `run_devserver` would `track_off` this row rather than re-mounting.
+        let persisted = state.store.load();
+        assert_eq!(persisted.devserver_token, "test-token");
+        assert_eq!(persisted.workspaces.len(), 1);
+        assert_eq!(persisted.workspaces[0].prefix, prefix);
+        assert!(!persisted.workspaces[0].on);
     }
 }
