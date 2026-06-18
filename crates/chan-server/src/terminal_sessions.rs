@@ -456,6 +456,21 @@ impl Registry {
             .collect()
     }
 
+    /// The exit code of any PTY in this registry that has exited, or `None`
+    /// while they all run. For the desktop's control-terminal connect flow:
+    /// the control tenant runs exactly one PTY (the connect script), so
+    /// `Some(code)` means that script exited — the token will never come, so
+    /// the desktop can stop the scrape early (instead of the full timeout) and
+    /// survey on a failing connect instead of stranding an empty window.
+    /// Scans every mapped session, including ones already marked closed but
+    /// still retained, so a just-exited script is still visible.
+    pub fn last_exit_code(&self) -> Option<u32> {
+        let sessions = self.sessions.lock().expect("terminal registry poisoned");
+        sessions
+            .values()
+            .find_map(|session| *session.exit_code.lock().expect("session exit poisoned"))
+    }
+
     /// Set the command this tenant's terminals run when an open request
     /// carries no command of its own. `None` restores the default shell.
     /// A single-purpose terminal tenant sets this once at creation so its
@@ -1151,6 +1166,12 @@ struct Session {
     /// state of members they do not host.
     broadcast: AtomicBool,
     closed: AtomicBool,
+    /// The PTY's exit code, set once its child process exits (the same value
+    /// broadcast as [`SessionEvent::Exit`]). `None` while the process runs.
+    /// Stored — not only broadcast — so a poller (the desktop's control-script
+    /// scrape) can see the script died without subscribing to the event
+    /// stream. Retained on the still-mapped session after a natural exit.
+    exit_code: Mutex<Option<u32>>,
 }
 
 impl Session {
@@ -1310,6 +1331,7 @@ impl Session {
             alt_screen_tail: Mutex::new(Vec::new()),
             broadcast: AtomicBool::new(false),
             closed: AtomicBool::new(false),
+            exit_code: Mutex::new(None),
         });
 
         {
@@ -1385,7 +1407,11 @@ impl Session {
 
                     match child.try_wait() {
                         Ok(Some(status)) => {
-                            session.broadcast(SessionEvent::Exit(status.exit_code()));
+                            let code = status.exit_code();
+                            // Record before broadcasting so a poller that reads
+                            // the registry right after the event still sees it.
+                            *session.exit_code.lock().expect("session exit poisoned") = Some(code);
+                            session.broadcast(SessionEvent::Exit(code));
                             return;
                         }
                         Ok(None) => std::thread::sleep(Duration::from_millis(25)),
@@ -2280,6 +2306,7 @@ mod tests {
             alt_screen_tail: Mutex::new(Vec::new()),
             broadcast: AtomicBool::new(false),
             closed: AtomicBool::new(false),
+            exit_code: Mutex::new(None),
         })
     }
 
