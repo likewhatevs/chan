@@ -60,6 +60,13 @@ const demo = params.get('demo'); // 'ok' | 'fail' | null (standalone only)
 // there is never more than one in-flight probe.
 const RETRY_DELAY_MS = 2000;
 
+// Give-up threshold. A remote that never comes up must not spin forever:
+// after this many failed attempts the loop stops and surfaces Retry /
+// Disconnect, so neither the user nor the launcher's connecting state is
+// stuck. Retry resumes with a fresh budget; the count is generous because a
+// legitimately-booting remote can take a while.
+const GIVE_UP_AFTER_ATTEMPTS = 20;
+
 const els = {
   body: document.body,
   spinner: document.getElementById('spinner'),
@@ -69,7 +76,12 @@ const els = {
   attempt: document.getElementById('attempt'),
   log: document.getElementById('log'),
   foot: document.getElementById('foot'),
+  actions: document.getElementById('actions'),
+  retry: document.getElementById('retry'),
+  disconnect: document.getElementById('disconnect'),
 };
+
+wireActions();
 
 let attempt = 0;
 let startedAt = null; // wall-clock of the first attempt; drives the timer
@@ -155,8 +167,51 @@ async function runLoop() {
     }
 
     setRow(row, 'fail', `attempt ${attempt}: ${failReason(res)}`);
+    if (attempt >= GIVE_UP_AFTER_ATTEMPTS) {
+      showGaveUp();
+      return;
+    }
     await delay(RETRY_DELAY_MS);
   }
+}
+
+// The retry loop hit GIVE_UP_AFTER_ATTEMPTS. Stop spinning and offer Retry /
+// Disconnect rather than looping forever (which left the launcher stuck on
+// "connecting"). Not a hard error: Retry resumes the loop.
+function showGaveUp() {
+  stopped = true;
+  stopElapsedTimer();
+  els.body.classList.add('is-gaveup');
+  els.title.textContent = label ? `Can't reach ${label}` : "Still can't connect";
+  els.foot.textContent =
+    `${displayUrl} hasn't responded after ${attempt} attempts. Retry, or disconnect to close this window.`;
+  els.actions.hidden = false;
+}
+
+// Clear the gave-up state so the loop can resume from a clean header.
+function hideGaveUp() {
+  els.body.classList.remove('is-gaveup');
+  els.actions.hidden = true;
+  els.title.textContent = label ? `Connecting to ${label}` : 'Connecting to workspace';
+  els.foot.textContent = 'This window keeps retrying until it connects or you close it.';
+}
+
+// Retry restarts the loop with a fresh attempt budget; Disconnect destroys the
+// window (same as Cmd+W) so the launcher leaves the connecting state. Both are
+// no-ops until the loop has actually given up (the actions are hidden before
+// then). request_close_window is a no-op in standalone-browser dev (no Tauri).
+function wireActions() {
+  els.retry.addEventListener('click', () => {
+    if (!stopped) return;
+    hideGaveUp();
+    attempt = 0;
+    stopped = false;
+    startElapsedTimer();
+    runLoop();
+  });
+  els.disconnect.addEventListener('click', () => {
+    if (invoke) invoke('request_close_window').catch(() => {});
+  });
 }
 
 // Probe the remote for reachability. In Tauri this is the `probe_url`

@@ -154,6 +154,44 @@
   border-color: var(--danger);
 }
 
+/* Gave-up state: the retry loop hit its attempt cap. Neutralize the spinner
+   (no implied progress) and reveal the Retry / Disconnect actions. */
+.connecting-body.is-gaveup .spinner {
+  animation: none;
+  border-color: var(--text-secondary);
+}
+
+.connecting-actions {
+  display: flex;
+  gap: 10px;
+}
+.connecting-btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.connecting-btn:hover {
+  border-color: var(--brand);
+}
+.connecting-btn:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+.connecting-btn.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+.connecting-btn.primary:hover {
+  filter: brightness(1.08);
+}
+
 /* Respect reduced-motion: drop the continuous spin (the timestamped
    log still conveys liveness). */
 @media (prefers-reduced-motion: reduce) {
