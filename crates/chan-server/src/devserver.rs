@@ -453,6 +453,29 @@ impl DevserverState {
         entries
     }
 
+    /// Forget the standalone terminal at `prefix`: reap its PTYs + unmount the
+    /// tenant, then drop it from the persisted set so it does NOT re-mount on
+    /// the next restart. Returns whether a terminal was registered there. The
+    /// desktop's close-for-good (vs bury) routes here.
+    fn forget_terminal(&self, prefix: &str) -> Result<bool, Error> {
+        let existed = {
+            let terminals = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
+            terminals.contains_key(prefix)
+        };
+        if !existed {
+            return Ok(false);
+        }
+        // Reap the PTYs synchronously (close_terminal_tenant), then drop the
+        // record + persist so the terminal is gone for good.
+        self.host.close_terminal_tenant(prefix)?;
+        {
+            let mut terminals = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
+            terminals.remove(prefix);
+        }
+        self.persist_state();
+        Ok(true)
+    }
+
     /// Re-mount a persisted terminal at its stored (stable) prefix on restart:
     /// a FRESH PTY running the recorded command; the window/tab layout restores
     /// from the launcher session store. Does NOT persist (the restart path
@@ -608,6 +631,10 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             "/api/devserver/terminals",
             get(handle_list_terminals).post(handle_open_terminal),
         )
+        .route(
+            "/api/devserver/terminals/*prefix",
+            delete(handle_forget_terminal),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -721,6 +748,21 @@ async fn handle_list_terminals(
     State(state): State<Arc<DevserverState>>,
 ) -> Json<Vec<TerminalEntry>> {
     Json(state.terminal_entries())
+}
+
+async fn handle_forget_terminal(
+    State(state): State<Arc<DevserverState>>,
+    AxumPath(prefix_tail): AxumPath<String>,
+) -> Response {
+    // The wildcard captures the prefix without its leading slash (the client
+    // appends the prefix value verbatim to the route base), mirroring the
+    // workspace DELETE.
+    let prefix = format!("/{}", prefix_tail.trim_start_matches('/'));
+    match state.forget_terminal(&prefix) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 async fn handle_open_terminal(
@@ -1061,6 +1103,33 @@ mod tests {
             .mounted_prefixes()
             .unwrap()
             .contains(&mounted.prefix));
+    }
+
+    #[tokio::test]
+    async fn terminal_forget_unmounts_and_drops_persistence() {
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let mounted = state
+            .open_terminal("terminal-x".into(), None)
+            .await
+            .expect("open");
+        assert_eq!(state.terminal_entries().len(), 1);
+
+        // Forget: unmounted, dropped from the list AND the persisted config,
+        // so it does not re-mount on the next restart.
+        assert!(state.forget_terminal(&mounted.prefix).expect("forget"));
+        assert!(state.terminal_entries().is_empty());
+        assert!(!state
+            .host
+            .mounted_prefixes()
+            .unwrap()
+            .contains(&mounted.prefix));
+        assert!(state.store.load().terminals.is_empty());
+
+        // Idempotent / false for an unknown prefix.
+        assert!(!state.forget_terminal(&mounted.prefix).expect("absent"));
+        assert!(!state.forget_terminal("/api/term-nope-0").expect("unknown"));
     }
 
     #[test]
