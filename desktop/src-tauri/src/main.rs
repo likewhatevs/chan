@@ -976,9 +976,23 @@ async fn scrape_control_terminal_token(state: &AppState, prefix: &str) -> Result
     const MAX_ATTEMPTS: usize = 40;
     const BACKOFF: std::time::Duration = std::time::Duration::from_millis(1500);
     for _ in 0..MAX_ATTEMPTS {
+        // Scrape the token FIRST: a script that prints the token then exits
+        // cleanly is a success, and the scrollback survives the exit, so a
+        // token found this pass wins over the exit check below.
         if let Some(token) = devserver::scrape_token(&embedded.read_control_terminal_output(prefix))
         {
             return Ok(token);
+        }
+        // No token yet, and the connect script's PTY has exited: a failed
+        // connect (bad credentials, script error, user closed the failing tab).
+        // Fail fast instead of waiting out the full backoff budget, so the
+        // launcher surveys (Re-run / Disconnect) promptly rather than sticking
+        // on "connecting". The exit status is the tenant's, independent of the
+        // control window, so this also catches the user closing the tab.
+        if let Some(code) = embedded.control_terminal_exit(prefix) {
+            return Err(format!(
+                "the devserver connect script exited (status {code}) before printing its token"
+            ));
         }
         tokio::time::sleep(BACKOFF).await;
     }
