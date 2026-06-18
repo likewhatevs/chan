@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
@@ -57,6 +57,13 @@ pub struct WorkspaceHost {
     /// its own open. Held across the open's `.await`, so it is a tokio
     /// mutex; registration is infrequent, so serializing it is cheap.
     register_lock: tokio::sync::Mutex<()>,
+    /// The host's own `Arc`, downgraded, registered by
+    /// [`install_self`](Self::install_self). Lets a per-tenant control socket
+    /// reach back for a `chan unserve` of a hosted path (unmount that tenant).
+    /// Empty until an embedder opts in; a host that never does answers
+    /// `Unserve` with an "unsupported" message (correct for chan-desktop,
+    /// which tears workspaces down in-process).
+    self_weak: OnceLock<Weak<WorkspaceHost>>,
 }
 
 struct HostedWorkspaceRuntime {
@@ -108,6 +115,27 @@ impl WorkspaceHost {
             workspaces: RwLock::new(HashMap::new()),
             desktop,
             register_lock: tokio::sync::Mutex::new(()),
+            self_weak: OnceLock::new(),
+        }
+    }
+
+    /// Register the host's own `Arc` so per-tenant control sockets can reach it
+    /// for a `chan unserve` of a hosted path. Idempotent; an embedder that
+    /// wants control-socket unserve of hosted workspaces calls this once after
+    /// wrapping the host in an `Arc` (the devserver does). A host that never
+    /// calls it answers `Unserve` with an "unsupported" message — correct for
+    /// chan-desktop, which tears workspaces down in-process, not over the
+    /// control socket.
+    pub fn install_self(self: &Arc<Self>) {
+        let _ = self.self_weak.set(Arc::downgrade(self));
+    }
+
+    /// The unserve mode tenants built by this host carry: `Host(weak)` once
+    /// [`install_self`](Self::install_self) ran, else `Unsupported`.
+    fn unserve_mode(&self) -> crate::control_socket::UnserveMode {
+        match self.self_weak.get() {
+            Some(weak) => crate::control_socket::UnserveMode::Host(weak.clone()),
+            None => crate::control_socket::UnserveMode::Unsupported,
         }
     }
 
@@ -215,6 +243,7 @@ impl WorkspaceHost {
             workspace,
             &config,
             self.desktop.clone(),
+            self.unserve_mode(),
         )
         .await?;
         let handle = ServeHandle {
@@ -309,8 +338,13 @@ impl WorkspaceHost {
             }
         }
 
-        let artifacts =
-            build_terminal_app(self.library.clone(), &config, self.desktop.clone()).await?;
+        let artifacts = build_terminal_app(
+            self.library.clone(),
+            &config,
+            self.desktop.clone(),
+            self.unserve_mode(),
+        )
+        .await?;
         // The tenant's terminals run `command` (when set) rather than the
         // default shell; applied before the SPA can open the first one.
         artifacts.terminal_sessions.set_default_command(command);
@@ -393,6 +427,29 @@ impl WorkspaceHost {
             .get(&prefix)
             .map(|runtime| runtime.artifacts.terminal_sessions.all_scrollback())
             .unwrap_or_default()
+    }
+
+    /// Close the mounted workspace whose root matches `root` (by canonical
+    /// form), returning whether one was found and closed. The control-socket
+    /// `Unserve` handler uses this to unmount a single hosted tenant by path
+    /// without disturbing the rest of the host. A terminal tenant (no
+    /// workspace root) never matches a real workspace root.
+    pub fn close_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
+        let target = canonical_key(root);
+        let prefix = {
+            let workspaces = self
+                .workspaces
+                .read()
+                .map_err(|_| Error::Config("workspace host lock poisoned".into()))?;
+            workspaces
+                .values()
+                .find(|runtime| canonical_key(&runtime.root) == target)
+                .map(|runtime| runtime.handle.prefix.clone())
+        };
+        match prefix {
+            Some(prefix) => self.close_workspace(&prefix),
+            None => Ok(false),
+        }
     }
 
     /// Close the workspace mounted at `prefix`.
@@ -774,6 +831,34 @@ mod tests {
         host.open_registered_workspace(root.path(), serve_config("/second"))
             .await
             .expect("reopen after close");
+    }
+
+    #[tokio::test]
+    async fn close_workspace_for_root_unmounts_by_path() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib));
+        host.open_registered_workspace(root.path(), serve_config("/ws"))
+            .await
+            .expect("open");
+
+        // The `chan unserve` host path: unmount the matching tenant by root.
+        assert!(host
+            .close_workspace_for_root(root.path())
+            .expect("close by root"));
+        assert!(host.mounted_prefixes().expect("prefixes").is_empty());
+
+        // An already-unmounted root and an unknown root both report false
+        // (no panic, no error) so unserve is idempotent / 404-able.
+        assert!(!host
+            .close_workspace_for_root(root.path())
+            .expect("absent root"));
+        let other = tempfile::tempdir().expect("other");
+        assert!(!host
+            .close_workspace_for_root(other.path())
+            .expect("unknown root"));
     }
 
     #[tokio::test]

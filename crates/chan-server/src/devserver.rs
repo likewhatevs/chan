@@ -385,6 +385,9 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     let token = persisted.devserver_token.clone();
 
     let host = Arc::new(WorkspaceHost::new(library));
+    // Opt in to control-socket `chan unserve`: a hosted workspace's tenant can
+    // then be unmounted by path (it does not kill the multi-tenant process).
+    host.install_self();
     let state = Arc::new(DevserverState {
         host: host.clone(),
         addr: config.addr,

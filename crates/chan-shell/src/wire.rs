@@ -211,6 +211,18 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         window_id: Option<String>,
     },
+    // Category 5 (process teardown): tear down the server serving `path`,
+    // the transport behind `chan unserve <path>`. `cmd_unserve` discovers the
+    // serving process from the workspace's `writer.lock` and sends this over
+    // that process's control socket; THE SERVER DECIDES SCOPE from `path`: a
+    // standalone `chan serve` of that root fires its own graceful shutdown
+    // (the process exits, releasing the flock), while a multi-tenant host (a
+    // `chan devserver` / chan-desktop) unmounts just that tenant and keeps
+    // running. The client carries no scope hint — the server knows its own
+    // kind. `path` is the canonical workspace root.
+    Unserve {
+        path: PathBuf,
+    },
 }
 
 /// Which `cs terminal team` operation a [`ControlRequest::TerminalTeam`]
@@ -550,6 +562,22 @@ mod survey_wire_tests {
         let back: ControlRequest =
             serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
         assert!(matches!(back, ControlRequest::WindowOpen { .. }));
+    }
+
+    #[test]
+    fn unserve_request_tag_and_path() {
+        // Pin the `chan unserve` transport wire: tag `unserve`, a single
+        // `path` (the canonical workspace root). A rename here would silently
+        // break `cmd_unserve` ↔ the control-socket handler.
+        let req = ControlRequest::Unserve {
+            path: PathBuf::from("/home/u/notes"),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "unserve");
+        assert_eq!(v["path"], "/home/u/notes");
+        let back: ControlRequest =
+            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back, ControlRequest::Unserve { .. }));
     }
 
     #[test]

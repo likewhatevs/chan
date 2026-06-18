@@ -6,7 +6,7 @@
 //! running server process.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock, Weak};
 
 use chan_workspace::{TeamConfig, Workspace};
 use portable_pty::PtySize;
@@ -210,6 +210,41 @@ pub const TERMINAL_ONLY_NEEDS_WORKSPACE: &str =
 pub const TERM_NEW_PATH_NEEDS_WORKSPACE: &str =
     "cannot resolve --path on a standalone terminal window (no workspace root); run it from a terminal inside a workspace window, or drop --path to open a terminal here";
 
+/// How a control socket's process tears down the workspace named by a
+/// [`ControlRequest::Unserve`] — the server-decides-scope half of `chan
+/// unserve`. [`build_app`](crate::build_app) builds it from an [`UnserveMode`]
+/// the embedder picks, and it rides in [`ControlSocketCtx`].
+#[derive(Clone)]
+pub enum UnserveScope {
+    /// A standalone `chan serve <root>`: unserve of `root` fires the process
+    /// graceful-shutdown signal, so the whole process exits and releases the
+    /// flock. `root` guards against unserving a path this server does not serve.
+    Standalone {
+        root: PathBuf,
+        shutdown_tx: Arc<tokio::sync::watch::Sender<bool>>,
+    },
+    /// A multi-tenant host (a `chan devserver` / chan-desktop) that opted in
+    /// via [`WorkspaceHost::install_self`](crate::host::WorkspaceHost::install_self):
+    /// unserve unmounts the matching tenant only and keeps the process alive.
+    Host(Weak<crate::host::WorkspaceHost>),
+    /// A tenant whose process can't honor a control-socket unserve (a
+    /// multi-tenant host that never registered a self-handle, or a standalone
+    /// terminal with no workspace): the handler refuses rather than guess.
+    Unsupported,
+}
+
+/// The embedder's choice of [`UnserveScope`] kind, passed to
+/// [`build_app`](crate::build_app) / [`build_terminal_app`](crate::build_terminal_app)
+/// (which fill in the standalone shutdown handle). A standalone `chan serve`
+/// passes [`UnserveMode::Standalone`]; a [`WorkspaceHost`](crate::host::WorkspaceHost)
+/// passes [`UnserveMode::Host`] once it registered its self-handle, else
+/// [`UnserveMode::Unsupported`].
+pub enum UnserveMode {
+    Standalone,
+    Host(Weak<crate::host::WorkspaceHost>),
+    Unsupported,
+}
+
 /// Shared server resources a control-socket connection needs, plus
 /// the tenant gate. One value per `start`; cloned per connection
 /// (every field is a cheap handle).
@@ -227,6 +262,8 @@ pub struct ControlSocketCtx {
     /// lifecycle verbs send ops down the channel.
     pub desktop: crate::desktop_window_ops::DesktopBridge,
     pub tenant: ControlTenant,
+    /// How `ControlRequest::Unserve` tears this process's workspace(s) down.
+    pub unserve: UnserveScope,
 }
 
 pub fn start(socket_path: PathBuf, ctx: ControlSocketCtx) -> std::io::Result<ControlHandle> {
@@ -390,6 +427,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
         window_presence,
         desktop,
         tenant,
+        unserve,
     } = ctx;
     // The registry is a set-once cell that may be filled after the
     // socket starts; resolve it per request, exactly as before.
@@ -675,7 +713,64 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                     .map(|()| confirm),
             )
         }
+        ControlRequest::Unserve { path } => handle_unserve(unserve, &path).await,
     }
+}
+
+/// Tear down whatever this process serves for `path`, the server side of
+/// `chan unserve`. The scope (built at mount time) decides: a standalone
+/// `chan serve` of that root fires its graceful-shutdown signal so the
+/// process exits and the flock releases; a multi-tenant host unmounts just
+/// that tenant; an opt-out process refuses. The response still flushes before
+/// a standalone process drains and exits.
+async fn handle_unserve(scope: &UnserveScope, path: &Path) -> ControlResponse {
+    match scope {
+        UnserveScope::Standalone { root, shutdown_tx } => {
+            if !same_path(root, path) {
+                return ControlResponse::Error {
+                    message: format!(
+                        "this server does not serve {} (it serves {})",
+                        path.display(),
+                        root.display()
+                    ),
+                };
+            }
+            let _ = shutdown_tx.send(true);
+            ControlResponse::Ok {
+                message: format!("unserving {}", path.display()),
+            }
+        }
+        UnserveScope::Host(weak) => match weak.upgrade() {
+            None => ControlResponse::Error {
+                message: "host is shutting down".into(),
+            },
+            Some(host) => match host.close_workspace_for_root(path) {
+                Ok(true) => ControlResponse::Ok {
+                    message: format!("unmounted {}", path.display()),
+                },
+                Ok(false) => ControlResponse::Error {
+                    message: format!("no workspace mounted for {}", path.display()),
+                },
+                Err(e) => ControlResponse::Error {
+                    message: format!("unmounting {}: {e}", path.display()),
+                },
+            },
+        },
+        UnserveScope::Unsupported => ControlResponse::Error {
+            message: format!(
+                "cannot unserve {} from here: this process exposes no control-socket teardown",
+                path.display()
+            ),
+        },
+    }
+}
+
+/// Whether two paths denote the same workspace root, comparing canonical
+/// forms and falling back to the literal path when the filesystem can't
+/// canonicalize (a root that moved or went missing still matches itself).
+fn same_path(a: &Path, b: &Path) -> bool {
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    canon(a) == canon(b)
 }
 
 /// `handle_team`'s dispatch payload: the `ControlRequest::TerminalTeam`
@@ -1870,7 +1965,43 @@ mod tests {
             // the title map stays empty.
             desktop: crate::desktop_window_ops::DesktopBridge::default(),
             tenant,
+            // Unit tests don't exercise unserve; refuse it explicitly.
+            unserve: UnserveScope::Unsupported,
         }
+    }
+
+    #[tokio::test]
+    async fn unserve_standalone_fires_shutdown_on_matching_root() {
+        let dir = tempfile::tempdir().expect("root");
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let scope = UnserveScope::Standalone {
+            root: dir.path().to_path_buf(),
+            shutdown_tx: Arc::new(tx),
+        };
+        let resp = handle_unserve(&scope, dir.path()).await;
+        assert!(matches!(resp, ControlResponse::Ok { .. }));
+        assert!(*rx.borrow(), "matching root fires the shutdown signal");
+    }
+
+    #[tokio::test]
+    async fn unserve_standalone_refuses_a_foreign_root() {
+        let served = tempfile::tempdir().expect("served");
+        let other = tempfile::tempdir().expect("other");
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let scope = UnserveScope::Standalone {
+            root: served.path().to_path_buf(),
+            shutdown_tx: Arc::new(tx),
+        };
+        let resp = handle_unserve(&scope, other.path()).await;
+        assert!(matches!(resp, ControlResponse::Error { .. }));
+        assert!(!*rx.borrow(), "a foreign root must NOT fire shutdown");
+    }
+
+    #[tokio::test]
+    async fn unserve_unsupported_refuses() {
+        let dir = tempfile::tempdir().expect("root");
+        let resp = handle_unserve(&UnserveScope::Unsupported, dir.path()).await;
+        assert!(matches!(resp, ControlResponse::Error { .. }));
     }
 
     #[test]

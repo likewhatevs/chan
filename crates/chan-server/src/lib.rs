@@ -463,7 +463,11 @@ async fn build_app(
     workspace: Arc<Workspace>,
     config: &ServeConfig,
     desktop: crate::desktop_window_ops::DesktopBridge,
+    unserve: control_socket::UnserveMode,
 ) -> Result<AppArtifacts, Error> {
+    // Captured before `workspace` is moved into AppState below; the standalone
+    // unserve scope names this root.
+    let unserve_root = workspace.root().to_path_buf();
     let token = if config.no_token {
         None
     } else {
@@ -681,6 +685,16 @@ async fn build_app(
     // Created before the control socket so `cs window list` and the
     // `/ws` route share one presence map (cloned onto AppState below).
     let window_presence = Arc::new(window_presence::WindowPresence::new());
+    // A standalone serve unserves by exiting the process (its shutdown
+    // signal); a hosted tenant unserves by unmounting itself from the host.
+    let unserve_scope = match unserve {
+        control_socket::UnserveMode::Standalone => control_socket::UnserveScope::Standalone {
+            root: unserve_root,
+            shutdown_tx: shutdown_tx.clone(),
+        },
+        control_socket::UnserveMode::Host(weak) => control_socket::UnserveScope::Host(weak),
+        control_socket::UnserveMode::Unsupported => control_socket::UnserveScope::Unsupported,
+    };
     let control = control_socket::start(
         control_socket_path.clone(),
         control_socket::ControlSocketCtx {
@@ -693,6 +707,7 @@ async fn build_app(
             window_presence: window_presence.clone(),
             desktop: desktop.clone(),
             tenant: control_socket::ControlTenant::Workspace,
+            unserve: unserve_scope,
         },
     );
     let (control_socket_path, control_socket) = match control {
@@ -799,6 +814,7 @@ async fn build_terminal_app(
     library: Library,
     config: &ServeConfig,
     desktop: crate::desktop_window_ops::DesktopBridge,
+    unserve: control_socket::UnserveMode,
 ) -> Result<AppArtifacts, Error> {
     let token = if config.no_token {
         None
@@ -870,6 +886,15 @@ async fn build_terminal_app(
     let terminal_registry_cell: control_socket::TerminalRegistryCell =
         Arc::new(std::sync::OnceLock::new());
     let control_socket_path = control_socket::pick_socket_path();
+    // A terminal tenant has no workspace to unserve, so a standalone
+    // terminal refuses; a hosted terminal still carries the host handle so an
+    // Unserve that lands on its socket can unmount the right WORKSPACE tenant.
+    let unserve_scope = match unserve {
+        control_socket::UnserveMode::Host(weak) => control_socket::UnserveScope::Host(weak),
+        control_socket::UnserveMode::Standalone | control_socket::UnserveMode::Unsupported => {
+            control_socket::UnserveScope::Unsupported
+        }
+    };
     let control = control_socket::start(
         control_socket_path.clone(),
         control_socket::ControlSocketCtx {
@@ -882,6 +907,7 @@ async fn build_terminal_app(
             window_presence: window_presence.clone(),
             desktop: desktop.clone(),
             tenant: control_socket::ControlTenant::TerminalOnly,
+            unserve: unserve_scope,
         },
     );
     let (control_socket_path, control_socket) = match control {
@@ -1074,6 +1100,7 @@ pub async fn serve(
         workspace,
         &config,
         crate::desktop_window_ops::DesktopBridge::default(),
+        control_socket::UnserveMode::Standalone,
     )
     .await?;
     let handle = ServeHandle {
@@ -1219,6 +1246,7 @@ pub async fn serve_via_tunnel(
         workspace,
         &server_config,
         crate::desktop_window_ops::DesktopBridge::default(),
+        control_socket::UnserveMode::Standalone,
     )
     .await?;
     let prefix_handle = artifacts.prefix.clone();
