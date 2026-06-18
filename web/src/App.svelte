@@ -1028,10 +1028,23 @@
     "app.find.close",
   ]);
 
+  /// The control terminal is a singleton: on top of the terminal-only filter,
+  /// block the commands that would break the one-PTY invariant — spawning more
+  /// terminals (Cmd+T) or splitting the pane into an empty second pane (which,
+  /// with the welcome tile gone in terminal-only mode, would strand a blank
+  /// pane). Reopening the script PTY is the connect flow's job, not the user's.
+  const CONTROL_TERMINAL_BLOCKED = new Set<string>([
+    "app.terminal.toggle",
+    "app.pane.splitRight",
+    "app.pane.splitDown",
+  ]);
+
   function runCommand(name: string, detail: Record<string, unknown>): void {
     // In a terminal-only window, drop any workspace-only command (file
     // browser, graph, dashboard, drafts, search, team work, rich prompt).
     if (ui.terminalOnly && !TERMINAL_ONLY_COMMANDS.has(name)) return;
+    // The control terminal stays one PTY: no extra terminals, no pane splits.
+    if (ui.terminalControl && CONTROL_TERMINAL_BLOCKED.has(name)) return;
     switch (name) {
       case "app.settings.toggle":
         // Command id used by chan-desktop KEY_BRIDGE_JS (native Cmd+,);

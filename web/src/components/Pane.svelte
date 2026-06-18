@@ -1118,6 +1118,7 @@
     class="tabs"
     class:drop-active={dropActive}
     class:flipped={pane.showingBack}
+    class:control-hidden={ui.terminalControl}
     role="tablist"
     ondragover={onDragOver}
     ondragleave={onDragLeave}
@@ -1475,8 +1476,14 @@
                  tab. Multi-pane empty panes keep the minimal chrome
                  (just the chan mark). Empty panes have no right-click
                  menu; the pane hamburger (⋮) carries every spawn entry,
-                 so right-clicking an empty pane is a no-op. -->
-            {#if !multiPane}
+                 so right-clicking an empty pane is a no-op.
+
+                 Terminal-only windows skip the welcome entirely: they always
+                 hold at least one terminal (boot opens one, close-on-last-tab
+                 closes the window), so the lone Terminal spawn tile only ever
+                 flashed during the transient empty boot layout. Fall through
+                 to the minimal chan mark instead. -->
+            {#if !multiPane && !ui.terminalOnly}
               <EmptyPaneWelcome />
             {:else}
               <div class="placeholder-stack">
@@ -1736,6 +1743,13 @@
   }
   .tabs.drop-active {
     box-shadow: inset 0 0 0 2px var(--pane-focus);
+  }
+  /* The control terminal is a chromeless singleton: hide the whole tab strip
+     (tab name + dead-zone + pane hamburger) so the connect-script PTY fills the
+     window like a plain terminal. Closing is the native red dot; there is no
+     in-page tab or split affordance. */
+  .tabs.control-hidden {
+    display: none;
   }
   /* Flipped chrome:
      * Tab CONTENT mirrors via per-child `scaleX(-1)` so each

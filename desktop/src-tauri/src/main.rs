@@ -1062,12 +1062,14 @@ async fn connect_devserver(
             prefix: None,
         },
     );
-    // The connection is up and its terminal is open, so put the control
-    // terminal away; the user can reopen it from the Window menu. Its tenant
-    // prefix was tracked at spawn time so disconnect/forget reaps the script.
-    if let Some(ct) = control {
-        serve::hide_and_bury_window(&app, &ct.label);
-    }
+    // The control terminal stays open after connect. It runs the connect
+    // script, which may keep streaming or prompt for ssh credentials, so
+    // burying it on connect hid live output and read as a flash. The user
+    // closes it with the native red dot (which buries it; reopen from the
+    // [DEVSERVER] row dropdown via open_window_by_label), and disconnect/forget
+    // reaps both the window and its tenant through teardown_devserver_windows.
+    // The tenant prefix was tracked at spawn time (control is read above for
+    // the token scrape).
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(())
 }
@@ -1307,6 +1309,25 @@ async fn forget_devserver_workspace(
         .get(&id)
         .ok_or_else(|| format!("devserver {id} is not connected"))?;
     devserver::forget_workspace(&conn, &prefix).await
+}
+
+/// Set a registered devserver workspace on (mount + mint a fresh tenant token)
+/// or off (unmount, keep registered) — the on/off toggle on a devserver row,
+/// distinct from Forget (`forget_devserver_workspace`). Returns the updated row
+/// (with a live URL when on, empty when off) so the launcher reflects the new
+/// state and can open it without waiting for the next poll.
+#[tauri::command]
+async fn set_devserver_workspace_on(
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    prefix: String,
+    on: bool,
+) -> Result<devserver::DevserverWorkspaceRow, String> {
+    let conn = state
+        .devservers
+        .get(&id)
+        .ok_or_else(|| format!("devserver {id} is not connected"))?;
+    devserver::set_workspace_on(&conn, &prefix, on).await
 }
 
 /// Forget a devserver: drops any live connection, tears down its windows, and
@@ -2357,6 +2378,7 @@ fn main() {
             reconnect_devserver,
             update_devserver,
             forget_devserver_workspace,
+            set_devserver_workspace_on,
             auth::auth_status,
             auth::open_signin,
             auth::signout,

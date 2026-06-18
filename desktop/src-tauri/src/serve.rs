@@ -366,11 +366,11 @@ pub async fn spawn_local_terminal_window(
     Ok(label)
 }
 
-/// A spawned control terminal: its window label (to tuck away / track) and
-/// its terminal tenant prefix (to scrape the token the connect script
-/// prints).
+/// A spawned control terminal: its terminal tenant prefix, used to scrape the
+/// token the connect script prints (and, on disconnect, to reap the tenant).
+/// The window is addressed by its deterministic `control_terminal_label`, so
+/// the struct doesn't carry the label.
 pub struct ControlTerminal {
-    pub label: String,
     pub prefix: String,
 }
 
@@ -400,34 +400,20 @@ pub async fn spawn_control_terminal_window(
             config_key: String::new(),
             zoom_seed: 1.0,
             connecting: None,
-            kind: Some("terminal"),
+            // `control` (not `terminal`) puts the SPA in the singleton
+            // control sub-mode: terminal-only, but with the tab strip / pane
+            // chrome hidden and Cmd+T / splits disabled so it never spawns a
+            // second tab. It also tags the window kind in `cs window list`,
+            // keeping it distinct from persisted standalone terminals (W10).
+            kind: Some("control"),
         },
     )?;
-    Ok(ControlTerminal { label, prefix })
+    Ok(ControlTerminal { prefix })
 }
 
 /// Stable window label for a devserver's control terminal.
 pub fn control_terminal_label(devserver_id: &str) -> String {
     format!("control-terminal-{devserver_id}")
-}
-
-/// Hide a window and record it as buried, so the user can reopen it from the
-/// Window menu. The connect flow uses this to tuck the control terminal away
-/// once the devserver is reached. Window operations run on the main thread.
-pub fn hide_and_bury_window(app: &AppHandle, label: &str) {
-    let app_owned = app.clone();
-    let label = label.to_string();
-    let _ = app.run_on_main_thread(move || {
-        let Some(window) = app_owned.get_webview_window(&label) else {
-            return;
-        };
-        let title = window.title().unwrap_or_else(|_| label.clone());
-        let _ = window.hide();
-        app_owned
-            .state::<Arc<AppState>>()
-            .bury_window(&label, &title);
-        crate::rebuild_window_menu(&app_owned);
-    });
 }
 
 /// `cs window open`: focus a live window, un-hide a buried one, or
@@ -684,7 +670,9 @@ struct WindowSpec<'a> {
     /// fixes.
     connecting: Option<&'a str>,
     /// `Some("terminal")` makes the SPA boot in terminal-only mode (no
-    /// workspace fetch); `None` is full workspace mode.
+    /// workspace fetch); `Some("control")` is the stricter singleton control
+    /// sub-mode (terminal-only + hidden chrome, one PTY); `None` is full
+    /// workspace mode. Also the kind `cs window list` shows.
     kind: Option<&'a str>,
 }
 
@@ -709,9 +697,11 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
         return Err(format!("bad chan URL for {window_label}: {url}"));
     };
     parsed.query_pairs_mut().append_pair("w", window_label);
-    // `kind=terminal` is the SPA's only signal to enter terminal-only mode
-    // (no workspace fetch, terminal panes only). Workspace/outbound
-    // windows pass `None` and the SPA stays in full workspace mode.
+    // `kind=terminal` / `kind=control` are the SPA's only signal to enter
+    // terminal-only mode (no workspace fetch, terminal panes only);
+    // `control` additionally selects the singleton control sub-mode.
+    // Workspace/outbound windows pass `None` and the SPA stays in full
+    // workspace mode.
     if let Some(kind) = kind {
         parsed.query_pairs_mut().append_pair("kind", kind);
     }
@@ -736,8 +726,8 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     let app_owned = app.clone();
     let label_owned = window_label.to_string();
     let title_owned = title.to_string();
-    // `Some("terminal")` for terminal windows, else "workspace" (covers
-    // local / outbound) — the kind `cs window list` shows.
+    // The passed kind (`terminal` / `control`) for terminal windows, else
+    // "workspace" (covers local / outbound) — the kind `cs window list` shows.
     // Captured owned so the 'static main-thread closure can hold it.
     let kind_owned = kind.unwrap_or("workspace").to_string();
     let res = app.run_on_main_thread(move || {

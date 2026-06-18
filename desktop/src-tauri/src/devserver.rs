@@ -104,6 +104,14 @@ struct MountedTerminal {
     token: String,
 }
 
+/// `POST /api/devserver/workspaces/{prefix}/on` body — mirrors the server's
+/// `SetWorkspaceOnRequest`. `on:false` keeps the workspace registered
+/// (unmount-but-remember), distinct from `DELETE` = Forget.
+#[derive(Debug, serde::Serialize)]
+struct SetWorkspaceOnRequest {
+    on: bool,
+}
+
 /// A devserver workspace as the launcher renders it: the tenant fields plus
 /// the assembled tenant URL ready for the outbound-window machinery.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -246,17 +254,27 @@ pub async fn fetch_workspaces(conn: &DevserverConn) -> Result<Vec<DevserverWorks
         .map_err(|e| format!("decoding devserver workspaces: {e}"))?;
     entries
         .into_iter()
-        .map(|e| {
-            let url = assemble_tenant_url(&conn.host, conn.port, &e.prefix, &e.token)?;
-            Ok(DevserverWorkspaceRow {
-                prefix: e.prefix,
-                path: e.path,
-                label: e.label,
-                on: e.on,
-                url,
-            })
-        })
+        .map(|e| row_from_entry(conn, e))
         .collect()
+}
+
+/// Turn a wire `WorkspaceEntry` into a launcher row, assembling the tenant URL
+/// from its token. An off (registered-but-unmounted) row carries `token:""` and
+/// gets an empty URL — it has no live tenant; the launcher renders it off and
+/// Open turns it on first (which mints a fresh token).
+fn row_from_entry(conn: &DevserverConn, e: WorkspaceEntry) -> Result<DevserverWorkspaceRow, String> {
+    let url = if e.token.is_empty() {
+        String::new()
+    } else {
+        assemble_tenant_url(&conn.host, conn.port, &e.prefix, &e.token)?
+    };
+    Ok(DevserverWorkspaceRow {
+        prefix: e.prefix,
+        path: e.path,
+        label: e.label,
+        on: e.on,
+        url,
+    })
 }
 
 /// `POST /api/devserver/terminals`: mount a standalone terminal tenant and
@@ -315,6 +333,47 @@ pub async fn forget_workspace(conn: &DevserverConn, prefix: &str) -> Result<(), 
     Ok(())
 }
 
+/// The on/off-toggle URL for a registered workspace: the collection path + the
+/// prefix (an absolute route path) + `/on`. Distinct from the DELETE URL
+/// (= Forget); on/off keeps the registration.
+fn workspace_on_url(host: &str, port: u16, prefix: &str) -> String {
+    format!(
+        "{}/api/devserver/workspaces{}/on",
+        base_origin(host, port),
+        prefix
+    )
+}
+
+/// `POST /api/devserver/workspaces/{prefix}/on` `{on}`: mount (`on:true`) or
+/// unmount (`on:false`) a registered workspace WITHOUT forgetting it. Returns
+/// the updated row; turning on mints a fresh tenant token (so the reassembled
+/// URL is live), turning off clears it (empty URL). Idempotent server-side.
+pub async fn set_workspace_on(
+    conn: &DevserverConn,
+    prefix: &str,
+    on: bool,
+) -> Result<DevserverWorkspaceRow, String> {
+    let url = workspace_on_url(&conn.host, conn.port, prefix);
+    let resp = http_client()?
+        .post(&url)
+        .bearer_auth(&conn.token)
+        .json(&SetWorkspaceOnRequest { on })
+        .send()
+        .await
+        .map_err(|e| format!("setting devserver workspace on/off: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "devserver workspace on/off returned HTTP {}",
+            resp.status()
+        ));
+    }
+    let entry = resp
+        .json::<WorkspaceEntry>()
+        .await
+        .map_err(|e| format!("decoding devserver workspace on/off: {e}"))?;
+    row_from_entry(conn, entry)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,6 +425,60 @@ mod tests {
         assert_eq!(
             workspace_delete_url("127.0.0.1", 8787, "/api/notes-1a2b3c"),
             "http://127.0.0.1:8787/api/devserver/workspaces/api/notes-1a2b3c"
+        );
+    }
+
+    #[test]
+    fn workspace_on_url_appends_prefix_and_on() {
+        assert_eq!(
+            workspace_on_url("127.0.0.1", 8787, "/api/notes-1a2b3c"),
+            "http://127.0.0.1:8787/api/devserver/workspaces/api/notes-1a2b3c/on"
+        );
+    }
+
+    #[test]
+    fn set_workspace_on_request_serializes_on_field() {
+        assert_eq!(
+            serde_json::to_string(&SetWorkspaceOnRequest { on: false }).unwrap(),
+            r#"{"on":false}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&SetWorkspaceOnRequest { on: true }).unwrap(),
+            r#"{"on":true}"#
+        );
+    }
+
+    #[test]
+    fn row_from_entry_off_row_has_no_url_on_row_has_one() {
+        let conn = DevserverConn {
+            host: "127.0.0.1".into(),
+            port: 8787,
+            token: "dt".into(),
+        };
+        // Off (registered-but-unmounted): token:"" ⇒ empty URL.
+        let off = WorkspaceEntry {
+            prefix: "/api/notes-1a2b3c".into(),
+            path: "/home/a/notes".into(),
+            label: "notes".into(),
+            on: false,
+            token: String::new(),
+        };
+        let row = row_from_entry(&conn, off).unwrap();
+        assert!(!row.on);
+        assert_eq!(row.url, "");
+        // On: a live token assembles the tenant URL.
+        let on = WorkspaceEntry {
+            prefix: "/api/notes-1a2b3c".into(),
+            path: "/home/a/notes".into(),
+            label: "notes".into(),
+            on: true,
+            token: "tok_live".into(),
+        };
+        let row = row_from_entry(&conn, on).unwrap();
+        assert!(row.on);
+        assert_eq!(
+            row.url,
+            "http://127.0.0.1:8787/api/notes-1a2b3c/index.html?t=tok_live"
         );
     }
 

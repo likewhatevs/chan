@@ -429,10 +429,13 @@ describe("EmptyPaneWelcome static spawn surface", () => {
     expect(pane).toMatch(
       /import EmptyPaneWelcome from "\.\/EmptyPaneWelcome\.svelte";/,
     );
+    // EmptyPaneWelcome mounts on the lone-pane empty case, but NOT in a
+    // terminal-only window: those always hold a terminal, so the lone spawn
+    // tile only ever flashed during the empty boot layout (W1).
     // EmptyPaneWelcome does not forward oncontextmenu because there
     // is no empty-pane right-click menu.
     expect(pane).toMatch(
-      /\{#if !multiPane\}[\s\S]{1,800}<EmptyPaneWelcome \/>/,
+      /\{#if !multiPane && !ui\.terminalOnly\}[\s\S]{1,800}<EmptyPaneWelcome \/>/,
     );
     expect(pane).not.toMatch(/<EmptyPaneWelcome oncontextmenu=/);
     // EmptyPaneCarousel is owned by DashboardTab.svelte, not Pane.svelte.

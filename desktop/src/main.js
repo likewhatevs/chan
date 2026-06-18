@@ -707,12 +707,21 @@ function renderDevserverActions(ds) {
 /// so it matches chan-desktop's local workspace buttons; the caret + items are
 /// wired in `pollDevserverWorkspaces`.
 function renderDevserverWorkspaceRow(ws) {
+  // The on/off switch mirrors the local-workspace row: ON = mounted (live
+  // tenant URL), OFF = registered-but-unmounted (no URL). An off row's Open
+  // turns it on first. Forget (caret) removes the registration entirely.
+  const hasUrl = !!ws.url;
   return `
-    <tr data-ds-prefix="${escapeAttr(ws.prefix)}" data-url="${escapeAttr(ws.url)}">
-      <td><span class="conn-dot on" title="Workspace"></span></td>
+    <tr data-ds-prefix="${escapeAttr(ws.prefix)}" data-url="${escapeAttr(ws.url || '')}">
+      <td>
+        <label class="switch">
+          <input type="checkbox" data-act="toggle-ds-on" ${ws.on ? 'checked' : ''}/>
+          <span class="slider"></span>
+        </label>
+      </td>
       <td class="path-cell where-cell remote-cell" title="${escapeAttr(ws.path)}">${ICON_OUTBOUND}<span class="where-text">${escapeHtml(ws.label || ws.path)}</span></td>
       <td><div class="row-actions">
-        ${renderOpenSplit({ hasUrl: true, includeForget: true, forgetLabel: 'Forget' })}
+        ${renderOpenSplit({ hasUrl, includeForget: true, forgetLabel: 'Forget' })}
       </div></td>
     </tr>`;
 }
@@ -854,16 +863,57 @@ async function pollDevserverWorkspaces() {
       ? `<table class="workspaces"><tbody>${rows.map(renderDevserverWorkspaceRow).join('')}</tbody></table>`
       : `<p class="nw-muted ws-group-pending">No workspaces on this devserver yet.</p>`;
     container.querySelectorAll('tr[data-ds-prefix]').forEach((tr) => {
+      const prefix = tr.dataset.dsPrefix;
       // The row reuses renderOpenSplit: primary "launch" opens the tenant,
       // the caret menu's "open-browser" (wired by bindSplitMenu via data-url)
-      // opens it externally, and "remove" forgets (unmounts) it.
+      // opens it externally, and "remove" forgets (unmounts) it. The on/off
+      // switch mounts/unmounts without forgetting (mirrors the local row).
+      const toggle = tr.querySelector('[data-act="toggle-ds-on"]');
+      if (toggle) {
+        toggle.addEventListener('change', async (e) => {
+          const cb = e.target;
+          // Mount/unmount is not instant (an unmount waits up to 5s for the
+          // flock to release). The native checkbox flips on click, so disable
+          // it for the transition to block a racing re-click, then re-poll from
+          // the TRUE state so the toggle + Open reconcile on every outcome
+          // (including a failed turn-on, which reverts the checkbox).
+          cb.disabled = true;
+          try {
+            await invoke('set_devserver_workspace_on', { id, prefix, on: cb.checked });
+          } catch (err) {
+            if (cb.checked) showTurnOnFailureDialog(err);
+            else showError(err);
+          }
+          lastDevserverRowsJson[id] = null;
+          await pollDevserverWorkspaces();
+        });
+      }
       const open = tr.querySelector('[data-act="launch"]');
       if (open) {
-        open.addEventListener('click', async () => {
+        open.addEventListener('click', async (e) => {
+          const btn = e.currentTarget;
+          let url = tr.dataset.url;
+          if (!url) {
+            // Off row: turn it on first (mints a fresh tenant token + URL),
+            // then open. Button stays disabled for the transition so a
+            // double-click can't race the still-mounting tenant.
+            btn.disabled = true;
+            try {
+              const row = await invoke('set_devserver_workspace_on', { id, prefix, on: true });
+              url = row.url;
+            } catch (err) {
+              showTurnOnFailureDialog(err);
+              lastDevserverRowsJson[id] = null;
+              await pollDevserverWorkspaces();
+              return;
+            }
+            lastDevserverRowsJson[id] = null;
+            await pollDevserverWorkspaces();
+          }
           try {
-            await invoke('open_devserver_workspace', { id, prefix: tr.dataset.dsPrefix, url: tr.dataset.url });
-          } catch (e) {
-            showError(e);
+            await invoke('open_devserver_workspace', { id, prefix, url });
+          } catch (e2) {
+            showError(e2);
           }
         });
       }
@@ -1399,12 +1449,106 @@ async function maybeOfferUpdate() {
     { title: 'Chan Desktop update', okLabel: 'Install', cancelLabel: 'Later', kind: 'info' }
   );
   if (!accepted) return;
+  const progress = showUpdateProgress(update.version);
   try {
-    await update.downloadAndInstall();
+    // tauri-plugin-updater streams DownloadEvents into this callback:
+    // Started{contentLength?} -> Progress{chunkLength} (repeated) -> Finished.
+    // Accumulate bytes + time so the modal shows size, percent, elapsed, ETA.
+    let total = 0;
+    let downloaded = 0;
+    let startedAt = 0;
+    await update.downloadAndInstall((e) => {
+      if (e.event === 'Started') {
+        total = (e.data && e.data.contentLength) || 0;
+        downloaded = 0;
+        startedAt = Date.now();
+        progress.update({ downloaded, total, startedAt });
+      } else if (e.event === 'Progress') {
+        downloaded += (e.data && e.data.chunkLength) || 0;
+        progress.update({ downloaded, total, startedAt });
+      } else if (e.event === 'Finished') {
+        progress.finish();
+      }
+    });
     await relaunch();
   } catch (e) {
+    progress.close();
     showError(e);
   }
+}
+
+/// Modal shown while a desktop self-update downloads, mirroring the connecting
+/// screen's counter feel: a progress bar + a meta line with size, percent,
+/// elapsed, and ETA. Returns handles to advance it as DownloadEvents arrive,
+/// mark it finished, and close it. When the server sends no Content-Length the
+/// bar runs indeterminate and the meta drops the percent + ETA (graceful
+/// degrade for a chunked/unknown-size body).
+function showUpdateProgress(version) {
+  const overlay = document.createElement('div');
+  overlay.className = 'preflight-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  const dialog = document.createElement('div');
+  dialog.className = 'preflight-dialog';
+  const title = document.createElement('h2');
+  title.textContent = `Downloading update ${version}`;
+  const track = document.createElement('div');
+  track.className = 'update-progress-track';
+  const bar = document.createElement('div');
+  bar.className = 'update-progress-bar';
+  track.appendChild(bar);
+  const meta = document.createElement('p');
+  meta.className = 'update-progress-meta';
+  meta.setAttribute('role', 'status');
+  meta.setAttribute('aria-live', 'polite');
+  meta.textContent = 'Starting download…';
+  dialog.append(title, track, meta);
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  return {
+    update({ downloaded, total, startedAt }) {
+      const elapsed = startedAt ? (Date.now() - startedAt) / 1000 : 0;
+      if (total > 0) {
+        const pct = Math.min(100, Math.round((downloaded / total) * 100));
+        track.classList.remove('indeterminate');
+        bar.style.width = `${pct}%`;
+        const eta = downloaded > 0 ? (elapsed * (total - downloaded)) / downloaded : null;
+        meta.textContent =
+          `${formatBytes(downloaded)} / ${formatBytes(total)} · ${pct}% · ` +
+          `${formatDuration(elapsed)} elapsed · ${eta != null ? `ETA ${formatDuration(eta)}` : 'ETA --:--'}`;
+      } else {
+        track.classList.add('indeterminate');
+        meta.textContent = `${formatBytes(downloaded)} · ${formatDuration(elapsed)} elapsed`;
+      }
+    },
+    finish() {
+      track.classList.remove('indeterminate');
+      bar.style.width = '100%';
+      meta.textContent = 'Download complete — installing and restarting…';
+    },
+    close() {
+      overlay.remove();
+    },
+  };
+}
+
+/// Human-readable byte size (B/KB/MB/GB), one decimal under 10 of a unit.
+function formatBytes(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
+/// MM:SS for a duration in seconds (download elapsed / ETA).
+function formatDuration(secs) {
+  const total = Math.max(0, Math.floor(secs));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 // Re-render whenever the chan registry changes from anywhere

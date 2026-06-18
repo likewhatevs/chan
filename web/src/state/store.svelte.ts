@@ -196,6 +196,12 @@ export const ui = $state<{
   /// terminal exists, so the transient empty layout during boot can't trip the
   /// close-on-last-tab watcher in App.svelte. Always false in workspace mode.
   terminalArmed: boolean;
+  /// The control-terminal sub-mode (`kind=control`): a singleton terminal-only
+  /// window running a devserver's connect script. Stricter than `terminalOnly`
+  /// — the tab strip / pane chrome are hidden and Cmd+T / pane splits are
+  /// disabled so it stays one PTY. Set once at bootstrap from the URL, never
+  /// flipped. Implies `terminalOnly`.
+  terminalControl: boolean;
 }>({
   status: null,
   statusKind: null,
@@ -208,20 +214,37 @@ export const ui = $state<{
   disconnectBlocking: false,
   terminalOnly: isTerminalOnlyWindow(),
   terminalArmed: false,
+  terminalControl: isControlTerminalWindow(),
 });
 
-/// Detect terminal-only mode from the window URL. The `?kind=terminal`
-/// query param (set by the desktop shell when it opens a standalone
-/// terminal window) is the ONLY signal; there is no server bootstrap
-/// marker. Read once at module load so the flag is stable before any
-/// component mounts. Guarded for non-browser (test) contexts where
-/// `location` may be undefined.
-export function isTerminalOnlyWindow(): boolean {
+/// The window-kind URL marker. The `?kind=` query param (set by the desktop
+/// shell when it opens a standalone terminal window) is the ONLY signal; there
+/// is no server bootstrap marker. Read once at module load so the flag is
+/// stable before any component mounts. Guarded for non-browser (test) contexts
+/// where `location` may be undefined.
+function windowKind(): string | null {
   try {
-    return new URLSearchParams(location.search).get("kind") === "terminal";
+    return new URLSearchParams(location.search).get("kind");
   } catch {
-    return false;
+    return null;
   }
+}
+
+/// Detect terminal-only mode from the window URL. Both `kind=terminal` (a
+/// regular standalone terminal) and `kind=control` (the singleton control
+/// terminal that runs a devserver's connect script) boot terminal-only: no
+/// workspace fetch, terminal panes only.
+export function isTerminalOnlyWindow(): boolean {
+  const kind = windowKind();
+  return kind === "terminal" || kind === "control";
+}
+
+/// The control terminal is a stricter sub-mode of terminal-only (`kind=control`,
+/// set by the shell's `spawn_control_terminal_window`): a singleton that hosts
+/// exactly one PTY (the connect script), hides the tab strip / pane chrome, and
+/// disables Cmd+T + pane splits so it can never replicate into Terminal 1/2/3.
+export function isControlTerminalWindow(): boolean {
+  return windowKind() === "control";
 }
 
 export const HYBRID_SURFACE_KINDS: readonly HybridSurfaceKind[] = [
