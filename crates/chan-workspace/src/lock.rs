@@ -140,6 +140,30 @@ pub fn read_lock_record(lock_dir: &Path) -> Option<LockRecord> {
     read_record_at(&lock_dir.join("writer.lock"))
 }
 
+/// Probe whether the writer lock for `lock_dir` is currently free,
+/// without taking it or touching the record. `false` means some open
+/// file description still holds it — including an in-flight
+/// `Workspace::drop` whose flock release has not completed yet.
+///
+/// The close→reopen handoff uses this to confirm the prior holder's
+/// flock actually released before a reopen races it: an `Arc`'s strong
+/// count reaches zero *before* `Workspace::drop` runs the `_lock` drop,
+/// so "no strong refs" is not the same as "flock free".
+pub fn is_free(lock_dir: &Path) -> bool {
+    let path = lock_dir.join("writer.lock");
+    let Ok(file) = open_lock_file(&path) else {
+        // Can't even open the lockfile → treat as not-free (conservative).
+        return false;
+    };
+    match FileExt::try_lock_exclusive(&file) {
+        // Held only for this probe; `file` drops here and the OS releases it.
+        Ok(()) => true,
+        Err(e) if is_contended(&e) => false,
+        // An unexpected error is not a free lock.
+        Err(_) => false,
+    }
+}
+
 fn open_lock_file(path: &Path) -> Result<File> {
     OpenOptions::new()
         .create(true)
@@ -274,6 +298,16 @@ mod tests {
         assert_eq!(rec.pid, std::process::id());
         assert_eq!(rec.path, canonical_string(&root(&tmp)));
         assert!(!rec.started_at.is_empty());
+    }
+
+    #[test]
+    fn is_free_reflects_held_state() {
+        let tmp = TempDir::new().unwrap();
+        assert!(is_free(tmp.path())); // nothing holds it
+        let held = WorkspaceLock::acquire(tmp.path(), &root(&tmp)).unwrap();
+        assert!(!is_free(tmp.path())); // a live holder
+        drop(held);
+        assert!(is_free(tmp.path())); // released after drop
     }
 
     // Un-gated from the old `#[cfg(unix)]`: `is_contended` now maps the
