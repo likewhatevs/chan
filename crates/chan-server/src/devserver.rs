@@ -1130,6 +1130,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_terminal_post_requires_a_json_body() {
+        // Contract guard for the connect 415 regression: `POST
+        // /api/devserver/terminals` requires a labeled JSON body, so a bodyless
+        // POST (no `Content-Type: application/json`) is a 415. The desktop always
+        // sends `{label}` via `open_terminal_with_label`; this pins the contract
+        // so a future bodyless caller fails loudly here, not just at runtime on a
+        // fresh connect.
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+        let app = build_devserver_app(state, host);
+
+        // Bodyless POST → 415 Unsupported Media Type (a label is required).
+        let bodyless = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/devserver/terminals")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bodyless.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        // Labeled JSON body → mounts the terminal (200 OK).
+        let labeled = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/devserver/terminals")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"label":"terminal-deadbeef"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(labeled.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn terminal_forget_unmounts_and_drops_persistence() {
         let home = tempfile::tempdir().expect("home");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
