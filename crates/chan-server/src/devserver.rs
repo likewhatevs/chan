@@ -25,7 +25,6 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
@@ -34,15 +33,15 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, Request as HttpRequest, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get};
 use axum::{Json, Router};
 use chan_workspace::Library;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::random_token;
 use crate::devserver_api::{
-    DevserverInfo, MountedPrefix, MountedTerminal, OpenWorkspaceRequest, SetWorkspaceOnRequest,
-    WorkspaceEntry, DEVSERVER_API_PROTOCOL,
+    DevserverInfo, MountedPrefix, MountedTerminal, OpenTerminalRequest, OpenWorkspaceRequest,
+    SetWorkspaceOnRequest, TerminalEntry, WorkspaceEntry, DEVSERVER_API_PROTOCOL,
 };
 use crate::host::WorkspaceHost;
 use crate::{sanitize_prefix, Error, ServeConfig};
@@ -72,6 +71,12 @@ struct PersistedConfig {
     /// rather than failing the whole parse and minting a fresh one.
     #[serde(default)]
     workspaces: Vec<PersistedWorkspace>,
+    /// Standalone terminal tenants, persisted as first-class launcher entities
+    /// so they survive a restart (re-mounted with fresh PTYs at their stable
+    /// prefix). Named `terminals` for symmetry with `workspaces` (this is the
+    /// internal on-disk shape, not a cross-lane wire).
+    #[serde(default)]
+    terminals: Vec<PersistedTerminal>,
 }
 
 /// One registered workspace as persisted: where it lives, the stable route
@@ -82,6 +87,19 @@ struct PersistedWorkspace {
     path: String,
     prefix: String,
     on: bool,
+}
+
+/// One standalone terminal tenant as persisted: the client's stable window
+/// key (`label`, the `?w=<label>`), the route `prefix` it re-mounts at
+/// verbatim, and the PTY's default `command` (`None` = login shell). Re-mounted
+/// on restart with a FRESH PTY; the per-window pane/tab layout lives in the
+/// launcher session store, not here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedTerminal {
+    label: String,
+    prefix: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
 }
 
 /// Persistence at `~/.chan/devserver/config.json`, written atomically and
@@ -181,6 +199,17 @@ struct WorkspaceRecord {
     token: String,
 }
 
+/// A standalone terminal tenant as the devserver tracks it live, the source of
+/// truth for `GET /api/devserver/terminals`. Keyed by its stable `prefix`. The
+/// `token` is the live per-mount token (re-minted on each remount, so it is
+/// NOT persisted — only [`PersistedTerminal`]'s `{label, prefix, command}` is).
+struct TerminalRecord {
+    label: String,
+    prefix: String,
+    command: Option<String>,
+    token: String,
+}
+
 /// Shared runtime state behind the management API and the discovery socket.
 struct DevserverState {
     host: Arc<WorkspaceHost>,
@@ -188,12 +217,12 @@ struct DevserverState {
     /// Devserver-level bearer token, distinct from per-workspace tokens.
     token: String,
     host_label: String,
-    /// Registered workspaces by stable prefix, on and off. Terminal tenants
-    /// are NOT tracked here; they are not listed and reset on restart.
+    /// Registered workspaces by stable prefix, on and off.
     workspaces: Mutex<HashMap<String, WorkspaceRecord>>,
+    /// Standalone terminal tenants by stable prefix, persisted so they survive
+    /// a restart (re-mounted with fresh PTYs).
+    terminals: Mutex<HashMap<String, TerminalRecord>>,
     store: DevserverStore,
-    /// Monotonic source for standalone-terminal prefixes within a run.
-    terminal_seq: AtomicU64,
 }
 
 impl DevserverState {
@@ -205,7 +234,7 @@ impl DevserverState {
     async fn register_workspace(&self, root: &Path) -> Result<String, Error> {
         let prefix = allocate_workspace_prefix(root)?;
         let mounted = self.mount_at(root, &prefix).await?;
-        self.persist_workspaces();
+        self.persist_state();
         Ok(mounted)
     }
 
@@ -289,7 +318,7 @@ impl DevserverState {
                 record.token.clear();
             }
         }
-        self.persist_workspaces();
+        self.persist_state();
         Ok(self.entry_for(prefix))
     }
 
@@ -319,14 +348,15 @@ impl DevserverState {
             let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
             workspaces.remove(prefix);
         }
-        self.persist_workspaces();
+        self.persist_state();
         Ok(true)
     }
 
-    /// Persist the bearer token plus every registered workspace with its
-    /// mount state, so a restart comes back serving exactly what was on and
-    /// remembering what was off. Sorted by prefix for a stable file.
-    fn persist_workspaces(&self) {
+    /// Persist the bearer token, every registered workspace (with its mount
+    /// state), and every standalone terminal, so a restart comes back serving
+    /// exactly what was on, remembering what was off, and re-mounting the
+    /// terminals. Sorted by prefix for a stable file.
+    fn persist_state(&self) {
         let workspaces: Vec<PersistedWorkspace> = {
             let map = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
             let mut v: Vec<PersistedWorkspace> = map
@@ -340,9 +370,23 @@ impl DevserverState {
             v.sort_by(|a, b| a.prefix.cmp(&b.prefix));
             v
         };
+        let terminals: Vec<PersistedTerminal> = {
+            let map = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
+            let mut v: Vec<PersistedTerminal> = map
+                .values()
+                .map(|record| PersistedTerminal {
+                    label: record.label.clone(),
+                    prefix: record.prefix.clone(),
+                    command: record.command.clone(),
+                })
+                .collect();
+            v.sort_by(|a, b| a.prefix.cmp(&b.prefix));
+            v
+        };
         let cfg = PersistedConfig {
             devserver_token: self.token.clone(),
             workspaces,
+            terminals,
         };
         if let Err(e) = self.store.save(&cfg) {
             tracing::warn!("persisting devserver config: {e}");
@@ -356,6 +400,83 @@ impl DevserverState {
         let mut entries: Vec<WorkspaceEntry> = workspaces.values().map(entry_from_record).collect();
         entries.sort_by(|a, b| a.prefix.cmp(&b.prefix));
         entries
+    }
+
+    /// Open (mount) a standalone terminal tenant for the client window `label`,
+    /// running `command` (or the login shell). Allocates a STABLE prefix from
+    /// the label so the same terminal re-mounts at the same route across a
+    /// restart, records it for persistence, and returns the prefix + token.
+    async fn open_terminal(
+        &self,
+        label: String,
+        command: Option<String>,
+    ) -> Result<MountedTerminal, Error> {
+        let prefix = allocate_terminal_prefix(&label)?;
+        let hosted = self
+            .host
+            .open_terminal_session_with_command(tenant_config(self.addr, &prefix), command.clone())
+            .await?;
+        let token = hosted.handle.token.clone().unwrap_or_default();
+        {
+            let mut terminals = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
+            terminals.insert(
+                hosted.prefix.clone(),
+                TerminalRecord {
+                    label,
+                    prefix: hosted.prefix.clone(),
+                    command,
+                    token: token.clone(),
+                },
+            );
+        }
+        self.persist_state();
+        Ok(MountedTerminal {
+            prefix: hosted.prefix,
+            token,
+        })
+    }
+
+    /// Snapshot the standalone terminals for the list endpoint, sorted by
+    /// prefix. The desktop calls this on connect/reconnect to re-create the
+    /// devserver's terminal windows (each keyed by its `label`/`?w=<label>`).
+    fn terminal_entries(&self) -> Vec<TerminalEntry> {
+        let terminals = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
+        let mut entries: Vec<TerminalEntry> = terminals
+            .values()
+            .map(|record| TerminalEntry {
+                label: record.label.clone(),
+                prefix: record.prefix.clone(),
+                token: record.token.clone(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.prefix.cmp(&b.prefix));
+        entries
+    }
+
+    /// Re-mount a persisted terminal at its stored (stable) prefix on restart:
+    /// a FRESH PTY running the recorded command; the window/tab layout restores
+    /// from the launcher session store. Does NOT persist (the restart path
+    /// batches one save).
+    async fn remount_terminal(&self, term: &PersistedTerminal) -> Result<(), Error> {
+        let hosted = self
+            .host
+            .open_terminal_session_with_command(
+                tenant_config(self.addr, &term.prefix),
+                term.command.clone(),
+            )
+            .await?;
+        let token = hosted.handle.token.clone().unwrap_or_default();
+        let mut terminals = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
+        terminals.insert(
+            term.prefix.clone(),
+            TerminalRecord {
+                label: term.label.clone(),
+                prefix: term.prefix.clone(),
+                command: term.command.clone(),
+                token,
+            },
+        );
+        Ok(())
     }
 }
 
@@ -394,8 +515,8 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         token: token.clone(),
         host_label: config.host_label,
         workspaces: Mutex::new(HashMap::new()),
+        terminals: Mutex::new(HashMap::new()),
         store,
-        terminal_seq: AtomicU64::new(0),
     });
 
     // Restore the registered workspaces. `on` rows re-mount at their persisted
@@ -413,9 +534,20 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
             state.track_off(&path, &ws.prefix);
         }
     }
+    // Re-mount persisted standalone terminals at their stable prefix: fresh
+    // PTYs, with the per-window pane/tab layout restored from the launcher
+    // session store. A terminal that fails to re-mount surfaces a note.
+    for term in &persisted.terminals {
+        if let Err(e) = state.remount_terminal(term).await {
+            eprintln!(
+                "chan devserver: NOTE: could not re-mount terminal {}: {e}",
+                term.label
+            );
+        }
+    }
     // Persist once now so a newly-minted token + the restored set (with any
     // failed re-mounts downgraded to off) land even before the first call.
-    state.persist_workspaces();
+    state.persist_state();
 
     // Serve-handoff discovery. A bind failure is non-fatal: the management
     // API still works, only the `chan serve` registration path is disabled.
@@ -472,7 +604,10 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             "/api/devserver/workspaces/*prefix",
             delete(handle_forget).post(handle_set_workspace_on),
         )
-        .route("/api/devserver/terminals", post(handle_open_terminal))
+        .route(
+            "/api/devserver/terminals",
+            get(handle_list_terminals).post(handle_open_terminal),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -582,19 +717,18 @@ async fn handle_set_workspace_on(
     }
 }
 
-async fn handle_open_terminal(State(state): State<Arc<DevserverState>>) -> Response {
-    let n = state.terminal_seq.fetch_add(1, Ordering::Relaxed);
-    let prefix = format!("/api/terminal-{n}");
-    match state
-        .host
-        .open_terminal_session(tenant_config(state.addr, &prefix))
-        .await
-    {
-        Ok(hosted) => Json(MountedTerminal {
-            prefix: hosted.prefix,
-            token: hosted.handle.token.unwrap_or_default(),
-        })
-        .into_response(),
+async fn handle_list_terminals(
+    State(state): State<Arc<DevserverState>>,
+) -> Json<Vec<TerminalEntry>> {
+    Json(state.terminal_entries())
+}
+
+async fn handle_open_terminal(
+    State(state): State<Arc<DevserverState>>,
+    Json(req): Json<OpenTerminalRequest>,
+) -> Response {
+    match state.open_terminal(req.label, req.command).await {
+        Ok(mounted) => Json(mounted).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -664,6 +798,17 @@ fn allocate_workspace_prefix(root: &Path) -> Result<String, Error> {
     let hash = hasher.finish();
     let slug = workspace_slug(root);
     sanitize_prefix(&format!("/api/{slug}-{hash:x}")).map_err(Error::Config)
+}
+
+/// Allocate a standalone terminal's mount prefix from its window label:
+/// `/api/term-{slug}-{hash}`, deterministic so the same label always maps to
+/// the same prefix — the terminal re-mounts at the same route across a restart.
+fn allocate_terminal_prefix(label: &str) -> Result<String, Error> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    label.hash(&mut hasher);
+    let hash = hasher.finish();
+    let slug = workspace_slug(Path::new(label));
+    sanitize_prefix(&format!("/api/term-{slug}-{hash:x}")).map_err(Error::Config)
 }
 
 /// Sanitize a path segment into a legible `[a-z0-9-]` slug for a prefix:
@@ -781,6 +926,11 @@ mod tests {
                     on: false,
                 },
             ],
+            terminals: vec![PersistedTerminal {
+                label: "terminal-1".into(),
+                prefix: "/api/term-terminal-1-0".into(),
+                command: None,
+            }],
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: PersistedConfig = serde_json::from_str(&json).unwrap();
@@ -790,10 +940,13 @@ mod tests {
         assert!(back.workspaces[0].on);
         assert_eq!(back.workspaces[1].prefix, "/api/b-0");
         assert!(!back.workspaces[1].on);
+        assert_eq!(back.terminals.len(), 1);
+        assert_eq!(back.terminals[0].label, "terminal-1");
         // Tolerant of a missing/empty file shape.
         let empty: PersistedConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.devserver_token, "");
         assert!(empty.workspaces.is_empty());
+        assert!(empty.terminals.is_empty());
         // An old-format file (`enabled_workspaces: Vec<String>`) degrades to an
         // empty workspace set but KEEPS the token: the renamed key is ignored
         // rather than failing the whole parse and minting a fresh token.
@@ -825,6 +978,92 @@ mod tests {
     }
 
     #[test]
+    fn persisted_terminal_pins_field_names() {
+        let term = PersistedTerminal {
+            label: "terminal-1a2b".into(),
+            prefix: "/api/term-terminal-1a2b-ff".into(),
+            command: Some("ssh host".into()),
+        };
+        let v = serde_json::to_value(&term).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "label": "terminal-1a2b",
+                "prefix": "/api/term-terminal-1a2b-ff",
+                "command": "ssh host",
+            })
+        );
+        assert_eq!(term, serde_json::from_value(v).unwrap());
+        // `command` is omitted when None (login shell).
+        let bare = PersistedTerminal {
+            label: "t".into(),
+            prefix: "/api/term-t-0".into(),
+            command: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&bare).unwrap(),
+            serde_json::json!({ "label": "t", "prefix": "/api/term-t-0" })
+        );
+    }
+
+    #[test]
+    fn terminal_prefix_is_stable_and_legible() {
+        let a = allocate_terminal_prefix("terminal-1a2b").unwrap();
+        let b = allocate_terminal_prefix("terminal-1a2b").unwrap();
+        assert_eq!(a, b, "same label -> same prefix (stable across restart)");
+        assert!(a.starts_with("/api/term-"), "unexpected: {a}");
+        assert!(!a.starts_with("/api/devserver/"));
+        let c = allocate_terminal_prefix("terminal-9z9z").unwrap();
+        assert_ne!(a, c, "different labels differ");
+    }
+
+    #[tokio::test]
+    async fn terminal_open_persists_and_remounts_at_stable_prefix() {
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        // Open a standalone terminal: mounted in the host AND persisted.
+        let mounted = state
+            .open_terminal("terminal-1a2b".into(), Some("printf hi".into()))
+            .await
+            .expect("open terminal");
+        assert!(mounted.prefix.starts_with("/api/term-"));
+        assert!(!mounted.token.is_empty());
+        assert!(state
+            .host
+            .mounted_prefixes()
+            .unwrap()
+            .contains(&mounted.prefix));
+
+        // Listed for the desktop's reconnect discovery, with the live token.
+        let entries = state.terminal_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].label, "terminal-1a2b");
+        assert_eq!(entries[0].prefix, mounted.prefix);
+        assert_eq!(entries[0].token, mounted.token);
+
+        // Persisted with its label, stable prefix, and command.
+        let persisted = state.store.load();
+        assert_eq!(persisted.terminals.len(), 1);
+        assert_eq!(persisted.terminals[0].label, "terminal-1a2b");
+        assert_eq!(persisted.terminals[0].prefix, mounted.prefix);
+        assert_eq!(persisted.terminals[0].command.as_deref(), Some("printf hi"));
+
+        // Simulate a restart: a FRESH host re-mounts from the persisted record
+        // at the SAME prefix (the terminal survives the restart).
+        let restarted = test_state(home.path(), addr);
+        for term in &restarted.store.load().terminals {
+            restarted.remount_terminal(term).await.expect("remount");
+        }
+        assert!(restarted
+            .host
+            .mounted_prefixes()
+            .unwrap()
+            .contains(&mounted.prefix));
+    }
+
+    #[test]
     fn store_save_load_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let store = DevserverStore::at(dir.path().join("nested").join("config.json"));
@@ -837,6 +1076,7 @@ mod tests {
                 prefix: "/api/x-0".into(),
                 on: true,
             }],
+            terminals: Vec::new(),
         };
         store.save(&cfg).unwrap();
         let loaded = store.load();
@@ -871,8 +1111,8 @@ mod tests {
             token: "test-token".into(),
             host_label: "test".into(),
             workspaces: Mutex::new(HashMap::new()),
+            terminals: Mutex::new(HashMap::new()),
             store: DevserverStore::at(home.join("devserver").join("config.json")),
-            terminal_seq: AtomicU64::new(0),
         })
     }
 

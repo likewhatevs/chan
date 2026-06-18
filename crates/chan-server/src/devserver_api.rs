@@ -98,6 +98,37 @@ pub struct SetWorkspaceOnRequest {
     pub on: bool,
 }
 
+/// Body of `POST /api/devserver/terminals`: open (or, on the persistence
+/// path, re-open) a standalone terminal tenant. `label` is the client's
+/// stable window key — the `?w=<label>` value the SPA hydrates its layout
+/// from and the key the launcher persists the terminal under, so the SAME
+/// terminal re-mounts at the same route prefix across a devserver restart.
+/// `command` is the PTY's default command line (`None` = the login shell); a
+/// single-purpose terminal (e.g. one running a connect script) sets it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpenTerminalRequest {
+    /// Stable window key (`?w=<label>`); the launcher persists the terminal
+    /// under it. The client owns the scheme (`<family>-<id>`).
+    pub label: String,
+    /// PTY default command; omitted (`None`) runs the login shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+/// One element of `GET /api/devserver/terminals`, the box's persisted
+/// standalone terminals as a client sees them. The client re-creates each
+/// terminal window on connect/reconnect keyed by `label` (the `?w=<label>`),
+/// assembling the tenant URL from `prefix` + `token` like a workspace row.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TerminalEntry {
+    /// Stable window key (`?w=<label>`), the client's `<family>-<id>` scheme.
+    pub label: String,
+    /// Route prefix the terminal tenant is mounted at, e.g. `/api/term-…`.
+    pub prefix: String,
+    /// Per-tenant bearer token, minted devserver-side (live for this mount).
+    pub token: String,
+}
+
 /// Response of `POST /api/devserver/terminals`: the prefix and per-tenant
 /// token of the new standalone terminal tenant. Terminals are not carried
 /// by `GET workspaces`, so the token comes back inline here; this is the
@@ -201,6 +232,48 @@ mod tests {
         let v = serde_json::to_value(&resp).unwrap();
         assert_eq!(v, json!({ "prefix": "/api/notes-1a2b3c" }));
         assert_eq!(resp, serde_json::from_value(v).unwrap());
+    }
+
+    #[test]
+    fn open_terminal_request_wire() {
+        let req = OpenTerminalRequest {
+            label: "terminal-1a2b".into(),
+            command: Some("ssh host".into()),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(
+            v,
+            json!({ "label": "terminal-1a2b", "command": "ssh host" })
+        );
+        assert_eq!(req, serde_json::from_value(v).unwrap());
+        // `command` is omitted when None (the tenant runs the login shell).
+        let bare = OpenTerminalRequest {
+            label: "terminal-2".into(),
+            command: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&bare).unwrap(),
+            json!({ "label": "terminal-2" })
+        );
+    }
+
+    #[test]
+    fn terminal_entry_wire() {
+        let entry = TerminalEntry {
+            label: "terminal-1a2b".into(),
+            prefix: "/api/term-terminal-1a2b-ff".into(),
+            token: "tok_t".into(),
+        };
+        let v = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            v,
+            json!({
+                "label": "terminal-1a2b",
+                "prefix": "/api/term-terminal-1a2b-ff",
+                "token": "tok_t",
+            })
+        );
+        assert_eq!(entry, serde_json::from_value(v).unwrap());
     }
 
     #[test]
