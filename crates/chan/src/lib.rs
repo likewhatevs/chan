@@ -1458,13 +1458,10 @@ async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
     ensure_systemd_linger().await?;
 
     if unit_is_active().await {
-        // A journal-follow won't re-emit the running unit's original start
-        // line, so the re-attaching process re-provides the token contract
-        // itself, read from the same 0600 config the service persisted. The
-        // desktop scrapes this exact marker to reconnect seamlessly.
-        if let Some(token) = chan_server::persisted_devserver_token() {
-            println!("{}{token}", chan_server::DEVSERVER_TOKEN_MARKER);
-        }
+        // Re-attaching to a unit that is already running. A journal follow
+        // won't re-emit the unit's original start line, so the supervisor
+        // re-provides the token contract itself (see emit_devserver_token_marker).
+        emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
         eprintln!(
             "chan devserver: re-attaching to the running systemd user service \
              {DEVSERVER_SYSTEMD_UNIT}"
@@ -1481,6 +1478,12 @@ async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
                 recent_unit_journal().await
             );
         }
+        // The freshly started service prints the token marker to its own stdout,
+        // which under the unit lands in the journal — invisible to this terminal
+        // on a host with no readable journal. Emit it directly from the persisted
+        // config so the desktop reconnects regardless; fail loud if it never
+        // lands rather than claim "started" on a token we cannot surface.
+        emit_devserver_token_marker(DEVSERVER_TOKEN_WAIT).await?;
         eprintln!(
             "chan devserver: started the systemd user service \
              {DEVSERVER_SYSTEMD_UNIT} (bind={addr})"
@@ -1488,6 +1491,58 @@ async fn run_devserver_under_systemd(addr: SocketAddr) -> Result<()> {
     }
 
     follow_unit_until_stopped().await
+}
+
+/// How long the supervisor waits for the service's bearer token to land in the
+/// persisted config before giving up. A fresh `Type=simple` unit reports active
+/// before its first persist, so a brief poll covers that race; every later start
+/// finds the token on the first read.
+const DEVSERVER_TOKEN_WAIT: Duration = Duration::from_secs(5);
+
+/// Resolve the persisted devserver bearer token, polling `read` until it yields
+/// a token or `timeout` elapses. Injecting the reader keeps the poll/timeout
+/// contract testable without a real config on disk.
+async fn resolve_devserver_token(
+    read: impl Fn() -> Option<String>,
+    timeout: Duration,
+) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(token) = read() {
+            return Some(token);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Print the locked `CHAN_DEVSERVER_TOKEN=` marker to stdout — the same contract
+/// the foreground server emits — directly from the supervisor, read from the
+/// persisted 0600 config. Token delivery must not depend on this user being able
+/// to read the unit journal (a uid below `SYS_UID_MAX`, or a user outside the
+/// `systemd-journal`/`adm` groups, cannot): the desktop control terminal scrapes
+/// this marker to reconnect, and the journal follow is only human-facing log
+/// streaming. A duplicate marker re-surfaced by the journal on readable hosts is
+/// harmless — the scraper takes the last one.
+///
+/// Errors when the token never lands within `timeout`. The point of `--systemd`
+/// supervision is to hand a client a token to reconnect with; a unit that is
+/// active but whose token cannot be surfaced is unreachable, so fail loud rather
+/// than babysit it. The unit stays running, so a later re-attach can recover it.
+async fn emit_devserver_token_marker(timeout: Duration) -> Result<()> {
+    match resolve_devserver_token(chan_server::persisted_devserver_token, timeout).await {
+        Some(token) => {
+            println!("{}{token}", chan_server::DEVSERVER_TOKEN_MARKER);
+            Ok(())
+        }
+        None => anyhow::bail!(
+            "chan devserver: {DEVSERVER_SYSTEMD_UNIT} is active but its bearer \
+             token could not be read from ~/.chan/devserver/config.json; the \
+             control terminal cannot authenticate to it"
+        ),
+    }
 }
 
 /// Ensure lingering is enabled so the user service survives logout. Fails
@@ -3920,5 +3975,44 @@ mod tests {
             msg.contains("escapes workspace root") || msg.contains("PathEscape"),
             "expected escape rejection, got: {msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_devserver_token_returns_first_available() {
+        // The common case: the token is already on disk, so the first read wins
+        // and no polling happens.
+        let token =
+            resolve_devserver_token(|| Some("tok_abc".to_string()), Duration::from_secs(5)).await;
+        assert_eq!(token.as_deref(), Some("tok_abc"));
+    }
+
+    #[tokio::test]
+    async fn resolve_devserver_token_polls_until_the_token_lands() {
+        // The fresh `Type=simple` race: the unit is active but the service has
+        // not persisted yet, so the first reads miss and a later one succeeds.
+        let calls = std::cell::Cell::new(0u32);
+        let token = resolve_devserver_token(
+            || {
+                let n = calls.get() + 1;
+                calls.set(n);
+                (n >= 3).then(|| "tok_late".to_string())
+            },
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(token.as_deref(), Some("tok_late"));
+        assert!(
+            calls.get() >= 3,
+            "expected polling, saw {} reads",
+            calls.get()
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_devserver_token_gives_up_after_timeout() {
+        // A token that never lands resolves to None at the deadline, which the
+        // caller turns into a loud failure rather than supervising blind.
+        let token = resolve_devserver_token(|| None, Duration::from_millis(150)).await;
+        assert_eq!(token, None);
     }
 }
