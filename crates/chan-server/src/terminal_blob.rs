@@ -13,16 +13,20 @@
 
 use std::path::{Path, PathBuf};
 
-/// Accept a key only if it is a single safe path segment — ASCII
-/// alphanumerics plus `-`/`_`, non-empty, bounded — so a hostile `?w=`
-/// (e.g. `../../etc/passwd`) can never escape the store dir. Disallowing `.`
-/// also keeps keys from colliding with the `.tmp` write file.
+/// Validate a flat blob key, mirroring `chan_workspace::blob::validate_key`
+/// so a terminal window's `?w=` label persists exactly like a workspace
+/// window's: ASCII alphanumeric plus `-`/`_`/`.`, length 1..=255, and no
+/// leading `.` (would write a hidden file) or `-` (would look like a CLI
+/// flag). It is a single safe path segment, so a hostile `?w=` (e.g.
+/// `../../etc/passwd`) can never escape the store dir.
 fn safe_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 255
+        && !key.starts_with('.')
+        && !key.starts_with('-')
         && key
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 fn key_path(dir: &Path, key: &str) -> Option<PathBuf> {
@@ -39,7 +43,10 @@ pub fn put(dir: &Path, key: &str, content: &[u8]) -> std::io::Result<()> {
         ));
     };
     std::fs::create_dir_all(dir)?;
-    let tmp = path.with_extension("tmp");
+    // Leading-dot tmp: a valid key can never start with `.`, so this never
+    // collides with another key's blob (even a key like `foo.bar`), and
+    // `list` skips it (it fails `safe_key`).
+    let tmp = dir.join(format!(".{key}.tmp"));
     {
         use std::io::Write;
         let mut f = std::fs::File::create(&tmp)?;
@@ -119,8 +126,9 @@ mod tests {
             list(d).unwrap(),
             vec!["terminal-1".to_string(), "terminal-2".to_string()]
         );
-        // Atomic write leaves no tmp behind.
-        assert!(!d.join("terminal-1.tmp").exists());
+        // Atomic write leaves no (leading-dot) tmp behind, and it never shows
+        // up in `list`.
+        assert!(!d.join(".terminal-1.tmp").exists());
 
         delete(d, "terminal-1").unwrap();
         assert!(get(d, "terminal-1").unwrap().is_none());
@@ -130,10 +138,38 @@ mod tests {
     }
 
     #[test]
+    fn accepts_the_real_window_label_formats() {
+        // The desktop's actual labels (serve.rs): `outbound-<16hex>-<seq>` and
+        // `terminal-win-<n>`, plus a dotted key (validate_key allows `.`).
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        for k in [
+            "outbound-1a2b3c4d5e6f7890-3",
+            "terminal-win-7",
+            "a.b.c",
+            "ok_key.v2",
+        ] {
+            put(d, k, b"x").unwrap_or_else(|e| panic!("should accept {k:?}: {e}"));
+            assert_eq!(get(d, k).unwrap().as_deref(), Some(&b"x"[..]), "{k:?}");
+        }
+    }
+
+    #[test]
     fn rejects_path_traversal_and_unsafe_keys() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
-        for bad in ["../escape", "a/b", "..", ".", "", "with space", "dot.key"] {
+        // Separators, traversal, leading `.` (hidden file) / `-` (CLI-flag),
+        // empty, and illegal chars — mirrors chan_workspace::blob::validate_key.
+        for bad in [
+            "../escape",
+            "a/b",
+            "..",
+            ".",
+            ".hidden",
+            "-flag",
+            "",
+            "with space",
+        ] {
             assert!(put(d, bad, b"x").is_err(), "should reject put {bad:?}");
             assert!(get(d, bad).unwrap().is_none(), "should reject get {bad:?}");
             // delete of a bad key is a silent no-op.
