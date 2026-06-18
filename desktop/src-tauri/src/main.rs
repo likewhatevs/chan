@@ -911,6 +911,51 @@ fn track_devserver_window(state: &AppState, id: &str, window: DevserverWindow) {
         .push(window);
 }
 
+/// Re-create the devserver's persisted standalone-terminal windows (W10): fetch
+/// the persisted set (`GET /api/devserver/terminals`) and (re)build one window
+/// per entry at its stable label (`?w=<label>`), so they re-surface both on an
+/// explicit connect AND on an auto-reconnect across a devserver restart (the
+/// terminals re-mount server-side at stable prefixes). Seeds the window-seq past
+/// the persisted labels so a later New-Terminal mint can't collide with a
+/// re-created one after a process restart. Best-effort per terminal; returns the
+/// count re-created (0 = none persisted, or the devserver is unreachable).
+async fn reopen_devserver_terminal_windows(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    id: &str,
+) -> usize {
+    let Some(conn) = state.devservers.get(id) else {
+        return 0;
+    };
+    let persisted = devserver::fetch_terminals(&conn).await.unwrap_or_default();
+    if persisted.is_empty() {
+        return 0;
+    }
+    let family_id = devserver_terminal_window_id(id);
+    let labels: Vec<String> = persisted.iter().map(|t| t.label.clone()).collect();
+    serve::reserve_window_seq_above(&labels);
+    let mut created = 0;
+    for t in persisted {
+        if let Err(e) =
+            serve::spawn_devserver_terminal_window_at_label(app, &family_id, &t.label, &t.url)
+        {
+            tracing::warn!(devserver = %id, label = %t.label, error = %e, "re-creating a persisted devserver terminal failed");
+            continue;
+        }
+        track_devserver_window(
+            state,
+            id,
+            DevserverWindow {
+                window_id: family_id.clone(),
+                label: t.label,
+                prefix: None,
+            },
+        );
+        created += 1;
+    }
+    created
+}
+
 /// Close every window the desktop opened for a devserver (its standalone
 /// terminal, its workspace tenants, and its control terminal) and forget the
 /// tracking. Best-effort: a window the user already closed is a no-op.
@@ -1060,19 +1105,12 @@ async fn connect_devserver(
     );
     let conn = devserver::DevserverConn { host, port, token };
     state.devservers.set(id.clone(), conn);
-    // W10: re-surface the devserver's persisted standalone terminals (Seam 4).
-    // Each comes back at its persisted label (?w=<label>) so the SPA reattaches
-    // to the live PTY (scrollback + running processes intact); a fresh devserver
-    // with none gets one terminal so the user still lands on a terminal.
-    let terminal_window_id = devserver_terminal_window_id(&id);
-    let persisted = {
-        let conn = state
-            .devservers
-            .get(&id)
-            .ok_or_else(|| format!("devserver {id} is not connected"))?;
-        devserver::fetch_terminals(&conn).await.unwrap_or_default()
-    };
-    if persisted.is_empty() {
+    // W10: re-surface the devserver's persisted standalone terminals (Seam 4)
+    // at their persisted labels (?w=<label>) so the SPA reattaches to the live
+    // PTY. A fresh devserver with none gets one terminal so the user still lands
+    // on a terminal.
+    if reopen_devserver_terminal_windows(&app, &state, &id).await == 0 {
+        let terminal_window_id = devserver_terminal_window_id(&id);
         let terminal_url = ensure_devserver_terminal_url(&state, &id).await?;
         let terminal_label =
             serve::spawn_devserver_terminal_window(&app, &terminal_window_id, &terminal_url)?;
@@ -1085,32 +1123,6 @@ async fn connect_devserver(
                 prefix: None,
             },
         );
-    } else {
-        // Seed the window-seq past the persisted labels so a later New Terminal
-        // mint can't collide with a re-created one after a process restart reset
-        // the per-process counter to 0.
-        let labels: Vec<String> = persisted.iter().map(|t| t.label.clone()).collect();
-        serve::reserve_window_seq_above(&labels);
-        for t in persisted {
-            if let Err(e) = serve::spawn_devserver_terminal_window_at_label(
-                &app,
-                &terminal_window_id,
-                &t.label,
-                &t.url,
-            ) {
-                tracing::warn!(devserver = %id, label = %t.label, error = %e, "re-creating a persisted devserver terminal failed");
-                continue;
-            }
-            track_devserver_window(
-                &state,
-                &id,
-                DevserverWindow {
-                    window_id: terminal_window_id.clone(),
-                    label: t.label,
-                    prefix: None,
-                },
-            );
-        }
     }
     // The control terminal stays open after connect. It runs the connect
     // script, which may keep streaming or prompt for ssh credentials, so
@@ -1292,9 +1304,14 @@ async fn reconnect_devserver(
             if rotated {
                 // A rotated token means the devserver restarted: its old shared
                 // terminal tenant is gone, so drop the cached URL (the next
-                // terminal mounts a fresh one). Workspace windows re-open below.
+                // terminal mounts a fresh one). Workspace + persisted-terminal
+                // windows re-open below.
                 state.devserver_terminal_urls.lock().unwrap().remove(&id);
                 reopen_devserver_workspace_windows(&app, &state, &id, &rows);
+                // W10: the restart re-mounted the persisted standalone terminals
+                // server-side at stable prefixes — re-create their windows too
+                // (reopen_devserver_workspace_windows only handles workspaces).
+                reopen_devserver_terminal_windows(&app, &state, &id).await;
             }
             let _ = app.emit(serve::SERVES_CHANGED, ());
             return Ok(true);
