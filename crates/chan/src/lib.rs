@@ -1108,11 +1108,15 @@ async fn unserve_running(lib: &Library, path: &Path) -> Result<UnserveOutcome> {
     Ok(UnserveOutcome::Unserved)
 }
 
-/// Find the per-process control socket for `pid` by its well-known name
-/// (`$TMPDIR/chan-control-<pid>-<rand>.sock`). One socket per process, so
-/// the first match is unambiguous. Returns `None` where the socket isn't a
-/// temp-dir file (Windows named pipes aren't enumerable here — unserve over
-/// the wire is unix-first this round).
+/// Find a control socket for `pid` by its well-known name
+/// (`$TMPDIR/chan-control-<pid>-<rand>.sock`). A dedicated `chan serve` has
+/// exactly one; a multi-tenant devserver has one per tenant under the same
+/// pid. Either way every socket routes the `Unserve { path }` verb to the
+/// server, which acts by path — so the first match is sufficient and we
+/// must NOT broadcast (once the first tenant unmounts, the rest 404).
+/// Returns `None` where the socket isn't a temp-dir file (Windows named
+/// pipes aren't enumerable here — unserve over the wire is unix-first this
+/// round).
 fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
     control_socket_for_pid_in(&std::env::temp_dir(), pid)
 }
