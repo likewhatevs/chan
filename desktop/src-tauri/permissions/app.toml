@@ -32,6 +32,7 @@ permissions = [
   "allow-reconnect-devserver",
   "allow-update-devserver",
   "allow-forget-devserver-workspace",
+  "allow-set-devserver-workspace-on",
 ]
 
 [[set]]
@@ -239,3 +240,8 @@ commands.allow = ["update_devserver"]
 identifier = "allow-forget-devserver-workspace"
 description = "Enables the forget_devserver_workspace command."
 commands.allow = ["forget_devserver_workspace"]
+
+[[permission]]
+identifier = "allow-set-devserver-workspace-on"
+description = "Enables the set_devserver_workspace_on command."
+commands.allow = ["set_devserver_workspace_on"]
