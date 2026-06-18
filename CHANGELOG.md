@@ -6,6 +6,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.39.0] - 2026-06-18
+
+A hardening round on the `chan devserver` + chan-desktop surface: workspace lifecycle, lock
+correctness, and standalone-terminal persistence.
+
+### Added
+
+- Devserver workspaces now have an on/off toggle: unload a remote workspace (releasing its writer
+  lock) without forgetting it, then toggle it back on — from the chan-desktop launcher. The off/on
+  state persists across a devserver restart.
+- `chan unserve <path>`: tear down a running `chan serve` for a workspace from the command line (the
+  CLI counterpart to the desktop on/off), releasing the writer lock so the workspace can be re-served
+  or removed.
+- `chan remove <path>` now unserves a running serve first, then forgets everything about the
+  workspace — index, graph, sessions, tokens, report, registry entry, and the whole
+  `~/.chan/workspaces/<key>/` metadata directory — so it never fails with "workspace locked" on a
+  live serve.
+- Self-upgrade download progress: a text meter (percent, size, elapsed, ETA) in the terminal and a
+  progress bar in chan-desktop.
+- Standalone terminal persistence at the launcher: a devserver's terminal windows and their pane/tab
+  layout come back when chan-desktop reconnects or the devserver restarts — reconnecting to the live
+  shells while the devserver is still up, or fresh shells with the saved layout after a restart.
+  `cs window list` and the Window menu reflect them.
+
+### Fixed
+
+- Workspace lock correctness: the writer lock now records the holder's pid, path, and start time, and
+  a contender reclaims the lock only from a provably-dead holder instead of failing. Fixes rapid
+  Open / On / Off clicking in chan-desktop wedging a workspace as "locked" with no live process.
+- Devserver file-descriptor leak (EMFILE) on a long-running multi-workspace devserver: the redundant
+  tantivy commit-watcher (a second inotify watcher per workspace) is gone, so the descriptor count
+  stays bounded across mount/unmount and reconnect churn.
+- Control / standalone terminal behaviour in chan-desktop: the control terminal opens and stays open
+  on connect (no auto-hide or flashing), is a true singleton (no replicated Terminal 1/2/3), and the
+  empty standalone-terminal window no longer shows a flashing floating button.
+- Failing connect script: closing a failing control terminal now surfaces a re-run / disconnect
+  survey and tears down cleanly instead of leaving the launcher stuck on "connecting" with an empty
+  window.
+- An empty devserver (zero workspaces) now loads on connect and across a restart.
+- Graph: in a directory scope, every file node now anchors to its folder spine, so cross-tree files
+  (link / mention / tag targets from elsewhere in the workspace) no longer render loose.
+
 ## [v0.38.1] - 2026-06-18
 
 ### Added
