@@ -103,9 +103,16 @@ impl Bm25Index {
             .memory_budget_per_thread(WRITER_BUDGET / writer_budget.worker_threads)
             .build();
         let writer = index.writer_with_options(writer_options)?;
+        // Manual reload, not OnCommit*: `commit` below reloads the
+        // reader synchronously itself, so tantivy's commit watcher is
+        // redundant — and on a long-lived multi-workspace process (the
+        // devserver) every OnCommit reader spins up a `MmapDirectory`
+        // file_watcher holding an inotify fd, which accumulates across
+        // mount/unmount churn until the process hits EMFILE. Manual keeps
+        // search-after-commit correct with no background watcher.
         let reader = index
             .reader_builder()
-            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .reload_policy(ReloadPolicy::Manual)
             .try_into()?;
         Ok(Self {
             index,
