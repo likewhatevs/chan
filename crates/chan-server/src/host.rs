@@ -81,11 +81,12 @@ impl HostedWorkspaceRuntime {
     }
 
     /// Signal shutdown and tear the workspace cell down. Returns a `Weak`
-    /// to the workspace so a caller that needs the per-workspace flock
-    /// released before it returns (an in-process close then reopen) can
-    /// wait for the last strong `Arc` to drop. `None` when the cell was
-    /// already cleared (a second call, e.g. Drop after an explicit close).
-    fn shutdown(&self) -> Option<Weak<Workspace>> {
+    /// to the workspace plus its lock dir so a caller that needs the
+    /// per-workspace flock released before it returns (an in-process close
+    /// then reopen) can wait for the last strong `Arc` to drop AND the flock
+    /// to free. `None` when the cell was already cleared (a second call, e.g.
+    /// Drop after an explicit close, or a terminal tenant with no workspace).
+    fn shutdown(&self) -> Option<(Weak<Workspace>, PathBuf)> {
         let _ = self.artifacts.shutdown_tx.send(true);
         clear_workspace_cell(&self.artifacts.workspace_cell)
     }
@@ -501,8 +502,8 @@ impl WorkspaceHost {
         // cell, which is a no-op.
         let released = runtime.shutdown();
         drop(runtime);
-        if let Some(weak) = released {
-            wait_for_workspace_release(&weak);
+        if let Some((weak, lock_dir)) = released {
+            wait_for_workspace_release(&weak, &lock_dir);
         }
         Ok(true)
     }
@@ -548,8 +549,8 @@ impl WorkspaceHost {
             .close_all(CloseReason::Shutdown);
         let released = runtime.shutdown();
         drop(runtime);
-        if let Some(weak) = released {
-            wait_for_workspace_release(&weak);
+        if let Some((weak, lock_dir)) = released {
+            wait_for_workspace_release(&weak, &lock_dir);
         }
         Ok(true)
     }
@@ -685,12 +686,13 @@ fn display_prefix(prefix: &str) -> &str {
 }
 
 /// Clear the workspace cell, signalling teardown and dropping the host's
-/// strong `Arc<Workspace>`. Returns a `Weak` to that workspace (or `None`
-/// when the cell was already empty) so the caller can wait for the last
-/// strong reference to drop and the flock to release.
+/// strong `Arc<Workspace>`. Returns a `Weak` to that workspace plus its lock
+/// directory (or `None` when the cell was already empty) so the caller can
+/// wait for the last strong reference to drop AND the per-workspace flock to
+/// actually release before an immediate reopen races it.
 fn clear_workspace_cell(
     workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
-) -> Option<Weak<Workspace>> {
+) -> Option<(Weak<Workspace>, PathBuf)> {
     let cell = workspace_cell.write().ok()?.take()?;
     let WorkspaceCell {
         workspace,
@@ -702,9 +704,12 @@ fn clear_workspace_cell(
     indexer.cancel();
     drop(watch_handle);
     drop(indexer);
+    // Capture the lock dir before dropping the workspace: the flock-free wait
+    // below needs it, and the workspace is gone by then.
+    let lock_dir = workspace.paths().lock.clone();
     let weak = Arc::downgrade(&workspace);
     drop(workspace);
-    Some(weak)
+    Some((weak, lock_dir))
 }
 
 /// Block (bounded) until the last strong `Arc<Workspace>` drops after
@@ -716,11 +721,18 @@ fn clear_workspace_cell(
 /// the wait is typically a few milliseconds. Bounded so a wedged reindex
 /// cannot hang close: past the deadline the caller sees the same
 /// lingering-flock behavior it would have had without the wait.
-fn wait_for_workspace_release(weak: &Weak<Workspace>) {
+fn wait_for_workspace_release(weak: &Weak<Workspace>, lock_dir: &Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while weak.strong_count() > 0 {
+    // Two conditions, not one: the last strong `Arc` must drop, AND the
+    // per-workspace flock must actually release. An `Arc`'s strong count hits
+    // zero *before* `Workspace::drop` runs the `_lock` field's drop, so
+    // `strong_count()==0` alone leaves a window where an immediate reopen
+    // races the in-flight Drop and trips `WorkspaceLocked` with no live
+    // competitor (the on→off→on wedge). `lock::is_free` try-acquires the flock
+    // (and releases it), proving the prior holder's Drop completed.
+    while weak.strong_count() > 0 || !chan_workspace::lock::is_free(lock_dir) {
         if Instant::now() >= deadline {
-            tracing::warn!("close_workspace: workspace handle still held 5s after teardown");
+            tracing::warn!("close_workspace: workspace flock still held 5s after teardown");
             return;
         }
         std::thread::sleep(Duration::from_millis(2));
@@ -847,6 +859,41 @@ mod tests {
         host.open_registered_workspace(root.path(), serve_config("/second"))
             .await
             .expect("reopen after close");
+    }
+
+    #[tokio::test]
+    async fn close_workspace_releases_the_flock_before_returning() {
+        // The on→off→on wedge fix: `close_workspace` must not return until the
+        // per-workspace flock is genuinely released, not merely once the last
+        // `Arc`'s strong count hits zero (which happens BEFORE `Workspace::drop`
+        // runs the `_lock` drop). Asserted deterministically: the flock is free
+        // the instant close returns.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib));
+        host.open_registered_workspace(root.path(), serve_config("/ws"))
+            .await
+            .expect("open");
+
+        // Capture the lock dir from the live workspace; while mounted, held.
+        let lock_dir = host
+            .live_workspace(root.path())
+            .expect("live workspace")
+            .paths()
+            .lock
+            .clone();
+        assert!(
+            !chan_workspace::lock::is_free(&lock_dir),
+            "flock is held while the workspace is mounted"
+        );
+
+        assert!(host.close_workspace("/ws").expect("close"));
+        assert!(
+            chan_workspace::lock::is_free(&lock_dir),
+            "flock is free the moment close_workspace returns"
+        );
     }
 
     #[tokio::test]
