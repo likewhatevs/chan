@@ -1068,6 +1068,45 @@ fn merge_unified_tree_layer(
             blocked_dirs.push(entry_path.to_string());
         }
     }
+
+    // Anchor every included file to its folder ancestors. In directory/file
+    // scope the file NODES are seeded workspace-wide (a node per indexed file,
+    // plus referenced on-disk targets), but the tree walk above is
+    // PREFIX-scoped — so any file outside the scoped subtree gets a node with
+    // no `contains` ancestor chain and the frontend renders it edgeless. Spine
+    // each remaining non-missing file to its parent directory chain so
+    // directory scope keeps the "no file renders edgeless" invariant Workspace
+    // scope already has. This mirrors the Workspace-scope walk (which spines
+    // the whole tree); the extra out-of-prefix folder bubbles are
+    // declutterable via the folder chip. No directory is special-cased — a
+    // draft's `.Drafts` parent is anchored exactly like any other live
+    // directory. The spine ops are idempotent (`edge_set`/`merge_directory_node`
+    // dedup), so an in-scope file already spined by the prefix walk is a no-op.
+    // Workspace scope already walks the full tree, so it needs no backfill.
+    if !matches!(p.scope, GraphScope::Workspace) {
+        let unspined: Vec<String> = ctx
+            .nodes
+            .values()
+            .filter_map(|node| match node {
+                GraphNodeView::File { path, missing, .. }
+                | GraphNodeView::Media { path, missing, .. }
+                    if !missing =>
+                {
+                    Some(path.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        for path in unspined {
+            let clean = path.trim_matches('/');
+            if clean.is_empty() {
+                continue;
+            }
+            let parent = parent_directory(clean);
+            ctx.ensure_directory_path(&parent);
+            ctx.push_contains_edge(directory_node_id(&parent), clean.to_string());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2549,13 +2588,14 @@ mod tests {
     }
 
     #[test]
-    fn drafts_dir_appears_as_natural_directory_at_workspace_scope() {
-        // Drafts are now real in-root files under the configured drafts
-        // dir, so the drafts directory arrives as a normal
-        // `directory:.Drafts` node anchored by a real `contains` edge
-        // from root via the filesystem / tree layers. No synthetic
-        // edge kind is emitted, and a non-drafts directory scope shows
-        // neither the drafts node nor any edge pointing at it.
+    fn drafts_dir_appears_as_natural_directory() {
+        // Drafts are now real in-root files under the configured drafts dir
+        // and are no longer special-cased — the drafts directory is just
+        // another live directory. It arrives as a normal `directory:.Drafts`
+        // node anchored by a real `contains` edge from root via the
+        // filesystem / tree layers (no synthetic edge kind), and an indexed
+        // draft is anchored in a non-drafts directory scope exactly like any
+        // other out-of-prefix file.
         let (_cfg, _root, workspace) = open_workspace();
         workspace.create_draft_dir("untitled").unwrap();
         workspace
@@ -2616,14 +2656,123 @@ mod tests {
             &mut e2,
         )
         .unwrap();
+        // The indexed draft is a workspace-wide node, so it is anchored into
+        // a non-drafts directory scope like any other out-of-prefix file: the
+        // `.Drafts` directory appears, carried only by `contains` edges (no
+        // special-casing keeps it out, and no synthetic edge kind leaks in).
         assert!(
-            !has_drafts(&dir),
-            "drafts directory must NOT appear in a non-drafts directory scope"
+            has_drafts(&dir),
+            "drafts directory should appear in a non-drafts directory scope, like any directory"
         );
         assert!(
-            !dir.edges.iter().any(|e| e.target == drafts_id),
-            "no edge to the drafts node should leak into a directory-scoped graph"
+            dir.edges
+                .iter()
+                .any(|e| e.target == drafts_id && e.kind == "contains"),
+            "drafts directory must be anchored by a `contains` edge in directory scope"
         );
+        assert!(
+            dir.edges
+                .iter()
+                .filter(|e| e.target == drafts_id)
+                .all(|e| e.kind == "contains"),
+            "drafts node must carry only `contains` edges in directory scope"
+        );
+    }
+
+    #[test]
+    fn directory_scope_anchors_every_out_of_prefix_file_no_loose_nodes() {
+        // Folder-ON (directory scope) seeds a file node for every indexed file
+        // workspace-wide, but the tree spine is prefix-scoped — so before the
+        // backfill every file OUTSIDE the scoped subtree had a node with no
+        // `contains` ancestor chain and the frontend rendered it edgeless.
+        // The backfill anchors every included file to its folder ancestors
+        // (the "no file renders edgeless" invariant), mirroring Workspace
+        // scope. This holds for out-of-prefix files whether or not anything
+        // links them.
+        let (_cfg, _root, workspace) = open_workspace();
+        workspace.write_text("notes/a.md", "# A\n").unwrap();
+        // A file two dirs deep in another subtree.
+        workspace
+            .write_text("gateway/deep/ref.md", "# Ref\n")
+            .unwrap();
+        // An UNREFERENCED file in yet another subtree — anchored all the same.
+        workspace
+            .write_text("other/orphan.md", "# Orphan\n")
+            .unwrap();
+        workspace.index_file("notes/a.md").unwrap();
+        workspace.index_file("gateway/deep/ref.md").unwrap();
+        workspace.index_file("other/orphan.md").unwrap();
+
+        let mut emit = None;
+        let dir = build_graph_view(
+            workspace,
+            GraphParams {
+                scope: GraphScope::Directory,
+                path: "notes".to_string(),
+                depth: 1,
+            },
+            &mut emit,
+        )
+        .unwrap();
+
+        // The deep out-of-prefix file is fully anchored:
+        // root -> directory:gateway -> directory:gateway/deep -> file.
+        for (source, target) in [
+            (String::new(), directory_node_id("gateway")),
+            (
+                directory_node_id("gateway"),
+                directory_node_id("gateway/deep"),
+            ),
+            (
+                directory_node_id("gateway/deep"),
+                "gateway/deep/ref.md".to_string(),
+            ),
+        ] {
+            assert!(
+                dir.edges
+                    .iter()
+                    .any(|e| e.source == source && e.target == target && e.kind == "contains"),
+                "missing `contains` spine edge {source:?} -> {target:?} (out-of-prefix file renders loose)"
+            );
+        }
+        // The unreferenced file is anchored too — anchoring is not gated on
+        // being a link/mention/tag target.
+        assert!(
+            dir.edges
+                .iter()
+                .any(|e| e.source == directory_node_id("other")
+                    && e.target == "other/orphan.md"
+                    && e.kind == "contains"),
+            "an unreferenced out-of-prefix file must still be anchored"
+        );
+
+        // Invariant: every non-missing file node is reachable from the
+        // workspace root over `contains` edges (the frontend
+        // `pullContainsSpine` "no file renders edgeless" contract).
+        let parent_of: std::collections::HashMap<&str, &str> = dir
+            .edges
+            .iter()
+            .filter(|e| e.kind == "contains")
+            .map(|e| (e.target.as_str(), e.source.as_str()))
+            .collect();
+        for node in &dir.nodes {
+            let GraphNodeView::File { path, missing, .. } = node else {
+                continue;
+            };
+            if *missing {
+                continue;
+            }
+            let mut cur = path.as_str();
+            let mut hops = 0;
+            while !cur.is_empty() {
+                let Some(parent) = parent_of.get(cur) else {
+                    panic!("file node {path:?} is edgeless (no `contains` parent for {cur:?})");
+                };
+                cur = parent;
+                hops += 1;
+                assert!(hops < 64, "contains chain for {path:?} did not reach root");
+            }
+        }
     }
 
     #[test]
