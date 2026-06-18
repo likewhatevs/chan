@@ -638,4 +638,65 @@ mod tests {
         assert!(conns.remove("ds1").is_some());
         assert!(!conns.is_connected("ds1"));
     }
+
+    /// Issue 2a guard (@@Alex-mandated): the connect-flow auto-terminal mount
+    /// (`open_terminal_with_label`) must carry a JSON body so the devserver's
+    /// `Json<OpenTerminalRequest>` endpoint accepts it (200) — the old body-less
+    /// POST sent no `Content-Type: application/json` and axum's `Json` extractor
+    /// rejected it 415, breaking the connect flow. The loopback handler uses the
+    /// SAME strict `Json` extractor the real endpoint does, so a regression back
+    /// to a body-less / content-type-less request fails this test.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn open_terminal_with_label_request_is_accepted_by_a_strict_json_endpoint() {
+        use axum::{routing::post, Json, Router};
+
+        #[derive(serde::Deserialize)]
+        struct Req {
+            label: String,
+        }
+        #[derive(serde::Serialize)]
+        struct Resp {
+            prefix: String,
+            token: String,
+        }
+        async fn handler(Json(req): Json<Req>) -> Json<Resp> {
+            Json(Resp {
+                prefix: format!("/api/term-{}", req.label),
+                token: "tok_fake".to_string(),
+            })
+        }
+
+        let app = Router::new().route("/api/devserver/terminals", post(handler));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let conn = DevserverConn {
+            host: "127.0.0.1".into(),
+            port,
+            token: "dt".into(),
+        };
+        let url = open_terminal_with_label(&conn, "guard")
+            .await
+            .expect("labeled terminal POST must be accepted (not HTTP 415)");
+        assert!(url.contains("/api/term-guard/"), "{url}");
+        assert!(url.contains("t=tok_fake"), "{url}");
+
+        // Adversarial half: a body-less POST (the old connect-flow bug) IS
+        // rejected 415 by the same endpoint — so the 200 above is the labeled
+        // JSON body's doing, not a lax mock.
+        let bodyless = http_client()
+            .unwrap()
+            .post(format!("http://127.0.0.1:{port}/api/devserver/terminals"))
+            .bearer_auth("dt")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            bodyless.status(),
+            reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+    }
 }
