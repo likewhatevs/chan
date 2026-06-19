@@ -56,7 +56,7 @@ pub fn spawn(app: AppHandle, registry_path: &Path) -> notify::Result<Debouncer<i
 
     // Best-effort: if the chan config dir doesn't exist yet, create
     // it so we have something to watch. chan will populate the file
-    // on first `chan add`. Failure here is non-fatal.
+    // on first `chan workspace add`. Failure here is non-fatal.
     let _ = std::fs::create_dir_all(&dir);
 
     let mut debouncer = new_debouncer(

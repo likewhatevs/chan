@@ -449,7 +449,7 @@ async fn add_workspace(
     };
     // Route through the SINGLE embedded Library so the in-memory
     // registry the host opens workspaces against learns about the new
-    // row immediately. A subprocess `chan add` would mutate only
+    // row immediately. A subprocess `chan workspace add` would mutate only
     // the on-disk registry, leaving the host's boot-time snapshot
     // stale, which is the "workspace not registered" bug this replaces.
     let library = embedded.library().clone();
@@ -2359,7 +2359,7 @@ fn main() {
                     emit_system_notice(
                         app.handle(),
                         "warning",
-                        "Auto-refresh disabled; close and reopen the window after running chan add.",
+                        "Auto-refresh disabled; close and reopen the window after running chan workspace add.",
                     );
                 }
             }
