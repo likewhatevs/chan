@@ -992,6 +992,23 @@ impl FsGraphWalker {
                 }
             }
             Some(frames) => {
+                // Re-emit the ancestor spine down to the deepest in-progress
+                // frame so THIS resume page is self-consistent. The page emits
+                // `contains` edges for the resumed directories' children
+                // (`parent_rel -> child`); without re-emitting the spine, those
+                // parent directory nodes (and the chain up to the root) live
+                // only on the page that first descended into them, so a resume
+                // page carries parent-less edges. The DFS stack is a single
+                // nested path, so its deepest frame's rel encodes every
+                // ancestor — `emit_ancestor_chain` re-emits each as a node plus
+                // the `contains` edges between them. (Idempotent within the
+                // whole walk: nodes/edges dedup, so the union still equals
+                // `build_fs_graph`; this only makes each page self-describing,
+                // matching the `None` branch's spine emission at `:985`.)
+                if let Some(deepest) = frames.last() {
+                    let deepest_rel = deepest.r.clone();
+                    self.emit_ancestor_chain(&deepest_rel);
+                }
                 for cf in frames {
                     let dir_abs = self.root.join(&cf.r);
                     if let Some(mut frame) = self.open_dir_frame(&cf.r, &dir_abs, cf.l) {
@@ -2015,6 +2032,60 @@ mod tests {
                 assert!(batches > 1, "depth {depth} should need multiple batches");
             }
         }
+    }
+
+    #[test]
+    fn every_paged_batch_is_self_describing() {
+        // Each page must be a valid subgraph on its own: every `contains`
+        // edge's parent (source) directory is a node IN THE SAME page. Before
+        // the resume branch re-emitted the ancestor spine, resume pages whose
+        // walk was mid-way down a directory (e.g. inside `dir0/sub`) carried
+        // edges like `dir0/sub -> deep.md` with no `dir0/sub` node — masked
+        // only by the client's cumulative merge. The whole-tree walk at a tiny
+        // batch forces several resume pages with deep in-progress frames.
+        let (_cfg, _root, ws) = seed_paged_workspace();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0usize;
+        let mut resume_pages = 0usize;
+        loop {
+            let resp = build_fs_graph_paged(
+                &ws,
+                &FsGraphParams {
+                    scope: FsGraphScope::Directory,
+                    path: String::new(),
+                    depth: 6,
+                    cursor: cursor.clone(),
+                    limit: Some(2),
+                },
+            )
+            .expect("paged batch");
+            pages += 1;
+            if cursor.is_some() {
+                resume_pages += 1;
+            }
+            let ids: std::collections::BTreeSet<&str> =
+                resp.nodes.iter().map(|n| n.id.as_str()).collect();
+            for e in &resp.edges {
+                if e.kind == "contains" {
+                    assert!(
+                        ids.contains(e.source.as_str()),
+                        "page {pages} has a parent-less contains edge: {} -> {} \
+                         (source not a node in this page)",
+                        e.source,
+                        e.target,
+                    );
+                }
+            }
+            if resp.done {
+                break;
+            }
+            cursor = resp.cursor.clone();
+            assert!(pages < 10_000, "paged walk failed to terminate");
+        }
+        assert!(
+            resume_pages > 0,
+            "the walk must exercise resume pages (the branch under test)"
+        );
     }
 
     #[test]
