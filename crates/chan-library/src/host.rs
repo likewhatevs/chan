@@ -804,6 +804,7 @@ fn wait_for_workspace_release(weak: &Weak<Workspace>, lock_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tenant::WorkspaceCellHandle;
     use crate::terminal_sessions::CreateOptions;
     use axum::body::to_bytes;
     use portable_pty::PtySize;
@@ -829,6 +830,124 @@ mod tests {
         serde_json::from_slice(&bytes).expect("json response")
     }
 
+    /// A minimal `TenantBuilder` standing in for chan-server's route layer:
+    /// a tiny router (`/api/workspace` echoes the root, `/api/build-info` 200,
+    /// nothing else → 404), a real terminal registry, and a fake cell that
+    /// holds the real `Arc<Workspace>` so the flock-release lifecycle behaves
+    /// like the route layer's. Lets the host's dispatch + teardown be unit-
+    /// tested in isolation.
+    struct FakeBuilder;
+
+    fn fake_builder() -> Arc<dyn TenantBuilder> {
+        Arc::new(FakeBuilder)
+    }
+
+    fn fake_registry() -> Arc<crate::terminal_sessions::Registry> {
+        Arc::new(crate::terminal_sessions::Registry::new(
+            crate::terminal_sessions::RegistryConfig {
+                workspace_root: PathBuf::from("/"),
+                mcp_socket_path: None,
+                control_socket_path: None,
+                terminal: crate::config::TerminalConfig::default(),
+            },
+        ))
+    }
+
+    fn fake_artifacts(app: Router, cell: Arc<dyn WorkspaceCellHandle>) -> TenantArtifacts {
+        let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+        TenantArtifacts {
+            app,
+            token: None,
+            terminal_sessions: fake_registry(),
+            shutdown_tx: Arc::new(shutdown_tx),
+            prefix: Arc::new(RwLock::new(String::new())),
+            window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
+            cell,
+            keepalive: Box::new(()),
+        }
+    }
+
+    fn nest(prefix: &str, inner: Router) -> Router {
+        if prefix.is_empty() {
+            inner
+        } else {
+            Router::new().nest(prefix, inner)
+        }
+    }
+
+    struct FakeWorkspaceCell(std::sync::Mutex<Option<Arc<Workspace>>>);
+    impl WorkspaceCellHandle for FakeWorkspaceCell {
+        fn workspace(&self) -> Option<Arc<Workspace>> {
+            self.0.lock().ok()?.clone()
+        }
+        fn cancel_reindex(&self) {}
+        fn clear(&self) -> Option<(Weak<Workspace>, PathBuf)> {
+            let ws = self.0.lock().ok()?.take()?;
+            let lock_dir = ws.paths().lock.clone();
+            let weak = Arc::downgrade(&ws);
+            drop(ws);
+            Some((weak, lock_dir))
+        }
+    }
+
+    struct FakeTerminalCell;
+    impl WorkspaceCellHandle for FakeTerminalCell {
+        fn workspace(&self) -> Option<Arc<Workspace>> {
+            None
+        }
+        fn cancel_reindex(&self) {}
+        fn clear(&self) -> Option<(Weak<Workspace>, PathBuf)> {
+            None
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TenantBuilder for FakeBuilder {
+        async fn build_workspace(
+            &self,
+            _library: Library,
+            workspace: Arc<Workspace>,
+            config: &ServeConfig,
+            _desktop: DesktopBridge,
+            _unserve: UnserveMode,
+        ) -> Result<TenantArtifacts, Error> {
+            let root = workspace.root().to_string_lossy().to_string();
+            let inner = Router::new()
+                .route(
+                    "/api/workspace",
+                    axum::routing::get(move || {
+                        let root = root.clone();
+                        async move { axum::Json(serde_json::json!({ "root": root })) }
+                    }),
+                )
+                .route(
+                    "/api/build-info",
+                    axum::routing::get(|| async { StatusCode::OK }),
+                );
+            let cell: Arc<dyn WorkspaceCellHandle> =
+                Arc::new(FakeWorkspaceCell(std::sync::Mutex::new(Some(workspace))));
+            Ok(fake_artifacts(nest(&config.prefix, inner), cell))
+        }
+
+        async fn build_terminal(
+            &self,
+            _library: Library,
+            config: &ServeConfig,
+            _desktop: DesktopBridge,
+            _unserve: UnserveMode,
+            command: Option<String>,
+            _session_dir: Option<PathBuf>,
+        ) -> Result<TenantArtifacts, Error> {
+            let inner = Router::new().route(
+                "/api/build-info",
+                axum::routing::get(|| async { StatusCode::OK }),
+            );
+            let artifacts = fake_artifacts(nest(&config.prefix, inner), Arc::new(FakeTerminalCell));
+            artifacts.terminal_sessions.set_default_command(command);
+            Ok(artifacts)
+        }
+    }
+
     #[tokio::test]
     async fn host_routes_requests_to_the_matching_workspace_prefix() {
         let cfg = tempfile::tempdir().expect("config dir");
@@ -839,7 +958,7 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root_a.path()).expect("register a");
         lib.register_workspace(root_b.path()).expect("register b");
-        let host = Arc::new(WorkspaceHost::new(lib.clone()));
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
 
         host.open_registered_workspace(root_a.path(), serve_config("/a"))
             .await
@@ -885,7 +1004,7 @@ mod tests {
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
-        let host = Arc::new(WorkspaceHost::new(lib.clone()));
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
         host.open_registered_workspace(root.path(), serve_config("/workspace"))
             .await
             .expect("open");
@@ -911,7 +1030,7 @@ mod tests {
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
-        let host = Arc::new(WorkspaceHost::new(lib.clone()));
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
 
         host.open_registered_workspace(root.path(), serve_config("/first"))
             .await
@@ -934,7 +1053,7 @@ mod tests {
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
         host.open_registered_workspace(root.path(), serve_config("/ws"))
             .await
             .expect("open");
@@ -964,7 +1083,7 @@ mod tests {
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
         host.open_registered_workspace(root.path(), serve_config("/ws"))
             .await
             .expect("open");
@@ -992,7 +1111,7 @@ mod tests {
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
-        let host = Arc::new(WorkspaceHost::new(lib.clone()));
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
         host.open_registered_workspace(root.path(), serve_config("/workspace"))
             .await
             .expect("open");
@@ -1031,7 +1150,7 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(fresh.path())
             .expect("register fresh dir");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
 
         let hosted = host
             .open_registered_workspace(fresh.path(), serve_config("/fresh"))
@@ -1047,7 +1166,7 @@ mod tests {
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
 
         let first = host
             .open_or_get_registered_workspace(root.path(), serve_config("/first"))
@@ -1085,7 +1204,7 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(a.path()).expect("register a");
         lib.register_workspace(b.path()).expect("register b");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
 
         host.open_or_get_registered_workspace(a.path(), serve_config("/shared"))
             .await
@@ -1106,7 +1225,7 @@ mod tests {
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root.path()).expect("register");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
 
         // Two callers race the same fresh root. The registration lock
         // serializes them: one mounts, the other observes that mount in the
@@ -1128,7 +1247,7 @@ mod tests {
     async fn open_terminal_session_mounts_slim_tenant() {
         let cfg = tempfile::tempdir().expect("config dir");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
 
         // No workspace path, no registration: a terminal tenant is
         // backed by nothing but the embedded host.
@@ -1174,7 +1293,7 @@ mod tests {
     async fn open_terminal_session_rejects_duplicate_prefix() {
         let cfg = tempfile::tempdir().expect("config dir");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
 
         host.open_terminal_session(serve_config("/terminal-1"))
             .await
@@ -1191,7 +1310,7 @@ mod tests {
     async fn open_terminal_session_with_command_mounts_tenant() {
         let cfg = tempfile::tempdir().expect("config dir");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
 
         // A command-carrying terminal tenant mounts like a default-shell
         // one; the command becomes the tenant's PTY default (the running of
@@ -1221,7 +1340,7 @@ mod tests {
     async fn terminal_tenant_scrollback_empty_when_no_output() {
         let cfg = tempfile::tempdir().expect("config dir");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
 
         // No tenant mounted at the prefix -> empty (no panic).
         assert!(host.terminal_tenant_scrollback("/absent").is_empty());
@@ -1239,7 +1358,7 @@ mod tests {
     async fn close_terminal_tenant_reaps_ptys_and_frees_the_prefix() {
         let cfg = tempfile::tempdir().expect("config dir");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
 
         host.open_terminal_session(serve_config("/control"))
             .await
@@ -1300,7 +1419,7 @@ mod tests {
     async fn terminal_tenant_last_exit_reports_the_script_exit_code() {
         let cfg = tempfile::tempdir().expect("config dir");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
         host.open_terminal_session(serve_config("/ctl"))
             .await
             .expect("open terminal tenant");
@@ -1359,7 +1478,7 @@ mod tests {
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         lib.register_workspace(root_a.path()).expect("register a");
         lib.register_workspace(root_b.path()).expect("register b");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
         host.open_registered_workspace(root_a.path(), serve_config("/a"))
             .await
             .expect("open a");

@@ -1319,7 +1319,7 @@ mod tests {
     /// store under `home`.
     fn test_state(home: &Path, addr: SocketAddr) -> Arc<DevserverState> {
         let lib = Library::open_at(home.join("config.toml")).expect("library");
-        let host = Arc::new(WorkspaceHost::new(lib));
+        let host = Arc::new(WorkspaceHost::new(lib, crate::route_builder()));
         Arc::new(DevserverState {
             host,
             addr,
@@ -1508,35 +1508,10 @@ mod tests {
         assert!(!state.forget_workspace(&prefix).expect("already removed"));
     }
 
-    #[tokio::test]
-    async fn list_tenant_windows_surfaces_persisted_windows() {
-        // L10-server: a saved (persisted) window in a mounted tenant is
-        // enumerated cross-tenant — saved, not connected (no live client),
-        // keyed by the tenant prefix. This is the input the
-        // `GET /api/devserver/windows` aggregate folds into DevserverWindow.
-        let home = tempfile::tempdir().expect("home");
-        let ws = tempfile::tempdir().expect("workspace");
-        std::fs::write(ws.path().join("a.md"), "# A\n").unwrap();
-        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let state = test_state(home.path(), addr);
-
-        let prefix = state.register_workspace(ws.path()).await.expect("mount");
-        // Persist a window blob in the tenant (as a `PUT /api/session?w=` would).
-        let workspace = state.host.live_workspace(ws.path()).expect("live tenant");
-        workspace
-            .put_session("workspace-test-1", br#"{"panes":[]}"#)
-            .expect("save blob");
-
-        let per_tenant = state.host.list_tenant_windows();
-        let (owner_prefix, win) = per_tenant
-            .iter()
-            .flat_map(|(p, windows)| windows.iter().map(move |w| (p, w)))
-            .find(|(_, w)| w.id == "workspace-test-1")
-            .expect("persisted window is enumerated");
-        assert_eq!(owner_prefix, &prefix, "keyed by the owning tenant prefix");
-        assert!(win.saved, "it has a durable blob");
-        assert!(!win.connected, "no live client attached");
-    }
+    // The per-tenant window enumeration this test covered (list_tenant_windows
+    // → GET /api/devserver/windows) is retired: the library window feed
+    // (Seam W, GET /api/library/windows) is the source of truth, tested with
+    // the window registry.
 
     #[tokio::test]
     async fn off_state_persists_to_store() {
