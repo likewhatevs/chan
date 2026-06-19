@@ -14,6 +14,7 @@ mod registry;
 mod serve;
 mod watcher;
 mod window_ops;
+mod window_watcher;
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
