@@ -568,19 +568,43 @@ impl WorkspaceHost {
         Ok(row.to_record(library_id, prefix, token, connected))
     }
 
-    /// Discard a window: drop its registry row and fire the watch. Returns
-    /// whether a row existed (a `DELETE` handler maps `false` to 404). Reaping
-    /// the window's PTYs is the tenant-side follow-up that lands with the D-W3
-    /// terminal-tenant wiring (no `terminal_sessions` reap path exists yet).
+    /// Discard a window: drop its registry row, reap its terminal sessions, and
+    /// fire the watch. Returns whether a row existed (a `DELETE` handler maps
+    /// `false` to 404). The reap is the L5 "discard ⇒ reap" contract: it frees
+    /// the fds a busy detached session would otherwise keep alive. A terminal
+    /// window's sessions reap once @@Desktop's D-W3 terminal tenant is wired;
+    /// until then only that tenant is absent, so the reap is simply a no-op for
+    /// terminal windows (workspace windows reap their panes today).
     pub fn discard_window(&self, window_id: &str) -> Result<bool, Error> {
         let registry = self
             .window_registry()
             .ok_or_else(|| Error::Config("window registry not installed".into()))?;
         let removed = registry.remove(window_id);
         if removed {
+            self.reap_window_sessions(window_id);
             self.notify_window_change();
         }
         Ok(removed)
+    }
+
+    /// Reap every terminal session a discarded `window_id` owns, across all
+    /// mounted tenants. The id is library-unique, so only its owning tenant
+    /// reaps anything; the rest are no-ops. The tenant registries are cloned out
+    /// under the lock and reaped after releasing it, so a PTY teardown never
+    /// blocks a concurrent tenant mount/unmount. Returns the count reaped.
+    fn reap_window_sessions(&self, window_id: &str) -> usize {
+        let registries: Vec<Arc<crate::terminal_sessions::Registry>> = match self.workspaces.read()
+        {
+            Ok(workspaces) => workspaces
+                .values()
+                .map(|runtime| runtime.artifacts.terminal_sessions.clone())
+                .collect(),
+            Err(_) => return 0,
+        };
+        registries
+            .iter()
+            .map(|sessions| sessions.forget_window(window_id))
+            .sum()
     }
 
     /// Resolve a persisted window's live `(prefix, token, connected)` from its
