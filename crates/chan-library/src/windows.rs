@@ -1,0 +1,733 @@
+//! The authoritative window set: the library-owned window registry plus its
+//! wire contract.
+//!
+//! The library is the single authority for which windows exist. Every window (a
+//! standalone terminal or a workspace view) is a durable [`PersistedWindow`] in
+//! the [`WindowRegistry`], keyed by a library-minted
+//! [`WindowRecord::window_id`]. Clients (native desktop windows, browser tabs,
+//! `cs`) are pure views: they read the window set ([`WindowSet`]) and reconcile
+//! their surface to it; they never mint an id and never parse one. A client
+//! brings a window into being by asking the library to mint one
+//! ([`CreateWindow`]).
+//!
+//! Durable vs wire split. [`PersistedWindow`] is the durable on-disk row (id,
+//! kind, title, ordinal, workspace path). [`WindowRecord`] is what the HTTP feed
+//! serves: the durable row plus live state assembled at read time (the owning
+//! library's id, the serving tenant's `prefix`/`token`, and the `connected`
+//! presence flag, see [`PersistedWindow::to_record`]). So the registry owns
+//! durability plus the mint; the route layer assembles the live view.
+//!
+//! Id scope. `window_id` is unique within its minting library only: libraries
+//! mint independently, with no global authority. The globally-unique key is the
+//! composite `(library_id, window_id)`, which is what a client aggregating
+//! libraries keys on. Within a library, uniqueness is structural: the mint
+//! re-rolls against the registry, so it never collides regardless of entropy
+//! width.
+
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use rand::RngCore;
+use serde::{Deserialize, Serialize};
+use tokio::sync::Notify;
+
+/// House glyph for a local workspace under `$HOME`. Titles are library-owned, so
+/// this is their single source.
+const ICON_LOCAL_HOME: &str = "\u{1F3E0}"; // house
+/// Glyph for a local workspace outside `$HOME`.
+const ICON_LOCAL_OTHER: &str = "\u{1F5A5}\u{FE0F}"; // desktop computer
+
+// ---------------------------------------------------------------------------
+// The window wire contract. The serde field names ARE the wire, so a one-sided
+// rename compiles green and breaks at runtime; the `*_wire` byte tests pin them.
+// ---------------------------------------------------------------------------
+
+/// Window flavour. `rename_all = "lowercase"` pins the wire tags
+/// `"terminal"` / `"workspace"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowKind {
+    Terminal,
+    Workspace,
+}
+
+/// One library-owned window: the authoritative record every client reconciles
+/// to. Assembled at read time from a [`PersistedWindow`] plus live state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowRecord {
+    /// Library-minted, persisted, opaque, stable across reconnect AND library
+    /// restart. THE reconciliation key. Clients MUST NOT parse it. Unique
+    /// within its minting library; the global key is the composite
+    /// `(library_id, window_id)`.
+    pub window_id: String,
+    /// Owning library identity: `"local"` for the baked-in local-disk library,
+    /// `lib-<hex>` for a devserver. Routes the attach, groups the per-library
+    /// window menu, decorates remote titles, and forms the global key.
+    pub library_id: String,
+    /// Window flavour.
+    pub kind: WindowKind,
+    /// Library-composed and persisted display title, auto-derived (no user
+    /// rename). Local perspective (`🏠 Terminal Window N` /
+    /// `🏠 {path} Window N`); the desktop re-decorates a remote library's rows
+    /// from `kind`/`ordinal`/`workspace_path`, never by parsing this string.
+    pub title: String,
+    /// Per-(kind, workspace/library) "Window N": library-owned, persisted,
+    /// stable. On the wire so a client can recompose the title fully.
+    pub ordinal: u32,
+    /// `kind == Workspace`: the full workspace root path. `None` for a terminal
+    /// window; omitted from the wire when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+    /// Route prefix of the tenant serving this window's content. The client
+    /// attaches under it.
+    pub prefix: String,
+    /// Per-tenant bearer for `prefix`; empty when the owning tenant is off (a
+    /// persisted workspace window whose workspace is not mounted, so the desktop
+    /// turns it on before attaching).
+    pub token: String,
+    /// A durable library record exists (survives client disconnect AND library
+    /// restart). True for every feed row in this model.
+    pub persisted: bool,
+    /// A `/ws` socket tagged with `window_id` is live right now: some client has
+    /// it open (visible OR buried; the server cannot tell those apart).
+    pub connected: bool,
+}
+
+/// The window-set watch frame: a full snapshot pushed on connect and on every
+/// change (mint, discard, bury, connect, disconnect), driven by the registry's
+/// [`WindowRegistry::change_notify`]. A full snapshot rather than a delta keeps
+/// the reconcile idempotent and lets a dropped frame self-heal on the next one.
+/// (The plain list endpoint returns the bare `Vec<WindowRecord>`; the watch
+/// wraps it so a future frame can add sibling fields.)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowSet {
+    pub windows: Vec<WindowRecord>,
+}
+
+/// Body of `POST /api/library/windows`, the mint request. The client supplies
+/// the kind (plus `workspace_path` for a workspace window); the library supplies
+/// the `window_id`, persists the record, and returns the assembled
+/// [`WindowRecord`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateWindow {
+    pub kind: WindowKind,
+    /// Required for `kind == Workspace`; omitted for a terminal window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Durable registry (the source of truth).
+// ---------------------------------------------------------------------------
+
+/// The durable on-disk row for one window: everything that survives a library
+/// restart. The live `prefix`/`token`/`connected` are NOT here; they are
+/// assembled at read time (see [`Self::to_record`]). Field names are the
+/// persisted contract, pinned by `persisted_window_pins_field_names`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistedWindow {
+    pub window_id: String,
+    pub kind: WindowKind,
+    pub title: String,
+    pub ordinal: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+}
+
+impl PersistedWindow {
+    /// Assemble the wire [`WindowRecord`] from this durable row plus the live
+    /// state the route layer holds: the owning `library_id`, the serving
+    /// tenant's `prefix` + `token` (empty when the tenant is off), and whether
+    /// a `/ws` socket is currently `connected`. `persisted` is always true for
+    /// a row that exists in the registry.
+    pub fn to_record(
+        &self,
+        library_id: String,
+        prefix: String,
+        token: String,
+        connected: bool,
+    ) -> WindowRecord {
+        WindowRecord {
+            window_id: self.window_id.clone(),
+            library_id,
+            kind: self.kind,
+            title: self.title.clone(),
+            ordinal: self.ordinal,
+            workspace_path: self.workspace_path.clone(),
+            prefix,
+            token,
+            persisted: true,
+            connected,
+        }
+    }
+}
+
+/// The library's window registry: the durable window set, the mint, and the
+/// change broadcaster. Library-level (one per library; a workspace window and a
+/// terminal window both live here), persisted to `store_path`. Cheap to share
+/// behind an `Arc`; the route layer holds one and reads/writes it per request.
+pub struct WindowRegistry {
+    store_path: PathBuf,
+    windows: Mutex<Vec<PersistedWindow>>,
+    /// Fires on every change (create/remove). The watch endpoint awaits this
+    /// and republishes a fresh [`WindowSet`] snapshot. A consumer must register
+    /// its `notified()` BEFORE taking its snapshot, so a change between snapshot
+    /// and re-await is not missed (`Notify` stores no permit for
+    /// `notify_waiters`).
+    notify: Arc<Notify>,
+}
+
+impl WindowRegistry {
+    /// Open the registry at `store_path`, loading any persisted window set. An
+    /// absent or unreadable store degrades to an empty set rather than refusing
+    /// to start (the windows reappear as clients re-create them).
+    pub fn open(store_path: PathBuf) -> Self {
+        let windows = match std::fs::read(&store_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        Self {
+            store_path,
+            windows: Mutex::new(windows),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Mint and persist a new window of `kind` (with `workspace_path` for a
+    /// workspace window). The library owns the id, the ordinal, and the title;
+    /// returns the durable row. Fires the change notification.
+    pub fn create(&self, kind: WindowKind, workspace_path: Option<String>) -> PersistedWindow {
+        let (row, snapshot) = {
+            let mut windows = self.lock();
+            let window_id = mint_id(&windows);
+            let ordinal = next_ordinal(&windows, kind, workspace_path.as_deref());
+            let title = compose_title(kind, ordinal, workspace_path.as_deref());
+            let row = PersistedWindow {
+                window_id,
+                kind,
+                title,
+                ordinal,
+                workspace_path,
+            };
+            windows.push(row.clone());
+            (row, windows.clone())
+        };
+        self.save_best_effort(&snapshot);
+        self.notify.notify_waiters();
+        row
+    }
+
+    /// Drop the window `window_id` from the durable set: the discard mechanism.
+    /// The policy of when to discard versus bury lives in the route/desktop
+    /// layer. Returns whether a row was removed; fires the change notification
+    /// when so.
+    pub fn remove(&self, window_id: &str) -> bool {
+        let (removed, snapshot) = {
+            let mut windows = self.lock();
+            let before = windows.len();
+            windows.retain(|w| w.window_id != window_id);
+            (windows.len() != before, windows.clone())
+        };
+        if removed {
+            self.save_best_effort(&snapshot);
+            self.notify.notify_waiters();
+        }
+        removed
+    }
+
+    /// Snapshot the durable window set, ordered for stable display: terminals
+    /// before workspaces, then by `(workspace_path, ordinal, window_id)`. The
+    /// route layer maps each row through [`PersistedWindow::to_record`].
+    pub fn snapshot(&self) -> Vec<PersistedWindow> {
+        let mut windows = self.lock().clone();
+        windows.sort_by(|a, b| {
+            kind_order(a.kind)
+                .cmp(&kind_order(b.kind))
+                .then_with(|| a.workspace_path.cmp(&b.workspace_path))
+                .then_with(|| a.ordinal.cmp(&b.ordinal))
+                .then_with(|| a.window_id.cmp(&b.window_id))
+        });
+        windows
+    }
+
+    /// The change-notification handle for the watch endpoint. Register
+    /// `notify.notified()` *before* taking a snapshot to avoid missing a change
+    /// that lands between the snapshot and the next await.
+    pub fn change_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.notify)
+    }
+
+    /// Persist the window set, logging on failure rather than propagating: a
+    /// failed save must not abort a window create/remove (the in-memory set is
+    /// still correct; the on-disk copy catches up on the next change).
+    fn save_best_effort(&self, windows: &[PersistedWindow]) {
+        if let Err(e) = save_atomic(&self.store_path, windows) {
+            tracing::warn!("persisting window registry: {e}");
+        }
+    }
+
+    /// Recover from a poisoned lock instead of propagating the panic: the
+    /// critical sections are simple Vec ops that cannot leave the set
+    /// inconsistent, and registry bookkeeping must never abort a window path.
+    fn lock(&self) -> MutexGuard<'_, Vec<PersistedWindow>> {
+        self.windows.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// Terminals sort before workspaces in the display order.
+fn kind_order(kind: WindowKind) -> u8 {
+    match kind {
+        WindowKind::Terminal => 0,
+        WindowKind::Workspace => 1,
+    }
+}
+
+/// Mint a fresh `w-<16 hex>` id (8 random bytes), re-rolling against the current
+/// set so the per-library id is unique structurally, not reliant on entropy
+/// width. The opaque id never carries meaning; clients treat it as a black box.
+fn mint_id(windows: &[PersistedWindow]) -> String {
+    use std::fmt::Write as _;
+    loop {
+        let mut bytes = [0u8; 8];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        let mut id = String::with_capacity(18);
+        id.push_str("w-");
+        for b in bytes {
+            let _ = write!(id, "{b:02x}");
+        }
+        if !windows.iter().any(|w| w.window_id == id) {
+            return id;
+        }
+    }
+}
+
+/// Lowest-free "Window N" within the same `(kind, workspace_path)` family, so a
+/// closed window's number is reused rather than monotonically climbing (mirrors
+/// the terminal-tab lowest-free numbering). Starts at 1.
+fn next_ordinal(
+    windows: &[PersistedWindow],
+    kind: WindowKind,
+    workspace_path: Option<&str>,
+) -> u32 {
+    let used: HashSet<u32> = windows
+        .iter()
+        .filter(|w| w.kind == kind && w.workspace_path.as_deref() == workspace_path)
+        .map(|w| w.ordinal)
+        .collect();
+    (1u32..)
+        .find(|n| !used.contains(n))
+        .expect("u32 always has a free ordinal for a realistic window count")
+}
+
+/// Compose the persisted, library-perspective title: `🏠 Terminal Window N` for
+/// a terminal; `{icon} {full path} Window N` for a workspace, where the icon is
+/// the house glyph under `$HOME` else the local-other glyph. The remote
+/// decoration (a remote arrow plus the devserver name) is the desktop's job for
+/// a remote library's rows; the library always composes from its own local view.
+fn compose_title(kind: WindowKind, ordinal: u32, workspace_path: Option<&str>) -> String {
+    match kind {
+        WindowKind::Terminal => format!("{ICON_LOCAL_HOME} Terminal Window {ordinal}"),
+        WindowKind::Workspace => {
+            let path = workspace_path.unwrap_or_default();
+            let icon = local_workspace_icon(Path::new(path));
+            format!("{icon} {path} Window {ordinal}")
+        }
+    }
+}
+
+/// 🏠 when `path` is under `$HOME`, else 🖥️ (a local workspace elsewhere).
+fn local_workspace_icon(path: &Path) -> &'static str {
+    match dirs::home_dir() {
+        Some(home) if path.starts_with(&home) => ICON_LOCAL_HOME,
+        _ => ICON_LOCAL_OTHER,
+    }
+}
+
+/// Atomically persist the window set: write a 0600 tmp, fsync it, rename over
+/// the target, then fsync the parent dir. Renaming un-synced bytes is the
+/// partial-write risk on a crash. The dir fsync is inlined (no cross-crate dep)
+/// and best-effort: the rename already committed the data, so a failed dir sync
+/// is durability hardening, not a save failure.
+fn save_atomic(path: &Path, windows: &[PersistedWindow]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let dir = match path.parent() {
+        Some(dir) => {
+            std::fs::create_dir_all(dir)?;
+            dir
+        }
+        None => Path::new("."),
+    };
+    let bytes = serde_json::to_vec_pretty(windows)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(&bytes)?;
+        f.sync_all()?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp, path)?;
+    // Best-effort parent-dir fsync so the new dirent survives a crash too.
+    if let Ok(dir_file) = std::fs::File::open(dir) {
+        let _ = dir_file.sync_all();
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn registry() -> (WindowRegistry, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let reg = WindowRegistry::open(dir.path().join("windows.json"));
+        (reg, dir)
+    }
+
+    // --- wire byte pins -----------------------------------------------------
+
+    #[test]
+    fn window_kind_wire() {
+        assert_eq!(
+            serde_json::to_value(WindowKind::Terminal).unwrap(),
+            json!("terminal")
+        );
+        assert_eq!(
+            serde_json::to_value(WindowKind::Workspace).unwrap(),
+            json!("workspace")
+        );
+        assert_eq!(
+            serde_json::from_value::<WindowKind>(json!("workspace")).unwrap(),
+            WindowKind::Workspace
+        );
+    }
+
+    #[test]
+    fn window_record_terminal_wire() {
+        // Local terminal, live client; `workspace_path` omitted.
+        let rec = WindowRecord {
+            window_id: "w-1a2b3c4d5e6f7081".into(),
+            library_id: "local".into(),
+            kind: WindowKind::Terminal,
+            title: "🏠 Terminal Window 1".into(),
+            ordinal: 1,
+            workspace_path: None,
+            prefix: "/api/terminal".into(),
+            token: "tok_term".into(),
+            persisted: true,
+            connected: true,
+        };
+        let v = serde_json::to_value(&rec).unwrap();
+        assert_eq!(
+            v,
+            json!({
+                "window_id": "w-1a2b3c4d5e6f7081",
+                "library_id": "local",
+                "kind": "terminal",
+                "title": "🏠 Terminal Window 1",
+                "ordinal": 1,
+                "prefix": "/api/terminal",
+                "token": "tok_term",
+                "persisted": true,
+                "connected": true,
+            })
+        );
+        assert_eq!(rec, serde_json::from_value(v).unwrap());
+    }
+
+    #[test]
+    fn window_record_workspace_off_wire() {
+        // Devserver library, workspace OFF (empty token), no client. `title`
+        // carries the library's OWN-perspective 🏠 (the desktop re-decorates).
+        let rec = WindowRecord {
+            window_id: "w-99aa88bb77cc66dd".into(),
+            library_id: "lib-0f1e2d3c4b5a6978".into(),
+            kind: WindowKind::Workspace,
+            title: "🏠 /home/u/notes Window 2".into(),
+            ordinal: 2,
+            workspace_path: Some("/home/u/notes".into()),
+            prefix: "/api/notes-1a2b3c".into(),
+            token: String::new(),
+            persisted: true,
+            connected: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&rec).unwrap(),
+            json!({
+                "window_id": "w-99aa88bb77cc66dd",
+                "library_id": "lib-0f1e2d3c4b5a6978",
+                "kind": "workspace",
+                "title": "🏠 /home/u/notes Window 2",
+                "ordinal": 2,
+                "workspace_path": "/home/u/notes",
+                "prefix": "/api/notes-1a2b3c",
+                "token": "",
+                "persisted": true,
+                "connected": false,
+            })
+        );
+    }
+
+    #[test]
+    fn window_set_wire() {
+        let set = WindowSet {
+            windows: vec![WindowRecord {
+                window_id: "w-1a2b3c4d5e6f7081".into(),
+                library_id: "local".into(),
+                kind: WindowKind::Terminal,
+                title: "🏠 Terminal Window 1".into(),
+                ordinal: 1,
+                workspace_path: None,
+                prefix: "/api/terminal".into(),
+                token: "tok_term".into(),
+                persisted: true,
+                connected: true,
+            }],
+        };
+        let v = serde_json::to_value(&set).unwrap();
+        assert_eq!(v["windows"][0]["window_id"], "w-1a2b3c4d5e6f7081");
+        assert_eq!(v["windows"].as_array().unwrap().len(), 1);
+        assert_eq!(set, serde_json::from_value(v).unwrap());
+    }
+
+    #[test]
+    fn create_window_wire() {
+        let term = CreateWindow {
+            kind: WindowKind::Terminal,
+            workspace_path: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&term).unwrap(),
+            json!({ "kind": "terminal" })
+        );
+        assert_eq!(
+            term,
+            serde_json::from_value(json!({ "kind": "terminal" })).unwrap()
+        );
+
+        let ws = CreateWindow {
+            kind: WindowKind::Workspace,
+            workspace_path: Some("/home/u/notes".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&ws).unwrap(),
+            json!({ "kind": "workspace", "workspace_path": "/home/u/notes" })
+        );
+    }
+
+    #[test]
+    fn persisted_window_pins_field_names() {
+        let p = PersistedWindow {
+            window_id: "w-deadbeefdeadbeef".into(),
+            kind: WindowKind::Workspace,
+            title: "🏠 /n Window 1".into(),
+            ordinal: 1,
+            workspace_path: Some("/n".into()),
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(
+            v,
+            json!({
+                "window_id": "w-deadbeefdeadbeef",
+                "kind": "workspace",
+                "title": "🏠 /n Window 1",
+                "ordinal": 1,
+                "workspace_path": "/n",
+            })
+        );
+        assert_eq!(p, serde_json::from_value(v).unwrap());
+        // A terminal row omits workspace_path.
+        let t = PersistedWindow {
+            window_id: "w-0".into(),
+            kind: WindowKind::Terminal,
+            title: "🏠 Terminal Window 1".into(),
+            ordinal: 1,
+            workspace_path: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&t).unwrap(),
+            json!({ "window_id": "w-0", "kind": "terminal", "title": "🏠 Terminal Window 1", "ordinal": 1 })
+        );
+    }
+
+    // --- mint / ordinal / title --------------------------------------------
+
+    #[test]
+    fn mint_is_w_prefixed_hex_and_unique() {
+        let (reg, _d) = registry();
+        let mut ids = HashSet::new();
+        for _ in 0..50 {
+            let w = reg.create(WindowKind::Terminal, None);
+            assert!(w.window_id.starts_with("w-"), "id: {}", w.window_id);
+            assert_eq!(w.window_id.len(), 18, "w- + 16 hex chars");
+            assert!(
+                w.window_id[2..].chars().all(|c| c.is_ascii_hexdigit()),
+                "id tail must be hex: {}",
+                w.window_id
+            );
+            assert!(ids.insert(w.window_id), "minted a duplicate id");
+        }
+    }
+
+    #[test]
+    fn ordinal_is_lowest_free_per_kind_and_workspace() {
+        let (reg, _d) = registry();
+        // Terminals number independently: 1, 2, 3.
+        let t1 = reg.create(WindowKind::Terminal, None);
+        let t2 = reg.create(WindowKind::Terminal, None);
+        let t3 = reg.create(WindowKind::Terminal, None);
+        assert_eq!((t1.ordinal, t2.ordinal, t3.ordinal), (1, 2, 3));
+
+        // A workspace numbers from 1 again (separate family); a different
+        // workspace path is also its own family.
+        let wa = reg.create(WindowKind::Workspace, Some("/a".into()));
+        let wb = reg.create(WindowKind::Workspace, Some("/b".into()));
+        assert_eq!((wa.ordinal, wb.ordinal), (1, 1));
+        let wa2 = reg.create(WindowKind::Workspace, Some("/a".into()));
+        assert_eq!(wa2.ordinal, 2);
+
+        // Removing terminal #2 frees the slot; the next terminal reuses 2.
+        assert!(reg.remove(&t2.window_id));
+        let t = reg.create(WindowKind::Terminal, None);
+        assert_eq!(t.ordinal, 2, "lowest-free is reused, not monotonic");
+    }
+
+    #[test]
+    fn terminal_title_is_home_terminal_window_n() {
+        let (reg, _d) = registry();
+        let t = reg.create(WindowKind::Terminal, None);
+        assert_eq!(t.title, "🏠 Terminal Window 1");
+    }
+
+    #[test]
+    fn workspace_title_icon_follows_home_prefix() {
+        // Under $HOME → 🏠; elsewhere → 🖥️. Drive both via compose_title so the
+        // test does not depend on a real registry path.
+        let home = dirs::home_dir().expect("home dir");
+        let under_home = home.join("notes");
+        let title = compose_title(WindowKind::Workspace, 1, Some(under_home.to_str().unwrap()));
+        assert!(
+            title.starts_with(ICON_LOCAL_HOME),
+            "under-home → 🏠: {title}"
+        );
+        assert!(title.ends_with("Window 1"));
+
+        let elsewhere = compose_title(WindowKind::Workspace, 3, Some("/opt/elsewhere"));
+        assert_eq!(
+            elsewhere,
+            format!("{ICON_LOCAL_OTHER} /opt/elsewhere Window 3")
+        );
+    }
+
+    // --- persistence / assembly --------------------------------------------
+
+    #[test]
+    fn persist_round_trips_across_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("nested").join("windows.json");
+        let ids: Vec<String> = {
+            let reg = WindowRegistry::open(path.clone());
+            let a = reg.create(WindowKind::Terminal, None);
+            let b = reg.create(WindowKind::Workspace, Some("/n".into()));
+            vec![a.window_id, b.window_id]
+        };
+        // A fresh registry over the same store sees the same windows.
+        let reopened = WindowRegistry::open(path.clone());
+        let snap = reopened.snapshot();
+        assert_eq!(snap.len(), 2);
+        for id in &ids {
+            assert!(snap.iter().any(|w| &w.window_id == id), "missing {id}");
+        }
+        // 0600 + no leftover tmp.
+        assert!(!path.with_extension("json.tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "store must be 0600");
+        }
+    }
+
+    #[test]
+    fn snapshot_orders_terminals_before_workspaces() {
+        let (reg, _d) = registry();
+        reg.create(WindowKind::Workspace, Some("/z".into()));
+        reg.create(WindowKind::Terminal, None);
+        reg.create(WindowKind::Workspace, Some("/a".into()));
+        let kinds: Vec<WindowKind> = reg.snapshot().iter().map(|w| w.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                WindowKind::Terminal,
+                WindowKind::Workspace,
+                WindowKind::Workspace
+            ]
+        );
+        // Workspaces ordered by path (/a before /z).
+        let paths: Vec<Option<String>> = reg
+            .snapshot()
+            .into_iter()
+            .filter(|w| w.kind == WindowKind::Workspace)
+            .map(|w| w.workspace_path)
+            .collect();
+        assert_eq!(paths, vec![Some("/a".into()), Some("/z".into())]);
+    }
+
+    #[test]
+    fn to_record_assembles_live_state() {
+        let p = PersistedWindow {
+            window_id: "w-abc".into(),
+            kind: WindowKind::Workspace,
+            title: "🏠 /n Window 1".into(),
+            ordinal: 1,
+            workspace_path: Some("/n".into()),
+        };
+        let rec = p.to_record("local".into(), "/api/n-0".into(), String::new(), false);
+        assert_eq!(rec.window_id, "w-abc");
+        assert_eq!(rec.library_id, "local");
+        assert_eq!(rec.prefix, "/api/n-0");
+        assert_eq!(rec.token, "");
+        assert!(rec.persisted, "a registry row is always persisted");
+        assert!(!rec.connected);
+        // The durable fields carry through unchanged.
+        assert_eq!(rec.kind, WindowKind::Workspace);
+        assert_eq!(rec.ordinal, 1);
+        assert_eq!(rec.workspace_path.as_deref(), Some("/n"));
+    }
+
+    #[test]
+    fn remove_is_idempotent_and_persists() {
+        let (reg, _d) = registry();
+        let w = reg.create(WindowKind::Terminal, None);
+        assert!(reg.remove(&w.window_id), "first remove drops the row");
+        assert!(reg.snapshot().is_empty());
+        assert!(!reg.remove(&w.window_id), "second remove is a no-op false");
+        assert!(!reg.remove("w-nope"), "unknown id is false");
+    }
+
+    // --- change notification (watch broadcaster contract) ------------------
+
+    #[tokio::test]
+    async fn change_notify_wakes_a_waiter_on_create() {
+        let reg = Arc::new(WindowRegistry::open(
+            tempfile::tempdir().unwrap().path().join("w.json"),
+        ));
+        let notify = reg.change_notify();
+        let waiter = tokio::spawn(async move { notify.notified().await });
+        // Let the spawned task poll `notified()` once so its waiter is parked
+        // before we fire (current-thread runtime makes this deterministic).
+        tokio::task::yield_now().await;
+        reg.create(WindowKind::Terminal, None);
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("change_notify woke the waiter")
+            .expect("waiter task ok");
+    }
+}

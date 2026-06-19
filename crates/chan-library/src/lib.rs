@@ -15,6 +15,7 @@
 pub mod config;
 pub mod terminal_sessions;
 pub mod time;
+pub mod windows;
 
 pub use config::{
     TerminalConfig, TerminalFontChoice, TERMINAL_SCROLLBACK_MB_MAX, TERMINAL_SCROLLBACK_MB_MIN,
