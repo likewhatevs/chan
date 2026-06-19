@@ -22,7 +22,13 @@
 //! per-library watcher wiring (the `WindowFeed` impls, the Tauri `NativeSurface`
 //! impl, and the `watch_loop` spawn) — the `expect(dead_code)` self-clears the
 //! moment that wiring lands.
-#![cfg_attr(not(test), expect(dead_code, reason = "the window-watcher reconcile core + loop; the per-library watcher wiring consumes it"))]
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the window-watcher reconcile core + loop; the per-library watcher wiring consumes it"
+    )
+)]
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -130,10 +136,7 @@ impl WatcherViewState {
     /// Bury a native window (the standalone-terminal close button): the next
     /// reconcile closes it, and it surfaces in the Window menu for reopen.
     pub fn bury(&self, native_label: &str) {
-        self.buried
-            .lock()
-            .unwrap()
-            .insert(native_label.to_string());
+        self.buried.lock().unwrap().insert(native_label.to_string());
         self.changed.notify_one();
     }
 
@@ -181,7 +184,12 @@ pub async fn watch_loop<F, S, C>(
         tokio::pin!(view_changed);
         view_changed.as_mut().enable();
 
-        reconcile(library_id, &feed.snapshot(), &view.buried_snapshot(), &surface);
+        reconcile(
+            library_id,
+            &feed.snapshot(),
+            &view.buried_snapshot(),
+            &surface,
+        );
 
         tokio::select! {
             _ = feed_changed => {}
