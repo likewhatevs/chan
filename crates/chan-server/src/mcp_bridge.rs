@@ -102,10 +102,7 @@ async fn connect_mcp(socket: &Path) -> std::io::Result<transport::Client> {
 }
 
 #[cfg(unix)]
-async fn connect_mcp_in(
-    socket: &Path,
-    fallback_dir: &Path,
-) -> std::io::Result<transport::Client> {
+async fn connect_mcp_in(socket: &Path, fallback_dir: &Path) -> std::io::Result<transport::Client> {
     match transport::connect(socket).await {
         Ok(client) => Ok(client),
         Err(primary) if should_try_mcp_socket_fallback(&primary) => {
