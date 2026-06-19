@@ -1,0 +1,219 @@
+/* Global tokens + the shared layout primitives (groups, rows, buttons) the
+   launcher components key off. The token names mirror the desktop / web app
+   so the launcher reads as the same product; dark is the default, light is
+   opted into via `data-theme="light"` on the document element. */
+
+:root {
+  --bg: #1c1c1e;
+  --bg-card: #232325;
+  --bg-elev: #2a2a2c;
+  --border: #3a3a3c;
+  --text: #f5f5f7;
+  --text-secondary: #98989d;
+  --link: #58a6ff;
+  --btn-bg: #2a2a2c;
+  --btn-border: #3a3a3c;
+  --accent: #3fb950;
+  --brand: #e58c4d;
+  --danger: #f85149;
+}
+
+:root[data-theme="light"] {
+  --bg: #faf9f7;
+  --bg-card: #ffffff;
+  --bg-elev: #ffffff;
+  --border: #e2e0dc;
+  --text: #1a1a1a;
+  --text-secondary: #6a6a6a;
+  --link: #0a64c8;
+  --btn-bg: #f2f1ee;
+  --btn-border: #d9d7d2;
+  --accent: #2da44e;
+  --brand: #c25e16;
+  --danger: #d1242f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+}
+
+/* ---- Buttons ---------------------------------------------------------- */
+
+.btn {
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--btn-border);
+  border-radius: 7px;
+  background: var(--btn-bg);
+  color: var(--text);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--brand);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.btn.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.btn-ghost {
+  padding: 0.3rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- Groups + rows (registry lists and the window feed) --------------- */
+
+.group {
+  margin-top: 1.75rem;
+}
+
+.group-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--bg-card);
+}
+
+.row + .row {
+  border-top: 1px solid var(--border);
+}
+
+.row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.row-name {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.92rem;
+  color: var(--text);
+}
+
+.row-sub {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 26rem;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+/* On/off pill toggle. */
+.pill {
+  min-width: 2.6rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--btn-border);
+  border-radius: 999px;
+  background: var(--btn-bg);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.pill.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* A stored-token chip on a devserver row. */
+.chip {
+  font-size: 0.68rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+/* Connected/detached dot on a window-feed row. */
+.dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  opacity: 0.4;
+}
+
+.dot.live {
+  background: var(--accent);
+  opacity: 1;
+}
+
+/* ---- Window feed ------------------------------------------------------ */
+
+.feed {
+  margin-top: 2.25rem;
+}
+
+.feed-heading {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}

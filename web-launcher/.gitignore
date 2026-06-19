@@ -1,0 +1,11 @@
+# Build artifacts; rebuild via `npm run build`.
+node_modules/
+dist/
+.svelte-kit/
+
+# Vite cache
+.vite/
+
+# Editor swap
+*.swp
+*.swo
