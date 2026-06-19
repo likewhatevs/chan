@@ -153,8 +153,38 @@ impl WorkspaceHost {
     /// (devserver / desktop) builds the registry at its store path and calls
     /// this once after wrapping the host in an `Arc`.
     pub fn install_window_registry(&self, registry: Arc<WindowRegistry>, library_id: String) {
+        // Bridge the registry's own change signal (it fires on every
+        // create/remove) into the aggregate library notify, so the watch feed
+        // pushes on a mint/discard without the caller having to fire it. Skipped
+        // outside a tokio runtime (unit tests don't run the feed); the task
+        // lives for the host's lifetime.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let reg_notify = registry.change_notify();
+            let lib_notify = Arc::clone(&self.library_change_notify);
+            handle.spawn(async move {
+                // Re-arm the registry waiter before fanning out so a change
+                // during the fan-out is not dropped (`Notify` keeps no permit
+                // for `notify_waiters`).
+                let notified = reg_notify.notified();
+                tokio::pin!(notified);
+                loop {
+                    notified.as_mut().await;
+                    notified.set(reg_notify.notified());
+                    lib_notify.notify_waiters();
+                }
+            });
+        }
         let _ = self.window_registry.set(registry);
         let _ = self.library_id.set(library_id);
+    }
+
+    /// Fire the aggregate window-set change signal that the watch feed awaits.
+    /// Called when a tenant mounts/unmounts (a workspace window's liveness in
+    /// [`assemble_window_records`](Self::assemble_window_records) shifts);
+    /// registry mint/discard fire it via the bridge in
+    /// [`install_window_registry`](Self::install_window_registry).
+    fn notify_window_change(&self) {
+        self.library_change_notify.notify_waiters();
     }
 
     /// This library's persisted window registry, once installed.
@@ -335,6 +365,8 @@ impl WorkspaceHost {
             )));
         }
         workspaces.insert(prefix, runtime);
+        drop(workspaces);
+        self.notify_window_change();
         Ok(hosted)
     }
 
@@ -448,6 +480,8 @@ impl WorkspaceHost {
             )));
         }
         workspaces.insert(prefix, runtime);
+        drop(workspaces);
+        self.notify_window_change();
         Ok(hosted)
     }
 
@@ -645,6 +679,7 @@ impl WorkspaceHost {
         if let Some((weak, lock_dir)) = released {
             wait_for_workspace_release(&weak, &lock_dir);
         }
+        self.notify_window_change();
         Ok(true)
     }
 
@@ -692,6 +727,7 @@ impl WorkspaceHost {
         if let Some((weak, lock_dir)) = released {
             wait_for_workspace_release(&weak, &lock_dir);
         }
+        self.notify_window_change();
         Ok(true)
     }
 

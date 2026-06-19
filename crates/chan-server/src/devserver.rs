@@ -48,8 +48,8 @@ use crate::WorkspaceHost;
 use crate::{sanitize_prefix, Error, ServeConfig};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
-use chan_library::{allocate_workspace_prefix, workspace_slug};
 use chan_library::windows::WindowRegistry;
+use chan_library::{allocate_workspace_prefix, workspace_slug};
 
 /// Inputs the CLI resolves for `chan devserver`. The `--systemd`
 /// supervision path is layered on in the CLI around this; the runtime
@@ -672,7 +672,10 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     let windows_store = devserver_config_path()
         .context("resolving devserver windows store path")?
         .with_file_name("windows.json");
-    host.install_window_registry(Arc::new(WindowRegistry::open(windows_store)), library_id.clone());
+    host.install_window_registry(
+        Arc::new(WindowRegistry::open(windows_store)),
+        library_id.clone(),
+    );
     let state = Arc::new(DevserverState {
         host: host.clone(),
         addr: config.addr,
