@@ -984,6 +984,21 @@ pub fn route_builder() -> Arc<dyn chan_library::TenantBuilder> {
     Arc::new(RouteLayer)
 }
 
+/// Install the local-disk library's window registry on chan-desktop's embedded
+/// `host`: the persisted window set at `~/.chan/windows.json`, library id
+/// `"local"`. The window feed has no data until a registry is installed; this is
+/// the desktop's counterpart to the devserver's `~/.chan/devserver/windows.json`.
+pub fn install_local_window_registry(host: &WorkspaceHost) {
+    let store = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".chan")
+        .join("windows.json");
+    host.install_window_registry(
+        Arc::new(chan_library::windows::WindowRegistry::open(store)),
+        "local".to_string(),
+    );
+}
+
 #[async_trait::async_trait]
 impl chan_library::TenantBuilder for RouteLayer {
     async fn build_workspace(

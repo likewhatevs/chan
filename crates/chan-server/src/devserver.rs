@@ -49,6 +49,7 @@ use crate::{sanitize_prefix, Error, ServeConfig};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
 use chan_library::{allocate_workspace_prefix, workspace_slug};
+use chan_library::windows::WindowRegistry;
 
 /// Inputs the CLI resolves for `chan devserver`. The `--systemd`
 /// supervision path is layered on in the CLI around this; the runtime
@@ -68,6 +69,11 @@ pub struct DevserverConfig {
 struct PersistedConfig {
     #[serde(default)]
     devserver_token: String,
+    /// This library's stable identity, minted once (`lib-<16hex>`) and persisted
+    /// so it survives restart. Stamped on every window record (Seam W); a client
+    /// merging several libraries' feeds partitions by it.
+    #[serde(default)]
+    library_id: String,
     /// Registered workspaces, on and off. Replaces the old
     /// `enabled_workspaces: Vec<String>` outright (pre-release: no dual-read).
     /// Renaming the key also lets an old-format file degrade cleanly: serde
@@ -234,6 +240,8 @@ struct DevserverState {
     addr: SocketAddr,
     /// Devserver-level bearer token, distinct from per-workspace tokens.
     token: String,
+    /// This library's stable identity (`lib-<16hex>`), persisted with the token.
+    library_id: String,
     host_label: String,
     /// Registered workspaces by stable prefix, on and off.
     workspaces: Mutex<HashMap<String, WorkspaceRecord>>,
@@ -432,6 +440,7 @@ impl DevserverState {
         };
         let cfg = PersistedConfig {
             devserver_token: self.token.clone(),
+            library_id: self.library_id.clone(),
             workspaces,
             terminals,
         };
@@ -646,15 +655,29 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         persisted.devserver_token = random_token();
     }
     let token = persisted.devserver_token.clone();
+    // Mint a stable per-library id once (`lib-<16hex>`), persisted alongside the
+    // token, so it survives restart and stamps every window record (Seam W).
+    if persisted.library_id.is_empty() {
+        persisted.library_id = format!("lib-{:016x}", rand::random::<u64>());
+    }
+    let library_id = persisted.library_id.clone();
 
     let host = Arc::new(WorkspaceHost::new(library, crate::route_builder()));
     // Opt in to control-socket `chan unserve`: a hosted workspace's tenant can
     // then be unmounted by path (it does not kill the multi-tenant process).
     host.install_self();
+    // Install the persisted window registry (the Seam-W source of truth) beside
+    // the devserver config, so the window feed has data. The window-record
+    // assembly reads it; `library_id` stamps each row.
+    let windows_store = devserver_config_path()
+        .context("resolving devserver windows store path")?
+        .with_file_name("windows.json");
+    host.install_window_registry(Arc::new(WindowRegistry::open(windows_store)), library_id.clone());
     let state = Arc::new(DevserverState {
         host: host.clone(),
         addr: config.addr,
         token: token.clone(),
+        library_id,
         host_label: config.host_label,
         workspaces: Mutex::new(HashMap::new()),
         terminals: Mutex::new(HashMap::new()),
@@ -1054,6 +1077,7 @@ mod tests {
     fn persisted_config_round_trips() {
         let cfg = PersistedConfig {
             devserver_token: "tok".into(),
+            library_id: String::new(),
             workspaces: vec![
                 PersistedWorkspace {
                     path: "/a".into(),
@@ -1285,6 +1309,7 @@ mod tests {
         assert_eq!(store.load().devserver_token, "");
         let cfg = PersistedConfig {
             devserver_token: "abc".into(),
+            library_id: String::new(),
             workspaces: vec![PersistedWorkspace {
                 path: "/x".into(),
                 prefix: "/api/x-0".into(),

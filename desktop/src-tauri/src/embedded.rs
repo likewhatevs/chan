@@ -55,6 +55,9 @@ impl EmbeddedServer {
             bridge,
             chan_server::route_builder(),
         ));
+        // Install the local library's window registry so the window feed has
+        // data (~/.chan/windows.json, library id "local").
+        chan_server::install_local_window_registry(&host);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| format!("binding embedded chan server: {e}"))?;
         listener
