@@ -289,6 +289,19 @@ enum Command {
         #[arg(long, requires = "tunnel_token")]
         tunnel_public: bool,
     },
+    /// Show which registered workspaces are currently being served, and
+    /// by what.
+    ///
+    /// A live writer-lock holder means the workspace is served; the
+    /// holder's pid and start time come from its `writer.lock` record.
+    /// The serving kind (standalone `serve` / chan-desktop / devserver)
+    /// is resolved from the holder's control socket when reachable, and
+    /// shown as `served` otherwise.
+    Ps {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run a headless multi-workspace devserver on one address.
     ///
     /// Aggregates many workspaces behind one port: a `chan serve <path>`
@@ -854,6 +867,7 @@ where
             )
             .await
         }
+        Command::Ps { json } => cmd_ps(json).await,
         Command::Devserver {
             bind,
             port,
@@ -1063,6 +1077,118 @@ fn cmd_completions(shell: Shell) -> Result<()> {
     let bin_name = cmd.get_name().to_string();
     clap_complete::generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
     Ok(())
+}
+
+/// The process serving a workspace, behind its writer-lock holder.
+///
+/// The variants are produced by `serving_kind`'s control-socket identity
+/// round-trip; the allow keeps the full vocabulary (and its stable JSON
+/// labels) while that round-trip is stubbed.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ServedBy {
+    /// A dedicated `chan serve` bound to this one workspace.
+    Standalone,
+    /// chan-desktop's embedded server.
+    Desktop,
+    /// A multi-workspace `chan devserver`.
+    Devserver,
+}
+
+impl ServedBy {
+    fn label(self) -> &'static str {
+        match self {
+            ServedBy::Standalone => "standalone",
+            ServedBy::Desktop => "desktop",
+            ServedBy::Devserver => "devserver",
+        }
+    }
+}
+
+/// One `chan ps` row: a registered workspace and its serving state.
+#[derive(Serialize)]
+struct PsRow {
+    path: String,
+    served: bool,
+    /// `None` when free, or served but the kind is not yet resolved.
+    served_by: Option<ServedBy>,
+    pid: Option<u32>,
+    /// RFC3339 lock-acquisition time of the holder.
+    since: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PsOutput {
+    workspaces: Vec<PsRow>,
+}
+
+/// `chan ps`: report each registered workspace's serving state. Serving
+/// is decided by a live writer-lock holder (`lock::is_free` is false);
+/// the holder's pid + start time come from the `writer.lock` record.
+async fn cmd_ps(json: bool) -> Result<()> {
+    let lib = library()?;
+    let mut rows = Vec::new();
+    for ws in lib.list_workspaces() {
+        let lock_dir = lib.workspace_paths_for(&ws.root_path).map(|p| p.lock);
+        let served = lock_dir
+            .as_deref()
+            .map(|d| !chan_workspace::lock::is_free(d))
+            .unwrap_or(false);
+        let record = if served {
+            lock_dir
+                .as_deref()
+                .and_then(chan_workspace::lock::read_lock_record)
+        } else {
+            None
+        };
+        let pid = record.as_ref().map(|r| r.pid);
+        let since = record.map(|r| r.started_at);
+        let served_by = match (served, pid) {
+            (true, Some(p)) => serving_kind(p).await,
+            _ => None,
+        };
+        rows.push(PsRow {
+            path: ws.root_path.display().to_string(),
+            served,
+            served_by,
+            pid,
+            since,
+        });
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&PsOutput { workspaces: rows })?
+        );
+        return Ok(());
+    }
+    if rows.is_empty() {
+        println!("(no workspaces registered)");
+        return Ok(());
+    }
+    println!("{:<7}  {:<11}  {:>8}  WORKSPACE", "STATE", "BY", "PID");
+    for r in &rows {
+        let state = if r.served { "served" } else { "free" };
+        let by = match r.served_by {
+            Some(k) => k.label(),
+            None if r.served => "served",
+            None => "-",
+        };
+        let pid = r.pid.map_or_else(|| "-".to_string(), |p| p.to_string());
+        println!("{:<7}  {:<11}  {:>8}  {}", state, by, pid, r.path);
+    }
+    Ok(())
+}
+
+/// Resolve the serving kind behind `holder_pid` by reaching its control
+/// socket. The kind comes from a `ControlRequest::Identify` round-trip;
+/// that request is added together with its chan-server handler so the
+/// server's match stays exhaustive, and the call drops in here. Until
+/// then a reachable holder reports no kind and `chan ps` shows `served`.
+async fn serving_kind(holder_pid: u32) -> Option<ServedBy> {
+    let _socket = control_socket_for_pid(holder_pid)?;
+    None
 }
 
 async fn cmd_remove(path: PathBuf) -> Result<()> {
@@ -4185,6 +4311,30 @@ mod tests {
                 argv[1],
             );
         }
+    }
+
+    #[test]
+    fn ps_command_parses() {
+        let cli = Cli::try_parse_from(["chan", "ps", "--json"]).unwrap();
+        match cli.command {
+            Command::Ps { json } => assert!(json),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn served_by_json_labels_are_stable() {
+        // The `chan ps --json` `served_by` strings are a machine contract.
+        assert_eq!(
+            serde_json::to_value(ServedBy::Standalone).unwrap(),
+            "standalone"
+        );
+        assert_eq!(serde_json::to_value(ServedBy::Desktop).unwrap(), "desktop");
+        assert_eq!(
+            serde_json::to_value(ServedBy::Devserver).unwrap(),
+            "devserver"
+        );
+        assert_eq!(ServedBy::Devserver.label(), "devserver");
     }
 
     #[test]
