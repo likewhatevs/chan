@@ -73,34 +73,35 @@ The binary also exposes two hidden MCP subcommands that external agent CLIs invo
 Subcommand surface today:
 
 ```
-chan add PATH [--semantic-search] [--reports]
-chan list [--json]
-chan remove PATH
+chan workspace add PATH [--semantic-search] [--reports]
+chan workspace ls [--json]
+chan workspace rm PATH
+chan workspace index <rebuild|status|set-model|download-model|list-models|
+                     enable-semantic|disable-semantic>
+chan workspace reports <...>        per-workspace code-report toggle
+chan workspace search PATH QUERY [--limit N]
+chan workspace graph PATH [--scope all|file|directory] [--target] [--depth]
+chan workspace status [PATH] [--json]
+chan workspace metadata <...>       metadata archive import/export
+chan workspace contacts import csv FILE --into DIR
 chan serve PATH [--here] [--host|-4|-6] [--port] [--prefix]
            [--timeout] [--no-token] [--no-browser] [--standalone]
            [--no-settings] [--search-aggression]
            [--tunnel-url] [--tunnel-token] [--tunnel-workspace-name]
            [--tunnel-public]
 chan devserver [--bind IP] [--port N] [--systemd] [--launchd]
-chan index <rebuild|status|set-model|download-model|list-models|
-            enable-semantic|disable-semantic>
-chan reports <...>                  per-workspace code-report toggle
-chan search PATH QUERY [--limit N]
-chan graph PATH [--scope all|file|directory] [--target] [--depth]
-chan status [PATH] [--json]
+chan unserve PATH
 chan config <...>                   settings persisted outside the workspace
-chan metadata <...>                 metadata archive import/export
 chan upgrade [-y] [--check] [--version V]
-chan contacts import csv FILE --into DIR
 chan shell <action>                 the `cs` surface (see below)
 chan completions SHELL
 ```
 
-`chan serve` requires an explicit workspace root: with no path it exits with a hint to pass one (there is no default-workspace serving). An explicit path auto-registers, so `chan serve /some/dir` works without a prior `chan add`. On Linux and macOS, if a devserver is running on the box, `chan serve PATH` registers the workspace with it over the discovery socket and exits instead of binding its own listener; `--standalone` forces a standalone bind and skips both the devserver registration and the desktop handoff. `chan devserver` runs the aggregator those registrations attach to (see "Devserver and the multi-workspace host" below).
+`chan serve` requires an explicit workspace root: with no path it exits with a hint to pass one (there is no default-workspace serving). An explicit path auto-registers, so `chan serve /some/dir` works without a prior `chan workspace add`. On Linux and macOS, if a devserver is running on the box, `chan serve PATH` registers the workspace with it over the discovery socket and exits instead of binding its own listener; `--standalone` forces a standalone bind and skips both the devserver registration and the desktop handoff. `chan devserver` runs the aggregator those registrations attach to (see "Devserver and the multi-workspace host" below).
 
 `chan shell` drives the chan window that spawned the current terminal through the server's control socket (`$CHAN_WINDOW_ID` + `$CHAN_CONTROL_SOCKET`). A user-created `cs -> chan` symlink on PATH is the short form: argv[0] rewriting maps `cs <action>` to `chan shell <action>`. The action surface (open, graph, dashboard, terminal, window, ...) lives in chan-shell.
 
-`chan contacts import csv` parses a Google Contacts CSV and writes one markdown note per contact under `--into` (workspace-relative). Notes carry `chan.kind: contact` frontmatter so the graph builder and editor `@` picker can classify them without a separate index. The orchestrator lives on `chan-workspace` (`Workspace::import_contacts`); this binary just plumbs flags and prints a per-row summary table. Re-running either skips existing files (default) or overwrites (`--overwrite`).
+`chan workspace contacts import csv` parses a Google Contacts CSV and writes one markdown note per contact under `--into` (workspace-relative). Notes carry `chan.kind: contact` frontmatter so the graph builder and editor `@` picker can classify them without a separate index. The orchestrator lives on `chan-workspace` (`Workspace::import_contacts`); this binary just plumbs flags and prints a per-row summary table. Re-running either skips existing files (default) or overwrites (`--overwrite`).
 
 ### chan-server
 

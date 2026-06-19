@@ -77,7 +77,7 @@ Embedded terminal tabs start at the workspace root and export Chan MCP discovery
 ## Run
 
 ```bash
-chan add ~/Notes              # register the workspace
+chan workspace add ~/Notes              # register the workspace
 chan serve ~/Notes            # bind 127.0.0.1:8787 and open browser
 ```
 

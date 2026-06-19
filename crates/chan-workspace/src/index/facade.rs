@@ -1,5 +1,5 @@
-// High-level entry point for both the CLI (`chan index`, `chan
-// search`) and the in-process server use cases. Composes BM25,
+// High-level entry point for both the CLI (`chan workspace index`,
+// `chan workspace search`) and the in-process server use cases. Composes BM25,
 // embeddings, and the vector store. Hybrid retrieval (RRF fusion)
 // is gated by the `embeddings` feature; without it the facade
 // answers Hybrid / Semantic queries with `ready: false` and a
@@ -38,7 +38,7 @@ use crate::fs_ops::{self, WalkFilter};
 ///
 /// Aligns with the opt-in model-download design: default
 /// builds ship without the model bundled; users get working BM25
-/// keyword search out of the box; `chan index download-model`
+/// keyword search out of the box; `chan workspace index download-model`
 /// upgrades them to hybrid semantic+BM25 retrieval.
 #[cfg(feature = "embeddings")]
 fn warn_bm25_only_once() {
@@ -46,7 +46,7 @@ fn warn_bm25_only_once() {
     WARNED.call_once(|| {
         tracing::warn!(
             "Embedding model not downloaded; falling back to BM25-only \
-             keyword search. Run `chan index download-model` to enable \
+             keyword search. Run `chan workspace index download-model` to enable \
              semantic search (or rebuild with `--features embed-model`)."
         );
     });
@@ -161,7 +161,7 @@ pub struct Index {
     vectors: VectorStore,
     /// Lazily loaded: opening the embedder mmaps the safetensors
     /// weights and warms the device, and we don't want
-    /// `chan search --mode bm25` to pay that cost. The Mutex
+    /// `chan workspace search --mode bm25` to pay that cost. The Mutex
     /// serializes first-init so two threads racing here can't both
     /// download the model from HuggingFace; once the Arc is
     /// populated, every subsequent call clones it cheaply.
@@ -282,7 +282,7 @@ impl Index {
     /// config write). On change, writes `<index_dir>/config.toml`
     /// atomically so a `chan serve` restart honours the new
     /// preference. The CLI exposes this as
-    /// `chan index enable-semantic` / `disable-semantic`; the API
+    /// `chan workspace index enable-semantic` / `disable-semantic`; the API
     /// exposes it under `/api/index/semantic/{enable,disable}`.
     pub fn set_semantic_enabled(&self, enabled: bool) -> Result<(), IndexError> {
         let to_save = {
@@ -1284,7 +1284,7 @@ pub struct SearchBudget {
 /// Knobs for `Index::build_all`.
 #[derive(Debug, Clone, Copy)]
 pub struct BuildOptions {
-    /// When `false`, skip embeddings (`chan index --mode bm25` and
+    /// When `false`, skip embeddings (`chan workspace index --mode bm25` and
     /// unit tests). Default: `true`.
     pub include_vectors: bool,
     /// Search indexer resource budget. Default: balanced.

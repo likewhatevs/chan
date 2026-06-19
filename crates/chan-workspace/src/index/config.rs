@@ -147,7 +147,7 @@ pub struct IndexConfig {
     /// Per-workspace Hybrid-search opt-in. Default-false so
     /// workspaces stay BM25-only unless
     /// the user explicitly flips it on via
-    /// `chan index enable-semantic` (CLI) or the Settings UI.
+    /// `chan workspace index enable-semantic` (CLI) or the Settings UI.
     /// The query path reads this flag to decide
     /// whether Hybrid is the default mode for the workspace; explicit
     /// `Mode::Hybrid` overrides on `search` still work regardless.
@@ -487,7 +487,7 @@ mod tests {
 
     #[test]
     fn load_works_while_workspace_lock_is_held() {
-        // `chan index status` reads IndexConfig without
+        // `chan workspace index status` reads IndexConfig without
         // opening a Workspace (so no writer lock acquired), which means
         // a running `chan serve` against the workspace no longer blocks
         // the CLI. Pin the invariant: `config::load` doesn't touch

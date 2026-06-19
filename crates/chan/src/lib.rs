@@ -1,46 +1,43 @@
-// chan: notes app with embedded web editor.
+// chan: a Markdown notes workspace with an editor, terminal, file
+// browser, and graph over a folder on disk.
 //
 // This library holds the whole `chan` CLI surface so two binaries can
 // drive it: the standalone `chan` binary (`src/main.rs`, a thin shim
 // calling `run(.., Personality::Standalone)`) and chan-desktop, which
 // dispatches `chan` in-process when invoked through a `~/.local/bin/chan`
 // shim (`Personality::Desktop`). The only behavioural fork between the two
-// is the `Personality` passed to [`run`] — see `cmd_serve` (browser vs
+// is the `Personality` passed to [`run`]: see `cmd_serve` (browser vs
 // desktop handoff) and `chan upgrade` (CLI tarball replace vs desktop
-// updater). Subcommands:
+// updater).
 //
-//   chan add <path>                 register a directory as a chan
+// The top-level surface carries the process-lifecycle and app-level
+// commands; the workspace registry and per-workspace content operations
+// are grouped under `chan workspace`:
+//
+//   chan workspace add <path>       register a directory as a chan
 //                                   workspace in ~/.chan/config.toml
-//   chan list [--json]              list registered workspaces,
+//   chan workspace ls [--json]      list registered workspaces,
 //                                   most-recent first. --json emits
 //                                   a stable machine-readable shape.
-//   chan remove <path>              drop a workspace from the registry
+//   chan workspace rm <path>        drop a workspace from the registry
 //                                   (filesystem contents untouched)
+//   chan workspace index <path>     rebuild the search index + graph
+//   chan workspace search <path> <query>
+//                                   query the BM25 index
+//   chan workspace graph <path>     inspect semantic or filesystem graph edges
+//   chan workspace status [path]    report workspace/index/graph health
+//   chan workspace metadata export PATH ARCHIVE.tar.zst
+//                                   export a workspace's chan metadata
+//   chan workspace contacts import csv FILE --into DIR
+//                                   import a Google Contacts CSV as one
+//                                   markdown note per contact under DIR
 //   chan serve [-4|-6] [--host H --port N]
 //                                   run the HTTP server. Defaults
 //                                   to 127.0.0.1 (loopback only);
 //                                   -6 picks ::1 instead. The
-//                                   embedded web editor talks to
-//                                   this.
-//   chan index <path>               rebuild the search index +
-//                                   graph for the workspace
-//   chan search <path> <query>      query the BM25 index
-//   chan graph <path>               inspect semantic or filesystem graph edges
-//   chan status [path]              report workspace/index/graph health
+//                                   embedded web editor talks to this.
 //   chan config get [KEY]           print a preference value
 //   chan config set KEY=VALUE       update a preference
-//   chan metadata export PATH ARCHIVE.tar.zst
-//                                   export chan metadata for a workspace
-//   chan metadata import PATH ARCHIVE.tar.zst [--rescan]
-//                                   import metadata with SCM guard
-//   chan contacts import csv FILE --into DIR
-//                                   import a Google Contacts CSV
-//                                   as one markdown note per
-//                                   contact under DIR (workspace-
-//                                   relative). Notes carry
-//                                   `chan.kind: contact`
-//                                   frontmatter for graph + @
-//                                   picker classification.
 //
 // Anything that touches the registry / workspace contents goes through
 // `chan_workspace::Library` and `chan_workspace::Workspace` so the library's
@@ -142,37 +139,17 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Register a directory as a chan workspace.
+    /// Manage a chan workspace: register, list, and forget
+    /// workspaces, and drive a workspace's content (index, reports,
+    /// search, graph, status, metadata, contacts).
     ///
-    /// The baseline filesystem walk + markdown read + documentation
-    /// graph + BM25 always runs. Semantic search is an optional
-    /// layer, off by default to keep workspaces lean. chan-reports
-    /// is on by default for new workspaces (`chan reports disable`
-    /// turns it off).
-    Add {
-        path: PathBuf,
-        /// Enable per-workspace semantic search (BGE-small
-        /// dense vectors). Per-workspace footprint; needs the shared
-        /// model (`chan index download-model`). Off by default.
-        #[arg(long = "semantic-search")]
-        semantic_search: bool,
-        /// Force-enable per-workspace chan-reports (language
-        /// detection + SLOC + COCOMO). Per-workspace footprint;
-        /// maintained incrementally from filesystem events. Reports
-        /// are already on by default for new workspaces; the flag
-        /// persists the setting explicitly and runs the kickoff
-        /// scan at add time.
-        #[arg(long = "reports")]
-        reports: bool,
-    },
-    /// List registered workspaces, most-recent first.
-    List {
-        /// Emit machine-readable JSON:
-        /// `{"workspaces":[{path,metadata_key,last_seen_at},...]}`.
-        /// `last_seen_at` is RFC3339 UTC. The text format is
-        /// unchanged when this flag is omitted.
-        #[arg(long)]
-        json: bool,
+    /// Every registry mutation and content operation routes through
+    /// `chan_workspace::Library` / `Workspace` so atomic writes, the
+    /// path sandbox, the special-file refusal, and the cross-process
+    /// writer lock apply uniformly.
+    Workspace {
+        #[command(subcommand)]
+        action: WorkspaceAction,
     },
     /// Drive the current chan window from its terminal (the `cs` alias).
     ///
@@ -198,16 +175,9 @@ enum Command {
         /// Shell to generate completions for.
         shell: Shell,
     },
-    /// Drop a workspace from the registry. Does not delete the
-    /// directory or its content; only forgets it on this machine.
-    ///
-    Remove {
-        #[arg(value_hint = clap::ValueHint::AnyPath)]
-        path: PathBuf,
-    },
     /// Tear down a running `chan serve` for a workspace, releasing its
     /// writer lock, without forgetting the workspace. The inverse of
-    /// `chan serve`. `chan remove` runs this first so it can forget a
+    /// `chan serve`. `chan workspace rm` runs this first so it can forget a
     /// workspace that is currently being served.
     Unserve {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
@@ -351,9 +321,106 @@ enum Command {
         #[arg(long, conflicts_with = "systemd")]
         launchd: bool,
     },
+    /// Read or write settings persisted outside the workspace. Keys use
+    /// the same namespaces as the web Settings overlay where possible
+    /// (`editor.*`, `server.*`).
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+    /// Self-upgrade: read release metadata from chan.app, download
+    /// the selected CLI asset, verify SHA256, and atomically replace
+    /// the running binary. Set `CHAN_UPDATE_CHECK=0` to silence the
+    /// banner that fires on `chan serve` startup.
+    Upgrade {
+        /// Skip the confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Only check + report; do not download or replace the
+        /// binary. Returns success in both directions.
+        #[arg(long)]
+        check: bool,
+        /// Pin a specific version instead of querying latest metadata.
+        /// Pass a bare version, for example `0.14.0`.
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// Internal: run the chan-llm MCP server on stdio against a
+    /// workspace. Spawned by MCP clients so file edits route through
+    /// chan-workspace's gates instead of touching the workspace directly.
+    /// Not for end-user invocation.
+    #[command(name = "__mcp", hide = true)]
+    Mcp {
+        /// Workspace root to expose. Must already be registered.
+        path: PathBuf,
+    },
+    /// Internal: stdio bridge to the MCP server hosted in-process
+    /// by a running `chan serve`. Connects to the per-server Unix-
+    /// domain socket and pipes stdin/stdout through it. Used by the
+    /// external MCP clients so agent child processes can reach the
+    /// live workspace without trying to reopen it (which would deadlock
+    /// against chan-workspace's per-workspace flock). Not for end-user
+    /// invocation.
+    #[command(name = "__mcp-proxy", hide = true)]
+    McpProxy {
+        /// Unix-domain socket path the running chan-server listens
+        /// on. Resolved at request time by chan-server, embedded in
+        /// the gemini settings.json / claude --mcp-config payload.
+        socket: PathBuf,
+    },
+}
+
+/// Subcommands for `chan workspace`. Groups the workspace-registry
+/// operations (add / ls / rm) with the per-workspace content
+/// operations (index / reports / search / graph / status / metadata /
+/// contacts) under one verb, so the top-level surface carries only the
+/// process-lifecycle and app-level commands (serve, devserver,
+/// unserve, config, ...). Mirrors the `IndexAction` / `ReportsAction`
+/// sub-enum pattern.
+#[derive(Subcommand, Debug)]
+enum WorkspaceAction {
+    /// Register a directory as a chan workspace.
+    ///
+    /// The baseline filesystem walk + markdown read + documentation
+    /// graph + BM25 always runs. Semantic search is an optional
+    /// layer, off by default to keep workspaces lean. chan-reports
+    /// is on by default for new workspaces (`chan workspace reports
+    /// disable` turns it off).
+    Add {
+        path: PathBuf,
+        /// Enable per-workspace semantic search (BGE-small
+        /// dense vectors). Per-workspace footprint; needs the shared
+        /// model (`chan workspace index download-model`). Off by
+        /// default.
+        #[arg(long = "semantic-search")]
+        semantic_search: bool,
+        /// Force-enable per-workspace chan-reports (language
+        /// detection + SLOC + COCOMO). Per-workspace footprint;
+        /// maintained incrementally from filesystem events. Reports
+        /// are already on by default for new workspaces; the flag
+        /// persists the setting explicitly and runs the kickoff
+        /// scan at add time.
+        #[arg(long = "reports")]
+        reports: bool,
+    },
+    /// List registered workspaces, most-recent first.
+    Ls {
+        /// Emit machine-readable JSON:
+        /// `{"workspaces":[{path,metadata_key,last_seen_at},...]}`.
+        /// `last_seen_at` is RFC3339 UTC. The text format is
+        /// unchanged when this flag is omitted.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drop a workspace from the registry. Does not delete the
+    /// directory or its content; only forgets it on this machine.
+    Rm {
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        path: PathBuf,
+    },
     /// Rebuild the search index + graph; manage the embedding
     /// model + per-workspace Hybrid-search opt-in. Subcommand-driven
-    /// (rather than a flat `chan index <path>`)
+    /// (rather than a flat `chan workspace index <path>`)
     /// so the model + semantic-toggle controls live alongside
     /// the rebuild action; mirrors `chan config <action>`.
     Index {
@@ -405,57 +472,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Read or write settings persisted outside the workspace. Keys use
-    /// the same namespaces as the web Settings overlay where possible
-    /// (`editor.*`, `server.*`).
-    Config {
-        #[command(subcommand)]
-        action: ConfigAction,
-    },
     /// Import and export chan metadata for a registered workspace.
     Metadata {
         #[command(subcommand)]
         action: MetadataAction,
-    },
-    /// Self-upgrade: read release metadata from chan.app, download
-    /// the selected CLI asset, verify SHA256, and atomically replace
-    /// the running binary. Set `CHAN_UPDATE_CHECK=0` to silence the
-    /// banner that fires on `chan serve` startup.
-    Upgrade {
-        /// Skip the confirmation prompt.
-        #[arg(short = 'y', long)]
-        yes: bool,
-        /// Only check + report; do not download or replace the
-        /// binary. Returns success in both directions.
-        #[arg(long)]
-        check: bool,
-        /// Pin a specific version instead of querying latest metadata.
-        /// Pass a bare version, for example `0.14.0`.
-        #[arg(long)]
-        version: Option<String>,
-    },
-    /// Internal: run the chan-llm MCP server on stdio against a
-    /// workspace. Spawned by MCP clients so file edits route through
-    /// chan-workspace's gates instead of touching the workspace directly.
-    /// Not for end-user invocation.
-    #[command(name = "__mcp", hide = true)]
-    Mcp {
-        /// Workspace root to expose. Must already be registered.
-        path: PathBuf,
-    },
-    /// Internal: stdio bridge to the MCP server hosted in-process
-    /// by a running `chan serve`. Connects to the per-server Unix-
-    /// domain socket and pipes stdin/stdout through it. Used by the
-    /// external MCP clients so agent child processes can reach the
-    /// live workspace without trying to reopen it (which would deadlock
-    /// against chan-workspace's per-workspace flock). Not for end-user
-    /// invocation.
-    #[command(name = "__mcp-proxy", hide = true)]
-    McpProxy {
-        /// Unix-domain socket path the running chan-server listens
-        /// on. Resolved at request time by chan-server, embedded in
-        /// the gemini settings.json / claude --mcp-config payload.
-        socket: PathBuf,
     },
     /// Manage contacts inside a workspace. Today: import contacts from
     /// an external source as one markdown note per contact, with
@@ -505,8 +525,8 @@ enum ImportSource {
         overwrite: bool,
         /// Workspace root (required).
         /// Auto-registers the path if not already known, so
-        /// `chan contacts import csv ... --workspace /some/dir`
-        /// works without a prior `chan add`.
+        /// `chan workspace contacts import csv ... --workspace /some/dir`
+        /// works without a prior `chan workspace add`.
         #[arg(long)]
         workspace: Option<PathBuf>,
     },
@@ -553,7 +573,7 @@ enum MetadataAction {
     Import {
         /// Workspace root.
         path: PathBuf,
-        /// Archive path created by `chan metadata export`.
+        /// Archive path created by `chan workspace metadata export`.
         archive: PathBuf,
         /// Rebuild the workspace index and graph after import.
         #[arg(long)]
@@ -564,7 +584,7 @@ enum MetadataAction {
     },
     /// Print the archive manifest without importing it.
     Inspect {
-        /// Archive path created by `chan metadata export`.
+        /// Archive path created by `chan workspace metadata export`.
         archive: PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -572,19 +592,19 @@ enum MetadataAction {
     },
 }
 
-/// Subcommands for `chan index`. Subcommand-driven (rather than a
-/// flat `chan index <path>`) so the surface
+/// Subcommands for `chan workspace index`. Subcommand-driven (rather than a
+/// flat `chan workspace index <path>`) so the surface
 /// covers rebuild, model download, semantic-search toggle, and
-/// state inspection. Older scripts' flat `chan index <path>` is now
-/// `chan index rebuild <path>`.
+/// state inspection. Older scripts' flat `chan workspace index <path>` is now
+/// `chan workspace index rebuild <path>`.
 ///
-/// Symmetric naming matches the `chan reports
+/// Symmetric naming matches the `chan workspace reports
 /// enable/disable` parallel pair so scripted callers can pattern-
 /// match `<feature> enable / disable` across the surface.
 #[derive(Subcommand, Debug)]
 enum IndexAction {
     /// Rebuild the search index + graph for a workspace. Older
-    /// scripts used a flat `chan index <path>`; the explicit verb keeps it
+    /// scripts used a flat `chan workspace index <path>`; the explicit verb keeps it
     /// alongside the model/semantic actions. Accepts either the
     /// positional `<PATH>` (backwards-compat) OR `--path <PATH>`
     /// (uniform with the other four subcommands so wrappers can
@@ -624,7 +644,7 @@ enum IndexAction {
         model: String,
     },
     /// Flip the workspace's Hybrid-search opt-in. Refuses if the model
-    /// isn't downloaded; the error points at `chan index
+    /// isn't downloaded; the error points at `chan workspace index
     /// download-model`. The flag persists in
     /// `<index_dir>/config.toml` so it survives `chan serve`
     /// restarts.
@@ -651,11 +671,11 @@ enum IndexAction {
     },
 }
 
-/// Subcommands for `chan reports`. Mirrors
+/// Subcommands for `chan workspace reports`. Mirrors
 /// `IndexAction::{EnableSemantic,DisableSemantic}`'s shape so
 /// scripted callers can pattern-match `<feature> enable / disable`
-/// uniformly across the surface (`chan index enable-semantic` /
-/// `chan reports enable`).
+/// uniformly across the surface (`chan workspace index enable-semantic` /
+/// `chan workspace reports enable`).
 ///
 /// Default state for both features is OFF (lean-workspace
 /// baseline); explicit opt-in via this CLI / the
@@ -752,15 +772,44 @@ where
     let verbose = cli.verbose > 0;
 
     match cli.command {
-        Command::Add {
-            path,
-            semantic_search,
-            reports,
-        } => cmd_add(path, semantic_search, reports),
-        Command::List { json } => cmd_list(json),
+        Command::Workspace { action } => match action {
+            WorkspaceAction::Add {
+                path,
+                semantic_search,
+                reports,
+            } => cmd_add(path, semantic_search, reports),
+            WorkspaceAction::Ls { json } => cmd_list(json),
+            WorkspaceAction::Rm { path } => cmd_remove(path).await,
+            WorkspaceAction::Index { action } => cmd_index(action),
+            WorkspaceAction::Reports { action } => cmd_reports(action),
+            WorkspaceAction::Search { path, query, limit } => cmd_search(path, query, limit),
+            WorkspaceAction::Graph {
+                path,
+                scope,
+                target,
+                depth,
+                limit,
+                json,
+            } => cmd_graph(path, scope, target, depth, limit, json),
+            WorkspaceAction::Status { path, json } => cmd_status(path, json),
+            WorkspaceAction::Metadata { action } => cmd_metadata(action),
+            WorkspaceAction::Contacts { action } => match action {
+                ContactsAction::Import { source } => match source {
+                    ImportSource::Csv {
+                        file,
+                        into,
+                        provider,
+                        dry_run,
+                        overwrite,
+                        workspace,
+                    } => {
+                        cmd_contacts_import_csv(file, into, provider, dry_run, overwrite, workspace)
+                    }
+                },
+            },
+        },
         Command::Shell { action } => chan_shell::dispatch(action).await,
         Command::Completions { shell } => cmd_completions(shell),
-        Command::Remove { path } => cmd_remove(path).await,
         Command::Unserve { path } => cmd_unserve(path).await,
         Command::Serve {
             path,
@@ -812,20 +861,7 @@ where
             systemd,
             launchd,
         } => cmd_devserver(bind, port, systemd, launchd).await,
-        Command::Index { action } => cmd_index(action),
-        Command::Reports { action } => cmd_reports(action),
-        Command::Search { path, query, limit } => cmd_search(path, query, limit),
-        Command::Graph {
-            path,
-            scope,
-            target,
-            depth,
-            limit,
-            json,
-        } => cmd_graph(path, scope, target, depth, limit, json),
-        Command::Status { path, json } => cmd_status(path, json),
         Command::Config { action } => cmd_config(action),
-        Command::Metadata { action } => cmd_metadata(action),
         Command::Upgrade {
             yes,
             check,
@@ -848,18 +884,6 @@ where
         },
         Command::Mcp { path } => cmd_mcp(path).await,
         Command::McpProxy { socket } => cmd_mcp_proxy(socket).await,
-        Command::Contacts { action } => match action {
-            ContactsAction::Import { source } => match source {
-                ImportSource::Csv {
-                    file,
-                    into,
-                    provider,
-                    dry_run,
-                    overwrite,
-                    workspace,
-                } => cmd_contacts_import_csv(file, into, provider, dry_run, overwrite, workspace),
-            },
-        },
     }
 }
 
@@ -981,7 +1005,7 @@ fn cmd_add(path: PathBuf, semantic_search: bool, reports: bool) -> Result<()> {
     let lib = library()?;
     let entry = ensure_workspace_registered(&lib, &path)?;
     // Opt-in feature flags. Persist before
-    // boot-time activation so a `chan add --reports` lands the
+    // boot-time activation so a `chan workspace add --reports` lands the
     // flag immediately + the kickoff scan runs once.
     if semantic_search || reports {
         let workspace = lib
@@ -1057,7 +1081,7 @@ async fn cmd_remove(path: PathBuf) -> Result<()> {
         .with_context(|| format!("unregistering {}", path.display()))?;
     if removed {
         // `reset_workspace(Everything)` deliberately preserves the trash +
-        // lock dirs (other callers rely on that). `chan remove` means
+        // lock dirs (other callers rely on that). `chan workspace rm` means
         // "forget everything", so drop the whole metadata dir — trash
         // included — leaving no `~/.chan/workspaces/<key>/` behind.
         if let Some(root) = metadata_root {
@@ -1089,7 +1113,7 @@ enum UnserveOutcome {
     NotServed,
 }
 
-/// Shared by `chan unserve` and `chan remove`. Discovers the process
+/// Shared by `chan unserve` and `chan workspace rm`. Discovers the process
 /// serving `path` from its `writer.lock` record, reaches it over its
 /// control socket, asks it to unserve (the server decides scope: a
 /// dedicated serve exits, a devserver/desktop unmounts just that tenant),
@@ -1330,7 +1354,7 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     let lib = library()?;
     // `chan serve` requires an explicit workspace root; with no path it is
     // a clear error. An explicit path auto-registers, so `chan serve
-    // /some/dir` works without a prior `chan add`.
+    // /some/dir` works without a prior `chan workspace add`.
     let root = path.ok_or_else(|| missing_workspace_path("serve", "chan serve ."))?;
     // Resolve to an absolute path against the CLI's cwd before anything
     // downstream consumes it. The macOS desktop handoff opens the
@@ -2470,7 +2494,7 @@ async fn cmd_upgrade_desktop(_check_only: bool, _version_override: Option<String
     anyhow::bail!("desktop `chan upgrade` is only supported on unix")
 }
 
-/// Dispatch the `chan reports {enable,disable}`
+/// Dispatch the `chan workspace reports {enable,disable}`
 /// subcommands. Parallels `cmd_index_set_semantic`'s shape: open
 /// the workspace (with the path-resolution fallback to the registry's
 /// default), flip the per-workspace `reports_enabled` flag, surface
@@ -2489,9 +2513,9 @@ fn cmd_reports_set(path: Option<PathBuf>, enabled: bool, skip_confirm: bool) -> 
     let lib = library()?;
     let root = path.ok_or_else(|| {
         let (cmd, hint) = if enabled {
-            ("reports enable", "chan reports enable --path .")
+            ("reports enable", "chan workspace reports enable --path .")
         } else {
-            ("reports disable", "chan reports disable --path .")
+            ("reports disable", "chan workspace reports disable --path .")
         };
         missing_workspace_path(cmd, hint)
     })?;
@@ -2547,7 +2571,7 @@ fn cmd_index(action: IndexAction) -> Result<()> {
             // supplied → clean error, not a clap-default panic.
             let resolved = path_flag.or(path).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "`chan index rebuild` requires a workspace path (positional or `--path`)"
+                    "`chan workspace index rebuild` requires a workspace path (positional or `--path`)"
                 )
             })?;
             cmd_index_rebuild(resolved)
@@ -2564,8 +2588,8 @@ fn cmd_index(action: IndexAction) -> Result<()> {
 fn cmd_index_rebuild(path: PathBuf) -> Result<()> {
     let lib = library()?;
     // Idempotent: registering an already-known workspace only touches
-    // last_seen_at. CLI users expect `chan index rebuild /some/path`
-    // to work without a prior `chan add`.
+    // last_seen_at. CLI users expect `chan workspace index rebuild /some/path`
+    // to work without a prior `chan workspace add`.
     ensure_workspace_registered(&lib, &path)?;
     let workspace = lib.open_workspace(&path)?;
 
@@ -2686,7 +2710,7 @@ fn cmd_index_download_model(model: &str) -> Result<()> {
     };
     if chan_workspace::index::config::embedding_model(model).is_none() {
         anyhow::bail!(
-            "unknown embedding model: {model} (run `chan index list-models` to list supported models)"
+            "unknown embedding model: {model} (run `chan workspace index list-models` to list supported models)"
         );
     }
     let cache_dir = global_models_dir();
@@ -2715,14 +2739,14 @@ fn cmd_index_download_model(model: &str) -> Result<()> {
 fn cmd_index_set_model(path: Option<PathBuf>, model: &str) -> Result<()> {
     if chan_workspace::index::config::embedding_model(model).is_none() {
         anyhow::bail!(
-            "unknown embedding model: {model} (run `chan index list-models` to list supported models)"
+            "unknown embedding model: {model} (run `chan workspace index list-models` to list supported models)"
         );
     }
     let lib = library()?;
     let root = path.ok_or_else(|| {
         missing_workspace_path(
             "index set-model",
-            "chan index set-model --path . --model BAAI/bge-small-en-v1.5",
+            "chan workspace index set-model --path . --model BAAI/bge-small-en-v1.5",
         )
     })?;
     let workspace = lib
@@ -2740,7 +2764,7 @@ fn cmd_index_set_model(path: Option<PathBuf>, model: &str) -> Result<()> {
 
 /// Flip the per-workspace Hybrid-search opt-in. On enable,
 /// refuses if the model isn't downloaded; the user is pointed at
-/// `chan index download-model`. On disable, always succeeds (the
+/// `chan workspace index download-model`. On disable, always succeeds (the
 /// underlying `set_semantic_enabled` is idempotent).
 ///
 /// Deliberately does NOT auto-register an unregistered path.
@@ -2755,12 +2779,12 @@ fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
         let (cmd, hint) = if enabled {
             (
                 "index enable-semantic",
-                "chan index enable-semantic --path .",
+                "chan workspace index enable-semantic --path .",
             )
         } else {
             (
                 "index disable-semantic",
-                "chan index disable-semantic --path .",
+                "chan workspace index disable-semantic --path .",
             )
         };
         missing_workspace_path(cmd, hint)
@@ -2774,7 +2798,7 @@ fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
             .context("reading workspace's model id")?;
         if let Err(err) = resolve_model(&model) {
             return Err(anyhow::anyhow!(
-                "{err}\nrun `chan index download-model` to fetch it"
+                "{err}\nrun `chan workspace index download-model` to fetch it"
             ));
         }
     }
@@ -2808,8 +2832,9 @@ fn cmd_index_set_semantic(path: Option<PathBuf>, enabled: bool) -> Result<()> {
 fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     use chan_workspace::index::embeddings::{global_models_dir, repo_dir_name, resolve_model};
     let lib = library()?;
-    let root =
-        path.ok_or_else(|| missing_workspace_path("index status", "chan index status --path ."))?;
+    let root = path.ok_or_else(|| {
+        missing_workspace_path("index status", "chan workspace index status --path .")
+    })?;
     let workspace_paths = lib
         .workspace_paths_for(&root)
         .ok_or_else(|| anyhow::anyhow!(not_a_chan_workspace_hint(&root)))?;
@@ -2872,7 +2897,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
             if model_present {
                 "yes"
             } else {
-                "no (run `chan index download-model`)"
+                "no (run `chan workspace index download-model`)"
             }
         );
         if let Some(bytes) = model_size_bytes {
@@ -2888,7 +2913,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
 
 /// User-facing message when a CLI subcommand is
 /// pointed at a path the registry doesn't know. Surfaces a clear
-/// "not a chan workspace at <path>" hint with a `chan add` next-step
+/// "not a chan workspace at <path>" hint with a `chan workspace add` next-step
 /// instead of leaking the implementation detail (auto-register
 /// side-effect, `WorkspaceNotRegistered(<path>)`, etc.).
 ///
@@ -2899,7 +2924,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
 #[cfg(feature = "embeddings")]
 fn not_a_chan_workspace_hint(root: &std::path::Path) -> String {
     format!(
-        "not a chan workspace at {}; run `chan add {}` first",
+        "not a chan workspace at {}; run `chan workspace add {}` first",
         root.display(),
         root.display()
     )
@@ -2989,7 +3014,7 @@ async fn cmd_mcp_proxy(_socket: PathBuf) -> Result<()> {
 /// route: Hybrid (BM25 + dense, RRF-fused) only when the workspace opted
 /// in via `semantic_enabled` AND the embedding model is on disk;
 /// otherwise BM25. Keeping the CLI and the route on the same rule means
-/// `chan search` and the editor's search panel agree on what ran.
+/// `chan workspace search` and the editor's search panel agree on what ran.
 #[cfg(feature = "embeddings")]
 fn resolve_search_mode(workspace: &chan_workspace::Workspace) -> SearchMode {
     use chan_workspace::index::embeddings::resolve_model;
@@ -3245,7 +3270,7 @@ fn print_filesystem_graph(out: &FsGraphResponse, limit: usize) {
 
 fn cmd_status(path: Option<PathBuf>, json: bool) -> Result<()> {
     let lib = library()?;
-    let root = path.ok_or_else(|| missing_workspace_path("status", "chan status ."))?;
+    let root = path.ok_or_else(|| missing_workspace_path("status", "chan workspace status ."))?;
     ensure_workspace_registered(&lib, &root)?;
     let workspace = lib.open_workspace(&root)?;
     let known = lib
@@ -3789,7 +3814,7 @@ fn cmd_contacts_import_csv(
     let root = workspace.ok_or_else(|| {
         missing_workspace_path(
             "contacts import csv",
-            "chan contacts import csv contacts.csv --workspace .",
+            "chan workspace contacts import csv contacts.csv --workspace .",
         )
     })?;
     if !root.exists() {
@@ -4026,16 +4051,21 @@ mod tests {
 
     #[test]
     fn index_model_subcommands_parse() {
-        let cli = Cli::try_parse_from(["chan", "index", "list-models", "--json"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["chan", "workspace", "index", "list-models", "--json"]).unwrap();
         match cli.command {
-            Command::Index {
-                action: IndexAction::ListModels { json },
+            Command::Workspace {
+                action:
+                    WorkspaceAction::Index {
+                        action: IndexAction::ListModels { json },
+                    },
             } => assert!(json),
             other => panic!("unexpected command: {other:?}"),
         }
 
         let cli = Cli::try_parse_from([
             "chan",
+            "workspace",
             "index",
             "set-model",
             "--path",
@@ -4045,8 +4075,11 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Command::Index {
-                action: IndexAction::SetModel { path, model },
+            Command::Workspace {
+                action:
+                    WorkspaceAction::Index {
+                        action: IndexAction::SetModel { path, model },
+                    },
             } => {
                 assert_eq!(path, Some(PathBuf::from("/tmp/workspace")));
                 assert_eq!(model, "BAAI/bge-base-en-v1.5");
@@ -4059,6 +4092,7 @@ mod tests {
     fn metadata_subcommands_parse() {
         let cli = Cli::try_parse_from([
             "chan",
+            "workspace",
             "metadata",
             "export",
             "/tmp/workspace",
@@ -4066,8 +4100,11 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Command::Metadata {
-                action: MetadataAction::Export { path, archive },
+            Command::Workspace {
+                action:
+                    WorkspaceAction::Metadata {
+                        action: MetadataAction::Export { path, archive },
+                    },
             } => {
                 assert_eq!(path, PathBuf::from("/tmp/workspace"));
                 assert_eq!(archive, PathBuf::from("/tmp/meta.tar.zst"));
@@ -4077,6 +4114,7 @@ mod tests {
 
         let cli = Cli::try_parse_from([
             "chan",
+            "workspace",
             "metadata",
             "import",
             "/tmp/workspace",
@@ -4086,13 +4124,16 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Command::Metadata {
+            Command::Workspace {
                 action:
-                    MetadataAction::Import {
-                        path,
-                        archive,
-                        rescan,
-                        force_scm,
+                    WorkspaceAction::Metadata {
+                        action:
+                            MetadataAction::Import {
+                                path,
+                                archive,
+                                rescan,
+                                force_scm,
+                            },
                     },
             } => {
                 assert_eq!(path, PathBuf::from("/tmp/workspace"));
@@ -4101,6 +4142,49 @@ mod tests {
                 assert!(force_scm);
             }
             other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn workspace_group_renames_list_and_remove() {
+        // The registry verbs live under `chan workspace` now, with
+        // `list` renamed to `ls` and `remove` to `rm`.
+        let cli = Cli::try_parse_from(["chan", "workspace", "ls", "--json"]).unwrap();
+        match cli.command {
+            Command::Workspace {
+                action: WorkspaceAction::Ls { json },
+            } => assert!(json),
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["chan", "workspace", "rm", "/tmp/workspace"]).unwrap();
+        match cli.command {
+            Command::Workspace {
+                action: WorkspaceAction::Rm { path },
+            } => assert_eq!(path, PathBuf::from("/tmp/workspace")),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flat_workspace_subcommands_are_rejected() {
+        // Pre-release reorg: no back-compat aliases. The old flat forms
+        // (`chan add`, `chan list`, `chan index`, ...) must no longer parse
+        // as top-level commands now that they moved under `chan workspace`.
+        for argv in [
+            ["chan", "add"].as_slice(),
+            ["chan", "list"].as_slice(),
+            ["chan", "remove"].as_slice(),
+            ["chan", "index"].as_slice(),
+            ["chan", "search"].as_slice(),
+            ["chan", "metadata"].as_slice(),
+            ["chan", "contacts"].as_slice(),
+        ] {
+            assert!(
+                Cli::try_parse_from(argv).is_err(),
+                "flat `{}` should no longer parse as a top-level command",
+                argv[1],
+            );
         }
     }
 
@@ -4331,8 +4415,8 @@ mod tests {
 
     // --- graph_scope_nodes rejection coverage (syseng-1 residuals 1+2) ---
     //
-    // syseng's hardening pass observed `chan graph --target ../etc/hosts`
-    // and `chan graph --target notes/no-such-file.md` returning
+    // syseng's hardening pass observed `chan workspace graph --target ../etc/hosts`
+    // and `chan workspace graph --target notes/no-such-file.md` returning
     // `1 nodes, 0 edges` with exit 0 instead of a clear rejection.
     // `graph_scope_nodes` now stats the target through chan-workspace and
     // bails on escape / missing / wrong-type; these tests pin that.

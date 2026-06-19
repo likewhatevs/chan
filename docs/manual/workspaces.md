@@ -18,7 +18,7 @@ The command prints a loopback URL with a bearer token. Open that URL in a browse
 
 The workspace path is required: `chan serve` with no path exits with an error asking you to pass one (for example `chan serve .`).
 
-`chan add PATH` registers a workspace without serving it; `chan list` and `chan remove` manage the registry.
+`chan workspace add PATH` registers a workspace without serving it; `chan workspace ls` and `chan workspace rm` manage the registry.
 
 Useful `chan serve` flags:
 

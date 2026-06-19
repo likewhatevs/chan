@@ -1432,7 +1432,7 @@ impl Workspace {
     /// `import_contacts` plus a `ProgressCallback`. Fires one
     /// `ProgressStage::Import` event per contact processed (wrote /
     /// overwrote / skipped / failed), with `current` / `total`
-    /// counting through the input vec. The CLI's `chan contacts
+    /// counting through the input vec. The CLI's `chan workspace contacts
     /// import` uses this to show live status; the no-arg version is
     /// fine for scripted callers that just want the summary.
     pub fn import_contacts_with(
@@ -2321,7 +2321,7 @@ impl Workspace {
 
     /// Flip the per-workspace Hybrid-search preference.
     /// Idempotent — re-setting the current value is a no-op. The
-    /// `chan index enable-semantic` / `disable-semantic` CLI and the
+    /// `chan workspace index enable-semantic` / `disable-semantic` CLI and the
     /// `/api/index/semantic/{enable,disable}` endpoints both route
     /// here; the change persists to `<index_dir>/config.toml` so a
     /// `chan serve` restart honours it.

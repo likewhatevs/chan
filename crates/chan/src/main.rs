@@ -1,4 +1,5 @@
-// chan: notes app with embedded web editor.
+// chan: a Markdown notes workspace with an editor, terminal, file
+// browser, and graph over a folder on disk.
 //
 // The standalone `chan` binary. The whole CLI surface lives in the `chan`
 // library (`src/lib.rs`) so chan-desktop can dispatch `chan` in-process too;

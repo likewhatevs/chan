@@ -10,7 +10,7 @@
 //   fusion     reciprocal-rank fusion (BM25 + semantic)
 //   vectors    on-disk vector store + brute-force cosine
 //
-// All callers (the CLI's `chan index` / `chan search` and the
+// All callers (the CLI's `chan workspace index` / `chan workspace search` and the
 // chan-server background indexer) go through this module so search
 // results match across surfaces.
 

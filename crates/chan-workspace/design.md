@@ -769,7 +769,7 @@ Usage shape:
   - `library.list_workspaces()`, `register_workspace`, `unregister_workspace` for the registry subcommands.
   - `library.open_workspace(root)` to get an `Arc<Workspace>`, then `workspace.search(...)`, `workspace.reindex(...)`, `workspace.list_tree()` for `index` / `search` / direct CLI access.
   - `Library::reset_workspace` for `chan reset`.
-  - `metadata_archive` export / import for `chan metadata`.
+  - `metadata_archive` export / import for `chan workspace metadata`.
 
 ### `chan-server` (HTTP + WebSocket, `crates/chan-server`)
 

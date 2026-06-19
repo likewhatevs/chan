@@ -58,10 +58,10 @@ Per-workspace entry persisted at registration time:
 
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
-| `root_path` | `PathBuf` | required | `chan add <path>` | workspace enumeration / open |
+| `root_path` | `PathBuf` | required | `chan workspace add <path>` | workspace enumeration / open |
 | `metadata_key` | `String` | minted on add | (internal identity) | stable storage key under `~/.chan/workspaces/` |
 | `created_at` | `DateTime<Utc>` | now() on add | (internal) | registry bookkeeping |
-| `last_seen_at` | `DateTime<Utc>` | refreshed on open | `chan list --json` | recency sort |
+| `last_seen_at` | `DateTime<Utc>` | refreshed on open | `chan workspace ls --json` | recency sort |
 | `canonical_path` | transient (`#[serde(skip)]`) | n/a | (internal cache) | symlink-stable comparison |
 
 Workspaces have no persisted display name: the UI titles a workspace by its directory basename, and `PATCH /api/workspace` rejects `name` writes.
@@ -82,12 +82,12 @@ Source: `crates/chan-workspace/src/index/config.rs`.
 | Field | Type | Default | Reachability | Consumers |
 |-------|------|---------|--------------|-----------|
 | `schema_version` | `u32` | `SCHEMA_VERSION` const | (internal) | version-mismatch wipe gate |
-| `model` | `String` | `BAAI/bge-small-en-v1.5` | `chan index download-model --model` | embedder resolver |
+| `model` | `String` | `BAAI/bge-small-en-v1.5` | `chan workspace index download-model --model` | embedder resolver |
 | `chunking` | `Chunking` enum | `Headings` | (internal; no user surface yet) | indexer chunking strategy |
 | `vectors_model` | `Option<String>` | `None` | (internal stamp) | mismatch-wipe trigger on `Index::open` |
 | `vectors_dim` | `Option<u32>` | `None` | (internal stamp) | build-time defensive cross-check |
-| `semantic_enabled` | `bool` | `false` | `chan index enable-semantic/disable-semantic --path <workspace>` + Settings | `Workspace::search` Hybrid default mode |
-| `reports_enabled` | `bool` | `true` on new workspaces; a legacy config.toml omitting the field stays `false` | `chan reports enable/disable --path <workspace> [-y]` + `chan add --reports` | `Workspace::report()` lazy init + `Workspace::boot()` |
+| `semantic_enabled` | `bool` | `false` | `chan workspace index enable-semantic/disable-semantic --path <workspace>` + Settings | `Workspace::search` Hybrid default mode |
+| `reports_enabled` | `bool` | `true` on new workspaces; a legacy config.toml omitting the field stays `false` | `chan workspace reports enable/disable --path <workspace> [-y]` + `chan workspace add --reports` | `Workspace::report()` lazy init + `Workspace::boot()` |
 | `excluded_dirs` | `Vec<String>` | `[]` | `GET`/`PUT /api/index/excluded-dirs` | per-workspace additions to the global walk blocklist (exact basenames, any depth, case-insensitive) |
 | `screensaver_enabled` | `bool` | `false` | `PATCH /api/screensaver/state` + Settings | SPA screensaver overlay arming |
 | `screensaver_timeout_secs` | `u32` | `300` | `PATCH /api/screensaver/state` | SPA client-side idle threshold |

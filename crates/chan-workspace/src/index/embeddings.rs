@@ -64,11 +64,11 @@ pub enum EmbedError {
     /// Model not present on disk and the binary wasn't
     /// built with `--features embed-model`. Surfaces to the CLI / API
     /// layer so the user sees "model not downloaded;
-    /// run `chan index download-model` or enable in Settings"
+    /// run `chan workspace index download-model` or enable in Settings"
     /// instead of a silent hf-hub network fetch.
     #[error(
         "embedding model '{model_id}' not downloaded; expected at {expected_dir:?}. \
-         Run `chan index download-model` or rebuild with `--features embed-model`."
+         Run `chan workspace index download-model` or rebuild with `--features embed-model`."
     )]
     ModelNotDownloaded {
         model_id: String,
@@ -237,7 +237,7 @@ impl Embedder {
     /// `INFER_BATCH`-sized forward passes so the caller can hand us
     /// thousands of chunks at a time without blowing GPU memory.
     /// Caller may pass a cancel flag; checked between sub-batches
-    /// so a `chan index` Ctrl+C interrupts within ~one forward pass
+    /// so a `chan workspace index` Ctrl+C interrupts within ~one forward pass
     /// instead of waiting for the next file boundary.
     pub fn embed_documents<S: AsRef<str> + Send + Sync>(
         &self,
@@ -486,7 +486,7 @@ fn model_files_present(repo_dir: &Path) -> bool {
 /// either source can populate the cache). Returns
 /// `EmbedError::ModelNotDownloaded` otherwise; callers propagate it
 /// to the API / CLI surface so the user sees "model not downloaded;
-/// run `chan index download-model` or rebuild with `--features
+/// run `chan workspace index download-model` or rebuild with `--features
 /// embed-model`".
 ///
 /// Rejects unknown model ids first (mirrors `Embedder::open_once`'s
@@ -601,7 +601,7 @@ mod tests {
         // Default-build runtime path: feature `embed-model` off + no
         // prior download → resolver surfaces
         // ModelNotDownloaded with the expected path. The CLI / API
-        // layer turns this into the "run `chan index download-model`"
+        // layer turns this into the "run `chan workspace index download-model`"
         // hint instead of triggering an hf-hub network fetch.
         let tmp = tempfile::tempdir().unwrap();
         let err = resolve_model_in("BAAI/bge-small-en-v1.5", tmp.path()).unwrap_err();
