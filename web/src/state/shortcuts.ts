@@ -306,6 +306,21 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "Panes",
     note: "empty panes only; otherwise the browser / window close fires",
   },
+  // The explicit "close this window" action. The browser owns Ctrl+Shift+W
+  // (close browser window) and Cmd+W (close tab), so there is no in-page web
+  // chord — on the web a browser tab close IS the discard. chan-desktop binds
+  // Ctrl+Shift+W and maps the OS close button here when a devserver is NOT
+  // connected (when connected the button buries the window instead, serve.rs).
+  // Drives the window-discard path (an explicit DELETE of the saved window
+  // blob), distinct from Ctrl+D (close tab) and Mod+W (close empty pane).
+  {
+    id: "app.window.close",
+    label: "Close window",
+    native: "Ctrl+Shift+W",
+    group: "App",
+    note: "discard an empty / terminal window; buries when devserver-connected",
+    escapeTerminal: true,
+  },
   {
     id: "ui.overlay.dismiss",
     label: "Dismiss overlay",

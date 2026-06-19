@@ -1931,6 +1931,14 @@ const SESSION_DEBOUNCE_MS = 750;
 let sessionTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSessionSnapshot: string | null = null;
 let bootstrapHydrated = true;
+// Explicit window-discard intent. Once a window is discarded (^W/^D to empty,
+// the close-window action when a devserver is not connected, or an empty
+// window), its saved blob is deleted and never re-written, so the window
+// disappears from `cs window list` and the server reaps its terminal sessions
+// (it keys the reap on the window label, which is both the WS `window_id` and
+// the blob `?w=` key). Distinct from a BURY, which keeps the blob so the
+// window can be re-surfaced.
+let sessionDiscarded = false;
 
 /// Wrapped session payload. Forward-compat: missing fields fall
 /// back to defaults on restore so adding a new overlay type later
@@ -1963,20 +1971,27 @@ type SessionPayload = {
 };
 
 function serializeSession(): SessionPayload | null {
+  // An explicit window discard suppresses every save so the blob stays
+  // deleted and the window leaves nothing in `cs window list`.
+  if (sessionDiscarded) return null;
   const layout = serializeLayout({ terminalSessions: true });
-  // A window with no durable content has nothing worth persisting, so
-  // delete the blob instead of saving it (the caller maps a null return to
-  // `api.deleteSession()`). "No durable content" means either:
-  //   - no pane/tab layout at all — even if a folder was toggled in the
-  //     file browser (the tree root `""` is auto-seeded on every fresh
-  //     window, so a `treeExpanded`-only payload was the original phantom); or
-  //   - a layout whose tabs are ALL terminals. Terminal tabs are ephemeral
-  //     (the PTY dies on restart; a saved `tsid` just respawns a fresh
-  //     shell), so a terminal-only window is not a durable saved window —
-  //     this is the dead-terminal case @@Alex's hand-smoke caught.
-  // `treeExpanded` only rides along when there's durable content to
-  // restore it into.
-  if (!layout || !layoutHasDurableContent(layout)) {
+  // Persist a window when it has durable (file / graph / browser) content OR
+  // at least one terminal carrying a live server session to RE-ATTACH (a
+  // `tsid`). The reattachable-terminal case is what lets a standalone-terminal
+  // window survive a fresh page load — a close->reopen, or a chan-desktop
+  // disconnect->reconnect that re-creates the WKWebView: the on-disk blob
+  // carries the tsids, so restore re-attaches the live PTYs instead of
+  // spawning fresh shells. (sessionStorage alone, the old reattach channel,
+  // is gone on a fresh load — it only rescues a same-tab Cmd+R.) A
+  // terminal-only window whose sessions have ended (no reattachable tsid) and
+  // a truly empty window both serialize to nothing durable, so the caller
+  // deletes the blob (a null return maps to `api.deleteSession()`).
+  // `treeExpanded` only rides along when there is durable content to restore
+  // it into.
+  if (
+    !layout ||
+    !(layoutHasDurableContent(layout) || layoutHasReattachableTerminal(layout))
+  ) {
     return null;
   }
   const treeMap: Record<string, boolean> = {};
@@ -2027,7 +2042,7 @@ function isLegacyLayoutPayload(value: unknown): value is ReturnType<typeof seria
 }
 
 export function scheduleSessionSave(): void {
-  if (!bootstrapHydrated) return;
+  if (!bootstrapHydrated || sessionDiscarded) return;
   if (sessionTimer) clearTimeout(sessionTimer);
   sessionTimer = setTimeout(() => {
     sessionTimer = null;
@@ -2050,8 +2065,38 @@ export function scheduleSessionSave(): void {
   }, SESSION_DEBOUNCE_MS);
 }
 
+/// Discard this window's saved session: delete the blob NOW (the server
+/// reaps the window's live terminal sessions, keyed on the window label) and
+/// stop any pending or future save from re-persisting it. The caller closes
+/// the window afterward. Idempotent; fires a `keepalive` DELETE so the reap
+/// survives an immediate window destroy/unload — this is the explicit,
+/// synchronous discard signal that replaces the old reliance on a `pagehide`
+/// flush (which a hidden/buried WKWebView may never fire).
+export function discardWindowSession(): void {
+  sessionDiscarded = true;
+  if (sessionTimer) {
+    clearTimeout(sessionTimer);
+    sessionTimer = null;
+  }
+  // No Cmd+R resurrection from the sessionStorage reload snapshot either.
+  writeLayoutReloadSnapshot(null);
+  lastSessionSnapshot = "";
+  try {
+    void fetch(withTokenQuery(sessionPath()), {
+      method: "DELETE",
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* page is going away; nothing useful we can do */
+  }
+}
+
 export function __testSetBootstrapHydrated(value: boolean): void {
   bootstrapHydrated = value;
+}
+
+export function __testResetSessionDiscarded(): void {
+  sessionDiscarded = false;
 }
 
 export const __testApplyTreeExpandedReloadSnapshot = applyTreeExpandedReloadSnapshot;
@@ -2066,6 +2111,9 @@ export const __testIsTransientBootstrapError = isTransientBootstrapError;
 /// suspends, unlike `beforeunload`).
 function flushSessionSaveOnExit(): void {
   if (!bootstrapHydrated) return;
+  // A discarded window already deleted its blob synchronously; don't let the
+  // exit flush re-write the blob or resurrect the reload snapshot.
+  if (sessionDiscarded) return;
   if (sessionTimer) {
     clearTimeout(sessionTimer);
     sessionTimer = null;
@@ -3225,26 +3273,30 @@ function readLayoutReloadSnapshot(): ReturnType<typeof serializeLayout> {
 
 /// Keep the all-terminal reattach snapshot in sync with each session save.
 /// Called from both save paths BEFORE their on-disk dedup so a tsid change
-/// updates the snapshot even when the (null) on-disk payload is unchanged.
-///   - durable window (payload non-null): the on-disk blob is the source → clear;
+/// updates the snapshot even when the on-disk payload is unchanged.
+///
+/// The on-disk blob is the durable cross-load source (close→reopen, reconnect,
+/// and a Cmd+R once it has been written), but its `keepalive` PUT can race a
+/// fast reload's GET, so a reattachable-terminal layout is ALSO mirrored (with
+/// tsids) into sessionStorage — the same-tab reload reads that synchronously
+/// and can never lose the surviving PTYs:
+///   - layout WITH a reattachable tsid (terminal-only OR terminal+durable):
+///     persist the snapshot, even when the blob is also PUT;
+///   - durable window with NO terminal (payload non-null): the on-disk blob is
+///     the sole source → clear;
 ///   - truly empty window (no layout): nothing to reattach → clear;
-///   - all-terminal layout WITH a reattachable tsid: persist it;
 ///   - all-terminal layout with NO reattachable tsid (an early save before the
 ///     terminal's session frame, or a session that ended): leave any prior good
 ///     snapshot intact — never persist a tsid-less terminal (restoring it would
 ///     spawn a stray fresh PTY).
 function syncLayoutReloadSnapshot(payload: SessionPayload | null): void {
-  if (payload) {
-    writeLayoutReloadSnapshot(null);
-    return;
-  }
   const layout = serializeLayout({ terminalSessions: true });
-  if (!layout) {
-    writeLayoutReloadSnapshot(null);
+  if (layout && layoutHasReattachableTerminal(layout)) {
+    writeLayoutReloadSnapshot(layout);
     return;
   }
-  if (layoutHasReattachableTerminal(layout)) {
-    writeLayoutReloadSnapshot(layout);
+  if (payload || !layout) {
+    writeLayoutReloadSnapshot(null);
   }
 }
 

@@ -5,8 +5,10 @@ import {
   __testApplyTreeExpandedReloadSnapshot,
   __testReadLayoutReloadSnapshot,
   __testSetBootstrapHydrated,
+  __testResetSessionDiscarded,
   __testApplyOverlaysFromHash,
   browserSelection,
+  discardWindowSession,
   graphReloadSignal,
   onWatchEvent,
   openFsGraphForDirectory,
@@ -67,9 +69,11 @@ function setTerminalLayout(tab: Partial<TerminalTab> = {}): void {
   layout.nodes = { [pane.id]: pane };
 }
 
-/// Add a durable (non-terminal) tab to the active pane so the window has
-/// content worth persisting. Terminal-only windows are ephemeral and serialize
-/// to null (deleted, not saved), so tests that expect a PUT need this.
+/// Add a durable (non-terminal) tab to the active pane so the window persists
+/// even when its terminal carries no reattachable session. A terminal-only
+/// window persists only when its terminal has a live tsid to reattach; a
+/// tsid-less terminal-only window serializes to null (deleted, not saved), so
+/// tests that expect a PUT without a tsid need this.
 function addDashboardTab(id = "dash-1"): void {
   const dashboard: DashboardTab = { kind: "dashboard", id, title: "Dashboard" };
   activePane().tabs.push(dashboard);
@@ -77,6 +81,7 @@ function addDashboardTab(id = "dash-1"): void {
 
 afterEach(() => {
   __testSetBootstrapHydrated(true);
+  __testResetSessionDiscarded();
   const pane: LeafNode = {
     kind: "leaf",
     id: "pane-reset",
@@ -170,7 +175,7 @@ describe("session persistence bootstrap guard", () => {
     vi.useRealTimers();
   });
 
-  test("a terminal-only window is ephemeral: deletes the blob instead of saving it", async () => {
+  test("a reattachable terminal-only window persists its blob; a tsid-less one is deleted", async () => {
     vi.useFakeTimers();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(null, { status: 204 }),
@@ -185,20 +190,65 @@ describe("session persistence bootstrap guard", () => {
     await vi.runAllTimersAsync();
     expect(fetchSpy.mock.calls.at(-1)?.[1]?.method).toBe("PUT");
 
-    // 2) Remove the durable tab, leaving only the live terminal. Terminals are
-    //    ephemeral (the PTY dies on restart; a saved tsid just respawns a fresh
-    //    shell), so a terminal-only window is not durable: it must DELETE its
-    //    blob, not persist a dead-terminal layout that lingers as a phantom in
-    //    `cs window list`.
+    // 2) Remove the durable tab, leaving only the LIVE terminal. Its tsid
+    //    reattaches the surviving PTY on a close->reopen, so a terminal-only
+    //    window IS durable now: it PUTs the on-disk blob (carrying the tsid)
+    //    instead of deleting it. This is the standalone-terminal reconnect fix
+    //    — the old code deleted here, which is why reconnect spawned fresh shells.
     const pane = activePane();
     pane.tabs = pane.tabs.filter((t) => t.kind === "terminal");
     pane.activeTabId = pane.tabs[0]?.id ?? null;
     scheduleSessionSave();
     await vi.runAllTimersAsync();
+    {
+      const [url, init] = fetchSpy.mock.calls.at(-1)!;
+      expect(init?.method).toBe("PUT");
+      expect(String(url)).toContain("/api/session");
+    }
 
+    // 3) The terminal's session ends (tsid cleared): nothing to reattach, so
+    //    the now-ephemeral terminal-only window DELETEs its blob — it must not
+    //    linger as a phantom in `cs window list`.
+    const term = activePane().tabs[0] as TerminalTab;
+    term.terminalSessionId = undefined;
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+    expect(fetchSpy.mock.calls.at(-1)?.[1]?.method).toBe("DELETE");
+
+    fetchSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  test("discardWindowSession deletes the blob synchronously and suppresses later saves", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+    __testSetBootstrapHydrated(true);
+
+    // A live terminal window that would otherwise persist (PUT + snapshot).
+    setTerminalLayout({ terminalSessionId: "term_live" });
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+    expect(JSON.stringify(__testReadLayoutReloadSnapshot())).toContain("term_live");
+    fetchSpy.mockClear();
+
+    // Discard intent: an immediate keepalive DELETE (the server's reap trigger)
+    // and the sessionStorage mirror cleared — no waiting on the debounce or a
+    // `pagehide` a buried window may never fire.
+    discardWindowSession();
     const [url, init] = fetchSpy.mock.calls.at(-1)!;
     expect(init?.method).toBe("DELETE");
+    expect((init as RequestInit)?.keepalive).toBe(true);
     expect(String(url)).toContain("/api/session");
+    expect(__testReadLayoutReloadSnapshot()).toBeNull();
+
+    // A later save is suppressed: the window stays discarded, no PUT resurrects
+    // the blob.
+    fetchSpy.mockClear();
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+    expect(fetchSpy).not.toHaveBeenCalled();
 
     fetchSpy.mockRestore();
     vi.useRealTimers();
@@ -206,32 +256,51 @@ describe("session persistence bootstrap guard", () => {
 });
 
 describe("all-terminal reload reattach snapshot", () => {
-  test("an all-terminal window mirrors its layout+tsid to sessionStorage; durable content clears it", async () => {
+  test("a reattachable-terminal window mirrors to sessionStorage too; a terminal-free durable window clears it", async () => {
     vi.useFakeTimers();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(null, { status: 204 }),
     );
     __testSetBootstrapHydrated(true);
 
-    // 1) Durable window (terminal + dashboard): the on-disk blob is the source
-    //    of truth (PUT), so the reload snapshot is cleared.
+    // 1) Terminal (live tsid) + dashboard. The on-disk blob is PUT (durable),
+    //    AND because a reattachable terminal is present the layout is also
+    //    mirrored into sessionStorage (with the tsid) as the race-free same-tab
+    //    Cmd+R fast path — the blob's keepalive PUT can race a fast reload's GET.
     setTerminalLayout({ terminalSessionId: "tsid-keepalive" });
     addDashboardTab();
     scheduleSessionSave();
     await vi.runAllTimersAsync();
     expect(fetchSpy.mock.calls.at(-1)?.[1]?.method).toBe("PUT");
-    expect(__testReadLayoutReloadSnapshot()).toBeNull();
+    expect(JSON.stringify(__testReadLayoutReloadSnapshot())).toContain("tsid-keepalive");
 
-    // 2) Remove the durable tab → all-terminal window: no on-disk blob (DELETE),
-    //    but the reload snapshot now carries the layout + tsid so Cmd+R can
-    //    reattach the surviving PTY instead of spawning a fresh one.
+    // 2) Remove the durable tab → terminal-only window. Still reattachable, so
+    //    it PUTs the on-disk blob (the close->reopen source) and keeps the
+    //    sessionStorage mirror.
     const pane = activePane();
     pane.tabs = pane.tabs.filter((t) => t.kind === "terminal");
     pane.activeTabId = pane.tabs[0]?.id ?? null;
     scheduleSessionSave();
     await vi.runAllTimersAsync();
-    expect(fetchSpy.mock.calls.at(-1)?.[1]?.method).toBe("DELETE");
+    expect(fetchSpy.mock.calls.at(-1)?.[1]?.method).toBe("PUT");
     expect(JSON.stringify(__testReadLayoutReloadSnapshot())).toContain("tsid-keepalive");
+
+    // 3) Replace with a durable window that has NO terminal (dashboard only).
+    //    It reloads from the on-disk blob alone, so the sessionStorage mirror
+    //    is cleared — there is nothing to reattach race-free.
+    const dashOnly: LeafNode = {
+      kind: "leaf",
+      id: "pane-dash-only",
+      tabs: [{ kind: "dashboard", id: "dash-only", title: "Dashboard" }],
+      activeTabId: "dash-only",
+    };
+    layout.rootId = dashOnly.id;
+    layout.activePaneId = dashOnly.id;
+    layout.nodes = { [dashOnly.id]: dashOnly };
+    scheduleSessionSave();
+    await vi.runAllTimersAsync();
+    expect(fetchSpy.mock.calls.at(-1)?.[1]?.method).toBe("PUT");
+    expect(__testReadLayoutReloadSnapshot()).toBeNull();
 
     fetchSpy.mockRestore();
     vi.useRealTimers();

@@ -34,6 +34,7 @@
     browserSelection,
     browserSidePanes,
     closeOverlay,
+    discardWindowSession,
     workspace,
     fileOps,
     openGraph,
@@ -922,6 +923,10 @@
     // so re-showing is instant.
     if (leafPaneCount() <= 1) {
       if (isTauriDesktop()) {
+        // An empty window is a discard: delete its blob synchronously (reaps
+        // any server sessions) before the host destroys the window, so it
+        // never lingers in `cs window list`.
+        discardWindowSession();
         void requestCloseWindow();
         return true;
       }
@@ -938,7 +943,13 @@
   $effect(() => {
     if (!ui.terminalOnly || !ui.terminalArmed) return;
     if (allTerminalTabs().length > 0) return;
-    if (isTauriDesktop()) void requestCloseWindow();
+    // Last terminal closed (^W / ^D / Cmd+W): the window is empty, which is a
+    // discard — delete its blob (reaps any server sessions) before the host
+    // destroys the window so it leaves nothing in `cs window list`.
+    if (isTauriDesktop()) {
+      discardWindowSession();
+      void requestCloseWindow();
+    }
   });
   onMount(() => document.addEventListener("keydown", onWindowKey));
   // SPA-global file-drop guard: an OS file dropped outside an
@@ -1022,6 +1033,7 @@
     "app.tab.prev",
     "app.tab.jump",
     "app.tab.close",
+    "app.window.close",
     "app.find.open",
     "app.find.next",
     "app.find.prev",
@@ -1134,6 +1146,16 @@
         else closeActiveEmptyPane();
         return;
       }
+      // Explicit "close this window" (native Ctrl+Shift+W via KEY_BRIDGE_JS,
+      // and the OS close button when a devserver is NOT connected). Discard
+      // intent: delete this window's saved blob now — the server reaps its
+      // terminal sessions — then ask the host to close the window. Distinct
+      // from a bury (connected close button), which keeps the blob so the
+      // window can be re-surfaced.
+      case "app.window.close":
+        discardWindowSession();
+        if (isTauriDesktop()) void requestCloseWindow();
+        return;
       // `app.save` is intentionally absent: autosave covers the write path.
       case "app.file.new":
         void fileOps.createFile("");
