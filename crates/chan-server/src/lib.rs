@@ -330,6 +330,11 @@ struct AppArtifacts {
     /// "does window X still have shells?" without going through HTTP
     /// (see `WorkspaceHost::tenant_has_window_sessions`).
     terminal_sessions: Arc<TerminalRegistry>,
+    /// The router's state, kept so a host can enumerate this tenant's
+    /// windows (saved ∪ connected ∪ titles) without an HTTP round-trip —
+    /// the input to `WorkspaceHost::list_tenant_windows` /
+    /// `GET /api/devserver/windows`. Same Arc the router serves from.
+    state: Arc<AppState>,
     /// Shutdown signal sender. Fed by SIGINT/SIGTERM and (optionally)
     /// the idle-timeout watcher. Receivers live on `AppState` and in
     /// `serve()` / `serve_via_tunnel()` for the runloop select.
@@ -772,7 +777,7 @@ async fn build_app(
     // route reachable at `/foo<route>` without changing any handler.
     // axum strips the prefix from the inner URI, so handlers continue
     // to see paths starting with `/api`, `/ws`, etc.
-    let inner = router(state);
+    let inner = router(state.clone());
     let app = if config.prefix.is_empty() {
         inner
     } else {
@@ -791,6 +796,7 @@ async fn build_app(
         mcp_bridge,
         control_socket,
         terminal_sessions: terminal_sessions_handle,
+        state,
         shutdown_tx,
     })
 }
@@ -981,7 +987,7 @@ async fn build_terminal_app(
     // Nest under the prefix exactly like `build_app` so the host's
     // prefix dispatch reaches `/terminal-<seq><route>` and handlers
     // still see workspace-relative paths (`/api/...`, `/ws`).
-    let inner = terminal_router(state);
+    let inner = terminal_router(state.clone());
     let app = if config.prefix.is_empty() {
         inner
     } else {
@@ -1002,6 +1008,7 @@ async fn build_terminal_app(
         mcp_bridge: None,
         control_socket,
         terminal_sessions: terminal_sessions_handle,
+        state,
         shutdown_tx,
     })
 }

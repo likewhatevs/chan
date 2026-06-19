@@ -26,7 +26,6 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
-use crate::error::err_from;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -95,13 +94,21 @@ pub(crate) fn join_windows_with_titles(
     rows
 }
 
-pub async fn api_list_windows(State(state): State<Arc<AppState>>) -> Response {
+/// Enumerate this tenant's windows: saved session blobs ∪ live `/ws` presence,
+/// each stamped with the desktop's OS title/kind. Sync — `list_sessions` is
+/// blocking disk I/O, so an async caller wraps this in `spawn_blocking`. A
+/// failed saved-blob read degrades to "no saved windows" (graceful for an
+/// enumeration; the host aggregate must not fail wholesale on one tenant).
+/// Backs both `GET /api/windows` and the host's cross-tenant aggregate
+/// (`WorkspaceHost::list_tenant_windows` → `GET /api/devserver/windows`).
+pub(crate) fn enumerate_windows(state: &AppState) -> Vec<WindowInfo> {
     let connected = state.window_presence.connected_ids();
     let titles = state.window_titles.clone();
-    let Ok(workspace) = state.try_workspace() else {
+    let saved: Vec<String> = match state.try_workspace() {
+        Ok(workspace) => workspace.list_sessions().unwrap_or_default(),
         // Workspace-less terminal tenant: a persistent launcher store when one
         // is configured (a persisted devserver terminal), else in memory.
-        let saved: Vec<String> = match &state.terminal_session_dir {
+        Err(_) => match &state.terminal_session_dir {
             Some(dir) => crate::terminal_blob::list(dir).unwrap_or_default(),
             None => state
                 .ephemeral_sessions
@@ -110,14 +117,15 @@ pub async fn api_list_windows(State(state): State<Arc<AppState>>) -> Response {
                 .keys()
                 .cloned()
                 .collect(),
-        };
-        return Json(join_windows_with_titles(saved, connected, &titles)).into_response();
+        },
     };
-    // Same spawn_blocking posture as the session routes: list_sessions
-    // is sync disk I/O.
-    match tokio::task::spawn_blocking(move || workspace.list_sessions()).await {
-        Ok(Ok(saved)) => Json(join_windows_with_titles(saved, connected, &titles)).into_response(),
-        Ok(Err(e)) => err_from(&e),
+    join_windows_with_titles(saved, connected, &titles)
+}
+
+pub async fn api_list_windows(State(state): State<Arc<AppState>>) -> Response {
+    // spawn_blocking: `enumerate_windows` does sync disk I/O (`list_sessions`).
+    match tokio::task::spawn_blocking(move || enumerate_windows(&state)).await {
+        Ok(rows) => Json(rows).into_response(),
         Err(e) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("list windows task panicked: {e}"),

@@ -40,8 +40,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::random_token;
 use crate::devserver_api::{
-    DevserverInfo, MountedPrefix, MountedTerminal, OpenTerminalRequest, OpenWorkspaceRequest,
-    SetWorkspaceOnRequest, TerminalEntry, WorkspaceEntry, DEVSERVER_API_PROTOCOL,
+    DevserverInfo, DevserverWindow, MountedPrefix, MountedTerminal, OpenTerminalRequest,
+    OpenWorkspaceRequest, SetWorkspaceOnRequest, TerminalEntry, WorkspaceEntry,
+    DEVSERVER_API_PROTOCOL,
 };
 use crate::host::WorkspaceHost;
 use crate::{sanitize_prefix, Error, ServeConfig};
@@ -750,6 +751,7 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             "/api/devserver/terminals/*prefix",
             delete(handle_forget_terminal),
         )
+        .route("/api/devserver/windows", get(handle_list_windows))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -863,6 +865,57 @@ async fn handle_list_terminals(
     State(state): State<Arc<DevserverState>>,
 ) -> Json<Vec<TerminalEntry>> {
     Json(state.terminal_entries())
+}
+
+/// `GET /api/devserver/windows` (L10): every PERSISTED window across all
+/// tenants, for the desktop's menu-reopen of closed devserver windows. Folds
+/// the host's per-tenant window enumeration into `DevserverWindow` rows,
+/// stamping each with its tenant's per-mount token; the desktop filters
+/// `saved && !connected`. Persisted-only: a discard reaped the blob + PTYs, so
+/// only windows with a live blob (`saved`) surface.
+async fn handle_list_windows(
+    State(state): State<Arc<DevserverState>>,
+) -> Json<Vec<DevserverWindow>> {
+    // Token per tenant prefix: a mounted workspace or terminal carries one;
+    // an off workspace's is empty.
+    let tokens: HashMap<String, String> = {
+        let workspaces = state.workspaces.lock().unwrap_or_else(|e| e.into_inner());
+        let terminals = state.terminals.lock().unwrap_or_else(|e| e.into_inner());
+        workspaces
+            .values()
+            .map(|r| (r.prefix.clone(), r.token.clone()))
+            .chain(
+                terminals
+                    .values()
+                    .map(|r| (r.prefix.clone(), r.token.clone())),
+            )
+            .collect()
+    };
+    // The enumeration reads each tenant's session-blob store (blocking I/O).
+    let host = state.host.clone();
+    let per_tenant = tokio::task::spawn_blocking(move || host.list_tenant_windows())
+        .await
+        .unwrap_or_default();
+    let mut out: Vec<DevserverWindow> = Vec::new();
+    for (prefix, windows) in per_tenant {
+        let token = tokens.get(&prefix).cloned().unwrap_or_default();
+        for w in windows {
+            if !w.saved {
+                continue; // persisted-only: a live-but-unsaved window is not reopenable
+            }
+            out.push(DevserverWindow {
+                label: w.id,
+                prefix: prefix.clone(),
+                token: token.clone(),
+                kind: w.kind,
+                title: w.title,
+                connected: w.connected,
+                saved: w.saved,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.prefix.cmp(&b.prefix).then_with(|| a.label.cmp(&b.label)));
+    Json(out)
 }
 
 async fn handle_forget_terminal(
@@ -1522,6 +1575,36 @@ mod tests {
 
         // Idempotent: forgetting an unknown / already-removed prefix is false.
         assert!(!state.forget_workspace(&prefix).expect("already removed"));
+    }
+
+    #[tokio::test]
+    async fn list_tenant_windows_surfaces_persisted_windows() {
+        // L10-server: a saved (persisted) window in a mounted tenant is
+        // enumerated cross-tenant — saved, not connected (no live client),
+        // keyed by the tenant prefix. This is the input the
+        // `GET /api/devserver/windows` aggregate folds into DevserverWindow.
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        std::fs::write(ws.path().join("a.md"), "# A\n").unwrap();
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        let prefix = state.register_workspace(ws.path()).await.expect("mount");
+        // Persist a window blob in the tenant (as a `PUT /api/session?w=` would).
+        let workspace = state.host.live_workspace(ws.path()).expect("live tenant");
+        workspace
+            .put_session("workspace-test-1", br#"{"panes":[]}"#)
+            .expect("save blob");
+
+        let per_tenant = state.host.list_tenant_windows();
+        let (owner_prefix, win) = per_tenant
+            .iter()
+            .flat_map(|(p, windows)| windows.iter().map(move |w| (p, w)))
+            .find(|(_, w)| w.id == "workspace-test-1")
+            .expect("persisted window is enumerated");
+        assert_eq!(owner_prefix, &prefix, "keyed by the owning tenant prefix");
+        assert!(win.saved, "it has a durable blob");
+        assert!(!win.connected, "no live client attached");
     }
 
     #[tokio::test]

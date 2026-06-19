@@ -416,6 +416,27 @@ impl WorkspaceHost {
             .any(|entry| entry.window_id.as_deref() == Some(window_id))
     }
 
+    /// Enumerate every mounted tenant's windows (saved session blobs ∪ live
+    /// `/ws` presence, with desktop titles), keyed by route prefix. The
+    /// cross-tenant input the devserver's `GET /api/devserver/windows`
+    /// menu-reopen aggregate folds into `DevserverWindow` rows. Sync — each
+    /// tenant's `enumerate_windows` does a blocking session-blob read, so the
+    /// async handler wraps the whole call in `spawn_blocking`.
+    pub fn list_tenant_windows(&self) -> Vec<(String, Vec<crate::routes::windows::WindowInfo>)> {
+        let Ok(workspaces) = self.workspaces.read() else {
+            return Vec::new();
+        };
+        workspaces
+            .iter()
+            .map(|(prefix, runtime)| {
+                (
+                    prefix.clone(),
+                    crate::routes::windows::enumerate_windows(&runtime.artifacts.state),
+                )
+            })
+            .collect()
+    }
+
     /// Raw replay-ring PTY bytes for the terminal tenant mounted at
     /// `prefix` (empty when none is mounted there). Reaches into that
     /// tenant's terminal registry like [`tenant_has_window_sessions`](
