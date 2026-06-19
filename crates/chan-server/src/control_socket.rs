@@ -320,13 +320,15 @@ async fn serve_connection(conn: transport::Conn, ctx: ControlSocketCtx) {
     }
 }
 
-/// The control socket's cross-platform transport seam — the ONLY
-/// `#[cfg]`-split surface. unix uses a `UnixListener`; windows uses a
-/// `tokio::net::windows::named_pipe` server. Both yield a `Conn` whose
-/// `into_split()` gives line-framing-compatible read/write halves, so the
-/// accept loop, `serve_connection`, and every handler stay platform-neutral.
-/// tokio is `features=["full"]` workspace-wide, so neither path adds a dep.
-mod transport {
+/// The cross-platform transport seam — the ONLY `#[cfg]`-split surface for
+/// both the control socket AND the MCP bridge (`mcp_bridge.rs` reuses
+/// `bind`/`accept` + `connect`/`Client`). unix uses a `UnixListener`/`UnixStream`;
+/// windows uses a `tokio::net::windows::named_pipe` server/client. Both yield a
+/// `Conn`/`Client` whose `into_split()` gives read/write halves that implement
+/// `AsyncRead + AsyncWrite`, so the accept loop, `serve_connection`, the MCP
+/// bridge, and every handler stay platform-neutral. tokio is `features=["full"]`
+/// workspace-wide, so neither path adds a dep.
+pub(crate) mod transport {
     #[cfg(unix)]
     mod imp {
         use std::path::Path;
@@ -336,12 +338,21 @@ mod transport {
 
         pub struct Listener(UnixListener);
         pub struct Conn(UnixStream);
+        /// Client end of the same transport (the proxy side). A distinct type
+        /// from the accepted `Conn` because on Windows the client and server
+        /// pipe handles are different types.
+        pub struct Client(UnixStream);
 
         /// Bind the Unix-domain socket, clearing any stale node first (a
         /// crashed prior server can leave the path occupied).
         pub fn bind(path: &Path) -> std::io::Result<Listener> {
             let _ = std::fs::remove_file(path);
             Ok(Listener(UnixListener::bind(path)?))
+        }
+
+        /// Connect to a bound transport as a client.
+        pub async fn connect(path: &Path) -> std::io::Result<Client> {
+            Ok(Client(UnixStream::connect(path).await?))
         }
 
         impl Listener {
@@ -356,6 +367,12 @@ mod transport {
                 self.0.into_split()
             }
         }
+
+        impl Client {
+            pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
+                self.0.into_split()
+            }
+        }
     }
 
     #[cfg(windows)]
@@ -364,7 +381,9 @@ mod transport {
         use std::path::Path;
 
         use tokio::io::{ReadHalf, WriteHalf};
-        use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+        use tokio::net::windows::named_pipe::{
+            ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+        };
 
         /// A named-pipe "listener". tokio creates one pipe instance per
         /// connection, so the listener always holds the next idle instance
@@ -375,6 +394,9 @@ mod transport {
             next: NamedPipeServer,
         }
         pub struct Conn(NamedPipeServer);
+        /// Client end (the proxy side): a named-pipe CLIENT handle, a distinct
+        /// type from the server-side `Conn`.
+        pub struct Client(NamedPipeClient);
 
         pub fn bind(path: &Path) -> std::io::Result<Listener> {
             let pipe_name = path.as_os_str().to_owned();
@@ -385,6 +407,11 @@ mod transport {
                 .first_pipe_instance(true)
                 .create(&pipe_name)?;
             Ok(Listener { pipe_name, next })
+        }
+
+        /// Connect to a bound transport as a client (open the named pipe).
+        pub async fn connect(path: &Path) -> std::io::Result<Client> {
+            Ok(Client(ClientOptions::new().open(path.as_os_str())?))
         }
 
         impl Listener {
@@ -408,11 +435,18 @@ mod transport {
                 tokio::io::split(self.0)
             }
         }
+
+        impl Client {
+            pub fn into_split(self) -> (ReadHalf<NamedPipeClient>, WriteHalf<NamedPipeClient>) {
+                tokio::io::split(self.0)
+            }
+        }
     }
 
     // `Listener` is reached only through `bind`'s inferred return type, so it
-    // needs no re-export; `Conn` names `serve_connection`'s parameter.
-    pub use imp::{bind, Conn};
+    // needs no re-export; `Conn` names `serve_connection`'s parameter. `connect`
+    // + `Client` are the proxy (client) side the MCP bridge reuses.
+    pub use imp::{bind, connect, Client, Conn};
 }
 // transport seam ends here; the request handlers below are platform-neutral.
 

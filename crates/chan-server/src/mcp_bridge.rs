@@ -1,4 +1,4 @@
-//! In-process MCP server exposed over a Unix-domain socket.
+//! In-process MCP server exposed over a local IPC transport.
 //!
 //! External MCP agents want to launch the chan MCP server as a
 //! subprocess so writes round-trip through chan-workspace's gates. The
@@ -10,47 +10,69 @@
 //! The bridge resolves that conflict: chan-server already owns an
 //! `Arc<Workspace>` for the workspace it serves, so the MCP service is run
 //! in-process. Each external agent connects through `chan __mcp-proxy`
-//! to a Unix-domain socket the bridge listens on; the proxy just
-//! pipes stdin/stdout through the socket. No second workspace open, no
-//! flock contention.
+//! to a local IPC endpoint the bridge listens on; the proxy just pipes
+//! stdin/stdout through it. No second workspace open, no flock contention.
+//!
+//! Transport: the bridge reuses the control socket's cross-platform
+//! [`transport`](crate::control_socket::transport) seam — a Unix-domain
+//! socket on unix, a named pipe on Windows — so MCP is reachable on both.
+//! `chan_llm::mcp::Server::serve_io` is generic over `AsyncRead + AsyncWrite`,
+//! so the platform-specific stream halves plug straight in with no chan-llm
+//! change.
 //!
 //! Lifetime: the bridge spawns at boot inside `build_app`. The
 //! returned `BridgeHandle` owns the socket-cleanup `Drop` and the
 //! accept-loop join handle; serve()/shutdown drops it explicitly so
-//! the socket file is unlinked even when the runtime is torn down
-//! abruptly.
+//! the endpoint is released even when the runtime is torn down abruptly.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rand::RngCore;
-#[cfg(unix)]
-use tokio::net::UnixListener;
-#[cfg(unix)]
 use tokio::task::JoinHandle;
 
-/// Pick a unique socket path under the system tmp dir. macOS caps
-/// `sun_path` at 104 bytes, so the suffix is short and the directory
-/// short; `/tmp/chan-mcp-<pid>-<8 hex>.sock` fits well within that.
+use crate::control_socket::transport;
+
+/// Pick a unique IPC endpoint path: `/tmp/chan-mcp-<pid>-<hex>.sock` on unix,
+/// `\\.\pipe\chan-mcp-<pid>-<hex>` on Windows.
 pub fn pick_socket_path() -> PathBuf {
     pick_named_socket_path("mcp")
 }
 
-pub(crate) fn pick_named_socket_path(name: &str) -> PathBuf {
+fn random_suffix() -> String {
     let mut bytes = [0u8; 4];
     rand::thread_rng().fill_bytes(&mut bytes);
-    let suffix: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    std::env::temp_dir().join(format!("chan-{name}-{}-{suffix}.sock", std::process::id()))
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Connect stdio to a running chan-server MCP socket. Used by the
-/// `chan __mcp-proxy` and `chan-desktop __mcp-proxy` hidden commands.
+/// macOS caps `sun_path` at 104 bytes, so the suffix is short and the
+/// directory short; `/tmp/chan-<name>-<pid>-<8 hex>.sock` fits well within
+/// that. On Windows a named pipe is `\\.\pipe\chan-<name>-<pid>-<8 hex>`.
 #[cfg(unix)]
+pub(crate) fn pick_named_socket_path(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "chan-{name}-{}-{}.sock",
+        std::process::id(),
+        random_suffix()
+    ))
+}
+
+#[cfg(windows)]
+pub(crate) fn pick_named_socket_path(name: &str) -> PathBuf {
+    PathBuf::from(format!(
+        r"\\.\pipe\chan-{name}-{}-{}",
+        std::process::id(),
+        random_suffix()
+    ))
+}
+
+/// Connect stdio to a running chan-server MCP endpoint. Used by the
+/// `chan __mcp-proxy` and `chan-desktop __mcp-proxy` hidden commands.
 pub async fn run_stdio_proxy(socket: PathBuf) -> std::io::Result<()> {
     use tokio::io::{stdin, stdout};
 
-    let stream = connect_mcp_socket(&socket).await?;
-    let (mut read_sock, mut write_sock) = stream.into_split();
+    let client = connect_mcp(&socket).await?;
+    let (mut read_sock, mut write_sock) = client.into_split();
     let mut stdin = stdin();
     let mut stdout = stdout();
     let to_socket = tokio::io::copy(&mut stdin, &mut write_sock);
@@ -66,30 +88,35 @@ pub async fn run_stdio_proxy(socket: PathBuf) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Connect to the MCP endpoint. On unix a stale configured socket falls back
+/// to a live `chan-mcp-*.sock` sibling (a server that re-minted its path);
+/// named pipes are not filesystem nodes, so Windows just connects.
 #[cfg(unix)]
-async fn connect_mcp_socket(socket: &Path) -> std::io::Result<tokio::net::UnixStream> {
-    connect_mcp_socket_in(socket, &std::env::temp_dir()).await
+async fn connect_mcp(socket: &Path) -> std::io::Result<transport::Client> {
+    connect_mcp_in(socket, &std::env::temp_dir()).await
+}
+
+#[cfg(not(unix))]
+async fn connect_mcp(socket: &Path) -> std::io::Result<transport::Client> {
+    transport::connect(socket).await
 }
 
 #[cfg(unix)]
-async fn connect_mcp_socket_in(
+async fn connect_mcp_in(
     socket: &Path,
     fallback_dir: &Path,
-) -> std::io::Result<tokio::net::UnixStream> {
-    match tokio::net::UnixStream::connect(socket).await {
-        Ok(stream) => Ok(stream),
+) -> std::io::Result<transport::Client> {
+    match transport::connect(socket).await {
+        Ok(client) => Ok(client),
         Err(primary) if should_try_mcp_socket_fallback(&primary) => {
             for candidate in mcp_socket_fallback_candidates_in(fallback_dir, socket) {
-                match tokio::net::UnixStream::connect(&candidate).await {
-                    Ok(stream) => {
-                        tracing::warn!(
-                            configured = %socket.display(),
-                            fallback = %candidate.display(),
-                            "configured MCP socket is stale; using live fallback"
-                        );
-                        return Ok(stream);
-                    }
-                    Err(_) => continue,
+                if let Ok(client) = transport::connect(&candidate).await {
+                    tracing::warn!(
+                        configured = %socket.display(),
+                        fallback = %candidate.display(),
+                        "configured MCP socket is stale; using live fallback"
+                    );
+                    return Ok(client);
                 }
             }
             Err(primary)
@@ -135,22 +162,12 @@ fn mcp_socket_fallback_candidates_in(dir: &Path, preferred: &Path) -> Vec<PathBu
 }
 
 /// Bridge handle returned from `start`. Drop = abort the accept loop
-/// and unlink the socket file. Held by `AppState` for the lifetime
+/// and (on unix) unlink the socket file; a Windows named pipe is reclaimed
+/// by the OS once the last handle drops. Held by `AppState` for the lifetime
 /// of the chan-server process.
-#[cfg(unix)]
 pub struct BridgeHandle {
     socket_path: PathBuf,
     accept_loop: Option<JoinHandle<()>>,
-}
-
-/// Windows stub: chan-server's MCP bridge relies on Unix-domain
-/// sockets, which are not how the chan stack reaches subprocess
-/// agents on Windows. The handle still exists so `AppArtifacts` has
-/// a stable type across targets; `start` returns `Unsupported` so
-/// the caller falls back to `mcp_socket_path = None`.
-#[cfg(not(unix))]
-pub struct BridgeHandle {
-    socket_path: PathBuf,
 }
 
 impl BridgeHandle {
@@ -159,34 +176,32 @@ impl BridgeHandle {
     }
 }
 
-#[cfg(unix)]
 impl Drop for BridgeHandle {
     fn drop(&mut self) {
         if let Some(h) = self.accept_loop.take() {
             h.abort();
         }
+        // Unix sockets are filesystem nodes that must be unlinked; a Windows
+        // named pipe has no path node and is reclaimed by the OS.
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
     }
 }
 
-/// Bind the socket and spawn an accept loop. Each accepted connection
+/// Bind the endpoint and spawn an accept loop. Each accepted connection
 /// gets a fresh `chan_llm::mcp::Server` constructed against the
 /// current workspace Arc.
-#[cfg(unix)]
 pub fn start<DF>(socket_path: PathBuf, workspace_for: DF) -> std::io::Result<BridgeHandle>
 where
     DF: Fn() -> Option<Arc<chan_workspace::Workspace>> + Send + Sync + 'static,
 {
-    // Stale socket from a previous run that didn't get to clean up
-    // (kill -9, panic in Drop): unlink so bind doesn't EADDRINUSE.
-    let _ = std::fs::remove_file(&socket_path);
-    let listener = UnixListener::bind(&socket_path)?;
+    let mut listener = transport::bind(&socket_path)?;
     let workspace_for = Arc::new(workspace_for);
 
     let accept_loop = tokio::spawn(async move {
         loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(pair) => pair,
+            let conn = match listener.accept().await {
+                Ok(conn) => conn,
                 Err(e) => {
                     tracing::warn!("mcp bridge accept: {e}");
                     // Brief pause so a transient error doesn't spin
@@ -200,7 +215,7 @@ where
                 continue;
             };
             tokio::spawn(async move {
-                let (read, write) = stream.into_split();
+                let (read, write) = conn.into_split();
                 let server = chan_llm::mcp::Server::new(workspace);
                 if let Err(e) = server.serve_io(read, write).await {
                     tracing::debug!("mcp bridge session: {e}");
@@ -213,17 +228,6 @@ where
         socket_path,
         accept_loop: Some(accept_loop),
     })
-}
-
-#[cfg(not(unix))]
-pub fn start<DF>(_socket_path: PathBuf, _workspace_for: DF) -> std::io::Result<BridgeHandle>
-where
-    DF: Fn() -> Option<Arc<chan_workspace::Workspace>> + Send + Sync + 'static,
-{
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "mcp bridge requires unix-domain sockets",
-    ))
 }
 
 #[cfg(test)]
@@ -243,8 +247,8 @@ mod tests {
             let _ = listener.accept().await.unwrap();
         });
 
-        let stream = connect_mcp_socket_in(&preferred, dir.path()).await.unwrap();
-        drop(stream);
+        let client = connect_mcp_in(&preferred, dir.path()).await.unwrap();
+        drop(client);
         accept.await.unwrap();
     }
 }
