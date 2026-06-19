@@ -3120,23 +3120,14 @@ async fn cmd_mcp(path: PathBuf) -> Result<()> {
 }
 
 /// Bridge between the agent subprocess and the MCP server hosted in
-/// chan-server. Connects to the Unix-domain socket and pipes
-/// stdin -> socket and socket -> stdout concurrently. Returns when
-/// either direction closes, which is the normal end of a session.
-#[cfg(unix)]
+/// chan-server. Connects to the server's MCP transport (a Unix-domain
+/// socket on unix, a named pipe on Windows) and pipes stdin -> socket and
+/// socket -> stdout concurrently. Returns when either direction closes,
+/// which is the normal end of a session.
 async fn cmd_mcp_proxy(socket: PathBuf) -> Result<()> {
     chan_server::run_mcp_stdio_proxy(socket)
         .await
         .context("running MCP proxy")
-}
-
-/// Windows stub: chan's MCP bridge runs over Unix-domain sockets; the
-/// proxy subcommand has no counterpart on Windows. The CLI still
-/// accepts `__mcp-proxy` so flag-parsing stays target-agnostic, but
-/// invoking it fails fast instead of half-working.
-#[cfg(not(unix))]
-async fn cmd_mcp_proxy(_socket: PathBuf) -> Result<()> {
-    anyhow::bail!("__mcp-proxy is unix-only");
 }
 
 /// Pick the CLI content-search mode, mirroring the `/api/search/content`
