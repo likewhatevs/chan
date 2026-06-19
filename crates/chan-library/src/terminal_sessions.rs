@@ -18,7 +18,7 @@ use tokio::sync::{broadcast, watch, Notify};
 use tokio::task::JoinHandle;
 
 use crate::config::TerminalConfig;
-use crate::signal::{now_unix_millis, now_unix_secs};
+use crate::time::{now_unix_millis, now_unix_secs};
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -584,7 +584,7 @@ impl Registry {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn attach(&self, id: &str, since: Option<u64>) -> Option<AttachHandle> {
         self.attach_for_ws(id, since)
     }
@@ -1150,12 +1150,17 @@ impl Registry {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn len(&self) -> usize {
         self.sessions
             .lock()
             .expect("terminal registry poisoned")
             .len()
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

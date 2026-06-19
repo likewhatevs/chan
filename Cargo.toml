@@ -8,6 +8,7 @@ members = [
     "crates/chan-workspace",
     "crates/chan-llm",
     "crates/chan-report",
+    "crates/chan-library",
     "crates/chan-server",
     "crates/chan-shell",
     "crates/chan-tunnel-client",
@@ -41,6 +42,7 @@ chan = { version = "0.40.0", path = "crates/chan" }
 chan-workspace = { version = "0.40.0", path = "crates/chan-workspace", default-features = false }
 chan-llm = { version = "0.40.0", path = "crates/chan-llm" }
 chan-report = { version = "0.40.0", path = "crates/chan-report" }
+chan-library = { version = "0.40.0", path = "crates/chan-library" }
 chan-server = { version = "0.40.0", path = "crates/chan-server", default-features = false }
 # default-features off so chan-server can pull just the wire types
 # (`ControlRequest` / `ControlResponse`) without the clap-backed `cs`

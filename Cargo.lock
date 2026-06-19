@@ -1014,6 +1014,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "chan-library"
+version = "0.40.0"
+dependencies = [
+ "anyhow",
+ "dirs 5.0.1",
+ "portable-pty",
+ "rand 0.8.6",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "chan-llm"
 version = "0.40.0"
 dependencies = [
@@ -1048,6 +1064,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
+ "chan-library",
  "chan-llm",
  "chan-shell",
  "chan-tunnel-client",

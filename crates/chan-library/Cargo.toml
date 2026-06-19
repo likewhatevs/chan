@@ -1,0 +1,32 @@
+[package]
+name = "chan-library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The chan library: the authoritative window/terminal/workspace lifecycle (the source of truth clients reconcile to)."
+
+[lib]
+name = "chan_library"
+
+[features]
+# Test-only registry helpers (`Registry::attach`/`len`/`is_empty`) compiled
+# for downstream test builds. chan-server's tests drive the registry directly
+# (host.rs, routes/terminal.rs), so they enable this in their dev-dependency;
+# production builds never see these methods.
+test-util = []
+
+[dependencies]
+anyhow = { workspace = true }
+dirs = { workspace = true }
+portable-pty = "0.8"
+rand = "0.8"
+rustix = { version = "1.1", features = ["process"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

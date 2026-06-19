@@ -48,7 +48,6 @@ mod store;
 mod submit_config;
 mod survey;
 mod terminal_blob;
-mod terminal_sessions;
 mod tunnel_guard;
 mod util;
 mod window_bus;
@@ -72,6 +71,9 @@ pub use preferences::{
 pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
 pub use window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
 
+use crate::terminal_sessions::{
+    Registry as TerminalRegistry, RegistryConfig as TerminalRegistryConfig,
+};
 use auth::{auth_middleware, load_or_create_token, random_token};
 use bus::{make_progress_broadcast, make_watch_bridge};
 use routes::{
@@ -104,7 +106,9 @@ use signal::{
 };
 use state::{AppState, WorkspaceCell};
 use static_assets::{serve_font, serve_static};
-use terminal_sessions::{Registry as TerminalRegistry, RegistryConfig as TerminalRegistryConfig};
+// The terminal-session registry lives in chan-library. Re-export it at the
+// crate root so the route layer reaches it as `crate::terminal_sessions::…`.
+pub(crate) use chan_library::terminal_sessions;
 
 /// Tunnel workspace-name helpers re-exported from chan-tunnel-proto so
 /// the `chan` binary can pre-validate / pre-sanitize without taking
@@ -458,7 +462,7 @@ fn prime_terminal_shell() {
         // later through the `OnceLock`. `drop` rather than `let _` keeps clippy's
         // `let_underscore_future` happy.
         drop(tokio::task::spawn_blocking(
-            terminal_sessions::prime_git_bash,
+            crate::terminal_sessions::prime_git_bash,
         ));
     }
 }

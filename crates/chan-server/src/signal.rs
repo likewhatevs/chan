@@ -20,16 +20,6 @@ pub fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Current wall-clock unix timestamp in MILLISECONDS, for sub-second
-/// quiescence timing (the `cs terminal write` queue's output-idle debounce).
-/// Saturates at 0 on a pre-1970 clock, like `now_unix_secs`.
-pub fn now_unix_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 /// Print a Dense1x2 QR for `url` to stderr when stderr is a TTY.
 /// Suppressed under redirection so the banner stays grep-friendly
 /// in logs. Encoder failure (URL too long for ECC H) is silent: the
