@@ -299,41 +299,14 @@ impl AppState {
         self.window_numbers.lock().unwrap().remove(label);
     }
 
-    /// The custom title set for `label` via `cs window title`, if any.
-    /// `build_workspace_window` prefers it over the auto scheme.
+    /// The custom OS-title override for `label`, if any (read by
+    /// `build_workspace_window`).
     pub fn window_title_override(&self, label: &str) -> Option<String> {
         self.window_title_overrides
             .lock()
             .unwrap()
             .get(label)
             .cloned()
-    }
-
-    /// Set (non-empty) or clear (empty) the custom title for `label`.
-    /// Returns the title to display: the override, or the recomputed
-    /// default "{base} Window {N}" on a reset, or the bare label when the
-    /// window has no recorded display number (shouldn't happen for a live
-    /// window).
-    pub fn set_window_title_override(&self, label: &str, title: &str) -> String {
-        let mut overrides = self.window_title_overrides.lock().unwrap();
-        if title.is_empty() {
-            overrides.remove(label);
-            return self
-                .default_window_title(label)
-                .unwrap_or_else(|| label.to_string());
-        }
-        overrides.insert(label.to_string(), title.to_string());
-        title.to_string()
-    }
-
-    /// Reconstruct the auto "{base} Window {N}" title for `label` from its
-    /// recorded display number. `None` for an unknown label.
-    pub fn default_window_title(&self, label: &str) -> Option<String> {
-        self.window_numbers
-            .lock()
-            .unwrap()
-            .get(label)
-            .map(|(base, n)| format!("{base} Window {n}"))
     }
 
     /// Record `label` as buried (most recent). Re-burying a label

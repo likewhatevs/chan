@@ -16,7 +16,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use chan_server::{DesktopWindowOp, NewWindowKind, WindowMeta};
+use chan_server::{DesktopWindowOp, NewWindowKind};
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
 
@@ -58,14 +58,6 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
         DesktopWindowOp::Hide { id, reply } => {
             let app2 = app.clone();
             let result = on_main(&app, move || hide_window(&app2, &id))
-                .await
-                .and_then(|inner| inner);
-            let _ = reply.send(result);
-        }
-        DesktopWindowOp::Title { id, title, reply } => {
-            let app2 = app.clone();
-            let state2 = Arc::clone(&state);
-            let result = on_main(&app, move || set_window_title(&app2, &state2, &id, &title))
                 .await
                 .and_then(|inner| inner);
             let _ = reply.send(result);
@@ -112,50 +104,6 @@ fn hide_window(app: &AppHandle, id: &str) -> Result<(), String> {
         Some(w) => w.close().map_err(|e| format!("hiding {id}: {e}")),
         None => Err(format!("no window {id}")),
     }
-}
-
-/// `cs window title`: set (or, for an empty string, reset) the OS title
-/// and mirror it into the title registry so `cs window list` reflects it
-/// immediately. The override persists across the bury/reopen cycle.
-/// Rejects a custom title another window already shows, keeping window
-/// names unambiguous (auto "{base} Window N" titles are already unique).
-fn set_window_title(
-    app: &AppHandle,
-    state: &Arc<AppState>,
-    id: &str,
-    title: &str,
-) -> Result<(), String> {
-    let Some(w) = app.get_webview_window(id) else {
-        return Err(format!("no window {id}"));
-    };
-    // Custom titles bypass the per-base numbering, so guard uniqueness
-    // here: refuse a title another SPA window (visible OR hidden — both
-    // are live webviews and both appear in the Window menu) already
-    // shows. The empty-string reset is exempt; it recomputes the unique
-    // default.
-    if !title.is_empty() {
-        let collision = app
-            .webview_windows()
-            .iter()
-            .filter(|(label, _)| label.as_str() != id && serve::is_workspace_webview_label(label))
-            .find(|(_, win)| win.title().map(|t| t == title).unwrap_or(false))
-            .map(|(label, _)| label.clone());
-        if let Some(other) = collision {
-            return Err(format!(
-                "title \"{title}\" is already used by window {other}"
-            ));
-        }
-    }
-    let shown = state.set_window_title_override(id, title);
-    w.set_title(&shown)
-        .map_err(|e| format!("setting title on {id}: {e}"))?;
-    if let Some(embedded) = state.embedded.get() {
-        let kind = embedded.window_titles().get(id).and_then(|m| m.kind);
-        embedded
-            .window_titles()
-            .set(id, WindowMeta { title: shown, kind });
-    }
-    Ok(())
 }
 
 /// `cs window rm`: truly destroy the window. When it still has live

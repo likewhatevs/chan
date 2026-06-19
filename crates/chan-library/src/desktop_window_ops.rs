@@ -64,12 +64,6 @@ pub enum DesktopWindowOp {
         id: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
-    /// Set a custom OS title (empty string resets to the default).
-    Title {
-        id: String,
-        title: String,
-        reply: oneshot::Sender<Result<(), String>>,
-    },
 }
 
 /// Pinned refusal when no desktop is attached (standalone serve / browser).
