@@ -46,7 +46,7 @@ use crate::devserver_api::{
     DEVSERVER_API_PROTOCOL,
 };
 use crate::{sanitize_prefix, Error, ServeConfig};
-use crate::{WindowRecord, WindowSet, WorkspaceHost};
+use crate::{CreateWindow, WindowRecord, WindowSet, WorkspaceHost};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
 use chan_library::windows::WindowRegistry;
@@ -782,10 +782,17 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             delete(handle_forget_terminal),
         )
         .route("/api/devserver/windows", get(handle_list_windows))
-        .route("/api/library/windows", get(handle_list_library_windows))
+        .route(
+            "/api/library/windows",
+            get(handle_list_library_windows).post(handle_create_library_window),
+        )
         .route(
             "/api/library/windows/watch",
             get(handle_watch_library_windows),
+        )
+        .route(
+            "/api/library/windows/:window_id",
+            delete(handle_discard_library_window),
         )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -845,6 +852,33 @@ async fn watch_library_windows(mut socket: WebSocket, host: Arc<WorkspaceHost>) 
                 _ => {} // ignore any other client frame
             },
         }
+    }
+}
+
+/// `POST /api/library/windows` `{kind, workspace_path?}`: mint a window. The
+/// library assigns the id and persists the record; the registry change bridge
+/// fires the watch. Returns the assembled record in the feed shape.
+async fn handle_create_library_window(
+    State(state): State<Arc<DevserverState>>,
+    Json(req): Json<CreateWindow>,
+) -> Response {
+    match state.host.mint_window(req.kind, req.workspace_path) {
+        Ok(record) => Json(record).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `DELETE /api/library/windows/{window_id}`: discard a window by dropping its
+/// record; the change bridge fires the watch, and each client's reconcile then
+/// closes the window. 404 when no window has that id.
+async fn handle_discard_library_window(
+    State(state): State<Arc<DevserverState>>,
+    AxumPath(window_id): AxumPath<String>,
+) -> Response {
+    match state.host.discard_window(&window_id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
@@ -1625,16 +1659,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn library_windows_feed_is_served_and_bearer_gated() {
+    async fn library_windows_feed_lists_mints_and_discards() {
+        use axum::body::to_bytes;
         use tower::ServiceExt;
 
         let home = tempfile::tempdir().expect("home");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
+        // The real devserver installs a window registry in run_devserver; do the
+        // same here so mint/discard have a store.
+        state.host.install_window_registry(
+            Arc::new(chan_library::windows::WindowRegistry::open(
+                home.path().join("windows.json"),
+            )),
+            "local".to_string(),
+        );
         let host = state.host.clone();
         let app = build_devserver_app(state, host);
 
-        // No bearer: 401.
+        // The feed is bearer-gated.
         let unauth = app
             .clone()
             .oneshot(
@@ -1647,23 +1690,10 @@ mod tests {
             .unwrap();
         assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
 
-        // With bearer: 200 (the test host installs no registry, so the set is empty).
-        let ok = app
-            .clone()
-            .oneshot(
-                HttpRequest::builder()
-                    .uri("/api/library/windows")
-                    .header(header::AUTHORIZATION, "Bearer test-token")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(ok.status(), StatusCode::OK);
-
-        // The watch route is registered: a plain GET (no WebSocket upgrade) is a
-        // 4xx upgrade error, not a 404.
+        // The watch route is registered (no conflict with the discard route): a
+        // plain GET is a 4xx upgrade error, not a 404.
         let watch = app
+            .clone()
             .oneshot(
                 HttpRequest::builder()
                     .uri("/api/library/windows/watch")
@@ -1674,5 +1704,55 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(watch.status(), StatusCode::NOT_FOUND);
+
+        // Mint a terminal window: 200 with the assembled record (a w- id, stamped
+        // with the library id).
+        let minted = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/library/windows")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"kind":"terminal"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(minted.status(), StatusCode::OK);
+        let body = to_bytes(minted.into_body(), 64 * 1024).await.unwrap();
+        let record: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let window_id = record["window_id"].as_str().unwrap().to_string();
+        assert!(window_id.starts_with("w-"));
+        assert_eq!(record["kind"], "terminal");
+        assert_eq!(record["library_id"], "local");
+
+        // Discard it: 204; an unknown id is 404.
+        let discarded = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/library/windows/{window_id}"))
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(discarded.status(), StatusCode::NO_CONTENT);
+        let missing = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("DELETE")
+                    .uri("/api/library/windows/w-nope")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 }
