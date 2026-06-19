@@ -375,6 +375,52 @@ pub async fn fetch_terminals(conn: &DevserverConn) -> Result<Vec<DevserverTermin
         .collect()
 }
 
+/// One row of `GET /api/devserver/windows` (contracts.md Amendment 8): a
+/// PERSISTED window across any of the devserver's tenants (workspace OR
+/// standalone terminal). The desktop enumerates these to offer CLOSED-but-
+/// persisted windows for reopen in the Window menu. Deserialized 1:1 from the
+/// frozen wire; `kind`/`title` are optional (mirror `WindowInfo`). `prefix` +
+/// the CURRENT (re-minted) per-mount `token` assemble the reopen URL; `token`
+/// is empty when the tenant is off (not menu-reopenable — use the launcher row).
+#[derive(Debug, Clone, Deserialize)]
+pub struct DevserverWindowRow {
+    pub label: String,
+    pub prefix: String,
+    pub token: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub connected: bool,
+    pub saved: bool,
+}
+
+/// `GET /api/devserver/windows` (Amendment 8): every PERSISTED window across all
+/// of the devserver's tenants, with the live `connected`/`saved` flags + the
+/// current per-mount token. Authed like the rest. Persisted-only by construction
+/// (a discarded window's blob is already gone server-side), so the desktop only
+/// filters `saved && !connected` for the reopenable set.
+pub async fn fetch_devserver_windows(
+    conn: &DevserverConn,
+) -> Result<Vec<DevserverWindowRow>, String> {
+    let url = format!(
+        "{}/api/devserver/windows",
+        base_origin(&conn.host, conn.port)
+    );
+    let resp = http_client()?
+        .get(&url)
+        .bearer_auth(&conn.token)
+        .send()
+        .await
+        .map_err(|e| format!("listing devserver windows: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("devserver windows returned HTTP {}", resp.status()));
+    }
+    resp.json::<Vec<DevserverWindowRow>>()
+        .await
+        .map_err(|e| format!("decoding devserver windows: {e}"))
+}
+
 /// The `DELETE` URL for unmounting a workspace tenant. The server route is
 /// an axum wildcard, so `prefix` (an absolute route path like
 /// `/api/notes-1a2b3c`) is appended verbatim after the collection path.
@@ -490,6 +536,31 @@ mod tests {
         assert_eq!(entries[0].label, "notes");
         assert!(entries[0].on);
         assert_eq!(entries[0].token, "tok_abc");
+    }
+
+    #[test]
+    fn devserver_window_row_decodes_amendment_8_shape() {
+        // Pins the GET /api/devserver/windows wire (Amendment 8): kind/title are
+        // optional; connected/saved drive the reopenable filter; token is empty
+        // when the tenant is off. A drift here reds before the menu misbehaves.
+        let json = r#"[
+          {"label":"workspace-abc-1","prefix":"/api/notes-abc","token":"tok1","kind":"workspace","title":"🏠 /n Window 1","connected":false,"saved":true},
+          {"label":"terminal-win-2","prefix":"/control-3","token":"","connected":true,"saved":true}
+        ]"#;
+        let rows: Vec<DevserverWindowRow> = serde_json::from_str(json).unwrap();
+        assert_eq!(rows.len(), 2);
+        // Row 0: workspace, reopenable (saved && !connected), kind/title present.
+        assert_eq!(rows[0].label, "workspace-abc-1");
+        assert_eq!(rows[0].prefix, "/api/notes-abc");
+        assert_eq!(rows[0].token, "tok1");
+        assert_eq!(rows[0].kind.as_deref(), Some("workspace"));
+        assert_eq!(rows[0].title.as_deref(), Some("🏠 /n Window 1"));
+        assert!(rows[0].saved && !rows[0].connected);
+        // Row 1: optional kind/title absent (defaults None); empty token = off.
+        assert_eq!(rows[1].kind, None);
+        assert_eq!(rows[1].title, None);
+        assert!(rows[1].token.is_empty());
+        assert!(rows[1].connected); // NOT reopenable (a client is attached)
     }
 
     #[test]

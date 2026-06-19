@@ -130,6 +130,24 @@ pub struct RemoteReopen {
     /// Route through the connecting screen (outbound remotes; a down
     /// remote must not paint a blank webview).
     pub connecting: bool,
+    /// Set when this is a CLOSED devserver-tenant window enumerated for the
+    /// Window menu (L10) rather than an outbound attachment: the reopen
+    /// re-creates it at its label AND re-tracks it under the devserver so a
+    /// later disconnect tears it down. `None` for outbound reopens.
+    pub devserver: Option<DevserverReopen>,
+}
+
+/// The devserver context a menu-reopened window needs (see `RemoteReopen`):
+/// which devserver owns it and how to re-create + track it.
+#[derive(Debug, Clone)]
+pub struct DevserverReopen {
+    /// Devserver id — the teardown key (a disconnect closes this window).
+    pub id: String,
+    /// Tenant route prefix — the tracking `window_id` for a workspace window.
+    pub prefix: String,
+    /// A standalone-terminal tenant (vs a workspace) — selects the re-create +
+    /// track shape (terminal family window vs outbound workspace window).
+    pub is_terminal: bool,
 }
 
 /// One buried (hidden, not closed) window: see `AppState::buried_windows`.
@@ -1326,6 +1344,7 @@ fn reopen_devserver_workspace_windows(
             menu_title: String::new(),
             config_key: config::outbound_window_key(&window.window_id),
             connecting: true,
+            devserver: None,
         };
         let _ = serve::reopen_remote_window(app, &window.label, &entry);
     }
@@ -3016,6 +3035,9 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
             connecting: bool,
         }
         let mut conns: Vec<Conn> = Vec::new();
+        // (id, display name, live conn) for each CONNECTED devserver, so its
+        // persisted-but-closed windows become reopen entries below (L10).
+        let mut devserver_targets: Vec<(String, String, devserver::DevserverConn)> = Vec::new();
         let cfg = {
             let store = state.store.lock().unwrap();
             store.get().ok()
@@ -3029,6 +3051,12 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
                     config_key: config::outbound_window_key(&o.id),
                     connecting: true,
                 });
+            }
+            for d in &cfg.devservers {
+                // `devservers.get` returns Some only for a CONNECTED devserver.
+                if let Some(conn) = state.devservers.get(&d.id) {
+                    devserver_targets.push((d.id.clone(), devserver_display(d), conn));
+                }
             }
         }
 
@@ -3068,6 +3096,63 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
                         ),
                         config_key: conn.config_key.clone(),
                         connecting: conn.connecting,
+                        devserver: None,
+                    },
+                );
+            }
+        }
+        // L10: a connected devserver's CLOSED-but-persisted windows
+        // (`saved && !connected`) are reopenable from the Window menu. The URL
+        // is re-minted with the devserver's CURRENT per-mount token
+        // (`assemble_tenant_url`); an OFF tenant (empty token) is not
+        // menu-reopenable here — its launcher row turns it back on. The reopen
+        // (`open_remote_window_from_menu`) re-creates AND re-tracks the window so
+        // a later disconnect tears it down.
+        for (id, display, conn) in devserver_targets {
+            let rows = match devserver::fetch_devserver_windows(&conn).await {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tracing::warn!(devserver = %id, error = %e, "remote windows poll: listing devserver windows failed");
+                    continue;
+                }
+            };
+            for row in rows {
+                if !(row.saved && !row.connected && !row.token.is_empty()) {
+                    continue;
+                }
+                let url = match devserver::assemble_tenant_url(
+                    &conn.host,
+                    conn.port,
+                    &row.prefix,
+                    &row.token,
+                ) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        tracing::warn!(devserver = %id, label = %row.label, error = %e, "assembling a devserver reopen url failed");
+                        continue;
+                    }
+                };
+                let is_terminal = row.kind.as_deref() == Some("terminal");
+                let tail = row
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| remote_window_tail(&row.label));
+                map.insert(
+                    row.label.clone(),
+                    RemoteReopen {
+                        url,
+                        base_title: row.title.unwrap_or_else(|| display.clone()),
+                        menu_title: format!("{display} — {tail}"),
+                        config_key: config::outbound_window_key(&row.prefix),
+                        // Workspace reopen routes through the connecting screen
+                        // like the reconnect path; the terminal branch bypasses
+                        // it (spawns the tenant window directly).
+                        connecting: true,
+                        devserver: Some(DevserverReopen {
+                            id: id.clone(),
+                            prefix: row.prefix,
+                            is_terminal,
+                        }),
                     },
                 );
             }
@@ -3132,6 +3217,36 @@ fn open_remote_window_from_menu(app: &tauri::AppHandle, label: &str) {
         tracing::warn!(label, "remote window menu entry has no stored connection");
         return;
     };
+    // A CLOSED devserver window (L10): re-create it at its label AND re-track it
+    // under the devserver so a later disconnect tears it down. A terminal tenant
+    // spawns its tenant window directly (no connecting screen); a workspace
+    // tenant reuses the outbound reopen (connecting screen, like reconnect).
+    if let Some(ds) = entry.devserver.clone() {
+        let tracked = if ds.is_terminal {
+            let family_id = devserver_terminal_window_id(&ds.id);
+            serve::spawn_devserver_terminal_window_at_label(app, &family_id, label, &entry.url).map(
+                |()| DevserverWindow {
+                    window_id: family_id,
+                    label: label.to_string(),
+                    prefix: None,
+                },
+            )
+        } else {
+            serve::reopen_remote_window(app, label, &entry).map(|()| DevserverWindow {
+                window_id: ds.prefix.clone(),
+                label: label.to_string(),
+                prefix: Some(ds.prefix.clone()),
+            })
+        };
+        match tracked {
+            Ok(window) => {
+                let state = app.state::<Arc<AppState>>();
+                track_devserver_window(&state, &ds.id, window);
+            }
+            Err(e) => tracing::warn!(label, error = %e, "reopening devserver window failed"),
+        }
+        return;
+    }
     if let Err(e) = serve::reopen_remote_window(app, label, &entry) {
         tracing::warn!(label, error = %e, "reopening remote window failed");
     }
