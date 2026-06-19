@@ -1080,11 +1080,8 @@ fn cmd_completions(shell: Shell) -> Result<()> {
 }
 
 /// The process serving a workspace, behind its writer-lock holder.
-///
-/// The variants are produced by `serving_kind`'s control-socket identity
-/// round-trip; the allow keeps the full vocabulary (and its stable JSON
-/// labels) while that round-trip is stubbed.
-#[allow(dead_code)]
+/// Produced by `serving_kind`'s `Identify` round-trip; serializes to
+/// `standalone` / `desktop` / `devserver` for `chan ps --json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ServedBy {
@@ -1181,14 +1178,21 @@ async fn cmd_ps(json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the serving kind behind `holder_pid` by reaching its control
-/// socket. The kind comes from a `ControlRequest::Identify` round-trip;
-/// that request is added together with its chan-server handler so the
-/// server's match stays exhaustive, and the call drops in here. Until
-/// then a reachable holder reports no kind and `chan ps` shows `served`.
+/// Resolve the serving kind behind `holder_pid` with an `Identify`
+/// round-trip to its control socket. Returns `None` when the holder has
+/// no reachable control socket or does not answer; `chan ps` then shows
+/// `served` without a kind.
 async fn serving_kind(holder_pid: u32) -> Option<ServedBy> {
-    let _socket = control_socket_for_pid(holder_pid)?;
-    None
+    let socket = control_socket_for_pid(holder_pid)?;
+    let message = chan_shell::send_control_request(&socket, chan_shell::ControlRequest::Identify)
+        .await
+        .ok()?;
+    let identity: chan_shell::Identity = serde_json::from_str(&message).ok()?;
+    Some(match identity.kind {
+        chan_shell::ServeKind::Standalone => ServedBy::Standalone,
+        chan_shell::ServeKind::Desktop => ServedBy::Desktop,
+        chan_shell::ServeKind::Devserver => ServedBy::Devserver,
+    })
 }
 
 async fn cmd_remove(path: PathBuf) -> Result<()> {
