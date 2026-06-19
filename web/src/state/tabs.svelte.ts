@@ -1747,6 +1747,22 @@ export function isTerminalMoving(tabId: string): boolean {
   return terminalsMovingOut.delete(tabId);
 }
 
+/// Records whether the most recent terminal-tab close was a session-preserving
+/// cross-window MOVE (vs a real close). `closeTab` sets it just before it
+/// removes the tab — so the empty-window discard guard, which fires reactively
+/// right after, reads the LAST close's intent deterministically (set before the
+/// mutation, no effect-vs-teardown ordering race). A non-move close clears it.
+let lastTerminalCloseWasMoveOut = false;
+
+/// One-shot read for the window-discard guard: was the close that just emptied
+/// this window a terminal move-out? If so the source's discard must DELETE its
+/// blob but NOT reap — the moved PTY lives on, re-bound to the target window.
+export function consumeLastCloseWasMoveOut(): boolean {
+  const v = lastTerminalCloseWasMoveOut;
+  lastTerminalCloseWasMoveOut = false;
+  return v;
+}
+
 export function registerTerminalInputSink(tabId: string, sink: TerminalInputSink): () => void {
   terminalInputSinks.set(tabId, sink);
   return () => {
@@ -2356,6 +2372,10 @@ async function closeTabAsync(
   const idx = p.tabs.findIndex((t) => t.id === tabId);
   if (idx < 0) return;
   const tab = p.tabs[idx];
+  // Capture move-out intent NOW, before the terminal close-sink below consumes
+  // `terminalsMovingOut`. A cross-window MOVE marks the tab moving-out
+  // (Pane.svelte drag-end) right before this call.
+  const movingOut = tab.kind === "terminal" && terminalsMovingOut.has(tabId);
   if (isDraftTab(tab) && !opts?.force) {
     if (!(await handleDraftTabClose(tab))) return;
   } else if (!(await confirmCloseTabs([tab], opts))) {
@@ -2364,6 +2384,11 @@ async function closeTabAsync(
   if (tab.kind === "terminal") {
     if (!(await runTerminalCloseSink(tab))) return;
   }
+  // Record the close's move-out intent for the empty-window discard guard. Set
+  // unconditionally (false for a real close) so a prior move-out can't leak into
+  // a later genuine discard, and set right before the splice so the reactive
+  // empty-window `$effect` reads it deterministically.
+  lastTerminalCloseWasMoveOut = movingOut;
   rememberClosedTab(paneId, tab);
   p.tabs.splice(idx, 1);
   if (p.activeTabId === tabId) {

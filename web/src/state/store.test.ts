@@ -253,6 +253,31 @@ describe("session persistence bootstrap guard", () => {
     fetchSpy.mockRestore();
     vi.useRealTimers();
   });
+
+  test("discardWindowSession({reap:false}) marks the DELETE &moved=1; default reaps", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 204 }),
+    );
+    __testSetBootstrapHydrated(true);
+    setTerminalLayout({ terminalSessionId: "term_live" });
+
+    // Default discard: a plain DELETE — the server reaps the window's sessions.
+    discardWindowSession();
+    expect(String(fetchSpy.mock.calls.at(-1)![0])).not.toContain("moved=1");
+    expect(fetchSpy.mock.calls.at(-1)![1]?.method).toBe("DELETE");
+    __testResetSessionDiscarded();
+    fetchSpy.mockClear();
+
+    // Move-out discard: still DELETE the blob, but `&moved=1` tells the server
+    // NOT to reap — the terminal moved to another window and stays live there.
+    discardWindowSession({ reap: false });
+    const [url, init] = fetchSpy.mock.calls.at(-1)!;
+    expect(init?.method).toBe("DELETE");
+    expect(String(url)).toContain("/api/session");
+    expect(String(url)).toContain("moved=1");
+
+    fetchSpy.mockRestore();
+  });
 });
 
 describe("all-terminal reload reattach snapshot", () => {

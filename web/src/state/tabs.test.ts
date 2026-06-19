@@ -17,6 +17,9 @@ import {
   ensureTerminalKeyboardProtocol,
   closeTab,
   closeTabsInPane,
+  consumeLastCloseWasMoveOut,
+  isTerminalMoving,
+  markTerminalMovingOut,
   cancelPaneMode,
   commitPaneMode,
   detachTabToPaneEdge,
@@ -213,6 +216,26 @@ describe("tab close confirmation", () => {
     unregister();
     expect(closeSink).toHaveBeenCalledTimes(1);
     expect(activePane().tabs).toHaveLength(1);
+  });
+
+  test("a terminal moving out records the move-out for the discard guard; a real close clears it", async () => {
+    // A cross-window MOVE marks the tab moving-out (Pane.svelte drag-end) right
+    // before closeTab; the empty-window discard guard reads this to suppress the
+    // reap (the moved PTY lives on in the target window).
+    const moving = terminalTab({ id: "term-move", terminalSessionId: "sess-move" });
+    const pane = resetLayout([moving]);
+    markTerminalMovingOut(moving.id);
+    await closeTab(pane.id, moving.id, { force: true });
+    expect(consumeLastCloseWasMoveOut()).toBe(true);
+    // One-shot: a second read is false.
+    expect(consumeLastCloseWasMoveOut()).toBe(false);
+    isTerminalMoving(moving.id); // drain the residual marker (no close-sink in test)
+
+    // A genuine close (not marked moving-out) records false → the discard reaps.
+    const closing = terminalTab({ id: "term-close", terminalSessionId: "sess-close" });
+    const pane2 = resetLayout([closing]);
+    await closeTab(pane2.id, closing.id, { force: true });
+    expect(consumeLastCloseWasMoveOut()).toBe(false);
   });
 
   test("draft tab close prompts for discard or save", async () => {

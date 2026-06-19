@@ -68,6 +68,7 @@
     closePane,
     closeTab,
     closeTabsInPane,
+    consumeLastCloseWasMoveOut,
     cancelPaneMode,
     commitPaneMode,
     draftCloseState,
@@ -936,10 +937,11 @@
     // so re-showing is instant.
     if (leafPaneCount() <= 1) {
       if (isTauriDesktop()) {
-        // An empty window is a discard: delete its blob synchronously (reaps
-        // any server sessions) before the host destroys the window, so it
-        // never lingers in `cs window list`.
-        discardWindowSession();
+        // An empty window is a discard: delete its blob synchronously before
+        // the host destroys the window, so it never lingers in `cs window
+        // list`. Suppress the reap if the window emptied via a terminal
+        // move-out (the moved PTY must survive in the target window).
+        discardWindowSession({ reap: !consumeLastCloseWasMoveOut() });
         void requestCloseWindow();
         return true;
       }
@@ -957,10 +959,13 @@
     if (!ui.terminalOnly || !ui.terminalArmed) return;
     if (allTerminalTabs().length > 0) return;
     // Last terminal closed (^W / ^D / Cmd+W): the window is empty, which is a
-    // discard — delete its blob (reaps any server sessions) before the host
-    // destroys the window so it leaves nothing in `cs window list`.
+    // discard — delete its blob before the host destroys the window so it
+    // leaves nothing in `cs window list`. But if the window emptied because its
+    // terminal MOVED to another window, suppress the reap: the moved PTY lives
+    // on (re-bound to the target), and the source's synchronous DELETE could
+    // otherwise beat the target's re-attach and kill it.
     if (isTauriDesktop()) {
-      discardWindowSession();
+      discardWindowSession({ reap: !consumeLastCloseWasMoveOut() });
       void requestCloseWindow();
     }
   });

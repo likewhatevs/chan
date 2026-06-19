@@ -2065,14 +2065,20 @@ export function scheduleSessionSave(): void {
   }, SESSION_DEBOUNCE_MS);
 }
 
-/// Discard this window's saved session: delete the blob NOW (the server
-/// reaps the window's live terminal sessions, keyed on the window label) and
-/// stop any pending or future save from re-persisting it. The caller closes
-/// the window afterward. Idempotent; fires a `keepalive` DELETE so the reap
-/// survives an immediate window destroy/unload — this is the explicit,
+/// Discard this window's saved session: delete the blob NOW (by default the
+/// server also reaps the window's live terminal sessions, keyed on the window
+/// label) and stop any pending or future save from re-persisting it. The caller
+/// closes the window afterward. Idempotent; fires a `keepalive` DELETE so the
+/// reap survives an immediate window destroy/unload — this is the explicit,
 /// synchronous discard signal that replaces the old reliance on a `pagehide`
 /// flush (which a hidden/buried WKWebView may never fire).
-export function discardWindowSession(): void {
+///
+/// `reap: false` (a cross-window terminal MOVE that emptied this window): still
+/// DELETE the blob so the window leaves `cs window list`, but mark it
+/// (`&moved=1`) so the server does NOT reap — the moved PTY lives on, re-bound
+/// to the target window. Without this the source's synchronous DELETE can beat
+/// the target's async re-attach and kill the just-moved terminal.
+export function discardWindowSession(opts?: { reap?: boolean }): void {
   sessionDiscarded = true;
   if (sessionTimer) {
     clearTimeout(sessionTimer);
@@ -2081,8 +2087,10 @@ export function discardWindowSession(): void {
   // No Cmd+R resurrection from the sessionStorage reload snapshot either.
   writeLayoutReloadSnapshot(null);
   lastSessionSnapshot = "";
+  // sessionPath() always carries `?w=`, so `&moved=1` is always a valid append.
+  const url = withTokenQuery(sessionPath()) + (opts?.reap === false ? "&moved=1" : "");
   try {
-    void fetch(withTokenQuery(sessionPath()), {
+    void fetch(url, {
       method: "DELETE",
       keepalive: true,
     }).catch(() => {});
