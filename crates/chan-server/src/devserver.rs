@@ -1348,6 +1348,7 @@ mod tests {
             host,
             addr,
             token: "test-token".into(),
+            library_id: "lib-test".into(),
             host_label: "test".into(),
             workspaces: Mutex::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
