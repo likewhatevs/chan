@@ -17,6 +17,7 @@ pub mod desktop_window_ops;
 pub mod error;
 pub mod prefix;
 pub mod serve_config;
+pub mod tenant;
 pub mod terminal_sessions;
 pub mod time;
 pub mod window_presence;
@@ -29,3 +30,4 @@ pub use config::{
 pub use error::Error;
 pub use prefix::{allocate_workspace_prefix, workspace_slug};
 pub use serve_config::{sanitize_prefix, ServeConfig, ServeHandle};
+pub use tenant::{HostControl, WorkspaceCellHandle};

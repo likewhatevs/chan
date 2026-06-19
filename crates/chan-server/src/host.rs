@@ -437,6 +437,15 @@ impl WorkspaceHost {
             .collect()
     }
 
+    /// The full library window set — every window across every tenant, as the
+    /// authoritative records the launcher / `cs window list` / the desktop
+    /// watcher reconcile to. The live-state assembly (registry rows joined with
+    /// each tenant's prefix/token/presence) is wired with the window registry
+    /// field; until then this is empty.
+    pub fn assemble_window_records(&self) -> Vec<chan_library::windows::WindowRecord> {
+        Vec::new()
+    }
+
     /// Raw replay-ring PTY bytes for the terminal tenant mounted at
     /// `prefix` (empty when none is mounted there). Reaches into that
     /// tenant's terminal registry like [`tenant_has_window_sessions`](
@@ -656,6 +665,18 @@ impl WorkspaceHost {
             .filter(|(prefix, _)| path_matches_prefix(path, prefix))
             .max_by_key(|(prefix, _)| prefix.len())
             .map(|(_, runtime)| runtime.router()))
+    }
+}
+
+/// The control socket reaches the host through `Weak<dyn HostControl>` (the
+/// `install_self` back-reference), so it never names the concrete host type.
+impl chan_library::HostControl for WorkspaceHost {
+    fn close_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
+        self.close_workspace_for_root(root)
+    }
+
+    fn assemble_window_records(&self) -> Vec<chan_library::windows::WindowRecord> {
+        self.assemble_window_records()
     }
 }
 
