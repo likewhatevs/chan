@@ -36,7 +36,9 @@ pub use chan_shell::{ControlRequest, ControlResponse};
 // The survey types are part of the same shared wire module; the handler
 // pushes a SurveySpec to the SPA and formats the SurveyReply for the CLI.
 // TeamOp tags the `cs terminal team` op (new | load).
-use chan_shell::{submit_writes, PaneOp, SubmitAgent, SurveyReply, SurveySpec, TeamOp};
+use chan_shell::{
+    submit_writes, Identity, PaneOp, ServeKind, SubmitAgent, SurveyReply, SurveySpec, TeamOp,
+};
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -603,6 +605,26 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             );
             into_response(
                 serde_json::to_string(&rows).map_err(|e| format!("encoding window list: {e}")),
+            )
+        }
+        ControlRequest::Identify => {
+            // Classify this serving process for `chan ps`. `unserve` separates a
+            // standalone `serve` (its own shutdown signal) from a hosted tenant;
+            // among hosted tenants, an active desktop window-ops channel marks
+            // chan-desktop, its absence a headless devserver.
+            let kind = if matches!(unserve, UnserveScope::Standalone { .. }) {
+                ServeKind::Standalone
+            } else if desktop.window_ops.is_some() {
+                ServeKind::Desktop
+            } else {
+                ServeKind::Devserver
+            };
+            let identity = Identity {
+                kind,
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            };
+            into_response(
+                serde_json::to_string(&identity).map_err(|e| format!("encoding identity: {e}")),
             )
         }
         ControlRequest::Search { query, limit } => {
@@ -2002,6 +2024,44 @@ mod tests {
         let dir = tempfile::tempdir().expect("root");
         let resp = handle_unserve(&UnserveScope::Unsupported, dir.path()).await;
         assert!(matches!(resp, ControlResponse::Error { .. }));
+    }
+
+    #[tokio::test]
+    async fn identify_classifies_standalone_desktop_and_devserver() {
+        async fn kind_of(ctx: &ControlSocketCtx) -> ServeKind {
+            match handle_request(ControlRequest::Identify, ctx).await {
+                ControlResponse::Ok { message } => {
+                    serde_json::from_str::<Identity>(&message)
+                        .expect("identity json")
+                        .kind
+                }
+                other => panic!("expected Ok identity, got {other:?}"),
+            }
+        }
+        let cell = Arc::new(RwLock::new(None));
+
+        // Hosted tenant, no desktop window-ops channel => devserver.
+        let ctx = test_ctx(cell.clone(), ControlTenant::Workspace);
+        assert_eq!(kind_of(&ctx).await, ServeKind::Devserver);
+
+        // A standalone `serve` (its own shutdown scope) => standalone.
+        let mut ctx = test_ctx(cell.clone(), ControlTenant::Workspace);
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        ctx.unserve = UnserveScope::Standalone {
+            root: std::path::PathBuf::from("/tmp/standalone"),
+            shutdown_tx: Arc::new(tx),
+        };
+        assert_eq!(kind_of(&ctx).await, ServeKind::Standalone);
+
+        // A hosted tenant WITH a live desktop window-ops channel => desktop.
+        let mut ctx = test_ctx(cell, ControlTenant::Workspace);
+        let titles = ctx.desktop.window_titles.clone();
+        let (ops_tx, _ops_rx) = tokio::sync::mpsc::channel(1);
+        ctx.desktop = crate::desktop_window_ops::DesktopBridge {
+            window_ops: Some(ops_tx),
+            window_titles: titles,
+        };
+        assert_eq!(kind_of(&ctx).await, ServeKind::Desktop);
     }
 
     #[test]

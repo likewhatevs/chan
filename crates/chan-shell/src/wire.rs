@@ -72,6 +72,11 @@ pub enum ControlRequest {
     // desktop-supplied OS title/kind), returned as JSON in `Ok.message`
     // for the CLI to format. Works on both workspace and terminal tenants.
     WindowList,
+    // Identify the serving process behind this control socket: `chan ps`
+    // round-trips it to classify each served workspace's holder as a
+    // standalone `serve`, a chan-desktop, or a devserver. The reply is an
+    // [`Identity`] JSON in `Ok.message`.
+    Identify,
     // Category 4 (desktop window lifecycle): drive the desktop's OS
     // windows from the terminal. These reach the Tauri app through the
     // in-process bridge the embedded server installs; a standalone
@@ -776,6 +781,39 @@ mod survey_wire_tests {
             }
         ));
     }
+
+    #[test]
+    fn identify_request_and_identity_reply_wire() {
+        // The request is a bare tagged unit; `chan ps` and the chan-server
+        // handler must agree on the exact bytes.
+        let v = serde_json::to_value(&ControlRequest::Identify).unwrap();
+        assert_eq!(v, serde_json::json!({ "type": "identify" }));
+        assert!(matches!(
+            serde_json::from_str::<ControlRequest>(r#"{"type":"identify"}"#).unwrap(),
+            ControlRequest::Identify
+        ));
+
+        // The reply payload (JSON in Ok.message): kind serializes to the
+        // `standalone`/`desktop`/`devserver` strings `chan ps` shows.
+        let id = Identity {
+            kind: ServeKind::Devserver,
+            version: "0.40.0".into(),
+        };
+        let v = serde_json::to_value(&id).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "kind": "devserver", "version": "0.40.0" })
+        );
+        assert_eq!(id, serde_json::from_value(v).unwrap());
+        assert_eq!(
+            serde_json::to_value(ServeKind::Standalone).unwrap(),
+            serde_json::json!("standalone")
+        );
+        assert_eq!(
+            serde_json::to_value(ServeKind::Desktop).unwrap(),
+            serde_json::json!("desktop")
+        );
+    }
 }
 
 /// The single-line reply the server writes back on the control socket.
@@ -785,4 +823,24 @@ mod survey_wire_tests {
 pub enum ControlResponse {
     Ok { message: String },
     Error { message: String },
+}
+
+/// What kind of process serves a workspace, for `chan ps`. A `serve` standalone,
+/// a chan-desktop, or a headless devserver. Serializes to `standalone` /
+/// `desktop` / `devserver`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServeKind {
+    Standalone,
+    Desktop,
+    Devserver,
+}
+
+/// Reply payload for [`ControlRequest::Identify`], JSON-encoded into the
+/// `Ok.message` of a [`ControlResponse`] (the convention for structured control
+/// replies). `version` is the server's `CARGO_PKG_VERSION`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Identity {
+    pub kind: ServeKind,
+    pub version: String,
 }

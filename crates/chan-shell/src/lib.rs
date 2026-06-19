@@ -15,8 +15,8 @@
 
 mod wire;
 pub use wire::{
-    ControlRequest, ControlResponse, PaneOp, SplitDir, SurveyFollowup, SurveyReply, SurveySpec,
-    TeamOp,
+    ControlRequest, ControlResponse, Identity, PaneOp, ServeKind, SplitDir, SurveyFollowup,
+    SurveyReply, SurveySpec, TeamOp,
 };
 
 #[cfg(feature = "client")]
