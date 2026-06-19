@@ -44,8 +44,8 @@ use crate::devserver_api::{
     OpenWorkspaceRequest, SetWorkspaceOnRequest, TerminalEntry, WorkspaceEntry,
     DEVSERVER_API_PROTOCOL,
 };
-use crate::WorkspaceHost;
 use crate::{sanitize_prefix, Error, ServeConfig};
+use crate::{WindowRecord, WorkspaceHost};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
 use chan_library::windows::WindowRegistry;
@@ -781,12 +781,23 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             delete(handle_forget_terminal),
         )
         .route("/api/devserver/windows", get(handle_list_windows))
+        .route("/api/library/windows", get(handle_list_library_windows))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
         ))
         .with_state(state);
     public.merge(authed).merge(host.router())
+}
+
+/// `GET /api/library/windows`: the full library window set every client
+/// reconciles to. A thin wrapper over the host's shared `assemble_window_records`,
+/// which the desktop watcher and `cs window list` also call in-process, so every
+/// client reads one assembly with no divergence.
+async fn handle_list_library_windows(
+    State(state): State<Arc<DevserverState>>,
+) -> Json<Vec<WindowRecord>> {
+    Json(state.host.assemble_window_records())
 }
 
 /// Bind the per-user discovery socket whose registration handler mounts the
