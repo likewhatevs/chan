@@ -338,6 +338,12 @@ impl WorkspaceHost {
                 self.unserve_mode(),
             )
             .await?;
+        // Presence transitions (a window's first socket connecting / last one
+        // dropping) shift its `connected` flag with no registry change, so feed
+        // the tenant's presence the aggregate signal the watch awaits.
+        artifacts
+            .window_presence
+            .install_change_notify(self.library_change_notify.clone());
         let handle = ServeHandle {
             addr: config.addr,
             prefix: prefix.clone(),
@@ -449,6 +455,11 @@ impl WorkspaceHost {
                 session_dir,
             )
             .await?;
+        // Feed the tenant's presence the aggregate change signal (see
+        // `open_workspace`); a terminal window's `connected` is presence-driven.
+        artifacts
+            .window_presence
+            .install_change_notify(self.library_change_notify.clone());
         // Root reported for diagnostics / desktop correlation: the PTY
         // cwd is the user's home dir, so surface that. Falls back to "/"
         // to match `build_terminal_app`'s registry root resolution.

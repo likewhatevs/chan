@@ -21,12 +21,18 @@
 //! distinguishable here. The honest vocabulary is connected / saved.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use tokio::sync::Notify;
 
 #[derive(Default)]
 pub struct WindowPresence {
     /// window id -> live socket count.
     inner: Mutex<HashMap<String, usize>>,
+    /// Fired on a 0↔1 presence transition (a window's first socket connecting
+    /// or last one dropping) so the library watch feed re-snapshots its
+    /// `connected` flag. Installed by the host when it mounts the tenant;
+    /// absent in unit tests / before install, in which case presence is silent.
+    change_notify: OnceLock<Arc<Notify>>,
 }
 
 impl WindowPresence {
@@ -34,11 +40,32 @@ impl WindowPresence {
         Self::default()
     }
 
+    /// Install the library's aggregate change signal so presence transitions
+    /// wake the watch feed. Idempotent set-once; the host calls this once per
+    /// tenant right after the builder constructs the presence.
+    pub fn install_change_notify(&self, notify: Arc<Notify>) {
+        let _ = self.change_notify.set(notify);
+    }
+
+    /// Wake the watch feed if a change signal is installed.
+    fn fire_change(&self) {
+        if let Some(notify) = self.change_notify.get() {
+            notify.notify_waiters();
+        }
+    }
+
     /// Register one live socket for `id`; presence holds until the
     /// returned guard drops.
     pub fn connect(self: &Arc<Self>, id: &str) -> PresenceGuard {
-        let mut inner = self.lock();
-        *inner.entry(id.to_string()).or_insert(0) += 1;
+        let newly_connected = {
+            let mut inner = self.lock();
+            let count = inner.entry(id.to_string()).or_insert(0);
+            *count += 1;
+            *count == 1
+        };
+        if newly_connected {
+            self.fire_change();
+        }
         PresenceGuard {
             presence: Arc::clone(self),
             id: id.to_string(),
@@ -58,12 +85,23 @@ impl WindowPresence {
     }
 
     fn disconnect(&self, id: &str) {
-        let mut inner = self.lock();
-        if let Some(count) = inner.get_mut(id) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                inner.remove(id);
+        let newly_disconnected = {
+            let mut inner = self.lock();
+            match inner.get_mut(id) {
+                Some(count) => {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        inner.remove(id);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                None => false,
             }
+        };
+        if newly_disconnected {
+            self.fire_change();
         }
     }
 }
