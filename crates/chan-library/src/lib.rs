@@ -30,4 +30,6 @@ pub use config::{
 pub use error::Error;
 pub use prefix::{allocate_workspace_prefix, workspace_slug};
 pub use serve_config::{sanitize_prefix, ServeConfig, ServeHandle};
-pub use tenant::{HostControl, UnserveMode, UnserveScope, WorkspaceCellHandle};
+pub use tenant::{
+    HostControl, TenantArtifacts, TenantBuilder, UnserveMode, UnserveScope, WorkspaceCellHandle,
+};

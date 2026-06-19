@@ -12,14 +12,19 @@
 //!   and read the library window set (`cs window list`). Lets the control
 //!   socket hold `Weak<dyn HostControl>` instead of a concrete `WorkspaceHost`.
 
+use std::any::Any;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, RwLock, Weak};
 
+use async_trait::async_trait;
 use chan_workspace::Workspace;
 use tokio::sync::watch;
 
+use crate::desktop_window_ops::DesktopBridge;
+use crate::terminal_sessions::Registry as TerminalRegistry;
+use crate::window_presence::WindowPresence;
 use crate::windows::WindowRecord;
-use crate::Error;
+use crate::{Error, ServeConfig};
 
 /// A handle to one tenant's live workspace cell, owned by the route layer
 /// (it wraps `chan-server`'s `WorkspaceCell`, which holds the search indexer).
@@ -88,4 +93,63 @@ pub enum UnserveMode {
     Standalone,
     Host(Weak<dyn HostControl>),
     Unsupported,
+}
+
+/// What the route layer hands back per mounted tenant — everything the host
+/// needs to route to it, reconcile its windows, and tear it down. The
+/// router-construction seam: the host owns these; the route layer builds them
+/// via [`TenantBuilder`]. This is the ex-`AppArtifacts`, reduced to the
+/// host-facing surface, plus an opaque keep-alive for the route-layer pieces
+/// the host only owns for lifetime (the MCP bridge, the control socket, the
+/// background prune/drain/broadcast tasks).
+pub struct TenantArtifacts {
+    /// The tenant's axum app, dispatched under its route prefix.
+    pub app: axum::Router,
+    /// Per-launch bearer for this tenant (`None` with `--no-token`).
+    pub token: Option<String>,
+    /// The tenant's PTY registry (window-session checks, scrollback, reap).
+    pub terminal_sessions: Arc<TerminalRegistry>,
+    /// Shutdown signal; the host fires it on tenant close so the tenant's
+    /// background tasks exit and the runtime drops cleanly.
+    pub shutdown_tx: Arc<watch::Sender<bool>>,
+    /// SPA-facing URL prefix (tunnel mode swaps it on Connected). Shared Arc
+    /// with the tenant's `AppState`.
+    pub prefix: Arc<RwLock<String>>,
+    /// Which window ids hold a live `/ws` socket — the `connected` source for
+    /// the window-record assembly.
+    pub window_presence: Arc<WindowPresence>,
+    /// Reach the tenant's live workspace + drive teardown/reindex-cancel
+    /// without naming the route layer's `WorkspaceCell`.
+    pub cell: Arc<dyn WorkspaceCellHandle>,
+    /// Route-layer pieces the host only owns for the tenant's lifetime (MCP
+    /// bridge, control socket, background task handles). Opaque: the host never
+    /// calls them; dropping this on teardown unlinks sockets + stops tasks.
+    pub keepalive: Box<dyn Any + Send + Sync>,
+}
+
+/// The route layer's tenant constructor, inverted so `chan-library`'s host
+/// drives it without depending on `chan-server`. The route layer
+/// (`chan-server`) implements this; the host holds an `Arc<dyn TenantBuilder>`
+/// and calls it from `open_*`.
+#[async_trait]
+pub trait TenantBuilder: Send + Sync {
+    /// Build a workspace tenant mounted under `config.prefix`.
+    async fn build_workspace(
+        &self,
+        workspace: Arc<Workspace>,
+        config: &ServeConfig,
+        desktop: DesktopBridge,
+        unserve: UnserveMode,
+    ) -> Result<TenantArtifacts, Error>;
+
+    /// Build a workspace-less terminal tenant, optionally running `command` on
+    /// its PTYs, with an optional persisted per-window session dir.
+    async fn build_terminal(
+        &self,
+        config: &ServeConfig,
+        desktop: DesktopBridge,
+        unserve: UnserveMode,
+        command: Option<String>,
+        session_dir: Option<PathBuf>,
+    ) -> Result<TenantArtifacts, Error>;
 }
