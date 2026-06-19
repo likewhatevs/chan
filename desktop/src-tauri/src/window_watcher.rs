@@ -22,7 +22,7 @@
 //! per-library watcher wiring (the `WindowFeed` impls, the Tauri `NativeSurface`
 //! impl, and the `watch_loop` spawn) — the `expect(dead_code)` self-clears the
 //! moment that wiring lands.
-#![expect(dead_code, reason = "the window-watcher reconcile core + loop; the per-library watcher wiring consumes it")]
+#![cfg_attr(not(test), expect(dead_code, reason = "the window-watcher reconcile core + loop; the per-library watcher wiring consumes it"))]
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -98,16 +98,22 @@ pub fn reconcile(
     }
 }
 
-/// A library's window-set feed: the current snapshot plus a signal that it may
-/// have changed. The local library implements this in-process
-/// (`host.assemble_window_records()` + the registry's change `Notify`); a
-/// devserver implements it over HTTP (`GET /api/library/windows` + the watch
-/// socket). One [`watch_loop`] drives both.
+/// A library's window-set feed: the current snapshot plus the change signal the
+/// loop waits on. The local library implements this in-process
+/// (`host.assemble_window_records()` + `host.library_change_notify()`).
+///
+/// **Why a `Notify` and not an `async fn changed()`:** the library fires its
+/// change signal with `notify_waiters()` — which stores NO permit, so a waiter
+/// registered *after* the fire misses it. tokio's `Notified` only registers on
+/// first poll, so [`watch_loop`] must `enable()` it (register) BEFORE taking the
+/// snapshot, closing the snapshot↔await gap. An opaque `impl Future` can't be
+/// `enable()`d, so the feed hands the loop the raw `Notify` to arm itself.
 pub trait WindowFeed {
     /// The library's current full window set.
     fn snapshot(&self) -> Vec<WindowRecord>;
-    /// Resolves when the set may have changed, driving the next reconcile.
-    fn changed(&self) -> impl Future<Output = ()> + Send;
+    /// The change signal: fires (via `notify_waiters`) on every window-set
+    /// change. The loop pins + `enable()`s it before snapshotting.
+    fn change_notify(&self) -> Arc<Notify>;
 }
 
 /// Desktop-local view state the watcher reconciles around. **Bury is
@@ -144,10 +150,14 @@ impl WatcherViewState {
 
 /// Drive a library's native surface to its window set: reconcile on every feed
 /// change AND every local view change (bury/unbury), until `cancel` resolves
-/// (disconnect). The reconcile is idempotent (snapshot-not-delta), so a missed
-/// wakeup self-heals on the next pass and reconnect = resubscribe + reconcile
-/// can never spawn a duplicate. On exit the surface is left as-is; disconnect
-/// reconciles to empty separately (detach, not reap).
+/// (disconnect). The reconcile is idempotent (snapshot-not-delta), so reconnect
+/// = resubscribe + reconcile can never spawn a duplicate. On exit the surface is
+/// left as-is; disconnect reconciles to empty separately (detach, not reap).
+///
+/// Correctness: both change signals fire with `notify_waiters()` (no stored
+/// permit), so each `Notified` is pinned and `enable()`d — registered as a
+/// waiter — BEFORE the snapshot is taken. A change landing in the snapshot↔await
+/// gap then still wakes the already-registered waiter rather than being missed.
 pub async fn watch_loop<F, S, C>(
     library_id: &str,
     feed: F,
@@ -159,13 +169,20 @@ pub async fn watch_loop<F, S, C>(
     S: NativeSurface,
     C: Future<Output = ()>,
 {
+    let feed_notify = feed.change_notify();
     tokio::pin!(cancel);
     loop {
-        // Register BOTH change signals before snapshotting, so a change between
-        // the snapshot and the await is not lost (`Notify` keeps one permit).
-        let feed_changed = feed.changed();
+        // Arm BOTH change waiters (register them) BEFORE the snapshot, closing
+        // the snapshot↔await race against `notify_waiters()`.
+        let feed_changed = feed_notify.notified();
+        tokio::pin!(feed_changed);
+        feed_changed.as_mut().enable();
         let view_changed = view.changed.notified();
+        tokio::pin!(view_changed);
+        view_changed.as_mut().enable();
+
         reconcile(library_id, &feed.snapshot(), &view.buried_snapshot(), &surface);
+
         tokio::select! {
             _ = feed_changed => {}
             _ = view_changed => {}
@@ -291,6 +308,80 @@ mod tests {
         let b = rec("lib-abc", "w-1", WindowKind::Terminal);
         assert_ne!(native_label(&a), native_label(&b));
         assert_eq!(native_label(&b), "lib-abc::w-1");
+    }
+
+    /// The race-proof test for the `enable()`-before-snapshot fix, against a REAL
+    /// `notify_waiters()` (not the fake feed). The feed fires its change signal
+    /// SYNCHRONOUSLY during the first `snapshot()` — i.e. inside the snapshot↔await
+    /// gap — then returns the window on the next snapshot. With `enable()` arming
+    /// the waiter BEFORE the snapshot, the loop catches the gap-fired change and
+    /// reconciles to the new snapshot (opens `w-1`). WITHOUT it, the change is
+    /// missed (waiter registers after the fire), the loop blocks forever, and
+    /// `w-1` never opens — so this assertion fails iff the race is present.
+    #[tokio::test]
+    async fn watch_loop_catches_a_change_fired_in_the_snapshot_gap() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Default)]
+        struct ShareSurface {
+            opened: std::sync::Mutex<Vec<String>>,
+        }
+        impl NativeSurface for Arc<ShareSurface> {
+            fn open_labels(&self, _library_id: &str) -> HashSet<String> {
+                self.opened.lock().unwrap().iter().cloned().collect()
+            }
+            fn open(&self, record: &WindowRecord) {
+                self.opened.lock().unwrap().push(native_label(record));
+            }
+            fn close(&self, label: &str) {
+                self.opened.lock().unwrap().retain(|l| l != label);
+            }
+        }
+
+        struct GapFeed {
+            notify: Arc<Notify>,
+            calls: AtomicUsize,
+        }
+        impl WindowFeed for GapFeed {
+            fn snapshot(&self) -> Vec<WindowRecord> {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    // Fire a change DURING the snapshot — the snapshot↔await gap.
+                    self.notify.notify_waiters();
+                    Vec::new()
+                } else {
+                    vec![rec("local", "w-1", WindowKind::Terminal)]
+                }
+            }
+            fn change_notify(&self) -> Arc<Notify> {
+                self.notify.clone()
+            }
+        }
+
+        let notify = Arc::new(Notify::new());
+        let feed = GapFeed {
+            notify: notify.clone(),
+            calls: AtomicUsize::new(0),
+        };
+        let surface = Arc::new(ShareSurface::default());
+        let view = Arc::new(WatcherViewState::default());
+        let cancel = Arc::new(Notify::new());
+
+        let surface_in = Arc::clone(&surface);
+        let cancel_in = Arc::clone(&cancel);
+        let task = tokio::spawn(async move {
+            watch_loop("local", feed, surface_in, view, cancel_in.notified()).await;
+        });
+
+        // Give the loop time to run the gap iteration + the re-reconcile, then stop it.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancel.notify_waiters();
+        let _ = task.await;
+
+        assert_eq!(
+            *surface.opened.lock().unwrap(),
+            vec!["local::w-1".to_string()],
+            "enable()-before-snapshot must catch the gap-fired notify_waiters and reconcile",
+        );
     }
 
     #[test]
