@@ -6,7 +6,7 @@
 //! running server process.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock, Weak};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use chan_workspace::{TeamConfig, Workspace};
 use portable_pty::PtySize;
@@ -212,40 +212,11 @@ pub const TERMINAL_ONLY_NEEDS_WORKSPACE: &str =
 pub const TERM_NEW_PATH_NEEDS_WORKSPACE: &str =
     "cannot resolve --path on a standalone terminal window (no workspace root); run it from a terminal inside a workspace window, or drop --path to open a terminal here";
 
-/// How a control socket's process tears down the workspace named by a
-/// [`ControlRequest::Unserve`] — the server-decides-scope half of `chan
-/// unserve`. [`build_app`](crate::build_app) builds it from an [`UnserveMode`]
-/// the embedder picks, and it rides in [`ControlSocketCtx`].
-#[derive(Clone)]
-pub enum UnserveScope {
-    /// A standalone `chan serve <root>`: unserve of `root` fires the process
-    /// graceful-shutdown signal, so the whole process exits and releases the
-    /// flock. `root` guards against unserving a path this server does not serve.
-    Standalone {
-        root: PathBuf,
-        shutdown_tx: Arc<tokio::sync::watch::Sender<bool>>,
-    },
-    /// A multi-tenant host (a `chan devserver` / chan-desktop) that opted in
-    /// via [`WorkspaceHost::install_self`](crate::host::WorkspaceHost::install_self):
-    /// unserve unmounts the matching tenant only and keeps the process alive.
-    Host(Weak<crate::host::WorkspaceHost>),
-    /// A tenant whose process can't honor a control-socket unserve (a
-    /// multi-tenant host that never registered a self-handle, or a standalone
-    /// terminal with no workspace): the handler refuses rather than guess.
-    Unsupported,
-}
-
-/// The embedder's choice of [`UnserveScope`] kind, passed to
-/// [`build_app`](crate::build_app) / [`build_terminal_app`](crate::build_terminal_app)
-/// (which fill in the standalone shutdown handle). A standalone `chan serve`
-/// passes [`UnserveMode::Standalone`]; a [`WorkspaceHost`](crate::host::WorkspaceHost)
-/// passes [`UnserveMode::Host`] once it registered its self-handle, else
-/// [`UnserveMode::Unsupported`].
-pub enum UnserveMode {
-    Standalone,
-    Host(Weak<crate::host::WorkspaceHost>),
-    Unsupported,
-}
+// `UnserveScope` lives in chan-library; its `Host` variant carries a
+// `Weak<dyn HostControl>`, so the control socket reaches the host (unserve)
+// without naming the concrete `WorkspaceHost` — the handler upgrades the weak
+// and calls the trait-object method directly.
+use chan_library::UnserveScope;
 
 /// Shared server resources a control-socket connection needs, plus
 /// the tenant gate. One value per `start`; cloned per connection

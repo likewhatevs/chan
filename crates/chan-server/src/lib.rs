@@ -358,7 +358,7 @@ async fn build_app(
     workspace: Arc<Workspace>,
     config: &ServeConfig,
     desktop: crate::desktop_window_ops::DesktopBridge,
-    unserve: control_socket::UnserveMode,
+    unserve: chan_library::UnserveMode,
 ) -> Result<AppArtifacts, Error> {
     // Captured before `workspace` is moved into AppState below; the standalone
     // unserve scope names this root.
@@ -583,12 +583,12 @@ async fn build_app(
     // A standalone serve unserves by exiting the process (its shutdown
     // signal); a hosted tenant unserves by unmounting itself from the host.
     let unserve_scope = match unserve {
-        control_socket::UnserveMode::Standalone => control_socket::UnserveScope::Standalone {
+        chan_library::UnserveMode::Standalone => chan_library::UnserveScope::Standalone {
             root: unserve_root,
             shutdown_tx: shutdown_tx.clone(),
         },
-        control_socket::UnserveMode::Host(weak) => control_socket::UnserveScope::Host(weak),
-        control_socket::UnserveMode::Unsupported => control_socket::UnserveScope::Unsupported,
+        chan_library::UnserveMode::Host(weak) => chan_library::UnserveScope::Host(weak),
+        chan_library::UnserveMode::Unsupported => chan_library::UnserveScope::Unsupported,
     };
     let control = control_socket::start(
         control_socket_path.clone(),
@@ -711,7 +711,7 @@ async fn build_terminal_app(
     library: Library,
     config: &ServeConfig,
     desktop: crate::desktop_window_ops::DesktopBridge,
-    unserve: control_socket::UnserveMode,
+    unserve: chan_library::UnserveMode,
     session_dir: Option<std::path::PathBuf>,
 ) -> Result<AppArtifacts, Error> {
     let token = if config.no_token {
@@ -788,9 +788,9 @@ async fn build_terminal_app(
     // terminal refuses; a hosted terminal still carries the host handle so an
     // Unserve that lands on its socket can unmount the right WORKSPACE tenant.
     let unserve_scope = match unserve {
-        control_socket::UnserveMode::Host(weak) => control_socket::UnserveScope::Host(weak),
-        control_socket::UnserveMode::Standalone | control_socket::UnserveMode::Unsupported => {
-            control_socket::UnserveScope::Unsupported
+        chan_library::UnserveMode::Host(weak) => chan_library::UnserveScope::Host(weak),
+        chan_library::UnserveMode::Standalone | chan_library::UnserveMode::Unsupported => {
+            chan_library::UnserveScope::Unsupported
         }
     };
     let control = control_socket::start(
@@ -1002,7 +1002,7 @@ pub async fn serve(
         workspace,
         &config,
         crate::desktop_window_ops::DesktopBridge::default(),
-        control_socket::UnserveMode::Standalone,
+        chan_library::UnserveMode::Standalone,
     )
     .await?;
     let handle = ServeHandle {
@@ -1148,7 +1148,7 @@ pub async fn serve_via_tunnel(
         workspace,
         &server_config,
         crate::desktop_window_ops::DesktopBridge::default(),
-        control_socket::UnserveMode::Standalone,
+        chan_library::UnserveMode::Standalone,
     )
     .await?;
     let prefix_handle = artifacts.prefix.clone();

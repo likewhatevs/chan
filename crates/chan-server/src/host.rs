@@ -63,7 +63,7 @@ pub struct WorkspaceHost {
     /// Empty until an embedder opts in; a host that never does answers
     /// `Unserve` with an "unsupported" message (correct for chan-desktop,
     /// which tears workspaces down in-process).
-    self_weak: OnceLock<Weak<WorkspaceHost>>,
+    self_weak: OnceLock<Weak<dyn chan_library::HostControl>>,
 }
 
 struct HostedWorkspaceRuntime {
@@ -128,15 +128,21 @@ impl WorkspaceHost {
     /// chan-desktop, which tears workspaces down in-process, not over the
     /// control socket.
     pub fn install_self(self: &Arc<Self>) {
-        let _ = self.self_weak.set(Arc::downgrade(self));
+        // Unsize the concrete `Weak<WorkspaceHost>` to `Weak<dyn HostControl>`
+        // (WorkspaceHost impls HostControl) so the control socket reaches the
+        // host without naming the concrete type. Downgrade concretely first,
+        // then coerce — inferring the trait object from `set`'s type would make
+        // `downgrade` expect `&Arc<dyn HostControl>` and fail.
+        let weak_self: Weak<WorkspaceHost> = Arc::downgrade(self);
+        let _ = self.self_weak.set(weak_self);
     }
 
     /// The unserve mode tenants built by this host carry: `Host(weak)` once
     /// [`install_self`](Self::install_self) ran, else `Unsupported`.
-    fn unserve_mode(&self) -> crate::control_socket::UnserveMode {
+    fn unserve_mode(&self) -> chan_library::UnserveMode {
         match self.self_weak.get() {
-            Some(weak) => crate::control_socket::UnserveMode::Host(weak.clone()),
-            None => crate::control_socket::UnserveMode::Unsupported,
+            Some(weak) => chan_library::UnserveMode::Host(weak.clone()),
+            None => chan_library::UnserveMode::Unsupported,
         }
     }
 
