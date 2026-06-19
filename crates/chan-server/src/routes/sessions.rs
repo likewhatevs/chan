@@ -94,6 +94,11 @@ pub async fn api_put_session(
     body: Bytes,
 ) -> Response {
     let key = q.w;
+    // A saved layout blob makes this window PERSISTED: its detached terminal
+    // sessions are kept alive (reattachable) instead of orphan-reaped. The SPA
+    // PUTs only windows with durable content; an explicit discard DELETEs (see
+    // `api_delete_session`). Marked regardless of which blob backend stores it.
+    state.terminal_sessions.mark_window_persisted(&key);
     let Ok(workspace) = state.try_workspace() else {
         if let Some(dir) = state.terminal_session_dir.clone() {
             return blocking_response(
@@ -123,6 +128,13 @@ pub async fn api_delete_session(
     Query(q): Query<SessionQuery>,
 ) -> Response {
     let key = q.w;
+    // DELETE is the explicit DISCARD signal (^W to empty / ^D / Ctrl+Shift+W /
+    // an empty window): drop the window from the persisted set and immediately
+    // reap its terminal sessions (kill the PTYs, release the fds). This is the
+    // "discard ⇒ reap" half — it frees a busy detached session the pruner
+    // otherwise keeps alive. Runs regardless of whether a blob was on disk (an
+    // unsaved window can still be discarded).
+    state.terminal_sessions.forget_window(&key);
     let Ok(workspace) = state.try_workspace() else {
         if let Some(dir) = state.terminal_session_dir.clone() {
             return blocking_response(

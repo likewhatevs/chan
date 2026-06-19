@@ -77,6 +77,18 @@ pub struct Registry {
     /// default interactive shell. A single-purpose terminal tenant (a
     /// window whose PTY runs a connect script) sets it once at creation.
     default_command: Mutex<Option<String>>,
+    /// Window ids (the `?w=` session-blob key) that currently have a durable
+    /// saved layout blob. Maintained by the session routes: a `PUT
+    /// /api/session?w=W` marks W persisted, a `DELETE` forgets it. Drives the
+    /// persistence-based session lifetime (see [`Registry::prune_idle_at`]): a
+    /// persisted window's detached sessions survive a client disconnect
+    /// indefinitely (browser-tab semantics — reattach on reconnect), while a
+    /// window with no durable blob is an orphan and its detached sessions are
+    /// reaped after a grace. The durable blob store is the source of truth;
+    /// this set is the in-process cache the pruner consults without touching
+    /// disk. It tracks marks for THIS process's lifetime — sessions never
+    /// outlive the process (PTYs die with it), so it needs no startup seed.
+    persisted_windows: Mutex<HashSet<String>>,
 }
 
 /// Parse the ordinal from a default `Terminal-N` name for lowest-free
@@ -365,7 +377,14 @@ impl AttachHandle {
 
 impl Drop for AttachHandle {
     fn drop(&mut self) {
-        self.session.attach_count.fetch_sub(1, Ordering::Relaxed);
+        // On the last client detaching (count 1 -> 0), stamp the detach time so
+        // the orphan-grace pruner can age the session from when it went idle,
+        // not from its last output byte.
+        if self.session.attach_count.fetch_sub(1, Ordering::Relaxed) == 1 {
+            self.session
+                .detached_at
+                .store(now_unix_secs() as i64, Ordering::Relaxed);
+        }
     }
 }
 
@@ -376,6 +395,7 @@ impl Registry {
             sessions: Mutex::new(HashMap::new()),
             roster_notify: Arc::new(Notify::new()),
             default_command: Mutex::new(None),
+            persisted_windows: Mutex::new(HashSet::new()),
         }
     }
 
@@ -431,7 +451,7 @@ impl Registry {
         if session.closed.load(Ordering::Relaxed) {
             return None;
         }
-        Some(session.window_id.clone())
+        Some(session.window_id())
     }
 
     /// Snapshot of every live session for the cross-window roster. Mirrors
@@ -450,7 +470,7 @@ impl Registry {
                     .tab_group
                     .clone()
                     .unwrap_or_else(|| DEFAULT_TERMINAL_GROUP.to_string()),
-                window_id: session.window_id.clone(),
+                window_id: session.window_id(),
                 broadcast: session.broadcast.load(Ordering::Relaxed),
             })
             .collect()
@@ -600,10 +620,32 @@ impl Registry {
     ) -> Result<AttachHandle, CreateError> {
         if let Some(id) = id {
             if let Some(handle) = self.attach_for_ws(id, since) {
+                // Amendment 3(A): re-home the session to the ATTACHING window.
+                // A cross-window terminal move re-binds it here, so a later
+                // `close_for_window(source)` reaps only sessions still bound to
+                // the source — not the one that just moved away.
+                self.rebind_session_window(id, opts.window_id.clone());
                 return Ok(handle);
             }
         }
         self.create(opts)
+    }
+
+    /// Re-home a live session to `window_id` (the attaching window). No-op for a
+    /// windowless (`None`) reattach or a vanished session. See
+    /// [`Session::set_window_id`] (Amendment 3(A)).
+    fn rebind_session_window(&self, id: &str, window_id: Option<String>) {
+        if window_id.is_none() {
+            return;
+        }
+        if let Some(session) = self
+            .sessions
+            .lock()
+            .expect("terminal registry poisoned")
+            .get(id)
+        {
+            session.set_window_id(window_id);
+        }
     }
 
     pub fn close(&self, id: &str, reason: CloseReason) -> bool {
@@ -632,6 +674,53 @@ impl Registry {
             self.notify_roster_change();
         }
         removed
+    }
+
+    /// Record that window `window_id` has a durable saved layout blob, so its
+    /// detached terminal sessions are kept alive (reattachable on reconnect)
+    /// instead of orphan-reaped. Called on a `PUT /api/session?w=<window_id>`.
+    /// Idempotent.
+    pub fn mark_window_persisted(&self, window_id: &str) {
+        self.persisted_windows
+            .lock()
+            .expect("terminal registry poisoned")
+            .insert(window_id.to_string());
+    }
+
+    /// Close every live session owned by `window_id` (its PTYs are killed and
+    /// fds released). Returns how many were closed. The window-scoped sibling
+    /// of [`Registry::close`]; the discard primitive behind
+    /// [`Registry::forget_window`].
+    pub fn close_for_window(&self, window_id: &str, reason: CloseReason) -> usize {
+        let ids: Vec<String> = {
+            let sessions = self.sessions.lock().expect("terminal registry poisoned");
+            sessions
+                .iter()
+                .filter(|(_, session)| session.window_id().as_deref() == Some(window_id))
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        let mut closed = 0;
+        for id in ids {
+            if self.close(&id, reason) {
+                closed += 1;
+            }
+        }
+        closed
+    }
+
+    /// A window was DISCARDED (its layout blob was DELETEd — `^W` to empty,
+    /// `^D`, `Ctrl+Shift+W`, or an empty window). Drop it from the persisted
+    /// set and immediately reap its terminal sessions. This is what frees a
+    /// busy detached session the idle pruner deliberately keeps alive, and so
+    /// is the discard half of "discard ⇒ reap; persist ⇒ keep". Returns how
+    /// many sessions were reaped. Called on a `DELETE /api/session?w=<window_id>`.
+    pub fn forget_window(&self, window_id: &str) -> usize {
+        self.persisted_windows
+            .lock()
+            .expect("terminal registry poisoned")
+            .remove(window_id);
+        self.close_for_window(window_id, CloseReason::Explicit)
     }
 
     /// Snapshot of every live session, for `cs term list`. The control
@@ -710,7 +799,7 @@ impl Registry {
             .as_deref()
             .unwrap_or(DEFAULT_TERMINAL_GROUP)
             .to_string();
-        let source_window = source.window_id.clone();
+        let source_window = source.window_id();
         for (id, session) in sessions.iter() {
             if id == source_id || session.closed.load(Ordering::Relaxed) {
                 continue;
@@ -721,7 +810,7 @@ impl Registry {
                 .unwrap_or(DEFAULT_TERMINAL_GROUP);
             // Same group, different window: same-window members are fanned
             // client-side, so skip them here to avoid double-delivery.
-            if group != source_group || session.window_id == source_window {
+            if group != source_group || session.window_id() == source_window {
                 continue;
             }
             // Respect the receiver's own broadcast toggle (synced via the
@@ -900,9 +989,9 @@ impl Registry {
                     continue;
                 }
             }
-            if let Some(window_id) = session.window_id.as_deref() {
-                if seen.insert(window_id.to_string()) {
-                    out.push(window_id.to_string());
+            if let Some(window_id) = session.window_id() {
+                if seen.insert(window_id.clone()) {
+                    out.push(window_id);
                 }
             }
         }
@@ -927,19 +1016,53 @@ impl Registry {
         self.prune_idle_at(now_unix_secs() as i64)
     }
 
+    /// Reap sessions whose window can never come back. Persistence-driven, NOT
+    /// activity-driven (a busy detached session refreshes `last_activity` on
+    /// every output byte, so the old activity timer kept htop / a `for` loop
+    /// immortal — the FD leak). The rule, per the v0.40.0 Seam A contract:
+    ///
+    /// - **attached** (`attach_count > 0`) — keep; a client is live on it.
+    /// - **detached, window persisted** (a durable layout blob exists, tracked
+    ///   in `persisted_windows`) — keep indefinitely; the window survives a
+    ///   client disconnect and reattaches on reconnect (browser-tab / devserver
+    ///   semantics). Discard reaps it explicitly via [`Registry::forget_window`].
+    /// - **detached, window NOT persisted** (browser window that never saved a
+    ///   blob — a hard client crash before any save) — orphan; reap once it has
+    ///   been detached longer than the grace.
+    /// - **detached, no `window_id`** (a headless `cs terminal new` from a
+    ///   native terminal) — unchanged activity-idle cleanup, timed off
+    ///   `last_activity`; these are intentional, not browser-window orphans.
+    ///
+    /// The detach/idle grace reuses `terminal.idle_timeout_secs`.
     pub fn prune_idle_at(&self, now: i64) -> usize {
         let idle_timeout = self.config.terminal.idle_timeout_secs as i64;
+        let persisted = self
+            .persisted_windows
+            .lock()
+            .expect("terminal registry poisoned")
+            .clone();
         let to_close: Vec<String> = {
             let sessions = self.sessions.lock().expect("terminal registry poisoned");
             sessions
                 .iter()
                 .filter_map(|(id, session)| {
-                    let attached = session.attach_count.load(Ordering::Relaxed);
-                    let last = session.last_activity.load(Ordering::Relaxed);
-                    if attached == 0 && now.saturating_sub(last) > idle_timeout {
-                        Some(id.clone())
-                    } else {
-                        None
+                    if session.attach_count.load(Ordering::Relaxed) != 0 {
+                        return None; // a client is attached
+                    }
+                    match session.window_id() {
+                        // Persisted window: kept until an explicit discard.
+                        Some(window_id) if persisted.contains(&window_id) => None,
+                        // Browser window with no durable blob: orphan-grace from
+                        // when it last went detached.
+                        Some(_) => {
+                            let detached = session.detached_at.load(Ordering::Relaxed);
+                            (now.saturating_sub(detached) > idle_timeout).then(|| id.clone())
+                        }
+                        // Headless / control terminal: legacy activity-idle.
+                        None => {
+                            let last = session.last_activity.load(Ordering::Relaxed);
+                            (now.saturating_sub(last) > idle_timeout).then(|| id.clone())
+                        }
                     }
                 })
                 .collect()
@@ -1125,7 +1248,12 @@ struct Session {
     id: String,
     tab_name: Option<String>,
     tab_group: Option<String>,
-    window_id: Option<String>,
+    /// The window this session currently belongs to (the `?w=` label). Interior
+    /// mutable because a reattach REBINDS it to the attaching window: a
+    /// cross-window terminal move re-homes the session, so a later
+    /// `close_for_window(source)` reaps only sessions STILL bound to the source
+    /// (Seam A Amendment 3(A)). Read via [`Session::window_id`].
+    window_id: Mutex<Option<String>>,
     workspace_root: PathBuf,
     spawn_opts: CreateOptions,
     child_pid: Option<u32>,
@@ -1154,6 +1282,12 @@ struct Session {
     /// so the next queued message does not fire into the same compose.
     awaiting_gen: AtomicBool,
     attach_count: AtomicUsize,
+    /// Unix seconds when `attach_count` last fell to 0 (every client detached).
+    /// Seeded at spawn. The orphan-grace pruner times a detached session from
+    /// THIS, not `last_activity` — a busy detached session (htop, a `for` loop)
+    /// keeps `last_activity` fresh forever, so timing the grace off output kept
+    /// it immortal (the FD leak). Meaningless while `attach_count > 0`.
+    detached_at: AtomicI64,
     winsize: Mutex<PtySize>,
     focused: AtomicBool,
     bytes_since_focus: AtomicU64,
@@ -1299,7 +1433,7 @@ impl Session {
             id,
             tab_name,
             tab_group,
-            window_id,
+            window_id: Mutex::new(window_id),
             workspace_root: config.workspace_root.clone(),
             spawn_opts: CreateOptions {
                 size: opts.size,
@@ -1324,6 +1458,7 @@ impl Session {
             last_deliver_at: AtomicI64::new(0),
             awaiting_gen: AtomicBool::new(false),
             attach_count: AtomicUsize::new(0),
+            detached_at: AtomicI64::new(now_unix_secs() as i64),
             winsize: Mutex::new(opts.size),
             focused: AtomicBool::new(false),
             bytes_since_focus: AtomicU64::new(0),
@@ -1686,7 +1821,7 @@ impl Session {
         opts.size = *self.winsize.lock().expect("terminal winsize poisoned");
         opts.tab_name = self.tab_name.clone();
         opts.tab_group = self.tab_group.clone();
-        opts.window_id = self.window_id.clone();
+        opts.window_id = self.window_id();
         opts
     }
 
@@ -1696,6 +1831,24 @@ impl Session {
         }
         self.broadcast(SessionEvent::Closed(reason));
         let _ = self.command_tx.send(PtyCommand::Kill);
+    }
+
+    /// The window (`?w=` label) this session currently belongs to.
+    fn window_id(&self) -> Option<String> {
+        self.window_id
+            .lock()
+            .expect("terminal window_id poisoned")
+            .clone()
+    }
+
+    /// Rebind the owning window on reattach (Amendment 3(A)). A `None`
+    /// (windowless) reattach does NOT clear an existing binding — only a real
+    /// attaching window re-homes the session.
+    fn set_window_id(&self, window_id: Option<String>) {
+        if window_id.is_none() {
+            return;
+        }
+        *self.window_id.lock().expect("terminal window_id poisoned") = window_id;
     }
 
     fn record_output(&self, bytes: &[u8]) {
@@ -2276,7 +2429,7 @@ mod tests {
             id: "test-session".to_string(),
             tab_name: None,
             tab_group: None,
-            window_id: None,
+            window_id: Mutex::new(None),
             workspace_root: PathBuf::from("/"),
             spawn_opts: CreateOptions {
                 size: test_size(),
@@ -2299,6 +2452,7 @@ mod tests {
             last_deliver_at: AtomicI64::new(0),
             awaiting_gen: AtomicBool::new(false),
             attach_count: AtomicUsize::new(0),
+            detached_at: AtomicI64::new(now_unix_secs() as i64),
             winsize: Mutex::new(test_size()),
             focused: AtomicBool::new(false),
             bytes_since_focus: AtomicU64::new(0),
@@ -2845,6 +2999,126 @@ mod tests {
         assert!(registry.attach(&id, None).is_none());
     }
 
+    fn opts_with_window(window_id: &str) -> CreateOptions {
+        CreateOptions {
+            size: test_size(),
+            tab_name: None,
+            tab_group: None,
+            window_id: Some(window_id.to_string()),
+            mcp_env: true,
+            cwd: None,
+            command: None,
+            env: Default::default(),
+        }
+    }
+
+    #[test]
+    fn persisted_window_session_survives_prune_and_reattaches() {
+        // persist ⇒ keep: a detached session whose window has a durable blob is
+        // kept indefinitely (browser-tab / devserver semantics), reattachable.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let handle = registry.create(opts_with_window("win-keep")).unwrap();
+        let id = handle.id().to_string();
+        drop(handle); // every client detached
+        registry.mark_window_persisted("win-keep");
+        let now = now_unix_secs() as i64;
+        // Far past the idle grace — a persisted window is never idle-reaped.
+        assert_eq!(registry.prune_idle_at(now + 100_000), 0);
+        assert_eq!(registry.len(), 1);
+        assert!(registry.attach(&id, None).is_some());
+    }
+
+    #[test]
+    fn busy_orphan_window_session_is_reaped_from_detach_time() {
+        // The FD-leak fix: a BUSY detached session (fresh `last_activity`) whose
+        // window was never persisted is still reaped, because the grace is timed
+        // off the detach instant, not the last output byte.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let handle = registry.create(opts_with_window("win-orphan")).unwrap();
+        drop(handle); // detached; window never persisted
+        let now = now_unix_secs() as i64;
+        {
+            let sessions = registry.sessions.lock().unwrap();
+            let session = sessions.values().next().unwrap();
+            // Simulate a busy session: output kept arriving "just now"...
+            session
+                .last_activity
+                .store(now + 100_000, Ordering::Relaxed);
+            // ...but it has been detached since `now`.
+            session.detached_at.store(now, Ordering::Relaxed);
+        }
+        // 11s past detach > the 10s grace ⇒ reaped despite the fresh activity.
+        assert_eq!(registry.prune_idle_at(now + 11), 1);
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn forget_window_reaps_its_sessions_and_unpersists() {
+        // discard ⇒ reap: a window-blob DELETE kills exactly that window's
+        // sessions and drops it from the persisted set.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let a1 = registry.create(opts_with_window("win-a")).unwrap();
+        let a2 = registry.create(opts_with_window("win-a")).unwrap();
+        let b = registry.create(opts_with_window("win-b")).unwrap();
+        registry.mark_window_persisted("win-a");
+        drop(a1);
+        drop(a2);
+        drop(b);
+        assert_eq!(registry.forget_window("win-a"), 2);
+        assert_eq!(registry.len(), 1); // win-b untouched
+        assert!(!registry.persisted_windows.lock().unwrap().contains("win-a"));
+    }
+
+    #[test]
+    fn close_for_window_only_closes_the_matching_window() {
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let _a = registry.create(opts_with_window("win-a")).unwrap();
+        let _b = registry.create(opts_with_window("win-b")).unwrap();
+        assert_eq!(registry.close_for_window("win-a", CloseReason::Explicit), 1);
+        assert_eq!(registry.len(), 1);
+        assert_eq!(
+            registry.close_for_window("win-missing", CloseReason::Explicit),
+            0
+        );
+    }
+
+    #[test]
+    fn cross_window_move_rebinds_window_and_survives_source_discard() {
+        // Amendment 3(A): a terminal dragged from window A to window B must
+        // re-home to B on reattach, so A's discard (it emptied out) does NOT
+        // reap the moved session — only sessions STILL bound to A.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        // Opened in window A...
+        let handle = registry.create(opts_with_window("win-a")).unwrap();
+        let id = handle.id().to_string();
+        drop(handle); // the move detaches it from the source
+
+        // ...dragged to window B: B reattaches by id with window_id=B.
+        let reattached = registry
+            .get_or_create_for_ws(Some(&id), Some(0), opts_with_window("win-b"))
+            .expect("reattach");
+        assert_eq!(
+            reattached.id(),
+            id,
+            "reattached the SAME session (no respawn)"
+        );
+        drop(reattached);
+
+        // The SOURCE window A discards. It must reap nothing — the session
+        // moved to B.
+        assert_eq!(
+            registry.forget_window("win-a"),
+            0,
+            "discarding the source must not reap the moved session"
+        );
+        assert_eq!(registry.len(), 1, "the moved session survives");
+        assert!(registry.attach(&id, None).is_some(), "moved PTY still live");
+
+        // Discarding B (its true owner now) reaps it.
+        assert_eq!(registry.forget_window("win-b"), 1);
+        assert_eq!(registry.len(), 0);
+    }
+
     #[test]
     fn cap_exceeded_refuses_create() {
         let registry = Registry::new(test_config(1024, 1, 10));
@@ -3200,7 +3474,7 @@ mod tests {
         // set the fields the cross-window fan reads (private, same module).
         let mut s = Arc::try_unwrap(test_session_with_ring(64)).expect("sole owner");
         s.id = id.to_string();
-        s.window_id = window_id.map(str::to_string);
+        s.window_id = Mutex::new(window_id.map(str::to_string));
         s.tab_group = tab_group.map(str::to_string);
         // Sentinel: 0 is distinguishable from any real `now_unix_secs()`.
         s.last_activity = AtomicI64::new(0);
