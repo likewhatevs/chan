@@ -3448,6 +3448,20 @@ fn handle_close_window(app: &tauri::AppHandle) {
     else {
         return;
     };
+    // A control terminal's Cmd+W must fire the abandon/re-run dialog (a
+    // connected devserver's control window IS the connection), not bury or
+    // close a tab. `control-terminal-*` is not a workspace webview label, so
+    // without this it would fall to `window.close()` → the CloseRequested
+    // bury-when-connected branch. Route it through `request_close_window`
+    // instead: connected → emits `devserver-control-closed` (the survey) +
+    // destroys; connecting → destroys (the scrape loop then surveys). This is
+    // the macOS half of the control-window close model — the menu accelerator
+    // pre-empts the webview, so the SPA's own Mod+W handler never sees it on
+    // macOS (it covers web/linux/windows).
+    if window.label().starts_with("control-terminal-") {
+        let _ = request_close_window(app.clone(), window);
+        return;
+    }
     if serve::is_workspace_webview_label(window.label()) {
         // A window still on the connecting/retry screen has no tabs to
         // close and nothing to bury: Cmd+W means cancel — destroy for
