@@ -58,6 +58,7 @@ pub use chan_library::desktop_window_ops::{
     DesktopBridge, DesktopWindowOp, DesktopWindowSender, NewWindowKind, NO_DESKTOP,
 };
 pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
+pub use chan_library::windows::{CreateWindow, WindowKind, WindowRecord, WindowSet};
 pub(crate) use chan_library::{desktop_window_ops, window_presence, window_titles};
 pub use chan_library::{HostedWorkspace, WorkspaceHost};
 pub use devserver::{
