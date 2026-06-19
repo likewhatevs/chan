@@ -547,6 +547,42 @@ impl WorkspaceHost {
             .collect()
     }
 
+    /// Mint a window: persist a new registry row and return its assembled
+    /// [`WindowRecord`] (the same shape the feed serves, so a `POST` handler
+    /// returns it directly). The registry's create fires the watch via the
+    /// bridge; this also fires it directly so the push does not hinge on the
+    /// bridge task's scheduling. The tenant side (ensuring a serving tenant for
+    /// the new window) is layered on with the D-W3 desktop wiring.
+    pub fn mint_window(
+        &self,
+        kind: WindowKind,
+        workspace_path: Option<String>,
+    ) -> Result<WindowRecord, Error> {
+        let registry = self
+            .window_registry()
+            .ok_or_else(|| Error::Config("window registry not installed".into()))?;
+        let row = registry.create(kind, workspace_path);
+        self.notify_window_change();
+        let library_id = self.library_id().to_string();
+        let (prefix, token, connected) = self.window_live_state(&row);
+        Ok(row.to_record(library_id, prefix, token, connected))
+    }
+
+    /// Discard a window: drop its registry row and fire the watch. Returns
+    /// whether a row existed (a `DELETE` handler maps `false` to 404). Reaping
+    /// the window's PTYs is the tenant-side follow-up that lands with the D-W3
+    /// terminal-tenant wiring (no `terminal_sessions` reap path exists yet).
+    pub fn discard_window(&self, window_id: &str) -> Result<bool, Error> {
+        let registry = self
+            .window_registry()
+            .ok_or_else(|| Error::Config("window registry not installed".into()))?;
+        let removed = registry.remove(window_id);
+        if removed {
+            self.notify_window_change();
+        }
+        Ok(removed)
+    }
+
     /// Resolve a persisted window's live `(prefix, token, connected)` from its
     /// serving tenant. A terminal window has no per-library terminal tenant
     /// wired yet, so it carries no prefix or token; a workspace window resolves
@@ -1673,5 +1709,56 @@ mod tests {
         );
         assert_eq!(ws_rec.token, "");
         assert!(!ws_rec.connected);
+    }
+
+    #[test]
+    fn mint_and_discard_window_round_trip() {
+        // Minting before a registry is installed is an error, not a panic.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let no_reg = WorkspaceHost::new(lib, fake_builder());
+        assert!(no_reg.mint_window(WindowKind::Terminal, None).is_err());
+
+        let cfg2 = tempfile::tempdir().expect("config dir");
+        let lib2 = Library::open_at(cfg2.path().join("config.toml")).expect("library");
+        let host = WorkspaceHost::new(lib2, fake_builder());
+        let store = tempfile::tempdir().expect("store dir");
+        let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
+        host.install_window_registry(registry, "lib-mint".into());
+
+        // Mint returns the assembled record, and the row lands in the feed.
+        let term = host
+            .mint_window(WindowKind::Terminal, None)
+            .expect("mint terminal");
+        assert_eq!(term.kind, WindowKind::Terminal);
+        assert_eq!(term.library_id, "lib-mint");
+        assert!(term.persisted);
+        let ws = host
+            .mint_window(WindowKind::Workspace, Some("/tmp/notes".into()))
+            .expect("mint workspace");
+        assert_eq!(ws.workspace_path.as_deref(), Some("/tmp/notes"));
+
+        let mut ids: Vec<String> = host
+            .assemble_window_records()
+            .into_iter()
+            .map(|r| r.window_id)
+            .collect();
+        ids.sort();
+        let mut expected = vec![term.window_id.clone(), ws.window_id.clone()];
+        expected.sort();
+        assert_eq!(ids, expected);
+
+        // Discard drops the row and reports it existed; a second discard is a
+        // no-op (the handler's 404 path), as is an unknown id.
+        assert!(host.discard_window(&term.window_id).expect("discard"));
+        assert!(!host.discard_window(&term.window_id).expect("re-discard"));
+        assert!(!host.discard_window("w-doesnotexist0000").expect("unknown"));
+
+        let remaining: Vec<String> = host
+            .assemble_window_records()
+            .into_iter()
+            .map(|r| r.window_id)
+            .collect();
+        assert_eq!(remaining, vec![ws.window_id]);
     }
 }
