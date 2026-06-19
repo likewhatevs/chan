@@ -33,7 +33,6 @@ mod error;
 /// Public so both the `chan` CLI (client) and `chan-desktop`
 /// (listener) consume it; both already depend on chan-server.
 pub mod handoff;
-mod host;
 mod indexer;
 mod mcp_bridge;
 mod preferences;
@@ -63,7 +62,7 @@ pub use devserver::{
     persisted_devserver_token, run_devserver, DevserverConfig, DEVSERVER_TOKEN_MARKER,
 };
 pub use error::Error;
-pub use host::{HostedWorkspace, WorkspaceHost};
+pub use chan_library::{HostedWorkspace, WorkspaceHost};
 pub use mcp_bridge::run_stdio_proxy as run_mcp_stdio_proxy;
 pub use preferences::{
     BrowserSidePanes, EditorPrefs, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths,
@@ -978,6 +977,14 @@ fn terminal_router(state: Arc<AppState>) -> Router {
 /// tenant; they wrap [`build_app`]/[`build_terminal_app`] and adapt the
 /// route-layer `AppArtifacts` to the host-facing `TenantArtifacts`.
 pub(crate) struct RouteLayer;
+
+/// The route layer's tenant constructor, as an `Arc<dyn TenantBuilder>` for a
+/// `WorkspaceHost`. Embedders (the devserver, chan-desktop) pass this to
+/// `WorkspaceHost::new`/`with_desktop_bridge` so the host builds tenants over
+/// chan-server's routes without naming `RouteLayer`.
+pub fn route_builder() -> Arc<dyn chan_library::TenantBuilder> {
+    Arc::new(RouteLayer)
+}
 
 #[async_trait::async_trait]
 impl chan_library::TenantBuilder for RouteLayer {

@@ -44,7 +44,7 @@ use crate::devserver_api::{
     OpenWorkspaceRequest, SetWorkspaceOnRequest, TerminalEntry, WorkspaceEntry,
     DEVSERVER_API_PROTOCOL,
 };
-use crate::host::WorkspaceHost;
+use crate::WorkspaceHost;
 use crate::{sanitize_prefix, Error, ServeConfig};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
@@ -647,7 +647,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     }
     let token = persisted.devserver_token.clone();
 
-    let host = Arc::new(WorkspaceHost::new(library));
+    let host = Arc::new(WorkspaceHost::new(library, crate::route_builder()));
     // Opt in to control-socket `chan unserve`: a hosted workspace's tenant can
     // then be unmounted by path (it does not kill the multi-tenant process).
     host.install_self();
@@ -877,48 +877,14 @@ async fn handle_list_terminals(
 /// `saved && !connected`. Persisted-only: a discard reaped the blob + PTYs, so
 /// only windows with a live blob (`saved`) surface.
 async fn handle_list_windows(
-    State(state): State<Arc<DevserverState>>,
+    State(_state): State<Arc<DevserverState>>,
 ) -> Json<Vec<DevserverWindow>> {
-    // Token per tenant prefix: a mounted workspace or terminal carries one;
-    // an off workspace's is empty.
-    let tokens: HashMap<String, String> = {
-        let workspaces = state.workspaces.lock().unwrap_or_else(|e| e.into_inner());
-        let terminals = state.terminals.lock().unwrap_or_else(|e| e.into_inner());
-        workspaces
-            .values()
-            .map(|r| (r.prefix.clone(), r.token.clone()))
-            .chain(
-                terminals
-                    .values()
-                    .map(|r| (r.prefix.clone(), r.token.clone())),
-            )
-            .collect()
-    };
-    // The enumeration reads each tenant's session-blob store (blocking I/O).
-    let host = state.host.clone();
-    let per_tenant = tokio::task::spawn_blocking(move || host.list_tenant_windows())
-        .await
-        .unwrap_or_default();
-    let mut out: Vec<DevserverWindow> = Vec::new();
-    for (prefix, windows) in per_tenant {
-        let token = tokens.get(&prefix).cloned().unwrap_or_default();
-        for w in windows {
-            if !w.saved {
-                continue; // persisted-only: a live-but-unsaved window is not reopenable
-            }
-            out.push(DevserverWindow {
-                label: w.id,
-                prefix: prefix.clone(),
-                token: token.clone(),
-                kind: w.kind,
-                title: w.title,
-                connected: w.connected,
-                saved: w.saved,
-            });
-        }
-    }
-    out.sort_by(|a, b| a.prefix.cmp(&b.prefix).then_with(|| a.label.cmp(&b.label)));
-    Json(out)
+    // Superseded by the library window feed `GET /api/library/windows` (Seam W),
+    // which the desktop watcher and `cs window list` reconcile to. The
+    // per-tenant enumeration that backed this endpoint is gone with the host
+    // move; this returns empty during the transition until the feed lands and
+    // this endpoint is retired.
+    Json(Vec::new())
 }
 
 async fn handle_forget_terminal(

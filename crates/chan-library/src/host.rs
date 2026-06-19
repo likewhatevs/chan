@@ -16,14 +16,14 @@ use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use chan_workspace::{Library, Workspace};
+use tokio::sync::Notify;
 use tower::ServiceExt;
 
 use crate::desktop_window_ops::DesktopBridge;
-use crate::state::WorkspaceCell;
+use crate::tenant::{HostControl, TenantArtifacts, TenantBuilder, UnserveMode};
 use crate::terminal_sessions::CloseReason;
-use crate::{
-    build_app, build_terminal_app, sanitize_prefix, AppArtifacts, Error, ServeConfig, ServeHandle,
-};
+use crate::windows::{WindowRecord, WindowRegistry};
+use crate::{sanitize_prefix, Error, ServeConfig, ServeHandle};
 
 /// One workspace mounted into a [`WorkspaceHost`].
 #[derive(Debug, Clone)]
@@ -57,13 +57,31 @@ pub struct WorkspaceHost {
     /// its own open. Held across the open's `.await`, so it is a tokio
     /// mutex; registration is infrequent, so serializing it is cheap.
     register_lock: tokio::sync::Mutex<()>,
+    /// The route layer's tenant constructor, inverted so the host builds tenants
+    /// without depending on chan-server. chan-server's `RouteLayer` implements
+    /// it; `open_*` call through it.
+    builder: Arc<dyn TenantBuilder>,
     /// The host's own `Arc`, downgraded, registered by
     /// [`install_self`](Self::install_self). Lets a per-tenant control socket
     /// reach back for a `chan unserve` of a hosted path (unmount that tenant).
     /// Empty until an embedder opts in; a host that never does answers
     /// `Unserve` with an "unsupported" message (correct for chan-desktop,
     /// which tears workspaces down in-process).
-    self_weak: OnceLock<Weak<dyn chan_library::HostControl>>,
+    self_weak: OnceLock<Weak<dyn HostControl>>,
+    /// The library's persisted window registry — the source of truth for which
+    /// windows exist (D5 ids). Installed once via
+    /// [`install_window_registry`](Self::install_window_registry); the window
+    /// feed (`assemble_window_records`) reads it. Empty on a host that never
+    /// installs one (its window set is empty).
+    window_registry: OnceLock<Arc<WindowRegistry>>,
+    /// This library's identity: `"local"` for the baked-in local-disk library,
+    /// `lib-<hex>` for a devserver. Stamped on every window record. Set with the
+    /// registry; defaults to `"local"` when unset.
+    library_id: OnceLock<String>,
+    /// Fires on any change that affects the window set — registry mint/discard,
+    /// `WindowPresence` connect/disconnect, tenant on/off — so the watch feed
+    /// pushes a fresh snapshot. The aggregate every client's reconcile awaits.
+    library_change_notify: Arc<Notify>,
 }
 
 struct HostedWorkspaceRuntime {
@@ -72,7 +90,7 @@ struct HostedWorkspaceRuntime {
     /// host hand back the existing mount on an idempotent re-register and
     /// list every tenant without rebuilding one.
     handle: ServeHandle,
-    artifacts: AppArtifacts,
+    artifacts: TenantArtifacts,
 }
 
 impl HostedWorkspaceRuntime {
@@ -88,7 +106,7 @@ impl HostedWorkspaceRuntime {
     /// Drop after an explicit close, or a terminal tenant with no workspace).
     fn shutdown(&self) -> Option<(Weak<Workspace>, PathBuf)> {
         let _ = self.artifacts.shutdown_tx.send(true);
-        clear_workspace_cell(&self.artifacts.workspace_cell)
+        self.artifacts.cell.clear()
     }
 }
 
@@ -102,22 +120,57 @@ impl WorkspaceHost {
     /// Create an empty host backed by the caller's `Library`, with no
     /// desktop attached (window-lifecycle ops refuse; the title map stays
     /// empty). The standalone and test path.
-    pub fn new(library: Library) -> Self {
-        Self::with_desktop_bridge(library, DesktopBridge::default())
+    pub fn new(library: Library, builder: Arc<dyn TenantBuilder>) -> Self {
+        Self::with_desktop_bridge(library, DesktopBridge::default(), builder)
     }
 
     /// Create a host whose tenants share `desktop` — chan-desktop passes a
     /// bridge carrying the window-ops channel and the title map so
     /// `cs window <op>` reaches the Tauri app and `cs window list` shows
-    /// real titles.
-    pub fn with_desktop_bridge(library: Library, desktop: DesktopBridge) -> Self {
+    /// real titles. `builder` is the route layer's tenant constructor
+    /// (chan-server's `RouteLayer`).
+    pub fn with_desktop_bridge(
+        library: Library,
+        desktop: DesktopBridge,
+        builder: Arc<dyn TenantBuilder>,
+    ) -> Self {
         Self {
             library,
             workspaces: RwLock::new(HashMap::new()),
             desktop,
             register_lock: tokio::sync::Mutex::new(()),
+            builder,
             self_weak: OnceLock::new(),
+            window_registry: OnceLock::new(),
+            library_id: OnceLock::new(),
+            library_change_notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Install this library's persisted window registry + its identity
+    /// (`"local"` / `lib-<hex>`). Idempotent set-once; the window feed reads the
+    /// registry, and `library_id` is stamped on every record. The embedder
+    /// (devserver / desktop) builds the registry at its store path and calls
+    /// this once after wrapping the host in an `Arc`.
+    pub fn install_window_registry(&self, registry: Arc<WindowRegistry>, library_id: String) {
+        let _ = self.window_registry.set(registry);
+        let _ = self.library_id.set(library_id);
+    }
+
+    /// This library's persisted window registry, once installed.
+    pub fn window_registry(&self) -> Option<&Arc<WindowRegistry>> {
+        self.window_registry.get()
+    }
+
+    /// This library's identity (`"local"` until a devserver installs its own).
+    pub fn library_id(&self) -> &str {
+        self.library_id.get().map(String::as_str).unwrap_or("local")
+    }
+
+    /// The aggregate change signal the window-set watch feed awaits: fires on
+    /// registry mint/discard, presence connect/disconnect, and tenant on/off.
+    pub fn library_change_notify(&self) -> Arc<Notify> {
+        self.library_change_notify.clone()
     }
 
     /// Register the host's own `Arc` so per-tenant control sockets can reach it
@@ -139,10 +192,10 @@ impl WorkspaceHost {
 
     /// The unserve mode tenants built by this host carry: `Host(weak)` once
     /// [`install_self`](Self::install_self) ran, else `Unsupported`.
-    fn unserve_mode(&self) -> chan_library::UnserveMode {
+    fn unserve_mode(&self) -> UnserveMode {
         match self.self_weak.get() {
-            Some(weak) => chan_library::UnserveMode::Host(weak.clone()),
-            None => chan_library::UnserveMode::Unsupported,
+            Some(weak) => UnserveMode::Host(weak.clone()),
+            None => UnserveMode::Unsupported,
         }
     }
 
@@ -245,14 +298,16 @@ impl WorkspaceHost {
             }
         }
 
-        let artifacts = build_app(
-            self.library.clone(),
-            workspace,
-            &config,
-            self.desktop.clone(),
-            self.unserve_mode(),
-        )
-        .await?;
+        let artifacts = self
+            .builder
+            .build_workspace(
+                self.library.clone(),
+                workspace,
+                &config,
+                self.desktop.clone(),
+                self.unserve_mode(),
+            )
+            .await?;
         let handle = ServeHandle {
             addr: config.addr,
             prefix: prefix.clone(),
@@ -349,17 +404,19 @@ impl WorkspaceHost {
             }
         }
 
-        let artifacts = build_terminal_app(
-            self.library.clone(),
-            &config,
-            self.desktop.clone(),
-            self.unserve_mode(),
-            session_dir,
-        )
-        .await?;
-        // The tenant's terminals run `command` (when set) rather than the
-        // default shell; applied before the SPA can open the first one.
-        artifacts.terminal_sessions.set_default_command(command);
+        // The builder applies `command` as the tenant's default before the SPA
+        // can open the first terminal.
+        let artifacts = self
+            .builder
+            .build_terminal(
+                self.library.clone(),
+                &config,
+                self.desktop.clone(),
+                self.unserve_mode(),
+                command,
+                session_dir,
+            )
+            .await?;
         // Root reported for diagnostics / desktop correlation: the PTY
         // cwd is the user's home dir, so surface that. Falls back to "/"
         // to match `build_terminal_app`'s registry root resolution.
@@ -422,33 +479,13 @@ impl WorkspaceHost {
             .any(|entry| entry.window_id.as_deref() == Some(window_id))
     }
 
-    /// Enumerate every mounted tenant's windows (saved session blobs ∪ live
-    /// `/ws` presence, with desktop titles), keyed by route prefix. The
-    /// cross-tenant input the devserver's `GET /api/devserver/windows`
-    /// menu-reopen aggregate folds into `DevserverWindow` rows. Sync — each
-    /// tenant's `enumerate_windows` does a blocking session-blob read, so the
-    /// async handler wraps the whole call in `spawn_blocking`.
-    pub fn list_tenant_windows(&self) -> Vec<(String, Vec<crate::routes::windows::WindowInfo>)> {
-        let Ok(workspaces) = self.workspaces.read() else {
-            return Vec::new();
-        };
-        workspaces
-            .iter()
-            .map(|(prefix, runtime)| {
-                (
-                    prefix.clone(),
-                    crate::routes::windows::enumerate_windows(&runtime.artifacts.state),
-                )
-            })
-            .collect()
-    }
 
     /// The full library window set — every window across every tenant, as the
     /// authoritative records the launcher / `cs window list` / the desktop
     /// watcher reconcile to. The live-state assembly (registry rows joined with
     /// each tenant's prefix/token/presence) is wired with the window registry
     /// field; until then this is empty.
-    pub fn assemble_window_records(&self) -> Vec<chan_library::windows::WindowRecord> {
+    pub fn assemble_window_records(&self) -> Vec<WindowRecord> {
         Vec::new()
     }
 
@@ -610,11 +647,7 @@ impl WorkspaceHost {
             return;
         };
         for runtime in workspaces.values() {
-            if let Ok(cell) = runtime.artifacts.workspace_cell.read() {
-                if let Some(cell) = cell.as_ref() {
-                    cell.indexer.cancel();
-                }
-            }
+            runtime.artifacts.cell.cancel_reindex();
         }
     }
 
@@ -657,8 +690,7 @@ impl WorkspaceHost {
         let runtime = workspaces
             .values()
             .find(|runtime| canonical_key(&runtime.root) == target)?;
-        let cell = runtime.artifacts.workspace_cell.read().ok()?;
-        Some(cell.as_ref()?.workspace.clone())
+        runtime.artifacts.cell.workspace()
     }
 
     fn router_for_path(&self, path: &str) -> Result<Option<Router>, Error> {
@@ -676,12 +708,12 @@ impl WorkspaceHost {
 
 /// The control socket reaches the host through `Weak<dyn HostControl>` (the
 /// `install_self` back-reference), so it never names the concrete host type.
-impl chan_library::HostControl for WorkspaceHost {
+impl HostControl for WorkspaceHost {
     fn close_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
         self.close_workspace_for_root(root)
     }
 
-    fn assemble_window_records(&self) -> Vec<chan_library::windows::WindowRecord> {
+    fn assemble_window_records(&self) -> Vec<WindowRecord> {
         self.assemble_window_records()
     }
 }
@@ -738,32 +770,9 @@ fn display_prefix(prefix: &str) -> &str {
     }
 }
 
-/// Clear the workspace cell, signalling teardown and dropping the host's
-/// strong `Arc<Workspace>`. Returns a `Weak` to that workspace plus its lock
-/// directory (or `None` when the cell was already empty) so the caller can
-/// wait for the last strong reference to drop AND the per-workspace flock to
-/// actually release before an immediate reopen races it.
-fn clear_workspace_cell(
-    workspace_cell: &Arc<RwLock<Option<WorkspaceCell>>>,
-) -> Option<(Weak<Workspace>, PathBuf)> {
-    let cell = workspace_cell.write().ok()?.take()?;
-    let WorkspaceCell {
-        workspace,
-        watch_handle,
-        indexer,
-    } = cell;
-    // Clear the shared cell before socket accept loops finish aborting;
-    // otherwise their stale Arc can keep the workspace marked open.
-    indexer.cancel();
-    drop(watch_handle);
-    drop(indexer);
-    // Capture the lock dir before dropping the workspace: the flock-free wait
-    // below needs it, and the workspace is gone by then.
-    let lock_dir = workspace.paths().lock.clone();
-    let weak = Arc::downgrade(&workspace);
-    drop(workspace);
-    Some((weak, lock_dir))
-}
+// The workspace-cell teardown (cancel indexer, drop watcher + workspace, return
+// the flock-release info) lives in the route layer's `WorkspaceCellHandle::clear`
+// impl, which owns the concrete cell; the host reaches it via `artifacts.cell`.
 
 /// Block (bounded) until the last strong `Arc<Workspace>` drops after
 /// teardown, which releases the per-workspace flock. The straggler is an

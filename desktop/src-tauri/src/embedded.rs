@@ -51,7 +51,9 @@ impl EmbeddedServer {
             window_titles: Arc::new(WindowTitles::new()),
         };
         let host = Arc::new(chan_server::WorkspaceHost::with_desktop_bridge(
-            library, bridge,
+            library,
+            bridge,
+            chan_server::route_builder(),
         ));
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| format!("binding embedded chan server: {e}"))?;
