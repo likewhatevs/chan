@@ -6,6 +6,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Making the `chan devserver` window + terminal lifecycle actually work end to end — reconnect,
+window cleanup, and the file-descriptor leak — plus the devserver serving the host library, a CLI
+reorganisation, and the deferred Windows/graph items.
+
+### Added
+
+- `chan ps`: show which registered workspaces are currently being served, and by what — a standalone
+  `chan serve`, chan-desktop, or a `chan devserver`.
+- Menu-reopen of closed devserver windows: a connected devserver's closed-but-saved windows appear in
+  the chan-desktop Window menu and reopen to their live terminal / saved workspace layout.
+- The chan-llm MCP server is now reachable on Windows (the bridge runs over the cross-platform
+  control-socket transport).
+- Windows writer-lock: a contender can now reclaim a lock from a leaked file handle left by a
+  provably-dead holder.
+
+### Fixed
+
+- Reconnecting to a `chan devserver` (from chan-desktop or a browser tab) now **re-attaches to the
+  live terminal sessions** instead of restarting them: standalone-terminal shells and a workspace's
+  terminals come back with their processes still running and scrollback intact — not fresh shells.
+- The devserver **file-descriptor leak** (EMFILE on a long-running devserver) is fixed at its root: a
+  terminal session now lives exactly as long as its window is *saved*, so a discarded window's
+  sessions are reaped immediately and busy detached sessions no longer leak descriptors across
+  reconnect churn. (Deeper than the v0.39.0 tantivy-watcher fix, which did not cover a steady devserver.)
+- Window cleanup is now explicit: closing a window with ^W / ^D / Ctrl+Shift+W, and empty windows,
+  **discard** the window (gone from `cs window list`); only **burying** a window (the OS close button
+  while connected, or a window with content) saves and hides it.
+- The control-terminal dialog now fires on a **connected-phase exit** — the connect script returning
+  on its own or via Ctrl-C — and on Cmd+W while it is still running, not only during connecting.
+- `chan devserver` now **serves the host library**: it lists every workspace `chan workspace ls`
+  shows (each on/off-able), instead of coming up empty and chan-desktop hanging on "Loading…".
+- fs-graph paged-resume pages no longer carry parent-less `contains` edges (an internal correctness
+  fix; the paged graph now matches the unpaged one page-for-page).
+
+### Changed
+
+- CLI: registry and content operations are grouped under a `chan workspace <…>` subcommand —
+  `chan add` → `chan workspace add`, `chan list` → `chan workspace ls`, `chan remove` →
+  `chan workspace rm`, and `index` / `reports` / `search` / `graph` / `status` / `metadata` /
+  `contacts` likewise. The top level keeps `serve`, `unserve`, `ps`, `devserver`, `shell`, `config`,
+  `upgrade`, and `completions`. (Pre-release: the old flat forms are removed, not aliased.)
+- The `chan` tagline is now "an AI-native workspace for your Markdown notes and projects."
+- "Forget" on a devserver workspace now removes it from the host library (the same as
+  `chan workspace rm`, binning its trash) — one destructive Forget across the CLI, chan-desktop, and
+  the devserver, since the host library is the single source of truth.
+
 ## [v0.39.1] - 2026-06-18
 
 A patch for three issues found smoke-testing the v0.39.0 `chan devserver` connect flow.
