@@ -2082,8 +2082,10 @@ fn git_bash() -> Option<&'static GitBashInstall> {
 /// startup, so the inline spawn gate
 /// ([`reject_terminal_spawn_if_git_bash_missing`]) and [`windows_command_builder`]
 /// only ever read the warm `OnceLock`.
+// `pub` (not `pub(crate)`) because chan-server's route layer calls it
+// cross-crate to prime the cache at server startup.
 #[cfg(windows)]
-pub(crate) fn prime_git_bash() {
+pub fn prime_git_bash() {
     let _ = git_bash();
 }
 
