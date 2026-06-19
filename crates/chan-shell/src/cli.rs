@@ -137,10 +137,11 @@ pub enum ShellAction {
 }
 
 /// `cs window <action>`: read the window registry and drive the
-/// desktop's OS windows. The lifecycle verbs (`new`/`open`/`rm`/`hide`/
-/// `title`) need the chan desktop app; a standalone `chan serve` refuses
+/// desktop's OS windows. The lifecycle verbs (`new`/`open`/`rm`/`hide`)
+/// need the chan desktop app; a standalone `chan serve` refuses
 /// them. `new` derives its kind from the calling tenant; the id-bearing
-/// verbs act on any window by id.
+/// verbs act on any window by id. Titles are library-owned and
+/// auto-derived; there is no rename verb.
 #[derive(Subcommand, Debug)]
 pub enum WindowAction {
     /// List the windows chan knows about (connected and/or with a
@@ -182,15 +183,6 @@ pub enum WindowAction {
     Hide {
         /// The window id (see `cs window list`).
         id: String,
-    },
-    /// Set a custom title on a window by id. An empty string resets it to
-    /// the default `<base> Window <N>`. A title another window already
-    /// shows is rejected, keeping window names unambiguous.
-    Title {
-        /// The window id (see `cs window list`).
-        id: String,
-        /// The new title (empty resets to the default).
-        title: String,
     },
 }
 
@@ -668,9 +660,6 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
                 cmd_window_op(ControlRequest::WindowClose { id, force }).await
             }
             WindowAction::Hide { id } => cmd_window_op(ControlRequest::WindowHide { id }).await,
-            WindowAction::Title { id, title } => {
-                cmd_window_op(ControlRequest::WindowTitle { id, title }).await
-            }
         },
         ShellAction::Search {
             query,
@@ -1693,18 +1682,6 @@ mod tests {
                 action: WindowAction::Hide { .. }
             }
         ));
-
-        // title takes id + the new title (which may be empty to reset).
-        let cli = CsCli::parse_from(["cs", "window", "title", "terminal-win-3", "Build logs"]);
-        match cli.action {
-            ShellAction::Window {
-                action: WindowAction::Title { id, title },
-            } => {
-                assert_eq!(id, "terminal-win-3");
-                assert_eq!(title, "Build logs");
-            }
-            other => panic!("unexpected parse: {other:?}"),
-        }
     }
 
     #[test]
@@ -1715,12 +1692,11 @@ mod tests {
         // auto-generated `help` subcommand, so it (correctly) does NOT
         // resolve to `hide`.
         type Case = (&'static str, fn(&WindowAction) -> bool);
-        let cases: [Case; 6] = [
+        let cases: [Case; 5] = [
             ("l", |a| matches!(a, WindowAction::List { .. })),
             ("n", |a| matches!(a, WindowAction::New)),
             ("o", |a| matches!(a, WindowAction::Open { .. })),
             ("hi", |a| matches!(a, WindowAction::Hide { .. })),
-            ("t", |a| matches!(a, WindowAction::Title { .. })),
             ("r", |a| matches!(a, WindowAction::Rm { .. })),
         ];
         for (prefix, check) in cases {
@@ -1728,7 +1704,6 @@ mod tests {
             // by the variants that don't take them.
             let args = match prefix {
                 "o" | "hi" | "r" => vec!["cs", "window", prefix, "id-0"],
-                "t" => vec!["cs", "window", prefix, "id-0", "Title"],
                 _ => vec!["cs", "window", prefix],
             };
             let cli = CsCli::try_parse_from(args)

@@ -723,23 +723,6 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 .await
                 .map(|()| format!("hid window {id}")),
         ),
-        ControlRequest::WindowTitle { id, title } => {
-            let confirm = if title.is_empty() {
-                format!("reset title for window {id}")
-            } else {
-                format!("set title for window {id}")
-            };
-            into_response(
-                desktop
-                    .dispatch(|reply| DesktopWindowOp::Title {
-                        id: id.clone(),
-                        title,
-                        reply,
-                    })
-                    .await
-                    .map(|()| confirm),
-            )
-        }
         ControlRequest::Unserve { path } => handle_unserve(unserve, &path).await,
     }
 }

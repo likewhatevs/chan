@@ -107,12 +107,6 @@ pub enum ControlRequest {
     WindowHide {
         id: String,
     },
-    // Set a custom OS window title that survives reload/reopen; an empty
-    // string resets to the default `{base} Window {N}`.
-    WindowTitle {
-        id: String,
-        title: String,
-    },
     TermRestart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_name: Option<String>,
@@ -626,21 +620,6 @@ mod survey_wire_tests {
         let back: ControlRequest =
             serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
         assert!(matches!(back, ControlRequest::WindowHide { .. }));
-    }
-
-    #[test]
-    fn window_title_request_tag_and_fields() {
-        let req = ControlRequest::WindowTitle {
-            id: "terminal-win-2".into(),
-            title: "Build logs".into(),
-        };
-        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
-        assert_eq!(v["type"], "window_title");
-        assert_eq!(v["id"], "terminal-win-2");
-        assert_eq!(v["title"], "Build logs");
-        let back: ControlRequest =
-            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
-        assert!(matches!(back, ControlRequest::WindowTitle { .. }));
     }
 
     #[test]

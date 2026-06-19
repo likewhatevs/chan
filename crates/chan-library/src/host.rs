@@ -479,7 +479,6 @@ impl WorkspaceHost {
             .any(|entry| entry.window_id.as_deref() == Some(window_id))
     }
 
-
     /// The full library window set — every window across every tenant, as the
     /// authoritative records the launcher / `cs window list` / the desktop
     /// watcher reconcile to. The live-state assembly (registry rows joined with

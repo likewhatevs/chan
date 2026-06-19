@@ -981,7 +981,6 @@ fn allocate_terminal_prefix(label: &str) -> Result<String, Error> {
     sanitize_prefix(&format!("/api/term-{slug}-{hash:x}")).map_err(Error::Config)
 }
 
-
 /// Display label for a workspace: its last path segment, or the full path
 /// when there is no file name.
 fn workspace_label(root: &Path) -> String {
