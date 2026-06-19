@@ -54,22 +54,22 @@ pub use config::ServerConfig;
 // Desktop window-ops, window presence, and the title map live in chan-library.
 // Re-export the modules so internal `crate::…::` paths resolve unchanged, and
 // the public types so chan-desktop keeps reaching them via `chan_server::`.
-pub(crate) use chan_library::{desktop_window_ops, window_presence, window_titles};
 pub use chan_library::desktop_window_ops::{
     DesktopBridge, DesktopWindowOp, DesktopWindowSender, NewWindowKind, NO_DESKTOP,
 };
+pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
+pub(crate) use chan_library::{desktop_window_ops, window_presence, window_titles};
+pub use chan_library::{HostedWorkspace, WorkspaceHost};
 pub use devserver::{
     persisted_devserver_token, run_devserver, DevserverConfig, DEVSERVER_TOKEN_MARKER,
 };
 pub use error::Error;
-pub use chan_library::{HostedWorkspace, WorkspaceHost};
 pub use mcp_bridge::run_stdio_proxy as run_mcp_stdio_proxy;
 pub use preferences::{
     BrowserSidePanes, EditorPrefs, EditorTheme, HybridSurfaceThemes, LineSpacing, PaneWidths,
     SurfaceThemeChoice, ThemeChoice,
 };
 pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
-pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
 
 use crate::terminal_sessions::{
     Registry as TerminalRegistry, RegistryConfig as TerminalRegistryConfig,
