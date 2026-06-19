@@ -16,6 +16,11 @@ import { defineConfig } from "vitest/config";
 
 const svelteClient = fileURLToPath(new URL("./node_modules/svelte/src/index-client.js", import.meta.url));
 
+// The backend port the dev server proxies to. Defaults to 8787 (the local
+// loopback library / a default `chan devserver`); override with VITE_PROXY_PORT
+// to point at a devserver on another port.
+const proxyPort = process.env.VITE_PROXY_PORT ?? "8787";
+
 export default defineConfig({
   base: "./",
   plugins: [svelte()],
@@ -25,8 +30,8 @@ export default defineConfig({
     // `chan devserver` (or the local loopback library) so the SPA talks
     // to the real backend without rebuilding the binary on every change.
     proxy: {
-      "/api/library/windows/watch": { target: "ws://127.0.0.1:8787", ws: true },
-      "/api": "http://127.0.0.1:8787",
+      "/api/library/windows/watch": { target: `ws://127.0.0.1:${proxyPort}`, ws: true },
+      "/api": `http://127.0.0.1:${proxyPort}`,
     },
   },
   build: {

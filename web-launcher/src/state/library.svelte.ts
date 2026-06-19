@@ -45,9 +45,14 @@ export async function loadLibrary(): Promise<void> {
     library.loading = false;
   }
   if (!unwatch) {
-    unwatch = backend.watchWindows((set) => {
-      library.windows = set.windows;
-    });
+    try {
+      unwatch = backend.watchWindows((set) => {
+        library.windows = set.windows;
+      });
+    } catch {
+      // The window feed is best-effort: a host without WebSocket or a failed
+      // connection must not break loading the registries.
+    }
   }
 }
 

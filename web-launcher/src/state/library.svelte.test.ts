@@ -18,10 +18,13 @@ beforeEach(async () => {
 });
 
 describe("loadLibrary", () => {
-  it("populates both registries and the window feed", () => {
+  // The window feed is served live (a real watch socket), so its population is
+  // not asserted here: jsdom has no WebSocket, and loadLibrary subscribes
+  // best-effort. The feed's grouping/recompose logic is covered by
+  // windowLabel.test.ts; its live behaviour by the integration pass.
+  it("populates both registries", () => {
     expect(library.workspaces.length).toBeGreaterThanOrEqual(2);
     expect(library.devservers.length).toBeGreaterThanOrEqual(1);
-    expect(library.windows.length).toBeGreaterThanOrEqual(4);
   });
 
   it("never exposes a devserver token (write-only wire)", () => {
@@ -29,11 +32,6 @@ describe("loadLibrary", () => {
       expect(Object.prototype.hasOwnProperty.call(ds, "token")).toBe(false);
       expect(typeof ds.has_token).toBe("boolean");
     }
-  });
-
-  it("carries the local library window with a connected flag", () => {
-    const local = library.windows.find((w) => w.library_id === "local");
-    expect(local).toBeDefined();
   });
 });
 

@@ -1,21 +1,21 @@
 // The backend the launcher talks to, split into two independently-sourced
-// halves so each can move to the live client as its handlers ship:
+// halves:
 //
-//   - The window feed (list + watch) is the authoritative open-window set.
-//     Its handlers exist, so it can be served live independently.
+//   - The window feed (list + watch) is served live: the library's HTTP
+//     handlers exist, so the launcher reads the authoritative open-window set
+//     straight off the server.
 //   - The registry CRUD (workspaces + devservers) is served by the in-memory
-//     mock until its HTTP handlers are deployed.
+//     mock until its HTTP handlers are deployed; pointing REGISTRY at liveApi
+//     moves it over with no other change.
 //
-// To move a half to the live server, import `liveApi` from "./library" and
-// point that half's source at it. Each source implements the full LibraryApi;
-// `backend` is composed from the two so the rest of the app stays a single
-// LibraryApi consumer.
+// Each source implements the full LibraryApi; `backend` is composed from the
+// two so the rest of the app stays a single LibraryApi consumer.
 
-import type { LibraryApi } from "./library";
+import { liveApi, type LibraryApi } from "./library";
 import { mockApi } from "./mock";
 
 const REGISTRY: LibraryApi = mockApi;
-const WINDOW_FEED: LibraryApi = mockApi;
+const WINDOW_FEED: LibraryApi = liveApi;
 
 export const backend: LibraryApi = {
   // Registry CRUD.
