@@ -1193,6 +1193,7 @@ dependencies = [
  "toml 0.8.2",
  "tracing",
  "walkdir",
+ "windows-sys 0.59.0",
  "xattr",
  "zstd",
 ]

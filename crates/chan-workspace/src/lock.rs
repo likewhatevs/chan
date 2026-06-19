@@ -69,9 +69,13 @@ impl WorkspaceLock {
     /// writers corrupting the index.
     ///
     /// On Unix a normally-dead holder's flock is auto-released, so the
-    /// contended path is reached only for that leaked-fd case; on Windows
-    /// the steal degrades to a refuse (a LockFileEx handle can't be
-    /// unlinked without `FILE_SHARE_DELETE`).
+    /// contended path is reached only for that leaked-fd case. On Windows
+    /// the equivalent is a leaked `LockFileEx` handle: the lockfile is
+    /// opened with `FILE_SHARE_DELETE` and the steal unlinks it, but it
+    /// stays best-effort (a recreate can lose a race to the leaked handle's
+    /// pending-delete, degrading to a refuse). `holder_liveness` probes the
+    /// recorded pid on both platforms so only a provably-dead holder is
+    /// ever stolen from.
     pub fn acquire(lock_dir: &Path, workspace_root: &Path) -> Result<Self> {
         fs::create_dir_all(lock_dir)?;
         let path = lock_dir.join("writer.lock");
@@ -165,13 +169,22 @@ pub fn is_free(lock_dir: &Path) -> bool {
 }
 
 fn open_lock_file(path: &Path) -> Result<File> {
-    OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(path)
-        .map_err(|e| ChanError::Io(e.to_string()))
+    let mut opts = OpenOptions::new();
+    opts.create(true).read(true).write(true).truncate(false);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE. std's
+        // default share mode omits DELETE, which would block the steal
+        // path from unlinking the lockfile while a dead holder's leaked
+        // handle is still open. Every opener sets DELETE so a provably-
+        // dead holder's handle can be superseded.
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+        const FILE_SHARE_DELETE: u32 = 0x4;
+        opts.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    }
+    opts.open(path).map_err(|e| ChanError::Io(e.to_string()))
 }
 
 fn write_record(mut file: &File, workspace_root: &Path) -> Result<()> {
@@ -207,9 +220,9 @@ fn canonical_string(root: &Path) -> String {
         .into_owned()
 }
 
-// On non-unix the only liveness verdict is `Indeterminate` (no
-// dependency-free probe yet), so `Alive` is never constructed there.
-#[cfg_attr(not(unix), allow(dead_code))]
+// Only Unix and Windows have a liveness probe; on any other target the
+// sole verdict is `Indeterminate`, so `Alive`/`Dead` are never built there.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Liveness {
     Alive,
@@ -236,12 +249,50 @@ fn holder_liveness(pid: u32) -> Liveness {
             Err(_) => Liveness::Indeterminate,
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // No dependency-free liveness probe on Windows yet, and the
-        // unlink-based steal can't break a LockFileEx handle anyway (it
-        // would need FILE_SHARE_DELETE). Stay conservative — never steal
-        // — until a LockFileEx-aware path lands.
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // GetExitCodeProcess reports this (STATUS_PENDING) while a process
+        // is still running. A process that genuinely exits with code 259
+        // reads as Alive here, so the steal is refused for it: conservative,
+        // never the reverse. pid reuse points OpenProcess at the new owner
+        // and also reads Alive -> refuse, so a reused pid is never stolen.
+        const STILL_ACTIVE: u32 = 259;
+        // SAFETY: plain Win32 FFI. We pass our own `pid`, never inherit the
+        // handle, and CloseHandle every successfully-opened handle before
+        // returning.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return match GetLastError() {
+                    // No process with that id: provably dead.
+                    ERROR_INVALID_PARAMETER => Liveness::Dead,
+                    // It exists but is protected from our token: alive.
+                    ERROR_ACCESS_DENIED => Liveness::Alive,
+                    _ => Liveness::Indeterminate,
+                };
+            }
+            let mut code: u32 = 0;
+            let ok = GetExitCodeProcess(handle, &mut code);
+            CloseHandle(handle);
+            if ok == 0 {
+                Liveness::Indeterminate
+            } else if code == STILL_ACTIVE {
+                Liveness::Alive
+            } else {
+                Liveness::Dead
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // No dependency-free liveness probe on this target. Stay
+        // conservative: never steal.
         let _ = pid;
         Liveness::Indeterminate
     }
@@ -374,6 +425,27 @@ mod tests {
         let mut child = std::process::Command::new("true")
             .spawn()
             .expect("spawn /usr/bin/true");
+        let pid = child.id();
+        child.wait().expect("reap child");
+        assert_eq!(holder_liveness(pid), Liveness::Dead);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn our_own_pid_reads_as_alive() {
+        assert_eq!(holder_liveness(std::process::id()), Liveness::Alive);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exited_child_pid_reads_as_dead() {
+        // A child that has run to completion is provably dead:
+        // GetExitCodeProcess returns its real exit code (not STILL_ACTIVE),
+        // or OpenProcess fails once the process object is freed.
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .expect("spawn cmd /C exit");
         let pid = child.id();
         child.wait().expect("reap child");
         assert_eq!(holder_liveness(pid), Liveness::Dead);

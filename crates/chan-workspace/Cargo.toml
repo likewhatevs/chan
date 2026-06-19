@@ -80,6 +80,17 @@ hf-hub = { version = "0.4", default-features = false, optional = true, features 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd", target_os = "netbsd"))'.dependencies]
 xattr = "1"
 
+# Windows process-liveness probe for the writer-lock steal path
+# (`lock.rs`): OpenProcess + GetExitCodeProcess decide whether a
+# recorded lock holder is provably dead before its leaked LockFileEx
+# handle is unlinked. Pinned to chan-desktop's version so the lockfile
+# carries one windows-sys.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 tempfile = "3"
 
