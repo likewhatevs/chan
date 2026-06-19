@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.40.0] - 2026-06-19
+
 Making the `chan devserver` window + terminal lifecycle actually work end to end — reconnect,
 window cleanup, and the file-descriptor leak — plus the devserver serving the host library, a CLI
 reorganisation, and the deferred Windows/graph items.
