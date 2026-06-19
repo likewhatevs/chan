@@ -1031,10 +1031,16 @@ async fn handle_open_terminal(
     }
 }
 
+/// Route the watch feed authenticates by `?t=`. A browser cannot set the
+/// `Authorization` header on a WebSocket, so the watch upgrade alone accepts the
+/// bearer as a query param; every other route stays header-only, since a query
+/// token leaks through URL logs and the regular SPA `fetch` can set the header.
+const WATCH_WS_PATH: &str = "/api/library/windows/watch";
+
 /// Gate every management route except `info` on the devserver bearer token. The
-/// token may arrive in the `Authorization: Bearer` header (`cs`, the desktop) or,
-/// for a browser WebSocket that cannot set request headers, as the `?t=` query
-/// param (the same convention the per-workspace tenant URLs use).
+/// token arrives in the `Authorization: Bearer` header (`cs`, the desktop, the
+/// SPA `fetch`); the watch WebSocket additionally accepts it as the `?t=` query
+/// param (see [`WATCH_WS_PATH`]).
 async fn require_bearer(
     State(state): State<Arc<DevserverState>>,
     req: HttpRequest<Body>,
@@ -1045,8 +1051,13 @@ async fn require_bearer(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    let query_token = req.uri().query().and_then(query_bearer);
     let token = state.token.as_bytes();
+    // The `?t=` query token is accepted only for the watch WebSocket, where the
+    // browser has no other way to present it; offering it elsewhere would add a
+    // URL-leakable auth path the header already covers.
+    let query_token = (req.uri().path() == WATCH_WS_PATH)
+        .then(|| req.uri().query().and_then(query_bearer))
+        .flatten();
     let authorized = header_token.is_some_and(|t| bytes_eq(t.as_bytes(), token))
         || query_token.is_some_and(|t| bytes_eq(t.as_bytes(), token));
     if authorized {
@@ -1775,7 +1786,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bearer_accepts_the_query_token_for_header_less_clients() {
+    async fn query_token_authorizes_only_the_watch_websocket() {
         use tower::ServiceExt;
 
         let home = tempfile::tempdir().expect("home");
@@ -1784,8 +1795,9 @@ mod tests {
         let host = state.host.clone();
         let app = build_devserver_app(state, host);
 
-        // `?t=<token>` authorizes with no Authorization header (a browser WS).
-        let via_query = app
+        // A regular route does NOT accept `?t=`: the header is required (a query
+        // token leaks via URL logs, and the SPA fetch can set the header).
+        let regular = app
             .clone()
             .oneshot(
                 HttpRequest::builder()
@@ -1795,18 +1807,33 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(via_query.status(), StatusCode::OK);
+        assert_eq!(regular.status(), StatusCode::UNAUTHORIZED);
 
-        // A wrong query token is still rejected.
-        let wrong = app
+        // The watch WebSocket accepts `?t=`: a valid token passes the bearer
+        // gate, so the response is the WebSocket upgrade error (no upgrade
+        // headers in this plain request), NOT a 401.
+        let watch_ok = app
+            .clone()
             .oneshot(
                 HttpRequest::builder()
-                    .uri("/api/library/windows?t=nope")
+                    .uri("/api/library/windows/watch?t=test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+        assert_ne!(watch_ok.status(), StatusCode::UNAUTHORIZED);
+
+        // A wrong `?t=` on the watch route is still rejected.
+        let watch_bad = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/windows/watch?t=nope")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(watch_bad.status(), StatusCode::UNAUTHORIZED);
     }
 }
