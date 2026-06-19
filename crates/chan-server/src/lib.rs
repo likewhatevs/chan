@@ -19,7 +19,6 @@ mod auth;
 mod bus;
 mod config;
 mod control_socket;
-mod desktop_window_ops;
 mod devserver;
 /// Devserver management-API wire contract (HTTP/JSON), public so a
 /// chan-desktop client and the server build against the exact shapes.
@@ -51,11 +50,13 @@ mod terminal_blob;
 mod tunnel_guard;
 mod util;
 mod window_bus;
-mod window_presence;
-mod window_titles;
 
 pub use config::ServerConfig;
-pub use desktop_window_ops::{
+// Desktop window-ops, window presence, and the title map live in chan-library.
+// Re-export the modules so internal `crate::…::` paths resolve unchanged, and
+// the public types so chan-desktop keeps reaching them via `chan_server::`.
+pub(crate) use chan_library::{desktop_window_ops, window_presence, window_titles};
+pub use chan_library::desktop_window_ops::{
     DesktopBridge, DesktopWindowOp, DesktopWindowSender, NewWindowKind, NO_DESKTOP,
 };
 pub use devserver::{
@@ -69,7 +70,7 @@ pub use preferences::{
     SurfaceThemeChoice, ThemeChoice,
 };
 pub use routes::{build_fs_graph, FsGraphResponse, FsGraphScope};
-pub use window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
+pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
 
 use crate::terminal_sessions::{
     Registry as TerminalRegistry, RegistryConfig as TerminalRegistryConfig,

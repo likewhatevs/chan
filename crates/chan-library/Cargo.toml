@@ -18,7 +18,16 @@ name = "chan_library"
 test-util = []
 
 [dependencies]
+# The filesystem/registry core. default-features off (no embeddings: the host
+# owns lifecycle, not search — chan-server forwards embeddings through its own
+# feature when it builds chan-workspace).
+chan-workspace = { workspace = true, default-features = false }
+# Control-socket wire types (`ControlRequest`/`ControlResponse`); default-features
+# off drops the clap-backed `cs` client, same as chan-server.
+chan-shell = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
 dirs = { workspace = true }
 portable-pty = "0.8"
 rand = "0.8"
@@ -26,6 +35,7 @@ rustix = { version = "1.1", features = ["process"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+tower = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

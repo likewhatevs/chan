@@ -13,8 +13,11 @@
 #![forbid(unsafe_code)]
 
 pub mod config;
+pub mod desktop_window_ops;
 pub mod terminal_sessions;
 pub mod time;
+pub mod window_presence;
+pub mod window_titles;
 pub mod windows;
 
 pub use config::{

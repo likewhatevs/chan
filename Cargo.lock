@@ -1018,6 +1018,10 @@ name = "chan-library"
 version = "0.40.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "axum",
+ "chan-shell",
+ "chan-workspace",
  "dirs 5.0.1",
  "portable-pty",
  "rand 0.8.6",
@@ -1026,6 +1030,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tower",
  "tracing",
 ]
 
