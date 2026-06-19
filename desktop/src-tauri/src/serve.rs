@@ -1810,6 +1810,28 @@ mod tests {
     }
 
     #[test]
+    fn workspace_capability_covers_control_terminal_windows() {
+        // A control terminal's window label is `control-terminal-<id>`
+        // (`control_terminal_label`), which matches NONE of workspace-* /
+        // outbound-* / terminal-* — so without this glob the control window has
+        // no capability and Tauri denies every IPC from it, including the
+        // request_close_window that rules (b)/(c) of the control-terminal dialog
+        // (Cmd+W / the not-connected close button) route through. Pin the grant
+        // so a glob rename can't silently strand the control window again.
+        let windows = capability_windows(WORKSPACE_CAPABILITY_JSON);
+        assert!(
+            windows.iter().any(|w| w == "control-terminal-*"),
+            "workspace capability must target control-terminal-* windows so the connect-script \
+             window can request_close_window: {windows:?}",
+        );
+        let label = control_terminal_label("abc123");
+        assert!(
+            label.starts_with("control-terminal-"),
+            "control terminal label must keep the control-terminal- prefix the glob matches: {label}",
+        );
+    }
+
+    #[test]
     fn workspace_capability_covers_loopback_server_urls() {
         // Workspace windows load chan-server through loopback HTTP
         // origins. Without a remote URL match, Tauri omits the IPC

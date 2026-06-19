@@ -1028,6 +1028,67 @@ async fn scrape_control_terminal_token(
     Err("the devserver did not print its token in the control terminal in time".to_string())
 }
 
+/// Watch a connected scripted devserver's control-terminal PTY for a
+/// connected-phase exit — the connect script returning on its own, or a ^C in
+/// the control window. The connect flow's scrape loop only watches the PTY
+/// until the token lands; once connected nothing else does, so a script that
+/// dies leaves the devserver unreachable with no signal (the user's "^C and no
+/// dialog shows"). On such an exit, fire the same `devserver-control-closed`
+/// launcher survey (re-run vs abandon) the empty-window close path emits — but,
+/// unlike that path, WITHOUT closing the control window: the user didn't ask to
+/// close it, so it stays showing "process exited; press Ctrl+D", same as a
+/// non-control terminal. The fire is desktop-side (a poll of the tenant's exit
+/// status), independent of the control window's SPA and so robust to a
+/// buried/throttled WKWebView (frozen Seam C contract, rule a).
+///
+/// Stops without firing once this watcher's control terminal is no longer the
+/// devserver's current one: a disconnect/forget removes the prefix (and reaps
+/// the tenant), and a fresh connect replaces it — either way that exit is not a
+/// surprise THIS watcher owns, so it must not double-survey or fire against a
+/// reconnected session.
+fn spawn_control_terminal_exit_watcher(
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    id: String,
+    prefix: String,
+) {
+    tauri::async_runtime::spawn(async move {
+        const POLL: std::time::Duration = std::time::Duration::from_millis(1000);
+        loop {
+            // Still this devserver's live control terminal? A disconnect drops
+            // the prefix from the map (and reaps the tenant); a fresh connect
+            // overwrites it. Either way, stop — this watcher's job is done.
+            let current = state
+                .control_terminal_prefixes
+                .lock()
+                .unwrap()
+                .get(&id)
+                .cloned();
+            if current.as_deref() != Some(prefix.as_str()) {
+                return;
+            }
+            let exited = state
+                .embedded
+                .get()
+                .and_then(|e| e.control_terminal_exit(&prefix));
+            if let Some(code) = exited {
+                // Fire only while still connected: a disconnect-driven reap is
+                // expected teardown, not a surprise loss to survey.
+                if state.devservers.is_connected(&id) {
+                    tracing::info!(
+                        devserver = %id,
+                        status = code,
+                        "control terminal exited while connected; surveying re-run vs abandon"
+                    );
+                    let _ = app.emit("devserver-control-closed", id);
+                }
+                return;
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    });
+}
+
 /// Connect to a configured devserver: run its connect script in a control
 /// terminal (when one is set), acquire its bearer token, confirm it answers,
 /// record the connection, open a standalone terminal on it, then tuck the
@@ -1113,6 +1174,19 @@ async fn connect_devserver(
     // reaps both the window and its tenant through teardown_devserver_windows.
     // The tenant prefix was tracked at spawn time (control is read above for
     // the token scrape).
+    //
+    // Rule (a) of the control-terminal dialog: the scrape loop above stopped
+    // watching the PTY once the token landed, so a connected-phase exit (the
+    // script returning, or a ^C in the control window) would otherwise go
+    // unnoticed. Watch it from here so it surveys re-run/abandon.
+    if let Some(ct) = &control {
+        spawn_control_terminal_exit_watcher(
+            app.clone(),
+            Arc::clone(&state),
+            id.clone(),
+            ct.prefix.clone(),
+        );
+    }
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(())
 }

@@ -642,6 +642,21 @@ function render(workspaces, devservers = []) {
   }
 }
 
+/// The `.ds-workspaces` body for a CONNECTED devserver section. Driven by the
+/// last-known rows cache so a re-render reflects the real state at once: a
+/// known-empty devserver shows "(no workspaces)" immediately instead of
+/// sticking on "Loading..." waiting for a poll a hidden/throttled launcher may
+/// not run promptly (the F4 "stuck on Loading" bug). A populated or never-yet-
+/// fetched devserver shows "Loading..." until `pollDevserverWorkspaces` renders
+/// and binds its rows (the table needs the poll for its row event wiring).
+function renderDevserverConnectedBody(id) {
+  const rows = devserverWorkspaceRows[id];
+  const inner = Array.isArray(rows) && rows.length === 0
+    ? `<p class="nw-muted ws-group-pending">No workspaces on this devserver yet.</p>`
+    : `<p class="nw-muted ws-group-pending">Loading workspaces...</p>`;
+  return `<div class="ds-workspaces">${inner}</div>`;
+}
+
 /// One `[DEVSERVER {host}]` launcher section: a header (name + endpoint +
 /// Connect/Disconnect + Forget) over the section body. While disconnected
 /// the body is a placeholder; once connected it lists the devserver's live
@@ -650,7 +665,7 @@ function renderDevserverSection(ds) {
   const name = (ds.label && ds.label.trim()) || ds.host || 'devserver';
   const endpoint = `${ds.host}:${ds.port}`;
   const body = ds.connected
-    ? `<div class="ds-workspaces"><p class="nw-muted ws-group-pending">Loading workspaces...</p></div>`
+    ? renderDevserverConnectedBody(ds.id)
     : `<p class="nw-muted ws-group-pending">Not connected.</p>`;
   return `
     <section class="ws-group-block" data-devserver-id="${escapeAttr(ds.id || '')}">
@@ -754,6 +769,7 @@ function bindDevserverSectionEvents(devservers) {
           showError(e);
           return;
         }
+        delete devserverWorkspaceRows[id];
         await refresh(true);
       });
     }
@@ -790,6 +806,12 @@ function bindDevserverSectionEvents(devservers) {
           } else {
             showError(failure);
           }
+        } else {
+          // Connect succeeded: fill this section's body NOW (its rows, or the
+          // empty "(no workspaces)") as part of the connect action, rather than
+          // leaving it on "Loading..." for the throttle-prone interval poll —
+          // a just-connected empty devserver was sticking on "Loading...".
+          await pollDevserverWorkspaces();
         }
       });
     }
@@ -802,6 +824,7 @@ function bindDevserverSectionEvents(devservers) {
         } catch (e) {
           showError(e);
         }
+        delete devserverWorkspaceRows[id];
         await refresh(true);
       });
     }
@@ -825,6 +848,13 @@ function bindDevserverSectionEvents(devservers) {
 // Per-devserver last-rendered workspace-rows JSON so the periodic poll only
 // touches the DOM when the list actually changed (no flicker at idle).
 const lastDevserverRowsJson = {};
+
+// Per-devserver last-known workspace rows (the array itself), so a launcher
+// re-render can show the real connected state — rows, or the empty
+// "(no workspaces)" — instead of reverting every section to "Loading..." and
+// depending on a follow-up poll. Set by pollDevserverWorkspaces on a successful
+// fetch and on connect-success; cleared on disconnect/forget.
+const devserverWorkspaceRows = {};
 
 /// Fill each connected `[DEVSERVER]` section with its live workspace rows.
 /// Runs after a render and on a periodic interval; updates only the section
@@ -856,6 +886,10 @@ async function pollDevserverWorkspaces() {
       invoke('reconnect_devserver', { id }).catch(() => {});
       continue;
     }
+    // Cache the real rows BEFORE the DOM dedupe: a re-render reads this to show
+    // the true state (rows or "(no workspaces)") immediately, even on a poll
+    // that dedupes the DOM update away.
+    devserverWorkspaceRows[id] = rows;
     const json = JSON.stringify(rows);
     if (lastDevserverRowsJson[id] === json) continue;
     lastDevserverRowsJson[id] = json;
@@ -1355,12 +1389,29 @@ function showConnectFailureSurvey(ds, reason) {
   });
 }
 
-/// React to a connected devserver's control terminal emptying (its
-/// connect-script tab was closed, or the script exited): that terminal is the
-/// connection endpoint, so the devserver is now unreachable. Survey re-run vs
-/// abandon. Driven by the `devserver-control-closed` event the backend emits
-/// from `request_close_window`.
+/// React to a connected devserver's control terminal going away — its
+/// connect-script tab was closed (^W / Cmd+W → `request_close_window`) or the
+/// script exited on its own / by ^C (the desktop-side exit watcher): that
+/// terminal is the connection endpoint, so the devserver is now unreachable.
+/// Survey re-run vs abandon. Driven by the `devserver-control-closed` event the
+/// backend emits.
+///
+/// Deduped per devserver: the exit watcher and the empty-window close can both
+/// signal for the same devserver (e.g. the script ^C's so the watcher surveys,
+/// then the user hits Ctrl+D on the "process exited" tab), so only one survey
+/// shows until the user answers it.
+const controlSurveyInFlight = new Set();
 async function handleControlTerminalClosed(id) {
+  if (controlSurveyInFlight.has(id)) return;
+  controlSurveyInFlight.add(id);
+  try {
+    await runControlTerminalClosedSurvey(id);
+  } finally {
+    controlSurveyInFlight.delete(id);
+  }
+}
+
+async function runControlTerminalClosedSurvey(id) {
   let ds = null;
   try {
     ds = (await invoke('list_devservers')).find((d) => d.id === id) || null;
