@@ -1031,25 +1031,43 @@ async fn handle_open_terminal(
     }
 }
 
-/// Gate every management route except `info` on the devserver bearer token.
+/// Gate every management route except `info` on the devserver bearer token. The
+/// token may arrive in the `Authorization: Bearer` header (`cs`, the desktop) or,
+/// for a browser WebSocket that cannot set request headers, as the `?t=` query
+/// param (the same convention the per-workspace tenant URLs use).
 async fn require_bearer(
     State(state): State<Arc<DevserverState>>,
     req: HttpRequest<Body>,
     next: Next,
 ) -> Response {
-    let presented = req
+    let header_token = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    match presented {
-        Some(t) if bytes_eq(t.as_bytes(), state.token.as_bytes()) => next.run(req).await,
-        _ => (
+    let query_token = req.uri().query().and_then(query_bearer);
+    let token = state.token.as_bytes();
+    let authorized = header_token.is_some_and(|t| bytes_eq(t.as_bytes(), token))
+        || query_token.is_some_and(|t| bytes_eq(t.as_bytes(), token));
+    if authorized {
+        next.run(req).await
+    } else {
+        (
             StatusCode::UNAUTHORIZED,
             "missing or invalid devserver bearer token",
         )
-            .into_response(),
+            .into_response()
     }
+}
+
+/// The `t` bearer from a URL query string (`...?t=<token>`), for a client that
+/// cannot set the `Authorization` header (a browser WebSocket). Tokens are
+/// alphanumeric, so the value needs no percent-decoding.
+fn query_bearer(query: &str) -> Option<&str> {
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == "t").then_some(value)
+    })
 }
 
 /// Length-then-content comparison of two byte slices in time independent of
@@ -1754,5 +1772,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn bearer_accepts_the_query_token_for_header_less_clients() {
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+        let app = build_devserver_app(state, host);
+
+        // `?t=<token>` authorizes with no Authorization header (a browser WS).
+        let via_query = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/windows?t=test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(via_query.status(), StatusCode::OK);
+
+        // A wrong query token is still rejected.
+        let wrong = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/windows?t=nope")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
     }
 }
