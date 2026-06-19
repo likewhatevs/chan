@@ -100,11 +100,10 @@ pub enum ShellAction {
         #[arg(long)]
         pretty: bool,
     },
-    /// Window registry operations. `cs window list` (or `cs w l`) shows
-    /// every window chan knows about: `open` (a live event socket is
-    /// connected — includes windows chan-desktop has hidden via the
-    /// close button) and/or `saved` (a persisted per-window layout
-    /// exists, reopenable).
+    /// Window registry operations. `cs window list` (or `cs w l`) shows the
+    /// library's authoritative window set — every window across every tenant,
+    /// with its `connected` flag (a live event socket is tagged with it right
+    /// now, including windows chan-desktop has hidden via the close button).
     #[command(infer_subcommands = true)]
     Window {
         #[command(subcommand)]
@@ -676,10 +675,11 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
     }
 }
 
-/// `cs window list`: fetch the server's window registry view (saved
-/// session blobs ∪ live `/ws` presence) and print it. Session-scoped
-/// like `cs terminal list`: needs only $CHAN_CONTROL_SOCKET, no
-/// window id.
+/// `cs window list`: fetch the library's authoritative window set (the same
+/// `WindowRecord` feed the desktop watcher and launcher reconcile to) and
+/// print it. Session-scoped like `cs terminal list`: needs only
+/// $CHAN_CONTROL_SOCKET, no window id. A standalone `chan serve` has no
+/// library and lists no windows.
 async fn cmd_window_list(json: bool, pretty: bool) -> Result<()> {
     let socket = control_socket_env()?;
     let raw = send_control_request(&socket, ControlRequest::WindowList).await?;
@@ -700,7 +700,7 @@ async fn cmd_window_list(json: bool, pretty: bool) -> Result<()> {
     Ok(())
 }
 
-/// `cs window <new|open|rm|hide|title>`: send a one-shot window-lifecycle
+/// `cs window <new|open|rm|hide>`: send a one-shot window-lifecycle
 /// request and print the server's reply (the new window id for `new`, a
 /// short confirmation otherwise). Session-scoped like `cs window list`:
 /// needs only $CHAN_CONTROL_SOCKET, no window id. `rm` of a window with
@@ -713,12 +713,12 @@ async fn cmd_window_op(req: ControlRequest) -> Result<()> {
     Ok(())
 }
 
-/// Render the `cs window list` rows (`[{id, connected, saved, title?,
-/// kind?}]`) as a markdown table. `title`/`kind` are present only when a
-/// desktop is attached (the OS title lives there); `open` = a live event
-/// socket exists somewhere (a hidden chan-desktop window still counts —
-/// the server can't tell hidden from visible); `saved` = a persisted
-/// layout exists.
+/// Render the `cs window list` rows (library `WindowRecord`s:
+/// `{window_id, library_id, kind, title, ordinal, connected, …}`) as a
+/// markdown table. Titles are library-owned and auto-derived; `connected`
+/// means a live `/ws` socket is tagged with the window right now. Every row
+/// in the set is a persisted library record, so `connected` is the only
+/// status axis.
 fn render_window_list_markdown(raw: &str) -> Result<String> {
     let value: serde_json::Value = serde_json::from_str(raw).context("parsing window list JSON")?;
     let rows = value
@@ -727,23 +727,24 @@ fn render_window_list_markdown(raw: &str) -> Result<String> {
     if rows.is_empty() {
         return Ok("No windows.\n".to_string());
     }
-    let mut out = String::from("| window | kind | title | status |\n| --- | --- | --- | --- |\n");
+    let mut out = String::from(
+        "| window | library | kind | title | # | status |\n\
+         | --- | --- | --- | --- | --- | --- |\n",
+    );
     for row in rows {
-        let id = row.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+        let id = row.get("window_id").and_then(|v| v.as_str()).unwrap_or("?");
+        let library = row.get("library_id").and_then(|v| v.as_str()).unwrap_or("");
         let kind = row.get("kind").and_then(|v| v.as_str()).unwrap_or("");
         let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let ordinal = row.get("ordinal").and_then(|v| v.as_u64()).unwrap_or(0);
         let connected = row
             .get("connected")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let saved = row.get("saved").and_then(|v| v.as_bool()).unwrap_or(false);
-        let status = match (connected, saved) {
-            (true, true) => "open, saved",
-            (true, false) => "open",
-            (false, true) => "saved",
-            (false, false) => "?",
-        };
-        out.push_str(&format!("| {id} | {kind} | {title} | {status} |\n"));
+        let status = if connected { "connected" } else { "offline" };
+        out.push_str(&format!(
+            "| {id} | {library} | {kind} | {title} | {ordinal} | {status} |\n"
+        ));
     }
     Ok(out)
 }

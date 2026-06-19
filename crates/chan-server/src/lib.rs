@@ -576,8 +576,8 @@ async fn build_app(
     // layout query. The control socket parks the query oneshot; the SPA's
     // `POST /api/window/reply` route completes it through AppState below.
     let window_bus = Arc::new(crate::window_bus::WindowBus::new());
-    // Created before the control socket so `cs window list` and the
-    // `/ws` route share one presence map (cloned onto AppState below).
+    // Shared by the `/ws` route (presence updates) and the host's window-set
+    // assembly (cloned onto AppState below).
     let window_presence = Arc::new(window_presence::WindowPresence::new());
     // A standalone serve unserves by exiting the process (its shutdown
     // signal); a hosted tenant unserves by unmounting itself from the host.
@@ -598,7 +598,6 @@ async fn build_app(
             terminal_registry: terminal_registry_cell.clone(),
             survey_bus: survey_bus.clone(),
             window_bus: window_bus.clone(),
-            window_presence: window_presence.clone(),
             desktop: desktop.clone(),
             tenant: control_socket::ControlTenant::Workspace,
             unserve: unserve_scope,
@@ -801,7 +800,6 @@ async fn build_terminal_app(
             terminal_registry: terminal_registry_cell.clone(),
             survey_bus: survey_bus.clone(),
             window_bus: window_bus.clone(),
-            window_presence: window_presence.clone(),
             desktop: desktop.clone(),
             tenant: control_socket::ControlTenant::TerminalOnly,
             unserve: unserve_scope,

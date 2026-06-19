@@ -229,10 +229,8 @@ pub struct ControlSocketCtx {
     pub terminal_registry: TerminalRegistryCell,
     pub survey_bus: Arc<crate::survey::SurveyBus>,
     pub window_bus: Arc<crate::window_bus::WindowBus>,
-    pub window_presence: Arc<crate::window_presence::WindowPresence>,
-    /// Desktop integration: the window-ops channel (`None` standalone)
-    /// and the shared title map. `cs window list` reads the titles; the
-    /// lifecycle verbs send ops down the channel.
+    /// Desktop integration: the window-ops channel (`None` standalone) and the
+    /// shared title map. The lifecycle verbs send ops down the channel.
     pub desktop: crate::desktop_window_ops::DesktopBridge,
     pub tenant: ControlTenant,
     /// How `ControlRequest::Unserve` tears this process's workspace(s) down.
@@ -431,7 +429,6 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
         terminal_registry,
         survey_bus,
         window_bus,
-        window_presence,
         desktop,
         tenant,
         unserve,
@@ -577,39 +574,20 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             into_response(term_scrollback(registry, &tab_name))
         }
         ControlRequest::WindowList => {
-            let connected = window_presence.connected_ids();
-            let saved = match tenant {
-                ControlTenant::Workspace => {
-                    let workspace = match workspace_from_cell(workspace_cell, tenant) {
-                        Ok(workspace) => workspace,
-                        Err(message) => return ControlResponse::Error { message },
-                    };
-                    match tokio::task::spawn_blocking(move || workspace.list_sessions()).await {
-                        Ok(Ok(keys)) => keys,
-                        Ok(Err(e)) => {
-                            return ControlResponse::Error {
-                                message: format!("listing saved windows: {e}"),
-                            }
-                        }
-                        Err(e) => {
-                            return ControlResponse::Error {
-                                message: format!("list windows task panicked: {e}"),
-                            }
-                        }
-                    }
-                }
-                // A standalone terminal tenant's saved blobs describe
-                // windows whose PTYs died with them — nothing reopenable.
-                // Live presence is the honest list there.
-                ControlTenant::TerminalOnly => Vec::new(),
+            // The library is the single authority for the window set: one
+            // assembly (`assemble_window_records`) the desktop watcher, the
+            // launcher, and `cs window list` all reconcile to, so they never
+            // disagree. A standalone `chan serve` has no host and thus no
+            // library window set — the honest answer is empty.
+            let records = match unserve {
+                UnserveScope::Host(weak) => weak
+                    .upgrade()
+                    .map(|host| host.assemble_window_records())
+                    .unwrap_or_default(),
+                UnserveScope::Standalone { .. } | UnserveScope::Unsupported => Vec::new(),
             };
-            let rows = crate::routes::windows::join_windows_with_titles(
-                saved,
-                connected,
-                &desktop.window_titles,
-            );
             into_response(
-                serde_json::to_string(&rows).map_err(|e| format!("encoding window list: {e}")),
+                serde_json::to_string(&records).map_err(|e| format!("encoding window list: {e}")),
             )
         }
         ControlRequest::Identify => {
@@ -1970,7 +1948,6 @@ mod tests {
             terminal_registry: Arc::new(std::sync::OnceLock::new()),
             survey_bus: Arc::new(crate::survey::SurveyBus::new()),
             window_bus: Arc::new(crate::window_bus::WindowBus::new()),
-            window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
             // No desktop attached in unit tests: lifecycle ops refuse and
             // the title map stays empty.
             desktop: crate::desktop_window_ops::DesktopBridge::default(),
@@ -2113,24 +2090,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn window_list_on_a_terminal_tenant_reports_presence() {
-        // `cs window list` must WORK on a terminal tenant (presence-only
-        // rows), not refuse like the workspace commands.
+    async fn window_list_without_a_host_is_empty() {
+        // The library owns the window set; `cs window list` reads it through
+        // the host handle (`assemble_window_records`). A control socket with
+        // no host (a standalone serve, or any host-less tenant) has no library
+        // window set, so the honest answer is an empty array — not a refusal.
         let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
         let ctx = test_ctx(workspace_cell, ControlTenant::TerminalOnly);
-        let _guard = ctx.window_presence.connect("terminal-win-0");
 
         let response = handle_request(ControlRequest::WindowList, &ctx).await;
 
         match response {
             ControlResponse::Ok { message } => {
                 let rows: Value = serde_json::from_str(&message).expect("rows JSON");
-                assert_eq!(
-                    rows,
-                    serde_json::json!([
-                        {"id": "terminal-win-0", "connected": true, "saved": false}
-                    ]),
-                );
+                assert_eq!(rows, serde_json::json!([]));
             }
             ControlResponse::Error { message } => panic!("unexpected error: {message}"),
         }
