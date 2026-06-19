@@ -22,8 +22,8 @@ use tower::ServiceExt;
 use crate::desktop_window_ops::DesktopBridge;
 use crate::tenant::{HostControl, TenantArtifacts, TenantBuilder, UnserveMode};
 use crate::terminal_sessions::CloseReason;
-use crate::windows::{WindowRecord, WindowRegistry};
-use crate::{sanitize_prefix, Error, ServeConfig, ServeHandle};
+use crate::windows::{PersistedWindow, WindowKind, WindowRecord, WindowRegistry};
+use crate::{allocate_workspace_prefix, sanitize_prefix, Error, ServeConfig, ServeHandle};
 
 /// One workspace mounted into a [`WorkspaceHost`].
 #[derive(Debug, Clone)]
@@ -479,13 +479,76 @@ impl WorkspaceHost {
             .any(|entry| entry.window_id.as_deref() == Some(window_id))
     }
 
-    /// The full library window set — every window across every tenant, as the
-    /// authoritative records the launcher / `cs window list` / the desktop
-    /// watcher reconcile to. The live-state assembly (registry rows joined with
-    /// each tenant's prefix/token/presence) is wired with the window registry
-    /// field; until then this is empty.
+    /// The full library window set: every window across every tenant, as the
+    /// authoritative records the launcher, `cs window list`, and the desktop
+    /// watcher reconcile to. Joins each persisted registry row with its serving
+    /// tenant's live state: a workspace window carries its mounted tenant's
+    /// prefix and token (or, when the workspace is off, a stable derived prefix
+    /// with no token), and `connected` reflects a live `/ws` socket for that
+    /// window id. Empty when no registry is installed (a host that never opened
+    /// one has no windows).
     pub fn assemble_window_records(&self) -> Vec<WindowRecord> {
-        Vec::new()
+        let Some(registry) = self.window_registry() else {
+            return Vec::new();
+        };
+        let library_id = self.library_id();
+        registry
+            .snapshot()
+            .into_iter()
+            .map(|row| {
+                let (prefix, token, connected) = self.window_live_state(&row);
+                row.to_record(library_id.to_string(), prefix, token, connected)
+            })
+            .collect()
+    }
+
+    /// Resolve a persisted window's live `(prefix, token, connected)` from its
+    /// serving tenant. A terminal window has no per-library terminal tenant
+    /// wired yet, so it carries no prefix or token; a workspace window resolves
+    /// through [`workspace_window_live`](Self::workspace_window_live).
+    fn window_live_state(&self, row: &PersistedWindow) -> (String, String, bool) {
+        match row.kind {
+            WindowKind::Workspace => {
+                self.workspace_window_live(row.workspace_path.as_deref(), &row.window_id)
+            }
+            WindowKind::Terminal => (String::new(), String::new(), false),
+        }
+    }
+
+    /// The `(prefix, token, connected)` for a workspace window. A mounted
+    /// workspace carries its live tenant's prefix and token plus the window's
+    /// `/ws` presence; an off workspace carries its stable derived prefix with
+    /// no token, since the client turns it on before attaching.
+    fn workspace_window_live(
+        &self,
+        workspace_path: Option<&str>,
+        window_id: &str,
+    ) -> (String, String, bool) {
+        let Some(path) = workspace_path else {
+            return (String::new(), String::new(), false);
+        };
+        let path = Path::new(path);
+        let target = canonical_key(path);
+        if let Ok(workspaces) = self.workspaces.read() {
+            if let Some(runtime) = workspaces
+                .values()
+                .find(|runtime| canonical_key(&runtime.root) == target)
+            {
+                let connected = runtime
+                    .artifacts
+                    .window_presence
+                    .connected_ids()
+                    .iter()
+                    .any(|id| id == window_id);
+                return (
+                    runtime.handle.prefix.clone(),
+                    runtime.handle.token.clone().unwrap_or_default(),
+                    connected,
+                );
+            }
+        }
+        let prefix = allocate_workspace_prefix(path).unwrap_or_default();
+        (prefix, String::new(), false)
     }
 
     /// Raw replay-ring PTY bytes for the terminal tenant mounted at
@@ -1511,5 +1574,57 @@ mod tests {
             "/workspace"
         ));
         assert!(path_matches_prefix("/anything", ""));
+    }
+
+    #[test]
+    fn assemble_window_records_joins_registry_with_live_state() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = WorkspaceHost::new(lib, fake_builder());
+
+        // No registry installed: the window set is empty.
+        assert!(host.assemble_window_records().is_empty());
+
+        // Install a registry + identity, then mint a terminal and an (unmounted)
+        // workspace window.
+        let store = tempfile::tempdir().expect("store dir");
+        let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
+        let term = registry.create(WindowKind::Terminal, None);
+        let ws = registry.create(WindowKind::Workspace, Some("/tmp/notes".into()));
+        host.install_window_registry(registry, "lib-abc".into());
+
+        let records = host.assemble_window_records();
+        assert_eq!(records.len(), 2);
+        // Every row is stamped with the library id and is persisted.
+        assert!(records
+            .iter()
+            .all(|r| r.library_id == "lib-abc" && r.persisted));
+
+        // A terminal window has no per-library terminal tenant wired yet, so no
+        // live prefix/token and not connected; durable fields carry through.
+        let term_rec = records
+            .iter()
+            .find(|r| r.window_id == term.window_id)
+            .expect("terminal row");
+        assert_eq!(term_rec.kind, WindowKind::Terminal);
+        assert_eq!(term_rec.prefix, "");
+        assert_eq!(term_rec.token, "");
+        assert!(!term_rec.connected);
+        assert_eq!(term_rec.title, term.title);
+
+        // An off (unmounted) workspace carries its stable derived prefix, no
+        // token, not connected.
+        let ws_rec = records
+            .iter()
+            .find(|r| r.window_id == ws.window_id)
+            .expect("workspace row");
+        assert_eq!(ws_rec.kind, WindowKind::Workspace);
+        assert_eq!(ws_rec.workspace_path.as_deref(), Some("/tmp/notes"));
+        assert_eq!(
+            ws_rec.prefix,
+            allocate_workspace_prefix(Path::new("/tmp/notes")).unwrap()
+        );
+        assert_eq!(ws_rec.token, "");
+        assert!(!ws_rec.connected);
     }
 }
