@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, Weak};
 
 use async_trait::async_trait;
-use chan_workspace::Workspace;
+use chan_workspace::{Library, Workspace};
 use tokio::sync::watch;
 
 use crate::desktop_window_ops::DesktopBridge;
@@ -136,6 +136,7 @@ pub trait TenantBuilder: Send + Sync {
     /// Build a workspace tenant mounted under `config.prefix`.
     async fn build_workspace(
         &self,
+        library: Library,
         workspace: Arc<Workspace>,
         config: &ServeConfig,
         desktop: DesktopBridge,
@@ -146,6 +147,7 @@ pub trait TenantBuilder: Send + Sync {
     /// its PTYs, with an optional persisted per-window session dir.
     async fn build_terminal(
         &self,
+        library: Library,
         config: &ServeConfig,
         desktop: DesktopBridge,
         unserve: UnserveMode,

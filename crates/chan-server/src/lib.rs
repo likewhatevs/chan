@@ -125,7 +125,7 @@ use self_writes::SelfWrites;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use axum::extract::DefaultBodyLimit;
@@ -971,6 +971,125 @@ fn terminal_router(state: Arc<AppState>) -> Router {
             auth_middleware,
         ))
         .with_state(state)
+}
+
+/// chan-server's implementation of chan-library's tenant-construction seam.
+/// `WorkspaceHost` holds an `Arc<dyn TenantBuilder>` and calls these to mount a
+/// tenant; they wrap [`build_app`]/[`build_terminal_app`] and adapt the
+/// route-layer `AppArtifacts` to the host-facing `TenantArtifacts`.
+pub(crate) struct RouteLayer;
+
+#[async_trait::async_trait]
+impl chan_library::TenantBuilder for RouteLayer {
+    async fn build_workspace(
+        &self,
+        library: Library,
+        workspace: Arc<Workspace>,
+        config: &ServeConfig,
+        desktop: DesktopBridge,
+        unserve: chan_library::UnserveMode,
+    ) -> Result<chan_library::TenantArtifacts, Error> {
+        let artifacts = build_app(library, workspace, config, desktop, unserve).await?;
+        Ok(into_tenant_artifacts(artifacts))
+    }
+
+    async fn build_terminal(
+        &self,
+        library: Library,
+        config: &ServeConfig,
+        desktop: DesktopBridge,
+        unserve: chan_library::UnserveMode,
+        command: Option<String>,
+        session_dir: Option<PathBuf>,
+    ) -> Result<chan_library::TenantArtifacts, Error> {
+        let artifacts = build_terminal_app(library, config, desktop, unserve, session_dir).await?;
+        // The tenant's terminals run `command` (when set) rather than the
+        // default shell; applied before the SPA can open the first one.
+        artifacts.terminal_sessions.set_default_command(command);
+        Ok(into_tenant_artifacts(artifacts))
+    }
+}
+
+/// Reduce a route-layer `AppArtifacts` to the host-facing `TenantArtifacts`:
+/// surface what the host routes / reconciles / tears down with, and stash the
+/// rest (MCP bridge, control socket, background tasks, the AppState the router
+/// owns) in the opaque keep-alive the host owns for the tenant's lifetime.
+fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
+    let AppArtifacts {
+        app,
+        token,
+        last_activity,
+        workspace_cell,
+        _terminal_pruner,
+        _terminal_drainer,
+        _terminal_roster_broadcaster,
+        prefix,
+        mcp_bridge,
+        control_socket,
+        terminal_sessions,
+        state,
+        shutdown_tx,
+    } = a;
+    let window_presence = state.window_presence.clone();
+    let cell: Arc<dyn chan_library::WorkspaceCellHandle> = Arc::new(CellHandle(workspace_cell));
+    chan_library::TenantArtifacts {
+        app,
+        token,
+        terminal_sessions,
+        shutdown_tx,
+        prefix,
+        window_presence,
+        cell,
+        keepalive: Box::new((
+            last_activity,
+            _terminal_pruner,
+            _terminal_drainer,
+            _terminal_roster_broadcaster,
+            mcp_bridge,
+            control_socket,
+            state,
+        )),
+    }
+}
+
+/// Route-layer implementation of chan-library's `WorkspaceCellHandle`: drives a
+/// tenant's `WorkspaceCell` (which owns the search indexer) on the host's
+/// behalf without exposing the concrete cell type.
+struct CellHandle(Arc<RwLock<Option<WorkspaceCell>>>);
+
+impl chan_library::WorkspaceCellHandle for CellHandle {
+    fn workspace(&self) -> Option<Arc<Workspace>> {
+        let cell = self.0.read().ok()?;
+        Some(cell.as_ref()?.workspace.clone())
+    }
+
+    fn cancel_reindex(&self) {
+        if let Ok(cell) = self.0.read() {
+            if let Some(cell) = cell.as_ref() {
+                cell.indexer.cancel();
+            }
+        }
+    }
+
+    fn clear(&self) -> Option<(Weak<Workspace>, PathBuf)> {
+        let cell = self.0.write().ok()?.take()?;
+        let WorkspaceCell {
+            workspace,
+            watch_handle,
+            indexer,
+        } = cell;
+        // Clear the shared cell before socket accept loops finish aborting;
+        // otherwise their stale Arc can keep the workspace marked open.
+        indexer.cancel();
+        drop(watch_handle);
+        drop(indexer);
+        // Capture the lock dir before dropping the workspace: the flock-free
+        // wait needs it, and the workspace is gone by then.
+        let lock_dir = workspace.paths().lock.clone();
+        let weak = Arc::downgrade(&workspace);
+        drop(workspace);
+        Some((weak, lock_dir))
+    }
 }
 
 /// Spawn the listener, build the router, and serve forever.
