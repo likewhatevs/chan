@@ -17,10 +17,15 @@ use crate::error::err_from;
 use crate::state::AppState;
 use crate::util::raw_json_response;
 
-/// Window id query param (`?w=<id>`) for session routes.
+/// Window id query param (`?w=<id>`) for session routes. `moved=1` (DELETE
+/// only) marks a cross-window MOVE-OUT so the handler deletes the blob but does
+/// NOT reap the window's sessions — the moved PTY survives (Amendment 7). Get /
+/// put ignore it.
 #[derive(Deserialize)]
 pub struct SessionQuery {
     w: String,
+    #[serde(default)]
+    moved: Option<String>,
 }
 
 async fn blocking_response(
@@ -128,13 +133,23 @@ pub async fn api_delete_session(
     Query(q): Query<SessionQuery>,
 ) -> Response {
     let key = q.w;
-    // DELETE is the explicit DISCARD signal (^W to empty / ^D / Ctrl+Shift+W /
-    // an empty window): drop the window from the persisted set and immediately
-    // reap its terminal sessions (kill the PTYs, release the fds). This is the
-    // "discard ⇒ reap" half — it frees a busy detached session the pruner
-    // otherwise keeps alive. Runs regardless of whether a blob was on disk (an
-    // unsaved window can still be discarded).
-    state.terminal_sessions.forget_window(&key);
+    // A DELETE either DISCARDS the window or signals a cross-window MOVE-OUT:
+    // - `?w=W` (discard: ^W to empty / ^D / Ctrl+Shift+W / an empty window):
+    //   drop it from the persisted set AND reap its sessions (kill the PTYs,
+    //   release the fds) — the "discard ⇒ reap" half that frees a busy detached
+    //   session the pruner keeps alive.
+    // - `?w=W&moved=1` (Amendment 7): the source window emptied because its tab
+    //   moved to another window. Drop the blob + unpersist so it leaves
+    //   `cs window list`, but do NOT reap — the moved PTY survives, and
+    //   Amendment 3(A)'s reattach re-binds it to the target window. Skipping the
+    //   reap is the deterministic guard against the source DELETE racing ahead
+    //   of the target's attach/rebind.
+    // Either way the blob delete below runs (an unsaved window can still go).
+    if matches!(q.moved.as_deref(), Some("1")) {
+        state.terminal_sessions.unpersist_window(&key);
+    } else {
+        state.terminal_sessions.forget_window(&key);
+    }
     let Ok(workspace) = state.try_workspace() else {
         if let Some(dir) = state.terminal_session_dir.clone() {
             return blocking_response(

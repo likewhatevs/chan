@@ -716,11 +716,22 @@ impl Registry {
     /// is the discard half of "discard ⇒ reap; persist ⇒ keep". Returns how
     /// many sessions were reaped. Called on a `DELETE /api/session?w=<window_id>`.
     pub fn forget_window(&self, window_id: &str) -> usize {
+        self.unpersist_window(window_id);
+        self.close_for_window(window_id, CloseReason::Explicit)
+    }
+
+    /// Drop `window_id` from the persisted set WITHOUT reaping its sessions.
+    /// The discard half of a cross-window MOVE-OUT (Amendment 7): the source
+    /// window emptied because its tab moved away, so its layout blob is deleted
+    /// (it leaves `cs window list`) but the moved PTY must survive — Amendment
+    /// 3(A)'s reattach rebinds it to the target. A move-out DELETE
+    /// (`?w=W&moved=1`) routes here; a real discard (`?w=W`) routes through
+    /// [`forget_window`](Self::forget_window) and reaps.
+    pub fn unpersist_window(&self, window_id: &str) {
         self.persisted_windows
             .lock()
             .expect("terminal registry poisoned")
             .remove(window_id);
-        self.close_for_window(window_id, CloseReason::Explicit)
     }
 
     /// Snapshot of every live session, for `cs term list`. The control
@@ -3067,6 +3078,23 @@ mod tests {
         assert_eq!(registry.forget_window("win-a"), 2);
         assert_eq!(registry.len(), 1); // win-b untouched
         assert!(!registry.persisted_windows.lock().unwrap().contains("win-a"));
+    }
+
+    #[test]
+    fn unpersist_window_drops_persistence_without_reaping() {
+        // Amendment 7 move-out: the source's `?w=W&moved=1` DELETE unpersists
+        // the window but must NOT reap — the moved PTY survives (Amendment 3(A)
+        // rebinds it to the target on attach).
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let _a = registry.create(opts_with_window("win-a")).unwrap();
+        registry.mark_window_persisted("win-a");
+
+        registry.unpersist_window("win-a");
+        assert_eq!(registry.len(), 1, "move-out keeps the PTY alive (no reap)");
+        assert!(
+            !registry.persisted_windows.lock().unwrap().contains("win-a"),
+            "the source window is no longer persisted"
+        );
     }
 
     #[test]
