@@ -14,6 +14,9 @@
 
 pub mod config;
 pub mod desktop_window_ops;
+pub mod error;
+pub mod prefix;
+pub mod serve_config;
 pub mod terminal_sessions;
 pub mod time;
 pub mod window_presence;
@@ -23,3 +26,6 @@ pub mod windows;
 pub use config::{
     TerminalConfig, TerminalFontChoice, TERMINAL_SCROLLBACK_MB_MAX, TERMINAL_SCROLLBACK_MB_MIN,
 };
+pub use error::Error;
+pub use prefix::{allocate_workspace_prefix, workspace_slug};
+pub use serve_config::{sanitize_prefix, ServeConfig, ServeHandle};

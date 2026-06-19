@@ -46,6 +46,9 @@ use crate::devserver_api::{
 };
 use crate::host::WorkspaceHost;
 use crate::{sanitize_prefix, Error, ServeConfig};
+// Prefix allocation lives in chan-library (the window-record assembly needs the
+// stable OFF-workspace prefix); the devserver mounts at the same prefix.
+use chan_library::{allocate_workspace_prefix, workspace_slug};
 
 /// Inputs the CLI resolves for `chan devserver`. The `--systemd`
 /// supervision path is layered on in the CLI around this; the runtime
@@ -1001,15 +1004,6 @@ fn tenant_config(addr: SocketAddr, prefix: &str) -> ServeConfig {
 /// is the sanitized last path segment and `hash` disambiguates over the
 /// canonical root. Deterministic, so the same root always maps to the same
 /// prefix (idempotent re-register and stable URLs across restarts).
-fn allocate_workspace_prefix(root: &Path) -> Result<String, Error> {
-    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    canonical.hash(&mut hasher);
-    let hash = hasher.finish();
-    let slug = workspace_slug(root);
-    sanitize_prefix(&format!("/api/{slug}-{hash:x}")).map_err(Error::Config)
-}
-
 /// Allocate a standalone terminal's mount prefix from its window label:
 /// `/api/term-{slug}-{hash}`, deterministic so the same label always maps to
 /// the same prefix — the terminal re-mounts at the same route across a restart.
@@ -1021,35 +1015,6 @@ fn allocate_terminal_prefix(label: &str) -> Result<String, Error> {
     sanitize_prefix(&format!("/api/term-{slug}-{hash:x}")).map_err(Error::Config)
 }
 
-/// Sanitize a path segment into a legible `[a-z0-9-]` slug for a prefix:
-/// lowercase, non-alphanumerics to `-`, collapsed and trimmed, length
-/// capped, with a fallback for an empty result.
-fn workspace_slug(root: &Path) -> String {
-    let raw = root
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("workspace");
-    let mut slug: String = raw
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    while slug.contains("--") {
-        slug = slug.replace("--", "-");
-    }
-    let trimmed: String = slug.trim_matches('-').chars().take(24).collect();
-    let trimmed = trimmed.trim_matches('-');
-    if trimmed.is_empty() {
-        "workspace".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
 
 /// Display label for a workspace: its last path segment, or the full path
 /// when there is no file name.

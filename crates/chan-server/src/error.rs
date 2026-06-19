@@ -12,17 +12,10 @@ use axum::Json;
 
 use crate::state::StateAccessError;
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("chan-workspace: {0}")]
-    Core(#[from] chan_workspace::ChanError),
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("config: {0}")]
-    Config(String),
-    #[error("{0}")]
-    BadRequest(String),
-}
+// The error type lives in chan-library (returned by the host lifecycle + the
+// tenant builder). Re-exported so `crate::Error` / `chan_server::Error` resolve
+// unchanged; the `err_*` helpers below map it onto HTTP responses.
+pub use chan_library::Error;
 
 /// Wrap a status + message into the standard `{"error": "..."}` body.
 pub fn err(status: StatusCode, msg: String) -> Response {
