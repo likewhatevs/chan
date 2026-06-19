@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use axum::body::Body;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, Request as HttpRequest, StatusCode};
 use axum::middleware::{self, Next};
@@ -45,7 +46,7 @@ use crate::devserver_api::{
     DEVSERVER_API_PROTOCOL,
 };
 use crate::{sanitize_prefix, Error, ServeConfig};
-use crate::{WindowRecord, WorkspaceHost};
+use crate::{WindowRecord, WindowSet, WorkspaceHost};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
 use chan_library::windows::WindowRegistry;
@@ -782,6 +783,10 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
         )
         .route("/api/devserver/windows", get(handle_list_windows))
         .route("/api/library/windows", get(handle_list_library_windows))
+        .route(
+            "/api/library/windows/watch",
+            get(handle_watch_library_windows),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -798,6 +803,49 @@ async fn handle_list_library_windows(
     State(state): State<Arc<DevserverState>>,
 ) -> Json<Vec<WindowRecord>> {
     Json(state.host.assemble_window_records())
+}
+
+/// `GET /api/library/windows/watch`: a WebSocket that pushes the full window set
+/// on connect and again on every change, so a client reconciles its surface to
+/// the live library state without polling. Bearer-gated via the management
+/// middleware (the `Authorization` header); a browser WebSocket cannot send that
+/// header, so a browser client needs the bearer in a query parameter, while `cs`
+/// and the desktop use the header.
+async fn handle_watch_library_windows(
+    State(state): State<Arc<DevserverState>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let host = state.host.clone();
+    ws.on_upgrade(move |socket| watch_library_windows(socket, host))
+}
+
+/// Push a fresh window-set snapshot on connect and on every change. Sending the
+/// whole set rather than a delta keeps the client's reconcile idempotent: a
+/// dropped frame self-heals on the next push. The change waiter is registered
+/// BEFORE each snapshot so a change that lands between the snapshot and the await
+/// is never missed. The loop ends when the client disconnects.
+async fn watch_library_windows(mut socket: WebSocket, host: Arc<WorkspaceHost>) {
+    let notify = host.library_change_notify();
+    loop {
+        let changed = notify.notified();
+        let set = WindowSet {
+            windows: host.assemble_window_records(),
+        };
+        let frame = match serde_json::to_string(&set) {
+            Ok(frame) => frame,
+            Err(_) => break,
+        };
+        if socket.send(Message::Text(frame)).await.is_err() {
+            break; // the client is gone
+        }
+        tokio::select! {
+            _ = changed => {} // a window-set change: re-snapshot
+            msg = socket.recv() => match msg {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                _ => {} // ignore any other client frame
+            },
+        }
+    }
 }
 
 /// Bind the per-user discovery socket whose registration handler mounts the
@@ -1574,5 +1622,57 @@ mod tests {
         assert_eq!(persisted.workspaces.len(), 1);
         assert_eq!(persisted.workspaces[0].prefix, prefix);
         assert!(!persisted.workspaces[0].on);
+    }
+
+    #[tokio::test]
+    async fn library_windows_feed_is_served_and_bearer_gated() {
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+        let app = build_devserver_app(state, host);
+
+        // No bearer: 401.
+        let unauth = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/windows")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+        // With bearer: 200 (the test host installs no registry, so the set is empty).
+        let ok = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/windows")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        // The watch route is registered: a plain GET (no WebSocket upgrade) is a
+        // 4xx upgrade error, not a 404.
+        let watch = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/windows/watch")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(watch.status(), StatusCode::NOT_FOUND);
     }
 }
