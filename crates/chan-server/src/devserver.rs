@@ -21,7 +21,7 @@
 //! reconnecting client re-hydrates its panes from the tenant. Terminal PTY
 //! contents reset (PTYs are fresh processes).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -313,15 +313,28 @@ impl DevserverState {
                 .get(prefix)
                 .map(|record| (record.on, record.root.clone()))
         };
-        let Some((currently_on, root)) = current else {
-            return Ok(None);
+        let (currently_on, root) = match current {
+            Some(current) => current,
+            // Not in the serving map: it may be a host-library workspace the
+            // devserver has not mounted yet (D1 — every library workspace is
+            // listable + toggleable). Resolve the prefix back to its library
+            // root and treat it as currently off; an unknown prefix is a 404.
+            None => match self.library_root_for_prefix(prefix) {
+                Some(root) => (false, root),
+                None => return Ok(None),
+            },
         };
         if currently_on == on {
             // Already in the requested state: idempotent no-op, current row.
-            return Ok(self.entry_for(prefix));
+            // A library-only off row has no map entry, so synthesize it.
+            return Ok(self
+                .entry_for(prefix)
+                .or_else(|| self.library_off_entry(prefix)));
         }
         if on {
-            // Off → on: remount at the SAME prefix, minting a fresh token.
+            // Off → on: mount at the SAME (stable) prefix, minting a fresh
+            // token. Works for a registered-off row AND a never-served library
+            // workspace (mount_at registers it in the library + host).
             self.mount_at(&root, prefix).await?;
         } else {
             // On → off: unmount, release the flock, keep the registration.
@@ -333,7 +346,9 @@ impl DevserverState {
             }
         }
         self.persist_state();
-        Ok(self.entry_for(prefix))
+        Ok(self
+            .entry_for(prefix)
+            .or_else(|| self.library_off_entry(prefix)))
     }
 
     /// The current [`WorkspaceEntry`] for `prefix`, or `None` when no
@@ -349,19 +364,33 @@ impl DevserverState {
     /// "removed" signal, since an off row is registered-but-unmounted and
     /// forgetting it must still report success. Distinct from on/off.
     fn forget_workspace(&self, prefix: &str) -> Result<bool, Error> {
-        let existed = {
+        // DESTRUCTIVE under D1 (Seam B Amendment 6) — the devserver Forget is
+        // `chan workspace rm`: unmount-if-running, then UNREGISTER from the host
+        // library (reset Everything + bin the trash). The host library is the
+        // single registry, so the workspace then disappears everywhere
+        // (library, devserver listing, CLI). `set_workspace_on {on:false}` is
+        // the reversible unmount; this is the removal. Resolve the root from the
+        // serving record OR, for a library workspace not currently served, the
+        // library itself — every library workspace is forgettable.
+        let root = {
             let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
-            workspaces.contains_key(prefix)
-        };
-        if !existed {
-            return Ok(false);
+            workspaces.get(prefix).map(|record| record.root.clone())
         }
-        // Unmount if mounted; a no-op false when the row is off (not in host).
-        self.host.close_workspace(prefix)?;
+        .or_else(|| self.library_root_for_prefix(prefix));
+        let Some(root) = root else {
+            return Ok(false);
+        };
+        // Unmount if mounted (releases the per-workspace flock before the reset);
+        // a no-op when the row is off or library-only (not in the host).
+        let _ = self.host.close_workspace(prefix);
         {
             let mut workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
             workspaces.remove(prefix);
         }
+        // Remove from the host library: reset Everything + bin the workspace
+        // trash (@@Alex "bin it!!"). Unmount above dropped the tenant's handle,
+        // so the writer lock is released before the reset.
+        self.host.library().unregister_workspace(&root)?;
         self.persist_state();
         Ok(true)
     }
@@ -407,13 +436,75 @@ impl DevserverState {
         }
     }
 
-    /// Snapshot the registered workspaces for the list endpoint, on and off,
-    /// sorted by prefix for a stable listing.
+    /// The box's workspace list for `GET /api/devserver/workspaces`: ONE row
+    /// per HOST-LIBRARY workspace (the set `chan workspace ls` shows, read live
+    /// from the registry), with `on`/`prefix`/`token` from the devserver's
+    /// serving state. The host library — not the devserver's own config — is
+    /// the source of truth (D1): a freshly-started devserver therefore lists
+    /// exactly what `chan list` shows instead of coming up empty. A library
+    /// workspace the devserver is not serving is `on:false` at its stable
+    /// derived prefix with no token; toggling it on mounts it (see
+    /// [`set_workspace_on`](Self::set_workspace_on)). Sorted by prefix.
     fn workspace_entries(&self) -> Vec<WorkspaceEntry> {
-        let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
-        let mut entries: Vec<WorkspaceEntry> = workspaces.values().map(entry_from_record).collect();
+        let by_root: HashMap<PathBuf, WorkspaceEntry> = {
+            let workspaces = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
+            workspaces
+                .values()
+                .map(|record| (record.root.clone(), entry_from_record(record)))
+                .collect()
+        };
+        let mut entries: Vec<WorkspaceEntry> = Vec::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        for ws in self.host.library().list_workspaces() {
+            seen.insert(ws.root_path.clone());
+            if let Some(entry) = by_root.get(&ws.root_path) {
+                entries.push(entry.clone());
+            } else if let Ok(prefix) = allocate_workspace_prefix(&ws.root_path) {
+                entries.push(WorkspaceEntry {
+                    prefix,
+                    path: ws.root_path.to_string_lossy().into_owned(),
+                    label: workspace_label(&ws.root_path),
+                    on: false,
+                    token: String::new(),
+                });
+            }
+        }
+        // Defensive: a served workspace whose root left the library (forgotten
+        // while still mounted) must still surface so a live mount never
+        // silently vanishes from the list.
+        for (root, entry) in &by_root {
+            if !seen.contains(root) {
+                entries.push(entry.clone());
+            }
+        }
         entries.sort_by(|a, b| a.prefix.cmp(&b.prefix));
         entries
+    }
+
+    /// Resolve a route prefix back to a host-library workspace root for a
+    /// prefix that names a library workspace the devserver is NOT serving (so
+    /// it is absent from `self.workspaces`). Matches on the stable
+    /// [`allocate_workspace_prefix`] mapping.
+    fn library_root_for_prefix(&self, prefix: &str) -> Option<PathBuf> {
+        self.host
+            .library()
+            .list_workspaces()
+            .into_iter()
+            .map(|ws| ws.root_path)
+            .find(|root| allocate_workspace_prefix(root).ok().as_deref() == Some(prefix))
+    }
+
+    /// The off-state row for a library workspace the devserver is not serving
+    /// (stable prefix, no token), for idempotent off-toggles and reporting.
+    fn library_off_entry(&self, prefix: &str) -> Option<WorkspaceEntry> {
+        let root = self.library_root_for_prefix(prefix)?;
+        Some(WorkspaceEntry {
+            prefix: prefix.to_string(),
+            path: root.to_string_lossy().into_owned(),
+            label: workspace_label(&root),
+            on: false,
+            token: String::new(),
+        })
     }
 
     /// Open (mount) a standalone terminal tenant for the client window `label`,
@@ -1324,29 +1415,113 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forget_removes_registered_on_or_off() {
+    async fn lists_full_host_library_and_toggles_unserved_workspaces_on() {
+        // D1: GET /workspaces lists ONE row per HOST-LIBRARY workspace (what
+        // `chan list` shows), not just the devserver's served subset — so a
+        // fresh devserver is not empty. An unserved library workspace is off at
+        // its stable prefix; `{prefix}/on` mounts it even though it was never
+        // registered on the devserver.
         let home = tempfile::tempdir().expect("home");
-        let ws = tempfile::tempdir().expect("workspace");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
 
-        // Forget a mounted (on) workspace: removed + unmounted.
-        let prefix = state.register_workspace(ws.path()).await.expect("mount");
-        assert!(state.forget_workspace(&prefix).expect("forget on"));
-        assert!(state.workspace_entries().is_empty());
-        // Idempotent / false for an unknown row.
-        assert!(!state.forget_workspace(&prefix).expect("forget absent"));
-
-        // Forget an OFF workspace still reports removed — the case a
-        // host-unmount-only signal would wrongly report as not-found.
-        let prefix = state.register_workspace(ws.path()).await.expect("remount");
+        // Two workspaces registered in the HOST LIBRARY directly (as `chan add`
+        // would), with NEITHER mounted on the devserver.
+        let ws_a = tempfile::tempdir().expect("a");
+        let ws_b = tempfile::tempdir().expect("b");
+        std::fs::write(ws_a.path().join("a.md"), "# A\n").unwrap();
+        std::fs::write(ws_b.path().join("b.md"), "# B\n").unwrap();
         state
-            .set_workspace_on(&prefix, false)
-            .await
-            .unwrap()
+            .host
+            .library()
+            .register_workspace(ws_a.path())
             .unwrap();
-        assert!(state.forget_workspace(&prefix).expect("forget off"));
-        assert!(state.workspace_entries().is_empty());
+        state
+            .host
+            .library()
+            .register_workspace(ws_b.path())
+            .unwrap();
+
+        // The devserver surfaces BOTH — the full library — off, no token.
+        let entries = state.workspace_entries();
+        assert_eq!(
+            entries.len(),
+            2,
+            "lists the full host library, not the served subset"
+        );
+        assert!(
+            entries.iter().all(|e| !e.on),
+            "unserved library workspaces are off"
+        );
+        assert!(
+            entries.iter().all(|e| e.token.is_empty()),
+            "off rows carry no token"
+        );
+        assert!(
+            state.host.mounted_prefixes().unwrap().is_empty(),
+            "nothing mounted yet"
+        );
+
+        // Toggle A on by its stable prefix — never registered on the devserver,
+        // yet this mounts it (D1: every library workspace is toggleable).
+        let prefix_a = allocate_workspace_prefix(ws_a.path()).expect("prefix");
+        let row = state
+            .set_workspace_on(&prefix_a, true)
+            .await
+            .expect("toggle on")
+            .expect("library workspace is a known prefix");
+        assert!(row.on);
+        assert_eq!(row.prefix, prefix_a);
+        assert!(!row.token.is_empty(), "an on row carries a token");
+
+        // Still two rows; exactly A is on.
+        let entries = state.workspace_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.iter().filter(|e| e.on).count(), 1);
+        assert!(entries.iter().find(|e| e.prefix == prefix_a).unwrap().on);
+
+        // An unknown prefix (no library workspace, no serving record) is a 404.
+        assert!(state
+            .set_workspace_on("/api/ghost-0", true)
+            .await
+            .expect("no error")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn forget_is_destructive_and_removes_from_the_host_library() {
+        // Seam B Amendment 6: the devserver Forget is DESTRUCTIVE — it is
+        // `chan workspace rm` (unmount-if-on + unregister from the host library
+        // + bin the trash). The host library is the single registry, so the
+        // workspace then disappears from the listing too. (`set_workspace_on
+        // {on:false}` is the reversible unmount; this is the removal.)
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        std::fs::write(ws.path().join("a.md"), "# A\n").unwrap();
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        let prefix = state.register_workspace(ws.path()).await.expect("mount");
+        assert_eq!(state.workspace_entries().len(), 1);
+
+        assert!(state.forget_workspace(&prefix).expect("forget"));
+        assert!(
+            state.host.mounted_prefixes().unwrap().is_empty(),
+            "forget unmounts the workspace in the host"
+        );
+        // Destructive: unregistered from the host library, so gone from the
+        // listing — one registry, one removal.
+        assert!(
+            state.workspace_entries().is_empty(),
+            "forgotten workspace is removed from the library listing"
+        );
+        assert!(
+            state.host.library().list_workspaces().is_empty(),
+            "forgotten workspace is unregistered from the host library"
+        );
+
+        // Idempotent: forgetting an unknown / already-removed prefix is false.
+        assert!(!state.forget_workspace(&prefix).expect("already removed"));
     }
 
     #[tokio::test]
