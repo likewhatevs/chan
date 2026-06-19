@@ -1,5 +1,4 @@
-// chan: a Markdown notes workspace with an editor, terminal, file
-// browser, and graph over a folder on disk.
+// chan: an AI-native workspace for your Markdown notes and projects.
 //
 // The standalone `chan` binary. The whole CLI surface lives in the `chan`
 // library (`src/lib.rs`) so chan-desktop can dispatch `chan` in-process too;

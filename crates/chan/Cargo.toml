@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "chan: a Markdown notes workspace with an editor, terminal, file browser, and graph over a folder on disk."
+description = "chan: an AI-native workspace for your Markdown notes and projects."
 
 [[bin]]
 name = "chan"
@@ -97,10 +97,11 @@ maintainer = "Alexandre Fiori <fiorix@gmail.com>"
 copyright = "2026 Alexandre Fiori"
 license-file = ["../../LICENSE", "0"]
 extended-description = """
-chan is a Markdown notes workspace: a CLI plus an HTTP server that
-serves a hybrid editor, terminal, file browser, and graph over a
-folder on disk. Cross-file [[wiki-link]] autocomplete, BM25 content
-search, and an MCP server for agents included."""
+chan is an AI-native workspace for your Markdown notes and projects:
+a CLI plus an HTTP server that serves a hybrid editor, terminal, file
+browser, and graph over a folder on disk. Cross-file [[wiki-link]]
+autocomplete, BM25 content search, and an MCP server for agents
+included."""
 section = "utility"
 priority = "optional"
 assets = [
@@ -111,7 +112,7 @@ assets = [
 
 [package.metadata.generate-rpm]
 license = "Apache-2.0"
-summary = "Markdown notes workspace with editor, terminal, file browser, and graph"
+summary = "AI-native workspace for your Markdown notes and projects"
 # cargo-generate-rpm resolves asset `source` paths relative to
 # the package directory (`crates/chan/`), unlike cargo-deb which
 # is workspace-aware. The binary lives at the workspace target
