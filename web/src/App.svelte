@@ -778,6 +778,19 @@
     // `app.pane.closeEmpty` (Mod+W): only an EMPTY active pane closes;
     // otherwise the chord falls through to the browser / native close.
     if (meta && !e.altKey && !e.shiftKey && e.code === "KeyW") {
+      // In a control terminal window, Cmd+W must drive the close path even
+      // while the connect script's PTY is live, so the abandon/edit/retry
+      // dialog fires (closeActiveEmptyPane is a no-op with a live shell). The
+      // backend's request_close_window detects the control-terminal window +
+      // is_connected and emits devserver-control-closed (the launcher survey)
+      // instead of destroying. (macOS routes Cmd+W through the native menu;
+      // this covers the web + Linux/Windows keymap path.)
+      if (ui.terminalControl) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isTauriDesktop()) void requestCloseWindow();
+        return;
+      }
       if (closeActiveEmptyPane()) {
         e.preventDefault();
         e.stopPropagation();
