@@ -16,7 +16,6 @@ mod watcher;
 mod window_ops;
 
 use std::collections::HashMap;
-#[cfg(unix)]
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -2043,7 +2042,13 @@ fn init_tracing() {
         .init();
 }
 
-#[cfg(unix)]
+/// Cross-platform MCP-proxy short-circuit: when chan-desktop is invoked as
+/// `<exe> __mcp-proxy <socket>` (the `cs` / `chan` MCP discovery hands this
+/// off), bridge stdio to the chan-server MCP socket and EXIT instead of
+/// launching the GUI. The transport underneath (`run_mcp_stdio_proxy`) is
+/// cross-platform — a Unix-domain socket on unix, a named pipe on Windows — so
+/// the desktop carries MCP on every platform. Returns `Ok(true)` when it
+/// handled the invocation, `Ok(false)` for a normal GUI launch.
 fn run_hidden_mcp_proxy_if_requested() -> Result<bool, String> {
     let mut args = std::env::args_os();
     let _program = args.next();
@@ -2060,11 +2065,6 @@ fn run_hidden_mcp_proxy_if_requested() -> Result<bool, String> {
         .map_err(|e| format!("building MCP proxy runtime: {e}"))?;
     rt.block_on(run_mcp_proxy(socket))?;
     Ok(true)
-}
-
-#[cfg(not(unix))]
-fn run_hidden_mcp_proxy_if_requested() -> Result<bool, String> {
-    Ok(false)
 }
 
 /// When chan-desktop is invoked through a `cs` name (a `~/.local/bin/cs`
@@ -2128,7 +2128,6 @@ fn run_as_chan_if_requested() -> Result<bool, String> {
     Ok(true)
 }
 
-#[cfg(unix)]
 async fn run_mcp_proxy(socket: PathBuf) -> Result<(), String> {
     chan_server::run_mcp_stdio_proxy(socket)
         .await
