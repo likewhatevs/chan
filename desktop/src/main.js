@@ -626,12 +626,11 @@ function render(workspaces, devservers = []) {
   for (const ds of devservers) html += renderDevserverSection(ds);
   main.innerHTML = html;
   // The innerHTML rebuild replaced every .ds-workspaces container with a fresh
-  // "Loading..." placeholder, so the poll's per-devserver dedupe cache now
-  // describes DOM that no longer exists. Reset it so the post-render poll
-  // refills the placeholders. Without this, a disconnect -> reconnect with an
-  // unchanged workspace list (devserver still up, token stable) dedupes against
-  // the stale entry and the section sticks on "Loading workspaces...".
-  for (const key of Object.keys(lastDevserverRowsJson)) delete lastDevserverRowsJson[key];
+  // "Loading..." placeholder. The poll's per-container dedupe marker
+  // (dataset.rowsJson) lives ON those now-destroyed nodes, so the post-render
+  // poll naturally refills each fresh placeholder (a node with no marker always
+  // fills). A disconnect -> reconnect with an unchanged list therefore still
+  // refills instead of sticking on "Loading workspaces...".
 
   bindRowEvents();
   if (grouped) {
@@ -845,10 +844,6 @@ function bindDevserverSectionEvents(devservers) {
   });
 }
 
-// Per-devserver last-rendered workspace-rows JSON so the periodic poll only
-// touches the DOM when the list actually changed (no flicker at idle).
-const lastDevserverRowsJson = {};
-
 // Per-devserver last-known workspace rows (the array itself), so a launcher
 // re-render can show the real connected state — rows, or the empty
 // "(no workspaces)" — instead of reverting every section to "Loading..." and
@@ -856,9 +851,35 @@ const lastDevserverRowsJson = {};
 // fetch and on connect-success; cleared on disconnect/forget.
 const devserverWorkspaceRows = {};
 
+/// The live `.ds-workspaces` container for a devserver id, re-queried from the
+/// CURRENT DOM. The poll re-acquires this AFTER its await: a render() during the
+/// await replaces the section, so a node captured before it is detached, and a
+/// write/marker on a detached node would strand the live "Loading..." placeholder.
+function liveDevserverWorkspaces(id) {
+  return main.querySelector(`section[data-devserver-id="${id}"] .ds-workspaces`);
+}
+
+/// Force the next poll to refill a devserver's rows even when the list JSON is
+/// unchanged — e.g. a FAILED toggle leaves the server state the same but must
+/// still revert its flipped/disabled checkbox by re-rendering the row. Drop the
+/// live container's dedupe marker, then re-poll.
+async function refillDevserverWorkspaces(id) {
+  const live = liveDevserverWorkspaces(id);
+  if (live) delete live.dataset.rowsJson;
+  await pollDevserverWorkspaces();
+}
+
 /// Fill each connected `[DEVSERVER]` section with its live workspace rows.
 /// Runs after a render and on a periodic interval; updates only the section
 /// bodies (not the whole launcher), so it never disturbs the local table.
+///
+/// The per-container dedupe marker (`dataset.rowsJson`) lives on the live
+/// `.ds-workspaces` node, so concurrent polls are idempotent and a fresh
+/// post-render placeholder (no marker) always refills — no separate cache to
+/// desync from the DOM across re-renders (that desync was the "stuck on Loading
+/// workspaces..." bug: a poll parked on its await resumed past a render and wrote
+/// its rows + cache against the detached old container, leaving the live
+/// placeholder un-refilled and every later poll deduping it away).
 async function pollDevserverWorkspaces() {
   const sections = [...main.querySelectorAll('section[data-devserver-id]')];
   if (!sections.length) return;
@@ -872,17 +893,19 @@ async function pollDevserverWorkspaces() {
   for (const section of sections) {
     const id = section.dataset.devserverId;
     const ds = byId[id];
-    const container = section.querySelector('.ds-workspaces');
-    if (!ds || !ds.connected || !container) continue;
+    if (!ds || !ds.connected) continue;
     let rows;
     try {
       rows = await invoke('list_devserver_workspaces', { id });
     } catch (e) {
       // Connected but unreachable: show a reconnecting state and try to
-      // recover (the devserver may have restarted with a fresh token). The
-      // next poll reflects success.
-      container.innerHTML = `<p class="nw-muted ws-group-pending">Reconnecting&hellip;</p>`;
-      lastDevserverRowsJson[id] = null;
+      // recover (the devserver may have restarted with a fresh token). Clear the
+      // marker so the next successful poll refills even if the list is unchanged.
+      const live = liveDevserverWorkspaces(id);
+      if (live) {
+        live.innerHTML = `<p class="nw-muted ws-group-pending">Reconnecting&hellip;</p>`;
+        delete live.dataset.rowsJson;
+      }
       invoke('reconnect_devserver', { id }).catch(() => {});
       continue;
     }
@@ -890,9 +913,13 @@ async function pollDevserverWorkspaces() {
     // the true state (rows or "(no workspaces)") immediately, even on a poll
     // that dedupes the DOM update away.
     devserverWorkspaceRows[id] = rows;
+    // Re-acquire the LIVE container AFTER the await (a render during the await
+    // may have replaced it), and dedupe on its own marker.
+    const container = liveDevserverWorkspaces(id);
+    if (!container) continue;
     const json = JSON.stringify(rows);
-    if (lastDevserverRowsJson[id] === json) continue;
-    lastDevserverRowsJson[id] = json;
+    if (container.dataset.rowsJson === json) continue;
+    container.dataset.rowsJson = json;
     container.innerHTML = rows.length
       ? `<table class="workspaces"><tbody>${rows.map(renderDevserverWorkspaceRow).join('')}</tbody></table>`
       : `<p class="nw-muted ws-group-pending">No workspaces on this devserver yet.</p>`;
@@ -918,8 +945,7 @@ async function pollDevserverWorkspaces() {
             if (cb.checked) showTurnOnFailureDialog(err);
             else showError(err);
           }
-          lastDevserverRowsJson[id] = null;
-          await pollDevserverWorkspaces();
+          await refillDevserverWorkspaces(id);
         });
       }
       const open = tr.querySelector('[data-act="launch"]');
@@ -937,12 +963,10 @@ async function pollDevserverWorkspaces() {
               url = row.url;
             } catch (err) {
               showTurnOnFailureDialog(err);
-              lastDevserverRowsJson[id] = null;
-              await pollDevserverWorkspaces();
+              await refillDevserverWorkspaces(id);
               return;
             }
-            lastDevserverRowsJson[id] = null;
-            await pollDevserverWorkspaces();
+            await refillDevserverWorkspaces(id);
           }
           try {
             await invoke('open_devserver_workspace', { id, prefix, url });
@@ -962,8 +986,7 @@ async function pollDevserverWorkspaces() {
             return;
           }
           // Force the next poll to re-render the now-shorter list.
-          lastDevserverRowsJson[id] = null;
-          await pollDevserverWorkspaces();
+          await refillDevserverWorkspaces(id);
         });
       }
       bindSplitMenu(tr);
