@@ -137,7 +137,19 @@
       return false;
     }
   });
-  const showOnboardCard = $derived(!!summary && !locked && !onboardDismissed);
+  // First-boot gate: show the onboarding nudge only while the workspace has NO
+  // data yet — nothing indexed and neither optional layer on. Once it has any
+  // data (indexed content, semantic, or reports) the nudge never shows again,
+  // on any client or boot. The fields are server-derived, so the gate holds
+  // identically for local and devserver workspaces. The localStorage dismiss
+  // stays as a secondary per-session hide, no longer the primary gate.
+  const workspaceHasData = $derived.by(() => {
+    const s = summary;
+    return !!s && (s.indexed_docs > 0 || s.semantic_enabled || s.reports_enabled);
+  });
+  const showOnboardCard = $derived(
+    !!summary && !locked && !workspaceHasData && !onboardDismissed,
+  );
 
   function dismissOnboard(): void {
     const key = workspaceKey();
