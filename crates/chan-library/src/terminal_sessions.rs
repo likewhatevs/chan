@@ -739,6 +739,16 @@ impl Registry {
             .insert(window_id.to_string());
     }
 
+    /// Whether `window_id` is marked persisted (its detached sessions are spared
+    /// the orphan-grace reap). The read side of
+    /// [`mark_window_persisted`](Self::mark_window_persisted).
+    pub fn is_window_persisted(&self, window_id: &str) -> bool {
+        self.persisted_windows
+            .lock()
+            .expect("terminal registry poisoned")
+            .contains(window_id)
+    }
+
     /// Close every live session owned by `window_id` (its PTYs are killed and
     /// fds released). Returns how many were closed. The window-scoped sibling
     /// of [`Registry::close`]; the discard primitive behind
