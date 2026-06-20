@@ -74,82 +74,62 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/await api\.write\(draftPath, text\)/);
   });
 
-  test("submit routes to THIS terminal with its OWN agent and a tagged id, keeping the text", () => {
-    // Routes to the bubble's OWN tab (not the focused pane's active terminal),
-    // submits with the chord THIS terminal reads (submitAgent()) plus a
-    // client-generated message id, and only begins a pending when the frame
-    // actually went out (the data-loss guard: a failed send keeps the text).
+  test("submit routes to THIS terminal, then CLEARS the composer for back-to-back queuing", () => {
+    // Routes to the bubble's OWN tab with the chord THIS terminal reads
+    // (submitAgent()) + a client message id, only beginning a pending when the
+    // frame actually went out (the data-loss guard).
     expect(richPromptSrc).toMatch(/const id = crypto\.randomUUID\(\);/);
     expect(richPromptSrc).toMatch(
       /if \(!sendPromptToTerminal\(tab\.id, text, submitAgent\(\), id\)\) return true;/,
     );
     expect(richPromptSrc).toMatch(/beginPendingPrompt\(tab, id\);/);
-    // Queue visibility: submit does NOT clear the composer — the text stays
-    // (read-only) until the server's prompt-delivered. No raw input frame,
-    // no folder/media delete on submit (that happens on terminal close).
     const submitBody = richPromptSrc.match(/function submit\(\): boolean \{[\s\S]*?\n  \}/)?.[0];
     expect(submitBody).toBeTruthy();
-    expect(submitBody).not.toContain('insert: ""');
-    // Second Cmd+Enter while a message is in flight is a no-op (one message
-    // at a time; replace needs cancel-by-id, deferred to v2 together).
-    expect(submitBody).toContain("if (tab.pendingPrompt) return true;");
-    // The draft persists what was submitted (reload mid-pending restores it).
+    // Back-to-back queuing: submit CLEARS the composer + keeps it editable, has
+    // NO one-message guard, and remembers the last message for ArrowUp recall.
+    expect(submitBody).toContain('insert: ""');
+    expect(submitBody).not.toContain("if (tab.pendingPrompt) return true;");
+    expect(submitBody).toContain("lastQueued = { id, text };");
     expect(submitBody).toContain("void flushWrite();");
     expect(richPromptSrc).not.toMatch(/type: "input"/);
     expect(richPromptSrc).not.toMatch(/discardDraft/);
   });
 
-  test("delivered clears the composer + draft; rejected/failed unlock and keep the text", () => {
-    // The ONLY doc-clear lives in the terminal-phase consumer, on
-    // "delivered" (the agent consumed the message; the draft clears HERE).
-    expect(richPromptSrc).toMatch(
-      /function consumeTerminalPhase\([\s\S]{1,700}changes: \{ from: 0, to: view\.state\.doc\.length, insert: "" \}/,
-    );
-    expect(richPromptSrc).toMatch(
-      /if \(phase === "delivered"\) \{[\s\S]{1,400}void flushWrite\(\);[\s\S]{1,80}view\.focus\(\);/,
-    );
-    // Honest labels on the non-delivery exits; both keep the text.
+  test("delivered does NOT clear the composer (it holds the next draft); non-delivery restores + warns", () => {
+    const consumeBody = richPromptSrc.match(/function consumeTerminalPhase\([\s\S]*?\n  \}/)?.[0];
+    expect(consumeBody).toBeTruthy();
+    // The composer is cleared on SUBMIT, not here — delivered just drops the
+    // pending so the next-message draft survives (consume only acts on the
+    // non-delivered branch).
+    expect(consumeBody).toContain('if (phase !== "delivered")');
+    // Non-delivery restores the failed text for a retry + warns honestly.
+    expect(consumeBody).toContain("lastQueued.text");
     expect(richPromptSrc).toMatch(/queue full — try again/);
     expect(richPromptSrc).toMatch(/connection lost — message may still be queued/);
   });
 
-  test("pending locks the editor read-only + reads as a read-only card (caret hidden)", () => {
-    // readOnly blocks doc edits; editable stays TRUE so the caret/keymap stay
-    // live for ↑/Esc — an editable:false editor would not receive the key.
-    expect(richPromptSrc).toMatch(
-      /\[EditorState\.readOnly\.of\(locked\), EditorView\.editable\.of\(true\)\]/,
-    );
-    // Locked from creation when the bubble mounts mid-pending (hide/show) or a
-    // reload restored a queued message; reconfigured live on phase changes.
-    expect(richPromptSrc).toMatch(/lockCompartment\.of\(lockExtensions\(isPending\)\)/);
-    expect(richPromptSrc).toMatch(
-      /lockCompartment\.reconfigure\(lockExtensions\(isPending\)\)/,
-    );
-    // The read-only LOOK: hide the caret while pending so it isn't an editable field.
-    expect(richPromptSrc).toMatch(
-      /\.rich-prompt\.pending :global\(\.cm-content\) \{\s*caret-color: transparent;/,
-    );
+  test("the composer is NEVER locked — always editable (the readonly seam is gone)", () => {
+    // A submitted message lives in the server queue, not the composer, so the
+    // composer stays editable for the next message: no readOnly lock, no lock
+    // compartment, no read-only-look caret hiding.
+    expect(richPromptSrc).not.toMatch(/EditorState\.readOnly\.of\(/);
+    expect(richPromptSrc).not.toMatch(/lockCompartment/);
+    expect(richPromptSrc).not.toMatch(/lockExtensions/);
+    expect(richPromptSrc).not.toMatch(/caret-color: transparent/);
   });
 
-  test("queued/sent: ↑ recalls to edit (optimistic local unlock), Esc abandons, affordances shown", () => {
-    // ArrowUp recalls to EDIT from anywhere (no doc-start guard — the card reads
-    // read-only, so there's no caret nav to protect).
+  test("↑ recalls the last queued message from an EMPTY composer; Esc abandons the draft", () => {
     expect(richPromptSrc).toMatch(/\{ key: "ArrowUp", run: recall \}/);
-    expect(richPromptSrc).not.toMatch(/!sel\.empty \|\| sel\.from !== 0/);
-    // Recall accepts queued (acked) AND sent (pre-ack), unlocks LOCALLY (clears
-    // the pending), and best-effort cancels in the background — never waiting on
-    // the ack, so the editor can't get stuck read-only.
-    expect(richPromptSrc).toMatch(/phase !== "queued" && phase !== "sent"\) return false/);
-    expect(richPromptSrc).toMatch(/function enterLocalEdit\(\): void/);
-    expect(richPromptSrc).toMatch(/tab\.pendingPrompt = undefined;/);
+    // Recall fires only from an empty composer (never clobber an in-progress
+    // next draft), restores the buffered text, and best-effort cancels.
+    expect(richPromptSrc).toMatch(/view\.state\.doc\.length > 0\) return false/);
+    expect(richPromptSrc).toMatch(/const \{ id, text \} = lastQueued;/);
     expect(richPromptSrc).toMatch(/sendCancelToTerminal\(tab\.id, id\)/);
-    // Esc enqueued -> dequeue + DROP the draft now; else a real abandon (clear
-    // the draft before hiding so onDestroy can't re-persist stale text).
-    expect(richPromptSrc).toMatch(/phase === "queued" \|\| phase === "sent"/);
+    // Esc abandons the current draft + hides; it does NOT cancel queued messages.
     expect(richPromptSrc).toMatch(/function abandonDraft\(\): void/);
     expect(richPromptSrc).toMatch(/hideRichPromptForTab\(tab\.id\)/);
-    // The affordance hint in the queued label.
-    expect(richPromptSrc).toMatch(/queued\$\{position\} · ↑ edit · esc cancel/);
+    // The label surfaces the queue depth + the recall affordance.
+    expect(richPromptSrc).toMatch(/queued · ↑ recall/);
   });
 
   test("fast-path grace + ack timeout constants gate the chip and the dead-socket fail", () => {
@@ -160,9 +140,14 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/failPendingPrompt\(tab\);/);
   });
 
-  test("idle label surfaces teammate queue depth from the prompt itself", () => {
-    expect(richPromptSrc).toMatch(/\$\{tab\.queueDepth\} queued · \$\{submitLabel\}/);
-    expect(richPromptSrc).toMatch(/queued — waiting for agent/);
+  test("label surfaces the queue depth (server + the local just-submitted) with the recall hint", () => {
+    // queuedCount = max(server queueDepth, the local just-submitted message
+    // after the grace window) — so a teammate `cs terminal write` and the
+    // user's own queued messages both show, with the ↑-recall affordance.
+    expect(richPromptSrc).toMatch(
+      /Math\.max\(tab\.queueDepth \?\? 0, isPending && pendingChipVisible \? 1 : 0\)/,
+    );
+    expect(richPromptSrc).toMatch(/\$\{queuedCount\} queued · ↑ recall · \$\{submitLabel\}/);
   });
 
   test("submitAgent picks the chord from the terminal's negotiated protocol", () => {

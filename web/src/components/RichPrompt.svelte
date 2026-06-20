@@ -16,7 +16,7 @@
   // terminal closes (TerminalTab's close sink).
 
   import { onDestroy, onMount } from "svelte";
-  import { Compartment, EditorState, Prec } from "@codemirror/state";
+  import { EditorState, Prec } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
   import {
     defaultKeymap,
@@ -95,44 +95,31 @@
   let graceTimer: ReturnType<typeof setTimeout> | null = null;
   let ackTimer: ReturnType<typeof setTimeout> | null = null;
   let noteTimer: ReturnType<typeof setTimeout> | null = null;
-  // Read-only while a message is in flight ("sent"/"queued"); terminal
-  // phases are consumed (cleared) by the phase effect below, so they never
-  // hold the lock.
+  // True while a just-submitted message is still in flight (the server has not
+  // drained it yet). Drives the queued chip ONLY — the composer is never
+  // locked: a submitted message lives in the server queue, not the composer, so
+  // the user keeps typing and queuing the next one back-to-back.
   const isPending = $derived.by(() => {
     const phase = tab.pendingPrompt?.phase;
     return phase === "sent" || phase === "queued";
   });
 
-  // CodeMirror lock seam. While a message is in flight ("sent"/"queued") the
-  // editor is readOnly (transactions that change the doc are dropped), but it
-  // stays EDITABLE (contenteditable) so the caret/keymap remain live — that is
-  // what lets ArrowUp-at-doc-start trigger recall while queued (GAP 1) and
-  // keeps focus through the pending round-trip. readOnly alone blocks typing,
-  // so the previous editable:false was redundant insurance; dropping it is what
-  // makes recall reliable (an editable:false editor doesn't receive the key).
-  const lockCompartment = new Compartment();
-  function lockExtensions(locked: boolean) {
-    return [EditorState.readOnly.of(locked), EditorView.editable.of(true)];
-  }
-  $effect(() => {
-    view?.dispatch({ effects: lockCompartment.reconfigure(lockExtensions(isPending)) });
-  });
+  // The last message submitted into the queue, kept so ArrowUp can recall it
+  // (pull it back out of the queue to edit) from an empty composer.
+  let lastQueued: { id: string; text: string } | null = null;
 
+  // Queued count to surface in the label: the server queue depth (which a
+  // teammate `cs terminal write` shares too) plus the just-submitted local
+  // message, the latter only after the grace window so a fast-drained submit
+  // does not flash the count.
+  const queuedCount = $derived(
+    Math.max(tab.queueDepth ?? 0, isPending && pendingChipVisible ? 1 : 0),
+  );
   const labelText = $derived.by(() => {
-    const pending = tab.pendingPrompt;
-    if (pending && isPending && pendingChipVisible) {
-      const position =
-        pending.phase === "queued" && (pending.depth ?? 0) > 1 ? ` (#${pending.depth})` : "";
-      // Surface the queued-state affordances so the read-only card is
-      // self-explanatory: ↑ recalls the message to edit, Esc cancels (drops) it.
-      return pending.phase === "queued"
-        ? `queued${position} · ↑ edit · esc cancel`
-        : `queued — waiting for agent${position}`;
-    }
     if (transientNote) return transientNote;
-    // Teammate pokes (`cs terminal write`) share the queue: surface the
-    // depth in the idle label so the user sees them from the prompt itself.
-    if ((tab.queueDepth ?? 0) > 0) return `${tab.queueDepth} queued · ${submitLabel}`;
+    // The composer stays free for the next message; the queued ones live in the
+    // queue. Show the depth + the recall affordance (↑ pulls the last one back).
+    if (queuedCount > 0) return `${queuedCount} queued · ↑ recall · ${submitLabel}`;
     return submitLabel;
   });
 
@@ -160,22 +147,23 @@
     if (!view) return;
     clearPendingTimers();
     pendingChipVisible = false;
-    if (phase === "delivered") {
-      // The agent consumed the message: NOW clear the composer + the draft
-      // (the draft held the text the whole time it was queued).
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: "" },
-      });
-      void flushWrite();
-      view.focus();
-    } else if (phase === "rejected") {
-      // Queue full, nothing enqueued: keep the text for a retry.
-      showTransientNote("queue full — try again");
-    } else {
-      // WS close / ack timeout / session end: the message may still be
-      // queued server-side, but this client can't observe delivery anymore.
-      // Keep the text; a resubmit is a visible, recoverable duplicate.
-      showTransientNote("connection lost — message may still be queued");
+    if (phase !== "delivered") {
+      // Not delivered: the message did not (or may not have) reach the queue.
+      // The composer was cleared on submit, so restore the failed text into an
+      // EMPTY composer for a retry (never clobber an in-progress next draft),
+      // and warn. Delivered needs nothing here — the queue drained it and the
+      // composer already moved on to the next message.
+      const failedId = tab.pendingPrompt?.id;
+      if (lastQueued && lastQueued.id === failedId && view.state.doc.length === 0) {
+        view.dispatch({ changes: { from: 0, to: 0, insert: lastQueued.text } });
+        void flushWrite();
+        view.focus();
+      }
+      showTransientNote(
+        phase === "rejected"
+          ? "queue full — try again"
+          : "connection lost — message may still be queued",
+      );
     }
     tab.pendingPrompt = undefined;
   }
@@ -191,27 +179,27 @@
     }
   });
 
-  // ↑ recalls an IN-FLIGHT message to edit it: unlock the composer NOW
-  // (optimistic local dequeue) and keep the draft to edit + resubmit. Accepts
-  // "queued" (acked) and "sent" (pre-ack) — both mean "in flight, give it back".
-  // Clearing pendingPrompt unlocks instantly AND makes every later ack for this
-  // id no-op (the resolvers guard on the current id), so the background cancel
-  // can never re-lock. Fires from anywhere in the doc — the locked card hides
-  // the caret, so there is no multi-line navigation to protect; returns false
-  // when nothing is in flight so ArrowUp navigates the draft normally.
+  // ↑ recalls the LAST message queued from this composer — pulls it back out of
+  // the server queue to edit + resubmit. Only from an EMPTY composer: never
+  // clobber an in-progress next message, so ArrowUp on a non-empty composer
+  // does normal caret navigation (returns false). The text is restored from the
+  // local buffer; the server cancel is best-effort (a drained message just
+  // resubmits as a visible, recoverable duplicate).
   function recall(): boolean {
-    const phase = tab.pendingPrompt?.phase;
-    if (phase !== "queued" && phase !== "sent") return false;
-    const id = tab.pendingPrompt!.id;
-    enterLocalEdit();
-    // Best-effort: pull it from the server queue. The ack is not awaited (it
-    // no-ops against the cleared pending), so the editor never re-locks.
+    if (!view || view.state.doc.length > 0) return false;
+    if (!lastQueued) return false;
+    const { id, text } = lastQueued;
+    lastQueued = null;
     sendCancelToTerminal(tab.id, id);
+    if (tab.pendingPrompt?.id === id) enterLocalEdit();
+    view.dispatch({ changes: { from: 0, to: 0, insert: text } });
+    void flushWrite();
+    view.focus();
     return true;
   }
 
-  // Unlock the composer + reset the queued-state presentation, keeping the
-  // draft text. Shared by ↑ (recall) and the enqueued-Escape abandon.
+  // Clear the in-flight pending + reset the queued-state presentation (the
+  // composer text is untouched). Shared by ↑ (recall) and the Escape abandon.
   function enterLocalEdit(): void {
     clearPendingTimers();
     if (noteTimer !== null) {
@@ -292,20 +280,27 @@
   // losing it.
   function submit(): boolean {
     if (!view) return true;
-    if (tab.pendingPrompt) return true;
     const text = view.state.doc.toString();
     if (!text.trim()) return true;
     const id = crypto.randomUUID();
-    // Persist exactly what is being submitted: the draft holds the text
-    // while it is queued, so a reload mid-pending restores it.
-    void flushWrite();
     if (!sendPromptToTerminal(tab.id, text, submitAgent(), id)) return true;
+    // The message is now in the server queue. Clear the composer + keep it
+    // editable so the next message can be typed immediately (back-to-back
+    // queuing) — the queued message lives in the queue, not the composer.
+    // Remember it so ArrowUp can recall it to edit. No `pendingPrompt` guard:
+    // a second submit just queues another message.
+    lastQueued = { id, text };
     beginPendingPrompt(tab, id);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+    void flushWrite();
+    view.focus();
     pendingChipVisible = false;
+    if (graceTimer !== null) clearTimeout(graceTimer);
     graceTimer = setTimeout(() => {
       graceTimer = null;
       pendingChipVisible = true;
     }, PENDING_CHIP_GRACE_MS);
+    if (ackTimer !== null) clearTimeout(ackTimer);
     ackTimer = setTimeout(() => {
       ackTimer = null;
       failPendingPrompt(tab);
@@ -348,7 +343,6 @@
           // Locked from creation when a message is already in flight (the
           // bubble was hidden mid-pending, or a reload restored a queued
           // message; the pending lives on the tab).
-          lockCompartment.of(lockExtensions(isPending)),
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           // High-prec: Mod-Enter submits; Enter continues markdown markup
@@ -474,24 +468,13 @@
     // Stop it from reaching App.svelte's global Escape handling.
     e.stopPropagation();
     e.preventDefault();
-    const phase = tab.pendingPrompt?.phase;
-    if (phase === "queued" || phase === "sent") {
-      // Enqueued: dequeue it (best-effort) and DROP the draft now — no waiting
-      // on the ack (vs ↑, which keeps the draft to edit).
-      const id = tab.pendingPrompt!.id;
-      enterLocalEdit();
-      sendCancelToTerminal(tab.id, id);
-      abandonDraft();
-    } else {
-      // Not enqueued: a real abandon — discard the draft BEFORE hiding so the
-      // onDestroy flush cannot re-persist stale text and the next open is empty.
-      abandonDraft();
-    }
+    // Abandon the current composer draft + hide. Queued messages live in the
+    // server queue (fire-and-forget) — Escape does not cancel them; ↑ recalls
+    // the last one to edit, otherwise it just delivers.
+    abandonDraft();
   }
 
-  // Clear the composer + discard the persisted draft, then hide the bubble. A
-  // programmatic dispatch applies even while the lock is still reconfiguring,
-  // mirroring the delivered-phase clear.
+  // Clear the composer + discard the persisted draft, then hide the bubble.
   function abandonDraft(): void {
     if (view) {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
@@ -507,7 +490,6 @@
 <div
   class="rich-prompt"
   class:resized={customHeight !== null}
-  class:pending={isPending}
   role="group"
   aria-label="Rich Prompt"
   bind:this={rootEl}
@@ -528,7 +510,7 @@
     onpointercancel={onResizeEnd}
   ></div>
   <div class="rp-editor" data-file-drop-zone bind:this={host}></div>
-  <div class="rp-label" class:queued={isPending && pendingChipVisible} aria-hidden="true">
+  <div class="rp-label" class:queued={queuedCount > 0} aria-hidden="true">
     {labelText}
   </div>
 </div>
@@ -603,22 +585,9 @@
     border-top: 1px solid var(--border);
     user-select: none;
   }
-  /* In-flight message: the text stays visible but reads as a READ-ONLY card,
-     not an editable field. read-only is enforced in the editor state; the dim
-     + the hidden caret are the visual affordance (the keymap stays live so
-     ↑ recalls + Esc cancels). */
-  .rich-prompt.pending .rp-editor {
-    opacity: 0.55;
-  }
-  /* Hide the caret (native + drawn) so the queued card doesn't look editable. */
-  .rich-prompt.pending :global(.cm-content) {
-    caret-color: transparent;
-  }
-  .rich-prompt.pending :global(.cm-cursor),
-  .rich-prompt.pending :global(.cm-cursorLayer) {
-    display: none;
-  }
-  .rich-prompt.pending .rp-label.queued {
+  /* Queued indicator: highlight the label when messages sit in the queue. The
+     composer itself stays a normal editable field (no read-only look). */
+  .rp-label.queued {
     color: var(--text-primary);
   }
 </style>
