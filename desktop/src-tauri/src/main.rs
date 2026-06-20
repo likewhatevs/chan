@@ -1565,8 +1565,13 @@ fn open_workspace_from_handoff(
         .unwrap()
         .get(&key)
         .and_then(|h| h.url.clone());
-    if let Some(url) = running_url {
-        return serve::spawn_local_workspace_window(&app, &key, &url).map(|_| ());
+    if running_url.is_some() {
+        // Already running: mint another window; the watcher opens it.
+        return state
+            .embedded()
+            .ok_or_else(|| "embedded local server is unavailable".to_string())?
+            .mint_window(chan_server::WindowKind::Workspace, Some(key.clone()))
+            .map(|_| ());
     }
 
     // Not running: register (creating the dir for a fresh path)

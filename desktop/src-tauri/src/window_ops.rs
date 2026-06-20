@@ -41,7 +41,7 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
                 NewWindowKind::Terminal => {
                     serve::spawn_local_terminal_window(app.clone(), Arc::clone(&state)).await
                 }
-                NewWindowKind::Workspace { key } => new_workspace_window(&app, &state, &key).await,
+                NewWindowKind::Workspace { key } => new_workspace_window(&state, &key).await,
             };
             let _ = reply.send(result);
         }
@@ -69,30 +69,20 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
 }
 
 /// `cs window new` (workspace tenant): open another window of the
-/// workspace rooted at `key`, resolving its running launch URL the same
-/// way `open_local_workspace` does. Errors when that workspace isn't
-/// currently running locally.
-async fn new_workspace_window(
-    app: &AppHandle,
-    state: &Arc<AppState>,
-    key: &str,
-) -> Result<String, String> {
+/// workspace rooted at `key` by minting a window into the library registry
+/// (the watcher opens it), the same way `open_local_workspace` does. Errors
+/// when that workspace isn't currently running locally. Returns the new
+/// window's composite native label.
+async fn new_workspace_window(state: &Arc<AppState>, key: &str) -> Result<String, String> {
     let canon = crate::canonical_key(Path::new(key));
-    let url = state
-        .serves
-        .lock()
-        .unwrap()
-        .get(&canon)
-        .and_then(|h| h.url.clone());
-    let Some(url) = url else {
+    if !state.serves.lock().unwrap().contains_key(&canon) {
         return Err(format!("workspace {key} is not running"));
-    };
-    let app2 = app.clone();
-    on_main(app, move || {
-        serve::spawn_local_workspace_window(&app2, &canon, &url)
-    })
-    .await
-    .and_then(|inner| inner)
+    }
+    let record = state
+        .embedded()
+        .ok_or_else(|| "embedded local server is unavailable".to_string())?
+        .mint_window(chan_server::WindowKind::Workspace, Some(canon))?;
+    Ok(crate::window_watcher::native_label(&record))
 }
 
 /// `cs window hide`: route through the OS close-button path so the
