@@ -486,6 +486,19 @@ pub enum TerminalAction {
         #[arg(long = "tab-group")]
         tab_group: Option<String>,
     },
+    /// Close (tear down) live terminal session(s) selected by name and/or
+    /// group: kills the PTY and removes the session, so its tab name frees
+    /// for re-use. The teardown partner to `restart` / `new`; at least one
+    /// selector is required. `--tab-group` tears down a whole group (e.g. a
+    /// finished team) in one call.
+    Close {
+        /// Close every session with this tab name.
+        #[arg(long = "tab-name")]
+        tab_name: Option<String>,
+        /// Close every session in this group.
+        #[arg(long = "tab-group")]
+        tab_group: Option<String>,
+    },
     /// Dump a live terminal session's scrollback (its replay ring) by tab
     /// name, printing the raw bytes to stdout. Exactly one session must
     /// match the name: zero is an error, and more than one is ambiguous
@@ -1106,6 +1119,25 @@ async fn cmd_shell_terminal(action: TerminalAction) -> Result<()> {
             let message = send_control_request(
                 &socket,
                 ControlRequest::TermRestart {
+                    tab_name,
+                    tab_group,
+                },
+            )
+            .await?;
+            eprintln!("{message}");
+            Ok(())
+        }
+        TerminalAction::Close {
+            tab_name,
+            tab_group,
+        } => {
+            if tab_name.is_none() && tab_group.is_none() {
+                anyhow::bail!("cs terminal close needs --tab-name and/or --tab-group");
+            }
+            let socket = control_socket_env()?;
+            let message = send_control_request(
+                &socket,
+                ControlRequest::TermClose {
                     tab_name,
                     tab_group,
                 },
@@ -1787,6 +1819,34 @@ mod tests {
     fn pane_layout_markdown_empty_is_short_line() {
         let out = render_pane_layout_markdown(r#"{"activePaneId":"","panes":[]}"#).expect("render");
         assert_eq!(out, "No panes.\n");
+    }
+
+    #[test]
+    fn parses_terminal_close_by_name_or_group() {
+        let cli = CsCli::parse_from(["cs", "terminal", "close", "--tab-name", "@@Alice"]);
+        match cli.action {
+            ShellAction::Terminal {
+                action:
+                    TerminalAction::Close {
+                        tab_name,
+                        tab_group,
+                    },
+            } => {
+                assert_eq!(tab_name.as_deref(), Some("@@Alice"));
+                assert_eq!(tab_group, None);
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
+        // --tab-group is accepted too (whole-group teardown). The
+        // "needs a selector" guard is a dispatch-time bail (like restart),
+        // not a parse error.
+        let cli = CsCli::parse_from(["cs", "terminal", "close", "--tab-group", "chan-team"]);
+        match cli.action {
+            ShellAction::Terminal {
+                action: TerminalAction::Close { tab_group, .. },
+            } => assert_eq!(tab_group.as_deref(), Some("chan-team")),
+            other => panic!("unexpected parse: {other:?}"),
+        }
     }
 
     #[test]

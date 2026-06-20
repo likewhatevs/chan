@@ -113,6 +113,16 @@ pub enum ControlRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_group: Option<String>,
     },
+    // Category 2: close (tear down) live session(s) by tab name and/or group,
+    // for `cs terminal close`. The explicit teardown partner to `TermRestart`:
+    // kills the PTY and removes the registry entry, so the tab name frees,
+    // instead of killing the pid out of band and leaving the entry to linger.
+    TermClose {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab_group: Option<String>,
+    },
     // Category 2: dump one live session's replay ring (its scrollback) by
     // tab name and return the decoded bytes on the connection (like `term
     // list`). No group axis: scrollback reads exactly ONE terminal's
@@ -637,6 +647,25 @@ mod survey_wire_tests {
         let raw = serde_json::to_string(&req).unwrap();
         let back: ControlRequest = serde_json::from_str(&raw).unwrap();
         assert!(matches!(back, ControlRequest::TermScrollback { .. }));
+    }
+
+    #[test]
+    fn term_close_request_tag_and_fields() {
+        // Wire tag `term_close`; both selectors optional + skipped when None
+        // (same shape as `term_restart`). A Rust rename that drifts the tag or
+        // a field breaks the server's decode with a green build.
+        let req = ControlRequest::TermClose {
+            tab_name: Some("@@Alice".into()),
+            tab_group: None,
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "term_close");
+        assert_eq!(v["tab_name"], "@@Alice");
+        assert!(v.get("tab_group").is_none());
+        // Decodes back into the same variant (the server's path).
+        let raw = serde_json::to_string(&req).unwrap();
+        let back: ControlRequest = serde_json::from_str(&raw).unwrap();
+        assert!(matches!(back, ControlRequest::TermClose { .. }));
     }
 
     #[test]

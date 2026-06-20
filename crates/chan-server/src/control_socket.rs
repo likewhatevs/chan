@@ -565,6 +565,21 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 tab_group.as_deref(),
             ))
         }
+        ControlRequest::TermClose {
+            tab_name,
+            tab_group,
+        } => {
+            let Some(registry) = terminal_registry else {
+                return ControlResponse::Error {
+                    message: "terminal registry unavailable".into(),
+                };
+            };
+            into_response(term_close(
+                registry,
+                tab_name.as_deref(),
+                tab_group.as_deref(),
+            ))
+        }
         ControlRequest::TermScrollback { tab_name } => {
             let Some(registry) = terminal_registry else {
                 return ControlResponse::Error {
@@ -1772,6 +1787,25 @@ fn term_restart(
         return Err("no live terminal session matched".into());
     }
     Ok(format!("restarted {restarted} terminal session(s)"))
+}
+
+/// Category 2: close live session(s) selected by name and/or group, for
+/// `cs terminal close`. The explicit teardown partner to [`term_restart`]:
+/// kills the PTY and removes the registry entry so the tab name frees,
+/// instead of killing the pid out of band and leaving the entry to linger.
+fn term_close(
+    registry: &TerminalRegistry,
+    tab_name: Option<&str>,
+    tab_group: Option<&str>,
+) -> Result<String, String> {
+    if tab_name.is_none() && tab_group.is_none() {
+        return Err("term close needs a tab name and/or group selector".into());
+    }
+    let closed = registry.close_matching(tab_name, tab_group);
+    if closed == 0 {
+        return Err("no live terminal session matched".into());
+    }
+    Ok(format!("closed {closed} terminal session(s)"))
 }
 
 /// Category 2: dump the full replay ring of the single live session whose
