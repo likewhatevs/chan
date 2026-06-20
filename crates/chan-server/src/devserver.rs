@@ -828,13 +828,22 @@ async fn handle_watch_library_windows(
 
 /// Push a fresh window-set snapshot on connect and on every change. Sending the
 /// whole set rather than a delta keeps the client's reconcile idempotent: a
-/// dropped frame self-heals on the next push. The change waiter is registered
-/// BEFORE each snapshot so a change that lands between the snapshot and the await
-/// is never missed. The loop ends when the client disconnects.
+/// dropped frame self-heals on the next push. The change waiter is armed
+/// (`enable`d) BEFORE each snapshot so a change that lands between the snapshot
+/// and the await is never missed. The loop ends when the client disconnects.
 async fn watch_library_windows(mut socket: WebSocket, host: Arc<WorkspaceHost>) {
     let notify = host.library_change_notify();
+    let changed = notify.notified();
+    tokio::pin!(changed);
     loop {
-        let changed = notify.notified();
+        // Arm the change waiter BEFORE the snapshot. A `Notified` records the
+        // `notify_waiters` count when it is created, so creating and `enable`-ing
+        // it before the snapshot guarantees a change during the snapshot or the
+        // `send().await` advances that count and wakes the `select!` below,
+        // rather than being read into a snapshot the waiter was armed after. The
+        // explicit `enable` also keeps this consumer's ordering identical to the
+        // desktop's local watcher.
+        changed.as_mut().enable();
         let set = WindowSet {
             windows: host.assemble_window_records(),
         };
@@ -846,7 +855,12 @@ async fn watch_library_windows(mut socket: WebSocket, host: Arc<WorkspaceHost>) 
             break; // the client is gone
         }
         tokio::select! {
-            _ = changed => {} // a window-set change: re-snapshot
+            _ = changed.as_mut() => {
+                // A window-set change woke us: drop the consumed waiter and
+                // re-arm a fresh one, which the next loop turn enables before
+                // it reads the snapshot.
+                changed.set(notify.notified());
+            }
             msg = socket.recv() => match msg {
                 None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
                 _ => {} // ignore any other client frame
@@ -1835,5 +1849,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(watch_bad.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// The watch pump arms its change waiter (`enable`) BEFORE it takes the
+    /// snapshot. A `Notify::Notified` records the `notify_waiters` count when it
+    /// is created and compares it on first poll, so a change is observed only
+    /// when the waiter was created before that change. This pins the ordering
+    /// the pump depends on against a real `notify_waiters` (the same primitive
+    /// `library_change_notify` fires): armed-before-change wakes, armed-after
+    /// blocks.
+    #[tokio::test]
+    async fn watch_waiter_must_be_armed_before_the_change() {
+        use tokio::sync::Notify;
+
+        let notify = Notify::new();
+
+        // Armed before the stand-in "snapshot + send": a change in that window
+        // wakes the await, so it returns at once.
+        let armed = notify.notified();
+        tokio::pin!(armed);
+        armed.as_mut().enable();
+        notify.notify_waiters();
+        tokio::time::timeout(std::time::Duration::from_millis(200), armed.as_mut())
+            .await
+            .expect("a waiter armed before the change observes it");
+
+        // Armed after the change: the waiter captures the already-advanced count,
+        // so the change is behind it and the await blocks. This is what moving
+        // the waiter past the snapshot would do, hence arm-before-snapshot.
+        notify.notify_waiters();
+        let late = notify.notified();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), late)
+                .await
+                .is_err(),
+            "a waiter armed after the change blocks until the next one"
+        );
     }
 }
