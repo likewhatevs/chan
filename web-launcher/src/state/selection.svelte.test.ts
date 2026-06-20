@@ -25,10 +25,10 @@ describe("workspace multi-select", () => {
     expect(isSelected(id)).toBe(false);
     toggleSelected(id);
     expect(isSelected(id)).toBe(true);
-    expect(selection.selected.size).toBe(1);
+    expect(selection.selected.length).toBe(1);
     toggleSelected(id);
     expect(isSelected(id)).toBe(false);
-    expect(selection.selected.size).toBe(0);
+    expect(selection.selected.length).toBe(0);
   });
 
   it("bulk turn off sets every selected workspace off", async () => {
@@ -63,7 +63,7 @@ describe("workspace multi-select", () => {
     await confirmBulkDelete();
     expect(library.workspaces.some((w) => w.workspace_id === id)).toBe(false);
     expect(library.workspaces.length).toBe(before - 1);
-    expect(selection.selected.size).toBe(0);
+    expect(selection.selected.length).toBe(0);
     expect(selection.confirmingDelete).toBe(false);
   });
 });

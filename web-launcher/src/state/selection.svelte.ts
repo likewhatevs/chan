@@ -8,8 +8,9 @@
 import { removeWorkspace, toggleWorkspace } from "./library.svelte";
 
 interface SelectionState {
-  /** Selected workspace ids. Reactive: Svelte 5 proxies the Set. */
-  selected: Set<string>;
+  /** Selected workspace ids. A plain array — deeply reactive under $state (a
+   * bare Set would need svelte/reactivity's SvelteSet to track). */
+  selected: string[];
   /** A bulk action is running. */
   busy: boolean;
   /** The Delete action is awaiting its confirm. */
@@ -19,26 +20,27 @@ interface SelectionState {
 }
 
 export const selection = $state<SelectionState>({
-  selected: new Set(),
+  selected: [],
   busy: false,
   confirmingDelete: false,
   note: null,
 });
 
 export function isSelected(id: string): boolean {
-  return selection.selected.has(id);
+  return selection.selected.includes(id);
 }
 
 export function toggleSelected(id: string): void {
-  if (selection.selected.has(id)) selection.selected.delete(id);
-  else selection.selected.add(id);
+  const i = selection.selected.indexOf(id);
+  if (i >= 0) selection.selected.splice(i, 1);
+  else selection.selected.push(id);
   // Cancel a pending delete-confirm if the selection changed under it.
   selection.confirmingDelete = false;
   selection.note = null;
 }
 
 export function clearSelection(): void {
-  selection.selected.clear();
+  selection.selected = [];
   selection.confirmingDelete = false;
   selection.note = null;
 }
@@ -67,7 +69,7 @@ export async function bulkSetOn(on: boolean): Promise<void> {
 }
 
 export function requestBulkDelete(): void {
-  if (selection.selected.size > 0) selection.confirmingDelete = true;
+  if (selection.selected.length > 0) selection.confirmingDelete = true;
 }
 
 export function cancelBulkDelete(): void {
@@ -78,5 +80,5 @@ export async function confirmBulkDelete(): Promise<void> {
   await runBulk((id) => removeWorkspace(id), "delete");
   selection.confirmingDelete = false;
   // Drop ids that were removed (a failed delete keeps its row + selection).
-  if (!selection.note) selection.selected.clear();
+  if (!selection.note) selection.selected = [];
 }

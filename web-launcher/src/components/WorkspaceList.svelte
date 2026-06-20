@@ -21,7 +21,7 @@
     return ws.label || basename(ws.path) || ws.path;
   }
 
-  const selectedCount = $derived(selection.selected.size);
+  const selectedCount = $derived(selection.selected.length);
 </script>
 
 {#if library.workspaces.length}
