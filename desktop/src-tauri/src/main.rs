@@ -2231,6 +2231,67 @@ mod win_console {
     }
 }
 
+/// macOS GUI launches (Finder / Dock / Spotlight) inherit a restricted launchd
+/// `$PATH` that misses the user's interactive dirs (`~/.local/bin`,
+/// `/opt/homebrew/bin`, and custom dirs). Resolve the login+interactive shell's
+/// `$PATH` and merge it into this process's `$PATH`, so in-process checks (the
+/// `cs` alias detection, which scans `$PATH`) and spawned subprocesses
+/// (terminals) see binaries wherever the user actually has them — the general
+/// fix for the launchd restricted-PATH gotcha, not `cs`-specific. Best-effort:
+/// any failure leaves the inherited PATH untouched (status quo, no regression).
+#[cfg(target_os = "macos")]
+fn fix_macos_login_path() {
+    let Some(shell_path) = resolve_login_shell_path() else {
+        return;
+    };
+    let inherited = std::env::var("PATH").unwrap_or_default();
+    let merged = merge_path_dirs(&shell_path, &inherited);
+    if !merged.is_empty() {
+        std::env::set_var("PATH", merged);
+    }
+}
+
+/// Keep the interactive shell PATH first, then any inherited (launchd) dirs not
+/// already present — deduped, order-stable, empty segments dropped.
+#[cfg(target_os = "macos")]
+fn merge_path_dirs(shell_path: &str, inherited: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    shell_path
+        .split(':')
+        .chain(inherited.split(':'))
+        .filter(|dir| !dir.is_empty() && seen.insert(dir.to_string()))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// Run the user's login shell (`$SHELL`) as a login + interactive shell to
+/// capture the `$PATH` it exports — the dirs the user has on their REAL
+/// interactive PATH (their profile / rc files), which the GUI launchd PATH
+/// lacks. Markers delimit the value so a chatty rc (banners) can't corrupt it;
+/// stdin is `/dev/null` so an interactive shell can't block on input, and
+/// stderr is discarded. `None` on any failure or an empty result.
+#[cfg(target_os = "macos")]
+fn resolve_login_shell_path() -> Option<String> {
+    const MARK: &str = "__CHAN_PATH__";
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let output = std::process::Command::new(shell)
+        .args([
+            "-l",
+            "-i",
+            "-c",
+            &format!("printf '{MARK}%s{MARK}' \"$PATH\""),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let out = String::from_utf8_lossy(&output.stdout);
+    let start = out.find(MARK)? + MARK.len();
+    let end = out[start..].find(MARK)? + start;
+    let path = &out[start..end];
+    (!path.is_empty()).then(|| path.to_string())
+}
+
 fn main() {
     // Windows: a release chan-desktop.exe is GUI-subsystem (no console). When
     // invoked as the `chan` / `cs` CLI through a shim, reattach to the parent
@@ -2313,6 +2374,12 @@ fn main() {
         .manage(state)
         .setup(move |app| {
             install_app_menu(app.handle())?;
+
+            // Fix the restricted launchd `$PATH` of a macOS GUI launch BEFORE
+            // the embedded server starts, so its in-process `cs` detection (and
+            // the terminals it spawns) scan the user's real interactive PATH.
+            #[cfg(target_os = "macos")]
+            fix_macos_login_path();
 
             match tauri::async_runtime::block_on(embedded::EmbeddedServer::start()) {
                 Ok(server) => {
@@ -3672,6 +3739,17 @@ fn spawn_terminal_window(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn merge_path_dirs_keeps_shell_first_and_dedups() {
+        // Shell PATH first, inherited dirs appended once, deduped.
+        assert_eq!(merge_path_dirs("/a:/b", "/b:/c"), "/a:/b:/c");
+        // Empty segments dropped.
+        assert_eq!(merge_path_dirs("/a::/b", ""), "/a:/b");
+        assert_eq!(merge_path_dirs("", "/x"), "/x");
+        assert_eq!(merge_path_dirs("", ""), "");
+    }
 
     #[test]
     fn desktop_binary_accepts_hidden_mcp_proxy_command() {
