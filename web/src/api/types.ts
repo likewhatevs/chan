@@ -256,6 +256,10 @@ export type Preferences = {
   /// Global overlay-maximize toggle for the overlay surfaces (search /
   /// file browser). Optional on the wire; absent is treated as off.
   overlay_maximized?: boolean;
+  /// Whether the `cs` terminal-alias offer card has been dismissed.
+  /// Optional on the wire; absent is treated as not-dismissed, so the
+  /// offer shows until the user dismisses it.
+  cs_dismissed?: boolean;
 };
 
 export type TreeEntry = {

@@ -36,11 +36,15 @@
   // The non-blocking `cs` terminal-alias offer. It rides on the snapshot but
   // never gates `locked`, so it renders as a dismissible corner card once the
   // workspace is ready (or right away when nothing locked the boot). Dismissal
-  // is persisted machine-wide in localStorage: the alias and PATH are global,
-  // so once handled it should not nag again on the next load.
-  const CS_DISMISS_KEY = "chan.csLinkDismissed";
+  // persists in the per-library server prefs (so it travels with the library
+  // and stays consistent across clients), read from the loaded workspace
+  // preferences. `csDismissedLocal` is the optimistic in-session flip so the
+  // card hides instantly on the × click, before the prefs round-trip lands.
   const csOffer = $derived(snapshot?.cs_link ?? null);
-  let csDismissed = $state(readCsDismissed());
+  let csDismissedLocal = $state(false);
+  const csDismissed = $derived(
+    csDismissedLocal || (workspace.info?.preferences?.cs_dismissed ?? false),
+  );
   let csBusy = $state(false);
   let csResult = $state<string | null>(null);
   let csError = $state<string | null>(null);
@@ -56,23 +60,9 @@
   // get the offer).
   const showCsCard = $derived(!!csOffer && !locked && !csDismissed);
 
-  function readCsDismissed(): boolean {
-    try {
-      return localStorage.getItem(CS_DISMISS_KEY) === "1";
-    } catch {
-      return false;
-    }
-  }
-  function persistCsDismissed(): void {
-    try {
-      localStorage.setItem(CS_DISMISS_KEY, "1");
-    } catch {
-      // Private-mode / disabled storage: dismissal stays session-local.
-    }
-  }
   function dismissCs(): void {
-    csDismissed = true;
-    persistCsDismissed();
+    csDismissedLocal = true;
+    void api.setCsDismissed(true);
   }
   function errText(e: unknown): string {
     if (e instanceof ApiError) {
@@ -95,7 +85,10 @@
       const res = await api.createCsLink();
       csResult = res.message;
       // Succeeded (or already present): don't ask again on future loads.
-      if (res.resolved) persistCsDismissed();
+      if (res.resolved) {
+        csDismissedLocal = true;
+        void api.setCsDismissed(true);
+      }
     } catch (e) {
       // Non-fatal: surface why and fall back to the manual hint so the user
       // can finish by hand, then continue.

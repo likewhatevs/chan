@@ -1101,6 +1101,15 @@ export const api = {
       preferences: { ...cfg.preferences, overlay_maximized: on },
     });
   },
+  /// Persist the per-library `cs` terminal-alias offer dismissal.
+  setCsDismissed: async (on: boolean): Promise<void> => {
+    const cfg = await req<GlobalConfig>("GET", "/api/config");
+    if (cfg.preferences.cs_dismissed === on) return;
+    await req<GlobalConfig>("PATCH", "/api/config", {
+      ...cfg,
+      preferences: { ...cfg.preferences, cs_dismissed: on },
+    });
+  },
   /// Semantic-search endpoints. Open-read for state; settings-
   /// gated for mutations (download / enable / disable). The
   /// download POST blocks until the resolver has the bytes on
