@@ -201,6 +201,9 @@ pub fn new_outbound_window_label(id: &str) -> String {
 /// one re-created after a restart reset the counter to 0 (a collision would let
 /// `build_workspace_window` destroy the re-created window). Non-numeric tails
 /// are ignored. Used by the W10 devserver-terminal re-create on connect.
+// Client-side window-seq minting for the imperative devserver path; superseded
+// by the watcher (the library mints ids). Deleted-as-dead in S2-DEVSERVER D3.
+#[allow(dead_code)]
 pub fn reserve_window_seq_above(labels: &[String]) {
     let max = labels
         .iter()
@@ -224,6 +227,9 @@ pub fn is_workspace_webview_label(label: &str) -> bool {
         // Watcher-opened local windows carry the composite native label
         // `local::<window_id>`; they host the same embedded SPA.
         || label.starts_with("local::")
+        // Watcher-opened devserver windows carry `lib-<hex>::<window_id>` — the
+        // same SPA, served by the remote devserver.
+        || label.starts_with("lib-")
 }
 
 /// Open (or rebuild-in-place at the same label) a native window for a
@@ -278,7 +284,6 @@ pub(crate) fn open_watched_local_window(
 /// native label is the composite `{library_id}::{window_id}`; `?w=` is the bare
 /// `window_id` (decoupled), carried as the SPA session id. No `config_key`: the
 /// library owns persistence (the layout blob is keyed by `window_id`).
-#[allow(dead_code)] // wired into the devserver watcher's NativeSurface in the D1 cutover.
 pub(crate) fn open_watched_remote_window(
     app: &AppHandle,
     host: &str,
@@ -1161,7 +1166,7 @@ pub fn close_window_by_label(app: &AppHandle, label: &str) {
     });
 }
 
-fn close_windows_with_prefix(app: &AppHandle, prefix: &str) {
+pub(crate) fn close_windows_with_prefix(app: &AppHandle, prefix: &str) {
     let app_owned = app.clone();
     let prefix_owned = prefix.to_string();
     let _ = app.run_on_main_thread(move || {

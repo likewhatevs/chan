@@ -103,6 +103,13 @@ pub struct AppState {
     /// disconnect tears down exactly its windows, and a reconnect re-opens its
     /// workspace windows with a fresh token under the same label.
     pub devserver_windows: Mutex<HashMap<String, Vec<DevserverWindow>>>,
+    /// Per connected devserver (`Devserver.id`), its window watcher's
+    /// `(library_id, cancel)`. The watcher drives that devserver's native
+    /// windows as a pure reconcile of its `/api/library/windows` feed; on
+    /// disconnect the `cancel` flips and the `library_id` (`lib-<hex>`) closes
+    /// the `{library_id}::*` windows (detach, not reap). Supersedes the
+    /// imperative `devserver_windows` tracking for the watcher-driven path.
+    pub devserver_watchers: Mutex<HashMap<String, (String, tokio::sync::watch::Sender<bool>)>>,
     /// The embedded control-terminal tenant prefix (`/control-N`) running each
     /// scripted devserver's connect script, keyed by `Devserver.id`. Kept
     /// separate from `devserver_windows` because this is a LOCAL embedded
@@ -900,6 +907,9 @@ fn track_devserver_window(state: &AppState, id: &str, window: DevserverWindow) {
 /// the persisted labels so a later New-Terminal mint can't collide with a
 /// re-created one after a process restart. Best-effort per terminal; returns the
 /// count re-created (0 = none persisted, or the devserver is unreachable).
+// Imperative connect/reconnect orchestrator superseded by the devserver watcher
+// (the reconcile re-surfaces persisted terminals); deleted in S2-DEVSERVER D3.
+#[allow(dead_code)]
 async fn reopen_devserver_terminal_windows(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -1176,15 +1186,20 @@ async fn connect_devserver(
         "connected to devserver"
     );
     let conn = devserver::DevserverConn { host, port, token };
-    state.devservers.set(id.clone(), conn);
-    // W10: re-surface the devserver's persisted standalone terminals (Seam 4)
-    // at their persisted labels (?w=<label>) so the SPA reattaches to the live
-    // PTY. A fresh devserver with none gets one terminal so the user still lands
-    // on a terminal — a first-class persisted, per-tenant terminal (the labeled
-    // POST), so it re-surfaces on reconnect like the rest.
-    if reopen_devserver_terminal_windows(&app, &state, &id).await == 0 {
-        open_devserver_terminal_window(&app, &state, &id).await?;
-    }
+    state.devservers.set(id.clone(), conn.clone());
+    // The window watcher is the SOLE driver of this devserver's native windows:
+    // spawn it over the library feed (`/api/library/windows/watch`), and its
+    // first snapshot reconciles open the persisted windows — including the
+    // library's auto-created boot terminal, so there is no imperative
+    // "open one" fallback. Store `(library_id, cancel)` so disconnect can stop
+    // the watcher + close its `{library_id}::*` windows.
+    let (library_id, cancel) =
+        window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn).await?;
+    state
+        .devserver_watchers
+        .lock()
+        .unwrap()
+        .insert(id.clone(), (library_id, cancel));
     // The control terminal stays open after connect. It runs the connect
     // script, which may keep streaming or prompt for ssh credentials, so
     // burying it on connect hid live output and read as a flash. The user
@@ -1221,6 +1236,14 @@ fn disconnect_devserver(
     id: String,
 ) -> Result<(), String> {
     state.devservers.remove(&id);
+    // Stop the window watcher + reconcile its windows away. Detach, NOT reap:
+    // the devserver keeps its window set server-side, so a later reconnect
+    // restores the same windows. The control terminal + any residual imperative
+    // windows are torn down separately below.
+    if let Some((library_id, cancel)) = state.devserver_watchers.lock().unwrap().remove(&id) {
+        let _ = cancel.send(true);
+        serve::close_windows_with_prefix(&app, &format!("{library_id}::"));
+    }
     teardown_devserver_windows(&app, &state, &id);
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(())
@@ -1315,6 +1338,9 @@ async fn open_devserver_terminal(
 /// webview in place). The standalone terminal is not re-opened here (its
 /// tenant is gone after a restart); the user reopens one from the recovered
 /// section.
+// Imperative reconnect orchestrator superseded by the devserver watcher (the
+// reconcile re-surfaces workspace windows); deleted in S2-DEVSERVER D3.
+#[allow(dead_code)]
 fn reopen_devserver_workspace_windows(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -1379,24 +1405,38 @@ async fn reconnect_devserver(
     for token in candidates {
         let mut probe = conn.clone();
         probe.token = token.clone();
-        if let Ok(rows) = devserver::fetch_workspaces(&probe).await {
+        // `fetch_workspaces` is the connectivity probe (does this token auth?);
+        // its rows are no longer consumed (the watcher re-surfaces the windows).
+        if devserver::fetch_workspaces(&probe).await.is_ok() {
             // A disconnect that landed mid-probe already tore the windows
             // down; do not resurrect the connection or re-open them.
             if !state.devservers.is_connected(&id) {
                 return Ok(false);
             }
             let rotated = token != conn.token;
-            state.devservers.set(id.clone(), probe);
+            state.devservers.set(id.clone(), probe.clone());
             if rotated {
                 // A rotated token means the devserver restarted: its old tenants
-                // are gone. Workspace + persisted-terminal windows re-open below
-                // (the persisted terminals re-mount server-side at stable
-                // prefixes), each with the fresh token.
-                reopen_devserver_workspace_windows(&app, &state, &id, &rows);
-                // W10: the restart re-mounted the persisted standalone terminals
-                // server-side at stable prefixes — re-create their windows too
-                // (reopen_devserver_workspace_windows only handles workspaces).
-                reopen_devserver_terminal_windows(&app, &state, &id).await;
+                // are gone AND the running watcher's feed task can't auth with
+                // the stale token. RESPAWN the watcher on the fresh conn — cancel
+                // the old one + reconcile its windows away, then spawn anew so its
+                // first snapshot re-opens the restarted devserver's persisted set.
+                // (A non-rotated reconnect needs nothing: the feed task's own
+                // reconnect-on-drop self-heals with the same token.)
+                if let Some((library_id, cancel)) =
+                    state.devserver_watchers.lock().unwrap().remove(&id)
+                {
+                    let _ = cancel.send(true);
+                    serve::close_windows_with_prefix(&app, &format!("{library_id}::"));
+                }
+                let (library_id, cancel) =
+                    window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), probe)
+                        .await?;
+                state
+                    .devserver_watchers
+                    .lock()
+                    .unwrap()
+                    .insert(id.clone(), (library_id, cancel));
             }
             let _ = app.emit(serve::SERVES_CHANGED, ());
             return Ok(true);
@@ -2402,6 +2442,7 @@ fn main() {
         remote_reopen: Mutex::new(HashMap::new()),
         devservers: devserver::DevserverConns::default(),
         devserver_windows: Mutex::new(HashMap::new()),
+        devserver_watchers: Mutex::new(HashMap::new()),
         control_terminal_prefixes: Mutex::new(HashMap::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),

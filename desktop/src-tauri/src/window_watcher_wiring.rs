@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use chan_server::{WindowRecord, WindowSet};
 use tauri::{AppHandle, Manager};
-use tokio::sync::Notify;
+use tokio::sync::{watch, Notify};
 
 use crate::devserver::DevserverConn;
 use crate::window_watcher::{
@@ -209,12 +209,17 @@ async fn run_devserver_window_feed(
     conn: DevserverConn,
     snapshot: Arc<Mutex<Vec<WindowRecord>>>,
     change: Arc<Notify>,
-    cancel: Arc<Notify>,
+    mut cancel: watch::Receiver<bool>,
 ) {
     const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
     loop {
+        // A `watch` (not a `Notify`) so the cancel PERSISTS: a disconnect that
+        // flips it while we are between selects is still seen here, not missed.
+        if *cancel.borrow_and_update() {
+            return;
+        }
         tokio::select! {
-            _ = cancel.notified() => return,
+            _ = cancel.changed() => return,
             result = stream_window_feed(&conn, &snapshot, &change) => {
                 if let Err(e) = result {
                     tracing::debug!(
@@ -225,8 +230,11 @@ async fn run_devserver_window_feed(
                 }
             }
         }
+        if *cancel.borrow_and_update() {
+            return;
+        }
         tokio::select! {
-            _ = cancel.notified() => return,
+            _ = cancel.changed() => return,
             _ = tokio::time::sleep(RECONNECT_BACKOFF) => {}
         }
     }
@@ -268,38 +276,39 @@ async fn stream_window_feed(
 
 /// Spawn a connected devserver's window watcher: one [`watch_loop`] driven by the
 /// devserver's `/api/library/windows/watch` feed, opening windows as remote SPA
-/// webviews. Returns a cancel `Notify` — fire it on disconnect to stop the
-/// watcher + its feed task; the caller then reconciles the devserver's native
-/// windows away (detach, not reap).
+/// webviews. Returns `(library_id, cancel)` — flip `cancel` (a `watch::Sender`)
+/// to `true` on disconnect to stop the watcher + its feed task; the caller then
+/// reconciles the devserver's native windows away by the `library_id` prefix
+/// (detach, not reap).
 ///
 /// `library_id` (`lib-<hex>`) is learned from a first HTTP fetch (records carry
 /// it) because the close-side label filter needs it up front; a connected
 /// devserver always has ≥1 window (its boot terminal), so the seed is non-empty.
-/// The id outlives the watcher, so it is leaked to `&'static str` (a few bytes
-/// per connect — negligible, and avoids threading an owned id through the shared
-/// `watch_loop` signature).
-#[allow(dead_code)] // wired into connect_devserver in the D1 cutover.
+/// A `&'static` copy is leaked for the shared `watch_loop` signature (a few bytes
+/// per connect); the owned `String` is returned for the caller to store + use at
+/// disconnect.
 pub(crate) async fn spawn_devserver_window_watcher(
     app: AppHandle,
     conn: DevserverConn,
-) -> Result<Arc<Notify>, String> {
+) -> Result<(String, watch::Sender<bool>), String> {
     let seed = crate::devserver::fetch_library_windows(&conn).await?;
-    let library_id: &'static str = match seed.first() {
-        Some(record) => Box::leak(record.library_id.clone().into_boxed_str()),
+    let library_id = match seed.first() {
+        Some(record) => record.library_id.clone(),
         None => return Err("devserver library feed is empty (no boot window)".into()),
     };
+    let library_id_static: &'static str = Box::leak(library_id.clone().into_boxed_str());
     let snapshot = Arc::new(Mutex::new(seed));
     let change = Arc::new(Notify::new());
-    let cancel = Arc::new(Notify::new());
+    let (cancel_tx, cancel_rx) = watch::channel(false);
     let host = conn.host.clone();
     let port = conn.port;
     // The WS feed task owns `conn`, pushes changes into `snapshot` + wakes
-    // `change`, and stops when `cancel` fires.
+    // `change`, and stops when `cancel` flips true.
     tauri::async_runtime::spawn(run_devserver_window_feed(
         conn,
         Arc::clone(&snapshot),
         Arc::clone(&change),
-        Arc::clone(&cancel),
+        cancel_rx.clone(),
     ));
     let surface = TauriNativeSurface {
         app,
@@ -308,9 +317,19 @@ pub(crate) async fn spawn_devserver_window_watcher(
     };
     let feed = DevserverWindowFeed { snapshot, change };
     let view = Arc::new(WatcherViewState::default());
-    let cancel_loop = Arc::clone(&cancel);
-    tauri::async_runtime::spawn(watch_loop(library_id, feed, surface, view, async move {
-        cancel_loop.notified().await
-    }));
-    Ok(cancel)
+    let mut cancel_loop = cancel_rx;
+    tauri::async_runtime::spawn(watch_loop(
+        library_id_static,
+        feed,
+        surface,
+        view,
+        async move {
+            while !*cancel_loop.borrow_and_update() {
+                if cancel_loop.changed().await.is_err() {
+                    break;
+                }
+            }
+        },
+    ));
+    Ok((library_id, cancel_tx))
 }

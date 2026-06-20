@@ -342,6 +342,10 @@ pub struct DevserverTerminalRow {
 /// `GET /api/devserver/terminals`: the devserver's persisted standalone
 /// terminals (Seam 4 Amendment 5), each with its assembled tenant URL, to
 /// re-surface as windows on connect/reconnect.
+// Imperative devserver-window path superseded by the window watcher (the
+// reconcile re-surfaces terminals); deleted with the imperative layer in
+// S2-DEVSERVER D3.
+#[allow(dead_code)]
 pub async fn fetch_terminals(conn: &DevserverConn) -> Result<Vec<DevserverTerminalRow>, String> {
     let url = format!(
         "{}/api/devserver/terminals",
@@ -426,7 +430,6 @@ pub async fn fetch_devserver_windows(
 /// devserver's `library_id`, stamped per row, the watcher's first read of which
 /// library it is reconciling). The WS `/watch` then pushes every change. The new
 /// library feed that supersedes the per-tenant `fetch_devserver_windows`.
-#[allow(dead_code)] // seeds spawn_devserver_window_watcher (next D1 slice).
 pub async fn fetch_library_windows(
     conn: &DevserverConn,
 ) -> Result<Vec<chan_server::WindowRecord>, String> {
