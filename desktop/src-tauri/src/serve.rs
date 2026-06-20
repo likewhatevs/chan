@@ -347,46 +347,24 @@ pub fn spawn_devserver_terminal_window_at_label(
     )
 }
 
-/// Spawn a standalone terminal-only window. Unlike a workspace window there
-/// is no registry entry and no On-toggle lifecycle: every terminal window
-/// loads the ONE shared `/terminal` tenant (mounted on first use), in
-/// `kind=terminal` mode.
-///
-/// Each window gets a unique `terminal-win-<seq>` label so its layout
-/// persists separately (keyed by `?w=`) and the OS window switcher
-/// disambiguates - the label is not the route prefix. The shared
-/// tenant is never torn down per window (it lives for the process lifetime;
-/// orphaned PTYs idle-prune), which is what lets a terminal moved into
-/// another window keep its live PTY.
-pub async fn spawn_local_terminal_window(
-    app: AppHandle,
-    state: Arc<AppState>,
-) -> Result<String, String> {
+/// Mint a standalone terminal window. Like every local window it is a library
+/// registry row (`local::<id>`), so it persists and restores across quit/reopen;
+/// the watcher opens it (in `?kind=terminal` mode) at the ONE shared `/terminal`
+/// tenant, mounted on first use. All terminal windows share that tenant — so a
+/// terminal moved between windows keeps its live PTY — and it lives for the
+/// process lifetime (orphaned PTYs idle-prune). Returns the new window's
+/// composite native label.
+pub async fn spawn_local_terminal_window(state: Arc<AppState>) -> Result<String, String> {
     let Some(embedded) = state.embedded.get() else {
         return Err("embedded local server is unavailable".to_string());
     };
-    let url = embedded.open_terminal().await?;
-    let label = format!("terminal-win-{}", next_window_seq());
-    // `config_key` is unused for terminal windows (no LRU restore), but
-    // `build_workspace_window` takes one; an empty key never matches a real
-    // workspace/outbound key and the terminal close branch skips the
-    // capture entirely. No per-window tenant teardown on build failure: the
-    // tenant is shared and persistent.
-    build_workspace_window(
-        &app,
-        WindowSpec {
-            label: &label,
-            session_id: &label,
-            title: "Terminal",
-            url: &url,
-            url_hash_seed: "",
-            config_key: String::new(),
-            zoom_seed: 1.0,
-            connecting: None,
-            kind: Some("terminal"),
-        },
-    )?;
-    Ok(label)
+    // Ensure the shared terminal tenant is mounted (records its prefix so the
+    // minted record resolves to it); cached after the first mount.
+    embedded.open_terminal().await?;
+    // Mint the window; the watcher opens it. The registry is the sole window
+    // authority, so the terminal can never be double-opened and it persists.
+    let record = embedded.mint_window(WindowKind::Terminal, None)?;
+    Ok(crate::window_watcher::native_label(&record))
 }
 
 /// A spawned control terminal: its terminal tenant prefix, used to scrape the

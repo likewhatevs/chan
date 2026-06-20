@@ -39,7 +39,7 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
         DesktopWindowOp::New { kind, reply } => {
             let result = match kind {
                 NewWindowKind::Terminal => {
-                    serve::spawn_local_terminal_window(app.clone(), Arc::clone(&state)).await
+                    serve::spawn_local_terminal_window(Arc::clone(&state)).await
                 }
                 NewWindowKind::Workspace { key } => new_workspace_window(&state, &key).await,
             };

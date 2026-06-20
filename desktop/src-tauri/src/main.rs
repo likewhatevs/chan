@@ -2439,11 +2439,13 @@ fn main() {
                 }
             }
 
-            // Boot matrix (§3.2). A workspace is opt-in (B1), so boot
-            // never creates one. Either re-serve what the user left on,
-            // or drop to the always-available standalone terminal — the
-            // "you always have a shell" floor — when there's nothing to
-            // restore.
+            // Boot matrix (§3.2). Every window is a library registry row, so boot
+            // is uniform: mount the shared terminal tenant (so persisted terminal
+            // windows resolve a live prefix/token and the watcher reopens them),
+            // re-serve the workspaces the user left on (each mount lets the watcher
+            // reopen that workspace's persisted windows at their stable window_id),
+            // and — if nothing will be shown (a fresh profile, or only off
+            // workspaces) — mint a default terminal so there is always a shell.
             let enabled = state_for_setup
                 .store
                 .lock()
@@ -2452,35 +2454,49 @@ fn main() {
                 .map(|cfg| cfg.enabled_workspaces)
                 .unwrap_or_default();
             let handle = app.handle().clone();
-            if enabled.is_empty() {
-                // Fresh profile, or a registry whose workspaces are all
-                // off: the launcher shows its (possibly empty) list and
-                // we open a standalone terminal window.
-                spawn_terminal_window(&handle);
-            } else {
-                // Re-serve + reopen a window for each workspace that was
-                // on at the last clean shutdown. `serve::start` mounts the
-                // runtime AND opens its window. Serial so concurrent opens
-                // can't race the shared embedded host; on a re-serve
-                // failure surface a notice and leave it off (the key drops
+            let state_for_restore = Arc::clone(&state_for_setup);
+            tauri::async_runtime::spawn(async move {
+                // Mount the shared terminal tenant FIRST so persisted terminal
+                // windows resolve and the watcher reopens them on relaunch.
+                if let Some(embedded) = state_for_restore.embedded() {
+                    if let Err(e) = embedded.open_terminal().await {
+                        tracing::warn!(error = %e, "mounting the shared terminal tenant on boot failed");
+                    }
+                }
+                // Re-serve each workspace that was on at the last clean shutdown.
+                // Serial so concurrent opens can't race the shared embedded host;
+                // on a failure surface a notice and leave it off (the key drops
                 // out of `enabled_workspaces` on the next clean shutdown).
-                let state_for_restore = Arc::clone(&state_for_setup);
-                tauri::async_runtime::spawn(async move {
-                    for key in enabled {
+                for key in enabled {
+                    if let Err(e) =
+                        serve::start(handle.clone(), Arc::clone(&state_for_restore), key.clone())
+                            .await
+                    {
+                        tracing::warn!(key = %key, error = %e, "restoring enabled workspace failed");
+                        emit_system_notice(
+                            &handle,
+                            "warning",
+                            format!("Could not re-open workspace {key}: {e}"),
+                        );
+                    }
+                }
+                // "You always have a shell" floor: when nothing has a live tenant
+                // to show (fresh profile, or only off workspaces), mint a default
+                // boot terminal. Persisted windows otherwise restore via the watcher.
+                if let Some(embedded) = state_for_restore.embedded() {
+                    let anything_shown = embedded
+                        .assemble_window_records()
+                        .iter()
+                        .any(|r| !r.token.is_empty());
+                    if !anything_shown {
                         if let Err(e) =
-                            serve::start(handle.clone(), Arc::clone(&state_for_restore), key.clone())
-                                .await
+                            embedded.mint_window(chan_server::WindowKind::Terminal, None)
                         {
-                            tracing::warn!(key = %key, error = %e, "restoring enabled workspace failed");
-                            emit_system_notice(
-                                &handle,
-                                "warning",
-                                format!("Could not re-open workspace {key}: {e}"),
-                            );
+                            tracing::warn!(error = %e, "minting the boot terminal failed");
                         }
                     }
-                });
-            }
+                }
+            });
 
             Ok(())
         })
@@ -3623,7 +3639,7 @@ fn spawn_terminal_window(app: &tauri::AppHandle) {
     let app_for_task = app.clone();
     let state = Arc::clone(&app.state::<Arc<AppState>>());
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = serve::spawn_local_terminal_window(app_for_task.clone(), state).await {
+        if let Err(e) = serve::spawn_local_terminal_window(state).await {
             tracing::warn!(error = %e, "opening standalone terminal window failed");
             emit_system_notice(
                 &app_for_task,
