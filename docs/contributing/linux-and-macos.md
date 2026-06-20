@@ -176,6 +176,47 @@ Expect the locked `CHAN_DEVSERVER_TOKEN=<token>` marker on **stdout** (the contr
 
 The macOS counterpart, `--launchd`, runs **natively** on your Mac — no container needed. `chan devserver --launchd` writes `~/Library/LaunchAgents/app.chan.devserver.plist`, bootstraps it into your `gui/$(id -u)` session, and emits the same `CHAN_DEVSERVER_TOKEN=` marker on stdout; inspect it with `launchctl print gui/$(id -u)/app.chan.devserver` and tear it down with `launchctl bootout gui/$(id -u)/app.chan.devserver`. Like `--systemd`, it is not reachable from CI (the runner has no GUI launchd domain), so exercise it locally.
 
+## Smoke-testing chan-desktop in isolation
+
+The built macOS `.app` (`make chan-desktop` produces `target/release/bundle/macos/Chan.app`) reads and writes your **real** `~/.chan` library and, on a plain launch, hands off to your **real** running chan-desktop. To exercise a dev build without disturbing either, run it from a terminal with a throwaway `HOME` and `XDG_RUNTIME_DIR`:
+
+```sh
+rm -rf /tmp/chan-smoke /tmp/chan-smoke-xdg && mkdir -p /tmp/chan-smoke /tmp/chan-smoke-xdg
+HOME=/tmp/chan-smoke XDG_RUNTIME_DIR=/tmp/chan-smoke-xdg \
+  target/release/bundle/macos/Chan.app/Contents/MacOS/chan-desktop
+```
+
+Why each piece matters:
+
+- **`HOME=throwaway` redirects the whole library.** chan resolves `~/.chan` from `$HOME` — config, state, and cache all live under `$HOME/.chan`, and there is no `CHAN_HOME` override — so a smoke instance under a throwaway `HOME` never touches your real workspaces, window registry, or settings.
+- **`XDG_RUNTIME_DIR=throwaway` redirects the discovery socket.** A plain launch hands off to an already-running chan-desktop through a per-user discovery socket: `$XDG_RUNTIME_DIR/chan-desktop.sock` when that variable is set, otherwise `$TMPDIR/chan-desktop-<uid>.sock` on macOS (which has no `XDG_RUNTIME_DIR` by default). Pointing `XDG_RUNTIME_DIR` at a throwaway dir moves the socket there, so the smoke instance neither hands off to nor collides with your real desktop.
+- **Start it from a terminal, not a Finder/Dock double-click.** A GUI launch ignores your shell environment, so the `HOME`/`XDG_RUNTIME_DIR` overrides only take effect when the binary is started from a shell.
+
+### Driving the smoke instance from the CLI
+
+On boot chan-desktop installs its `chan` and `cs` shims into `$HOME/.local/bin` — under the throwaway `HOME` that is `/tmp/chan-smoke/.local/bin`. Drive the smoke instance with *that* `HOME`'s `cs`, so the command resolves the smoke library's sockets rather than your real one's:
+
+```sh
+HOME=/tmp/chan-smoke /tmp/chan-smoke/.local/bin/cs terminal list
+```
+
+It is the same `cs -> chan-desktop` symlink the cs-alias verify above covers, installed into the isolated `HOME` instead of your real one.
+
+### Reproducing the restricted GUI PATH
+
+A Finder/Dock launch runs under launchd's restricted `$PATH` — no `~/.local/bin`, no `/opt/homebrew/bin` — which is the environment in which cs-detection has to find `cs`. Reproduce it from a terminal by stripping `$PATH` to the launchd default:
+
+```sh
+PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME=/tmp/chan-smoke XDG_RUNTIME_DIR=/tmp/chan-smoke-xdg \
+  target/release/bundle/macos/Chan.app/Contents/MacOS/chan-desktop
+```
+
+chan-desktop resolves your real login-shell `$PATH` at startup (it runs your login shell and reads back its `$PATH`), so cs-detection still locates the shim under the stripped environment — which is exactly what this variant exercises.
+
+### End-to-end: connect the isolated desktop to a lima devserver
+
+Run a devserver in lima/sdme as in the Devserver section above — a smoke does not need `--systemd`; a foreground `chan devserver --bind 127.0.0.1 --port 7777` in the container is enough, and it prints the `CHAN_DEVSERVER_TOKEN=<token>` marker on stdout (the same marker the desktop control terminal scrapes). sdme containers use host networking and lima forwards the VM's loopback ports, so the devserver is reachable at `localhost:7777` from macOS (the reachability the Prerequisites note above describes). In the isolated chan-desktop, add a devserver pointed at `http://localhost:7777` with that token; the desktop connects directly over the bearer, no scraping. If you instead expose the container with a published port (`sdme … -p`, which is DNAT rather than host networking), lima does not observe the mapping — bridge it with `ssh -F ~/.lima/default/ssh.config -N -L 7777:127.0.0.1:7777 lima-default` and point the desktop at the forwarded `localhost:7777`.
+
 ## Gateway: Postgres-backed tests
 
 The gateway is a separate workspace with Postgres-backed integration tests. Its container setup (a `chan-psql` Postgres rootfs) and the test commands live in [`gateway/docs/testing-on-linux-and-macos.md`](../../gateway/docs/testing-on-linux-and-macos.md).
