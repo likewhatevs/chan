@@ -551,6 +551,14 @@ impl DevserverState {
         command: Option<String>,
     ) -> Result<MountedTerminal, Error> {
         let prefix = allocate_terminal_prefix(&label)?;
+        // The prefix is deterministic per label, so re-creating a label whose
+        // previous terminal was closed but not fully forgotten — e.g. its window
+        // record was discarded without the standalone-terminal DELETE
+        // (handle_forget_terminal) — leaves the old tenant mounted at this
+        // prefix, and the mount below would hit the dup-prefix guard and 500.
+        // Forget any such leftover first (reaps its PTYs + drops its record), so
+        // re-creating the label mounts a FRESH terminal; a no-op when none.
+        self.forget_terminal(&prefix)?;
         let hosted = self
             .host
             .open_terminal_session_with_command(
@@ -1627,6 +1635,42 @@ mod tests {
             !after.token.is_empty(),
             "terminal window resolves to a real token so should_show shows it",
         );
+    }
+
+    #[tokio::test]
+    async fn open_terminal_same_label_recreates_instead_of_500() {
+        // Re-smoke 2 regression: re-creating a label whose terminal was closed
+        // but left a leftover mount (e.g. window discarded without the
+        // standalone-terminal DELETE) must mount FRESH, not 500 on the
+        // dup-prefix guard. open_terminal forgets any leftover at the prefix
+        // first.
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        let first = state
+            .open_terminal("terminal-1".into(), None)
+            .await
+            .expect("first open");
+        // The tenant stays mounted at first.prefix (the leftover). Re-creating
+        // the same label used to 500 ("prefix already mounted"); now it forgets
+        // the leftover + remounts fresh.
+        let second = state
+            .open_terminal("terminal-1".into(), None)
+            .await
+            .expect("re-create the same label succeeds (no 500)");
+        assert_eq!(
+            first.prefix, second.prefix,
+            "same label maps to the same deterministic prefix"
+        );
+        assert!(!second.token.is_empty());
+        // Exactly one terminal at that prefix — the leftover was replaced.
+        let at_prefix = state
+            .terminal_entries()
+            .into_iter()
+            .filter(|e| e.prefix == second.prefix)
+            .count();
+        assert_eq!(at_prefix, 1, "leftover replaced, not duplicated");
     }
 
     #[tokio::test]
