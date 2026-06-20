@@ -421,6 +421,30 @@ pub async fn fetch_devserver_windows(
         .map_err(|e| format!("decoding devserver windows: {e}"))
 }
 
+/// The full Seam-W window set a connected devserver serves at
+/// `GET /api/library/windows` — the watcher's initial seed (it also carries the
+/// devserver's `library_id`, stamped per row, the watcher's first read of which
+/// library it is reconciling). The WS `/watch` then pushes every change. The new
+/// library feed that supersedes the per-tenant `fetch_devserver_windows`.
+#[allow(dead_code)] // seeds spawn_devserver_window_watcher (next D1 slice).
+pub async fn fetch_library_windows(
+    conn: &DevserverConn,
+) -> Result<Vec<chan_server::WindowRecord>, String> {
+    let url = format!("{}/api/library/windows", base_origin(&conn.host, conn.port));
+    let resp = http_client()?
+        .get(&url)
+        .bearer_auth(&conn.token)
+        .send()
+        .await
+        .map_err(|e| format!("listing library windows: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("library windows returned HTTP {}", resp.status()));
+    }
+    resp.json::<Vec<chan_server::WindowRecord>>()
+        .await
+        .map_err(|e| format!("decoding library windows: {e}"))
+}
+
 /// The `DELETE` URL for unmounting a workspace tenant. The server route is
 /// an axum wildcard, so `prefix` (an absolute route path like
 /// `/api/notes-1a2b3c`) is appended verbatim after the collection path.

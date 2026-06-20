@@ -56,6 +56,8 @@ reqwest = { workspace = true }
 # The launcher's local workspace runtime serves the embedded SPA + API
 # over a loopback axum router (see src/embedded.rs).
 axum = { workspace = true }
+# StreamExt for the devserver window feed's WS stream (tokio-tungstenite).
+futures = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time", "process"] }
 tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
