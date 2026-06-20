@@ -969,11 +969,11 @@ struct TeamSpawn {
 /// the SPA's `resolveTeamGroup` (teamOrchestrator.svelte.ts): it reads the
 /// same resolved-group set `cs terminal list` shows.
 fn resolve_team_group(registry: &TerminalRegistry, base: &str) -> String {
-    let live: std::collections::HashSet<String> = registry
-        .session_summaries()
-        .into_iter()
-        .map(|s| s.tab_group)
-        .collect();
+    // Group resolution needs only the live tab_groups, so use the cwd-free
+    // `roster()` rather than `session_summaries()` (which shells `lsof` per
+    // session) — no point probing every PTY's cwd just to dedup a group name.
+    let live: std::collections::HashSet<String> =
+        registry.roster().into_iter().map(|s| s.tab_group).collect();
     if !live.contains(base) {
         return base.to_string();
     }

@@ -381,6 +381,18 @@ impl AttachHandle {
     pub fn cwd(&self) -> Option<PathBuf> {
         self.session.cwd()
     }
+
+    /// Like [`cwd`](Self::cwd) but runs the probe (which shells `lsof` on
+    /// macOS) on the blocking pool, so an async caller never stalls the
+    /// runtime on the PTY's cwd lookup. `None` if the blocking task is
+    /// cancelled or the cwd can't be read.
+    pub async fn cwd_blocking(&self) -> Option<PathBuf> {
+        let session = Arc::clone(&self.session);
+        tokio::task::spawn_blocking(move || session.cwd())
+            .await
+            .ok()
+            .flatten()
+    }
 }
 
 impl Drop for AttachHandle {
@@ -756,10 +768,20 @@ impl Registry {
     /// `tab_group`. `cwd` is the session's current working directory when
     /// it can be read from the child process.
     pub fn session_summaries(&self) -> Vec<TerminalSessionSummary> {
-        let sessions = self.sessions.lock().expect("terminal registry poisoned");
-        sessions
-            .values()
-            .filter(|session| !session.closed.load(Ordering::Relaxed))
+        // Snapshot the live sessions under the lock, then read each cwd AFTER
+        // releasing it. `cwd()` shells `lsof` on macOS, so computing it under
+        // the sessions mutex made a multi-session `cs term list` serialize N
+        // lsof probes while holding the registry lock — stalling every other
+        // terminal op. The snapshot keeps the lock hold to a cheap Arc clone.
+        let live: Vec<Arc<Session>> = {
+            let sessions = self.sessions.lock().expect("terminal registry poisoned");
+            sessions
+                .values()
+                .filter(|session| !session.closed.load(Ordering::Relaxed))
+                .cloned()
+                .collect()
+        };
+        live.into_iter()
             .map(|session| TerminalSessionSummary {
                 session_id: session.id.clone(),
                 tab_name: session.tab_name.clone(),

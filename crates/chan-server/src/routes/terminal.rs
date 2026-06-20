@@ -686,8 +686,10 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                                 state.last_activity.store(now_unix_secs(), Ordering::Relaxed);
                             }
                             Ok(ClientFrame::Cwd) => {
-                                let (cwd, cwd_rel) =
-                                    terminal_cwd_payload(state.try_workspace().ok().as_deref(), session.cwd());
+                                let (cwd, cwd_rel) = terminal_cwd_payload(
+                                    state.try_workspace().ok().as_deref(),
+                                    session.cwd_blocking().await,
+                                );
                                 let _ = send_frame(&mut socket, ServerFrame::Cwd { cwd, cwd_rel }).await;
                             }
                             Ok(ClientFrame::Focus { focused }) => {
@@ -908,7 +910,10 @@ async fn send_attach_prelude(
         return Err(());
     }
     session.request_redraw();
-    let (cwd, cwd_rel) = terminal_cwd_payload(state.try_workspace().ok().as_deref(), session.cwd());
+    let (cwd, cwd_rel) = terminal_cwd_payload(
+        state.try_workspace().ok().as_deref(),
+        session.cwd_blocking().await,
+    );
     if send_frame(
         socket,
         ServerFrame::Ready {
