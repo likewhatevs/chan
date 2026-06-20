@@ -248,6 +248,14 @@ export type Preferences = {
   /// older servers that don't ship the field don't trip the type
   /// contract; the UI treats `undefined` as the default-true.
   empty_pane_carousel_cycling?: boolean;
+  /// Editor page-width cap as a ratio of the window width, in (0, 1];
+  /// 1.0 means no cap. Optional on the wire so older servers that omit
+  /// it don't trip the contract; the UI clamps to its slider bounds
+  /// [0.25, 1.0] on read and falls back to its default when absent.
+  page_width_ratio?: number;
+  /// Global overlay-maximize toggle for the overlay surfaces (search /
+  /// file browser). Optional on the wire; absent is treated as off.
+  overlay_maximized?: boolean;
 };
 
 export type TreeEntry = {

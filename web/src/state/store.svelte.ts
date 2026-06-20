@@ -75,6 +75,7 @@ import { graphData, invalidateGraph, ensureGraphLoaded } from "./graphData.svelt
 import { withTokenQuery } from "../api/transport";
 import { uiConfirm } from "./confirm.svelte";
 import { applyEditorToolPreferences } from "./editorTools.svelte";
+import { hydratePageWidthFromPrefs } from "./pageWidth.svelte";
 import { fbWatchResyncAll } from "./fbWatch.svelte";
 // `workspace` + the draft-path helpers live in a side-effect-free leaf
 // module so `tabs.svelte.ts` can read `draftsDir()` without dragging in
@@ -594,6 +595,7 @@ export function applyServerPreferences(): void {
     browserSidePanes.right = prefs.browser_side_panes.right;
   }
   applyEditorToolPreferences(prefs);
+  hydratePageWidthFromPrefs(prefs.page_width_ratio, prefs.overlay_maximized);
 }
 
 /** Subscribe to OS-level color-scheme changes. While the user is in

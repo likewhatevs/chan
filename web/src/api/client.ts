@@ -1080,6 +1080,27 @@ export const api = {
       preferences: { ...cfg.preferences, empty_pane_carousel_cycling: cycling },
     });
   },
+  /// Persist the per-library page-width cap ratio. The SPA applies the
+  /// cap optimistically and debounces this write (the width slider
+  /// fires on every drag tick); the value is stored verbatim and
+  /// re-clamped on read. Whole-block PATCH like the toggle above.
+  setPageWidthRatio: async (ratio: number): Promise<void> => {
+    const cfg = await req<GlobalConfig>("GET", "/api/config");
+    if (cfg.preferences.page_width_ratio === ratio) return;
+    await req<GlobalConfig>("PATCH", "/api/config", {
+      ...cfg,
+      preferences: { ...cfg.preferences, page_width_ratio: ratio },
+    });
+  },
+  /// Persist the per-library overlay-maximize toggle.
+  setOverlayMaximizedPref: async (on: boolean): Promise<void> => {
+    const cfg = await req<GlobalConfig>("GET", "/api/config");
+    if (cfg.preferences.overlay_maximized === on) return;
+    await req<GlobalConfig>("PATCH", "/api/config", {
+      ...cfg,
+      preferences: { ...cfg.preferences, overlay_maximized: on },
+    });
+  },
   /// Semantic-search endpoints. Open-read for state; settings-
   /// gated for mutations (download / enable / disable). The
   /// download POST blocks until the resolver has the bytes on

@@ -14,11 +14,15 @@
 //     changes innerWidth in CSS units; the cap rescales with it
 //     instead of getting wedged at a now-meaningless pixel value
 //
-// localStorage is per-origin per-browser-per-machine; sync across
-// machines is out of scope, sync across windows on the same browser
-// rides the `storage` event.
+// The cap (and the overlay-maximize toggle below) persist in the
+// per-library server preferences, so they travel with the library and
+// stay consistent across clients. Writes go through PATCH /api/config
+// (debounced for the drag-driven width slider); reads hydrate from the
+// preferences block on boot and on every `config_changed` event, which
+// also syncs the value live across open windows.
 
-const STORAGE_KEY = "chan.pageWidth.ratio";
+import { api } from "../api/client";
+
 const CSS_VAR = "--chan-page-max-width";
 
 /// Slider bounds in percent. 100 % is the "no cap" sentinel; below
@@ -32,11 +36,11 @@ export const PAGE_WIDTH_STEP_PCT = 5;
 /// tiny window we don't want the cap to collapse to a sliver.
 const MIN_RESOLVED_PX = 240;
 
-/// Default ratio for first-time users (no localStorage value yet).
+/// Default ratio for first-time users (no stored preference yet).
 /// 80% leaves a clear off-page band on each side, matching the
 /// document-style page look the rest of the editor was already
-/// hinting at via --page-shade. Stored ratios from prior sessions
-/// override this on hydrate.
+/// hinting at via --page-shade. A stored per-library ratio overrides
+/// this on hydrate.
 const DEFAULT_RATIO = 0.8;
 
 export const pageWidth = $state<{ ratio: number }>({ ratio: DEFAULT_RATIO });
@@ -45,9 +49,8 @@ export const pageWidth = $state<{ ratio: number }>({ ratio: DEFAULT_RATIO });
 /// widens its panel from `min(1200px, calc(100vw - 48px))` to
 /// `calc(100vw - 88px)` so the side gap matches the top safe-area
 /// + 44px chrome buffer. Lives next to the page-width state because
-/// both knobs persist across reloads under the same module and the
-/// menu items that toggle them sit in the same hamburger surfaces.
-const OVERLAY_MAX_KEY = "chan.overlayMaximized";
+/// both knobs persist in the same per-library preferences block and
+/// the menu items that toggle them sit in the same hamburger surfaces.
 export const overlayMaximized = $state<{ on: boolean }>({ on: false });
 
 function clampRatio(r: number): number {
@@ -57,24 +60,18 @@ function clampRatio(r: number): number {
   return Math.max(lo, Math.min(hi, r));
 }
 
-function readRatio(): number {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_RATIO;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return DEFAULT_RATIO;
-    return clampRatio(n);
-  } catch {
-    return DEFAULT_RATIO;
-  }
-}
-
-function writeRatio(r: number): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, String(r));
-  } catch {
-    /* quota or disabled storage; the in-memory value still applies */
-  }
+/// The width slider fires on every drag tick, so the cap applies to
+/// the DOM immediately but the server write is debounced: only the
+/// settled value is PATCHed, avoiding a flood of /api/config writes
+/// mid-drag.
+const PERSIST_DEBOUNCE_MS = 400;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePersistRatio(): void {
+  if (persistTimer != null) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    void api.setPageWidthRatio(pageWidth.ratio);
+  }, PERSIST_DEBOUNCE_MS);
 }
 
 function applyToDom(r: number): void {
@@ -89,38 +86,51 @@ function applyToDom(r: number): void {
   root.classList.add("chan-page-capped");
 }
 
-/// First-paint apply. Runs synchronously before any editor mounts
-/// so the initial render is already capped to the remembered ratio.
+/// First-paint apply. Runs synchronously before any editor mounts so
+/// the initial render is already capped to the default ratio. The
+/// per-library stored value arrives a moment later over the bootstrap
+/// `/api/workspace` fetch and lands through `hydratePageWidthFromPrefs`.
 export function applyInitialPageWidth(): void {
   if (typeof window === "undefined") return;
-  pageWidth.ratio = readRatio();
   applyToDom(pageWidth.ratio);
-  overlayMaximized.on = readOverlayMaximized();
 }
 
-function readOverlayMaximized(): boolean {
-  try {
-    return localStorage.getItem(OVERLAY_MAX_KEY) === "1";
-  } catch {
-    return false;
+/// Hydrate the cap + overlay-maximize toggle from the per-library
+/// server preferences. Called from `applyServerPreferences` on boot
+/// (once `workspace.info` is set) and on every `config_changed` WS
+/// event, so a change in one window propagates live to the others. The
+/// server stores the ratio verbatim; clamp to the slider bounds on
+/// read. Absent fields fall back to the defaults.
+export function hydratePageWidthFromPrefs(
+  ratio: number | undefined,
+  overlay: boolean | undefined,
+): void {
+  if (typeof window === "undefined") return;
+  const next = clampRatio(ratio ?? DEFAULT_RATIO);
+  if (next !== pageWidth.ratio) {
+    pageWidth.ratio = next;
+    applyToDom(next);
+  }
+  const on = overlay ?? false;
+  if (on !== overlayMaximized.on) {
+    overlayMaximized.on = on;
   }
 }
 
+/// User-driven toggle. Single click, so persist directly (no debounce);
+/// the optimistic local flip keeps the UI instant.
 export function setOverlayMaximized(on: boolean): void {
   overlayMaximized.on = on;
-  try {
-    localStorage.setItem(OVERLAY_MAX_KEY, on ? "1" : "0");
-  } catch {
-    /* quota or disabled storage; in-memory value still applies */
-  }
+  void api.setOverlayMaximizedPref(on);
 }
 
 /// User-driven update. Pass a ratio in (0, 1]; 1 means unbounded.
+/// Applies the cap immediately; the server write is debounced.
 export function setPageWidth(r: number): void {
   const next = clampRatio(r);
   pageWidth.ratio = next;
   applyToDom(next);
-  writeRatio(next);
+  schedulePersistRatio();
 }
 
 /// Per-element apply. Each Pane.svelte instance subscribes to its
@@ -142,9 +152,9 @@ export function applyPageWidthToElement(
   el.style.setProperty(CSS_VAR, `${px}px`);
 }
 
-/// Re-apply on viewport changes (resize, browser zoom) and pick up
-/// updates from other windows on the same origin via the `storage`
-/// event.
+/// Re-apply on viewport changes (resize, browser zoom). Cross-window
+/// sync of the stored ratio rides the `config_changed` WS event
+/// (`hydratePageWidthFromPrefs`), so there is no `storage` listener.
 export function watchPageWidth(): () => void {
   if (typeof window === "undefined") return () => {};
 
@@ -159,18 +169,8 @@ export function watchPageWidth(): () => void {
   };
   window.addEventListener("resize", onResize);
 
-  const onStorage = (e: StorageEvent) => {
-    if (e.key !== STORAGE_KEY) return;
-    const next = readRatio();
-    if (next === pageWidth.ratio) return;
-    pageWidth.ratio = next;
-    applyToDom(next);
-  };
-  window.addEventListener("storage", onStorage);
-
   return () => {
     window.removeEventListener("resize", onResize);
-    window.removeEventListener("storage", onStorage);
     if (raf != null) cancelAnimationFrame(raf);
   };
 }
