@@ -280,6 +280,22 @@ impl EmbeddedServer {
     pub fn library_change_notify(&self) -> Arc<Notify> {
         self.host.library_change_notify()
     }
+
+    /// Mint a window into the local library registry and return its assembled
+    /// record. The minted record fires the aggregate change signal, so the
+    /// window watcher's feed surfaces it and opens its native window — the
+    /// registry is the sole window-creation authority (a minted window can
+    /// never be double-opened). A workspace window resolves its live tenant
+    /// (the workspace must be running) for a prefix/token to attach to.
+    pub fn mint_window(
+        &self,
+        kind: chan_server::WindowKind,
+        workspace_path: Option<String>,
+    ) -> Result<WindowRecord, String> {
+        self.host
+            .mint_window(kind, workspace_path)
+            .map_err(|e| format!("minting a window: {e}"))
+    }
 }
 
 impl Drop for EmbeddedServer {

@@ -215,6 +215,9 @@ pub fn is_workspace_webview_label(label: &str) -> bool {
     label.starts_with("workspace-")
         || label.starts_with("outbound-")
         || label.starts_with("terminal-")
+        // Watcher-opened local windows carry the composite native label
+        // `local::<window_id>`; they host the same embedded SPA.
+        || label.starts_with("local::")
 }
 
 /// Spawn a new local-workspace webview window pointing at `url`. Each
@@ -1894,6 +1897,21 @@ mod tests {
         assert!(
             label.starts_with("control-terminal-"),
             "control terminal label must keep the control-terminal- prefix the glob matches: {label}",
+        );
+    }
+
+    #[test]
+    fn workspace_capability_covers_watcher_opened_local_windows() {
+        // Watcher-opened local windows carry the composite native label
+        // `local::<window_id>` (`window_watcher::native_label`), which matches
+        // NONE of the workspace-* / outbound-* / terminal-* globs — so without
+        // `local::*` a minted window gets no capability and Tauri denies every
+        // SPA IPC (the command bridge, opener, drag). Pin the grant so a glob
+        // change can't silently strand minted windows.
+        let windows = capability_windows(WORKSPACE_CAPABILITY_JSON);
+        assert!(
+            windows.iter().any(|w| w == "local::*"),
+            "workspace capability must target local::* watcher-opened windows: {windows:?}",
         );
     }
 

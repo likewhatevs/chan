@@ -1517,20 +1517,19 @@ fn normalize_devserver_label(raw: &str) -> Result<String, String> {
 /// here and add new windows alongside it. Errors if the workspace is
 /// not currently running (no URL captured yet).
 #[tauri::command]
-fn open_local_workspace(
-    app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
-    path: String,
-) -> Result<(), String> {
+fn open_local_workspace(state: State<Arc<AppState>>, path: String) -> Result<(), String> {
     let key = canonical_key(Path::new(&path));
-    let url = state
-        .serves
-        .lock()
-        .unwrap()
-        .get(&key)
-        .and_then(|h| h.url.clone())
-        .ok_or_else(|| format!("workspace {key} is not running"))?;
-    serve::spawn_local_workspace_window(&app, &key, &url)?;
+    // Mint the window into the library registry; the watcher opens it (the
+    // registry is the sole window-creation authority, so a reconnect/relaunch
+    // can never duplicate it). Require the workspace running so the minted
+    // record resolves a live tenant to attach to.
+    if !state.serves.lock().unwrap().contains_key(&key) {
+        return Err(format!("workspace {key} is not running"));
+    }
+    state
+        .embedded()
+        .ok_or_else(|| "embedded local server is unavailable".to_string())?
+        .mint_window(chan_server::WindowKind::Workspace, Some(key))?;
     Ok(())
 }
 
