@@ -131,24 +131,25 @@ describe("RichPrompt.svelte component", () => {
     );
   });
 
-  test("queued state: ↑ recalls from anywhere, Esc cancels, affordances shown (GAP 1 UX)", () => {
-    // ArrowUp recalls to EDIT (no doc-start guard anymore — the card reads
+  test("queued/sent: ↑ recalls to edit (optimistic local unlock), Esc abandons, affordances shown", () => {
+    // ArrowUp recalls to EDIT from anywhere (no doc-start guard — the card reads
     // read-only, so there's no caret nav to protect).
     expect(richPromptSrc).toMatch(/\{ key: "ArrowUp", run: recall \}/);
     expect(richPromptSrc).not.toMatch(/!sel\.empty \|\| sel\.from !== 0/);
-    // Esc while queued cancels (drops); else hides.
-    expect(richPromptSrc).toMatch(
-      /tab\.pendingPrompt\?\.phase === "queued"\)\s*\{\s*cancelQueued\(\);/,
-    );
-    // Both ↑ and Esc go through the one cancel-prompt wire; the intent decides
-    // keep-vs-drop.
-    expect(richPromptSrc).toMatch(/requestCancel\("edit"\)/);
-    expect(richPromptSrc).toMatch(/requestCancel\("cancel"\)/);
-    expect(richPromptSrc).toMatch(/sendCancelToTerminal\(tab\.id, pending\.id\)/);
+    // Recall accepts queued (acked) AND sent (pre-ack), unlocks LOCALLY (clears
+    // the pending), and best-effort cancels in the background — never waiting on
+    // the ack, so the editor can't get stuck read-only.
+    expect(richPromptSrc).toMatch(/phase !== "queued" && phase !== "sent"\) return false/);
+    expect(richPromptSrc).toMatch(/function enterLocalEdit\(\): void/);
+    expect(richPromptSrc).toMatch(/tab\.pendingPrompt = undefined;/);
+    expect(richPromptSrc).toMatch(/sendCancelToTerminal\(tab\.id, id\)/);
+    // Esc enqueued -> dequeue + DROP the draft now; else a real abandon (clear
+    // the draft before hiding so onDestroy can't re-persist stale text).
+    expect(richPromptSrc).toMatch(/phase === "queued" \|\| phase === "sent"/);
+    expect(richPromptSrc).toMatch(/function abandonDraft\(\): void/);
+    expect(richPromptSrc).toMatch(/hideRichPromptForTab\(tab\.id\)/);
     // The affordance hint in the queued label.
     expect(richPromptSrc).toMatch(/queued\$\{position\} · ↑ edit · esc cancel/);
-    // recalled → keep text (edit) or drop (cancel); drained → "already sent".
-    expect(richPromptSrc).toMatch(/already sent — too late to recall/);
   });
 
   test("fast-path grace + ack timeout constants gate the chip and the dead-socket fail", () => {
