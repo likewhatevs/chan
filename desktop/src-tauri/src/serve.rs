@@ -274,7 +274,7 @@ pub(crate) fn open_watched_local_window(
 /// Spawn a new outbound URL webview window. The desktop does not own
 /// the remote process; this only creates another webview pointed at
 /// the persisted URL.
-pub fn spawn_outbound_workspace_window(
+pub fn spawn_remote_workspace_window(
     app: &AppHandle,
     id: &str,
     url: &str,
@@ -291,7 +291,7 @@ pub fn spawn_outbound_workspace_window(
         };
     // Outbound title is the outbound glyph + the URL (the locator),
     // not the user's label (which still names the launcher row).
-    let title = outbound_window_title(url);
+    let title = remote_window_title(url);
     let label = restore.label.clone();
     // Outbound = an outgoing connection to a remote we do not own. Route
     // through the connecting screen so a down remote shows a retrying
@@ -496,7 +496,7 @@ pub fn window_has_live_shells(state: &Arc<AppState>, label: &str) -> bool {
 /// Base window title for an outbound (we-dial-out) workspace window.
 /// pub: the remote Window-menu refresh derives the same title without
 /// opening a window.
-pub fn outbound_window_title(url: &str) -> String {
+pub fn remote_window_title(url: &str) -> String {
     format!("{ICON_OUTBOUND} {url}")
 }
 
@@ -689,7 +689,7 @@ struct WindowSpec<'a> {
 
 /// Build and show a chan-style workspace webview window on the main
 /// thread. Internal: call `open_watched_local_window` (the watcher path) /
-/// `spawn_outbound_workspace_window` from outside. Centralising the
+/// `spawn_remote_workspace_window` from outside. Centralising the
 /// key-bridge JS, the size defaults, the zoom-hotkey polyfill, and
 /// the drag-drop handler off in one place means workspace UX changes
 /// don't fork between the local and outbound paths.
@@ -1101,7 +1101,7 @@ fn ensure_window_capacity(app: &AppHandle, prefix: &str) -> Result<(), String> {
 
 /// Destroy every webview window opened for this outbound URL
 /// attachment. Used when the user forgets the attachment row.
-pub fn close_outbound_workspace_windows(app: &AppHandle, id: &str) {
+pub fn close_remote_workspace_windows(app: &AppHandle, id: &str) {
     close_windows_with_prefix(app, &outbound_window_prefix(id))
 }
 

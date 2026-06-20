@@ -655,7 +655,7 @@ fn add_outbound_workspace(
         store.save(&cfg).map_err(err)?;
         (id, stored_url)
     };
-    serve::spawn_outbound_workspace_window(&app, &id, &stored_url)?;
+    serve::spawn_remote_workspace_window(&app, &id, &stored_url)?;
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(id)
 }
@@ -676,7 +676,7 @@ fn open_outbound_workspace(
             .ok_or_else(|| format!("no outbound workspace attachment {id}"))?;
         outbound.url.clone()
     };
-    serve::spawn_outbound_workspace_window(&app, &id, &url).map(|_| ())
+    serve::spawn_remote_workspace_window(&app, &id, &url).map(|_| ())
 }
 
 /// Forget an outbound URL attachment. The remote server is not
@@ -697,7 +697,7 @@ fn remove_outbound_workspace(
             store.save(&cfg).map_err(err)?;
         }
     }
-    serve::close_outbound_workspace_windows(&app, &id);
+    serve::close_remote_workspace_windows(&app, &id);
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(())
 }
@@ -942,7 +942,7 @@ fn teardown_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str
         .remove(id)
         .unwrap_or_default();
     for window in windows {
-        serve::close_outbound_workspace_windows(app, &window.window_id);
+        serve::close_remote_workspace_windows(app, &window.window_id);
     }
     serve::close_window_by_label(app, &serve::control_terminal_label(id));
     // Closing the control-terminal WINDOW doesn't stop the connect script: its
@@ -1246,7 +1246,7 @@ fn open_devserver_workspace(
     prefix: String,
     url: String,
 ) -> Result<(), String> {
-    let label = serve::spawn_outbound_workspace_window(&app, &prefix, &url)?;
+    let label = serve::spawn_remote_workspace_window(&app, &prefix, &url)?;
     track_devserver_window(
         &state,
         &id,
@@ -1335,7 +1335,7 @@ fn reopen_devserver_workspace_windows(
         };
         let entry = RemoteReopen {
             url: url.to_string(),
-            base_title: serve::outbound_window_title(url),
+            base_title: serve::remote_window_title(url),
             menu_title: String::new(),
             config_key: config::outbound_window_key(&window.window_id),
             connecting: true,
@@ -3192,7 +3192,7 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
                 conns.push(Conn {
                     family: format!("{}-", serve::outbound_window_prefix(&o.id)),
                     url: o.url.clone(),
-                    base_title: serve::outbound_window_title(&o.url),
+                    base_title: serve::remote_window_title(&o.url),
                     config_key: config::outbound_window_key(&o.id),
                     connecting: true,
                 });
@@ -3567,7 +3567,7 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
         for o in &cfg.outbound {
             let prefix = serve::outbound_window_prefix(&o.id);
             if focused_label.starts_with(&format!("{prefix}-")) {
-                return serve::spawn_outbound_workspace_window(app, &o.id, &o.url).map(|_| ());
+                return serve::spawn_remote_workspace_window(app, &o.id, &o.url).map(|_| ());
             }
         }
         // Stale window for a forgotten attachment: surface the picker.
