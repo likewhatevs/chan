@@ -468,9 +468,17 @@
     // Stop it from reaching App.svelte's global Escape handling.
     e.stopPropagation();
     e.preventDefault();
-    // Abandon the current composer draft + hide. Queued messages live in the
-    // server queue (fire-and-forget) — Escape does not cancel them; ↑ recalls
-    // the last one to edit, otherwise it just delivers.
+    // Dequeue-if-enqueued else abandon, adapted to the queue: an EMPTY composer
+    // with a still-queued message → dequeue it (cancel + DROP, the counterpart
+    // to ↑ which recalls it to edit), keeping the bubble open for the next
+    // message. Otherwise (a draft in the composer, or nothing queued) → abandon
+    // the current draft + hide.
+    if (view && view.state.doc.length === 0 && lastQueued) {
+      sendCancelToTerminal(tab.id, lastQueued.id);
+      lastQueued = null;
+      enterLocalEdit();
+      return;
+    }
     abandonDraft();
   }
 

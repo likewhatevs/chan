@@ -125,7 +125,12 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/view\.state\.doc\.length > 0\) return false/);
     expect(richPromptSrc).toMatch(/const \{ id, text \} = lastQueued;/);
     expect(richPromptSrc).toMatch(/sendCancelToTerminal\(tab\.id, id\)/);
-    // Esc abandons the current draft + hides; it does NOT cancel queued messages.
+    // Esc = dequeue-if-enqueued else abandon: an empty composer with a queued
+    // message dequeues it (cancel + drop, ↑'s counterpart); otherwise it
+    // abandons the current draft + hides.
+    expect(richPromptSrc).toMatch(
+      /view\.state\.doc\.length === 0 && lastQueued\) \{[\s\S]{1,160}sendCancelToTerminal\(tab\.id, lastQueued\.id\)/,
+    );
     expect(richPromptSrc).toMatch(/function abandonDraft\(\): void/);
     expect(richPromptSrc).toMatch(/hideRichPromptForTab\(tab\.id\)/);
     // The label surfaces the queue depth + the recall affordance.
