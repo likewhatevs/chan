@@ -9,9 +9,12 @@
 //! local serving never spawns `chan serve`.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+use chan_server::{WindowKind, WindowRecord};
 
 /// Per-process monotonic counter appended to every workspace-window
 /// label so the user can open more than one window for the same
@@ -244,6 +247,7 @@ pub fn spawn_local_workspace_window(
         app,
         WindowSpec {
             label: &restore.label,
+            session_id: &restore.label,
             title: &title,
             url,
             url_hash_seed: &restore.url_hash,
@@ -254,6 +258,51 @@ pub fn spawn_local_workspace_window(
         },
     )?;
     Ok(label)
+}
+
+/// Open (or rebuild-in-place at the same label) a native window for a
+/// library-minted local window `record`, driven by the window watcher (the
+/// SOLE caller). The Tauri label is the composite native key
+/// `{library_id}::{window_id}`; the loaded SPA carries `?w=<window_id>` — the
+/// bare per-library session key, decoupled from the OS-window label. Local
+/// tenants are always up, so the tenant URL loads directly (no connecting
+/// screen). An off workspace carries an empty token and the SPA turns it on
+/// before attaching (O-W2).
+pub(crate) fn open_watched_local_window(
+    app: &AppHandle,
+    addr: SocketAddr,
+    record: &WindowRecord,
+) -> Result<(), String> {
+    let label = crate::window_watcher::native_label(record);
+    let url = format!(
+        "http://{addr}{}/index.html?t={}",
+        record.prefix, record.token
+    );
+    let (title, kind) = match record.kind {
+        WindowKind::Terminal => ("Terminal".to_string(), Some("terminal")),
+        WindowKind::Workspace => (
+            record
+                .workspace_path
+                .as_deref()
+                .map(workspace_title)
+                .unwrap_or_else(|| "Workspace".to_string()),
+            None,
+        ),
+    };
+    build_workspace_window(
+        app,
+        WindowSpec {
+            label: &label,
+            session_id: &record.window_id,
+            title: &title,
+            url: &url,
+            url_hash_seed: "",
+            config_key: String::new(),
+            zoom_seed: 1.0,
+            connecting: None,
+            kind,
+        },
+    )
 }
 
 /// Spawn a new outbound URL webview window. The desktop does not own
@@ -286,6 +335,7 @@ pub fn spawn_outbound_workspace_window(
         app,
         WindowSpec {
             label: &restore.label,
+            session_id: &restore.label,
             title: &title,
             url,
             url_hash_seed: &restore.url_hash,
@@ -319,6 +369,7 @@ pub fn spawn_devserver_terminal_window_at_label(
         app,
         WindowSpec {
             label,
+            session_id: label,
             title: "Terminal",
             url,
             url_hash_seed: "",
@@ -359,6 +410,7 @@ pub async fn spawn_local_terminal_window(
         &app,
         WindowSpec {
             label: &label,
+            session_id: &label,
             title: "Terminal",
             url: &url,
             url_hash_seed: "",
@@ -399,6 +451,7 @@ pub async fn spawn_control_terminal_window(
         &app,
         WindowSpec {
             label: &label,
+            session_id: &label,
             title: "Control Terminal",
             url: &url,
             url_hash_seed: "",
@@ -448,6 +501,7 @@ pub fn open_window_by_label(
             app,
             WindowSpec {
                 label,
+                session_id: label,
                 title: &title,
                 url: &url,
                 url_hash_seed: "",
@@ -516,6 +570,7 @@ pub fn reopen_remote_window(
         app,
         WindowSpec {
             label,
+            session_id: label,
             title: &entry.base_title,
             url: &entry.url,
             url_hash_seed: "",
@@ -645,8 +700,15 @@ fn pop_compatible_config(
 /// Inputs for one SPA webview window build: identity (label/title),
 /// where to point it, what to restore, and how to load.
 struct WindowSpec<'a> {
-    /// Unique Tauri window label (also the `?w=` per-window session key).
+    /// Unique Tauri window label: the OS-window identity, decoupled from the
+    /// SPA session key (`session_id`). For most windows the two are equal; the
+    /// window watcher's composite native label (`{library_id}::{window_id}`)
+    /// differs from its bare `?w=` (`window_id`).
     label: &'a str,
+    /// The `?w=` per-window SPA session key appended to the loaded URL — what
+    /// the SPA keys its session blob / `/ws` presence on. Equals `label`
+    /// except for watcher-opened windows, which pass the bare `window_id`.
+    session_id: &'a str,
     /// Base title; the builder suffixes a reused " Window N" display number.
     title: &'a str,
     /// The workspace/terminal URL the webview ultimately shows.
@@ -690,6 +752,7 @@ struct WindowSpec<'a> {
 fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), String> {
     let WindowSpec {
         label: window_label,
+        session_id,
         title,
         url,
         url_hash_seed,
@@ -701,7 +764,10 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     let Ok(mut parsed) = url.parse::<tauri::Url>() else {
         return Err(format!("bad chan URL for {window_label}: {url}"));
     };
-    parsed.query_pairs_mut().append_pair("w", window_label);
+    // The SPA keys its per-window session (panes/tabs, `/ws` presence) on
+    // `?w=`; that is the `session_id`, NOT the Tauri label (they diverge only
+    // for watcher-opened windows, where the label is the composite native key).
+    parsed.query_pairs_mut().append_pair("w", session_id);
     // `kind=terminal` / `kind=control` are the SPA's only signal to enter
     // terminal-only mode (no workspace fetch, terminal panes only);
     // `control` additionally selects the singleton control sub-mode.

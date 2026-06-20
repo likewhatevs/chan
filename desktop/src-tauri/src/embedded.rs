@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::Router;
-use chan_server::{DesktopBridge, DesktopWindowOp, SharedWindowTitles, WindowTitles};
-use tokio::sync::{mpsc, watch};
+use chan_server::{DesktopBridge, DesktopWindowOp, SharedWindowTitles, WindowRecord, WindowTitles};
+use tokio::sync::{mpsc, watch, Notify};
 
 use crate::serve;
 
@@ -257,6 +257,28 @@ impl EmbeddedServer {
             .close_terminal_tenant(prefix)
             .map(|_| ())
             .map_err(|e| format!("closing control terminal {prefix}: {e}"))
+    }
+
+    /// The loopback address the embedded server listens on. The window
+    /// watcher assembles a window's tenant URL (`http://{addr}{prefix}…`)
+    /// from this plus the record's prefix/token.
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// The library's authoritative window set (Seam W), each persisted
+    /// registry row joined with its serving tenant's live `prefix`/`token`/
+    /// `connected`. The local window watcher reconciles native windows to
+    /// this. Empty until a window is minted.
+    pub fn assemble_window_records(&self) -> Vec<WindowRecord> {
+        self.host.assemble_window_records()
+    }
+
+    /// The aggregate window-set change signal (registry mint/discard +
+    /// tenant on/off + presence) the watcher's feed awaits. NOT the raw
+    /// registry change signal — that misses tenant transitions.
+    pub fn library_change_notify(&self) -> Arc<Notify> {
+        self.host.library_change_notify()
     }
 }
 

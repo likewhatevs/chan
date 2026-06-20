@@ -15,6 +15,7 @@ mod serve;
 mod watcher;
 mod window_ops;
 mod window_watcher;
+mod window_watcher_wiring;
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -236,6 +237,12 @@ fn lowest_free_window_number(
 }
 
 impl AppState {
+    /// The embedded local server, once `.setup()` has started it. The
+    /// window-watcher wiring reads the library's window feed through this.
+    pub(crate) fn embedded(&self) -> Option<&embedded::EmbeddedServer> {
+        self.embedded.get()
+    }
+
     /// Push a closing window's layout onto the LRU stack. Best
     /// effort: any I/O error is logged and dropped so a flaky
     /// config disk doesn't leak through the WindowEvent handler.
@@ -2295,6 +2302,16 @@ fn main() {
                             rx,
                         ));
                     }
+                    // Spawn the local window watcher: native windows become a
+                    // pure idempotent reconcile of the local library's window
+                    // set (Seam W), so reconnect / relaunch can never spawn a
+                    // duplicate. Inert until a local window is minted (an empty
+                    // registry reconciles to nothing); converting the creation
+                    // paths to mint makes it the sole driver.
+                    window_watcher_wiring::spawn_local_window_watcher(
+                        app.handle().clone(),
+                        Arc::clone(&state_for_setup),
+                    );
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "embedded local server disabled");
