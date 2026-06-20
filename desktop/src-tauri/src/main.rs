@@ -583,7 +583,13 @@ async fn set_workspace_on(
     if on {
         serve::start(app, Arc::clone(&state), key).await?;
     } else {
-        serve::stop(Some(&app), &state, &key);
+        // `serve::stop` → `close_workspace` busy-waits up to 5s for the flock
+        // release (host.rs `wait_for_workspace_release`), so run it off the
+        // runtime — this is an async command (async-audit A3).
+        let state_owned = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || serve::stop(Some(&app), &state_owned, &key))
+            .await
+            .map_err(|e| format!("stopping workspace {path}: {e}"))?;
     }
     persist_enabled_workspaces(&state);
     Ok(())

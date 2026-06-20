@@ -188,7 +188,7 @@ impl EmbeddedServer {
         // by `?w=<window_id>`) so it restores across a desktop relaunch — with
         // fresh shells, since the PTYs don't survive. Best-effort: if the dir
         // can't be made the tenant falls back to its in-memory layout store.
-        let session_dir = local_terminal_session_dir();
+        let session_dir = local_terminal_session_dir().await;
         let hosted = self
             .host
             .open_terminal_session(serve_config(self.addr, PREFIX), session_dir)
@@ -346,9 +346,12 @@ fn map_open_error(key: &str, e: chan_server::Error) -> String {
 /// (`~/.chan/terminal-sessions`, created on first use). `None` if the home dir
 /// can't be resolved — the tenant then keeps layout in-memory (it just won't
 /// persist across relaunch).
-fn local_terminal_session_dir() -> Option<std::path::PathBuf> {
+async fn local_terminal_session_dir() -> Option<std::path::PathBuf> {
     let dir = dirs::home_dir()?.join(".chan").join("terminal-sessions");
-    std::fs::create_dir_all(&dir).ok()?;
+    // `tokio::fs` keeps the dir-create off the runtime thread (async-audit C3):
+    // `open_terminal` is async, so a blocking `std::fs::create_dir_all` would
+    // stall the event loop.
+    tokio::fs::create_dir_all(&dir).await.ok()?;
     Some(dir)
 }
 
