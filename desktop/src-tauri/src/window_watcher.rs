@@ -500,6 +500,85 @@ mod tests {
         );
     }
 
+    /// Disconnect semantics: flipping the loop's cancel makes it reconcile to an
+    /// EMPTY set, closing every window it opened (detach, NOT reap — the library
+    /// keeps the records server-side, so a reconnect reopens them). The watcher
+    /// being the sole driver of CLOSE is what lets `disconnect_devserver` just fire
+    /// the cancel instead of reaching for the windows imperatively.
+    #[tokio::test]
+    async fn watch_loop_closes_its_windows_on_cancel() {
+        #[derive(Default)]
+        struct RecordSurface {
+            open_now: std::sync::Mutex<HashSet<String>>,
+            closed: std::sync::Mutex<Vec<String>>,
+        }
+        impl NativeSurface for Arc<RecordSurface> {
+            fn open_labels(&self, _library_id: &str) -> HashSet<String> {
+                self.open_now.lock().unwrap().clone()
+            }
+            fn open(&self, record: &WindowRecord) {
+                self.open_now.lock().unwrap().insert(native_label(record));
+            }
+            fn close(&self, label: &str) {
+                self.open_now.lock().unwrap().remove(label);
+                self.closed.lock().unwrap().push(label.to_string());
+            }
+        }
+
+        struct StaticFeed {
+            notify: Arc<Notify>,
+        }
+        impl WindowFeed for StaticFeed {
+            fn snapshot(&self) -> Vec<WindowRecord> {
+                vec![rec("local", "w-1", WindowKind::Terminal)]
+            }
+            fn change_notify(&self) -> Arc<Notify> {
+                self.notify.clone()
+            }
+        }
+
+        let notify = Arc::new(Notify::new());
+        let feed = StaticFeed {
+            notify: notify.clone(),
+        };
+        let surface = Arc::new(RecordSurface::default());
+        let view = Arc::new(WatcherViewState::default());
+        let cancel = Arc::new(Notify::new());
+
+        let surface_in = Arc::clone(&surface);
+        let cancel_in = Arc::clone(&cancel);
+        let task = tokio::spawn(async move {
+            watch_loop(Some("local"), feed, surface_in, view, cancel_in.notified()).await;
+        });
+
+        // The loop opens w-1 and parks in select.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            surface
+                .open_now
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["local::w-1".to_string()],
+            "the loop opens the library's window before cancel",
+        );
+
+        cancel.notify_waiters();
+        let _ = task.await;
+
+        assert!(
+            surface.open_now.lock().unwrap().is_empty(),
+            "cancel reconciles the loop's windows away",
+        );
+        assert_eq!(
+            *surface.closed.lock().unwrap(),
+            vec!["local::w-1".to_string()],
+            "cancel closes exactly the window the loop opened",
+        );
+    }
+
     #[test]
     fn view_state_bury_unbury_tracks_local_set() {
         let view = WatcherViewState::default();
