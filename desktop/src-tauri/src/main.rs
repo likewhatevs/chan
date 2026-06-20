@@ -2275,7 +2275,7 @@ fn merge_path_dirs(shell_path: &str, inherited: &str) -> String {
 #[cfg(target_os = "macos")]
 fn resolve_login_shell_path() -> Option<String> {
     use std::io::Read;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     const MARK: &str = "__CHAN_PATH__";
     const TIMEOUT: Duration = Duration::from_secs(3);
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
@@ -2294,18 +2294,8 @@ fn resolve_login_shell_path() -> Option<String> {
     // Poll for exit with a timeout; on timeout kill the shell and fall back to
     // the inherited PATH. (stdin=/dev/null already stops the common read-hang;
     // this is belt-and-suspenders for a broken rc.)
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() > TIMEOUT => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(_) => return None,
-        }
+    if !wait_for_child(&mut child, TIMEOUT) {
+        return None;
     }
     // The output is tiny (a PATH between markers), so the pipe never fills and
     // the child exits before this read.
@@ -2315,6 +2305,29 @@ fn resolve_login_shell_path() -> Option<String> {
     let end = out[begin..].find(MARK)? + begin;
     let path = &out[begin..end];
     (!path.is_empty()).then(|| path.to_string())
+}
+
+/// Wait for `child` to exit within `timeout`. Returns `true` if it exited on
+/// its own; on timeout, kill + reap it and return `false`. Polls rather than
+/// blocking so a broken interactive rc can't hang app launch. Extracted from
+/// `resolve_login_shell_path` so the timeout/kill branch is unit-testable
+/// without a real login shell.
+#[cfg(target_os = "macos")]
+fn wait_for_child(child: &mut std::process::Child, timeout: std::time::Duration) -> bool {
+    use std::time::{Duration, Instant};
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if started.elapsed() > timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => return false,
+        }
+    }
 }
 
 fn main() {
@@ -3774,6 +3787,33 @@ mod tests {
         assert_eq!(merge_path_dirs("/a::/b", ""), "/a:/b");
         assert_eq!(merge_path_dirs("", "/x"), "/x");
         assert_eq!(merge_path_dirs("", ""), "");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn wait_for_child_times_out_and_kills_a_hung_process() {
+        use std::time::Duration;
+        // A shell that never exits stands in for a broken interactive rc.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleep");
+        // 100ms << 30s, so this deterministically takes the timeout branch.
+        assert!(!wait_for_child(&mut child, Duration::from_millis(100)));
+        // The child was killed + reaped, so its status is already available.
+        assert!(matches!(child.try_wait(), Ok(Some(_))));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn wait_for_child_reports_a_fast_exit() {
+        use std::time::Duration;
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn true");
+        assert!(wait_for_child(&mut child, Duration::from_secs(5)));
     }
 
     #[test]
