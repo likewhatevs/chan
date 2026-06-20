@@ -44,10 +44,18 @@ pub struct PreferencesView {
     pub hybrid_surface_themes: HybridSurfaceThemes,
     #[serde(default = "default_empty_pane_carousel_cycling")]
     pub empty_pane_carousel_cycling: bool,
+    #[serde(default = "default_page_width_ratio")]
+    pub page_width_ratio: f64,
+    #[serde(default)]
+    pub overlay_maximized: bool,
 }
 
 fn default_empty_pane_carousel_cycling() -> bool {
     true
+}
+
+fn default_page_width_ratio() -> f64 {
+    0.8
 }
 
 pub(super) fn preferences_view(state: &AppState) -> Result<PreferencesView, Error> {
@@ -73,6 +81,8 @@ pub(super) fn preferences_view(state: &AppState) -> Result<PreferencesView, Erro
         bubble_overlay_mode: editor.bubble_overlay_mode,
         hybrid_surface_themes: editor.hybrid_surface_themes.clone(),
         empty_pane_carousel_cycling: editor.empty_pane_carousel_cycling,
+        page_width_ratio: editor.page_width_ratio,
+        overlay_maximized: editor.overlay_maximized,
     })
 }
 
@@ -247,6 +257,8 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         editor.bubble_overlay_mode = view.bubble_overlay_mode;
         editor.hybrid_surface_themes = view.hybrid_surface_themes;
         editor.empty_pane_carousel_cycling = view.empty_pane_carousel_cycling;
+        editor.page_width_ratio = view.page_width_ratio;
+        editor.overlay_maximized = view.overlay_maximized;
         editor.save()?;
     }
     {

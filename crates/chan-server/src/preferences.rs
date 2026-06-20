@@ -20,6 +20,11 @@
 //!   - bubble_overlay_mode (stack / tray for watcher notifications)
 //!   - empty_pane_carousel_cycling (auto-rotate the empty-pane
 //!     carousel; per-user toggle, default true)
+//!   - page_width_ratio (editor page-width cap as a ratio of the
+//!     window width, (0, 1]; migrated from the SPA
+//!     `chan.pageWidth.ratio` localStorage so it lives in the library)
+//!   - overlay_maximized (global overlay-maximize toggle; migrated
+//!     from the SPA `chan.overlayMaximized` localStorage)
 //!   - hybrid_surface_themes (optional body-theme overrides for
 //!     Hybrid Editor / Terminal / File Browser / Graph / Infographics)
 //!
@@ -65,10 +70,29 @@ pub struct EditorPrefs {
     /// of this flag.
     #[serde(default = "default_empty_pane_carousel_cycling")]
     pub empty_pane_carousel_cycling: bool,
+    /// Editor page-width cap as a ratio of the window width, in (0, 1]
+    /// (1.0 = no cap). Migrated from the SPA `chan.pageWidth.ratio`
+    /// localStorage so the setting lives in the library and travels with
+    /// it. The SPA clamps to its slider bounds [0.25, 1.0] on read; the
+    /// value is stored verbatim here (mirrors the other prefs: storage,
+    /// not validation).
+    #[serde(default = "default_page_width_ratio")]
+    pub page_width_ratio: f64,
+    /// Global overlay-maximize toggle (widens every OverlayShell panel).
+    /// Migrated from the SPA `chan.overlayMaximized` localStorage so it
+    /// lives in the library.
+    #[serde(default)]
+    pub overlay_maximized: bool,
 }
 
 fn default_empty_pane_carousel_cycling() -> bool {
     true
+}
+
+/// Mirrors the SPA `DEFAULT_RATIO` in `pageWidth.svelte.ts`: 80% leaves a
+/// clear off-page band on each side, matching the document-style page look.
+fn default_page_width_ratio() -> f64 {
+    0.8
 }
 
 impl Default for EditorPrefs {
@@ -84,6 +108,8 @@ impl Default for EditorPrefs {
             bubble_overlay_mode: BubbleOverlayMode::default(),
             hybrid_surface_themes: HybridSurfaceThemes::default(),
             empty_pane_carousel_cycling: default_empty_pane_carousel_cycling(),
+            page_width_ratio: default_page_width_ratio(),
+            overlay_maximized: false,
         }
     }
 }
@@ -427,5 +453,37 @@ mod tests {
         );
         let reloaded = EditorPrefs::load_from(&p).unwrap();
         assert!(!reloaded.empty_pane_carousel_cycling);
+    }
+
+    #[test]
+    fn page_width_and_overlay_defaults_and_round_trip() {
+        // Fresh install defaults: 80% page-width ratio, overlay not
+        // maximized (mirrors the SPA pageWidth.svelte.ts defaults).
+        let prefs = EditorPrefs::default();
+        assert_eq!(prefs.page_width_ratio, 0.8);
+        assert!(!prefs.overlay_maximized);
+
+        // Older preferences.toml omits both fields; serde fills the
+        // defaults on load.
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("preferences.toml");
+        std::fs::write(&p, "theme = \"dark\"\n").unwrap();
+        let loaded = EditorPrefs::load_from(&p).unwrap();
+        assert_eq!(loaded.page_width_ratio, 0.8);
+        assert!(!loaded.overlay_maximized);
+
+        // Non-default values persist and round-trip verbatim.
+        let custom = EditorPrefs {
+            page_width_ratio: 0.5,
+            overlay_maximized: true,
+            ..Default::default()
+        };
+        custom.save_to(&p).unwrap();
+        let saved = std::fs::read_to_string(&p).unwrap();
+        assert!(saved.contains("page_width_ratio = 0.5"), "got: {saved}");
+        assert!(saved.contains("overlay_maximized = true"), "got: {saved}");
+        let reloaded = EditorPrefs::load_from(&p).unwrap();
+        assert_eq!(reloaded.page_width_ratio, 0.5);
+        assert!(reloaded.overlay_maximized);
     }
 }
