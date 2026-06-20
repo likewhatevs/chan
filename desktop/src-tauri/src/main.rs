@@ -3367,6 +3367,30 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
     };
     let focused_label = focused.label().to_string();
     let state = app.state::<Arc<AppState>>();
+    // A watcher-opened workspace window (`local::<window_id>`): mint another
+    // window for the same workspace; the watcher opens it. Each minted window
+    // is an independent registry record, so there is no `<kind>-<hash>-<seq>`
+    // family to unbury (unlike the workspace-/outbound- schemes below).
+    if focused_label.starts_with("local::") {
+        let workspace_path = state.embedded().and_then(|embedded| {
+            embedded
+                .assemble_window_records()
+                .into_iter()
+                .find_map(|record| {
+                    (crate::window_watcher::native_label(&record) == focused_label)
+                        .then_some(record.workspace_path)
+                        .flatten()
+                })
+        });
+        return match workspace_path {
+            Some(path) => state
+                .embedded()
+                .ok_or_else(|| "embedded local server is unavailable".to_string())?
+                .mint_window(chan_server::WindowKind::Workspace, Some(path))
+                .map(|_| ()),
+            None => show_window(app, "main"),
+        };
+    }
     // Family unbury first: workspace- and outbound- windows all
     // group by their `<kind>-<16hex>-` label prefix.
     if let Some(buried) = state.most_recent_buried(window_family_prefix(&focused_label)) {
@@ -3421,7 +3445,12 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
         })
     };
     match resolved {
-        Some((key, url)) => serve::spawn_local_workspace_window(app, &key, &url).map(|_| ()),
+        // Mint another window for the workspace; the watcher opens it.
+        Some((key, _url)) => state
+            .embedded()
+            .ok_or_else(|| "embedded local server is unavailable".to_string())?
+            .mint_window(chan_server::WindowKind::Workspace, Some(key))
+            .map(|_| ()),
         // Workspace runtime gone under a live window: surface the picker.
         None => show_window(app, "main"),
     }
