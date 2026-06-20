@@ -1299,28 +1299,25 @@ async fn list_devserver_workspaces(
     devserver::fetch_workspaces(&conn).await
 }
 
-/// Open a devserver workspace tenant in a webview. `url` is the assembled
-/// tenant URL from `list_devserver_workspaces`; `prefix` keys the window so
-/// reopening restores its layout. The window is tracked under `id` so a
-/// disconnect tears it down with the rest of the devserver's windows.
+/// Open a devserver workspace window by MINTING it on the devserver's library
+/// (`POST /api/library/windows {Workspace, path}`). The window watcher then
+/// reconciles the new record open, so the window is feed-driven: it persists
+/// server-side and reopens on reconnect, and disconnect closes it via the
+/// watcher's reconcile-to-empty — unlike the old imperative `outbound-` spawn,
+/// which lived outside the feed and vanished on reconnect. The SPA Open button
+/// turns the workspace ON first, so the minted record resolves a live token (an
+/// off workspace mints an empty token the watcher skips).
 #[tauri::command]
-fn open_devserver_workspace(
-    app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
+async fn open_devserver_workspace(
+    state: State<'_, Arc<AppState>>,
     id: String,
-    prefix: String,
-    url: String,
+    path: String,
 ) -> Result<(), String> {
-    let label = serve::spawn_remote_workspace_window(&app, &prefix, &url)?;
-    track_devserver_window(
-        &state,
-        &id,
-        DevserverWindow {
-            window_id: prefix.clone(),
-            label,
-            prefix: Some(prefix),
-        },
-    );
+    let conn = state
+        .devservers
+        .get(&id)
+        .ok_or_else(|| "devserver is not connected".to_string())?;
+    devserver::mint_library_window(&conn, chan_server::WindowKind::Workspace, Some(path)).await?;
     Ok(())
 }
 

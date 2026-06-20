@@ -726,7 +726,7 @@ function renderDevserverWorkspaceRow(ws) {
   // turns it on first. Forget (caret) removes the registration entirely.
   const hasUrl = !!ws.url;
   return `
-    <tr data-ds-prefix="${escapeAttr(ws.prefix)}" data-url="${escapeAttr(ws.url || '')}">
+    <tr data-ds-prefix="${escapeAttr(ws.prefix)}" data-url="${escapeAttr(ws.url || '')}" data-ds-path="${escapeAttr(ws.path)}">
       <td>
         <label class="switch">
           <input type="checkbox" data-act="toggle-ds-on" ${ws.on ? 'checked' : ''}/>
@@ -952,15 +952,15 @@ async function pollDevserverWorkspaces() {
       if (open) {
         open.addEventListener('click', async (e) => {
           const btn = e.currentTarget;
-          let url = tr.dataset.url;
-          if (!url) {
-            // Off row: turn it on first (mints a fresh tenant token + URL),
-            // then open. Button stays disabled for the transition so a
-            // double-click can't race the still-mounting tenant.
+          const path = tr.dataset.dsPath;
+          if (!tr.dataset.url) {
+            // Off row: turn it on first so the devserver mounts the tenant — the
+            // minted window needs a live token to open (an off workspace mints an
+            // empty token the watcher skips). Button stays disabled for the
+            // transition so a double-click can't race the still-mounting tenant.
             btn.disabled = true;
             try {
-              const row = await invoke('set_devserver_workspace_on', { id, prefix, on: true });
-              url = row.url;
+              await invoke('set_devserver_workspace_on', { id, prefix, on: true });
             } catch (err) {
               showTurnOnFailureDialog(err);
               await refillDevserverWorkspaces(id);
@@ -969,7 +969,9 @@ async function pollDevserverWorkspaces() {
             await refillDevserverWorkspaces(id);
           }
           try {
-            await invoke('open_devserver_workspace', { id, prefix, url });
+            // Mint the workspace window on the devserver's library; the watcher
+            // reconciles it open (feed-driven, so it reopens on reconnect).
+            await invoke('open_devserver_workspace', { id, path });
           } catch (e2) {
             showError(e2);
           }
