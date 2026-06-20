@@ -53,11 +53,9 @@ describe("TerminalTab Rich Prompt wiring", () => {
     expect(terminal).toMatch(
       /ws\.onclose = \(\) => \{[\s\S]{1,800}failPendingPrompt\(tab\);\s*setTerminalQueueDepth\(tab, 0\);/,
     );
-    // closed/exit arms: depth 0 + fail BEFORE clearTerminalSession. (The
-    // restart reason reattaches + returns earlier, so the ended branch sits
-    // further down — hence the wider window here.)
+    // closed/exit arms: depth 0 + fail BEFORE clearTerminalSession.
     expect(terminal).toMatch(
-      /frame\.type === "closed"\) \{[\s\S]{1,1200}setTerminalQueueDepth\(tab, 0\);\s*failPendingPrompt\(tab\);\s*clearTerminalSession\(tab\);/,
+      /frame\.type === "closed"\) \{[\s\S]{1,600}setTerminalQueueDepth\(tab, 0\);\s*failPendingPrompt\(tab\);\s*clearTerminalSession\(tab\);/,
     );
     expect(terminal).toMatch(
       /frame\.type === "exit"\) \{[\s\S]{1,400}setTerminalQueueDepth\(tab, 0\);\s*failPendingPrompt\(tab\);\s*clearTerminalSession\(tab\);/,

@@ -170,14 +170,7 @@
         payload_b64: string;
       };
 
-  type CloseReason =
-    | "idle"
-    | "workspace"
-    | "shutdown"
-    | "explicit"
-    | "capped"
-    | "error"
-    | "restart";
+  type CloseReason = "idle" | "workspace" | "shutdown" | "explicit" | "capped" | "error";
 
   let host: HTMLDivElement | undefined = $state();
   let searchInput: HTMLInputElement | undefined = $state();
@@ -866,17 +859,6 @@
         resolvePromptCancelled(tab, frame.id, frame.removed);
       } else if (frame.type === "closed") {
         sessionClosedReason = frame.reason;
-        if (frame.reason === "restart") {
-          // The session was restarted server-side (same id, fresh shell):
-          // REATTACH to the same session_id instead of dropping the tab or
-          // showing "session ended". Keep the tab + its session id + any
-          // in-flight prompt; connect() reattaches (tab.terminalSessionId is
-          // set) and streams the relaunched shell, and the reattach replay +
-          // the session frame reconcile the prompt/queue state.
-          statusDetail = "restarting...";
-          void connect();
-          return;
-        }
         status = "exited";
         statusDetail = `session ended (${frame.reason})`;
         // The session (and its write queue) is gone: zero the badge and
