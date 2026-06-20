@@ -78,6 +78,13 @@ pub struct WorkspaceHost {
     /// `lib-<hex>` for a devserver. Stamped on every window record. Set with the
     /// registry; defaults to `"local"` when unset.
     library_id: OnceLock<String>,
+    /// Route prefix of this library's shared terminal tenant — the one
+    /// standalone-terminal tenant mounted via [`open_terminal_session`](
+    /// Self::open_terminal_session) that every terminal window attaches to.
+    /// Recorded on first mount so [`window_live_state`](Self::window_live_state)
+    /// resolves a terminal window's `(prefix, token)` to it (the terminal
+    /// analogue of a workspace tenant). Unset until the tenant mounts.
+    terminal_tenant_prefix: OnceLock<String>,
     /// Fires on any change that affects the window set — registry mint/discard,
     /// `WindowPresence` connect/disconnect, tenant on/off — so the watch feed
     /// pushes a fresh snapshot. The aggregate every client's reconcile awaits.
@@ -143,6 +150,7 @@ impl WorkspaceHost {
             self_weak: OnceLock::new(),
             window_registry: OnceLock::new(),
             library_id: OnceLock::new(),
+            terminal_tenant_prefix: OnceLock::new(),
             library_change_notify: Arc::new(Notify::new()),
         }
     }
@@ -384,10 +392,19 @@ impl WorkspaceHost {
         &self,
         config: ServeConfig,
     ) -> Result<HostedWorkspace, Error> {
-        // Non-persistent terminal (no launcher session store): its layout
-        // lives in `ephemeral_sessions`.
-        self.open_terminal_session_with_command(config, None, None)
-            .await
+        // This is THE library's shared terminal tenant (every standalone
+        // terminal window attaches here, sharing its prefix+token). Record its
+        // sanitized prefix — matching the `workspaces` map key — so
+        // `window_live_state(Terminal)` resolves terminal windows to it. The
+        // tenant's PTY/layout is non-persistent (lives in `ephemeral_sessions`,
+        // so shells restart on relaunch); the terminal WINDOWS persist as
+        // registry rows. Set-once: the shared tenant mounts once per library.
+        let prefix = sanitize_prefix(&config.prefix).map_err(Error::Config)?;
+        let hosted = self
+            .open_terminal_session_with_command(config, None, None)
+            .await?;
+        let _ = self.terminal_tenant_prefix.set(prefix);
+        Ok(hosted)
     }
 
     /// Mount a workspace-less "terminal-only" tenant under
@@ -627,16 +644,45 @@ impl WorkspaceHost {
     }
 
     /// Resolve a persisted window's live `(prefix, token, connected)` from its
-    /// serving tenant. A terminal window has no per-library terminal tenant
-    /// wired yet, so it carries no prefix or token; a workspace window resolves
-    /// through [`workspace_window_live`](Self::workspace_window_live).
+    /// serving tenant. A terminal window resolves to the library's shared
+    /// terminal tenant (via [`terminal_window_live`](Self::terminal_window_live)),
+    /// a workspace window through
+    /// [`workspace_window_live`](Self::workspace_window_live).
     fn window_live_state(&self, row: &PersistedWindow) -> (String, String, bool) {
         match row.kind {
             WindowKind::Workspace => {
                 self.workspace_window_live(row.workspace_path.as_deref(), &row.window_id)
             }
-            WindowKind::Terminal => (String::new(), String::new(), false),
+            WindowKind::Terminal => self.terminal_window_live(&row.window_id),
         }
+    }
+
+    /// The `(prefix, token, connected)` for a terminal window: the library's
+    /// shared terminal tenant, once mounted. Every terminal window attaches to
+    /// the one tenant, so they all share its prefix+token; `connected` reflects
+    /// this `window_id`'s live `/ws` presence. Empty until the tenant is mounted
+    /// — boot ordering mounts it before the watcher reconciles persisted
+    /// terminal windows, so they resolve and reopen on relaunch.
+    fn terminal_window_live(&self, window_id: &str) -> (String, String, bool) {
+        let Some(prefix) = self.terminal_tenant_prefix.get() else {
+            return (String::new(), String::new(), false);
+        };
+        if let Ok(workspaces) = self.workspaces.read() {
+            if let Some(runtime) = workspaces.get(prefix) {
+                let connected = runtime
+                    .artifacts
+                    .window_presence
+                    .connected_ids()
+                    .iter()
+                    .any(|id| id == window_id);
+                return (
+                    runtime.handle.prefix.clone(),
+                    runtime.handle.token.clone().unwrap_or_default(),
+                    connected,
+                );
+            }
+        }
+        (String::new(), String::new(), false)
     }
 
     /// The `(prefix, token, connected)` for a workspace window. A mounted
@@ -1770,8 +1816,10 @@ mod tests {
             .iter()
             .all(|r| r.library_id == "lib-abc" && r.persisted));
 
-        // A terminal window has no per-library terminal tenant wired yet, so no
-        // live prefix/token and not connected; durable fields carry through.
+        // No terminal tenant is mounted in this test, so the terminal window
+        // has no live prefix/token and is not connected; durable fields carry
+        // through. (When the shared tenant IS mounted it resolves — see
+        // `assemble_resolves_a_terminal_window_to_the_shared_tenant`.)
         let term_rec = records
             .iter()
             .find(|r| r.window_id == term.window_id)
@@ -1796,6 +1844,41 @@ mod tests {
         );
         assert_eq!(ws_rec.token, "");
         assert!(!ws_rec.connected);
+    }
+
+    #[tokio::test]
+    async fn assemble_resolves_a_terminal_window_to_the_shared_tenant() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = WorkspaceHost::new(lib, fake_builder());
+
+        // Mount the shared terminal tenant (records its prefix), install a
+        // registry, then mint a terminal window.
+        host.open_terminal_session(serve_config("/terminal"))
+            .await
+            .expect("open terminal session");
+        let store = tempfile::tempdir().expect("store dir");
+        let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
+        let term = registry.create(WindowKind::Terminal, None);
+        host.install_window_registry(registry, "local".into());
+
+        // The terminal window now resolves to the shared tenant's prefix — the
+        // old empty stub is gone — so the desktop watcher can open it. (token is
+        // empty here only because the test serve_config sets no_token; in
+        // production the tenant carries a token so should_show opens the window.)
+        let records = host.assemble_window_records();
+        let term_rec = records
+            .iter()
+            .find(|r| r.window_id == term.window_id)
+            .expect("terminal row");
+        assert_eq!(
+            term_rec.prefix, "/terminal",
+            "terminal resolves to the shared tenant prefix",
+        );
+        assert!(
+            !term_rec.connected,
+            "no live /ws socket for this window yet"
+        );
     }
 
     #[test]
