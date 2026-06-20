@@ -26,5 +26,6 @@ describe("launcher root", () => {
     expect(target.querySelector(".topbar")).not.toBeNull();
     expect(target.querySelector('[aria-label="New workspace"]')).not.toBeNull();
     expect(target.querySelector('[aria-label="Toggle theme"]')).not.toBeNull();
+    expect(target.querySelector('[aria-label="Open terminal"]')).not.toBeNull();
   });
 });

@@ -96,6 +96,12 @@ export async function removeDevserver(id: string): Promise<void> {
   await refreshDevservers();
 }
 
+/** Mint a new terminal window of the local library. The window feed updates
+ * itself through the watch subscription, so there is nothing to refresh here. */
+export async function openTerminal(): Promise<void> {
+  await backend.createWindow("terminal");
+}
+
 /** The user's name for a remote library, joined by its library id. */
 export function remoteLibraryName(libraryId: string): string | null {
   const ds = library.devservers.find((d) => d.library_id === libraryId);

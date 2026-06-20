@@ -109,6 +109,9 @@ export interface LibraryApi {
   removeDevserver(id: string): Promise<void>;
   listWindows(): Promise<WindowRecord[]>;
   watchWindows(onSet: (set: WindowSet) => void): () => void;
+  /** Mint a window of the local library (client supplies the kind; the library
+   * supplies the id + persists). A terminal window has no workspace_path. */
+  createWindow(kind: WindowKind, workspacePath?: string): Promise<WindowRecord>;
 }
 
 /** A non-2xx response, carrying the status and the server's text body. */
@@ -175,4 +178,9 @@ export const liveApi: LibraryApi = {
     };
     return () => ws.close();
   },
+  createWindow: (kind, workspacePath) =>
+    req("POST", "/api/library/windows", {
+      kind,
+      ...(workspacePath ? { workspace_path: workspacePath } : {}),
+    }),
 };

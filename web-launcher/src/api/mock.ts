@@ -191,6 +191,29 @@ export const mockApi: LibraryApi = {
 
   listWindows: () => tick(windows.map((w) => ({ ...w }))),
 
+  createWindow: (kind, workspacePath) => {
+    const localTerminals = windows.filter(
+      (w) => w.library_id === "local" && w.kind === "terminal",
+    ).length;
+    const ordinal = kind === "terminal" ? localTerminals + 1 : 1;
+    const base = workspacePath ? workspacePath.split("/").filter(Boolean).pop() : null;
+    const rec: WindowRecord = {
+      window_id: `w-local-${kind}-${windows.length + 1}`,
+      library_id: "local",
+      kind,
+      title: kind === "terminal" ? `🏠 Terminal Window ${ordinal}` : `🏠 ${base} Window ${ordinal}`,
+      ordinal,
+      workspace_path: kind === "workspace" ? (workspacePath ?? null) : null,
+      prefix: `t/local-${windows.length + 1}`,
+      token: "tok_local",
+      persisted: true,
+      connected: true,
+    };
+    windows.push(rec);
+    notify();
+    return tick({ ...rec });
+  },
+
   watchWindows: (onSet) => {
     subscribers.add(onSet);
     // Full snapshot on subscribe, mirroring the live watch socket.

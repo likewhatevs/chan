@@ -1,8 +1,9 @@
 <script lang="ts">
-  // The launcher's top bar: the "Workspaces" title, a theme toggle, and the
-  // New-workspace button (+) that opens the two-choice dialog.
+  // The launcher's top bar: the "Workspaces" title, a theme toggle, an
+  // open-terminal button, and the New-workspace button (+).
   import { themeState, toggleTheme } from "../state/theme.svelte";
   import { openNewDialog } from "../state/dialog.svelte";
+  import { openTerminal } from "../state/library.svelte";
 </script>
 
 <header class="topbar">
@@ -14,6 +15,12 @@
       aria-label="Toggle theme"
       title="Toggle theme"
       onclick={toggleTheme}>{themeState.theme === "dark" ? "☀" : "☾"}</button>
+    <button
+      class="icon-btn"
+      type="button"
+      aria-label="Open terminal"
+      title="Open terminal"
+      onclick={() => openTerminal()}>⌨</button>
     <button
       class="icon-btn"
       type="button"

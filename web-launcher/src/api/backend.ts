@@ -30,4 +30,5 @@ export const backend: LibraryApi = {
   // Window feed.
   listWindows: WINDOW_FEED.listWindows,
   watchWindows: WINDOW_FEED.watchWindows,
+  createWindow: WINDOW_FEED.createWindow,
 };
