@@ -118,13 +118,30 @@ pub struct MountedPrefix {
 /// remembered as off, so the row stays in `GET workspaces` and re-mounts at
 /// the **same** prefix on `on:true`. The handler answers `200` with the
 /// updated [`WorkspaceEntry`] (a fresh `token` when `on:true`; `token:""`
-/// when off), or `404` when `{prefix}` is not a registered workspace. The
-/// call is idempotent in both directions.
+/// when off), `409` with an [`ActiveTerminalsRejection`] when an `on:false`
+/// would kill live terminals and `force` is unset, or `404` when `{prefix}`
+/// is not a registered workspace. The call is idempotent in both directions.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SetWorkspaceOnRequest {
     /// Target mount state: `true` mounts the workspace (minting a fresh
     /// per-mount token), `false` unmounts it but keeps it registered.
     pub on: bool,
+    /// Force a destructive `on:false`. Unmounting a workspace kills the
+    /// terminal sessions running in it, so an `on:false` with live terminals
+    /// is refused (`409`, carrying the active count) until the client
+    /// confirms by re-issuing with `force:true`. Ignored when `on:true`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
+}
+
+/// Body of the `409 Conflict` answer to `POST .../{prefix}/on {on:false}`
+/// when the workspace still has live terminal sessions and the request did
+/// not set `force`. The client shows `active_terminals` in a confirm prompt,
+/// then re-issues the off with `force:true` to kill them and unmount.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActiveTerminalsRejection {
+    /// Live terminal sessions the off would kill.
+    pub active_terminals: usize,
 }
 
 /// Body of `POST /api/devserver/terminals`: open (or, on the persistence
@@ -371,13 +388,43 @@ mod tests {
         // The toggle body is a single `{ "on": bool }`. The client posts this
         // exact shape to `.../{prefix}/on`; pin both directions so a rename
         // fails the build instead of silently no-op-ing the toggle.
-        let off = SetWorkspaceOnRequest { on: false };
+        let off = SetWorkspaceOnRequest {
+            on: false,
+            force: false,
+        };
         let v = serde_json::to_value(&off).unwrap();
         assert_eq!(v, json!({ "on": false }));
         assert_eq!(off, serde_json::from_value(v).unwrap());
 
-        let on = SetWorkspaceOnRequest { on: true };
+        let on = SetWorkspaceOnRequest {
+            on: true,
+            force: false,
+        };
         assert_eq!(serde_json::to_value(&on).unwrap(), json!({ "on": true }));
+
+        // `force` rides the wire only when set; a body without it deserializes
+        // to the safe `force:false`, so an unforced off stays guarded.
+        let forced = SetWorkspaceOnRequest {
+            on: false,
+            force: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&forced).unwrap(),
+            json!({ "on": false, "force": true })
+        );
+        assert_eq!(off, serde_json::from_value(json!({ "on": false })).unwrap());
+    }
+
+    #[test]
+    fn active_terminals_rejection_wire() {
+        // The 409 body the off path returns when live terminals block an
+        // unforced unmount; the client reads `active_terminals` for its prompt.
+        let rejection = ActiveTerminalsRejection {
+            active_terminals: 3,
+        };
+        let v = serde_json::to_value(&rejection).unwrap();
+        assert_eq!(v, json!({ "active_terminals": 3 }));
+        assert_eq!(rejection, serde_json::from_value(v).unwrap());
     }
 
     #[test]
