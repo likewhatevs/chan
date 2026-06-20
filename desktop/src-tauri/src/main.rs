@@ -3608,6 +3608,24 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
             None => show_window(app, "main"),
         };
     }
+    // A watcher-opened devserver workspace window (`lib-<library_id>::<window_id>`):
+    // mint ANOTHER window for the same workspace on the same devserver, mirroring
+    // the `local::` branch. There is no stored library_id->devserver map, so the
+    // async helper matches the focused label against each connected devserver's
+    // feed (which also hands back the focused window's `workspace_path`). It is an
+    // HTTP round-trip, so fire-and-forget — a failure surfaces as a warning, not a
+    // blocked menu handler. (Without this a `lib-` label matches no branch below
+    // and falls through to `show_window("main")` — the bug where Cmd+Shift+N on a
+    // devserver workspace window jumps focus back to the launcher.)
+    if focused_label.starts_with("lib-") {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = mint_another_devserver_workspace_window(&app, &focused_label).await {
+                tracing::warn!(label = %focused_label, error = %e, "Cmd+Shift+N on a devserver workspace window failed");
+            }
+        });
+        return Ok(());
+    }
     // Family unbury first: workspace- and outbound- windows all
     // group by their `<kind>-<16hex>-` label prefix.
     if let Some(buried) = state.most_recent_buried(window_family_prefix(&focused_label)) {
@@ -3671,6 +3689,47 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
         // Workspace runtime gone under a live window: surface the picker.
         None => show_window(app, "main"),
     }
+}
+
+/// Mint another window for the devserver workspace that owns `focused_label`
+/// (a `lib-<library_id>::<window_id>` watcher window), for Cmd+Shift+N. No stored
+/// `library_id -> devserver` map exists, so match the focused label against each
+/// connected devserver's library feed; the matching record yields the conn AND
+/// the focused window's `workspace_path`. Mint a Workspace window on that conn —
+/// the watcher opens it — mirroring the `local::` New-Window behavior. A stale
+/// window whose devserver is gone falls back to the picker.
+async fn mint_another_devserver_workspace_window(
+    app: &tauri::AppHandle,
+    focused_label: &str,
+) -> Result<(), String> {
+    let state = app.state::<Arc<AppState>>();
+    // Snapshot the ids under the lock, then release it before the awaits.
+    let devserver_ids: Vec<String> = {
+        let cfg = state.store.lock().unwrap().get().map_err(err)?;
+        cfg.devservers.iter().map(|ds| ds.id.clone()).collect()
+    };
+    for id in devserver_ids {
+        let Some(conn) = state.devservers.get(&id) else {
+            continue;
+        };
+        let Ok(windows) = devserver::fetch_library_windows(&conn).await else {
+            continue;
+        };
+        if let Some(record) = windows
+            .iter()
+            .find(|r| crate::window_watcher::native_label(r) == focused_label)
+        {
+            return devserver::mint_library_window(
+                &conn,
+                chan_server::WindowKind::Workspace,
+                record.workspace_path.clone(),
+            )
+            .await
+            .map(|_| ());
+        }
+    }
+    // Stale window for a disconnected/forgotten devserver: surface the picker.
+    show_window(app, "main")
 }
 
 /// OS window title for the singleton launcher. Launchers are never
