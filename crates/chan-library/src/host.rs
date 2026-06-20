@@ -653,30 +653,54 @@ impl WorkspaceHost {
             .ok_or_else(|| Error::Config("window registry not installed".into()))?;
         let removed = registry.remove(window_id);
         if removed {
-            self.reap_window_sessions(window_id);
+            self.reap_discarded_window_state(window_id);
             self.notify_window_change();
         }
         Ok(removed)
     }
 
-    /// Reap every terminal session a discarded `window_id` owns, across all
-    /// mounted tenants. The id is library-unique, so only its owning tenant
-    /// reaps anything; the rest are no-ops. The tenant registries are cloned out
-    /// under the lock and reaped after releasing it, so a PTY teardown never
-    /// blocks a concurrent tenant mount/unmount. Returns the count reaped.
-    fn reap_window_sessions(&self, window_id: &str) -> usize {
-        let registries: Vec<Arc<crate::terminal_sessions::Registry>> = match self.workspaces.read()
-        {
-            Ok(workspaces) => workspaces
+    /// Reap all state a discarded `window_id` owns across mounted tenants, so a
+    /// registry discard is the SINGLE authoritative cleanup — even a non-SPA
+    /// discard (cs-driven, a watcher reconcile, a crashed client) that never
+    /// sends the SPA `DELETE /api/session`: the terminal sessions (PTYs + fds)
+    /// AND the durable workspace session/layout blob
+    /// (`<workspace>/.chan/sessions/<id>`). The id is library-unique, so only
+    /// its owning tenant has anything; the rest are no-ops. Handles are cloned
+    /// out under the lock and the reap/delete run after releasing it, so the
+    /// blocking I/O never stalls a concurrent tenant mount/unmount. Returns the
+    /// session count reaped.
+    ///
+    /// The on-disk TERMINAL blob (`terminal_blob`, a chan-server store keyed by
+    /// the tenant's session dir) is not reaped here — chan-library can't reach
+    /// it; a per-label terminal's blob is cleaned by the devserver's
+    /// `forget_terminal`. (Follow-up: surface the terminal blob to this path.)
+    fn reap_discarded_window_state(&self, window_id: &str) -> usize {
+        let (registries, workspaces) = {
+            let tenants = match self.workspaces.read() {
+                Ok(tenants) => tenants,
+                Err(_) => return 0,
+            };
+            let registries: Vec<_> = tenants
                 .values()
                 .map(|runtime| runtime.artifacts.terminal_sessions.clone())
-                .collect(),
-            Err(_) => return 0,
+                .collect();
+            let workspaces: Vec<_> = tenants
+                .values()
+                .filter_map(|runtime| runtime.artifacts.cell.workspace())
+                .collect();
+            (registries, workspaces)
         };
-        registries
+        let reaped = registries
             .iter()
             .map(|sessions| sessions.forget_window(window_id))
-            .sum()
+            .sum();
+        // Delete the durable workspace session/layout blob too (best-effort; a
+        // no-op when this window has none), so a non-SPA discard never orphans
+        // `<workspace>/.chan/sessions/<id>`.
+        for workspace in workspaces {
+            let _ = workspace.delete_session(window_id);
+        }
+        reaped
     }
 
     /// Resolve a persisted window's live `(prefix, token, connected)` from its
@@ -1966,6 +1990,67 @@ mod tests {
             .map(|r| r.window_id)
             .collect();
         assert_eq!(remaining, vec![ws.window_id]);
+    }
+
+    #[tokio::test]
+    async fn discard_window_deletes_the_durable_workspace_session_blob() {
+        // P1a: a registry discard is the single authoritative cleanup — it also
+        // deletes the durable workspace session/layout blob, so a non-SPA
+        // discard (one that never sends `DELETE /api/session`) never orphans
+        // `<workspace>/.chan/sessions/<id>` on disk.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        std::fs::write(root.path().join("a.md"), "# A\n").expect("write a");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+        host.open_registered_workspace(root.path(), serve_config("/a"))
+            .await
+            .expect("open");
+
+        let store = tempfile::tempdir().expect("store dir");
+        let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
+        host.install_window_registry(registry, "lib-blob".into());
+        let win = host
+            .mint_window(
+                WindowKind::Workspace,
+                Some(root.path().to_string_lossy().into_owned()),
+            )
+            .expect("mint workspace window");
+
+        // Reach the tenant's real workspace and write the durable layout blob
+        // keyed by the window id (what the SPA would PUT).
+        let workspace = {
+            let tenants = host.workspaces.read().unwrap();
+            tenants
+                .values()
+                .next()
+                .expect("workspace tenant")
+                .artifacts
+                .cell
+                .workspace()
+                .expect("real workspace handle")
+        };
+        workspace
+            .put_session(&win.window_id, b"{\"layout\":1}")
+            .expect("put session blob");
+        assert!(
+            workspace
+                .get_session(&win.window_id)
+                .expect("get")
+                .is_some(),
+            "blob must exist before discard"
+        );
+
+        assert!(host.discard_window(&win.window_id).expect("discard"));
+
+        assert!(
+            workspace
+                .get_session(&win.window_id)
+                .expect("get")
+                .is_none(),
+            "discard_window must delete the durable session blob"
+        );
     }
 
     #[tokio::test]
