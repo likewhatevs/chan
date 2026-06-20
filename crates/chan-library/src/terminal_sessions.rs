@@ -504,6 +504,12 @@ impl Registry {
     }
 
     pub fn create(&self, mut opts: CreateOptions) -> Result<AttachHandle, CreateError> {
+        // Clear dead-process ghosts before minting: a killed session lingers in
+        // the map (its controller thread records `exit_code` on exit but never
+        // reaps the entry), so it would hold its tab name + occupy a
+        // `session_cap` slot against a re-spawn under the same name. See
+        // [`reap_exited`].
+        self.reap_exited();
         let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
         if sessions.len() >= self.config.terminal.session_cap {
             return Err(CreateError::Capped);
@@ -965,6 +971,44 @@ impl Registry {
         Ok(restarted)
     }
 
+    /// Close every live session matching the given tab name and/or group, for
+    /// `cs terminal close`. Same selector semantics as `restart_matching` (a
+    /// `None` axis matches all; both narrow to the intersection). Closes the
+    /// PTY and removes the registry entry — the explicit teardown that was
+    /// missing (killing the pid out-of-band left the entry to linger and hold
+    /// its tab name). Returns how many sessions were closed.
+    pub fn close_matching(&self, tab_name: Option<&str>, tab_group: Option<&str>) -> usize {
+        let ids: Vec<String> = {
+            let sessions = self.sessions.lock().expect("terminal registry poisoned");
+            sessions
+                .values()
+                .filter(|session| !session.closed.load(Ordering::Relaxed))
+                .filter(|session| match tab_name {
+                    Some(name) => session.tab_name.as_deref() == Some(name),
+                    None => true,
+                })
+                .filter(|session| match tab_group {
+                    Some(group) => {
+                        session
+                            .tab_group
+                            .as_deref()
+                            .unwrap_or(DEFAULT_TERMINAL_GROUP)
+                            == group
+                    }
+                    None => true,
+                })
+                .map(|session| session.id.clone())
+                .collect()
+        };
+        let mut closed = 0;
+        for id in &ids {
+            if self.close(id, CloseReason::Explicit) {
+                closed += 1;
+            }
+        }
+        closed
+    }
+
     /// The DISTINCT window ids that own a live session matching the given
     /// tab name and/or group, for `cs terminal survey`. Same selector
     /// semantics as `write_input_matching` (a `None` axis matches all; both
@@ -1021,6 +1065,44 @@ impl Registry {
             session.close(reason);
         }
         self.notify_roster_change();
+    }
+
+    /// Reap sessions whose child PROCESS has exited and that have no client
+    /// attached. A dead, unviewed session is a pure ghost — no process, no
+    /// viewer — so keeping it only leaks the slot and HOLDS its tab name,
+    /// making a re-spawn under the same name collide and come up renamed (the
+    /// `cs terminal restart` ghost-tab bug: a killed agent's entry lingered
+    /// because the controller thread records `exit_code` on exit but never
+    /// removes the entry). Distinct axis from [`prune_idle_at`], which times
+    /// out *live* detached sessions and deliberately keeps persisted windows:
+    /// a dead process can't be reattached, only re-spawned, so a persisted
+    /// window comes back fresh on reconnect rather than stranding the ghost.
+    /// An attached dead session is KEPT (a client is still viewing its final
+    /// output — no natural-`exit`-vanishes regression). Returns how many were
+    /// reaped. Run before every [`create`](Self::create) and on the pruner tick.
+    pub fn reap_exited(&self) -> usize {
+        let to_reap: Vec<String> = {
+            let sessions = self.sessions.lock().expect("terminal registry poisoned");
+            sessions
+                .iter()
+                .filter(|(_, session)| {
+                    session.attach_count.load(Ordering::Relaxed) == 0
+                        && session
+                            .exit_code
+                            .lock()
+                            .expect("session exit poisoned")
+                            .is_some()
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        let mut reaped = 0;
+        for id in &to_reap {
+            if self.close(id, CloseReason::Explicit) {
+                reaped += 1;
+            }
+        }
+        reaped
     }
 
     pub fn prune_idle(&self) -> usize {
@@ -1095,6 +1177,7 @@ impl Registry {
                         break;
                     }
                     _ = tick.tick() => {
+                        self.reap_exited();
                         self.prune_idle();
                     }
                 }
@@ -3115,6 +3198,75 @@ mod tests {
             registry.close_for_window("win-missing", CloseReason::Explicit),
             0
         );
+    }
+
+    #[test]
+    fn reap_exited_removes_a_dead_detached_session() {
+        // A killed agent: its controller thread recorded `exit_code` on process
+        // exit but the entry lingered (the ghost-tab name-holding bug). Once
+        // detached (frontend gone) it is a pure ghost ⇒ reaped, freeing the name.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let handle = registry.create(opts_with_window("win-dead")).unwrap();
+        drop(handle); // frontend gone (detached)
+        {
+            let sessions = registry.sessions.lock().unwrap();
+            let session = sessions.values().next().unwrap();
+            *session.exit_code.lock().unwrap() = Some(0); // process exited
+        }
+        assert_eq!(registry.reap_exited(), 1);
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn reap_exited_keeps_an_attached_dead_session() {
+        // A natural `exit` while a client still views the final output: the
+        // process is dead but a viewer is attached, so the pane survives until
+        // the client detaches. Guards against a natural-exit-vanishes regression.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let _handle = registry.create(opts_with_window("win-viewed")).unwrap(); // attached
+        {
+            let sessions = registry.sessions.lock().unwrap();
+            let session = sessions.values().next().unwrap();
+            *session.exit_code.lock().unwrap() = Some(0);
+        }
+        assert_eq!(registry.reap_exited(), 0);
+        assert_eq!(registry.len(), 1);
+        registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[test]
+    fn reap_exited_keeps_a_live_detached_session() {
+        // Detached but the process is still running (a busy background agent):
+        // NOT a ghost — kept. Process-death is the reap axis, not detach.
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let handle = registry.create(opts_with_window("win-live")).unwrap();
+        drop(handle); // detached, but exit_code stays None (still running)
+        assert_eq!(registry.reap_exited(), 0);
+        assert_eq!(registry.len(), 1);
+        registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[test]
+    fn close_matching_closes_by_tab_name_and_leaves_others() {
+        let registry = Registry::new(test_config(1024, 4, 10));
+        let _a = registry
+            .create(CreateOptions {
+                tab_name: Some("@@Alice".into()),
+                ..opts_with_window("win-a")
+            })
+            .unwrap();
+        let _b = registry
+            .create(CreateOptions {
+                tab_name: Some("@@Bob".into()),
+                ..opts_with_window("win-b")
+            })
+            .unwrap();
+        assert_eq!(registry.close_matching(Some("@@Alice"), None), 1);
+        assert_eq!(registry.len(), 1);
+        // A selector that matches nothing closes nothing.
+        assert_eq!(registry.close_matching(Some("@@Nobody"), None), 0);
+        assert_eq!(registry.len(), 1);
+        registry.close_all(CloseReason::Shutdown);
     }
 
     #[test]
