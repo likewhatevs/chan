@@ -4,9 +4,10 @@
 //! Every SPA window opens one event socket and tags it with its window
 //! id (`/ws?w=<id>` — the same id that keys the per-window session
 //! blob). The refcounted map below turns those sockets into a presence
-//! set consumed by `GET /api/windows` and `cs window list`, so a
-//! desktop attached to a remote serve can tell which saved windows are
-//! currently open somewhere and which are reopenable.
+//! set the window lists read for `connected`: `GET /api/windows` and the
+//! library window feed (`GET /api/library/windows`), so a client can tell
+//! which saved windows are currently open somewhere and which are
+//! reopenable.
 //!
 //! Refcounted, not boolean: a reload briefly overlaps the old and new
 //! socket of the same window, and a plain set would flicker the window

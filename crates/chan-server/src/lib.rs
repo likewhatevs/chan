@@ -219,10 +219,7 @@ struct AppArtifacts {
     /// "does window X still have shells?" without going through HTTP
     /// (see `WorkspaceHost::tenant_has_window_sessions`).
     terminal_sessions: Arc<TerminalRegistry>,
-    /// The router's state, kept so a host can enumerate this tenant's
-    /// windows (saved ∪ connected ∪ titles) without an HTTP round-trip —
-    /// the input to `WorkspaceHost::list_tenant_windows` /
-    /// `GET /api/devserver/windows`. Same Arc the router serves from.
+    /// The router's state, the same `Arc` the router serves from.
     state: Arc<AppState>,
     /// Shutdown signal sender. Fed by SIGINT/SIGTERM and (optionally)
     /// the idle-timeout watcher. Receivers live on `AppState` and in

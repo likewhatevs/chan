@@ -1721,11 +1721,6 @@ mod tests {
         assert!(!state.forget_workspace(&prefix).expect("already removed"));
     }
 
-    // The per-tenant window enumeration this test covered (list_tenant_windows
-    // → GET /api/devserver/windows) is retired: the library window feed
-    // (Seam W, GET /api/library/windows) is the source of truth, tested with
-    // the window registry.
-
     #[tokio::test]
     async fn off_state_persists_to_store() {
         let home = tempfile::tempdir().expect("home");

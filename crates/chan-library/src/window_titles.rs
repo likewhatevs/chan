@@ -2,10 +2,10 @@
 //!
 //! The OS window title (`"Terminal Window 1"`, `"🏠 /notes Window 2"`)
 //! is assembled by chan-desktop when it builds the webview; the server
-//! never sees it. So that `cs window list` (and `GET /api/windows`) can
-//! show the title the user actually reads in the title bar, the desktop
-//! writes each window's title here on build / rename and removes it on
-//! destroy, and the window-list join reads it back.
+//! never sees it. So that `GET /api/windows` can show the title the user
+//! actually reads in the title bar, the desktop writes each window's title
+//! here on build / rename and removes it on destroy, and the window-list
+//! join reads it back.
 //!
 //! The map is empty in standalone `chan serve` / plain-browser mode (no
 //! desktop writes to it), so the server stays Tauri-free and those rows

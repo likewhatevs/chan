@@ -99,8 +99,7 @@ pub(crate) fn join_windows_with_titles(
 /// blocking disk I/O, so an async caller wraps this in `spawn_blocking`. A
 /// failed saved-blob read degrades to "no saved windows" (graceful for an
 /// enumeration; the host aggregate must not fail wholesale on one tenant).
-/// Backs both `GET /api/windows` and the host's cross-tenant aggregate
-/// (`WorkspaceHost::list_tenant_windows` → `GET /api/devserver/windows`).
+/// Backs `GET /api/windows` (the desktop's remote-connection window menu).
 pub(crate) fn enumerate_windows(state: &AppState) -> Vec<WindowInfo> {
     let connected = state.window_presence.connected_ids();
     let titles = state.window_titles.clone();
