@@ -1537,10 +1537,10 @@ fn open_local_workspace(state: State<Arc<AppState>>, path: String) -> Result<(),
 /// request (`chan serve <workspace>` while this desktop is running).
 ///
 /// Mirrors the `add_workspace` flow: register + boot the workspace through the
-/// shared embedded Library, then `serve::start` (mount + spawn the
+/// shared embedded Library, then `serve::start` (mount + mint the
 /// first window). If the workspace is ALREADY running, `serve::start`
-/// returns early without spawning a window, so we raise an additional
-/// window via `spawn_local_workspace_window` to match the user's intent
+/// returns early without minting, so we mint an additional window (the
+/// watcher opens it) to match the user's intent
 /// ("show me this workspace now").
 ///
 /// The slow work (registry write, boot scan, mount) runs on a spawned
@@ -3310,8 +3310,8 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// Window labels are `workspace-<hash(key)>-<seq>` and the hash is
 /// one-way, so we recover the workspace key by matching
 /// `serve::workspace_window_prefix(key)` against the focused window's
-/// label across the running `serves` map, then reuse the same
-/// `spawn_local_workspace_window` path `open_local_workspace` uses.
+/// label across the running `serves` map, then mint another window for
+/// it (the watcher opens it), like `open_local_workspace`.
 ///
 /// A focused `outbound-*` window opens a new window on the
 /// SAME remote (the connection is recovered from the label's hash

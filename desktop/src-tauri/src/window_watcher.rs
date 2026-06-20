@@ -61,12 +61,17 @@ pub trait NativeSurface {
     fn close(&self, label: &str);
 }
 
-/// Whether the reconcile surfaces `record` as a native window: persisted, and not
-/// **locally buried**. Bury is desktop-local view state (L5 / @@Lead ruling #1) — the
-/// browser has no native windows, so a bury lives only in this process's `buried`
-/// set, never in Seam W. Discard is the library op (the record leaves the snapshot).
+/// Whether the reconcile surfaces `record` as a native window: persisted, not
+/// **locally buried**, and backed by a **live tenant** (a non-empty `token`).
+/// Bury is desktop-local view state (L5) — the browser has no native windows, so
+/// a bury lives only in this process's `buried` set, never in Seam W. The token
+/// gate IS the workspace on/off lifecycle: an off workspace's window carries an
+/// empty token (no tenant to attach to), so the reconcile CLOSES it while the
+/// library KEEPS the record — turning the workspace back on re-tokens it and the
+/// reconcile reopens it at the same window_id (the SPA restores its tabs). Discard
+/// is the library op (the record leaves the snapshot entirely).
 fn should_show(record: &WindowRecord, buried: &HashSet<String>) -> bool {
-    record.persisted && !buried.contains(&native_label(record))
+    record.persisted && !buried.contains(&native_label(record)) && !record.token.is_empty()
 }
 
 /// One idempotent reconcile pass for `library_id`: open every shown record that
@@ -284,6 +289,27 @@ mod tests {
         reconcile("local", &[], &none(), &s);
         assert_eq!(*s.closed.borrow(), vec!["local::w-1"]);
         assert!(s.opened.borrow().is_empty());
+    }
+
+    #[test]
+    fn off_workspace_window_is_closed_and_not_opened() {
+        // A workspace turned OFF: its window record persists but carries an empty
+        // token (no live tenant). The reconcile must NOT open it, and must CLOSE
+        // it if already open — the library keeps the record so a re-on reopens it
+        // at the same window_id.
+        let mut off = rec("local", "w-1", WindowKind::Workspace);
+        off.token = String::new();
+        // Not yet open -> stays closed.
+        let s = FakeSurface::with(&[]);
+        reconcile("local", std::slice::from_ref(&off), &none(), &s);
+        assert!(
+            s.opened.borrow().is_empty(),
+            "off-tenant window must not open"
+        );
+        // Already open -> reconcile closes it (record kept; tenant gone).
+        let s2 = FakeSurface::with(&["local::w-1"]);
+        reconcile("local", std::slice::from_ref(&off), &none(), &s2);
+        assert_eq!(*s2.closed.borrow(), vec!["local::w-1"]);
     }
 
     #[test]

@@ -85,12 +85,23 @@ pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<
         serves.insert(key.clone(), ServeHandle::embedded(prefix, url.clone()));
     }
     let _ = app.emit(SERVES_CHANGED, ());
-    if let Err(e) = spawn_local_workspace_window(&app, &key, &url) {
-        if let Some(handle) = state.serves.lock().unwrap().remove(&key) {
-            stop_handle(None, &state, &key, handle);
+    // Mint the FIRST window only when this workspace has no persisted window
+    // record yet (a fresh turn-on); the watcher then opens it. On a re-on or
+    // boot re-serve the records already exist, and the mount above (which fired
+    // the library change signal) makes them live, so the watcher reopens them
+    // at their stable window_id — restoring each window's tabs. The registry is
+    // the sole window-creation authority; there is no imperative window build.
+    let has_window = embedded.assemble_window_records().iter().any(|r| {
+        r.kind == WindowKind::Workspace && r.workspace_path.as_deref() == Some(key.as_str())
+    });
+    if !has_window {
+        if let Err(e) = embedded.mint_window(WindowKind::Workspace, Some(key.clone())) {
+            if let Some(handle) = state.serves.lock().unwrap().remove(&key) {
+                stop_handle(None, &state, &key, handle);
+            }
+            let _ = app.emit(SERVES_CHANGED, ());
+            return Err(e);
         }
-        let _ = app.emit(SERVES_CHANGED, ());
-        return Err(e);
     }
     Ok(())
 }
@@ -134,7 +145,10 @@ fn stop_handle(app: Option<&AppHandle>, state: &AppState, key: &str, handle: Ser
         }
     }
     if let Some(app) = app {
-        close_local_workspace_windows(app, key);
+        // No imperative window teardown: unmounting fired the library change
+        // signal, so the watcher reconciles the now-tenant-less windows closed
+        // (their token emptied → not shown) while KEEPING the persisted records,
+        // so turning the workspace back on reopens them at the same window_id.
         let _ = app.emit(SERVES_CHANGED, ());
     }
 }
@@ -148,14 +162,6 @@ pub fn workspace_window_prefix(key: &str) -> String {
     let mut h = DefaultHasher::new();
     key.hash(&mut h);
     format!("workspace-{:016x}", h.finish())
-}
-
-/// Fresh, unique window label for a new local-workspace webview.
-/// Every call yields a distinct label so multi-window works; the
-/// prefix is still identifiable for cleanup. Format:
-/// `workspace-<hash>-<seq>` where `seq` is a per-process atomic.
-pub fn new_workspace_window_label(key: &str) -> String {
-    format!("{}-{}", workspace_window_prefix(key), next_window_seq())
 }
 
 /// Window title for a local-workspace webview: a kind glyph (home vs this
@@ -218,49 +224,6 @@ pub fn is_workspace_webview_label(label: &str) -> bool {
         // Watcher-opened local windows carry the composite native label
         // `local::<window_id>`; they host the same embedded SPA.
         || label.starts_with("local::")
-}
-
-/// Spawn a new local-workspace webview window pointing at `url`. Each
-/// call opens an independent window; multiple windows per workspace are
-/// supported. Pops the most-recent WindowConfig for this workspace (if
-/// any) so the new window reuses the previous `?w=<label>` and URL
-/// hash, restoring panes / tabs (via `session.json`) and overlay
-/// state across the close/reopen cycle. A user-initiated close
-/// pushes the closing window's state back to the stack so the next
-/// open repeats the restore. The Tauri close handler does NOT stop
-/// the underlying local runtime; the On toggle (plus
-/// `close_local_workspace_windows` on runtime teardown) remains the single
-/// authority on workspace lifecycle.
-pub fn spawn_local_workspace_window(
-    app: &AppHandle,
-    key: &str,
-    url: &str,
-) -> Result<String, String> {
-    let prefix = workspace_window_prefix(key);
-    let config_key = config::local_window_key(key);
-    let restore = match unbury_or_restore(app, &prefix, &config_key, || {
-        new_workspace_window_label(key)
-    })? {
-        OpenOutcome::Unburied(label) => return Ok(label),
-        OpenOutcome::Build(restore) => restore,
-    };
-    let title = workspace_title(key);
-    let label = restore.label.clone();
-    build_workspace_window(
-        app,
-        WindowSpec {
-            label: &restore.label,
-            session_id: &restore.label,
-            title: &title,
-            url,
-            url_hash_seed: &restore.url_hash,
-            config_key,
-            zoom_seed: restore.zoom,
-            connecting: None,
-            kind: None,
-        },
-    )?;
-    Ok(label)
 }
 
 /// Open (or rebuild-in-place at the same label) a native window for a
@@ -747,7 +710,7 @@ struct WindowSpec<'a> {
 }
 
 /// Build and show a chan-style workspace webview window on the main
-/// thread. Internal: call `spawn_local_workspace_window` /
+/// thread. Internal: call `open_watched_local_window` (the watcher path) /
 /// `spawn_outbound_workspace_window` from outside. Centralising the
 /// key-bridge JS, the size defaults, the zoom-hotkey polyfill, and
 /// the drag-drop handler off in one place means workspace UX changes
@@ -1127,14 +1090,6 @@ fn ensure_window_capacity(app: &AppHandle, prefix: &str) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-/// Destroy every webview window opened for this local workspace when
-/// the local runtime is closed. Walks `webview_windows()` and
-/// matches by prefix because the user may have opened several
-/// windows for the same workspace.
-pub fn close_local_workspace_windows(app: &AppHandle, key: &str) {
-    close_windows_with_prefix(app, &workspace_window_prefix(key))
 }
 
 /// Destroy every webview window opened for this outbound URL
