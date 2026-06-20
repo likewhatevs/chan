@@ -48,6 +48,8 @@ pub struct PreferencesView {
     pub page_width_ratio: f64,
     #[serde(default)]
     pub overlay_maximized: bool,
+    #[serde(default)]
+    pub cs_dismissed: bool,
 }
 
 fn default_empty_pane_carousel_cycling() -> bool {
@@ -83,6 +85,7 @@ pub(super) fn preferences_view(state: &AppState) -> Result<PreferencesView, Erro
         empty_pane_carousel_cycling: editor.empty_pane_carousel_cycling,
         page_width_ratio: editor.page_width_ratio,
         overlay_maximized: editor.overlay_maximized,
+        cs_dismissed: editor.cs_dismissed,
     })
 }
 
@@ -259,6 +262,7 @@ fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Erro
         editor.empty_pane_carousel_cycling = view.empty_pane_carousel_cycling;
         editor.page_width_ratio = view.page_width_ratio;
         editor.overlay_maximized = view.overlay_maximized;
+        editor.cs_dismissed = view.cs_dismissed;
         editor.save()?;
     }
     {
