@@ -483,13 +483,18 @@ mod tests {
             watch_loop(Some("local"), feed, surface_in, view, cancel_in.notified()).await;
         });
 
-        // Give the loop time to run the gap iteration + the re-reconcile, then stop it.
+        // Give the loop time to run the gap iteration + the re-reconcile, then
+        // capture the open set WHILE it is parked in select. Cancel now makes the
+        // loop reconcile its windows away (the disconnect semantics — the watcher
+        // is the sole driver of both open and close), so the gap-catch's open must
+        // be observed BEFORE tearing the loop down, not after.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let opened_during_run = surface.opened.lock().unwrap().clone();
         cancel.notify_waiters();
         let _ = task.await;
 
         assert_eq!(
-            *surface.opened.lock().unwrap(),
+            opened_during_run,
             vec!["local::w-1".to_string()],
             "create-before-snapshot must catch the gap-fired notify_waiters and reconcile",
         );
