@@ -16,9 +16,11 @@
 ///   * On app load, `pruneEditorBuffers()` evicts entries past the TTL
 ///     and total-size cap.
 ///
-/// Buffers are keyed on the file's workspace-relative path, not the
-/// in-memory tab id: tab ids are regenerated on every page load, so a
-/// path key is what survives the reload the recovery exists for.
+/// Buffers are keyed on the workspace root plus the file's workspace-
+/// relative path, not the in-memory tab id: tab ids are regenerated on
+/// every page load, so a path key is what survives the reload the
+/// recovery exists for, and the root scopes it so two workspaces with a
+/// same-relative-path file (e.g. README.md) do not share one buffer.
 ///
 /// Restore eligibility turns on `sessionId`. Each page load gets a
 /// fresh SESSION_ID; a buffer carries the id of the load that wrote
@@ -35,6 +37,8 @@
 /// Two tabs open against the same path share a buffer key. That is
 /// acceptable: same file, same unsaved-content semantic, and whoever
 /// mounts first reads the banner.
+
+import { workspace } from "./workspace.svelte";
 
 const BUFFER_KEY_PREFIX = "chan:editor-buffer:";
 /// 7-day TTL. Stale buffers from forgotten tabs evict on the next page
@@ -152,7 +156,14 @@ export function flushPendingBufferWrites(): number {
 }
 
 export function bufferKey(key: string): string {
-  return `${BUFFER_KEY_PREFIX}${key}`;
+  // Namespace by the workspace root so two workspaces with a file at the
+  // same relative path (e.g. README.md) do not collide on one recovery
+  // buffer. When no workspace is mounted yet (boot / SSR / unit tests)
+  // there is no editing in flight, so fall back to the un-namespaced key.
+  const root = workspace.info?.root;
+  return root
+    ? `${BUFFER_KEY_PREFIX}${root}:${key}`
+    : `${BUFFER_KEY_PREFIX}${key}`;
 }
 
 export function writeEditorBuffer(

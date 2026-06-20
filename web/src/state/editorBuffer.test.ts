@@ -29,6 +29,8 @@ import {
   SESSION_ID,
   writeEditorBuffer,
 } from "./editorBuffer";
+import { workspace } from "./workspace.svelte";
+import type { WorkspaceInfo } from "../api/types";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -82,6 +84,27 @@ describe("editorBuffer roundtrip", () => {
 
   test("bufferKey uses the expected namespace prefix", () => {
     expect(bufferKey("notes/a.md")).toBe("chan:editor-buffer:notes/a.md");
+  });
+});
+
+describe("editorBuffer workspace namespacing", () => {
+  afterEach(() => {
+    workspace.info = null;
+  });
+
+  test("namespaces the key by workspace root so a same-relpath file in two workspaces does not collide", () => {
+    workspace.info = { root: "/ws-a" } as unknown as WorkspaceInfo;
+    const a = bufferKey("README.md");
+    workspace.info = { root: "/ws-b" } as unknown as WorkspaceInfo;
+    const b = bufferKey("README.md");
+    expect(a).not.toBe(b);
+    expect(a).toBe("chan:editor-buffer:/ws-a:README.md");
+    expect(b).toBe("chan:editor-buffer:/ws-b:README.md");
+  });
+
+  test("falls back to the un-namespaced key when no workspace is mounted", () => {
+    workspace.info = null;
+    expect(bufferKey("README.md")).toBe("chan:editor-buffer:README.md");
   });
 });
 
