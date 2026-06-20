@@ -6659,7 +6659,9 @@ mod tests {
             .put_session("win-tree", br#"{"treeExpanded":{"":true}}"#)
             .unwrap();
         workspace.put_session("win-empty", b"").unwrap();
-        // The dead-terminal phantom shape: a real on-disk sdme blob.
+        // A terminal-only window: now KEPT (mirrors the SPA persist gate — it
+        // restores with a fresh shell). Formerly pruned as a "dead-terminal
+        // phantom"; superseded by the keep-the-structure rule (4412f64c).
         workspace
             .put_session(
                 "win-term",
@@ -6670,7 +6672,9 @@ mod tests {
         prune_empty_sessions(sessions);
 
         let keys = workspace.list_sessions().unwrap();
-        assert_eq!(keys, vec!["win-real"]);
+        // win-term survives now (terminal-only is persistable structure); the
+        // null / tree-only / empty phantoms are still dropped.
+        assert_eq!(keys, vec!["win-real", "win-term"]);
         // Real content is byte-preserved, not just retained.
         assert_eq!(
             workspace.get_session("win-real").unwrap().unwrap(),
@@ -6679,7 +6683,10 @@ mod tests {
 
         // Idempotent: a second sweep with no phantoms left is a no-op.
         prune_empty_sessions(sessions);
-        assert_eq!(workspace.list_sessions().unwrap(), vec!["win-real"]);
+        assert_eq!(
+            workspace.list_sessions().unwrap(),
+            vec!["win-real", "win-term"]
+        );
     }
 
     // ---- resolve_link ----
