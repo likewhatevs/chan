@@ -625,6 +625,10 @@ export type PreflightSnapshot = {
   /// Non-blocking `cs` alias offer; rendered as a dismissible card, never
   /// part of the lock.
   cs_link?: CsLink | null;
+  /// The per-library `cs` dismissal pref, surfaced on the snapshot so the
+  /// card can gate at pre-flight time, before the workspace preferences
+  /// finish loading. Always present; defaults false.
+  cs_dismissed: boolean;
   /// Post-open workspace facts for the onboarding nudge; present once ready.
   summary?: WorkspaceSummary | null;
 };

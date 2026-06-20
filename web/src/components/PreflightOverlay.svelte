@@ -37,13 +37,16 @@
   // never gates `locked`, so it renders as a dismissible corner card once the
   // workspace is ready (or right away when nothing locked the boot). Dismissal
   // persists in the per-library server prefs (so it travels with the library
-  // and stays consistent across clients), read from the loaded workspace
-  // preferences. `csDismissedLocal` is the optimistic in-session flip so the
-  // card hides instantly on the × click, before the prefs round-trip lands.
+  // and stays consistent across clients). The card gates at pre-flight time,
+  // before the workspace preferences finish loading, so it reads the dismissal
+  // from the snapshot, where the server surfaces the same per-library pref
+  // alongside `cs_link`. `csDismissedLocal` is the optimistic in-session flip
+  // so the card hides instantly on the × click, before the prefs round-trip
+  // lands and the next poll reflects it.
   const csOffer = $derived(snapshot?.cs_link ?? null);
   let csDismissedLocal = $state(false);
   const csDismissed = $derived(
-    csDismissedLocal || (workspace.info?.preferences?.cs_dismissed ?? false),
+    csDismissedLocal || (snapshot?.cs_dismissed ?? false),
   );
   let csBusy = $state(false);
   let csResult = $state<string | null>(null);
