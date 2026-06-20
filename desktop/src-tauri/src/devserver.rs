@@ -42,6 +42,10 @@ pub struct DevserverConn {
     /// Sent as `Authorization: Bearer <token>` on every endpoint except the
     /// unauthenticated info probe.
     pub token: String,
+    /// Human display name for window titles (the server's `host_label`, else the
+    /// dialed host). Resolved once at connect and carried on the conn so a
+    /// reconnect (which clones the conn) reuses it without re-probing.
+    pub name: String,
 }
 
 /// In-memory map of connected devservers keyed by `Devserver.id`. A
@@ -707,6 +711,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 8787,
             token: "dt".into(),
+            name: "box".into(),
         };
         // Off (registered-but-unmounted): token:"" ⇒ empty URL.
         let off = WorkspaceEntry {
@@ -812,6 +817,7 @@ mod tests {
                 host: "127.0.0.1".into(),
                 port: 8787,
                 token: "tok".into(),
+                name: "box".into(),
             },
         );
         assert!(conns.is_connected("ds1"));
@@ -858,6 +864,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port,
             token: "dt".into(),
+            name: "box".into(),
         };
         let url = open_terminal_with_label(&conn, "guard")
             .await

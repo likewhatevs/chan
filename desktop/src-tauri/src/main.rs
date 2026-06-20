@@ -1215,7 +1215,19 @@ async fn connect_devserver(
         label = %info.host_label,
         "connected to devserver"
     );
-    let conn = devserver::DevserverConn { host, port, token };
+    // Window-title display name: the server's host_label, else the dialed host
+    // (a bare tunnel host like 127.0.0.1 is a poor title, but better than blank).
+    let name = if info.host_label.trim().is_empty() {
+        host.clone()
+    } else {
+        info.host_label.clone()
+    };
+    let conn = devserver::DevserverConn {
+        host,
+        port,
+        token,
+        name,
+    };
     state.devservers.set(id.clone(), conn.clone());
     // The window watcher is the SOLE driver of this devserver's native windows:
     // spawn it over the library feed (`/api/library/windows/watch`), and its

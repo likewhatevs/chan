@@ -36,17 +36,26 @@ const LOCAL_LIBRARY_ID: &str = "local";
 /// in-process loopback library; remote windows load a connected devserver's SPA
 /// at `host:port` (through the connecting screen, since the remote may be down).
 enum WindowOpener {
-    Local { addr: SocketAddr },
-    Remote { host: String, port: u16 },
+    Local {
+        addr: SocketAddr,
+    },
+    Remote {
+        host: String,
+        port: u16,
+        /// Devserver display name for the window title (see `DevserverConn.name`).
+        devserver_name: String,
+    },
 }
 
 impl WindowOpener {
     fn open(&self, app: &AppHandle, record: &WindowRecord) -> Result<(), String> {
         match self {
             WindowOpener::Local { addr } => serve::open_watched_local_window(app, *addr, record),
-            WindowOpener::Remote { host, port } => {
-                serve::open_watched_remote_window(app, host, *port, record)
-            }
+            WindowOpener::Remote {
+                host,
+                port,
+                devserver_name,
+            } => serve::open_watched_remote_window(app, host, *port, devserver_name, record),
         }
     }
 }
@@ -297,6 +306,7 @@ pub(crate) async fn spawn_devserver_window_watcher(
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let host = conn.host.clone();
     let port = conn.port;
+    let devserver_name = conn.name.clone();
     // The WS feed task owns `conn`, pushes changes into `snapshot` + wakes
     // `change`, and stops when `cancel` flips true.
     tauri::async_runtime::spawn(run_devserver_window_feed(
@@ -307,7 +317,11 @@ pub(crate) async fn spawn_devserver_window_watcher(
     ));
     let surface = TauriNativeSurface {
         app,
-        opener: WindowOpener::Remote { host, port },
+        opener: WindowOpener::Remote {
+            host,
+            port,
+            devserver_name,
+        },
         in_flight: Arc::new(Mutex::new(HashSet::new())),
     };
     let feed = DevserverWindowFeed { snapshot, change };

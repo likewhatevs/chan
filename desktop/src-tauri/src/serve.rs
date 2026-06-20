@@ -184,6 +184,29 @@ fn local_title(key: &str, home: Option<&Path>) -> String {
     format!("{icon} {key}")
 }
 
+/// Title for a devserver (remote) webview, per spec `icon devserver / repo`:
+/// the remote glyph, the devserver's display name, then the workspace's repo
+/// (the path basename). `build_workspace_window` appends ` Window {N}`. A
+/// terminal carries no workspace, so it reads `icon devserver Terminal`. The
+/// full remote path is NOT used (it would read as a meaningless local path —
+/// `workspace_title`'s home-vs-computer glyph is wrong for a remote box).
+fn devserver_window_title(devserver_name: &str, record: &WindowRecord) -> String {
+    match record.kind {
+        WindowKind::Terminal => format!("{ICON_OUTBOUND} {devserver_name} Terminal"),
+        WindowKind::Workspace => {
+            let repo = record
+                .workspace_path
+                .as_deref()
+                .and_then(|p| Path::new(p).file_name())
+                .and_then(|n| n.to_str());
+            match repo {
+                Some(repo) => format!("{ICON_OUTBOUND} {devserver_name} / {repo}"),
+                None => format!("{ICON_OUTBOUND} {devserver_name}"),
+            }
+        }
+    }
+}
+
 /// Stable window-label prefix for an outbound URL attachment.
 pub fn outbound_window_prefix(id: &str) -> String {
     let mut h = DefaultHasher::new();
@@ -288,20 +311,15 @@ pub(crate) fn open_watched_remote_window(
     app: &AppHandle,
     host: &str,
     port: u16,
+    devserver_name: &str,
     record: &WindowRecord,
 ) -> Result<(), String> {
     let label = crate::window_watcher::native_label(record);
     let url = crate::devserver::assemble_tenant_url(host, port, &record.prefix, &record.token)?;
-    let (title, kind) = match record.kind {
-        WindowKind::Terminal => ("Terminal".to_string(), Some("terminal")),
-        WindowKind::Workspace => (
-            record
-                .workspace_path
-                .as_deref()
-                .map(workspace_title)
-                .unwrap_or_else(|| "Workspace".to_string()),
-            None,
-        ),
+    let title = devserver_window_title(devserver_name, record);
+    let kind = match record.kind {
+        WindowKind::Terminal => Some("terminal"),
+        WindowKind::Workspace => None,
     };
     build_workspace_window(
         app,
