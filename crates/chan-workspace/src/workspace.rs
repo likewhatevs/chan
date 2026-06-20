@@ -3525,31 +3525,30 @@ fn persist_rename_log(graph_dir: &std::path::Path, log: &HashMap<String, String>
     fs_ops::atomic_write(&graph_dir.join(RENAME_LOG_FILE), &body)
 }
 
-/// True when a persisted session blob carries no real window content and
-/// is therefore a phantom "saved window with nothing in it".
+/// True when a persisted session blob carries no PERSISTABLE window structure
+/// and is therefore a phantom "saved window with nothing in it" — safe to GC.
 ///
-/// The session schema is the host's (frontend's) concern and otherwise
-/// opaque to chan-workspace; this is the single place we peek, and only at
-/// the layout's `tab kind` shape. It GCs phantom blobs written by pre-fix
-/// builds and by the terminal-only case:
-///   - a `null` body (the old `putSession(null)` path);
-///   - a `treeExpanded`-only object (a folder toggled in an empty window);
-///   - a layout whose tabs are **all terminals** (`"k":"t"`). Terminal tabs
-///     are ephemeral (the PTY dies on restart; a saved `tsid` just respawns
-///     a fresh shell), so a terminal-only window has no durable content —
-///     it should neither persist nor survive the next open. This is the
-///     `9862dfa1` follow-up @@Alex's hand-smoke caught: a non-null layout
-///     with one dead-terminal tab was slipping through the old `layout`-
-///     non-null check.
+/// The session schema is the host's (frontend's) concern and otherwise opaque
+/// to chan-workspace; this is the single place we peek, and only at the
+/// layout's node/tab shape. It mirrors the frontend's
+/// `layoutHasPersistableStructure` gate (`tabs.svelte.ts`): a window is worth
+/// keeping if its layout has a SPLIT (`"k":"s"`) — the pane structure restores
+/// even with empty/fresh panes — OR any TAB (a terminal tab respawns a fresh
+/// shell on restart, which the frontend now persists deliberately). The
+/// phantoms are: a `null` body (the old `putSession(null)` path); a
+/// `treeExpanded`-only object (a folder toggled in an empty window); and a
+/// single empty pane (no split, no tabs).
 ///
-/// The fixed frontend deletes such sessions instead of writing them, so no
-/// new phantoms appear; this clears the existing backlog on open.
+/// Supersedes the `9862dfa1` "prune all-terminal layouts" rule: terminal-only
+/// and empty-split windows now persist their structure so they RESTORE instead
+/// of vanishing on the next off->on / restart. The fixed frontend stops writing
+/// true phantoms; this clears the existing backlog on open.
 ///
 /// Conservative by design: we only prune shapes we positively recognize as
-/// empty. Empty/whitespace bytes and JSON `null` are empty; an object is
-/// empty iff it has no non-null `layout`, or a layout with no non-terminal
-/// tab; anything else (array, scalar, an unknown node/tab shape, or
-/// unparseable bytes) is left untouched.
+/// empty. Empty/whitespace bytes and JSON `null` are empty; an object is empty
+/// iff it has no non-null `layout`, or a layout with no persistable structure;
+/// anything else (array, scalar, an unknown node/tab shape, or unparseable
+/// bytes) is left untouched.
 fn session_blob_is_empty(bytes: &[u8]) -> bool {
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return true;
@@ -3559,47 +3558,38 @@ fn session_blob_is_empty(bytes: &[u8]) -> bool {
         Ok(serde_json::Value::Object(map)) => match map.get("layout") {
             // No layout (or explicit null): treeExpanded-only / empty blob.
             None | Some(serde_json::Value::Null) => true,
-            // A layout is durable content only if it has a non-terminal tab.
-            Some(layout) => !layout_has_durable_content(layout),
+            // Keep a layout with persistable structure (a split, or any tab).
+            Some(layout) => !layout_is_persistable(layout),
         },
         _ => false,
     }
 }
 
-/// Walk a serialized layout node tree; report whether any tab is a durable
-/// (non-terminal) surface. The serialized shape is the frontend's
-/// `serializeLayout()` output: a leaf `{"k":"l","t":[<tabs>],"bt":[…]?}` or a
-/// split `{"k":"s","a":<node>,"b":<node>}`; a tab's kind is `"k"` (terminal
-/// is `"t"`, defaulting to file when absent). Unknown node/tab shapes count
-/// as durable — we never prune something we don't positively understand.
-fn layout_has_durable_content(node: &serde_json::Value) -> bool {
+/// Walk a serialized layout node tree; report whether it has PERSISTABLE
+/// structure (the Rust mirror of the frontend's `layoutHasPersistableStructure`).
+/// The serialized shape is the frontend's `serializeLayout()` output: a leaf
+/// `{"k":"l","t":[<tabs>],"bt":[…]?}` or a split `{"k":"s","a":<node>,"b":<node>}`.
+/// A split persists its pane structure even with empty/fresh panes; a leaf
+/// persists once it holds ANY tab (terminal tabs respawn fresh shells on
+/// restore). Only a single empty pane has nothing to keep. Unknown node shapes
+/// count as persistable — we never prune something we don't positively
+/// understand.
+fn layout_is_persistable(node: &serde_json::Value) -> bool {
     let serde_json::Value::Object(map) = node else {
         return true; // unknown shape: be conservative.
     };
     match map.get("k").and_then(serde_json::Value::as_str) {
-        Some("l") => {
-            // Durable iff any tab is non-terminal. Inspect front tabs `t`
-            // plus legacy back tabs `bt` (Hybrid). A leaf with no (or only
-            // terminal) tabs has no durable content.
-            ["t", "bt"]
-                .iter()
-                .filter_map(|key| map.get(*key))
-                .filter_map(serde_json::Value::as_array)
-                .flatten()
-                .any(|tab| !tab_is_terminal(tab))
-        }
-        Some("s") => {
-            let durable = |key| map.get(key).is_some_and(layout_has_durable_content);
-            durable("a") || durable("b")
-        }
+        // A leaf persists once it holds any tab — front `t` or legacy Hybrid
+        // back `bt`. An empty pane (no tabs) has nothing to keep.
+        Some("l") => ["t", "bt"]
+            .iter()
+            .filter_map(|key| map.get(*key))
+            .filter_map(serde_json::Value::as_array)
+            .any(|tabs| !tabs.is_empty()),
+        // A split persists its pane structure regardless of pane content.
+        Some("s") => true,
         _ => true, // unknown node kind: be conservative.
     }
-}
-
-/// A serialized tab is a terminal iff its kind `"k"` is `"t"`. Kind defaults
-/// to file (`"f"`) when absent, so a tab with no `k` is non-terminal.
-fn tab_is_terminal(tab: &serde_json::Value) -> bool {
-    tab.get("k").and_then(serde_json::Value::as_str) == Some("t")
 }
 
 /// Best-effort GC of phantom (content-less) session blobs in `sessions`.
@@ -6600,38 +6590,43 @@ mod tests {
         assert!(session_blob_is_empty(
             br#"{"layout":null,"treeExpanded":{"docs":true}}"#
         ));
-        // A layout with no tabs, or whose tabs are ALL terminals, is an
-        // ephemeral terminal-only window → phantom. This is the exact
-        // dead-terminal shape @@Alex's hand-smoke caught (a single terminal
-        // tab carrying a now-dead tsid).
+        // A single empty pane (no split, no tabs) is a phantom.
         assert!(session_blob_is_empty(br#"{"layout":{"k":"l","t":[]}}"#));
-        assert!(session_blob_is_empty(
+
+        // PERSISTABLE STRUCTURE is kept (mirrors layoutHasPersistableStructure;
+        // supersedes 9862dfa1's prune-all-terminals rule): a terminal-only
+        // window persists so it restores with a fresh shell — even a single
+        // dead-terminal tab, the shape that used to be pruned.
+        assert!(!session_blob_is_empty(
             br#"{"layout":{"k":"l","t":[{"k":"t","n":"Terminal-2","tsid":"56bd5182f75a4ba055f7fe7bed7676a3","a":1}],"f":1},"treeExpanded":{"":true}}"#
         ));
-        // Multiple terminals, still no durable surface → phantom. Splits
-        // whose every leaf is terminal-only are also empty.
-        assert!(session_blob_is_empty(
+        assert!(!session_blob_is_empty(
             br#"{"layout":{"k":"l","t":[{"k":"t"},{"k":"t"}]}}"#
         ));
-        assert!(session_blob_is_empty(
+        // A split persists its pane structure even when every leaf is
+        // terminal-only OR empty.
+        assert!(!session_blob_is_empty(
             br#"{"layout":{"k":"s","a":{"k":"l","t":[{"k":"t"}]},"b":{"k":"l","t":[{"k":"t"}]}}}"#
+        ));
+        assert!(!session_blob_is_empty(
+            br#"{"layout":{"k":"s","a":{"k":"l","t":[]},"b":{"k":"l","t":[]}}}"#
         ));
 
         // A layout with any non-terminal tab is durable content → kept.
         assert!(!session_blob_is_empty(
             br#"{"layout":{"k":"l","t":[{"k":"f","p":"note.md"}]}}"#
         ));
-        // Kind defaults to file when absent → non-terminal → kept.
+        // Kind defaults to file when absent → still a tab → kept.
         assert!(!session_blob_is_empty(br#"{"layout":{"k":"l","t":[{}]}}"#));
         // Other durable surfaces (browser/graph/hybrid/dashboard) are kept.
         for kind in ["b", "g", "h", "d", "s"] {
             let blob = format!(r#"{{"layout":{{"k":"l","t":[{{"k":"{kind}"}}]}}}}"#);
             assert!(
                 !session_blob_is_empty(blob.as_bytes()),
-                "kind {kind:?} is a durable tab and must not be pruned",
+                "kind {kind:?} is a tab and must not be pruned",
             );
         }
-        // A terminal alongside a file is durable (the file is real content).
+        // A terminal alongside a file is kept (both are tabs).
         assert!(!session_blob_is_empty(
             br#"{"layout":{"k":"l","t":[{"k":"t"},{"k":"f"}]}}"#
         ));
@@ -6639,7 +6634,7 @@ mod tests {
         assert!(!session_blob_is_empty(
             br#"{"layout":{"k":"s","a":{"k":"l","t":[{"k":"t"}]},"b":{"k":"l","t":[{"k":"f"}]}}}"#
         ));
-        // A non-terminal in the legacy Hybrid back-tabs `bt` is still durable.
+        // A tab in the legacy Hybrid back-tabs `bt` is still a tab → kept.
         assert!(!session_blob_is_empty(
             br#"{"layout":{"k":"l","t":[{"k":"t"}],"bt":[{"k":"f"}]}}"#
         ));
