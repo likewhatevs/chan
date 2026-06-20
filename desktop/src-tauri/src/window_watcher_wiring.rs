@@ -168,7 +168,7 @@ pub(crate) fn spawn_local_window_watcher(app: AppHandle, state: Arc<AppState>) {
     // cancelled — `cancel` is a future that only resolves at process exit
     // (which drops the spawned task).
     tauri::async_runtime::spawn(watch_loop(
-        LOCAL_LIBRARY_ID,
+        Some(LOCAL_LIBRARY_ID),
         feed,
         surface,
         view,
@@ -276,27 +276,22 @@ async fn stream_window_feed(
 
 /// Spawn a connected devserver's window watcher: one [`watch_loop`] driven by the
 /// devserver's `/api/library/windows/watch` feed, opening windows as remote SPA
-/// webviews. Returns `(library_id, cancel)` — flip `cancel` (a `watch::Sender`)
-/// to `true` on disconnect to stop the watcher + its feed task; the caller then
-/// reconciles the devserver's native windows away by the `library_id` prefix
-/// (detach, not reap).
+/// webviews. Returns the `cancel` (a `watch::Sender`) — flip it to `true` on
+/// disconnect to stop the watcher + its feed task; the watcher itself reconciles
+/// its native windows away on cancel (detach, not reap).
 ///
-/// `library_id` (`lib-<hex>`) is learned from a first HTTP fetch (records carry
-/// it) because the close-side label filter needs it up front; a connected
-/// devserver always has ≥1 window (its boot terminal), so the seed is non-empty.
-/// A `&'static` copy is leaked for the shared `watch_loop` signature (a few bytes
-/// per connect); the owned `String` is returned for the caller to store + use at
-/// disconnect.
+/// The `library_id` (`lib-<hex>`) is NOT needed up front: an EMPTY feed is valid
+/// (a devserver with no windows, or one the user emptied before disconnecting),
+/// so the watcher learns the id LAZILY from the first record (`watch_loop`). The
+/// initial seed is best-effort — an empty or failed fetch is fine; the `/watch`
+/// WS pushes the authoritative snapshot on connect.
 pub(crate) async fn spawn_devserver_window_watcher(
     app: AppHandle,
     conn: DevserverConn,
-) -> Result<(String, watch::Sender<bool>), String> {
-    let seed = crate::devserver::fetch_library_windows(&conn).await?;
-    let library_id = match seed.first() {
-        Some(record) => record.library_id.clone(),
-        None => return Err("devserver library feed is empty (no boot window)".into()),
-    };
-    let library_id_static: &'static str = Box::leak(library_id.clone().into_boxed_str());
+) -> Result<watch::Sender<bool>, String> {
+    let seed = crate::devserver::fetch_library_windows(&conn)
+        .await
+        .unwrap_or_default();
     let snapshot = Arc::new(Mutex::new(seed));
     let change = Arc::new(Notify::new());
     let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -319,7 +314,7 @@ pub(crate) async fn spawn_devserver_window_watcher(
     let view = Arc::new(WatcherViewState::default());
     let mut cancel_loop = cancel_rx;
     tauri::async_runtime::spawn(watch_loop(
-        library_id_static,
+        None,
         feed,
         surface,
         view,
@@ -331,5 +326,5 @@ pub(crate) async fn spawn_devserver_window_watcher(
             }
         },
     ));
-    Ok((library_id, cancel_tx))
+    Ok(cancel_tx)
 }

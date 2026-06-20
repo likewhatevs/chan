@@ -103,13 +103,13 @@ pub struct AppState {
     /// disconnect tears down exactly its windows, and a reconnect re-opens its
     /// workspace windows with a fresh token under the same label.
     pub devserver_windows: Mutex<HashMap<String, Vec<DevserverWindow>>>,
-    /// Per connected devserver (`Devserver.id`), its window watcher's
-    /// `(library_id, cancel)`. The watcher drives that devserver's native
-    /// windows as a pure reconcile of its `/api/library/windows` feed; on
-    /// disconnect the `cancel` flips and the `library_id` (`lib-<hex>`) closes
-    /// the `{library_id}::*` windows (detach, not reap). Supersedes the
+    /// Per connected devserver (`Devserver.id`), the `cancel` handle for its
+    /// window watcher. The watcher drives that devserver's native windows as a
+    /// pure reconcile of its `/api/library/windows` feed; flipping `cancel` on
+    /// disconnect stops it AND makes it reconcile its windows away (detach, not
+    /// reap — it learned its `library_id` lazily from the feed). Supersedes the
     /// imperative `devserver_windows` tracking for the watcher-driven path.
-    pub devserver_watchers: Mutex<HashMap<String, (String, tokio::sync::watch::Sender<bool>)>>,
+    pub devserver_watchers: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     /// The embedded control-terminal tenant prefix (`/control-N`) running each
     /// scripted devserver's connect script, keyed by `Devserver.id`. Kept
     /// separate from `devserver_windows` because this is a LOCAL embedded
@@ -624,6 +624,33 @@ fn persist_enabled_workspaces(state: &AppState) {
     }
 }
 
+/// Whether this devserver's first-connect boot terminal was already minted (the
+/// persisted one-shot flag). An unknown devserver reads as not bootstrapped, so
+/// a fresh add mints on its first connect.
+fn devserver_bootstrapped(state: &AppState, id: &str) -> bool {
+    state
+        .store
+        .lock()
+        .unwrap()
+        .get()
+        .ok()
+        .map(|cfg| cfg.devservers.iter().any(|d| d.id == id && d.bootstrapped))
+        .unwrap_or(false)
+}
+
+/// Mark this devserver bootstrapped (its first-connect boot terminal was minted)
+/// and persist it, so a reconnect after the user deleted that terminal does not
+/// re-mint one.
+fn set_devserver_bootstrapped(state: &AppState, id: &str) -> Result<(), String> {
+    let mut store = state.store.lock().unwrap();
+    let mut cfg = store.get().map_err(err)?;
+    if let Some(ds) = cfg.devservers.iter_mut().find(|d| d.id == id) {
+        ds.bootstrapped = true;
+        store.save(&cfg).map_err(err)?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
     state.store.lock().unwrap().get().map_err(err)
@@ -822,6 +849,9 @@ fn add_devserver(
                     script,
                     label,
                     added_at: config::current_millis(),
+                    // A freshly-added devserver mints its boot terminal on the
+                    // first connect; this flips true there.
+                    bootstrapped: false,
                 };
                 let id = entry.id.clone();
                 cfg.devservers.push(entry);
@@ -1189,17 +1219,24 @@ async fn connect_devserver(
     state.devservers.set(id.clone(), conn.clone());
     // The window watcher is the SOLE driver of this devserver's native windows:
     // spawn it over the library feed (`/api/library/windows/watch`), and its
-    // first snapshot reconciles open the persisted windows — including the
-    // library's auto-created boot terminal, so there is no imperative
-    // "open one" fallback. Store `(library_id, cancel)` so disconnect can stop
-    // the watcher + close its `{library_id}::*` windows.
-    let (library_id, cancel) =
-        window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn).await?;
+    // snapshots reconcile open whatever the devserver persisted. An EMPTY feed is
+    // valid (a fresh devserver, or one the user emptied before disconnecting).
+    let cancel =
+        window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn.clone()).await?;
     state
         .devserver_watchers
         .lock()
         .unwrap()
-        .insert(id.clone(), (library_id, cancel));
+        .insert(id.clone(), cancel);
+    // FIRST connect only: mint a standalone boot terminal (the watcher reconciles
+    // it open) so the user lands on a terminal alongside any persisted windows.
+    // Gated by a persisted per-devserver flag — if the user later DELETES it and
+    // reconnects, we do NOT re-mint (@@Alex: "we save that state ... we dont open
+    // a new terminal"). One-shot bootstrap; the feed drives every window after.
+    if !devserver_bootstrapped(&state, &id) {
+        devserver::mint_library_window(&conn, chan_server::WindowKind::Terminal, None).await?;
+        set_devserver_bootstrapped(&state, &id)?;
+    }
     // The control terminal stays open after connect. It runs the connect
     // script, which may keep streaming or prompt for ssh credentials, so
     // burying it on connect hid live output and read as a flash. The user
@@ -1236,13 +1273,12 @@ fn disconnect_devserver(
     id: String,
 ) -> Result<(), String> {
     state.devservers.remove(&id);
-    // Stop the window watcher + reconcile its windows away. Detach, NOT reap:
-    // the devserver keeps its window set server-side, so a later reconnect
-    // restores the same windows. The control terminal + any residual imperative
+    // Stop the window watcher. Flipping its cancel makes IT reconcile its windows
+    // away (detach, NOT reap: the devserver keeps its set server-side, so a later
+    // reconnect restores them). The control terminal + any residual imperative
     // windows are torn down separately below.
-    if let Some((library_id, cancel)) = state.devserver_watchers.lock().unwrap().remove(&id) {
+    if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(&id) {
         let _ = cancel.send(true);
-        serve::close_windows_with_prefix(&app, &format!("{library_id}::"));
     }
     teardown_devserver_windows(&app, &state, &id);
     let _ = app.emit(serve::SERVES_CHANGED, ());
@@ -1423,20 +1459,17 @@ async fn reconnect_devserver(
                 // first snapshot re-opens the restarted devserver's persisted set.
                 // (A non-rotated reconnect needs nothing: the feed task's own
                 // reconnect-on-drop self-heals with the same token.)
-                if let Some((library_id, cancel)) =
-                    state.devserver_watchers.lock().unwrap().remove(&id)
-                {
-                    let _ = cancel.send(true);
-                    serve::close_windows_with_prefix(&app, &format!("{library_id}::"));
+                if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(&id) {
+                    let _ = cancel.send(true); // the watcher reconciles its windows away
                 }
-                let (library_id, cancel) =
+                let cancel =
                     window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), probe)
                         .await?;
                 state
                     .devserver_watchers
                     .lock()
                     .unwrap()
-                    .insert(id.clone(), (library_id, cancel));
+                    .insert(id.clone(), cancel);
             }
             let _ = app.emit(serve::SERVES_CHANGED, ());
             return Ok(true);

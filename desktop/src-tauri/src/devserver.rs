@@ -448,6 +448,37 @@ pub async fn fetch_library_windows(
         .map_err(|e| format!("decoding library windows: {e}"))
 }
 
+/// Mint a window on a connected devserver's library
+/// (`POST /api/library/windows`): the library assigns the id, persists the
+/// record, and fires the watch, so the desktop's watcher reconciles the new
+/// window open — no client-side open. Used for the first-connect boot terminal
+/// (`kind: Terminal`). (The D3.1 mint helper, pulled forward for the
+/// D1-completion boot-terminal bootstrap; the launcher-open reroute stays D3.)
+pub async fn mint_library_window(
+    conn: &DevserverConn,
+    kind: chan_server::WindowKind,
+    workspace_path: Option<String>,
+) -> Result<chan_server::WindowRecord, String> {
+    let url = format!("{}/api/library/windows", base_origin(&conn.host, conn.port));
+    let body = chan_server::CreateWindow {
+        kind,
+        workspace_path,
+    };
+    let resp = http_client()?
+        .post(&url)
+        .bearer_auth(&conn.token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("minting library window: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("library window mint returned HTTP {}", resp.status()));
+    }
+    resp.json::<chan_server::WindowRecord>()
+        .await
+        .map_err(|e| format!("decoding minted window: {e}"))
+}
+
 /// The `DELETE` URL for unmounting a workspace tenant. The server route is
 /// an axum wildcard, so `prefix` (an absolute route path like
 /// `/api/notes-1a2b3c`) is appended verbatim after the collection path.

@@ -169,7 +169,7 @@ impl WatcherViewState {
 /// it — not missed. (Each is also `enable()`d to register the waiter eagerly;
 /// belt-and-suspenders — the generation capture is what's load-bearing here.)
 pub async fn watch_loop<F, S, C>(
-    library_id: &str,
+    initial_library_id: Option<&str>,
     feed: F,
     surface: S,
     view: Arc<WatcherViewState>,
@@ -179,6 +179,13 @@ pub async fn watch_loop<F, S, C>(
     S: NativeSurface,
     C: Future<Output = ()>,
 {
+    // The library id is LAZY. A devserver whose feed is EMPTY (the user deleted
+    // every window before disconnecting — a valid state) has no record to read it
+    // from. Learn/refresh it from the feed records; the local library passes it
+    // eagerly (its id is constant). While it is unknown there are NO windows, so
+    // reconcile is a no-op — skip it. Once learned it is REMEMBERED, so a feed
+    // that later empties still closes the library's windows.
+    let mut library_id = initial_library_id.map(str::to_string);
     let feed_notify = feed.change_notify();
     tokio::pin!(cancel);
     loop {
@@ -193,17 +200,26 @@ pub async fn watch_loop<F, S, C>(
         tokio::pin!(view_changed);
         view_changed.as_mut().enable();
 
-        reconcile(
-            library_id,
-            &feed.snapshot(),
-            &view.buried_snapshot(),
-            &surface,
-        );
+        let snapshot = feed.snapshot();
+        if let Some(record) = snapshot.first() {
+            library_id = Some(record.library_id.clone());
+        }
+        if let Some(library_id) = &library_id {
+            reconcile(library_id, &snapshot, &view.buried_snapshot(), &surface);
+        }
 
         tokio::select! {
             _ = feed_changed => {}
             _ = view_changed => {}
-            _ = &mut cancel => break,
+            _ = &mut cancel => {
+                // Disconnect: reconcile to empty so the library's native windows
+                // close (detach, NOT reap — the library keeps its set server-side,
+                // so a reconnect restores them). A no-op if nothing was opened.
+                if let Some(library_id) = &library_id {
+                    reconcile(library_id, &[], &view.buried_snapshot(), &surface);
+                }
+                break;
+            }
         }
     }
 }
@@ -464,7 +480,7 @@ mod tests {
         let surface_in = Arc::clone(&surface);
         let cancel_in = Arc::clone(&cancel);
         let task = tokio::spawn(async move {
-            watch_loop("local", feed, surface_in, view, cancel_in.notified()).await;
+            watch_loop(Some("local"), feed, surface_in, view, cancel_in.notified()).await;
         });
 
         // Give the loop time to run the gap iteration + the re-reconcile, then stop it.
