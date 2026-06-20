@@ -2269,12 +2269,17 @@ fn merge_path_dirs(shell_path: &str, inherited: &str) -> String {
 /// interactive PATH (their profile / rc files), which the GUI launchd PATH
 /// lacks. Markers delimit the value so a chatty rc (banners) can't corrupt it;
 /// stdin is `/dev/null` so an interactive shell can't block on input, and
-/// stderr is discarded. `None` on any failure or an empty result.
+/// stderr is discarded. Bounded by a ~3s timeout so a pathological / hanging
+/// rc can't block app launch (a hang is worse than the no-op fallback). `None`
+/// on any failure, timeout, or empty result.
 #[cfg(target_os = "macos")]
 fn resolve_login_shell_path() -> Option<String> {
+    use std::io::Read;
+    use std::time::{Duration, Instant};
     const MARK: &str = "__CHAN_PATH__";
+    const TIMEOUT: Duration = Duration::from_secs(3);
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    let output = std::process::Command::new(shell)
+    let mut child = std::process::Command::new(shell)
         .args([
             "-l",
             "-i",
@@ -2282,13 +2287,33 @@ fn resolve_login_shell_path() -> Option<String> {
             &format!("printf '{MARK}%s{MARK}' \"$PATH\""),
         ])
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
+        .spawn()
         .ok()?;
-    let out = String::from_utf8_lossy(&output.stdout);
-    let start = out.find(MARK)? + MARK.len();
-    let end = out[start..].find(MARK)? + start;
-    let path = &out[start..end];
+    // Poll for exit with a timeout; on timeout kill the shell and fall back to
+    // the inherited PATH. (stdin=/dev/null already stops the common read-hang;
+    // this is belt-and-suspenders for a broken rc.)
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() > TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => return None,
+        }
+    }
+    // The output is tiny (a PATH between markers), so the pipe never fills and
+    // the child exits before this read.
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    let begin = out.find(MARK)? + MARK.len();
+    let end = out[begin..].find(MARK)? + begin;
+    let path = &out[begin..end];
     (!path.is_empty()).then(|| path.to_string())
 }
 
