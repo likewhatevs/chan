@@ -240,8 +240,25 @@ fn status_for_error(e: &Error) -> StatusCode {
 fn patch_config(state: &AppState, body: PatchConfigBody) -> Result<GlobalConfigView, Error> {
     if let Some(prefs) = body.preferences {
         apply_preferences(state, prefs)?;
+        // P3: tell every open window of this tenant a setting changed, so each
+        // re-fetches preferences and reflects it live (theme, fonts, pane
+        // widths, ...) instead of going stale until a reload.
+        broadcast_config_changed(state);
     }
     global_config_view(state)
+}
+
+/// Broadcast a `config_changed` frame on the per-tenant `/ws` bus so every open
+/// window re-fetches preferences and reflects the change without a reload. The
+/// SPA's event store handles the `config_changed` kind by scheduling a
+/// workspace refresh. This rides the same broadcast channel as filesystem
+/// events but bypasses the self-write dedupe (it is a synthetic frame, not a
+/// file event), so sibling windows reliably see config flips. A no-subscriber
+/// `send` is the only `Err` a broadcast yields, so it is ignored.
+fn broadcast_config_changed(state: &AppState) {
+    let _ = state
+        .events_tx
+        .send(r#"{"kind":"config_changed"}"#.to_string());
 }
 
 fn apply_preferences(state: &AppState, view: PreferencesView) -> Result<(), Error> {
@@ -338,6 +355,21 @@ mod tests {
         let view = preferences_view(&state).expect("preferences view");
         let json = serde_json::to_value(view).expect("serialize");
         assert!(json.get("assistant").is_none());
+    }
+
+    #[test]
+    fn broadcast_config_changed_emits_a_config_changed_frame_on_the_ws_bus() {
+        // P3 cross-window settings sync: the SPA's /ws event store keys on a
+        // frame whose `kind` is exactly "config_changed" (it then re-fetches
+        // preferences). Pin that wire contract so a rename can't silently break
+        // live sync. Tested directly rather than through `patch_config`, which
+        // would save the real `~/.chan` preferences as a side effect.
+        let state = make_test_state(false, false);
+        let mut rx = state.events_tx.subscribe();
+        broadcast_config_changed(&state);
+        let frame = rx.try_recv().expect("a frame on the /ws bus");
+        let json: serde_json::Value = serde_json::from_str(&frame).expect("valid json frame");
+        assert_eq!(json["kind"], "config_changed");
     }
 
     #[test]
