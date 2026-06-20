@@ -109,6 +109,9 @@ pub(crate) fn spawn_local_window_watcher(app: AppHandle, state: Arc<AppState>) {
     };
     let surface = TauriNativeSurface { app, addr };
     let view = Arc::new(WatcherViewState::default());
+    // Share the view state so the desktop close handlers can bury/unbury
+    // through the watcher (L5), then hand the same Arc to the loop.
+    state.set_local_watcher_view(Arc::clone(&view));
     // The local library lives for the whole process, so the watcher is never
     // cancelled — `cancel` is a future that only resolves at process exit
     // (which drops the spawned task).

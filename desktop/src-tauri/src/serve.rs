@@ -853,6 +853,27 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                     // and never reach this branch.
                     WindowEvent::CloseRequested { api, .. } => {
                         let state = app_for_close.state::<Arc<AppState>>();
+                        // A watcher-managed local window (`local::<id>`): the
+                        // red-dot close BURIES it through the watcher view state
+                        // (should_show false -> the reconcile closes the native
+                        // window; the record stays, reopenable from the Window
+                        // menu). Mirror into the legacy buried list so the menu
+                        // lists it; the Destroyed handler keeps it there because
+                        // it is in the watcher bury set.
+                        if label_for_close.starts_with("local::") {
+                            api.prevent_close();
+                            let title = app_for_close
+                                .get_webview_window(&label_for_close)
+                                .and_then(|w| w.title().ok())
+                                .unwrap_or_else(|| label_for_close.clone());
+                            if let Some(view) = state.local_watcher_view() {
+                                view.bury(&label_for_close);
+                            }
+                            state.bury_window(&label_for_close, &title);
+                            crate::rebuild_window_menu(&app_for_close);
+                            show_bury_notice(&app_for_close, &title);
+                            return;
+                        }
                         let bury = if label_for_close.starts_with("terminal-") {
                             state
                                 .embedded
@@ -927,7 +948,15 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                             .lock()
                             .unwrap()
                             .remove(&label_for_close);
-                        if state.remove_buried(&label_for_close) {
+                        // A watcher-buried local window destroyed here was buried
+                        // by the reconcile (the user red-dot-closed it); KEEP it
+                        // in the reopen menu. Only drop it from the buried list on
+                        // a real teardown/discard (not in the watcher bury set).
+                        let watcher_buried = state
+                            .local_watcher_view()
+                            .map(|v| v.is_buried(&label_for_close))
+                            .unwrap_or(false);
+                        if !watcher_buried && state.remove_buried(&label_for_close) {
                             crate::rebuild_window_menu(&app_for_close);
                         }
                         // A destroyed remote-backed window may now be a

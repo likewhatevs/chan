@@ -18,17 +18,9 @@
 //! [`reconcile`]. This module is the surface-agnostic core; the Tauri-side
 //! [`NativeSurface`] impl and the per-library watcher tasks bind to it.
 //!
-//! The items below are exercised by the test suite and consumed by the
-//! per-library watcher wiring (the `WindowFeed` impls, the Tauri `NativeSurface`
-//! impl, and the `watch_loop` spawn) — the `expect(dead_code)` self-clears the
-//! moment that wiring lands.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the window-watcher reconcile core + loop; the per-library watcher wiring consumes it"
-    )
-)]
+//! The reconcile core + loop are consumed by the per-library watcher wiring (the
+//! `WindowFeed` impls, the Tauri `NativeSurface` impl, the `watch_loop` spawn) and
+//! the L5 close handlers (bury/unbury through the view state).
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -155,6 +147,13 @@ impl WatcherViewState {
 
     fn buried_snapshot(&self) -> HashSet<String> {
         self.buried.lock().unwrap().clone()
+    }
+
+    /// Whether `native_label` is currently buried. Lets the desktop's window
+    /// teardown distinguish a watcher bury (keep the window in the reopen menu)
+    /// from a real discard/teardown (drop it).
+    pub fn is_buried(&self, native_label: &str) -> bool {
+        self.buried.lock().unwrap().contains(native_label)
     }
 }
 
@@ -437,5 +436,7 @@ mod tests {
             view.buried_snapshot().into_iter().collect::<Vec<_>>(),
             vec!["local::w-2".to_string()]
         );
+        assert!(view.is_buried("local::w-2"));
+        assert!(!view.is_buried("local::w-1"));
     }
 }

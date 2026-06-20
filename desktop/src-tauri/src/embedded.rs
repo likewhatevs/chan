@@ -301,6 +301,17 @@ impl EmbeddedServer {
             .mint_window(kind, workspace_path)
             .map_err(|e| format!("minting a window: {e}"))
     }
+
+    /// Discard a window: remove its registry row and reap its terminal
+    /// sessions, then fire the aggregate change signal so the watcher reconciles
+    /// the native window closed (the L5 discard op — `^W`/`^D`/empty-pane). The
+    /// record is gone, so the watcher never reopens it. Returns whether a row
+    /// existed.
+    pub fn discard_window(&self, window_id: &str) -> Result<bool, String> {
+        self.host
+            .discard_window(window_id)
+            .map_err(|e| format!("discarding window {window_id}: {e}"))
+    }
 }
 
 impl Drop for EmbeddedServer {

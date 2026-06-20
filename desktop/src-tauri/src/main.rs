@@ -49,6 +49,10 @@ pub struct AppState {
     /// Initialized during Tauri setup, after the async runtime is
     /// available for Tokio listener registration.
     embedded: OnceLock<embedded::EmbeddedServer>,
+    /// The local window watcher's desktop-local view state (the L5 bury set),
+    /// shared so the close handlers can bury/unbury through the watcher rather
+    /// than the legacy hide path. Set once when the watcher spawns.
+    local_watcher_view: OnceLock<Arc<window_watcher::WatcherViewState>>,
     /// Per-live-window zoom level. Tracks the
     /// current zoom for every open webview keyed by window label so
     /// `zoom_in` / `zoom_out` / `zoom_reset` can compute the next
@@ -241,6 +245,17 @@ impl AppState {
     /// window-watcher wiring reads the library's window feed through this.
     pub(crate) fn embedded(&self) -> Option<&embedded::EmbeddedServer> {
         self.embedded.get()
+    }
+
+    /// The window watcher's view state (the L5 bury set), once the watcher has
+    /// spawned. Close handlers bury/unbury local windows through it.
+    pub(crate) fn local_watcher_view(&self) -> Option<&Arc<window_watcher::WatcherViewState>> {
+        self.local_watcher_view.get()
+    }
+
+    /// Record the watcher's view state so close handlers can reach it. Set once.
+    pub(crate) fn set_local_watcher_view(&self, view: Arc<window_watcher::WatcherViewState>) {
+        let _ = self.local_watcher_view.set(view);
     }
 
     /// Push a closing window's layout onto the LRU stack. Best
@@ -1926,12 +1941,26 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
     if !others_remain {
         let _ = show_window(&app, "main");
     }
-    // `destroy()`, not `close()`: this is the SPA's DELIBERATE
-    // close-cascade (last tab, then last pane, just closed — the window
-    // is empty). `close()` would fire `CloseRequested`, where the
-    // bury-on-close handler hides SPA windows instead of closing them;
-    // an empty window is worthless buried. Destroy skips the request
-    // phase and goes straight to the `Destroyed` cleanup.
+    // A watcher-managed local window (`local::<window_id>`) emptied (last
+    // pane/tab closed, ^W/^D/Cmd+W): DISCARD its registry record — which reaps
+    // its sessions and fires the feed — so the watcher reconciles the native
+    // window closed. The record is gone, so it can NEVER reopen (the boomerang
+    // bug a bare destroy hit: the record stayed live and reconcile reopened it).
+    if let Some(window_id) = closing.strip_prefix("local::") {
+        if let Some(embedded) = app.state::<Arc<AppState>>().embedded() {
+            match embedded.discard_window(window_id) {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    tracing::warn!(window = %window_id, error = %e, "discarding an emptied window failed; destroying");
+                }
+            }
+        }
+    }
+    // `destroy()`, not `close()`: this is the SPA's DELIBERATE close-cascade
+    // (last tab, then last pane, just closed — the window is empty). `close()`
+    // would fire `CloseRequested`, where the bury-on-close handler hides SPA
+    // windows instead of closing them; an empty window is worthless buried.
+    // Destroy skips the request phase and goes straight to `Destroyed` cleanup.
     window.destroy().map_err(err)
 }
 
@@ -2260,6 +2289,7 @@ fn main() {
         store: Mutex::new(store),
         serves: Mutex::new(HashMap::new()),
         embedded: OnceLock::new(),
+        local_watcher_view: OnceLock::new(),
         live_window_zooms: Mutex::new(HashMap::new()),
         window_numbers: Mutex::new(HashMap::new()),
         window_title_overrides: Mutex::new(HashMap::new()),
@@ -3267,7 +3297,20 @@ fn open_remote_window_from_menu(app: &tauri::AppHandle, label: &str) {
 /// was destroyed underneath; the registry entry is cleaned up either
 /// way).
 pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
-    let removed = app.state::<Arc<AppState>>().remove_buried(label);
+    let state = app.state::<Arc<AppState>>();
+    let removed = state.remove_buried(label);
+    // A watcher-managed local window: un-bury through the view state. The bury
+    // destroyed the native window (the reconcile closed it), so there is nothing
+    // to show() — the reconcile reopens it at its window_id. Counts as shown.
+    if label.starts_with("local::") {
+        if let Some(view) = state.local_watcher_view() {
+            view.unbury(label);
+        }
+        if removed {
+            rebuild_window_menu(app);
+        }
+        return true;
+    }
     let shown = match app.get_webview_window(label) {
         Some(w) => {
             let _ = w.show();
