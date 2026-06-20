@@ -271,6 +271,49 @@ pub(crate) fn open_watched_local_window(
     )
 }
 
+/// Open a watched REMOTE (devserver) window — the watcher's analog of
+/// [`open_watched_local_window`], but the SPA is served by the remote devserver
+/// at `host:port`, so the navigate target is the assembled tenant URL and the
+/// window routes through the connecting screen (the remote may be down). The
+/// native label is the composite `{library_id}::{window_id}`; `?w=` is the bare
+/// `window_id` (decoupled), carried as the SPA session id. No `config_key`: the
+/// library owns persistence (the layout blob is keyed by `window_id`).
+#[allow(dead_code)] // wired into the devserver watcher's NativeSurface in the D1 cutover.
+pub(crate) fn open_watched_remote_window(
+    app: &AppHandle,
+    host: &str,
+    port: u16,
+    record: &WindowRecord,
+) -> Result<(), String> {
+    let label = crate::window_watcher::native_label(record);
+    let url = crate::devserver::assemble_tenant_url(host, port, &record.prefix, &record.token)?;
+    let (title, kind) = match record.kind {
+        WindowKind::Terminal => ("Terminal".to_string(), Some("terminal")),
+        WindowKind::Workspace => (
+            record
+                .workspace_path
+                .as_deref()
+                .map(workspace_title)
+                .unwrap_or_else(|| "Workspace".to_string()),
+            None,
+        ),
+    };
+    build_workspace_window(
+        app,
+        WindowSpec {
+            label: &label,
+            session_id: &record.window_id,
+            title: &title,
+            url: &url,
+            url_hash_seed: "",
+            config_key: String::new(),
+            zoom_seed: 1.0,
+            connecting: Some(url.as_str()),
+            kind,
+        },
+    )
+}
+
 /// Spawn a new outbound URL webview window. The desktop does not own
 /// the remote process; this only creates another webview pointed at
 /// the persisted URL.
