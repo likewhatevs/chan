@@ -530,25 +530,42 @@ impl Registry {
         // `session_cap` slot against a re-spawn under the same name. See
         // [`reap_exited`].
         self.reap_exited();
-        let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
-        if sessions.len() >= self.config.terminal.session_cap {
-            return Err(CreateError::Capped);
-        }
+        // Global pre-spawn gates (git-bash on PATH; fd pressure — the latter
+        // does an fd_snapshot read_dir): neither needs the sessions lock, so run
+        // them before taking it, keeping that blocking I/O off the registry lock.
         reject_terminal_spawn_if_git_bash_missing()?;
         reject_terminal_spawn_if_fd_pressure()?;
-        // A tenant opened to run a specific command applies it to any
-        // session that brings none of its own, so the window's terminal
-        // runs the command; an explicit per-session command wins.
-        if opts.command.is_none() {
-            opts.command = self
-                .default_command
-                .lock()
-                .expect("terminal registry poisoned")
-                .clone();
-        }
-        let id = self.unused_id(&sessions);
+        // Validate the cap + mint the id under the lock, but SPAWN (openpty +
+        // fork/exec) OUTSIDE it so a create's PTY launch doesn't stall every
+        // other terminal op on the registry mutex.
+        let id = {
+            let sessions = self.sessions.lock().expect("terminal registry poisoned");
+            if sessions.len() >= self.config.terminal.session_cap {
+                return Err(CreateError::Capped);
+            }
+            // A tenant opened to run a specific command applies it to any
+            // session that brings none of its own, so the window's terminal
+            // runs the command; an explicit per-session command wins.
+            if opts.command.is_none() {
+                opts.command = self
+                    .default_command
+                    .lock()
+                    .expect("terminal registry poisoned")
+                    .clone();
+            }
+            self.unused_id(&sessions)
+        };
         let session =
             Session::spawn(id.clone(), self.config.clone(), opts).map_err(CreateError::Spawn)?;
+        let mut sessions = self.sessions.lock().expect("terminal registry poisoned");
+        // Re-check under the re-acquired lock: a concurrent create may have
+        // filled the cap (or — astronomically — taken the random id) while we
+        // spawned. If so, reap the orphan PTY before dropping it (no Drop).
+        if sessions.len() >= self.config.terminal.session_cap || sessions.contains_key(&id) {
+            drop(sessions);
+            session.close(CloseReason::Shutdown);
+            return Err(CreateError::Capped);
+        }
         sessions.insert(id.clone(), session.clone());
         drop(sessions);
         self.notify_roster_change();
@@ -608,8 +625,14 @@ impl Registry {
                 self.notify_roster_change();
                 Ok(true)
             }
-            Some(_) => Ok(false),
-            None => Ok(false),
+            // A concurrent op replaced or removed the session while we spawned;
+            // the freshly-spawned `session` was never inserted, so reap its PTY
+            // before dropping it (Session has no Drop) — else the orphan child +
+            // fds leak.
+            Some(_) | None => {
+                session.close(CloseReason::Shutdown);
+                Ok(false)
+            }
         }
     }
 
