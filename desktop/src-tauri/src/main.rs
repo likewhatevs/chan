@@ -1541,21 +1541,22 @@ async fn forget_devserver_workspace(
 
 /// Set a registered devserver workspace on (mount + mint a fresh tenant token)
 /// or off (unmount, keep registered) — the on/off toggle on a devserver row,
-/// distinct from Forget (`forget_devserver_workspace`). Returns the updated row
-/// (with a live URL when on, empty when off) so the launcher reflects the new
-/// state and can open it without waiting for the next poll.
+/// distinct from Forget (`forget_devserver_workspace`). An unforced off with
+/// live terminals fails with [`SetWorkspaceOnError::ActiveTerminals`] so the SPA
+/// confirms then retries with `force: true`. The launcher reflects the new state
+/// via the next poll (the row is re-fetched, not returned).
 #[tauri::command]
 async fn set_devserver_workspace_on(
     state: State<'_, Arc<AppState>>,
     id: String,
     prefix: String,
     on: bool,
-) -> Result<devserver::DevserverWorkspaceRow, String> {
-    let conn = state
-        .devservers
-        .get(&id)
-        .ok_or_else(|| format!("devserver {id} is not connected"))?;
-    devserver::set_workspace_on(&conn, &prefix, on).await
+    force: bool,
+) -> Result<(), devserver::SetWorkspaceOnError> {
+    let conn = state.devservers.get(&id).ok_or_else(|| {
+        devserver::SetWorkspaceOnError::other(format!("devserver {id} is not connected"))
+    })?;
+    devserver::set_workspace_on(&conn, &prefix, on, force).await
 }
 
 /// Forget a devserver: drops any live connection, tears down its windows, and

@@ -106,10 +106,40 @@ struct MountedTerminal {
 
 /// `POST /api/devserver/workspaces/{prefix}/on` body — mirrors the server's
 /// `SetWorkspaceOnRequest`. `on:false` keeps the workspace registered
-/// (unmount-but-remember), distinct from `DELETE` = Forget.
+/// (unmount-but-remember), distinct from `DELETE` = Forget. `force` overrides
+/// the server's off-with-live-terminals guard (the 409 below).
 #[derive(Debug, serde::Serialize)]
 struct SetWorkspaceOnRequest {
     on: bool,
+    force: bool,
+}
+
+/// The server's 409 body when an unforced off is rejected because the tenant
+/// still has live terminals — mirrors `ActiveTerminalsRejection`.
+#[derive(Debug, serde::Deserialize)]
+struct ActiveTerminalsRejection {
+    active_terminals: usize,
+}
+
+/// Why a devserver workspace on/off failed, structured so the SPA can tell a
+/// confirm-before-off (live terminals → offer to force) apart from a plain
+/// failure. Serialized to the frontend as the command's error.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind")]
+pub enum SetWorkspaceOnError {
+    /// An unforced off was rejected: `active_terminals` live terminals would be
+    /// killed. The SPA confirms, then retries with `force: true`.
+    ActiveTerminals { active_terminals: usize },
+    /// Any other failure (network, decode, non-409 status), as a plain message.
+    Other { message: String },
+}
+
+impl SetWorkspaceOnError {
+    pub fn other(msg: impl std::fmt::Display) -> Self {
+        Self::Other {
+            message: msg.to_string(),
+        }
+    }
 }
 
 /// A devserver workspace as the launcher renders it: the tenant fields plus
@@ -523,34 +553,45 @@ fn workspace_on_url(host: &str, port: u16, prefix: &str) -> String {
     )
 }
 
-/// `POST /api/devserver/workspaces/{prefix}/on` `{on}`: mount (`on:true`) or
-/// unmount (`on:false`) a registered workspace WITHOUT forgetting it. Returns
-/// the updated row; turning on mints a fresh tenant token (so the reassembled
-/// URL is live), turning off clears it (empty URL). Idempotent server-side.
+/// `POST /api/devserver/workspaces/{prefix}/on` `{on, force}`: mount (`on:true`)
+/// or unmount (`on:false`) a registered workspace WITHOUT forgetting it. Turning
+/// on mints a fresh tenant token; turning off clears it. Idempotent server-side.
+/// An unforced off is rejected with 409 + a live-terminal count when the tenant
+/// has open terminals — surfaced as [`SetWorkspaceOnError::ActiveTerminals`] so
+/// the SPA can confirm-then-force; `force: true` overrides the guard.
 pub async fn set_workspace_on(
     conn: &DevserverConn,
     prefix: &str,
     on: bool,
-) -> Result<DevserverWorkspaceRow, String> {
+    force: bool,
+) -> Result<(), SetWorkspaceOnError> {
     let url = workspace_on_url(&conn.host, conn.port, prefix);
-    let resp = http_client()?
+    let resp = http_client()
+        .map_err(SetWorkspaceOnError::other)?
         .post(&url)
         .bearer_auth(&conn.token)
-        .json(&SetWorkspaceOnRequest { on })
+        .json(&SetWorkspaceOnRequest { on, force })
         .send()
         .await
-        .map_err(|e| format!("setting devserver workspace on/off: {e}"))?;
+        .map_err(|e| {
+            SetWorkspaceOnError::other(format!("setting devserver workspace on/off: {e}"))
+        })?;
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        // Off blocked by live terminals: surface the count for the confirm.
+        let active_terminals = resp
+            .json::<ActiveTerminalsRejection>()
+            .await
+            .map(|r| r.active_terminals)
+            .unwrap_or(0);
+        return Err(SetWorkspaceOnError::ActiveTerminals { active_terminals });
+    }
     if !resp.status().is_success() {
-        return Err(format!(
+        return Err(SetWorkspaceOnError::other(format!(
             "devserver workspace on/off returned HTTP {}",
             resp.status()
-        ));
+        )));
     }
-    let entry = resp
-        .json::<WorkspaceEntry>()
-        .await
-        .map_err(|e| format!("decoding devserver workspace on/off: {e}"))?;
-    row_from_entry(conn, entry)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -641,14 +682,22 @@ mod tests {
     }
 
     #[test]
-    fn set_workspace_on_request_serializes_on_field() {
+    fn set_workspace_on_request_serializes_on_and_force_fields() {
         assert_eq!(
-            serde_json::to_string(&SetWorkspaceOnRequest { on: false }).unwrap(),
-            r#"{"on":false}"#
+            serde_json::to_string(&SetWorkspaceOnRequest {
+                on: false,
+                force: false
+            })
+            .unwrap(),
+            r#"{"on":false,"force":false}"#
         );
         assert_eq!(
-            serde_json::to_string(&SetWorkspaceOnRequest { on: true }).unwrap(),
-            r#"{"on":true}"#
+            serde_json::to_string(&SetWorkspaceOnRequest {
+                on: true,
+                force: true
+            })
+            .unwrap(),
+            r#"{"on":true,"force":true}"#
         );
     }
 

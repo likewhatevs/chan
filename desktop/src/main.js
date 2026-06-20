@@ -940,10 +940,28 @@ async function pollDevserverWorkspaces() {
           // (including a failed turn-on, which reverts the checkbox).
           cb.disabled = true;
           try {
-            await invoke('set_devserver_workspace_on', { id, prefix, on: cb.checked });
+            await invoke('set_devserver_workspace_on', { id, prefix, on: cb.checked, force: false });
           } catch (err) {
-            if (cb.checked) showTurnOnFailureDialog(err);
-            else showError(err);
+            if (!cb.checked && err && err.kind === 'ActiveTerminals') {
+              // The server blocked the off because the tenant has live
+              // terminals. Confirm, then retry with force (server kills them).
+              const n = err.active_terminals;
+              const ok = await ask(
+                `${n} terminal${n === 1 ? '' : 's'} still running in this workspace. Turn it off anyway? Open terminals will be closed.`,
+                { title: 'Turn off workspace', kind: 'warning' },
+              );
+              if (ok) {
+                try {
+                  await invoke('set_devserver_workspace_on', { id, prefix, on: false, force: true });
+                } catch (err2) {
+                  showError(err2);
+                }
+              }
+            } else if (cb.checked) {
+              showTurnOnFailureDialog(err);
+            } else {
+              showError(err);
+            }
           }
           await refillDevserverWorkspaces(id);
         });
@@ -960,7 +978,7 @@ async function pollDevserverWorkspaces() {
             // transition so a double-click can't race the still-mounting tenant.
             btn.disabled = true;
             try {
-              await invoke('set_devserver_workspace_on', { id, prefix, on: true });
+              await invoke('set_devserver_workspace_on', { id, prefix, on: true, force: false });
             } catch (err) {
               showTurnOnFailureDialog(err);
               await refillDevserverWorkspaces(id);
