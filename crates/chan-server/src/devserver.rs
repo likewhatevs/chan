@@ -521,6 +521,26 @@ impl DevserverState {
         })
     }
 
+    /// Mount the per-library SHARED terminal tenant (D-W3). `open_terminal_session`
+    /// records its prefix in the host's `terminal_tenant_prefix`, which the window
+    /// feed's `terminal_window_live` resolves a Terminal record's prefix+token
+    /// against. The desktop does this via `embedded.rs`; the devserver never did
+    /// (it only ever mounted per-LABEL terminals via the lower-level
+    /// `open_terminal_session_with_command`, which does NOT set the OnceLock), so
+    /// every devserver Terminal window carried an empty token and the desktop
+    /// watcher's `should_show` (which requires a non-empty token) hid it —
+    /// vanishing on every reconnect. `Some(dir)` persists each window's pane
+    /// layout. One shared tenant per library, so this is called once at startup.
+    async fn mount_shared_terminal_tenant(&self) -> Result<(), Error> {
+        self.host
+            .open_terminal_session(
+                tenant_config(self.addr, DEVSERVER_SHARED_TERMINAL_PREFIX),
+                devserver_terminals_dir(),
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Open (mount) a standalone terminal tenant for the client window `label`,
     /// running `command` (or the login shell). Allocates a STABLE prefix from
     /// the label so the same terminal re-mounts at the same route across a
@@ -687,6 +707,13 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         terminals: Mutex::new(HashMap::new()),
         store,
     });
+
+    // Mount the per-library SHARED terminal tenant (D-W3) before serving, so
+    // devserver Terminal windows resolve to a real prefix+token.
+    state
+        .mount_shared_terminal_tenant()
+        .await
+        .context("mounting the devserver shared terminal tenant")?;
 
     // Restore the registered workspaces. `on` rows re-mount at their persisted
     // (stable) prefix; `off` rows are tracked as registered-but-unmounted so
@@ -1129,6 +1156,12 @@ fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
 // Prefix + config helpers.
 // ---------------------------------------------------------------------------
 
+/// Mount prefix of the per-library SHARED terminal tenant (D-W3) that every
+/// devserver Terminal window resolves to. Fixed (one shared tenant per library),
+/// and distinct from per-label terminal prefixes (`/api/term-…`) and workspace
+/// prefixes (`/api/{slug}-…`), so it never collides.
+const DEVSERVER_SHARED_TERMINAL_PREFIX: &str = "/api/terminal";
+
 /// Per-tenant serve config: each workspace gets its own bearer token (so
 /// `no_token` is false), no browser, no idle timeout.
 fn tenant_config(addr: SocketAddr, prefix: &str) -> ServeConfig {
@@ -1542,6 +1575,58 @@ mod tests {
             terminals: Mutex::new(HashMap::new()),
             store: DevserverStore::at(home.join("devserver").join("config.json")),
         })
+    }
+
+    #[tokio::test]
+    async fn shared_terminal_tenant_makes_terminal_windows_resolve() {
+        // D-W3: without the shared terminal tenant a devserver Terminal window
+        // resolves to an empty prefix/token (and the desktop watcher hides it);
+        // after mount_shared_terminal_tenant it resolves to the shared tenant's
+        // prefix + a real token.
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        state.host.install_window_registry(
+            Arc::new(WindowRegistry::open(home.path().join("windows.json"))),
+            "lib-test".into(),
+        );
+
+        let term = state
+            .host
+            .mint_window(chan_library::windows::WindowKind::Terminal, None)
+            .expect("mint terminal");
+
+        let find = |st: &Arc<DevserverState>| {
+            st.host
+                .assemble_window_records()
+                .into_iter()
+                .find(|r| r.window_id == term.window_id)
+                .expect("terminal row")
+        };
+
+        // No shared terminal tenant yet → empty prefix/token (the bug).
+        let before = find(&state);
+        assert_eq!(
+            before.prefix, "",
+            "no shared terminal tenant → empty prefix"
+        );
+        assert_eq!(before.token, "");
+
+        // Mount it (the D-W3 fix run_devserver performs at startup).
+        state
+            .mount_shared_terminal_tenant()
+            .await
+            .expect("mount shared terminal tenant");
+
+        let after = find(&state);
+        assert_eq!(
+            after.prefix, DEVSERVER_SHARED_TERMINAL_PREFIX,
+            "terminal window resolves to the shared tenant prefix",
+        );
+        assert!(
+            !after.token.is_empty(),
+            "terminal window resolves to a real token so should_show shows it",
+        );
     }
 
     #[tokio::test]
