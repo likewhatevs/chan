@@ -136,13 +136,14 @@ pub struct AppState {
     /// window closes and the tenant is torn down. Unused on workspace
     /// tenants, which take the disk path in the session handlers.
     pub ephemeral_sessions: Mutex<HashMap<String, Vec<u8>>>,
-    /// On-disk per-window session-blob store for a PERSISTED terminal tenant
-    /// (a standalone devserver terminal), so its pane/tab layout survives a
-    /// devserver restart. `Some(dir)` ⇒ the session handlers read/write
-    /// [`crate::terminal_blob`] at `dir`, keyed by the `?w=<window-label>`,
-    /// instead of `ephemeral_sessions`; `None` ⇒ the in-memory store above
-    /// (control terminals, and desktop-local terminals whose layout lives in
-    /// the desktop `Config`).
+    /// On-disk per-window session-blob store for a PERSISTED terminal tenant —
+    /// the desktop's standalone `/terminal` tenant and a standalone devserver
+    /// terminal — so its pane/tab layout survives a relaunch (with fresh shells;
+    /// the PTYs themselves don't survive). `Some(dir)` ⇒ the session handlers
+    /// read/write [`crate::terminal_blob`] at `dir`, keyed by the
+    /// `?w=<window-label>`, instead of `ephemeral_sessions`; `None` ⇒ the
+    /// in-memory store above (control terminals, whose layout is ephemeral by
+    /// design).
     pub terminal_session_dir: Option<std::path::PathBuf>,
     /// Which window ids currently hold a `/ws` socket (refcounted; see
     /// the module docs). Feeds `GET /api/windows` and `cs window list`

@@ -184,9 +184,14 @@ impl EmbeddedServer {
         if let Some(url) = cached.as_ref() {
             return Ok(url.clone());
         }
+        // Persist each standalone-terminal window's pane layout on disk (keyed
+        // by `?w=<window_id>`) so it restores across a desktop relaunch — with
+        // fresh shells, since the PTYs don't survive. Best-effort: if the dir
+        // can't be made the tenant falls back to its in-memory layout store.
+        let session_dir = local_terminal_session_dir();
         let hosted = self
             .host
-            .open_terminal_session(serve_config(self.addr, PREFIX))
+            .open_terminal_session(serve_config(self.addr, PREFIX), session_dir)
             .await
             .map_err(|e| format!("opening the shared embedded terminal tenant: {e}"))?;
         let url = hosted.handle.launch_url();
@@ -335,6 +340,16 @@ fn map_open_error(key: &str, e: chan_server::Error) -> String {
         }
         other => format!("opening embedded workspace {key}: {other}"),
     }
+}
+
+/// On-disk dir for the standalone `/terminal` tenant's per-window layout blobs
+/// (`~/.chan/terminal-sessions`, created on first use). `None` if the home dir
+/// can't be resolved — the tenant then keeps layout in-memory (it just won't
+/// persist across relaunch).
+fn local_terminal_session_dir() -> Option<std::path::PathBuf> {
+    let dir = dirs::home_dir()?.join(".chan").join("terminal-sessions");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 fn serve_config(addr: SocketAddr, prefix: &str) -> chan_server::ServeConfig {
