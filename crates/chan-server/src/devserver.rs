@@ -111,6 +111,11 @@ struct PersistedTerminal {
     prefix: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     command: Option<String>,
+    /// The library window id this terminal is linked to (`w-<hex>`), when the
+    /// client set it at create. Persisted so the discard cascade still matches
+    /// after a restart re-mounts the terminal. `None` for unlinked terminals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    window_id: Option<String>,
 }
 
 /// Persistence at `~/.chan/devserver/config.json`, written atomically and
@@ -233,6 +238,10 @@ struct TerminalRecord {
     prefix: String,
     command: Option<String>,
     token: String,
+    /// The library window id (`w-<hex>`) this terminal is linked to, when the
+    /// client set it at create. The discard cascade forgets the terminal whose
+    /// `window_id` matches the discarded window. `None` for unlinked terminals.
+    window_id: Option<String>,
 }
 
 /// Shared runtime state behind the management API and the discovery socket.
@@ -434,6 +443,7 @@ impl DevserverState {
                     label: record.label.clone(),
                     prefix: record.prefix.clone(),
                     command: record.command.clone(),
+                    window_id: record.window_id.clone(),
                 })
                 .collect();
             v.sort_by(|a, b| a.prefix.cmp(&b.prefix));
@@ -549,6 +559,7 @@ impl DevserverState {
         &self,
         label: String,
         command: Option<String>,
+        window_id: Option<String>,
     ) -> Result<MountedTerminal, Error> {
         let prefix = allocate_terminal_prefix(&label)?;
         // The prefix is deterministic per label, so re-creating a label whose
@@ -577,6 +588,7 @@ impl DevserverState {
                     prefix: hosted.prefix.clone(),
                     command,
                     token: token.clone(),
+                    window_id,
                 },
             );
         }
@@ -632,6 +644,27 @@ impl DevserverState {
         Ok(true)
     }
 
+    /// Cascade for a library-window discard (`B-with-a-link`): forget the
+    /// standalone terminal whose `window_id` matches the discarded window — the
+    /// explicit link the client set at create — so a registry discard is the
+    /// single authoritative cleanup of the window AND its terminal tenant.
+    /// Returns whether a terminal was forgotten. A no-op (`Ok(false)`) when no
+    /// terminal carries that `window_id`: a workspace window, an unlinked
+    /// terminal, or a client that has not yet adopted the link.
+    fn forget_terminal_for_window(&self, window_id: &str) -> Result<bool, Error> {
+        let prefix = {
+            let terminals = self.terminals.lock().unwrap_or_else(|e| e.into_inner());
+            terminals
+                .values()
+                .find(|record| record.window_id.as_deref() == Some(window_id))
+                .map(|record| record.prefix.clone())
+        };
+        match prefix {
+            Some(prefix) => self.forget_terminal(&prefix),
+            None => Ok(false),
+        }
+    }
+
     /// Re-mount a persisted terminal at its stored (stable) prefix on restart:
     /// a FRESH PTY running the recorded command; the window/tab layout restores
     /// from the launcher session store. Does NOT persist (the restart path
@@ -654,6 +687,7 @@ impl DevserverState {
                 prefix: term.prefix.clone(),
                 command: term.command.clone(),
                 token,
+                window_id: term.window_id.clone(),
             },
         );
         Ok(())
@@ -919,13 +953,24 @@ async fn handle_create_library_window(
 
 /// `DELETE /api/library/windows/{window_id}`: discard a window by dropping its
 /// record; the change bridge fires the watch, and each client's reconcile then
-/// closes the window. 404 when no window has that id.
+/// closes the window. The discard then cascades to forget the standalone
+/// terminal linked to this window (`B-with-a-link`), so a single registry
+/// discard is the authoritative cleanup of the window and its terminal tenant.
+/// 404 when no window has that id.
 async fn handle_discard_library_window(
     State(state): State<Arc<DevserverState>>,
     AxumPath(window_id): AxumPath<String>,
 ) -> Response {
     match state.host.discard_window(&window_id) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            // Cascade: forget the per-label terminal whose window_id matches.
+            // A no-op when none is linked (workspace window, unlinked terminal,
+            // or a client that has not adopted the link yet).
+            if let Err(e) = state.forget_terminal_for_window(&window_id) {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -1091,7 +1136,10 @@ async fn handle_open_terminal(
     State(state): State<Arc<DevserverState>>,
     Json(req): Json<OpenTerminalRequest>,
 ) -> Response {
-    match state.open_terminal(req.label, req.command).await {
+    match state
+        .open_terminal(req.label, req.command, req.window_id)
+        .await
+    {
         Ok(mounted) => Json(mounted).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -1291,6 +1339,7 @@ mod tests {
                 label: "terminal-1".into(),
                 prefix: "/api/term-terminal-1-0".into(),
                 command: None,
+                window_id: None,
             }],
         };
         let json = serde_json::to_string(&cfg).unwrap();
@@ -1344,6 +1393,7 @@ mod tests {
             label: "terminal-1a2b".into(),
             prefix: "/api/term-terminal-1a2b-ff".into(),
             command: Some("ssh host".into()),
+            window_id: Some("w-1a2b3c4d".into()),
         };
         let v = serde_json::to_value(&term).unwrap();
         assert_eq!(
@@ -1352,14 +1402,17 @@ mod tests {
                 "label": "terminal-1a2b",
                 "prefix": "/api/term-terminal-1a2b-ff",
                 "command": "ssh host",
+                "window_id": "w-1a2b3c4d",
             })
         );
         assert_eq!(term, serde_json::from_value(v).unwrap());
-        // `command` is omitted when None (login shell).
+        // `command` and `window_id` are omitted when None (login shell; not
+        // linked to a library window).
         let bare = PersistedTerminal {
             label: "t".into(),
             prefix: "/api/term-t-0".into(),
             command: None,
+            window_id: None,
         };
         assert_eq!(
             serde_json::to_value(&bare).unwrap(),
@@ -1386,7 +1439,11 @@ mod tests {
 
         // Open a standalone terminal: mounted in the host AND persisted.
         let mounted = state
-            .open_terminal("terminal-1a2b".into(), Some("printf hi".into()))
+            .open_terminal(
+                "terminal-1a2b".into(),
+                Some("printf hi".into()),
+                Some("w-1a2b3c4d".into()),
+            )
             .await
             .expect("open terminal");
         assert!(mounted.prefix.starts_with("/api/term-"));
@@ -1410,6 +1467,12 @@ mod tests {
         assert_eq!(persisted.terminals[0].label, "terminal-1a2b");
         assert_eq!(persisted.terminals[0].prefix, mounted.prefix);
         assert_eq!(persisted.terminals[0].command.as_deref(), Some("printf hi"));
+        // The library-window link persists, so the discard cascade still
+        // matches after a restart re-mounts the terminal.
+        assert_eq!(
+            persisted.terminals[0].window_id.as_deref(),
+            Some("w-1a2b3c4d")
+        );
 
         // Simulate a restart: a FRESH host re-mounts from the persisted record
         // at the SAME prefix (the terminal survives the restart).
@@ -1509,7 +1572,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
         let mounted = state
-            .open_terminal("terminal-x".into(), None)
+            .open_terminal("terminal-x".into(), None, None)
             .await
             .expect("open");
         assert_eq!(state.terminal_entries().len(), 1);
@@ -1528,6 +1591,50 @@ mod tests {
         // Idempotent / false for an unknown prefix.
         assert!(!state.forget_terminal(&mounted.prefix).expect("absent"));
         assert!(!state.forget_terminal("/api/term-nope-0").expect("unknown"));
+    }
+
+    #[tokio::test]
+    async fn forget_terminal_for_window_cascades_only_the_linked_terminal() {
+        // B-with-a-link: discarding a library window forgets the terminal whose
+        // window_id matches, and ONLY that one. The cascade is a no-op for an
+        // unlinked terminal or an unknown window id.
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let linked = state
+            .open_terminal("terminal-linked".into(), None, Some("w-linked01".into()))
+            .await
+            .expect("open linked");
+        let unlinked = state
+            .open_terminal("terminal-unlinked".into(), None, None)
+            .await
+            .expect("open unlinked");
+        assert_eq!(state.terminal_entries().len(), 2);
+
+        // An unknown window id forgets nothing.
+        assert!(!state
+            .forget_terminal_for_window("w-nomatch0")
+            .expect("unknown window"));
+        assert_eq!(state.terminal_entries().len(), 2);
+
+        // The matching window forgets exactly its terminal; the unlinked one
+        // stays mounted.
+        assert!(state
+            .forget_terminal_for_window("w-linked01")
+            .expect("linked window"));
+        let remaining = state.terminal_entries();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].prefix, unlinked.prefix);
+        assert!(!state
+            .host
+            .mounted_prefixes()
+            .unwrap()
+            .contains(&linked.prefix));
+
+        // Idempotent: a second cascade for the same window is a no-op.
+        assert!(!state
+            .forget_terminal_for_window("w-linked01")
+            .expect("already gone"));
     }
 
     #[test]
@@ -1649,14 +1756,14 @@ mod tests {
         let state = test_state(home.path(), addr);
 
         let first = state
-            .open_terminal("terminal-1".into(), None)
+            .open_terminal("terminal-1".into(), None, None)
             .await
             .expect("first open");
         // The tenant stays mounted at first.prefix (the leftover). Re-creating
         // the same label used to 500 ("prefix already mounted"); now it forgets
         // the leftover + remounts fresh.
         let second = state
-            .open_terminal("terminal-1".into(), None)
+            .open_terminal("terminal-1".into(), None, None)
             .await
             .expect("re-create the same label succeeds (no 500)");
         assert_eq!(

@@ -159,6 +159,14 @@ pub struct OpenTerminalRequest {
     /// PTY default command; omitted (`None`) runs the login shell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// The library window id (`w-<hex>`) this terminal belongs to, when the
+    /// client links them at create. The discard cascade
+    /// (`DELETE /api/library/windows/{window_id}`) forgets the terminal whose
+    /// `window_id` matches, so a registry discard is the single authoritative
+    /// cleanup. Optional + non-breaking: omitted by clients that do not link,
+    /// in which case the cascade is simply a no-op for that terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
 }
 
 /// One element of `GET /api/devserver/terminals`, the box's persisted
@@ -335,17 +343,21 @@ mod tests {
         let req = OpenTerminalRequest {
             label: "terminal-1a2b".into(),
             command: Some("ssh host".into()),
+            window_id: Some("w-1a2b3c4d".into()),
         };
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(
             v,
-            json!({ "label": "terminal-1a2b", "command": "ssh host" })
+            json!({ "label": "terminal-1a2b", "command": "ssh host", "window_id": "w-1a2b3c4d" })
         );
         assert_eq!(req, serde_json::from_value(v).unwrap());
-        // `command` is omitted when None (the tenant runs the login shell).
+        // `command` and `window_id` are omitted when None (login shell; the
+        // terminal is not linked to a library window, so the discard cascade
+        // is a no-op for it).
         let bare = OpenTerminalRequest {
             label: "terminal-2".into(),
             command: None,
+            window_id: None,
         };
         assert_eq!(
             serde_json::to_value(&bare).unwrap(),
