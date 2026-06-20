@@ -1086,22 +1086,16 @@ export const api = {
       `/api/terminals/${encodeURIComponent(sessionId)}/broadcast`,
       { on },
     ),
-  setBubbleOverlayMode: async (mode: BubbleOverlayMode): Promise<void> => {
-    const cfg = await req<GlobalConfig>("GET", "/api/config");
-    if (cfg.preferences.bubble_overlay_mode === mode) return;
-    await req<GlobalConfig>("PATCH", "/api/config", {
-      ...cfg,
-      preferences: { ...cfg.preferences, bubble_overlay_mode: mode },
-    });
-  },
-  setEmptyPaneCarouselCycling: async (cycling: boolean): Promise<void> => {
-    const cfg = await req<GlobalConfig>("GET", "/api/config");
-    if (cfg.preferences.empty_pane_carousel_cycling === cycling) return;
-    await req<GlobalConfig>("PATCH", "/api/config", {
-      ...cfg,
-      preferences: { ...cfg.preferences, empty_pane_carousel_cycling: cycling },
-    });
-  },
+  setBubbleOverlayMode: (mode: BubbleOverlayMode): Promise<void> =>
+    queuePrefWrite((p) =>
+      p.bubble_overlay_mode === mode ? null : { ...p, bubble_overlay_mode: mode },
+    ),
+  setEmptyPaneCarouselCycling: (cycling: boolean): Promise<void> =>
+    queuePrefWrite((p) =>
+      p.empty_pane_carousel_cycling === cycling
+        ? null
+        : { ...p, empty_pane_carousel_cycling: cycling },
+    ),
   /// Persist the per-library page-width cap ratio. The SPA applies the
   /// cap optimistically and debounces this write (the width slider
   /// fires on every drag tick); the value is stored verbatim and
