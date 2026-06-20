@@ -602,15 +602,17 @@ impl WorkspaceHost {
             .window_registry()
             .ok_or_else(|| Error::Config("window registry not installed".into()))?;
         let row = registry.create(kind, workspace_path);
-        // A devserver-minted window auto-persists. An auto-opened window never
-        // PUTs a layout blob (the SPA save that marks a window durable), so its
-        // terminal sessions would be orphan-reaped on the first client
-        // disconnect and the window could not restore on reconnect. Mark it
-        // persisted across the mounted tenants at mint. The local library is
-        // EXEMPT (`"local"`): its windows persist via the SPA layout PUT, and
-        // forcing every local window durable would change that behaviour.
-        if self.library_id() != "local" {
-            self.persist_window_across_tenants(&row.window_id);
+        // The D-W3 session-survival fold: a devserver Terminal window's session
+        // lives in the shared terminal tenant and is auto-opened, so the SPA
+        // never PUTs a layout blob to persist it — it would be orphan-reaped on
+        // the first disconnect (post-D-W3 the window shows, but loses its state
+        // on reconnect). Mark it persisted in the shared terminal tenant so the
+        // pruner spares its session. Scoped to the devserver (`library_id !=
+        // "local"`; local terminals persist via the SPA layout PUT) and to
+        // Terminal windows (a workspace window persists through its own workspace
+        // tenant's PUT, not here).
+        if matches!(row.kind, WindowKind::Terminal) && self.library_id() != "local" {
+            self.persist_terminal_window(&row.window_id);
         }
         self.notify_window_change();
         let library_id = self.library_id().to_string();
@@ -618,24 +620,23 @@ impl WorkspaceHost {
         Ok(row.to_record(library_id, prefix, token, connected))
     }
 
-    /// Mark `window_id` persisted across every mounted tenant so its terminal
-    /// sessions are spared the orphan-grace reap (they survive a client
-    /// disconnect and restore on reconnect). Used for devserver-minted windows,
-    /// which never get the SPA layout-blob PUT that persists local windows. A
-    /// tenant mounted AFTER this call won't carry the mark — relevant only if a
-    /// window is minted before its serving workspace is on; the boot terminal
-    /// and a served workspace's windows are minted with their tenant already up.
-    fn persist_window_across_tenants(&self, window_id: &str) {
-        let registries: Vec<Arc<crate::terminal_sessions::Registry>> = match self.workspaces.read()
-        {
-            Ok(workspaces) => workspaces
-                .values()
-                .map(|runtime| runtime.artifacts.terminal_sessions.clone())
-                .collect(),
-            Err(_) => return,
+    /// Mark a Terminal `window_id` persisted in the SHARED terminal tenant (its
+    /// serving tenant), so the orphan-grace pruner spares its session and it
+    /// survives a client disconnect+reconnect with its state. The session-
+    /// survival half of D-W3 for devserver terminals; a no-op until the shared
+    /// terminal tenant is mounted (`run_devserver` mounts it at startup, before
+    /// any terminal window is minted, so the prefix is always set by then).
+    fn persist_terminal_window(&self, window_id: &str) {
+        let Some(prefix) = self.terminal_tenant_prefix.get() else {
+            return;
         };
-        for sessions in registries {
-            sessions.mark_window_persisted(window_id);
+        if let Ok(workspaces) = self.workspaces.read() {
+            if let Some(runtime) = workspaces.get(prefix) {
+                runtime
+                    .artifacts
+                    .terminal_sessions
+                    .mark_window_persisted(window_id);
+            }
         }
     }
 
@@ -1968,47 +1969,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn devserver_minted_window_is_persisted_local_is_not() {
-        // A devserver (non-"local" library) auto-persists minted windows so an
-        // auto-opened window (which never PUTs a layout blob) survives a client
-        // disconnect; the local library is exempt — its windows persist via the
-        // SPA layout PUT. Returns whether the minted window is persisted in the
-        // mounted tenant's terminal registry.
-        async fn mint_marks_persisted(library_id: &str) -> bool {
+    async fn devserver_terminal_window_persists_in_shared_tenant_local_is_not() {
+        // D-W3 session-survival fold: a devserver (non-"local") Terminal window is
+        // marked persisted in the SHARED terminal tenant so its session survives a
+        // disconnect (it never PUTs a layout blob). The local library is exempt
+        // (its terminals persist via the SPA layout PUT). Returns whether the
+        // minted terminal window is persisted in the shared terminal tenant.
+        async fn mint_terminal_marks_persisted(library_id: &str) -> bool {
             let cfg = tempfile::tempdir().expect("config dir");
-            let root = tempfile::tempdir().expect("workspace root");
-            std::fs::write(root.path().join("a.md"), "# A\n").expect("write");
             let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
-            lib.register_workspace(root.path()).expect("register");
             let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
+            // Mount the shared terminal tenant (records terminal_tenant_prefix) —
+            // the D-W3 mount the devserver does at startup.
+            host.open_terminal_session(serve_config("/api/terminal"), None)
+                .await
+                .expect("mount shared terminal tenant");
             let store = tempfile::tempdir().expect("store dir");
             let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
             host.install_window_registry(registry, library_id.into());
-            // Mount a tenant so there's a terminal registry for the mark to land in.
-            host.open_registered_workspace(root.path(), serve_config("/a"))
-                .await
-                .expect("open workspace");
             let rec = host
                 .mint_window(WindowKind::Terminal, None)
                 .expect("mint terminal");
+            // The shared terminal tenant is the only mount; inspect its registry.
             // Bind the read guard so it drops before `host` at fn end.
             let tenants = host.workspaces.read().unwrap();
             tenants
                 .values()
                 .next()
-                .expect("one mounted tenant")
+                .expect("shared terminal tenant")
                 .artifacts
                 .terminal_sessions
                 .is_window_persisted(&rec.window_id)
         }
 
         assert!(
-            mint_marks_persisted("lib-test").await,
-            "devserver-minted window must be persisted"
+            mint_terminal_marks_persisted("lib-test").await,
+            "devserver terminal window must be persisted in the shared terminal tenant"
         );
         assert!(
-            !mint_marks_persisted("local").await,
-            "local-minted window must NOT be auto-persisted (relies on layout PUT)"
+            !mint_terminal_marks_persisted("local").await,
+            "local terminal window must NOT be auto-persisted (relies on layout PUT)"
         );
     }
 }
