@@ -524,6 +524,25 @@ impl WorkspaceHost {
             .any(|entry| entry.window_id.as_deref() == Some(window_id))
     }
 
+    /// How many live terminal sessions the tenant mounted at `prefix` is
+    /// running, or `0` when nothing is mounted there. The reversible
+    /// workspace-off path reads this to refuse an unmount that would kill
+    /// running terminals unless the caller forces it. Sync and cheap (one read
+    /// lock + a roster snapshot), like
+    /// [`tenant_has_window_sessions`](Self::tenant_has_window_sessions).
+    pub fn tenant_terminal_session_count(&self, prefix: &str) -> usize {
+        let Ok(prefix) = sanitize_prefix(prefix) else {
+            return 0;
+        };
+        let Ok(workspaces) = self.workspaces.read() else {
+            return 0;
+        };
+        workspaces
+            .get(&prefix)
+            .map(|runtime| runtime.artifacts.terminal_sessions.roster().len())
+            .unwrap_or(0)
+    }
+
     /// The full library window set: every window across every tenant, as the
     /// authoritative records the launcher, `cs window list`, and the desktop
     /// watcher reconcile to. Joins each persisted registry row with its serving
@@ -1582,6 +1601,50 @@ mod tests {
         assert!(!host
             .close_terminal_tenant("/absent")
             .expect("absent close is false"));
+    }
+
+    #[tokio::test]
+    async fn tenant_terminal_session_count_tracks_live_ptys() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
+        host.open_terminal_session(serve_config("/count"))
+            .await
+            .expect("open terminal tenant");
+
+        // A mounted tenant with no PTYs and an absent prefix both count zero.
+        assert_eq!(host.tenant_terminal_session_count("/count"), 0);
+        assert_eq!(host.tenant_terminal_session_count("/absent"), 0);
+
+        // A live PTY lifts the count: this is what the off path consults to
+        // refuse a terminal-killing unmount unless the caller forces it.
+        let registry = {
+            let workspaces = host.workspaces.read().expect("host lock");
+            workspaces
+                .get("/count")
+                .expect("tenant mounted")
+                .artifacts
+                .terminal_sessions
+                .clone()
+        };
+        registry
+            .create(CreateOptions {
+                size: PtySize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                tab_name: None,
+                tab_group: None,
+                window_id: None,
+                mcp_env: false,
+                cwd: None,
+                command: None,
+                env: Default::default(),
+            })
+            .expect("spawn PTY");
+        assert_eq!(host.tenant_terminal_session_count("/count"), 1);
     }
 
     #[tokio::test]

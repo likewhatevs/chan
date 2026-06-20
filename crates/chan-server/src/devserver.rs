@@ -41,9 +41,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::random_token;
 use crate::devserver_api::{
-    DevserverInfo, DevserverWindow, MountedPrefix, MountedTerminal, OpenTerminalRequest,
-    OpenWorkspaceRequest, SetWorkspaceOnRequest, TerminalEntry, WorkspaceEntry,
-    DEVSERVER_API_PROTOCOL,
+    ActiveTerminalsRejection, DevserverInfo, DevserverWindow, MountedPrefix, MountedTerminal,
+    OpenTerminalRequest, OpenWorkspaceRequest, SetWorkspaceOnRequest, TerminalEntry,
+    WorkspaceEntry, DEVSERVER_API_PROTOCOL,
 };
 use crate::{sanitize_prefix, Error, ServeConfig};
 use crate::{CreateWindow, WindowRecord, WindowSet, WorkspaceHost};
@@ -990,6 +990,23 @@ async fn handle_set_workspace_on(
         return StatusCode::NOT_FOUND.into_response();
     };
     let prefix = format!("/{}", prefix_tail.trim_start_matches('/'));
+    // Confirm-before-off: unmounting a workspace kills the terminals running in
+    // it, so a reversible off with live terminals is refused (the response
+    // carries the count) until the client re-issues with `force`. The check is
+    // server-side because `cs` and the launcher can trigger the off too, not
+    // just the desktop's own confirm dialog.
+    if !req.on && !req.force {
+        let active = state.host.tenant_terminal_session_count(&prefix);
+        if active > 0 {
+            return (
+                StatusCode::CONFLICT,
+                Json(ActiveTerminalsRejection {
+                    active_terminals: active,
+                }),
+            )
+                .into_response();
+        }
+    }
     match state.set_workspace_on(&prefix, req.on).await {
         Ok(Some(entry)) => Json(entry).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -1411,6 +1428,38 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(labeled.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn off_without_live_terminals_is_not_blocked() {
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        std::fs::write(ws.path().join("a.md"), "# A\n").expect("seed");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let prefix = state.register_workspace(ws.path()).await.expect("mount");
+        let host = state.host.clone();
+        let app = build_devserver_app(state, host);
+
+        // An unforced off of a workspace with no live terminals clears the
+        // confirm-before-off guard (count is 0) and unmounts: 200, not 409. (The
+        // 409 path needs a live PTY in the tenant, which the host's
+        // `tenant_terminal_session_count` test covers.)
+        let off = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri(format!("/api/devserver/workspaces{prefix}/on"))
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"on":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(off.status(), StatusCode::OK);
     }
 
     #[tokio::test]
