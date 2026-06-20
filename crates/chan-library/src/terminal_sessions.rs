@@ -279,6 +279,14 @@ pub enum SessionEvent {
     Exit(u32),
     Error(String),
     Closed(CloseReason),
+    /// The session was RESTARTED in place: its PTY is being replaced under the
+    /// SAME session id (the roster keeps the id). Broadcast on the OLD
+    /// session's channel just before it is killed, so an attached `/ws` reader
+    /// re-attaches to the relaunched session instead of tearing the socket
+    /// down — the SPA tab stays put and transparently shows the new shell (no
+    /// `Closed`/`Exit`, so it is never dropped). Consumed server-side in the
+    /// `/ws` loop; never serialized to a client frame.
+    Restarted,
     /// The write queue's MESSAGE depth changed (an enqueue on either path,
     /// or a message's tail drained). The depth is the absolute message count
     /// (see [`QueuedWrite::tail`]), so consumers stay idempotent under
@@ -581,7 +589,10 @@ impl Registry {
             Some(current) if Arc::ptr_eq(current, &old) => {
                 sessions.insert(id.to_string(), session);
                 drop(sessions);
-                old.close(CloseReason::Explicit);
+                // Signal an in-place restart (not a close) on the old channel so
+                // an attached `/ws` reader re-attaches to the relaunched session
+                // under the same id instead of dropping the tab.
+                old.close_for_restart();
                 self.notify_roster_change();
                 Ok(true)
             }
@@ -1932,6 +1943,21 @@ impl Session {
         let _ = self.command_tx.send(PtyCommand::Kill);
     }
 
+    /// Like [`close`](Self::close) but signals an in-place RESTART instead of a
+    /// teardown: broadcast [`SessionEvent::Restarted`] (not `Closed`) before
+    /// killing the old PTY, so an attached `/ws` reader re-attaches to the
+    /// relaunched session (same id) rather than dropping the tab. The `Kill`
+    /// command returns the controller thread before its `try_wait` `Exit`
+    /// branch, so no `Exit` leaks either; and the reader moves to the new
+    /// channel on `Restarted`, so any racing old-PTY event goes unseen.
+    fn close_for_restart(&self) {
+        if self.closed.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        self.broadcast(SessionEvent::Restarted);
+        let _ = self.command_tx.send(PtyCommand::Kill);
+    }
+
     /// The window (`?w=` label) this session currently belongs to.
     fn window_id(&self) -> Option<String> {
         self.window_id
@@ -3266,6 +3292,35 @@ mod tests {
         // A selector that matches nothing closes nothing.
         assert_eq!(registry.close_matching(Some("@@Nobody"), None), 0);
         assert_eq!(registry.len(), 1);
+        registry.close_all(CloseReason::Shutdown);
+    }
+
+    #[test]
+    fn restart_signals_restarted_not_closed_on_the_old_channel() {
+        // The restart-reconcile contract (bug 2): a restart broadcasts
+        // `Restarted` (never `Closed`/`Exit`) on the OLD channel, so the /ws
+        // reader re-attaches to the relaunched session under the SAME id
+        // instead of dropping the tab. The id stays live afterwards.
+        let registry = Registry::new(test_config(4096, 8, 60));
+        let mut handle = registry.create(opts_with_window("win-restart")).unwrap();
+        let id = handle.id().to_string();
+        assert!(registry.restart(&id, RestartOverrides::default()).unwrap());
+        let mut saw_restarted = false;
+        while let Ok(event) = handle.rx.try_recv() {
+            match event {
+                SessionEvent::Restarted => saw_restarted = true,
+                SessionEvent::Closed(_) | SessionEvent::Exit(_) => {
+                    panic!("restart must not broadcast Closed/Exit on the old channel")
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            saw_restarted,
+            "restart must broadcast Restarted on the old channel"
+        );
+        // The id still resolves to a live, relaunched session.
+        assert!(registry.attach_for_ws(&id, None).is_some());
         registry.close_all(CloseReason::Shutdown);
     }
 

@@ -18,7 +18,7 @@ use crate::error::err_tunnel_public_locked;
 use crate::signal::now_unix_secs;
 use crate::state::AppState;
 use crate::terminal_sessions::{
-    CloseReason, CreateError, CreateOptions, RestartOverrides, SessionEvent,
+    AttachHandle, CloseReason, CreateError, CreateOptions, RestartOverrides, SessionEvent,
     ALT_SCREEN_ATTACH_PRELUDE, GIT_BASH_MISSING_REASON,
 };
 
@@ -26,6 +26,12 @@ const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const MAX_COLS: u16 = 500;
 const MAX_ROWS: u16 = 200;
+
+/// RIS (ESC c) — full terminal reset, sent to an attached xterm when its
+/// session is restarted in place so the relaunched shell starts on a clean
+/// screen. A fresh SPA reattach gets a brand-new empty xterm; a server-side
+/// re-attach reuses the live one, so reset it here to match.
+const RESET_TERMINAL: &[u8] = b"\x1bc";
 
 #[derive(Debug, Deserialize)]
 pub struct TerminalQuery {
@@ -638,43 +644,12 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
     };
     let mut shutdown_rx = state.shutdown_rx.clone();
 
-    let _ = send_frame(
-        &mut socket,
-        ServerFrame::Session {
-            id: session.id().to_owned(),
-            seq: session.seq,
-            missed_bytes: session.missed_bytes,
-            bytes_since_focus: session.bytes_since_focus(),
-            queue_depth: session.queue_depth(),
-            queued_prompt_ids: session.queued_prompt_ids(),
-        },
-    )
-    .await;
-    for chunk in &session.replay {
-        if socket.send(Message::Binary(chunk.clone())).await.is_err() {
-            return;
-        }
-    }
-    if session.alt_screen
-        && socket
-            .send(Message::Binary(ALT_SCREEN_ATTACH_PRELUDE.to_vec()))
-            .await
-            .is_err()
+    if send_attach_prelude(&mut socket, &state, &session, opts.size)
+        .await
+        .is_err()
     {
         return;
     }
-    session.request_redraw();
-    let (cwd, cwd_rel) = terminal_cwd_payload(state.try_workspace().ok().as_deref(), session.cwd());
-    let _ = send_frame(
-        &mut socket,
-        ServerFrame::Ready {
-            cols: opts.size.cols,
-            rows: opts.size.rows,
-            cwd,
-            cwd_rel,
-        },
-    )
-    .await;
 
     loop {
         tokio::select! {
@@ -847,6 +822,34 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
                         let _ = send_frame(&mut socket, ServerFrame::Closed { reason }).await;
                         break;
                     }
+                    Ok(SessionEvent::Restarted) => {
+                        // The session was restarted in place under the same id.
+                        // Re-attach this socket to the relaunched session and
+                        // replay it over a reset screen, so the tab stays put and
+                        // transparently shows the new shell (no Closed/Exit ⇒ the
+                        // SPA never drops it). If the relaunched session is gone,
+                        // fall through to a normal teardown.
+                        let id = session.id().to_owned();
+                        match state.terminal_sessions.attach_for_ws(&id, None) {
+                            Some(next) => {
+                                session = next;
+                                if socket
+                                    .send(Message::Binary(RESET_TERMINAL.to_vec()))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                if send_attach_prelude(&mut socket, &state, &session, opts.size)
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         let _ = send_frame(
                             &mut socket,
@@ -862,6 +865,65 @@ async fn terminal_ws(mut socket: WebSocket, state: Arc<AppState>, opts: Terminal
             }
         }
     }
+}
+
+/// Send the post-attach prelude for `session`: the session-control frame, the
+/// retained scrollback replay, the alt-screen prelude, a redraw nudge, and the
+/// `Ready` frame. Used on first attach and on an in-place restart re-attach.
+/// Any socket send failure returns `Err(())` so the caller tears the
+/// connection down.
+async fn send_attach_prelude(
+    socket: &mut WebSocket,
+    state: &AppState,
+    session: &AttachHandle,
+    size: PtySize,
+) -> Result<(), ()> {
+    if send_frame(
+        socket,
+        ServerFrame::Session {
+            id: session.id().to_owned(),
+            seq: session.seq,
+            missed_bytes: session.missed_bytes,
+            bytes_since_focus: session.bytes_since_focus(),
+            queue_depth: session.queue_depth(),
+            queued_prompt_ids: session.queued_prompt_ids(),
+        },
+    )
+    .await
+    .is_err()
+    {
+        return Err(());
+    }
+    for chunk in &session.replay {
+        if socket.send(Message::Binary(chunk.clone())).await.is_err() {
+            return Err(());
+        }
+    }
+    if session.alt_screen
+        && socket
+            .send(Message::Binary(ALT_SCREEN_ATTACH_PRELUDE.to_vec()))
+            .await
+            .is_err()
+    {
+        return Err(());
+    }
+    session.request_redraw();
+    let (cwd, cwd_rel) = terminal_cwd_payload(state.try_workspace().ok().as_deref(), session.cwd());
+    if send_frame(
+        socket,
+        ServerFrame::Ready {
+            cols: size.cols,
+            rows: size.rows,
+            cwd,
+            cwd_rel,
+        },
+    )
+    .await
+    .is_err()
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 async fn send_frame(socket: &mut WebSocket, frame: ServerFrame) -> Result<(), axum::Error> {
