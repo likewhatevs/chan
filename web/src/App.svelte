@@ -937,16 +937,13 @@
     // so re-showing is instant.
     if (leafPaneCount() <= 1) {
       if (isTauriDesktop()) {
-        // A window that has never held content (a freshly restored window whose
-        // layout has not hydrated its panes yet — the deferred layout phase)
-        // must NOT be discarded on close: that deletes its record for good.
-        // Fall through to the native close, which buries it — the record
-        // survives, so the window returns on restart.
-        if (!ui.windowArmed) return false;
-        // An empty window is a discard: delete its blob synchronously before
-        // the host destroys the window, so it never lingers in `cs window
-        // list`. Suppress the reap if the window emptied via a terminal
-        // move-out (the moved PTY must survive in the target window).
+        // A user-initiated close of an empty window (Cmd+W / ^W / ^D) is an
+        // intentional DISCARD: delete its blob synchronously before the host
+        // destroys the window, so it never lingers in `cs window list`. Suppress
+        // the reap if the window emptied via a terminal move-out (the moved PTY
+        // must survive in the target window). (Restored-empty windows survive a
+        // RESTART via the persisted record + the native-close bury, not by
+        // blocking this explicit close.)
         discardWindowSession({ reap: !consumeLastCloseWasMoveOut() });
         void requestCloseWindow();
         return true;
@@ -974,17 +971,6 @@
       discardWindowSession({ reap: !consumeLastCloseWasMoveOut() });
       void requestCloseWindow();
     }
-  });
-  // A window arms once it has held content (any pane with a tab). Until then a
-  // freshly restored window whose layout hasn't hydrated its panes yet must not
-  // discard itself on close (closeActiveEmptyPane buries it instead, so it
-  // survives restart). Sticky once set.
-  $effect(() => {
-    if (ui.windowArmed) return;
-    const hasContent = Object.values(layout.nodes).some(
-      (n) => n.kind === "leaf" && n.tabs.length > 0,
-    );
-    if (hasContent) ui.windowArmed = true;
   });
   onMount(() => document.addEventListener("keydown", onWindowKey));
   // SPA-global file-drop guard: an OS file dropped outside an

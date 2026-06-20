@@ -202,13 +202,6 @@ export const ui = $state<{
   /// disabled so it stays one PTY. Set once at bootstrap from the URL, never
   /// flipped. Implies `terminalOnly`.
   terminalControl: boolean;
-  /// A workspace window is "armed" once it has held content (any pane with a
-  /// tab). Until then — e.g. a freshly restored window whose layout has not
-  /// hydrated its panes yet (the deferred layout phase) — closing it must NOT
-  /// discard the record (which would delete the window for good); it falls
-  /// through to the native close, which buries it so it returns on restart.
-  /// Sticky once set.
-  windowArmed: boolean;
 }>({
   status: null,
   statusKind: null,
@@ -222,7 +215,6 @@ export const ui = $state<{
   terminalOnly: isTerminalOnlyWindow(),
   terminalArmed: false,
   terminalControl: isControlTerminalWindow(),
-  windowArmed: false,
 });
 
 /// The window-kind URL marker. The `?kind=` query param (set by the desktop
