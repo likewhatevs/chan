@@ -2045,6 +2045,22 @@ fn request_close_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> 
             }
         }
     }
+    // A watcher-managed DEVSERVER window (`lib-<library_id>::<window_id>`) emptied:
+    // discard its record on the owning devserver — the async analog of the
+    // `local::` discard above. The server drops + PERSISTS the removal and fires
+    // the watch, so the close survives a restart instead of the record reopening
+    // empty. The DELETE is an HTTP round-trip, so fire-and-forget it (logging a
+    // failure) and destroy the native window now for an instant close.
+    if closing.starts_with("lib-") {
+        let label = closing.to_string();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = discard_devserver_window(&app, &label).await {
+                tracing::warn!(label = %label, error = %e, "discarding a closed devserver window failed");
+            }
+        });
+        return window.destroy().map_err(err);
+    }
     // `destroy()`, not `close()`: this is the SPA's DELIBERATE close-cascade
     // (last tab, then last pane, just closed — the window is empty). `close()`
     // would fire `CloseRequested`, where the bury-on-close handler hides SPA
@@ -3743,6 +3759,35 @@ async fn mint_another_devserver_workspace_window(
     }
     // Stale window for a disconnected/forgotten devserver: surface the picker.
     show_window(app, "main")
+}
+
+/// Discard a closed devserver window's record on its owning devserver — the
+/// `DELETE` the empty-window close-cascade sends for `lib-` windows (the
+/// devserver analog of `embedded.discard_window`). There is no stored
+/// library_id->devserver map, so feed-match the focused/closing label to find the
+/// conn AND the bare `window_id`, then DELETE. A no-op if the devserver is gone
+/// or the record already left the feed.
+async fn discard_devserver_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
+    let state = app.state::<Arc<AppState>>();
+    let devserver_ids: Vec<String> = {
+        let cfg = state.store.lock().unwrap().get().map_err(err)?;
+        cfg.devservers.iter().map(|ds| ds.id.clone()).collect()
+    };
+    for id in devserver_ids {
+        let Some(conn) = state.devservers.get(&id) else {
+            continue;
+        };
+        let Ok(windows) = devserver::fetch_library_windows(&conn).await else {
+            continue;
+        };
+        if let Some(record) = windows
+            .iter()
+            .find(|r| crate::window_watcher::native_label(r) == label)
+        {
+            return devserver::discard_library_window(&conn, &record.window_id).await;
+        }
+    }
+    Ok(())
 }
 
 /// OS window title for the singleton launcher. Launchers are never

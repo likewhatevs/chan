@@ -516,6 +516,33 @@ pub async fn mint_library_window(
         .map_err(|e| format!("decoding minted window: {e}"))
 }
 
+/// `DELETE /api/library/windows/{window_id}`: discard a devserver window's
+/// registry record. The server drops the row, PERSISTS the removal
+/// (`save_best_effort`), and fires the watch so every client's reconcile closes
+/// the window. The devserver analog of the local `embedded.discard_window` — a
+/// closed devserver window must DELETE its record, else it survives server-side
+/// and reopens (empty) on restart. A 404 (already gone) is success.
+pub async fn discard_library_window(conn: &DevserverConn, window_id: &str) -> Result<(), String> {
+    let url = format!(
+        "{}/api/library/windows/{}",
+        base_origin(&conn.host, conn.port),
+        window_id
+    );
+    let resp = http_client()?
+        .delete(&url)
+        .bearer_auth(&conn.token)
+        .send()
+        .await
+        .map_err(|e| format!("discarding library window: {e}"))?;
+    if !resp.status().is_success() && resp.status() != reqwest::StatusCode::NOT_FOUND {
+        return Err(format!(
+            "library window discard returned HTTP {}",
+            resp.status()
+        ));
+    }
+    Ok(())
+}
+
 /// The `DELETE` URL for unmounting a workspace tenant. The server route is
 /// an axum wildcard, so `prefix` (an absolute route path like
 /// `/api/notes-1a2b3c`) is appended verbatim after the collection path.
