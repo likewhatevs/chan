@@ -3382,70 +3382,46 @@ fn open_about_window(app: &tauri::AppHandle) -> Result<(), String> {
 /// focused window's backing connection can't be resolved (stale
 /// window for a forgotten attachment).
 fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), String> {
-    // Buried windows take precedence in every family: Cmd+Shift+N on a
-    // window whose family has a hidden sibling REOPENS that sibling
-    // (most recent first) instead of spawning a fresh window —
-    // reopen-the-last-closed-window feel, with the live window state
-    // intact.
-    //
-    // A focused standalone terminal window opens ANOTHER
-    // terminal window (its workspace-less analogue of "new window of this
-    // workspace"), not the launcher. Checked first because a terminal-*
-    // window has no entry in the `serves` map for the workspace-recovery
-    // path below to match.
-    if app
-        .webview_windows()
-        .values()
-        .any(|w| w.label().starts_with("terminal-") && w.is_focused().unwrap_or(false))
-    {
-        let state = app.state::<Arc<AppState>>();
-        if let Some(buried) = state.most_recent_buried("terminal-win-") {
-            if unbury_window(app, &buried) {
-                return Ok(());
-            }
-        }
-        spawn_terminal_window(app);
-        return Ok(());
-    }
+    // Buried workspace-/outbound- windows take precedence in their family:
+    // Cmd+Shift+N on a window whose family has a hidden sibling REOPENS that
+    // sibling (most recent first) instead of spawning a fresh window. Local
+    // `local::` windows are independent registry records — no family unbury;
+    // a focused one mints/opens a fresh window (branched on kind below), and a
+    // focused launcher (or nothing) opens a standalone terminal.
     let Some(focused) = app
         .webview_windows()
         .into_values()
         .find(|w| serve::is_workspace_webview_label(w.label()) && w.is_focused().unwrap_or(false))
     else {
-        // Launcher (or nothing) focused: New Window means a standalone
-        // terminal window. Like the terminal-focused branch, a buried
-        // terminal window is reopened first.
-        let state = app.state::<Arc<AppState>>();
-        if let Some(buried) = state.most_recent_buried("terminal-win-") {
-            if unbury_window(app, &buried) {
-                return Ok(());
-            }
-        }
+        // Launcher (or nothing) focused: New Window means a standalone terminal.
         spawn_terminal_window(app);
         return Ok(());
     };
     let focused_label = focused.label().to_string();
     let state = app.state::<Arc<AppState>>();
-    // A watcher-opened workspace window (`local::<window_id>`): mint another
-    // window for the same workspace; the watcher opens it. Each minted window
-    // is an independent registry record, so there is no `<kind>-<hash>-<seq>`
-    // family to unbury (unlike the workspace-/outbound- schemes below).
+    // A watcher-opened local window (`local::<window_id>`): branch on the
+    // focused window's KIND. A terminal opens ANOTHER standalone terminal; a
+    // workspace mints another window for the same workspace (the watcher opens
+    // it). Each minted window is an independent registry record, so there is no
+    // `<kind>-<hash>-<seq>` family to unbury (unlike the schemes below).
+    // (A Terminal record carries no `workspace_path`, so keying on that — the
+    // old code — fell through to the launcher: the #2 bug.)
     if focused_label.starts_with("local::") {
-        let workspace_path = state.embedded().and_then(|embedded| {
+        let record = state.embedded().and_then(|embedded| {
             embedded
                 .assemble_window_records()
                 .into_iter()
-                .find_map(|record| {
-                    (crate::window_watcher::native_label(&record) == focused_label)
-                        .then_some(record.workspace_path)
-                        .flatten()
-                })
+                .find(|r| crate::window_watcher::native_label(r) == focused_label)
         });
-        return match workspace_path {
-            Some(path) => state
+        return match record {
+            Some(r) if r.kind == chan_server::WindowKind::Terminal => {
+                spawn_terminal_window(app);
+                Ok(())
+            }
+            Some(r) => state
                 .embedded()
                 .ok_or_else(|| "embedded local server is unavailable".to_string())?
-                .mint_window(chan_server::WindowKind::Workspace, Some(path))
+                .mint_window(chan_server::WindowKind::Workspace, r.workspace_path)
                 .map(|_| ()),
             None => show_window(app, "main"),
         };

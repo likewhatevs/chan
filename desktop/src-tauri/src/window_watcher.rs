@@ -311,6 +311,62 @@ mod tests {
         assert_eq!(*s2.closed.borrow(), vec!["local::w-1"]);
     }
 
+    /// Models the real Tauri surface's ASYNC build: `open` does not immediately
+    /// surface the window in `open_labels` (the build is dispatched to the main
+    /// thread), but the label is tracked in-flight and folded into `open_labels`
+    /// so a reconcile in the dispatch→build gap treats it as open. Mirrors
+    /// `TauriNativeSurface`'s in-flight set.
+    #[derive(Default)]
+    struct AsyncGapSurface {
+        built: RefCell<HashSet<String>>,
+        in_flight: RefCell<HashSet<String>>,
+        opens: RefCell<Vec<String>>,
+    }
+    impl NativeSurface for AsyncGapSurface {
+        fn open_labels(&self, _library_id: &str) -> HashSet<String> {
+            let built = self.built.borrow().clone();
+            self.in_flight.borrow_mut().retain(|l| !built.contains(l));
+            let mut labels = built;
+            labels.extend(self.in_flight.borrow().iter().cloned());
+            labels
+        }
+        fn open(&self, record: &WindowRecord) {
+            let label = native_label(record);
+            self.in_flight.borrow_mut().insert(label.clone());
+            self.opens.borrow_mut().push(label);
+            // Deliberately NOT added to `built` — the build is async.
+        }
+        fn close(&self, label: &str) {
+            self.built.borrow_mut().remove(label);
+            self.in_flight.borrow_mut().remove(label);
+        }
+    }
+
+    #[test]
+    fn reconcile_does_not_double_open_across_the_async_build_gap() {
+        // Two reconcile passes fire before the dispatched build lands in the
+        // surface (the multi-notify boot burst). The in-flight tracking must make
+        // the 2nd pass a no-op — otherwise both build the SAME label ("webview
+        // label already exists" + a stuck/duplicate window).
+        let s = AsyncGapSurface::default();
+        let snap = vec![rec("local", "w-1", WindowKind::Terminal)];
+        reconcile("local", &snap, &none(), &s);
+        reconcile("local", &snap, &none(), &s);
+        assert_eq!(
+            s.opens.borrow().len(),
+            1,
+            "must open the label exactly once across the async build gap",
+        );
+        // Once the build lands, the same snapshot stays a no-op.
+        s.built.borrow_mut().insert("local::w-1".to_string());
+        reconcile("local", &snap, &none(), &s);
+        assert_eq!(
+            s.opens.borrow().len(),
+            1,
+            "no re-open after the build lands"
+        );
+    }
+
     #[test]
     fn buried_window_is_not_opened_and_is_closed() {
         let mut buried = HashSet::new();

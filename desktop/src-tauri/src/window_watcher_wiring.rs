@@ -15,13 +15,15 @@
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chan_server::WindowRecord;
 use tauri::{AppHandle, Manager};
 use tokio::sync::Notify;
 
-use crate::window_watcher::{watch_loop, NativeSurface, WatcherViewState, WindowFeed};
+use crate::window_watcher::{
+    native_label, watch_loop, NativeSurface, WatcherViewState, WindowFeed,
+};
 use crate::{serve, AppState};
 
 /// Library id of the embedded local-disk library (Seam-L scheme).
@@ -54,22 +56,44 @@ impl WindowFeed for LocalWindowFeed {
 struct TauriNativeSurface {
     app: AppHandle,
     addr: SocketAddr,
+    /// Labels whose build was dispatched to the Tauri main thread but may not yet
+    /// be in `webview_windows()` — the build is async (`open` returns before
+    /// `build_workspace_window`'s `run_on_main_thread` closure runs). Tracked and
+    /// folded into `open_labels` so a reconcile in the dispatch→build gap treats
+    /// the window as already open and does NOT double-`open` the same label (the
+    /// TOCTOU that produced "webview label already exists" + a stuck/duplicate
+    /// window during the multi-notify boot burst). Self-cleaning: a label that
+    /// has landed in `webview_windows` is dropped from the set.
+    in_flight: Arc<Mutex<HashSet<String>>>,
 }
 
 impl NativeSurface for TauriNativeSurface {
     fn open_labels(&self, library_id: &str) -> HashSet<String> {
         let prefix = format!("{library_id}::");
-        self.app
+        let mut labels: HashSet<String> = self
+            .app
             .webview_windows()
             .into_keys()
             .filter(|label| label.starts_with(&prefix))
-            .collect()
+            .collect();
+        // A dispatched build that has now landed in `webview_windows` is no
+        // longer in-flight; drop it, then fold the still-pending ones in so the
+        // reconcile sees them as open.
+        let mut in_flight = self.in_flight.lock().unwrap();
+        in_flight.retain(|label| !labels.contains(label));
+        labels.extend(in_flight.iter().filter(|l| l.starts_with(&prefix)).cloned());
+        labels
     }
 
     fn open(&self, record: &WindowRecord) {
+        // Mark the label in-flight BEFORE dispatching the (async) build, so a
+        // reconcile that runs before the build lands won't re-open it.
+        let label = native_label(record);
+        self.in_flight.lock().unwrap().insert(label.clone());
         // `open_watched_local_window` dispatches the actual build to the Tauri
         // main thread internally, so this returns promptly.
         if let Err(e) = serve::open_watched_local_window(&self.app, self.addr, record) {
+            self.in_flight.lock().unwrap().remove(&label);
             tracing::warn!(
                 window = %record.window_id,
                 error = %e,
@@ -79,6 +103,8 @@ impl NativeSurface for TauriNativeSurface {
     }
 
     fn close(&self, label: &str) {
+        // No longer in-flight (also covers a close before the build landed).
+        self.in_flight.lock().unwrap().remove(label);
         // Destroying a window must run on the Tauri main thread.
         let app = self.app.clone();
         let dispatch = self.app.clone();
@@ -107,7 +133,11 @@ pub(crate) fn spawn_local_window_watcher(app: AppHandle, state: Arc<AppState>) {
         state: Arc::clone(&state),
         change,
     };
-    let surface = TauriNativeSurface { app, addr };
+    let surface = TauriNativeSurface {
+        app,
+        addr,
+        in_flight: Arc::new(Mutex::new(HashSet::new())),
+    };
     let view = Arc::new(WatcherViewState::default());
     // Share the view state so the desktop close handlers can bury/unbury
     // through the watcher (L5), then hand the same Arc to the loop.
