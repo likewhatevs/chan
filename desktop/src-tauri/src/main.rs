@@ -1337,7 +1337,7 @@ fn reopen_devserver_workspace_windows(
             url: url.to_string(),
             base_title: serve::remote_window_title(url),
             menu_title: String::new(),
-            config_key: config::outbound_window_key(&window.window_id),
+            config_key: config::remote_window_key(&window.window_id),
             connecting: true,
             devserver: None,
         };
@@ -3193,7 +3193,7 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
                     family: format!("{}-", serve::outbound_window_prefix(&o.id)),
                     url: o.url.clone(),
                     base_title: serve::remote_window_title(&o.url),
-                    config_key: config::outbound_window_key(&o.id),
+                    config_key: config::remote_window_key(&o.id),
                     connecting: true,
                 });
             }
@@ -3288,7 +3288,7 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
                         url,
                         base_title: row.title.unwrap_or_else(|| display.clone()),
                         menu_title: format!("{display} — {tail}"),
-                        config_key: config::outbound_window_key(&row.prefix),
+                        config_key: config::remote_window_key(&row.prefix),
                         // Workspace reopen routes through the connecting screen
                         // like the reconnect path; the terminal branch bypasses
                         // it (spawns the tenant window directly).

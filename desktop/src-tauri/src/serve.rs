@@ -280,7 +280,7 @@ pub fn spawn_remote_workspace_window(
     url: &str,
 ) -> Result<String, String> {
     let prefix = outbound_window_prefix(id);
-    let config_key = config::outbound_window_key(id);
+    let config_key = config::remote_window_key(id);
     let restore =
         match unbury_or_restore(app, &prefix, &config_key, || new_outbound_window_label(id))? {
             OpenOutcome::Unburied(label) => {
@@ -339,7 +339,7 @@ pub fn spawn_devserver_terminal_window_at_label(
             title: "Terminal",
             url,
             url_hash_seed: "",
-            config_key: config::outbound_window_key(family_id),
+            config_key: config::remote_window_key(family_id),
             zoom_seed: 1.0,
             connecting: None,
             kind: Some("terminal"),
@@ -663,7 +663,7 @@ struct WindowSpec<'a> {
     /// `session.json`. Empty when there's nothing to restore.
     url_hash_seed: &'a str,
     /// WindowConfig identity key (`local_window_key` or
-    /// `outbound_window_key`). Stamped onto the close handler so a
+    /// `remote_window_key`). Stamped onto the close handler so a
     /// user-initiated close pushes the window's final URL hash back
     /// into the LRU stack. Empty for terminal windows (no LRU restore).
     config_key: String,

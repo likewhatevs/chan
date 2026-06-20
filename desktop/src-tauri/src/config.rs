@@ -103,7 +103,7 @@ pub struct WindowConfig {
     /// Workspace identity:
     ///   * local workspaces: canonical filesystem path (matches the
     ///     `AppState.serves` key).
-    ///   * outbound workspaces: `"outbound:<id>"`, namespaced by the
+    ///   * remote (devserver) workspaces: `"remote:<id>"`, namespaced by the
     ///     desktop-local attachment id because the URL can change.
     pub key: String,
     /// Tauri window label this config was last bound to. The label
@@ -206,9 +206,9 @@ pub fn local_window_key(workspace_key: &str) -> String {
     workspace_key.to_string()
 }
 
-/// Identity key for an outbound URL attachment.
-pub fn outbound_window_key(id: &str) -> String {
-    format!("outbound:{id}")
+/// Identity key for a remote (devserver) URL attachment.
+pub fn remote_window_key(id: &str) -> String {
+    format!("remote:{id}")
 }
 
 /// Push a window config to the top of the LRU stack and persist.
@@ -409,9 +409,9 @@ mod tests {
     }
 
     #[test]
-    fn outbound_window_key_namespaced_apart_from_local() {
-        let outbound = outbound_window_key("remote-1");
-        assert_ne!(local_window_key("remote-1"), outbound);
+    fn remote_window_key_namespaced_apart_from_local() {
+        let remote = remote_window_key("remote-1");
+        assert_ne!(local_window_key("remote-1"), remote);
     }
 
     #[test]
