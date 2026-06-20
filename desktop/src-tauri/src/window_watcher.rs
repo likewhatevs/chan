@@ -108,17 +108,19 @@ pub fn reconcile(
 /// loop waits on. The local library implements this in-process
 /// (`host.assemble_window_records()` + `host.library_change_notify()`).
 ///
-/// **Why a `Notify` and not an `async fn changed()`:** the library fires its
-/// change signal with `notify_waiters()` — which stores NO permit, so a waiter
-/// registered *after* the fire misses it. tokio's `Notified` only registers on
-/// first poll, so [`watch_loop`] must `enable()` it (register) BEFORE taking the
-/// snapshot, closing the snapshot↔await gap. An opaque `impl Future` can't be
-/// `enable()`d, so the feed hands the loop the raw `Notify` to arm itself.
+/// **Why a `Notify`, not an `async fn changed()`:** tokio's `Notified` captures
+/// the `notify_waiters()` generation at CREATION (not at first poll), so a
+/// `Notified` created BEFORE the snapshot catches a change fired during the
+/// snapshot — the next poll sees the advanced generation. The hazard an opaque
+/// `async fn changed()` would introduce is creating its `Notified` only when
+/// first polled (i.e. AFTER the snapshot), where a same-instant change could be
+/// missed. Handing the loop the raw `Notify` lets it guarantee
+/// create-before-snapshot, which is the actual correctness property.
 pub trait WindowFeed {
     /// The library's current full window set.
     fn snapshot(&self) -> Vec<WindowRecord>;
-    /// The change signal: fires (via `notify_waiters`) on every window-set
-    /// change. The loop pins + `enable()`s it before snapshotting.
+    /// The change signal, fired (via `notify_waiters`) on every window-set
+    /// change. The loop creates this future before snapshotting.
     fn change_notify(&self) -> Arc<Notify>;
 }
 
@@ -157,10 +159,11 @@ impl WatcherViewState {
 /// = resubscribe + reconcile can never spawn a duplicate. On exit the surface is
 /// left as-is; disconnect reconciles to empty separately (detach, not reap).
 ///
-/// Correctness: both change signals fire with `notify_waiters()` (no stored
-/// permit), so each `Notified` is pinned and `enable()`d — registered as a
-/// waiter — BEFORE the snapshot is taken. A change landing in the snapshot↔await
-/// gap then still wakes the already-registered waiter rather than being missed.
+/// Correctness: both change `Notified`s are created BEFORE the snapshot. tokio
+/// captures the `notify_waiters()` generation at creation, so a change firing in
+/// the snapshot↔await window advances the generation and the first poll catches
+/// it — not missed. (Each is also `enable()`d to register the waiter eagerly;
+/// belt-and-suspenders — the generation capture is what's load-bearing here.)
 pub async fn watch_loop<F, S, C>(
     library_id: &str,
     feed: F,
@@ -175,8 +178,10 @@ pub async fn watch_loop<F, S, C>(
     let feed_notify = feed.change_notify();
     tokio::pin!(cancel);
     loop {
-        // Arm BOTH change waiters (register them) BEFORE the snapshot, closing
-        // the snapshot↔await race against `notify_waiters()`.
+        // Create both change futures BEFORE the snapshot so each captures the
+        // current notify_waiters generation; a change during the snapshot then
+        // advances it and the next poll catches it. (enable() arms the waiter
+        // eagerly too — harmless belt-and-suspenders.)
         let feed_changed = feed_notify.notified();
         tokio::pin!(feed_changed);
         feed_changed.as_mut().enable();
@@ -318,14 +323,15 @@ mod tests {
         assert_eq!(native_label(&b), "lib-abc::w-1");
     }
 
-    /// The race-proof test for the `enable()`-before-snapshot fix, against a REAL
-    /// `notify_waiters()` (not the fake feed). The feed fires its change signal
-    /// SYNCHRONOUSLY during the first `snapshot()` — i.e. inside the snapshot↔await
-    /// gap — then returns the window on the next snapshot. With `enable()` arming
-    /// the waiter BEFORE the snapshot, the loop catches the gap-fired change and
-    /// reconciles to the new snapshot (opens `w-1`). WITHOUT it, the change is
-    /// missed (waiter registers after the fire), the loop blocks forever, and
-    /// `w-1` never opens — so this assertion fails iff the race is present.
+    /// Guards the create-before-snapshot property against a REAL `notify_waiters()`
+    /// (not the fake feed). The feed fires its change signal SYNCHRONOUSLY during
+    /// the first `snapshot()` — inside the snapshot↔await window — then returns the
+    /// window on the next snapshot. Because the change future is created before the
+    /// snapshot, it captures the pre-fire generation; the fire advances it and the
+    /// next poll catches it, so the loop re-reconciles and opens `w-1`. A loop that
+    /// created its change future only AFTER the snapshot (e.g. an opaque
+    /// `async fn changed()`) would capture the post-fire generation, block forever,
+    /// and never open `w-1` — so this assertion fails if that regression slips in.
     #[tokio::test]
     async fn watch_loop_catches_a_change_fired_in_the_snapshot_gap() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -388,7 +394,7 @@ mod tests {
         assert_eq!(
             *surface.opened.lock().unwrap(),
             vec!["local::w-1".to_string()],
-            "enable()-before-snapshot must catch the gap-fired notify_waiters and reconcile",
+            "create-before-snapshot must catch the gap-fired notify_waiters and reconcile",
         );
     }
 
