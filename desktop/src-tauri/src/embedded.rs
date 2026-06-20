@@ -55,6 +55,11 @@ impl EmbeddedServer {
             bridge,
             chan_server::route_builder(),
         ));
+        // Register the host's self-handle so its per-tenant control sockets can
+        // reach it for teardown — otherwise the desktop's tenants report
+        // `UnserveMode::Unsupported` and `chan unserve` fails. Parity with the
+        // devserver path's `host.install_self()`.
+        host.install_self();
         // Install the local library's window registry so the window feed has
         // data (~/.chan/windows.json, library id "local").
         chan_server::install_local_window_registry(&host);
