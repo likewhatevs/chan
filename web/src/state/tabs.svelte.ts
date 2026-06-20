@@ -4611,6 +4611,26 @@ export function layoutHasReattachableTerminal(layout: SerNode | null): boolean {
   return false;
 }
 
+/// True when a serialized layout is worth persisting for its STRUCTURE alone,
+/// even with no durable content and no reattachable PTY: a split (more than one
+/// pane, so empty panes survive) or a terminal-only window. Restoring it
+/// recreates the panes and spawns FRESH shells for the terminals — the PTYs are
+/// gone after a restart or a workspace off->on, and the layout is what we keep.
+/// Gates the on-disk session save (store.svelte.ts) so a terminal-only or
+/// empty-split window no longer restores blank. A single empty pane stays
+/// unpersisted (it is just the default window).
+export function layoutHasPersistableStructure(layout: SerNode | null): boolean {
+  if (!layout) return false;
+  const leaves = serializedLeaves(layout);
+  if (leaves.length > 1) return true;
+  for (const leaf of leaves) {
+    for (const tab of [...leaf.t, ...(leaf.bt ?? [])]) {
+      if ((tab.k ?? "f") === "t") return true;
+    }
+  }
+  return false;
+}
+
 /// Copy terminal PTY session metadata from a per-window session layout
 /// onto the live layout after a shareable URL-hash layout restore.
 /// The hash deliberately omits `tsid`; this graft keeps reloads

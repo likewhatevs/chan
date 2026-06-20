@@ -68,6 +68,7 @@ import {
   reopenClosedTab,
   reorderTab,
   restoreLayout,
+  layoutHasPersistableStructure,
   saveDraftTabToWorkspace,
   saveTab,
   scheduleAutosave,
@@ -3175,5 +3176,49 @@ describe("terminal unseen-output dot pulse", () => {
     setTerminalActivity(tab, false);
     expect(tab.terminalActivity).toBeUndefined();
     expect(tab.terminalActivityPulsing).toBeUndefined();
+  });
+});
+
+describe("layoutHasPersistableStructure (terminal-only / empty-split persistence)", () => {
+  test("persists a terminal-only single pane", () => {
+    expect(
+      layoutHasPersistableStructure({ k: "l", t: [{ k: "t", n: "Terminal", a: 1 }] }),
+    ).toBe(true);
+  });
+
+  test("persists a split even when both panes are empty", () => {
+    expect(
+      layoutHasPersistableStructure({
+        k: "s",
+        d: "r",
+        a: { k: "l", t: [] },
+        b: { k: "l", t: [] },
+      }),
+    ).toBe(true);
+  });
+
+  test("persists a split of terminals", () => {
+    expect(
+      layoutHasPersistableStructure({
+        k: "s",
+        d: "r",
+        a: { k: "l", t: [{ k: "t", n: "Terminal", a: 1 }] },
+        b: { k: "l", t: [{ k: "t", n: "Terminal" }] },
+      }),
+    ).toBe(true);
+  });
+
+  test("does NOT persist a single empty pane (the default window)", () => {
+    expect(layoutHasPersistableStructure({ k: "l", t: [] })).toBe(false);
+  });
+
+  test("does NOT persist a single durable-only pane (handled by the durable gate)", () => {
+    expect(
+      layoutHasPersistableStructure({ k: "l", t: [{ k: "f", p: "notes.md", a: 1 }] }),
+    ).toBe(false);
+  });
+
+  test("returns false for a null layout", () => {
+    expect(layoutHasPersistableStructure(null)).toBe(false);
   });
 });

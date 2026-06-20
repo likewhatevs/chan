@@ -175,7 +175,7 @@ describe("session persistence bootstrap guard", () => {
     vi.useRealTimers();
   });
 
-  test("a reattachable terminal-only window persists its blob; a tsid-less one is deleted", async () => {
+  test("a terminal-only window persists its blob (live tsid reattaches; tsid-less keeps the structure for fresh shells)", async () => {
     vi.useFakeTimers();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(null, { status: 204 }),
@@ -206,14 +206,20 @@ describe("session persistence bootstrap guard", () => {
       expect(String(url)).toContain("/api/session");
     }
 
-    // 3) The terminal's session ends (tsid cleared): nothing to reattach, so
-    //    the now-ephemeral terminal-only window DELETEs its blob — it must not
-    //    linger as a phantom in `cs window list`.
+    // 3) The terminal's session ends (tsid cleared): nothing to reattach, but
+    //    the pane STRUCTURE is still worth keeping, so the window PUTs its blob
+    //    (without session ids) and restores with a FRESH shell instead of coming
+    //    back empty. A truly empty window (no panes/tabs) still deletes — covered
+    //    by the empty-window test above.
     const term = activePane().tabs[0] as TerminalTab;
     term.terminalSessionId = undefined;
     scheduleSessionSave();
     await vi.runAllTimersAsync();
-    expect(fetchSpy.mock.calls.at(-1)?.[1]?.method).toBe("DELETE");
+    {
+      const [url, init] = fetchSpy.mock.calls.at(-1)!;
+      expect(init?.method).toBe("PUT");
+      expect(String(url)).toContain("/api/session");
+    }
 
     fetchSpy.mockRestore();
     vi.useRealTimers();

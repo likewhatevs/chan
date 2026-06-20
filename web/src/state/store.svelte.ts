@@ -39,6 +39,7 @@ import {
   openTerminalInActivePane,
   openDashboardInActivePane,
   layoutHasDurableContent,
+  layoutHasPersistableStructure,
   layoutHasReattachableTerminal,
   registerDraftPromotionSink,
   restoreLayout,
@@ -1975,33 +1976,34 @@ function serializeSession(): SessionPayload | null {
   // deleted and the window leaves nothing in `cs window list`.
   if (sessionDiscarded) return null;
   const layout = serializeLayout({ terminalSessions: true });
-  // Persist a window when it has durable (file / graph / browser) content OR
-  // at least one terminal carrying a live server session to RE-ATTACH (a
-  // `tsid`). The reattachable-terminal case is what lets a standalone-terminal
-  // window survive a fresh page load — a close->reopen, or a chan-desktop
-  // disconnect->reconnect that re-creates the WKWebView: the on-disk blob
-  // carries the tsids, so restore re-attaches the live PTYs instead of
-  // spawning fresh shells. (sessionStorage alone, the old reattach channel,
-  // is gone on a fresh load — it only rescues a same-tab Cmd+R.) A
-  // terminal-only window whose sessions have ended (no reattachable tsid) and
-  // a truly empty window both serialize to nothing durable, so the caller
-  // deletes the blob (a null return maps to `api.deleteSession()`).
-  // `treeExpanded` only rides along when there is durable content to restore
-  // it into.
-  if (
-    !layout ||
-    !(layoutHasDurableContent(layout) || layoutHasReattachableTerminal(layout))
-  ) {
-    return null;
+  if (!layout) return null;
+  // Durable (file / graph / browser) content OR a terminal carrying a live
+  // server session to RE-ATTACH (a `tsid`): persist WITH the session ids, so a
+  // close->reopen, or a chan-desktop disconnect->reconnect that re-creates the
+  // WKWebView, re-attaches the live PTYs from the on-disk blob instead of
+  // spawning fresh shells. (sessionStorage, the same-tab reattach channel, is
+  // gone on a fresh load.) `treeExpanded` rides along only here, where there is
+  // durable content to restore it into.
+  if (layoutHasDurableContent(layout) || layoutHasReattachableTerminal(layout)) {
+    const treeMap: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(treeExpanded.map)) {
+      if (v) treeMap[k] = true;
+    }
+    return {
+      layout,
+      ...(Object.keys(treeMap).length > 0 ? { treeExpanded: treeMap } : {}),
+    };
   }
-  const treeMap: Record<string, boolean> = {};
-  for (const [k, v] of Object.entries(treeExpanded.map)) {
-    if (v) treeMap[k] = true;
+  // No durable content and no live PTY — a terminal-only or empty-split window
+  // (e.g. after a restart, or a workspace off->on that killed its PTYs).
+  // Persist the pane STRUCTURE so the layout survives, and recreate it with
+  // FRESH shells: serialize WITHOUT session ids so restore spawns fresh PTYs
+  // rather than chasing dead tsids. A truly empty single pane persists nothing.
+  if (layoutHasPersistableStructure(layout)) {
+    const structure = serializeLayout({ terminalSessions: false });
+    if (structure) return { layout: structure };
   }
-  return {
-    layout,
-    ...(Object.keys(treeMap).length > 0 ? { treeExpanded: treeMap } : {}),
-  };
+  return null;
 }
 
 async function restoreSession(p: SessionPayload): Promise<void> {
