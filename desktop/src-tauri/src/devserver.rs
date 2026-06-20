@@ -472,7 +472,10 @@ pub async fn mint_library_window(
         .await
         .map_err(|e| format!("minting library window: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("library window mint returned HTTP {}", resp.status()));
+        return Err(format!(
+            "library window mint returned HTTP {}",
+            resp.status()
+        ));
     }
     resp.json::<chan_server::WindowRecord>()
         .await

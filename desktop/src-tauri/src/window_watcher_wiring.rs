@@ -313,18 +313,12 @@ pub(crate) async fn spawn_devserver_window_watcher(
     let feed = DevserverWindowFeed { snapshot, change };
     let view = Arc::new(WatcherViewState::default());
     let mut cancel_loop = cancel_rx;
-    tauri::async_runtime::spawn(watch_loop(
-        None,
-        feed,
-        surface,
-        view,
-        async move {
-            while !*cancel_loop.borrow_and_update() {
-                if cancel_loop.changed().await.is_err() {
-                    break;
-                }
+    tauri::async_runtime::spawn(watch_loop(None, feed, surface, view, async move {
+        while !*cancel_loop.borrow_and_update() {
+            if cancel_loop.changed().await.is_err() {
+                break;
             }
-        },
-    ));
+        }
+    }));
     Ok(cancel_tx)
 }
