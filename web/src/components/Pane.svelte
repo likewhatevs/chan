@@ -330,6 +330,13 @@
     window.removeEventListener("mousemove", onDeadZoneMouseMove);
     window.removeEventListener("mouseup", onDeadZoneMouseUp);
   }
+  // A mousedown that never reaches mouseup / the drag threshold (e.g. the
+  // pane unmounts mid-press) would leak these window listeners; drop them
+  // unconditionally on teardown.
+  onDestroy(() => {
+    window.removeEventListener("mousemove", onDeadZoneMouseMove);
+    window.removeEventListener("mouseup", onDeadZoneMouseUp);
+  });
 
   function onDeadZoneDblClick(): void {
     enterPaneModeTransaction(null);

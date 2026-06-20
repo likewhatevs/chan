@@ -65,7 +65,9 @@
 
   function dismissCs(): void {
     csDismissedLocal = true;
-    void api.setCsDismissed(true);
+    api.setCsDismissed(true).catch((e) => {
+      console.warn("chan: failed to persist cs-dismiss", e);
+    });
   }
   function errText(e: unknown): string {
     if (e instanceof ApiError) {
@@ -90,7 +92,9 @@
       // Succeeded (or already present): don't ask again on future loads.
       if (res.resolved) {
         csDismissedLocal = true;
-        void api.setCsDismissed(true);
+        api.setCsDismissed(true).catch((e) => {
+          console.warn("chan: failed to persist cs-dismiss", e);
+        });
       }
     } catch (e) {
       // Non-fatal: surface why and fall back to the manual hint so the user

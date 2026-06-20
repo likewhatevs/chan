@@ -385,6 +385,28 @@ async function readFileStream(
   };
 }
 
+/// Serialize whole-block preferences PATCHes. Every preferences setter
+/// re-reads the config and PATCHes the entire `preferences` block, so two
+/// near-simultaneous flips of different fields would each clobber the
+/// other. Chaining each write off the prior (and re-GETting inside the
+/// chain) makes a later write observe the earlier one; the catch swallows
+/// a failed write so it can't wedge the chain. Mirrors persistThemeChoice.
+let prefsWriteInflight: Promise<void> = Promise.resolve();
+function queuePrefWrite(
+  next: (prefs: GlobalConfig["preferences"]) => GlobalConfig["preferences"] | null,
+): Promise<void> {
+  prefsWriteInflight = prefsWriteInflight.catch(() => {}).then(async () => {
+    const cfg = await req<GlobalConfig>("GET", "/api/config");
+    const updated = next(cfg.preferences);
+    if (!updated) return;
+    await req<GlobalConfig>("PATCH", "/api/config", {
+      ...cfg,
+      preferences: updated,
+    });
+  });
+  return prefsWriteInflight;
+}
+
 export const api = {
   workspace: () => req<WorkspaceInfo>("GET", "/api/workspace"),
   /// Read the global per-user config (registry of known workspaces,
@@ -1083,33 +1105,22 @@ export const api = {
   /// Persist the per-library page-width cap ratio. The SPA applies the
   /// cap optimistically and debounces this write (the width slider
   /// fires on every drag tick); the value is stored verbatim and
-  /// re-clamped on read. Whole-block PATCH like the toggle above.
-  setPageWidthRatio: async (ratio: number): Promise<void> => {
-    const cfg = await req<GlobalConfig>("GET", "/api/config");
-    if (cfg.preferences.page_width_ratio === ratio) return;
-    await req<GlobalConfig>("PATCH", "/api/config", {
-      ...cfg,
-      preferences: { ...cfg.preferences, page_width_ratio: ratio },
-    });
-  },
+  /// re-clamped on read. Serialized via queuePrefWrite so a concurrent
+  /// overlay / cs-dismiss flip can't clobber it.
+  setPageWidthRatio: (ratio: number): Promise<void> =>
+    queuePrefWrite((p) =>
+      p.page_width_ratio === ratio ? null : { ...p, page_width_ratio: ratio },
+    ),
   /// Persist the per-library overlay-maximize toggle.
-  setOverlayMaximizedPref: async (on: boolean): Promise<void> => {
-    const cfg = await req<GlobalConfig>("GET", "/api/config");
-    if (cfg.preferences.overlay_maximized === on) return;
-    await req<GlobalConfig>("PATCH", "/api/config", {
-      ...cfg,
-      preferences: { ...cfg.preferences, overlay_maximized: on },
-    });
-  },
+  setOverlayMaximizedPref: (on: boolean): Promise<void> =>
+    queuePrefWrite((p) =>
+      p.overlay_maximized === on ? null : { ...p, overlay_maximized: on },
+    ),
   /// Persist the per-library `cs` terminal-alias offer dismissal.
-  setCsDismissed: async (on: boolean): Promise<void> => {
-    const cfg = await req<GlobalConfig>("GET", "/api/config");
-    if (cfg.preferences.cs_dismissed === on) return;
-    await req<GlobalConfig>("PATCH", "/api/config", {
-      ...cfg,
-      preferences: { ...cfg.preferences, cs_dismissed: on },
-    });
-  },
+  setCsDismissed: (on: boolean): Promise<void> =>
+    queuePrefWrite((p) =>
+      p.cs_dismissed === on ? null : { ...p, cs_dismissed: on },
+    ),
   /// Semantic-search endpoints. Open-read for state; settings-
   /// gated for mutations (download / enable / disable). The
   /// download POST blocks until the resolver has the bytes on

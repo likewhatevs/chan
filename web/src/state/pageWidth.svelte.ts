@@ -70,7 +70,9 @@ function schedulePersistRatio(): void {
   if (persistTimer != null) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistTimer = null;
-    void api.setPageWidthRatio(pageWidth.ratio);
+    api.setPageWidthRatio(pageWidth.ratio).catch((e) => {
+      console.warn("chan: failed to persist page-width", e);
+    });
   }, PERSIST_DEBOUNCE_MS);
 }
 
@@ -121,7 +123,9 @@ export function hydratePageWidthFromPrefs(
 /// the optimistic local flip keeps the UI instant.
 export function setOverlayMaximized(on: boolean): void {
   overlayMaximized.on = on;
-  void api.setOverlayMaximizedPref(on);
+  api.setOverlayMaximizedPref(on).catch((e) => {
+    console.warn("chan: failed to persist overlay-maximize", e);
+  });
 }
 
 /// User-driven update. Pass a ratio in (0, 1]; 1 means unbounded.
