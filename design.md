@@ -66,7 +66,7 @@ Every crate above is a member of this repo's root workspace (gateway/ is the one
 
 ### chan (binary)
 
-Owns: argument parsing (clap), tracing init, dispatch into subcommands. Calls `chan_workspace::Library` for registry mutations and `chan_workspace::Workspace` for per-workspace operations. Calls `chan_server::serve` (or `serve_via_tunnel`) for `chan serve`. Self-upgrade flow lives in `crates/chan/src/update.rs`. No HTTP routes, no LLM code, no filesystem access outside chan-workspace.
+Owns: argument parsing (clap), tracing init, dispatch into subcommands. Calls `chan_workspace::Library` for registry mutations and `chan_workspace::Workspace` for per-workspace operations. Calls `chan_server::serve` for `chan serve` and `chan_server::run_devserver` for `chan devserver` (which dials the gateway tunnel when `--tunnel-token` is set). Self-upgrade flow lives in `crates/chan/src/update.rs`. No HTTP routes, no LLM code, no filesystem access outside chan-workspace.
 
 The binary also exposes two hidden MCP subcommands that external agent CLIs invoke through environment variables exported by the embedded terminal: `chan __mcp <workspace-root>` runs chan-llm's MCP server on stdio (used when no running `chan serve` is reachable); `chan __mcp-proxy <socket>` is a stdio bridge into the in-process MCP server hosted by a running `chan serve`. The embedded terminal exports `CHAN_MCP_SERVER_JSON` and companion `CHAN_MCP_*` discovery variables. Chan deliberately avoids CLI-owned env namespaces such as `CLAUDE_`, `CODEX_`, and `GEMINI_`; external tools can translate the `CHAN_` descriptor into their own MCP configuration.
 
@@ -87,9 +87,8 @@ chan workspace contacts import csv FILE --into DIR
 chan serve PATH [--here] [--host|-4|-6] [--port] [--prefix]
            [--timeout] [--no-token] [--no-browser] [--standalone]
            [--no-settings] [--search-aggression]
-           [--tunnel-url] [--tunnel-token] [--tunnel-workspace-name]
-           [--tunnel-public]
 chan devserver [--bind IP] [--port N] [--systemd] [--launchd]
+           [--tunnel-url] [--tunnel-token]
 chan unserve PATH
 chan config <...>                   settings persisted outside the workspace
 chan upgrade [-y] [--check] [--version V]
@@ -143,12 +142,12 @@ survey.rs            survey bus: blocked-transport side of
                      `cs terminal survey`
 terminal_sessions.rs long-lived PTY session registry
 tunnel_guard.rs      middleware refusing settings writes in
-                     tunnel / --no-settings lockdown
+                     the --no-settings lockdown
 util.rs              slug + opaque-JSON route helpers
 window_bus.rs        window bus: blocked-transport side of `cs pane`
 window_presence.rs   which window ids currently hold a /ws socket
 lib.rs               ServeConfig, sanitize_prefix, build_app, serve,
-                     serve_via_tunnel, router
+                     run_devserver, router
 
 routes/
   attachments.rs     POST /api/attachments (multipart upload)
@@ -220,18 +219,21 @@ The frontend lives under `web/` (Svelte + Vite + Tailwind) and ships as a build 
 Vite is configured with `base: "./"` so asset URLs in the bundle are relative to whatever path the SPA shell is loaded from. That matters for two paths:
 
 - `--prefix /seg`: a reverse proxy can mount many `chan serve` instances under one host, e.g. `workspace.example.com/{user}/`. The router is `Router::new().nest(prefix, inner)`, and every `index.html` response gets a `<meta name="chan-prefix" content="/seg">` injected after the `<head>` tag (`static_assets::inject_chan_prefix`). The frontend reads that meta tag at boot and prepends the prefix to every fetch and WebSocket URL.
-- Tunnel mode: chan-server runs at root inside the tunnel (`{user}.workspace.chan.app/{workspace}` is stripped by the gateway before forwarding into the tunnel substream; the upstream sees `/`, `/assets/...`), but the SPA still needs to know the public path so its API URLs resolve from the browser's origin. On `chan_tunnel_client::TunnelEvent::Connected` the server swaps the same `chan-prefix` meta value in.
+- Tunnel mode: a `chan devserver` carries its WHOLE library through one gateway registration. The proxy is segment-PRESERVING — it forwards `{user}.devserver.chan.app/{workspace}/...` into the tunnel substream UNCHANGED (it does NOT strip the `{workspace}` segment). The devserver mounts each tenant at its public slug `/{workspace}`, and that tenant's SPA shell already carries `<meta name="chan-prefix" content="/{workspace}">`, so a multi-tenant devserver does not swap one prefix on connect: each tenant self-prefixes at its slug and the proxy forwards every API/WS URL under `/{workspace}/...` unchanged.
 
 Single-page-app fallback: any path that isn't an `/api` route, a `/ws` upgrade, or a baked asset returns `index.html` so client-side routes work. Misses on `/api/*` and `/ws` return real 404s instead of the SPA shell so callers don't silently get HTML when they expected JSON.
 
 ## Bind vs tunnel
 
-`chan serve` uses one of two transports:
+`chan serve` always binds a local listener: `axum::serve(TcpListener, app)` on 127.0.0.1 (or `--host` / `-6`). A per-launch bearer token gates every `/api/*` and `/ws` route, accepted as `?t=TOKEN` or `Authorization: Bearer TOKEN`. No TLS; the loopback bind is the trust boundary. (Single-workspace remote serve was dropped: the gateway tunnel now carries a whole library through `chan devserver`, below, not one workspace per `chan serve`.)
 
-- Local bind (default): `axum::serve(TcpListener, app)` on 127.0.0.1 (or `--host` / `-6`). Per-launch bearer token gates every `/api/*` and `/ws` route, accepted as `?t=TOKEN` or `Authorization: Bearer TOKEN`. No TLS; loopback bind is the trust boundary.
-- Tunnel (`CHAN_TUNNEL_TOKEN=...`): same axum router, but the transport is `chan_tunnel_client::run` instead of a TCP listener. The tunnel client dials `workspace.chan.app/v1/tunnel`, runs a Hello/HelloAck handshake that names the workspace, and serves yamux substreams with the router. The bearer token is forced off in tunnel mode: `{user}.workspace.chan.app/{workspace}/` is the trust boundary (default behavior 404s anonymous visitors; the workspace owner opens the workspace from id.chan.app's dashboard via a short-lived workspace-gate token, workspace-proxy validates and issues a host-only session cookie scoped to that workspace; `--tunnel-public` opts out of that gate).
+The gateway tunnel is `chan devserver --tunnel-token <PAT>` (`CHAN_TUNNEL_TOKEN`). When set, the devserver runs its local management server AND hands the same devserver router to `chan_tunnel_client::run`, which dials `devserver.chan.app/v1/tunnel` and serves yamux substreams. The model is per-DEVSERVER, not per-workspace:
 
-`build_app` produces the byte-identical axum app for both paths. The two `serve*` functions differ only in transport, signal wiring, and whether they bring up the launch banner / browser handoff.
+- One devserver per user; the public host is `{user}.devserver.chan.app`. The registration is keyed on the DEVSERVER identity (`devserver_id`), which the gateway resolves backend-side from the token (the PAT's SHA-256) via the `Validated.devserver_id` the tunnel validator returns — NOT a workspace name the client supplies. The client's `Hello.workspace` is an ignored `"devserver"` placeholder.
+- Always authenticated; there is no anonymous-readable path (the `public` flag is gone). `{user}.devserver.chan.app` is the trust boundary: the gateway gates on one `devserver_access(owner, devserver, caller)` check (a grant is the WHOLE library) and issues a host-only session cookie scoped `Path=/` over the whole host (no per-workspace path scope, since the grant is whole-devserver).
+- The path `{workspace}` segment is tenant routing only and never gates. The proxy forwards it unchanged (segment-preserving) and the devserver routes the tenant by it. The management API (`/api/devserver/*`) is local-only; the proxy 404s it on the public wildcard.
+
+`build_app` produces the byte-identical axum app for the local bind; the devserver mounts each tenant through the same `WorkspaceHost` tenant builder, so request handling is identical across local serve, the devserver, and the tunnel.
 
 Both paths install signal watchers (SIGINT / SIGTERM on Unix, Ctrl-C on Windows) that fire a single `tokio::sync::watch` channel the server future drains on. A side task uses the same channel to cancel any in-flight reindex so the runtime drop returns within at most one file's worth of work. After the signal fires, both paths race the server future against a 10-second grace timer and force exit on grace expiry. The local bind path centralizes this wiring in `signal::graceful_serve`, and the headless `chan devserver` (`run_devserver`) calls the same helper, so its SIGINT / SIGTERM drain and the 10-second grace force-exit behave identically; its reindex-cancel side task rides the same channel before the call.
 
@@ -241,8 +243,10 @@ Both paths install signal watchers (SIGINT / SIGTERM on Unix, Ctrl-C on Windows)
 
 The devserver wraps the host in two surfaces:
 
-- A management HTTP/JSON API under the reserved `/api/devserver/*` namespace; `devserver_api.rs` is the versioned wire contract. It lists, mounts, and forgets workspaces and opens standalone terminals. Every workspace tenant mounts under a non-empty, legible prefix below `/api/`, so the management router answers first and an unmatched path falls through to the per-tenant router.
+- A management HTTP/JSON API under the reserved `/api/devserver/*` namespace; `devserver_api.rs` is the versioned wire contract. It lists, mounts, and forgets workspaces and opens standalone terminals. Workspace tenants mount at their PUBLIC slug `/{slug}` (top-level) — the path the gateway forwards as `{user}.devserver.chan.app/{slug}/` — so the explicit `/api/devserver/*` and `/api/library/*` management routes answer first and `/{slug}/...` falls through to the per-tenant router; `api` is the one reserved top-level slug, and two workspaces whose basename slugs collide are rejected at mount (slug uniqueness within a devserver). Standalone terminal tenants keep an opaque `/api/term-*` prefix (launcher-local, not public).
 - A per-user Unix discovery socket (`devserver_handoff.rs`). When a devserver is running on a box, a `chan serve PATH` there registers its workspace with the running devserver and exits instead of binding a second listener, so the devserver keeps the single-writer flock. Discovery is a well-known per-user endpoint (not the per-pid MCP / control sockets) and is a second endpoint alongside the macOS desktop handoff (`handoff.rs`); a box can run a devserver, a desktop, both, or neither. It is Unix-only: other targets resolve to "no devserver" and the CLI stays standalone. The registration handshake carries a protocol version, and a mismatch falls back to standalone rather than decoding an unknown shape. `chan serve --standalone` forces a standalone bind and skips both the devserver registration and the desktop handoff.
+
+Optionally, `chan devserver --tunnel-token <PAT>` also publishes the whole library through the gateway (see "Bind vs tunnel"): the foreground devserver hands the SAME devserver router to `chan_tunnel_client`, registering ONE devserver at `{user}.devserver.chan.app`. The management API rides the same router but the proxy 404s `/api/devserver/*` on the public wildcard, so only tenant content (`/{slug}/...`) is reachable through the gateway; the owner manages the devserver over the direct (host:port / `ssh -L`) connection. Tunnel mode is foreground-only — combined with `--systemd`/`--launchd` it is refused, since the supervised backend would have to persist the token in the unit file / launchd plist.
 
 What was mounted survives a restart. The enabled workspace roots and the devserver bearer token persist in `~/.chan/devserver/config.json` (0600); the enabled set is re-mounted on the next start, and the reused token keeps a reconnecting client working. Per-window pane and tab layout is not persisted by the devserver: each tenant is a full workspace mount that stores its own per-window SPA session, so a reconnecting client re-hydrates its panes from the tenant. Terminal PTY contents reset across a restart because PTYs are fresh processes.
 
