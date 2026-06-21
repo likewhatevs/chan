@@ -11,8 +11,8 @@
   import { meStore } from "../state/me.svelte";
 
   // `devservers` is the live snapshot from /api/me (one per user, keyed
-  // devserver_id). `username` is the owner handle for open URLs.
-  let { username, devservers }: { username: string; devservers: Devserver[] } = $props();
+  // devserver_id), used to flip owned rows online/offline.
+  let { devservers }: { devservers: Devserver[] } = $props();
 
   // Owned devservers (label + grant_count, profile-backed) and the
   // shared-with-me list. Loaded here so /api/me stays small for users
@@ -36,9 +36,6 @@
   let addRole = $state<Record<string, DevserverGrantRole>>({});
   let addBusy = $state<Record<string, boolean>>({});
   let addError = $state<Record<string, string | null>>({});
-
-  // Copy-share-link feedback, keyed by devserver_id ("Copied" toast).
-  let copied = $state<Record<string, boolean>>({});
 
   let refreshing = $state(false);
 
@@ -171,26 +168,6 @@
     }
   }
 
-  function open(owner: string) {
-    location.assign(api.devserverOpenUrl(owner));
-  }
-
-  async function copyShareLink(devserverId: string) {
-    const url = api.shareUrl(username);
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      // Clipboard can be blocked in non-secure contexts; fall back to a
-      // prompt so the user can copy manually.
-      window.prompt("Copy this share link:", url);
-      return;
-    }
-    copied[devserverId] = true;
-    setTimeout(() => {
-      copied[devserverId] = false;
-    }, 1500);
-  }
-
   $effect(() => {
     void loadLists();
   });
@@ -231,7 +208,7 @@
                 <div class="label">{d.label}</div>
                 <div class="muted small">
                   {#if d.online}
-                    Online - shared collaborators can open it
+                    Online
                   {:else}
                     Offline - run <code>chan devserver --tunnel-token=&lt;token&gt;</code>
                   {/if}
@@ -252,28 +229,15 @@
                 >
                   {expanded === d.id ? "Hide" : "Share"}
                 </button>
-                <button type="button" disabled={!d.online} onclick={() => open(username)}>
-                  Open
-                </button>
               </div>
             </div>
 
             {#if expanded === d.id}
               <div class="panel">
-                <div class="panel-head">
-                  <strong>Share this devserver</strong>
-                  <button
-                    type="button"
-                    class="ghost small-btn"
-                    onclick={() => copyShareLink(d.id)}
-                  >
-                    {copied[d.id] ? "Copied" : "Copy share link"}
-                  </button>
-                </div>
+                <strong>Share this devserver</strong>
                 <p class="muted small">
-                  Grant by email, or copy the share link. The collaborator gets
-                  access to the whole devserver once they sign in with a matching
-                  verified email.
+                  Grant by email. The collaborator gets access to the whole
+                  devserver once they sign in with a matching verified email.
                 </p>
 
                 <form
@@ -363,11 +327,6 @@
                 <div class="muted small">
                   {s.role === "editor" ? "Editor" : "Viewer"} access
                 </div>
-              </div>
-              <div class="actions">
-                <button type="button" onclick={() => open(s.owner_username)}>
-                  Open
-                </button>
               </div>
             </div>
           </li>
@@ -473,11 +432,6 @@
     display: flex;
     flex-direction: column;
     gap: .5rem;
-  }
-  .panel-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
   }
   .addgrant {
     display: flex;

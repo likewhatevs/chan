@@ -125,28 +125,12 @@ export const api = {
   tokenAudit: (id: string) =>
     request<AuditEntry[]>(`/api/tokens/${id}/audit`),
 
-  /// Build the entry URL that opens an owner's devserver. The server
-  /// mints a 30s devserver-gate JWT inside the 303 Location, so we never
-  /// see the token here. We hand the URL to the browser via
-  /// location.assign; it follows the 303 to `{owner}.devserver.<domain>`,
-  /// the proxy validates, sets the session cookie, and 303s to the clean
-  /// URL. No tenant segment: the devserver serves its own launcher at
-  /// `/` (the dashboard can't enumerate a devserver's workspaces, design
-  /// 4.1), so we open the root and the user picks a workspace there.
-  devserverOpenUrl: (owner: string): string => {
-    const u = encodeURIComponent(owner);
-    return `/api/devservers/open?u=${u}`;
-  },
-
-  /// Copyable whole-devserver share link. Anyone who signs in via an
-  /// OAuth provider whose verified email matches a grant the owner
-  /// created is admitted to the whole devserver. Hand-distributed
-  /// (email, chat); the server does not send the message. Absolute URL
-  /// (the SPA origin = id.chan.app, which handles /s/:owner).
-  shareUrl: (owner: string): string => {
-    const o = encodeURIComponent(owner);
-    return `${window.location.origin}/s/${o}`;
-  },
+  // NOTE: whole-devserver "open" (root) + the /s/:owner share-link are
+  // intentionally absent. Opening a shared devserver is the next phase
+  // ("opening a devserver = opening a chan-library": a root launcher with
+  // full terminal/workspace/state behavior). This round ships sharing
+  // management only; the per-tenant share link /s/:owner/:workspace still
+  // exists server-side for a known workspace.
 
   listDevserverGrants: (devserverId: string) =>
     request<DevserverGrant[]>(`/api/devservers/${encodeURIComponent(devserverId)}/grants`),

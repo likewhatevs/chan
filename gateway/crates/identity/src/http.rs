@@ -154,7 +154,6 @@ pub fn router(
         .route("/api/tokens", get(tokens_list).post(tokens_create))
         .route("/api/tokens/:id", axum::routing::delete(tokens_revoke))
         .route("/api/tokens/:id/audit", get(tokens_audit))
-        .route("/api/devservers/open", get(devserver_open))
         .route("/api/devservers/owned", get(devservers_owned))
         .route("/api/devservers/incoming", get(devservers_incoming))
         .route(
@@ -165,7 +164,6 @@ pub fn router(
             "/api/grants/:id",
             axum::routing::delete(devserver_grants_delete),
         )
-        .route("/s/:owner", get(share_landing_root))
         .route("/s/:owner/:workspace", get(share_landing))
         .route(
             "/desktop/authorize",
@@ -943,127 +941,6 @@ async fn tokens_audit(
     Ok(Json(rows))
 }
 
-#[derive(Debug, Deserialize)]
-struct DevserverOpenQuery {
-    u: String,
-    /// Optional tenant segment. Absent -> open the devserver root (the
-    /// launcher the devserver serves at `/`). The dashboard can't
-    /// enumerate a devserver's tenants (design 4.1), so it opens the
-    /// root and the user picks a workspace inside the devserver.
-    #[serde(default)]
-    d: Option<String>,
-}
-
-/// Mint a devserver-gate entry token and 303 the browser to
-/// `https://{u}.devserver.chan.app/{d}/?t=<jwt>`. The proxy verifies
-/// the token, sets a host-only `devserver_gate` cookie, and 303s to the
-/// clean URL. The whole handshake is invisible to the user past the
-/// initial click.
-///
-/// Authorization (single path, owner or grantee):
-///   * caller must hold an authed (non-blocked) session;
-///   * `u` is resolved to a user record (case-insensitive username
-///     lookup); 404 if unknown so the endpoint cannot be used to
-///     probe handles;
-///   * `u`'s LIVE devserver_id is read from the proxy admin tunnel list
-///     (one devserver per user); no live devserver -> 404;
-///   * profile `devserver_access?as=<self>` is consulted on that
-///     devserver_id: owner returns `owner`, accepted grantee returns
-///     `viewer`/`editor`, anyone else 404 (same shape as "unknown
-///     devserver"). A grant gives the WHOLE devserver.
-///
-/// The entry token is short-lived (30s). The proxy validates
-/// signature + exp + aud (`{u}.devserver.chan.app`) + drv (the
-/// devserver_id) + sub (the caller's user_id, *not* the owner's, so the
-/// devserver_gate cookie minted on the next leg carries the right
-/// identity for upstream collab attribution) and then issues its own
-/// 24h session JWT cookie. `d` rides the path as the tenant segment and
-/// is routed inside the devserver; it is not a gate key.
-async fn devserver_open(
-    State(state): State<AppState>,
-    session: Session,
-    Query(q): Query<DevserverOpenQuery>,
-) -> Result<Redirect> {
-    let caller = current_active_user(&state, &session).await?;
-    let owner_handle = q.u.trim().to_ascii_lowercase();
-    if !valid_username(&owner_handle) {
-        return Err(Error::NotFound);
-    }
-    // Optional tenant segment: shape-checked when present, else open the
-    // devserver root.
-    let workspace = match q.d.as_deref().map(|s| s.trim().to_ascii_lowercase()) {
-        Some(d) if !d.is_empty() => {
-            if !is_workspace_name_shape(&d) {
-                return Err(Error::NotFound);
-            }
-            Some(d)
-        }
-        _ => None,
-    };
-
-    // Resolve owner. Owner == caller is fast-pathable but the
-    // username lookup is one cheap query, so we always go through it
-    // for one code path.
-    let owner = state
-        .cfg
-        .profile_client
-        .find_user_by_username(&owner_handle)
-        .await?
-        .ok_or(Error::NotFound)?;
-
-    // The owner's LIVE devserver is the authority for the drv claim:
-    // one devserver per user, its id is the registry's second key,
-    // surfaced on the admin tunnel list. No live devserver -> 404 (same
-    // shape as no-access / unknown-handle, so probes can't enumerate).
-    let client =
-        state.cfg.workspace_admin.as_ref().ok_or_else(|| {
-            Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
-        })?;
-    let live = client.list_user_tunnels(&owner.username).await?;
-    let devserver_id = live
-        .first()
-        .map(|t| t.devserver_id.clone())
-        .ok_or(Error::NotFound)?;
-
-    // Authorization is one per-devserver check: a grant gives the WHOLE
-    // devserver. 404 on no-access matches the unknown-devserver shape so
-    // this endpoint cannot enumerate which devservers an owner shares.
-    state
-        .cfg
-        .profile_client
-        .devserver_access(owner.id, &devserver_id, caller.id)
-        .await?
-        .ok_or(Error::NotFound)?;
-
-    let host = state.cfg.devserver_host_for(&owner.username);
-    let token = gateway_common::devserver_gate::encode_entry(
-        state.cfg.workspace_gate_secret.as_bytes(),
-        caller.id,
-        &devserver_id,
-        &host,
-    )
-    .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
-
-    // 303 (See Other) is the right shape for a GET that produced a
-    // resource we want the browser to navigate to. Token rides in
-    // the URL because that's the only way to hand it off across
-    // origins without JS; the 30s exp keeps the leak window short. The
-    // path is the `{workspace}` tenant segment (or `/` for the devserver
-    // root); the devserver routes it internally. Scheme + port come from
-    // config so a local-dev deploy where `*.devserver.localtest.me`
-    // resolves to 127.0.0.1 over plain HTTP builds the right URL.
-    let path = match &workspace {
-        Some(d) => format!("/{d}/"),
-        None => "/".to_string(),
-    };
-    let url = format!(
-        "{scheme}://{host}{port}{path}?t={token}",
-        scheme = state.cfg.workspace_public_scheme,
-        port = state.cfg.workspace_public_port,
-    );
-    Ok(Redirect::to(&url))
-}
-
 // ---------------------------------------------------------------------------
 // Devserver sharing (grants)
 // ---------------------------------------------------------------------------
@@ -1191,11 +1068,8 @@ fn is_devserver_id_shape(s: &str) -> bool {
 // Share landing
 // ---------------------------------------------------------------------------
 
-/// Public entry point for a copied share link.
-///
-/// Two shapes, one flow:
-///   * `/s/:owner` (whole-devserver link) -> opens the devserver root.
-///   * `/s/:owner/:workspace` (deep link) -> opens that tenant.
+/// Public entry point for a copied per-tenant share link
+/// (`/s/:owner/:workspace`).
 ///
 /// Flow:
 ///   1. If the caller has no session, stash the path and 303 to `/` so
@@ -1203,54 +1077,25 @@ fn is_devserver_id_shape(s: &str) -> bool {
 ///      303s back here after sign-in.
 ///   2. With a session, resolve `:owner` (username -> User), read the
 ///      owner's LIVE devserver_id from the proxy admin tunnel list, and
-///      call profile `devserver_access?as=<self>` on it. Owner and
-///      grantee both return a role; no-access (or no live devserver)
-///      returns 404. A grant gives the WHOLE devserver.
-///   3. On access, mint an entry JWT (drv = the devserver_id) against
-///      the owner's `{owner}.devserver.chan.app` host and 303 to the
-///      proxy so it sets its `devserver_gate` cookie and serves the
-///      content. The `:workspace` segment, when present, rides the path
-///      as the tenant; absent, the devserver serves its root launcher.
+///      call profile `devserver_access?as=<self>` on it. Owner and grantee
+///      both return a role; no-access (or no live devserver) returns 404.
+///      A grant gives the WHOLE devserver.
+///   3. On access, mint an entry JWT (drv = the devserver_id) against the
+///      owner's `{owner}.devserver.chan.app` host and 303 to the proxy so
+///      it sets its `devserver_gate` cookie and serves `/{workspace}/`.
+///
+/// Whole-devserver opening (a launcher at the devserver root) is the next
+/// phase; this round ships the per-tenant link + email grants only.
 async fn share_landing(
     State(state): State<AppState>,
     session: Session,
     Path((owner, workspace)): Path<(String, String)>,
 ) -> Result<Redirect> {
-    share_landing_impl(state, session, owner, Some(workspace)).await
-}
-
-/// Whole-devserver share link (`/s/:owner`): no tenant segment, opens
-/// the devserver root launcher. The dashboard's copy-link uses this
-/// because a grant shares the WHOLE devserver, so a per-workspace link
-/// would be arbitrary.
-async fn share_landing_root(
-    State(state): State<AppState>,
-    session: Session,
-    Path(owner): Path<String>,
-) -> Result<Redirect> {
-    share_landing_impl(state, session, owner, None).await
-}
-
-async fn share_landing_impl(
-    state: AppState,
-    session: Session,
-    owner: String,
-    workspace: Option<String>,
-) -> Result<Redirect> {
     let owner = owner.trim().to_ascii_lowercase();
-    if !valid_username(&owner) {
+    let workspace = workspace.trim().to_ascii_lowercase();
+    if !valid_username(&owner) || !is_workspace_name_shape(&workspace) {
         return Err(Error::NotFound);
     }
-    // Optional tenant segment: shape-checked when present.
-    let workspace = match workspace.map(|w| w.trim().to_ascii_lowercase()) {
-        Some(w) if !w.is_empty() => {
-            if !is_workspace_name_shape(&w) {
-                return Err(Error::NotFound);
-            }
-            Some(w)
-        }
-        _ => None,
-    };
 
     // Unauthenticated: stash + send to login. Use a 303 (See Other)
     // so a refresh on the SPA root doesn't re-trigger the share flow.
@@ -1259,10 +1104,7 @@ async fn share_landing_impl(
         .await
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("session get: {e}")))?;
     let Some(uid) = uid else {
-        let dest = match &workspace {
-            Some(w) => format!("/s/{owner}/{w}"),
-            None => format!("/s/{owner}"),
-        };
+        let dest = format!("/s/{owner}/{workspace}");
         session
             .insert(KEY_POST_LOGIN_REDIRECT, &dest)
             .await
@@ -1270,9 +1112,8 @@ async fn share_landing_impl(
         return Ok(Redirect::to("/"));
     };
 
-    // Resolve the owner handle. 404 is the same shape as "no access"
-    // and "unknown devserver", so a stranger cannot probe the existence
-    // of a handle through this route.
+    // Resolve the owner handle. 404 is the same shape as "no access" and
+    // "unknown devserver", so a stranger cannot probe a handle's existence.
     let owner_user = state
         .cfg
         .profile_client
@@ -1311,18 +1152,14 @@ async fn share_landing_impl(
 
     tracing::info!(
         owner = %owner_user.username,
-        workspace = ?workspace,
+        workspace = %workspace,
         caller = %uid,
         role = %access.role,
         "share landing: minting entry token",
     );
 
-    let path = match &workspace {
-        Some(w) => format!("/{w}/"),
-        None => "/".to_string(),
-    };
     let url = format!(
-        "{scheme}://{host}{port}{path}?t={token}",
+        "{scheme}://{host}{port}/{workspace}/?t={token}",
         scheme = state.cfg.workspace_public_scheme,
         port = state.cfg.workspace_public_port,
     );

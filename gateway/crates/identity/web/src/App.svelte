@@ -85,10 +85,7 @@
     {:else if activeTab === "tokens"}
       <Tokens />
     {:else}
-      <Devservers
-        username={meStore.me.user.username}
-        devservers={meStore.me.devservers}
-      />
+      <Devservers devservers={meStore.me.devservers} />
     {/if}
   {/if}
 </main>

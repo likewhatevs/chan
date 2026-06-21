@@ -113,7 +113,6 @@ Session-gated SPA API (`/api/*`):
 | POST   | `/api/tokens`         | mint a PAT (returns plaintext once)     |
 | DELETE | `/api/tokens/:id`     | revoke a PAT                            |
 | GET    | `/api/tokens/:id/audit` | per-token audit log                   |
-| GET    | `/api/devservers/open`    | mint devserver-gate entry token + 303 (opens the devserver root; `?u=` owner, optional `&d=` tenant) |
 | GET    | `/api/devservers/owned`   | devservers the user owns (+ grant counts)   |
 | GET    | `/api/devservers/incoming`| devservers shared with the user             |
 | POST   | `/api/devservers/:d/grants`| share a devserver (whole library) by email |
@@ -124,8 +123,7 @@ Public share landing (no auth at the door):
 
 | Method | Path                  | Purpose                                 |
 |--------|-----------------------|-----------------------------------------|
-| GET    | `/s/:owner`               | whole-devserver share link (OAuth-then-mint) |
-| GET    | `/s/:owner/:workspace`    | tenant deep-link share (OAuth-then-mint) |
+| GET    | `/s/:owner/:workspace`    | per-tenant share link (OAuth-then-mint) |
 
 Desktop authorize (PAT mint for chan-desktop; consent is session-gated, entry bounces through sign-in when needed):
 
