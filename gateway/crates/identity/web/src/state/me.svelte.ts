@@ -41,7 +41,7 @@ class MeStore {
   }
 
   /// Refetch /api/me without going through the loading state. Used
-  /// by the Workspaces view to refresh the list after a manual nudge
+  /// by the Devservers view to refresh the list after a manual nudge
   /// (an open succeeded / failed, or the user just connected a new
   /// `chan serve`).
   async refresh() {

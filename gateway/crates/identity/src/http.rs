@@ -154,10 +154,7 @@ pub fn router(
         .route("/api/tokens", get(tokens_list).post(tokens_create))
         .route("/api/tokens/:id", axum::routing::delete(tokens_revoke))
         .route("/api/tokens/:id/audit", get(tokens_audit))
-        // TRANSITIONAL: the open + share-landing routes still gate per
-        // workspace until the proxy admin tunnel list surfaces the live
-        // devserver_id (then they move to a per-devserver drv).
-        .route("/api/workspaces/open", get(workspaces_open))
+        .route("/api/devservers/open", get(devserver_open))
         .route("/api/devservers/owned", get(devservers_owned))
         .route("/api/devservers/incoming", get(devservers_incoming))
         .route(
@@ -541,12 +538,11 @@ async fn current_active_user(state: &AppState, session: &Session) -> Result<User
 }
 
 #[derive(Serialize)]
-struct WorkspaceView {
-    /// Tenant slug, routed at `{user}.devserver.chan.app/{workspace}/`.
-    workspace: String,
-    /// Display label. Defaults to the slug until the wire carries a
-    /// separate label.
-    label: String,
+struct DevserverView {
+    /// The owner's live devserver id (registry 2nd key). One devserver
+    /// per user. The dashboard pairs this with the profile-backed owned
+    /// list (which carries the label) to flip online/offline.
+    devserver_id: String,
     /// "online" while the tunnel registration is live.
     status: &'static str,
 }
@@ -554,11 +550,14 @@ struct WorkspaceView {
 #[derive(Serialize)]
 struct MeResponse {
     user: User,
-    /// Live tunnel snapshot for this user, sourced from workspace-proxy
-    /// admin. Empty when the user has no `chan serve` connected (or
-    /// is blocked, or workspace-proxy is unreachable; in the unreachable
-    /// case we log and serve an empty list so the dashboard renders).
-    workspaces: Vec<WorkspaceView>,
+    /// Live devserver snapshot for this user, sourced from the proxy
+    /// admin tunnel list (one devserver per user). Empty when nothing is
+    /// connected (or the user is blocked, or the proxy is unreachable; in
+    /// the unreachable case we log and serve an empty list so the
+    /// dashboard renders). Per-workspace online state is NOT here: it
+    /// comes from the devserver's own API over the owner's direct
+    /// connection (design 4.1).
+    devservers: Vec<DevserverView>,
     /// Resolved feature flags for this user. Map of flag_key -> bool.
     /// Sourced from profile each call (no caching) so a gradual
     /// rollout takes effect on the next dashboard reload.
@@ -580,26 +579,19 @@ async fn me(State(state): State<AppState>, session: Session) -> Result<Response>
     // rather than failing the whole `/api/me`: the dashboard is the
     // user's only way to discover other state (rename, PATs, account
     // delete), and that state still loads from profile-service.
-    let workspaces = if user.is_blocked() {
+    let devservers = if user.is_blocked() {
         Vec::new()
     } else if let Some(client) = &state.cfg.workspace_admin {
         match client.list_user_tunnels(&user.username).await {
             Ok(rows) => rows
                 .into_iter()
-                .map(|t| WorkspaceView {
-                    // Placeholder: the admin tunnel list is now per-devserver
-                    // (one entry per user, keyed devserver_id), not per
-                    // workspace. The proper dashboard reshape (devserver
-                    // online state here; per-workspace `on` from the
-                    // devserver's own API over the owner's direct connection)
-                    // is SPA-lane work, sequenced after the Rust API settles.
-                    label: t.devserver_id.clone(),
-                    workspace: t.devserver_id,
+                .map(|t| DevserverView {
+                    devserver_id: t.devserver_id,
                     status: "online",
                 })
                 .collect(),
             Err(e) => {
-                tracing::warn!(error = ?e, user = %user.username, "workspace list fetch failed");
+                tracing::warn!(error = ?e, user = %user.username, "devserver list fetch failed");
                 Vec::new()
             }
         }
@@ -619,7 +611,7 @@ async fn me(State(state): State<AppState>, session: Session) -> Result<Response>
 
     Ok(Json(MeResponse {
         user,
-        workspaces,
+        devservers,
         flags,
     })
     .into_response())
@@ -861,6 +853,21 @@ async fn tokens_create(
         )
         .await?;
 
+    // The PAT IS a devserver (1 token : 1 devserver). Register the
+    // devserver row so the owner sees it and can grant on it before it
+    // ever dials in; the label mirrors the PAT label. Best-effort: the
+    // row also auto-creates on first grant, and the PAT is already
+    // persisted, so a profile hiccup must not fail the mint.
+    let devserver_id = crate::api_tokens::devserver_id_from_pat(&secret);
+    if let Err(e) = state
+        .cfg
+        .profile_client
+        .create_devserver(uid, &devserver_id, &body.label)
+        .await
+    {
+        tracing::warn!(error = ?e, user = %uid, "register devserver after PAT mint failed");
+    }
+
     Ok((
         StatusCode::CREATED,
         Json(CreatedTokenView {
@@ -936,9 +943,14 @@ async fn tokens_audit(
 }
 
 #[derive(Debug, Deserialize)]
-struct WorkspacesOpenQuery {
+struct DevserverOpenQuery {
     u: String,
-    d: String,
+    /// Optional tenant segment. Absent -> open the devserver root (the
+    /// launcher the devserver serves at `/`). The dashboard can't
+    /// enumerate a devserver's tenants (design 4.1), so it opens the
+    /// root and the user picks a workspace inside the devserver.
+    #[serde(default)]
+    d: Option<String>,
 }
 
 /// Mint a devserver-gate entry token and 303 the browser to
@@ -966,17 +978,27 @@ struct WorkspacesOpenQuery {
 /// identity for upstream collab attribution) and then issues its own
 /// 24h session JWT cookie. `d` rides the path as the tenant segment and
 /// is routed inside the devserver; it is not a gate key.
-async fn workspaces_open(
+async fn devserver_open(
     State(state): State<AppState>,
     session: Session,
-    Query(q): Query<WorkspacesOpenQuery>,
+    Query(q): Query<DevserverOpenQuery>,
 ) -> Result<Redirect> {
     let caller = current_active_user(&state, &session).await?;
     let owner_handle = q.u.trim().to_ascii_lowercase();
-    let workspace = q.d.trim().to_ascii_lowercase();
-    if !valid_username(&owner_handle) || !is_workspace_name_shape(&workspace) {
+    if !valid_username(&owner_handle) {
         return Err(Error::NotFound);
     }
+    // Optional tenant segment: shape-checked when present, else open the
+    // devserver root.
+    let workspace = match q.d.as_deref().map(|s| s.trim().to_ascii_lowercase()) {
+        Some(d) if !d.is_empty() => {
+            if !is_workspace_name_shape(&d) {
+                return Err(Error::NotFound);
+            }
+            Some(d)
+        }
+        _ => None,
+    };
 
     // Resolve owner. Owner == caller is fast-pathable but the
     // username lookup is one cheap query, so we always go through it
@@ -1025,12 +1047,16 @@ async fn workspaces_open(
     // resource we want the browser to navigate to. Token rides in
     // the URL because that's the only way to hand it off across
     // origins without JS; the 30s exp keeps the leak window short. The
-    // path keeps the `{workspace}` tenant segment; the devserver routes
-    // it internally. Scheme + port come from config so a local-dev
-    // deploy where `*.devserver.localtest.me` resolves to 127.0.0.1 over
-    // plain HTTP builds the right URL.
+    // path is the `{workspace}` tenant segment (or `/` for the devserver
+    // root); the devserver routes it internally. Scheme + port come from
+    // config so a local-dev deploy where `*.devserver.localtest.me`
+    // resolves to 127.0.0.1 over plain HTTP builds the right URL.
+    let path = match &workspace {
+        Some(d) => format!("/{d}/"),
+        None => "/".to_string(),
+    };
     let url = format!(
-        "{scheme}://{host}{port}/{workspace}/?t={token}",
+        "{scheme}://{host}{port}{path}?t={token}",
         scheme = state.cfg.workspace_public_scheme,
         port = state.cfg.workspace_public_port,
     );

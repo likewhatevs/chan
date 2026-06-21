@@ -4,7 +4,7 @@
   import Login from "./views/Login.svelte";
   import Profile from "./views/Profile.svelte";
   import Tokens from "./views/Tokens.svelte";
-  import Workspaces from "./views/Workspaces.svelte";
+  import Devservers from "./views/Devservers.svelte";
   import { meStore } from "./state/me.svelte";
 
   type Tab = "profile" | "tokens" | "workspaces";
@@ -28,8 +28,8 @@
     }
   }
 
-  // Hide Workspaces tab when share_workspaces feature flag is off for this
-  // user. If they bookmarked #workspaces or pasted a URL into the bar,
+  // Hide the Devservers tab when the share_workspaces feature flag is off
+  // for this user. If they bookmarked #workspaces or pasted a URL into the bar,
   // fall back to Profile so the dashboard always lands on a tab the
   // user can actually see.
   function visibleTab(t: Tab, sharesOn: boolean): Tab {
@@ -76,7 +76,7 @@
           class:active={activeTab === "workspaces"}
           onclick={() => setTab("workspaces")}
         >
-          Workspaces
+          Devservers
         </button>
       {/if}
     </nav>
@@ -85,9 +85,9 @@
     {:else if activeTab === "tokens"}
       <Tokens />
     {:else}
-      <Workspaces
+      <Devservers
         username={meStore.me.user.username}
-        workspaces={meStore.me.workspaces}
+        devservers={meStore.me.devservers}
       />
     {/if}
   {/if}

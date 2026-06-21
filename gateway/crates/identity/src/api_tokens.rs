@@ -388,7 +388,9 @@ fn hash_token(token: &str) -> String {
 /// keys the registry and the devserver-gate `drv` claim on this exact
 /// string, so its shape (64 lowercase hex chars) is a cross-service
 /// contract. The PAT is the secret; this hash is a public handle.
-fn devserver_id_from_pat(token: &str) -> String {
+/// `pub(crate)` so the token-create handler can register the devserver
+/// row (1 token : 1 devserver) at mint time.
+pub(crate) fn devserver_id_from_pat(token: &str) -> String {
     Sha256::digest(token.as_bytes())
         .iter()
         .map(|b| format!("{b:02x}"))

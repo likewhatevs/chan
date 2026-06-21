@@ -1,5 +1,5 @@
 /* Shared palette + base element styles for id.chan.app and
-   workspace.chan.app SPAs. Imported once per app from main.ts so the
+   devserver.chan.app SPAs. Imported once per app from main.ts so the
    two surfaces stay visually identical without duplicated rules.
    Default dark; [data-theme="light"] flips it. */
 

@@ -390,11 +390,11 @@ async fn login_then_me() {
     let (s, _, body, _) = c.send(Method::GET, "/api/me", None).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["user"]["id"].as_str().unwrap(), uid.to_string());
-    // The live list comes from proxy admin. This test mocks no tunnel
-    // list, so the admin call no-matches and `me` resolves an empty
+    // The live devserver list comes from proxy admin. This test mocks no
+    // tunnel list, so the admin call no-matches and `me` resolves an empty
     // array (it tolerates admin errors rather than failing /api/me).
     assert_eq!(
-        body["workspaces"].as_array().expect("workspaces present"),
+        body["devservers"].as_array().expect("devservers present"),
         &Vec::<serde_json::Value>::new()
     );
     app.cleanup().await;

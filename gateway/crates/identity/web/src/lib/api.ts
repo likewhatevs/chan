@@ -16,23 +16,23 @@ export type User = {
   avatar_url: string | null;
 };
 
-export type Workspace = {
-  /// Workspace slug, used as the path on `{user}.workspace.chan.app`.
-  workspace: string;
-  /// Display label. Currently always the slug; the chan-tunnel Hello
-  /// frame does not carry a per-tunnel label.
-  label: string;
-  public: boolean;
-  /// "online" while the tunnel registration is live. workspace-proxy
-  /// only reports online workspaces, so this is the only value.
+export type Devserver = {
+  /// The owner's live devserver id (lowercase hex SHA-256 of the PAT;
+  /// the registry's 2nd key). One devserver per user. The dashboard
+  /// pairs this with the owned list (which carries the label) to flip
+  /// online/offline.
+  devserver_id: string;
+  /// "online" while the tunnel registration is live. The proxy admin
+  /// only reports live devservers, so this is the only value.
   status: "online";
 };
 
 export type Me = {
   user: User;
-  /// Live tunnel snapshot for the signed-in user, sourced from
-  /// workspace-proxy admin. Empty when nothing is connected.
-  workspaces: Workspace[];
+  /// Live devserver snapshot for the signed-in user, sourced from the
+  /// proxy admin tunnel list (one devserver per user). Empty when
+  /// nothing is connected.
+  devservers: Devserver[];
   /// Resolved feature flags for this user. Map of flag key -> bool.
   /// A flag absent from the map = does not exist in the registry
   /// (treat as off). Fresh deploys ship `share_workspaces` off.
@@ -65,24 +65,26 @@ export type AuditEntry = {
 
 export type ProvidersResponse = { providers: string[] };
 
-export type WorkspaceGrantRole = "viewer" | "editor";
+export type DevserverGrantRole = "viewer" | "editor";
 
-export type WorkspaceGrant = {
+export type DevserverGrant = {
   id: string;
   owner_user_id: string;
-  workspace_name: string;
+  devserver_id: string;
   grantee_email: string;
   /// null until the recipient signs in with a verified OAuth email
   /// matching grantee_email. Until then the grant is "pending" and
-  /// the recipient cannot open the workspace.
+  /// the recipient cannot open the devserver.
   grantee_user_id: string | null;
-  role: WorkspaceGrantRole;
+  role: DevserverGrantRole;
   created_at: string;
   accepted_at: string | null;
 };
 
-export type OwnedWorkspaceSummary = {
-  workspace_name: string;
+export type OwnedDevserverSummary = {
+  devserver_id: string;
+  /// Human-friendly name, mirrored from the PAT label.
+  label: string;
   grant_count: number;
 };
 
@@ -92,8 +94,9 @@ export type IncomingShare = {
   owner_username: string;
   owner_display_name: string | null;
   owner_avatar_url: string | null;
-  workspace_name: string;
-  role: WorkspaceGrantRole;
+  devserver_id: string;
+  label: string;
+  role: DevserverGrantRole;
   accepted_at: string;
 };
 
@@ -122,56 +125,30 @@ export const api = {
   tokenAudit: (id: string) =>
     request<AuditEntry[]>(`/api/tokens/${id}/audit`),
 
-  /// Build the entry URL for a workspace. The server mints a 30s
-  /// workspace-gate JWT inside the 303 Location, so we never see the
-  /// token here. We hand the URL to the browser via location.assign
-  /// (or an anchor href); it follows the 303 to the wildcard
-  /// subdomain, workspace-proxy validates, sets the session cookie, and
-  /// 303s to the clean URL.
-  workspaceOpenUrl: (user: string, workspace: string): string => {
-    const u = encodeURIComponent(user);
-    const d = encodeURIComponent(workspace);
-    return `/api/workspaces/open?u=${u}&d=${d}`;
+  /// Build the entry URL that opens an owner's devserver. The server
+  /// mints a 30s devserver-gate JWT inside the 303 Location, so we never
+  /// see the token here. We hand the URL to the browser via
+  /// location.assign; it follows the 303 to `{owner}.devserver.<domain>`,
+  /// the proxy validates, sets the session cookie, and 303s to the clean
+  /// URL. No tenant segment: the devserver serves its own launcher at
+  /// `/` (the dashboard can't enumerate a devserver's workspaces, design
+  /// 4.1), so we open the root and the user picks a workspace there.
+  devserverOpenUrl: (owner: string): string => {
+    const u = encodeURIComponent(owner);
+    return `/api/devservers/open?u=${u}`;
   },
 
-  /// Public, copyable share link. Anyone with this URL who can sign
-  /// in via an OAuth provider whose verified email matches a grant
-  /// the owner created will be admitted. Hand-distributed (email,
-  /// chat, etc.) -- identity-service does not send the message.
-  shareUrl: (owner: string, workspace: string): string => {
-    const o = encodeURIComponent(owner);
-    const d = encodeURIComponent(workspace);
-    // Absolute URL so the copy-button result works after paste
-    // anywhere. window.location.origin is the SPA's own origin (the
-    // identity service); same hostname that handles /s/:owner/:workspace.
-    return `${window.location.origin}/s/${o}/${d}`;
-  },
-
-  createWorkspace: (workspace_name: string) =>
-    request<{
-      id: string;
-      owner_user_id: string;
-      workspace_name: string;
-      created_at: string;
-    }>("/api/workspaces", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ workspace_name }),
-    }),
-  deleteWorkspace: (workspace: string) =>
-    request<void>(`/api/workspaces/${encodeURIComponent(workspace)}`, { method: "DELETE" }),
-
-  listWorkspaceGrants: (workspace: string) =>
-    request<WorkspaceGrant[]>(`/api/workspaces/${encodeURIComponent(workspace)}/grants`),
-  addWorkspaceGrant: (workspace: string, grantee_email: string, role: WorkspaceGrantRole) =>
-    request<WorkspaceGrant>(`/api/workspaces/${encodeURIComponent(workspace)}/grants`, {
+  listDevserverGrants: (devserverId: string) =>
+    request<DevserverGrant[]>(`/api/devservers/${encodeURIComponent(devserverId)}/grants`),
+  addDevserverGrant: (devserverId: string, grantee_email: string, role: DevserverGrantRole) =>
+    request<DevserverGrant>(`/api/devservers/${encodeURIComponent(devserverId)}/grants`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ grantee_email, role }),
     }),
-  deleteWorkspaceGrant: (id: string) =>
+  deleteDevserverGrant: (id: string) =>
     request<void>(`/api/grants/${id}`, { method: "DELETE" }),
 
-  listOwnedWorkspaces: () => request<OwnedWorkspaceSummary[]>("/api/workspaces/owned"),
-  listIncomingShares: () => request<IncomingShare[]>("/api/workspaces/incoming"),
+  listOwnedDevservers: () => request<OwnedDevserverSummary[]>("/api/devservers/owned"),
+  listIncomingShares: () => request<IncomingShare[]>("/api/devservers/incoming"),
 };
