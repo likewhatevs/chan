@@ -187,24 +187,34 @@ pub struct FeatureFlagSummary {
     pub updated_at: DateTime<Utc>,
 }
 
+/// One shareable devserver the owner has declared. `devserver_id` is
+/// the lowercase hex SHA-256 of the owner's PAT (produced by identity);
+/// `label` mirrors the PAT label so the owner's list renders without a
+/// second hop. The surrogate uuid is for FK joins only.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct Workspace {
+pub struct Devserver {
     pub id: Uuid,
     pub owner_user_id: Uuid,
-    pub workspace_name: String,
+    pub devserver_id: String,
+    pub label: String,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateWorkspace {
-    pub workspace_name: String,
+pub struct CreateDevserver {
+    pub devserver_id: String,
+    /// Human-friendly name, mirrored from the PAT label. Optional so the
+    /// grant-create auto-bootstrap path (which has no label) still works;
+    /// absent or blank leaves any existing label untouched.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct WorkspaceGrant {
+pub struct DevserverGrant {
     pub id: Uuid,
     pub owner_user_id: Uuid,
-    pub workspace_name: String,
+    pub devserver_id: String,
     pub grantee_email: String,
     pub grantee_user_id: Option<Uuid>,
     pub role: String,
@@ -213,21 +223,22 @@ pub struct WorkspaceGrant {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateWorkspaceGrant {
+pub struct CreateDevserverGrant {
     pub grantee_email: String,
     pub role: String,
 }
 
 /// Access decision returned by the per-request gate. `role` is one
 /// of `owner`, `editor`, `viewer`; 404 means the caller has no
-/// access (same shape as "unknown workspace", no enumeration leak).
+/// access (same shape as "unknown devserver", no enumeration leak).
 #[derive(Debug, Serialize)]
-pub struct WorkspaceAccess {
+pub struct DevserverAccess {
     pub role: String,
 }
 
 /// One incoming share: owner's identity flattened so the dashboard
-/// can render without a second hop.
+/// can render without a second hop. A grant gives the WHOLE devserver,
+/// so the share is keyed on the devserver, not a single workspace.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct IncomingShare {
     pub grant_id: Uuid,
@@ -235,19 +246,21 @@ pub struct IncomingShare {
     pub owner_username: String,
     pub owner_display_name: Option<String>,
     pub owner_avatar_url: Option<String>,
-    pub workspace_name: String,
+    pub devserver_id: String,
+    pub label: String,
     pub role: String,
     pub accepted_at: DateTime<Utc>,
 }
 
-/// One workspace the owner has configured shares on. `grant_count` is
+/// One devserver the owner has configured shares on. `grant_count` is
 /// the number of (active) grants on it; the SPA pairs this with the
-/// live-tunnel list from workspace-proxy admin to surface "pending —
-/// start chan serve" status for workspaces that have shares but no live
+/// live-tunnel list from devserver-proxy admin to surface online /
+/// offline status for a devserver that has shares but no live
 /// registration.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct OwnedWorkspaceSummary {
-    pub workspace_name: String,
+pub struct OwnedDevserverSummary {
+    pub devserver_id: String,
+    pub label: String,
     pub grant_count: i64,
 }
 

@@ -13,8 +13,8 @@ Small axum service in front of Postgres. Schema:
 - `api_tokens (id, user_id, label, token_hash, expires_at, created_at, revoked_at, last_used_at, scopes)`
 - `api_token_audit (id, ts, token_id, action, ip, user_agent)`
 - `auth_audit (id, ts, user_id, action, ip, user_agent, note)`
-- `workspaces (id, owner_user_id, workspace_name, created_at)` with `UNIQUE (owner_user_id, workspace_name)`. First-class entity for an owner's workspace: lets the dashboard list a workspace that has no grants and no live tunnel yet, and acts as the FK target for grants.
-- `workspace_grants (id, owner_user_id, workspace_name, grantee_email, grantee_user_id, role, created_at, accepted_at)` with `UNIQUE (owner_user_id, workspace_name, lower(grantee_email))` and an FK on `(owner_user_id, workspace_name)` -> `workspaces` (cascade delete).
+- `devservers (id, owner_user_id, devserver_id, label, created_at)` with `UNIQUE (owner_user_id, devserver_id)`. First-class entity for an owner's shareable devserver: lets the dashboard list a devserver that has no grants and no live tunnel yet, and acts as the FK target for grants. `devserver_id` is the lowercase hex SHA-256 of the owner's PAT (produced by identity); `label` mirrors the PAT label.
+- `devserver_grants (id, owner_user_id, devserver_id, grantee_email, grantee_user_id, role, created_at, accepted_at)` with `UNIQUE (owner_user_id, devserver_id, lower(grantee_email))` and an FK on `(owner_user_id, devserver_id)` -> `devservers` (cascade delete).
 - `feature_flags (key PK, description, default_enabled, created_at, updated_at)`: registry of named flags.
 - `feature_flag_overrides (flag_key, user_id, enabled, set_at, PRIMARY KEY (flag_key, user_id))`: per-user explicit enable/disable rows. The effective value for `(flag, user)` is the override row when present, else `default_enabled`.
 
@@ -109,25 +109,25 @@ workspace-proxy is the authority on live registrations; profile is the authority
 `PATCH /v1/users/:id` (the service-tier route) accepts only `display_name` and `avatar_url`. Email is the identity-linking key in `upsert_by_identity` branch (b): a service-bearer holder that could rewrite email could pivot account ownership to any account whose verified OAuth email matched the new value. Email mutation therefore lives behind the admin bearer on `POST /v1/admin/users/:id/email`, runs in a single transaction with an `auth_audit` row of action `email_changed` (note carries the old + new addresses), and surfaces unique-constraint conflicts as
 409.
 
-### Workspaces are first-class
+### Devservers are first-class
 
-A workspace is a row in `workspaces` keyed on `(owner_user_id, workspace_name)`. The dashboard creates one before either grants land or `chan serve` registers a live tunnel, so the offline state is always representable. Live tunnels (held in workspace-proxy's in-memory Registry) reference the same `(owner, workspace_name)` pair; the FK from `workspace_grants` -> `workspaces` makes workspace deletion atomic (cascading every grant on it).
+A devserver is a row in `devservers` keyed on `(owner_user_id, devserver_id)`, where `devserver_id` is the lowercase hex SHA-256 of the owner's PAT (ADR-0001: the devserver is the unit of registration, gate, and sharing). identity-service creates the row at PAT-create time (it holds the raw token to compute the id) before either grants land or `chan devserver` registers a live tunnel, so the offline state is always representable. Live tunnels (held in devserver-proxy's in-memory Registry) reference the same `(owner, devserver_id)` pair; the FK from `devserver_grants` -> `devservers` makes devserver deletion atomic (cascading every grant on it).
 
-`POST /v1/users/:owner/workspaces` is idempotent: 201 on insert, 200 when the name already existed. `POST .../grants` upserts the parent `workspaces` row in the same transaction (so a caller that skips the explicit workspace-create still produces a valid graph and the FK never fires).
+`POST /v1/users/:owner/devservers` is idempotent: 201 on insert, 200 when the id already existed (a blank/absent label on a re-issue leaves the stored label untouched). `POST .../grants` upserts the parent `devservers` row in the same transaction (so a caller that pre-seeds a grant before the devserver registers still produces a valid graph and the FK never fires).
 
-### Per-workspace sharing grants
+### Per-devserver sharing grants
 
-A user can share one of their workspaces (the path segment served at `{owner}.workspace.chan.app/{workspace}/`) with another user by email. Grants live in `workspace_grants` keyed on `(owner_user_id, workspace_name, lower(grantee_email))`:
+A grant gives a collaborator the WHOLE devserver (the whole library), not a single workspace: under ADR-0001 the path `{workspace}` segment is tenant routing only and never gates. A user shares their devserver with another user by email. Grants live in `devserver_grants` keyed on `(owner_user_id, devserver_id, lower(grantee_email))`:
 
-- The owner pre-seeds grants from id.chan.app's SPA *before* (or alongside) running `chan serve --tunnel-workspace-name=<name>`. The grant row exists independently of any live tunnel.
+- The owner pre-seeds grants from id.chan.app's SPA *before* (or alongside) running `chan devserver --tunnel-token <pat>`. The grant row exists independently of any live tunnel.
 - `grantee_user_id` is `NULL` until a sign-in is observed with a verified email matching `grantee_email`. Two resolution paths: (a) at grant-create time, if `users` already has a row for the email; (b) at OAuth-callback time, via `POST /v1/users/:id/grants/claim` which identity-service calls with the union of the user's verified emails.
-- `role` is one of `viewer`, `editor`. Re-adding the same email on the same `(owner, workspace)` is idempotent: the SQL is `INSERT ... ON CONFLICT DO UPDATE SET role = EXCLUDED.role`, with `grantee_user_id` and `accepted_at` preserved via `COALESCE` so a role change does not re-pend an already-claimed grant.
+- `role` is one of `viewer`, `editor`. Re-adding the same email on the same `(owner, devserver)` is idempotent: the SQL is `INSERT ... ON CONFLICT DO UPDATE SET role = EXCLUDED.role`, with `grantee_user_id` and `accepted_at` preserved via `COALESCE` so a role change does not re-pend an already-claimed grant.
 
-Access decisions: identity-service calls `GET /v1/users/:owner/workspaces/:workspace/access?as=<caller_user_id>` before minting a workspace-gate entry JWT. The response is `{role: "owner"|"editor"|"viewer"}` on access, 404 otherwise. The 404 shape is shared with "unknown workspace": neither the access endpoint nor the share landing page leaks which workspaces an owner is sharing.
+Access decisions: identity-service calls `GET /v1/users/:owner/devservers/:devserver_id/access?as=<caller_user_id>` before minting a devserver-gate entry JWT, passing the devserver_id of the owner's live registration. The response is `{role: "owner"|"editor"|"viewer"}` on access, 404 otherwise. The 404 shape is shared with "unknown devserver": neither the access endpoint nor the share landing page leaks which devservers an owner is sharing. One `devserver_access` call is the single authorization assertion the gate needs.
 
-Workspace-name normalization: handler lowercases + trims and rejects anything outside `[a-z0-9._-]{1,64}` so the stored value is always the canonical path segment workspace-proxy serves. Email uniqueness is case-insensitive via a functional `lower(grantee_email)` index; display preserves the as-typed casing.
+devserver_id normalization: handler lowercases + trims and rejects anything that is not exactly 64 hex chars, the canonical SHA-256(PAT) shape. Email uniqueness is case-insensitive via a functional `lower(grantee_email)` index; display preserves the as-typed casing. Token rotation mints a new PAT and thus a new devserver_id, so existing grants do not survive rotation (re-share required); this is the settled trade-off in ADR-0001.
 
-Listings: `GET /v1/users/:id/grants/owned` returns `(workspace_name, grant_count)` per workspace the user has configured shares on; `GET /v1/users/:id/grants/incoming` returns workspaces shared *with* the user (claimed grants only). FK cascades on `users(id)` drop grants when either the owner or the grantee is deleted.
+Listings: `GET /v1/users/:id/grants/owned` returns `(devserver_id, label, grant_count)` per devserver the user has configured shares on; `GET /v1/users/:id/grants/incoming` returns devservers shared *with* the user (claimed grants only). FK cascades on `users(id)` drop grants when either the owner or the grantee is deleted.
 
 ### Feature flags
 
@@ -148,7 +148,7 @@ Column lists are constants `format!`'d into queries; user input always rides thr
 - `api_token_audit.action` is one of `created`, `created_via_desktop`, `used`, `revoked`.
 - Block always: revokes every active PAT, fires the workspace-proxy eviction (if configured), appends one `auth_audit` row.
 - Bearer comparisons run at constant time.
-- `workspace_grants.role` is one of `viewer`, `editor` (CHECK constraint). `accepted_at` is `NULL` iff `grantee_user_id` is `NULL`; both flip together at claim time.
+- `devserver_grants.role` is one of `viewer`, `editor` (CHECK constraint). `accepted_at` is `NULL` iff `grantee_user_id` is `NULL`; both flip together at claim time.
 
 ## Error model
 

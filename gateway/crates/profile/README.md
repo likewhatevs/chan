@@ -1,6 +1,6 @@
 # profile-service
 
-Internal HTTP API in front of Postgres. Owns the canonical user record, linked OAuth identities, workspaces + sharing grants, feature flags, and the authentication audit log; serves the admin views over `api_tokens`. Called only by `identity-service` and the operator CLI; not exposed publicly.
+Internal HTTP API in front of Postgres. Owns the canonical user record, linked OAuth identities, devservers + sharing grants, feature flags, and the authentication audit log; serves the admin views over `api_tokens`. Called only by `identity-service` and the operator CLI; not exposed publicly.
 
 ## Role in the system
 
@@ -55,15 +55,15 @@ Service API (`/v1/users/*`, `/v1/auth-audit`):
 | GET    | `/v1/users/by-username`            | case-insensitive handle lookup |
 | POST   | `/v1/users/upsert-by-identity`     | atomic find-or-create-or-link |
 | POST   | `/v1/users/:id/identities`         | attach OAuth identity         |
-| GET    | `/v1/users/:o/workspaces`              | list owner's workspaces           |
-| POST   | `/v1/users/:o/workspaces`              | create workspace (idempotent)     |
-| DELETE | `/v1/users/:o/workspaces/:d`           | delete workspace (cascades grants)|
-| POST   | `/v1/users/:o/workspaces/:d/grants`    | create / promote workspace grant  |
-| GET    | `/v1/users/:o/workspaces/:d/grants`    | list grants on a workspace        |
-| GET    | `/v1/users/:o/workspaces/:d/access`    | access check, `?as=<user_id>` |
+| GET    | `/v1/users/:o/devservers`              | list owner's devservers           |
+| POST   | `/v1/users/:o/devservers`              | create devserver (idempotent)     |
+| DELETE | `/v1/users/:o/devservers/:d`           | delete devserver (cascades grants)|
+| POST   | `/v1/users/:o/devservers/:d/grants`    | create / promote devserver grant  |
+| GET    | `/v1/users/:o/devservers/:d/grants`    | list grants on a devserver        |
+| GET    | `/v1/users/:o/devservers/:d/access`    | access check, `?as=<user_id>` |
 | DELETE | `/v1/users/:o/grants/:id`          | revoke a grant (owner-scoped) |
-| GET    | `/v1/users/:id/grants/owned`       | workspaces this user shares       |
-| GET    | `/v1/users/:id/grants/incoming`    | workspaces shared with this user  |
+| GET    | `/v1/users/:id/grants/owned`       | devservers this user shares       |
+| GET    | `/v1/users/:id/grants/incoming`    | devservers shared with this user  |
 | POST   | `/v1/users/:id/grants/claim`       | claim pending grants by email |
 | GET    | `/v1/users/:id/flags`              | resolved flags for one user   |
 | POST   | `/v1/auth-audit`                   | append login/logout event     |

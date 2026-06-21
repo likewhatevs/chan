@@ -965,7 +965,7 @@ async fn cascade_on_user_delete() {
 }
 
 // ---------------------------------------------------------------------------
-// workspace_grants
+// devserver_grants
 // ---------------------------------------------------------------------------
 
 async fn mk_user(app: &TestApp, email: &str) -> String {
@@ -975,23 +975,31 @@ async fn mk_user(app: &TestApp, email: &str) -> String {
     v["id"].as_str().unwrap().to_string()
 }
 
+/// A syntactically-valid devserver id: 64 lowercase hex chars. The real
+/// id is SHA-256(PAT); tests only need the right shape and distinct,
+/// lexicographically-sortable values, so one repeated hex digit suffices.
+fn ds(hex_digit: &str) -> String {
+    hex_digit.repeat(64)
+}
+
 #[tokio::test]
 async fn grant_create_resolves_existing_user() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     let alice = mk_user(&app, "alice@x.com").await;
+    let dsid = ds("a");
 
     let (s, v) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
     assert_eq!(v["grantee_user_id"], alice);
     assert_eq!(v["role"], "editor");
-    assert_eq!(v["workspace_name"], "photos");
+    assert_eq!(v["devserver_id"], dsid);
     assert!(v["accepted_at"].is_string());
 
     app.cleanup().await;
@@ -1001,11 +1009,12 @@ async fn grant_create_resolves_existing_user() {
 async fn grant_create_pending_for_unknown_email() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
+    let dsid = ds("a");
 
     let (s, v) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "future@x.com", "role": "viewer"})),
         )
         .await;
@@ -1020,12 +1029,13 @@ async fn grant_create_pending_for_unknown_email() {
 async fn grant_create_validates_inputs() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
+    let dsid = ds("a");
 
     // Bad role.
     let (s, _) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "a@b.com", "role": "admin"})),
         )
         .await;
@@ -1035,18 +1045,29 @@ async fn grant_create_validates_inputs() {
     let (s, _) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "nope", "role": "viewer"})),
         )
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 
-    // Bad workspace name (uppercase rejected after normalize roundtrip
-    // would actually pass; we test illegal chars instead).
+    // Bad devserver id (non-hex char at the right length).
+    let bad = "g".repeat(64);
     let (s, _) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces/has%20space/grants"),
+            &format!("/v1/users/{owner}/devservers/{bad}/grants"),
+            Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // Bad devserver id (too short).
+    let short = "a".repeat(63);
+    let (s, _) = app
+        .req(
+            Method::POST,
+            &format!("/v1/users/{owner}/devservers/{short}/grants"),
             Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
         )
         .await;
@@ -1057,7 +1078,7 @@ async fn grant_create_validates_inputs() {
     let (s, _) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{ghost}/workspaces/photos/grants"),
+            &format!("/v1/users/{ghost}/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
         )
         .await;
@@ -1071,11 +1092,12 @@ async fn grant_create_is_idempotent_and_promotes_role() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     let _alice = mk_user(&app, "alice@x.com").await;
+    let dsid = ds("a");
 
     let (s, v1) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
         )
         .await;
@@ -1084,7 +1106,7 @@ async fn grant_create_is_idempotent_and_promotes_role() {
     let (s, v2) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "ALICE@x.com", "role": "editor"})),
         )
         .await;
@@ -1102,17 +1124,18 @@ async fn grant_list_and_delete() {
     let owner = mk_user(&app, "owner@x.com").await;
     mk_user(&app, "alice@x.com").await;
     mk_user(&app, "bob@x.com").await;
+    let dsid = ds("a");
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces/photos/grants"),
+        &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
     )
     .await;
     let (_, b) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "bob@x.com", "role": "editor"})),
         )
         .await;
@@ -1121,7 +1144,7 @@ async fn grant_list_and_delete() {
     let (s, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             None,
         )
         .await;
@@ -1140,7 +1163,7 @@ async fn grant_list_and_delete() {
     let (_, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             None,
         )
         .await;
@@ -1151,7 +1174,7 @@ async fn grant_list_and_delete() {
     let (_, again) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "bob@x.com", "role": "viewer"})),
         )
         .await;
@@ -1169,15 +1192,17 @@ async fn grant_list_and_delete() {
 }
 
 #[tokio::test]
-async fn workspace_access_owner_grantee_and_stranger() {
+async fn devserver_access_owner_grantee_and_stranger() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     let alice = mk_user(&app, "alice@x.com").await;
     let stranger = mk_user(&app, "s@x.com").await;
+    let dsid = ds("a");
+    let other_ds = ds("b");
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces/photos/grants"),
+        &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
     )
     .await;
@@ -1186,7 +1211,7 @@ async fn workspace_access_owner_grantee_and_stranger() {
     let (s, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/workspaces/photos/access?as={owner}"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/access?as={owner}"),
             None,
         )
         .await;
@@ -1197,7 +1222,7 @@ async fn workspace_access_owner_grantee_and_stranger() {
     let (s, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/workspaces/photos/access?as={alice}"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/access?as={alice}"),
             None,
         )
         .await;
@@ -1208,17 +1233,18 @@ async fn workspace_access_owner_grantee_and_stranger() {
     let (s, _) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/workspaces/photos/access?as={stranger}"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/access?as={stranger}"),
             None,
         )
         .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 
-    // Unknown workspace: also 404 (same shape).
+    // Different devserver of the same owner: grantee has no grant on it,
+    // so 404 (same shape). Proves the grant is scoped to its devserver.
     let (s, _) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/workspaces/nope/access?as={alice}"),
+            &format!("/v1/users/{owner}/devservers/{other_ds}/access?as={alice}"),
             None,
         )
         .await;
@@ -1231,11 +1257,12 @@ async fn workspace_access_owner_grantee_and_stranger() {
 async fn claim_sweep_fills_pending_grants() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
+    let dsid = ds("a");
 
     // Pre-seed a grant for an email that doesn't exist yet.
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces/photos/grants"),
+        &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
         Some(json!({"grantee_email": "late@x.com", "role": "viewer"})),
     )
     .await;
@@ -1258,7 +1285,7 @@ async fn claim_sweep_fills_pending_grants() {
     let (s, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/workspaces/photos/access?as={late}"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/access?as={late}"),
             None,
         )
         .await;
@@ -1283,22 +1310,24 @@ async fn list_owned_and_incoming() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     let alice = mk_user(&app, "alice@x.com").await;
+    let ds_a = ds("a");
+    let ds_b = ds("b");
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces/photos/grants"),
+        &format!("/v1/users/{owner}/devservers/{ds_a}/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
     )
     .await;
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces/photos/grants"),
+        &format!("/v1/users/{owner}/devservers/{ds_a}/grants"),
         Some(json!({"grantee_email": "ghost@x.com", "role": "viewer"})),
     )
     .await;
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces/videos/grants"),
+        &format!("/v1/users/{owner}/devservers/{ds_b}/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
     )
     .await;
@@ -1313,9 +1342,10 @@ async fn list_owned_and_incoming() {
     assert_eq!(s, StatusCode::OK);
     let arr = v.as_array().unwrap();
     assert_eq!(arr.len(), 2);
-    assert_eq!(arr[0]["workspace_name"], "photos");
+    // Ordered by devserver_id, so ds_a ("aaaa...") precedes ds_b.
+    assert_eq!(arr[0]["devserver_id"], ds_a);
     assert_eq!(arr[0]["grant_count"], 2);
-    assert_eq!(arr[1]["workspace_name"], "videos");
+    assert_eq!(arr[1]["devserver_id"], ds_b);
     assert_eq!(arr[1]["grant_count"], 1);
 
     let (s, v) = app
@@ -1328,9 +1358,11 @@ async fn list_owned_and_incoming() {
     assert_eq!(s, StatusCode::OK);
     let arr = v.as_array().unwrap();
     assert_eq!(arr.len(), 2);
-    // Both rows show this owner.
+    // Both rows show this owner and carry a devserver_id + label.
     for row in arr {
         assert_eq!(row["owner_user_id"], owner);
+        assert!(row["devserver_id"].is_string());
+        assert!(row["label"].is_string());
         assert!(row["accepted_at"].is_string());
     }
 
@@ -1342,10 +1374,11 @@ async fn cascade_grants_on_user_delete() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     let alice = mk_user(&app, "alice@x.com").await;
+    let dsid = ds("a");
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces/photos/grants"),
+        &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
     )
     .await;
@@ -1366,47 +1399,58 @@ async fn cascade_grants_on_user_delete() {
 }
 
 // ---------------------------------------------------------------------------
-// workspaces (first-class entity)
+// devservers (first-class entity)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn workspace_create_idempotent() {
+async fn devserver_create_idempotent() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
+    let dsid = ds("a");
+    let upper = "A".repeat(64); // same id, uppercase: normalizes to dsid
 
     let (s, v1) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces"),
-            Some(json!({"workspace_name": "photos"})),
+            &format!("/v1/users/{owner}/devservers"),
+            Some(json!({"devserver_id": dsid, "label": "laptop"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(v1["devserver_id"], dsid);
+    assert_eq!(v1["label"], "laptop");
 
     let (s, v2) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces"),
-            Some(json!({"workspace_name": "PHOTOS"})),
+            &format!("/v1/users/{owner}/devservers"),
+            Some(json!({"devserver_id": upper})),
         )
         .await;
     assert_eq!(s, StatusCode::OK, "re-create returns 200, not 201");
     assert_eq!(v1["id"], v2["id"], "same row");
+    assert_eq!(
+        v2["label"], "laptop",
+        "blank label leaves the name untouched"
+    );
 
     app.cleanup().await;
 }
 
 #[tokio::test]
-async fn workspace_create_validates_name() {
+async fn devserver_create_validates_id() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
 
-    for bad in ["", "Has Space", "with/slash", &"x".repeat(65)] {
+    let too_short = "a".repeat(63);
+    let too_long = "a".repeat(65);
+    let non_hex = "g".repeat(64);
+    for bad in ["", "Has Space", &too_short, &too_long, &non_hex] {
         let (s, _) = app
             .req(
                 Method::POST,
-                &format!("/v1/users/{owner}/workspaces"),
-                Some(json!({"workspace_name": bad})),
+                &format!("/v1/users/{owner}/devservers"),
+                Some(json!({"devserver_id": bad})),
             )
             .await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "should reject {bad:?}");
@@ -1415,43 +1459,45 @@ async fn workspace_create_validates_name() {
 }
 
 #[tokio::test]
-async fn workspace_list_and_delete_cascades_grants() {
+async fn devserver_list_and_delete_cascades_grants() {
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     mk_user(&app, "alice@x.com").await;
+    let ds_a = ds("a");
+    let ds_b = ds("b");
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces"),
-        Some(json!({"workspace_name": "photos"})),
+        &format!("/v1/users/{owner}/devservers"),
+        Some(json!({"devserver_id": ds_a})),
     )
     .await;
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces/photos/grants"),
+        &format!("/v1/users/{owner}/devservers/{ds_a}/grants"),
         Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
     )
     .await;
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces"),
-        Some(json!({"workspace_name": "videos"})),
+        &format!("/v1/users/{owner}/devservers"),
+        Some(json!({"devserver_id": ds_b})),
     )
     .await;
 
     let (s, v) = app
-        .req(Method::GET, &format!("/v1/users/{owner}/workspaces"), None)
+        .req(Method::GET, &format!("/v1/users/{owner}/devservers"), None)
         .await;
     assert_eq!(s, StatusCode::OK);
     let arr = v.as_array().unwrap();
     assert_eq!(arr.len(), 2);
-    assert_eq!(arr[0]["workspace_name"], "photos");
-    assert_eq!(arr[1]["workspace_name"], "videos");
+    assert_eq!(arr[0]["devserver_id"], ds_a);
+    assert_eq!(arr[1]["devserver_id"], ds_b);
 
     let (s, _) = app
         .req(
             Method::DELETE,
-            &format!("/v1/users/{owner}/workspaces/photos"),
+            &format!("/v1/users/{owner}/devservers/{ds_a}"),
             None,
         )
         .await;
@@ -1459,16 +1505,16 @@ async fn workspace_list_and_delete_cascades_grants() {
 
     // List shrinks.
     let (_, v) = app
-        .req(Method::GET, &format!("/v1/users/{owner}/workspaces"), None)
+        .req(Method::GET, &format!("/v1/users/{owner}/devservers"), None)
         .await;
     assert_eq!(v.as_array().unwrap().len(), 1);
 
-    // Cascade dropped the grant. Listing grants on the deleted workspace
+    // Cascade dropped the grant. Listing grants on the deleted devserver
     // returns an empty array (the route is valid; just no rows).
     let (_, v) = app
         .req(
             Method::GET,
-            &format!("/v1/users/{owner}/workspaces/photos/grants"),
+            &format!("/v1/users/{owner}/devservers/{ds_a}/grants"),
             None,
         )
         .await;
@@ -1478,17 +1524,17 @@ async fn workspace_list_and_delete_cascades_grants() {
 }
 
 #[tokio::test]
-async fn owned_includes_workspaceless() {
-    // A brand-new workspace with zero grants must still appear in
-    // /grants/owned with grant_count = 0 so the dashboard can
-    // render it.
+async fn owned_includes_grantless() {
+    // A brand-new devserver with zero grants must still appear in
+    // /grants/owned with grant_count = 0 so the dashboard can render it.
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
+    let dsid = ds("a");
 
     app.req(
         Method::POST,
-        &format!("/v1/users/{owner}/workspaces"),
-        Some(json!({"workspace_name": "empty"})),
+        &format!("/v1/users/{owner}/devservers"),
+        Some(json!({"devserver_id": dsid, "label": "desktop"})),
     )
     .await;
 
@@ -1502,36 +1548,39 @@ async fn owned_includes_workspaceless() {
     assert_eq!(s, StatusCode::OK);
     let arr = v.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["workspace_name"], "empty");
+    assert_eq!(arr[0]["devserver_id"], dsid);
+    assert_eq!(arr[0]["label"], "desktop");
     assert_eq!(arr[0]["grant_count"], 0);
 
     app.cleanup().await;
 }
 
 #[tokio::test]
-async fn grant_create_autocreates_workspace() {
-    // POST /v1/users/:o/workspaces/:d/grants must work even if the
-    // owner has not POSTed the workspace first: the grant handler
-    // upserts the workspaces row in the same transaction. Important
-    // for back-compat with callers that don't know about /workspaces.
+async fn grant_create_autocreates_devserver() {
+    // POST /v1/users/:o/devservers/:d/grants must work even if the
+    // owner has not POSTed the devserver first: the grant handler
+    // upserts the devservers row in the same transaction, so a caller
+    // that pre-seeds a grant before the devserver registers still
+    // produces a valid graph and the FK never fires.
     let app = TestApp::new().await;
     let owner = mk_user(&app, "owner@x.com").await;
     mk_user(&app, "alice@x.com").await;
+    let dsid = ds("c");
 
     let (s, _) = app
         .req(
             Method::POST,
-            &format!("/v1/users/{owner}/workspaces/auto/grants"),
+            &format!("/v1/users/{owner}/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "alice@x.com", "role": "viewer"})),
         )
         .await;
     assert_eq!(s, StatusCode::CREATED);
 
     let (_, v) = app
-        .req(Method::GET, &format!("/v1/users/{owner}/workspaces"), None)
+        .req(Method::GET, &format!("/v1/users/{owner}/devservers"), None)
         .await;
     let arr = v.as_array().unwrap();
-    assert!(arr.iter().any(|r| r["workspace_name"] == "auto"));
+    assert!(arr.iter().any(|r| r["devserver_id"] == dsid));
 
     app.cleanup().await;
 }

@@ -14,10 +14,10 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 use crate::models::{
     AdminChangeEmail, AdminToken, AdminTokenAudit, AuthAudit, BlockUser, ClaimGrantsRequest,
-    ClaimGrantsResponse, CreateAuthAudit, CreateIdentity, CreateUser, CreateWorkspace,
-    CreateWorkspaceGrant, FeatureFlag, FeatureFlagOverride, FeatureFlagSummary, Identity,
-    IncomingShare, OwnedWorkspaceSummary, UpdateUser, UpdateUsername, UpsertByIdentity, UpsertFlag,
-    UpsertFlagOverride, UpsertResponse, User, Workspace, WorkspaceAccess, WorkspaceGrant,
+    ClaimGrantsResponse, CreateAuthAudit, CreateDevserver, CreateDevserverGrant, CreateIdentity,
+    CreateUser, Devserver, DevserverAccess, DevserverGrant, FeatureFlag, FeatureFlagOverride,
+    FeatureFlagSummary, Identity, IncomingShare, OwnedDevserverSummary, UpdateUser, UpdateUsername,
+    UpsertByIdentity, UpsertFlag, UpsertFlagOverride, UpsertResponse, User,
 };
 
 /// Single source of truth for the column list returned for `users`
@@ -34,25 +34,13 @@ fn user_cols_prefixed(alias: &str) -> String {
         .join(", ")
 }
 
-/// 1-64 chars, lowercase ascii alnum plus `[._-]`. Conservative
-/// subset so the value is safe as a URL path segment without
-/// percent-encoding and as a sqlite-style identifier upstream.
-/// Caller is expected to lowercase + trim before passing in.
-///
-/// Explicitly rejects `.`, `..`, and any name starting with `.`:
-/// path-traversal lookalikes have no legitimate use here and a
-/// downstream filename-mapper in `chan serve` could be surprised by
-/// the relative-path semantics.
-fn valid_workspace_name(s: &str) -> bool {
-    let len = s.len();
-    if !(1..=64).contains(&len) {
-        return false;
-    }
-    if s == "." || s == ".." || s.starts_with('.') {
-        return false;
-    }
-    s.bytes()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'_' | b'.'))
+/// A devserver id is the lowercase hex SHA-256 of the owner's PAT:
+/// exactly 64 chars of `[0-9a-f]`. identity-service produces it (it
+/// holds the raw token); profile re-checks the shape so a malformed
+/// path segment is a clean 400 rather than a silent no-match that
+/// reads like "no access". Caller lowercases + trims before passing in.
+fn valid_devserver_id(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Lightweight: non-empty, contains `@`, no whitespace, sane length.
@@ -95,26 +83,26 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/users/:id/identities", post(create_identity))
         .route(
-            "/v1/users/:owner_id/workspaces",
-            get(list_workspaces).post(create_workspace),
+            "/v1/users/:owner_id/devservers",
+            get(list_devservers).post(create_devserver),
         )
         .route(
-            "/v1/users/:owner_id/workspaces/:workspace",
-            axum::routing::delete(delete_workspace),
+            "/v1/users/:owner_id/devservers/:devserver_id",
+            axum::routing::delete(delete_devserver),
         )
         .route(
-            "/v1/users/:owner_id/workspaces/:workspace/grants",
-            get(list_workspace_grants).post(create_workspace_grant),
+            "/v1/users/:owner_id/devservers/:devserver_id/grants",
+            get(list_devserver_grants).post(create_devserver_grant),
         )
         .route(
-            "/v1/users/:owner_id/workspaces/:workspace/access",
-            get(workspace_access),
+            "/v1/users/:owner_id/devservers/:devserver_id/access",
+            get(devserver_access),
         )
         .route(
             "/v1/users/:owner_id/grants/:id",
-            axum::routing::delete(delete_workspace_grant),
+            axum::routing::delete(delete_devserver_grant),
         )
-        .route("/v1/users/:id/grants/owned", get(list_owned_workspaces))
+        .route("/v1/users/:id/grants/owned", get(list_owned_devservers))
         .route("/v1/users/:id/grants/incoming", get(list_incoming_shares))
         .route("/v1/users/:id/grants/claim", post(claim_grants))
         .route("/v1/users/:id/flags", get(get_user_flags))
@@ -909,18 +897,25 @@ async fn admin_revoke_token(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Idempotent workspace create. Re-issuing for the same (owner, name)
-/// returns the existing row at 200 OK instead of 409. The workspace
-/// name is the canonical key (per-owner namespace); the surrogate
-/// uuid is for FK joins only.
-async fn create_workspace(
+/// Idempotent devserver create. Re-issuing for the same
+/// (owner, devserver_id) returns the existing row at 200 OK instead of
+/// 409. identity-service calls this at PAT-create time (it holds the raw
+/// token to compute `devserver_id`); the `(owner, devserver_id)` pair is
+/// the canonical key, the surrogate uuid is for FK joins only. A blank /
+/// absent label on a re-issue leaves the stored label untouched.
+async fn create_devserver(
     State(state): State<AppState>,
     Path(owner_id): Path<Uuid>,
-    Json(body): Json<CreateWorkspace>,
-) -> Result<(StatusCode, Json<Workspace>)> {
-    let name = body.workspace_name.trim().to_ascii_lowercase();
-    if !valid_workspace_name(&name) {
-        return Err(Error::BadRequest("invalid workspace name".into()));
+    Json(body): Json<CreateDevserver>,
+) -> Result<(StatusCode, Json<Devserver>)> {
+    let devserver_id = body.devserver_id.trim().to_ascii_lowercase();
+    if !valid_devserver_id(&devserver_id) {
+        return Err(Error::BadRequest("invalid devserver id".into()));
+    }
+    let label = body.label.unwrap_or_default();
+    let label = label.trim();
+    if label.len() > 64 {
+        return Err(Error::BadRequest("label too long".into()));
     }
     let owner_exists =
         sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
@@ -932,40 +927,46 @@ async fn create_workspace(
     }
 
     // ON CONFLICT DO NOTHING + RETURNING returns 0 rows on hit, so
-    // we follow up with a SELECT in that case. Two-step keeps the
-    // INSERT happy-path single-statement.
-    let inserted = sqlx::query_as::<_, Workspace>(
-        "INSERT INTO workspaces (owner_user_id, workspace_name) VALUES ($1, $2) \
-         ON CONFLICT (owner_user_id, workspace_name) DO NOTHING \
-         RETURNING id, owner_user_id, workspace_name, created_at",
+    // we follow up with an UPDATE-returning in that case. Two-step keeps
+    // the INSERT happy-path single-statement.
+    let inserted = sqlx::query_as::<_, Devserver>(
+        "INSERT INTO devservers (owner_user_id, devserver_id, label) VALUES ($1, $2, $3) \
+         ON CONFLICT (owner_user_id, devserver_id) DO NOTHING \
+         RETURNING id, owner_user_id, devserver_id, label, created_at",
     )
     .bind(owner_id)
-    .bind(&name)
+    .bind(&devserver_id)
+    .bind(label)
     .fetch_optional(&state.pool)
     .await?;
 
     if let Some(d) = inserted {
         return Ok((StatusCode::CREATED, Json(d)));
     }
-    let existing = sqlx::query_as::<_, Workspace>(
-        "SELECT id, owner_user_id, workspace_name, created_at \
-         FROM workspaces WHERE owner_user_id = $1 AND workspace_name = $2",
+    // Existing row: refresh the label only when a non-empty one is
+    // supplied so the grant-create auto-bootstrap (label-less) never
+    // blanks a real name.
+    let existing = sqlx::query_as::<_, Devserver>(
+        "UPDATE devservers SET label = CASE WHEN $3 = '' THEN label ELSE $3 END \
+         WHERE owner_user_id = $1 AND devserver_id = $2 \
+         RETURNING id, owner_user_id, devserver_id, label, created_at",
     )
     .bind(owner_id)
-    .bind(&name)
+    .bind(&devserver_id)
+    .bind(label)
     .fetch_one(&state.pool)
     .await?;
     Ok((StatusCode::OK, Json(existing)))
 }
 
-async fn list_workspaces(
+async fn list_devservers(
     State(state): State<AppState>,
     Path(owner_id): Path<Uuid>,
-) -> Result<Json<Vec<Workspace>>> {
-    let rows = sqlx::query_as::<_, Workspace>(
-        "SELECT id, owner_user_id, workspace_name, created_at \
-         FROM workspaces WHERE owner_user_id = $1 \
-         ORDER BY workspace_name",
+) -> Result<Json<Vec<Devserver>>> {
+    let rows = sqlx::query_as::<_, Devserver>(
+        "SELECT id, owner_user_id, devserver_id, label, created_at \
+         FROM devservers WHERE owner_user_id = $1 \
+         ORDER BY devserver_id",
     )
     .bind(owner_id)
     .fetch_all(&state.pool)
@@ -973,27 +974,25 @@ async fn list_workspaces(
     Ok(Json(rows))
 }
 
-/// Drop a workspace and (via FK CASCADE) every grant on it. The owner
-/// remains responsible for stopping any `chan serve` they have
-/// running for this workspace; the in-memory workspace-proxy registration
-/// outlives the DELETE here. We do not call workspace-proxy admin from
-/// this path because the in-memory tunnel could still be useful
-/// (the owner can re-create the workspace); ops that want to evict
-/// tunnels should use the admin block flow instead.
-async fn delete_workspace(
+/// Drop a devserver and (via FK CASCADE) every grant on it. The owner
+/// remains responsible for stopping any `chan devserver` they have
+/// running; the in-memory devserver-proxy registration outlives the
+/// DELETE here. We do not call devserver-proxy admin from this path
+/// because the in-memory tunnel could still be useful; ops that want to
+/// evict tunnels should use the admin block flow instead.
+async fn delete_devserver(
     State(state): State<AppState>,
-    Path((owner_id, workspace)): Path<(Uuid, String)>,
+    Path((owner_id, devserver_id)): Path<(Uuid, String)>,
 ) -> Result<StatusCode> {
-    let name = workspace.trim().to_ascii_lowercase();
-    if !valid_workspace_name(&name) {
-        return Err(Error::BadRequest("invalid workspace name".into()));
+    let devserver_id = devserver_id.trim().to_ascii_lowercase();
+    if !valid_devserver_id(&devserver_id) {
+        return Err(Error::BadRequest("invalid devserver id".into()));
     }
-    let res =
-        sqlx::query("DELETE FROM workspaces WHERE owner_user_id = $1 AND workspace_name = $2")
-            .bind(owner_id)
-            .bind(&name)
-            .execute(&state.pool)
-            .await?;
+    let res = sqlx::query("DELETE FROM devservers WHERE owner_user_id = $1 AND devserver_id = $2")
+        .bind(owner_id)
+        .bind(&devserver_id)
+        .execute(&state.pool)
+        .await?;
     if res.rows_affected() == 0 {
         return Err(Error::NotFound);
     }
@@ -1001,7 +1000,7 @@ async fn delete_workspace(
 }
 
 /// Idempotent grant create/promote. Re-adding the same email on the
-/// same (owner, workspace) returns the existing row with `role` updated
+/// same (owner, devserver) returns the existing row with `role` updated
 /// to the latest value; the original `created_at`, `grantee_user_id`
 /// and `accepted_at` are preserved via COALESCE so an already-claimed
 /// grant doesn't lose its claim when the owner adjusts the role.
@@ -1010,14 +1009,14 @@ async fn delete_workspace(
 /// the common case where the recipient already has an account).
 /// Late signups are picked up by `claim_grants` on the next OAuth
 /// callback.
-async fn create_workspace_grant(
+async fn create_devserver_grant(
     State(state): State<AppState>,
-    Path((owner_id, workspace)): Path<(Uuid, String)>,
-    Json(body): Json<CreateWorkspaceGrant>,
-) -> Result<(StatusCode, Json<WorkspaceGrant>)> {
-    let workspace = workspace.trim().to_ascii_lowercase();
-    if !valid_workspace_name(&workspace) {
-        return Err(Error::BadRequest("invalid workspace name".into()));
+    Path((owner_id, devserver_id)): Path<(Uuid, String)>,
+    Json(body): Json<CreateDevserverGrant>,
+) -> Result<(StatusCode, Json<DevserverGrant>)> {
+    let devserver_id = devserver_id.trim().to_ascii_lowercase();
+    if !valid_devserver_id(&devserver_id) {
+        return Err(Error::BadRequest("invalid devserver id".into()));
     }
     let email = body.grantee_email.trim();
     if !valid_email(email) {
@@ -1039,16 +1038,17 @@ async fn create_workspace_grant(
 
     let mut tx = state.pool.begin().await?;
 
-    // Ensure the parent `workspaces` row exists. The FK from workspace_grants
-    // requires it; auto-creating here keeps the grant API ergonomic
-    // (callers don't have to bootstrap the workspace row in a separate
-    // hop) and is idempotent.
+    // Ensure the parent `devservers` row exists. The FK from
+    // devserver_grants requires it; auto-creating here keeps the grant
+    // API ergonomic (callers don't have to bootstrap the devserver row
+    // in a separate hop) and is idempotent. Label is left at the default
+    // here; identity sets a real one at PAT-create time.
     sqlx::query(
-        "INSERT INTO workspaces (owner_user_id, workspace_name) VALUES ($1, $2) \
-         ON CONFLICT (owner_user_id, workspace_name) DO NOTHING",
+        "INSERT INTO devservers (owner_user_id, devserver_id) VALUES ($1, $2) \
+         ON CONFLICT (owner_user_id, devserver_id) DO NOTHING",
     )
     .bind(owner_id)
-    .bind(&workspace)
+    .bind(&devserver_id)
     .execute(&mut *tx)
     .await?;
 
@@ -1058,20 +1058,20 @@ async fn create_workspace_grant(
             .fetch_optional(&mut *tx)
             .await?;
 
-    let row = sqlx::query_as::<_, WorkspaceGrant>(
-        "INSERT INTO workspace_grants \
-             (owner_user_id, workspace_name, grantee_email, grantee_user_id, role, accepted_at) \
+    let row = sqlx::query_as::<_, DevserverGrant>(
+        "INSERT INTO devserver_grants \
+             (owner_user_id, devserver_id, grantee_email, grantee_user_id, role, accepted_at) \
          VALUES ($1, $2, $3, $4, $5, \
                  CASE WHEN $4::uuid IS NULL THEN NULL ELSE now() END) \
-         ON CONFLICT (owner_user_id, workspace_name, lower(grantee_email)) DO UPDATE SET \
+         ON CONFLICT (owner_user_id, devserver_id, lower(grantee_email)) DO UPDATE SET \
              role = EXCLUDED.role, \
-             grantee_user_id = COALESCE(workspace_grants.grantee_user_id, EXCLUDED.grantee_user_id), \
-             accepted_at = COALESCE(workspace_grants.accepted_at, EXCLUDED.accepted_at) \
-         RETURNING id, owner_user_id, workspace_name, grantee_email, grantee_user_id, role, \
+             grantee_user_id = COALESCE(devserver_grants.grantee_user_id, EXCLUDED.grantee_user_id), \
+             accepted_at = COALESCE(devserver_grants.accepted_at, EXCLUDED.accepted_at) \
+         RETURNING id, owner_user_id, devserver_id, grantee_email, grantee_user_id, role, \
                    created_at, accepted_at",
     )
     .bind(owner_id)
-    .bind(&workspace)
+    .bind(&devserver_id)
     .bind(email)
     .bind(grantee_id)
     .bind(role)
@@ -1082,23 +1082,23 @@ async fn create_workspace_grant(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
-async fn list_workspace_grants(
+async fn list_devserver_grants(
     State(state): State<AppState>,
-    Path((owner_id, workspace)): Path<(Uuid, String)>,
-) -> Result<Json<Vec<WorkspaceGrant>>> {
-    let workspace = workspace.trim().to_ascii_lowercase();
-    if !valid_workspace_name(&workspace) {
-        return Err(Error::BadRequest("invalid workspace name".into()));
+    Path((owner_id, devserver_id)): Path<(Uuid, String)>,
+) -> Result<Json<Vec<DevserverGrant>>> {
+    let devserver_id = devserver_id.trim().to_ascii_lowercase();
+    if !valid_devserver_id(&devserver_id) {
+        return Err(Error::BadRequest("invalid devserver id".into()));
     }
-    let rows = sqlx::query_as::<_, WorkspaceGrant>(
-        "SELECT id, owner_user_id, workspace_name, grantee_email, grantee_user_id, role, \
+    let rows = sqlx::query_as::<_, DevserverGrant>(
+        "SELECT id, owner_user_id, devserver_id, grantee_email, grantee_user_id, role, \
                 created_at, accepted_at \
-         FROM workspace_grants \
-         WHERE owner_user_id = $1 AND workspace_name = $2 \
+         FROM devserver_grants \
+         WHERE owner_user_id = $1 AND devserver_id = $2 \
          ORDER BY created_at",
     )
     .bind(owner_id)
-    .bind(&workspace)
+    .bind(&devserver_id)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows))
@@ -1106,11 +1106,11 @@ async fn list_workspace_grants(
 
 /// Owner-scoped delete. Path carries owner_id so a bug in the calling
 /// layer can't let user A revoke user B's grant by guessing its uuid.
-async fn delete_workspace_grant(
+async fn delete_devserver_grant(
     State(state): State<AppState>,
     Path((owner_id, grant_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode> {
-    let res = sqlx::query("DELETE FROM workspace_grants WHERE id = $1 AND owner_user_id = $2")
+    let res = sqlx::query("DELETE FROM devserver_grants WHERE id = $1 AND owner_user_id = $2")
         .bind(grant_id)
         .bind(owner_id)
         .execute(&state.pool)
@@ -1128,60 +1128,62 @@ struct AccessQuery {
     caller: Uuid,
 }
 
-/// Per-request access gate. identity-service calls this from
-/// `/api/workspaces/open` before minting an entry JWT. Returns:
+/// Per-request access gate. identity-service calls this before minting
+/// an entry JWT, with the devserver_id of the owner's live registration.
+/// Returns:
 ///   - `{role: "owner"}` if caller == owner
 ///   - `{role: "viewer"|"editor"}` if caller has a claimed grant
-///   - 404 in every other case (no-grant and unknown-workspace share the
+///   - 404 in every other case (no-grant and unknown-devserver share the
 ///     same shape so the endpoint can't be used to enumerate which
-///     workspaces a user is sharing).
-async fn workspace_access(
+///     devservers a user is sharing). A grant gives the WHOLE devserver,
+///     so this is the single authorization assertion the gate needs.
+async fn devserver_access(
     State(state): State<AppState>,
-    Path((owner_id, workspace)): Path<(Uuid, String)>,
+    Path((owner_id, devserver_id)): Path<(Uuid, String)>,
     Query(q): Query<AccessQuery>,
-) -> Result<Json<WorkspaceAccess>> {
-    let workspace = workspace.trim().to_ascii_lowercase();
-    if !valid_workspace_name(&workspace) {
-        return Err(Error::BadRequest("invalid workspace name".into()));
+) -> Result<Json<DevserverAccess>> {
+    let devserver_id = devserver_id.trim().to_ascii_lowercase();
+    if !valid_devserver_id(&devserver_id) {
+        return Err(Error::BadRequest("invalid devserver id".into()));
     }
     if owner_id == q.caller {
-        return Ok(Json(WorkspaceAccess {
+        return Ok(Json(DevserverAccess {
             role: "owner".into(),
         }));
     }
     let role: Option<String> = sqlx::query_scalar(
-        "SELECT role FROM workspace_grants \
-         WHERE owner_user_id = $1 AND workspace_name = $2 AND grantee_user_id = $3",
+        "SELECT role FROM devserver_grants \
+         WHERE owner_user_id = $1 AND devserver_id = $2 AND grantee_user_id = $3",
     )
     .bind(owner_id)
-    .bind(&workspace)
+    .bind(&devserver_id)
     .bind(q.caller)
     .fetch_optional(&state.pool)
     .await?;
-    role.map(|r| Json(WorkspaceAccess { role: r }))
+    role.map(|r| Json(DevserverAccess { role: r }))
         .ok_or(Error::NotFound)
 }
 
-/// Workspaces this user owns. Paired in the SPA with the live-tunnel
-/// list from workspace-proxy admin: a workspace that shows up here but not
-/// in the live list is the "configured / offline" state. The grant
-/// count is a LEFT JOIN aggregate, so a workspace with no grants yet
-/// still surfaces (it will not let anyone in until at least one
-/// grant lands, but the row exists for the dashboard).
-async fn list_owned_workspaces(
+/// Devservers this user owns. Paired in the SPA with the live-tunnel
+/// list from devserver-proxy admin: a devserver that shows up here but
+/// not in the live list is the "configured / offline" state. The grant
+/// count is a LEFT JOIN aggregate, so a devserver with no grants yet
+/// still surfaces (it will not let anyone in until at least one grant
+/// lands, but the row exists for the dashboard).
+async fn list_owned_devservers(
     State(state): State<AppState>,
     Path(owner_id): Path<Uuid>,
-) -> Result<Json<Vec<OwnedWorkspaceSummary>>> {
-    let rows = sqlx::query_as::<_, OwnedWorkspaceSummary>(
-        "SELECT d.workspace_name, COALESCE(g.cnt, 0)::bigint AS grant_count \
-         FROM workspaces d \
+) -> Result<Json<Vec<OwnedDevserverSummary>>> {
+    let rows = sqlx::query_as::<_, OwnedDevserverSummary>(
+        "SELECT d.devserver_id, d.label, COALESCE(g.cnt, 0)::bigint AS grant_count \
+         FROM devservers d \
          LEFT JOIN ( \
-             SELECT owner_user_id, workspace_name, COUNT(*) AS cnt \
-             FROM workspace_grants \
-             GROUP BY owner_user_id, workspace_name \
-         ) g ON g.owner_user_id = d.owner_user_id AND g.workspace_name = d.workspace_name \
+             SELECT owner_user_id, devserver_id, COUNT(*) AS cnt \
+             FROM devserver_grants \
+             GROUP BY owner_user_id, devserver_id \
+         ) g ON g.owner_user_id = d.owner_user_id AND g.devserver_id = d.devserver_id \
          WHERE d.owner_user_id = $1 \
-         ORDER BY d.workspace_name",
+         ORDER BY d.devserver_id",
     )
     .bind(owner_id)
     .fetch_all(&state.pool)
@@ -1189,10 +1191,10 @@ async fn list_owned_workspaces(
     Ok(Json(rows))
 }
 
-/// Workspaces shared *with* this user. Only includes claimed grants so a
+/// Devservers shared *with* this user. Only includes claimed grants so a
 /// pending invite (email matched but no sign-in yet — shouldn't happen
 /// for the caller themselves, but defensive) doesn't leak into the
-/// dashboard.
+/// dashboard. The `label` joins from the parent devserver row.
 async fn list_incoming_shares(
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
@@ -1201,9 +1203,11 @@ async fn list_incoming_shares(
         "SELECT g.id AS grant_id, \
                 u.id AS owner_user_id, u.username AS owner_username, \
                 u.display_name AS owner_display_name, u.avatar_url AS owner_avatar_url, \
-                g.workspace_name, g.role, g.accepted_at \
-         FROM workspace_grants g \
+                g.devserver_id, d.label, g.role, g.accepted_at \
+         FROM devserver_grants g \
          JOIN users u ON u.id = g.owner_user_id \
+         JOIN devservers d ON d.owner_user_id = g.owner_user_id \
+                          AND d.devserver_id = g.devserver_id \
          WHERE g.grantee_user_id = $1 AND g.accepted_at IS NOT NULL \
          ORDER BY g.accepted_at DESC",
     )
@@ -1242,7 +1246,7 @@ async fn claim_grants(
         return Ok(Json(ClaimGrantsResponse { claimed: 0 }));
     }
     let res = sqlx::query(
-        "UPDATE workspace_grants \
+        "UPDATE devserver_grants \
          SET grantee_user_id = $1, accepted_at = now() \
          WHERE grantee_user_id IS NULL \
            AND lower(grantee_email) = ANY($2)",
@@ -1260,8 +1264,9 @@ async fn claim_grants(
 // Feature flags
 // ---------------------------------------------------------------------------
 
-/// 1-64 chars, lowercase ascii alnum plus `[._-]`. Matches the
-/// workspace-name validator so all string-keyed surfaces use one shape.
+/// 1-64 chars, lowercase ascii alnum plus `[._-]`. Flag keys are a
+/// small admin-curated set; the shape keeps them safe as map keys and
+/// log fields.
 fn valid_flag_key(s: &str) -> bool {
     let len = s.len();
     if !(1..=64).contains(&len) {
