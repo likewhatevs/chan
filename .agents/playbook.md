@@ -27,7 +27,7 @@ The phase-13 r2 Team Work revamp REMOVED the fsnotify event-watcher / poke-dispa
 ## Coordination discipline
 
 - Append-only, even in coordination. Once an agent has started a task, new asks become NEW tasks, not amendments to the one in flight. Rewriting under someone loses the audit trail. (phase 7)
-- Lean poke bus. A poke is a one-line pointer ("read <path>"); the context lives in the on-disk task file it points to. Fat pokes stack, truncate, and bury the substance. (phase 16)
+- Lean poke bus. A poke is a one-line pointer to a **specific append-only section** ("see <file> §<heading>") — never the content itself. The substance lives in the dated/named `##` section; markdown headings make sections cheap to cite, so cite them. Fat pokes (status, decisions, analysis carried on the bus) stack, truncate, bury the substance, and can't be re-read or referenced later. Write the section first, then poke it. (phase 16; sharpened + re-ratified phase 31 — a standing rule we drifted from, per @@Alex)
 - Every poke to an agent CLI must end with the agent's submit chord (`--submit=<agent>`), or it parks unsubmitted in the compose box and stalls the round. (phase 15)
 - Workers route decisions to the lead/architect; the lead consolidates and surveys @@Alex with `cs terminal survey` (a blocking overlay in the host's window). Workers do not survey the host directly, and do not use a TUI survey. (phases 15, 16)
 - Verify a write landed BEFORE you poke about it: grep or Read the file, then poke. Never bundle a heredoc-write plus a poke plus a grep into one shell command; truncation silently drops the later steps. (phase 8)
