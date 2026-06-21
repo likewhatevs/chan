@@ -762,7 +762,7 @@ mod tests {
 
     #[test]
     fn local_devserver_config_reads_just_the_token() {
-        let json = r#"{"devserver_token":"tok_box","enabled_workspaces":[],"window_configs":[]}"#;
+        let json = r#"{"devserver_token":"tok_box","workspaces":[],"terminals":[]}"#;
         let cfg: LocalDevserverConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.devserver_token, "tok_box");
     }

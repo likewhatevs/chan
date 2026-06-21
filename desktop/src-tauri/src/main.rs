@@ -598,28 +598,33 @@ async fn set_workspace_on(
             .await
             .map_err(|e| format!("stopping workspace {path}: {e}"))?;
     }
-    persist_enabled_workspaces(&state);
+    persist_workspaces(&state);
     Ok(())
 }
 
-/// Snapshot the canonical keys of every currently-on local workspace
-/// into the desktop config so the next boot can re-serve them (the §3.2
-/// boot matrix). Called after each on/off toggle and on clean shutdown.
-/// Best-effort: a persistence failure is logged, never fatal to the
-/// toggle or the exit.
-fn persist_enabled_workspaces(state: &AppState) {
+/// Snapshot every currently-on local workspace into the desktop config as `on`
+/// rows of the shared workspace overlay (the same `{path, on}` shape the
+/// devserver persists), so the next boot re-serves them (the §3.2 boot matrix).
+/// Off workspaces are simply absent — the CLI registry surfaces them off.
+/// Called after each on/off toggle and on clean shutdown. Best-effort: a
+/// persistence failure is logged, never fatal to the toggle or the exit.
+fn persist_workspaces(state: &AppState) {
     let mut keys: Vec<String> = state.serves.lock().unwrap().keys().cloned().collect();
     keys.sort();
+    let workspaces: Vec<chan_server::PersistedWorkspace> = keys
+        .into_iter()
+        .map(|path| chan_server::PersistedWorkspace { path, on: true })
+        .collect();
     let mut store = state.store.lock().unwrap();
     match store.get() {
         Ok(mut cfg) => {
-            cfg.enabled_workspaces = keys;
+            cfg.workspaces = workspaces;
             if let Err(e) = store.save(&cfg) {
-                tracing::warn!(error = %e, "persisting enabled workspaces failed");
+                tracing::warn!(error = %e, "persisting workspaces failed");
             }
         }
         Err(e) => {
-            tracing::warn!(error = %e, "reading config to persist enabled workspaces failed");
+            tracing::warn!(error = %e, "reading config to persist workspaces failed");
         }
     }
 }
@@ -908,7 +913,11 @@ fn track_devserver_window(state: &AppState, id: &str, window: DevserverWindow) {
 /// re-created one after a process restart. Best-effort per terminal; returns the
 /// count re-created (0 = none persisted, or the devserver is unreachable).
 // Imperative connect/reconnect orchestrator superseded by the devserver watcher
-// (the reconcile re-surfaces persisted terminals); deleted in S2-DEVSERVER D3.
+// (the reconcile re-surfaces persisted terminals). The whole per-label
+// devserver-terminal system this drives (its `POST /api/devserver/terminals`
+// endpoint, `PersistedTerminal`, `remount_terminal`) is inert now that New
+// Terminal mints library windows on the shared terminal tenant — slated for
+// removal in a follow-up cleanup.
 #[allow(dead_code)]
 async fn reopen_devserver_terminal_windows(
     app: &tauri::AppHandle,
@@ -2628,12 +2637,18 @@ fn main() {
             // reopen that workspace's persisted windows at their stable window_id),
             // and let the library's first-open rule mint one boot terminal only on
             // a truly fresh library (empty registry, marker unset).
-            let enabled = state_for_setup
+            let enabled: Vec<String> = state_for_setup
                 .store
                 .lock()
                 .unwrap()
                 .get()
-                .map(|cfg| cfg.enabled_workspaces)
+                .map(|cfg| {
+                    cfg.workspaces
+                        .into_iter()
+                        .filter(|w| w.on)
+                        .map(|w| w.path)
+                        .collect()
+                })
                 .unwrap_or_default();
             let handle = app.handle().clone();
             let state_for_restore = Arc::clone(&state_for_setup);
@@ -2648,7 +2663,8 @@ fn main() {
                 // Re-serve each workspace that was on at the last clean shutdown.
                 // Serial so concurrent opens can't race the shared embedded host;
                 // on a failure surface a notice and leave it off (the key drops
-                // out of `enabled_workspaces` on the next clean shutdown).
+                // out of the persisted workspace overlay on the next clean
+                // shutdown).
                 for key in enabled {
                     if let Err(e) =
                         serve::start(handle.clone(), Arc::clone(&state_for_restore), key.clone())
@@ -2758,7 +2774,7 @@ fn main() {
                 // Persist the on-set BEFORE teardown drains it, so the
                 // next boot re-serves exactly the workspaces that were
                 // on at this clean shutdown (the §3.2 boot matrix).
-                persist_enabled_workspaces(&state_for_exit);
+                persist_workspaces(&state_for_exit);
                 // Best-effort: unmount every embedded local workspace
                 // before the desktop runtime exits.
                 serve::stop_all(&state_for_exit);

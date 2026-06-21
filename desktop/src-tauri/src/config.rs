@@ -23,6 +23,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chan_server::PersistedWorkspace;
 use serde::{Deserialize, Serialize};
 
 /// Cap on how many window configs we retain in the LRU stack.
@@ -147,16 +148,17 @@ pub struct Config {
     /// devserver rotates them); only the connection recipe is.
     #[serde(default)]
     pub devservers: Vec<Devserver>,
-    /// Canonical keys of the local workspaces that were *on* (served) at
-    /// the last toggle / clean shutdown. Restored on the next boot (the
-    /// §3.2 boot matrix) so the desktop comes back up serving what the
-    /// user left running. Desktop-owned, so the CLI registry
-    /// (`~/.chan/config.toml`) stays pure. Trade-off: a crash with an
-    /// entry persisted re-serves it next boot; a re-serve failure there
-    /// surfaces a notice and is left off (it drops out of this set on the
-    /// next clean shutdown).
+    /// The local workspaces' on/off overlay: the shared
+    /// [`PersistedWorkspace`] shape (`{path, on}`) the devserver persists too.
+    /// Desktop writes an `on` row per served workspace; the boot path re-serves
+    /// those (the §3.2 boot matrix) so the desktop comes back up running what
+    /// the user left on. The CLI registry (`~/.chan/config.toml`) is the
+    /// existence source and stays pure; a workspace absent from this overlay is
+    /// off. Trade-off: a crash with an entry persisted re-serves it next boot; a
+    /// re-serve failure surfaces a notice and is left off (it drops out of this
+    /// set on the next clean shutdown).
     #[serde(default)]
-    pub enabled_workspaces: Vec<String>,
+    pub workspaces: Vec<PersistedWorkspace>,
     /// LRU stack of closed window configs. Newest at index 0. A
     /// fresh workspace webview pops the most-recent matching entry on
     /// open so the user re-enters the same panes / tabs / overlays
@@ -421,32 +423,41 @@ mod tests {
     }
 
     #[test]
-    fn config_defaults_enabled_workspaces_empty() {
+    fn config_defaults_workspaces_empty() {
         // Fresh profile comes up with nothing on — the boot matrix
         // opens the standalone terminal rather than re-serving anything.
         let cfg = Config::default();
-        assert!(cfg.enabled_workspaces.is_empty());
+        assert!(cfg.workspaces.is_empty());
     }
 
     #[test]
-    fn config_loads_without_enabled_workspaces_field() {
-        // A config.json that predates B4 (no enabled_workspaces key)
-        // must still load: serde(default) reads it as the empty set so
-        // the load never fails and drops the rest of the config.
+    fn config_loads_without_workspaces_field() {
+        // A config.json without a `workspaces` key must still load:
+        // serde(default) reads it as the empty set so the load never fails
+        // and drops the rest of the config.
         let raw = r#"{ "outbound": [], "window_configs": [] }"#;
-        let cfg: Config = serde_json::from_str(raw).expect("load without enabled_workspaces");
-        assert!(cfg.enabled_workspaces.is_empty());
+        let cfg: Config = serde_json::from_str(raw).expect("load without workspaces");
+        assert!(cfg.workspaces.is_empty());
     }
 
     #[test]
-    fn config_enabled_workspaces_round_trip() {
+    fn config_workspaces_round_trip() {
         let cfg = Config {
-            enabled_workspaces: vec!["/home/alex/notes".into(), "/tmp/scratch".into()],
+            workspaces: vec![
+                PersistedWorkspace {
+                    path: "/home/alex/notes".into(),
+                    on: true,
+                },
+                PersistedWorkspace {
+                    path: "/tmp/scratch".into(),
+                    on: false,
+                },
+            ],
             ..Default::default()
         };
         let json = serde_json::to_string(&cfg).expect("serialize");
         let back: Config = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.enabled_workspaces, cfg.enabled_workspaces);
+        assert_eq!(back.workspaces, cfg.workspaces);
     }
 
     #[test]

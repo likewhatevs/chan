@@ -53,7 +53,7 @@ use crate::{CreateWindow, WindowRecord, WindowSet, WorkspaceHost};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
 use chan_library::windows::WindowRegistry;
-use chan_library::{allocate_workspace_prefix, workspace_slug};
+use chan_library::{allocate_workspace_prefix, workspace_slug, PersistedWorkspace};
 
 /// Inputs the CLI resolves for `chan devserver`. The `--systemd`
 /// supervision path is layered on in the CLI around this; the runtime
@@ -94,11 +94,10 @@ struct PersistedConfig {
     /// merging several libraries' feeds partitions by it.
     #[serde(default)]
     library_id: String,
-    /// Registered workspaces, on and off. Replaces the old
-    /// `enabled_workspaces: Vec<String>` outright (pre-release: no dual-read).
-    /// Renaming the key also lets an old-format file degrade cleanly: serde
-    /// ignores the now-unknown `enabled_workspaces` and keeps the token,
-    /// rather than failing the whole parse and minting a fresh one.
+    /// Registered workspaces, on and off, as the shared [`PersistedWorkspace`]
+    /// on/off overlay (the local desktop config persists the same shape). The
+    /// library registry is the existence source; this records which were
+    /// mounted. The mount prefix is re-derived at restore, not stored.
     #[serde(default)]
     workspaces: Vec<PersistedWorkspace>,
     /// Standalone terminal tenants, persisted as first-class launcher entities
@@ -107,16 +106,6 @@ struct PersistedConfig {
     /// internal on-disk shape, not a cross-lane wire).
     #[serde(default)]
     terminals: Vec<PersistedTerminal>,
-}
-
-/// One registered workspace as persisted: where it lives, the stable route
-/// `prefix` it re-mounts at (allocated once, kept across off→on), and whether
-/// it was mounted (`on`) or unmounted-but-remembered (`off`) at the last save.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct PersistedWorkspace {
-    path: String,
-    prefix: String,
-    on: bool,
 }
 
 /// One standalone terminal tenant as persisted: the client's stable window
@@ -459,11 +448,10 @@ impl DevserverState {
                 .values()
                 .map(|record| PersistedWorkspace {
                     path: record.root.to_string_lossy().into_owned(),
-                    prefix: record.prefix.clone(),
                     on: record.on,
                 })
                 .collect();
-            v.sort_by(|a, b| a.prefix.cmp(&b.prefix));
+            v.sort_by(|a, b| a.path.cmp(&b.path));
             v
         };
         let terminals: Vec<PersistedTerminal> = {
@@ -802,19 +790,31 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         .ensure_first_open_terminal()
         .context("provisioning the devserver first-open terminal")?;
 
-    // Restore the registered workspaces. `on` rows re-mount at their persisted
-    // (stable) prefix; `off` rows are tracked as registered-but-unmounted so
-    // the client still sees them and can toggle them on. A root that fails to
-    // re-mount is downgraded to off so its row still surfaces.
+    // Restore the registered workspaces. The mount prefix is re-derived from the
+    // path (the stable slug live mounts and the window feed already use), not
+    // persisted. `on` rows re-mount at it; `off` rows are tracked as
+    // registered-but-unmounted so the client still sees them and can toggle them
+    // on. A root that fails to re-mount is downgraded to off so its row still
+    // surfaces; a path that fails to map to a prefix is skipped with a note.
     for ws in &persisted.workspaces {
         let path = PathBuf::from(&ws.path);
+        let prefix = match allocate_workspace_prefix(&path) {
+            Ok(prefix) => prefix,
+            Err(e) => {
+                eprintln!(
+                    "chan devserver: NOTE: skipping persisted workspace {} ({e})",
+                    ws.path
+                );
+                continue;
+            }
+        };
         if ws.on {
-            if let Err(e) = state.mount_at(&path, &ws.prefix).await {
+            if let Err(e) = state.mount_at(&path, &prefix).await {
                 eprintln!("chan devserver: NOTE: could not re-mount {}: {e}", ws.path);
-                state.track_off(&path, &ws.prefix);
+                state.track_off(&path, &prefix);
             }
         } else {
-            state.track_off(&path, &ws.prefix);
+            state.track_off(&path, &prefix);
         }
     }
     // Re-mount persisted standalone terminals at their stable prefix: fresh
@@ -1526,12 +1526,10 @@ mod tests {
             workspaces: vec![
                 PersistedWorkspace {
                     path: "/a".into(),
-                    prefix: "/api/a-0".into(),
                     on: true,
                 },
                 PersistedWorkspace {
                     path: "/b".into(),
-                    prefix: "/api/b-0".into(),
                     on: false,
                 },
             ],
@@ -1548,7 +1546,7 @@ mod tests {
         assert_eq!(back.workspaces.len(), 2);
         assert_eq!(back.workspaces[0].path, "/a");
         assert!(back.workspaces[0].on);
-        assert_eq!(back.workspaces[1].prefix, "/api/b-0");
+        assert_eq!(back.workspaces[1].path, "/b");
         assert!(!back.workspaces[1].on);
         assert_eq!(back.terminals.len(), 1);
         assert_eq!(back.terminals[0].label, "terminal-1");
@@ -1572,7 +1570,6 @@ mod tests {
         // pin them so a rename is a visible, deliberate change.
         let ws = PersistedWorkspace {
             path: "/home/u/notes".into(),
-            prefix: "/api/notes-1a2b3c".into(),
             on: true,
         };
         let v = serde_json::to_value(&ws).unwrap();
@@ -1580,7 +1577,6 @@ mod tests {
             v,
             serde_json::json!({
                 "path": "/home/u/notes",
-                "prefix": "/api/notes-1a2b3c",
                 "on": true,
             })
         );
@@ -1848,7 +1844,6 @@ mod tests {
             library_id: String::new(),
             workspaces: vec![PersistedWorkspace {
                 path: "/x".into(),
-                prefix: "/api/x-0".into(),
                 on: true,
             }],
             terminals: Vec::new(),
@@ -2180,13 +2175,18 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // The on-disk config records the workspace registered-but-off, with
-        // its stable prefix, alongside the preserved bearer token. On restart,
-        // `run_devserver` would `track_off` this row rather than re-mounting.
+        // The on-disk config records the workspace registered-but-off (by path,
+        // the prefix re-derived at restore), alongside the preserved bearer
+        // token. On restart, `run_devserver` would `track_off` this row rather
+        // than re-mounting.
         let persisted = state.store.load();
         assert_eq!(persisted.devserver_token, "test-token");
         assert_eq!(persisted.workspaces.len(), 1);
-        assert_eq!(persisted.workspaces[0].prefix, prefix);
+        // The host canonicalizes the registered root, so compare against the
+        // canonical path (the persisted shape stores it by path now, prefix
+        // re-derived at restore).
+        let canonical = ws.path().canonicalize().expect("canonicalize workspace");
+        assert_eq!(persisted.workspaces[0].path, canonical.to_string_lossy());
         assert!(!persisted.workspaces[0].on);
     }
 

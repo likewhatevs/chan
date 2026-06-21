@@ -24,6 +24,7 @@ pub mod time;
 pub mod window_presence;
 pub mod window_titles;
 pub mod windows;
+pub mod workspace_persist;
 
 pub use config::{
     TerminalConfig, TerminalFontChoice, TERMINAL_SCROLLBACK_MB_MAX, TERMINAL_SCROLLBACK_MB_MIN,
@@ -35,3 +36,4 @@ pub use serve_config::{sanitize_prefix, ServeConfig, ServeHandle};
 pub use tenant::{
     HostControl, TenantArtifacts, TenantBuilder, UnserveMode, UnserveScope, WorkspaceCellHandle,
 };
+pub use workspace_persist::PersistedWorkspace;

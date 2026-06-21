@@ -602,16 +602,17 @@ impl WorkspaceHost {
             .window_registry()
             .ok_or_else(|| Error::Config("window registry not installed".into()))?;
         let row = registry.create(kind, workspace_path);
-        // The D-W3 session-survival fold: a devserver Terminal window's session
-        // lives in the shared terminal tenant and is auto-opened, so the SPA
-        // never PUTs a layout blob to persist it — it would be orphan-reaped on
-        // the first disconnect (post-D-W3 the window shows, but loses its state
-        // on reconnect). Mark it persisted in the shared terminal tenant so the
-        // pruner spares its session. Scoped to the devserver (`library_id !=
-        // "local"`; local terminals persist via the SPA layout PUT) and to
-        // Terminal windows (a workspace window persists through its own workspace
-        // tenant's PUT, not here).
-        if matches!(row.kind, WindowKind::Terminal) && self.library_id() != "local" {
+        // A Terminal window's session lives in the shared terminal tenant and is
+        // auto-opened by the watcher, so the SPA never PUTs a layout blob to
+        // persist it — without a durable blob it would be orphan-reaped on the
+        // first client disconnect (the window shows but loses its session on
+        // reconnect). Mark every Terminal window persisted in the shared terminal
+        // tenant so the pruner spares its session — uniformly across libraries
+        // (local and devserver both mount the shared terminal tenant). A no-op
+        // until that tenant is mounted (its prefix OnceLock is still unset). A
+        // workspace window persists through its own workspace tenant's PUT, not
+        // here.
+        if matches!(row.kind, WindowKind::Terminal) {
             self.persist_terminal_window(&row.window_id);
         }
         self.notify_window_change();
@@ -650,10 +651,11 @@ impl WorkspaceHost {
 
     /// Mark a Terminal `window_id` persisted in the SHARED terminal tenant (its
     /// serving tenant), so the orphan-grace pruner spares its session and it
-    /// survives a client disconnect+reconnect with its state. The session-
-    /// survival half of D-W3 for devserver terminals; a no-op until the shared
-    /// terminal tenant is mounted (`run_devserver` mounts it at startup, before
-    /// any terminal window is minted, so the prefix is always set by then).
+    /// survives a client disconnect+reconnect with its state. Applies to every
+    /// library (local and devserver alike); a no-op until the shared terminal
+    /// tenant is mounted (both the desktop boot and `run_devserver` mount it at
+    /// startup, before any terminal window is minted, so the prefix is set by
+    /// then).
     fn persist_terminal_window(&self, window_id: &str) {
         let Some(prefix) = self.terminal_tenant_prefix.get() else {
             return;
@@ -2293,12 +2295,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn devserver_terminal_window_persists_in_shared_tenant_local_is_not() {
-        // D-W3 session-survival fold: a devserver (non-"local") Terminal window is
-        // marked persisted in the SHARED terminal tenant so its session survives a
-        // disconnect (it never PUTs a layout blob). The local library is exempt
-        // (its terminals persist via the SPA layout PUT). Returns whether the
-        // minted terminal window is persisted in the shared terminal tenant.
+    async fn terminal_window_persists_in_shared_tenant_uniformly() {
+        // A Terminal window's session lives in the shared terminal tenant and is
+        // auto-opened (it never PUTs a layout blob), so every library marks it
+        // persisted at mint — local and devserver alike, no library_id branch —
+        // and the orphan-grace pruner spares its session on a disconnect. Returns
+        // whether the minted terminal window is persisted in the shared tenant.
         async fn mint_terminal_marks_persisted(library_id: &str) -> bool {
             let cfg = tempfile::tempdir().expect("config dir");
             let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
@@ -2331,8 +2333,8 @@ mod tests {
             "devserver terminal window must be persisted in the shared terminal tenant"
         );
         assert!(
-            !mint_terminal_marks_persisted("local").await,
-            "local terminal window must NOT be auto-persisted (relies on layout PUT)"
+            mint_terminal_marks_persisted("local").await,
+            "local terminal window must ALSO be persisted (uniform, no library_id branch)"
         );
     }
 }

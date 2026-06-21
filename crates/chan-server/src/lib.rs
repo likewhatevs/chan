@@ -59,7 +59,7 @@ pub use chan_library::desktop_window_ops::{
 pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
 pub use chan_library::windows::{CreateWindow, WindowKind, WindowRecord, WindowSet};
 pub(crate) use chan_library::{desktop_window_ops, window_presence, window_titles};
-pub use chan_library::{HostedWorkspace, WorkspaceHost};
+pub use chan_library::{HostedWorkspace, PersistedWorkspace, WorkspaceHost};
 pub use devserver::{
     persisted_devserver_token, run_devserver, DevserverConfig, DevserverTunnel,
     DEVSERVER_TOKEN_MARKER,
