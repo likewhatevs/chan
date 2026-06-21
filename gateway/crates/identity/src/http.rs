@@ -23,9 +23,7 @@ use crate::api_tokens::{
 };
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::profile_client::{
-    IncomingShare, OwnedWorkspaceSummary, User, Workspace, WorkspaceGrant,
-};
+use crate::profile_client::{DevserverGrant, IncomingShare, OwnedDevserverSummary, User};
 use crate::static_files;
 use crate::token_throttle::TokenThrottle;
 
@@ -156,21 +154,19 @@ pub fn router(
         .route("/api/tokens", get(tokens_list).post(tokens_create))
         .route("/api/tokens/:id", axum::routing::delete(tokens_revoke))
         .route("/api/tokens/:id/audit", get(tokens_audit))
+        // TRANSITIONAL: the open + share-landing routes still gate per
+        // workspace until the proxy admin tunnel list surfaces the live
+        // devserver_id (then they move to a per-devserver drv).
         .route("/api/workspaces/open", get(workspaces_open))
-        .route("/api/workspaces/owned", get(workspaces_owned))
-        .route("/api/workspaces/incoming", get(workspaces_incoming))
-        .route("/api/workspaces", post(workspaces_create))
+        .route("/api/devservers/owned", get(devservers_owned))
+        .route("/api/devservers/incoming", get(devservers_incoming))
         .route(
-            "/api/workspaces/:workspace",
-            axum::routing::delete(workspaces_delete),
-        )
-        .route(
-            "/api/workspaces/:workspace/grants",
-            get(workspace_grants_list).post(workspace_grants_create),
+            "/api/devservers/:devserver_id/grants",
+            get(devserver_grants_list).post(devserver_grants_create),
         )
         .route(
             "/api/grants/:id",
-            axum::routing::delete(workspace_grants_delete),
+            axum::routing::delete(devserver_grants_delete),
         )
         .route("/s/:owner/:workspace", get(share_landing))
         .route(
@@ -1033,7 +1029,7 @@ async fn workspaces_open(
 }
 
 // ---------------------------------------------------------------------------
-// Workspace sharing (grants)
+// Devserver sharing (grants)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -1042,21 +1038,21 @@ struct CreateGrantBody {
     role: String,
 }
 
-/// Owner creates / promotes a grant on one of their workspaces. The
-/// session user is the owner; the URL carries only the workspace name
+/// Owner creates / promotes a grant on one of their devservers. The
+/// session user is the owner; the URL carries only the devserver_id
 /// (not the owner's id), so a stale tab cannot mint grants against
-/// somebody else's workspace.
-async fn workspace_grants_create(
+/// somebody else's devserver. A grant gives the WHOLE devserver.
+async fn devserver_grants_create(
     State(state): State<AppState>,
     session: Session,
-    Path(workspace): Path<String>,
+    Path(devserver_id): Path<String>,
     Json(body): Json<CreateGrantBody>,
-) -> Result<(StatusCode, Json<WorkspaceGrant>)> {
+) -> Result<(StatusCode, Json<DevserverGrant>)> {
     let user = current_active_user(&state, &session).await?;
     // Surface format errors before the round trip; profile re-checks.
-    let workspace = workspace.trim().to_ascii_lowercase();
-    if !is_workspace_name_shape(&workspace) {
-        return Err(Error::BadRequest("invalid workspace name".into()));
+    let devserver_id = devserver_id.trim().to_ascii_lowercase();
+    if !is_devserver_id_shape(&devserver_id) {
+        return Err(Error::BadRequest("invalid devserver id".into()));
     }
     let role = body.role.trim();
     if role != "viewer" && role != "editor" {
@@ -1065,30 +1061,30 @@ async fn workspace_grants_create(
     let grant = state
         .cfg
         .profile_client
-        .create_workspace_grant(user.id, &workspace, body.grantee_email.trim(), role)
+        .create_devserver_grant(user.id, &devserver_id, body.grantee_email.trim(), role)
         .await?;
     Ok((StatusCode::CREATED, Json(grant)))
 }
 
-async fn workspace_grants_list(
+async fn devserver_grants_list(
     State(state): State<AppState>,
     session: Session,
-    Path(workspace): Path<String>,
-) -> Result<Json<Vec<WorkspaceGrant>>> {
+    Path(devserver_id): Path<String>,
+) -> Result<Json<Vec<DevserverGrant>>> {
     let user = current_active_user(&state, &session).await?;
-    let workspace = workspace.trim().to_ascii_lowercase();
-    if !is_workspace_name_shape(&workspace) {
-        return Err(Error::BadRequest("invalid workspace name".into()));
+    let devserver_id = devserver_id.trim().to_ascii_lowercase();
+    if !is_devserver_id_shape(&devserver_id) {
+        return Err(Error::BadRequest("invalid devserver id".into()));
     }
     let rows = state
         .cfg
         .profile_client
-        .list_workspace_grants(user.id, &workspace)
+        .list_devserver_grants(user.id, &devserver_id)
         .await?;
     Ok(Json(rows))
 }
 
-async fn workspace_grants_delete(
+async fn devserver_grants_delete(
     State(state): State<AppState>,
     session: Session,
     Path(grant_id): Path<Uuid>,
@@ -1100,69 +1096,25 @@ async fn workspace_grants_delete(
     state
         .cfg
         .profile_client
-        .delete_workspace_grant(user.id, grant_id)
+        .delete_devserver_grant(user.id, grant_id)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn workspaces_owned(
+async fn devservers_owned(
     State(state): State<AppState>,
     session: Session,
-) -> Result<Json<Vec<OwnedWorkspaceSummary>>> {
+) -> Result<Json<Vec<OwnedDevserverSummary>>> {
     let user = current_active_user(&state, &session).await?;
     let rows = state
         .cfg
         .profile_client
-        .list_owned_workspaces(user.id)
+        .list_owned_devservers(user.id)
         .await?;
     Ok(Json(rows))
 }
 
-#[derive(Debug, Deserialize)]
-struct CreateWorkspaceBody {
-    workspace_name: String,
-}
-
-/// Create one workspace in the owner's namespace. Idempotent at
-/// profile-service: re-issuing for the same name returns the
-/// existing row.
-async fn workspaces_create(
-    State(state): State<AppState>,
-    session: Session,
-    Json(body): Json<CreateWorkspaceBody>,
-) -> Result<Json<Workspace>> {
-    let user = current_active_user(&state, &session).await?;
-    let name = body.workspace_name.trim().to_ascii_lowercase();
-    if !is_workspace_name_shape(&name) {
-        return Err(Error::BadRequest("invalid workspace name".into()));
-    }
-    let workspace = state
-        .cfg
-        .profile_client
-        .create_workspace(user.id, &name)
-        .await?;
-    Ok(Json(workspace))
-}
-
-async fn workspaces_delete(
-    State(state): State<AppState>,
-    session: Session,
-    Path(workspace): Path<String>,
-) -> Result<StatusCode> {
-    let user = current_active_user(&state, &session).await?;
-    let name = workspace.trim().to_ascii_lowercase();
-    if !is_workspace_name_shape(&name) {
-        return Err(Error::BadRequest("invalid workspace name".into()));
-    }
-    state
-        .cfg
-        .profile_client
-        .delete_workspace(user.id, &name)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn workspaces_incoming(
+async fn devservers_incoming(
     State(state): State<AppState>,
     session: Session,
 ) -> Result<Json<Vec<IncomingShare>>> {
@@ -1177,7 +1129,9 @@ async fn workspaces_incoming(
 
 /// Shape-only validator; profile re-checks. 1-64 chars, lowercase
 /// ascii alnum + `[._-]`, with `.` / `..` / leading-dot rejected to
-/// match the canonical rule in profile-service.
+/// match the canonical rule in profile-service. Still used by the
+/// transitional open + share-landing routes, where the path segment is
+/// a workspace/tenant name.
 fn is_workspace_name_shape(s: &str) -> bool {
     let len = s.len();
     if !(1..=64).contains(&len) {
@@ -1188,6 +1142,13 @@ fn is_workspace_name_shape(s: &str) -> bool {
     }
     s.bytes()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'_' | b'.'))
+}
+
+/// Shape-only validator for a devserver id: 64 lowercase hex chars
+/// (SHA-256 of the PAT). profile re-checks; this catches a malformed
+/// path segment before the round trip.
+fn is_devserver_id_shape(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 // ---------------------------------------------------------------------------

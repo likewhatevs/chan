@@ -112,18 +112,19 @@ pub struct FeatureFlagOverride {
 pub type FlagMap = std::collections::BTreeMap<String, bool>;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Workspace {
+pub struct Devserver {
     pub id: Uuid,
     pub owner_user_id: Uuid,
-    pub workspace_name: String,
+    pub devserver_id: String,
+    pub label: String,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct WorkspaceGrant {
+pub struct DevserverGrant {
     pub id: Uuid,
     pub owner_user_id: Uuid,
-    pub workspace_name: String,
+    pub devserver_id: String,
     pub grantee_email: String,
     #[serde(default)]
     pub grantee_user_id: Option<Uuid>,
@@ -133,16 +134,17 @@ pub struct WorkspaceGrant {
     pub accepted_at: Option<DateTime<Utc>>,
 }
 
-/// Reply from `GET /v1/users/:o/workspaces/:d/access?as=<id>`.
+/// Reply from `GET /v1/users/:o/devservers/:d/access?as=<id>`.
 /// `role` is one of `owner`, `editor`, `viewer`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct WorkspaceAccess {
+pub struct DevserverAccess {
     pub role: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct OwnedWorkspaceSummary {
-    pub workspace_name: String,
+pub struct OwnedDevserverSummary {
+    pub devserver_id: String,
+    pub label: String,
     pub grant_count: i64,
 }
 
@@ -155,7 +157,8 @@ pub struct IncomingShare {
     pub owner_display_name: Option<String>,
     #[serde(default)]
     pub owner_avatar_url: Option<String>,
-    pub workspace_name: String,
+    pub devserver_id: String,
+    pub label: String,
     pub role: String,
     pub accepted_at: DateTime<Utc>,
 }
@@ -546,18 +549,20 @@ impl ProfileClient {
     }
 
     /// Idempotent. 201 on insert, 200 on hit-existing — caller maps
-    /// both to "workspace now exists".
-    pub async fn create_workspace(
+    /// both to "devserver now exists". `label` mirrors the PAT label;
+    /// a blank label on a re-issue leaves the stored one untouched.
+    pub async fn create_devserver(
         &self,
         owner_id: Uuid,
-        workspace_name: &str,
-    ) -> ProfileResult<Workspace> {
+        devserver_id: &str,
+        label: &str,
+    ) -> ProfileResult<Devserver> {
         let res = self
             .req(
                 reqwest::Method::POST,
-                &format!("/v1/users/{owner_id}/workspaces"),
+                &format!("/v1/users/{owner_id}/devservers"),
             )
-            .json(&serde_json::json!({"workspace_name": workspace_name}))
+            .json(&serde_json::json!({"devserver_id": devserver_id, "label": label}))
             .send()
             .await?;
         match res.status() {
@@ -568,11 +573,11 @@ impl ProfileClient {
         }
     }
 
-    pub async fn list_workspaces(&self, owner_id: Uuid) -> ProfileResult<Vec<Workspace>> {
+    pub async fn list_devservers(&self, owner_id: Uuid) -> ProfileResult<Vec<Devserver>> {
         let res = self
             .req(
                 reqwest::Method::GET,
-                &format!("/v1/users/{owner_id}/workspaces"),
+                &format!("/v1/users/{owner_id}/devservers"),
             )
             .send()
             .await?;
@@ -582,15 +587,11 @@ impl ProfileClient {
         }
     }
 
-    pub async fn delete_workspace(
-        &self,
-        owner_id: Uuid,
-        workspace_name: &str,
-    ) -> ProfileResult<()> {
+    pub async fn delete_devserver(&self, owner_id: Uuid, devserver_id: &str) -> ProfileResult<()> {
         let res = self
             .req(
                 reqwest::Method::DELETE,
-                &format!("/v1/users/{owner_id}/workspaces/{workspace_name}"),
+                &format!("/v1/users/{owner_id}/devservers/{devserver_id}"),
             )
             .send()
             .await?;
@@ -602,20 +603,21 @@ impl ProfileClient {
     }
 
     /// Create-or-promote: re-adding the same email on the same
-    /// `(owner, workspace)` updates the role and keeps the existing
+    /// `(owner, devserver)` updates the role and keeps the existing
     /// `created_at` / `grantee_user_id` / `accepted_at` on the server
-    /// side. Returns the resulting row in both cases.
-    pub async fn create_workspace_grant(
+    /// side. A grant gives the WHOLE devserver. Returns the resulting
+    /// row in both cases.
+    pub async fn create_devserver_grant(
         &self,
         owner_id: Uuid,
-        workspace: &str,
+        devserver_id: &str,
         grantee_email: &str,
         role: &str,
-    ) -> ProfileResult<WorkspaceGrant> {
+    ) -> ProfileResult<DevserverGrant> {
         let res = self
             .req(
                 reqwest::Method::POST,
-                &format!("/v1/users/{owner_id}/workspaces/{workspace}/grants"),
+                &format!("/v1/users/{owner_id}/devservers/{devserver_id}/grants"),
             )
             .json(&serde_json::json!({
                 "grantee_email": grantee_email,
@@ -631,15 +633,15 @@ impl ProfileClient {
         }
     }
 
-    pub async fn list_workspace_grants(
+    pub async fn list_devserver_grants(
         &self,
         owner_id: Uuid,
-        workspace: &str,
-    ) -> ProfileResult<Vec<WorkspaceGrant>> {
+        devserver_id: &str,
+    ) -> ProfileResult<Vec<DevserverGrant>> {
         let res = self
             .req(
                 reqwest::Method::GET,
-                &format!("/v1/users/{owner_id}/workspaces/{workspace}/grants"),
+                &format!("/v1/users/{owner_id}/devservers/{devserver_id}/grants"),
             )
             .send()
             .await?;
@@ -653,7 +655,7 @@ impl ProfileClient {
     /// Owner-scoped delete. `owner_id` is required by the server, so
     /// a bug in identity-service can't let user A revoke user B's
     /// grant.
-    pub async fn delete_workspace_grant(
+    pub async fn delete_devserver_grant(
         &self,
         owner_id: Uuid,
         grant_id: Uuid,
@@ -672,16 +674,21 @@ impl ProfileClient {
         }
     }
 
-    /// Per-request access gate. `Ok(Some(WorkspaceAccess))` is access;
+    /// Per-request access gate. `Ok(Some(DevserverAccess))` is access;
     /// `Ok(None)` is no access (shares the 404 shape with "unknown
-    /// workspace" on purpose, so callers can render a single "no access"
+    /// devserver" on purpose, so callers can render a single "no access"
     /// page without disclosing which case they hit).
+    ///
+    /// TRANSITIONAL: still hits the per-workspace access path. The open
+    /// routes that call this move to a per-devserver `drv` once the proxy
+    /// admin tunnel list surfaces the live devserver_id; at that point
+    /// this becomes `devserver_access(owner, devserver_id, caller)`.
     pub async fn workspace_access(
         &self,
         owner_id: Uuid,
         workspace: &str,
         caller: Uuid,
-    ) -> ProfileResult<Option<WorkspaceAccess>> {
+    ) -> ProfileResult<Option<DevserverAccess>> {
         let mut url = self.url(&format!(
             "/v1/users/{owner_id}/workspaces/{workspace}/access"
         ));
@@ -699,10 +706,10 @@ impl ProfileClient {
         }
     }
 
-    pub async fn list_owned_workspaces(
+    pub async fn list_owned_devservers(
         &self,
         user_id: Uuid,
-    ) -> ProfileResult<Vec<OwnedWorkspaceSummary>> {
+    ) -> ProfileResult<Vec<OwnedDevserverSummary>> {
         let res = self
             .req(
                 reqwest::Method::GET,

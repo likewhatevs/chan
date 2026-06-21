@@ -650,12 +650,18 @@ fn live_user_body(uid: Uuid, email: &str, username: &str) -> Value {
     })
 }
 
-fn grant_body(grant_id: Uuid, owner_id: Uuid, workspace: &str, email: &str, role: &str) -> Value {
+fn grant_body(
+    grant_id: Uuid,
+    owner_id: Uuid,
+    devserver_id: &str,
+    email: &str,
+    role: &str,
+) -> Value {
     let now = chrono::Utc::now().to_rfc3339();
     json!({
         "id": grant_id,
         "owner_user_id": owner_id,
-        "workspace_name": workspace,
+        "devserver_id": devserver_id,
         "grantee_email": email,
         "grantee_user_id": null,
         "role": role,
@@ -668,10 +674,11 @@ fn grant_body(grant_id: Uuid, owner_id: Uuid, workspace: &str, email: &str, role
 async fn grant_create_requires_session() {
     let app = TestApp::new().await;
     let mut c = Client::new(&app);
+    let dsid = "a".repeat(64);
     let (s, _, _, _) = c
         .send(
             Method::POST,
-            "/api/workspaces/photos/grants",
+            &format!("/api/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "a@b.com", "role": "viewer"})),
         )
         .await;
@@ -695,10 +702,11 @@ async fn grant_create_validates_role() {
         .mount(&app.profile)
         .await;
 
+    let dsid = "a".repeat(64);
     let (s, _, _, _) = c
         .send(
             Method::POST,
-            "/api/workspaces/photos/grants",
+            &format!("/api/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "a@b.com", "role": "admin"})),
         )
         .await;
@@ -722,12 +730,13 @@ async fn grant_create_forwards_to_profile() {
         .mount(&app.profile)
         .await;
     let grant_id = Uuid::new_v4();
+    let dsid = "a".repeat(64);
     Mock::given(method("POST"))
-        .and(path(format!("/v1/users/{uid}/workspaces/photos/grants")))
+        .and(path(format!("/v1/users/{uid}/devservers/{dsid}/grants")))
         .respond_with(ResponseTemplate::new(201).set_body_json(grant_body(
             grant_id,
             uid,
-            "photos",
+            &dsid,
             "alice@x.com",
             "editor",
         )))
@@ -737,7 +746,7 @@ async fn grant_create_forwards_to_profile() {
     let (s, _, body, _) = c
         .send(
             Method::POST,
-            "/api/workspaces/photos/grants",
+            &format!("/api/devservers/{dsid}/grants"),
             Some(json!({"grantee_email": "alice@x.com", "role": "editor"})),
         )
         .await;
