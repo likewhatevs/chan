@@ -1,10 +1,10 @@
 # chan-gateway-admin
 
-Operator CLI for the chan-gateway suite. Manages users, personal access tokens, audit logs, and live tunnel registrations by calling profile-service and workspace-proxy admin routes over Bearer auth.
+Operator CLI for the chan-gateway suite. Manages users, personal access tokens, audit logs, and live tunnel registrations by calling profile-service and devserver-proxy admin routes over Bearer auth.
 
 ## Role in the system
 
-Out-of-band admin surface. profile-service exposes `/v1/admin/*`; workspace-proxy exposes `/admin/v1/*`. This CLI is the human-friendly wrapper around both. Designed to run inside the chan infrastructure (an admin host that can reach the internal profile URL and the workspace-proxy admin port) or alongside the gateway services on a single host.
+Out-of-band admin surface. profile-service exposes `/v1/admin/*`; devserver-proxy exposes `/admin/v1/*`. This CLI is the human-friendly wrapper around both. Designed to run inside the chan infrastructure (an admin host that can reach the internal profile URL and the devserver-proxy admin port) or alongside the gateway services on a single host.
 
 ## Build
 
@@ -33,9 +33,9 @@ sudo apt install ./chan-gateway-admin_*.deb
 | `CHAN_ADMIN_TOKEN`        | none                     | Bearer for both    |
 |                           |                          | services. Required.|
 | `CHAN_ADMIN_PROFILE_URL`  | `http://127.0.0.1:7001`  | profile-service    |
-| `CHAN_ADMIN_WORKSPACE_URL`    | `http://127.0.0.1:7002`  | workspace-proxy        |
+| `CHAN_ADMIN_WORKSPACE_URL`    | `http://127.0.0.1:7002`  | devserver-proxy        |
 
-Single-token deployments set `CHAN_ADMIN_TOKEN` to a value that matches both `PROFILE_ADMIN_TOKEN` (profile-service) and `WORKSPACE_ADMIN_TOKEN` (workspace-proxy). Deployments that rotate the two service tokens independently pass `--token` per invocation, with the value matching the service that invocation talks to.
+Single-token deployments set `CHAN_ADMIN_TOKEN` to a value that matches both `PROFILE_ADMIN_TOKEN` (profile-service) and `WORKSPACE_ADMIN_TOKEN` (devserver-proxy). Deployments that rotate the two service tokens independently pass `--token` per invocation, with the value matching the service that invocation talks to.
 
 ## Commands
 

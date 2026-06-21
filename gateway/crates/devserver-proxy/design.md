@@ -1,4 +1,4 @@
-# workspace-proxy: design
+# devserver-proxy: design
 
 ## Problem
 
@@ -6,10 +6,10 @@
 
 1. Accepts the tunnel registration handshake.
 2. Reverse-proxies HTTP and WebSocket traffic into the registered workspace.
-3. Gates workspaces behind a token minted by identity-service. workspace-proxy holds no session cookie of its own beyond a short-lived, per-workspace gate cookie scoped to one path.
+3. Gates workspaces behind a token minted by identity-service. devserver-proxy holds no session cookie of its own beyond a short-lived, per-workspace gate cookie scoped to one path.
 4. Supports admin operations (snapshot, evict, per-user list and bulk evict).
 
-The workspace list, sign-in surface and every piece of user-facing UI live in identity-service. workspace-proxy has no SPA and no public `/api/*` of its own.
+The workspace list, sign-in surface and every piece of user-facing UI live in identity-service. devserver-proxy has no SPA and no public `/api/*` of its own.
 
 ## Architecture
 
@@ -38,13 +38,13 @@ The `Registry` (`registry.rs`) is the in-process map from `(username, devserver_
 
 ## Devserver gate
 
-workspace-proxy reads no `tower_sessions` cookie. Authentication for the proxy path uses a JWT minted by identity-service, signed with `WORKSPACE_GATE_SECRET` (HMAC-SHA256). The secret is shared between identity (mints both shapes) and workspace-proxy (verifies, mints the session shape).
+devserver-proxy reads no `tower_sessions` cookie. Authentication for the proxy path uses a JWT minted by identity-service, signed with `WORKSPACE_GATE_SECRET` (HMAC-SHA256). The secret is shared between identity (mints both shapes) and devserver-proxy (verifies, mints the session shape).
 
 The gate is per-DEVSERVER: there is one devserver per user, one host (`{user}.devserver.chan.app`), one access check. A grant gives the whole devserver, so the `{workspace}` path segment never gates. Two tokens are involved:
 
 - **Entry token**: 30s exp, carried in `?t=` on the first hit. Issued by identity after a `devserver_access(owner, devserver, caller)` check. Claims: `{iss: "id.chan.app", sub: user_id, drv: <devserver id>, aud: "<host>", typ: "entry", iat, exp}`.
 
-- **Session cookie**: 24h hard exp, written as `Set-Cookie: devserver_gate=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/`. Minted by workspace-proxy on entry-token validation. Same claim envelope, `typ: "session"`. Stateless: no server-side store.
+- **Session cookie**: 24h hard exp, written as `Set-Cookie: devserver_gate=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/`. Minted by devserver-proxy on entry-token validation. Same claim envelope, `typ: "session"`. Stateless: no server-side store.
 
 `Path=/` (whole host) is safe because the grant is whole-devserver: every path on `{user}.devserver.chan.app` is content the cookie-holder is already authorized to reach, so there is no non-granted sub-tenant to isolate. The remaining isolation axis is user-to-user, carried by the host-only cookie + the `aud` claim: `alice.devserver.chan.app` and `bob.devserver.chan.app` are distinct origins, and a token's `aud` binds it to one host.
 
@@ -76,7 +76,7 @@ The 404 path checks `Accept: text/html`; browsers get the styled "workspace not 
 
 `HOP_BY_HOP_NAMES` lists the RFC 7230 6.1 hop-by-hop headers: `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`. In addition, `connection_listed_headers` parses the inbound `Connection` value and strips every header it names (also RFC 7230 6.1). Applied on both legs.
 
-Inbound `Host`, `Cookie`, and `Authorization` are dropped. `X-Forwarded-For` is recomputed as `<existing chain>, <peer ip>`. `X-Forwarded-Proto` is set from `FORWARDED_PROTO` (default `https`, configured to match the terminator that fronts this listener). `X-Forwarded-Host` is set from the inbound `Host` header workspace-proxy itself routed on. Inbound `X-Forwarded-{Host,Proto}` are NOT trusted: they are client-controllable and an upstream that builds absolute URLs from XFH/XFProto would otherwise be steerable from outside.
+Inbound `Host`, `Cookie`, and `Authorization` are dropped. `X-Forwarded-For` is recomputed as `<existing chain>, <peer ip>`. `X-Forwarded-Proto` is set from `FORWARDED_PROTO` (default `https`, configured to match the terminator that fronts this listener). `X-Forwarded-Host` is set from the inbound `Host` header devserver-proxy itself routed on. Inbound `X-Forwarded-{Host,Proto}` are NOT trusted: they are client-controllable and an upstream that builds absolute URLs from XFH/XFProto would otherwise be steerable from outside.
 
 The `dispatch` handler likewise reads the raw `Host` header directly rather than going through axum's `Host` extractor, which consults `Forwarded` and `X-Forwarded-Host` before `Host` and would let a hostile client route into a different tenant's wildcard surface by spoofing those headers.
 
@@ -110,7 +110,7 @@ The h2c tunnel listener and the axum HTTP listener share the in-process `Registr
 
 ### No cookie session for the proxy path
 
-workspace-proxy reads nothing from `tower_sessions`. The browser never sends an `.chan.app`-scoped cookie to `*.devserver.chan.app` because no such cookie exists; id.chan.app's cookie is host-only on id.
+devserver-proxy reads nothing from `tower_sessions`. The browser never sends an `.chan.app`-scoped cookie to `*.devserver.chan.app` because no such cookie exists; id.chan.app's cookie is host-only on id.
 
 This is load-bearing for cross-tenant isolation:
 
@@ -130,7 +130,7 @@ The tunnel validator returns `(user_id, username)`. `CapturingValidator` records
 
 ### Auth gate trust model
 
-The auth assertion on the wildcard path is the entry JWT, not "sub matches owner". identity-service calls `profile.devserver_access(owner, devserver, caller)` before minting any entry token, so a valid signature plus the right `aud` (= the inbound host, which is `{owner}.devserver.chan.app`) plus the right `drv` (= the live devserver id) proves the caller was authorized at mint time. identity owns the access-control policy; workspace-proxy verifies the signed assertion. The session cookie minted on entry-token validation carries the entry's `sub` unchanged so the upstream attribution chain knows whether the request belongs to the owner or a grantee.
+The auth assertion on the wildcard path is the entry JWT, not "sub matches owner". identity-service calls `profile.devserver_access(owner, devserver, caller)` before minting any entry token, so a valid signature plus the right `aud` (= the inbound host, which is `{owner}.devserver.chan.app`) plus the right `drv` (= the live devserver id) proves the caller was authorized at mint time. identity owns the access-control policy; devserver-proxy verifies the signed assertion. The session cookie minted on entry-token validation carries the entry's `sub` unchanged so the upstream attribution chain knows whether the request belongs to the owner or a grantee.
 
 User-to-user isolation is enforced by `aud`. A token minted for one subdomain (`alice.devserver.chan.app`) cannot be replayed on another (`bob.devserver.chan.app`) because `decode` rejects on `aud` mismatch. The `drv` claim binds the token to one devserver: a cookie minted for a rotated/old devserver id no longer matches the user's live registration and 404s (re-share required after rotation). There is no separate "this user is the owner" check, and intentionally so: requiring it would prevent accepted grantees from reaching the devserver they have been granted.
 
@@ -165,7 +165,7 @@ The apex, wildcard, and the dashboard redirect's id host all derive from one bas
 
 ## Error model
 
-`workspace_proxy::Error` (`src/error.rs`):
+`devserver_proxy::Error` (`src/error.rs`):
 
 | Variant       | HTTP | Notes                                     |
 |---------------|------|-------------------------------------------|
@@ -179,7 +179,7 @@ The apex, wildcard, and the dashboard redirect's id host all derive from one bas
 | Anyhow        | 500  | startup or unexpected                     |
 | Reqwest       | 502  | identity-service unreachable              |
 
-workspace-proxy carries no `Conflict` variant: nothing on this surface PATCHes a unique-constrained row.
+devserver-proxy carries no `Conflict` variant: nothing on this surface PATCHes a unique-constrained row.
 
 ## What's wired
 

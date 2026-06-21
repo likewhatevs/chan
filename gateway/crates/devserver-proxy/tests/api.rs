@@ -1,6 +1,6 @@
-//! Integration tests for workspace-proxy.
+//! Integration tests for devserver-proxy.
 //!
-//! No Postgres in this suite: workspace-proxy holds no sessions and
+//! No Postgres in this suite: devserver-proxy holds no sessions and
 //! no DB state. The proxy gate is driven by devserver-gate JWTs
 //! (HS256, shared `WORKSPACE_GATE_SECRET`), and tests mint those
 //! directly via `gateway_common::devserver_gate`.
@@ -29,35 +29,48 @@ use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use workspace_proxy::config::Config;
-use workspace_proxy::http as dp_http;
-use workspace_proxy::identity_validator::CapturingValidator;
-use workspace_proxy::registry::Registry;
+use devserver_proxy::config::Config;
+use devserver_proxy::http as dp_http;
+use devserver_proxy::identity_validator::CapturingValidator;
+use devserver_proxy::registry::Registry;
 
 const ADMIN_TOKEN: &str = "test-admin-token";
-const WORKSPACE_GATE_SECRET: &[u8] = b"test-workspace-gate-secret-32-bytes-aa";
+const WORKSPACE_GATE_SECRET: &[u8] = b"test-devserver-gate-secret-32-bytes-aa";
 const APEX_HOST: &str = "devserver.chan.app";
 const WILDCARD_SUFFIX: &str = ".devserver.chan.app";
 
-/// (user_id, username, scopes) row stored per-token in the stub.
-/// Aliased so clippy's `type_complexity` lint is happy on the
+/// (user_id, username, devserver_id, scopes) row stored per-token in
+/// the stub. Aliased so clippy's `type_complexity` lint is happy on the
 /// inner `Arc<Mutex<HashMap<...>>>` declaration below.
-type StubRow = (Uuid, String, Vec<String>);
+type StubRow = (Uuid, String, String, Vec<String>);
 
-/// Stub validator: tokens map to (user_id, username, scopes). Used
-/// in place of the real IdentityValidator so tests don't need
-/// identity-service. Every tunnel token carries the base `tunnel`
-/// scope.
+/// Stub validator: tokens map to (user_id, username, devserver_id,
+/// scopes). Used in place of the real IdentityValidator so tests don't
+/// need identity-service. The tunnel-server keys the registration on the
+/// token-resolved `devserver_id` (server-authoritative), so the stub is
+/// what determines the registry's second key. Every token carries the
+/// base `tunnel` scope.
 #[derive(Clone, Default)]
 struct StubValidator {
     by_token: Arc<StdMutex<HashMap<String, StubRow>>>,
 }
 
 impl StubValidator {
-    fn add(&self, token: impl Into<String>, user_id: Uuid, username: impl Into<String>) {
+    fn add(
+        &self,
+        token: impl Into<String>,
+        user_id: Uuid,
+        username: impl Into<String>,
+        devserver_id: impl Into<String>,
+    ) {
         self.by_token.lock().unwrap().insert(
             token.into(),
-            (user_id, username.into(), vec!["tunnel".to_string()]),
+            (
+                user_id,
+                username.into(),
+                devserver_id.into(),
+                vec!["tunnel".to_string()],
+            ),
         );
     }
 }
@@ -67,9 +80,10 @@ impl Validator for StubValidator {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError> {
         let g = self.by_token.lock().unwrap();
         match g.get(token) {
-            Some((uid, username, scopes)) => Ok(Validated {
+            Some((uid, username, devserver_id, scopes)) => Ok(Validated {
                 user_id: *uid,
                 username: username.clone(),
+                devserver_id: devserver_id.clone(),
                 scopes: scopes.clone(),
             }),
             None => Err(ServerError::InvalidToken),
@@ -143,17 +157,20 @@ impl TestApp {
         // Nothing DB-backed; just drop self.
     }
 
-    async fn register_tunnel(&self, username: &str, workspace: &str, uid: Uuid, router: Router) {
+    async fn register_tunnel(&self, username: &str, devserver_id: &str, uid: Uuid, router: Router) {
         let token = format!("tok-{}", Uuid::new_v4().simple());
-        self.stub.add(&token, uid, username);
-        spawn_tunnel_client(self.tunnel_addr, &token, workspace, router).await;
+        // The tunnel-server keys the registration on the token-resolved
+        // devserver_id, so the stub returns it; the registry's second key
+        // is this value (Hello.workspace is not the identity source).
+        self.stub.add(&token, uid, username, devserver_id);
+        spawn_tunnel_client(self.tunnel_addr, &token, devserver_id, router).await;
         for _ in 0..50 {
-            if self.registry.get(username, workspace).is_some() {
+            if self.registry.get(username, devserver_id).is_some() {
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        panic!("tunnel for {username}/{workspace} did not register");
+        panic!("tunnel for {username}/{devserver_id} did not register");
     }
 }
 
@@ -551,7 +568,7 @@ async fn session_cookie_for_wrong_devserver_is_404() {
 }
 
 // Regression: identity mints entry JWTs with `sub = caller.user_id`
-// (owner or accepted grantee). workspace-proxy used to compare `sub`
+// (owner or accepted grantee). devserver-proxy used to compare `sub`
 // against the registry-cached owner_id and 404 every grantee; the gate
 // now trusts identity's mint-time `devserver_access` check and admits any
 // signed entry with the right aud + drv.
@@ -840,7 +857,7 @@ async fn x_forwarded_for_extended() {
 
 #[tokio::test]
 async fn cookie_header_stripped_from_upstream() {
-    // workspace-proxy must never forward the devserver_gate cookie to the
+    // devserver-proxy must never forward the devserver_gate cookie to the
     // tenant's chan-serve peer (the cookie is for the gate, not for
     // the tenant). The very cookie that admits the request is stripped
     // before the upstream sees it. Other inbound cookies the tenant
@@ -1007,7 +1024,7 @@ async fn tunnel_rejects_third_workspace_when_limit_is_two() {
     app.register_tunnel("alice", "b", uid, Router::new()).await;
 
     let token = format!("tok-{}", Uuid::new_v4().simple());
-    app.stub.add(&token, uid, "alice");
+    app.stub.add(&token, uid, "alice", "c");
     let result = try_register_tunnel(app.tunnel_addr, &token, "c", Router::new()).await;
     assert!(
         result.is_err(),
@@ -1031,7 +1048,7 @@ async fn tunnel_allows_reconnect_of_existing_workspace_at_limit() {
     app.register_tunnel("alice", "a", uid, Router::new()).await;
     app.register_tunnel("alice", "b", uid, Router::new()).await;
     let token = format!("tok-{}", Uuid::new_v4().simple());
-    app.stub.add(&token, uid, "alice");
+    app.stub.add(&token, uid, "alice", "a");
     try_register_tunnel(app.tunnel_addr, &token, "a", Router::new())
         .await
         .expect("reconnect at limit ok");

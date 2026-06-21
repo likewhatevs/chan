@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::registry::Registry;
 
 /// Application state passed to every handler. Holds no cookie or
-/// session machinery; workspace-proxy reads no cookie other than the
+/// session machinery; devserver-proxy reads no cookie other than the
 /// `devserver_gate` issued by the proxy gate itself.
 #[derive(Clone)]
 pub struct AppState {
@@ -27,8 +27,8 @@ pub fn router(cfg: Arc<Config>, registry: Registry) -> Router {
         // upstream during health checks.
         .route("/healthz", get(healthz))
         // Single fallback that dispatches on the Host header. Apex
-        // (workspace.chan.app) only carries admin + healthz; everything
-        // else 404s. Wildcard ({user}.workspace.chan.app) hands off to
+        // (devserver.chan.app) only carries admin + healthz; everything
+        // else 404s. Wildcard ({user}.devserver.chan.app) hands off to
         // the proxy module.
         .fallback(dispatch)
         .merge(admin)
@@ -77,7 +77,7 @@ async fn dispatch(State(state): State<AppState>, req: Request) -> Response {
 
     // Wildcard root `/` -> dashboard. The dashboard lives at
     // id.chan.app/workspaces in prod (configurable via DASHBOARD_URL);
-    // workspace-proxy doesn't render any UI of its own, so a
+    // devserver-proxy doesn't render any UI of its own, so a
     // bare-domain hit bounces.
     let path = req.uri().path();
     if path == "/" || path.is_empty() {

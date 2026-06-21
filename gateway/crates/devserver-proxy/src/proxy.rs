@@ -141,7 +141,7 @@ impl http_body::Body for DeadlineBody {
     }
 }
 
-/// Cookie name for the session-shape workspace-gate token. Host-only on
+/// Cookie name for the session-shape devserver-gate token. Host-only on
 /// `{user}.devserver.chan.app`; `Path=/{workspace}/`; HttpOnly; Secure;
 /// SameSite=Lax; 24h lifetime (matches the session JWT exp).
 const COOKIE_NAME: &str = "devserver_gate";
@@ -314,7 +314,7 @@ fn resolve_gate(state: &AppState, req: &Request, devserver_id: &str, aud: &str) 
     // would lock out every accepted grantee. The aud + drv claims
     // (signed at mint time by identity, which already checked
     // `devserver_access`) are the authorization assertion. Identity owns
-    // the policy; workspace-proxy verifies the assertion. `drv` is the
+    // the policy; devserver-proxy verifies the assertion. `drv` is the
     // devserver id, matched against the user's live registration.
     if let Some(token) = entry_token_param(req.uri()) {
         return match devserver_gate::decode(secret, &token, TokenType::Entry, aud, devserver_id) {
@@ -743,12 +743,12 @@ const X_FORWARDED_FOR: &str = "x-forwarded-for";
 const X_FORWARDED_PROTO: &str = "x-forwarded-proto";
 const X_FORWARDED_HOST: &str = "x-forwarded-host";
 
-/// Trust boundary: workspace-proxy is the only thing between the client
+/// Trust boundary: devserver-proxy is the only thing between the client
 /// and the upstream `chan serve`. Inbound `X-Forwarded-Host` /
 /// `X-Forwarded-Proto` are entirely client-controlled (nginx may not
 /// scrub them, and the gateway must not assume it does) so we never
 /// forward those values; we re-derive `host` from the inbound `Host`
-/// header workspace-proxy itself routed on, and `proto` from
+/// header devserver-proxy itself routed on, and `proto` from
 /// `cfg.forwarded_proto` (configured to match the terminator that
 /// fronts this listener). The inbound XFF chain is preserved because
 /// dropping it would break legitimate multi-hop observability for

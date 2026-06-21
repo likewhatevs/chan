@@ -12,9 +12,9 @@
 //!
 //! All gated by a single bearer token (`WORKSPACE_ADMIN_TOKEN`). The
 //! tunnel registry is in-memory and process-local, so admin reads
-//! always see exactly what this workspace-proxy instance is serving --
+//! always see exactly what this devserver-proxy instance is serving --
 //! there is no cross-process aggregation because the deployment runs
-//! a single workspace-proxy.
+//! a single devserver-proxy.
 
 use std::convert::Infallible;
 use std::time::Duration;

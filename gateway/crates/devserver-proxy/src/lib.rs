@@ -1,4 +1,4 @@
-//! workspace-proxy: public-facing service at devserver.chan.app (apex) and
+//! devserver-proxy: public-facing service at devserver.chan.app (apex) and
 //! *.devserver.chan.app (wildcard).
 //!
 //! Two TCP listeners share the process, fronted by one nginx vhost
@@ -7,7 +7,7 @@
 //!   * `bind_addr` (devserver.chan.app apex + *.devserver.chan.app wildcard):
 //!     axum HTTP. The wildcard host carries the tenant reverse-proxy
 //!     surface; the apex carries `/admin/v1/*` and `/healthz` only.
-//!     A single router dispatches on the `Host` header. workspace-proxy
+//!     A single router dispatches on the `Host` header. devserver-proxy
 //!     reads no session cookie. The proxy gate uses a devserver-gate JWT
 //!     (HS256, secret shared with identity-service) carried in the
 //!     entry URL or in a host-only, path-scoped `devserver_gate` cookie.

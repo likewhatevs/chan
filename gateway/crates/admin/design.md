@@ -6,14 +6,14 @@ Operators need to manage users, tokens, and live tunnels without SSH plus direct
 
 ## Architecture
 
-Single Rust binary that talks HTTP to profile-service and workspace-proxy. No database access; the CLI only consumes the existing admin HTTP routes.
+Single Rust binary that talks HTTP to profile-service and devserver-proxy. No database access; the CLI only consumes the existing admin HTTP routes.
 
 The `tokio` runtime is `current_thread` (commands are sequential and short-lived; a multi-threaded runtime is unnecessary overhead). `clap` derives the command tree.
 
 Two HTTP clients live inside the binary:
 
 - `AdminClient`: profile-service (`CHAN_ADMIN_PROFILE_URL`). Resolves `<ident>` and calls the admin tree.
-- `WorkspaceClient`: workspace-proxy apex (`CHAN_ADMIN_WORKSPACE_URL`, typically `https://workspace.chan.app`). Talks to `/admin/v1/*` and decodes the SSE snapshot stream for `tunnel watch`.
+- `WorkspaceClient`: devserver-proxy apex (`CHAN_ADMIN_WORKSPACE_URL`, typically `https://devserver.chan.app`). Talks to `/admin/v1/*` and decodes the SSE snapshot stream for `tunnel watch`.
 
 Both clients use plain `reqwest` with a shared bearer configuration; the CLI sets a 15-second per-call timeout (no global timeout on the watch stream so it can idle between snapshots).
 
@@ -33,12 +33,12 @@ Ambiguous matches (more than one) error with `ambiguous`; no match errors with t
 
 ### `user block`
 
-The block flow lives server-side: profile-service fans out to workspace-proxy in the same operation. The CLI still calls both for robustness against split deployments where the CLI's workspace-proxy URL may differ from the profile container's view of workspace-proxy, but the second call is idempotent (`killed: 0` is fine when profile already swept the registrations).
+The block flow lives server-side: profile-service fans out to devserver-proxy in the same operation. The CLI still calls both for robustness against split deployments where the CLI's devserver-proxy URL may differ from the profile container's view of devserver-proxy, but the second call is idempotent (`killed: 0` is fine when profile already swept the registrations).
 
 Order:
 
-1. `POST /v1/admin/users/:id/block` on profile-service. This sets `blocked_at`, revokes every live PAT, writes an `auth_audit` row and, server-side, fires workspace-proxy `kill_user_tunnels` for the user. If profile fails the CLI stops here.
-2. `POST /admin/v1/users/:user/tunnels/kill` on workspace-proxy. Belt-and-braces. A failure here surfaces as a warning on stderr but does not change the profile-side outcome.
+1. `POST /v1/admin/users/:id/block` on profile-service. This sets `blocked_at`, revokes every live PAT, writes an `auth_audit` row and, server-side, fires devserver-proxy `kill_user_tunnels` for the user. If profile fails the CLI stops here.
+2. `POST /admin/v1/users/:user/tunnels/kill` on devserver-proxy. Belt-and-braces. A failure here surfaces as a warning on stderr but does not change the profile-side outcome.
 
 The ordering ensures a partial failure leaves the user in a "blocked but maybe a tunnel still alive" state rather than the inverse, which is the safer direction.
 
@@ -48,7 +48,7 @@ Manage feature flags and per-user overrides via profile-service's admin tree. `f
 
 ### `tunnel watch`
 
-workspace-proxy's `/admin/v1/tunnels/watch` is an SSE stream. `watch_loop` consumes the stream, parses `event: snapshot` blocks, and re-renders. TTY mode clears the screen between renders (`\x1b[2J\x1b[H`) so the output behaves like `watch -n1`. `--json` emits one JSON line per event for `jq` piping.
+devserver-proxy's `/admin/v1/tunnels/watch` is an SSE stream. `watch_loop` consumes the stream, parses `event: snapshot` blocks, and re-renders. TTY mode clears the screen between renders (`\x1b[2J\x1b[H`) so the output behaves like `watch -n1`. `--json` emits one JSON line per event for `jq` piping.
 
 ### Output
 
@@ -81,7 +81,7 @@ Path segments contain only `[a-z0-9_.-]` (validated upstream), so the CLI ships 
 ## Invariants
 
 - The CLI is read-mostly. State changes go through documented HTTP routes; there are no direct database writes.
-- A blocked user always has every PAT revoked; the profile block flow handles this server-side, and also fires workspace-proxy eviction in the same transaction.
+- A blocked user always has every PAT revoked; the profile block flow handles this server-side, and also fires devserver-proxy eviction in the same transaction.
 - `user delete` cascades through profile-service's FK chain; the CLI does not orchestrate the deletion across multiple endpoints.
 - `tunnel kill` is idempotent: a second kill of the same registration returns 404, which the CLI surfaces as exit 3.
 - Output is deterministic on TTY-vs-`--json` choice. No mixed output on a single command.

@@ -15,7 +15,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-CRATES=("profile" "identity" "workspace-proxy" "admin")
+CRATES=("profile" "identity" "devserver-proxy" "admin")
 TARGETS=("x86_64-unknown-linux-gnu" "aarch64-unknown-linux-gnu")
 
 # Frontend bundle. rust-embed bakes whatever is in
@@ -30,7 +30,7 @@ npm run build --workspaces --if-present --silent
 for target in "${TARGETS[@]}"; do
     echo "==> cargo-zigbuild --release --target $target"
     cargo zigbuild --release --target "$target" \
-        -p profile -p identity -p workspace-proxy -p admin
+        -p profile -p identity -p devserver-proxy -p admin
 done
 
 # Package each crate per target.

@@ -1,16 +1,16 @@
 # chan-gateway
 
-The self-hostable server side of chan's tunnel: the identity, profile, and workspace-proxy services that sit behind `id.chan.app` and `workspace.chan.app`. A fleet of `chan serve` instances dials in over the tunnel and this gateway reverse-proxies each one back out at `{user}.workspace.chan.app/{workspace}/*`, turning them into a portable, multi-device workspace service you run on your own infrastructure (your own "Google Drive / Docs" equivalent, with chan's editor on top). `chan serve --tunnel-url` points at a gateway you stand up; `id.chan.app` and `workspace.chan.app` are the maintainer's own deployment of this code, which is experimental and ships with sign-in off by default (nobody can authenticate until an operator enrols them). It is not a hosted product. Tracks [fiorix/chan#8][issue].
+The self-hostable server side of chan's tunnel: the identity, profile, and devserver-proxy services that sit behind `id.chan.app` and `devserver.chan.app`. A fleet of `chan serve` instances dials in over the tunnel and this gateway reverse-proxies each one back out at `{user}.devserver.chan.app/{workspace}/*`, turning them into a portable, multi-device workspace service you run on your own infrastructure (your own "Google Drive / Docs" equivalent, with chan's editor on top). `chan serve --tunnel-url` points at a gateway you stand up; `id.chan.app` and `devserver.chan.app` are the maintainer's own deployment of this code, which is experimental and ships with sign-in off by default (nobody can authenticate until an operator enrols them). It is not a hosted product. Tracks [fiorix/chan#8][issue].
 
 [issue]: https://github.com/fiorix/chan/issues/8
 
 ## What's here
 
 - `profile`: internal HTTP API over Postgres. Users, linked OAuth identities, workspaces + sharing grants, feature flags, auth audit.
-- `identity`: id.chan.app. OAuth2 sign-in (GitHub / Google / GitLab) with PKCE, Postgres-backed sessions, embedded Svelte SPA, personal access tokens (incl. the `chan://` desktop-authorize consent flow), workspace-gate entry-token mint.
-- `workspace-proxy`: workspace.chan.app (apex) + `*.workspace.chan.app` (wildcard). Each `chan serve` instance dials `POST /v1/tunnel` (raw h2c) and registers over an authenticated yamux tunnel; HTTP and WebSocket traffic at `{user}.workspace.chan.app/{workspace}/*` is reverse-proxied into it. Entry is gated by the workspace-gate handoff: identity mints an entry JWT, workspace-proxy verifies it and mints a host-only, path-scoped `workspace_gate` cookie. The gate always runs; without a valid token / cookie a request 404s (same shape as an unknown workspace, so probes can't enumerate).
-- `admin`: operator CLI against profile's and workspace-proxy's admin trees.
-- `gateway-common`: shared library (domain derivation, HTTP clients, workspace-gate JWT, token bucket, validators).
+- `identity`: id.chan.app. OAuth2 sign-in (GitHub / Google / GitLab) with PKCE, Postgres-backed sessions, embedded Svelte SPA, personal access tokens (incl. the `chan://` desktop-authorize consent flow), devserver-gate entry-token mint.
+- `devserver-proxy`: devserver.chan.app (apex) + `*.devserver.chan.app` (wildcard). Each `chan serve` instance dials `POST /v1/tunnel` (raw h2c) and registers over an authenticated yamux tunnel; HTTP and WebSocket traffic at `{user}.devserver.chan.app/{workspace}/*` is reverse-proxied into it. Entry is gated by the devserver-gate handoff: identity mints an entry JWT, devserver-proxy verifies it and mints a host-only, path-scoped `devserver_gate` cookie. The gate always runs; without a valid token / cookie a request 404s (same shape as an unknown workspace, so probes can't enumerate).
+- `admin`: operator CLI against profile's and devserver-proxy's admin trees.
+- `gateway-common`: shared library (domain derivation, HTTP clients, devserver-gate JWT, token bucket, validators).
 
 Personal access tokens (PATs, `chan_pat_...`) are the only credential the chan CLI / chan-tunnel side uses; they carry the `tunnel` scope. Adding another OAuth provider is one new file under `crates/identity/src/providers/` plus wiring in `Config::from_env`. Microsoft and Apple are intentionally excluded (Microsoft because tenant admins can mint unverified-email accounts that defeat our email-as-link key; Apple because the OAuth setup is high-touch for the value at this scale).
 
@@ -21,7 +21,7 @@ gateway/
   Cargo.toml                       # workspace
   crates/identity/                 # bin: identity-service (id.chan.app)
   crates/identity/web/             # SPA embedded into identity-service
-  crates/workspace-proxy/          # bin: workspace-proxy-service (workspace.chan.app)
+  crates/devserver-proxy/          # bin: devserver-proxy-service (devserver.chan.app)
   crates/profile/                  # bin: profile-service (internal)
   crates/admin/                    # bin: chan-gateway-admin (operator CLI)
   crates/gateway-common/           # lib: shared clients / JWT / validators
@@ -58,7 +58,7 @@ npm install
 npm run build --workspaces
 ```
 
-`vite build` writes to `crates/identity/web/dist/`, embedded by the identity binary via `rust-embed`. workspace-proxy ships no SPA.
+`vite build` writes to `crates/identity/web/dist/`, embedded by the identity binary via `rust-embed`. devserver-proxy ships no SPA.
 
 ### GitHub OAuth app
 
@@ -92,7 +92,7 @@ export COOKIE_SECURE=false
 export PROFILE_SERVICE_URL=http://127.0.0.1:7001
 export PROFILE_AUTH_TOKEN=dev-token
 export IDENTITY_INTERNAL_TOKEN=dev-internal-token
-export WORKSPACE_GATE_SECRET=dev-workspace-gate-secret
+export WORKSPACE_GATE_SECRET=dev-devserver-gate-secret
 export GITHUB_CLIENT_ID=...
 export GITHUB_CLIENT_SECRET=...
 cargo run -p identity
@@ -100,18 +100,18 @@ cargo run -p identity
 
 Open http://127.0.0.1:7000 and sign in with GitHub.
 
-Terminal 3 (workspace-proxy-service, workspace.chan.app surface on 7002):
+Terminal 3 (devserver-proxy-service, devserver.chan.app surface on 7002):
 
 ```sh
 export BIND_ADDR=127.0.0.1:7002
 export TUNNEL_BIND_ADDR=127.0.0.1:7100
 export IDENTITY_URL=http://127.0.0.1:7000
 export IDENTITY_INTERNAL_TOKEN=dev-internal-token
-export WORKSPACE_GATE_SECRET=dev-workspace-gate-secret
-cargo run -p workspace-proxy
+export WORKSPACE_GATE_SECRET=dev-devserver-gate-secret
+cargo run -p devserver-proxy
 ```
 
-workspace-proxy holds no database and no session cookie of its own; a workspace is reached by following the "open workspace" link from the id.chan.app dashboard, which carries the entry token. For the full local stack use `scripts/dev/setup.sh` + `scripts/dev/run.sh`.
+devserver-proxy holds no database and no session cookie of its own; a workspace is reached by following the "open workspace" link from the id.chan.app dashboard, which carries the entry token. For the full local stack use `scripts/dev/setup.sh` + `scripts/dev/run.sh`.
 
 For frontend iteration without re-embedding:
 
@@ -131,7 +131,7 @@ Tests use real Postgres (per-test schema isolation). Identity tests mock the Git
 
 ## Releases
 
-The gateway ships on the monorepo's release line: the gateway crates are versioned in lockstep with the root (`chan`), and a `v*` tag triggers the repo-root `.github/workflows/release.yml`, whose `gateway-linux-packages` job builds four .deb packages (`chan-gateway-profile`, `chan-gateway-identity`, `chan-gateway-workspace-proxy`, `chan-gateway-admin`) for amd64 and arm64 and uploads them alongside the rest of the release.
+The gateway ships on the monorepo's release line: the gateway crates are versioned in lockstep with the root (`chan`), and a `v*` tag triggers the repo-root `.github/workflows/release.yml`, whose `gateway-linux-packages` job builds four .deb packages (`chan-gateway-profile`, `chan-gateway-identity`, `chan-gateway-devserver-proxy`, `chan-gateway-admin`) for amd64 and arm64 and uploads them alongside the rest of the release.
 
 There is no gateway-local release script: bump `gateway/Cargo.toml` in the same commit as the root `Cargo.toml` version, then cut the release from the monorepo root. The release workflow's `context` job asserts the tag matches the gateway version.
 
@@ -150,29 +150,29 @@ ls dist/                                   # eight .deb files (4 packages x 2 ar
 ```sh
 sudo apt install ./chan-gateway-profile_*.deb \
                  ./chan-gateway-identity_*.deb \
-                 ./chan-gateway-workspace-proxy_*.deb
+                 ./chan-gateway-devserver-proxy_*.deb
 ```
 
-The packages share a system user (`chan-gateway`) and put env templates at `/etc/chan-gateway/{profile,identity,workspace-proxy}.env`. Edit those, then enable + start each service:
+The packages share a system user (`chan-gateway`) and put env templates at `/etc/chan-gateway/{profile,identity,devserver-proxy}.env`. Edit those, then enable + start each service:
 
 ```sh
 sudo systemctl enable --now chan-gateway-profile
 sudo systemctl enable --now chan-gateway-identity
-sudo systemctl enable --now chan-gateway-workspace-proxy
+sudo systemctl enable --now chan-gateway-devserver-proxy
 ```
 
-The binaries listen on `127.0.0.1:{7001,7000,7002}` by default; front them with nginx + Let's Encrypt for `id.chan.app` and `workspace.chan.app`.
+The binaries listen on `127.0.0.1:{7001,7000,7002}` by default; front them with nginx + Let's Encrypt for `id.chan.app` and `devserver.chan.app`.
 
 ## Admin
 
-`chan-gateway-admin` (`crates/admin/`) is the operator CLI: list / block / unblock users, inspect personal access tokens, snapshot or kill live tunnels, read auth audit. It talks to profile-service's `/v1/admin/*` tree and workspace-proxy's `/admin/v1/*` tree over plain HTTP, so run it on a host that can reach the internal listeners.
+`chan-gateway-admin` (`crates/admin/`) is the operator CLI: list / block / unblock users, inspect personal access tokens, snapshot or kill live tunnels, read auth audit. It talks to profile-service's `/v1/admin/*` tree and devserver-proxy's `/admin/v1/*` tree over plain HTTP, so run it on a host that can reach the internal listeners.
 
 ### Setup
 
 Two service env vars guard the admin tree; rotate them like any other secret:
 
 - profile-service: `PROFILE_ADMIN_TOKEN=<random>`
-- workspace-proxy:    `WORKSPACE_ADMIN_TOKEN=<random>`
+- devserver-proxy:    `WORKSPACE_ADMIN_TOKEN=<random>`
 
 A single-token deployment shares one secret across both services; `chan-gateway-admin` reads `CHAN_ADMIN_TOKEN` and sends it to each.
 
@@ -214,7 +214,7 @@ chan-gateway-admin token list alice@example.com
 chan-gateway-admin token revoke <token-uuid>
 chan-gateway-admin token audit  <token-uuid>
 
-# Live tunnels (workspace-proxy in-memory registry)
+# Live tunnels (devserver-proxy in-memory registry)
 chan-gateway-admin tunnel ps
 chan-gateway-admin tunnel ps --user alice
 chan-gateway-admin tunnel kill alice home          # force one workspace offline

@@ -3,7 +3,7 @@
 //! Modules:
 //!
 //!   * `domain`: single-source public-hostname derivation from
-//!     `CHAN_DOMAIN`. identity and workspace-proxy derive the same
+//!     `CHAN_DOMAIN`. identity and devserver-proxy derive the same
 //!     id / devserver hosts so the devserver-gate `aud` cannot drift.
 //!   * `profile_client`: typed HTTP client for profile-service. Used
 //!     by identity-service. Owns its own error enum (`ProfileError`);
@@ -15,23 +15,23 @@
 //!     consumer keeps its own `#[derive(Embed)]` (rust-embed resolves
 //!     the `#[folder]` path relative to the deriving crate) and calls
 //!     `static_files::serve::<Assets>(uri, banner)`. Used only by
-//!     identity-service; workspace-proxy ships no SPA.
+//!     identity-service; devserver-proxy ships no SPA.
 //!   * `token_bucket`: per-fingerprint token bucket with a bounded
 //!     map, plus the shared default limits. Backs the brute-force
-//!     throttle in `workspace_proxy::throttle_validator` and
+//!     throttle in `devserver_proxy::throttle_validator` and
 //!     `identity::token_throttle`; both wrap this primitive in a
 //!     thin trait-level adapter.
 //!   * `validators`: username shape validation and the lifetime
-//!     rename cap, shared by identity, profile, and workspace-proxy.
-//!   * `workspace_admin_client`: typed HTTP client for workspace-proxy's
+//!     rename cap, shared by identity, profile, and devserver-proxy.
+//!   * `workspace_admin_client`: typed HTTP client for devserver-proxy's
 //!     `/admin/v1/*` tree. Used by identity-service (on revoke /
 //!     delete / dashboard reads) and profile-service (on admin
 //!     block) so a state change in the DB also tears down the
-//!     in-process yamux registrations workspace-proxy holds for the
+//!     in-process yamux registrations devserver-proxy holds for the
 //!     user.
 //!   * `devserver_gate`: shared JWT envelope and HS256 encode/decode
 //!     helpers for the devserver-gate handoff. identity mints entry
-//!     tokens; workspace-proxy verifies entry tokens and mints session
+//!     tokens; devserver-proxy verifies entry tokens and mints session
 //!     tokens. Same envelope, same secret (WORKSPACE_GATE_SECRET),
 //!     distinct `typ` claim.
 

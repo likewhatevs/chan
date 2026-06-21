@@ -601,6 +601,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "devserver-proxy"
+version = "0.41.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bytes",
+ "chan-tunnel-client",
+ "chan-tunnel-proto",
+ "chan-tunnel-server",
+ "chrono",
+ "futures-util",
+ "gateway-common",
+ "h2 0.4.14",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.9.0",
+ "hyper-util",
+ "jsonwebtoken",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4113,43 +4150,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "workspace-proxy"
-version = "0.41.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "bytes",
- "chan-tunnel-client",
- "chan-tunnel-proto",
- "chan-tunnel-server",
- "chrono",
- "futures-util",
- "gateway-common",
- "h2 0.4.14",
- "http 1.4.0",
- "http-body 1.0.1",
- "http-body-util",
- "hyper 1.9.0",
- "hyper-util",
- "jsonwebtoken",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "subtle",
- "thiserror 1.0.69",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
 ]
 
 [[package]]

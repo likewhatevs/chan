@@ -8,7 +8,7 @@ It mirrors the production definitions in the sibling `chan-prod-setup` repo. Per
 
 ## Why the all-container, prod-like stack
 
-The gateway's cross-tenant isolation is carried by two host-scoped cookies: `id_session` (host-only on `id.<domain>`) and `workspace_gate` (host-only and path-scoped on `{user}.workspace.<domain>/{workspace}/`). No `.<domain>`-wide cookie exists, so a browser never auto-attaches an identity session to a fetch on another tenant's subdomain. That design, plus the reverse-proxy header hygiene (hop-by-hop stripping, dropped inbound Host/Cookie/Authorization, recomputed `X-Forwarded-*`), only fully exercises behind a real TLS terminator with real subdomains. Running the same containers and the same nginx as prod is how you exercise it.
+The gateway's cross-tenant isolation is carried by two host-scoped cookies: `id_session` (host-only on `id.<domain>`) and `devserver_gate` (host-only and path-scoped on `{user}.workspace.<domain>/{workspace}/`). No `.<domain>`-wide cookie exists, so a browser never auto-attaches an identity session to a fetch on another tenant's subdomain. That design, plus the reverse-proxy header hygiene (hop-by-hop stripping, dropped inbound Host/Cookie/Authorization, recomputed `X-Forwarded-*`), only fully exercises behind a real TLS terminator with real subdomains. Running the same containers and the same nginx as prod is how you exercise it.
 
 ## Topology
 
@@ -19,11 +19,11 @@ The gateway's cross-tenant isolation is carried by two host-scoped cookies: `id_
   +---------------------- chan-svc zone (private bridge, inside Lima) ------+
   |  chan-nginx   TLS terminator; the ONLY published container (:80,:443)  |
   |     id.<domain>          -> chan-id:7000                               |
-  |     <domain> (apex)      -> chan-workspace-proxy:7002  (admin, healthz)|
-  |       /v1/tunnel (h2c)   -> chan-workspace-proxy:7100  (grpc_pass)     |
-  |     *.workspace.<domain> -> chan-workspace-proxy:7002  (tenant + WS)   |
+  |     <domain> (apex)      -> chan-devserver-proxy:7002  (admin, healthz)|
+  |       /v1/tunnel (h2c)   -> chan-devserver-proxy:7100  (grpc_pass)     |
+  |     *.workspace.<domain> -> chan-devserver-proxy:7002  (tenant + WS)   |
   |                                                                        |
-  |  chan-id:7000   chan-profile:7001   chan-workspace-proxy:7002 + :7100  |
+  |  chan-id:7000   chan-profile:7001   chan-devserver-proxy:7002 + :7100  |
   |  chan-psql:5432   (also published :5432 for host-side cargo test)      |
   +------------------------------------------------------------------------+
 ```
@@ -48,7 +48,7 @@ The service containers install the gateway `.deb`s, the same way prod does, so b
 make linux-gateway     # root Makefile -> build-gateway.sh, uses gateway-build.sdme
 ```
 
-`gateway-build.sdme` (in `scripts/dev/sdme/`) bakes the Rust toolchain, node/npm, and cargo-deb; no Postgres is needed at build time. The four packages (identity, profile, workspace-proxy, admin) land in the build's `dist/` staging dir, where the service containers pick them up.
+`gateway-build.sdme` (in `scripts/dev/sdme/`) bakes the Rust toolchain, node/npm, and cargo-deb; no Postgres is needed at build time. The four packages (identity, profile, devserver-proxy, admin) land in the build's `dist/` staging dir, where the service containers pick them up.
 
 ## Postgres: chan-psql on the zone
 
@@ -66,7 +66,7 @@ Services reach it as `chan-psql:5432` on the zone; the published `:5432` (via Li
 
 ## The service containers (pattern + one worked example)
 
-Each gateway service is its own container built from a tiny `.sdme` file that installs the matching `.deb` and enables its systemd unit. The prod files live in `chan-prod-setup/services/` (`chan-id.sdme`, `chan-profile.sdme`, `chan-workspace-proxy.sdme`); a dev-sanitized copy differs only in where secrets come from. Worked example, identity:
+Each gateway service is its own container built from a tiny `.sdme` file that installs the matching `.deb` and enables its systemd unit. The prod files live in `chan-prod-setup/services/` (`chan-id.sdme`, `chan-profile.sdme`, `chan-devserver-proxy.sdme`); a dev-sanitized copy differs only in where secrets come from. Worked example, identity:
 
 ```dockerfile
 # chan-id-dev.sdme: chan-gateway-identity (id.<domain> on :7000)
@@ -86,7 +86,7 @@ RUN set -eux; \
 Environment=BIND_ADDR=0.0.0.0:7000\n\
 Environment=BASE_URL=http://id.localtest.me\n\
 Environment=PROFILE_SERVICE_URL=http://chan-profile:7001\n\
-Environment=WORKSPACE_ADMIN_URL=http://chan-workspace-proxy:7002\n\
+Environment=WORKSPACE_ADMIN_URL=http://chan-devserver-proxy:7002\n\
 Environment=COOKIE_SECURE=false\n\
 Environment=GITHUB_CLIENT_ID=...  GITHUB_CLIENT_SECRET=...\n' \
         > /etc/systemd/system/chan-gateway-identity.service.d/dev-env.conf; \
@@ -101,7 +101,7 @@ limactl shell default sudo sdme create chan-id -r chan-id-dev --network-zone cha
 limactl shell default sudo sdme start chan-id
 ```
 
-`chan-profile` and `chan-workspace-proxy` follow the identical shape: install their `.deb`, set their bind addr and the hostname-based URLs (`profile` needs `DATABASE_URL=postgres://chan:chan@chan-psql:5432/chan_gateway`; `workspace-proxy` needs `IDENTITY_URL=http://chan-id:7000`, `TUNNEL_BIND_ADDR=0.0.0.0:7100`, `FORWARDED_PROTO=https`, and the `WORKSPACE_GATE_SECRET`/`IDENTITY_INTERNAL_TOKEN` shared secrets). Generate the shared secrets with `openssl rand -hex 32` and reuse the matching value across the two services that share each one. See `chan-prod-setup/services/` for the prod versions and `chan-prod-setup/bin/secrets-init.sh` for the full secret set.
+`chan-profile` and `chan-devserver-proxy` follow the identical shape: install their `.deb`, set their bind addr and the hostname-based URLs (`profile` needs `DATABASE_URL=postgres://chan:chan@chan-psql:5432/chan_gateway`; `devserver-proxy` needs `IDENTITY_URL=http://chan-id:7000`, `TUNNEL_BIND_ADDR=0.0.0.0:7100`, `FORWARDED_PROTO=https`, and the `WORKSPACE_GATE_SECRET`/`IDENTITY_INTERNAL_TOKEN` shared secrets). Generate the shared secrets with `openssl rand -hex 32` and reuse the matching value across the two services that share each one. See `chan-prod-setup/services/` for the prod versions and `chan-prod-setup/bin/secrets-init.sh` for the full secret set.
 
 ## nginx container + TLS
 
@@ -109,9 +109,9 @@ nginx is its own container (`chan-nginx`), the TLS terminator and the only one t
 
 ```
 id.<domain>                  -> chan-id:7000               (proxy_pass)
-<domain> (apex)              -> chan-workspace-proxy:7002  (admin + healthz)
-<domain>/v1/tunnel           -> chan-workspace-proxy:7100  (grpc_pass, h2c)
-*.workspace.<domain>         -> chan-workspace-proxy:7002  (tenant + WS upgrade)
+<domain> (apex)              -> chan-devserver-proxy:7002  (admin + healthz)
+<domain>/v1/tunnel           -> chan-devserver-proxy:7100  (grpc_pass, h2c)
+*.workspace.<domain>         -> chan-devserver-proxy:7002  (tenant + WS upgrade)
 ```
 
 The one dev difference is the certificate. Prod uses certbot with the dns-01 Cloudflare plugin to get a real `*.workspace.<domain>` wildcard (http-01 cannot issue wildcards). Locally, issue a local-CA wildcard with [`mkcert`](https://github.com/FiloSottile/mkcert) and mount it into the nginx container in place of `/etc/letsencrypt`:
@@ -188,7 +188,7 @@ npm ci && npm run build --workspaces   # SPA; rust-embed needs web/dist
 cargo test                             # profile + identity need the DB
 ```
 
-`workspace-proxy` and all `cargo test --lib` unit tests need no database; only `profile` and `identity` integration tests do. Per-test schema isolation means a `cargo test` run never clobbers the `chan_gateway` DB a running stack uses. CI (`gateway-ci.yml`) runs the same gate with a `postgres:16` service on `ubuntu-latest` (x86_64), the canonical lane; local sdme is the fast loop.
+`devserver-proxy` and all `cargo test --lib` unit tests need no database; only `profile` and `identity` integration tests do. Per-test schema isolation means a `cargo test` run never clobbers the `chan_gateway` DB a running stack uses. CI (`gateway-ci.yml`) runs the same gate with a `postgres:16` service on `ubuntu-latest` (x86_64), the canonical lane; local sdme is the fast loop.
 
 ### Connection reaper (test infra)
 
@@ -215,5 +215,5 @@ Safe whenever no live stack is connected to `chan_gateway`.
 - **`connection refused on localhost:5432`** — `sdme ps` should list chan-psql Running; if stopped, `sdme start chan-psql`; if wedged under load, `sdme exec chan-psql -- /usr/bin/systemctl restart postgresql`.
 - **A service can't reach another** — they resolve by container hostname ON the `chan-svc` zone, so every service container (and chan-psql) must be created with `--network-zone chan-svc`; check `sdme ps` and the hostname-based URLs in each unit's env.
 - **Browser rejects the local cert** — run `mkcert -install` so the local CA is trusted, and reissue the wildcard if you changed the domain.
-- **Signed-in but the workspace 404s** — confirm nginx serves https and `FORWARDED_PROTO=https` is set on workspace-proxy; a scheme mismatch makes the `workspace_gate` cookie fail to attach.
+- **Signed-in but the workspace 404s** — confirm nginx serves https and `FORWARDED_PROTO=https` is set on devserver-proxy; a scheme mismatch makes the `devserver_gate` cookie fail to attach.
 - **Tests pass locally but break on CI** — same migration set must run (`migrations/0001..N` in order); a forgotten file shows up as missing-column errors on first use.

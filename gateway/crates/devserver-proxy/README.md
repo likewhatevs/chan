@@ -1,18 +1,18 @@
-# workspace-proxy
+# devserver-proxy
 
 Public-facing service at devserver.chan.app (apex) and `*.devserver.chan.app` (wildcard). Reverse-proxies HTTP / WebSocket traffic into a user's running `chan serve` instances. Embeds `chan-tunnel-server` to terminate registrations from those instances on a separate h2c listener. No SPA, no database; it is a stateless proxy.
 
 ## Role in the system
 
-workspace-proxy is the surface where a workspace is served in the browser. It does NOT read identity's `id_session` cookie. Entry is gated by the devserver-gate handoff: identity mints a short-lived entry JWT and 303s the browser to `{user}.devserver.<domain>/{workspace}/?t=<jwt>`; workspace-proxy verifies it (signature + `aud` = inbound host + `drv`), mints its own host-only, path-scoped `devserver_gate` cookie, and forwards authenticated traffic to the right `chan serve` peer through a yamux substream owned by an active tunnel. The `aud`-equals-inbound-host check is what enforces tenant isolation.
+devserver-proxy is the surface where a workspace is served in the browser. It does NOT read identity's `id_session` cookie. Entry is gated by the devserver-gate handoff: identity mints a short-lived entry JWT and 303s the browser to `{user}.devserver.<domain>/{workspace}/?t=<jwt>`; devserver-proxy verifies it (signature + `aud` = inbound host + `drv`), mints its own host-only, path-scoped `devserver_gate` cookie, and forwards authenticated traffic to the right `chan serve` peer through a yamux substream owned by an active tunnel. The `aud`-equals-inbound-host check is what enforces tenant isolation.
 
 ## Build
 
 ```bash
-cargo build -p workspace-proxy
+cargo build -p devserver-proxy
 ```
 
-No frontend: workspace-proxy ships no SPA.
+No frontend: devserver-proxy ships no SPA.
 
 ## Dev run
 
@@ -22,7 +22,7 @@ export TUNNEL_BIND_ADDR=127.0.0.1:7100
 export IDENTITY_URL=http://127.0.0.1:7000
 export IDENTITY_INTERNAL_TOKEN=dev-internal-token
 export WORKSPACE_GATE_SECRET=dev-devserver-gate-secret
-cargo run -p workspace-proxy
+cargo run -p devserver-proxy
 ```
 
 For the full local stack (with identity + profile + Postgres), prefer `scripts/dev/setup.sh` + `scripts/dev/run.sh`. Two listeners come up:

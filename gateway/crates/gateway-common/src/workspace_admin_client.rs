@@ -1,16 +1,16 @@
-//! Thin reqwest client for workspace-proxy's `/admin/v1/*` tree.
+//! Thin reqwest client for devserver-proxy's `/admin/v1/*` tree.
 //!
 //! Used by:
 //!   * identity-service on PAT revoke, account delete, and dashboard
 //!     reads (`/api/me` merges the live workspace list), so id can
-//!     render and gate without going through workspace-proxy's wildcard
+//!     render and gate without going through devserver-proxy's wildcard
 //!     surface.
 //!   * profile-service on admin block, so the in-process yamux
-//!     registrations workspace-proxy holds for that user are torn down
+//!     registrations devserver-proxy holds for that user are torn down
 //!     at the same time the DB state changes.
 //!
 //! Errors are surfaced but every write call site should treat this
-//! as best-effort: a brief workspace-proxy outage shouldn't block the
+//! as best-effort: a brief devserver-proxy outage shouldn't block the
 //! primary action (revoke, block, delete). On the wire the existing
 //! tokens stop validating immediately; the live substreams just
 //! linger a bit longer than ideal. Read calls bubble up directly
@@ -27,7 +27,7 @@ use url::Url;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceAdminError {
-    #[error("workspace-proxy admin upstream: {0}")]
+    #[error("devserver-proxy admin upstream: {0}")]
     Upstream(String),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
@@ -35,9 +35,9 @@ pub enum WorkspaceAdminError {
 
 pub type WorkspaceAdminResult<T> = Result<T, WorkspaceAdminError>;
 
-/// One live tunnel as workspace-proxy reports it. Mirrors workspace-proxy's
+/// One live tunnel as devserver-proxy reports it. Mirrors devserver-proxy's
 /// `admin::TunnelView`; the duplication is deliberate (this crate
-/// stays independent of workspace-proxy's internal types so it can be
+/// stays independent of devserver-proxy's internal types so it can be
 /// pulled by identity and profile without a circular dep).
 #[derive(Debug, Clone, Deserialize)]
 pub struct TunnelView {
@@ -103,7 +103,7 @@ impl WorkspaceAdminClient {
         let status = res.status();
         if !status.is_success() {
             let body = res.text().await.unwrap_or_default();
-            tracing::warn!(%status, body = %body, "workspace-proxy admin upstream error");
+            tracing::warn!(%status, body = %body, "devserver-proxy admin upstream error");
             return Err(WorkspaceAdminError::Upstream(format!("{status}")));
         }
         // The endpoint returns 200 with a JSON body; tolerate 204 to
@@ -130,7 +130,7 @@ impl WorkspaceAdminClient {
         let status = res.status();
         if !status.is_success() {
             let body = res.text().await.unwrap_or_default();
-            tracing::warn!(%status, body = %body, "workspace-proxy admin upstream error");
+            tracing::warn!(%status, body = %body, "devserver-proxy admin upstream error");
             return Err(WorkspaceAdminError::Upstream(format!("{status}")));
         }
         let tunnels: Vec<TunnelView> = res.json().await?;

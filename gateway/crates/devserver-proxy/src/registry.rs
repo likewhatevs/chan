@@ -2,7 +2,7 @@
 //!
 //! The tunnel-server crate already maintains the authoritative
 //! `(user, workspace) -> TunnelHandle` map (collision policy, eviction
-//! on disconnect, substream open). workspace-proxy adds two things on
+//! on disconnect, substream open). devserver-proxy adds two things on
 //! top:
 //!
 //!   * a `username -> user_id` cache populated by the validator

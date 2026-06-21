@@ -32,7 +32,7 @@ REPO_ROOT := $(abspath .)
 # surfaced at release-tag time, because nothing local built the gateway.
 # Pointing every consumer here means a future rename breaks the local
 # gate, not just the published release.
-GATEWAY_RELEASE_CRATES := profile identity workspace-proxy admin
+GATEWAY_RELEASE_CRATES := profile identity devserver-proxy admin
 
 .PHONY: help
 help: ## Show this help.

@@ -88,6 +88,7 @@ mod tests {
             Ok(Validated {
                 user_id: Uuid::nil(),
                 username: "u".into(),
+                devserver_id: "ds-test".into(),
                 scopes: vec!["tunnel".into()],
             })
         }

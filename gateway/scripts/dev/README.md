@@ -1,6 +1,6 @@
 # Local dev stack
 
-Bootstraps the four chan-gateway services (postgres + profile + identity + workspace-proxy) against a workspace `cargo run` build, so you can browse `id.localtest.me:17000` and exercise the dashboard, OAuth flow, and workspace-gate handoff against the real binaries.
+Bootstraps the four chan-gateway services (postgres + profile + identity + devserver-proxy) against a workspace `cargo run` build, so you can browse `id.localtest.me:17000` and exercise the dashboard, OAuth flow, and workspace-gate handoff against the real binaries.
 
 `*.localtest.me` resolves to `127.0.0.1` for every subdomain via public DNS, which sidesteps the `/etc/hosts` surgery you would otherwise need to test the wildcard-subdomain shape locally.
 
@@ -10,7 +10,7 @@ Dev port layout (offset by `+10000` from the prod-shaped ports so the runner can
 |---------------|---------|------------------------------------------|
 | profile       | `17001` | http://127.0.0.1:17001                   |
 | identity      | `17000` | http://id.localtest.me:17000             |
-| workspace-proxy   | `17002` | http://workspace.localtest.me:17002 (apex)   |
+| devserver-proxy   | `17002` | http://workspace.localtest.me:17002 (apex)   |
 |               |         | http://*.workspace.localtest.me:17002 (wild) |
 | workspace tunnel  | `17100` | http://workspace.localtest.me:17100 (h2c)    |
 
@@ -38,7 +38,7 @@ Dev port layout (offset by `+10000` from the prod-shaped ports so the runner can
 scripts/dev/run.sh
 ```
 
-Spawns profile, identity, and workspace-proxy in the foreground. Logs from all three multiplex to stdout, prefixed by service. Ctrl-C sends SIGINT to all three and waits for clean shutdown.
+Spawns profile, identity, and devserver-proxy in the foreground. Logs from all three multiplex to stdout, prefixed by service. Ctrl-C sends SIGINT to all three and waits for clean shutdown.
 
 Then open:
 
@@ -82,7 +82,7 @@ cargo run -p chan -- serve <some-workspace-dir> \
   --tunnel-workspace-name=blog
 ```
 
-The `http://` scheme on the URL triggers chan-tunnel-client's h2c path (no TLS); workspace-proxy's tunnel listener is bound to `127.0.0.1:17100` and speaks h2c directly. Once connected, the dashboard's Workspaces tab lists the workspace; clicking Open redirects the browser through `/api/workspaces/open` to `http://<user>.workspace.localtest.me:17002/blog/`.
+The `http://` scheme on the URL triggers chan-tunnel-client's h2c path (no TLS); devserver-proxy's tunnel listener is bound to `127.0.0.1:17100` and speaks h2c directly. Once connected, the dashboard's Workspaces tab lists the workspace; clicking Open redirects the browser through `/api/workspaces/open` to `http://<user>.workspace.localtest.me:17002/blog/`.
 
 ## Notes
 

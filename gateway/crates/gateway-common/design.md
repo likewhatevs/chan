@@ -2,13 +2,13 @@
 
 ## Problem
 
-identity-service, workspace-proxy and profile-service need the same plumbing in several places:
+identity-service, devserver-proxy and profile-service need the same plumbing in several places:
 
 - a `ProfileClient` calling profile-service over HTTP;
-- a `WorkspaceAdminClient` calling workspace-proxy admin (used by identity on revoke / delete / dashboard reads and by profile on admin block);
-- the JWT shape used by the devserver-gate handoff between identity (mint) and workspace-proxy (verify + mint sessions);
+- a `WorkspaceAdminClient` calling devserver-proxy admin (used by identity on revoke / delete / dashboard reads and by profile on admin block);
+- the JWT shape used by the devserver-gate handoff between identity (mint) and devserver-proxy (verify + mint sessions);
 - the public-hostname derivation both public services must agree on;
-- username validation rules that profile, identity and workspace-proxy all enforce;
+- username validation rules that profile, identity and devserver-proxy all enforce;
 - the token-bucket primitive both validate throttles wrap.
 
 Per-crate copies would risk drift and make cross-cutting choices (timeouts, error mapping, MIME guessing, signing claims, throttle limits) live in multiple places.
@@ -18,7 +18,7 @@ Per-crate copies would risk drift and make cross-cutting choices (timeouts, erro
 Library crate with eight modules and no axum / IntoResponse coupling in the data-layer types:
 
 - `domain` (`src/domain.rs`)
-  - `Domains`: public hostnames (`base`, `id_host`, `devserver_apex`, `devserver_wildcard_suffix`) derived from one base domain via `from_base` / `from_env` (`CHAN_DOMAIN`, default `localtest.me`). identity and workspace-proxy derive the same hosts from the same env, so the devserver-gate `aud` cannot drift. std-only.
+  - `Domains`: public hostnames (`base`, `id_host`, `devserver_apex`, `devserver_wildcard_suffix`) derived from one base domain via `from_base` / `from_env` (`CHAN_DOMAIN`, default `localtest.me`). identity and devserver-proxy derive the same hosts from the same env, so the devserver-gate `aud` cannot drift. std-only.
 - `profile_client` (`src/profile_client.rs`)
   - `ProfileClient`: reqwest-backed client with a 10-second per-request timeout. Bearer token lives inside; callers do not deal with auth. Idempotent GETs on the dashboard / OAuth-callback read path retry once after 100 ms on connect error, timeout, or 5xx (`send_idempotent`); writes never retry.
   - Serde types matching profile-service's wire shapes: `User`, `Identity`, `UpsertResponse`, `FeatureFlag*`, `FlagMap`, `Workspace`, `WorkspaceGrant`, `WorkspaceAccess`, `OwnedWorkspaceSummary`, `IncomingShare`. `User` is the superset of every field profile returns; consumers ignore the fields they do not need.
@@ -88,7 +88,7 @@ Library crate with eight modules and no axum / IntoResponse coupling in the data
 |---------------------------------------------------|-------------------------------|
 | `Claims` (serde)                                  | entry + session JWT envelope  |
 | `encode_entry(secret, sub, drv, aud)`             | identity mints (30s exp)      |
-| `encode_session(secret, sub, drv, aud)`           | workspace-proxy mints (24h)   |
+| `encode_session(secret, sub, drv, aud)`           | devserver-proxy mints (24h)   |
 | `decode(secret, token, typ, aud, drv)`            | verify; returns `Claims`      |
 
 `static_files::serve` is a single async function with one type parameter for the embedded asset set. `token_bucket::TokenBucket`, `validators::valid_username`, `domain::Domains`, and `shutdown_signal` are plain types / functions described above.
@@ -105,7 +105,7 @@ Library crate with eight modules and no axum / IntoResponse coupling in the data
 
 ### Shared devserver_gate
 
-Both identity and workspace-proxy depend on the same JWT envelope and the same HS256 verification config (hard-required alg, no fallback). One module here is the canonical place for both; the secret is shared between the two services via env var (`WORKSPACE_GATE_SECRET`).
+Both identity and devserver-proxy depend on the same JWT envelope and the same HS256 verification config (hard-required alg, no fallback). One module here is the canonical place for both; the secret is shared between the two services via env var (`WORKSPACE_GATE_SECRET`).
 
 ### `static_files::serve` is generic over `RustEmbed`
 

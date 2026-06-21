@@ -1,10 +1,10 @@
 //! chan-gateway-admin: command-line admin for the chan.app gateway.
 //!
 //! Talks to profile-service's `/v1/admin/*` tree (plus the non-admin
-//! routes used for cross-service reads) and workspace-proxy's
+//! routes used for cross-service reads) and devserver-proxy's
 //! `/admin/v1/*` tree (tunnel ps / kill / watch). Authenticates with
 //! `CHAN_ADMIN_TOKEN`, which must match `PROFILE_ADMIN_TOKEN` on
-//! profile-service and `WORKSPACE_ADMIN_TOKEN` on workspace-proxy.
+//! profile-service and `WORKSPACE_ADMIN_TOKEN` on devserver-proxy.
 //!
 //! Output is shell-friendly: human-readable tables on a TTY,
 //! `--json` everywhere for piping into jq. Exit codes:
@@ -40,13 +40,13 @@ struct Cli {
     #[arg(long, global = true, env = "CHAN_ADMIN_PROFILE_URL")]
     profile_url: Option<String>,
 
-    /// HTTP URL of workspace-proxy (used by `tunnel` subcommands).
+    /// HTTP URL of devserver-proxy (used by `tunnel` subcommands).
     /// Defaults to CHAN_ADMIN_WORKSPACE_URL or http://127.0.0.1:7002.
     #[arg(long, global = true, env = "CHAN_ADMIN_WORKSPACE_URL")]
     workspace_url: Option<String>,
 
     /// Bearer matching profile-service's PROFILE_ADMIN_TOKEN and
-    /// workspace-proxy's WORKSPACE_ADMIN_TOKEN. Single-token deployments
+    /// devserver-proxy's WORKSPACE_ADMIN_TOKEN. Single-token deployments
     /// share one secret across both services; deployments that
     /// rotate them independently can override per-call with the
     /// dedicated env vars.
@@ -73,7 +73,7 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TokenCmd,
     },
-    /// Inspect and kill live tunnels (live workspace-proxy registry).
+    /// Inspect and kill live tunnels (live devserver-proxy registry).
     Tunnel {
         #[command(subcommand)]
         cmd: TunnelCmd,
@@ -275,10 +275,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             cmd: UserCmd::Block { ident, reason },
         } => {
             // Block needs both clients: profile holds the canonical
-            // block + token revoke, workspace-proxy holds live tunnel
+            // block + token revoke, devserver-proxy holds live tunnel
             // registrations that must be severed so the cookie-
             // session bypass (existing tunnels surviving an admin
-            // block) is closed. Profile first so a workspace-proxy
+            // block) is closed. Profile first so a devserver-proxy
             // outage doesn't leave the user un-blocked.
             let profile = build_profile_client(cli.profile_url.as_deref(), &token)?;
             let u = profile.resolve_user(&ident).await?;

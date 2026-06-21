@@ -2,15 +2,15 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use chan_tunnel_server::{serve_tunnel_listener, Validator};
-use tokio::sync::Notify;
-use tracing_subscriber::EnvFilter;
-use workspace_proxy::{
+use devserver_proxy::{
     config::Config,
     http,
     identity_validator::{CapturingValidator, IdentityValidator},
     registry::Registry,
     throttle_validator::ThrottlingValidator,
 };
+use tokio::sync::Notify;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -22,7 +22,7 @@ async fn main() -> ExitCode {
         .init();
 
     if let Err(e) = run().await {
-        tracing::error!(error = ?e, "workspace-proxy-service exited with error");
+        tracing::error!(error = ?e, "devserver-proxy-service exited with error");
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
@@ -37,7 +37,7 @@ async fn run() -> anyhow::Result<()> {
         wildcard = %cfg.wildcard_suffix,
         identity = %cfg.identity_url,
         max_workspaces_per_user = cfg.max_workspaces_per_user,
-        "starting workspace-proxy-service",
+        "starting devserver-proxy-service",
     );
 
     let registry = Registry::new();

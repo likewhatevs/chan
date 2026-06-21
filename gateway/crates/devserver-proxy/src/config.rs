@@ -22,18 +22,18 @@ pub struct Config {
     /// `.devserver.chan.app`). The proxy router parses `{user}` out of
     /// every Host that ends with this suffix.
     pub wildcard_suffix: String,
-    /// Base URL of identity-service. workspace-proxy POSTs to
+    /// Base URL of identity-service. devserver-proxy POSTs to
     /// `{identity_url}/internal/v1/tokens/validate` to validate the
     /// PAT every `chan serve` presents in its tunnel handshake.
     pub identity_url: Url,
-    /// Bearer workspace-proxy presents on identity-service's
+    /// Bearer devserver-proxy presents on identity-service's
     /// `/internal/v1/tokens/validate`. Sourced from
     /// `IDENTITY_INTERNAL_TOKEN`; required, no fallback.
     pub identity_auth_token: String,
     /// Absolute URL the wildcard root (`{user}.devserver.chan.app/`)
     /// 302s to. The dashboard lives at id.chan.app/workspaces in prod;
     /// dev sets this to `http://id.localtest.me:17000/workspaces`. If
-    /// unset, workspace-proxy derives a sensible default by swapping
+    /// unset, devserver-proxy derives a sensible default by swapping
     /// the `devserver.` prefix on `apex_host` for `id.` and assuming
     /// `https`.
     pub dashboard_url: String,
@@ -65,7 +65,7 @@ pub struct Config {
     /// per-half idle timeouts instead.
     pub request_timeout: Option<std::time::Duration>,
     /// Value to set on the outbound `X-Forwarded-Proto` header before
-    /// forwarding to the upstream `chan serve`. workspace-proxy itself
+    /// forwarding to the upstream `chan serve`. devserver-proxy itself
     /// does not see TLS (nginx terminates), so we cannot derive this
     /// from the inbound connection; the inbound `X-Forwarded-Proto`
     /// is client-controlled and must not be trusted. Defaults to
@@ -121,7 +121,7 @@ impl Config {
             .parse()
             .context("IDENTITY_URL must be a URL")?;
 
-        // Bearer workspace-proxy presents on identity-service's
+        // Bearer devserver-proxy presents on identity-service's
         // /internal/v1/tokens/validate. Required; the same value is
         // configured on identity as IDENTITY_INTERNAL_TOKEN. No
         // fallback to PROFILE_AUTH_TOKEN: rotating the profile bearer

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build the chan-gateway .deb packages (profile, identity, workspace-proxy,
+# Build the chan-gateway .deb packages (profile, identity, devserver-proxy,
 # admin) inside an sdme container, then copy them out to the host. This is the
 # local-dev, sdme-based mirror of the release.yml gateway-linux-packages job;
 # CI builds natively on its ubuntu runners (amd64 + arm64) and does NOT use
