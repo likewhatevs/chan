@@ -64,3 +64,18 @@ describe("Pane.svelte menu annotation", () => {
     expect(pane).toMatch(/await reloadWindow\(\)/);
   });
 });
+
+describe("layout-persist effect tracks the Hybrid flip (reload survival)", () => {
+  // The flip (pane.showingBack) + per-Hybrid theme live on the pane, not a
+  // tab. The single layout-persist $effect schedules the hash + session save
+  // by reading reactive deps; it MUST read these pane fields or a bare flip /
+  // theme change never schedules a save and a reload restores the un-flipped
+  // layout. The serialize/restore already round-trip sb/ht; this guards the
+  // missing reactive dep that left the flip unpersisted (a Svelte-5 reactivity
+  // regression the static type/test gate cannot catch at runtime).
+  test("the persist effect reads node.showingBack + node.theme", () => {
+    // `void node.showingBack;` only appears in the layout-persist effect's
+    // leaf loop; asserting the adjacent pane-field reads pins the fix.
+    expect(app).toMatch(/void node\.showingBack;\s*void node\.theme;/);
+  });
+});

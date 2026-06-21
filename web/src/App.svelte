@@ -147,6 +147,13 @@
       if (node.kind !== "leaf") continue;
       void node.activeTabId;
       void node.tabs.length;
+      // The Hybrid flip + per-Hybrid theme persist (sb / ht in the SerLeaf)
+      // but live on the pane, not a tab. Read them here so a bare flip /
+      // theme change re-runs this effect and schedules the save; without
+      // these a flip-only change never persists and a reload restores the
+      // un-flipped layout.
+      void node.showingBack;
+      void node.theme;
       for (const t of node.tabs) {
         if (t.kind === "terminal") {
           void t.title;
