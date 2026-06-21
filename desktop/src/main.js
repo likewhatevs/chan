@@ -832,8 +832,9 @@ function bindDevserverSectionEvents(devservers) {
     const newTerminal = section.querySelector('[data-act="new-terminal-devserver"]');
     if (newTerminal) {
       // Open ANOTHER standalone terminal on the connected devserver (the
-      // connect flow already opened the first). Each click mounts a fresh
-      // remote terminal tenant in its own window.
+      // connect flow already opened the first). Each click mints a library
+      // terminal window the desktop's window watcher opens, on the devserver's
+      // shared /terminal tenant.
       newTerminal.addEventListener('click', async () => {
         if (!id) return;
         try {

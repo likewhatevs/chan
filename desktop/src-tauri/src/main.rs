@@ -1299,48 +1299,23 @@ async fn open_devserver_workspace(
     Ok(())
 }
 
-/// Open one standalone terminal on a connected devserver as a PERSISTED,
-/// per-window tenant (Seam 4): mint a window label in the devserver's terminal
-/// family, have the devserver mount + persist a tenant keyed by that label, and
-/// open the window at it — so `fetch_terminals` re-surfaces it on reconnect. The
-/// labels share one window family (`devserver_terminal_window_id`) for
-/// Cmd+Shift+N / teardown grouping; the PTYs are per-tenant (no shared
-/// cross-window registry). Shared by the New-Terminal command, the connect
-/// flow's first terminal, and Cmd+Shift+N on a focused devserver terminal.
-async fn open_devserver_terminal_window(
-    app: &tauri::AppHandle,
-    state: &AppState,
-    id: &str,
-) -> Result<(), String> {
-    let conn = state
-        .devservers
-        .get(id)
-        .ok_or_else(|| format!("devserver {id} is not connected"))?;
-    let window_id = devserver_terminal_window_id(id);
-    let label = serve::new_outbound_window_label(&window_id);
-    let terminal_url = devserver::open_terminal_with_label(&conn, &label).await?;
-    serve::spawn_devserver_terminal_window_at_label(app, &window_id, &label, &terminal_url)?;
-    track_devserver_window(
-        state,
-        id,
-        DevserverWindow {
-            window_id,
-            label,
-            prefix: None,
-        },
-    );
-    Ok(())
-}
-
-/// Open a standalone terminal on a connected devserver (the New-Terminal
-/// affordance). Thin wrapper over [`open_devserver_terminal_window`].
+/// Mint a standalone terminal window on a connected devserver's library (the
+/// launcher's per-devserver New Terminal button). The library assigns the window
+/// id, persists the record, and fires the watch, so the desktop's window watcher
+/// opens it as a `lib-` terminal on the devserver's shared `/terminal` tenant —
+/// the same terminal family as the connect-time boot terminal, not an isolated
+/// per-window tenant.
 #[tauri::command]
 async fn open_devserver_terminal(
-    app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    open_devserver_terminal_window(&app, &state, &id).await
+    let conn = state
+        .devservers
+        .get(&id)
+        .ok_or_else(|| format!("devserver {id} is not connected"))?;
+    devserver::mint_library_window(&conn, chan_server::WindowKind::Terminal, None).await?;
+    Ok(())
 }
 
 /// Re-open a devserver's open workspace windows with fresh tenant URLs after
@@ -3597,20 +3572,21 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
             None => show_window(app, "main"),
         };
     }
-    // A watcher-opened devserver workspace window (`lib-<library_id>::<window_id>`):
-    // mint ANOTHER window for the same workspace on the same devserver, mirroring
-    // the `local::` branch. There is no stored library_id->devserver map, so the
-    // async helper matches the focused label against each connected devserver's
-    // feed (which also hands back the focused window's `workspace_path`). It is an
-    // HTTP round-trip, so fire-and-forget — a failure surfaces as a warning, not a
-    // blocked menu handler. (Without this a `lib-` label matches no branch below
-    // and falls through to `show_window("main")` — the bug where Cmd+Shift+N on a
-    // devserver workspace window jumps focus back to the launcher.)
+    // A watcher-opened devserver window (`lib-<library_id>::<window_id>`): mint
+    // ANOTHER window of the SAME kind on the same devserver, mirroring the
+    // `local::` branch (a Terminal opens another standalone terminal; a Workspace
+    // another window for its workspace). There is no stored library_id->devserver
+    // map, so the async helper matches the focused label against each connected
+    // devserver's feed (which hands back the focused window's kind +
+    // workspace_path). It is an HTTP round-trip, so fire-and-forget — a failure
+    // surfaces as a warning, not a blocked menu handler. (Without this a `lib-`
+    // label matches no branch below and falls through to `show_window("main")` —
+    // Cmd+Shift+N on a devserver window jumps focus back to the launcher.)
     if focused_label.starts_with("lib-") {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = mint_another_devserver_workspace_window(&app, &focused_label).await {
-                tracing::warn!(label = %focused_label, error = %e, "Cmd+Shift+N on a devserver workspace window failed");
+            if let Err(e) = mint_another_devserver_window(&app, &focused_label).await {
+                tracing::warn!(label = %focused_label, error = %e, "Cmd+Shift+N on a devserver window failed");
             }
         });
         return Ok(());
@@ -3624,27 +3600,6 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
     }
     if focused_label.starts_with("outbound-") {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
-        // A devserver standalone terminal: open ANOTHER persisted per-tenant
-        // terminal on the same devserver (Cmd+Shift+N parity with New-Terminal).
-        // All a devserver's terminals share the stable window id, so their labels
-        // share one outbound hash prefix; recompute it per devserver to recover
-        // which one is focused. The mount is an async HTTP POST, so fire-and-
-        // forget it (like the local standalone-terminal case) and surface a
-        // failure as a warning rather than blocking the menu handler.
-        for ds in &cfg.devservers {
-            let prefix = serve::outbound_window_prefix(&devserver_terminal_window_id(&ds.id));
-            if focused_label.starts_with(&format!("{prefix}-")) {
-                let app = app.clone();
-                let id = ds.id.clone();
-                tauri::async_runtime::spawn(async move {
-                    let state = app.state::<Arc<AppState>>();
-                    if let Err(e) = open_devserver_terminal_window(&app, &state, &id).await {
-                        tracing::warn!(devserver = %id, error = %e, "opening another devserver terminal failed");
-                    }
-                });
-                return Ok(());
-            }
-        }
         // New window on the SAME outbound remote: recover the attachment
         // by matching the focused label's hash prefix (labels are
         // `outbound-<hash(id)>-<seq>`; the hash is one-way).
@@ -3680,14 +3635,14 @@ fn open_new_window_for_focused_workspace(app: &tauri::AppHandle) -> Result<(), S
     }
 }
 
-/// Mint another window for the devserver workspace that owns `focused_label`
+/// Mint another window for the devserver window that owns `focused_label`
 /// (a `lib-<library_id>::<window_id>` watcher window), for Cmd+Shift+N. No stored
 /// `library_id -> devserver` map exists, so match the focused label against each
 /// connected devserver's library feed; the matching record yields the conn AND
-/// the focused window's `workspace_path`. Mint a Workspace window on that conn —
+/// the focused window's kind + `workspace_path`. Mint the SAME kind on that conn —
 /// the watcher opens it — mirroring the `local::` New-Window behavior. A stale
 /// window whose devserver is gone falls back to the picker.
-async fn mint_another_devserver_workspace_window(
+async fn mint_another_devserver_window(
     app: &tauri::AppHandle,
     focused_label: &str,
 ) -> Result<(), String> {
@@ -3708,13 +3663,17 @@ async fn mint_another_devserver_workspace_window(
             .iter()
             .find(|r| crate::window_watcher::native_label(r) == focused_label)
         {
-            return devserver::mint_library_window(
-                &conn,
-                chan_server::WindowKind::Workspace,
-                record.workspace_path.clone(),
-            )
-            .await
-            .map(|_| ());
+            // Mirror the focused window's kind. A Terminal record carries no
+            // `workspace_path`, so minting a Workspace would make a blank,
+            // path-less window; branch on the kind and carry the path only for a
+            // Workspace.
+            let workspace_path = match record.kind {
+                chan_server::WindowKind::Terminal => None,
+                chan_server::WindowKind::Workspace => record.workspace_path.clone(),
+            };
+            return devserver::mint_library_window(&conn, record.kind, workspace_path)
+                .await
+                .map(|_| ());
         }
     }
     // Stale window for a disconnected/forgotten devserver: surface the picker.

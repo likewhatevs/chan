@@ -100,14 +100,6 @@ struct WorkspaceEntry {
     token: String,
 }
 
-/// `POST /api/devserver/terminals`: the mounted terminal tenant's prefix
-/// and its per-tenant token, enough to assemble the tab URL.
-#[derive(Debug, Clone, Deserialize)]
-struct MountedTerminal {
-    prefix: String,
-    token: String,
-}
-
 /// `POST /api/devserver/workspaces/{prefix}/on` body — mirrors the server's
 /// `SetWorkspaceOnRequest`. `on:false` keeps the workspace registered
 /// (unmount-but-remember), distinct from `DELETE` = Forget. `force` overrides
@@ -312,46 +304,6 @@ fn row_from_entry(
         on: e.on,
         url,
     })
-}
-
-/// `POST /api/devserver/terminals` body carrying the desktop-assigned window
-/// `label` (the `?w=` key, in the desktop's outbound family). Per Seam 4
-/// Amendment 6 the devserver persists `{label, prefix, command}` keyed by the
-/// label, so the same standalone terminal re-surfaces on reconnect.
-#[derive(Debug, serde::Serialize)]
-struct OpenTerminalRequest {
-    label: String,
-}
-
-/// `POST /api/devserver/terminals {label}`: mount a PERSISTED standalone
-/// terminal tenant under the desktop-assigned `label` and return its assembled
-/// tab URL. The label is the stable identity (echoed by `fetch_terminals` on
-/// reconnect); the per-mount prefix/token come back fresh.
-pub async fn open_terminal_with_label(conn: &DevserverConn, label: &str) -> Result<String, String> {
-    let url = format!(
-        "{}/api/devserver/terminals",
-        base_origin(&conn.host, conn.port)
-    );
-    let resp = http_client()?
-        .post(&url)
-        .bearer_auth(&conn.token)
-        .json(&OpenTerminalRequest {
-            label: label.to_string(),
-        })
-        .send()
-        .await
-        .map_err(|e| format!("opening devserver terminal: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "devserver terminals returned HTTP {}",
-            resp.status()
-        ));
-    }
-    let terminal = resp
-        .json::<MountedTerminal>()
-        .await
-        .map_err(|e| format!("decoding devserver terminal: {e}"))?;
-    assemble_tenant_url(&conn.host, conn.port, &terminal.prefix, &terminal.token)
 }
 
 /// One element of `GET /api/devserver/terminals`: a persisted standalone
@@ -768,25 +720,6 @@ mod tests {
     }
 
     #[test]
-    fn mounted_terminal_decodes_prefix_and_token() {
-        let json = r#"{"prefix":"/api/terminal-9z","token":"tok_term"}"#;
-        let term: MountedTerminal = serde_json::from_str(json).unwrap();
-        assert_eq!(term.prefix, "/api/terminal-9z");
-        assert_eq!(term.token, "tok_term");
-    }
-
-    #[test]
-    fn open_terminal_request_serializes_label() {
-        assert_eq!(
-            serde_json::to_string(&OpenTerminalRequest {
-                label: "outbound-abc123-3".into()
-            })
-            .unwrap(),
-            r#"{"label":"outbound-abc123-3"}"#
-        );
-    }
-
-    #[test]
     fn persisted_terminal_entry_decodes_a_bare_array_element() {
         let json = r#"[{"label":"outbound-abc123-3","prefix":"/control-2","token":"tok_t"}]"#;
         let entries: Vec<PersistedTerminalEntry> = serde_json::from_str(json).unwrap();
@@ -851,67 +784,5 @@ mod tests {
         assert_eq!(conns.get("ds1").unwrap().port, 8787);
         assert!(conns.remove("ds1").is_some());
         assert!(!conns.is_connected("ds1"));
-    }
-
-    /// Issue 2a guard (@@Alex-mandated): the connect-flow auto-terminal mount
-    /// (`open_terminal_with_label`) must carry a JSON body so the devserver's
-    /// `Json<OpenTerminalRequest>` endpoint accepts it (200) — the old body-less
-    /// POST sent no `Content-Type: application/json` and axum's `Json` extractor
-    /// rejected it 415, breaking the connect flow. The loopback handler uses the
-    /// SAME strict `Json` extractor the real endpoint does, so a regression back
-    /// to a body-less / content-type-less request fails this test.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn open_terminal_with_label_request_is_accepted_by_a_strict_json_endpoint() {
-        use axum::{routing::post, Json, Router};
-
-        #[derive(serde::Deserialize)]
-        struct Req {
-            label: String,
-        }
-        #[derive(serde::Serialize)]
-        struct Resp {
-            prefix: String,
-            token: String,
-        }
-        async fn handler(Json(req): Json<Req>) -> Json<Resp> {
-            Json(Resp {
-                prefix: format!("/api/term-{}", req.label),
-                token: "tok_fake".to_string(),
-            })
-        }
-
-        let app = Router::new().route("/api/devserver/terminals", post(handler));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-
-        let conn = DevserverConn {
-            host: "127.0.0.1".into(),
-            port,
-            token: "dt".into(),
-            name: "box".into(),
-        };
-        let url = open_terminal_with_label(&conn, "guard")
-            .await
-            .expect("labeled terminal POST must be accepted (not HTTP 415)");
-        assert!(url.contains("/api/term-guard/"), "{url}");
-        assert!(url.contains("t=tok_fake"), "{url}");
-
-        // Adversarial half: a body-less POST (the old connect-flow bug) IS
-        // rejected 415 by the same endpoint — so the 200 above is the labeled
-        // JSON body's doing, not a lax mock.
-        let bodyless = http_client()
-            .unwrap()
-            .post(format!("http://127.0.0.1:{port}/api/devserver/terminals"))
-            .bearer_auth("dt")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            bodyless.status(),
-            reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
-        );
     }
 }
