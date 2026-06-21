@@ -180,16 +180,9 @@ Chronological. Items 1-3 are one-time per developer identity; items 4-6 are one-
 
 The release workflow consumes the secrets by name, so once step 6 is complete the next `vX.Y.Z` release cut produces a notarized `.dmg` ready for GitHub Release upload. The same release workflow also checks for the Tauri updater signing secret names documented in `.agents/desktop.md`; those keys are separate from Apple Developer ID signing.
 
-## Parallel Windows signing path (pointer only)
+## Parallel Windows signing path
 
-A separate brief lands when the Windows lane opens (`docs/release/windows-signing.md` is the suggested path). Two cert shapes worth noting for sequencing:
-
-| Cert type | SmartScreen reputation              | Cost / year |
-|-----------|-------------------------------------|-------------|
-| OV        | Builds reputation over time         | ~USD 200    |
-| EV        | Trusted immediately, hardware token | ~USD 400    |
-
-Recommendation when we cross that bridge: OV is sufficient for chan-desktop's distribution model (single signed installer hosted on GitHub Releases). EV's instant-reputation benefit matters most for high-volume enterprise distribution. The hardware-token requirement also makes EV painful for CI (token attestation does not run on GitHub-hosted runners without custom hardware).
+Windows Authenticode signing has its own procedure now: `docs/release/windows-signing.md`. One correction to the old assumption recorded here: the 2023 CA/Browser Forum baseline requires code-signing keys (OV **and** EV) to live on a hardware token or cloud HSM, so there is no downloadable `.pfx` for a new cert — the "base64 a `.pfx` into a CI secret" model used for macOS does NOT carry over. The CI-viable path is a cloud signing service (Azure Trusted Signing, ~USD 120/yr, recommended) rather than a plain OV `.pfx`. See that doc for the purchase decision, the cost table, and the CI wiring.
 
 The release workflow signs macOS only today; Windows signing lands together with a Windows release lane.
 
