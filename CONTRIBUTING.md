@@ -46,7 +46,7 @@ Do not bypass with `--no-verify` unless explicitly agreed. Hook failures get fix
 
 ## Gateway (server-side, Postgres)
 
-`gateway/` is a separate nested Cargo workspace (the account / sign-in / reverse-proxy surface for chan.app: profile, identity, workspace-proxy, admin, gateway-common). It is NOT a member of the root workspace, so `cargo build`/`make pre-push` above never touch it, and the core build stays free of Postgres and the sqlx/oauth2 stack. The gateway has its own gate (`.github/workflows/gateway-ci.yml`) and ships only linux amd64/arm64 `.deb` packages, versioned in lockstep with the root (bump `gateway/Cargo.toml` in the same commit as the root version).
+`gateway/` is a separate nested Cargo workspace (the account / sign-in / reverse-proxy surface for chan.app: profile, identity, devserver-proxy, admin, gateway-common). It is NOT a member of the root workspace, so `cargo build`/`make pre-push` above never touch it, and the core build stays free of Postgres and the sqlx/oauth2 stack. The gateway has its own gate (`.github/workflows/gateway-ci.yml`) and ships only linux amd64/arm64 `.deb` packages, versioned in lockstep with the root (bump `gateway/Cargo.toml` in the same commit as the root version).
 
 Unlike the core, the gateway is Postgres-backed. Its integration tests (`profile`, `identity`) create a throwaway schema per test under `TEST_DATABASE_URL`. The supported, reproducible setup runs Postgres in an `sdme` container (the same way CI does) and works on both Linux and macOS; see [`gateway/docs/testing-on-linux-and-macos.md`](gateway/docs/testing-on-linux-and-macos.md). Any Postgres with a `chan_gateway_test` database also works:
 

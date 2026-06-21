@@ -49,7 +49,7 @@ desktop/                Tauri shell (`chan-desktop`). Embeds
 
 gateway/                Account / sign-in / reverse-proxy surface for
                         chan.app: profile + identity (id.chan.app) and
-                        workspace-proxy (workspace.chan.app), plus the
+                        devserver-proxy (devserver.chan.app), plus the
                         admin CLI and shared gateway-common. A separate
                         nested Cargo workspace (own lock + deps),
                         Postgres-backed and linux amd64/arm64 only, so

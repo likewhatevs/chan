@@ -256,15 +256,15 @@ cargo install cargo-deb
 # build the SPA, then the four .debs
 cd /root/chan/gateway
 npm ci && npm run build --workspaces
-cargo build --release -p profile -p identity -p workspace-proxy -p admin
-for c in profile identity workspace-proxy admin; do cargo deb --no-build -p "$c"; done
+cargo build --release -p profile -p identity -p devserver-proxy -p admin
+for c in profile identity devserver-proxy admin; do cargo deb --no-build -p "$c"; done
 
 # install (postinst creates the chan-gateway user + units + default env),
 # generate config, start, and check health
 dpkg -i target/debian/*.deb || apt-get -f install -y
 bash scripts/configure.sh   # answers: PG user/pass/db, base domain, scheme, >=1 provider
-systemctl enable --now chan-gateway-profile chan-gateway-identity chan-gateway-workspace-proxy
-systemctl is-active chan-gateway-profile chan-gateway-identity chan-gateway-workspace-proxy
+systemctl enable --now chan-gateway-profile chan-gateway-identity chan-gateway-devserver-proxy
+systemctl is-active chan-gateway-profile chan-gateway-identity chan-gateway-devserver-proxy
 for p in 7001 7000 7002; do curl -fsS "http://127.0.0.1:$p/healthz"; echo; done
 ```
 
