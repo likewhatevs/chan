@@ -372,6 +372,41 @@ async fn forget_workspace(
         .status()
 }
 
+/// `GET /api/library/windows` as raw JSON values: the full library window set
+/// every client reconciles to.
+async fn list_library_windows(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    token: &str,
+) -> Vec<serde_json::Value> {
+    let url = format!("http://{addr}/api/library/windows");
+    let resp = client
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .expect("GET library windows");
+    let text = resp.text().await.unwrap_or_default();
+    serde_json::from_str(&text).expect("library windows json")
+}
+
+/// `DELETE /api/library/windows/{window_id}` — discard a window by its id.
+async fn discard_library_window(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    token: &str,
+    window_id: &str,
+) -> reqwest::StatusCode {
+    let url = format!("http://{addr}/api/library/windows/{window_id}");
+    client
+        .delete(&url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .expect("DELETE library window")
+        .status()
+}
+
 /// `POST <prefix>/api/terminals` on a mounted tenant — spawn a PTY running
 /// `command` through the login shell (`$SHELL -lc`). Auth is the per-workspace
 /// token from the workspace list.
@@ -577,6 +612,65 @@ async fn devserver_sigkill_releases_flock_and_survives_config() {
     assert!(
         entries.iter().any(|e| e["prefix"] == prefix),
         "workspace did not re-mount from persisted config: {entries:?}"
+    );
+}
+
+/// The library-owned first-open rule, at the process boundary: a FRESH
+/// devserver provisions exactly one `kind=terminal` window so a plain client
+/// (a browser, not just the desktop) sees a window on connect. Discarding that
+/// window then restarting the devserver on the same HOME must come back with
+/// ZERO windows — the first-open marker persisted under `~/.chan/devserver/`,
+/// so "closed it → reopening has no terminal" holds for the headless library
+/// exactly as for the desktop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn devserver_first_open_mints_one_terminal_then_honors_the_marker() {
+    let sandbox = Sandbox::new();
+    let port = free_port();
+    let client = http();
+
+    // Fresh devserver: exactly one terminal window in the library feed.
+    let (mut first, addr) = spawn_devserver(&sandbox, port).await;
+    let token = devserver_token(&first);
+    let windows = list_library_windows(&client, addr, &token).await;
+    assert_eq!(
+        windows.len(),
+        1,
+        "fresh devserver must mint exactly one window, got: {windows:?}"
+    );
+    assert_eq!(
+        windows[0]["kind"], "terminal",
+        "the first-open window is a terminal: {windows:?}"
+    );
+    let window_id = windows[0]["window_id"]
+        .as_str()
+        .expect("window_id field")
+        .to_string();
+
+    // Discard the terminal (the user closes it for good), then shut the
+    // devserver down cleanly so the marker is durably persisted.
+    let status = discard_library_window(&client, addr, &token, &window_id).await;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::NO_CONTENT,
+        "discard the only terminal window"
+    );
+    assert!(
+        list_library_windows(&client, addr, &token).await.is_empty(),
+        "feed empty right after the discard"
+    );
+    send_signal(first.pid(), "INT");
+    let (exit, _) = wait_exit(&mut first, EXIT_BUDGET)
+        .await
+        .unwrap_or_else(|| panic!("devserver did not exit on SIGINT:\n{}", first.out.dump()));
+    assert!(exit.success(), "devserver SIGINT exit not clean: {exit:?}");
+
+    // Restart on the same HOME: the marker is set, so NO terminal re-mints.
+    let (second, addr2) = spawn_devserver(&sandbox, port).await;
+    let token2 = devserver_token(&second);
+    let after = list_library_windows(&client, addr2, &token2).await;
+    assert!(
+        after.is_empty(),
+        "restart after the discard must mint no terminal (marker honored): {after:?}"
     );
 }
 

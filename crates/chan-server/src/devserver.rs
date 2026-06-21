@@ -788,6 +788,20 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         .await
         .context("mounting the devserver shared terminal tenant")?;
 
+    // The library open path: a fresh devserver (empty registry, marker unset)
+    // mints exactly one terminal so a plain browser pointed at it sees a window;
+    // a devserver whose terminal was closed (marker set) does NOT re-mint on
+    // restart. The rule lives in the library, identical to the desktop local
+    // boot. Run after mounting the shared terminal tenant so the minted window
+    // resolves to a real prefix+token. Persisted-workspace restore follows, so a
+    // first boot whose persisted set turns a workspace ON still mints the
+    // terminal (the registry was empty at this point) — matching "open spawns one
+    // terminal".
+    state
+        .host
+        .ensure_first_open_terminal()
+        .context("provisioning the devserver first-open terminal")?;
+
     // Restore the registered workspaces. `on` rows re-mount at their persisted
     // (stable) prefix; `off` rows are tracked as registered-but-unmounted so
     // the client still sees them and can toggle them on. A root that fails to
@@ -1880,10 +1894,11 @@ mod tests {
 
     #[tokio::test]
     async fn shared_terminal_tenant_makes_terminal_windows_resolve() {
-        // D-W3: without the shared terminal tenant a devserver Terminal window
-        // resolves to an empty prefix/token (and the desktop watcher hides it);
-        // after mount_shared_terminal_tenant it resolves to the shared tenant's
-        // prefix + a real token.
+        // The real devserver open path: mount the shared terminal tenant, then
+        // run the library's first-open rule (what `run_devserver` does at
+        // startup). The minted terminal window must resolve to the shared
+        // tenant's prefix + a real token, so the desktop watcher's should_show
+        // (non-empty token) shows it rather than hiding it on every reconnect.
         let home = tempfile::tempdir().expect("home");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
@@ -1892,34 +1907,29 @@ mod tests {
             "lib-test".into(),
         );
 
-        let term = state
-            .host
-            .mint_window(chan_library::windows::WindowKind::Terminal, None)
-            .expect("mint terminal");
-
-        let find = |st: &Arc<DevserverState>| {
-            st.host
-                .assemble_window_records()
-                .into_iter()
-                .find(|r| r.window_id == term.window_id)
-                .expect("terminal row")
-        };
-
-        // No shared terminal tenant yet → empty prefix/token (the bug).
-        let before = find(&state);
-        assert_eq!(
-            before.prefix, "",
-            "no shared terminal tenant → empty prefix"
-        );
-        assert_eq!(before.token, "");
-
-        // Mount it (the D-W3 fix run_devserver performs at startup).
+        // Mount the shared terminal tenant (the D-W3 mount run_devserver does
+        // before provisioning the first-open terminal), then provision it.
         state
             .mount_shared_terminal_tenant()
             .await
             .expect("mount shared terminal tenant");
+        let term = state
+            .host
+            .ensure_first_open_terminal()
+            .expect("first open")
+            .expect("fresh devserver mints exactly one terminal");
 
-        let after = find(&state);
+        let records = state.host.assemble_window_records();
+        assert_eq!(records.len(), 1, "exactly one window after first open");
+        let after = records
+            .into_iter()
+            .find(|r| r.window_id == term.window_id)
+            .expect("terminal row");
+        assert_eq!(
+            after.kind,
+            chan_library::windows::WindowKind::Terminal,
+            "first-open window is a terminal",
+        );
         assert_eq!(
             after.prefix, DEVSERVER_SHARED_TERMINAL_PREFIX,
             "terminal window resolves to the shared tenant prefix",
@@ -1927,6 +1937,19 @@ mod tests {
         assert!(
             !after.token.is_empty(),
             "terminal window resolves to a real token so should_show shows it",
+        );
+
+        // The marker is now set: a second open (a restart whose terminal was
+        // never closed) mints nothing extra.
+        assert!(state
+            .host
+            .ensure_first_open_terminal()
+            .expect("re-open")
+            .is_none());
+        assert_eq!(
+            state.host.assemble_window_records().len(),
+            1,
+            "no re-mint on a second open",
         );
     }
 

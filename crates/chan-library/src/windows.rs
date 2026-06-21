@@ -163,13 +163,36 @@ impl PersistedWindow {
     }
 }
 
+/// Per-library state that lives beside the window set but is NOT a window: the
+/// first-open marker. Kept in a sibling `*-state.json` rather than a field on
+/// the window-set store so the window store stays a pure `Vec<PersistedWindow>`
+/// (its serde shape is the persisted contract, pinned by
+/// `persisted_window_pins_field_names`) and so this internal lifecycle flag can
+/// never leak into the window feed. Field names are the persisted contract.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct LibraryState {
+    /// The library has already minted its one first-open terminal. Once set, an
+    /// emptied window registry (the user closed every window) does NOT re-mint:
+    /// "closed it → reopening comes up with no terminal".
+    #[serde(default)]
+    first_open_done: bool,
+}
+
 /// The library's window registry: the durable window set, the mint, and the
 /// change broadcaster. Library-level (one per library; a workspace window and a
 /// terminal window both live here), persisted to `store_path`. Cheap to share
 /// behind an `Arc`; the route layer holds one and reads/writes it per request.
 pub struct WindowRegistry {
     store_path: PathBuf,
+    /// Sibling state store (`<store_path stem>-state.json`) for the first-open
+    /// marker. Derived once at open so the marker and the window set always sit
+    /// in the same library directory.
+    state_path: PathBuf,
     windows: Mutex<Vec<PersistedWindow>>,
+    /// Per-library state that is not a window (the first-open marker). Guarded
+    /// independently of `windows` since the open path reads/sets it without
+    /// touching the window set.
+    state: Mutex<LibraryState>,
     /// Fires on every change (create/remove). The watch endpoint awaits this
     /// and republishes a fresh [`WindowSet`] snapshot. A consumer must register
     /// its `notified()` BEFORE taking its snapshot, so a change between snapshot
@@ -179,19 +202,62 @@ pub struct WindowRegistry {
 }
 
 impl WindowRegistry {
-    /// Open the registry at `store_path`, loading any persisted window set. An
-    /// absent or unreadable store degrades to an empty set rather than refusing
-    /// to start (the windows reappear as clients re-create them).
+    /// Open the registry at `store_path`, loading any persisted window set plus
+    /// the sibling first-open state. An absent or unreadable store degrades to
+    /// an empty set / default state rather than refusing to start (the windows
+    /// reappear as clients re-create them).
     pub fn open(store_path: PathBuf) -> Self {
         let windows = match std::fs::read(&store_path) {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
             Err(_) => Vec::new(),
         };
+        let state_path = state_path_for(&store_path);
+        let state = match std::fs::read(&state_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            Err(_) => LibraryState::default(),
+        };
         Self {
             store_path,
+            state_path,
             windows: Mutex::new(windows),
+            state: Mutex::new(state),
             notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Whether this library has already minted its first-open terminal. The open
+    /// path gates the one-shot mint on `!first_open_done()` (and an empty
+    /// registry), so a closed-then-reopened library does not re-mint.
+    pub fn first_open_done(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .first_open_done
+    }
+
+    /// Mark the first-open terminal as minted and persist it atomically (same
+    /// tmp+fsync+rename discipline as the window set). Idempotent: a no-op once
+    /// already set. Persisted before the open path returns so a crash right
+    /// after the mint cannot re-mint on the next boot.
+    pub fn mark_first_open_done(&self) {
+        let snapshot = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.first_open_done {
+                return;
+            }
+            state.first_open_done = true;
+            state.clone()
+        };
+        if let Err(e) = save_atomic(&self.state_path, &snapshot) {
+            tracing::warn!("persisting library first-open state: {e}");
+        }
+    }
+
+    /// Whether the durable window set is currently empty. The open path mints
+    /// the first-open terminal only on an empty registry, so a library that
+    /// already has persisted windows never gets an extra one.
+    pub fn is_empty(&self) -> bool {
+        self.lock().is_empty()
     }
 
     /// Mint and persist a new window of `kind` (with `workspace_path` for a
@@ -262,7 +328,7 @@ impl WindowRegistry {
     /// failed save must not abort a window create/remove (the in-memory set is
     /// still correct; the on-disk copy catches up on the next change).
     fn save_best_effort(&self, windows: &[PersistedWindow]) {
-        if let Err(e) = save_atomic(&self.store_path, windows) {
+        if let Err(e) = save_atomic(&self.store_path, &windows) {
             tracing::warn!("persisting window registry: {e}");
         }
     }
@@ -344,12 +410,24 @@ fn local_workspace_icon(path: &Path) -> &'static str {
     }
 }
 
-/// Atomically persist the window set: write a 0600 tmp, fsync it, rename over
-/// the target, then fsync the parent dir. Renaming un-synced bytes is the
-/// partial-write risk on a crash. The dir fsync is inlined (no cross-crate dep)
-/// and best-effort: the rename already committed the data, so a failed dir sync
-/// is durability hardening, not a save failure.
-fn save_atomic(path: &Path, windows: &[PersistedWindow]) -> std::io::Result<()> {
+/// The sibling state-store path for a window store: `<dir>/<stem>-state.json`
+/// next to `<dir>/<stem>.json`. Co-locating the first-open marker with the
+/// window set keeps both in the one library directory.
+fn state_path_for(store_path: &Path) -> PathBuf {
+    let stem = store_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "windows".to_string());
+    store_path.with_file_name(format!("{stem}-state.json"))
+}
+
+/// Atomically persist `value` as pretty JSON: write a 0600 tmp, fsync it,
+/// rename over the target, then fsync the parent dir. Renaming un-synced bytes
+/// is the partial-write risk on a crash. The dir fsync is inlined (no
+/// cross-crate dep) and best-effort: the rename already committed the data, so a
+/// failed dir sync is durability hardening, not a save failure. Shared by the
+/// window set and the sibling first-open state.
+fn save_atomic<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     use std::io::Write as _;
 
     let dir = match path.parent() {
@@ -359,7 +437,7 @@ fn save_atomic(path: &Path, windows: &[PersistedWindow]) -> std::io::Result<()> 
         }
         None => Path::new("."),
     };
-    let bytes = serde_json::to_vec_pretty(windows)
+    let bytes = serde_json::to_vec_pretty(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let tmp = path.with_extension("json.tmp");
     {
@@ -653,6 +731,32 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "store must be 0600");
         }
+    }
+
+    #[test]
+    fn first_open_marker_round_trips_and_is_co_located() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = dir.path().join("windows.json");
+        {
+            let reg = WindowRegistry::open(store.clone());
+            // Fresh registry: empty + unmarked.
+            assert!(reg.is_empty());
+            assert!(!reg.first_open_done());
+            reg.mark_first_open_done();
+            assert!(reg.first_open_done());
+            // Idempotent: a second mark is a no-op.
+            reg.mark_first_open_done();
+            assert!(reg.first_open_done());
+        }
+        // The marker survives a reopen and lives in the sibling state file
+        // co-located with the window store.
+        let state_file = dir.path().join("windows-state.json");
+        assert!(
+            state_file.exists(),
+            "marker persists to a sibling state file"
+        );
+        let reopened = WindowRegistry::open(store);
+        assert!(reopened.first_open_done(), "marker survives reopen");
     }
 
     #[test]

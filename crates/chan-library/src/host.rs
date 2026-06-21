@@ -620,6 +620,34 @@ impl WorkspaceHost {
         Ok(row.to_record(library_id, prefix, token, connected))
     }
 
+    /// The library's first-open rule: mint EXACTLY ONE Terminal window the very
+    /// first time a library is opened with an empty window registry, then record
+    /// it so it never happens again. Returns the minted record, or `None` when
+    /// nothing was minted (the registry already has windows, the first-open
+    /// marker is already set, or no registry is installed).
+    ///
+    /// Both the desktop local boot and the headless `run_devserver` open path
+    /// route through here, so "opening a chan-library spawns one terminal" is a
+    /// property of the library, identical local and remote. Behavior 2 (the user
+    /// closes the only terminal, then closes + reopens the library → no terminal)
+    /// falls out: once the marker is set, an emptied registry never re-mints. The
+    /// marker is persisted BEFORE returning so a crash right after the mint
+    /// cannot mint a second terminal on the next boot.
+    pub fn ensure_first_open_terminal(&self) -> Result<Option<WindowRecord>, Error> {
+        let Some(registry) = self.window_registry() else {
+            return Ok(None);
+        };
+        // The marker is the one-shot floor: once set, an emptied registry never
+        // re-mints. The empty check spares a fresh library that already restored
+        // persisted windows (a workspace turned on at boot) an extra terminal.
+        if registry.first_open_done() || !registry.is_empty() {
+            return Ok(None);
+        }
+        let record = self.mint_window(WindowKind::Terminal, None)?;
+        registry.mark_first_open_done();
+        Ok(Some(record))
+    }
+
     /// Mark a Terminal `window_id` persisted in the SHARED terminal tenant (its
     /// serving tenant), so the orphan-grace pruner spares its session and it
     /// survives a client disconnect+reconnect with its state. The session-
@@ -2108,6 +2136,99 @@ mod tests {
             .map(|r| r.window_id)
             .collect();
         assert_eq!(remaining, vec![ws.window_id]);
+    }
+
+    #[test]
+    fn first_open_mints_one_terminal_sets_marker_and_persists() {
+        // (a) First open on an empty, unmarked registry mints exactly one
+        // Terminal window, sets the marker, and persists both.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = WorkspaceHost::new(lib, fake_builder());
+        let store = tempfile::tempdir().expect("store dir");
+        let store_path = store.path().join("windows.json");
+        let registry = Arc::new(WindowRegistry::open(store_path.clone()));
+        host.install_window_registry(registry, "lib-fo".into());
+
+        let minted = host
+            .ensure_first_open_terminal()
+            .expect("first open")
+            .expect("mints exactly one terminal");
+        assert_eq!(minted.kind, WindowKind::Terminal);
+        let records = host.assemble_window_records();
+        assert_eq!(records.len(), 1, "exactly one window after first open");
+        assert_eq!(records[0].kind, WindowKind::Terminal);
+
+        // The marker and the window both persist: a fresh registry over the
+        // same store sees the window AND the marker set, so a re-run mints none.
+        let reopened = WindowRegistry::open(store_path);
+        assert!(reopened.first_open_done(), "marker persisted");
+        assert_eq!(reopened.snapshot().len(), 1, "window persisted");
+
+        // Calling first-open again on the same host mints nothing (marker set).
+        assert!(host
+            .ensure_first_open_terminal()
+            .expect("re-open")
+            .is_none());
+        assert_eq!(host.assemble_window_records().len(), 1, "still one window");
+    }
+
+    #[test]
+    fn first_open_after_marker_and_emptied_registry_mints_none() {
+        // (b) The close→reopen rule: once the marker is set, an emptied registry
+        // does NOT re-mint, even though it is empty again. Simulate the user
+        // having closed their only terminal: marker set, no windows.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = WorkspaceHost::new(lib, fake_builder());
+        let store = tempfile::tempdir().expect("store dir");
+        let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
+        registry.mark_first_open_done();
+        assert!(registry.is_empty());
+        host.install_window_registry(registry, "lib-emptied".into());
+
+        assert!(
+            host.ensure_first_open_terminal().expect("open").is_none(),
+            "marker set + empty registry → no re-mint"
+        );
+        assert!(
+            host.assemble_window_records().is_empty(),
+            "still no windows"
+        );
+    }
+
+    #[test]
+    fn first_open_with_existing_windows_mints_none() {
+        // (c) A registry that already has windows (a fresh library whose boot
+        // restored a turned-on workspace, say) gets no extra terminal.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = WorkspaceHost::new(lib, fake_builder());
+        let store = tempfile::tempdir().expect("store dir");
+        let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
+        registry.create(WindowKind::Workspace, Some("/tmp/notes".into()));
+        assert!(!registry.first_open_done(), "unmarked, but non-empty");
+        host.install_window_registry(registry, "lib-haswins".into());
+
+        assert!(
+            host.ensure_first_open_terminal().expect("open").is_none(),
+            "non-empty registry → no first-open mint"
+        );
+        let records = host.assemble_window_records();
+        assert_eq!(records.len(), 1, "only the pre-existing workspace window");
+        assert_eq!(records[0].kind, WindowKind::Workspace);
+    }
+
+    #[test]
+    fn first_open_without_registry_is_a_noop() {
+        // No registry installed: first-open mints nothing rather than erroring.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = WorkspaceHost::new(lib, fake_builder());
+        assert!(host
+            .ensure_first_open_terminal()
+            .expect("noop without registry")
+            .is_none());
     }
 
     #[tokio::test]
