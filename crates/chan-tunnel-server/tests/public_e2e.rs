@@ -96,7 +96,6 @@ async fn spawn(cfg: PublicConfig, upstream: Router) -> PublicHarness {
         token,
         workspace: workspace.clone(),
         client_version: "chan/test".into(),
-        public: false,
         initial_backoff: Duration::from_millis(50),
         max_backoff: Duration::from_secs(1),
         dial_timeout: Duration::from_secs(5),

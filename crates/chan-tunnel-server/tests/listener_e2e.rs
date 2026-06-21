@@ -1,8 +1,8 @@
 //! End-to-end tests for the tunnel listener.
 //!
 //! Workspaces a real `chan-tunnel-client` against `serve_tunnel_listener`
-//! over a localhost socket, exercising the auth gates (base scope,
-//! public scope, cap) that unit tests can only exercise in pieces.
+//! over a localhost socket, exercising the auth gates (base scope, cap)
+//! that unit tests can only exercise in pieces.
 //! The client dials h2c (`http://...`); no TLS plumbing on this
 //! side, since TLS is nginx's job in production.
 
@@ -13,8 +13,7 @@ use async_trait::async_trait;
 use chan_tunnel_client::{dial, ClientConfig, ClientError};
 use chan_tunnel_proto::error_code;
 use chan_tunnel_server::{
-    serve_tunnel_listener, Registry, ServerError, Validated, Validator, TUNNEL_PUBLIC_SCOPE,
-    TUNNEL_SCOPE,
+    serve_tunnel_listener, Registry, ServerError, Validated, Validator, TUNNEL_SCOPE,
 };
 use tokio::net::TcpListener;
 use url::Url;
@@ -71,14 +70,13 @@ async fn spawn_listener(validator: Arc<dyn Validator>, max_workspaces_per_user: 
     }
 }
 
-fn cfg(port: u16, token: &str, workspace: &str, public: bool) -> ClientConfig {
+fn cfg(port: u16, token: &str, workspace: &str) -> ClientConfig {
     ClientConfig {
         tunnel_url: Url::parse(&format!("http://127.0.0.1:{port}/v1/tunnel"))
             .expect("hard-coded url is valid"),
         token: token.into(),
         workspace: workspace.into(),
         client_version: "chan/test".into(),
-        public,
         initial_backoff: Duration::from_millis(50),
         max_backoff: Duration::from_secs(1),
         dial_timeout: Duration::from_secs(5),
@@ -110,16 +108,13 @@ async fn happy_path_private_workspace() {
         scopes: vec![TUNNEL_SCOPE.into()],
     });
     let h = spawn_listener(validator, 0).await;
-    let (reg, _yconn) = dial(&cfg(h.port, "good", "notes", false))
-        .await
-        .expect("dial ok");
+    let (reg, _yconn) = dial(&cfg(h.port, "good", "notes")).await.expect("dial ok");
     assert_eq!(reg.user, "alice");
     assert_eq!(reg.workspace, "notes");
     assert_eq!(reg.prefix, "/notes");
     assert!(wait_registered(&h.registry, "alice", "notes").await);
     let workspaces = h.registry.list_workspaces_for("alice");
     assert_eq!(workspaces.len(), 1);
-    assert!(!workspaces[0].public);
 }
 
 #[tokio::test]
@@ -130,7 +125,7 @@ async fn invalid_token_returns_401() {
         scopes: vec![TUNNEL_SCOPE.into()],
     });
     let h = spawn_listener(validator, 0).await;
-    let err = dial(&cfg(h.port, "bad", "notes", false))
+    let err = dial(&cfg(h.port, "bad", "notes"))
         .await
         .map(|_| ())
         .expect_err("bad token should fail");
@@ -150,81 +145,13 @@ async fn missing_base_scope_returns_403() {
         scopes: vec![],
     });
     let h = spawn_listener(validator, 0).await;
-    let err = dial(&cfg(h.port, "good", "notes", false))
+    let err = dial(&cfg(h.port, "good", "notes"))
         .await
         .map(|_| ())
         .expect_err("missing tunnel scope should fail");
     let msg = err.to_string();
     assert!(msg.to_lowercase().contains("forbidden"), "got: {msg}");
     assert!(h.registry.list_workspaces_for("alice").is_empty());
-}
-
-#[tokio::test]
-async fn missing_public_scope_refused_after_200() {
-    // Base scope only. Client asks for public; refusal happens in
-    // pre_ack, after the 200 / before HelloAck. The client surfaces
-    // it as a generic handshake/transport failure.
-    let validator = Arc::new(StubValidator {
-        expected_token: "good".into(),
-        username: "alice".into(),
-        scopes: vec![TUNNEL_SCOPE.into()],
-    });
-    let h = spawn_listener(validator, 0).await;
-    let err = dial(&cfg(h.port, "good", "notes", true))
-        .await
-        .map(|_| ())
-        .expect_err("public without tunnel.public should fail");
-    // Refusal is structured: code matches the proto constant and
-    // the message is non-empty so a UI can render it directly.
-    match err {
-        ClientError::RemoteRefusal {
-            ref code,
-            ref message,
-        } => {
-            assert_eq!(code, error_code::MISSING_PUBLIC_SCOPE);
-            assert!(!message.is_empty(), "expected refusal message");
-        }
-        other => panic!("expected RemoteRefusal, got {other:?}"),
-    }
-    // Workspace must not appear in the registry.
-    let workspaces = h.registry.list_workspaces_for("alice");
-    assert!(workspaces.is_empty(), "got workspaces: {workspaces:?}");
-}
-
-#[tokio::test]
-async fn public_scope_allows_public_workspace() {
-    let validator = Arc::new(StubValidator {
-        expected_token: "good".into(),
-        username: "alice".into(),
-        scopes: vec![TUNNEL_SCOPE.into(), TUNNEL_PUBLIC_SCOPE.into()],
-    });
-    let h = spawn_listener(validator, 0).await;
-    let (reg, _yconn) = dial(&cfg(h.port, "good", "docs", true))
-        .await
-        .expect("dial ok");
-    assert_eq!(reg.workspace, "docs");
-    assert!(wait_registered(&h.registry, "alice", "docs").await);
-    let workspaces = h.registry.list_workspaces_for("alice");
-    assert_eq!(workspaces.len(), 1);
-    assert!(workspaces[0].public, "expected public bit set");
-}
-
-#[tokio::test]
-async fn public_scope_holder_can_still_choose_private() {
-    // Token can host public, but this dial chooses private. Per-
-    // workspace choice survives once the scope is granted.
-    let validator = Arc::new(StubValidator {
-        expected_token: "good".into(),
-        username: "alice".into(),
-        scopes: vec![TUNNEL_SCOPE.into(), TUNNEL_PUBLIC_SCOPE.into()],
-    });
-    let h = spawn_listener(validator, 0).await;
-    let (_reg, _yconn) = dial(&cfg(h.port, "good", "notes", false))
-        .await
-        .expect("dial ok");
-    assert!(wait_registered(&h.registry, "alice", "notes").await);
-    let workspaces = h.registry.list_workspaces_for("alice");
-    assert!(!workspaces[0].public);
 }
 
 #[tokio::test]
@@ -235,15 +162,11 @@ async fn per_user_cap_blocks_third_workspace() {
         scopes: vec![TUNNEL_SCOPE.into()],
     });
     let h = spawn_listener(validator, 2).await;
-    let (_a, _y1) = dial(&cfg(h.port, "good", "d1", false))
-        .await
-        .expect("first dial");
+    let (_a, _y1) = dial(&cfg(h.port, "good", "d1")).await.expect("first dial");
     assert!(wait_registered(&h.registry, "alice", "d1").await);
-    let (_b, _y2) = dial(&cfg(h.port, "good", "d2", false))
-        .await
-        .expect("second dial");
+    let (_b, _y2) = dial(&cfg(h.port, "good", "d2")).await.expect("second dial");
     assert!(wait_registered(&h.registry, "alice", "d2").await);
-    let err = dial(&cfg(h.port, "good", "d3", false))
+    let err = dial(&cfg(h.port, "good", "d3"))
         .await
         .map(|_| ())
         .expect_err("third dial should hit the cap");
@@ -279,14 +202,14 @@ async fn reconnect_evicts_previous_registration() {
         scopes: vec![TUNNEL_SCOPE.into()],
     });
     let h = spawn_listener(validator, 0).await;
-    let (_a, _y1) = dial(&cfg(h.port, "good", "notes", false))
+    let (_a, _y1) = dial(&cfg(h.port, "good", "notes"))
         .await
         .expect("first dial");
     assert!(wait_registered(&h.registry, "alice", "notes").await);
     let first_at = h.registry.get("alice", "notes").unwrap().connected_at;
     // Tiny pause so the timestamps differ unambiguously.
     tokio::time::sleep(Duration::from_millis(20)).await;
-    let (_b, _y2) = dial(&cfg(h.port, "good", "notes", false))
+    let (_b, _y2) = dial(&cfg(h.port, "good", "notes"))
         .await
         .expect("second dial");
     // Wait for the new registration to land; it has a strictly

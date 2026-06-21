@@ -23,14 +23,11 @@ use http::{header, Method, Response, StatusCode};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 
-use chan_tunnel_proto::Hello;
-
 use crate::driver::workspace_tunnel;
 use crate::registry::Registry;
 use crate::{
-    handshake_validated, ServerError, Validated, Validator, FIRST_STREAM_TIMEOUT,
-    H2_HANDSHAKE_TIMEOUT, MAX_INFLIGHT_HANDSHAKES, TUNNEL_PUBLIC_SCOPE, TUNNEL_SCOPE,
-    VALIDATE_TIMEOUT,
+    handshake_validated, ServerError, Validator, FIRST_STREAM_TIMEOUT, H2_HANDSHAKE_TIMEOUT,
+    MAX_INFLIGHT_HANDSHAKES, TUNNEL_SCOPE, VALIDATE_TIMEOUT,
 };
 
 /// How many "stream beyond the first" rejections the drainer task
@@ -251,7 +248,6 @@ async fn handle_tunnel_conn(
     let duplex = H2Duplex::new(send, recv_body);
     let registry_for_check = registry.clone();
     let (hello, validated, yconn) = handshake_validated(duplex, validated, |hello, validated| {
-        check_public_scope(hello, validated)?;
         if max_workspaces_per_user == 0 {
             return Ok(());
         }
@@ -271,7 +267,6 @@ async fn handle_tunnel_conn(
 
     let user: Arc<str> = Arc::from(validated.username.as_str());
     let workspace: Arc<str> = Arc::from(hello.workspace.as_str());
-    let public = hello.public;
     // Authoritative cap enforcement: `pre_ack` above ran a
     // best-effort check before HelloAck so a non-racing dial fails
     // cleanly during handshake, but two parallel dials could both
@@ -283,7 +278,6 @@ async fn handle_tunnel_conn(
     let (handle, open_rx, shutdown_rx) = match registry.register_with_cap(
         user.clone(),
         workspace.clone(),
-        public,
         Some(peer),
         max_workspaces_per_user,
     ) {
@@ -301,7 +295,7 @@ async fn handle_tunnel_conn(
             });
         }
     };
-    tracing::info!(%user, %workspace, public, "tunnel registered");
+    tracing::info!(%user, %workspace, "tunnel registered");
 
     // Handshake is done; the in-flight slot belongs to the next
     // dialer. The per-tunnel driver runs without holding a permit.
@@ -309,24 +303,6 @@ async fn handle_tunnel_conn(
 
     workspace_tunnel(yconn, open_rx, shutdown_rx, registry.clone(), handle).await;
     tracing::info!(%user, %workspace, "tunnel driver exited");
-    Ok(())
-}
-
-/// Enforce the `tunnel.public` scope when the client's Hello asks
-/// for a publicly-readable workspace. `Hello.public` is a privilege
-/// escalation request (the public router skips the OAuth gate),
-/// so a token that does not carry `TUNNEL_PUBLIC_SCOPE` must not
-/// be able to grant it to itself at runtime.
-///
-/// Returns `Err(ServerError::MissingPublicScope)` when the token
-/// is missing the scope; otherwise `Ok(())`. The check is a no-op
-/// when `Hello.public == false`, so per-workspace choice within an
-/// already-scoped token still works (one user, two `chan serve`
-/// instances: a public docs workspace and a private notes workspace).
-fn check_public_scope(hello: &Hello, validated: &Validated) -> Result<(), ServerError> {
-    if hello.public && !validated.scopes.iter().any(|s| s == TUNNEL_PUBLIC_SCOPE) {
-        return Err(ServerError::MissingPublicScope);
-    }
     Ok(())
 }
 
@@ -358,9 +334,7 @@ fn extract_bearer<B>(request: &http::Request<B>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_public_scope, extract_bearer};
-    use crate::{ServerError, Validated, TUNNEL_PUBLIC_SCOPE, TUNNEL_SCOPE};
-    use chan_tunnel_proto::{Hello, ProtocolVersion};
+    use super::extract_bearer;
     use http::header::AUTHORIZATION;
 
     fn req_with_auth(value: &str) -> http::Request<()> {
@@ -368,59 +342,6 @@ mod tests {
             .header(AUTHORIZATION, value)
             .body(())
             .unwrap()
-    }
-
-    fn validated_with(scopes: &[&str]) -> Validated {
-        Validated {
-            user_id: uuid::Uuid::nil(),
-            username: "alice".into(),
-            scopes: scopes.iter().map(|s| (*s).to_string()).collect(),
-        }
-    }
-
-    fn hello(public: bool) -> Hello {
-        Hello {
-            protocol: ProtocolVersion::V1,
-            client_version: "chan/test".into(),
-            workspace: "notes".into(),
-            public,
-        }
-    }
-
-    #[test]
-    fn public_scope_check_allows_private_hello_without_extra_scope() {
-        // Token has only the base scope; Hello.public = false is
-        // fine and matches the common case.
-        let v = validated_with(&[TUNNEL_SCOPE]);
-        assert!(check_public_scope(&hello(false), &v).is_ok());
-    }
-
-    #[test]
-    fn public_scope_check_refuses_public_hello_without_extra_scope() {
-        // Hello.public = true with only TUNNEL_SCOPE in the token
-        // is the privilege-escalation case; refuse with the
-        // distinct MissingPublicScope error.
-        let v = validated_with(&[TUNNEL_SCOPE]);
-        match check_public_scope(&hello(true), &v) {
-            Err(ServerError::MissingPublicScope) => {}
-            other => panic!("expected MissingPublicScope, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn public_scope_check_allows_public_hello_with_extra_scope() {
-        // Token carries both scopes; client can choose public.
-        let v = validated_with(&[TUNNEL_SCOPE, TUNNEL_PUBLIC_SCOPE]);
-        assert!(check_public_scope(&hello(true), &v).is_ok());
-    }
-
-    #[test]
-    fn public_scope_check_allows_private_hello_with_extra_scope() {
-        // Token can host public, but this workspace is private. The
-        // user retains per-workspace choice (a public scope is "may
-        // host public", not "must host public").
-        let v = validated_with(&[TUNNEL_SCOPE, TUNNEL_PUBLIC_SCOPE]);
-        assert!(check_public_scope(&hello(false), &v).is_ok());
     }
 
     #[test]

@@ -93,11 +93,6 @@ pub struct ClientConfig {
     pub workspace: String,
     /// `chan` version reported in the Hello frame; logs only.
     pub client_version: String,
-    /// Expose the workspace to anonymous visitors. When false (the
-    /// default), only the workspace owner's signed-in id.chan.app
-    /// session can reach `workspace.chan.app/{user}/{workspace}`. When
-    /// true, the workspace-proxy auth gate skips the OAuth bounce.
-    pub public: bool,
     /// Initial reconnect backoff. Doubled up to `max_backoff`.
     pub initial_backoff: Duration,
     pub max_backoff: Duration,
@@ -140,7 +135,6 @@ impl Default for ClientConfig {
             token: String::new(),
             workspace: String::new(),
             client_version: format!("chan-tunnel-client/{}", env!("CARGO_PKG_VERSION")),
-            public: false,
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
             dial_timeout: Duration::from_secs(30),
@@ -205,7 +199,6 @@ where
         protocol: ProtocolVersion::V1,
         client_version: cfg.client_version.clone(),
         workspace: cfg.workspace.clone(),
-        public: cfg.public,
     };
     write_frame(&mut socket, &hello).await?;
 

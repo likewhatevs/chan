@@ -768,7 +768,7 @@ mod tests {
     async fn proxy_times_out_when_substream_open_waits_forever() {
         let registry = Registry::new();
         let (_handle, _open_rx, _shutdown_rx) = registry
-            .register_with_cap(Arc::from("alice"), Arc::from("notes"), false, None, 0)
+            .register_with_cap(Arc::from("alice"), Arc::from("notes"), None, 0)
             .unwrap();
         let state = PublicState {
             registry,

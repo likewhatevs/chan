@@ -941,7 +941,6 @@ fn spawn_devserver_tunnel(
             token,
             workspace: DEVSERVER_TUNNEL_NAME.to_string(),
             client_version: format!("chan/{}", env!("CARGO_PKG_VERSION")),
-            public: false,
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
             dial_timeout: Duration::from_secs(30),

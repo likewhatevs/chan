@@ -27,18 +27,6 @@ pub struct Hello {
     /// Workspace name to register under. Combined with the token's
     /// user to form the public path `/{user}/{workspace}/...`.
     pub workspace: String,
-    /// When true, the public proxy lets anonymous visitors reach
-    /// this workspace without an OAuth round-trip. When false (default),
-    /// only the workspace owner's signed-in session can reach it.
-    /// Additive field; older clients omitting it default to false.
-    ///
-    /// Setting this to `true` is a privilege-escalation request:
-    /// the server gates it on an extra token scope
-    /// (`chan_tunnel_server::TUNNEL_PUBLIC_SCOPE`). Clients without
-    /// that scope are refused with `MissingPublicScope`, so the
-    /// client cannot unilaterally make its workspace anonymous-readable.
-    #[serde(default)]
-    pub public: bool,
 }
 
 /// First frame, server -> client. Either confirms the
@@ -94,8 +82,6 @@ pub struct HelloAckErr {
 /// shapes; clients should fall back to a generic surface for codes
 /// they do not recognise so the protocol stays additive.
 pub mod error_code {
-    /// `Hello.public = true` from a token without TUNNEL_PUBLIC_SCOPE.
-    pub const MISSING_PUBLIC_SCOPE: &str = "missing_public_scope";
     /// Registering this workspace would exceed the per-user cap.
     pub const TOO_MANY_WORKSPACES: &str = "too_many_workspaces";
     /// `Hello.workspace` failed `is_valid_workspace_name`.
@@ -107,4 +93,87 @@ pub mod error_code {
     /// Catch-all for refusals the client doesn't have a specific
     /// branch for. Treat the `message` as the only useful payload.
     pub const INTERNAL: &str = "internal";
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    use serde_json::json;
+
+    // Control frames cross the wire as JSON (`frame::encode_frame` uses
+    // serde_json), so `to_value` pins the EXACT on-wire bytes. A field
+    // add/drop/rename is caught here — the gate-blind-wire hazard the
+    // always-authenticated cut had to clear. The load-bearing pin is that
+    // `Hello` carries NO `public` key after the cut.
+    #[test]
+    fn hello_wire_has_no_public_field() {
+        let hello = Hello {
+            protocol: ProtocolVersion::V1,
+            client_version: "chan/test".into(),
+            workspace: "notes".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&hello).unwrap(),
+            json!({
+                "protocol": 1,
+                "client_version": "chan/test",
+                "workspace": "notes",
+            })
+        );
+    }
+
+    // A legacy client that still sends `public` must not break the post-drop
+    // server: serde ignores the now-unknown field and the rest decodes. (Pre-
+    // release there are no mixed-version peers, but this pins the tolerance so
+    // the cut can never wedge a handshake on a stray field.)
+    #[test]
+    fn hello_decode_ignores_legacy_public_field() {
+        let legacy = json!({
+            "protocol": 1,
+            "client_version": "chan/old",
+            "workspace": "notes",
+            "public": true,
+        });
+        let hello: Hello = serde_json::from_value(legacy).unwrap();
+        assert_eq!(hello.workspace, "notes");
+        assert_eq!(hello.client_version, "chan/old");
+    }
+
+    #[test]
+    fn hello_ack_ok_wire() {
+        let ack = HelloAck::Ok(HelloAckOk {
+            protocol: ProtocolVersion::V1,
+            prefix: "/notes".into(),
+            user: "alice".into(),
+            workspace: "notes".into(),
+        });
+        assert_eq!(
+            serde_json::to_value(&ack).unwrap(),
+            json!({
+                "kind": "ok",
+                "protocol": 1,
+                "prefix": "/notes",
+                "user": "alice",
+                "workspace": "notes",
+            })
+        );
+    }
+
+    #[test]
+    fn hello_ack_refused_wire() {
+        let ack = HelloAck::Refused(HelloAckErr {
+            protocol: ProtocolVersion::V1,
+            code: error_code::TOO_MANY_WORKSPACES.into(),
+            message: "user alice reached max concurrent workspaces (1)".into(),
+        });
+        assert_eq!(
+            serde_json::to_value(&ack).unwrap(),
+            json!({
+                "kind": "refused",
+                "protocol": 1,
+                "code": "too_many_workspaces",
+                "message": "user alice reached max concurrent workspaces (1)",
+            })
+        );
+    }
 }

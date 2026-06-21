@@ -71,7 +71,6 @@ mod tests {
             protocol: ProtocolVersion::V1,
             client_version: "chan/0.4.0".into(),
             workspace: "notes".into(),
-            public: false,
         };
         let mut buf = BytesMut::new();
         encode_frame(&h, &mut buf).unwrap();
@@ -88,7 +87,6 @@ mod tests {
             protocol: ProtocolVersion::V1,
             client_version: "chan/0.4.0".into(),
             workspace: "notes".into(),
-            public: false,
         };
         let mut full = BytesMut::new();
         encode_frame(&h, &mut full).unwrap();
