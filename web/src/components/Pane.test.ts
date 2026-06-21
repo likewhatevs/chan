@@ -636,7 +636,7 @@ describe("Pane cross-window tab DnD (pane-id collision fix)", () => {
       /TAB_DRAG_MIME,[\s\S]{1,160}fromWindow: sessionWindowId\(\)/,
     );
     expect(paneSource).toMatch(
-      /import \{ sessionWindowId, windowDragScope \} from "\.\.\/api\/client"/,
+      /import \{ sessionWindowId, windowDragScope, windowLibraryId \} from "\.\.\/api\/client"/,
     );
   });
 
@@ -660,15 +660,17 @@ describe("Pane cross-kind / cross-workspace tab DnD guard", () => {
     // (when payload values are not readable).
     expect(paneSource).toMatch(/scopeMime\(currentDragScope\(\)\), "1"/);
     expect(paneSource).toMatch(
-      /import \{ sessionWindowId, windowDragScope \} from "\.\.\/api\/client"/,
+      /import \{ sessionWindowId, windowDragScope, windowLibraryId \} from "\.\.\/api\/client"/,
     );
   });
 
-  test("the scope is computed from the loaded workspace identity, not the window label", () => {
-    // currentDragScope keys on workspace.info (metadata_key/root), so two
-    // windows of one workspace match even with distinct `?w=w-<hex>` ids.
+  test("the scope is computed from the owning library + the loaded workspace identity", () => {
+    // currentDragScope keys on the chan-library (windowLibraryId) plus
+    // workspace.info (metadata_key/root): two windows of one workspace in one
+    // library match even with distinct `?w=w-<hex>` ids, while a workspace-key
+    // collision across libraries stays rejected.
     expect(paneSource).toMatch(
-      /currentDragScope = \(\): string =>[\s\S]{1,220}workspace\.info\?\.metadata_key \?\? workspace\.info\?\.root/,
+      /currentDragScope = \(\): string =>[\s\S]{1,280}libraryId: windowLibraryId\(\),[\s\S]{1,220}workspace\.info\?\.metadata_key \?\? workspace\.info\?\.root/,
     );
   });
 

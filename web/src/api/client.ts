@@ -125,24 +125,42 @@ export function sessionPath(): string {
   return `/api/session?w=${encodeURIComponent(sessionWindowId())}`;
 }
 
+/// The chan-library this window belongs to. The library backend appends
+/// `?lib=<library_id>` to each window URL next to `?w=`/`?kind=` (the local
+/// disk library stamps `local`, a devserver stamps `lib-<hex>`); when absent
+/// (plain browser tab, no library plumbing) we default to `local` to match the
+/// backend default for the local library. Guarded for non-browser (test)
+/// contexts where `window` is undefined.
+export function windowLibraryId(): string {
+  if (typeof window === "undefined") return "local";
+  const raw = new URL(window.location.href).searchParams.get("lib");
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : "local";
+}
+
 /// Cross-window tab-DnD compatibility key. Two chan-desktop windows may
-/// exchange tabs only when these match. Keyed on the window KIND + the
-/// WORKSPACE IDENTITY the SPA actually loaded — NOT the `?w=` window label,
-/// which is now an opaque per-window id (`w-<hex>`, set by the desktop window
-/// watcher) that differs between two windows of the SAME workspace. A
-/// terminal-only window scopes as `terminal` (every standalone terminal shares
-/// one `/terminal` tenant, so terminal↔terminal moves stay allowed); a
-/// workspace window scopes as `workspace:{key}` keyed on its stable identity,
-/// so two windows of one workspace share a scope while different workspaces —
-/// and terminal↔workspace — get distinct scopes. The caller supplies the
-/// identity (`workspace.info`'s `metadata_key`/`root`) because this module is
-/// below the workspace store.
+/// exchange tabs only when these match. Keyed on the owning CHAN-LIBRARY, the
+/// window KIND, and the WORKSPACE IDENTITY the SPA actually loaded, NOT the
+/// `?w=` window label, which is an opaque per-window id (`w-<hex>`, set by the
+/// desktop window watcher) that differs between two windows of the SAME
+/// workspace. A terminal-only window scopes as `lib:{id}|terminal` (every
+/// standalone terminal in one library shares its `/terminal` tenant, so
+/// terminal-to-terminal moves stay allowed within the same library); a workspace
+/// window scopes as `lib:{id}|workspace:{key}` keyed on its stable identity, so
+/// two windows of one workspace share a scope while different workspaces, and
+/// terminal-to-workspace, get distinct scopes. The `library_id` prefix makes both
+/// rules library-aware by string equality: a terminal accepts a drop only from
+/// the same library, and a workspace tab only within the same workspace AND the
+/// same library (so a workspace-key collision across libraries stays rejected).
+/// The caller supplies the identity (`workspace.info`'s `metadata_key`/`root`)
+/// and the library id because this module is below the workspace store.
 export function windowDragScope(scope: {
+  libraryId: string;
   terminalOnly: boolean;
   workspaceKey: string | null;
 }): string {
-  if (scope.terminalOnly) return "terminal";
-  return `workspace:${scope.workspaceKey ?? "unknown"}`;
+  if (scope.terminalOnly) return `lib:${scope.libraryId}|terminal`;
+  return `lib:${scope.libraryId}|workspace:${scope.workspaceKey ?? "unknown"}`;
 }
 
 function req<T>(

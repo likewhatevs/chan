@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { api, sessionPath, sessionWindowId, windowDragScope } from "./client";
+import {
+  api,
+  sessionPath,
+  sessionWindowId,
+  windowDragScope,
+  windowLibraryId,
+} from "./client";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -44,36 +50,115 @@ describe("sessionWindowId", () => {
   });
 });
 
-describe("windowDragScope", () => {
-  test("a workspace window scopes on its stable workspace identity", () => {
-    expect(windowDragScope({ terminalOnly: false, workspaceKey: "wk-deadbeef" })).toBe(
-      "workspace:wk-deadbeef",
-    );
+describe("windowLibraryId", () => {
+  test("reads the chan-library id from the ?lib= URL param", () => {
+    window.history.replaceState(null, "", "/?t=token&lib=lib-abc123");
+    expect(windowLibraryId()).toBe("lib-abc123");
   });
 
-  test("two windows of the SAME workspace get the SAME scope (opaque w-<hex> ids differ)", () => {
-    // The two windows have different `?w=` ids but the same loaded workspace.
-    const win1 = windowDragScope({ terminalOnly: false, workspaceKey: "wk-deadbeef" });
-    const win2 = windowDragScope({ terminalOnly: false, workspaceKey: "wk-deadbeef" });
+  test("defaults to local when ?lib= is absent", () => {
+    window.history.replaceState(null, "", "/?t=token");
+    expect(windowLibraryId()).toBe("local");
+  });
+
+  test("defaults to local when ?lib= is blank", () => {
+    window.history.replaceState(null, "", "/?lib=%20%20");
+    expect(windowLibraryId()).toBe("local");
+  });
+});
+
+describe("windowDragScope", () => {
+  test("a workspace window scopes on its library + stable workspace identity", () => {
+    expect(
+      windowDragScope({ libraryId: "local", terminalOnly: false, workspaceKey: "wk-deadbeef" }),
+    ).toBe("lib:local|workspace:wk-deadbeef");
+  });
+
+  test("a terminal window scopes on its library", () => {
+    expect(
+      windowDragScope({ libraryId: "local", terminalOnly: true, workspaceKey: null }),
+    ).toBe("lib:local|terminal");
+    expect(
+      windowDragScope({ libraryId: "lib-abc123", terminalOnly: true, workspaceKey: null }),
+    ).toBe("lib:lib-abc123|terminal");
+  });
+
+  test("two windows of the SAME workspace in the SAME library get the SAME scope", () => {
+    // The two windows have different `?w=` ids but the same library + workspace.
+    const win1 = windowDragScope({
+      libraryId: "local",
+      terminalOnly: false,
+      workspaceKey: "wk-deadbeef",
+    });
+    const win2 = windowDragScope({
+      libraryId: "local",
+      terminalOnly: false,
+      workspaceKey: "wk-deadbeef",
+    });
     expect(win1).toBe(win2);
   });
 
-  test("different workspaces get DIFFERENT scopes", () => {
-    const a = windowDragScope({ terminalOnly: false, workspaceKey: "wk-aaaa" });
-    const b = windowDragScope({ terminalOnly: false, workspaceKey: "wk-bbbb" });
+  test("different workspaces in the same library get DIFFERENT scopes", () => {
+    const a = windowDragScope({ libraryId: "local", terminalOnly: false, workspaceKey: "wk-aaaa" });
+    const b = windowDragScope({ libraryId: "local", terminalOnly: false, workspaceKey: "wk-bbbb" });
     expect(a).not.toBe(b);
   });
 
-  test("all terminal-only windows share one scope, distinct from a workspace", () => {
-    const term1 = windowDragScope({ terminalOnly: true, workspaceKey: null });
-    const term2 = windowDragScope({ terminalOnly: true, workspaceKey: null });
-    expect(term1).toBe("terminal");
-    expect(term2).toBe("terminal");
-    expect(windowDragScope({ terminalOnly: false, workspaceKey: "wk-deadbeef" })).not.toBe(term1);
+  test("terminal↔workspace in the same library get DISTINCT scopes", () => {
+    const term = windowDragScope({ libraryId: "local", terminalOnly: true, workspaceKey: null });
+    const ws = windowDragScope({
+      libraryId: "local",
+      terminalOnly: false,
+      workspaceKey: "wk-deadbeef",
+    });
+    expect(term).not.toBe(ws);
   });
 
   test("a workspace window with no identity falls back to a stable sentinel", () => {
-    expect(windowDragScope({ terminalOnly: false, workspaceKey: null })).toBe("workspace:unknown");
+    expect(
+      windowDragScope({ libraryId: "local", terminalOnly: false, workspaceKey: null }),
+    ).toBe("lib:local|workspace:unknown");
+  });
+
+  // Rule 1: a standalone terminal accepts a dropped tab only from a terminal in
+  // the SAME chan-library.
+  test("terminals in the SAME library match; in DIFFERENT libraries do NOT", () => {
+    const a1 = windowDragScope({ libraryId: "local", terminalOnly: true, workspaceKey: null });
+    const a2 = windowDragScope({ libraryId: "local", terminalOnly: true, workspaceKey: null });
+    const b = windowDragScope({ libraryId: "lib-remote", terminalOnly: true, workspaceKey: null });
+    expect(a1).toBe(a2);
+    expect(a1).not.toBe(b);
+  });
+
+  // Rule 2: a workspace tab is accepted only within the SAME workspace AND the
+  // SAME chan-library. Differing EITHER dimension must not match — including the
+  // collision case where the workspace_key is identical but the library differs.
+  test("workspaces match only on the same (library_id, workspace_key) pair", () => {
+    const localA = windowDragScope({
+      libraryId: "local",
+      terminalOnly: false,
+      workspaceKey: "wk-same",
+    });
+    const localAgain = windowDragScope({
+      libraryId: "local",
+      terminalOnly: false,
+      workspaceKey: "wk-same",
+    });
+    const localOther = windowDragScope({
+      libraryId: "local",
+      terminalOnly: false,
+      workspaceKey: "wk-other",
+    });
+    // Same key, DIFFERENT library: the collision case that must NOT match.
+    const remoteSameKey = windowDragScope({
+      libraryId: "lib-remote",
+      terminalOnly: false,
+      workspaceKey: "wk-same",
+    });
+
+    expect(localA).toBe(localAgain);
+    expect(localA).not.toBe(localOther);
+    expect(localA).not.toBe(remoteSameKey);
   });
 });
 

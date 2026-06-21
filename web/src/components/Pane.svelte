@@ -98,7 +98,7 @@
     osChord,
   } from "../state/shortcuts";
   import { openTabMenu, tabMenu } from "../state/tabMenu.svelte";
-  import { sessionWindowId, windowDragScope } from "../api/client";
+  import { sessionWindowId, windowDragScope, windowLibraryId } from "../api/client";
   import { onDestroy, onMount } from "svelte";
   import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
 
@@ -649,13 +649,15 @@
   // not readable). See windowDragScope + isTabDragScopeCompatible.
   const SCOPE_DRAG_MIME_PREFIX = "application/x-chan-tab-scope+";
   const scopeMime = (scope: string): string => SCOPE_DRAG_MIME_PREFIX + scope;
-  /// This window's drag scope, computed from what the SPA loaded: a
-  /// terminal-only window vs. the active workspace's stable identity
-  /// (`metadata_key`, falling back to the absolute `root`). Two windows of the
-  /// same workspace resolve to the same scope; the opaque `?w=w-<hex>` window id
-  /// is deliberately NOT used (it differs per window).
+  /// This window's drag scope, computed from what the SPA loaded: the owning
+  /// chan-library (`?lib=`), the window kind (terminal-only vs. workspace), and
+  /// the active workspace's stable identity (`metadata_key`, falling back to the
+  /// absolute `root`). Two windows of the same workspace in the same library
+  /// resolve to the same scope; the opaque `?w=w-<hex>` window id is deliberately
+  /// NOT used (it differs per window).
   const currentDragScope = (): string =>
     windowDragScope({
+      libraryId: windowLibraryId(),
       terminalOnly: ui.terminalOnly,
       workspaceKey: workspace.info?.metadata_key ?? workspace.info?.root ?? null,
     });
