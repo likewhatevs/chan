@@ -319,7 +319,10 @@ pub(crate) fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> Stri
         "`--tab-name` must match a live tab the host's WINDOW owns. When\n\
          {host_handle} has no member tab of their own, target the lead's tab\n\
          (`--tab-name={lead_handle}`) or the team's tab group instead; the overlay\n\
-         surfaces in the owning window either way.\n\n"
+         surfaces in the owning window either way. In that PROXY case also pass\n\
+         `--to={host_handle}` so an [F] follow-up is a task addressed to\n\
+         {host_handle} (the team manager), NOT the proxy tab -- `--to` overrides\n\
+         `--tab-name` for the follow-up's `to`.\n\n"
     ));
     out.push_str(&format!(
         "The overlay is keyboard-first for the host: {host_handle} picks an option\n\
