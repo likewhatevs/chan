@@ -6,6 +6,81 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+A round centred on the window lifecycle: a single library window registry now owns every window
+(local and devserver), and a window watcher reconciles native windows against its live feed — so
+windows mint, persist, reconnect, reload, and restore their layout from one source of truth.
+On top of that: live cross-window settings sync, dashboard config moved out of the search index,
+broader reload-survival, and an async/perf pass.
+
+### Added
+
+- **Live cross-window settings sync.** Changing a setting in one window of a workspace — theme,
+  fonts, pane widths, the page-width slider, overlay-maximize — now applies in every other open
+  window of that workspace immediately, without a reload. A Settings save broadcasts a
+  `config_changed` frame on the workspace's event bus and each window re-reads and reflects it.
+- **Web launcher: Gmail-style multi-select + bulk actions.** Select one or more workspace rows to
+  reveal a bulk-action bar — Turn On, Turn Off, Delete — that loops the single-workspace op over the
+  selection and reports partial failures. Delete is bulk-only behind a confirm; the per-row On/Off
+  pill stays the quick single toggle.
+- **Web launcher: Open terminal.** A top-bar button that mints a fresh local terminal window.
+- `cs terminal close --tab-name <n> | --tab-group <g>`: tear down terminal sessions by name or
+  group — the explicit teardown partner to `cs terminal restart` / `new`. Closing a session frees
+  its tab name; `--tab-group` tears down a whole group (e.g. a finished team) in one call.
+- Confirm-before-off for a workspace with live terminals: turning a workspace off when it still has
+  running terminals now prompts ("N terminals still running — turn off anyway?") and only unmounts
+  on confirm, instead of silently killing the shells. Enforced server-side so the desktop, `cs`, and
+  the launcher all get the guard.
+
+### Changed
+
+- **The window lifecycle is driven by a window watcher against a library window registry.** A single
+  per-library registry is the authoritative window set (it mints opaque window ids, assigns
+  "Window N" ordinals, composes titles, and persists the set to disk). The desktop opens, closes,
+  and restores native windows by reconciling against that set's live feed, for both local windows
+  and a connected `chan devserver` — replacing the per-surface imperative open/close paths. Standalone
+  terminals are now first-class library windows under the same lifecycle, so they mint, persist, and
+  reopen like workspace windows. `cs window list` reads the same set, so `cs`, the launcher, the HTTP
+  API, and the desktop never disagree.
+- The dashboard / overlay config (screensaver toggle, timeout, theme, pin, and the report /
+  semantic-search opt-ins) is no longer stored inside the search index config — it moves to a
+  per-workspace `dashboard.toml`, so a search reindex or a vector wipe can no longer reset it.
+  Existing workspaces migrate their toggles in place on first open.
+- `cs-link-dismissed`, the page-width ratio, and overlay-maximize are now per-library server
+  preferences instead of browser-local storage, so they travel with the library and stay consistent
+  across clients (and sync live across windows).
+
+### Fixed
+
+- **Reload-survival of the full layout.** A window reloads back to its exact prior state — a
+  standalone terminal, a terminal-only or empty-split layout, and a Hybrid pane flip (with its
+  per-Hybrid theme) all now persist and restore, where before they reset on reload, off/on, or a
+  desktop relaunch. (Terminal panes come back with fresh shells; the layout is preserved.)
+- **Transparent re-attach of a restarted terminal.** `cs terminal restart` now re-attaches the tab
+  to the relaunched session in place — the shell swaps under a live socket and the tab stays — instead
+  of dropping the tab and leaving a live-backend / dead-frontend ghost.
+- A killed terminal session is reaped from the registry so it stops appearing in `cs terminal list`
+  and frees its tab name, so re-spawning under that name no longer collides and comes up renamed.
+- **Rich-prompt queuing.** The composer no longer locks read-only after a submit: it clears and stays
+  editable so you can queue messages back to back, ArrowUp recalls the last queued message to edit,
+  and Esc dequeues it (or abandons the current draft). A failed send restores the text for retry.
+- macOS GUI launch (Finder / Dock / Spotlight) now resolves the user's real interactive shell PATH
+  before the embedded server starts, so `~/.local/bin`, Homebrew, and custom dirs are visible — fixing
+  the false "create the `cs` alias" card under the restricted launchd PATH. The resolution is bounded
+  with a ~3s timeout so a pathological shell rc can't hang app launch.
+- Cmd+R (and the devtools / zoom chords) are no longer dead on a devserver window: the desktop
+  key-bridge only swallows a keystroke when its IPC is actually present, otherwise the event falls
+  through to the SPA's own reload handler.
+- The editor hang-recovery buffer is now namespaced per workspace, so two workspaces with a file at
+  the same relative path (e.g. `README.md`) can no longer restore one's unsaved content into the other.
+- The onboarding nudge ("enable semantic search + reports") now shows only on a workspace's first
+  boot — gated on whether the workspace has any indexed content or an optional layer enabled — instead
+  of on every boot in a fresh WebView.
+- Performance / async hardening: PTY spawn and the `lsof` cwd probes run off the terminal-registry
+  lock (and off the async runtime), so a terminal launch or a multi-session `cs term list` no longer
+  stalls every other terminal op; preference writes are serialized through one in-flight chain so
+  near-simultaneous setting flips can't clobber each other; and a workspace-off no longer blocks the
+  desktop runtime waiting on the lock release.
+
 ## [v0.40.0] - 2026-06-19
 
 Making the `chan devserver` window + terminal lifecycle actually work end to end — reconnect,
