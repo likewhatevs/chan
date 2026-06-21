@@ -59,7 +59,7 @@ pub struct AppState {
     /// route 401, which is the safe default if the env var was
     /// forgotten on a fresh deploy.
     pub admin_token: Option<String>,
-    /// Optional workspace-proxy admin client used by `admin_block_user`
+    /// Optional devserver-proxy admin client used by `admin_block_user`
     /// to evict the user's live tunnels at the same moment we set
     /// `blocked_at`. `None` is fine in dev: tunnels just linger
     /// until reconnect, at which point the validate query refuses
@@ -730,8 +730,8 @@ async fn admin_block_user(
     // we block. Without this, an authenticated `chan serve` keeps
     // serving over its existing yamux substreams until it disconnects;
     // the DB block is already enforced for new validates and new
-    // sessions, but the in-process registrations on workspace-proxy don't
-    // see the row change. A workspace-proxy outage at this exact moment
+    // sessions, but the in-process registrations on devserver-proxy don't
+    // see the row change. A devserver-proxy outage at this exact moment
     // is acceptable: the next reconnect's validate refuses the token
     // on `blocked_at IS NOT NULL`, so the gap closes shortly.
     if let Some(client) = &state.workspace_admin {
@@ -1278,7 +1278,7 @@ fn valid_flag_key(s: &str) -> bool {
 
 /// Service-tier: resolve every registered flag for a single user.
 /// Returns `{flag_key: bool}` so callers (identity-service /api/me,
-/// workspace-proxy admin tooling) can render or gate without a second
+/// devserver-proxy admin tooling) can render or gate without a second
 /// hop. Unknown user is 404; unknown flag is simply absent from
 /// the map.
 async fn get_user_flags(

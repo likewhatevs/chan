@@ -17,10 +17,10 @@ pub struct Config {
     pub auth_token: String,
     /// Bearer for the /v1/admin/* tree. Distinct from `auth_token`
     /// so admin access can be rotated without touching identity /
-    /// workspace-proxy. Optional: when unset, the admin tree returns
+    /// devserver-proxy. Optional: when unset, the admin tree returns
     /// 401 for every request, which is the safe default.
     pub admin_token: Option<String>,
-    /// Pre-built admin client for workspace-proxy. `None` when
+    /// Pre-built admin client for devserver-proxy. `None` when
     /// `WORKSPACE_ADMIN_TOKEN` is unset, in which case admin block
     /// skips the tunnel-kill call (the live substreams stay alive
     /// until they reconnect and the next validate refuses them).
@@ -45,8 +45,8 @@ impl Config {
             .ok()
             .filter(|s| !s.is_empty());
 
-        // WORKSPACE_ADMIN_URL points at workspace-proxy's public listener; in
-        // single-listener deployments that's the same `workspace.chan.app`
+        // WORKSPACE_ADMIN_URL points at devserver-proxy's public listener; in
+        // single-listener deployments that's the same `devserver.chan.app`
         // host. Unset is OK in lab / one-machine setups: block-user
         // still works, the live tunnel just lingers until reconnect.
         let workspace_admin = std::env::var("WORKSPACE_ADMIN_TOKEN")

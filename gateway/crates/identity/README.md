@@ -1,6 +1,6 @@
 # identity-service
 
-Public-facing OAuth2 sign-in service for id.chan.app. Runs the GitHub / Google / GitLab auth-code flow with PKCE, holds the host-only `id_session` cookie, and serves a Svelte SPA where users manage their profile, personal access tokens (PATs), and workspaces. It mints the short-lived devserver-gate entry token that hands a user off to the devserver proxy.
+Public-facing OAuth2 sign-in service for id.chan.app. Runs the GitHub / Google / GitLab auth-code flow with PKCE, holds the host-only `id_session` cookie, and serves a Svelte SPA where users manage their profile, personal access tokens (PATs), and devservers (sharing). It mints the short-lived devserver-gate entry token that hands a user off to the devserver proxy.
 
 ## Role in the system
 
@@ -58,8 +58,8 @@ Required:
 | `DATABASE_URL`            | Postgres connection string                  |
 | `PROFILE_SERVICE_URL`     | profile-service HTTP base URL               |
 | `PROFILE_AUTH_TOKEN`      | bearer for profile-service calls            |
-| `IDENTITY_INTERNAL_TOKEN` | bearer workspace-proxy presents on validate |
-| `WORKSPACE_GATE_SECRET`   | HS256 secret; equals workspace-proxy's      |
+| `IDENTITY_INTERNAL_TOKEN` | bearer devserver-proxy presents on validate |
+| `WORKSPACE_GATE_SECRET`   | HS256 secret; equals devserver-proxy's      |
 | At least one provider's `*_CLIENT_ID` + `*_CLIENT_SECRET` pair        |
 
 Provider credentials (each pair optional; leave both unset to disable):
@@ -85,7 +85,7 @@ Optional knobs:
 | `DEVSERVER_WILDCARD_SUFFIX`| `.devserver.<domain>`     | redirect host suffix  |
 | `WORKSPACE_PUBLIC_SCHEME`  | `PUBLIC_SCHEME`           | workspace redirect scheme |
 | `WORKSPACE_PUBLIC_PORT`    | unset                     | `:port` for dev       |
-| `WORKSPACE_ADMIN_URL`      | unset                     | workspace-proxy admin base |
+| `WORKSPACE_ADMIN_URL`      | unset                     | devserver-proxy admin base |
 | `WORKSPACE_ADMIN_TOKEN`    | unset                     | enables tunnel evict on revoke / delete |
 | `RUSTRICT_ALLOWLIST`       | unset                     | comma-separated usernames exempt from the profanity filter |
 
@@ -113,20 +113,19 @@ Session-gated SPA API (`/api/*`):
 | POST   | `/api/tokens`         | mint a PAT (returns plaintext once)     |
 | DELETE | `/api/tokens/:id`     | revoke a PAT                            |
 | GET    | `/api/tokens/:id/audit` | per-token audit log                   |
-| GET    | `/api/workspaces/open`    | mint devserver-gate entry token + 303       |
-| POST   | `/api/workspaces`         | create a workspace in the user's namespace  |
-| DELETE | `/api/workspaces/:d`      | delete a workspace (cascades all its grants)|
-| GET    | `/api/workspaces/owned`   | workspaces the user owns                    |
-| GET    | `/api/workspaces/incoming`| workspaces shared with the user             |
-| POST   | `/api/workspaces/:d/grants`| share a workspace by email                 |
-| GET    | `/api/workspaces/:d/grants`| list grants on the user's workspace        |
-| DELETE | `/api/grants/:id`     | revoke a grant on the user's workspace      |
+| GET    | `/api/devservers/open`    | mint devserver-gate entry token + 303 (opens the devserver root; `?u=` owner, optional `&d=` tenant) |
+| GET    | `/api/devservers/owned`   | devservers the user owns (+ grant counts)   |
+| GET    | `/api/devservers/incoming`| devservers shared with the user             |
+| POST   | `/api/devservers/:d/grants`| share a devserver (whole library) by email |
+| GET    | `/api/devservers/:d/grants`| list grants on the user's devserver        |
+| DELETE | `/api/grants/:id`     | revoke a grant on the user's devserver      |
 
 Public share landing (no auth at the door):
 
 | Method | Path                  | Purpose                                 |
 |--------|-----------------------|-----------------------------------------|
-| GET    | `/s/:owner/:workspace`    | OAuth-then-mint entry token for grantees |
+| GET    | `/s/:owner`               | whole-devserver share link (OAuth-then-mint) |
+| GET    | `/s/:owner/:workspace`    | tenant deep-link share (OAuth-then-mint) |
 
 Desktop authorize (PAT mint for chan-desktop; consent is session-gated, entry bounces through sign-in when needed):
 
@@ -142,7 +141,7 @@ Internal (Bearer-gated by `IDENTITY_INTERNAL_TOKEN`):
 |--------|----------------------------------------|------------------------|
 | POST   | `/internal/v1/tokens/validate`         | validate a PAT         |
 
-The internal route is called by workspace-proxy during the tunnel handshake. The primary PAT brute-force throttle runs one hop earlier in workspace-proxy, keyed on a hash of the candidate token; this handler runs a defense-in-depth twin of the same throttle. A per-IP governor would be useless at either hop (every request arrives from one container IP). See identity's `design.md` for the rationale.
+The internal route is called by devserver-proxy during the tunnel handshake. The primary PAT brute-force throttle runs one hop earlier in devserver-proxy, keyed on a hash of the candidate token; this handler runs a defense-in-depth twin of the same throttle. A per-IP governor would be useless at either hop (every request arrives from one container IP). See identity's `design.md` for the rationale.
 
 ## Design rationale
 

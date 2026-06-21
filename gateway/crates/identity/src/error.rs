@@ -53,7 +53,7 @@ impl From<ProfileError> for Error {
     }
 }
 
-/// workspace-proxy admin failures only surface in the account-delete and
+/// devserver-proxy admin failures only surface in the account-delete and
 /// token-revoke paths. Map them to Upstream so the caller can decide
 /// whether to log-and-continue (every current caller does) or to
 /// `?` straight through.
@@ -75,7 +75,7 @@ impl IntoResponse for Error {
             Error::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             Error::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             // Upstream detail (oauth2 RequestTokenError, profile-service body,
-            // workspace-proxy admin response) stays in the server log; the public
+            // devserver-proxy admin response) stays in the server log; the public
             // body is fixed so OAuth provider errors and profile SQL fragments
             // do not leak through the 502.
             Error::Upstream(detail) => {

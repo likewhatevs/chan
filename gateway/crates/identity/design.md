@@ -18,11 +18,11 @@ axum HTTP server with three layers of routing under `id.chan.app`:
 
 1. `/auth/*`: pre-session OAuth flow. Sets a transient session key (`pending_oauth`) carrying CSRF state and the PKCE verifier; the callback consumes it and either upgrades the session to authenticated (`user_id`) or fails.
 2. `/api/*`: session-gated JSON API for the embedded SPA. Covers `me`, profile management, PAT lifecycle, the workspace list, and the devserver-gate mint endpoint.
-3. `/internal/v1/tokens/validate`: Bearer-gated endpoint called by chan-tunnel-server during handshake. Lives on its own sub-router so the session middleware doesn't try to load a cookie session for a non-cookie caller. A per-token-fingerprint throttle wraps it as defense in depth alongside the primary throttle in workspace-proxy.
+3. `/internal/v1/tokens/validate`: Bearer-gated endpoint called by chan-tunnel-server during handshake. Lives on its own sub-router so the session middleware doesn't try to load a cookie session for a non-cookie caller. A per-token-fingerprint throttle wraps it as defense in depth alongside the primary throttle in devserver-proxy.
 
 Static SPA assets are baked in at build time via `rust_embed` and served by `gateway_common::static_files::serve`. Anything not matched by an explicit route falls through to the static handler; paths without an extension serve `index.html` (SPA fallback).
 
-The session layer (`SessionManagerLayer` from `tower_sessions`) sits at the outermost edge and applies to every route. **Cookie scope is host-only on `id.chan.app`.** No `Domain` attribute. workspace-proxy does not share this cookie.
+The session layer (`SessionManagerLayer` from `tower_sessions`) sits at the outermost edge and applies to every route. **Cookie scope is host-only on `id.chan.app`.** No `Domain` attribute. devserver-proxy does not share this cookie.
 
 ## Public surface
 
@@ -65,7 +65,7 @@ PAT shape: `chan_pat_<32 random bytes, base64url, no pad>`.
   - Append `used` to `api_token_audit`.
 - Revoke (`DELETE /api/tokens/:id`):
   - Mark the row revoked.
-  - Best-effort: call workspace-proxy admin `kill_user_tunnels` for the user. Per-PAT eviction is not possible today (chan-tunnel-server does not track which token registered which substream); the conservative call is kill-all.
+  - Best-effort: call devserver-proxy admin `kill_user_tunnels` for the user. Per-PAT eviction is not possible today (chan-tunnel-server does not track which token registered which substream); the conservative call is kill-all.
 
 ### Dashboard
 
@@ -73,7 +73,7 @@ PAT shape: `chan_pat_<32 random bytes, base64url, no pad>`.
 
 1. Resolve `user_id` from the session.
 2. `profile.get_user(uid)`. Flush session and 401 if the user is gone underneath the cookie.
-3. Call workspace-proxy admin `GET /admin/v1/users/{username}/tunnels` for the live-workspace list. Empty for blocked users.
+3. Call devserver-proxy admin `GET /admin/v1/users/{username}/tunnels` for the live-workspace list. Empty for blocked users.
 4. Return `{user, workspaces: [TunnelView]}`.
 
 The SPA renders one card per workspace. Each card's "open" link points at `/api/workspaces/open?u={user}&d={workspace}` (server-side, see below) so the entry token is minted at click time, not at page-render time (otherwise short-exp tokens go stale before the user clicks).
@@ -85,11 +85,11 @@ The SPA renders one card per workspace. Each card's "open" link points at `/api/
 1. Resolve session; refuse if anonymous or blocked.
 2. Resolve `u` to a user record via profile `GET /v1/users/by-username`. Unknown handle returns 404 (same shape as no-access and unknown-workspace).
 3. Call profile `GET /v1/users/{owner_id}/workspaces/{d}/access?as= {session.user_id}`. Owner returns `owner`, an accepted grantee returns `viewer`/`editor`, anything else 404.
-4. Verify the workspace is live on workspace-proxy for `u` (cheap defense-in-depth; workspace-proxy is the authority on registrations).
+4. Verify the workspace is live on devserver-proxy for `u` (cheap defense-in-depth; devserver-proxy is the authority on registrations).
 5. Mint a 30s `entry` JWT (HS256, `WORKSPACE_GATE_SECRET`) with `{sub: session.user_id, drv: d, aud: "{u}.devserver.chan.app", ...}`. `sub` is the *caller's* id, not the owner's, so the devserver_gate cookie minted on the next leg carries the right identity for upstream collab attribution.
 6. 303 to `https://{u}.devserver.chan.app/{d}/?t=<jwt>`.
 
-workspace-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it as a host-only `devserver_gate` cookie, and 303s to the clean URL. The shared JWT type lives in `gateway_common::devserver_gate`.
+devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it as a host-only `devserver_gate` cookie, and 303s to the clean URL. The shared JWT type lives in `gateway_common::devserver_gate`.
 
 ### Share landing
 
@@ -97,7 +97,7 @@ workspace-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it a
 
 1. Validate `owner` (username shape) and `workspace` (1-64 lowercase alnum + `[._-]`); malformed values 404.
 2. No session: stash `/s/:owner/:workspace` under `post_login_redirect` and 303 to `/`. The SPA renders the OAuth picker; on callback, the stash is consumed and the user lands back here with a fresh session.
-3. With a session: resolve owner -> profile access check -> mint entry JWT -> 303 to workspace-proxy. Same code path as `/api/workspaces/open` once auth is established.
+3. With a session: resolve owner -> profile access check -> mint entry JWT -> 303 to devserver-proxy. Same code path as `/api/workspaces/open` once auth is established.
 
 The post-login redirect is validated to start with a single `/` and to contain no `:` or `//` prefix, so a hostile stash cannot point the callback at another origin.
 
@@ -138,7 +138,7 @@ OAuth-style consent flow at `/desktop/authorize` (entry, validates the query and
 
 1. Look up the user (need the username for the next step).
 2. `profile.delete_user(uid)`. FK cascades clean up identities and `api_tokens`.
-3. Best-effort: call workspace-proxy `kill_user_tunnels(username)` so live yamux registrations die at the same time the DB row goes.
+3. Best-effort: call devserver-proxy `kill_user_tunnels(username)` so live yamux registrations die at the same time the DB row goes.
 4. Flush the session.
 
 ## Key decisions
@@ -174,7 +174,7 @@ Plus (in `http.rs`):
 - Cookie name `id_session`. **Host-only on `id.chan.app`.** No `Domain` attribute.
 - `HttpOnly`, `SameSite=Lax`, 30-day inactivity expiry.
 - `Secure` follows the `COOKIE_SECURE` env var.
-- workspace-proxy does **not** read this cookie. Cross-service auth flows through the devserver-gate JWT, not through cookie sharing.
+- devserver-proxy does **not** read this cookie. Cross-service auth flows through the devserver-gate JWT, not through cookie sharing.
 
 ### Session id rotates on login
 
@@ -188,15 +188,15 @@ Plus (in `http.rs`):
 
 ### Workspace-gate mint, not session sharing
 
-`WORKSPACE_GATE_SECRET` is the only credential identity uses to talk auth to workspace-proxy. It is distinct from `PROFILE_AUTH_TOKEN`, `IDENTITY_INTERNAL_TOKEN` and `WORKSPACE_ADMIN_TOKEN`. identity uses it only to mint `typ: entry` tokens; workspace-proxy uses it to verify those and to mint its own `typ: session` cookies.
+`WORKSPACE_GATE_SECRET` is the only credential identity uses to talk auth to devserver-proxy. It is distinct from `PROFILE_AUTH_TOKEN`, `IDENTITY_INTERNAL_TOKEN` and `WORKSPACE_ADMIN_TOKEN`. identity uses it only to mint `typ: entry` tokens; devserver-proxy uses it to verify those and to mint its own `typ: session` cookies.
 
 ### IDENTITY_INTERNAL_TOKEN is required and distinct
 
-The bearer workspace-proxy presents on `/internal/v1/tokens/validate` is `IDENTITY_INTERNAL_TOKEN`. It is required; there is no fallback to `PROFILE_AUTH_TOKEN`. Rotating one bearer never rotates another.
+The bearer devserver-proxy presents on `/internal/v1/tokens/validate` is `IDENTITY_INTERNAL_TOKEN`. It is required; there is no fallback to `PROFILE_AUTH_TOKEN`. Rotating one bearer never rotates another.
 
 ### PAT validate runs its own throttle
 
-Mirror of workspace-proxy's `ThrottlingValidator`. Throttled requests return 401, identical on the wire to an unknown token, so the throttle is not observable from the outside. The workspace-proxy throttle catches the typical case; this one catches a leaked internal bearer being used to brute-force PATs directly.
+Mirror of devserver-proxy's `ThrottlingValidator`. Throttled requests return 401, identical on the wire to an unknown token, so the throttle is not observable from the outside. The devserver-proxy throttle catches the typical case; this one catches a leaked internal bearer being used to brute-force PATs directly.
 
 ### Domain config is single-source
 
@@ -226,7 +226,7 @@ identity derives `BASE_URL` (its OAuth-callback origin) and `devserver_wildcard_
 | BadRequest    | 400  | input or OAuth-flow failure            |
 | NotFound      | 404  | unknown provider, missing user / token |
 | Conflict      | 409  | username taken, rename cap reached     |
-| Upstream      | 502  | profile / workspace-proxy unhappy          |
+| Upstream      | 502  | profile / devserver-proxy unhappy          |
 | Anyhow        | 500  | startup or unexpected                  |
 | Reqwest       | 502  | network failure to a sibling service   |
 
@@ -236,7 +236,7 @@ identity derives `BASE_URL` (its OAuth-callback origin) and `devserver_wildcard_
 
 - axum 0.7 + `tower_sessions` + Postgres session store (host-only cookie scope)
 - `oauth2` crate with `rustls-tls` for PKCE + token exchange
-- `reqwest` for profile-service, workspace-proxy admin, and the OAuth providers' REST APIs
+- `reqwest` for profile-service, devserver-proxy admin, and the OAuth providers' REST APIs
 - `gateway-common` for the profile-service client, the workspace-admin client, the shared devserver_gate JWT type, and the SPA static-asset handler
 - `jsonwebtoken` for HS256 entry-token mint
 - `subtle`, `rustrict`, `rand::rngs::OsRng`, `sha2::Sha256`

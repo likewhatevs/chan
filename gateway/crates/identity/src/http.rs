@@ -42,7 +42,7 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     pub api_tokens: ApiTokenService,
     /// Per-token-fingerprint rate limiter applied to
-    /// /internal/v1/tokens/validate. Defense in depth: workspace-proxy
+    /// /internal/v1/tokens/validate. Defense in depth: devserver-proxy
     /// throttles by the same fingerprint one hop earlier, so this
     /// kicks in only if the internal bearer leaks and someone calls
     /// identity directly. Throttled requests come back as 401 so
@@ -130,12 +130,12 @@ pub fn router(
     // sub-router so the session layer doesn't try to load a cookie
     // session for callers that don't have one.
     //
-    // No per-IP rate limit here. The only caller is workspace-proxy,
+    // No per-IP rate limit here. The only caller is devserver-proxy,
     // so a governor at this hop sees one peer IP regardless of how
     // many distinct clients are probing tokens upstream: a single
     // global bucket that can lock out legitimate `chan serve`
     // handshakes while leaving real attacker shape invisible. The
-    // primary PAT brute-force gate sits in workspace-proxy, keyed on
+    // primary PAT brute-force gate sits in devserver-proxy, keyed on
     // a hash of the candidate token; `token_throttle` inside the
     // validate handler is its defense-in-depth twin.
     let internal = Router::new()
@@ -574,9 +574,9 @@ async fn me(State(state): State<AppState>, session: Session) -> Result<Response>
         return Err(Error::Unauthorized);
     };
 
-    // Workspace list comes from workspace-proxy. Blocked users get an empty
+    // Workspace list comes from devserver-proxy. Blocked users get an empty
     // list; the SPA renders the blocked view from `user.blocked_at`.
-    // workspace-proxy outages also surface as empty (with a log line)
+    // devserver-proxy outages also surface as empty (with a log line)
     // rather than failing the whole `/api/me`: the dashboard is the
     // user's only way to discover other state (rename, PATs, account
     // delete), and that state still loads from profile-service.
@@ -662,7 +662,7 @@ async fn providers_list(State(state): State<AppState>) -> Json<ProvidersResponse
 
 async fn delete_profile(State(state): State<AppState>, session: Session) -> Result<StatusCode> {
     let uid = current_user_id(&session).await?;
-    // Look the user up before delete so we can hand workspace-proxy the
+    // Look the user up before delete so we can hand devserver-proxy the
     // username for the bulk tunnel evict; the row is gone after the
     // DELETE returns, including via FK cascade. Tolerate "already
     // gone" (cookie outlived the row) by treating None as a no-op.
@@ -677,7 +677,7 @@ async fn delete_profile(State(state): State<AppState>, session: Session) -> Resu
     state.cfg.profile_client.delete_user(uid).await?;
 
     // Best-effort: drop every live tunnel the user had open.
-    // workspace-proxy holds those substreams in-process, so the cascade
+    // devserver-proxy holds those substreams in-process, so the cascade
     // above doesn't reach them. A failure here logs and continues;
     // the remote chan serve will get rejected on its next handshake
     // anyway because the PAT is now gone.
@@ -909,7 +909,7 @@ async fn tokens_revoke(
     // open. chan-serve instances using a non-revoked token will
     // reconnect on the next handshake; instances using the revoked
     // token fail the next validate and stay disconnected. A failure
-    // to reach workspace-proxy logs and continues; the next handshake
+    // to reach devserver-proxy logs and continues; the next handshake
     // will refuse the token anyway via the DB check.
     if let Some(client) = &state.cfg.workspace_admin {
         match client.kill_user_tunnels(&user.username).await {
@@ -1365,7 +1365,7 @@ async fn validate_token(
         return Err(Error::Unauthorized);
     }
     // Per-token-fingerprint rate limit before the DB lookup. Same
-    // shape as workspace-proxy's outer throttle: a throttled call comes
+    // shape as devserver-proxy's outer throttle: a throttled call comes
     // back as the same 401 an unknown-token call returns, so the
     // throttle is not observable on the wire. See the module doc
     // for the threat model.

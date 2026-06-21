@@ -18,7 +18,7 @@ pub struct Config {
     pub database_url: String,
     pub cookie_secure: bool,
     pub profile_client: ProfileClient,
-    /// Bearer workspace-proxy presents on /internal/v1/tokens/validate.
+    /// Bearer devserver-proxy presents on /internal/v1/tokens/validate.
     /// Required and distinct from PROFILE_AUTH_TOKEN; rotating one
     /// does not rotate the other.
     pub internal_auth_token: String,
@@ -34,17 +34,17 @@ pub struct Config {
     /// to 127.0.0.1 without TLS).
     pub workspace_public_scheme: String,
     /// Optional `:port` suffix appended to the redirect URL. Empty
-    /// in prod; `:7002` in local dev where workspace-proxy binds the
+    /// in prod; `:7002` in local dev where devserver-proxy binds the
     /// axum listener on a non-443 port.
     pub workspace_public_port: String,
-    /// Pre-built admin client for workspace-proxy. Required when
+    /// Pre-built admin client for devserver-proxy. Required when
     /// `WORKSPACE_ADMIN_TOKEN` is set; identity uses it on PAT revoke,
     /// account delete, and `/api/me` (dashboard reads). `None` only
     /// in dev / lab setups; the dashboard renders empty workspace lists
     /// and revoke / delete skip the tunnel-kill best-effort hop.
     pub workspace_admin: Option<WorkspaceAdminClient>,
     /// HMAC-SHA256 secret used to mint workspace-gate entry tokens.
-    /// Same value also configured on workspace-proxy. Required.
+    /// Same value also configured on devserver-proxy. Required.
     pub workspace_gate_secret: String,
     pub providers: Vec<Arc<dyn Provider>>,
 }
@@ -59,7 +59,7 @@ impl Config {
         // Single-source domain config. CHAN_DOMAIN drives both the id
         // and workspace hostnames; PUBLIC_SCHEME the URL scheme. Both
         // default dev-shaped (localtest.me / http); production sets
-        // them once in the shared environment file. workspace-proxy
+        // them once in the shared environment file. devserver-proxy
         // derives the same hosts from the same vars, so the two cannot
         // drift (the workspace-gate `aud` must match). See
         // gateway_common::domain.
@@ -90,7 +90,7 @@ impl Config {
             std::env::var("PROFILE_AUTH_TOKEN").context("PROFILE_AUTH_TOKEN is required")?;
         let profile_client = ProfileClient::new(profile_url, profile_token)?;
 
-        // Required, no fallback. workspace-proxy holds the matching
+        // Required, no fallback. devserver-proxy holds the matching
         // value via the same env var. Rotating PROFILE_AUTH_TOKEN
         // must never accidentally rotate the internal validate bearer.
         let internal_auth_token = std::env::var("IDENTITY_INTERNAL_TOKEN")

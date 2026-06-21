@@ -1,4 +1,4 @@
-//! Re-export of the shared workspace-proxy admin client.
+//! Re-export of the shared devserver-proxy admin client.
 //!
 //! Implementation lives in `gateway_common::workspace_admin_client`; this
 //! shim keeps the `crate::workspace_admin_client::*` import path stable

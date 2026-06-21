@@ -2,7 +2,7 @@
 
 ## Problem
 
-Other gateway services need a single, authoritative store for user identity. Two writers must not race when a user signs in for the first time on two providers concurrently; an admin block must revoke every live PAT in one operation and tear down the user's live yamux registrations on workspace-proxy; renames must be capped so the public `chan.app/{username}` namespace doesn't churn.
+Other gateway services need a single, authoritative store for user identity. Two writers must not race when a user signs in for the first time on two providers concurrently; an admin block must revoke every live PAT in one operation and tear down the user's live yamux registrations on devserver-proxy; renames must be capped so the public `chan.app/{username}` namespace doesn't churn.
 
 ## Architecture
 
@@ -28,7 +28,7 @@ The router splits into three sub-routers:
 
 All bearer comparisons run through `subtle::ConstantTimeEq` (`bearer_eq` in `http.rs`). Both checks always run on the service API so a wrong token cannot oracle which leg matched first.
 
-profile-service holds a `WorkspaceAdminClient` (from `gateway_common::workspace_admin_client`) when `WORKSPACE_ADMIN_URL` and `WORKSPACE_ADMIN_TOKEN` are set. The block flow fires `kill_user_tunnels` server-side at the same moment `blocked_at` is written, so live workspace-proxy registrations die without an extra hop from the operator CLI.
+profile-service holds a `WorkspaceAdminClient` (from `gateway_common::workspace_admin_client`) when `WORKSPACE_ADMIN_URL` and `WORKSPACE_ADMIN_TOKEN` are set. The block flow fires `kill_user_tunnels` server-side at the same moment `blocked_at` is written, so live devserver-proxy registrations die without an extra hop from the operator CLI.
 
 ## Public surface
 
@@ -93,16 +93,16 @@ WHERE id = $1 AND lower(username) = $2
 
 When the CTE returns no rows the handler runs one follow-up SELECT to distinguish "user not found" (404) from "rename cap reached" (409). Collapsing the original two-statement diagnosis into the CTE closes the TOCTOU window where a concurrent rename could change state between the CAS UPDATE and the diagnostic SELECT. The unique index on `lower(username)` still raises `23505` on the rare name collision, which surfaces as 409 with the database's error message.
 
-### Block fans out to workspace-proxy server-side
+### Block fans out to devserver-proxy server-side
 
 `POST /v1/admin/users/:id/block`:
 
 1. Set `users.blocked_at = now()` and `block_reason` in one transaction with the next two steps.
 2. Update `api_tokens` to set `revoked_at = now()` for every live PAT belonging to the user.
 3. Append an `auth_audit` row with action `blocked`.
-4. Best-effort: if a `WorkspaceAdminClient` is configured, call workspace-proxy `/admin/v1/users/{username}/tunnels/kill` to evict live yamux substreams. Failures are logged at warn; the next handshake from a peer with a stale PAT fails on the DB join anyway, so the gap closes either way.
+4. Best-effort: if a `WorkspaceAdminClient` is configured, call devserver-proxy `/admin/v1/users/{username}/tunnels/kill` to evict live yamux substreams. Failures are logged at warn; the next handshake from a peer with a stale PAT fails on the DB join anyway, so the gap closes either way.
 
-workspace-proxy is the authority on live registrations; profile is the authority on `blocked_at`. The block flow keeps both views consistent within the same operation.
+devserver-proxy is the authority on live registrations; profile is the authority on `blocked_at`. The block flow keeps both views consistent within the same operation.
 
 ### Email rewrite is admin-only
 
@@ -146,7 +146,7 @@ Column lists are constants `format!`'d into queries; user input always rides thr
 - `users.username_edits` only increases; never reset.
 - `users.blocked_at` is `NULL` or a timestamp; `NULL` means active.
 - `api_token_audit.action` is one of `created`, `created_via_desktop`, `used`, `revoked`.
-- Block always: revokes every active PAT, fires the workspace-proxy eviction (if configured), appends one `auth_audit` row.
+- Block always: revokes every active PAT, fires the devserver-proxy eviction (if configured), appends one `auth_audit` row.
 - Bearer comparisons run at constant time.
 - `devserver_grants.role` is one of `viewer`, `editor` (CHECK constraint). `accepted_at` is `NULL` iff `grantee_user_id` is `NULL`; both flip together at claim time.
 
@@ -171,7 +171,7 @@ Database errors are logged with `tracing::error!(error = ?e, ...)`; clients see 
 - sqlx with `runtime-tokio` + `tls-rustls` + Postgres
 - `subtle` for constant-time bearer comparison
 - `tower-http` tracing layer
-- `gateway_common::workspace_admin_client::WorkspaceAdminClient` (best-effort workspace-proxy eviction on admin block)
+- `gateway_common::workspace_admin_client::WorkspaceAdminClient` (best-effort devserver-proxy eviction on admin block)
 - migrations checked on startup
 
 ## What is not wired
