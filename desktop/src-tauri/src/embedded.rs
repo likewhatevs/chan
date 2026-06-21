@@ -307,6 +307,19 @@ impl EmbeddedServer {
             .map_err(|e| format!("minting a window: {e}"))
     }
 
+    /// The library's first-open rule: mint exactly one boot terminal the first
+    /// time this library is opened with an empty window registry, then persist a
+    /// marker so it never re-mints. Returns the minted record, or `None` when
+    /// nothing was minted (the registry already has windows, or the marker is set
+    /// — the user closed the only terminal, so reopening comes up with none). The
+    /// minted record fires the aggregate change signal, so the watcher opens its
+    /// native window. The boot path calls this instead of an unconditional mint.
+    pub fn ensure_first_open_terminal(&self) -> Result<Option<WindowRecord>, String> {
+        self.host
+            .ensure_first_open_terminal()
+            .map_err(|e| format!("ensuring the first-open terminal: {e}"))
+    }
+
     /// Discard a window: remove its registry row and reap its terminal
     /// sessions, then fire the aggregate change signal so the watcher reconciles
     /// the native window closed (the L5 discard op — `^W`/`^D`/empty-pane). The

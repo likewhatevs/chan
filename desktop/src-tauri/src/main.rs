@@ -624,33 +624,6 @@ fn persist_enabled_workspaces(state: &AppState) {
     }
 }
 
-/// Whether this devserver's first-connect boot terminal was already minted (the
-/// persisted one-shot flag). An unknown devserver reads as not bootstrapped, so
-/// a fresh add mints on its first connect.
-fn devserver_bootstrapped(state: &AppState, id: &str) -> bool {
-    state
-        .store
-        .lock()
-        .unwrap()
-        .get()
-        .ok()
-        .map(|cfg| cfg.devservers.iter().any(|d| d.id == id && d.bootstrapped))
-        .unwrap_or(false)
-}
-
-/// Mark this devserver bootstrapped (its first-connect boot terminal was minted)
-/// and persist it, so a reconnect after the user deleted that terminal does not
-/// re-mint one.
-fn set_devserver_bootstrapped(state: &AppState, id: &str) -> Result<(), String> {
-    let mut store = state.store.lock().unwrap();
-    let mut cfg = store.get().map_err(err)?;
-    if let Some(ds) = cfg.devservers.iter_mut().find(|d| d.id == id) {
-        ds.bootstrapped = true;
-        store.save(&cfg).map_err(err)?;
-    }
-    Ok(())
-}
-
 #[tauri::command]
 fn get_config(state: State<Arc<AppState>>) -> Result<Config, String> {
     state.store.lock().unwrap().get().map_err(err)
@@ -849,9 +822,6 @@ fn add_devserver(
                     script,
                     label,
                     added_at: config::current_millis(),
-                    // A freshly-added devserver mints its boot terminal on the
-                    // first connect; this flips true there.
-                    bootstrapped: false,
                 };
                 let id = entry.id.clone();
                 cfg.devservers.push(entry);
@@ -1240,15 +1210,11 @@ async fn connect_devserver(
         .lock()
         .unwrap()
         .insert(id.clone(), cancel);
-    // FIRST connect only: mint a standalone boot terminal (the watcher reconciles
-    // it open) so the user lands on a terminal alongside any persisted windows.
-    // Gated by a persisted per-devserver flag — if the user later DELETES it and
-    // reconnects, we do NOT re-mint (@@Alex: "we save that state ... we dont open
-    // a new terminal"). One-shot bootstrap; the feed drives every window after.
-    if !devserver_bootstrapped(&state, &id) {
-        devserver::mint_library_window(&conn, chan_server::WindowKind::Terminal, None).await?;
-        set_devserver_bootstrapped(&state, &id)?;
-    }
+    // The desktop does not mint a boot terminal on connect: the headless
+    // devserver runs the library's own first-open rule when it opens (one
+    // terminal the very first time, never re-minted once the user closes it), so
+    // the desktop just reconciles whatever the feed reports.
+    //
     // The control terminal stays open after connect. It runs the connect
     // script, which may keep streaming or prompt for ssh credentials, so
     // burying it on connect hid live output and read as a flash. The user
@@ -2680,13 +2646,13 @@ fn main() {
                 }
             }
 
-            // Boot matrix (§3.2). Every window is a library registry row, so boot
-            // is uniform: mount the shared terminal tenant (so persisted terminal
+            // Boot matrix. Every window is a library registry row, so boot is
+            // uniform: mount the shared terminal tenant (so persisted terminal
             // windows resolve a live prefix/token and the watcher reopens them),
             // re-serve the workspaces the user left on (each mount lets the watcher
             // reopen that workspace's persisted windows at their stable window_id),
-            // and — if nothing will be shown (a fresh profile, or only off
-            // workspaces) — mint a default terminal so there is always a shell.
+            // and let the library's first-open rule mint one boot terminal only on
+            // a truly fresh library (empty registry, marker unset).
             let enabled = state_for_setup
                 .store
                 .lock()
@@ -2721,20 +2687,14 @@ fn main() {
                         );
                     }
                 }
-                // "You always have a shell" floor: when nothing has a live tenant
-                // to show (fresh profile, or only off workspaces), mint a default
-                // boot terminal. Persisted windows otherwise restore via the watcher.
+                // First-open rule (library-owned): the very first time this local
+                // library is opened with an empty registry, mint one boot terminal
+                // and persist a marker. Once set, an emptied registry never
+                // re-mints — the user who closed their only terminal reopens to
+                // none. Persisted windows restore via the watcher independently.
                 if let Some(embedded) = state_for_restore.embedded() {
-                    let anything_shown = embedded
-                        .assemble_window_records()
-                        .iter()
-                        .any(|r| !r.token.is_empty());
-                    if !anything_shown {
-                        if let Err(e) =
-                            embedded.mint_window(chan_server::WindowKind::Terminal, None)
-                        {
-                            tracing::warn!(error = %e, "minting the boot terminal failed");
-                        }
+                    if let Err(e) = embedded.ensure_first_open_terminal() {
+                        tracing::warn!(error = %e, "ensuring the boot terminal failed");
                     }
                 }
             });

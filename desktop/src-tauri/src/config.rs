@@ -88,12 +88,6 @@ pub struct Devserver {
     /// Wall-clock millis when the devserver was added.
     #[serde(default)]
     pub added_at: u64,
-    /// Whether the FIRST connect already minted this devserver's standalone
-    /// boot terminal. One-shot: set true after the first connect's mint, so a
-    /// reconnect after the user deleted that terminal does NOT re-mint it (the
-    /// window watcher then just reconciles whatever the devserver still has).
-    #[serde(default)]
-    pub bootstrapped: bool,
 }
 
 /// Per-window layout snapshot pushed when a workspace webview closes,
@@ -493,7 +487,6 @@ mod tests {
                 script: "ssh box -L 8787:localhost:8787 chan devserver".into(),
                 label: "lab box".into(),
                 added_at: 42,
-                bootstrapped: true,
             }],
             ..Default::default()
         };

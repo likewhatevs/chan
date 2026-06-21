@@ -289,6 +289,7 @@ pub(crate) fn open_watched_local_window(
         WindowSpec {
             label: &label,
             session_id: &record.window_id,
+            library_id: &record.library_id,
             title: &title,
             url: &url,
             url_hash_seed: "",
@@ -326,6 +327,7 @@ pub(crate) fn open_watched_remote_window(
         WindowSpec {
             label: &label,
             session_id: &record.window_id,
+            library_id: &record.library_id,
             title: &title,
             url: &url,
             url_hash_seed: "",
@@ -368,6 +370,10 @@ pub fn spawn_remote_workspace_window(
         WindowSpec {
             label: &restore.label,
             session_id: &restore.label,
+            // An outbound URL attachment is not part of any chan-library, so it
+            // carries no `?lib=` (the SPA defaults it to `local`, isolating its
+            // tab d&d to itself).
+            library_id: "",
             title: &title,
             url,
             url_hash_seed: &restore.url_hash,
@@ -402,6 +408,10 @@ pub fn spawn_devserver_terminal_window_at_label(
         WindowSpec {
             label,
             session_id: label,
+            // The imperative per-label devserver terminal path predates the
+            // window-watcher feed that carries `library_id`; it has no record to
+            // read one from, so it passes none (the SPA defaults to `local`).
+            library_id: "",
             title: "Terminal",
             url,
             url_hash_seed: "",
@@ -462,6 +472,9 @@ pub async fn spawn_control_terminal_window(
         WindowSpec {
             label: &label,
             session_id: &label,
+            // The control terminal runs on the local embedded library's shared
+            // terminal tenant, so it belongs to the `local` library.
+            library_id: "local",
             title: "Control Terminal",
             url: &url,
             url_hash_seed: "",
@@ -512,6 +525,8 @@ pub fn open_window_by_label(
             WindowSpec {
                 label,
                 session_id: label,
+                // A running local workspace window belongs to the `local` library.
+                library_id: "local",
                 title: &title,
                 url: &url,
                 url_hash_seed: "",
@@ -581,6 +596,10 @@ pub fn reopen_remote_window(
         WindowSpec {
             label,
             session_id: label,
+            // The imperative remote-reopen path predates the window-watcher feed
+            // that carries `library_id`; it has no record to read one from, so it
+            // passes none (the SPA defaults to `local`).
+            library_id: "",
             title: &entry.base_title,
             url: &entry.url,
             url_hash_seed: "",
@@ -719,6 +738,12 @@ struct WindowSpec<'a> {
     /// the SPA keys its session blob / `/ws` presence on. Equals `label`
     /// except for watcher-opened windows, which pass the bare `window_id`.
     session_id: &'a str,
+    /// The owning chan-library's id, appended as `?lib=` so the SPA can scope
+    /// cross-window tab drag-and-drop to the same library (`local` for the
+    /// baked-in local disk library, `lib-<hex>` for a devserver). The SPA
+    /// defaults a missing `?lib=` to `local`, so a window with no library
+    /// identity (an outbound URL attachment) passes the empty string.
+    library_id: &'a str,
     /// Base title; the builder suffixes a reused " Window N" display number.
     title: &'a str,
     /// The workspace/terminal URL the webview ultimately shows.
@@ -763,6 +788,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     let WindowSpec {
         label: window_label,
         session_id,
+        library_id,
         title,
         url,
         url_hash_seed,
@@ -785,6 +811,13 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     // workspace mode.
     if let Some(kind) = kind {
         parsed.query_pairs_mut().append_pair("kind", kind);
+    }
+    // `lib=<library_id>` next to `?w=`/`?kind=` tells the SPA which chan-library
+    // this window belongs to, so cross-window tab d&d accepts a drop only from
+    // the same library. Skipped when empty (an outbound URL attachment has no
+    // library identity; the SPA defaults a missing `?lib=` to `local`).
+    if !library_id.is_empty() {
+        parsed.query_pairs_mut().append_pair("lib", library_id);
     }
     if !url_hash_seed.is_empty() {
         parsed.set_fragment(Some(url_hash_seed));
