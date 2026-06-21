@@ -165,6 +165,7 @@ pub fn router(
             "/api/grants/:id",
             axum::routing::delete(devserver_grants_delete),
         )
+        .route("/s/:owner", get(share_landing_root))
         .route("/s/:owner/:workspace", get(share_landing))
         .route(
             "/desktop/authorize",
@@ -1192,10 +1193,14 @@ fn is_devserver_id_shape(s: &str) -> bool {
 
 /// Public entry point for a copied share link.
 ///
+/// Two shapes, one flow:
+///   * `/s/:owner` (whole-devserver link) -> opens the devserver root.
+///   * `/s/:owner/:workspace` (deep link) -> opens that tenant.
+///
 /// Flow:
-///   1. If the caller has no session, stash `/s/:owner/:workspace` and
-///      303 to `/` so the SPA shows the OAuth picker. The callback
-///      reads the stash and 303s back here after sign-in.
+///   1. If the caller has no session, stash the path and 303 to `/` so
+///      the SPA shows the OAuth picker. The callback reads the stash and
+///      303s back here after sign-in.
 ///   2. With a session, resolve `:owner` (username -> User), read the
 ///      owner's LIVE devserver_id from the proxy admin tunnel list, and
 ///      call profile `devserver_access?as=<self>` on it. Owner and
@@ -1204,19 +1209,48 @@ fn is_devserver_id_shape(s: &str) -> bool {
 ///   3. On access, mint an entry JWT (drv = the devserver_id) against
 ///      the owner's `{owner}.devserver.chan.app` host and 303 to the
 ///      proxy so it sets its `devserver_gate` cookie and serves the
-///      content. The `:workspace` segment rides the path as the tenant.
-///      The same 30s short-lived entry token shape used by
-///      `/api/workspaces/open`.
+///      content. The `:workspace` segment, when present, rides the path
+///      as the tenant; absent, the devserver serves its root launcher.
 async fn share_landing(
     State(state): State<AppState>,
     session: Session,
     Path((owner, workspace)): Path<(String, String)>,
 ) -> Result<Redirect> {
+    share_landing_impl(state, session, owner, Some(workspace)).await
+}
+
+/// Whole-devserver share link (`/s/:owner`): no tenant segment, opens
+/// the devserver root launcher. The dashboard's copy-link uses this
+/// because a grant shares the WHOLE devserver, so a per-workspace link
+/// would be arbitrary.
+async fn share_landing_root(
+    State(state): State<AppState>,
+    session: Session,
+    Path(owner): Path<String>,
+) -> Result<Redirect> {
+    share_landing_impl(state, session, owner, None).await
+}
+
+async fn share_landing_impl(
+    state: AppState,
+    session: Session,
+    owner: String,
+    workspace: Option<String>,
+) -> Result<Redirect> {
     let owner = owner.trim().to_ascii_lowercase();
-    let workspace = workspace.trim().to_ascii_lowercase();
-    if !valid_username(&owner) || !is_workspace_name_shape(&workspace) {
+    if !valid_username(&owner) {
         return Err(Error::NotFound);
     }
+    // Optional tenant segment: shape-checked when present.
+    let workspace = match workspace.map(|w| w.trim().to_ascii_lowercase()) {
+        Some(w) if !w.is_empty() => {
+            if !is_workspace_name_shape(&w) {
+                return Err(Error::NotFound);
+            }
+            Some(w)
+        }
+        _ => None,
+    };
 
     // Unauthenticated: stash + send to login. Use a 303 (See Other)
     // so a refresh on the SPA root doesn't re-trigger the share flow.
@@ -1225,7 +1259,10 @@ async fn share_landing(
         .await
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("session get: {e}")))?;
     let Some(uid) = uid else {
-        let dest = format!("/s/{owner}/{workspace}");
+        let dest = match &workspace {
+            Some(w) => format!("/s/{owner}/{w}"),
+            None => format!("/s/{owner}"),
+        };
         session
             .insert(KEY_POST_LOGIN_REDIRECT, &dest)
             .await
@@ -1234,7 +1271,7 @@ async fn share_landing(
     };
 
     // Resolve the owner handle. 404 is the same shape as "no access"
-    // and "unknown workspace", so a stranger cannot probe the existence
+    // and "unknown devserver", so a stranger cannot probe the existence
     // of a handle through this route.
     let owner_user = state
         .cfg
@@ -1274,14 +1311,18 @@ async fn share_landing(
 
     tracing::info!(
         owner = %owner_user.username,
-        workspace = %workspace,
+        workspace = ?workspace,
         caller = %uid,
         role = %access.role,
         "share landing: minting entry token",
     );
 
+    let path = match &workspace {
+        Some(w) => format!("/{w}/"),
+        None => "/".to_string(),
+    };
     let url = format!(
-        "{scheme}://{host}{port}/{workspace}/?t={token}",
+        "{scheme}://{host}{port}{path}?t={token}",
         scheme = state.cfg.workspace_public_scheme,
         port = state.cfg.workspace_public_port,
     );

@@ -37,6 +37,9 @@
   let addBusy = $state<Record<string, boolean>>({});
   let addError = $state<Record<string, string | null>>({});
 
+  // Copy-share-link feedback, keyed by devserver_id ("Copied" toast).
+  let copied = $state<Record<string, boolean>>({});
+
   let refreshing = $state(false);
 
   function unifyDevservers() {
@@ -172,6 +175,22 @@
     location.assign(api.devserverOpenUrl(owner));
   }
 
+  async function copyShareLink(devserverId: string) {
+    const url = api.shareUrl(username);
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // Clipboard can be blocked in non-secure contexts; fall back to a
+      // prompt so the user can copy manually.
+      window.prompt("Copy this share link:", url);
+      return;
+    }
+    copied[devserverId] = true;
+    setTimeout(() => {
+      copied[devserverId] = false;
+    }, 1500);
+  }
+
   $effect(() => {
     void loadLists();
   });
@@ -241,10 +260,20 @@
 
             {#if expanded === d.id}
               <div class="panel">
-                <strong>Share this devserver</strong>
+                <div class="panel-head">
+                  <strong>Share this devserver</strong>
+                  <button
+                    type="button"
+                    class="ghost small-btn"
+                    onclick={() => copyShareLink(d.id)}
+                  >
+                    {copied[d.id] ? "Copied" : "Copy share link"}
+                  </button>
+                </div>
                 <p class="muted small">
-                  Grant by email. The collaborator gets access to the whole
-                  devserver once they sign in with a matching verified email.
+                  Grant by email, or copy the share link. The collaborator gets
+                  access to the whole devserver once they sign in with a matching
+                  verified email.
                 </p>
 
                 <form
@@ -444,6 +473,11 @@
     display: flex;
     flex-direction: column;
     gap: .5rem;
+  }
+  .panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
   .addgrant {
     display: flex;

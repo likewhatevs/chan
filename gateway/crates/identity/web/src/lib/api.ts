@@ -138,6 +138,16 @@ export const api = {
     return `/api/devservers/open?u=${u}`;
   },
 
+  /// Copyable whole-devserver share link. Anyone who signs in via an
+  /// OAuth provider whose verified email matches a grant the owner
+  /// created is admitted to the whole devserver. Hand-distributed
+  /// (email, chat); the server does not send the message. Absolute URL
+  /// (the SPA origin = id.chan.app, which handles /s/:owner).
+  shareUrl: (owner: string): string => {
+    const o = encodeURIComponent(owner);
+    return `${window.location.origin}/s/${o}`;
+  },
+
   listDevserverGrants: (devserverId: string) =>
     request<DevserverGrant[]>(`/api/devservers/${encodeURIComponent(devserverId)}/grants`),
   addDevserverGrant: (devserverId: string, grantee_email: string, role: DevserverGrantRole) =>
