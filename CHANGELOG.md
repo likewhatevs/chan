@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.41.0] - 2026-06-21
+
 A round centred on the window lifecycle: a single library window registry now owns every window
 (local and devserver), and a window watcher reconciles native windows against its live feed — so
 windows mint, persist, reconnect, reload, and restore their layout from one source of truth.
