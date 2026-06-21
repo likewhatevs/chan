@@ -8,7 +8,6 @@
 //! Auth gate, in this order:
 //!
 //!   * registration `(user, workspace)` not found in the registry -> 404
-//!   * `public` registration -> always pass through
 //!   * request has `?t=<entry-jwt>`:
 //!     * verify HS256 + exp + aud (Host) + drv (workspace) -> mint a session
 //!       JWT carrying the entry's `sub`, set `devserver_gate` cookie scoped
@@ -202,20 +201,20 @@ pub async fn handle(state: AppState, user: String, req: Request) -> Response {
 
     let is_ws = is_websocket_upgrade(req.headers());
 
-    if !entry.public {
-        match resolve_gate(&state, &req, &user, &workspace, &aud) {
-            Gate::Pass => {}
-            Gate::IssueSession { sub } => {
-                return issue_session_cookie(
-                    state.cfg.workspace_gate_secret.as_bytes(),
-                    sub,
-                    &workspace,
-                    &aud,
-                    req.uri(),
-                );
-            }
-            Gate::Reject => return not_found_response(req.headers()),
+    // The gate always runs: every devserver tunnel is authenticated,
+    // there is no un-gated pass-through.
+    match resolve_gate(&state, &req, &user, &workspace, &aud) {
+        Gate::Pass => {}
+        Gate::IssueSession { sub } => {
+            return issue_session_cookie(
+                state.cfg.workspace_gate_secret.as_bytes(),
+                sub,
+                &workspace,
+                &aud,
+                req.uri(),
+            );
         }
+        Gate::Reject => return not_found_response(req.headers()),
     }
     // The registry-cached owner_id is not consulted by the proxy gate
     // (comparing `sub` against the owner would lock out grantees; the

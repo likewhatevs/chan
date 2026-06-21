@@ -11,10 +11,10 @@
 //!     extra round trip to profile-service;
 //!
 //!   * lookup helpers that bundle the tunnel handle with the cached
-//!     `owner_id` and the SPA-facing metadata (`public`, `label`).
-//!     `label` isn't carried by the wire; the workspace slug is
-//!     applied as the default here. Per-tunnel labels would require
-//!     extending the Hello frame in chan-tunnel-proto.
+//!     `owner_id` and the SPA-facing metadata (`label`). `label` isn't
+//!     carried by the wire; the workspace slug is applied as the default
+//!     here. Per-tunnel labels would require extending the Hello frame
+//!     in chan-tunnel-proto.
 //!
 //! Cache invalidation: defensive. In normal flow the cache
 //! self-converges because `CapturingValidator::validate` runs
@@ -47,13 +47,11 @@ pub struct Registry {
 }
 
 /// Bundle returned by `Registry::get` for the proxy auth gate plus
-/// substream open. `public` comes from the tunnel handshake
-/// (`chan serve --tunnel-public`) via the underlying `TunnelHandle`.
+/// substream open.
 #[derive(Clone)]
 pub struct Entry {
     pub handle: TunnelHandle,
     pub owner_id: Uuid,
-    pub public: bool,
 }
 
 /// Row shape for `/api/me`. `label` defaults to the workspace slug
@@ -63,7 +61,6 @@ pub struct WorkspaceView {
     pub username: String,
     pub workspace: String,
     pub label: String,
-    pub public: bool,
 }
 
 impl Registry {
@@ -122,12 +119,7 @@ impl Registry {
             .unwrap_or_else(|e| e.into_inner())
             .get(username)
             .copied()?;
-        let public = handle.public;
-        Some(Entry {
-            handle,
-            owner_id,
-            public,
-        })
+        Some(Entry { handle, owner_id })
     }
 
     /// Snapshot every registered tunnel for the admin `tunnel ps`
@@ -190,7 +182,6 @@ impl Registry {
                     username: username.to_string(),
                     label: workspace.clone(),
                     workspace,
-                    public: info.public,
                 }
             })
             .collect()

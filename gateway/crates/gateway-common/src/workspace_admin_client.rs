@@ -43,7 +43,6 @@ pub type WorkspaceAdminResult<T> = Result<T, WorkspaceAdminError>;
 pub struct TunnelView {
     pub user: String,
     pub workspace: String,
-    pub public: bool,
     pub peer_addr: Option<String>,
     pub connected_at: DateTime<Utc>,
 }

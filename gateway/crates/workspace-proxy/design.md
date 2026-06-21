@@ -6,7 +6,7 @@
 
 1. Accepts the tunnel registration handshake.
 2. Reverse-proxies HTTP and WebSocket traffic into the registered workspace.
-3. Gates private workspaces behind a token minted by identity-service. workspace-proxy holds no session cookie of its own beyond a short-lived, per-workspace gate cookie scoped to one path.
+3. Gates workspaces behind a token minted by identity-service. workspace-proxy holds no session cookie of its own beyond a short-lived, per-workspace gate cookie scoped to one path.
 4. Supports admin operations (snapshot, evict, per-user list and bulk evict).
 
 The workspace list, sign-in surface and every piece of user-facing UI live in identity-service. workspace-proxy has no SPA and no public `/api/*` of its own.
@@ -25,7 +25,7 @@ Two public hostnames pointed at the same process:
   - `/` -- 302 to `https://id.chan.app/workspaces`.
   - `/{workspace}` -- 308 to `/{workspace}/` (trailing slash canonical).
   - `/{workspace}/?t=<jwt>` -- entry: validate the entry token, set the `devserver_gate` cookie, 303 to the clean URL.
-  - `/{workspace}/...` -- proxy to the registered tunnel for `(host_user, workspace)`. Public workspaces pass through; private workspaces require a valid `devserver_gate` cookie. Anything else -- 404.
+  - `/{workspace}/...` -- proxy to the registered tunnel for `(host_user, workspace)`, requires a valid `devserver_gate` cookie. Anything else -- 404.
 
 A single axum router serves both apex and wildcard via a Host-keyed dispatch. The wildcard host's `{user}` is parsed out of the request's `Host` header; the prefix before `.devserver.chan.app` is the username.
 
@@ -39,7 +39,7 @@ workspace-proxy reads no `tower_sessions` cookie. Authentication for the proxy p
 
 Two tokens are involved:
 
-- **Entry token**: 30s exp, carried in `?t=` on the first hit to a private workspace. Issued by identity at `GET /api/workspaces/open?u=...&d=...` after the dashboard verified the user owns the workspace. Claims: `{iss: "id.chan.app", sub: user_id, drv: <slug>, aud: "<host>", typ: "entry", iat, exp}`.
+- **Entry token**: 30s exp, carried in `?t=` on the first hit to a workspace. Issued by identity at `GET /api/workspaces/open?u=...&d=...` after the dashboard verified the user owns the workspace. Claims: `{iss: "id.chan.app", sub: user_id, drv: <slug>, aud: "<host>", typ: "entry", iat, exp}`.
 
 - **Session cookie**: 24h hard exp, written as `Set-Cookie: devserver_gate=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/<workspace>/`. Minted by workspace-proxy on entry-token validation. Same claim envelope, `typ: "session"`. Stateless: no server-side store.
 
@@ -60,12 +60,13 @@ Full route table is in [`README.md`](README.md). Critical paths:
 Auth gate for `*.devserver.chan.app/<workspace>/...`, in order:
 
 1. Registration `(host_user, workspace)` not found in the registry -> 404.
-2. `entry.public == true` -> pass through.
-3. Request carries `?t=<jwt>` -> verify signature + exp + aud + drv match. On success: mint a session JWT, write `devserver_gate` cookie scoped to `Path=/<workspace>/`, 303 to `/<workspace>/` (clean URL).
-4. Request carries `devserver_gate` cookie -> verify signature + exp + claim match against `(host_user, workspace)`. Pass through.
-5. Anything else (no cookie, expired cookie, bad signature, wrong user) -> 404.
+2. Request carries `?t=<jwt>` -> verify signature + exp + aud + drv match. On success: mint a session JWT, write `devserver_gate` cookie scoped to `Path=/<workspace>/`, 303 to `/<workspace>/` (clean URL).
+3. Request carries `devserver_gate` cookie -> verify signature + exp + claim match against `(host_user, workspace)`. Pass through.
+4. Anything else (no cookie, expired cookie, bad signature, wrong user) -> 404.
 
-The 404 path checks `Accept: text/html`; browsers get the styled "workspace not found" page, everything else gets the JSON `{"error":"not found"}` shape. Owners returning after the 24h cookie expires bounce through `id.chan.app/workspaces`; a bookmark to a private workspace URL is not a session.
+The gate always runs: every tunnel is authenticated, there is no un-gated pass-through.
+
+The 404 path checks `Accept: text/html`; browsers get the styled "workspace not found" page, everything else gets the JSON `{"error":"not found"}` shape. Owners returning after the 24h cookie expires bounce through `id.chan.app/workspaces`; a bookmark to a workspace URL is not a session.
 
 ### Hop-by-hop hygiene
 
@@ -189,7 +190,7 @@ workspace-proxy carries no `Conflict` variant: nothing on this surface PATCHes a
 
 - A SPA: no `web/` bundle, no static_files in this crate
 - Sessions: no `tower_sessions` integration anywhere
-- Per-tunnel labels (`Hello` carries name and public flag only)
+- Per-tunnel labels (the workspace slug is the default; `Hello` carries no separate label)
 - Per-PAT scopes (tunnel scope is implicit on validated PATs)
 - Multi-instance horizontal scale (one process, in-process registry)
 - Server-side session revocation (24h cookie exp is the only knob; rotating `WORKSPACE_GATE_SECRET` is the nuclear option)

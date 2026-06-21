@@ -38,7 +38,6 @@ use crate::http::AppState;
 pub struct TunnelView {
     pub user: String,
     pub workspace: String,
-    pub public: bool,
     pub peer_addr: Option<String>,
     pub connected_at: DateTime<Utc>,
 }
@@ -117,7 +116,6 @@ async fn list_user_tunnels(
         .map(|t| TunnelView {
             user: t.user.as_ref().to_string(),
             workspace: t.workspace.as_ref().to_string(),
-            public: t.public,
             peer_addr: t.peer_addr.map(|a| a.to_string()),
             connected_at: t.connected_at,
         })
@@ -195,7 +193,6 @@ fn snapshot(state: &AppState) -> Vec<TunnelView> {
         .map(|t| TunnelView {
             user: t.user.as_ref().to_string(),
             workspace: t.workspace.as_ref().to_string(),
-            public: t.public,
             peer_addr: t.peer_addr.map(|a| a.to_string()),
             connected_at: t.connected_at,
         })

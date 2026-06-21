@@ -10,15 +10,13 @@
 //!
 //!   200 { "user_id": "...", "username": "...", "token_id": "...",
 //!         "expires_at": "<iso8601|null>",
-//!         "scopes": ["tunnel", "tunnel.public", ...] }
+//!         "scopes": ["tunnel", ...] }
 //!   401 if the token is unknown / revoked / expired
 //!
 //! Scopes are per-token: identity stores them in `api_tokens.scopes`
 //! and emits them in the validate response. workspace-proxy forwards
-//! them verbatim into `Validated::scopes`; chan-tunnel-server then
-//! gates `tunnel` (base dial) and `tunnel.public` (anonymous-readable
-//! workspace) against the validated list. A token minted without
-//! `tunnel.public` cannot host a public workspace at runtime.
+//! them verbatim into `Validated::scopes`; chan-tunnel-server gates the
+//! `tunnel` (base dial) scope against the validated list.
 
 use async_trait::async_trait;
 use chan_tunnel_server::{ServerError, Validated, Validator};
@@ -96,10 +94,9 @@ impl Validator for IdentityValidator {
 
 /// Wraps a Validator and records the (username, user_id) mapping
 /// in the shared `Registry` on every successful validate. The
-/// reverse-proxy auth gate reads back the cached user_id when
-/// matching the session against the tunnel owner; without this
-/// cache workspace-proxy would have to round-trip to profile-service
-/// on every public request.
+/// reverse-proxy auth gate reads back the cached user_id as metadata
+/// for admin tooling; without this cache workspace-proxy would have to
+/// round-trip to profile-service on every reverse-proxy request.
 pub struct CapturingValidator<V: Validator> {
     inner: V,
     registry: Registry,

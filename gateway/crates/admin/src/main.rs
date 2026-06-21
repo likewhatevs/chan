@@ -1204,7 +1204,6 @@ struct FeatureFlagOverride {
 struct TunnelView {
     user: String,
     workspace: String,
-    public: bool,
     peer_addr: Option<String>,
     connected_at: DateTime<Utc>,
 }
@@ -1293,7 +1292,7 @@ fn render_tunnels(rows: &[TunnelView], json: bool) {
         return;
     }
     let mut t = make_table();
-    t.set_header(["USER", "WORKSPACE", "PUBLIC", "PEER", "UPTIME", "CONNECTED"]);
+    t.set_header(["USER", "WORKSPACE", "PEER", "UPTIME", "CONNECTED"]);
     let now = Utc::now();
     for r in rows {
         let uptime = now
@@ -1304,7 +1303,6 @@ fn render_tunnels(rows: &[TunnelView], json: bool) {
         t.add_row([
             Cell::new(&r.user),
             Cell::new(&r.workspace),
-            Cell::new(if r.public { "yes" } else { "no" }),
             Cell::new(r.peer_addr.as_deref().unwrap_or("-")),
             Cell::new(uptime),
             Cell::new(fmt_dt(r.connected_at)),

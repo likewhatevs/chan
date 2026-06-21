@@ -46,9 +46,8 @@ type StubRow = (Uuid, String, Vec<String>);
 
 /// Stub validator: tokens map to (user_id, username, scopes). Used
 /// in place of the real IdentityValidator so tests don't need
-/// identity-service. Scopes are per-token so a test can mint a
-/// private-only token (`["tunnel"]`) or a token that may host a
-/// public workspace (`["tunnel", "tunnel.public"]`).
+/// identity-service. Every tunnel token carries the base `tunnel`
+/// scope.
 #[derive(Clone, Default)]
 struct StubValidator {
     by_token: Arc<StdMutex<HashMap<String, StubRow>>>,
@@ -56,23 +55,9 @@ struct StubValidator {
 
 impl StubValidator {
     fn add(&self, token: impl Into<String>, user_id: Uuid, username: impl Into<String>) {
-        self.add_with_scopes(token, user_id, username, &["tunnel", "tunnel.public"]);
-    }
-
-    fn add_with_scopes(
-        &self,
-        token: impl Into<String>,
-        user_id: Uuid,
-        username: impl Into<String>,
-        scopes: &[&str],
-    ) {
         self.by_token.lock().unwrap().insert(
             token.into(),
-            (
-                user_id,
-                username.into(),
-                scopes.iter().map(|s| (*s).to_string()).collect(),
-            ),
+            (user_id, username.into(), vec!["tunnel".to_string()]),
         );
     }
 }
@@ -159,21 +144,9 @@ impl TestApp {
     }
 
     async fn register_tunnel(&self, username: &str, workspace: &str, uid: Uuid, router: Router) {
-        self.register_tunnel_with(username, workspace, uid, router, false)
-            .await
-    }
-
-    async fn register_tunnel_with(
-        &self,
-        username: &str,
-        workspace: &str,
-        uid: Uuid,
-        router: Router,
-        public: bool,
-    ) {
         let token = format!("tok-{}", Uuid::new_v4().simple());
         self.stub.add(&token, uid, username);
-        spawn_tunnel_client(self.tunnel_addr, &token, workspace, router, public).await;
+        spawn_tunnel_client(self.tunnel_addr, &token, workspace, router).await;
         for _ in 0..50 {
             if self.registry.get(username, workspace).is_some() {
                 return;
@@ -189,12 +162,11 @@ async fn spawn_tunnel_client(
     token: &str,
     workspace: &str,
     router: Router,
-    public: bool,
 ) {
     let token = token.to_string();
     let workspace = workspace.to_string();
     tokio::spawn(async move {
-        if let Err(e) = run_tunnel_client(tunnel_addr, &token, &workspace, router, public).await {
+        if let Err(e) = run_tunnel_client(tunnel_addr, &token, &workspace, router).await {
             tracing::warn!(error = ?e, "test tunnel client ended");
         }
     });
@@ -205,7 +177,6 @@ async fn run_tunnel_client(
     token: &str,
     workspace: &str,
     router: Router,
-    public: bool,
 ) -> anyhow::Result<()> {
     let tcp = TcpStream::connect(tunnel_addr).await?;
     tcp.set_nodelay(true)?;
@@ -233,7 +204,6 @@ async fn run_tunnel_client(
         tunnel_url: "https://chan-tunnel/v1/tunnel".parse().unwrap(),
         token: token.to_string(),
         workspace: workspace.to_string(),
-        public,
         ..Default::default()
     };
     let (_registration, yconn) = chan_tunnel_client::handshake(&cfg, duplex).await?;
@@ -311,6 +281,14 @@ fn host_for(user: &str) -> String {
     format!("{user}{WILDCARD_SUFFIX}")
 }
 
+/// A `Cookie` header value carrying a valid session token for
+/// `(sub, workspace)` on `host`. Every reverse-proxy request must pass
+/// the gate now that there is no un-gated public path.
+fn session_cookie(sub: Uuid, workspace: &str, host: &str) -> String {
+    let session = mint(devserver_gate::TokenType::Session, sub, workspace, host);
+    format!("devserver_gate={session}")
+}
+
 // ---------------------------------------------------------------
 // Apex routing
 // ---------------------------------------------------------------
@@ -365,7 +343,7 @@ async fn wildcard_root_redirects_to_dashboard() {
 }
 
 // ---------------------------------------------------------------
-// Proxy gate (unregistered + public)
+// Proxy gate (unregistered + anonymous)
 // ---------------------------------------------------------------
 
 #[tokio::test]
@@ -395,27 +373,6 @@ async fn unregistered_workspace_html_browser_gets_dead_end_page() {
     assert!(std::str::from_utf8(&body)
         .unwrap()
         .contains("workspace unavailable"));
-    app.cleanup().await;
-}
-
-#[tokio::test]
-async fn public_workspace_passes_through() {
-    let app = TestApp::new().await;
-    let uid = Uuid::new_v4();
-    let upstream = Router::new().route("/", axum::routing::get(|| async { "public ok" }));
-    app.register_tunnel_with("alice", "open", uid, upstream, true)
-        .await;
-
-    let proxy_addr = serve_router_real(app.router.clone()).await;
-    let res = reqwest::Client::new()
-        .get(format!("http://{proxy_addr}/open/"))
-        .header(header::HOST, host_for("alice"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200);
-    let body = res.text().await.unwrap();
-    assert_eq!(body, "public ok");
     app.cleanup().await;
 }
 
@@ -690,14 +647,16 @@ async fn proxy_strips_workspace_segment() {
     let upstream = Router::new()
         .route("/assets/foo.js", axum::routing::get(|| async { "js" }))
         .route("/", axum::routing::get(|| async { "root" }));
-    app.register_tunnel_with("alice", "blog", uid, upstream, true)
-        .await;
+    app.register_tunnel("alice", "blog", uid, upstream).await;
 
+    let host = host_for("alice");
+    let cookie = session_cookie(uid, "blog", &host);
     let proxy_addr = serve_router_real(app.router.clone()).await;
     let client = reqwest::Client::new();
     let res = client
         .get(format!("http://{proxy_addr}/blog/assets/foo.js"))
-        .header(header::HOST, host_for("alice"))
+        .header(header::HOST, &host)
+        .header(header::COOKIE, &cookie)
         .send()
         .await
         .unwrap();
@@ -706,7 +665,8 @@ async fn proxy_strips_workspace_segment() {
 
     let res = client
         .get(format!("http://{proxy_addr}/blog/"))
-        .header(header::HOST, host_for("alice"))
+        .header(header::HOST, &host)
+        .header(header::COOKIE, &cookie)
         .send()
         .await
         .unwrap();
@@ -764,19 +724,15 @@ async fn x_forwarded_for_appended_when_absent() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     let captured = Captured::default();
-    app.register_tunnel_with(
-        "alice",
-        "blog",
-        uid,
-        capturing_router(captured.clone()),
-        true,
-    )
-    .await;
+    app.register_tunnel("alice", "blog", uid, capturing_router(captured.clone()))
+        .await;
 
+    let host = host_for("alice");
     let proxy_addr = serve_router_real(app.router.clone()).await;
     reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/x"))
-        .header(header::HOST, host_for("alice"))
+        .header(header::HOST, &host)
+        .header(header::COOKIE, session_cookie(uid, "blog", &host))
         .send()
         .await
         .unwrap();
@@ -802,19 +758,15 @@ async fn x_forwarded_for_extended() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     let captured = Captured::default();
-    app.register_tunnel_with(
-        "alice",
-        "blog",
-        uid,
-        capturing_router(captured.clone()),
-        true,
-    )
-    .await;
+    app.register_tunnel("alice", "blog", uid, capturing_router(captured.clone()))
+        .await;
 
+    let host = host_for("alice");
     let proxy_addr = serve_router_real(app.router.clone()).await;
     reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/y"))
-        .header(header::HOST, host_for("alice"))
+        .header(header::HOST, &host)
+        .header(header::COOKIE, session_cookie(uid, "blog", &host))
         .header("x-forwarded-for", "203.0.113.5")
         // Inbound XFProto/XFHost: client-supplied and must be ignored.
         // Asserted below: outbound matches cfg / Host, not these values.
@@ -848,26 +800,25 @@ async fn x_forwarded_for_extended() {
 async fn cookie_header_stripped_from_upstream() {
     // workspace-proxy must never forward the devserver_gate cookie to the
     // tenant's chan-serve peer (the cookie is for the gate, not for
-    // the tenant). Other inbound cookies the tenant content might
-    // care about are also stripped today; if that proves wrong we
-    // can selectively preserve specific cookie names later.
+    // the tenant). The very cookie that admits the request is stripped
+    // before the upstream sees it. Other inbound cookies the tenant
+    // content might care about are also stripped today; if that proves
+    // wrong we can selectively preserve specific cookie names later.
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     let captured = Captured::default();
-    app.register_tunnel_with(
-        "alice",
-        "blog",
-        uid,
-        capturing_router(captured.clone()),
-        true,
-    )
-    .await;
+    app.register_tunnel("alice", "blog", uid, capturing_router(captured.clone()))
+        .await;
 
+    let host = host_for("alice");
     let proxy_addr = serve_router_real(app.router.clone()).await;
     reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/z"))
-        .header(header::HOST, host_for("alice"))
-        .header(header::COOKIE, "devserver_gate=junk; other=value")
+        .header(header::HOST, &host)
+        .header(
+            header::COOKIE,
+            format!("{}; other=value", session_cookie(uid, "blog", &host)),
+        )
         .send()
         .await
         .unwrap();
@@ -887,19 +838,15 @@ async fn authorization_header_stripped_from_upstream() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     let captured = Captured::default();
-    app.register_tunnel_with(
-        "alice",
-        "blog",
-        uid,
-        capturing_router(captured.clone()),
-        true,
-    )
-    .await;
+    app.register_tunnel("alice", "blog", uid, capturing_router(captured.clone()))
+        .await;
 
+    let host = host_for("alice");
     let proxy_addr = serve_router_real(app.router.clone()).await;
     reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/a"))
-        .header(header::HOST, host_for("alice"))
+        .header(header::HOST, &host)
+        .header(header::COOKIE, session_cookie(uid, "blog", &host))
         .header(header::AUTHORIZATION, "Bearer chan_pat_secret")
         .send()
         .await
@@ -918,7 +865,7 @@ async fn authorization_header_stripped_from_upstream() {
 // ---------------------------------------------------------------
 
 #[tokio::test]
-async fn websocket_bridges_text_frames_on_public_workspace() {
+async fn websocket_bridges_text_frames() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message as TgMessage;
 
@@ -936,16 +883,18 @@ async fn websocket_bridges_text_frames_on_public_workspace() {
         })
     }
     let upstream = Router::new().route("/ws", axum::routing::get(echo));
-    app.register_tunnel_with("alice", "open", uid, upstream, true)
-        .await;
+    app.register_tunnel("alice", "blog", uid, upstream).await;
 
+    let host = host_for("alice");
     let proxy_addr = serve_router_real(app.router.clone()).await;
-    let url = format!("ws://{proxy_addr}/open/ws");
+    let url = format!("ws://{proxy_addr}/blog/ws");
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let mut req = url.into_client_request().unwrap();
+    req.headers_mut()
+        .insert(header::HOST, HeaderValue::from_str(&host).unwrap());
     req.headers_mut().insert(
-        header::HOST,
-        HeaderValue::from_str(&host_for("alice")).unwrap(),
+        header::COOKIE,
+        HeaderValue::from_str(&session_cookie(uid, "blog", &host)).unwrap(),
     );
 
     let (mut client_ws, _resp) = tokio_tungstenite::connect_async(req).await.unwrap();
@@ -995,9 +944,8 @@ async fn try_register_tunnel(
 ) -> anyhow::Result<()> {
     let token = token.to_string();
     let workspace = workspace.to_string();
-    let task = tokio::spawn(async move {
-        run_tunnel_client(tunnel_addr, &token, &workspace, router, false).await
-    });
+    let task =
+        tokio::spawn(async move { run_tunnel_client(tunnel_addr, &token, &workspace, router).await });
     match tokio::time::timeout(std::time::Duration::from_millis(300), task).await {
         Err(_) => Ok(()),
         Ok(Ok(Ok(()))) => Ok(()),
@@ -1087,7 +1035,7 @@ async fn admin_tunnels_list_and_kill() {
 
     app.register_tunnel("alice", "home", uid, Router::new())
         .await;
-    app.register_tunnel_with("alice", "open", uid, Router::new(), true)
+    app.register_tunnel("alice", "open", uid, Router::new())
         .await;
 
     let (s, body) = send_admin(
