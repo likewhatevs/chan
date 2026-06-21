@@ -74,7 +74,7 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/await api\.write\(draftPath, text\)/);
   });
 
-  test("submit routes to THIS terminal, then CLEARS the composer for back-to-back queuing", () => {
+  test("submit routes to THIS terminal, then KEEPS the text as the greyed read-only card", () => {
     // Routes to the bubble's OWN tab with the chord THIS terminal reads
     // (submitAgent()) + a client message id, only beginning a pending when the
     // frame actually went out (the data-loss guard).
@@ -85,56 +85,61 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/beginPendingPrompt\(tab, id\);/);
     const submitBody = richPromptSrc.match(/function submit\(\): boolean \{[\s\S]*?\n  \}/)?.[0];
     expect(submitBody).toBeTruthy();
-    // Back-to-back queuing: submit CLEARS the composer + keeps it editable, has
-    // NO one-message guard, and remembers the last message for ArrowUp recall.
-    expect(submitBody).toContain('insert: ""');
-    expect(submitBody).not.toContain("if (tab.pendingPrompt) return true;");
+    // MODEL A: submit KEEPS the text (the greyed card), so it does NOT clear the
+    // composer; it guards re-submit while the card is up (no double-deliver),
+    // persists the text (reload-restores the card), and remembers it for recall.
+    expect(submitBody).not.toContain('insert: ""');
+    expect(submitBody).toContain("if (isPending) return true;");
     expect(submitBody).toContain("lastQueued = { id, text };");
     expect(submitBody).toContain("void flushWrite();");
     expect(richPromptSrc).not.toMatch(/type: "input"/);
     expect(richPromptSrc).not.toMatch(/discardDraft/);
   });
 
-  test("delivered does NOT clear the composer (it holds the next draft); non-delivery restores + warns", () => {
+  test("delivered CLEARS the greyed card; rejected/failed un-grey + keep the text + warn", () => {
     const consumeBody = richPromptSrc.match(/function consumeTerminalPhase\([\s\S]*?\n  \}/)?.[0];
     expect(consumeBody).toBeTruthy();
-    // The composer is cleared on SUBMIT, not here — delivered just drops the
-    // pending so the next-message draft survives (consume only acts on the
-    // non-delivered branch).
-    expect(consumeBody).toContain('if (phase !== "delivered")');
-    // Non-delivery restores the failed text for a retry + warns honestly.
-    expect(consumeBody).toContain("lastQueued.text");
+    // Delivered: the agent consumed the message, so the card clears (text +
+    // draft) back to an empty editable composer.
+    expect(consumeBody).toMatch(/if \(phase === "delivered"\)[\s\S]{1,500}insert: ""/);
+    // Rejected/failed: clearing pending below un-greys; the text stays for a
+    // retry; warn honestly.
     expect(richPromptSrc).toMatch(/queue full — try again/);
     expect(richPromptSrc).toMatch(/connection lost — message may still be queued/);
   });
 
-  test("the composer is NEVER locked — always editable (the readonly seam is gone)", () => {
-    // A submitted message lives in the server queue, not the composer, so the
-    // composer stays editable for the next message: no readOnly lock, no lock
-    // compartment, no read-only-look caret hiding.
-    expect(richPromptSrc).not.toMatch(/EditorState\.readOnly\.of\(/);
-    expect(richPromptSrc).not.toMatch(/lockCompartment/);
-    expect(richPromptSrc).not.toMatch(/lockExtensions/);
-    expect(richPromptSrc).not.toMatch(/caret-color: transparent/);
+  test("the greyed read-only card: readOnly lock + caret hidden, reconciled by type-to-move-on", () => {
+    // MODEL A re-applies @@Alex's read-only/greyed/caret-hidden card via a lock
+    // compartment, but reconciles back-to-back by exiting on the first keystroke
+    // (beforeinput move-on) rather than dropping the lock — so it never STICKS.
+    expect(richPromptSrc).toMatch(/lockCompartment/);
+    expect(richPromptSrc).toMatch(/EditorState\.readOnly\.of\(locked\)/);
+    expect(richPromptSrc).toMatch(/caret-color: transparent/);
+    // Type to move on: a user text input while pending clears the card + seeds a
+    // fresh composer with what was typed.
+    expect(richPromptSrc).toMatch(
+      /beforeinput: \(event, v\) => \{[\s\S]{1,400}if \(!isPending\) return false;[\s\S]{1,400}enterLocalEdit\(\);/,
+    );
+    expect(richPromptSrc).toMatch(/insert: seed/);
   });
 
-  test("↑ recalls the last queued message from an EMPTY composer; Esc abandons the draft", () => {
+  test("↑ edits the queued message (from the card or an empty composer); Esc drops it", () => {
     expect(richPromptSrc).toMatch(/\{ key: "ArrowUp", run: recall \}/);
-    // Recall fires only from an empty composer (never clobber an in-progress
-    // next draft), restores the buffered text, and best-effort cancels.
-    expect(richPromptSrc).toMatch(/view\.state\.doc\.length > 0\) return false/);
+    // From the greyed card, recall un-greys (the text is already shown); from an
+    // empty composer it restores the buffer. Both best-effort cancel.
+    expect(richPromptSrc).toMatch(/if \(isPending\) \{[\s\S]{1,200}enterLocalEdit\(\);/);
+    expect(richPromptSrc).toMatch(/view\.state\.doc\.length > 0 \|\| !lastQueued\) return false/);
     expect(richPromptSrc).toMatch(/const \{ id, text \} = lastQueued;/);
     expect(richPromptSrc).toMatch(/sendCancelToTerminal\(tab\.id, id\)/);
-    // Esc = dequeue-if-enqueued else abandon: an empty composer with a queued
-    // message dequeues it (cancel + drop, ↑'s counterpart); otherwise it
-    // abandons the current draft + hides.
+    // Esc drops the queued message (card up, or empty composer with a queued
+    // one): cancel + clear, keeping the bubble open; otherwise abandon the draft.
     expect(richPromptSrc).toMatch(
-      /view\.state\.doc\.length === 0 && lastQueued\) \{[\s\S]{1,160}sendCancelToTerminal\(tab\.id, lastQueued\.id\)/,
+      /lastQueued && \(isPending \|\| view\.state\.doc\.length === 0\)\) \{[\s\S]{1,160}sendCancelToTerminal\(tab\.id, lastQueued\.id\)/,
     );
     expect(richPromptSrc).toMatch(/function abandonDraft\(\): void/);
     expect(richPromptSrc).toMatch(/hideRichPromptForTab\(tab\.id\)/);
-    // The label surfaces the queue depth + the recall affordance.
-    expect(richPromptSrc).toMatch(/queued · ↑ recall/);
+    // The card's label IS its chrome: ↑ edit · esc cancel.
+    expect(richPromptSrc).toMatch(/queued · ↑ edit · esc cancel/);
   });
 
   test("fast-path grace + ack timeout constants gate the chip and the dead-socket fail", () => {
@@ -145,13 +150,16 @@ describe("RichPrompt.svelte component", () => {
     expect(richPromptSrc).toMatch(/failPendingPrompt\(tab\);/);
   });
 
-  test("label surfaces the queue depth (server + the local just-submitted) with the recall hint", () => {
+  test("label surfaces the queue depth (server + the local just-submitted) with the right affordance", () => {
     // queuedCount = max(server queueDepth, the local just-submitted message
     // after the grace window) — so a teammate `cs terminal write` and the
-    // user's own queued messages both show, with the ↑-recall affordance.
+    // user's own queued messages both show.
     expect(richPromptSrc).toMatch(
       /Math\.max\(tab\.queueDepth \?\? 0, isPending && pendingChipVisible \? 1 : 0\)/,
     );
+    // Card up (isPending): edit/cancel affordances ARE the chrome. Moved-on but
+    // messages still queued: the recall hint + the submit hint.
+    expect(richPromptSrc).toMatch(/isPending\) return `\$\{queuedCount\} queued · ↑ edit · esc cancel`/);
     expect(richPromptSrc).toMatch(/\$\{queuedCount\} queued · ↑ recall · \$\{submitLabel\}/);
   });
 

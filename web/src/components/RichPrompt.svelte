@@ -16,7 +16,7 @@
   // terminal closes (TerminalTab's close sink).
 
   import { onDestroy, onMount } from "svelte";
-  import { EditorState, Prec } from "@codemirror/state";
+  import { Compartment, EditorState, Prec } from "@codemirror/state";
   import { EditorView, keymap } from "@codemirror/view";
   import {
     defaultKeymap,
@@ -95,18 +95,38 @@
   let graceTimer: ReturnType<typeof setTimeout> | null = null;
   let ackTimer: ReturnType<typeof setTimeout> | null = null;
   let noteTimer: ReturnType<typeof setTimeout> | null = null;
-  // True while a just-submitted message is still in flight (the server has not
-  // drained it yet). Drives the queued chip ONLY — the composer is never
-  // locked: a submitted message lives in the server queue, not the composer, so
-  // the user keeps typing and queuing the next one back-to-back.
+  // True while a just-submitted message is still in flight ("sent"/"queued").
+  // It presents the GREYED, read-only "queued" card (@@Alex's model): the
+  // submitted text stays visible, dimmed, caret hidden, and the editor is
+  // read-only so the bytes the agent will read can't be edited out from under
+  // it. Back-to-back is reconciled NOT by dropping the lock (that loses the
+  // card) but by `beforeinput` "type to move on": the first character clears the
+  // card to a fresh editable composer (the queued message stays in the server
+  // FIFO). So the lock never STICKS — it exits the instant you type, recall, or
+  // the message drains.
   const isPending = $derived.by(() => {
     const phase = tab.pendingPrompt?.phase;
     return phase === "sent" || phase === "queued";
   });
 
   // The last message submitted into the queue, kept so ArrowUp can recall it
-  // (pull it back out of the queue to edit) from an empty composer.
+  // (pull it back out of the queue to edit) and Esc can drop it.
   let lastQueued: { id: string; text: string } | null = null;
+
+  // CodeMirror read-only lock seam. While a message is in flight the editor is
+  // readOnly (programmatic editing commands — Enter-continue-markup, Backspace,
+  // Tab-indent — respect it and no-op) but stays EDITABLE (contenteditable) so
+  // the caret/keymap remain live: ArrowUp-recall + the `beforeinput` move-on
+  // still fire. `EditorState.readOnly` does not block programmatic
+  // `view.dispatch`, so move-on/recall/delivered can still clear or seed the
+  // doc; only user editing of the locked card is blocked.
+  const lockCompartment = new Compartment();
+  function lockExtensions(locked: boolean) {
+    return [EditorState.readOnly.of(locked), EditorView.editable.of(true)];
+  }
+  $effect(() => {
+    view?.dispatch({ effects: lockCompartment.reconfigure(lockExtensions(isPending)) });
+  });
 
   // Queued count to surface in the label: the server queue depth (which a
   // teammate `cs terminal write` shares too) plus the just-submitted local
@@ -117,8 +137,11 @@
   );
   const labelText = $derived.by(() => {
     if (transientNote) return transientNote;
-    // The composer stays free for the next message; the queued ones live in the
-    // queue. Show the depth + the recall affordance (↑ pulls the last one back).
+    // Greyed card up: the affordances ARE the chrome (the card has no buttons).
+    // ↑ edits the queued message, Esc drops it. Otherwise, when messages sit in
+    // the queue but the card is gone (you moved on / a teammate poked), show the
+    // depth + the recall hint; idle shows the submit hint.
+    if (isPending) return `${queuedCount} queued · ↑ edit · esc cancel`;
     if (queuedCount > 0) return `${queuedCount} queued · ↑ recall · ${submitLabel}`;
     return submitLabel;
   });
@@ -147,18 +170,19 @@
     if (!view) return;
     clearPendingTimers();
     pendingChipVisible = false;
-    if (phase !== "delivered") {
-      // Not delivered: the message did not (or may not have) reach the queue.
-      // The composer was cleared on submit, so restore the failed text into an
-      // EMPTY composer for a retry (never clobber an in-progress next draft),
-      // and warn. Delivered needs nothing here — the queue drained it and the
-      // composer already moved on to the next message.
-      const failedId = tab.pendingPrompt?.id;
-      if (lastQueued && lastQueued.id === failedId && view.state.doc.length === 0) {
-        view.dispatch({ changes: { from: 0, to: 0, insert: lastQueued.text } });
-        void flushWrite();
-        view.focus();
-      }
+    if (phase === "delivered") {
+      // The agent consumed the message: the greyed card has served its purpose,
+      // so clear it (text + draft) — the composer returns to empty + editable
+      // for the next message. (The media folder stays; the agent reads it after
+      // delivery; the folder is cleaned on terminal close.)
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+      void flushWrite();
+      lastQueued = null;
+      view.focus();
+    } else {
+      // Rejected (queue full) / failed (socket dead, delivery unobservable):
+      // the text is still in the card. Clearing the pending below un-greys it,
+      // so the text is editable again for a retry; warn honestly.
       showTransientNote(
         phase === "rejected"
           ? "queue full — try again"
@@ -179,19 +203,29 @@
     }
   });
 
-  // ↑ recalls the LAST message queued from this composer — pulls it back out of
-  // the server queue to edit + resubmit. Only from an EMPTY composer: never
-  // clobber an in-progress next message, so ArrowUp on a non-empty composer
-  // does normal caret navigation (returns false). The text is restored from the
-  // local buffer; the server cancel is best-effort (a drained message just
-  // resubmits as a visible, recoverable duplicate).
+  // ↑ recalls the LAST queued message to edit + resubmit — pulls it back out of
+  // the server queue. Two cases:
+  //  - the GREYED card is up: its text is already in the composer, so just
+  //    un-grey (un-lock) it and best-effort cancel the server-side message.
+  //  - the card is gone (moved on / reload) but a message is still recallable:
+  //    only from an EMPTY composer (never clobber an in-progress next draft),
+  //    restore the buffered text + cancel.
+  // The server cancel is best-effort (a drained message just resubmits as a
+  // visible, recoverable duplicate). Returns false (lets ArrowUp move the caret)
+  // when the composer is non-empty and not greyed, or nothing is recallable.
   function recall(): boolean {
-    if (!view || view.state.doc.length > 0) return false;
-    if (!lastQueued) return false;
+    if (!view) return false;
+    if (isPending) {
+      if (lastQueued) sendCancelToTerminal(tab.id, lastQueued.id);
+      lastQueued = null;
+      enterLocalEdit();
+      view.focus();
+      return true;
+    }
+    if (view.state.doc.length > 0 || !lastQueued) return false;
     const { id, text } = lastQueued;
     lastQueued = null;
     sendCancelToTerminal(tab.id, id);
-    if (tab.pendingPrompt?.id === id) enterLocalEdit();
     view.dispatch({ changes: { from: 0, to: 0, insert: text } });
     void flushWrite();
     view.focus();
@@ -262,14 +296,16 @@
     return "gemini";
   }
 
-  // Cmd+Enter: submit the draft text through the queue and KEEP it visible
-  // (read-only) until the server reports the message's last write reached
-  // the PTY — the prompt-delivered resolution clears the composer + the
-  // draft text (folder + pasted media stay; the agent reads the media AFTER
-  // delivery; the folder is cleaned on terminal close). Always returns true
-  // so the chord never inserts a newline; empty/whitespace is swallowed, and
-  // a second Cmd+Enter while a message is in flight is a no-op (replace
-  // would need cancel-by-id; deferred together, v2).
+  // Cmd+Enter: submit the draft text through the queue and KEEP it visible as a
+  // GREYED, read-only card — the submitted bytes stay on screen, dimmed, so the
+  // user sees exactly what is queued. `prompt-delivered` clears the card (the
+  // composer returns to empty + editable); the media folder stays (the agent
+  // reads it after delivery; cleaned on terminal close). Always returns true so
+  // the chord never inserts a newline; empty/whitespace is swallowed; and a
+  // second Cmd+Enter WHILE the card is up is a no-op (the shown text is already
+  // queued — to queue another, TYPE to move on, then submit). Back-to-back
+  // type->submit->type->submit therefore works via the `beforeinput` move-on,
+  // without the old stuck-read-only bug.
   //
   // Routes to THIS bubble's OWN terminal (`tab`), NOT the focused pane's active
   // terminal: the bubble belongs to `tab`, so its text must land there. And we
@@ -280,18 +316,18 @@
   // losing it.
   function submit(): boolean {
     if (!view) return true;
+    // Card up: the shown text is already queued. Don't re-submit it (that would
+    // double-deliver); the user types to move on or ArrowUp to edit.
+    if (isPending) return true;
     const text = view.state.doc.toString();
     if (!text.trim()) return true;
     const id = crypto.randomUUID();
     if (!sendPromptToTerminal(tab.id, text, submitAgent(), id)) return true;
-    // The message is now in the server queue. Clear the composer + keep it
-    // editable so the next message can be typed immediately (back-to-back
-    // queuing) — the queued message lives in the queue, not the composer.
-    // Remember it so ArrowUp can recall it to edit. No `pendingPrompt` guard:
-    // a second submit just queues another message.
+    // Queued. KEEP the text in the composer as the greyed read-only card (the
+    // lock $effect greys it the moment `isPending` flips). Persist it so a
+    // reload restores the card, and remember it for ArrowUp recall / Esc drop.
     lastQueued = { id, text };
     beginPendingPrompt(tab, id);
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
     void flushWrite();
     view.focus();
     pendingChipVisible = false;
@@ -342,7 +378,41 @@
         extensions: [
           // Locked from creation when a message is already in flight (the
           // bubble was hidden mid-pending, or a reload restored a queued
-          // message; the pending lives on the tab).
+          // message; the pending lives on the tab). The $effect keeps it in
+          // sync after mount.
+          lockCompartment.of(lockExtensions(isPending)),
+          // Type to move on: while the greyed card is up, the editor is
+          // read-only, so a user TEXT input means "I'm done looking at the
+          // queued message, start the next one". Intercept it BEFORE
+          // CodeMirror drops it: un-grey (un-lock) the composer, clear the card,
+          // and seed it with what was typed/pasted — the queued message stays in
+          // the server FIFO. Non-text input (delete, etc.) is swallowed (the
+          // card is read-only; use ArrowUp to edit it, Esc to drop it).
+          EditorView.domEventHandlers({
+            beforeinput: (event, v) => {
+              if (!isPending) return false;
+              event.preventDefault();
+              const seeds = [
+                "insertText",
+                "insertReplacementText",
+                "insertFromPaste",
+                "insertFromDrop",
+                "insertCompositionText",
+              ];
+              if (seeds.includes(event.inputType) && event.data) {
+                const seed = event.data;
+                enterLocalEdit();
+                v.dispatch({
+                  changes: { from: 0, to: v.state.doc.length, insert: seed },
+                  selection: { anchor: seed.length },
+                  effects: lockCompartment.reconfigure(lockExtensions(false)),
+                });
+                void flushWrite();
+                v.focus();
+              }
+              return true;
+            },
+          }),
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           // High-prec: Mod-Enter submits; Enter continues markdown markup
@@ -356,9 +426,9 @@
               { key: "Mod-Enter", run: submit },
               { key: "Enter", run: insertNewlineContinueMarkup },
               { key: "Backspace", run: deleteMarkupBackward },
-              // ArrowUp at doc-start while queued recalls the message to edit
-              // (GAP 1). Off doc-start / not queued it returns false and falls
-              // through to default caret movement.
+              // ArrowUp recalls the queued message to edit: from the greyed card
+              // (un-grey it), or from an empty composer (restore the buffer).
+              // Otherwise it returns false and falls through to caret movement.
               { key: "ArrowUp", run: recall },
               {
                 key: "Tab",
@@ -396,9 +466,16 @@
       } else if (phase === "sent" || phase === "queued") {
         // Still in flight: show the chip immediately (it has been pending
         // at least one hide/show round-trip; the grace window is for the
-        // routine submit-while-open fast path) and re-arm the ack guard
-        // for an unacked send.
+        // routine submit-while-open fast path). `isPending` is already true, so
+        // the lock $effect has greyed the card; the restored draft content IS
+        // the card text. Reload re-hydration: remember it so ArrowUp can edit
+        // and Esc can drop the reproved-queued message after a reload (the
+        // server `session` frame's queued_prompt_ids reproved it via
+        // reproveRestoredPrompt). Re-arm the ack guard for an unacked send.
         pendingChipVisible = true;
+        if (content.trim()) {
+          lastQueued = { id: tab.pendingPrompt!.id, text: content };
+        }
         if (phase === "sent" && ackTimer === null) {
           ackTimer = setTimeout(() => {
             ackTimer = null;
@@ -468,15 +545,17 @@
     // Stop it from reaching App.svelte's global Escape handling.
     e.stopPropagation();
     e.preventDefault();
-    // Dequeue-if-enqueued else abandon, adapted to the queue: an EMPTY composer
-    // with a still-queued message → dequeue it (cancel + DROP, the counterpart
-    // to ↑ which recalls it to edit), keeping the bubble open for the next
-    // message. Otherwise (a draft in the composer, or nothing queued) → abandon
-    // the current draft + hide.
-    if (view && view.state.doc.length === 0 && lastQueued) {
+    // Dequeue-if-enqueued else abandon: the greyed card up (or an empty composer
+    // with a still-queued message) → drop that queued message (cancel + clear,
+    // the counterpart to ↑ which edits it), keeping the bubble open for the next
+    // message. Otherwise (an editable draft in the composer, nothing queued) →
+    // abandon the current draft + hide.
+    if (view && lastQueued && (isPending || view.state.doc.length === 0)) {
       sendCancelToTerminal(tab.id, lastQueued.id);
       lastQueued = null;
       enterLocalEdit();
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+      void flushWrite();
       return;
     }
     abandonDraft();
@@ -498,6 +577,7 @@
 <div
   class="rich-prompt"
   class:resized={customHeight !== null}
+  class:pending={isPending}
   role="group"
   aria-label="Rich Prompt"
   bind:this={rootEl}
@@ -593,9 +673,19 @@
     border-top: 1px solid var(--border);
     user-select: none;
   }
-  /* Queued indicator: highlight the label when messages sit in the queue. The
-     composer itself stays a normal editable field (no read-only look). */
+  /* Queued indicator: highlight the label when messages sit in the queue. */
   .rp-label.queued {
     color: var(--text-primary);
+  }
+  /* Greyed read-only "queued" card (@@Alex's model): the submitted text stays
+     visible but dimmed, with the caret hidden, so it reads as queued-not-
+     editable. The editor is `EditorState.readOnly` underneath; typing exits via
+     `beforeinput` move-on. The opacity + the hidden caret are the only visual
+     affordance (the keymap stays live so ArrowUp-edit / Esc-drop work). */
+  .rich-prompt.pending .rp-editor {
+    opacity: 0.55;
+  }
+  .rich-prompt.pending .rp-editor :global(.cm-content) {
+    caret-color: transparent;
   }
 </style>
