@@ -94,7 +94,9 @@ const MAX_STATE_LEN: usize = 512;
 /// check `ApiTokenService::create` runs: scopes here must be one of
 /// the chan-tunnel-server vocabulary entries, so a desktop build
 /// cannot mint a token carrying a typo'd or future-only scope.
-const ALLOWED_SCOPES: &[&str] = &["tunnel", "tunnel.public"];
+/// `tunnel` is the only live scope (the public-readable path is gone;
+/// every devserver is authenticated).
+const ALLOWED_SCOPES: &[&str] = &["tunnel"];
 
 /// Default when the client omits `scopes`. Matches the SPA / general
 /// PAT default so silence means "private tunnel only".
@@ -614,15 +616,17 @@ mod tests {
 
     #[test]
     fn accepts_csv_scopes_with_whitespace() {
+        // Exercises comma-split + trim + empty-element filter. `tunnel`
+        // is the only live scope now (public path dropped).
         let q = AuthorizeQuery {
             redirect_uri: EXPECTED_REDIRECT_URI.into(),
             state: "nonce".into(),
             label: "x".into(),
-            scopes: Some(" tunnel , tunnel.public ".into()),
+            scopes: Some(" tunnel , ".into()),
             expires_in: Some(10),
         };
         let p = validate(q).unwrap();
-        assert_eq!(p.scopes, vec!["tunnel", "tunnel.public"]);
+        assert_eq!(p.scopes, vec!["tunnel"]);
     }
 
     #[test]

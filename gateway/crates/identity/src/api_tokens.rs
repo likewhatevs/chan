@@ -63,11 +63,9 @@ pub struct ApiToken {
     pub created_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub last_used_at: Option<DateTime<Utc>>,
-    /// Capabilities the token carries. Returned to workspace-proxy at
-    /// validate time and gates chan-tunnel-server's scope checks
-    /// (`tunnel` for any dial, `tunnel.public` for anonymous-readable
-    /// workspaces). Newly-issued tokens default to `["tunnel"]`; granting
-    /// extra scopes is a deliberate act at create time.
+    /// Capabilities the token carries. Returned to the proxy at validate
+    /// time and gates chan-tunnel-server's scope checks (`tunnel` for any
+    /// dial). Newly-issued tokens default to `["tunnel"]`.
     pub scopes: Vec<String>,
 }
 
@@ -98,10 +96,9 @@ pub struct ValidatedToken {
     pub username: String,
     pub token_id: Uuid,
     pub expires_at: Option<DateTime<Utc>>,
-    /// Per-token capabilities. workspace-proxy forwards these into
+    /// Per-token capabilities. The proxy forwards these into
     /// `chan_tunnel_server::Validated::scopes`, which the listener
-    /// uses to gate `tunnel` (any dial) and `tunnel.public`
-    /// (anonymous-readable workspace).
+    /// uses to gate `tunnel` (any dial).
     pub scopes: Vec<String>,
     /// Devserver identity: lowercase hex SHA-256 of the PAT. The gateway
     /// keys the tunnel registry and the devserver-gate `drv` claim on
@@ -111,10 +108,9 @@ pub struct ValidatedToken {
     pub devserver_id: String,
 }
 
-/// Default scope set for a freshly-issued token. Private-only:
-/// the holder can dial chan-tunnel but cannot expose a workspace
-/// anonymously. Granting `tunnel.public` (or any future scope) is
-/// an explicit step in the token-create call.
+/// Default scope set for a freshly-issued token. `tunnel` lets the
+/// holder dial chan-tunnel; it is the only live scope (every devserver
+/// is authenticated, so there is no anonymous-readable capability).
 pub const DEFAULT_TOKEN_SCOPES: &[&str] = &["tunnel"];
 
 /// Request-scoped audit context recorded alongside token mutations.
@@ -323,13 +319,13 @@ impl ApiTokenService {
 }
 
 /// Hard cap on the per-token scope list to bound row width and
-/// keep validate-time copies tiny. The current set is two values
-/// (`tunnel`, `tunnel.public`); the cap leaves headroom for future
-/// scopes without admitting unbounded lists.
+/// keep validate-time copies tiny. The live set is just `tunnel`; the
+/// cap leaves headroom for future scopes without admitting unbounded
+/// lists.
 const MAX_SCOPES_PER_TOKEN: usize = 16;
-/// Hard cap on the length of any single scope. Scope names are
-/// short identifiers (`tunnel`, `tunnel.public`); the cap guards
-/// against pathological inputs in the create body.
+/// Hard cap on the length of any single scope. Scope names are short
+/// identifiers (`tunnel`); the cap guards against pathological inputs
+/// in the create body.
 const MAX_SCOPE_LEN: usize = 64;
 
 /// Reject scope lists that are empty, oversized, contain

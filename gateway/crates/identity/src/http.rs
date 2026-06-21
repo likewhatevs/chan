@@ -587,8 +587,14 @@ async fn me(State(state): State<AppState>, session: Session) -> Result<Response>
             Ok(rows) => rows
                 .into_iter()
                 .map(|t| WorkspaceView {
-                    label: t.workspace.clone(),
-                    workspace: t.workspace,
+                    // Placeholder: the admin tunnel list is now per-devserver
+                    // (one entry per user, keyed devserver_id), not per
+                    // workspace. The proper dashboard reshape (devserver
+                    // online state here; per-workspace `on` from the
+                    // devserver's own API over the owner's direct connection)
+                    // is SPA-lane work, sequenced after the Rust API settles.
+                    label: t.devserver_id.clone(),
+                    workspace: t.devserver_id,
                     status: "online",
                 })
                 .collect(),
@@ -781,10 +787,9 @@ struct CreateTokenBody {
     /// concrete expiry is computed client-side and sent here.
     expires_in: Option<i64>,
     /// Capabilities to grant the token. When absent (or empty), the
-    /// service falls back to `DEFAULT_TOKEN_SCOPES` (`["tunnel"]`):
-    /// the holder can dial chan-tunnel but cannot host a publicly-
-    /// readable workspace. Grant `"tunnel.public"` explicitly when
-    /// minting tokens for users authorised to share anonymously.
+    /// service falls back to `DEFAULT_TOKEN_SCOPES` (`["tunnel"]`),
+    /// which lets the holder dial chan-tunnel. `tunnel` is the only
+    /// live scope (every devserver is authenticated).
     #[serde(default)]
     scopes: Option<Vec<String>>,
 }
@@ -947,19 +952,20 @@ struct WorkspacesOpenQuery {
 ///   * `u` is resolved to a user record (case-insensitive username
 ///     lookup); 404 if unknown so the endpoint cannot be used to
 ///     probe handles;
-///   * profile `workspace_access?as=<self>` is consulted: owner returns
-///     `owner`, accepted grantee returns `viewer`/`editor`, anyone
-///     else 404 (same shape as "unknown workspace");
-///   * `d` is verified live in `u`'s tunnel registry on workspace-proxy
-///     (cheap defense-in-depth and a friendly 404 instead of a
-///     valid-token-into-a-cold-workspace race).
+///   * `u`'s LIVE devserver_id is read from the proxy admin tunnel list
+///     (one devserver per user); no live devserver -> 404;
+///   * profile `devserver_access?as=<self>` is consulted on that
+///     devserver_id: owner returns `owner`, accepted grantee returns
+///     `viewer`/`editor`, anyone else 404 (same shape as "unknown
+///     devserver"). A grant gives the WHOLE devserver.
 ///
 /// The entry token is short-lived (30s). The proxy validates
-/// signature + exp + aud (`{u}.devserver.chan.app`) + drv (`{d}`) + sub
-/// (the caller's user_id, *not* the owner's, so the devserver_gate
-/// cookie minted on the next leg carries the right identity for
-/// upstream collab attribution) and then issues its own 24h session
-/// JWT cookie.
+/// signature + exp + aud (`{u}.devserver.chan.app`) + drv (the
+/// devserver_id) + sub (the caller's user_id, *not* the owner's, so the
+/// devserver_gate cookie minted on the next leg carries the right
+/// identity for upstream collab attribution) and then issues its own
+/// 24h session JWT cookie. `d` rides the path as the tenant segment and
+/// is routed inside the devserver; it is not a gate key.
 async fn workspaces_open(
     State(state): State<AppState>,
     session: Session,
@@ -982,32 +988,35 @@ async fn workspaces_open(
         .await?
         .ok_or(Error::NotFound)?;
 
-    // Authorization. 404 on no-access matches the unknown-workspace shape
-    // so this endpoint cannot be used to enumerate which workspaces an
-    // owner is currently sharing or what handles exist.
-    state
-        .cfg
-        .profile_client
-        .workspace_access(owner.id, &workspace, caller.id)
-        .await?
-        .ok_or(Error::NotFound)?;
-
-    // Verify the workspace is actually live before minting. workspace-proxy is
-    // the authority on live registrations.
+    // The owner's LIVE devserver is the authority for the drv claim:
+    // one devserver per user, its id is the registry's second key,
+    // surfaced on the admin tunnel list. No live devserver -> 404 (same
+    // shape as no-access / unknown-handle, so probes can't enumerate).
     let client =
         state.cfg.workspace_admin.as_ref().ok_or_else(|| {
             Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
         })?;
     let live = client.list_user_tunnels(&owner.username).await?;
-    if !live.iter().any(|t| t.workspace == workspace) {
-        return Err(Error::NotFound);
-    }
+    let devserver_id = live
+        .first()
+        .map(|t| t.devserver_id.clone())
+        .ok_or(Error::NotFound)?;
+
+    // Authorization is one per-devserver check: a grant gives the WHOLE
+    // devserver. 404 on no-access matches the unknown-devserver shape so
+    // this endpoint cannot enumerate which devservers an owner shares.
+    state
+        .cfg
+        .profile_client
+        .devserver_access(owner.id, &devserver_id, caller.id)
+        .await?
+        .ok_or(Error::NotFound)?;
 
     let host = state.cfg.devserver_host_for(&owner.username);
     let token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         caller.id,
-        &workspace,
+        &devserver_id,
         &host,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
@@ -1015,11 +1024,11 @@ async fn workspaces_open(
     // 303 (See Other) is the right shape for a GET that produced a
     // resource we want the browser to navigate to. Token rides in
     // the URL because that's the only way to hand it off across
-    // origins without JS; the 30s exp keeps the leak window short.
-    //
-    // Scheme + port come from config so a local-dev deploy where
-    // `*.workspace.localtest.me` resolves to 127.0.0.1 over plain HTTP
-    // builds the right URL.
+    // origins without JS; the 30s exp keeps the leak window short. The
+    // path keeps the `{workspace}` tenant segment; the devserver routes
+    // it internally. Scheme + port come from config so a local-dev
+    // deploy where `*.devserver.localtest.me` resolves to 127.0.0.1 over
+    // plain HTTP builds the right URL.
     let url = format!(
         "{scheme}://{host}{port}/{workspace}/?t={token}",
         scheme = state.cfg.workspace_public_scheme,
@@ -1161,13 +1170,16 @@ fn is_devserver_id_shape(s: &str) -> bool {
 ///   1. If the caller has no session, stash `/s/:owner/:workspace` and
 ///      303 to `/` so the SPA shows the OAuth picker. The callback
 ///      reads the stash and 303s back here after sign-in.
-///   2. With a session, resolve `:owner` (username -> User) and call
-///      profile `workspace_access?as=<self>`. The owner case and the
-///      grantee case both return a role; no-access returns 404.
-///   3. On access, mint an entry JWT against the owner's
-///      `{owner}.devserver.chan.app` host and 303 to the proxy so
-///      the proxy sets its `devserver_gate` cookie and serves the
-///      content. The same 30s short-lived entry token shape used by
+///   2. With a session, resolve `:owner` (username -> User), read the
+///      owner's LIVE devserver_id from the proxy admin tunnel list, and
+///      call profile `devserver_access?as=<self>` on it. Owner and
+///      grantee both return a role; no-access (or no live devserver)
+///      returns 404. A grant gives the WHOLE devserver.
+///   3. On access, mint an entry JWT (drv = the devserver_id) against
+///      the owner's `{owner}.devserver.chan.app` host and 303 to the
+///      proxy so it sets its `devserver_gate` cookie and serves the
+///      content. The `:workspace` segment rides the path as the tenant.
+///      The same 30s short-lived entry token shape used by
 ///      `/api/workspaces/open`.
 async fn share_landing(
     State(state): State<AppState>,
@@ -1205,10 +1217,23 @@ async fn share_landing(
         .await?
         .ok_or(Error::NotFound)?;
 
+    // Resolve the owner's LIVE devserver (one per user); its id is the
+    // drv claim. No admin client or no live devserver -> 404, the same
+    // shape as no-access, so a probe cannot tell the cases apart.
+    let client =
+        state.cfg.workspace_admin.as_ref().ok_or_else(|| {
+            Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
+        })?;
+    let live = client.list_user_tunnels(&owner_user.username).await?;
+    let devserver_id = live
+        .first()
+        .map(|t| t.devserver_id.clone())
+        .ok_or(Error::NotFound)?;
+
     let access = state
         .cfg
         .profile_client
-        .workspace_access(owner_user.id, &workspace, uid)
+        .devserver_access(owner_user.id, &devserver_id, uid)
         .await?
         .ok_or(Error::NotFound)?;
 
@@ -1216,7 +1241,7 @@ async fn share_landing(
     let token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         uid,
-        &workspace,
+        &devserver_id,
         &host,
     )
     .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;

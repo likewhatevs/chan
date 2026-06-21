@@ -41,6 +41,7 @@ use identity::config::Config;
 use identity::http;
 use identity::profile_client::ProfileClient;
 use identity::providers::github::{GitHubEndpoints, GitHubProvider};
+use identity::workspace_admin_client::WorkspaceAdminClient;
 
 const PROFILE_TOKEN: &str = "test-profile-token";
 
@@ -129,7 +130,15 @@ impl TestApp {
             devserver_wildcard_suffix: ".devserver.chan.app".to_string(),
             workspace_public_scheme: "https".to_string(),
             workspace_public_port: String::new(),
-            workspace_admin: None,
+            // Point the proxy-admin client at the same mock server; its
+            // /admin/v1/* paths don't collide with profile's /v1/users/*.
+            // Tests that need a live devserver mock the tunnel list (see
+            // `mock_live_devserver`); the rest get an empty list via the
+            // no-match error path, which `me` tolerates.
+            workspace_admin: Some(
+                WorkspaceAdminClient::new(profile.uri().parse().unwrap(), "test-admin".into())
+                    .unwrap(),
+            ),
             workspace_gate_secret: "test-workspace-gate-secret-32-bytes-aa".to_string(),
             providers: vec![Arc::new(provider)],
         });
@@ -381,8 +390,9 @@ async fn login_then_me() {
     let (s, _, body, _) = c.send(Method::GET, "/api/me", None).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["user"]["id"].as_str().unwrap(), uid.to_string());
-    // Workspaces now come from workspace-proxy admin. TestApp wires
-    // workspace_admin: None, so the list resolves to an empty array.
+    // The live list comes from proxy admin. This test mocks no tunnel
+    // list, so the admin call no-matches and `me` resolves an empty
+    // array (it tolerates admin errors rather than failing /api/me).
     assert_eq!(
         body["workspaces"].as_array().expect("workspaces present"),
         &Vec::<serde_json::Value>::new()
@@ -670,6 +680,23 @@ fn grant_body(
     })
 }
 
+/// Mock the proxy admin tunnel list so `username` has one live
+/// devserver. The open routes read the live devserver_id from here to
+/// mint the gate `drv`.
+async fn mock_live_devserver(app: &TestApp, username: &str, devserver_id: &str) {
+    let now = chrono::Utc::now().to_rfc3339();
+    Mock::given(method("GET"))
+        .and(path(format!("/admin/v1/users/{username}/tunnels")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "user": username,
+            "devserver_id": devserver_id,
+            "peer_addr": null,
+            "connected_at": now,
+        }])))
+        .mount(&app.profile)
+        .await;
+}
+
 #[tokio::test]
 async fn grant_create_requires_session() {
     let app = TestApp::new().await;
@@ -857,9 +884,11 @@ async fn share_landing_grantee_minted_jwt_redirect() {
         )))
         .mount(&app.profile)
         .await;
+    let dsid = "a".repeat(64);
+    mock_live_devserver(&app, "owner-handle", &dsid).await;
     Mock::given(method("GET"))
         .and(path(format!(
-            "/v1/users/{owner_uid}/workspaces/photos/access"
+            "/v1/users/{owner_uid}/devservers/{dsid}/access"
         )))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "editor"})))
         .mount(&app.profile)
@@ -899,9 +928,11 @@ async fn share_landing_no_access_is_404() {
         )))
         .mount(&app.profile)
         .await;
+    let dsid = "a".repeat(64);
+    mock_live_devserver(&app, "owner-handle", &dsid).await;
     Mock::given(method("GET"))
         .and(path(format!(
-            "/v1/users/{owner_uid}/workspaces/photos/access"
+            "/v1/users/{owner_uid}/devservers/{dsid}/access"
         )))
         .respond_with(ResponseTemplate::new(404).set_body_json(json!({"error": "not found"})))
         .mount(&app.profile)

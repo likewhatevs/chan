@@ -5,7 +5,7 @@
 //!
 //! `ProfileError` is the client's own error enum so this crate has
 //! no axum / IntoResponse dependency. Each consumer (identity,
-//! workspace-proxy) provides a `From<ProfileError>` for its local
+//! devserver-proxy) provides a `From<ProfileError>` for its local
 //! request-handler error.
 
 use chrono::{DateTime, Utc};
@@ -36,7 +36,7 @@ pub struct User {
     pub email: String,
     pub display_name: Option<String>,
     pub username: String,
-    /// Lifetime rename counter. workspace-proxy ignores this; identity
+    /// Lifetime rename counter. devserver-proxy ignores this; identity
     /// reads it to surface "edits remaining" in the SPA.
     #[serde(default)]
     pub username_edits: i32,
@@ -49,7 +49,7 @@ pub struct User {
     #[serde(default)]
     pub block_reason: Option<String>,
     /// Provider-supplied avatar URL. Browser fetches it directly;
-    /// workspace-proxy doesn't read this field.
+    /// devserver-proxy doesn't read this field.
     #[serde(default)]
     pub avatar_url: Option<String>,
 }
@@ -677,20 +677,16 @@ impl ProfileClient {
     /// Per-request access gate. `Ok(Some(DevserverAccess))` is access;
     /// `Ok(None)` is no access (shares the 404 shape with "unknown
     /// devserver" on purpose, so callers can render a single "no access"
-    /// page without disclosing which case they hit).
-    ///
-    /// TRANSITIONAL: still hits the per-workspace access path. The open
-    /// routes that call this move to a per-devserver `drv` once the proxy
-    /// admin tunnel list surfaces the live devserver_id; at that point
-    /// this becomes `devserver_access(owner, devserver_id, caller)`.
-    pub async fn workspace_access(
+    /// page without disclosing which case they hit). A grant gives the
+    /// WHOLE devserver, so this is the single authorization assertion.
+    pub async fn devserver_access(
         &self,
         owner_id: Uuid,
-        workspace: &str,
+        devserver_id: &str,
         caller: Uuid,
     ) -> ProfileResult<Option<DevserverAccess>> {
         let mut url = self.url(&format!(
-            "/v1/users/{owner_id}/workspaces/{workspace}/access"
+            "/v1/users/{owner_id}/devservers/{devserver_id}/access"
         ));
         url.query_pairs_mut().append_pair("as", &caller.to_string());
         let builder = self
