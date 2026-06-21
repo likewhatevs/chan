@@ -1227,15 +1227,22 @@ const KEY_BRIDGE_JS: &str = r#"
   // DevTools. Both bypass the SPA event bus and invoke their
   // Tauri IPC commands directly so a frozen Svelte runtime or a
   // broken chord registry can't lock the dev affordances away.
+  // GUARD the bridge BEFORE swallowing the event: when window.__TAURI__ is
+  // absent (e.g. a devserver window where the bridge did not survive the
+  // connecting -> external navigation), do NOT preventDefault — let the event
+  // bubble to the SPA's own handler (Cmd+R -> location.reload()) so the chord
+  // degrades to a working fallback instead of dying. Swallowing first then
+  // finding no bridge killed Cmd+R/devtools/zoom outright (no IPC, no fallback).
   function invokeIpc(e, cmd) {
+    const tauri = window.__TAURI__;
+    if (!(tauri && tauri.core && typeof tauri.core.invoke === 'function')) {
+      return;
+    }
     e.preventDefault();
     e.stopImmediatePropagation();
-    const tauri = window.__TAURI__;
-    if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
-      tauri.core.invoke(cmd).catch((err) => {
-        console.error('[chan] IPC ' + cmd + ' failed:', err);
-      });
-    }
+    tauri.core.invoke(cmd).catch((err) => {
+      console.error('[chan] IPC ' + cmd + ' failed:', err);
+    });
   }
   // Chord policy: actions reachable through Pane Mode (Cmd+K) stay
   // unbound here (Cmd+`, Cmd+Shift+F) so the native layer claims as
