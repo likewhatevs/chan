@@ -6,6 +6,7 @@
 //! The client dials h2c (`http://...`); no TLS plumbing on this
 //! side, since TLS is nginx's job in production.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,25 +20,41 @@ use tokio::net::TcpListener;
 use url::Url;
 use uuid::Uuid;
 
-/// Validator stub. One expected token, one canned `Validated`.
-/// Anything else is `InvalidToken`.
+/// Validator stub. Maps each known token to the `devserver_id` it resolves
+/// to (identity is token-resolved, not from the client's `Hello`); an unknown
+/// token is `InvalidToken`. All tokens belong to one `username` so the
+/// per-user cap counts distinct devservers.
 struct StubValidator {
-    expected_token: String,
     username: String,
     scopes: Vec<String>,
+    tokens: HashMap<String, String>,
+}
+
+impl StubValidator {
+    fn new(username: &str, scopes: Vec<String>, tokens: &[(&str, &str)]) -> Arc<Self> {
+        Arc::new(Self {
+            username: username.into(),
+            scopes,
+            tokens: tokens
+                .iter()
+                .map(|(t, d)| (t.to_string(), d.to_string()))
+                .collect(),
+        })
+    }
 }
 
 #[async_trait]
 impl Validator for StubValidator {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError> {
-        if token != self.expected_token {
-            return Err(ServerError::InvalidToken);
+        match self.tokens.get(token) {
+            Some(devserver_id) => Ok(Validated {
+                user_id: Uuid::nil(),
+                username: self.username.clone(),
+                devserver_id: devserver_id.clone(),
+                scopes: self.scopes.clone(),
+            }),
+            None => Err(ServerError::InvalidToken),
         }
-        Ok(Validated {
-            user_id: Uuid::nil(),
-            username: self.username.clone(),
-            scopes: self.scopes.clone(),
-        })
     }
 }
 
@@ -101,29 +118,27 @@ async fn wait_registered(reg: &Registry, user: &str, workspace: &str) -> bool {
 }
 
 #[tokio::test]
-async fn happy_path_private_workspace() {
-    let validator = Arc::new(StubValidator {
-        expected_token: "good".into(),
-        username: "alice".into(),
-        scopes: vec![TUNNEL_SCOPE.into()],
-    });
+async fn registration_keys_on_token_devserver_id_not_hello_workspace() {
+    // The registry keys on the token-resolved devserver id ("ds-1"), NOT the
+    // client's Hello.workspace placeholder ("devsrv"). The ack echoes the
+    // resolved id.
+    let validator = StubValidator::new("alice", vec![TUNNEL_SCOPE.into()], &[("good", "ds-1")]);
     let h = spawn_listener(validator, 0).await;
-    let (reg, _yconn) = dial(&cfg(h.port, "good", "notes")).await.expect("dial ok");
+    let (reg, _yconn) = dial(&cfg(h.port, "good", "devsrv")).await.expect("dial ok");
     assert_eq!(reg.user, "alice");
-    assert_eq!(reg.workspace, "notes");
-    assert_eq!(reg.prefix, "/notes");
-    assert!(wait_registered(&h.registry, "alice", "notes").await);
-    let workspaces = h.registry.list_workspaces_for("alice");
-    assert_eq!(workspaces.len(), 1);
+    assert_eq!(reg.workspace, "ds-1");
+    assert_eq!(reg.prefix, "/ds-1");
+    // Keyed on the devserver id, not the placeholder label.
+    assert!(wait_registered(&h.registry, "alice", "ds-1").await);
+    assert!(h.registry.get("alice", "devsrv").is_none());
+    let registered = h.registry.list_workspaces_for("alice");
+    assert_eq!(registered.len(), 1);
+    assert_eq!(registered[0].workspace.as_ref(), "ds-1");
 }
 
 #[tokio::test]
 async fn invalid_token_returns_401() {
-    let validator = Arc::new(StubValidator {
-        expected_token: "good".into(),
-        username: "alice".into(),
-        scopes: vec![TUNNEL_SCOPE.into()],
-    });
+    let validator = StubValidator::new("alice", vec![TUNNEL_SCOPE.into()], &[("good", "ds-1")]);
     let h = spawn_listener(validator, 0).await;
     let err = dial(&cfg(h.port, "bad", "notes"))
         .await
@@ -139,11 +154,7 @@ async fn invalid_token_returns_401() {
 #[tokio::test]
 async fn missing_base_scope_returns_403() {
     // Token authenticates but lacks `TUNNEL_SCOPE` entirely.
-    let validator = Arc::new(StubValidator {
-        expected_token: "good".into(),
-        username: "alice".into(),
-        scopes: vec![],
-    });
+    let validator = StubValidator::new("alice", vec![], &[("good", "ds-1")]);
     let h = spawn_listener(validator, 0).await;
     let err = dial(&cfg(h.port, "good", "notes"))
         .await
@@ -155,18 +166,24 @@ async fn missing_base_scope_returns_403() {
 }
 
 #[tokio::test]
-async fn per_user_cap_blocks_third_workspace() {
-    let validator = Arc::new(StubValidator {
-        expected_token: "good".into(),
-        username: "alice".into(),
-        scopes: vec![TUNNEL_SCOPE.into()],
-    });
+async fn per_user_cap_blocks_third_devserver() {
+    // The cap counts distinct devservers per user. Three tokens resolve to
+    // three distinct devserver ids; with cap 2 the third is refused.
+    let validator = StubValidator::new(
+        "alice",
+        vec![TUNNEL_SCOPE.into()],
+        &[("t1", "ds-1"), ("t2", "ds-2"), ("t3", "ds-3")],
+    );
     let h = spawn_listener(validator, 2).await;
-    let (_a, _y1) = dial(&cfg(h.port, "good", "d1")).await.expect("first dial");
-    assert!(wait_registered(&h.registry, "alice", "d1").await);
-    let (_b, _y2) = dial(&cfg(h.port, "good", "d2")).await.expect("second dial");
-    assert!(wait_registered(&h.registry, "alice", "d2").await);
-    let err = dial(&cfg(h.port, "good", "d3"))
+    let (_a, _y1) = dial(&cfg(h.port, "t1", "devsrv"))
+        .await
+        .expect("first dial");
+    assert!(wait_registered(&h.registry, "alice", "ds-1").await);
+    let (_b, _y2) = dial(&cfg(h.port, "t2", "devsrv"))
+        .await
+        .expect("second dial");
+    assert!(wait_registered(&h.registry, "alice", "ds-2").await);
+    let err = dial(&cfg(h.port, "t3", "devsrv"))
         .await
         .map(|_| ())
         .expect_err("third dial should hit the cap");
@@ -182,40 +199,35 @@ async fn per_user_cap_blocks_third_workspace() {
         }
         other => panic!("expected RemoteRefusal, got {other:?}"),
     }
-    let workspaces: Vec<_> = h
+    let registered: Vec<_> = h
         .registry
         .list_workspaces_for("alice")
         .into_iter()
         .map(|d| d.workspace.as_ref().to_string())
         .collect();
-    assert_eq!(workspaces, vec!["d1".to_string(), "d2".to_string()]);
+    assert_eq!(registered, vec!["ds-1".to_string(), "ds-2".to_string()]);
 }
 
 #[tokio::test]
 async fn reconnect_evicts_previous_registration() {
-    // Same user + workspace registers twice. The second dial succeeds
-    // (chan serve restart reclaiming its slot) and the first
-    // registration is replaced.
-    let validator = Arc::new(StubValidator {
-        expected_token: "good".into(),
-        username: "alice".into(),
-        scopes: vec![TUNNEL_SCOPE.into()],
-    });
+    // The same token resolves to the same devserver id, so a second dial
+    // (a devserver restart reclaiming its slot) replaces the first.
+    let validator = StubValidator::new("alice", vec![TUNNEL_SCOPE.into()], &[("good", "ds-1")]);
     let h = spawn_listener(validator, 0).await;
-    let (_a, _y1) = dial(&cfg(h.port, "good", "notes"))
+    let (_a, _y1) = dial(&cfg(h.port, "good", "devsrv"))
         .await
         .expect("first dial");
-    assert!(wait_registered(&h.registry, "alice", "notes").await);
-    let first_at = h.registry.get("alice", "notes").unwrap().connected_at;
+    assert!(wait_registered(&h.registry, "alice", "ds-1").await);
+    let first_at = h.registry.get("alice", "ds-1").unwrap().connected_at;
     // Tiny pause so the timestamps differ unambiguously.
     tokio::time::sleep(Duration::from_millis(20)).await;
-    let (_b, _y2) = dial(&cfg(h.port, "good", "notes"))
+    let (_b, _y2) = dial(&cfg(h.port, "good", "devsrv"))
         .await
         .expect("second dial");
     // Wait for the new registration to land; it has a strictly
     // later connected_at than the first one.
     for _ in 0..100 {
-        if let Some(h2) = h.registry.get("alice", "notes") {
+        if let Some(h2) = h.registry.get("alice", "ds-1") {
             if h2.connected_at > first_at {
                 return;
             }

@@ -247,15 +247,18 @@ async fn handle_tunnel_conn(
 
     let duplex = H2Duplex::new(send, recv_body);
     let registry_for_check = registry.clone();
-    let (hello, validated, yconn) = handshake_validated(duplex, validated, |hello, validated| {
+    let (_hello, validated, yconn) = handshake_validated(duplex, validated, |_hello, validated| {
         if max_workspaces_per_user == 0 {
             return Ok(());
         }
-        let workspaces = registry_for_check.list_workspaces_for(&validated.username);
-        let already_present = workspaces
+        // The registry keys on the token-resolved `devserver_id`, NOT the
+        // client's `Hello.workspace` placeholder, so the cap counts distinct
+        // devservers per user and a reconnect of the same devserver is exempt.
+        let registered = registry_for_check.list_workspaces_for(&validated.username);
+        let already_present = registered
             .iter()
-            .any(|d| d.workspace.as_ref() == hello.workspace.as_str());
-        if !already_present && workspaces.len() >= max_workspaces_per_user {
+            .any(|d| d.workspace.as_ref() == validated.devserver_id.as_str());
+        if !already_present && registered.len() >= max_workspaces_per_user {
             return Err(ServerError::TooManyWorkspaces {
                 user: validated.username.clone(),
                 max: max_workspaces_per_user,
@@ -266,7 +269,9 @@ async fn handle_tunnel_conn(
     .await?;
 
     let user: Arc<str> = Arc::from(validated.username.as_str());
-    let workspace: Arc<str> = Arc::from(hello.workspace.as_str());
+    // The second registry key is the token-resolved devserver id (the
+    // authoritative identity), not the ignored `Hello.workspace` label.
+    let devserver: Arc<str> = Arc::from(validated.devserver_id.as_str());
     // Authoritative cap enforcement: `pre_ack` above ran a
     // best-effort check before HelloAck so a non-racing dial fails
     // cleanly during handshake, but two parallel dials could both
@@ -277,7 +282,7 @@ async fn handle_tunnel_conn(
     // transport disconnect.
     let (handle, open_rx, shutdown_rx) = match registry.register_with_cap(
         user.clone(),
-        workspace.clone(),
+        devserver.clone(),
         Some(peer),
         max_workspaces_per_user,
     ) {
@@ -295,14 +300,14 @@ async fn handle_tunnel_conn(
             });
         }
     };
-    tracing::info!(%user, %workspace, "tunnel registered");
+    tracing::info!(%user, %devserver, "tunnel registered");
 
     // Handshake is done; the in-flight slot belongs to the next
     // dialer. The per-tunnel driver runs without holding a permit.
     drop(inflight_permit);
 
     workspace_tunnel(yconn, open_rx, shutdown_rx, registry.clone(), handle).await;
-    tracing::info!(%user, %workspace, "tunnel driver exited");
+    tracing::info!(%user, %devserver, "tunnel driver exited");
     Ok(())
 }
 

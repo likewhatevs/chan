@@ -101,13 +101,19 @@ impl From<chan_tunnel_proto::IoFrameError> for ServerError {
 
 /// Result of validating a bearer token. Returned by `Validator`
 /// and used to populate the HelloAck plus the registry key.
-/// Tokens are user-scoped: one validated token can register any
-/// number of `(username, workspace)` tunnels, each from a separate
-/// `chan serve` instance.
+///
+/// The registration identity is resolved from the TOKEN, not from the
+/// client's `Hello`: `devserver_id` is the second registry key (one
+/// devserver per user, keyed on `(username, devserver_id)`). The client's
+/// `Hello.workspace` is an ignored placeholder label. The validator
+/// derives `devserver_id` from the PAT (the gateway uses the PAT's
+/// SHA-256), so token rotation yields a fresh devserver.
 #[derive(Debug, Clone)]
 pub struct Validated {
     pub user_id: uuid::Uuid,
     pub username: String,
+    /// Token-resolved devserver identity; the registry's second key.
+    pub devserver_id: String,
     pub scopes: Vec<String>,
 }
 
@@ -133,15 +139,15 @@ pub trait Validator: Send + Sync + 'static {
     async fn validate(&self, token: &str) -> Result<Validated, ServerError>;
 }
 
-/// Public path prefix shape: `/{workspace}`. The fronting proxy now
-/// uses wildcard subdomains (`{user}.workspace.chan.app`), so the
-/// username lives in the host header, not in the path. The path
-/// prefix is exactly the workspace segment so chan-server's
-/// `<meta name="chan-prefix">` makes the SPA's relative URLs
-/// resolve correctly under `{user}.workspace.chan.app/{workspace}/...`. No
-/// trailing slash; rest of the path is the workspace-relative request.
-fn make_prefix(_username: &str, workspace: &str) -> String {
-    format!("/{workspace}")
+/// Public path prefix shape: `/{key}`, where `key` is the registration's
+/// second registry key (the token-resolved `devserver_id`). The fronting
+/// proxy uses wildcard subdomains (`{user}.devserver.chan.app`), so the
+/// username lives in the host header, not in the path. A devserver tenant
+/// already self-prefixes at its own public slug and the proxy forwards the
+/// full path, so the devserver client ignores this prefix; it is retained
+/// for the registration round-trip shape. No trailing slash.
+fn make_prefix(_username: &str, key: &str) -> String {
+    format!("/{key}")
 }
 
 /// Workspace the Hello/HelloAck round-trip over `socket`. Validates
@@ -230,11 +236,14 @@ where
         return Err(e);
     }
 
+    // Identity is token-resolved: the registration keys on `devserver_id`,
+    // not the client's `Hello.workspace` placeholder. The ack echoes the
+    // resolved id so the client + registry + admin view all agree.
     let ack = HelloAck::Ok(chan_tunnel_proto::HelloAckOk {
         protocol: ProtocolVersion::V1,
-        prefix: make_prefix(&validated.username, &hello.workspace),
+        prefix: make_prefix(&validated.username, &validated.devserver_id),
         user: validated.username.clone(),
-        workspace: hello.workspace.clone(),
+        workspace: validated.devserver_id.clone(),
     });
     write_frame(&mut socket, &ack).await?;
 

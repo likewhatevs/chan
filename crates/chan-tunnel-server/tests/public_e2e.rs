@@ -40,6 +40,10 @@ use uuid::Uuid;
 struct StubValidator {
     token: String,
     username: String,
+    /// The registry's second key. Set to the path segment the public router
+    /// routes on (`/{user}/{devserver_id}/...`) so this turn-key-router
+    /// harness keeps resolving its `/alice/notes/...` test URLs.
+    devserver_id: String,
     scopes: Vec<String>,
 }
 
@@ -52,6 +56,7 @@ impl Validator for StubValidator {
         Ok(Validated {
             user_id: Uuid::nil(),
             username: self.username.clone(),
+            devserver_id: self.devserver_id.clone(),
             scopes: self.scopes.clone(),
         })
     }
@@ -71,6 +76,7 @@ async fn spawn(cfg: PublicConfig, upstream: Router) -> PublicHarness {
     let validator: Arc<dyn Validator> = Arc::new(StubValidator {
         token: token.clone(),
         username: username.clone(),
+        devserver_id: workspace.clone(),
         scopes: vec![TUNNEL_SCOPE.into()],
     });
     let registry = Registry::new();
