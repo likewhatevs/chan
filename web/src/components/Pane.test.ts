@@ -636,7 +636,7 @@ describe("Pane cross-window tab DnD (pane-id collision fix)", () => {
       /TAB_DRAG_MIME,[\s\S]{1,160}fromWindow: sessionWindowId\(\)/,
     );
     expect(paneSource).toMatch(
-      /import \{ sessionWindowId, windowDragScope, windowLibraryId \} from "\.\.\/api\/client"/,
+      /import \{\s*dragScopeMimeToken,\s*sessionWindowId,\s*windowDragScope,\s*windowLibraryId,\s*\} from "\.\.\/api\/client"/,
     );
   });
 
@@ -660,7 +660,17 @@ describe("Pane cross-kind / cross-workspace tab DnD guard", () => {
     // (when payload values are not readable).
     expect(paneSource).toMatch(/scopeMime\(currentDragScope\(\)\), "1"/);
     expect(paneSource).toMatch(
-      /import \{ sessionWindowId, windowDragScope, windowLibraryId \} from "\.\.\/api\/client"/,
+      /import \{\s*dragScopeMimeToken,\s*sessionWindowId,\s*windowDragScope,\s*windowLibraryId,\s*\} from "\.\.\/api\/client"/,
+    );
+  });
+
+  test("scopeMime hex-encodes the scope so the MIME type round-trips in WKWebView", () => {
+    // The human-readable scope carries `:`/`|`, which WKWebView mangles in a MIME
+    // type; the scopeMime boundary hex-encodes via dragScopeMimeToken so the
+    // stamped type comes back byte-identically at dragover (the intra-window-drag
+    // regression fix — without this, EVERY drop is rejected).
+    expect(paneSource).toMatch(
+      /const scopeMime = \(scope: string\): string =>\s*SCOPE_DRAG_MIME_PREFIX \+ dragScopeMimeToken\(scope\)/,
     );
   });
 

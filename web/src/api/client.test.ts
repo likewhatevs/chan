@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   api,
+  dragScopeMimeToken,
   sessionPath,
   sessionWindowId,
   windowDragScope,
@@ -159,6 +160,92 @@ describe("windowDragScope", () => {
     expect(localA).toBe(localAgain);
     expect(localA).not.toBe(localOther);
     expect(localA).not.toBe(remoteSameKey);
+  });
+});
+
+describe("dragScopeMimeToken", () => {
+  // The drag scope rides a DataTransfer MIME TYPE so it is readable at dragover.
+  // The human-readable scope carries `:` and `|`, which WKWebView mangles in a
+  // MIME type so the stamped type does not return byte-identically through
+  // `dataTransfer.types` — that broke the equality check for EVERY drop,
+  // intra-window pane moves included. The token must encode to a MIME-safe
+  // alphabet so the round-trip is byte-stable.
+
+  test("strips the characters that break the MIME round-trip", () => {
+    // The source string has the offending chars; the token must not.
+    const scope = windowDragScope({
+      libraryId: "local",
+      terminalOnly: false,
+      workspaceKey: "wk-deadbeef",
+    });
+    expect(scope).toMatch(/[:|]/);
+    expect(dragScopeMimeToken(scope)).not.toMatch(/[:|]/);
+  });
+
+  test("emits only lowercase hex (survives WKWebView type normalization)", () => {
+    // Lowercase `[0-9a-f]` is immune to the ASCII-lowercasing + token mangling a
+    // DataTransfer type undergoes, so the stamped and recomputed tokens match.
+    for (const scope of [
+      "lib:local|terminal",
+      "lib:lib-abc123|terminal",
+      "lib:local|workspace:wk-deadbeef",
+      // An absolute-root workspace key with `/` and mixed case — the latent
+      // hazard the `|` tipped over.
+      "lib:local|workspace:/Users/x/My Notes",
+    ]) {
+      expect(dragScopeMimeToken(scope)).toMatch(/^[0-9a-f]+$/);
+    }
+  });
+
+  test("is deterministic: the same scope encodes byte-for-byte identically", () => {
+    const scope = "lib:local|workspace:wk-deadbeef";
+    expect(dragScopeMimeToken(scope)).toBe(dragScopeMimeToken(scope));
+  });
+
+  test("is collision-free: different scopes encode to different tokens", () => {
+    const a = dragScopeMimeToken("lib:local|terminal");
+    const b = dragScopeMimeToken("lib:local|workspace:wk-deadbeef");
+    const c = dragScopeMimeToken("lib:remote|terminal");
+    expect(new Set([a, b, c]).size).toBe(3);
+  });
+
+  test("preserves the library-aware accept/reject matrix as a MIME type", () => {
+    // Compose the scope + token exactly as Pane.svelte's scopeMime does, so the
+    // matrix is asserted on the actual string a target compares at dragover.
+    const SCOPE_DRAG_MIME_PREFIX = "application/x-chan-tab-scope+";
+    const mime = (s: {
+      libraryId: string;
+      terminalOnly: boolean;
+      workspaceKey: string | null;
+    }): string => SCOPE_DRAG_MIME_PREFIX + dragScopeMimeToken(windowDragScope(s));
+
+    const localTermA = mime({ libraryId: "local", terminalOnly: true, workspaceKey: null });
+    const localTermB = mime({ libraryId: "local", terminalOnly: true, workspaceKey: null });
+    const remoteTerm = mime({ libraryId: "lib-remote", terminalOnly: true, workspaceKey: null });
+    const localWsA = mime({ libraryId: "local", terminalOnly: false, workspaceKey: "wk-same" });
+    const localWsAgain = mime({ libraryId: "local", terminalOnly: false, workspaceKey: "wk-same" });
+    const localWsOther = mime({ libraryId: "local", terminalOnly: false, workspaceKey: "wk-other" });
+    const remoteWsSameKey = mime({
+      libraryId: "lib-remote",
+      terminalOnly: false,
+      workspaceKey: "wk-same",
+    });
+
+    // Intra-window / same-(library, kind, workspace): ALWAYS allowed (the bug).
+    expect(localTermA).toBe(localTermB);
+    expect(localWsA).toBe(localWsAgain);
+    // Cross-library: rejected.
+    expect(localTermA).not.toBe(remoteTerm);
+    // Same workspace key, DIFFERENT library — the collision case: rejected.
+    expect(localWsA).not.toBe(remoteWsSameKey);
+    // Different workspace: rejected.
+    expect(localWsA).not.toBe(localWsOther);
+    // Terminal <-> workspace: rejected.
+    expect(localTermA).not.toBe(localWsA);
+    // Every accepted MIME type is itself a MIME-safe string.
+    for (const m of [localTermA, localWsA]) {
+      expect(m).toMatch(/^application\/x-chan-tab-scope\+[0-9a-f]+$/);
+    }
   });
 });
 

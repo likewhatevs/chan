@@ -163,6 +163,25 @@ export function windowDragScope(scope: {
   return `lib:${scope.libraryId}|workspace:${scope.workspaceKey ?? "unknown"}`;
 }
 
+/// MIME-safe encoding of a drag scope for use as a DataTransfer TYPE string.
+/// The scope rides a MIME TYPE (not a value) because only `types`, not values,
+/// are readable during `dragover`. But `windowDragScope` is human-readable and
+/// carries `:` and `|`, which are not MIME-type token characters; WKWebView
+/// normalizes/mangles such a type, so the string the source stamps does NOT come
+/// back byte-identically through `dataTransfer.types` at dragover — the equality
+/// check then fails for EVERY drop, intra-window pane moves included. Hex-encoding
+/// the UTF-8 bytes yields only `[0-9a-f]`, which survives normalization unchanged,
+/// so the source's stamped type equals the target's recomputed one for the same
+/// scope. The scope is only ever compared for EQUALITY, never parsed back, so a
+/// one-way bijective encoding is sufficient and collision-free.
+export function dragScopeMimeToken(scope: string): string {
+  let out = "";
+  for (const byte of new TextEncoder().encode(scope)) {
+    out += byte.toString(16).padStart(2, "0");
+  }
+  return out;
+}
+
 function req<T>(
   method: string,
   path: string,

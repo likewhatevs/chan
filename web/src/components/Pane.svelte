@@ -98,7 +98,12 @@
     osChord,
   } from "../state/shortcuts";
   import { openTabMenu, tabMenu } from "../state/tabMenu.svelte";
-  import { sessionWindowId, windowDragScope, windowLibraryId } from "../api/client";
+  import {
+    dragScopeMimeToken,
+    sessionWindowId,
+    windowDragScope,
+    windowLibraryId,
+  } from "../api/client";
   import { onDestroy, onMount } from "svelte";
   import { applyPageWidthToElement, pageWidth } from "../state/pageWidth.svelte";
 
@@ -646,9 +651,13 @@
   const FILE_DRAG_MIME = "application/x-md-file";
   // The drag's scope (window kind + workspace identity) is carried as a MIME
   // TYPE so a target can read it during `dragover` (when payload VALUES are
-  // not readable). See windowDragScope + isTabDragScopeCompatible.
+  // not readable). The human-readable scope carries `:`/`|`, which WKWebView
+  // mangles in a MIME type, so it is hex-encoded (dragScopeMimeToken) into a
+  // `[0-9a-f]` token that round-trips byte-identically through
+  // `dataTransfer.types`. See windowDragScope + isTabDragScopeCompatible.
   const SCOPE_DRAG_MIME_PREFIX = "application/x-chan-tab-scope+";
-  const scopeMime = (scope: string): string => SCOPE_DRAG_MIME_PREFIX + scope;
+  const scopeMime = (scope: string): string =>
+    SCOPE_DRAG_MIME_PREFIX + dragScopeMimeToken(scope);
   /// This window's drag scope, computed from what the SPA loaded: the owning
   /// chan-library (`?lib=`), the window kind (terminal-only vs. workspace), and
   /// the active workspace's stable identity (`metadata_key`, falling back to the
