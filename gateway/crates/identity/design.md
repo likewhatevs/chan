@@ -8,7 +8,7 @@ Public sign-in surface plus the only user-facing UI in the chan-gateway suite. O
 - The session cookie. Host-only on `id.chan.app`; it never spans subdomains.
 - Personal access tokens for the chan CLI / chan-tunnel.
 - The dashboard: profile management plus the live-workspace list.
-- Workspace-gate entry-token mint for the cross-origin handoff to `workspace.chan.app`.
+- Devserver-gate entry-token mint for the cross-origin handoff to `devserver.chan.app`.
 
 Profile data (canonical user record, identities, audit) lives in profile-service; identity must not race with itself or duplicate user rows on concurrent first-time logins.
 
@@ -17,7 +17,7 @@ Profile data (canonical user record, identities, audit) lives in profile-service
 axum HTTP server with three layers of routing under `id.chan.app`:
 
 1. `/auth/*`: pre-session OAuth flow. Sets a transient session key (`pending_oauth`) carrying CSRF state and the PKCE verifier; the callback consumes it and either upgrades the session to authenticated (`user_id`) or fails.
-2. `/api/*`: session-gated JSON API for the embedded SPA. Covers `me`, profile management, PAT lifecycle, the workspace list, and the workspace-gate mint endpoint.
+2. `/api/*`: session-gated JSON API for the embedded SPA. Covers `me`, profile management, PAT lifecycle, the workspace list, and the devserver-gate mint endpoint.
 3. `/internal/v1/tokens/validate`: Bearer-gated endpoint called by chan-tunnel-server during handshake. Lives on its own sub-router so the session middleware doesn't try to load a cookie session for a non-cookie caller. A per-token-fingerprint throttle wraps it as defense in depth alongside the primary throttle in workspace-proxy.
 
 Static SPA assets are baked in at build time via `rust_embed` and served by `gateway_common::static_files::serve`. Anything not matched by an explicit route falls through to the static handler; paths without an extension serve `index.html` (SPA fallback).
@@ -86,10 +86,10 @@ The SPA renders one card per workspace. Each card's "open" link points at `/api/
 2. Resolve `u` to a user record via profile `GET /v1/users/by-username`. Unknown handle returns 404 (same shape as no-access and unknown-workspace).
 3. Call profile `GET /v1/users/{owner_id}/workspaces/{d}/access?as= {session.user_id}`. Owner returns `owner`, an accepted grantee returns `viewer`/`editor`, anything else 404.
 4. Verify the workspace is live on workspace-proxy for `u` (cheap defense-in-depth; workspace-proxy is the authority on registrations).
-5. Mint a 30s `entry` JWT (HS256, `WORKSPACE_GATE_SECRET`) with `{sub: session.user_id, drv: d, aud: "{u}.workspace.chan.app", ...}`. `sub` is the *caller's* id, not the owner's, so the workspace_gate cookie minted on the next leg carries the right identity for upstream collab attribution.
-6. 303 to `https://{u}.workspace.chan.app/{d}/?t=<jwt>`.
+5. Mint a 30s `entry` JWT (HS256, `WORKSPACE_GATE_SECRET`) with `{sub: session.user_id, drv: d, aud: "{u}.devserver.chan.app", ...}`. `sub` is the *caller's* id, not the owner's, so the devserver_gate cookie minted on the next leg carries the right identity for upstream collab attribution.
+6. 303 to `https://{u}.devserver.chan.app/{d}/?t=<jwt>`.
 
-workspace-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it as a `Path=/<workspace>/` host-only cookie, and 303s to the clean URL. The shared JWT type lives in `gateway_common::workspace_gate`.
+workspace-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it as a host-only `devserver_gate` cookie, and 303s to the clean URL. The shared JWT type lives in `gateway_common::devserver_gate`.
 
 ### Share landing
 
@@ -174,7 +174,7 @@ Plus (in `http.rs`):
 - Cookie name `id_session`. **Host-only on `id.chan.app`.** No `Domain` attribute.
 - `HttpOnly`, `SameSite=Lax`, 30-day inactivity expiry.
 - `Secure` follows the `COOKIE_SECURE` env var.
-- workspace-proxy does **not** read this cookie. Cross-service auth flows through the workspace-gate JWT, not through cookie sharing.
+- workspace-proxy does **not** read this cookie. Cross-service auth flows through the devserver-gate JWT, not through cookie sharing.
 
 ### Session id rotates on login
 
@@ -200,9 +200,9 @@ Mirror of workspace-proxy's `ThrottlingValidator`. Throttled requests return 401
 
 ### Domain config is single-source
 
-The public hostnames are derived from one base domain (`CHAN_DOMAIN`, e.g. `chan.app`) plus `PUBLIC_SCHEME`, via `gateway_common::domain::Domains`. identity-service and workspace-proxy read the same two vars and derive the same `id.<base>` / `workspace.<base>` / `.workspace.<base>` hosts, so they cannot drift. This matters because the workspace-gate JWT `aud` is the inbound host: if the two services disagreed on the domain, the handoff would fail or isolation assumptions would shift.
+The public hostnames are derived from one base domain (`CHAN_DOMAIN`, e.g. `chan.app`) plus `PUBLIC_SCHEME`, via `gateway_common::domain::Domains`. identity-service and the proxy read the same two vars and derive the same `id.<base>` / `devserver.<base>` / `.devserver.<base>` hosts, so they cannot drift. This matters because the devserver-gate JWT `aud` is the inbound host: if the two services disagreed on the domain, the handoff would fail or isolation assumptions would shift.
 
-identity derives `BASE_URL` (its OAuth-callback origin) and `workspace_wildcard_suffix` from `CHAN_DOMAIN`; the fine-grained vars (`BASE_URL`, `WORKSPACE_WILDCARD_SUFFIX`, `WORKSPACE_PUBLIC_SCHEME`) remain as explicit overrides for non-default layouts (e.g. a dev port). Defaults are dev-shaped (`localtest.me` / `http`); production sets `CHAN_DOMAIN` + `PUBLIC_SCHEME` once in the shared `/etc/chan-gateway/domain.env`. The domain is still coupled to DNS, the wildcard TLS cert, and nginx `server_name`, so it is deploy-time config, not a runtime knob.
+identity derives `BASE_URL` (its OAuth-callback origin) and `devserver_wildcard_suffix` from `CHAN_DOMAIN`; the fine-grained vars (`BASE_URL`, `DEVSERVER_WILDCARD_SUFFIX`, `WORKSPACE_PUBLIC_SCHEME`) remain as explicit overrides for non-default layouts (e.g. a dev port). Defaults are dev-shaped (`localtest.me` / `http`); production sets `CHAN_DOMAIN` + `PUBLIC_SCHEME` once in the shared `/etc/chan-gateway/domain.env`. The domain is still coupled to DNS, the wildcard TLS cert, and nginx `server_name`, so it is deploy-time config, not a runtime knob.
 
 ## Invariants
 
@@ -237,7 +237,7 @@ identity derives `BASE_URL` (its OAuth-callback origin) and `workspace_wildcard_
 - axum 0.7 + `tower_sessions` + Postgres session store (host-only cookie scope)
 - `oauth2` crate with `rustls-tls` for PKCE + token exchange
 - `reqwest` for profile-service, workspace-proxy admin, and the OAuth providers' REST APIs
-- `gateway-common` for the profile-service client, the workspace-admin client, the shared workspace_gate JWT type, and the SPA static-asset handler
+- `gateway-common` for the profile-service client, the workspace-admin client, the shared devserver_gate JWT type, and the SPA static-asset handler
 - `jsonwebtoken` for HS256 entry-token mint
 - `subtle`, `rustrict`, `rand::rngs::OsRng`, `sha2::Sha256`
 - Svelte SPA embedded at build time
@@ -247,4 +247,4 @@ identity derives `BASE_URL` (its OAuth-callback origin) and `workspace_wildcard_
 - WebAuthn / passkeys
 - Magic-link sign-in
 - Device flow (RFC 8628) for browserless clients — chan-desktop's `/desktop/authorize` flow still rides the user's browser
-- Refresh of the workspace-gate session cookie on the workspace.chan.app side (24h hard exp; users re-enter via the dashboard)
+- Refresh of the devserver-gate session cookie on the devserver.chan.app side (24h hard exp; users re-enter via the dashboard)

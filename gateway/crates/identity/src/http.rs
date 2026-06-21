@@ -111,8 +111,8 @@ pub fn router(
     token_throttle: TokenThrottle,
 ) -> Router {
     // Host-only on id.chan.app: no Domain attribute, so the cookie
-    // does not propagate to workspace.chan.app or its subdomains. The
-    // workspace-gate handoff covers the cross-service auth need; see
+    // does not propagate to devserver.chan.app or its subdomains. The
+    // devserver-gate handoff covers the cross-service auth need; see
     // crates/identity/design.md.
     let session_layer = SessionManagerLayer::new(store)
         .with_name(SESSION_COOKIE)
@@ -546,12 +546,11 @@ async fn current_active_user(state: &AppState, session: &Session) -> Result<User
 
 #[derive(Serialize)]
 struct WorkspaceView {
-    /// Workspace slug (`{user}.workspace.chan.app/{workspace}/`).
+    /// Tenant slug, routed at `{user}.devserver.chan.app/{workspace}/`.
     workspace: String,
-    /// Display label. Defaults to the workspace slug until the wire
-    /// carries a separate label.
+    /// Display label. Defaults to the slug until the wire carries a
+    /// separate label.
     label: String,
-    public: bool,
     /// "online" while the tunnel registration is live.
     status: &'static str,
 }
@@ -594,7 +593,6 @@ async fn me(State(state): State<AppState>, session: Session) -> Result<Response>
                 .map(|t| WorkspaceView {
                     label: t.workspace.clone(),
                     workspace: t.workspace,
-                    public: t.public,
                     status: "online",
                 })
                 .collect(),
@@ -942,9 +940,9 @@ struct WorkspacesOpenQuery {
     d: String,
 }
 
-/// Mint a workspace-gate entry token and 303 the browser to
-/// `https://{u}.workspace.chan.app/{d}/?t=<jwt>`. workspace-proxy verifies
-/// the token, sets a host-only `workspace_gate` cookie, and 303s to the
+/// Mint a devserver-gate entry token and 303 the browser to
+/// `https://{u}.devserver.chan.app/{d}/?t=<jwt>`. The proxy verifies
+/// the token, sets a host-only `devserver_gate` cookie, and 303s to the
 /// clean URL. The whole handshake is invisible to the user past the
 /// initial click.
 ///
@@ -960,9 +958,9 @@ struct WorkspacesOpenQuery {
 ///     (cheap defense-in-depth and a friendly 404 instead of a
 ///     valid-token-into-a-cold-workspace race).
 ///
-/// The entry token is short-lived (30s). workspace-proxy validates
-/// signature + exp + aud (`{u}.workspace.chan.app`) + drv (`{d}`) + sub
-/// (the caller's user_id, *not* the owner's, so the workspace_gate
+/// The entry token is short-lived (30s). The proxy validates
+/// signature + exp + aud (`{u}.devserver.chan.app`) + drv (`{d}`) + sub
+/// (the caller's user_id, *not* the owner's, so the devserver_gate
 /// cookie minted on the next leg carries the right identity for
 /// upstream collab attribution) and then issues its own 24h session
 /// JWT cookie.
@@ -1009,8 +1007,8 @@ async fn workspaces_open(
         return Err(Error::NotFound);
     }
 
-    let host = state.cfg.workspace_host_for(&owner.username);
-    let token = gateway_common::workspace_gate::encode_entry(
+    let host = state.cfg.devserver_host_for(&owner.username);
+    let token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         caller.id,
         &workspace,
@@ -1206,8 +1204,8 @@ fn is_workspace_name_shape(s: &str) -> bool {
 ///      profile `workspace_access?as=<self>`. The owner case and the
 ///      grantee case both return a role; no-access returns 404.
 ///   3. On access, mint an entry JWT against the owner's
-///      `{owner}.workspace.chan.app` host and 303 to workspace-proxy so
-///      workspace-proxy sets its `workspace_gate` cookie and serves the
+///      `{owner}.devserver.chan.app` host and 303 to the proxy so
+///      the proxy sets its `devserver_gate` cookie and serves the
 ///      content. The same 30s short-lived entry token shape used by
 ///      `/api/workspaces/open`.
 async fn share_landing(
@@ -1253,8 +1251,8 @@ async fn share_landing(
         .await?
         .ok_or(Error::NotFound)?;
 
-    let host = state.cfg.workspace_host_for(&owner_user.username);
-    let token = gateway_common::workspace_gate::encode_entry(
+    let host = state.cfg.devserver_host_for(&owner_user.username);
+    let token = gateway_common::devserver_gate::encode_entry(
         state.cfg.workspace_gate_secret.as_bytes(),
         uid,
         &workspace,

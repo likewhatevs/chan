@@ -103,6 +103,12 @@ pub struct ValidatedToken {
     /// uses to gate `tunnel` (any dial) and `tunnel.public`
     /// (anonymous-readable workspace).
     pub scopes: Vec<String>,
+    /// Devserver identity: lowercase hex SHA-256 of the PAT. The gateway
+    /// keys the tunnel registry and the devserver-gate `drv` claim on
+    /// this (1 token : 1 devserver). Computed identity-side; the raw PAT
+    /// never leaves this service. Distinct encoding from the stored
+    /// `token_hash` (base64url) but the same underlying digest.
+    pub devserver_id: String,
 }
 
 /// Default scope set for a freshly-issued token. Private-only:
@@ -264,6 +270,7 @@ impl ApiTokenService {
             return Err(Error::Unauthorized);
         }
         let hash = hash_token(token);
+        let devserver_id = devserver_id_from_pat(token);
 
         // Join to users to get the username on the same round trip.
         // Blocked accounts (`u.blocked_at IS NOT NULL`) are filtered
@@ -295,6 +302,7 @@ impl ApiTokenService {
             username: row.2,
             expires_at: row.3,
             scopes: row.4,
+            devserver_id,
         })
     }
 
@@ -379,7 +387,58 @@ fn hash_token(token: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
 }
 
+/// Devserver identity = lowercase hex SHA-256 of the raw PAT. Same
+/// digest as `hash_token`, hex-encoded instead of base64url: the gateway
+/// keys the registry and the devserver-gate `drv` claim on this exact
+/// string, so its shape (64 lowercase hex chars) is a cross-service
+/// contract. The PAT is the secret; this hash is a public handle.
+fn devserver_id_from_pat(token: &str) -> String {
+    Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 fn map_db(e: sqlx::Error) -> Error {
     tracing::error!(error = ?e, "api_tokens db error");
     Error::Anyhow(anyhow::anyhow!(e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn devserver_id_is_lowercase_hex_sha256() {
+        // Known vector: SHA-256("abc") is a fixed, well-published digest.
+        // Pins the encoding (lowercase hex, 64 chars) so a future tweak
+        // to the helper cannot silently change the cross-service id.
+        assert_eq!(
+            devserver_id_from_pat("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let id = devserver_id_from_pat("chan_pat_example");
+        assert_eq!(id.len(), 64);
+        assert!(id.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')));
+        // Same digest as token_hash, different (base64url) encoding.
+        assert_ne!(id, hash_token("chan_pat_example"));
+    }
+
+    #[test]
+    fn validate_response_wire_pins_devserver_id() {
+        // W1 cross-service contract: workspace-proxy keys the registry
+        // and the devserver-gate `drv` claim on this exact JSON field
+        // name. Renaming it is a silent, compile-green break, so pin the
+        // wire string here.
+        let v = ValidatedToken {
+            user_id: Uuid::nil(),
+            username: "alice".into(),
+            token_id: Uuid::nil(),
+            expires_at: None,
+            scopes: vec!["tunnel".into()],
+            devserver_id: "a".repeat(64),
+        };
+        let j = serde_json::to_value(&v).unwrap();
+        assert_eq!(j["devserver_id"], "a".repeat(64));
+    }
 }

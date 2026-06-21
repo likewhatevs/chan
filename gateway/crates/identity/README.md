@@ -1,10 +1,10 @@
 # identity-service
 
-Public-facing OAuth2 sign-in service for id.chan.app. Runs the GitHub / Google / GitLab auth-code flow with PKCE, holds the host-only `id_session` cookie, and serves a Svelte SPA where users manage their profile, personal access tokens (PATs), and workspaces. It mints the short-lived workspace-gate entry token that hands a user off to workspace-proxy.
+Public-facing OAuth2 sign-in service for id.chan.app. Runs the GitHub / Google / GitLab auth-code flow with PKCE, holds the host-only `id_session` cookie, and serves a Svelte SPA where users manage their profile, personal access tokens (PATs), and workspaces. It mints the short-lived devserver-gate entry token that hands a user off to the devserver proxy.
 
 ## Role in the system
 
-First public touch-point of chan-gateway. After a successful OAuth flow the browser holds the `id_session` cookie, which is host-only on id.chan.app and is NOT shared with workspace-proxy. To open a workspace, identity mints a short-lived workspace-gate entry token and 303s the browser to `{user}.workspace.<domain>/{workspace}/?t=<jwt>`; workspace-proxy verifies it and mints its own host-scoped cookie. That split is the load-bearing piece of cross-tenant isolation: no `.chan.app`-scoped cookie exists.
+First public touch-point of chan-gateway. After a successful OAuth flow the browser holds the `id_session` cookie, which is host-only on id.chan.app and is NOT shared with the devserver proxy. To open a workspace, identity mints a short-lived devserver-gate entry token and 303s the browser to `{user}.devserver.<domain>/{workspace}/?t=<jwt>`; the proxy verifies it and mints its own host-scoped cookie. That split is the load-bearing piece of cross-tenant isolation: no `.chan.app`-scoped cookie exists.
 
 Identity-service owns:
 
@@ -82,7 +82,7 @@ Optional knobs:
 | `BIND_ADDR`                | `127.0.0.1:7000`          | listen address        |
 | `BASE_URL`                 | `<scheme>://id.<domain>`  | OAuth callback origin |
 | `COOKIE_SECURE`            | `false`                   | HTTPS-only cookie     |
-| `WORKSPACE_WILDCARD_SUFFIX`| `.workspace.<domain>`     | redirect host suffix  |
+| `DEVSERVER_WILDCARD_SUFFIX`| `.devserver.<domain>`     | redirect host suffix  |
 | `WORKSPACE_PUBLIC_SCHEME`  | `PUBLIC_SCHEME`           | workspace redirect scheme |
 | `WORKSPACE_PUBLIC_PORT`    | unset                     | `:port` for dev       |
 | `WORKSPACE_ADMIN_URL`      | unset                     | workspace-proxy admin base |
@@ -113,7 +113,7 @@ Session-gated SPA API (`/api/*`):
 | POST   | `/api/tokens`         | mint a PAT (returns plaintext once)     |
 | DELETE | `/api/tokens/:id`     | revoke a PAT                            |
 | GET    | `/api/tokens/:id/audit` | per-token audit log                   |
-| GET    | `/api/workspaces/open`    | mint workspace-gate entry token + 303       |
+| GET    | `/api/workspaces/open`    | mint devserver-gate entry token + 303       |
 | POST   | `/api/workspaces`         | create a workspace in the user's namespace  |
 | DELETE | `/api/workspaces/:d`      | delete a workspace (cascades all its grants)|
 | GET    | `/api/workspaces/owned`   | workspaces the user owns                    |

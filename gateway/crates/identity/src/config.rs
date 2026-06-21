@@ -22,13 +22,15 @@ pub struct Config {
     /// Required and distinct from PROFILE_AUTH_TOKEN; rotating one
     /// does not rotate the other.
     pub internal_auth_token: String,
-    /// Wildcard suffix used to mint workspace-gate entry tokens. Each
-    /// workspace opens at `{user}{wildcard_suffix}/{workspace}/`, e.g.
-    /// `alice.workspace.chan.app/blog/`. Derived from `CHAN_DOMAIN`
-    /// (`.workspace.<base>`) unless `WORKSPACE_WILDCARD_SUFFIX` is set.
-    pub workspace_wildcard_suffix: String,
-    /// Scheme of the workspace-gate redirect URL (`https` in prod,
-    /// `http` for local dev where `*.workspace.localtest.me` resolves
+    /// Wildcard suffix used to mint devserver-gate entry tokens. Each
+    /// tenant opens at `{user}{wildcard_suffix}/{workspace}/`, e.g.
+    /// `alice.devserver.chan.app/blog/`, where `{user}` is the devserver
+    /// host and `{workspace}` is tenant routing. Derived from
+    /// `CHAN_DOMAIN` (`.devserver.<base>`) unless `DEVSERVER_WILDCARD_SUFFIX`
+    /// is set.
+    pub devserver_wildcard_suffix: String,
+    /// Scheme of the devserver-gate redirect URL (`https` in prod,
+    /// `http` for local dev where `*.devserver.localtest.me` resolves
     /// to 127.0.0.1 without TLS).
     pub workspace_public_scheme: String,
     /// Optional `:port` suffix appended to the redirect URL. Empty
@@ -99,16 +101,16 @@ impl Config {
 
         // Wildcard suffix used to stitch the entry-token's `aud`
         // claim and the redirect Location. Defaults to the derived
-        // `.workspace.<base>`; override with WORKSPACE_WILDCARD_SUFFIX
+        // `.devserver.<base>`; override with DEVSERVER_WILDCARD_SUFFIX
         // only for unusual layouts.
-        let workspace_wildcard_suffix = match std::env::var("WORKSPACE_WILDCARD_SUFFIX") {
+        let devserver_wildcard_suffix = match std::env::var("DEVSERVER_WILDCARD_SUFFIX") {
             Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
-            _ => domains.workspace_wildcard_suffix.clone(),
+            _ => domains.devserver_wildcard_suffix.clone(),
         };
-        if !workspace_wildcard_suffix.starts_with('.') {
+        if !devserver_wildcard_suffix.starts_with('.') {
             anyhow::bail!(
-                "WORKSPACE_WILDCARD_SUFFIX must start with a dot (got \
-                 {workspace_wildcard_suffix:?}); e.g. .workspace.chan.app"
+                "DEVSERVER_WILDCARD_SUFFIX must start with a dot (got \
+                 {devserver_wildcard_suffix:?}); e.g. .devserver.chan.app"
             );
         }
 
@@ -202,7 +204,7 @@ impl Config {
             cookie_secure,
             profile_client,
             internal_auth_token,
-            workspace_wildcard_suffix,
+            devserver_wildcard_suffix,
             workspace_public_scheme,
             workspace_public_port,
             workspace_admin,
@@ -224,11 +226,11 @@ impl Config {
     }
 
     /// Build the wildcard host for a username:
-    /// `{user}{workspace_wildcard_suffix}` (e.g. `alice.workspace.chan.app`).
-    pub fn workspace_host_for(&self, username: &str) -> String {
-        // `.workspace.chan.app` already starts with a dot; the dot is
+    /// `{user}{devserver_wildcard_suffix}` (e.g. `alice.devserver.chan.app`).
+    pub fn devserver_host_for(&self, username: &str) -> String {
+        // `.devserver.chan.app` already starts with a dot; the dot is
         // the separator between the username and the suffix.
-        format!("{username}{}", &self.workspace_wildcard_suffix[..])
+        format!("{username}{}", &self.devserver_wildcard_suffix[..])
             .trim_start_matches('.')
             .to_string()
     }
@@ -264,7 +266,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn workspace_host_for_basic() {
+    fn devserver_host_for_basic() {
         let cfg = Config {
             bind_addr: "127.0.0.1:7000".parse().unwrap(),
             base_url: "http://localhost:7000".parse().unwrap(),
@@ -272,17 +274,17 @@ mod tests {
             cookie_secure: false,
             profile_client: ProfileClient::new("http://x/".parse().unwrap(), "x".into()).unwrap(),
             internal_auth_token: "x".into(),
-            workspace_wildcard_suffix: ".workspace.chan.app".into(),
+            devserver_wildcard_suffix: ".devserver.chan.app".into(),
             workspace_public_scheme: "https".into(),
             workspace_public_port: String::new(),
             workspace_admin: None,
             workspace_gate_secret: "x".into(),
             providers: vec![],
         };
-        assert_eq!(cfg.workspace_host_for("alice"), "alice.workspace.chan.app");
+        assert_eq!(cfg.devserver_host_for("alice"), "alice.devserver.chan.app");
         assert_eq!(
-            cfg.workspace_host_for("USER-1"),
-            "USER-1.workspace.chan.app"
+            cfg.devserver_host_for("USER-1"),
+            "USER-1.devserver.chan.app"
         );
     }
 }

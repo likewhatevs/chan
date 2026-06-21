@@ -126,7 +126,7 @@ impl TestApp {
             cookie_secure: false,
             profile_client,
             internal_auth_token: "test-internal".to_string(),
-            workspace_wildcard_suffix: ".workspace.chan.app".to_string(),
+            devserver_wildcard_suffix: ".devserver.chan.app".to_string(),
             workspace_public_scheme: "https".to_string(),
             workspace_public_port: String::new(),
             workspace_admin: None,
@@ -859,7 +859,7 @@ async fn share_landing_grantee_minted_jwt_redirect() {
     let (s, _, _, location) = c.send(Method::GET, "/s/owner-handle/photos", None).await;
     assert_eq!(s, StatusCode::SEE_OTHER);
     assert!(
-        location.starts_with("https://owner-handle.workspace.chan.app/photos/?t="),
+        location.starts_with("https://owner-handle.devserver.chan.app/photos/?t="),
         "got {location}"
     );
     app.cleanup().await;
