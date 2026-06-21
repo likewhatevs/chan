@@ -5,6 +5,8 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { gatewayServices } from "./gateway-services.mjs";
+
 const defaultRepo = "fiorix/chan";
 
 // Every public download the install page links to is collected here so it
@@ -36,10 +38,8 @@ function desktopAssets(version) {
   ];
 }
 
-// The four gateway services ship one .deb each per arch. Must match
-// gatewayServices in generate-release-metadata.mjs and the gateway packages
-// release.yml uploads.
-const gatewayServices = ["admin", "identity", "profile", "workspace-proxy"];
+// gatewayServices is single-sourced from the Makefile's GATEWAY_RELEASE_CRATES
+// (see ./gateway-services.mjs), the same source release.yml builds from.
 
 function gatewayAssets(version) {
   const assets = [];

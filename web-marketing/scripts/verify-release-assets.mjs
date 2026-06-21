@@ -2,6 +2,8 @@
 
 import { execFileSync } from "node:child_process";
 
+import { gatewayServices } from "./gateway-services.mjs";
+
 const repo = "fiorix/chan";
 const apiBase = `https://api.github.com/repos/${repo}`;
 const githubToken = readGithubToken();
@@ -32,15 +34,13 @@ async function main() {
     `Chan_${version}_arm64.deb`,
     `Chan-${version}-1.x86_64.rpm`,
     `Chan-${version}-1.aarch64.rpm`,
-    // chan-gateway
-    `chan-gateway-admin_${version}-1_amd64.deb`,
-    `chan-gateway-admin_${version}-1_arm64.deb`,
-    `chan-gateway-identity_${version}-1_amd64.deb`,
-    `chan-gateway-identity_${version}-1_arm64.deb`,
-    `chan-gateway-profile_${version}-1_amd64.deb`,
-    `chan-gateway-profile_${version}-1_arm64.deb`,
-    `chan-gateway-workspace-proxy_${version}-1_amd64.deb`,
-    `chan-gateway-workspace-proxy_${version}-1_arm64.deb`,
+    // chan-gateway: one .deb per service per arch, single-sourced from the
+    // Makefile's GATEWAY_RELEASE_CRATES (see ./gateway-services.mjs).
+    ...gatewayServices.flatMap((service) =>
+      ["amd64", "arm64"].map(
+        (arch) => `chan-gateway-${service}_${version}-1_${arch}.deb`,
+      ),
+    ),
   ];
   const updaterAssets = [
     `Chan_${version}_aarch64.app.tar.gz`,

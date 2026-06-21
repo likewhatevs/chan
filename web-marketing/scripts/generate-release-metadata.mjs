@@ -22,11 +22,6 @@ const cliTargets = [
   },
 ];
 
-// The four gateway services ship one .deb each per arch. Single-sourced here
-// so a service rename only touches one list. Must match GATEWAY_RELEASE_CRATES
-// in the Makefile and the gateway packages release.yml uploads.
-const gatewayServices = ["admin", "identity", "profile", "workspace-proxy"];
-
 function desktopDownloads(version) {
   return [
     {
@@ -148,21 +143,29 @@ function cliDownloads() {
   ];
 }
 
-function gatewayDownloads(version) {
-  const downloads = [];
-  for (const service of gatewayServices) {
-    for (const arch of ["amd64", "arm64"]) {
-      downloads.push({
-        id: `gateway-${service}-deb-${arch}`,
-        kind: "gateway",
-        label: `chan-gateway-${service} deb (${arch})`,
-        platform: arch === "amd64" ? "linux-x86_64" : "linux-aarch64",
-        format: "deb",
-        asset: `chan-gateway-${service}_${version}-1_${arch}.deb`,
-      });
-    }
+// Gateway downloads are DERIVED from the manifest's actual assets, not a fixed
+// service list: the metadata then reflects whatever gateway debs a given release
+// actually shipped (service names can differ across releases) with no list to
+// drift. Asset name shape: `chan-gateway-<service>_<version>-1_<arch>.deb`.
+function gatewayDownloads(manifest) {
+  const versionRe = manifest.version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^chan-gateway-(.+)_${versionRe}-1_(amd64|arm64)\\.deb$`);
+  const found = [];
+  for (const name of manifest.assets.keys()) {
+    const m = name.match(re);
+    if (m) found.push({ service: m[1], arch: m[2], asset: name });
   }
-  return downloads;
+  found.sort(
+    (a, b) => a.service.localeCompare(b.service) || a.arch.localeCompare(b.arch),
+  );
+  return found.map(({ service, arch, asset }) => ({
+    id: `gateway-${service}-deb-${arch}`,
+    kind: "gateway",
+    label: `chan-gateway-${service} deb (${arch})`,
+    platform: arch === "amd64" ? "linux-x86_64" : "linux-aarch64",
+    format: "deb",
+    asset,
+  }));
 }
 
 async function main() {
@@ -294,7 +297,7 @@ function buildMetadata(manifest) {
   const publicDownloads = [
     ...desktopDownloads(manifest.version),
     ...cliDownloads(),
-    ...gatewayDownloads(manifest.version),
+    ...gatewayDownloads(manifest),
   ].map((download) => {
     const asset = requireAsset(manifest, download.asset);
     return {

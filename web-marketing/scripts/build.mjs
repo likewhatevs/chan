@@ -3,6 +3,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { gatewayServices } from "./gateway-services.mjs";
+
 const scriptPath = fileURLToPath(import.meta.url);
 const siteRoot = path.resolve(path.dirname(scriptPath), "..");
 const repoRoot = path.resolve(siteRoot, "..");
@@ -29,15 +31,13 @@ const requiredDownloadIds = [
   "cli-linux-deb-arm64",
   "cli-linux-rpm-amd64",
   "cli-linux-rpm-arm64",
-  // chan-gateway
-  "gateway-admin-deb-amd64",
-  "gateway-admin-deb-arm64",
-  "gateway-identity-deb-amd64",
-  "gateway-identity-deb-arm64",
-  "gateway-profile-deb-amd64",
-  "gateway-profile-deb-arm64",
-  "gateway-workspace-proxy-deb-amd64",
-  "gateway-workspace-proxy-deb-arm64",
+  // chan-gateway: one .deb per service per arch, single-sourced from the
+  // Makefile's GATEWAY_RELEASE_CRATES (see ./gateway-services.mjs). These ids
+  // must match the install.html download buttons (validated below) and the ids
+  // generate-release-metadata.mjs emits.
+  ...gatewayServices.flatMap((service) =>
+    ["amd64", "arm64"].map((arch) => `gateway-${service}-deb-${arch}`),
+  ),
 ];
 
 const requiredInputs = [
