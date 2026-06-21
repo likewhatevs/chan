@@ -171,14 +171,23 @@
     clearPendingTimers();
     pendingChipVisible = false;
     if (phase === "delivered") {
-      // The agent consumed the message: the greyed card has served its purpose,
-      // so clear it (text + draft) — the composer returns to empty + editable
-      // for the next message. (The media folder stays; the agent reads it after
-      // delivery; the folder is cleaned on terminal close.)
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+      // The agent consumed the message: clear the greyed card (text + draft) AND
+      // re-enable editing in the SAME transaction, instead of leaning on the
+      // out-of-band lock $effect to unlock after the fact. Then defer view.focus()
+      // to a microtask so it lands AFTER that $effect's trailing reconfigure: a
+      // programmatic (no user gesture) focus during the readOnly->editable flip is
+      // otherwise dropped by the following transaction, leaving the just-cleared
+      // composer un-typeable in WKWebView until a hide/show remount. (Mirrors the
+      // beforeinput move-on path's folded unlock + TerminalTab's deferred focus.)
+      // The media folder stays; the agent reads it after delivery, cleaned on
+      // terminal close.
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "" },
+        effects: lockCompartment.reconfigure(lockExtensions(false)),
+      });
       void flushWrite();
       lastQueued = null;
-      view.focus();
+      queueMicrotask(() => view?.focus());
     } else {
       // Rejected (queue full) / failed (socket dead, delivery unobservable):
       // the text is still in the card. Clearing the pending below un-greys it,

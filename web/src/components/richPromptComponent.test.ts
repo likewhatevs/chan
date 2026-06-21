@@ -100,8 +100,18 @@ describe("RichPrompt.svelte component", () => {
     const consumeBody = richPromptSrc.match(/function consumeTerminalPhase\([\s\S]*?\n  \}/)?.[0];
     expect(consumeBody).toBeTruthy();
     // Delivered: the agent consumed the message, so the card clears (text +
-    // draft) back to an empty editable composer.
-    expect(consumeBody).toMatch(/if \(phase === "delivered"\)[\s\S]{1,500}insert: ""/);
+    // draft) back to an empty editable composer. The clear dispatch ALSO folds in
+    // the readOnly->editable reconfigure (it must not lean on the out-of-band lock
+    // $effect to unlock), and the focus is DEFERRED to a microtask so it lands
+    // after that effect's trailing reconfigure — without both, WKWebView leaves
+    // the cleared composer un-typeable until a hide/show remount.
+    const deliveredBranch = consumeBody?.match(
+      /if \(phase === "delivered"\)[\s\S]*?\n    \} else \{/,
+    )?.[0];
+    expect(deliveredBranch).toBeTruthy();
+    expect(deliveredBranch).toContain('insert: ""');
+    expect(deliveredBranch).toContain("lockCompartment.reconfigure(lockExtensions(false))");
+    expect(deliveredBranch).toContain("queueMicrotask(() => view?.focus())");
     // Rejected/failed: clearing pending below un-greys; the text stays for a
     // retry; warn honestly.
     expect(richPromptSrc).toMatch(/queue full — try again/);
