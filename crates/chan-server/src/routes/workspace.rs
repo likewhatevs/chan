@@ -108,17 +108,12 @@ struct CloudDriveJson {
     suggested_root: String,
 }
 
-pub async fn api_cloud_workspaces(State(state): State<Arc<AppState>>) -> Response {
+pub async fn api_cloud_workspaces() -> Response {
     // The detection walks the owner's home dir for Dropbox / iCloud
-    // / Google Drive / OneDrive locations. The result reveals which
-    // cloud providers the owner is signed into and the absolute
-    // paths of their sync roots. Anonymous visitors get an empty
-    // list; the SPA's "register a workspace" picker is unreachable
-    // anyway when Settings is locked, so the only consumer is the
-    // owner running locally.
-    if state.tunnel_public {
-        return Json(Vec::<CloudDriveJson>::new()).into_response();
-    }
+    // / Google Drive / OneDrive locations, surfaced in the SPA's
+    // "register a workspace" picker. The tunnel is always authenticated
+    // (the gateway proves the viewer is the owner), so there is no
+    // anonymous viewer to withhold it from.
     match tokio::task::spawn_blocking(move || {
         let out: Vec<CloudDriveJson> = chan_workspace::paths::detected_cloud_drives()
             .into_iter()
@@ -142,12 +137,6 @@ pub async fn api_cloud_workspaces(State(state): State<Arc<AppState>>) -> Respons
 }
 
 /// Build a `WorkspaceInfo` from current registry state.
-///
-/// `root` is blanked on `--tunnel-public` runs so the owner's
-/// absolute filesystem path does not leak to anonymous visitors.
-/// The SPA tolerates an empty `root`: it only uses the field for
-/// the Settings panel's "Workspace root" line, which is unreachable
-/// in tunnel mode anyway.
 fn workspace_info(state: &AppState) -> Result<WorkspaceInfo, String> {
     let workspaces = state.library.list_workspaces();
     // Snapshot the live workspace once: each call to `state.workspace()`
@@ -160,11 +149,7 @@ fn workspace_info(state: &AppState) -> Result<WorkspaceInfo, String> {
     let entry = workspaces
         .iter()
         .find(|d| d.root_path.as_path() == workspace_root);
-    let root = if state.tunnel_public {
-        String::new()
-    } else {
-        workspace_root.to_string_lossy().into_owned()
-    };
+    let root = workspace_root.to_string_lossy().into_owned();
     Ok(WorkspaceInfo {
         root,
         label: entry

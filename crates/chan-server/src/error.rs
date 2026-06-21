@@ -50,20 +50,6 @@ pub fn err_state(e: &StateAccessError) -> Response {
     }
 }
 
-/// Refusal returned by public-tunnel-locked routes that must not be
-/// reachable from anonymous visitors. Terminal sessions run local
-/// processes on the owner's machine; unauthenticated visitors cannot
-/// be allowed to spawn them.
-pub fn err_tunnel_public_locked() -> Response {
-    err(
-        StatusCode::FORBIDDEN,
-        "this operation requires an authenticated session; the \
-         public tunnel does not authenticate visitors. Use a \
-         loopback serve or a private (non-public) tunnel."
-            .into(),
-    )
-}
-
 /// Map chan-workspace errors to HTTP statuses. The shape of the JSON
 /// matches the old server so frontend error handling stays unchanged.
 pub fn err_from(e: &chan_workspace::ChanError) -> Response {
@@ -127,19 +113,6 @@ mod tests {
             "wrong message: {msg:?}, must reference 'settings' so the SPA \
              toast is recognisable"
         );
-    }
-
-    #[tokio::test]
-    async fn err_tunnel_public_locked_shape() {
-        let v = body_json(err_tunnel_public_locked()).await;
-        let msg = v
-            .get("error")
-            .and_then(|x| x.as_str())
-            .expect("error field");
-        // The exact text is a UX choice and can drift, but the body
-        // MUST carry a `error` string field at 403; that's the
-        // wire contract every chan-server refusal shares.
-        assert!(!msg.is_empty());
     }
 
     #[tokio::test]

@@ -260,11 +260,11 @@ fn build_snapshot(
     }
 }
 
-/// The `cs` offer is owner-only: a tunneled or publicly-served workspace
-/// must not let a visitor mutate the host's PATH. The local-serve default
-/// leaves both flags false, so the offer shows on a plain `chan serve`.
+/// The `cs` offer is owner-only: a settings-locked (kiosk) deployment must
+/// not let the operator at the keyboard mutate the host's PATH. The default
+/// leaves `settings_disabled` false, so the offer shows on a plain `chan serve`.
 fn cs_link_allowed(state: &AppState) -> bool {
-    !state.settings_disabled && !state.tunnel_public
+    !state.settings_disabled
 }
 
 /// The per-library `cs_dismissed` editor pref for the preflight snapshot.

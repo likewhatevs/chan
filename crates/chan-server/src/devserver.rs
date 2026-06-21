@@ -1373,7 +1373,6 @@ fn tenant_config(addr: SocketAddr, prefix: &str) -> ServeConfig {
         open_browser: false,
         search_aggression: None,
         settings_disabled: false,
-        tunnel_public: false,
         verbose: false,
     }
 }

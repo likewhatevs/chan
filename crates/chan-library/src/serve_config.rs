@@ -49,26 +49,10 @@ pub struct ServeConfig {
     /// the frontend as `<meta name="chan-settings-disabled">`, and
     /// mirrored on `AppState::settings_disabled` so the
     /// `tunnel_guard::settings_guard` middleware can refuse the
-    /// matching write routes server-side. Set to true on
-    /// `--tunnel-public` runs (anonymous viewers must not mutate
-    /// owner config) and left false on OAuth-gated tunnel runs (the
-    /// gateway has proven the viewer is the workspace owner). The
-    /// local-serve path always leaves it false.
+    /// matching write routes server-side. Set by `--no-settings` for
+    /// kiosk / shared-workstation deployments where the operator at the
+    /// keyboard is not the workspace owner. The default leaves it false.
     pub settings_disabled: bool,
-    /// Treat every inbound request as anonymous: the server is
-    /// publicly tunneled (`--tunnel-public`), the gateway is not
-    /// authenticating visitors, and the workspace owner cannot be
-    /// distinguished from a hostile third party. Stricter than
-    /// `settings_disabled`:
-    ///
-    ///   - read-only handlers that expose host-level data
-    ///     (`GET /api/workspace`, `GET /api/config`, `GET /api/cloud-workspaces`)
-    ///     redact paths before serializing.
-    ///
-    /// Hosted (OAuth-gated) tunnel runs leave this false: the gateway
-    /// has already proven the viewer is the workspace owner, so host-level
-    /// reads stay available.
-    pub tunnel_public: bool,
 }
 
 /// Resolved at boot for the launch banner / browser handoff.

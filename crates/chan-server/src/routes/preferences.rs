@@ -186,15 +186,6 @@ pub struct PatchConfigBody {
 }
 
 fn global_config_view(state: &AppState) -> Result<GlobalConfigView, Error> {
-    // On `--tunnel-public` runs we strip the whole "host machine"
-    // dimension of the response: anonymous visitors must not see the
-    // registry of other workspaces on the host.
-    if state.tunnel_public {
-        return Ok(GlobalConfigView {
-            preferences: preferences_view(state)?,
-            workspaces: Vec::new(),
-        });
-    }
     let workspaces = state
         .library
         .list_workspaces()
@@ -342,16 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn global_config_view_redacts_host_paths_on_public_tunnel() {
-        let state = make_test_state(true, true);
-        let view = global_config_view(&state).expect("global config view");
-        let json = to_json(&view);
-        assert_eq!(json["workspaces"], serde_json::json!([]));
-    }
-
-    #[test]
     fn preferences_view_has_no_assistant_subtree() {
-        let state = make_test_state(false, false);
+        let state = make_test_state(false);
         let view = preferences_view(&state).expect("preferences view");
         let json = serde_json::to_value(view).expect("serialize");
         assert!(json.get("assistant").is_none());
@@ -364,7 +347,7 @@ mod tests {
         // preferences). Pin that wire contract so a rename can't silently break
         // live sync. Tested directly rather than through `patch_config`, which
         // would save the real `~/.chan` preferences as a side effect.
-        let state = make_test_state(false, false);
+        let state = make_test_state(false);
         let mut rx = state.events_tx.subscribe();
         broadcast_config_changed(&state);
         let frame = rx.try_recv().expect("a frame on the /ws bus");
@@ -409,7 +392,7 @@ mod tests {
 
     #[test]
     fn global_config_view_keeps_host_fields_on_local_serve() {
-        let state = make_test_state(false, false);
+        let state = make_test_state(false);
         let view = global_config_view(&state).expect("global config view");
         let json = to_json(&view);
         assert!(json["workspaces"].is_array());

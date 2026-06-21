@@ -53,15 +53,6 @@ pub struct AppState {
     /// tag, and the `tunnel_guard::settings_guard` middleware reads
     /// it to refuse the settings-write routes server-side.
     pub settings_disabled: bool,
-    /// Snapshot of `ServeConfig::tunnel_public`. Stricter than
-    /// `settings_disabled`: only true on `--tunnel-public` runs
-    /// where the gateway is NOT authenticating the viewer. Read by:
-    ///
-    ///   - the read-only handlers that would otherwise leak host
-    ///     state (`api_get_workspace`, `api_get_config`,
-    ///     `api_cloud_workspaces`): they strip absolute paths and the
-    ///     workspace registry before serializing.
-    pub tunnel_public: bool,
     /// Last activity timestamp (unix seconds). Bumped by HTTP
     /// middleware on every request, by `ws_upgrade` on connect,
     /// and by `ws_pump` on every successful frame send. The idle
@@ -256,7 +247,7 @@ pub(crate) mod test_support {
     /// The returned `AppState` is safe to wrap in `Arc` and hand to
     /// axum extractors; reading any workspace-bearing field will panic
     /// (by design).
-    pub fn make_test_state(settings_disabled: bool, tunnel_public: bool) -> Arc<AppState> {
+    pub fn make_test_state(settings_disabled: bool) -> Arc<AppState> {
         // The TempDir's path is what Library::open_at uses for any
         // later registry writes (register_workspace, ...). Letting it
         // drop here would delete the directory and
@@ -284,7 +275,6 @@ pub(crate) mod test_support {
             token: None,
             prefix: Arc::new(RwLock::new(String::new())),
             settings_disabled,
-            tunnel_public,
             events_tx,
             index_events_tx,
             server_config: Mutex::new(ServerConfig::default()),
@@ -311,7 +301,7 @@ pub(crate) mod test_support {
 
     #[test]
     fn try_workspace_reports_missing_cell() {
-        let state = make_test_state(false, false);
+        let state = make_test_state(false);
 
         assert!(matches!(
             state.try_workspace(),
@@ -321,7 +311,7 @@ pub(crate) mod test_support {
 
     #[test]
     fn try_indexer_reports_poisoned_workspace_cell() {
-        let state = make_test_state(false, false);
+        let state = make_test_state(false);
         let workspace_cell = state.workspace_cell.clone();
         let _ = std::thread::spawn(move || {
             let _guard = workspace_cell.write().expect("poison setup");

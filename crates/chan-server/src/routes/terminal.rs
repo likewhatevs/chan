@@ -14,7 +14,6 @@ use chan_shell::{submit_writes, SubmitAgent};
 use portable_pty::PtySize;
 use serde::{Deserialize, Serialize};
 
-use crate::error::err_tunnel_public_locked;
 use crate::signal::now_unix_secs;
 use crate::state::AppState;
 use crate::terminal_sessions::{
@@ -253,10 +252,6 @@ pub async fn api_terminal_ws(
     Query(query): Query<TerminalQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
-
     let size = pty_size(query.cols, query.rows);
     let tab_name = query.tab_name.as_deref().and_then(normalize_tab_name);
     let tab_group = query.tab_group.as_deref().and_then(normalize_tab_group);
@@ -317,9 +312,6 @@ pub async fn api_create_terminal(
     State(state): State<Arc<AppState>>,
     body: Result<Json<CreateTerminalBody>, JsonRejection>,
 ) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
     let Json(body) = match body {
         Ok(body) => body,
         Err(e) => {
@@ -389,9 +381,6 @@ pub async fn api_restart_terminal(
     AxumPath(session): AxumPath<String>,
     body: Option<Json<RestartTerminalBody>>,
 ) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
     let overrides = if let Some(Json(body)) = body {
         let tab_name = match body.name.as_deref() {
             Some(name) => match normalize_tab_name(name) {
@@ -450,9 +439,6 @@ pub async fn api_delete_terminal(
     State(state): State<Arc<AppState>>,
     AxumPath(session): AxumPath<String>,
 ) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
     if state
         .terminal_sessions
         .close(&session, CloseReason::Explicit)
@@ -482,9 +468,6 @@ pub async fn api_set_terminal_broadcast(
     AxumPath(session): AxumPath<String>,
     body: Result<Json<SetBroadcastBody>, JsonRejection>,
 ) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
     let Json(body) = match body {
         Ok(body) => body,
         Err(e) => {
@@ -1032,9 +1015,6 @@ struct RosterResponse {
 /// `/ws` (see [`spawn_roster_broadcaster`]); the endpoint closes the
 /// reconnect gap where a window misses the last push.
 pub async fn api_terminals_roster(State(state): State<Arc<AppState>>) -> Response {
-    if state.tunnel_public {
-        return err_tunnel_public_locked();
-    }
     Json(RosterResponse {
         sessions: state.terminal_sessions.roster(),
     })
@@ -1346,7 +1326,7 @@ mod tests {
         // The cross-window toggle routes a `terminal_broadcast` window-command
         // to the session's owning window over the `/ws` bus. Pin the wire
         // shape the SPA's handleWindowCommand decodes.
-        let state = crate::state::test_support::make_test_state(false, false);
+        let state = crate::state::test_support::make_test_state(false);
         let handle = state
             .terminal_sessions
             .create(CreateOptions {
@@ -1386,7 +1366,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_terminal_broadcast_404_for_missing_session() {
-        let state = crate::state::test_support::make_test_state(false, false);
+        let state = crate::state::test_support::make_test_state(false);
         let resp = api_set_terminal_broadcast(
             State(state),
             AxumPath("nope".into()),
@@ -1481,7 +1461,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_create_terminal_spawns_command_and_returns_session() {
-        let state = crate::state::test_support::make_test_state(false, false);
+        let state = crate::state::test_support::make_test_state(false);
         let response = api_create_terminal(
             State(state.clone()),
             Ok(Json(create_terminal_body("printf 'hi from spawn\\n'"))),
@@ -1508,7 +1488,7 @@ mod tests {
         // The Team Work bootstrap spawns each team terminal with a group;
         // it must land on the session's registry tab_group (and so
         // $CHAN_TAB_GROUP + cs terminal list grouping).
-        let state = crate::state::test_support::make_test_state(false, false);
+        let state = crate::state::test_support::make_test_state(false);
         let mut body = create_terminal_body("sleep 1");
         body.group = Some("team-x".into());
         let response = api_create_terminal(State(state.clone()), Ok(Json(body))).await;
@@ -1524,7 +1504,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_create_terminal_rejects_missing_command() {
-        let state = crate::state::test_support::make_test_state(false, false);
+        let state = crate::state::test_support::make_test_state(false);
         let response = api_create_terminal(
             State(state),
             Ok(Json(CreateTerminalBody {
@@ -1542,7 +1522,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_control_endpoints_return_not_found_for_missing_session() {
-        let state = crate::state::test_support::make_test_state(false, false);
+        let state = crate::state::test_support::make_test_state(false);
 
         let restart =
             api_restart_terminal(State(state.clone()), AxumPath("missing".into()), None).await;
@@ -1554,7 +1534,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_restart_terminal_respawns_same_session_command() {
-        let state = crate::state::test_support::make_test_state(false, false);
+        let state = crate::state::test_support::make_test_state(false);
         let mut body = create_terminal_body("printf \"restart-$CHAN_TEST_RESTART\\n\"; sleep 1");
         body.env.insert("CHAN_TEST_RESTART".into(), "one".into());
         let response = api_create_terminal(State(state.clone()), Ok(Json(body))).await;
@@ -1586,7 +1566,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_restart_terminal_updates_chan_tab_name_env() {
-        let state = crate::state::test_support::make_test_state(false, false);
+        let state = crate::state::test_support::make_test_state(false);
         let mut body =
             create_terminal_body("printf '<CHAN_TAB_NAME=%s>\\n' \"$CHAN_TAB_NAME\"; sleep 1");
         body.name = "@@First".into();
@@ -1632,7 +1612,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_delete_terminal_closes_session() {
-        let state = crate::state::test_support::make_test_state(false, false);
+        let state = crate::state::test_support::make_test_state(false);
         let response = api_create_terminal(
             State(state.clone()),
             Ok(Json(create_terminal_body("sleep 5"))),

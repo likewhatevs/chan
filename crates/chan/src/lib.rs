@@ -1536,7 +1536,6 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         // a local operator on the same machine has nothing to hide
         // from themselves.
         settings_disabled: no_settings,
-        tunnel_public: false,
     };
     chan_server::serve(lib, workspace, config)
         .await

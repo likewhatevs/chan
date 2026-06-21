@@ -247,9 +247,9 @@ fn create_cs_link() -> Result<CsLinkResult, (StatusCode, String)> {
 }
 
 pub async fn api_cs_link_create(State(state): State<Arc<AppState>>) -> Response {
-    // Owner-only: a tunneled / publicly-served workspace must not let a
-    // visitor write a symlink onto the host's PATH.
-    if state.settings_disabled || state.tunnel_public {
+    // Owner-only: a settings-locked (kiosk) deployment must not let the
+    // operator at the keyboard write a symlink onto the host's PATH.
+    if state.settings_disabled {
         return err(
             StatusCode::FORBIDDEN,
             "cs link setup is available to the workspace owner only".into(),

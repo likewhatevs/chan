@@ -93,14 +93,14 @@ mod tests {
 
     #[tokio::test]
     async fn settings_guard_passes_when_settings_enabled() {
-        let state = make_test_state(false, false);
+        let state = make_test_state(false);
         let app = build_router(state, settings_guard);
         assert_eq!(status_of(app).await, StatusCode::OK);
     }
 
     #[tokio::test]
     async fn settings_guard_blocks_when_settings_disabled() {
-        let state = make_test_state(true, false);
+        let state = make_test_state(true);
         let app = build_router(state, settings_guard);
         assert_eq!(status_of(app).await, StatusCode::FORBIDDEN);
     }

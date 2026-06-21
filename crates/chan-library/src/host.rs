@@ -1113,7 +1113,6 @@ mod tests {
             search_aggression: None,
             verbose: false,
             settings_disabled: false,
-            tunnel_public: false,
         }
     }
 

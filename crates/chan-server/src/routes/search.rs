@@ -894,7 +894,6 @@ mod tests {
             token: Some("secret".to_string()),
             prefix: Arc::new(RwLock::new(String::new())),
             settings_disabled: false,
-            tunnel_public: false,
             last_activity: Arc::new(AtomicU64::new(0)),
             events_tx,
             index_events_tx,
