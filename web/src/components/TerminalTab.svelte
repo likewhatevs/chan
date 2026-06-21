@@ -217,6 +217,12 @@
   // the shell prompt (`bash: 41R: command not found`) and echoes it. Live
   // (post-`ready`) replies still forward (vim/readline need them).
   let replayingReattach = false;
+  // Defers the end-of-replay clear: term.write() is async, so on the `ready`
+  // frame xterm may still be draining the replayed ring (and emitting its
+  // historical query replies). `ready` latches this instead of clearing
+  // replayingReattach directly; writePtyOutput's drain callback resolves it
+  // when the write depth returns to 0. See maybeEndReplayWindow.
+  let clearReplayWhenDrained = false;
   let hostResumeTimers: ReturnType<typeof setTimeout>[] = [];
   let hostResumeListenerCleanup: (() => void) | null = null;
   // Wall-clock-gap sleep/wake detector. See
@@ -755,9 +761,11 @@
     gitBashMissing = false;
     const reattaching = Boolean(tab.terminalSessionId);
     // Gate xterm replies to historical queries during the reattach replay
-    // window; cleared on the `ready` frame. A fresh spawn has an empty replay,
-    // so this is only ever true (and only ever drops a reply) for a reattach.
+    // window; latched on the `ready` frame, then cleared once the replayed ring
+    // has drained (maybeEndReplayWindow). A fresh spawn has an empty replay, so
+    // this is only ever true (and only ever drops a reply) for a reattach.
     replayingReattach = reattaching;
+    clearReplayWhenDrained = false;
     pendingPromptSeed = reattaching ? "" : (tab.seedInput ?? "");
     promptSeedSent = false;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -803,10 +811,18 @@
         return;
       }
       if (frame.type === "ready") {
-        // The replay is fully written by the time `ready` arrives (server
-        // sends it AFTER the ring): end the replay window so LIVE query
-        // replies forward normally again.
-        replayingReattach = false;
+        // The server sends `ready` AFTER the replay ring — but term.write() is
+        // async, so xterm is often still parsing that ring (and emitting its
+        // historical CPR/DA query replies via onData) when `ready` arrives.
+        // Clearing replayingReattach here would forward those late replies as
+        // garbage at the prompt (`…R`/`…c`). Latch the clear until every
+        // replayed write has drained (depth back to 0); end now only if the
+        // ring already drained. LIVE replies (post-drain) still forward.
+        if (ptyOutputWriteDepth > 0) {
+          clearReplayWhenDrained = true;
+        } else {
+          replayingReattach = false;
+        }
         statusDetail = `${frame.cols}x${frame.rows}`;
         terminalCwdAbs = frame.cwd ?? null;
         terminalCwdVirtual = frame.cwd_rel ?? null;
@@ -1057,15 +1073,29 @@
     toggleRichPromptForTab(tab.id);
   }
 
+  // End the reattach replay window once the LAST replayed write has drained
+  // (depth back to 0) and the `ready` frame has latched the clear. This is the
+  // resolver for the async-write race: it flips replayingReattach off only after
+  // xterm has finished emitting the replayed ring's historical query replies, so
+  // those replies are dropped (handleXtermData) instead of echoing at the prompt.
+  function maybeEndReplayWindow(): void {
+    if (clearReplayWhenDrained && ptyOutputWriteDepth === 0) {
+      clearReplayWhenDrained = false;
+      replayingReattach = false;
+    }
+  }
+
   function writePtyOutput(bytes: Uint8Array): void {
     if (!term) return;
     ptyOutputWriteDepth += 1;
     try {
       term.write(bytes, () => {
         ptyOutputWriteDepth = Math.max(0, ptyOutputWriteDepth - 1);
+        maybeEndReplayWindow();
       });
     } catch (err) {
       ptyOutputWriteDepth = Math.max(0, ptyOutputWriteDepth - 1);
+      maybeEndReplayWindow();
       throw err;
     }
   }
@@ -1216,6 +1246,7 @@
     term?.dispose();
     term = null;
     ptyOutputWriteDepth = 0;
+    clearReplayWhenDrained = false;
     webglRendererActive = false;
     fit = null;
     search = null;

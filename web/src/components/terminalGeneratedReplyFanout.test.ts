@@ -37,17 +37,35 @@ describe("TerminalTab generated reply routing", () => {
   test("drops xterm replies during the reattach replay window (CPR-leak fix)", () => {
     // A replayed historical query (e.g. ESC[6n) must NOT have its reply sent to
     // the PTY — that lands it at the prompt + echoes. The gate is scoped to the
-    // replay window only (set on reattach, cleared on `ready`), so LIVE replies
-    // still forward.
+    // replay window only (set on reattach, cleared once the ring drains), so
+    // LIVE replies still forward.
     expect(terminal).toContain("let replayingReattach = false;");
     expect(terminal).toContain("replayingReattach = reattaching;");
-    // Cleared on the `ready` frame (the server sends it AFTER the replay ring).
-    expect(terminal).toMatch(
-      /frame\.type === "ready"[\s\S]*?replayingReattach = false;/,
-    );
     // The drop: during the replay window, return without sendInput.
     expect(terminal).toMatch(
       /if \(ptyOutputWriteDepth > 0\) \{[\s\S]*?if \(replayingReattach\) return;[\s\S]*?sendInput\(data\);/,
+    );
+  });
+
+  test("ends the replay window on ring DRAIN, not synchronously on `ready` (async-write race)", () => {
+    // term.write() is async: xterm keeps parsing the replayed ring (and emitting
+    // historical CPR/DA replies) after the `ready` frame arrives. Clearing
+    // replayingReattach synchronously on `ready` forwarded those late replies as
+    // garbage at the prompt. Fix: `ready` LATCHES the clear; the drain callback
+    // resolves it when the write depth returns to 0 (or `ready` clears at once
+    // if the ring already drained).
+    expect(terminal).toContain("let clearReplayWhenDrained = false;");
+    // `ready`: latch while writes are still draining; clear now only if drained.
+    expect(terminal).toMatch(
+      /frame\.type === "ready"[\s\S]*?if \(ptyOutputWriteDepth > 0\) \{\s*clearReplayWhenDrained = true;\s*\} else \{\s*replayingReattach = false;\s*\}/,
+    );
+    // The drain resolver flips the flag only at depth 0 with the latch set.
+    expect(terminal).toMatch(
+      /function maybeEndReplayWindow\(\): void \{[\s\S]*?clearReplayWhenDrained && ptyOutputWriteDepth === 0[\s\S]*?clearReplayWhenDrained = false;[\s\S]*?replayingReattach = false;/,
+    );
+    // Wired into the tracked write's drain callback (after the depth decrement).
+    expect(terminal).toMatch(
+      /term\.write\(bytes, \(\) => \{[\s\S]*?ptyOutputWriteDepth = Math\.max\(0, ptyOutputWriteDepth - 1\);\s*maybeEndReplayWindow\(\);/,
     );
   });
 });
