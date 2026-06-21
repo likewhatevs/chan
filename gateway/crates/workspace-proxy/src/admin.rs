@@ -37,7 +37,11 @@ use crate::http::AppState;
 #[derive(Debug, Clone, Serialize)]
 pub struct TunnelView {
     pub user: String,
-    pub workspace: String,
+    /// The registration's second key: the devserver id (one devserver
+    /// per user). identity reads this to mint a `drv` that matches the
+    /// owner's LIVE devserver, so a rotated owner's old grants correctly
+    /// 404 until re-share.
+    pub devserver_id: String,
     pub peer_addr: Option<String>,
     pub connected_at: DateTime<Utc>,
 }
@@ -115,7 +119,7 @@ async fn list_user_tunnels(
         .filter(|t| t.user.as_ref() == user)
         .map(|t| TunnelView {
             user: t.user.as_ref().to_string(),
-            workspace: t.workspace.as_ref().to_string(),
+            devserver_id: t.workspace.as_ref().to_string(),
             peer_addr: t.peer_addr.map(|a| a.to_string()),
             connected_at: t.connected_at,
         })
@@ -192,7 +196,7 @@ fn snapshot(state: &AppState) -> Vec<TunnelView> {
         .into_iter()
         .map(|t| TunnelView {
             user: t.user.as_ref().to_string(),
-            workspace: t.workspace.as_ref().to_string(),
+            devserver_id: t.workspace.as_ref().to_string(),
             peer_addr: t.peer_addr.map(|a| a.to_string()),
             connected_at: t.connected_at,
         })

@@ -414,7 +414,12 @@ async fn entry_token_mints_session_cookie() {
     assert_eq!(loc, "/blog/");
     let set = hdrs.get(header::SET_COOKIE).unwrap().to_str().unwrap();
     assert!(set.starts_with("devserver_gate="), "got {set}");
-    assert!(set.contains("Path=/blog/"));
+    // Whole-host cookie: the grant is the whole devserver, so the cookie
+    // is no longer scoped to a per-workspace path.
+    assert!(
+        set.contains("Path=/;") || set.contains("Path=/ "),
+        "got {set}"
+    );
     assert!(set.contains("HttpOnly"));
     assert!(set.contains("Secure"));
     assert!(set.contains("SameSite=Lax"));
@@ -443,21 +448,25 @@ async fn entry_token_drops_t_param_but_keeps_other_query() {
 }
 
 #[tokio::test]
-async fn entry_token_for_wrong_workspace_is_404() {
+async fn entry_token_for_wrong_devserver_is_404() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
+    // alice's live devserver id is "blog"; an entry token minted for a
+    // different devserver id (e.g. a rotated/old one) must not admit.
     app.register_tunnel("alice", "blog", uid, Router::new())
         .await;
-    app.register_tunnel("alice", "journal", uid, Router::new())
-        .await;
     let host = host_for("alice");
-    // Token minted for `blog`, used on `journal`.
-    let token = mint(devserver_gate::TokenType::Entry, uid, "blog", &host);
+    let token = mint(
+        devserver_gate::TokenType::Entry,
+        uid,
+        "stale-devserver",
+        &host,
+    );
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
         &host,
-        &format!("/journal/?t={token}"),
+        &format!("/blog/?t={token}"),
         &[],
     )
     .await;
@@ -495,7 +504,7 @@ async fn entry_token_for_wrong_host_is_404() {
 async fn session_cookie_admits() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
-    let upstream = Router::new().route("/", axum::routing::get(|| async { "owner pass" }));
+    let upstream = Router::new().fallback(|| async { "owner pass" });
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
@@ -515,20 +524,25 @@ async fn session_cookie_admits() {
 }
 
 #[tokio::test]
-async fn session_cookie_for_wrong_workspace_is_404() {
+async fn session_cookie_for_wrong_devserver_is_404() {
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
+    // Live devserver id is "blog"; a session cookie carrying a different
+    // devserver id (drv) must not admit, even on the right host.
     app.register_tunnel("alice", "blog", uid, Router::new())
         .await;
-    app.register_tunnel("alice", "journal", uid, Router::new())
-        .await;
     let host = host_for("alice");
-    let session = mint(devserver_gate::TokenType::Session, uid, "blog", &host);
+    let session = mint(
+        devserver_gate::TokenType::Session,
+        uid,
+        "stale-devserver",
+        &host,
+    );
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
         &host,
-        "/journal/",
+        "/blog/",
         &[("cookie", &format!("devserver_gate={session}"))],
     )
     .await;
@@ -539,7 +553,7 @@ async fn session_cookie_for_wrong_workspace_is_404() {
 // Regression: identity mints entry JWTs with `sub = caller.user_id`
 // (owner or accepted grantee). workspace-proxy used to compare `sub`
 // against the registry-cached owner_id and 404 every grantee; the gate
-// now trusts identity's mint-time `workspace_access` check and admits any
+// now trusts identity's mint-time `devserver_access` check and admits any
 // signed entry with the right aud + drv.
 #[tokio::test]
 async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
@@ -588,14 +602,14 @@ async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
 
 // Regression: a session cookie with a non-owner sub admits as long as
 // the signature + aud + drv match. Belongs alongside the
-// `session_cookie_for_wrong_workspace_is_404` test which still validates the
-// real bound (drv must match the requested workspace).
+// `session_cookie_for_wrong_devserver_is_404` test which still validates
+// the real bound (drv must match the live devserver id).
 #[tokio::test]
 async fn session_cookie_with_grantee_sub_admits() {
     let app = TestApp::new().await;
     let alice = Uuid::new_v4();
     let bob = Uuid::new_v4();
-    let upstream = Router::new().route("/", axum::routing::get(|| async { "grantee pass" }));
+    let upstream = Router::new().fallback(|| async { "grantee pass" });
     app.register_tunnel("alice", "blog", alice, upstream).await;
     let host = host_for("alice");
     let session = mint(devserver_gate::TokenType::Session, bob, "blog", &host);
@@ -637,16 +651,19 @@ async fn entry_token_with_bad_signature_is_404() {
 }
 
 // ---------------------------------------------------------------
-// Path strip + upstream proxy
+// Segment-preserving forward + upstream proxy
 // ---------------------------------------------------------------
 
 #[tokio::test]
-async fn proxy_strips_workspace_segment() {
+async fn proxy_preserves_workspace_segment() {
+    // The proxy is a segment-PRESERVING forwarder: it hands the
+    // devserver the full public `/{workspace}/...` path (the devserver
+    // mounts each tenant at its public slug and routes internally).
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();
     let upstream = Router::new()
-        .route("/assets/foo.js", axum::routing::get(|| async { "js" }))
-        .route("/", axum::routing::get(|| async { "root" }));
+        .route("/blog/assets/foo.js", axum::routing::get(|| async { "js" }))
+        .route("/blog/", axum::routing::get(|| async { "root" }));
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
@@ -672,6 +689,31 @@ async fn proxy_strips_workspace_segment() {
         .unwrap();
     assert_eq!(res.text().await.unwrap(), "root");
 
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn management_api_is_404_on_public_wildcard() {
+    // `/api/devserver/*` is the devserver's local-only management API;
+    // the proxy must 404 it on the public host so only tenant content
+    // reaches the tunnel.
+    let app = TestApp::new().await;
+    let uid = Uuid::new_v4();
+    let upstream = Router::new().fallback(|| async { "should not reach upstream" });
+    app.register_tunnel("alice", "blog", uid, upstream).await;
+
+    let host = host_for("alice");
+    let cookie = session_cookie(uid, "blog", &host);
+    // Even with a valid session cookie, the management API is not proxied.
+    let (s, _, _) = send_host(
+        &app.router,
+        Method::GET,
+        &host,
+        "/api/devserver/workspaces",
+        &[("cookie", &cookie)],
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
     app.cleanup().await;
 }
 
@@ -882,7 +924,8 @@ async fn websocket_bridges_text_frames() {
             let _ = socket.close().await;
         })
     }
-    let upstream = Router::new().route("/ws", axum::routing::get(echo));
+    // Segment-preserving forward: the upstream sees the full /blog/ws path.
+    let upstream = Router::new().route("/blog/ws", axum::routing::get(echo));
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
@@ -945,7 +988,9 @@ async fn try_register_tunnel(
     let token = token.to_string();
     let workspace = workspace.to_string();
     let task =
-        tokio::spawn(async move { run_tunnel_client(tunnel_addr, &token, &workspace, router).await });
+        tokio::spawn(
+            async move { run_tunnel_client(tunnel_addr, &token, &workspace, router).await },
+        );
     match tokio::time::timeout(std::time::Duration::from_millis(300), task).await {
         Err(_) => Ok(()),
         Ok(Ok(Ok(()))) => Ok(()),
@@ -1068,7 +1113,7 @@ async fn admin_tunnels_list_and_kill() {
     .await;
     let arr = body.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["workspace"], "open");
+    assert_eq!(arr[0]["devserver_id"], "open");
 
     // Unknown -> 404.
     let (s, _) = send_admin(
@@ -1104,11 +1149,11 @@ async fn admin_list_user_tunnels() {
     assert_eq!(s, StatusCode::OK);
     let arr = body.as_array().unwrap();
     assert_eq!(arr.len(), 2);
-    let workspaces: Vec<&str> = arr
+    let devserver_ids: Vec<&str> = arr
         .iter()
-        .map(|r| r["workspace"].as_str().unwrap())
+        .map(|r| r["devserver_id"].as_str().unwrap())
         .collect();
-    assert_eq!(workspaces, vec!["blog", "home"]);
+    assert_eq!(devserver_ids, vec!["blog", "home"]);
 
     // Unknown user -> empty, not 404.
     let (s, body) = send_admin(

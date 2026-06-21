@@ -107,12 +107,13 @@ impl Registry {
             .insert(username.to_string(), user_id);
     }
 
-    /// Resolve a registered tunnel for the proxy auth gate. Returns
-    /// `None` when the tunnel disconnected, or when the username
+    /// Resolve a registered tunnel by its `(user, devserver_id)` key.
+    /// Returns `None` when the tunnel disconnected, or when the username
     /// hasn't been seen in any tunnel handshake yet (no cached
-    /// owner_id).
-    pub fn get(&self, username: &str, workspace: &str) -> Option<Entry> {
-        let handle = self.tunnels.get(username, workspace)?;
+    /// owner_id). The second key is the devserver id (the registry's
+    /// registration name), not a workspace slug.
+    pub fn get(&self, username: &str, devserver_id: &str) -> Option<Entry> {
+        let handle = self.tunnels.get(username, devserver_id)?;
         let owner_id = self
             .user_ids
             .read()
@@ -120,6 +121,24 @@ impl Registry {
             .get(username)
             .copied()?;
         Some(Entry { handle, owner_id })
+    }
+
+    /// Resolve the user's single live devserver registration (one
+    /// devserver per user). Returns the registered devserver id (the
+    /// registry's second key) paired with its entry, or `None` when the
+    /// user has no live tunnel. The proxy gate looks up by user alone —
+    /// the inbound `{user}` host label — and never peels a path segment;
+    /// the devserver id it returns is what the gate verifies the
+    /// `devserver_gate` cookie's `drv` against.
+    pub fn get_user_devserver(&self, username: &str) -> Option<(String, Entry)> {
+        let info = self
+            .tunnels
+            .list_workspaces_for(username)
+            .into_iter()
+            .next()?;
+        let devserver_id = info.workspace.as_ref().to_string();
+        let entry = self.get(username, &devserver_id)?;
+        Some((devserver_id, entry))
     }
 
     /// Snapshot every registered tunnel for the admin `tunnel ps`

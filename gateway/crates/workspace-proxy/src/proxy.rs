@@ -1,33 +1,36 @@
 //! Reverse proxy for `*.devserver.chan.app/{workspace}/...` into the
-//! `chan serve` peer behind the registered tunnel.
+//! `chan devserver` peer behind the registered tunnel.
 //!
 //! `{user}` is parsed out of the wildcard `Host` header by
-//! `http::dispatch` and handed in. The first path segment is
-//! `{workspace}`.
+//! `http::dispatch` and handed in. The gate is per-DEVSERVER: there is
+//! one devserver per user, and the `{workspace}` path segment is tenant
+//! routing only — never a gate key. It is forwarded into the tunnel
+//! unchanged and the devserver routes the tenant internally.
 //!
 //! Auth gate, in this order:
 //!
-//!   * registration `(user, workspace)` not found in the registry -> 404
+//!   * no live devserver registration for `{user}` -> 404
+//!   * `/api/devserver/*` (the local-only management API) -> 404
 //!   * request has `?t=<entry-jwt>`:
-//!     * verify HS256 + exp + aud (Host) + drv (workspace) -> mint a session
-//!       JWT carrying the entry's `sub`, set `devserver_gate` cookie scoped
-//!       to `Path=/<workspace>/`, 303 to the clean URL
+//!     * verify HS256 + exp + aud (Host) + drv (devserver id) -> mint a
+//!       session JWT carrying the entry's `sub`, set a host-only
+//!       `devserver_gate` cookie scoped to `Path=/`, 303 to the clean URL
 //!     * any failure -> 404
 //!   * request has a valid `devserver_gate` cookie (signature + aud + drv)
 //!     -> pass through
-//!   * anything else (no cookie, expired, wrong aud, wrong workspace)
+//!   * anything else (no cookie, expired, wrong aud, wrong devserver)
 //!     -> 404
 //!
 //! The auth assertion is the entry JWT, not "sub matches owner". Identity
-//! mints entry tokens only after calling `profile.workspace_access(owner,
-//! workspace, caller)`, so a validly-signed entry with the right aud and drv
+//! mints entry tokens only after calling `profile.devserver_access(owner,
+//! devserver, caller)`, so a validly-signed entry with the right aud and drv
 //! proves the caller is authorized — owner or accepted grantee. The aud
 //! claim (= `{owner}.devserver.chan.app`) is what enforces tenant isolation;
 //! comparing `sub` against the cached owner would lock out every grantee.
 //!
 //! 404 is preferred over 401 / 403 on the proxy path so an
-//! unauthenticated probe cannot distinguish "workspace does not exist"
-//! from "workspace exists but you are not signed in" or "wrong workspace in
+//! unauthenticated probe cannot distinguish "devserver does not exist"
+//! from "devserver exists but you are not signed in" or "wrong devserver in
 //! the cookie." Owners returning after the 24h cookie expires bounce
 //! through the id.chan.app dashboard.
 //!
@@ -182,18 +185,24 @@ fn connection_listed_headers(headers: &HeaderMap) -> Vec<HeaderName> {
         .collect()
 }
 
-/// Entry point from `http::dispatch`. `user` came out of the
-/// wildcard Host header; the first path segment is `{workspace}`. axum's
-/// extractors are not used at this level because the dispatcher
-/// already consumed `Host`.
+/// Entry point from `http::dispatch`. `user` came out of the wildcard
+/// Host header. The gate is per-DEVSERVER: it resolves the user's single
+/// devserver registration and verifies the `devserver_gate` cookie's
+/// `drv` against that devserver id — it does NOT peel a path segment.
+/// The `{workspace}` path segment is tenant routing only and is
+/// forwarded into the tunnel unchanged. axum's extractors are not used
+/// at this level because the dispatcher already consumed `Host`.
 pub async fn handle(state: AppState, user: String, req: Request) -> Response {
-    let Some(workspace) = peel_workspace_segment(req.uri().path()) else {
+    // One devserver per user: look up by the host's {user} label alone.
+    let Some((devserver_id, entry)) = state.registry.get_user_devserver(&user) else {
         return not_found_response(req.headers());
     };
 
-    let Some(entry) = state.registry.get(&user, &workspace) else {
+    // The management API is local-only; the proxy carries tenant content
+    // only and never proxies `/api/devserver/*` on the public wildcard.
+    if is_management_path(req.uri().path()) {
         return not_found_response(req.headers());
-    };
+    }
 
     // The audience is the inbound Host. Tokens minted for one
     // subdomain do not validate on another.
@@ -203,13 +212,13 @@ pub async fn handle(state: AppState, user: String, req: Request) -> Response {
 
     // The gate always runs: every devserver tunnel is authenticated,
     // there is no un-gated pass-through.
-    match resolve_gate(&state, &req, &user, &workspace, &aud) {
+    match resolve_gate(&state, &req, &devserver_id, &aud) {
         Gate::Pass => {}
         Gate::IssueSession { sub } => {
             return issue_session_cookie(
                 state.cfg.workspace_gate_secret.as_bytes(),
                 sub,
-                &workspace,
+                &devserver_id,
                 &aud,
                 req.uri(),
             );
@@ -222,7 +231,10 @@ pub async fn handle(state: AppState, user: String, req: Request) -> Response {
     // stays in `Entry` as metadata for admin tooling.
     let _ = entry.owner_id;
 
-    let upstream_path_and_query = strip_workspace_segment(req.uri());
+    // Segment-preserving forward: hand the devserver the full public
+    // `/{workspace}/...` path (only the `?t=` entry token is stripped);
+    // the devserver is the single tenant-routing authority.
+    let upstream_path_and_query = forward_path(req.uri());
 
     if is_ws {
         let (mut parts, body) = req.into_parts();
@@ -284,11 +296,11 @@ enum Gate {
     /// cookie so the upstream attribution chain stays accurate.
     IssueSession { sub: Uuid },
     /// Anything that should map to 404 on the proxy path: no token,
-    /// bad signature, expired, wrong aud, wrong workspace.
+    /// bad signature, expired, wrong aud, wrong devserver.
     Reject,
 }
 
-fn resolve_gate(state: &AppState, req: &Request, _user: &str, workspace: &str, aud: &str) -> Gate {
+fn resolve_gate(state: &AppState, req: &Request, devserver_id: &str, aud: &str) -> Gate {
     let secret = state.cfg.workspace_gate_secret.as_bytes();
 
     // Entry token in `?t=` takes precedence: it's how the dashboard
@@ -301,10 +313,11 @@ fn resolve_gate(state: &AppState, req: &Request, _user: &str, workspace: &str, a
     // We do not compare `sub` against the registry-cached owner: that
     // would lock out every accepted grantee. The aud + drv claims
     // (signed at mint time by identity, which already checked
-    // `workspace_access`) are the authorization assertion. Identity owns
-    // the policy; workspace-proxy verifies the assertion.
+    // `devserver_access`) are the authorization assertion. Identity owns
+    // the policy; workspace-proxy verifies the assertion. `drv` is the
+    // devserver id, matched against the user's live registration.
     if let Some(token) = entry_token_param(req.uri()) {
-        return match devserver_gate::decode(secret, &token, TokenType::Entry, aud, workspace) {
+        return match devserver_gate::decode(secret, &token, TokenType::Entry, aud, devserver_id) {
             Ok(claims) => Gate::IssueSession { sub: claims.sub },
             Err(_) => Gate::Reject,
         };
@@ -316,43 +329,29 @@ fn resolve_gate(state: &AppState, req: &Request, _user: &str, workspace: &str, a
     // request); accept the first that verifies under this aud + drv so
     // a stale duplicate doesn't 404 a legitimate session.
     for cookie in devserver_gate_cookies(req.headers()) {
-        if devserver_gate::decode(secret, &cookie, TokenType::Session, aud, workspace).is_ok() {
+        if devserver_gate::decode(secret, &cookie, TokenType::Session, aud, devserver_id).is_ok() {
             return Gate::Pass;
         }
     }
     Gate::Reject
 }
 
-/// Peel the first path segment as `{workspace}`. Empty path / lone `/`
-/// returns None (the dispatcher handles `/` separately by redirecting
-/// to the dashboard).
-fn peel_workspace_segment(path: &str) -> Option<String> {
-    let trimmed = path.strip_prefix('/')?;
-    let seg = trimmed.split('/').next()?;
-    if seg.is_empty() {
-        return None;
-    }
-    Some(seg.to_string())
+/// True when the path targets the devserver's local-only management API
+/// (`/api/devserver` or `/api/devserver/...`). The proxy 404s it on the
+/// public wildcard so only tenant content reaches the tunnel; the owner
+/// manages over the direct connection.
+fn is_management_path(path: &str) -> bool {
+    path == "/api/devserver" || path.starts_with("/api/devserver/")
 }
 
-/// Strip `/<workspace>` from the inbound path, leaving the path the
-/// upstream `chan serve` (running without `--prefix` in tunnel
-/// mode) expects. Always returns a path that starts with `/`.
-fn strip_workspace_segment(uri: &Uri) -> String {
+/// The path forwarded into the tunnel: the full inbound path+query with
+/// the `?t=` entry token stripped. The proxy is a segment-PRESERVING
+/// forwarder — it does NOT strip the `{workspace}` segment; the devserver
+/// mounts each tenant at its public `/{workspace}/` slug and routes
+/// internally. Always returns a path that starts with `/`.
+fn forward_path(uri: &Uri) -> String {
     let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
-    // Walk to the second '/': pq = "/workspace[/...][?query]"; the
-    // second '/' is either at len("/workspace") or absent.
-    let mut slashes = 0;
-    for (i, c) in pq.char_indices() {
-        if c == '/' {
-            slashes += 1;
-            if slashes == 2 {
-                return strip_entry_token_query(&pq[i..]);
-            }
-        }
-    }
-    // No second slash: `/workspace` with no trailing slash and no query.
-    "/".to_string()
+    strip_entry_token_query(pq)
 }
 
 /// Pull `?t=<token>` value out of the URI. Returns None when absent
@@ -462,19 +461,22 @@ fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
     upgrade && conn
 }
 
-/// Mint a session JWT for `sub`, set it as a host-only `Path=/<workspace>/`
+/// Mint a session JWT for `sub`, set it as a host-only `Path=/`
 /// cookie, and 303 to the clean URL (`?t=` stripped). Browsers
 /// follow the 303 with the new cookie attached. `sub` comes from the
 /// entry token we just verified — owner or accepted grantee — so the
 /// session cookie identifies the right user for upstream attribution.
+/// `Path=/` is safe because the grant is whole-devserver: every path on
+/// this host is content the cookie-holder is authorized to reach, and
+/// user-to-user isolation stays on the host-only `aud` claim.
 fn issue_session_cookie(
     secret: &[u8],
     sub: Uuid,
-    workspace: &str,
+    devserver_id: &str,
     aud: &str,
     uri: &Uri,
 ) -> Response {
-    let session = match devserver_gate::encode_session(secret, sub, workspace, aud) {
+    let session = match devserver_gate::encode_session(secret, sub, devserver_id, aud) {
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = ?e, "failed to mint devserver_gate session token");
@@ -487,7 +489,7 @@ fn issue_session_cookie(
     // them to outlive a tab close.
     let cookie_value = format!(
         "{COOKIE_NAME}={session}; \
-         Path=/{workspace}/; \
+         Path=/; \
          HttpOnly; Secure; SameSite=Lax; Max-Age=86400"
     );
     let mut res = (StatusCode::SEE_OTHER, "").into_response();
@@ -909,40 +911,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn peel_workspace_segment_basic() {
-        assert_eq!(peel_workspace_segment("/blog").as_deref(), Some("blog"));
-        assert_eq!(peel_workspace_segment("/blog/").as_deref(), Some("blog"));
-        assert_eq!(
-            peel_workspace_segment("/blog/sub/path").as_deref(),
-            Some("blog")
-        );
-        assert_eq!(peel_workspace_segment("/"), None);
-        assert_eq!(peel_workspace_segment(""), None);
+    fn is_management_path_matches_devserver_api() {
+        assert!(is_management_path("/api/devserver"));
+        assert!(is_management_path("/api/devserver/workspaces"));
+        assert!(is_management_path("/api/devserver/x/y"));
+        // Tenant content that merely shares a prefix must NOT be 404'd.
+        assert!(!is_management_path("/api/devserver-notes"));
+        assert!(!is_management_path("/blog/api/devserver"));
+        assert!(!is_management_path("/"));
+        assert!(!is_management_path("/blog/"));
     }
 
     #[test]
-    fn strip_workspace_segment_basic() {
+    fn forward_path_preserves_segment() {
+        // Segment-preserving: the {workspace} segment is forwarded
+        // unchanged; only the ?t= entry token is stripped.
         let u = |s: &str| s.parse::<Uri>().unwrap();
-        assert_eq!(strip_workspace_segment(&u("/blog/")), "/");
-        assert_eq!(
-            strip_workspace_segment(&u("/blog/assets/x.js")),
-            "/assets/x.js"
-        );
-        assert_eq!(strip_workspace_segment(&u("/blog/?a=1")), "/?a=1");
-        assert_eq!(strip_workspace_segment(&u("/blog")), "/");
+        assert_eq!(forward_path(&u("/blog/")), "/blog/");
+        assert_eq!(forward_path(&u("/blog/assets/x.js")), "/blog/assets/x.js");
+        assert_eq!(forward_path(&u("/blog/?a=1")), "/blog/?a=1");
+        assert_eq!(forward_path(&u("/blog")), "/blog");
     }
 
     #[test]
-    fn strip_workspace_segment_drops_t_param() {
+    fn forward_path_drops_t_param() {
         let u = |s: &str| s.parse::<Uri>().unwrap();
-        assert_eq!(strip_workspace_segment(&u("/blog/?t=abc")), "/");
+        assert_eq!(forward_path(&u("/blog/?t=abc")), "/blog/");
+        assert_eq!(forward_path(&u("/blog/?t=abc&keep=1")), "/blog/?keep=1");
         assert_eq!(
-            strip_workspace_segment(&u("/blog/?t=abc&keep=1")),
-            "/?keep=1"
-        );
-        assert_eq!(
-            strip_workspace_segment(&u("/blog/path?a=1&t=secret&b=2")),
-            "/path?a=1&b=2"
+            forward_path(&u("/blog/path?a=1&t=secret&b=2")),
+            "/blog/path?a=1&b=2"
         );
     }
 

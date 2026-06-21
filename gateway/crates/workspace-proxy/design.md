@@ -21,29 +21,32 @@ Two public hostnames pointed at the same process:
   - `/healthz` -- liveness.
   - Anything else -- 404.
 
-- `*.devserver.chan.app` (wildcard): tenant content only.
+- `*.devserver.chan.app` (wildcard): tenant content only. One devserver
+  per user; the `{workspace}` path segment is tenant routing, never a gate key.
   - `/` -- 302 to `https://id.chan.app/workspaces`.
-  - `/{workspace}` -- 308 to `/{workspace}/` (trailing slash canonical).
+  - `/api/devserver/*` -- 404 (the devserver's local-only management API is
+    never proxied; the gateway carries tenant content only).
   - `/{workspace}/?t=<jwt>` -- entry: validate the entry token, set the `devserver_gate` cookie, 303 to the clean URL.
-  - `/{workspace}/...` -- proxy to the registered tunnel for `(host_user, workspace)`, requires a valid `devserver_gate` cookie. Anything else -- 404.
+  - `/{workspace}/...` -- gate on the user's live devserver (drv + aud), then
+    forward the FULL path unchanged into the tunnel. Anything else -- 404.
 
-A single axum router serves both apex and wildcard via a Host-keyed dispatch. The wildcard host's `{user}` is parsed out of the request's `Host` header; the prefix before `.devserver.chan.app` is the username.
+A single axum router serves both apex and wildcard via a Host-keyed dispatch. The wildcard host's `{user}` is parsed out of the request's `Host` header; the prefix before `.devserver.chan.app` is the username, and it alone resolves the user's single devserver registration.
 
 The tunnel listener is unchanged: `chan-tunnel-server` runs raw h2 on `TUNNEL_BIND_ADDR`, with the validator chain `CapturingValidator -> ThrottlingValidator -> IdentityValidator`. On a successful handshake the registry caches `(username -> user_id)`.
 
-The `Registry` (`registry.rs`) is the in-process map from `(username, workspace)` to the live `TunnelHandle` plus the username cache. The admin tree reads from the same registry that the proxy handler reads.
+The `Registry` (`registry.rs`) is the in-process map from `(username, devserver_id)` to the live `TunnelHandle` plus the username cache. The second key is the devserver id (the registration name), not a workspace slug. The proxy gate looks up the user's single registration by username alone (`get_user_devserver`). The admin tree reads from the same registry that the proxy handler reads.
 
-## Workspace gate
+## Devserver gate
 
 workspace-proxy reads no `tower_sessions` cookie. Authentication for the proxy path uses a JWT minted by identity-service, signed with `WORKSPACE_GATE_SECRET` (HMAC-SHA256). The secret is shared between identity (mints both shapes) and workspace-proxy (verifies, mints the session shape).
 
-Two tokens are involved:
+The gate is per-DEVSERVER: there is one devserver per user, one host (`{user}.devserver.chan.app`), one access check. A grant gives the whole devserver, so the `{workspace}` path segment never gates. Two tokens are involved:
 
-- **Entry token**: 30s exp, carried in `?t=` on the first hit to a workspace. Issued by identity at `GET /api/workspaces/open?u=...&d=...` after the dashboard verified the user owns the workspace. Claims: `{iss: "id.chan.app", sub: user_id, drv: <slug>, aud: "<host>", typ: "entry", iat, exp}`.
+- **Entry token**: 30s exp, carried in `?t=` on the first hit. Issued by identity after a `devserver_access(owner, devserver, caller)` check. Claims: `{iss: "id.chan.app", sub: user_id, drv: <devserver id>, aud: "<host>", typ: "entry", iat, exp}`.
 
-- **Session cookie**: 24h hard exp, written as `Set-Cookie: devserver_gate=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/<workspace>/`. Minted by workspace-proxy on entry-token validation. Same claim envelope, `typ: "session"`. Stateless: no server-side store.
+- **Session cookie**: 24h hard exp, written as `Set-Cookie: devserver_gate=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/`. Minted by workspace-proxy on entry-token validation. Same claim envelope, `typ: "session"`. Stateless: no server-side store.
 
-Cookie `Path` scopes the credential to one workspace. JS in `alice.devserver.chan.app/blog/...` cannot read or send the cookie for `alice.devserver.chan.app/journal/...` (path does not match). Cross-user attacks are blocked by browser origin separation: `alice.devserver.chan.app` and `bob.devserver.chan.app` are distinct origins.
+`Path=/` (whole host) is safe because the grant is whole-devserver: every path on `{user}.devserver.chan.app` is content the cookie-holder is already authorized to reach, so there is no non-granted sub-tenant to isolate. The remaining isolation axis is user-to-user, carried by the host-only cookie + the `aud` claim: `alice.devserver.chan.app` and `bob.devserver.chan.app` are distinct origins, and a token's `aud` binds it to one host.
 
 The shared JWT type and signing helpers live in `gateway_common::devserver_gate`.
 
@@ -53,20 +56,21 @@ Full route table is in [`README.md`](README.md). Critical paths:
 
 ### Tunnel registration (apex only)
 
-`POST /v1/tunnel` on `devserver.chan.app:443`. nginx routes this exact path to the h2c tunnel listener (`grpc_pass`, `TUNNEL_BIND_ADDR`, default `:7100`); everything else on the apex `proxy_pass`es to the axum listener on `:7002`. The h2c handler in `chan-tunnel-server` validates the Bearer PAT via identity-service `/internal/v1/tokens/validate`, then registers the workspace in the shared registry.
+`POST /v1/tunnel` on `devserver.chan.app:443`. nginx routes this exact path to the h2c tunnel listener (`grpc_pass`, `TUNNEL_BIND_ADDR`, default `:7100`); everything else on the apex `proxy_pass`es to the axum listener on `:7002`. The h2c handler in `chan-tunnel-server` validates the Bearer PAT via identity-service `/internal/v1/tokens/validate`, then registers the devserver in the shared registry.
 
 ### Reverse proxy (wildcard host)
 
-Auth gate for `*.devserver.chan.app/<workspace>/...`, in order:
+Auth gate for `*.devserver.chan.app/{workspace}/...`, in order:
 
-1. Registration `(host_user, workspace)` not found in the registry -> 404.
-2. Request carries `?t=<jwt>` -> verify signature + exp + aud + drv match. On success: mint a session JWT, write `devserver_gate` cookie scoped to `Path=/<workspace>/`, 303 to `/<workspace>/` (clean URL).
-3. Request carries `devserver_gate` cookie -> verify signature + exp + claim match against `(host_user, workspace)`. Pass through.
-4. Anything else (no cookie, expired cookie, bad signature, wrong user) -> 404.
+1. No live devserver registration for `{user}` -> 404.
+2. `/api/devserver/*` (the local-only management API) -> 404.
+3. Request carries `?t=<jwt>` -> verify signature + exp + aud + drv (= the live devserver id) match. On success: mint a session JWT, write `devserver_gate` cookie scoped to `Path=/`, 303 to the clean URL.
+4. Request carries `devserver_gate` cookie -> verify signature + exp + aud + drv against the user's live devserver. Pass through.
+5. Anything else (no cookie, expired cookie, bad signature, wrong devserver) -> 404.
 
-The gate always runs: every tunnel is authenticated, there is no un-gated pass-through.
+The gate always runs: every devserver is authenticated, there is no un-gated pass-through. On pass, the FULL inbound path (only `?t=` stripped) is forwarded into the tunnel; the devserver routes the `{workspace}` tenant internally.
 
-The 404 path checks `Accept: text/html`; browsers get the styled "workspace not found" page, everything else gets the JSON `{"error":"not found"}` shape. Owners returning after the 24h cookie expires bounce through `id.chan.app/workspaces`; a bookmark to a workspace URL is not a session.
+The 404 path checks `Accept: text/html`; browsers get the styled "workspace not found" page, everything else gets the JSON `{"error":"not found"}` shape. Owners returning after the 24h cookie expires bounce through `id.chan.app/workspaces`; a bookmark to a devserver URL is not a session.
 
 ### Hop-by-hop hygiene
 
@@ -111,7 +115,7 @@ workspace-proxy reads nothing from `tower_sessions`. The browser never sends an 
 This is load-bearing for cross-tenant isolation:
 
 - Malicious tenant content at `evil.devserver.chan.app` can run JS, but the only cookies it can access are its own host-only ones. The browser will not auto-attach an id.chan.app cookie to a fetch on `evil.devserver.chan.app`.
-- Same-host attacks across a single user's workspaces are blocked by the `Path=/<workspace>/` scope on the `devserver_gate` cookie.
+- The `devserver_gate` cookie is host-only and whole-host (`Path=/`). That is safe because a grant is whole-devserver: there is no non-granted sub-tenant on the same host to isolate from.
 - Cross-user attacks are blocked by browser origin separation; each user has their own subdomain.
 
 ### JWT, HS256, two-token
@@ -126,17 +130,17 @@ The tunnel validator returns `(user_id, username)`. `CapturingValidator` records
 
 ### Auth gate trust model
 
-The auth assertion on the wildcard path is the entry JWT, not "sub matches owner". identity-service calls `profile.workspace_access(owner, workspace, caller)` before minting any entry token, so a valid signature plus the right `aud` (= the inbound host, which is `{owner}.devserver.chan.app`) plus the right `drv` (= the requested workspace) proves the caller was authorized at mint time. identity owns the access-control policy; workspace-proxy verifies the signed assertion. The session cookie minted on entry-token validation carries the entry's `sub` unchanged so the upstream attribution chain knows whether the request belongs to the owner or a grantee.
+The auth assertion on the wildcard path is the entry JWT, not "sub matches owner". identity-service calls `profile.devserver_access(owner, devserver, caller)` before minting any entry token, so a valid signature plus the right `aud` (= the inbound host, which is `{owner}.devserver.chan.app`) plus the right `drv` (= the live devserver id) proves the caller was authorized at mint time. identity owns the access-control policy; workspace-proxy verifies the signed assertion. The session cookie minted on entry-token validation carries the entry's `sub` unchanged so the upstream attribution chain knows whether the request belongs to the owner or a grantee.
 
-Tenant isolation is enforced by `aud`. A token minted for one subdomain (`alice.devserver.chan.app`) cannot be replayed on another (`bob.devserver.chan.app`) because `decode` rejects on `aud` mismatch. Workspace isolation is enforced by `drv`. There is no separate "this user is the owner" check, and intentionally so: requiring it would prevent accepted grantees from accessing the workspaces they have been granted.
+User-to-user isolation is enforced by `aud`. A token minted for one subdomain (`alice.devserver.chan.app`) cannot be replayed on another (`bob.devserver.chan.app`) because `decode` rejects on `aud` mismatch. The `drv` claim binds the token to one devserver: a cookie minted for a rotated/old devserver id no longer matches the user's live registration and 404s (re-share required after rotation). There is no separate "this user is the owner" check, and intentionally so: requiring it would prevent accepted grantees from reaching the devserver they have been granted.
 
 ### Tunnel handshake throttles by token fingerprint
 
 `ThrottlingValidator` keeps an in-process map of fingerprint -> token bucket (SipHash of the candidate token, 4 rps refill, 16-burst capacity, 4096-entry cap with LRU eviction). Guesses at a specific PAT are bounded regardless of attacker source-IP diversity. A twin of this throttle lives in identity-service's `/internal/v1/tokens/validate` handler as defense in depth: if the internal bearer leaks and someone hits identity directly, the identity-side throttle catches it. Either throttle alone is enough to make a guess loop glacial.
 
-### Path strip is one segment
+### Segment-preserving forward
 
-`{user}` lives in the host, not the path. The wildcard router strips exactly one segment (`/<workspace>`) before forwarding to the upstream, which expects no prefix (chan serve in tunnel mode refuses `--prefix`).
+`{user}` lives in the host, not the path. The wildcard router does NOT peel a segment: it forwards the full inbound `/{workspace}/...` path (only `?t=` stripped) into the tunnel, and the devserver mounts each tenant at its public `/{workspace}/` slug and routes internally. Getting half of this wrong (proxy strips but the devserver expects the public segment, or vice versa) yields 404s that look like an auth bug; this is the highest-leverage correctness seam and the joint client-to-gateway smoke catches it.
 
 ### Admin tree on the apex
 
@@ -150,10 +154,11 @@ The apex, wildcard, and the dashboard redirect's id host all derive from one bas
 
 - Every registered tunnel has a known `owner_id`.
 - Tunnel registrations are ephemeral; they vanish when the peer disconnects or via admin evict.
-- The proxy path reads no `tower_sessions` cookie. The only cookie it reads or writes is the host-only, path-scoped `devserver_gate`.
+- The proxy path reads no `tower_sessions` cookie. The only cookie it reads or writes is the host-only, whole-host (`Path=/`) `devserver_gate`.
 - Bearer comparisons run at constant time.
 - Hop-by-hop headers are stripped on both legs of every request, including every header named by the inbound `Connection` value.
-- Reverse-proxy paths forward to the tunnel unchanged modulo the single `/<workspace>` segment strip.
+- Reverse-proxy paths forward the full inbound path to the tunnel unchanged (only the `?t=` entry token is stripped); the `{workspace}` segment is preserved.
+- `/api/devserver/*` is never proxied on the public wildcard; the gateway carries tenant content only.
 - Request and response bodies are bounded by the configured caps.
 - HTTP requests are bounded end-to-end by `REQUEST_TIMEOUT_SECS`.
 - WebSocket halves are bounded by a 300s idle timeout each.
