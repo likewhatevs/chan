@@ -50,7 +50,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use chan_server::{
     build_fs_graph, EditorPrefs, EditorTheme, FsGraphResponse, FsGraphScope as ServerFsGraphScope,
-    LineSpacing, ServeConfig, ServerConfig, ThemeChoice, TunnelServeConfig,
+    LineSpacing, ServeConfig, ServerConfig, ThemeChoice,
 };
 use chan_shell::ShellAction;
 use chan_workspace::{
@@ -218,9 +218,8 @@ enum Command {
         /// (e.g. `workspace.example.com/{user}/`). Canonicalized to
         /// `/seg[/seg...]` with `[A-Za-z0-9-]+` segments; trailing
         /// slashes and `//` runs are tolerated. Anything else is
-        /// rejected. Mutually exclusive with --tunnel-token (the
-        /// public gateway already strips /{user}/{workspace}).
-        #[arg(long, conflicts_with = "tunnel_token")]
+        /// rejected.
+        #[arg(long)]
         prefix: Option<String>,
         /// Idle timeout before the server triggers a graceful
         /// shutdown. Accepts `30s`, `5m`, `1h`. Useful for systemd
@@ -260,34 +259,6 @@ enum Command {
         /// devserver / desktop should not take over.
         #[arg(long)]
         standalone: bool,
-        /// Tunnel endpoint URL. With --tunnel-token, chan serve
-        /// dials this instead of binding a local listener.
-        #[arg(long, default_value = "https://workspace.chan.app/v1/tunnel")]
-        tunnel_url: String,
-        /// Personal access token (chan_pat_*) from id.chan.app.
-        /// Setting this enables tunnel mode: chan serve does not
-        /// bind a local TCP listener and instead publishes the
-        /// workspace at {user}.workspace.chan.app/{workspace}/*. Prefer the
-        /// CHAN_TUNNEL_TOKEN env var so the secret does not appear
-        /// in `ps`.
-        #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
-        tunnel_token: Option<String>,
-        /// Workspace URL slug to publish at /{user}/<name>. Must be
-        /// lowercase [a-z0-9-], 1-32 chars, no leading/trailing
-        /// hyphen. Defaults to a sanitized form of the workspace path
-        /// basename; chan emits a NOTE when it had to sanitize.
-        #[arg(long)]
-        tunnel_workspace_name: Option<String>,
-        /// Expose the tunneled workspace without an OAuth gate. By
-        /// default, `{user}.workspace.chan.app/{workspace}/` 404s anonymous
-        /// visitors; the workspace owner opens it from id.chan.app's
-        /// dashboard via a short-lived workspace-gate handoff. With
-        /// --tunnel-public, anyone with the URL can reach the workspace
-        /// over the same tunnel. Requires --tunnel-token (or
-        /// `CHAN_TUNNEL_TOKEN`); clap rejects the flag otherwise so
-        /// it can't silently no-op on a non-tunnel run.
-        #[arg(long, requires = "tunnel_token")]
-        tunnel_public: bool,
     },
     /// Show which registered workspaces are currently being served, and
     /// by what.
@@ -332,6 +303,20 @@ enum Command {
         /// macOS, runs in the foreground. Mutually exclusive with --systemd.
         #[arg(long, conflicts_with = "systemd")]
         launchd: bool,
+        /// Tunnel endpoint URL. With --tunnel-token, the devserver also dials
+        /// this gateway and publishes its tenant content at
+        /// `{user}.devserver.chan.app/{workspace}/*`, alongside the local
+        /// management server.
+        #[arg(long, default_value = "https://devserver.chan.app/v1/tunnel")]
+        tunnel_url: String,
+        /// Personal access token (chan_pat_*) from id.chan.app. Setting this
+        /// enables tunnel mode: the devserver dials the gateway and publishes
+        /// every mounted workspace behind one registration. The devserver
+        /// identity is resolved backend-side from the token, so there is no
+        /// name to pass. Prefer the CHAN_TUNNEL_TOKEN env var so the secret
+        /// does not appear in `ps`.
+        #[arg(long, env = "CHAN_TUNNEL_TOKEN")]
+        tunnel_token: Option<String>,
     },
     /// Read or write settings persisted outside the workspace. Keys use
     /// the same namespaces as the web Settings overlay where possible
@@ -837,10 +822,6 @@ where
             search_aggression,
             no_settings,
             standalone,
-            tunnel_url,
-            tunnel_token,
-            tunnel_workspace_name,
-            tunnel_public,
         } => {
             let addr = resolve_listen_addr(host, ipv4, ipv6, port)?;
             let prefix = chan_server::sanitize_prefix(prefix.as_deref().unwrap_or(""))
@@ -857,10 +838,6 @@ where
                     search_aggression,
                     no_settings,
                     standalone,
-                    tunnel_url,
-                    tunnel_token,
-                    tunnel_workspace_name,
-                    tunnel_public,
                     verbose,
                 },
                 personality,
@@ -873,7 +850,9 @@ where
             port,
             systemd,
             launchd,
-        } => cmd_devserver(bind, port, systemd, launchd).await,
+            tunnel_url,
+            tunnel_token,
+        } => cmd_devserver(bind, port, systemd, launchd, tunnel_url, tunnel_token).await,
         Command::Config { action } => cmd_config(action),
         Command::Upgrade {
             yes,
@@ -946,55 +925,6 @@ fn same_path(a: &Path, b: &Path) -> bool {
     let ca = a.canonicalize().unwrap_or_else(|_| a.to_path_buf());
     let cb = b.canonicalize().unwrap_or_else(|_| b.to_path_buf());
     ca == cb
-}
-
-/// Pick the URL-safe workspace name to publish under
-/// `{user}.workspace.chan.app/<name>`. This is a tunnel URL concern,
-/// separate from local path-keyed workspace metadata.
-///
-/// - With `--tunnel-workspace-name`: validate it; bail with a clear
-///   message + a suggested sanitized form if rejected.
-/// - Without: take the path basename and sanitize. Warn when
-///   sanitize altered it. Bail when sanitize yields `None` (the
-///   basename collapses to all punctuation).
-fn resolve_tunnel_workspace_name(flag: Option<String>, root: &Path) -> Result<String> {
-    if let Some(name) = flag {
-        if chan_server::tunnel::is_valid_workspace_name(&name) {
-            return Ok(name);
-        }
-        let suggestion = chan_server::tunnel::sanitize_workspace_name(&name);
-        let max = chan_server::tunnel::MAX_WORKSPACE_NAME_LEN;
-        let hint = match suggestion {
-            Some(s) => format!(" Try --tunnel-workspace-name={s}."),
-            None => String::new(),
-        };
-        anyhow::bail!(
-            "--tunnel-workspace-name {name:?} is not URL-safe (need [a-z0-9-], 1-{max} chars, no leading/trailing hyphen).{hint}"
-        );
-    }
-    let source = root
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    if chan_server::tunnel::is_valid_workspace_name(&source) {
-        return Ok(source);
-    }
-    match chan_server::tunnel::sanitize_workspace_name(&source) {
-        Some(sanitized) => {
-            eprintln!(
-                "NOTE: workspace path basename {source:?} sanitized to {sanitized:?} for the tunnel URL. \
-                 Pass --tunnel-workspace-name to override."
-            );
-            Ok(sanitized)
-        }
-        None => {
-            let max = chan_server::tunnel::MAX_WORKSPACE_NAME_LEN;
-            anyhow::bail!(
-                "cannot derive a URL-safe tunnel workspace name from {source:?}. \
-                 Pass --tunnel-workspace-name=<name> ([a-z0-9-], 1-{max} chars, no leading/trailing hyphen)."
-            );
-        }
-    }
 }
 
 fn ensure_workspace_registered(
@@ -1435,10 +1365,6 @@ struct ServeArgs {
     search_aggression: Option<SearchAggression>,
     no_settings: bool,
     standalone: bool,
-    tunnel_url: String,
-    tunnel_token: Option<String>,
-    tunnel_workspace_name: Option<String>,
-    tunnel_public: bool,
     verbose: bool,
 }
 
@@ -1474,10 +1400,6 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         search_aggression,
         no_settings,
         standalone,
-        tunnel_url,
-        tunnel_token,
-        tunnel_workspace_name,
-        tunnel_public,
         verbose,
     } = args;
     let lib = library()?;
@@ -1514,14 +1436,13 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     // dispatched as `chan`) integrates with a running desktop; the
     // standalone `chan` binary always owns its own server (browser) and
     // never hands off. When a same-user chan-desktop is running in a GUI
-    // session and this isn't a tunnel run, ask it to open this workspace in
-    // a native window and EXIT. The desktop then owns the workspace's flock;
-    // the CLI must NOT also open the workspace (the single-writer
-    // invariant). This runs BEFORE `open_workspace` so a successful handoff
-    // never double-opens. Every fallback (no desktop, refused, stale socket,
-    // bad handshake, version skew, GUI-absent, tunnel) drops through to the
-    // standalone server path below.
-    if personality == Personality::Desktop && tunnel_token.is_none() && !standalone {
+    // session, ask it to open this workspace in a native window and EXIT. The
+    // desktop then owns the workspace's flock; the CLI must NOT also open the
+    // workspace (the single-writer invariant). This runs BEFORE
+    // `open_workspace` so a successful handoff never double-opens. Every
+    // fallback (no desktop, refused, stale socket, bad handshake, version
+    // skew, GUI-absent) drops through to the standalone server path below.
+    if personality == Personality::Desktop && !standalone {
         if let Some(outcome) = maybe_handoff_to_desktop(&root).await {
             return outcome;
         }
@@ -1533,13 +1454,9 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     // devserver mounts this workspace and owns its flock, so the CLI prints
     // a note and exits WITHOUT opening it (the single-writer invariant).
     // Runs BEFORE `open_workspace` so a successful registration never
-    // double-opens. --standalone, tunnel mode, and CHAN_NO_DEVSERVER_HANDOFF
-    // opt out; every non-registered outcome drops through to the standalone
-    // server path below.
-    if !standalone
-        && tunnel_token.is_none()
-        && !chan_server::devserver_handoff::devserver_handoff_opt_out()
-    {
+    // double-opens. --standalone and CHAN_NO_DEVSERVER_HANDOFF opt out; every
+    // non-registered outcome drops through to the standalone server path below.
+    if !standalone && !chan_server::devserver_handoff::devserver_handoff_opt_out() {
         use chan_server::devserver_handoff::Outcome;
         match chan_server::devserver_handoff::try_register_devserver(&root).await {
             Outcome::Registered { prefix: _ } => {
@@ -1577,41 +1494,6 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     // (reqwest reads them automatically).
     update::maybe_print_banner();
     tokio::spawn(update::run_probe());
-
-    if let Some(token) = tunnel_token {
-        // Warn when the token came in via the flag rather than the
-        // env var (clap doesn't expose the source, so compare to env
-        // directly). The flag value is in `ps` output until the
-        // process exits; the env var is not.
-        if std::env::var("CHAN_TUNNEL_TOKEN").ok().as_deref() != Some(token.as_str()) {
-            eprintln!(
-                "WARNING: --tunnel-token is visible in `ps` output. \
-                 Prefer CHAN_TUNNEL_TOKEN env var instead."
-            );
-        }
-        let workspace_name = resolve_tunnel_workspace_name(tunnel_workspace_name, &root)?;
-        if tunnel_public {
-            eprintln!(
-                "WARNING: --public exposes this workspace at \
-                 workspace.chan.app/<user>/{workspace_name} with no auth gate. \
-                 Anyone with the URL has read/write access."
-            );
-        }
-        return chan_server::serve_via_tunnel(
-            lib,
-            workspace,
-            TunnelServeConfig {
-                tunnel_url: &tunnel_url,
-                token,
-                workspace_name,
-                public: tunnel_public,
-                open_browser: !no_browser,
-                search_aggression,
-            },
-        )
-        .await
-        .context("running tunnel client");
-    }
 
     // Loud warning: the auth model assumes loopback. No TLS, only a
     // bearer token. Binding off-loopback exposes the workspace in the
@@ -1667,7 +1549,14 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
 /// the `app.chan.devserver` LaunchAgent. Either re-attaches when its service is
 /// already running; off its own OS each prints a note and runs in the
 /// foreground.
-async fn cmd_devserver(bind: IpAddr, port: u16, systemd: bool, launchd: bool) -> Result<()> {
+async fn cmd_devserver(
+    bind: IpAddr,
+    port: u16,
+    systemd: bool,
+    launchd: bool,
+    tunnel_url: String,
+    tunnel_token: Option<String>,
+) -> Result<()> {
     let addr = SocketAddr::new(bind, port);
     if !addr.ip().is_loopback() {
         eprintln!(
@@ -1677,6 +1566,36 @@ async fn cmd_devserver(bind: IpAddr, port: u16, systemd: bool, launchd: bool) ->
             addr.ip()
         );
     }
+    // Resolve tunnel mode from --tunnel-token. When set, the devserver also
+    // dials the gateway and publishes every mounted workspace behind one
+    // registration; the local management server still binds. The tunnel runs
+    // only in the FOREGROUND devserver: the token is a secret, and the
+    // supervised backends would have to persist it in the unit file / launchd
+    // plist (0644) to re-exec with it, so the combination is refused.
+    let tunnel = match tunnel_token {
+        Some(token) => {
+            // Warn when the token came in via the flag rather than the env var
+            // (clap doesn't expose the source, so compare to env directly). The
+            // flag value is in `ps` output until the process exits; the env var
+            // is not.
+            if std::env::var("CHAN_TUNNEL_TOKEN").ok().as_deref() != Some(token.as_str()) {
+                eprintln!(
+                    "WARNING: --tunnel-token is visible in `ps` output. \
+                     Prefer CHAN_TUNNEL_TOKEN env var instead."
+                );
+            }
+            if systemd || launchd {
+                anyhow::bail!(
+                    "chan devserver: tunnel mode (--tunnel-token) is not supported under \
+                     --systemd/--launchd; the supervised backend would persist the token in \
+                     the unit file. Run the devserver in the foreground (or under your own \
+                     supervisor) to enable the tunnel."
+                );
+            }
+            Some(chan_server::DevserverTunnel { tunnel_url, token })
+        }
+        None => None,
+    };
     // `--systemd` / `--launchd` supervise the foreground devserver under the
     // platform service manager so it survives the launching terminal. Each is a
     // no-op off its own OS (the other backend is not wired there), so fall back
@@ -1693,18 +1612,24 @@ async fn cmd_devserver(bind: IpAddr, port: u16, systemd: bool, launchd: bool) ->
         }
         eprintln!("chan devserver: NOTE: --launchd is macOS-only; running in the foreground.");
     }
-    run_devserver_foreground(addr).await
+    run_devserver_foreground(addr, tunnel).await
 }
 
 /// Run the devserver in the foreground. The no-supervisor default and the
-/// systemd unit's `ExecStart` / launchd agent's `ProgramArguments` all land here.
-async fn run_devserver_foreground(addr: SocketAddr) -> Result<()> {
+/// systemd unit's `ExecStart` / launchd agent's `ProgramArguments` all land
+/// here. `tunnel` carries the gateway registration when `--tunnel-token` is
+/// set; the supervised backends never pass it (tunnel mode is foreground-only).
+async fn run_devserver_foreground(
+    addr: SocketAddr,
+    tunnel: Option<chan_server::DevserverTunnel>,
+) -> Result<()> {
     let lib = library()?;
     chan_server::run_devserver(
         lib,
         chan_server::DevserverConfig {
             addr,
             host_label: devserver_host_label(),
+            tunnel,
         },
     )
     .await
@@ -4362,46 +4287,6 @@ mod tests {
         assert!(!directory_depth_in_scope("notes/a.md", "", 1));
         assert!(directory_depth_in_scope("notes/a.md", "", 2));
         assert!(!directory_depth_in_scope("a.md", "", 0));
-    }
-
-    #[test]
-    fn tunnel_workspace_flag_passes_through_when_valid() {
-        let root = PathBuf::from("/tmp/whatever");
-        let out = resolve_tunnel_workspace_name(Some("notes".into()), &root).unwrap();
-        assert_eq!(out, "notes");
-    }
-
-    #[test]
-    fn tunnel_workspace_flag_rejected_with_suggestion() {
-        let root = PathBuf::from("/tmp/whatever");
-        let err = resolve_tunnel_workspace_name(Some("My Workspace!".into()), &root).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("not URL-safe"), "{msg}");
-        assert!(
-            msg.contains("--tunnel-workspace-name=my-workspace"),
-            "{msg}"
-        );
-    }
-
-    #[test]
-    fn tunnel_workspace_flag_rejected_when_unsanitizable() {
-        let root = PathBuf::from("/tmp/whatever");
-        let err = resolve_tunnel_workspace_name(Some("---".into()), &root).unwrap_err();
-        assert!(err.to_string().contains("not URL-safe"));
-    }
-
-    #[test]
-    fn tunnel_workspace_default_uses_path_basename() {
-        let root = PathBuf::from("/tmp/Daily Journal");
-        let out = resolve_tunnel_workspace_name(None, &root).unwrap();
-        assert_eq!(out, "daily-journal");
-    }
-
-    #[test]
-    fn tunnel_workspace_default_bails_when_basename_collapses() {
-        let root = PathBuf::from("/tmp/---");
-        let err = resolve_tunnel_workspace_name(None, &root).unwrap_err();
-        assert!(err.to_string().contains("cannot derive"));
     }
 
     #[test]

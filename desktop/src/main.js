@@ -473,7 +473,9 @@ function showNewWorkspaceDialog(initialChoice = 'local', editDevserver = null, a
         <textarea id="nw-ds-script" class="nw-script" rows="2" autocomplete="off" spellcheck="false" placeholder="ssh user@box -L 8787:localhost:8787 chan devserver --bind 127.0.0.1 --port 8787">${escapeHtml(ds.script || '')}</textarea>
       </label>
       <p class="nw-muted">On the box, run a devserver, then register workspaces into it with <code>chan serve</code>:</p>
-      <pre class="snippet" data-copy="chan devserver --bind 127.0.0.1 --port 8787" title="click to copy">chan devserver --bind 127.0.0.1 --port 8787</pre>`;
+      <pre class="snippet" data-copy="chan devserver --bind 127.0.0.1 --port 8787" title="click to copy">chan devserver --bind 127.0.0.1 --port 8787</pre>
+      <p class="nw-muted">To publish that devserver's workspaces through the chan gateway (shareable links), add a token from id.chan.app:</p>
+      <pre class="snippet" data-copy="chan devserver --tunnel-url https://devserver.chan.app/v1/tunnel --tunnel-token chan_pat_..." title="click to copy">chan devserver --tunnel-url https://devserver.chan.app/v1/tunnel --tunnel-token chan_pat_...</pre>`;
     const submit = document.createElement('button');
     submit.className = 'btn primary';
     submit.type = 'button';

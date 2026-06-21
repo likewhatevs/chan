@@ -5,10 +5,12 @@
 //!
 //! - A management HTTP/JSON API under the reserved `/api/devserver/*`
 //!   namespace ([`crate::devserver_api`]): list, mount, forget workspaces
-//!   and open standalone terminals. Every workspace tenant mounts under a
-//!   non-empty, legible prefix below `/api/`, so the management router
-//!   answers first and everything else falls through to the per-tenant
-//!   router.
+//!   and open standalone terminals. Workspace tenants mount at their PUBLIC
+//!   slug `/{slug}` (top-level), so the gateway forwards
+//!   `{user}.devserver.chan.app/{slug}/` unchanged and the devserver routes
+//!   the tenant by it; the explicit `/api/devserver/*` and `/api/library/*`
+//!   management routes match before the per-tenant fallback, and the only
+//!   reserved top-level slug is `api`.
 //! - A per-user Unix discovery socket ([`crate::devserver_handoff`]): a
 //!   `chan serve <path>` on the same box registers its workspace with the
 //!   running devserver and exits instead of binding its own server, so the
@@ -26,6 +28,7 @@ use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context;
 use axum::body::Body;
@@ -54,12 +57,28 @@ use chan_library::{allocate_workspace_prefix, workspace_slug};
 
 /// Inputs the CLI resolves for `chan devserver`. The `--systemd`
 /// supervision path is layered on in the CLI around this; the runtime
-/// itself only needs where to bind and how to label the box.
+/// itself only needs where to bind, how to label the box, and whether to
+/// also dial the gateway tunnel.
 pub struct DevserverConfig {
     /// Address to bind the public HTTP listener.
     pub addr: SocketAddr,
     /// Human label for the box (drives the client's grouping header).
     pub host_label: String,
+    /// When set, the devserver also dials the gateway and publishes its
+    /// tenant content at `{user}.devserver.chan.app/{workspace}/*`. `None`
+    /// leaves it local-only (management API + discovery socket on `addr`).
+    pub tunnel: Option<DevserverTunnel>,
+}
+
+/// Gateway tunnel registration for a devserver. The devserver identity is
+/// resolved backend-side from the token (PAT SHA-256), so there is no name to
+/// supply; the whole library rides one registration.
+#[derive(Debug, Clone)]
+pub struct DevserverTunnel {
+    /// Tunnel endpoint URL (default `https://devserver.chan.app/v1/tunnel`).
+    pub tunnel_url: String,
+    /// Personal access token (`chan_pat_*`) from id.chan.app.
+    pub token: String,
 }
 
 /// On-disk devserver state. The bearer token is minted once and reused so a
@@ -280,7 +299,19 @@ impl DevserverState {
     /// NOT persist — callers batch the save. Returns the prefix actually
     /// mounted at (the host's idempotent re-register can return an existing
     /// prefix; for a fresh mount it is `prefix`).
+    ///
+    /// Rejects a `prefix` that collides with the reserved `/api/` namespace.
+    /// The host's own collision guard rejects a `prefix` already taken by a
+    /// DIFFERENT root (two workspaces with the same basename slug), surfacing
+    /// the design's "slug uniqueness within a devserver".
     async fn mount_at(&self, root: &Path, prefix: &str) -> Result<String, Error> {
+        if prefix == RESERVED_WORKSPACE_PREFIX {
+            return Err(Error::Config(format!(
+                "cannot mount a workspace at {prefix}: that path is reserved for the devserver \
+                 management API (/api/*). Rename the workspace directory; its basename becomes \
+                 the public slug."
+            )));
+        }
         self.host.library().register_workspace(root)?;
         let hosted = self
             .host
@@ -819,10 +850,117 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         cancel_host.cancel_all_reindex();
     });
 
+    // Tunnel mode: also hand the SAME app to chan-tunnel-client, which registers
+    // ONE devserver and forwards inbound substreams into it, publishing every
+    // mounted tenant behind one gateway registration. The management API rides
+    // the same router, but the proxy 404s `/api/devserver/*` on the public
+    // wildcard, so only tenant content is reachable through the gateway. The
+    // run loop reconnects with backoff and is cancelled by the shutdown signal.
+    if let Some(tunnel) = config.tunnel {
+        spawn_devserver_tunnel(tunnel, app.clone(), &signal_tx);
+    }
+
     crate::signal::graceful_serve(listener, app, signal_tx)
         .await
         .context("running devserver")?;
     Ok(())
+}
+
+/// Fixed registration name sent in the tunnel `Hello` frame. The gateway
+/// resolves the devserver identity from the token (PAT SHA-256) and ignores
+/// this value; it is non-empty only to satisfy the client-side name check
+/// (`chan_tunnel_proto::is_valid_workspace_name`). One devserver per user means
+/// the registry key `(user, name)` never collides across users.
+const DEVSERVER_TUNNEL_NAME: &str = "devserver";
+
+/// True iff the tunnel dial endpoint is the production `devserver.chan.app`
+/// terminator. On that path the devserver can name the public host shape
+/// (`{user}.devserver.chan.app`); anywhere else (a dev gateway, a staging
+/// host) the terminator owns the URL scheme, so the connect log prints
+/// identity only.
+fn is_production_tunnel_url(tunnel_url: &str) -> bool {
+    url::Url::parse(tunnel_url)
+        .map(|u| u.scheme() == "https" && u.host_str() == Some("devserver.chan.app"))
+        .unwrap_or(false)
+}
+
+/// Dial the gateway tunnel on a background task that races the reconnect loop
+/// against the shutdown signal. The devserver is headless, so the lifecycle
+/// drainer only logs connect / disconnect / dial-failure: no QR, no
+/// browser-open, and no SPA prefix swap (each tenant already serves at its own
+/// public slug, so the proxy forwards the public path unchanged).
+fn spawn_devserver_tunnel(
+    tunnel: DevserverTunnel,
+    app: Router,
+    signal_tx: &Arc<tokio::sync::watch::Sender<bool>>,
+) {
+    let DevserverTunnel { tunnel_url, token } = tunnel;
+    let mut shutdown_rx = signal_tx.subscribe();
+    tokio::spawn(async move {
+        let url = match url::Url::parse(&tunnel_url) {
+            Ok(url) => url,
+            Err(e) => {
+                eprintln!("chan devserver: invalid --tunnel-url {tunnel_url:?}: {e}");
+                return;
+            }
+        };
+        let production = is_production_tunnel_url(&tunnel_url);
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            while let Some(ev) = events_rx.recv().await {
+                match ev {
+                    chan_tunnel_client::TunnelEvent::Connected(reg) => {
+                        if production {
+                            eprintln!(
+                                "chan devserver: tunnel connected; workspaces are published at \
+                                 https://{user}.devserver.chan.app/<workspace>/",
+                                user = reg.user,
+                            );
+                        } else {
+                            eprintln!(
+                                "chan devserver: tunnel connected as user {user}",
+                                user = reg.user,
+                            );
+                        }
+                    }
+                    chan_tunnel_client::TunnelEvent::Disconnected { retry_in } => {
+                        eprintln!(
+                            "chan devserver: tunnel disconnected; reconnecting in {retry_in:?}"
+                        );
+                    }
+                    chan_tunnel_client::TunnelEvent::DialFailed { error, retry_in } => {
+                        eprintln!(
+                            "chan devserver: tunnel dial failed: {error} (retry in {retry_in:?})"
+                        );
+                    }
+                }
+            }
+        });
+        let cfg = chan_tunnel_client::ClientConfig {
+            tunnel_url: url,
+            token,
+            workspace: DEVSERVER_TUNNEL_NAME.to_string(),
+            client_version: format!("chan/{}", env!("CARGO_PKG_VERSION")),
+            public: false,
+            initial_backoff: Duration::from_millis(500),
+            max_backoff: Duration::from_secs(30),
+            dial_timeout: Duration::from_secs(30),
+            proxy: None,
+            max_concurrent_substreams: chan_tunnel_client::ClientConfig::default()
+                .max_concurrent_substreams,
+            events: Some(events_tx),
+        };
+        // Race the run loop against shutdown: dropping the tunnel future closes
+        // the yamux session immediately (no axum connection pool to drain).
+        tokio::select! {
+            res = chan_tunnel_client::run(cfg, app) => {
+                if let Err(e) = res {
+                    eprintln!("chan devserver: tunnel client exited: {e}");
+                }
+            }
+            _ = shutdown_rx.changed() => {}
+        }
+    });
 }
 
 /// Build the merged router: the unauthenticated info probe, the
@@ -1212,10 +1350,17 @@ fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
 // Prefix + config helpers.
 // ---------------------------------------------------------------------------
 
+/// Top-level prefix reserved for the devserver's own `/api/` namespace (the
+/// management API and the terminal tenants). A workspace whose basename
+/// sanitizes to `api` would mount at `/api` and shadow that namespace, so
+/// [`mount_at`](DevserverState::mount_at) rejects it. Workspace tenants mount at
+/// their public slug `/{slug}` (top-level); only `/api` collides.
+const RESERVED_WORKSPACE_PREFIX: &str = "/api";
+
 /// Mount prefix of the per-library SHARED terminal tenant (D-W3) that every
 /// devserver Terminal window resolves to. Fixed (one shared tenant per library),
 /// and distinct from per-label terminal prefixes (`/api/term-…`) and workspace
-/// prefixes (`/api/{slug}-…`), so it never collides.
+/// prefixes (the top-level public slug `/{slug}`), so it never collides.
 const DEVSERVER_SHARED_TERMINAL_PREFIX: &str = "/api/terminal";
 
 /// Per-tenant serve config: each workspace gets its own bearer token (so
@@ -1234,13 +1379,11 @@ fn tenant_config(addr: SocketAddr, prefix: &str) -> ServeConfig {
     }
 }
 
-/// Allocate a workspace's mount prefix: `/api/{slug}-{hash}`, where `slug`
-/// is the sanitized last path segment and `hash` disambiguates over the
-/// canonical root. Deterministic, so the same root always maps to the same
-/// prefix (idempotent re-register and stable URLs across restarts).
 /// Allocate a standalone terminal's mount prefix from its window label:
 /// `/api/term-{slug}-{hash}`, deterministic so the same label always maps to
 /// the same prefix — the terminal re-mounts at the same route across a restart.
+/// Terminals keep the opaque `/api/` prefix (they are launcher-local, not part
+/// of the public workspace surface); only workspace tenants mount at `/{slug}`.
 fn allocate_terminal_prefix(label: &str) -> Result<String, Error> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     label.hash(&mut hasher);
@@ -1296,18 +1439,63 @@ mod tests {
     }
 
     #[test]
-    fn prefix_is_legible_unique_and_valid() {
+    fn workspace_prefix_is_the_public_slug() {
         let a = allocate_workspace_prefix(Path::new("/tmp/notes")).unwrap();
         let b = allocate_workspace_prefix(Path::new("/tmp/notes")).unwrap();
         // Deterministic: the same root maps to the same prefix.
         assert_eq!(a, b);
-        assert!(a.starts_with("/api/notes-"), "unexpected prefix: {a}");
-        // Never the reserved management namespace, never empty.
-        assert!(!a.starts_with("/api/devserver/"));
+        // The prefix IS the public slug the gateway forwards (`/{slug}`), not
+        // the old opaque `/api/{slug}-{hash}`. Top-level, never under the
+        // reserved `/api/` management+terminal namespace, never empty.
+        assert_eq!(a, "/notes");
+        assert!(!a.starts_with("/api"));
         assert_ne!(a, "");
-        // A different root differs.
+        // A different basename differs.
         let c = allocate_workspace_prefix(Path::new("/tmp/other")).unwrap();
         assert_ne!(a, c);
+        // Same basename under a different parent COLLIDES (same slug): the
+        // devserver rejects the second at mount time (slug uniqueness).
+        let d = allocate_workspace_prefix(Path::new("/tmp/sub/notes")).unwrap();
+        assert_eq!(a, d);
+    }
+
+    #[tokio::test]
+    async fn mount_uses_public_slug_and_rejects_slug_collision_and_reserved() {
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        // A workspace named "notes" mounts at its PUBLIC slug "/notes" (the path
+        // the gateway forwards), not an opaque /api/{slug}-{hash}.
+        let parent = tempfile::tempdir().expect("parent");
+        let notes = parent.path().join("notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        std::fs::write(notes.join("n.md"), "# N\n").unwrap();
+        let prefix = state.register_workspace(&notes).await.expect("mount");
+        assert_eq!(prefix, "/notes");
+        assert!(state
+            .host
+            .mounted_prefixes()
+            .unwrap()
+            .contains(&"/notes".to_string()));
+
+        // A SECOND workspace with the same basename collides on the slug and is
+        // rejected at mount time (slug uniqueness within a devserver).
+        let other = tempfile::tempdir().expect("other");
+        let notes2 = other.path().join("notes");
+        std::fs::create_dir_all(&notes2).unwrap();
+        std::fs::write(notes2.join("n.md"), "# N2\n").unwrap();
+        let err = state.register_workspace(&notes2).await.unwrap_err();
+        assert!(err.to_string().contains("already mounted"), "{err}");
+
+        // A workspace whose basename sanitizes to the reserved "api" slug is
+        // rejected: it would mount at /api and shadow the management namespace.
+        let api_parent = tempfile::tempdir().expect("api parent");
+        let api_dir = api_parent.path().join("api");
+        std::fs::create_dir_all(&api_dir).unwrap();
+        std::fs::write(api_dir.join("a.md"), "# A\n").unwrap();
+        let err = state.register_workspace(&api_dir).await.unwrap_err();
+        assert!(err.to_string().contains("reserved"), "{err}");
     }
 
     #[test]

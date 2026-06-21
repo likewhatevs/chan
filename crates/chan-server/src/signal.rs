@@ -20,20 +20,6 @@ pub fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Print a Dense1x2 QR for `url` to stderr when stderr is a TTY.
-/// Suppressed under redirection so the banner stays grep-friendly
-/// in logs. Encoder failure (URL too long for ECC H) is silent: the
-/// preceding plain-text URL line is still authoritative.
-pub fn print_qr_if_tty(url: &str) {
-    use std::io::IsTerminal;
-    if !std::io::stderr().is_terminal() {
-        return;
-    }
-    if let Some(s) = crate::qr::render(url) {
-        eprintln!("\n{s}");
-    }
-}
-
 /// Spawn the idle-timeout watcher. Compares `last_activity` against
 /// `now` on each tick; on a window expiry, signals shutdown.
 ///

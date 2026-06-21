@@ -36,7 +36,6 @@ pub mod handoff;
 mod indexer;
 mod mcp_bridge;
 mod preferences;
-mod qr;
 mod routes;
 mod self_writes;
 mod signal;
@@ -62,7 +61,8 @@ pub use chan_library::windows::{CreateWindow, WindowKind, WindowRecord, WindowSe
 pub(crate) use chan_library::{desktop_window_ops, window_presence, window_titles};
 pub use chan_library::{HostedWorkspace, WorkspaceHost};
 pub use devserver::{
-    persisted_devserver_token, run_devserver, DevserverConfig, DEVSERVER_TOKEN_MARKER,
+    persisted_devserver_token, run_devserver, DevserverConfig, DevserverTunnel,
+    DEVSERVER_TOKEN_MARKER,
 };
 pub use error::Error;
 pub use mcp_bridge::run_stdio_proxy as run_mcp_stdio_proxy;
@@ -102,9 +102,7 @@ use routes::{
     api_semantic_disable, api_semantic_download, api_semantic_enable, api_semantic_model_patch,
     api_semantic_models, api_semantic_state,
 };
-use signal::{
-    graceful_serve, now_unix_secs, print_qr_if_tty, spawn_idle_watcher, spawn_signal_watcher,
-};
+use signal::{graceful_serve, now_unix_secs, spawn_idle_watcher};
 use state::{AppState, WorkspaceCell};
 use static_assets::{serve_font, serve_static};
 // The terminal-session registry lives in chan-library. Re-export it at the
@@ -122,7 +120,6 @@ pub mod tunnel {
 
 use self_writes::SelfWrites;
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -133,8 +130,7 @@ use axum::middleware;
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
 use chan_workspace::{
-    Library, ProgressCallback, ProgressEvent, ProgressStage, SearchAggression, WatchEvent,
-    Workspace,
+    Library, ProgressCallback, ProgressEvent, ProgressStage, WatchEvent, Workspace,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
@@ -158,20 +154,6 @@ fn should_open_browser(open_browser: bool) -> bool {
         return false;
     }
     !matches!(std::env::var("BROWSER"), Ok(v) if v.is_empty())
-}
-
-/// True iff the tunnel dial endpoint points at the production
-/// `workspace.chan.app` terminator. On that path chan-serve can predict
-/// the public visitor URL (wildcard subdomain shape); anywhere else
-/// the terminator (chan-desktop, dev gateway, third-party host)
-/// owns the URL scheme so we can't fabricate one. The QR and
-/// browser-open paths key on this so we never advertise a
-/// hallucinated `tunnel.workspace.chan.app`-style URL for a dial that
-/// went to a local loopback or an unrelated host.
-fn is_production_tunnel_url(tunnel_url: &str) -> bool {
-    url::Url::parse(tunnel_url)
-        .map(|u| u.scheme() == "https" && u.host_str() == Some("workspace.chan.app"))
-        .unwrap_or(false)
 }
 
 /// Bundle returned by `build_app`: the prefixed axum app plus the
@@ -223,7 +205,7 @@ struct AppArtifacts {
     state: Arc<AppState>,
     /// Shutdown signal sender. Fed by SIGINT/SIGTERM and (optionally)
     /// the idle-timeout watcher. Receivers live on `AppState` and in
-    /// `serve()` / `serve_via_tunnel()` for the runloop select.
+    /// `serve()` for the runloop select.
     shutdown_tx: Arc<watch::Sender<bool>>,
 }
 
@@ -328,8 +310,9 @@ fn format_index_progress(event: &ProgressEvent, verbose: bool) -> String {
 
 /// Build the full axum app: state assembly, channels, watcher,
 /// indexer, config loads, router. Shared by `serve()` (local TCP
-/// listener) and `serve_via_tunnel()` (chan-tunnel-client transport)
-/// so the two paths serve byte-identical request handling.
+/// listener) and the `WorkspaceHost` tenant builder (the devserver and
+/// chan-desktop mount their tenants through it) so every path serves
+/// byte-identical request handling.
 /// Prime the Windows Git BASH discovery cache off the async request path.
 /// Discovery shells out (`git --exec-path`, `reg query`, `where bash`) with
 /// blocking process spawns; resolving it lazily on the first terminal create
@@ -1204,246 +1187,6 @@ pub async fn serve(
     graceful_serve(listener, app, signal_tx)
         .await
         .map_err(Error::Io)?;
-    Ok(())
-}
-
-/// Build the same axum app as `serve()` but hand it to
-/// `chan_tunnel_client::run` instead of binding a local TCP listener.
-/// `chan serve --tunnel-token ...` calls this; the tunnel client
-/// dials `tunnel_url`, runs Hello/HelloAck, and serves yamux
-/// substreams with our router until the future is dropped.
-///
-/// Tunnel mode forces `no_token=true`: the gateway in front of
-/// workspace.chan.app is the trust boundary, and the per-launch bearer
-/// would otherwise have to be embedded in any URL the user shares.
-///
-/// `public` is forwarded to workspace-proxy via the Hello frame. When
-/// false (the default), workspace-proxy bounces anonymous visitors to
-/// id.chan.app; only the workspace owner's signed-in session can reach
-/// the tunneled workspace. When true, workspace-proxy skips the OAuth gate
-/// and anyone with the URL can read/write.
-///
-/// The Settings panel follows `public`: an OAuth-gated tunnel run
-/// leaves it live (the gateway proves the viewer is the workspace owner,
-/// even on a different device), while `--tunnel-public` greys it out
-/// because anonymous visitors must not mutate owner config.
-#[derive(Debug, Clone)]
-pub struct TunnelServeConfig<'a> {
-    pub tunnel_url: &'a str,
-    pub token: String,
-    pub workspace_name: String,
-    pub public: bool,
-    pub open_browser: bool,
-    pub search_aggression: Option<SearchAggression>,
-}
-
-pub async fn serve_via_tunnel(
-    library: Library,
-    workspace: Arc<Workspace>,
-    config: TunnelServeConfig<'_>,
-) -> Result<(), Error> {
-    let TunnelServeConfig {
-        tunnel_url,
-        token,
-        workspace_name,
-        public,
-        open_browser,
-        search_aggression,
-    } = config;
-    // The addr field is unused in tunnel mode (no local listener);
-    // any parseable SocketAddr works. Prefix is empty: the public
-    // gateway strips /{user}/{workspace} before forwarding, so handlers
-    // see workspace-relative paths just like the local case.
-    let server_config = ServeConfig {
-        addr: SocketAddr::from(([127, 0, 0, 1], 0)),
-        no_token: true,
-        prefix: String::new(),
-        idle_timeout: None,
-        // Unused on this path: the tunnel browser-open fires from
-        // the Connected event handler below, gated by the
-        // `open_browser` parameter on serve_via_tunnel. The local
-        // serve() open path is never reached in tunnel mode.
-        open_browser: false,
-        search_aggression,
-        // Tunnel/desktop-spawned runs keep the cold-start stderr
-        // progress quiet by default; it targets the foreground local
-        // `chan serve` terminal.
-        verbose: false,
-        // Settings track `public`: OAuth-gated runs leave the panel
-        // live (the gateway has proven the viewer is the workspace
-        // owner), `--tunnel-public` greys it out so anonymous
-        // visitors can't mutate owner config.
-        settings_disabled: public,
-        // Forward the public-tunnel flag verbatim. Handlers consume
-        // this for restrictions that only apply when the gateway is
-        // not authenticating the viewer (terminal gate, host-path
-        // redactions).
-        tunnel_public: public,
-    };
-    let artifacts = build_app(
-        library,
-        workspace,
-        &server_config,
-        crate::desktop_window_ops::DesktopBridge::default(),
-        chan_library::UnserveMode::Standalone,
-    )
-    .await?;
-    let prefix_handle = artifacts.prefix.clone();
-    // Keep the MCP bridge alive for the tunnel session; bound here
-    // so the socket file is unlinked when serve_via_tunnel returns.
-    let _mcp_bridge = artifacts.mcp_bridge;
-    let _control_socket = artifacts.control_socket;
-    let workspace_cell = artifacts.workspace_cell.clone();
-
-    // Same shutdown wiring as `serve()`: signal_watcher workspaces a
-    // tokio::watch channel, and a side task cancels any in-flight
-    // reindex when shutdown fires so the runtime doesn't have to
-    // wait for the rebuild to finish naturally. Channel was created
-    // inside build_app so AppState shares the receiver.
-    let signal_tx = artifacts.shutdown_tx;
-    let mut signal_rx = signal_tx.subscribe();
-    spawn_signal_watcher(signal_tx.clone());
-
-    let cancel_workspace_cell = workspace_cell.clone();
-    let mut cancel_rx = signal_rx.clone();
-    tokio::spawn(async move {
-        let _ = cancel_rx.changed().await;
-        if let Ok(cell) = cancel_workspace_cell.read() {
-            if let Some(cell) = cell.as_ref() {
-                cell.indexer.cancel();
-            }
-        }
-    });
-
-    // Lifecycle events from chan-tunnel-client: drained on a side
-    // task so we can print a human-readable "your workspace is at ..."
-    // line on first connect and a reconnect notice on disconnect.
-    // The channel is bounded; chan-tunnel-client uses try_send so a
-    // slow drainer drops events instead of stalling the run loop.
-    let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(8);
-    // Capture for the spawned task: the hostname / scheme of the
-    // tunnel dial endpoint decides whether we know the public URL
-    // shape on the visitor side. The production `workspace.chan.app`
-    // gateway uses wildcard subdomains; any other terminator
-    // (embedded chan-tunnel-server, local dev, third-party host)
-    // owns its own URL scheme and chan-serve has no way to predict
-    // the visitor URL from this side of the dial.
-    let production_public = is_production_tunnel_url(tunnel_url);
-    tokio::spawn(async move {
-        // First-connect-only flag: print the QR + open the browser
-        // once. Reconnect storms must not re-trigger either side
-        // effect (would spam the screen and re-open tabs).
-        let mut greeted = false;
-        while let Some(ev) = events_rx.recv().await {
-            match ev {
-                chan_tunnel_client::TunnelEvent::Connected(reg) => {
-                    // Update the SPA-facing prefix so /index.html gets a
-                    // <meta name="chan-prefix" content="/{workspace}"> tag and
-                    // the frontend prepends the public path to its API and
-                    // WebSocket URLs. The router itself is mounted at
-                    // root: the public gateway strips the prefix before
-                    // forwarding into the tunnel substream.
-                    match prefix_handle.write() {
-                        Ok(mut prefix) => *prefix = reg.prefix.clone(),
-                        Err(_) => {
-                            tracing::warn!("prefix lock poisoned; tunnel prefix update skipped");
-                            continue;
-                        }
-                    }
-                    if production_public {
-                        // Wildcard-subdomain shape on workspace.chan.app:
-                        // `{user}.workspace.chan.app/{workspace}/`. User is in
-                        // the host; reg.prefix is `/{workspace}`. Trailing
-                        // slash matches the canonical form so the chan
-                        // SPA's vite `base: "./"` resolves asset URLs
-                        // relative to the workspace.
-                        let public_url = format!(
-                            "https://{user}.workspace.chan.app{prefix}/",
-                            user = reg.user,
-                            prefix = reg.prefix,
-                        );
-                        eprintln!("chan tunnel connected: {public_url}");
-                        if !greeted {
-                            greeted = true;
-                            print_qr_if_tty(&public_url);
-                            if should_open_browser(open_browser) {
-                                if let Err(e) = open::that_detached(&public_url) {
-                                    eprintln!(
-                                        "NOTE: could not open browser ({e}); visit the URL above."
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        // Non-production terminator: we know `reg.user`
-                        // and `reg.workspace` from HelloAck but the visitor
-                        // URL belongs to whoever is hosting the tunnel
-                        // server (e.g. chan-desktop maps each label to a
-                        // per-tenant loopback port the desktop chose).
-                        // Print identity only and skip the QR / browser
-                        // open; those would point at a wrong URL.
-                        eprintln!(
-                            "chan tunnel connected as {user}/{workspace}",
-                            user = reg.user,
-                            workspace = reg.workspace,
-                        );
-                        greeted = true;
-                    }
-                }
-                chan_tunnel_client::TunnelEvent::Disconnected { retry_in } => {
-                    eprintln!("chan tunnel disconnected; reconnecting in {retry_in:?}");
-                }
-                chan_tunnel_client::TunnelEvent::DialFailed { error, retry_in } => {
-                    eprintln!("chan tunnel dial failed: {error} (retry in {retry_in:?})");
-                }
-            }
-        }
-    });
-
-    let cfg = chan_tunnel_client::ClientConfig {
-        tunnel_url: tunnel_url
-            .parse()
-            .map_err(|e: url::ParseError| Error::Config(format!("invalid tunnel URL: {e}")))?,
-        token,
-        workspace: workspace_name,
-        client_version: format!("chan/{}", env!("CARGO_PKG_VERSION")),
-        public,
-        initial_backoff: Duration::from_millis(500),
-        max_backoff: Duration::from_secs(30),
-        // chan-tunnel-client 0.5.1 added a per-dial wall-clock cap.
-        // 30s matches the upstream default and covers the trans-
-        // pacific case; black-holed routes fail fast instead of
-        // hanging on the OS TCP timeout.
-        dial_timeout: Duration::from_secs(30),
-        // chan-tunnel-client 0.6 added an optional outbound proxy.
-        // We don't surface it through chan's CLI yet; default to
-        // direct dial.
-        proxy: None,
-        // Keep the substream concurrency cap aligned with
-        // chan-tunnel-client's default.
-        max_concurrent_substreams: chan_tunnel_client::ClientConfig::default()
-            .max_concurrent_substreams,
-        events: Some(events_tx),
-    };
-    // Race the tunnel run loop against the shutdown signal. The
-    // tunnel client doesn't observe SIGINT/SIGTERM itself; without
-    // this select! a Ctrl-C would only terminate the process via the
-    // outer runtime drop. With it, the future cancellation drops the
-    // tunnel client cleanly: yamux substreams close (which terminates
-    // all client HTTP and WS connections), MCP bridge drop unlinks
-    // its socket, indexer cancel has already fired.
-    tokio::select! {
-        res = chan_tunnel_client::run(cfg, artifacts.app) => {
-            res.map_err(|e| Error::Config(e.to_string()))?;
-        }
-        _ = signal_rx.changed() => {
-            // Dropping the tunnel future via select! cancellation
-            // closes the yamux session immediately. No drain window
-            // needed: there's no axum-level connection pool here, so
-            // unlike serve()'s graceful_shutdown there's nothing
-            // outstanding to wait on.
-        }
-    }
     Ok(())
 }
 

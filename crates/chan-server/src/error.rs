@@ -1,6 +1,6 @@
 //! Error type and HTTP response builders.
 //!
-//! `Error` is the crate-wide error returned by `serve()`/`serve_via_tunnel()`.
+//! `Error` is the crate-wide error returned by `serve()` and the devserver.
 //! The `err_*` helpers shape uniform `{"error": "..."}` JSON bodies and map
 //! chan-workspace errors onto the right HTTP status. Routes call into these instead
 //! of building responses by hand so the wire shape stays consistent across
