@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{Request, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::http::{Request, StatusCode, Uri};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Router;
 use chan_workspace::{Library, Workspace};
 use tokio::sync::Notify;
@@ -998,6 +998,34 @@ impl WorkspaceHost {
             .max_by_key(|(prefix, _)| prefix.len())
             .map(|(_, runtime)| runtime.router()))
     }
+
+    /// If `path` is exactly a mounted tenant prefix `/{prefix}` or its trailing-
+    /// slash form `/{prefix}/`, return the bare prefix. `host_dispatch` uses it
+    /// to canonicalize the tenant root (axum's nest 404s the exact `/{prefix}/`).
+    /// The empty (root) prefix is excluded — it serves at `/`, no slash dance.
+    fn exact_tenant_root(&self, path: &str) -> Option<String> {
+        let bare = path.strip_suffix('/').unwrap_or(path);
+        if bare.is_empty() {
+            return None;
+        }
+        let workspaces = self.workspaces.read().ok()?;
+        workspaces.contains_key(bare).then(|| bare.to_string())
+    }
+
+    /// Resolve the tenant owning `req`'s path and forward to it; 404 when none
+    /// does. The shared tail of `host_dispatch`, called pre- and post-rewrite.
+    async fn dispatch_to(&self, req: Request<Body>) -> Response {
+        let Some(router) = (match self.router_for_path(req.uri().path()) {
+            Ok(router) => router,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        match router.oneshot(req).await {
+            Ok(response) => response,
+            Err(e) => match e {},
+        }
+    }
 }
 
 /// The control socket reaches the host through `Weak<dyn HostControl>` (the
@@ -1013,17 +1041,42 @@ impl HostControl for WorkspaceHost {
 }
 
 async fn host_dispatch(State(host): State<Arc<WorkspaceHost>>, req: Request<Body>) -> Response {
-    let Some(router) = (match host.router_for_path(req.uri().path()) {
-        Ok(router) => router,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-
-    match router.oneshot(req).await {
-        Ok(response) => response,
-        Err(e) => match e {},
+    // Tenant-root trailing-slash canonicalization. A tenant nests at its prefix
+    // (`Router::new().nest("/{prefix}", inner)`), and axum's nest serves
+    // `/{prefix}` and `/{prefix}/<rest>` but 404s the EXACT `/{prefix}/`. The
+    // canonical public URL is `/{prefix}/` (the SPA's vite `base: "./"` resolves
+    // its relative asset URLs against the document path, so it must end in `/`
+    // for assets to land under the tenant). So at a tenant ROOT:
+    //   - bare `/{prefix}` 308-redirects to `/{prefix}/`;
+    //   - `/{prefix}/` is routed internally as `/{prefix}` so the nest serves the
+    //     SPA root, while the browser keeps the trailing-slash URL.
+    // Deeper paths (`/{prefix}/<rest>`) are untouched; the nest handles them.
+    if let Some(prefix) = host.exact_tenant_root(req.uri().path()) {
+        if req.uri().path().len() == prefix.len() {
+            let location = match req.uri().query() {
+                Some(q) => format!("{prefix}/?{q}"),
+                None => format!("{prefix}/"),
+            };
+            return Redirect::permanent(&location).into_response();
+        }
+        return host.dispatch_to(rewrite_request_path(req, &prefix)).await;
     }
+    host.dispatch_to(req).await
+}
+
+/// Rewrite a request's URI path (keeping the query) so the trailing-slash tenant
+/// root (`/{prefix}/`) routes as the bare prefix the nest matches. A parse
+/// failure leaves the request unchanged (it then 404s, the prior behavior).
+fn rewrite_request_path(req: Request<Body>, new_path: &str) -> Request<Body> {
+    let (mut parts, body) = req.into_parts();
+    let target = match parts.uri.query() {
+        Some(q) => format!("{new_path}?{q}"),
+        None => new_path.to_string(),
+    };
+    if let Ok(uri) = target.parse::<Uri>() {
+        parts.uri = uri;
+    }
+    Request::from_parts(parts, body)
 }
 
 fn path_matches_prefix(path: &str, prefix: &str) -> bool {
@@ -1125,7 +1178,8 @@ mod tests {
 
     /// A minimal `TenantBuilder` standing in for chan-server's route layer:
     /// a tiny router (`/api/workspace` echoes the root, `/api/build-info` 200,
-    /// nothing else → 404), a real terminal registry, and a fake cell that
+    /// a catch-all SPA fallback like the real layer), a real terminal registry,
+    /// and a fake cell that
     /// holds the real `Arc<Workspace>` so the flock-release lifecycle behaves
     /// like the route layer's. Lets the host's dispatch + teardown be unit-
     /// tested in isolation.
@@ -1216,7 +1270,11 @@ mod tests {
                 .route(
                     "/api/build-info",
                     axum::routing::get(|| async { StatusCode::OK }),
-                );
+                )
+                // Mimic the real route layer's SPA fallback: any non-api GET
+                // (including the tenant root `/`) returns the shell, so the
+                // tenant-root trailing-slash dispatch is testable.
+                .fallback(|| async { (StatusCode::OK, "spa") });
             let cell: Arc<dyn WorkspaceCellHandle> =
                 Arc::new(FakeWorkspaceCell(std::sync::Mutex::new(Some(workspace))));
             Ok(fake_artifacts(nest(&config.prefix, inner), cell))
@@ -1239,6 +1297,67 @@ mod tests {
             artifacts.terminal_sessions.set_default_command(command);
             Ok(artifacts)
         }
+    }
+
+    #[tokio::test]
+    async fn host_canonicalizes_tenant_root_trailing_slash() {
+        // The §7.3-smoke bug: a tenant nests at its slug, and axum's nest serves
+        // `/blog` and `/blog/<rest>` but 404s the EXACT `/blog/` — yet `/blog/`
+        // is the canonical open URL (the SPA's `base: "./"` needs the trailing
+        // slash). host_dispatch fixes it: `/blog/` serves the root, `/blog`
+        // 308s to `/blog/`.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        std::fs::write(root.path().join("note.md"), "# n\n").expect("write");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+        host.open_registered_workspace(root.path(), serve_config("/blog"))
+            .await
+            .expect("open");
+        let app = host.router();
+
+        let status = |uri: &'static str| {
+            let app = app.clone();
+            async move {
+                app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // `/blog/` (the canonical root) serves the SPA shell (the fallback).
+        assert_eq!(status("/blog/").await.status(), StatusCode::OK);
+        // Deep tenant paths are untouched by the canonicalization.
+        assert_eq!(
+            status("/blog/api/build-info").await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(status("/blog/anything").await.status(), StatusCode::OK);
+
+        // Bare `/blog` 308-redirects to the canonical `/blog/` (preserving query).
+        let bare = status("/blog").await;
+        assert_eq!(bare.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(bare.headers()["location"], "/blog/");
+        let bare_q = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/blog?t=tok")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bare_q.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(bare_q.headers()["location"], "/blog/?t=tok");
+
+        // `/blog/` with a query is rewritten to the bare prefix (keeping query)
+        // so the nest serves the root — still 200, not a 404.
+        assert_eq!(status("/blog/?t=tok").await.status(), StatusCode::OK);
+
+        // An unmounted path still 404s (no tenant owns it).
+        assert_eq!(status("/nope/").await.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
