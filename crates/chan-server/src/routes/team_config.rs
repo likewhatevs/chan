@@ -329,6 +329,15 @@ pub(crate) fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> Stri
          an answer, a follow-up, or a dismissal (see `cs terminal survey --help`\n\
          for the current flags).\n\n"
     ));
+    out.push_str(&format!(
+        "IMPORTANT: an [F] follow-up creates an EMPTY file at\n\
+         {team_dir}/followups/followup-{{from}}-{{to}}-{{n}}.md (the original\n\
+         question + an empty comments section). It means \"deferred, not ready\",\n\
+         NOT an answer. {host_handle} must WRITE the decision into the file's\n\
+         comments before {lead_handle} (or any agent) acts on it; an unpopulated\n\
+         follow-up is not actionable -- re-read it later and act ONLY once\n\
+         {host_handle} has filled it in.\n\n"
+    ));
 
     out.push_str("## The poke 1-liner\n\n");
     out.push_str(

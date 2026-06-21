@@ -317,6 +317,12 @@ the blocking call prints one of: the chosen option label; the new followup
 file path on [F] when `--followup-dir` context was passed (else a bare "host
 deferred" line); or "survey dismissed" when the host drops it.
 
+IMPORTANT: an [F] followup file is created EMPTY (the original question plus an
+empty comments section). It means "deferred, not ready" -- NOT an actionable
+answer. The host must WRITE their decision into the file's comments section
+before an agent acts on it. An agent that gets a followup path should re-read
+the file later and act ONLY once the host has populated it.
+
 Single question, two options:
   cs terminal survey --tab-name @@Alice \
     --title "Merge order" --option "A first" --option "B first" \
@@ -535,6 +541,9 @@ pub enum TerminalAction {
         /// `{dir}/followups/followup-{from}-{to}-{n}.md`. `[F]` is shown on
         /// every survey regardless; PASSING this dir is what makes `[F]` write
         /// the file (and return its path) instead of a plain no-file deferral.
+        /// The file is created EMPTY (question + empty comments): "deferred,
+        /// not ready", NOT an answer -- the host must populate it before an
+        /// agent acts on it.
         #[arg(long = "followup-dir", value_name = "TEAM_DIR")]
         followup_dir: Option<String>,
         /// Override the follow-up author (`from`). Defaults to
