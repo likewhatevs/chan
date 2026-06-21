@@ -76,6 +76,7 @@
     workspaceDisplayName,
     tree,
   } from "../state/store.svelte";
+  import { workspace } from "../state/workspace.svelte";
   import {
     isTauriDesktop,
     openWebInspector,
@@ -648,6 +649,16 @@
   // not readable). See windowDragScope + isTabDragScopeCompatible.
   const SCOPE_DRAG_MIME_PREFIX = "application/x-chan-tab-scope+";
   const scopeMime = (scope: string): string => SCOPE_DRAG_MIME_PREFIX + scope;
+  /// This window's drag scope, computed from what the SPA loaded: a
+  /// terminal-only window vs. the active workspace's stable identity
+  /// (`metadata_key`, falling back to the absolute `root`). Two windows of the
+  /// same workspace resolve to the same scope; the opaque `?w=w-<hex>` window id
+  /// is deliberately NOT used (it differs per window).
+  const currentDragScope = (): string =>
+    windowDragScope({
+      terminalOnly: ui.terminalOnly,
+      workspaceKey: workspace.info?.metadata_key ?? workspace.info?.root ?? null,
+    });
 
   function onDragStart(e: DragEvent, tabId: string): void {
     if (!e.dataTransfer) return;
@@ -667,7 +678,7 @@
     // Stamp our drag scope as a type so the target can reject a cross-kind /
     // cross-workspace drop at dragover (no-drop cursor) and on drop. Non-empty
     // data avoids empty-value quirks; only the type string matters.
-    e.dataTransfer.setData(scopeMime(windowDragScope()), "1");
+    e.dataTransfer.setData(scopeMime(currentDragScope()), "1");
   }
 
   /// Build the CROSS_TAB_MIME payload for a dragged tab. File tabs carry the
@@ -804,7 +815,7 @@
   /// (absent → rejected). Blocks the cross-window drags that misbehave today.
   function isTabDragScopeCompatible(e: DragEvent): boolean {
     const types = e.dataTransfer?.types;
-    return !!types && types.includes(scopeMime(windowDragScope()));
+    return !!types && types.includes(scopeMime(currentDragScope()));
   }
 
   function onDragOver(e: DragEvent): void {

@@ -126,15 +126,23 @@ export function sessionPath(): string {
 }
 
 /// Cross-window tab-DnD compatibility key. Two chan-desktop windows may
-/// exchange tabs only when these match. Derived from the `?w=` window label
-/// (`terminal-win-<seq>` / `workspace-<hash>-<seq>` / `outbound-<hash>-<seq>`)
-/// by dropping the trailing per-window seq, so windows of the SAME
-/// kind+workspace share one scope while different kinds (terminal vs
-/// workspace) and different workspaces get distinct scopes. A drag between
-/// windows of different scope (terminal↔workspace, workspace-A↔workspace-B) is
-/// rejected; same-workspace-multi-window and terminal↔terminal stay allowed.
-export function windowDragScope(): string {
-  return sessionWindowId().replace(/-\d+$/, "");
+/// exchange tabs only when these match. Keyed on the window KIND + the
+/// WORKSPACE IDENTITY the SPA actually loaded — NOT the `?w=` window label,
+/// which is now an opaque per-window id (`w-<hex>`, set by the desktop window
+/// watcher) that differs between two windows of the SAME workspace. A
+/// terminal-only window scopes as `terminal` (every standalone terminal shares
+/// one `/terminal` tenant, so terminal↔terminal moves stay allowed); a
+/// workspace window scopes as `workspace:{key}` keyed on its stable identity,
+/// so two windows of one workspace share a scope while different workspaces —
+/// and terminal↔workspace — get distinct scopes. The caller supplies the
+/// identity (`workspace.info`'s `metadata_key`/`root`) because this module is
+/// below the workspace store.
+export function windowDragScope(scope: {
+  terminalOnly: boolean;
+  workspaceKey: string | null;
+}): string {
+  if (scope.terminalOnly) return "terminal";
+  return `workspace:${scope.workspaceKey ?? "unknown"}`;
 }
 
 function req<T>(

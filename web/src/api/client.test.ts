@@ -45,41 +45,35 @@ describe("sessionWindowId", () => {
 });
 
 describe("windowDragScope", () => {
-  test("drops the per-window seq so a workspace's windows share one scope", () => {
-    window.history.replaceState(null, "", "/?w=workspace-deadbeef-3");
-    expect(windowDragScope()).toBe("workspace-deadbeef");
+  test("a workspace window scopes on its stable workspace identity", () => {
+    expect(windowDragScope({ terminalOnly: false, workspaceKey: "wk-deadbeef" })).toBe(
+      "workspace:wk-deadbeef",
+    );
   });
 
-  test("two windows of the SAME workspace get the SAME scope", () => {
-    window.history.replaceState(null, "", "/?w=workspace-deadbeef-3");
-    const win1 = windowDragScope();
-    window.history.replaceState(null, "", "/?w=workspace-deadbeef-7");
-    const win2 = windowDragScope();
+  test("two windows of the SAME workspace get the SAME scope (opaque w-<hex> ids differ)", () => {
+    // The two windows have different `?w=` ids but the same loaded workspace.
+    const win1 = windowDragScope({ terminalOnly: false, workspaceKey: "wk-deadbeef" });
+    const win2 = windowDragScope({ terminalOnly: false, workspaceKey: "wk-deadbeef" });
     expect(win1).toBe(win2);
   });
 
   test("different workspaces get DIFFERENT scopes", () => {
-    window.history.replaceState(null, "", "/?w=workspace-aaaaaaaa-1");
-    const a = windowDragScope();
-    window.history.replaceState(null, "", "/?w=workspace-bbbbbbbb-1");
-    const b = windowDragScope();
+    const a = windowDragScope({ terminalOnly: false, workspaceKey: "wk-aaaa" });
+    const b = windowDragScope({ terminalOnly: false, workspaceKey: "wk-bbbb" });
     expect(a).not.toBe(b);
   });
 
-  test("all standalone terminal windows share one scope, distinct from a workspace", () => {
-    window.history.replaceState(null, "", "/?w=terminal-win-5");
-    const term5 = windowDragScope();
-    window.history.replaceState(null, "", "/?w=terminal-win-9");
-    const term9 = windowDragScope();
-    expect(term5).toBe("terminal-win");
-    expect(term9).toBe("terminal-win");
-    window.history.replaceState(null, "", "/?w=workspace-deadbeef-1");
-    expect(windowDragScope()).not.toBe(term5);
+  test("all terminal-only windows share one scope, distinct from a workspace", () => {
+    const term1 = windowDragScope({ terminalOnly: true, workspaceKey: null });
+    const term2 = windowDragScope({ terminalOnly: true, workspaceKey: null });
+    expect(term1).toBe("terminal");
+    expect(term2).toBe("terminal");
+    expect(windowDragScope({ terminalOnly: false, workspaceKey: "wk-deadbeef" })).not.toBe(term1);
   });
 
-  test("outbound windows are scoped per remote workspace", () => {
-    window.history.replaceState(null, "", "/?w=outbound-c0ffee01-2");
-    expect(windowDragScope()).toBe("outbound-c0ffee01");
+  test("a workspace window with no identity falls back to a stable sentinel", () => {
+    expect(windowDragScope({ terminalOnly: false, workspaceKey: null })).toBe("workspace:unknown");
   });
 });
 

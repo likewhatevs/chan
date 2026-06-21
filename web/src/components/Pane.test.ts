@@ -658,15 +658,23 @@ describe("Pane cross-kind / cross-workspace tab DnD guard", () => {
   test("dragstart stamps the window's drag scope as a MIME type", () => {
     // The scope rides a MIME TYPE so the target can read it during dragover
     // (when payload values are not readable).
-    expect(paneSource).toMatch(/scopeMime\(windowDragScope\(\)\), "1"/);
+    expect(paneSource).toMatch(/scopeMime\(currentDragScope\(\)\), "1"/);
     expect(paneSource).toMatch(
       /import \{ sessionWindowId, windowDragScope \} from "\.\.\/api\/client"/,
     );
   });
 
+  test("the scope is computed from the loaded workspace identity, not the window label", () => {
+    // currentDragScope keys on workspace.info (metadata_key/root), so two
+    // windows of one workspace match even with distinct `?w=w-<hex>` ids.
+    expect(paneSource).toMatch(
+      /currentDragScope = \(\): string =>[\s\S]{1,220}workspace\.info\?\.metadata_key \?\? workspace\.info\?\.root/,
+    );
+  });
+
   test("compatibility is the source scope type matching THIS window's scope", () => {
     expect(paneSource).toMatch(
-      /function isTabDragScopeCompatible\(e: DragEvent\): boolean \{[\s\S]{1,160}includes\(scopeMime\(windowDragScope\(\)\)\)/,
+      /function isTabDragScopeCompatible\(e: DragEvent\): boolean \{[\s\S]{1,160}includes\(scopeMime\(currentDragScope\(\)\)\)/,
     );
   });
 
