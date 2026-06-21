@@ -61,7 +61,7 @@ pub struct SemanticState {
     /// `model_present` is false (no files to measure).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_size_bytes: Option<u64>,
-    /// Per-workspace opt-in flag (`IndexConfig::semantic_enabled`).
+    /// Per-workspace opt-in flag (`DashboardConfig::semantic_enabled`).
     /// Independent from `model_present`: a workspace can be opted in
     /// without a downloaded model (mode falls back to bm25 until
     /// the model lands; enable refuses to flip without the model

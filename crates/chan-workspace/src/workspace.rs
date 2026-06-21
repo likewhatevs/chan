@@ -10,13 +10,13 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::dashboard::{self, DashboardConfig, ScreensaverTheme};
 use crate::drafts::{self, DraftRef};
 use crate::error::{ChanError, Result};
 use crate::fs_ops;
 use crate::graph::{FileRecord, GraphView};
 use crate::index::{
-    BuildOptions, BuildSummary, Index, Mode as SearchMode, ScreensaverTheme, SearchAggression,
-    SearchResult,
+    BuildOptions, BuildSummary, Index, Mode as SearchMode, SearchAggression, SearchResult,
 };
 use crate::lock::WorkspaceLock;
 use crate::markdown;
@@ -395,6 +395,14 @@ impl Workspace {
         // best-effort posture as the trash sweep: a hiccup here must never
         // block a workspace open.
         prune_empty_sessions(&paths.sessions);
+        // One-shot dashboard re-home: the screensaver + report/semantic
+        // toggles used to squat in the search IndexConfig. Move any persisted
+        // values into the dedicated <root>/dashboard.toml and strip the old
+        // keys. Best-effort + idempotent (a no-op once dashboard.toml exists),
+        // same posture as the GC above: a hiccup must never block open.
+        if let Err(e) = dashboard::migrate_from_index_config(&paths.root, &paths.index) {
+            tracing::warn!(error = %e, "dashboard config migration at open failed; continuing");
+        }
         // Validate the configured in-root drafts dir name. An invalid
         // value (separator, traversal, clash with `.git`/`.chan` or an
         // excluded dir) falls back to the default rather than failing
@@ -2310,24 +2318,51 @@ impl Workspace {
         Ok(self.index()?.known_paths()?)
     }
 
+    /// Load this workspace's dashboard config (screensaver overlay + the
+    /// chan-report / semantic-search opt-ins) from `<root>/dashboard.toml`,
+    /// falling back to defaults when the file is absent. Read per access: the
+    /// dashboard surfaces (preflight + the dedicated toggle endpoints) are not
+    /// hot paths, so the config is not cached on the Workspace.
+    fn dashboard(&self) -> Result<DashboardConfig> {
+        dashboard::load(&self.paths.root)
+    }
+
+    /// Apply `mutate` to the dashboard config and persist it only when the
+    /// closure reports a change (so the toggles stay idempotent — re-setting
+    /// the current value writes nothing). Last-writer-wins across concurrent
+    /// callers; these are single-user UI actions, matching the prior
+    /// `IndexConfig` setter behaviour.
+    fn update_dashboard(&self, mutate: impl FnOnce(&mut DashboardConfig) -> bool) -> Result<()> {
+        let mut cfg = self.dashboard()?;
+        if mutate(&mut cfg) {
+            dashboard::save(&self.paths.root, &cfg)?;
+        }
+        Ok(())
+    }
+
     /// Read the per-workspace Hybrid-search preference.
-    /// Mirrors `IndexConfig::semantic_enabled`; default-false on a
+    /// Mirrors `DashboardConfig::semantic_enabled`; default-false on a
     /// workspace that has never set it via the CLI / API.
     /// Query-path callers consult this when no explicit `Mode` is
     /// passed.
     pub fn semantic_enabled(&self) -> Result<bool> {
-        Ok(self.index()?.config().semantic_enabled)
+        Ok(self.dashboard()?.semantic_enabled)
     }
 
     /// Flip the per-workspace Hybrid-search preference.
     /// Idempotent — re-setting the current value is a no-op. The
     /// `chan workspace index enable-semantic` / `disable-semantic` CLI and the
     /// `/api/index/semantic/{enable,disable}` endpoints both route
-    /// here; the change persists to `<index_dir>/config.toml` so a
+    /// here; the change persists to `<root>/dashboard.toml` so a
     /// `chan serve` restart honours it.
     pub fn set_semantic_enabled(&self, enabled: bool) -> Result<()> {
-        self.index()?.set_semantic_enabled(enabled)?;
-        Ok(())
+        self.update_dashboard(|cfg| {
+            if cfg.semantic_enabled == enabled {
+                return false;
+            }
+            cfg.semantic_enabled = enabled;
+            true
+        })
     }
 
     /// Read the configured embedding model id from the
@@ -2346,13 +2381,13 @@ impl Workspace {
     }
 
     /// Read the per-workspace chan-report opt-in flag.
-    /// Mirrors `IndexConfig::reports_enabled`; default-TRUE for a brand-new
+    /// Mirrors `DashboardConfig::reports_enabled`; default-TRUE for a brand-new
     /// workspace (reports on by default), while an
     /// existing workspace keeps its persisted value. Consumers gate
     /// `Workspace::report()` initialization + the per-workspace
     /// language-graph layer on this flag.
     pub fn reports_enabled(&self) -> Result<bool> {
-        Ok(self.index()?.config().reports_enabled)
+        Ok(self.dashboard()?.reports_enabled)
     }
 
     /// Flip the per-workspace chan-report opt-in.
@@ -2363,7 +2398,13 @@ impl Workspace {
     /// `report.jsonl` so re-enabling later triggers a fresh
     /// scan. Mirrors `set_semantic_enabled`'s shape.
     pub fn set_reports_enabled(&self, enabled: bool) -> Result<()> {
-        self.index()?.set_reports_enabled(enabled)?;
+        self.update_dashboard(|cfg| {
+            if cfg.reports_enabled == enabled {
+                return false;
+            }
+            cfg.reports_enabled = enabled;
+            true
+        })?;
         if !enabled {
             // Drop the persisted JSONL so a re-enable later
             // starts from a fresh scan. Best-effort: a missing
@@ -2437,7 +2478,7 @@ impl Workspace {
     /// Default-false on workspaces that pre-date the field; SPA arms
     /// the overlay state machine when true.
     pub fn screensaver_enabled(&self) -> Result<bool> {
-        Ok(self.index()?.config().screensaver_enabled)
+        Ok(self.dashboard()?.screensaver_enabled)
     }
 
     /// Flip the per-workspace screensaver-enabled flag.
@@ -2445,34 +2486,49 @@ impl Workspace {
     /// `set_reports_enabled`'s jsonl drop) — the overlay state
     /// lives entirely client-side; this just persists the toggle.
     pub fn set_screensaver_enabled(&self, enabled: bool) -> Result<()> {
-        self.index()?.set_screensaver_enabled(enabled)?;
-        Ok(())
+        self.update_dashboard(|cfg| {
+            if cfg.screensaver_enabled == enabled {
+                return false;
+            }
+            cfg.screensaver_enabled = enabled;
+            true
+        })
     }
 
     /// Read the idle window (seconds) before the
     /// SPA arms the overlay. Default 300.
     pub fn screensaver_timeout_secs(&self) -> Result<u32> {
-        Ok(self.index()?.config().screensaver_timeout_secs)
+        Ok(self.dashboard()?.screensaver_timeout_secs)
     }
 
     /// Persist the idle window. SPA enforces a
     /// minimum + maximum client-side; chan-workspace stores whatever
     /// value lands.
     pub fn set_screensaver_timeout_secs(&self, secs: u32) -> Result<()> {
-        self.index()?.set_screensaver_timeout_secs(secs)?;
-        Ok(())
+        self.update_dashboard(|cfg| {
+            if cfg.screensaver_timeout_secs == secs {
+                return false;
+            }
+            cfg.screensaver_timeout_secs = secs;
+            true
+        })
     }
 
     /// Read the persisted visual theme. Default
     /// plain on workspaces that pre-date the field.
     pub fn screensaver_theme(&self) -> Result<ScreensaverTheme> {
-        Ok(self.index()?.config().screensaver_theme)
+        Ok(self.dashboard()?.screensaver_theme)
     }
 
     /// Persist the visual theme.
     pub fn set_screensaver_theme(&self, theme: ScreensaverTheme) -> Result<()> {
-        self.index()?.set_screensaver_theme(theme)?;
-        Ok(())
+        self.update_dashboard(|cfg| {
+            if cfg.screensaver_theme == theme {
+                return false;
+            }
+            cfg.screensaver_theme = theme;
+            true
+        })
     }
 
     /// Read the persisted PIN hash. `None` means no
@@ -2482,15 +2538,20 @@ impl Workspace {
     /// bytes server-side. This getter is for the chan-server route
     /// + tests only.
     pub fn screensaver_pin_hash(&self) -> Result<Option<Vec<u8>>> {
-        Ok(self.index()?.config().screensaver_pin_hash.clone())
+        Ok(self.dashboard()?.screensaver_pin_hash)
     }
 
     /// Persist or clear the PIN hash. `Some(bytes)`
     /// stores them verbatim (SPA does PBKDF2 client-side);
     /// `None` clears the PIN.
     pub fn set_screensaver_pin_hash(&self, hash: Option<Vec<u8>>) -> Result<()> {
-        self.index()?.set_screensaver_pin_hash(hash)?;
-        Ok(())
+        self.update_dashboard(|cfg| {
+            if cfg.screensaver_pin_hash == hash {
+                return false;
+            }
+            cfg.screensaver_pin_hash = hash;
+            true
+        })
     }
 
     /// BOOT entry-point. Consumers call this after

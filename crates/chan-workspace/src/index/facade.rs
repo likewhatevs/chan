@@ -17,7 +17,7 @@ use thiserror::Error;
 
 use super::bm25::{Bm25Error, Bm25Index};
 use super::chunking;
-use super::config::{self, ConfigError, IndexConfig, ScreensaverTheme};
+use super::config::{self, ConfigError, IndexConfig};
 #[cfg(feature = "embeddings")]
 use super::embeddings::{self, EmbedError, Embedder};
 #[cfg(feature = "embeddings")]
@@ -277,42 +277,6 @@ impl Index {
         Ok(self.bm25.known_paths()?)
     }
 
-    /// Flip the per-workspace Hybrid-search opt-in.
-    /// Idempotent — re-setting to the same value is a no-op (no
-    /// config write). On change, writes `<index_dir>/config.toml`
-    /// atomically so a `chan serve` restart honours the new
-    /// preference. The CLI exposes this as
-    /// `chan workspace index enable-semantic` / `disable-semantic`; the API
-    /// exposes it under `/api/index/semantic/{enable,disable}`.
-    pub fn set_semantic_enabled(&self, enabled: bool) -> Result<(), IndexError> {
-        let to_save = {
-            let mut cfg = self.config.lock().unwrap();
-            if cfg.semantic_enabled == enabled {
-                return Ok(());
-            }
-            cfg.semantic_enabled = enabled;
-            cfg.clone()
-        };
-        config::save(&self.index_dir, &to_save)?;
-        Ok(())
-    }
-
-    /// Flip the per-workspace chan-report opt-in.
-    /// Idempotent — re-setting to the same value is a no-op.
-    /// Atomic write parallels `set_semantic_enabled`.
-    pub fn set_reports_enabled(&self, enabled: bool) -> Result<(), IndexError> {
-        let to_save = {
-            let mut cfg = self.config.lock().unwrap();
-            if cfg.reports_enabled == enabled {
-                return Ok(());
-            }
-            cfg.reports_enabled = enabled;
-            cfg.clone()
-        };
-        config::save(&self.index_dir, &to_save)?;
-        Ok(())
-    }
-
     /// Replace the per-workspace directory blocklist additions. Idempotent on
     /// no-change. Persists the new set to `config.toml`; the effective walk
     /// filter is re-derived on the next reindex (union with the global
@@ -324,66 +288,6 @@ impl Index {
                 return Ok(());
             }
             cfg.excluded_dirs = dirs;
-            cfg.clone()
-        };
-        config::save(&self.index_dir, &to_save)?;
-        Ok(())
-    }
-
-    /// Flip the per-workspace screensaver-enabled flag.
-    /// Idempotent on no-change.
-    pub fn set_screensaver_enabled(&self, enabled: bool) -> Result<(), IndexError> {
-        let to_save = {
-            let mut cfg = self.config.lock().unwrap();
-            if cfg.screensaver_enabled == enabled {
-                return Ok(());
-            }
-            cfg.screensaver_enabled = enabled;
-            cfg.clone()
-        };
-        config::save(&self.index_dir, &to_save)?;
-        Ok(())
-    }
-
-    /// Persist the screensaver idle window.
-    /// Idempotent on no-change.
-    pub fn set_screensaver_timeout_secs(&self, secs: u32) -> Result<(), IndexError> {
-        let to_save = {
-            let mut cfg = self.config.lock().unwrap();
-            if cfg.screensaver_timeout_secs == secs {
-                return Ok(());
-            }
-            cfg.screensaver_timeout_secs = secs;
-            cfg.clone()
-        };
-        config::save(&self.index_dir, &to_save)?;
-        Ok(())
-    }
-
-    /// Persist the screensaver visual theme.
-    /// Idempotent on no-change.
-    pub fn set_screensaver_theme(&self, theme: ScreensaverTheme) -> Result<(), IndexError> {
-        let to_save = {
-            let mut cfg = self.config.lock().unwrap();
-            if cfg.screensaver_theme == theme {
-                return Ok(());
-            }
-            cfg.screensaver_theme = theme;
-            cfg.clone()
-        };
-        config::save(&self.index_dir, &to_save)?;
-        Ok(())
-    }
-
-    /// Persist or clear the screensaver PIN hash.
-    /// Idempotent on identical input (including None → None).
-    pub fn set_screensaver_pin_hash(&self, hash: Option<Vec<u8>>) -> Result<(), IndexError> {
-        let to_save = {
-            let mut cfg = self.config.lock().unwrap();
-            if cfg.screensaver_pin_hash == hash {
-                return Ok(());
-            }
-            cfg.screensaver_pin_hash = hash;
             cfg.clone()
         };
         config::save(&self.index_dir, &to_save)?;
@@ -1661,13 +1565,7 @@ mod tests {
             chunking: config::Chunking::default(),
             vectors_model: Some("BAAI/bge-large-en-v1.5".to_owned()),
             vectors_dim: Some(1024),
-            semantic_enabled: false,
-            reports_enabled: false,
             excluded_dirs: Vec::new(),
-            screensaver_enabled: false,
-            screensaver_timeout_secs: 300,
-            screensaver_theme: config::ScreensaverTheme::Matrix,
-            screensaver_pin_hash: None,
         };
         config::save(&dir, &cfg_on_disk).unwrap();
         drop(idx);
@@ -1702,13 +1600,7 @@ mod tests {
             chunking: config::Chunking::default(),
             vectors_model: Some(model.clone()),
             vectors_dim: Some(384),
-            semantic_enabled: false,
-            reports_enabled: false,
             excluded_dirs: Vec::new(),
-            screensaver_enabled: false,
-            screensaver_timeout_secs: 300,
-            screensaver_theme: config::ScreensaverTheme::Matrix,
-            screensaver_pin_hash: None,
         };
         std::fs::create_dir_all(&dir).unwrap();
         config::save(&dir, &cfg_on_disk).unwrap();
@@ -1741,13 +1633,7 @@ mod tests {
             chunking: config::Chunking::default(),
             vectors_model: Some("BAAI/bge-small-en-v1.5".to_owned()),
             vectors_dim: Some(384),
-            semantic_enabled: false,
-            reports_enabled: false,
             excluded_dirs: Vec::new(),
-            screensaver_enabled: false,
-            screensaver_timeout_secs: 300,
-            screensaver_theme: config::ScreensaverTheme::Matrix,
-            screensaver_pin_hash: None,
         };
         config::save(&dir, &cfg_on_disk).unwrap();
         let _idx = Index::open(tmp.path(), &dir).unwrap();

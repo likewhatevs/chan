@@ -24,6 +24,7 @@
 mod blob;
 pub mod bootstrap;
 pub mod contacts;
+pub mod dashboard;
 pub mod drafts;
 pub mod error;
 pub(crate) mod fd_budget;
@@ -59,6 +60,7 @@ pub use contacts::{
     Contact, EmailAddress, ImportCounts, ImportOpts, ImportOutcome, ImportSummary, Organization,
     PhoneNumber, ProviderKind,
 };
+pub use dashboard::{DashboardConfig, ScreensaverTheme};
 pub use drafts::{DraftInspection, DraftPromoteMode, DraftPromoteReport, DraftRef};
 pub use error::{ChanError, Result};
 pub use fs_ops::{
@@ -70,7 +72,7 @@ pub use graph::{
 };
 pub use index::{
     BuildOptions, BuildSummary, Chunking, Hit, IndexConfig, IndexStats, Mode as SearchMode,
-    ScreensaverTheme, SearchAggression, SearchBudget, SearchResult, DEFAULT_MODEL,
+    SearchAggression, SearchBudget, SearchResult, DEFAULT_MODEL,
 };
 pub use indexer::{GraphIndexer, DEFAULT_DEBOUNCE_MS};
 pub use library::{Library, ResetMode, ResetReport, SweepReport};

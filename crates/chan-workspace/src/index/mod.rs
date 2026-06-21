@@ -23,7 +23,7 @@ pub mod facade;
 pub mod fusion;
 pub mod vectors;
 
-pub use config::{Chunking, IndexConfig, ScreensaverTheme, DEFAULT_MODEL};
+pub use config::{Chunking, IndexConfig, DEFAULT_MODEL};
 pub use facade::{
     BuildOptions, BuildSummary, Hit, Index, IndexError, IndexStats, Mode, SearchAggression,
     SearchBudget, SearchResult,

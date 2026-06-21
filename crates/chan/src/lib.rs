@@ -919,7 +919,7 @@ fn init_tracing(verbosity: u8) {
 /// tokei (pulled in transitively by chan-report for the language-count
 /// lens) logs `Unknown extension: <ext>` at WARN through tokei's own
 /// `LanguageType::from_path` for every file it can't classify. chan-report
-/// is default-off (`IndexConfig::reports_enabled = false`), so on a source
+/// is default-off (`DashboardConfig::reports_enabled = false`), so on a source
 /// tree with reports enabled this is pure console noise with no downstream
 /// effect (the graph language lens already degrades when a bucket is
 /// absent). Cap tokei at ERROR so the spam disappears but genuine tokei
@@ -2983,8 +2983,16 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
             workspace_paths.index.display()
         )
     })?;
+    // The screensaver + report/semantic toggles re-homed out of IndexConfig
+    // into the dedicated per-workspace dashboard config; read them from there.
+    let dashboard = chan_workspace::dashboard::load(&workspace_paths.root).with_context(|| {
+        format!(
+            "reading dashboard config at {}",
+            workspace_paths.root.display()
+        )
+    })?;
     let model = cfg.model;
-    let semantic_enabled = cfg.semantic_enabled;
+    let semantic_enabled = dashboard.semantic_enabled;
     let expected_dir = global_models_dir().join(repo_dir_name(&model));
     let model_present = resolve_model(&model).is_ok();
     let model_size_bytes = if model_present {
@@ -2998,12 +3006,10 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         "bm25"
     };
     if json {
-        // Emit `reports_enabled`
-        // alongside `semantic_enabled` so chan-desktop's
-        // `get_workspace_features` IPC can read both flags from one
-        // CLI round-trip. `chan_workspace::index::config::load`
-        // already populated both fields; this is a strict
-        // additive extension (existing JSON consumers ignore
+        // Emit `reports_enabled` alongside `semantic_enabled` so chan-desktop's
+        // `get_workspace_features` IPC can read both flags from one CLI
+        // round-trip. Both come from the per-workspace dashboard config; this
+        // is a strict additive extension (existing JSON consumers ignore
         // unknown fields).
         let body = serde_json::json!({
             "workspace": canonical_root.display().to_string(),
@@ -3013,7 +3019,7 @@ fn cmd_index_status(path: Option<PathBuf>, json: bool) -> Result<()> {
             "model_path": expected_dir.display().to_string(),
             "model_size_bytes": model_size_bytes,
             "semantic_enabled": semantic_enabled,
-            "reports_enabled": cfg.reports_enabled,
+            "reports_enabled": dashboard.reports_enabled,
         });
         println!("{}", serde_json::to_string_pretty(&body)?);
     } else {

@@ -101,15 +101,6 @@ pub enum Chunking {
     Fixed { chars: usize },
 }
 
-/// Visual theme rendered behind the screensaver unlock card.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ScreensaverTheme {
-    #[default]
-    Plain,
-    Matrix,
-}
-
 /// On-disk shape of `<index_dir>/config.toml`.
 ///
 /// `model` is the user-configured target: the model the indexer
@@ -144,26 +135,6 @@ pub struct IndexConfig {
     /// embedder's `dim()` before writing more shards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vectors_dim: Option<u32>,
-    /// Per-workspace Hybrid-search opt-in. Default-false so
-    /// workspaces stay BM25-only unless
-    /// the user explicitly flips it on via
-    /// `chan workspace index enable-semantic` (CLI) or the Settings UI.
-    /// The query path reads this flag to decide
-    /// whether Hybrid is the default mode for the workspace; explicit
-    /// `Mode::Hybrid` overrides on `search` still work regardless.
-    #[serde(default)]
-    pub semantic_enabled: bool,
-    /// Per-workspace chan-report opt-in. Default ON:
-    /// a new workspace gets language detection +
-    /// SLOC roll-up + COCOMO out of the box. When true, `Workspace::report()`
-    /// initializes the per-workspace `ReportState` + the watcher fanout keeps
-    /// it current. The on-by-default lives in the struct `Default` (used for a
-    /// brand-new workspace); the `#[serde(default)]` here stays `false` so an
-    /// older config.toml that omits the field is NOT silently migrated on.
-    /// Persists alongside `semantic_enabled` in the per-workspace
-    /// `IndexConfig`.
-    #[serde(default)]
-    pub reports_enabled: bool,
     /// Per-workspace directory BLOCKLIST additions.
     /// Directory basenames excluded from THIS workspace's index + graph walk,
     /// ON TOP of the global machine-wide baseline (`Registry::
@@ -174,76 +145,6 @@ pub struct IndexConfig {
     /// list). Managed via `GET`/`PUT /api/index/excluded-dirs`.
     #[serde(default)]
     pub excluded_dirs: Vec<String>,
-    /// Screensaver overlay opt-in. Default-false so
-    /// workspaces without the feature configured stay unchanged. SPA
-    /// reads `Workspace::screensaver_enabled()` via the
-    /// `/api/screensaver/state` endpoint + arms the overlay
-    /// state machine when true.
-    #[serde(default)]
-    pub screensaver_enabled: bool,
-    /// Idle window in seconds before the screensaver
-    /// overlay fires. Default 300 (5 minutes). The SPA computes
-    /// "idle" client-side from last keystroke / pointer activity;
-    /// chan-server just persists the threshold.
-    #[serde(default = "default_screensaver_timeout_secs")]
-    pub screensaver_timeout_secs: u32,
-    /// Visual theme for the screensaver overlay.
-    /// Default plain keeps the lock screen quiet unless the user opts
-    /// into an animated scene.
-    #[serde(default)]
-    pub screensaver_theme: ScreensaverTheme,
-    /// Per-workspace PIN hash. `None` when no PIN is
-    /// set (overlay still arms but auto-dismisses on any input).
-    /// The bytes are whatever the SPA POSTs — chan-server stores
-    /// without interpretation; the verify path is a byte-equality
-    /// compare. PBKDF2 happens client-side.
-    ///
-    /// NEVER serialized back over the wire in plaintext: the
-    /// `/api/screensaver/state` endpoint reports `pin_set: bool`
-    /// only.
-    #[serde(default, with = "screensaver_pin_serde")]
-    pub screensaver_pin_hash: Option<Vec<u8>>,
-}
-
-fn default_screensaver_timeout_secs() -> u32 {
-    300
-}
-
-/// Serde adapter for `screensaver_pin_hash`. We
-/// persist as base64 in the TOML so the file stays text-only +
-/// the bytes round-trip cleanly (raw `Vec<u8>` would land as a
-/// TOML array of integers — readable, but noisy + harder for
-/// future migrations to read).
-mod screensaver_pin_serde {
-    use base64::Engine;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &Option<Vec<u8>>, ser: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match value {
-            Some(bytes) => {
-                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-                ser.serialize_some(&b64)
-            }
-            None => ser.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D>(de: D) -> Result<Option<Vec<u8>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let opt = Option::<String>::deserialize(de)?;
-        match opt {
-            Some(s) => base64::engine::general_purpose::STANDARD
-                .decode(s.as_bytes())
-                .map(Some)
-                .map_err(serde::de::Error::custom),
-            None => Ok(None),
-        }
-    }
 }
 
 impl Default for IndexConfig {
@@ -254,23 +155,10 @@ impl Default for IndexConfig {
             chunking: Chunking::default(),
             vectors_model: None,
             vectors_dim: None,
-            semantic_enabled: false,
-            // Reports default ON: a freshly-created
-            // workspace opts into chan-report. This is the struct Default, used
-            // by `load()` only when no config.toml exists yet (a new
-            // workspace). An existing config.toml keeps its persisted value,
-            // and a legacy file that omits the field still deserializes to
-            // false via the field's `#[serde(default)]`, so existing
-            // workspaces never flip (no migration).
-            reports_enabled: true,
             // Per-workspace blocklist additions: none by default; the global
             // baseline alone applies until the user adds workspace-specific
             // dirs via the CRUD route.
             excluded_dirs: Vec::new(),
-            screensaver_enabled: false,
-            screensaver_timeout_secs: default_screensaver_timeout_secs(),
-            screensaver_theme: ScreensaverTheme::Plain,
-            screensaver_pin_hash: None,
         }
     }
 }
@@ -368,100 +256,6 @@ mod tests {
     }
 
     #[test]
-    fn semantic_enabled_defaults_false_and_round_trips_true() {
-        // Pin the per-workspace Hybrid opt-in field. Default
-        // is BM25-only so an existing
-        // workspace whose config.toml predates this field stays BM25 on
-        // upgrade. Round-tripping with the field set to true
-        // verifies the toml shape is preserved across save/load.
-        let tmp = TempDir::new().unwrap();
-        let cfg = load(tmp.path()).unwrap();
-        assert!(!cfg.semantic_enabled, "default must be false");
-
-        let cfg = IndexConfig {
-            semantic_enabled: true,
-            ..IndexConfig::default()
-        };
-        save(tmp.path(), &cfg).unwrap();
-        let loaded = load(tmp.path()).unwrap();
-        assert!(loaded.semantic_enabled);
-    }
-
-    #[test]
-    fn reports_enabled_defaults_true_for_new_workspace_but_legacy_file_stays_false() {
-        // Reports default ON. A brand-new workspace
-        // has no config.toml, so `load()` returns `IndexConfig::default()` ->
-        // reports ON. But an older config.toml that omits the field must NOT be
-        // migrated on: the field's `#[serde(default)]` keeps it false. This
-        // test pins both halves so the "new on, existing unchanged" split can't
-        // drift.
-        let tmp = TempDir::new().unwrap();
-        let cfg = load(tmp.path()).unwrap();
-        assert!(
-            cfg.reports_enabled,
-            "a new workspace defaults to reports ON"
-        );
-
-        // The field still round-trips when explicitly persisted.
-        let cfg = IndexConfig {
-            reports_enabled: true,
-            ..IndexConfig::default()
-        };
-        save(tmp.path(), &cfg).unwrap();
-        let loaded = load(tmp.path()).unwrap();
-        assert!(loaded.reports_enabled);
-        // No migration: a pre-existing on-disk file that omits the field
-        // (simulating an older workspace) deserializes to false, so an
-        // existing workspace never silently flips on. The minimum file is just
-        // schema_version + model; the toggles all use serde defaults.
-        std::fs::write(
-            config_path(tmp.path()),
-            "schema_version = 1\nmodel = \"BAAI/bge-small-en-v1.5\"\n",
-        )
-        .unwrap();
-        let legacy = load(tmp.path()).unwrap();
-        assert!(
-            !legacy.reports_enabled,
-            "legacy config missing the field stays false (no migration)"
-        );
-        assert!(!legacy.semantic_enabled, "missing field defaults to false");
-    }
-
-    #[test]
-    fn screensaver_theme_plain_round_trips_as_plain() {
-        let tmp = TempDir::new().unwrap();
-        let cfg = IndexConfig {
-            screensaver_theme: ScreensaverTheme::Plain,
-            ..IndexConfig::default()
-        };
-        save(tmp.path(), &cfg).unwrap();
-
-        let raw = std::fs::read_to_string(config_path(tmp.path())).unwrap();
-        assert!(
-            raw.contains("screensaver_theme = \"plain\""),
-            "theme should serialize as plain: {raw}"
-        );
-        let loaded = load(tmp.path()).unwrap();
-        assert_eq!(loaded.screensaver_theme, ScreensaverTheme::Plain);
-    }
-
-    #[test]
-    fn screensaver_theme_castaway_is_rejected() {
-        let tmp = TempDir::new().unwrap();
-        std::fs::write(
-            config_path(tmp.path()),
-            "schema_version = 3\nmodel = \"BAAI/bge-small-en-v1.5\"\nscreensaver_theme = \"castaway\"\n",
-        )
-        .unwrap();
-
-        let err = load(tmp.path()).unwrap_err();
-        assert!(
-            err.to_string().contains("unknown variant `castaway`"),
-            "castaway must not deserialize as a valid theme: {err}"
-        );
-    }
-
-    #[test]
     fn model_registry_contains_curated_models_and_marks_default() {
         let models = embedding_models();
         let ids: Vec<&str> = models.iter().map(|model| model.id).collect();
@@ -501,33 +295,12 @@ mod tests {
         std::fs::create_dir_all(&index_dir).unwrap();
         let on_disk = IndexConfig {
             model: "BAAI/bge-m3".to_owned(),
-            semantic_enabled: true,
             ..IndexConfig::default()
         };
         save(&index_dir, &on_disk).unwrap();
         let _holder = WorkspaceLock::acquire(&lock_dir, tmp.path()).unwrap();
         let loaded = load(&index_dir).unwrap();
         assert_eq!(loaded.model, "BAAI/bge-m3");
-        assert!(loaded.semantic_enabled);
-    }
-
-    #[test]
-    fn semantic_enabled_absent_in_old_file_loads_as_false() {
-        // Older workspaces' config.toml may not
-        // have the field at all. Pin that they load cleanly with the
-        // default (false) rather than failing with a missing-field
-        // error.
-        let tmp = TempDir::new().unwrap();
-        let path = config_path(tmp.path());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            "schema_version = 3\nmodel = \"BAAI/bge-small-en-v1.5\"\n",
-        )
-        .unwrap();
-        let cfg = load(tmp.path()).unwrap();
-        assert!(!cfg.semantic_enabled);
-        assert_eq!(cfg.model, "BAAI/bge-small-en-v1.5");
     }
 
     #[test]
