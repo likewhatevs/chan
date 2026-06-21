@@ -1530,14 +1530,16 @@ fn resolve_followup(
         .ok_or_else(|| {
             anyhow::anyhow!("--followup-dir needs a `from`: set $CHAN_TAB_NAME or pass --from")
         })?;
-    // to: the survey target. A selector is always present (checked by the
-    // caller), so the tab name / group resolves; --to is the final fallback.
-    let to = tab_name
+    // to: --to is the explicit OVERRIDE (the common case: surveying via the
+    // lead's tab on behalf of a host who has no live tab of their own, so the
+    // followup is addressed to the host, not the lead's tab). Falls back to the
+    // survey target (tab name / group), which is always present per the caller.
+    let to = to
         .and_then(trimmed)
+        .or_else(|| tab_name.and_then(trimmed))
         .or_else(|| tab_group.and_then(trimmed))
-        .or_else(|| to.and_then(trimmed))
         .ok_or_else(|| {
-            anyhow::anyhow!("--followup-dir needs a `to` target (--tab-name/--tab-group)")
+            anyhow::anyhow!("--followup-dir needs a `to` target (--to / --tab-name / --tab-group)")
         })?;
     Ok(SurveyFollowup { dir, from, to })
 }
@@ -2072,21 +2074,23 @@ mod tests {
     }
 
     #[test]
-    fn resolve_followup_prefers_env_tab_name_and_tab_name_target() {
-        // from <- $CHAN_TAB_NAME; to <- --tab-name; --from/--to ignored when
-        // the higher-priority sources are present.
+    fn resolve_followup_to_flag_overrides_tab_name() {
+        // from <- $CHAN_TAB_NAME (over --from). to <- --to OVERRIDE (over
+        // --tab-name/--tab-group): the common case of surveying via the lead's
+        // tab on behalf of a host with no live tab, so the followup is
+        // addressed to the host, not the lead's tab.
         let f = resolve_followup(
             Some("team-a".into()),
-            Some("Alice".into()),
-            Some("ignored-from".into()),
-            Some("ignored-to".into()),
-            Some("Bob".into()),
+            Some("Alice".into()),        // env_tab_name -> from
+            Some("ignored-from".into()), // --from (ignored; env wins)
+            Some("@@Host".into()),       // --to -> to (overrides --tab-name)
+            Some("Bob".into()),          // --tab-name (overridden by --to)
             Some("group-x".into()),
         )
         .expect("resolve");
         assert_eq!(f.dir, "team-a");
         assert_eq!(f.from, "Alice");
-        assert_eq!(f.to, "Bob");
+        assert_eq!(f.to, "@@Host");
     }
 
     #[test]
