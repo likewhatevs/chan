@@ -25,13 +25,7 @@ serve_tunnel_listener(
                               accept loop on a TCP listener; runs h2
                               server, validates, registers, workspaces
 
-public_router(registry)       axum router for the public side
-public_router_with(registry,  same, with PublicConfig knobs
-                   cfg)
-PublicConfig                  body cap, ...
-DEFAULT_REQUEST_BODY_CAP      10 MiB
-
-Registry                      live (user, workspace) -> TunnelHandle
+Registry                      live (user, devserver_id) -> TunnelHandle
 TunnelHandle                  open() -> yamux::Stream
 WorkspaceInfo / TunnelInfo        admin snapshots
 OpenError                     Disconnected

@@ -3,9 +3,9 @@
 //! Owns a `yamux::Connection` for the lifetime of one registered
 //! tunnel. Three things share its attention:
 //!
-//! 1. `OpenRequest` messages from the public router asking for a
-//!    new outbound substream. Each message carries a oneshot reply
-//!    channel.
+//! 1. `OpenRequest` messages from the fronting proxy (via
+//!    `TunnelHandle::open`) asking for a new outbound substream. Each
+//!    message carries a oneshot reply channel.
 //! 2. Inbound substreams from the peer. The protocol does not use
 //!    these in v0; we drop them, which yamux turns into a RST on
 //!    the next poll.

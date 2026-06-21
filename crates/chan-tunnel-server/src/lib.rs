@@ -198,11 +198,11 @@ where
     F: FnOnce(&Hello, &Validated) -> Result<(), ServerError>,
 {
     // Defense-in-depth: the validator has already authenticated the
-    // token, but the username it returns flows into the public URL
-    // path /{user}/{workspace}. If the upstream identity service ever
+    // token, but the username it returns flows into the public host
+    // `{user}.devserver.chan.app`. If the upstream identity service ever
     // emits a username with `/`, `..`, whitespace, or other
-    // path-affecting bytes, the public router would mis-route or
-    // leak the prefix. Refuse here so the rest of the pipeline can
+    // host-affecting bytes, the fronting proxy would mis-route or
+    // leak it. Refuse here so the rest of the pipeline can
     // assume the username is URL-safe.
     if !chan_tunnel_proto::is_valid_username(&validated.username) {
         return Err(ServerError::Handshake(format!(
@@ -303,10 +303,8 @@ fn tunnel_yamux_config() -> YamuxConfig {
 }
 
 mod driver;
-mod public;
 mod registry;
 mod tunnel;
 
-pub use public::{public_router, public_router_with, PublicConfig, DEFAULT_REQUEST_BODY_CAP};
 pub use registry::{OpenError, Registry, TunnelHandle, TunnelInfo, WorkspaceInfo};
 pub use tunnel::serve_tunnel_listener;
