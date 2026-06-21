@@ -1,4 +1,4 @@
-//! Reverse proxy for `*.workspace.chan.app/{workspace}/...` into the
+//! Reverse proxy for `*.devserver.chan.app/{workspace}/...` into the
 //! `chan serve` peer behind the registered tunnel.
 //!
 //! `{user}` is parsed out of the wildcard `Host` header by
@@ -11,10 +11,10 @@
 //!   * `public` registration -> always pass through
 //!   * request has `?t=<entry-jwt>`:
 //!     * verify HS256 + exp + aud (Host) + drv (workspace) -> mint a session
-//!       JWT carrying the entry's `sub`, set `workspace_gate` cookie scoped
+//!       JWT carrying the entry's `sub`, set `devserver_gate` cookie scoped
 //!       to `Path=/<workspace>/`, 303 to the clean URL
 //!     * any failure -> 404
-//!   * request has a valid `workspace_gate` cookie (signature + aud + drv)
+//!   * request has a valid `devserver_gate` cookie (signature + aud + drv)
 //!     -> pass through
 //!   * anything else (no cookie, expired, wrong aud, wrong workspace)
 //!     -> 404
@@ -23,7 +23,7 @@
 //! mints entry tokens only after calling `profile.workspace_access(owner,
 //! workspace, caller)`, so a validly-signed entry with the right aud and drv
 //! proves the caller is authorized — owner or accepted grantee. The aud
-//! claim (= `{owner}.workspace.chan.app`) is what enforces tenant isolation;
+//! claim (= `{owner}.devserver.chan.app`) is what enforces tenant isolation;
 //! comparing `sub` against the cached owner would lock out every grantee.
 //!
 //! 404 is preferred over 401 / 403 on the proxy path so an
@@ -50,7 +50,7 @@ use axum::http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Sta
 use axum::response::{IntoResponse, Response};
 use chan_tunnel_server::TunnelHandle;
 use futures_util::{SinkExt, StreamExt};
-use gateway_common::workspace_gate::{self, TokenType};
+use gateway_common::devserver_gate::{self, TokenType};
 use http_body_util::Limited;
 use hyper_util::rt::TokioIo;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -140,9 +140,9 @@ impl http_body::Body for DeadlineBody {
 }
 
 /// Cookie name for the session-shape workspace-gate token. Host-only on
-/// `{user}.workspace.chan.app`; `Path=/{workspace}/`; HttpOnly; Secure;
+/// `{user}.devserver.chan.app`; `Path=/{workspace}/`; HttpOnly; Secure;
 /// SameSite=Lax; 24h lifetime (matches the session JWT exp).
-const COOKIE_NAME: &str = "workspace_gate";
+const COOKIE_NAME: &str = "devserver_gate";
 
 /// Hop-by-hop headers we strip on both legs (RFC 7230 6.1).
 /// Match is on the lowercase header name string; `HeaderName` can
@@ -305,19 +305,19 @@ fn resolve_gate(state: &AppState, req: &Request, _user: &str, workspace: &str, a
     // `workspace_access`) are the authorization assertion. Identity owns
     // the policy; workspace-proxy verifies the assertion.
     if let Some(token) = entry_token_param(req.uri()) {
-        return match workspace_gate::decode(secret, &token, TokenType::Entry, aud, workspace) {
+        return match devserver_gate::decode(secret, &token, TokenType::Entry, aud, workspace) {
             Ok(claims) => Gate::IssueSession { sub: claims.sub },
             Err(_) => Gate::Reject,
         };
     }
 
     // No entry token: any one valid session cookie admits. A browser
-    // may send several `workspace_gate` cookies under unusual conditions
+    // may send several `devserver_gate` cookies under unusual conditions
     // (stale cookie at a different path that got attached to this
     // request); accept the first that verifies under this aud + drv so
     // a stale duplicate doesn't 404 a legitimate session.
-    for cookie in workspace_gate_cookies(req.headers()) {
-        if workspace_gate::decode(secret, &cookie, TokenType::Session, aud, workspace).is_ok() {
+    for cookie in devserver_gate_cookies(req.headers()) {
+        if devserver_gate::decode(secret, &cookie, TokenType::Session, aud, workspace).is_ok() {
             return Gate::Pass;
         }
     }
@@ -403,14 +403,14 @@ fn percent_decode(s: &str) -> String {
         .unwrap_or_else(|| s.to_string())
 }
 
-/// Read the `workspace_gate` cookie value from the Cookie header(s).
+/// Read the `devserver_gate` cookie value from the Cookie header(s).
 /// Manual parse: this crate deliberately carries no cookie / session
 /// dependency. RFC 6265 cookie-pair: `name=value; name=value; ...`.
 /// Returns every match in order so the caller can fall through stale
-/// duplicates (e.g. a browser sending an old + a fresh `workspace_gate`
+/// duplicates (e.g. a browser sending an old + a fresh `devserver_gate`
 /// under different paths that both got attached to the same request).
 /// Quoted values (`name="value"`) get the quotes stripped per RFC.
-fn workspace_gate_cookies(headers: &HeaderMap) -> Vec<String> {
+fn devserver_gate_cookies(headers: &HeaderMap) -> Vec<String> {
     let mut out = Vec::new();
     for raw in headers.get_all(header::COOKIE).iter() {
         let Ok(s) = raw.to_str() else { continue };
@@ -475,10 +475,10 @@ fn issue_session_cookie(
     aud: &str,
     uri: &Uri,
 ) -> Response {
-    let session = match workspace_gate::encode_session(secret, sub, workspace, aud) {
+    let session = match devserver_gate::encode_session(secret, sub, workspace, aud) {
         Ok(t) => t,
         Err(e) => {
-            tracing::error!(error = ?e, "failed to mint workspace_gate session token");
+            tracing::error!(error = ?e, "failed to mint devserver_gate session token");
             return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
         }
     };
@@ -604,10 +604,10 @@ async fn proxy_http(
         .map_err(|e| Error::Anyhow(anyhow::anyhow!("response: {e}")))
 }
 
-/// Drop hop-by-hop headers, Host, Cookie (the workspace_gate cookie has
+/// Drop hop-by-hop headers, Host, Cookie (the devserver_gate cookie has
 /// no business at the upstream), Authorization (a user-presented PAT
 /// or bearer has no business at the tenant's `chan serve` either;
-/// auth on this leg is the workspace_gate handshake plus the tunnel
+/// auth on this leg is the devserver_gate handshake plus the tunnel
 /// trust boundary), and existing X-Forwarded-*. Honors the
 /// connection-token list per RFC 7230 6.1.
 fn strip_inbound_headers(headers: &mut HeaderMap) {
@@ -963,40 +963,40 @@ mod tests {
     }
 
     #[test]
-    fn workspace_gate_cookies_extracts() {
+    fn devserver_gate_cookies_extracts() {
         let mut h = HeaderMap::new();
         h.insert(
             header::COOKIE,
-            HeaderValue::from_static("foo=bar; workspace_gate=abc.def.ghi; baz=qux"),
+            HeaderValue::from_static("foo=bar; devserver_gate=abc.def.ghi; baz=qux"),
         );
-        assert_eq!(workspace_gate_cookies(&h), vec!["abc.def.ghi".to_string()]);
+        assert_eq!(devserver_gate_cookies(&h), vec!["abc.def.ghi".to_string()]);
 
         // Duplicate cookies: caller is responsible for picking the
         // first that verifies. We return them in header order.
         let mut h = HeaderMap::new();
         h.append(
             header::COOKIE,
-            HeaderValue::from_static("workspace_gate=stale.1.x"),
+            HeaderValue::from_static("devserver_gate=stale.1.x"),
         );
         h.append(
             header::COOKIE,
-            HeaderValue::from_static("workspace_gate=fresh.2.y"),
+            HeaderValue::from_static("devserver_gate=fresh.2.y"),
         );
-        assert_eq!(workspace_gate_cookies(&h), vec!["stale.1.x", "fresh.2.y"]);
+        assert_eq!(devserver_gate_cookies(&h), vec!["stale.1.x", "fresh.2.y"]);
 
         // RFC-style quoted value: quotes stripped.
         let mut h = HeaderMap::new();
         h.insert(
             header::COOKIE,
-            HeaderValue::from_static("workspace_gate=\"abc.def.ghi\""),
+            HeaderValue::from_static("devserver_gate=\"abc.def.ghi\""),
         );
-        assert_eq!(workspace_gate_cookies(&h), vec!["abc.def.ghi".to_string()]);
+        assert_eq!(devserver_gate_cookies(&h), vec!["abc.def.ghi".to_string()]);
 
         let mut h = HeaderMap::new();
         h.insert(header::COOKIE, HeaderValue::from_static("foo=bar"));
-        assert!(workspace_gate_cookies(&h).is_empty());
+        assert!(devserver_gate_cookies(&h).is_empty());
 
-        assert!(workspace_gate_cookies(&HeaderMap::new()).is_empty());
+        assert!(devserver_gate_cookies(&HeaderMap::new()).is_empty());
     }
 
     #[test]

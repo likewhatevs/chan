@@ -6,20 +6,20 @@ use url::Url;
 /// Runtime config sourced from environment variables.
 #[derive(Clone)]
 pub struct Config {
-    /// Public listener (workspace.chan.app apex + *.workspace.chan.app
+    /// Public listener (devserver.chan.app apex + *.devserver.chan.app
     /// wildcard). Behind nginx + TLS.
     pub bind_addr: SocketAddr,
     /// Tunnel listener (apex `/v1/tunnel`). h2c behind nginx
     /// `grpc_pass`; `chan serve` instances dial
-    /// `https://workspace.chan.app/v1/tunnel` over h2/TLS, terminated at
+    /// `https://devserver.chan.app/v1/tunnel` over h2/TLS, terminated at
     /// nginx and forwarded here cleartext.
     pub tunnel_bind_addr: SocketAddr,
-    /// Apex hostname (e.g. `workspace.chan.app`). Used to distinguish
+    /// Apex hostname (e.g. `devserver.chan.app`). Used to distinguish
     /// the admin/healthz surface from the wildcard reverse-proxy
     /// surface in the Host-keyed router.
     pub apex_host: String,
     /// Wildcard suffix including the leading dot (e.g.
-    /// `.workspace.chan.app`). The proxy router parses `{user}` out of
+    /// `.devserver.chan.app`). The proxy router parses `{user}` out of
     /// every Host that ends with this suffix.
     pub wildcard_suffix: String,
     /// Base URL of identity-service. workspace-proxy POSTs to
@@ -30,16 +30,19 @@ pub struct Config {
     /// `/internal/v1/tokens/validate`. Sourced from
     /// `IDENTITY_INTERNAL_TOKEN`; required, no fallback.
     pub identity_auth_token: String,
-    /// Absolute URL the wildcard root (`{user}.workspace.chan.app/`)
+    /// Absolute URL the wildcard root (`{user}.devserver.chan.app/`)
     /// 302s to. The dashboard lives at id.chan.app/workspaces in prod;
     /// dev sets this to `http://id.localtest.me:17000/workspaces`. If
     /// unset, workspace-proxy derives a sensible default by swapping
-    /// the `workspace.` prefix on `apex_host` for `id.` and assuming
+    /// the `devserver.` prefix on `apex_host` for `id.` and assuming
     /// `https`.
     pub dashboard_url: String,
     /// HMAC-SHA256 secret used to verify entry tokens from identity
-    /// and mint session tokens for the `workspace_gate` cookie. Same
-    /// value also configured on identity-service. Required.
+    /// and mint session tokens for the `devserver_gate` cookie. Same
+    /// value also configured on identity-service. The env var keeps the
+    /// generic `WORKSPACE_GATE_SECRET` name (a cross-service shared
+    /// secret), so the field tracks the var rather than the cookie.
+    /// Required.
     pub workspace_gate_secret: String,
     /// Maximum number of distinct workspaces a single user can have
     /// registered concurrently. `0` disables the cap. Reconnects of
@@ -83,21 +86,21 @@ impl Config {
             .context("TUNNEL_BIND_ADDR must be host:port")?;
 
         // Single-source domain config. CHAN_DOMAIN drives both the
-        // workspace and id hostnames; PUBLIC_SCHEME the URL scheme.
+        // devserver and id hostnames; PUBLIC_SCHEME the URL scheme.
         // Both default dev-shaped (localtest.me / http); production
         // sets them once in the shared environment file. identity
         // derives the same hosts from the same vars, so the two cannot
-        // drift (the workspace-gate `aud` must match). See
+        // drift (the devserver-gate `aud` must match). See
         // gateway_common::domain.
         let domains = gateway_common::domain::Domains::from_env();
         let public_scheme = read_public_scheme()?;
 
-        // Apex + wildcard default to the derived workspace hosts;
+        // Apex + wildcard default to the derived devserver hosts;
         // override with APEX_HOST / WILDCARD_SUFFIX only for unusual
         // layouts. The wildcard suffix follows the apex unless set.
         let apex_host = match std::env::var("APEX_HOST") {
             Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
-            _ => domains.workspace_apex.clone(),
+            _ => domains.devserver_apex.clone(),
         };
         if apex_host.is_empty() {
             anyhow::bail!("APEX_HOST must not be empty");
@@ -109,7 +112,7 @@ impl Config {
         if !wildcard_suffix.starts_with('.') {
             anyhow::bail!(
                 "WILDCARD_SUFFIX must start with a dot (got {wildcard_suffix:?}); \
-                 e.g. .workspace.chan.app"
+                 e.g. .devserver.chan.app"
             );
         }
 
@@ -210,7 +213,7 @@ impl Config {
     ///
     /// The prefix must be a single DNS label: lowercase ASCII
     /// alphanumerics plus `-`, no internal dots. Multi-label
-    /// prefixes (e.g. `evil.alice` against `*.workspace.chan.app`) and
+    /// prefixes (e.g. `evil.alice` against `*.devserver.chan.app`) and
     /// non-label characters are rejected so the resulting "username"
     /// matches the shape username validators downstream accept.
     pub fn parse_wildcard_user(&self, host: &str) -> Option<String> {
@@ -283,8 +286,8 @@ mod tests {
         Config {
             bind_addr: "127.0.0.1:7002".parse().unwrap(),
             tunnel_bind_addr: "127.0.0.1:7100".parse().unwrap(),
-            apex_host: "workspace.chan.app".into(),
-            wildcard_suffix: ".workspace.chan.app".into(),
+            apex_host: "devserver.chan.app".into(),
+            wildcard_suffix: ".devserver.chan.app".into(),
             identity_url: "http://127.0.0.1:7000/".parse().unwrap(),
             identity_auth_token: "x".into(),
             dashboard_url: "https://id.chan.app/workspaces".into(),
@@ -301,24 +304,24 @@ mod tests {
     #[test]
     fn apex_returns_none() {
         let c = cfg();
-        assert_eq!(c.parse_wildcard_user("workspace.chan.app"), None);
-        assert_eq!(c.parse_wildcard_user("WORKSPACE.chan.app"), None);
-        assert_eq!(c.parse_wildcard_user("workspace.chan.app:7002"), None);
+        assert_eq!(c.parse_wildcard_user("devserver.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("DEVSERVER.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("devserver.chan.app:7002"), None);
     }
 
     #[test]
     fn wildcard_extracts_user() {
         let c = cfg();
         assert_eq!(
-            c.parse_wildcard_user("alice.workspace.chan.app").as_deref(),
+            c.parse_wildcard_user("alice.devserver.chan.app").as_deref(),
             Some("alice"),
         );
         assert_eq!(
-            c.parse_wildcard_user("Alice.Workspace.Chan.App").as_deref(),
+            c.parse_wildcard_user("Alice.Devserver.Chan.App").as_deref(),
             Some("alice"),
         );
         assert_eq!(
-            c.parse_wildcard_user("alice.workspace.chan.app:7002")
+            c.parse_wildcard_user("alice.devserver.chan.app:7002")
                 .as_deref(),
             Some("alice"),
         );
@@ -329,21 +332,21 @@ mod tests {
         let c = cfg();
         assert_eq!(c.parse_wildcard_user("example.com"), None);
         assert_eq!(c.parse_wildcard_user(""), None);
-        assert_eq!(c.parse_wildcard_user(".workspace.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user(".devserver.chan.app"), None);
     }
 
     #[test]
     fn multi_label_prefix_rejected() {
-        // `evil.alice.workspace.chan.app` matches the wildcard suffix
+        // `evil.alice.devserver.chan.app` matches the wildcard suffix
         // but must NOT resolve to username "evil.alice": the prefix
         // is required to be a single DNS label.
         let c = cfg();
-        assert_eq!(c.parse_wildcard_user("evil.alice.workspace.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("evil.alice.devserver.chan.app"), None);
         // Leading dot was already excluded by the substring length
         // check + emptiness guard, but tighten the boundary explicitly.
-        assert_eq!(c.parse_wildcard_user("..workspace.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("..devserver.chan.app"), None);
         // Underscores aren't legal DNS hostname chars and are not in
         // the username alphabet either.
-        assert_eq!(c.parse_wildcard_user("a_b.workspace.chan.app"), None);
+        assert_eq!(c.parse_wildcard_user("a_b.devserver.chan.app"), None);
     }
 }

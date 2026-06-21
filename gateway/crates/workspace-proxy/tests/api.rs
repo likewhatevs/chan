@@ -1,9 +1,9 @@
 //! Integration tests for workspace-proxy.
 //!
 //! No Postgres in this suite: workspace-proxy holds no sessions and
-//! no DB state. The proxy gate is driven by workspace-gate JWTs
+//! no DB state. The proxy gate is driven by devserver-gate JWTs
 //! (HS256, shared `WORKSPACE_GATE_SECRET`), and tests mint those
-//! directly via `gateway_common::workspace_gate`.
+//! directly via `gateway_common::devserver_gate`.
 //!
 //! Tunnel registrations exercise the real chan-tunnel handshake
 //! (h2c POST, Hello/HelloAck, yamux) against an in-process tunnel
@@ -22,7 +22,7 @@ use axum::Router;
 use bytes::Bytes;
 use chan_tunnel_proto::{H2Duplex, TUNNEL_PATH};
 use chan_tunnel_server::{serve_tunnel_listener, ServerError, Validated, Validator};
-use gateway_common::workspace_gate;
+use gateway_common::devserver_gate;
 use http::Method as HttpMethod;
 use serde_json::Value;
 use tokio::net::{TcpListener, TcpStream};
@@ -36,8 +36,8 @@ use workspace_proxy::registry::Registry;
 
 const ADMIN_TOKEN: &str = "test-admin-token";
 const WORKSPACE_GATE_SECRET: &[u8] = b"test-workspace-gate-secret-32-bytes-aa";
-const APEX_HOST: &str = "workspace.chan.app";
-const WILDCARD_SUFFIX: &str = ".workspace.chan.app";
+const APEX_HOST: &str = "devserver.chan.app";
+const WILDCARD_SUFFIX: &str = ".devserver.chan.app";
 
 /// (user_id, username, scopes) row stored per-token in the stub.
 /// Aliased so clippy's `type_complexity` lint is happy on the
@@ -293,16 +293,16 @@ async fn send_admin(
     (status, json)
 }
 
-/// Mint a workspace-gate token of the requested shape. Tests use this to
+/// Mint a devserver-gate token of the requested shape. Tests use this to
 /// build URLs and cookies the proxy gate will accept (or to forge
 /// near-misses for the negative cases).
-fn mint(typ: workspace_gate::TokenType, sub: Uuid, drv: &str, aud: &str) -> String {
+fn mint(typ: devserver_gate::TokenType, sub: Uuid, drv: &str, aud: &str) -> String {
     match typ {
-        workspace_gate::TokenType::Entry => {
-            workspace_gate::encode_entry(WORKSPACE_GATE_SECRET, sub, drv, aud).unwrap()
+        devserver_gate::TokenType::Entry => {
+            devserver_gate::encode_entry(WORKSPACE_GATE_SECRET, sub, drv, aud).unwrap()
         }
-        workspace_gate::TokenType::Session => {
-            workspace_gate::encode_session(WORKSPACE_GATE_SECRET, sub, drv, aud).unwrap()
+        devserver_gate::TokenType::Session => {
+            devserver_gate::encode_session(WORKSPACE_GATE_SECRET, sub, drv, aud).unwrap()
         }
     }
 }
@@ -353,7 +353,7 @@ async fn wildcard_root_redirects_to_dashboard() {
     let (s, hdrs, _) = send_host(
         &app.router,
         Method::GET,
-        "alice.workspace.chan.app",
+        "alice.devserver.chan.app",
         "/",
         &[],
     )
@@ -420,7 +420,7 @@ async fn public_workspace_passes_through() {
 }
 
 // ---------------------------------------------------------------
-// Proxy gate (private + workspace_gate JWT)
+// Proxy gate (private + devserver_gate JWT)
 // ---------------------------------------------------------------
 
 #[tokio::test]
@@ -443,7 +443,7 @@ async fn entry_token_mints_session_cookie() {
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
-    let token = mint(workspace_gate::TokenType::Entry, uid, "blog", &host);
+    let token = mint(devserver_gate::TokenType::Entry, uid, "blog", &host);
     let (s, hdrs, _) = send_host(
         &app.router,
         Method::GET,
@@ -456,7 +456,7 @@ async fn entry_token_mints_session_cookie() {
     let loc = hdrs.get(header::LOCATION).unwrap().to_str().unwrap();
     assert_eq!(loc, "/blog/");
     let set = hdrs.get(header::SET_COOKIE).unwrap().to_str().unwrap();
-    assert!(set.starts_with("workspace_gate="), "got {set}");
+    assert!(set.starts_with("devserver_gate="), "got {set}");
     assert!(set.contains("Path=/blog/"));
     assert!(set.contains("HttpOnly"));
     assert!(set.contains("Secure"));
@@ -471,7 +471,7 @@ async fn entry_token_drops_t_param_but_keeps_other_query() {
     app.register_tunnel("alice", "blog", uid, Router::new())
         .await;
     let host = host_for("alice");
-    let token = mint(workspace_gate::TokenType::Entry, uid, "blog", &host);
+    let token = mint(devserver_gate::TokenType::Entry, uid, "blog", &host);
     let (_, hdrs, _) = send_host(
         &app.router,
         Method::GET,
@@ -495,7 +495,7 @@ async fn entry_token_for_wrong_workspace_is_404() {
         .await;
     let host = host_for("alice");
     // Token minted for `blog`, used on `journal`.
-    let token = mint(workspace_gate::TokenType::Entry, uid, "blog", &host);
+    let token = mint(devserver_gate::TokenType::Entry, uid, "blog", &host);
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
@@ -514,13 +514,13 @@ async fn entry_token_for_wrong_host_is_404() {
     let uid = Uuid::new_v4();
     app.register_tunnel("alice", "blog", uid, Router::new())
         .await;
-    // Token minted with aud=bob.workspace.chan.app, presented on
-    // alice.workspace.chan.app.
+    // Token minted with aud=bob.devserver.chan.app, presented on
+    // alice.devserver.chan.app.
     let bad_token = mint(
-        workspace_gate::TokenType::Entry,
+        devserver_gate::TokenType::Entry,
         uid,
         "blog",
-        "bob.workspace.chan.app",
+        "bob.devserver.chan.app",
     );
     let (s, _, _) = send_host(
         &app.router,
@@ -542,13 +542,13 @@ async fn session_cookie_admits() {
     app.register_tunnel("alice", "blog", uid, upstream).await;
 
     let host = host_for("alice");
-    let session = mint(workspace_gate::TokenType::Session, uid, "blog", &host);
+    let session = mint(devserver_gate::TokenType::Session, uid, "blog", &host);
 
     let proxy_addr = serve_router_real(app.router.clone()).await;
     let res = reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/"))
         .header(header::HOST, &host)
-        .header(header::COOKIE, format!("workspace_gate={session}"))
+        .header(header::COOKIE, format!("devserver_gate={session}"))
         .send()
         .await
         .unwrap();
@@ -566,13 +566,13 @@ async fn session_cookie_for_wrong_workspace_is_404() {
     app.register_tunnel("alice", "journal", uid, Router::new())
         .await;
     let host = host_for("alice");
-    let session = mint(workspace_gate::TokenType::Session, uid, "blog", &host);
+    let session = mint(devserver_gate::TokenType::Session, uid, "blog", &host);
     let (s, _, _) = send_host(
         &app.router,
         Method::GET,
         &host,
         "/journal/",
-        &[("cookie", &format!("workspace_gate={session}"))],
+        &[("cookie", &format!("devserver_gate={session}"))],
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
@@ -594,7 +594,7 @@ async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
 
     let host = host_for("alice");
     // Bob is an accepted grantee; identity mints sub = bob.
-    let entry = mint(workspace_gate::TokenType::Entry, bob, "blog", &host);
+    let entry = mint(devserver_gate::TokenType::Entry, bob, "blog", &host);
     let (s, hdrs, _) = send_host(
         &app.router,
         Method::GET,
@@ -605,19 +605,19 @@ async fn entry_token_for_grantee_mints_session_carrying_grantee_sub() {
     .await;
     assert_eq!(s, StatusCode::SEE_OTHER);
     let set = hdrs.get(header::SET_COOKIE).unwrap().to_str().unwrap();
-    assert!(set.starts_with("workspace_gate="), "got {set}");
+    assert!(set.starts_with("devserver_gate="), "got {set}");
 
     // The minted session cookie must carry sub = bob (the grantee),
     // not sub = alice (the owner), so upstream attribution is correct.
     let cookie = set
-        .strip_prefix("workspace_gate=")
+        .strip_prefix("devserver_gate=")
         .and_then(|s| s.split(';').next())
         .unwrap();
     let aud = host_for("alice");
-    let claims = workspace_gate::decode(
+    let claims = devserver_gate::decode(
         WORKSPACE_GATE_SECRET,
         cookie,
-        workspace_gate::TokenType::Session,
+        devserver_gate::TokenType::Session,
         &aud,
         "blog",
     )
@@ -641,13 +641,13 @@ async fn session_cookie_with_grantee_sub_admits() {
     let upstream = Router::new().route("/", axum::routing::get(|| async { "grantee pass" }));
     app.register_tunnel("alice", "blog", alice, upstream).await;
     let host = host_for("alice");
-    let session = mint(workspace_gate::TokenType::Session, bob, "blog", &host);
+    let session = mint(devserver_gate::TokenType::Session, bob, "blog", &host);
 
     let proxy_addr = serve_router_real(app.router.clone()).await;
     let res = reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/"))
         .header(header::HOST, &host)
-        .header(header::COOKIE, format!("workspace_gate={session}"))
+        .header(header::COOKIE, format!("devserver_gate={session}"))
         .send()
         .await
         .unwrap();
@@ -665,7 +665,7 @@ async fn entry_token_with_bad_signature_is_404() {
     let host = host_for("alice");
     // Token minted with a different secret; same claim envelope.
     let bad =
-        workspace_gate::encode_entry(b"some-other-secret-32-bytes-foobaa", uid, "blog", &host)
+        devserver_gate::encode_entry(b"some-other-secret-32-bytes-foobaa", uid, "blog", &host)
             .unwrap();
     let (s, _, _) = send_host(
         &app.router,
@@ -846,7 +846,7 @@ async fn x_forwarded_for_extended() {
 
 #[tokio::test]
 async fn cookie_header_stripped_from_upstream() {
-    // workspace-proxy must never forward the workspace_gate cookie to the
+    // workspace-proxy must never forward the devserver_gate cookie to the
     // tenant's chan-serve peer (the cookie is for the gate, not for
     // the tenant). Other inbound cookies the tenant content might
     // care about are also stripped today; if that proves wrong we
@@ -867,7 +867,7 @@ async fn cookie_header_stripped_from_upstream() {
     reqwest::Client::new()
         .get(format!("http://{proxy_addr}/blog/z"))
         .header(header::HOST, host_for("alice"))
-        .header(header::COOKIE, "workspace_gate=junk; other=value")
+        .header(header::COOKIE, "devserver_gate=junk; other=value")
         .send()
         .await
         .unwrap();
@@ -882,7 +882,7 @@ async fn authorization_header_stripped_from_upstream() {
     // A user-presented Authorization bearer (e.g. an API client that
     // happens to land on a tenant URL with its own credential) must
     // never reach the tenant's chan-serve. Auth on this leg is the
-    // workspace-gate cookie / entry-token handshake; the tenant's content
+    // devserver-gate cookie / entry-token handshake; the tenant's content
     // has no business seeing the user's PAT or any other bearer.
     let app = TestApp::new().await;
     let uid = Uuid::new_v4();

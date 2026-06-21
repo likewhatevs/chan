@@ -12,7 +12,7 @@ use crate::registry::Registry;
 
 /// Application state passed to every handler. Holds no cookie or
 /// session machinery; workspace-proxy reads no cookie other than the
-/// `workspace_gate` issued by the proxy gate itself.
+/// `devserver_gate` issued by the proxy gate itself.
 #[derive(Clone)]
 pub struct AppState {
     pub cfg: Arc<Config>,

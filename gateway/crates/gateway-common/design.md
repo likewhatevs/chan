@@ -6,7 +6,7 @@ identity-service, workspace-proxy and profile-service need the same plumbing in 
 
 - a `ProfileClient` calling profile-service over HTTP;
 - a `WorkspaceAdminClient` calling workspace-proxy admin (used by identity on revoke / delete / dashboard reads and by profile on admin block);
-- the JWT shape used by the workspace-gate handoff between identity (mint) and workspace-proxy (verify + mint sessions);
+- the JWT shape used by the devserver-gate handoff between identity (mint) and workspace-proxy (verify + mint sessions);
 - the public-hostname derivation both public services must agree on;
 - username validation rules that profile, identity and workspace-proxy all enforce;
 - the token-bucket primitive both validate throttles wrap.
@@ -18,7 +18,7 @@ Per-crate copies would risk drift and make cross-cutting choices (timeouts, erro
 Library crate with eight modules and no axum / IntoResponse coupling in the data-layer types:
 
 - `domain` (`src/domain.rs`)
-  - `Domains`: public hostnames (`base`, `id_host`, `workspace_apex`, `workspace_wildcard_suffix`) derived from one base domain via `from_base` / `from_env` (`CHAN_DOMAIN`, default `localtest.me`). identity and workspace-proxy derive the same hosts from the same env, so the workspace-gate `aud` cannot drift. std-only.
+  - `Domains`: public hostnames (`base`, `id_host`, `devserver_apex`, `devserver_wildcard_suffix`) derived from one base domain via `from_base` / `from_env` (`CHAN_DOMAIN`, default `localtest.me`). identity and workspace-proxy derive the same hosts from the same env, so the devserver-gate `aud` cannot drift. std-only.
 - `profile_client` (`src/profile_client.rs`)
   - `ProfileClient`: reqwest-backed client with a 10-second per-request timeout. Bearer token lives inside; callers do not deal with auth. Idempotent GETs on the dashboard / OAuth-callback read path retry once after 100 ms on connect error, timeout, or 5xx (`send_idempotent`); writes never retry.
   - Serde types matching profile-service's wire shapes: `User`, `Identity`, `UpsertResponse`, `FeatureFlag*`, `FlagMap`, `Workspace`, `WorkspaceGrant`, `WorkspaceAccess`, `OwnedWorkspaceSummary`, `IncomingShare`. `User` is the superset of every field profile returns; consumers ignore the fields they do not need.
@@ -36,10 +36,10 @@ Library crate with eight modules and no axum / IntoResponse coupling in the data
 - `workspace_admin_client` (`src/workspace_admin_client.rs`)
   - `WorkspaceAdminClient`: reqwest-backed client for the apex admin tree. 5-second timeout. Exposes `kill_user_tunnels(username) -> usize` and `list_user_tunnels(username) -> Vec<TunnelView>`. Bearer token lives inside.
   - `WorkspaceAdminError`: thiserror enum with `Upstream(String)` and `Reqwest(reqwest::Error)`.
-- `workspace_gate` (`src/workspace_gate.rs`)
+- `devserver_gate` (`src/devserver_gate.rs`)
   - `Claims`: serde struct matching the entry / session JWT envelope (`iss`, `sub`, `drv`, `aud`, `typ`, `iat`, `exp`).
   - `TokenType::{Entry, Session}` and `encode_*` / `decode` helpers wrapping `jsonwebtoken` with HS256 hard-required. No `alg: none` path exists.
-  - `WorkspaceGateError`: thiserror enum covering decode/signature failures, expiry, and aud / drv / typ mismatch.
+  - `DevserverGateError`: thiserror enum covering decode/signature failures, expiry, and aud / drv / typ mismatch.
 
 ## Public surface
 
@@ -82,7 +82,7 @@ Library crate with eight modules and no axum / IntoResponse coupling in the data
 | `kill_user_tunnels(user)`    | bulk evict; returns count            |
 | `list_user_tunnels(user)`    | snapshot for the dashboard           |
 
-`workspace_gate`:
+`devserver_gate`:
 
 | Item                                              | Purpose                       |
 |---------------------------------------------------|-------------------------------|
@@ -97,13 +97,13 @@ Library crate with eight modules and no axum / IntoResponse coupling in the data
 
 ### No axum coupling in the data-layer types
 
-`ProfileError`, `WorkspaceAdminError`, `WorkspaceGateError` and `Claims` are plain thiserror / serde types. Each consumer maps the error onto its local request-handler error via a `From` impl. Keeps gateway-common free of HTTP-framing decisions and lets each consumer decide whether a given variant is a distinct status or folds into another.
+`ProfileError`, `WorkspaceAdminError`, `DevserverGateError` and `Claims` are plain thiserror / serde types. Each consumer maps the error onto its local request-handler error via a `From` impl. Keeps gateway-common free of HTTP-framing decisions and lets each consumer decide whether a given variant is a distinct status or folds into another.
 
 ### `User` is the superset
 
 `User` carries every field profile-service returns: `username_edits`, `avatar_url`, `blocked_at`, `block_reason`, `display_name`, `email`. Consumers ignore the fields they do not need. Splitting into per-consumer sub-structs would force parallel maintenance for negligible benefit.
 
-### Shared workspace_gate
+### Shared devserver_gate
 
 Both identity and workspace-proxy depend on the same JWT envelope and the same HS256 verification config (hard-required alg, no fallback). One module here is the canonical place for both; the secret is shared between the two services via env var (`WORKSPACE_GATE_SECRET`).
 
@@ -119,9 +119,9 @@ Each consumer's "frontend not built" banner names the right crate and its right 
 
 ## Invariants
 
-- `gateway_common` does not pull axum or any HTTP-routing framework into its data-layer surface. axum is a dependency only because `static_files::serve` returns `axum::response::Response`; nothing in `profile_client`, `workspace_admin_client` or `workspace_gate` knows axum exists.
+- `gateway_common` does not pull axum or any HTTP-routing framework into its data-layer surface. axum is a dependency only because `static_files::serve` returns `axum::response::Response`; nothing in `profile_client`, `workspace_admin_client` or `devserver_gate` knows axum exists.
 - Bearer tokens passed to `ProfileClient::new` or `WorkspaceAdminClient::new` live inside the client; the `Debug` impl deliberately elides the token.
-- `workspace_gate` enforces `alg: HS256` on every decode. No "alg: none" is ever accepted; no asymmetric algorithm is enabled.
+- `devserver_gate` enforces `alg: HS256` on every decode. No "alg: none" is ever accepted; no asymmetric algorithm is enabled.
 - HTTP calls run through one reqwest client per type with a fixed timeout (10s for profile, 5s for workspace-admin). New methods reuse the existing builder.
 
 ## Error model
@@ -143,7 +143,7 @@ Each consumer's "frontend not built" banner names the right crate and its right 
 | `Upstream`    | non-success status with body               |
 | `Reqwest`     | `From<reqwest::Error>`                     |
 
-`WorkspaceGateError`:
+`DevserverGateError`:
 
 | Variant          | Construction                                     |
 |------------------|--------------------------------------------------|
@@ -161,7 +161,7 @@ Consumers map these into their local axum errors.
 - `chrono` for `DateTime<Utc>` in the user / audit types
 - `serde` + `serde_json` for the wire shapes
 - `thiserror` for the error enums
-- `jsonwebtoken` for `workspace_gate`
+- `jsonwebtoken` for `devserver_gate`
 - `axum` (response types only), `mime_guess`, `rust-embed` for `static_files::serve`
 - std-only `domain`, `validators`, `token_bucket` (SipHash via `DefaultHasher`); `tokio::signal` for `shutdown`
 

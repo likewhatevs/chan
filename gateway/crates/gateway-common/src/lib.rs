@@ -4,7 +4,7 @@
 //!
 //!   * `domain`: single-source public-hostname derivation from
 //!     `CHAN_DOMAIN`. identity and workspace-proxy derive the same
-//!     id / workspace hosts so the workspace-gate `aud` cannot drift.
+//!     id / devserver hosts so the devserver-gate `aud` cannot drift.
 //!   * `profile_client`: typed HTTP client for profile-service. Used
 //!     by identity-service. Owns its own error enum (`ProfileError`);
 //!     the consumer maps it onto its local axum error via a `From`
@@ -29,12 +29,13 @@
 //!     block) so a state change in the DB also tears down the
 //!     in-process yamux registrations workspace-proxy holds for the
 //!     user.
-//!   * `workspace_gate`: shared JWT envelope and HS256 encode/decode
-//!     helpers for the workspace-gate handoff. identity mints entry
+//!   * `devserver_gate`: shared JWT envelope and HS256 encode/decode
+//!     helpers for the devserver-gate handoff. identity mints entry
 //!     tokens; workspace-proxy verifies entry tokens and mints session
 //!     tokens. Same envelope, same secret (WORKSPACE_GATE_SECRET),
 //!     distinct `typ` claim.
 
+pub mod devserver_gate;
 pub mod domain;
 pub mod profile_client;
 pub mod shutdown;
@@ -42,6 +43,5 @@ pub mod static_files;
 pub mod token_bucket;
 pub mod validators;
 pub mod workspace_admin_client;
-pub mod workspace_gate;
 
 pub use shutdown::shutdown_signal;
