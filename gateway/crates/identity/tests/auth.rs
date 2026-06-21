@@ -943,6 +943,92 @@ async fn share_landing_no_access_is_404() {
     app.cleanup().await;
 }
 
+#[tokio::test]
+async fn devserver_open_redirects_to_root() {
+    // /api/devservers/open with no `d` opens the devserver ROOT: it reads
+    // the owner's live devserver_id from the admin tunnel list, checks
+    // devserver_access, mints drv=devserver_id, and 303s to
+    // `{owner}.devserver.chan.app/?t=` (no tenant segment).
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let uid = fake_user_id();
+    happy_login(&app, &mut c, uid, "owner@x.com").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            uid,
+            "owner@x.com",
+            "owner-handle",
+        )))
+        .mount(&app.profile)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/users/by-username"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            uid,
+            "owner@x.com",
+            "owner-handle",
+        )))
+        .mount(&app.profile)
+        .await;
+    let dsid = "a".repeat(64);
+    mock_live_devserver(&app, "owner-handle", &dsid).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}/devservers/{dsid}/access")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "owner"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, _, _, location) = c
+        .send(Method::GET, "/api/devservers/open?u=owner-handle", None)
+        .await;
+    assert_eq!(s, StatusCode::SEE_OTHER);
+    assert!(
+        location.starts_with("https://owner-handle.devserver.chan.app/?t="),
+        "got {location}"
+    );
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn devserver_open_404_when_no_live_devserver() {
+    // No live devserver for the owner -> 404 (same shape as no-access).
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let uid = fake_user_id();
+    happy_login(&app, &mut c, uid, "owner@x.com").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{uid}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            uid,
+            "owner@x.com",
+            "owner-handle",
+        )))
+        .mount(&app.profile)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/users/by-username"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            uid,
+            "owner@x.com",
+            "owner-handle",
+        )))
+        .mount(&app.profile)
+        .await;
+    // No mock_live_devserver -> the admin tunnel list is empty.
+    Mock::given(method("GET"))
+        .and(path("/admin/v1/users/owner-handle/tunnels"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&app.profile)
+        .await;
+
+    let (s, _, _, _) = c
+        .send(Method::GET, "/api/devservers/open?u=owner-handle", None)
+        .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    app.cleanup().await;
+}
+
 // ---------------------------------------------------------------------------
 // Feature-flag gate at OAuth callback
 // ---------------------------------------------------------------------------
