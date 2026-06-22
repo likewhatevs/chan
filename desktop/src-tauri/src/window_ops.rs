@@ -127,7 +127,14 @@ async fn new_workspace_window(state: &Arc<AppState>, key: &str) -> Result<String
 fn hide_window(app: &AppHandle, id: &str) -> Result<(), String> {
     let label = serve::resolve_window_label(app, id);
     match app.get_webview_window(&label) {
-        Some(w) => w.close().map_err(|e| format!("hiding {id}: {e}")),
+        Some(w) => {
+            // The status-dot hide IS the explicit hide gesture, so suppress the
+            // close handler's "was hidden, not closed" notice (that teaches the
+            // red-button gesture). Flag the label before `close()` so the
+            // CloseRequested bury consumes it; both run on the main thread.
+            app.state::<Arc<AppState>>().mark_silent_hide(&label);
+            w.close().map_err(|e| format!("hiding {id}: {e}"))
+        }
         None => Err(format!("no window {id}")),
     }
 }

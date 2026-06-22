@@ -92,6 +92,13 @@ pub struct AppState {
     /// Cmd/Ctrl+Shift+N, which unburies the most recent of the focused
     /// family). Entries leave the list on unbury or window destroy.
     pub buried_windows: Mutex<Vec<BuriedWindow>>,
+    /// Native labels whose NEXT `CloseRequested`-bury should skip the
+    /// "was hidden, not closed" teaching notice. The launcher status-dot hide
+    /// routes through the OS close path (so the bury handler runs) but is an
+    /// explicit hide gesture of its own — the notice teaches the red-button
+    /// gesture, so we suppress it here. One-shot: the close handler consumes the
+    /// label, so a later genuine red-button close still shows the notice.
+    pub silent_hides: Mutex<std::collections::HashSet<String>>,
     /// Reopenable REMOTE windows, keyed by remote window label: the
     /// `saved && !connected` rows from each remote connection's
     /// (outbound attachment) `GET /api/windows`,
@@ -423,6 +430,20 @@ impl AppState {
     pub fn most_recent_buried(&self, prefix: &str) -> Option<String> {
         let buried = self.buried_windows.lock().unwrap();
         most_recent_buried_with_prefix(&buried, prefix).map(str::to_string)
+    }
+
+    /// Mark `label` so its next close-button bury skips the teaching notice
+    /// (the launcher status-dot hide is its own explicit gesture). Set on the
+    /// main thread just before `window.close()`; consumed by the close handler.
+    pub fn mark_silent_hide(&self, label: &str) {
+        self.silent_hides.lock().unwrap().insert(label.to_string());
+    }
+
+    /// Consume the silent-hide flag for `label`: returns whether this bury was
+    /// launcher-initiated (so the notice is skipped). One-shot — a later
+    /// red-button close finds no flag and shows the notice as usual.
+    pub fn take_silent_hide(&self, label: &str) -> bool {
+        self.silent_hides.lock().unwrap().remove(label)
     }
 
     /// (label, title) pairs of every buried window, most recent first
@@ -2569,6 +2590,7 @@ fn main() {
         window_numbers: Mutex::new(HashMap::new()),
         window_title_overrides: Mutex::new(HashMap::new()),
         buried_windows: Mutex::new(Vec::new()),
+        silent_hides: Mutex::new(std::collections::HashSet::new()),
         remote_reopen: Mutex::new(HashMap::new()),
         devservers: devserver::DevserverConns::default(),
         devserver_windows: Mutex::new(HashMap::new()),
@@ -3204,6 +3226,13 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             }
             return;
         }
+        if let Some(label) = id.strip_prefix(OPEN_MENU_ID_PREFIX) {
+            // An open-window entry just raises the live window to the front.
+            if let Err(e) = show_window(app, label) {
+                tracing::warn!(label, error = %e, "raising open window from menu failed");
+            }
+            return;
+        }
         if let Some(label) = id.strip_prefix(REMOTE_MENU_ID_PREFIX) {
             open_remote_window_from_menu(app, label);
             return;
@@ -3246,6 +3275,13 @@ fn install_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
 const BURIED_MENU_ID_PREFIX: &str = "buried:";
 /// Disabled section header above the buried entries.
 const BURIED_MENU_HEADER_ID: &str = "buried-header";
+/// Window-menu id namespace for currently-OPEN (visible) windows: the id is
+/// this prefix + the Tauri window label, so a click recovers the label and
+/// raises the live window. Same prefix+label scheme as `buried:`.
+const OPEN_MENU_ID_PREFIX: &str = "open:";
+/// Disabled section header above the open-window entries (a `-{ds_id}` suffix
+/// per devserver group, so the cleanup matches it by prefix).
+const OPEN_MENU_HEADER_ID: &str = "open-header";
 /// Window-menu id namespace for reopenable remote windows (same
 /// prefix+label scheme as `buried:`).
 const REMOTE_MENU_ID_PREFIX: &str = "remote:";
@@ -3284,11 +3320,13 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
         if let Ok(items) = submenu.items() {
             for item in items {
                 let id = item.id().as_ref();
-                // Buried headers are now one per group (local + each
-                // devserver), so match the header id by prefix.
+                // Buried and open headers are one per group (local + each
+                // devserver), so match those header ids by prefix.
                 if id.starts_with(BURIED_MENU_HEADER_ID)
+                    || id.starts_with(OPEN_MENU_HEADER_ID)
                     || id == REMOTE_MENU_HEADER_ID
                     || id.starts_with(BURIED_MENU_ID_PREFIX)
+                    || id.starts_with(OPEN_MENU_ID_PREFIX)
                     || id.starts_with(REMOTE_MENU_ID_PREFIX)
                 {
                     let _ = submenu.remove(&item);
@@ -3350,6 +3388,56 @@ pub fn rebuild_window_menu(app: &tauri::AppHandle) {
                 .collect()
         };
         devservers.sort_by(|a, b| a.1.cmp(&b.1));
+
+        // Currently-OPEN (visible) windows, so the Window menu can RAISE a live
+        // window — not just reopen a hidden or remote one. The library's own
+        // window set is the source of truth (local rows now; each connected
+        // devserver's rows once its feed merges in via `DevserverFeedSource`). A
+        // row counts as open when its native webview is alive AND visible: a
+        // buried window's webview is alive but hidden, so it shows under Hidden,
+        // not here. Grouped by the same devserver membership as the Hidden
+        // section so the two line up. Appended first → the open windows head the
+        // dynamic tail, above Hidden and Remote.
+        let open_records = state
+            .embedded()
+            .map(|e| e.assemble_window_records())
+            .unwrap_or_default();
+        let mut open_local: Vec<(String, String)> = Vec::new();
+        let mut open_grouped: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for record in &open_records {
+            let label = window_watcher::native_label(record);
+            let Some(window) = app.get_webview_window(&label) else {
+                continue;
+            };
+            if !window.is_visible().unwrap_or(false) {
+                continue;
+            }
+            let title = window.title().unwrap_or_else(|_| record.title.clone());
+            match devservers.iter().find(|(_, _, labels)| labels.contains(&label)) {
+                Some((ds_id, _, _)) => {
+                    open_grouped.entry(ds_id.clone()).or_default().push((label, title))
+                }
+                None => open_local.push((label, title)),
+            }
+        }
+        if !open_local.is_empty() {
+            append_section(
+                OPEN_MENU_HEADER_ID,
+                &format!("Open Windows ({})", open_local.len()),
+                &open_local,
+                OPEN_MENU_ID_PREFIX,
+            );
+        }
+        for (ds_id, display, _) in &devservers {
+            if let Some(rows) = open_grouped.get(ds_id) {
+                append_section(
+                    &format!("{OPEN_MENU_HEADER_ID}-{ds_id}"),
+                    &format!("{display} windows ({})", rows.len()),
+                    rows,
+                    OPEN_MENU_ID_PREFIX,
+                );
+            }
+        }
 
         let mut local: Vec<(String, String)> = Vec::new();
         let mut grouped: HashMap<String, Vec<(String, String)>> = HashMap::new();

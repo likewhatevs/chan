@@ -955,6 +955,12 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                     // and never reach this branch.
                     WindowEvent::CloseRequested { api, .. } => {
                         let state = app_for_close.state::<Arc<AppState>>();
+                        // A5: a launcher status-dot hide routes through this same
+                        // close path (so the bury handler runs) but is its own
+                        // explicit hide gesture — consume its one-shot flag here so
+                        // the bury below skips the teaching notice. A genuine
+                        // red-button close finds no flag and shows it.
+                        let silent_hide = state.take_silent_hide(&label_for_close);
                         // Active-transfer guard (BEFORE any bury/close path): a
                         // window with an in-flight upload/download must never close
                         // silently and kill the transfer. A LOCAL window reports its
@@ -1004,7 +1010,9 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                             }
                             state.bury_window(&label_for_close, &title);
                             crate::rebuild_window_menu(&app_for_close);
-                            show_bury_notice(&app_for_close, &title);
+                            if !silent_hide {
+                                show_bury_notice(&app_for_close, &title);
+                            }
                             return;
                         }
                         let bury = if label_for_close.starts_with("terminal-") {
@@ -1057,7 +1065,9 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         let _ = window.hide();
                         state.bury_window(&label_for_close, &title);
                         crate::rebuild_window_menu(&app_for_close);
-                        show_bury_notice(&app_for_close, &title);
+                        if !silent_hide {
+                            show_bury_notice(&app_for_close, &title);
+                        }
                     }
                     // Single cleanup point for EVERY destroy path: the
                     // no-live-shells close above, the SPA cascade destroy,
@@ -1115,10 +1125,12 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     res.map_err(|e| format!("scheduling workspace window for {window_label}: {e}"))
 }
 
-/// Informational notice shown EVERY time the OS close button buries a
+/// Informational notice shown when the OS close (red) button buries a
 /// window: the dialog is the teaching surface for the hide-not-close
-/// behaviour (smoke tests assert it appears). Async
-/// `.show` only — a blocking dialog on the event-loop thread deadlocks.
+/// behaviour (smoke tests assert it appears). The launcher status-dot hide
+/// suppresses it (its `silent_hide` flag) — that dot is its own explicit hide
+/// gesture and needs no teaching. Async `.show` only — a blocking dialog on
+/// the event-loop thread deadlocks.
 fn show_bury_notice(app: &AppHandle, title: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
     app.dialog()
