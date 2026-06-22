@@ -1034,14 +1034,9 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
 /// `.show` only — a blocking dialog on the event-loop thread deadlocks.
 fn show_bury_notice(app: &AppHandle, title: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-    let chord = if cfg!(target_os = "macos") {
-        "Cmd+Shift+N"
-    } else {
-        "Ctrl+Shift+N"
-    };
     app.dialog()
         .message(format!(
-            "\"{title}\" wasn't closed — its terminals and layout are still running. Reopen it from the Window menu, or with {chord}."
+            "\"{title}\" wasn't closed — its terminals and layout are still running. Reopen it from the Window menu."
         ))
         .title("Window Hidden")
         .kind(MessageDialogKind::Info)
