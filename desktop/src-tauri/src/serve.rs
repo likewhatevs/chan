@@ -780,6 +780,31 @@ struct WindowSpec<'a> {
     kind: Option<&'a str>,
 }
 
+/// Resolve the pane-highlight colour to inject for a window of `library_id`
+/// (seam #5): the LOCAL library's colour (the installed [`LocalColorStore`]) for
+/// a local window, or the owning devserver's `color` for a devserver window
+/// (mapped `library_id` -> devserver id via the live feed -> the config row's
+/// colour). `None` (unknown library, no colour set, or an empty/outbound
+/// `library_id`) -> the editor falls back to the default accent.
+fn pane_color_for_library(app: &AppHandle, library_id: &str) -> Option<String> {
+    let state = app.state::<Arc<AppState>>();
+    let embedded = state.embedded()?;
+    if library_id.is_empty() {
+        return None;
+    }
+    if library_id == embedded.library_id() {
+        return embedded.local_pane_color();
+    }
+    let devserver_id = state.devserver_feed.devserver_id_for_library(library_id)?;
+    // Bind the owned config before the tail so the MutexGuard temporary drops
+    // here (not after `state` at block end) — the tail then borrows nothing.
+    let cfg = state.store.lock().unwrap().get().ok()?;
+    cfg.devservers
+        .into_iter()
+        .find(|d| d.id == devserver_id)
+        .and_then(|d| d.color)
+}
+
 /// Build and show a chan-style workspace webview window on the main
 /// thread. Internal: call `open_watched_local_window` (the watcher path) /
 /// `spawn_remote_workspace_window` from outside. Centralising the
@@ -820,6 +845,14 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     // library identity; the SPA defaults a missing `?lib=` to `local`).
     if !library_id.is_empty() {
         parsed.query_pairs_mut().append_pair("lib", library_id);
+    }
+    // `pane=<hex>` is the window's library pane-highlight colour (seam #5): the
+    // LOCAL library's colour for local windows, the owning devserver's `color`
+    // for a devserver window. The editor reads it on boot to tint the active-pane
+    // highlight; absent -> the default accent. Resolved desktop-side from the
+    // window's `library_id`. v1 = mint-time (no live recolour of open windows).
+    if let Some(color) = pane_color_for_library(app, library_id) {
+        parsed.query_pairs_mut().append_pair("pane", &color);
     }
     if !url_hash_seed.is_empty() {
         parsed.set_fragment(Some(url_hash_seed));

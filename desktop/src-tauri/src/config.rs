@@ -101,6 +101,11 @@ pub struct Devserver {
     /// Wall-clock millis when the devserver was added.
     #[serde(default)]
     pub added_at: u64,
+    /// Per-library pane-highlight colour (hex `#rrggbb`), or `None` for the
+    /// default accent. Mirrors the launcher wire ([`DevserverEntry::color`]);
+    /// the desktop injects it as `?pane=` when minting this devserver's windows.
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 /// Per-window layout snapshot pushed when a workspace webview closes,
@@ -167,6 +172,13 @@ pub struct Config {
     /// evicted past that.
     #[serde(default)]
     pub window_configs: Vec<WindowConfig>,
+    /// The LOCAL library's pane-highlight colour (hex `#rrggbb`), or `None` for
+    /// the default accent. Backs the [`LocalColorStore`](chan_server::LocalColorStore)
+    /// the host reads when minting local windows (terminals + workspaces). The
+    /// launcher's local-colour route writes it; the per-devserver colour lives on
+    /// each [`Devserver`].
+    #[serde(default)]
+    pub local_color: Option<String>,
 }
 
 pub struct ConfigStore {
@@ -249,6 +261,34 @@ impl DevserverConfigRegistry {
     }
 }
 
+/// chan-desktop's [`LocalColorStore`](chan_server::LocalColorStore): the local
+/// library's pane-highlight colour persisted in the desktop config
+/// (`~/.chan/desktop`, the same shared store the devserver registry + window LRU
+/// use, so every write serializes through one lock). The host reads it when
+/// minting local windows; the launcher's local-colour route writes it.
+pub struct LocalColorConfig {
+    store: Arc<Mutex<ConfigStore>>,
+}
+
+impl LocalColorConfig {
+    pub fn new(store: Arc<Mutex<ConfigStore>>) -> Self {
+        Self { store }
+    }
+}
+
+impl chan_server::LocalColorStore for LocalColorConfig {
+    fn get(&self) -> Option<String> {
+        self.store.lock().unwrap().get().ok().and_then(|c| c.local_color)
+    }
+
+    fn set(&self, color: Option<String>) -> Result<(), String> {
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = store.get().map_err(|e| e.to_string())?;
+        cfg.local_color = color;
+        store.save(&cfg).map_err(|e| e.to_string())
+    }
+}
+
 /// Project a stored [`Devserver`] to the launcher's wire [`DevserverEntry`],
 /// eliding the token (only its presence, `has_token`, crosses the wire) and
 /// joining the live connection state (`connected`) from `conns`.
@@ -266,6 +306,8 @@ fn entry_from_devserver(d: &Devserver, conns: &DevserverConns) -> DevserverEntry
         // resolved from the live window feed — so the registry reports `None`
         // (the pre-connect state). Joining it back is a follow-up.
         library_id: None,
+        // Per-library pane-highlight colour the launcher picker round-trips.
+        color: d.color.clone(),
     }
 }
 
@@ -301,6 +343,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
             label: input.label.unwrap_or_default(),
             token,
             added_at: now_millis(),
+            color: input.color,
         };
         cfg.devservers.push(entry.clone());
         store.save(&cfg).map_err(|e| e.to_string())?;
@@ -320,6 +363,10 @@ impl DevserverRegistry for DevserverConfigRegistry {
         // path reads as "derive the label from the URL host" / "no script").
         ds.label = input.label.unwrap_or_default();
         ds.script = input.script.unwrap_or_default();
+        // Colour is full-replace like label/script: the edit dialog pre-fills the
+        // current colour (it's readable, unlike the token) and resubmits it, so
+        // `None` legitimately clears it back to the default accent.
+        ds.color = input.color;
         // Token is the lone keep-on-blank field: a write-only credential the
         // launcher never reads back, so its edit form can't resubmit it.
         if let Some(tok) = input.token {
@@ -614,6 +661,7 @@ mod tests {
                 label: "lab box".into(),
                 token: "tok_secret".into(),
                 added_at: 42,
+                color: Some("#ff8800".into()),
             }],
             ..Default::default()
         };
@@ -659,11 +707,15 @@ mod tests {
                 label: Some("lab".into()),
                 script: Some("ssh -L …".into()),
                 token: Some("tok_secret".into()),
+                color: Some("#3366ff".into()),
             })
             .expect("add");
         assert!(added.has_token);
         assert_eq!(added.url, "https://box.example.com:8787");
         assert_eq!(added.library_id, None);
+        // The pane-highlight colour persists + projects back on the wire entry
+        // (unlike the token, which is elided).
+        assert_eq!(added.color.as_deref(), Some("#3366ff"));
         let listed = reg.list();
         assert_eq!(listed.len(), 1);
         assert!(listed[0].has_token);

@@ -510,6 +510,20 @@ impl DevserverFeed {
             .get(id)
             .and_then(|s| s.lock().unwrap().first().map(|r| r.library_id.clone()))
     }
+
+    /// The devserver id owning `library_id`, learned from the live window
+    /// snapshots (each devserver's records carry its remote `library_id`). The
+    /// reverse of [`library_id_of`]; the pane-colour inject uses it to map a
+    /// minting devserver window's `library_id` back to its config row's colour.
+    fn devserver_id_for_library(&self, library_id: &str) -> Option<String> {
+        self.windows.lock().unwrap().iter().find_map(|(id, snap)| {
+            snap.lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.library_id == library_id)
+                .then(|| id.clone())
+        })
+    }
 }
 
 impl chan_server::DevserverFeedSource for DevserverFeed {
@@ -1053,6 +1067,7 @@ fn add_devserver(
                     label,
                     token: String::new(),
                     added_at: config::current_millis(),
+                    color: None,
                 };
                 let id = entry.id.clone();
                 cfg.devservers.push(entry);
@@ -1810,6 +1825,7 @@ fn register_devserver_from_handoff(
         label: name,
         script,
         token: None,
+        color: None,
     })?;
     Ok(())
 }

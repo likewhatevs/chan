@@ -83,10 +83,15 @@ impl EmbeddedServer {
         // overlay above. The headless devserver / plain `chan open` install
         // none (empty list, 404 mutation).
         host.install_devserver_registry(Arc::new(DevserverConfigRegistry::new(
-            config_store,
+            Arc::clone(&config_store),
             devserver_remove_hook,
             devserver_conns,
         )));
+        // Install the local-library pane-highlight colour store (seam #5) over the
+        // SAME shared desktop config the devserver registry uses, so the host reads
+        // the local colour when minting local windows and the launcher's
+        // local-colour route writes it.
+        host.install_local_color_store(Arc::new(crate::config::LocalColorConfig::new(config_store)));
         // Install the launcher SPA as the loopback's root fallback so the
         // desktop launcher loads the same web-launcher served at `/` on every
         // surface — parity with the devserver's `build_devserver_app`. Without
@@ -393,6 +398,20 @@ impl EmbeddedServer {
     /// snapshot or workspace cache) changes.
     pub fn signal_library_change(&self) {
         self.host.signal_library_change();
+    }
+
+    /// The LOCAL library's pane-highlight colour (hex), or `None` for the default
+    /// accent — read from the installed [`LocalColorStore`](chan_server::LocalColorStore).
+    /// Injected as `?pane=` when minting local windows (seam #5).
+    pub fn local_pane_color(&self) -> Option<String> {
+        self.host.local_color_store().and_then(|store| store.get())
+    }
+
+    /// This host's library id (`"local"`). The pane-colour inject branches on it:
+    /// a window whose `library_id` equals this is LOCAL (local colour); anything
+    /// else is a devserver window (its own `color`).
+    pub fn library_id(&self) -> &str {
+        self.host.library_id()
     }
 
     /// Mint a window into the local library registry and return its assembled
