@@ -705,6 +705,24 @@
       indexStatus.value?.state === "reindexing",
   );
 
+  /// Copy for the canvas empty-state (not loading, no error, zero nodes).
+  /// Filesystem mode is structural — it reads the on-disk tree, not the
+  /// index — so it keeps its scope message regardless of index state. The
+  /// markdown and language graphs are both index-derived, so a zero-node
+  /// result WHILE the index is still building means "not ready yet", not
+  /// "nothing here"; say so. `indexBuilding` is reactive (the status poller
+  /// flips it once the index settles), so the copy reverts to the
+  /// genuine-empty message on its own when indexing finishes.
+  const emptyStateMessage = $derived(
+    filesystemMode
+      ? "no filesystem graph nodes for this scope"
+      : indexBuilding
+        ? "graph temporarily unavailable while indexing the workspace"
+        : languageMode
+          ? "no language graph nodes for this workspace yet"
+          : "no markdown files in this workspace yet",
+  );
+
   /// Shallow-scope cue: when the scope's
   /// `depthCap` is 1 (single-file graph with no further forward
   /// hops; tag scope with only direct neighbours; etc.) the
@@ -2716,7 +2734,7 @@
       <div class="placeholder error">{error}</div>
     {:else if !loading && nodes.length === 0}
       <div class="placeholder">
-        {filesystemMode ? "no filesystem graph nodes for this scope" : languageMode ? "no language graph nodes for this workspace yet" : "no markdown files in this workspace yet"}
+        {emptyStateMessage}
       </div>
     {/if}
     {#if loading && nodes.length > 0}

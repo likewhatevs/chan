@@ -28,6 +28,32 @@ describe("graph loading-state: indexing cue", () => {
   });
 });
 
+// The canvas empty-state copy distinguishes "still indexing" from
+// "genuinely empty". A zero-node markdown/language graph during indexing
+// is "not ready yet", not "no files"; filesystem mode is structural and
+// keeps its scope message regardless of index state.
+describe("graph empty-state: indexing vs genuinely-empty copy", () => {
+  test("emptyStateMessage gates the index-derived modes on indexBuilding", () => {
+    expect(graph).toMatch(
+      /const emptyStateMessage = \$derived\(\s*filesystemMode\s*\?\s*"no filesystem graph nodes for this scope"\s*:\s*indexBuilding\s*\?\s*"graph temporarily unavailable while indexing the workspace"\s*:\s*languageMode\s*\?\s*"no language graph nodes for this workspace yet"\s*:\s*"no markdown files in this workspace yet",?\s*\)/,
+    );
+  });
+
+  test("the empty-state placeholder renders the derived message", () => {
+    expect(graph).toMatch(
+      /\{:else if !loading && nodes\.length === 0\}[\s\S]*?<div class="placeholder">\s*\{emptyStateMessage\}/,
+    );
+  });
+
+  test("filesystem mode is not gated on indexBuilding (structural, not index-derived)", () => {
+    // filesystemMode resolves before the indexBuilding branch, so a
+    // filesystem graph never shows the indexing copy.
+    expect(graph).toMatch(
+      /filesystemMode\s*\?\s*"no filesystem graph nodes for this scope"\s*:\s*indexBuilding/,
+    );
+  });
+});
+
 // While the index is building, dead-end ("missing") nodes may just be
 // not-yet-indexed link targets, so they are pulled back (with their
 // edges) until the index settles; once idle they render as real
