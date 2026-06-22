@@ -165,6 +165,51 @@ fn save_atomic<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A library's persisted pane-highlight colour: one hex string (or none), stored
+/// at `store_path` co-located with the window registry + workspace overlay (the
+/// devserver's `~/.chan/devserver/color.json`). Implements
+/// [`LocalColorStore`](crate::LocalColorStore) so the headless devserver serves
+/// the launcher's `local-color` route over a durable file — each devserver
+/// "sticks" to its own colour across restarts, and the desktop caches it for the
+/// pane-highlight inject. Mirrors [`WorkspaceOverlay`]'s degrade-to-default open
+/// + atomic save.
+pub struct FileLocalColor {
+    store_path: PathBuf,
+    color: Mutex<Option<String>>,
+}
+
+impl FileLocalColor {
+    /// Open the colour store at `store_path`, loading the persisted hex (or none).
+    /// An absent or unreadable store degrades to the default accent (`None`)
+    /// rather than refusing to start.
+    pub fn open(store_path: PathBuf) -> Self {
+        let color = match std::fs::read(&store_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            Err(_) => None,
+        };
+        Self {
+            store_path,
+            color: Mutex::new(color),
+        }
+    }
+}
+
+impl crate::LocalColorStore for FileLocalColor {
+    fn get(&self) -> Option<String> {
+        self.color.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set(&self, color: Option<String>) -> Result<(), String> {
+        let snapshot = {
+            let mut guard = self.color.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = color;
+            guard.clone()
+        };
+        save_atomic(&self.store_path, &snapshot)
+            .map_err(|e| format!("persisting local colour: {e}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +293,24 @@ mod tests {
             serde_json::json!({ "path": "/home/u/notes", "on": true })
         );
         assert_eq!(ws, serde_json::from_value(v).unwrap());
+    }
+
+    #[test]
+    fn file_local_color_persists_set_and_reopen() {
+        use crate::LocalColorStore;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("color.json");
+        let store = FileLocalColor::open(path.clone());
+        assert_eq!(store.get(), None, "absent store = default accent");
+        store.set(Some("#0af".into())).expect("set");
+        assert_eq!(store.get(), Some("#0af".into()));
+        // A fresh open reads the persisted colour back (the devserver "sticks").
+        assert_eq!(
+            FileLocalColor::open(path.clone()).get(),
+            Some("#0af".into())
+        );
+        // Clearing to None persists too.
+        store.set(None).expect("clear");
+        assert_eq!(FileLocalColor::open(path).get(), None);
     }
 }

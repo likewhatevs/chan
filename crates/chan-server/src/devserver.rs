@@ -49,7 +49,9 @@ use crate::{Error, ServeConfig, WorkspaceHost};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
 use chan_library::windows::WindowRegistry;
-use chan_library::{allocate_workspace_prefix, PersistedWorkspace, WorkspaceOverlay};
+use chan_library::{
+    allocate_workspace_prefix, FileLocalColor, PersistedWorkspace, WorkspaceOverlay,
+};
 
 /// Inputs the CLI resolves for `chan devserver`. The `--systemd`
 /// supervision path is layered on in the CLI around this; the runtime
@@ -581,6 +583,13 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         .context("resolving devserver workspace overlay path")?
         .with_file_name("workspaces.json");
     host.install_workspace_overlay(Arc::new(WorkspaceOverlay::open(overlay_store)));
+    // The devserver's own pane-highlight colour, persisted beside the registry +
+    // overlay: each devserver "sticks" to its colour, the launcher's local-color
+    // route serves it, and the desktop caches it for the pane-highlight inject.
+    let color_store = devserver_config_path()
+        .context("resolving devserver local-color path")?
+        .with_file_name("color.json");
+    host.install_local_color_store(Arc::new(FileLocalColor::open(color_store)));
     let state = Arc::new(DevserverState {
         host: host.clone(),
         addr: config.addr,

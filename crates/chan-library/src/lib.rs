@@ -41,4 +41,4 @@ pub use serve_config::{sanitize_prefix, ServeConfig, ServeHandle};
 pub use tenant::{
     HostControl, TenantArtifacts, TenantBuilder, UnserveMode, UnserveScope, WorkspaceCellHandle,
 };
-pub use workspace_persist::{PersistedWorkspace, WorkspaceOverlay};
+pub use workspace_persist::{FileLocalColor, PersistedWorkspace, WorkspaceOverlay};
