@@ -70,19 +70,15 @@ struct LocalWindowFeed {
 
 impl WindowFeed for LocalWindowFeed {
     fn snapshot(&self) -> Vec<WindowRecord> {
-        // `assemble_window_records` now MERGES connected devservers' windows
-        // (seam #1) for the launcher. The LOCAL native watcher must only
+        // LOCAL records only (`local_window_records`): the merged set (seam #1)
+        // includes devserver windows, but the LOCAL native watcher must only
         // reconcile LOCAL windows — devserver windows are driven by their own
-        // per-devserver watcher — so filter to this library, else the local
-        // reconcile would try to open remote records via the local opener (and
-        // trip its same-library debug-assert).
+        // per-devserver watcher — else the local reconcile would try to open
+        // remote records via the local opener (and trip its same-library assert).
         self.state
             .embedded()
-            .map(|embedded| embedded.assemble_window_records())
+            .map(|embedded| embedded.local_window_records())
             .unwrap_or_default()
-            .into_iter()
-            .filter(|r| r.library_id == LOCAL_LIBRARY_ID)
-            .collect()
     }
 
     fn change_notify(&self) -> Arc<Notify> {

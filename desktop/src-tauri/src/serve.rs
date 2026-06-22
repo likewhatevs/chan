@@ -91,7 +91,11 @@ pub async fn start(app: AppHandle, state: Arc<AppState>, key: String) -> Result<
     // the library change signal) makes them live, so the watcher reopens them
     // at their stable window_id — restoring each window's tabs. The registry is
     // the sole window-creation authority; there is no imperative window build.
-    let has_window = embedded.assemble_window_records().iter().any(|r| {
+    // LOCAL records only: the merged set now includes connected devservers'
+    // windows, and a remote workspace served at the SAME absolute path (common
+    // with `ssh -L` boxes) would otherwise false-match and skip minting the
+    // local window.
+    let has_window = embedded.local_window_records().iter().any(|r| {
         r.kind == WindowKind::Workspace && r.workspace_path.as_deref() == Some(key.as_str())
     });
     if !has_window {

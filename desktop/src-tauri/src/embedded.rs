@@ -183,7 +183,7 @@ impl EmbeddedServer {
     /// transfers live on that server, so it's absent from these records and reads
     /// `false` — correct, it's not ours to guard.
     pub fn window_has_active_transfer(&self, window_id: &str) -> bool {
-        let records = self.assemble_window_records();
+        let records = self.local_window_records();
         match tenant_prefix_for_window(&records, window_id) {
             Some(prefix) => self.host.tenant_has_active_transfer(&prefix, window_id),
             None => false,
@@ -350,10 +350,28 @@ impl EmbeddedServer {
 
     /// The library's authoritative window set (Seam W), each persisted
     /// registry row joined with its serving tenant's live `prefix`/`token`/
-    /// `connected`. The local window watcher reconciles native windows to
-    /// this. Empty until a window is minted.
+    /// `connected`. Since seam #1 this MERGES connected devservers' windows for
+    /// the launcher, so it is the right source only for surfaces that want the
+    /// full set (the launcher feed, the B4 Window menu). Empty until a window is
+    /// minted.
     pub fn assemble_window_records(&self) -> Vec<WindowRecord> {
         self.host.assemble_window_records()
+    }
+
+    /// The LOCAL library's window records only — the merged set
+    /// ([`assemble_window_records`](Self::assemble_window_records)) minus
+    /// connected devservers' rows. THE source for consumers that reason about
+    /// local windows (the local native watcher, the active-transfer close guard,
+    /// the first-window mint check): a remote row with a colliding `window_id` or
+    /// `workspace_path` would otherwise false-match and drive a wrong
+    /// open/close/mint. Filters to this host's library id.
+    pub fn local_window_records(&self) -> Vec<WindowRecord> {
+        let local = self.host.library_id();
+        self.host
+            .assemble_window_records()
+            .into_iter()
+            .filter(|r| r.library_id == local)
+            .collect()
     }
 
     /// The aggregate window-set change signal (registry mint/discard +
