@@ -244,6 +244,61 @@ body {
   color: var(--text-secondary);
 }
 
+/* The Local section header carries the local-library colour control beside its
+   title; space them apart on one baseline. */
+.group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.group-head .group-title {
+  margin: 0;
+}
+
+/* The local-library pane-colour control: a native swatch + a clear-to-default
+   button. */
+.color-control {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.color-control input[type="color"] {
+  width: 1.9rem;
+  height: 1.6rem;
+  padding: 0.1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  cursor: pointer;
+}
+
+.color-clear {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+  background: var(--btn-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.color-clear:hover {
+  border-color: var(--brand);
+}
+
+/* A devserver row's assigned pane colour, an inline dot beside its name. */
+.row-swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 25%, transparent);
+}
+
 /* Connected/detached dot on a window-feed row. */
 .dot {
   width: 0.6rem;

@@ -30,6 +30,17 @@
   let name = $state(editing?.label ?? "");
   let script = $state(editing?.script ?? "");
   let token = $state("");
+  // The pane-highlight colour (hex `#rrggbb`), empty when unset (the default
+  // accent). The native colour input has no empty state, so an empty `color`
+  // renders the input at the accent default but submits `null` to clear.
+  let color = $state(editing?.color ?? "");
+  // The accent the colour input falls back to while `color` is empty, so the
+  // "no colour set" state still shows the editor's default rather than black.
+  const ACCENT = "#3fb950";
+
+  function clearColor(): void {
+    color = "";
+  }
 
   const title = $derived(
     editing ? (readOnlyEdit ? "Devserver" : "Edit devserver") : "New workspace",
@@ -112,6 +123,9 @@
           label: name.trim() || undefined,
           script: script.trim() || undefined,
           token: t || undefined,
+          // A chosen hex sets the colour; an empty colour submits null to clear
+          // it to the default accent (distinct from undefined, which would keep).
+          color: color.trim() || null,
         },
         editing?.id,
       );
@@ -215,6 +229,21 @@
         spellcheck="false"
         disabled={readOnlyEdit}></textarea>
     </label>
+    <div class="field">
+      Pane colour <span class="muted">(optional; tints this library's active-pane highlight)</span>
+      <div class="color-row">
+        <input
+          type="color"
+          aria-label="Pane colour"
+          value={color || ACCENT}
+          disabled={readOnlyEdit}
+          oninput={(e) => (color = e.currentTarget.value)} />
+        <span class="color-hex">{color || "default accent"}</span>
+        {#if !readOnlyEdit}
+          <button class="btn" type="button" onclick={clearColor} disabled={!color}>Default</button>
+        {/if}
+      </div>
+    </div>
   {/if}
 
   {#if error}
@@ -305,6 +334,40 @@
   }
 
   .path-row .btn {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  /* The pane-colour control: a native colour swatch, its current hex (or the
+     "default accent" hint while unset), and a Default button to clear it. */
+  .color-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .color-row input[type="color"] {
+    width: 2.4rem;
+    height: 2rem;
+    padding: 0.15rem;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+
+  .color-row input[type="color"]:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+
+  .color-hex {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .color-row .btn {
     flex-shrink: 0;
     white-space: nowrap;
   }

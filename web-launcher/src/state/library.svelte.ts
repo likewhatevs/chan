@@ -10,6 +10,9 @@ interface LibraryState {
   workspaces: WorkspaceEntry[];
   devservers: DevserverEntry[];
   windows: WindowRecord[];
+  /** The local library's pane-highlight colour (hex `#rrggbb`), or null for the
+   * default accent. The local-colour control reads/writes it. */
+  localColor: string | null;
   loading: boolean;
   error: string | null;
 }
@@ -18,6 +21,7 @@ export const library = $state<LibraryState>({
   workspaces: [],
   devservers: [],
   windows: [],
+  localColor: null,
   loading: false,
   error: null,
 });
@@ -50,6 +54,13 @@ export async function loadLibrary(): Promise<void> {
     ]);
     library.workspaces = workspaces;
     library.devservers = devservers;
+    // The local-library colour is best-effort: a surface that 404s/errors on the
+    // route just falls back to the default accent (null), never failing the load.
+    try {
+      library.localColor = await backend.getLocalColor();
+    } catch {
+      library.localColor = null;
+    }
   } catch (e) {
     library.error = errorText(e);
   } finally {
@@ -173,6 +184,13 @@ export async function saveDevserver(input: DevserverInput, id?: string): Promise
 export async function removeDevserver(id: string): Promise<void> {
   await backend.removeDevserver(id);
   await refreshDevservers();
+}
+
+/** Set the local library's pane-highlight colour (hex `#rrggbb`); null clears it
+ * to the default accent. Updates `library.localColor` to match the server. */
+export async function setLocalColor(color: string | null): Promise<void> {
+  await backend.setLocalColor(color);
+  library.localColor = color;
 }
 
 // The devserver bridge actions are desktop actions: a surface with no desktop

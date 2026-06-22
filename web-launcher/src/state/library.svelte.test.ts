@@ -11,6 +11,7 @@ import {
   removeDevserver,
   removeWorkspace,
   saveDevserver,
+  setLocalColor,
   toggleWorkspace,
 } from "./library.svelte";
 
@@ -42,6 +43,23 @@ describe("loadLibrary", () => {
       expect(Object.prototype.hasOwnProperty.call(ds, "token")).toBe(false);
       expect(typeof ds.has_token).toBe("boolean");
     }
+  });
+
+  it("loads the local-library colour (best-effort)", () => {
+    // The mock seeds a local colour; loadLibrary populates library.localColor.
+    expect(library.localColor).toBe("#3fb950");
+  });
+});
+
+describe("local-library colour", () => {
+  it("sets the colour and clears it to the default accent (null)", async () => {
+    await setLocalColor("#ff8800");
+    expect(library.localColor).toBe("#ff8800");
+    await setLocalColor(null);
+    expect(library.localColor).toBeNull();
+    // Re-load reads back the cleared value from the store.
+    await loadLibrary();
+    expect(library.localColor).toBeNull();
   });
 });
 
@@ -96,6 +114,18 @@ describe("devserver registry", () => {
     const before = library.devservers.length;
     await removeDevserver(ds.id);
     expect(library.devservers.length).toBe(before - 1);
+  });
+
+  it("threads a colour through add, and clears it (null) vs keeps it (omitted) on edit", async () => {
+    await saveDevserver({ url: "https://tint.test:9100", color: "#e58c4d" });
+    const ds = library.devservers.find((d) => d.url === "https://tint.test:9100")!;
+    expect(ds.color).toBe("#e58c4d");
+    // An omitted colour on edit keeps the stored one (the token pattern).
+    await saveDevserver({ url: "https://tint.test:9101" }, ds.id);
+    expect(library.devservers.find((d) => d.id === ds.id)!.color).toBe("#e58c4d");
+    // An explicit null clears it to the default accent.
+    await saveDevserver({ url: "https://tint.test:9101", color: null }, ds.id);
+    expect(library.devservers.find((d) => d.id === ds.id)!.color).toBeNull();
   });
 
   it("connects a devserver and marks its library's windows live", async () => {
