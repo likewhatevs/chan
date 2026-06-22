@@ -111,6 +111,9 @@ pub fn launcher_router(
             "/api/library/devservers/:id/connect",
             post(handle_connect_devserver),
         )
+        // Native folder picker — another desktop-bridge dispatch (the launcher's
+        // New-Workspace "Browse…"), so it sits with the other bridge ops.
+        .route("/api/library/fs/pick-folder", post(handle_pick_folder))
         .with_state(host.clone());
     // Workspaces: list always; the mutation routes are always present but
     // refuse with 403 on the read-only surface (gated by `serve_addr` inside the
@@ -343,6 +346,24 @@ async fn handle_connect_devserver(
         reply,
     })
     .await
+}
+
+/// `POST /api/library/fs/pick-folder`: open the OS native folder dialog through
+/// the desktop bridge and return the chosen directory as a JSON string, or
+/// `null` when the user cancels. The launcher's New-Workspace "Browse…" calls
+/// this. Not a unit op (it returns a value), so it dials the bridge directly
+/// rather than via [`dispatch_window_op`]. 200 with the path/`null` on success;
+/// 409 (`NO_DESKTOP`) on a surface with no desktop attached, where the dialog
+/// can't run and the launcher keeps its plain text-entry fallback.
+async fn handle_pick_folder(State(host): State<Arc<WorkspaceHost>>) -> Response {
+    match host
+        .desktop_bridge()
+        .dispatch(|reply| DesktopWindowOp::PickFolder { reply })
+        .await
+    {
+        Ok(path) => Json(path).into_response(),
+        Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
+    }
 }
 
 /// Dispatch a unit-reply desktop window op and map it to HTTP: `Ok(())` → 204,
@@ -1004,6 +1025,9 @@ mod window_op_route_tests {
                     | DesktopWindowOp::ConnectDevserver { reply, .. } => {
                         let _ = reply.send(Ok(()));
                     }
+                    DesktopWindowOp::PickFolder { reply } => {
+                        let _ = reply.send(Ok(Some("/picked/dir".to_string())));
+                    }
                     _ => {}
                 }
             }
@@ -1017,6 +1041,10 @@ mod window_op_route_tests {
         // route maps the dispatch success to 204.
         let (status, _) = post(&router, "/api/library/devservers/ds1/connect").await;
         assert_eq!(status, StatusCode::NO_CONTENT, "connect");
+        // Pick-folder returns the chosen path as a JSON string (200).
+        let (status, body) = post(&router, "/api/library/fs/pick-folder").await;
+        assert_eq!(status, StatusCode::OK, "pick-folder");
+        assert_eq!(body, "\"/picked/dir\"", "pick-folder path json");
     }
 
     #[tokio::test]
@@ -1035,5 +1063,10 @@ mod window_op_route_tests {
         let (status, body) = post(&router, "/api/library/devservers/ds1/connect").await;
         assert_eq!(status, StatusCode::CONFLICT, "connect");
         assert_eq!(body, NO_DESKTOP, "connect");
+        // Pick-folder is inert without a desktop too — 409 NO_DESKTOP, so the
+        // launcher falls back to plain text entry.
+        let (status, body) = post(&router, "/api/library/fs/pick-folder").await;
+        assert_eq!(status, StatusCode::CONFLICT, "pick-folder");
+        assert_eq!(body, NO_DESKTOP, "pick-folder");
     }
 }

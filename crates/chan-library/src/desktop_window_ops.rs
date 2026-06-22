@@ -74,6 +74,15 @@ pub enum DesktopWindowOp {
         id: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Open the OS native folder-picker dialog and return the chosen
+    /// directory, or `None` when the user cancels. The launcher's
+    /// New-Workspace dialog drives this over the bridge so the Folder field
+    /// gets a real "Browse…" affordance instead of typing an absolute path.
+    /// Inert without a desktop attached — the route then answers
+    /// [`NO_DESKTOP`], so a plain browser keeps the text-entry fallback.
+    PickFolder {
+        reply: oneshot::Sender<Result<Option<String>, String>>,
+    },
 }
 
 /// Pinned refusal when no desktop is attached (standalone serve / browser).
