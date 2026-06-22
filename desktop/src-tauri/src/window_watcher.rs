@@ -271,6 +271,7 @@ mod tests {
             persisted: true,
             connected: false,
             active_transfer: false,
+            control: false,
         }
     }
 

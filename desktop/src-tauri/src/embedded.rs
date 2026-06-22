@@ -565,6 +565,7 @@ mod tests {
             persisted: true,
             connected: true,
             active_transfer: false,
+            control: false,
         }
     }
 

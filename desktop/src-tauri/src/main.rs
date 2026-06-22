@@ -127,6 +127,12 @@ pub struct AppState {
     /// reap — it learned its `library_id` lazily from the feed). Supersedes the
     /// imperative `devserver_windows` tracking for the watcher-driven path.
     pub devserver_watchers: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    /// Per connected devserver (`Devserver.id`), its window-watcher view state (the
+    /// L5 bury set) — the devserver analog of `local_watcher_view`. The close
+    /// handler buries a devserver window through it (D2) so the reconcile CLOSES
+    /// the webview (drops the `/ws`) rather than hiding it alive, letting the
+    /// launcher dot reflect hidden. Dropped on disconnect with the watcher.
+    pub devserver_watcher_views: Mutex<HashMap<String, Arc<window_watcher::WatcherViewState>>>,
     /// Composite native labels (`{library_id}::{window_id}`) of connected-
     /// devserver windows that currently have an in-flight file transfer, as
     /// reported by each devserver's windows feed (`WindowRecord.active_transfer`).
@@ -479,6 +485,11 @@ pub struct DevserverFeed {
     windows: Mutex<HashMap<String, Arc<Mutex<Vec<chan_server::WindowRecord>>>>>,
     /// Devserver id -> its cached served workspaces (refreshed by the poll task).
     workspaces: Mutex<HashMap<String, Vec<chan_server::LauncherWorkspace>>>,
+    /// Devserver id -> its cached pane-highlight colour (its own remote
+    /// `LocalColorStore` value, refreshed by the poll task). Absent = no colour
+    /// (default accent). Surfaced through `pane_color` so a devserver window's
+    /// `?pane=` injects that devserver's own colour (seam #5 round-3).
+    colors: Mutex<HashMap<String, String>>,
 }
 
 impl DevserverFeed {
@@ -488,16 +499,32 @@ impl DevserverFeed {
         self.windows.lock().unwrap().insert(id, snapshot);
     }
 
-    /// Drop a disconnected devserver from both feeds (windows + workspace cache).
+    /// Drop a disconnected devserver from every feed (windows + workspace +
+    /// colour cache).
     fn forget(&self, id: &str) {
         self.windows.lock().unwrap().remove(id);
         self.workspaces.lock().unwrap().remove(id);
+        self.colors.lock().unwrap().remove(id);
     }
 
     /// Replace a devserver's cached workspace rows (the poll task gates this on a
     /// real change, so this just stores).
     fn set_workspaces(&self, id: String, rows: Vec<chan_server::LauncherWorkspace>) {
         self.workspaces.lock().unwrap().insert(id, rows);
+    }
+
+    /// Replace a devserver's cached colour (the poll gates on change). `None`
+    /// clears it (the devserver has no colour set → default accent).
+    fn set_color(&self, id: String, color: Option<String>) {
+        let mut colors = self.colors.lock().unwrap();
+        match color {
+            Some(c) => {
+                colors.insert(id, c);
+            }
+            None => {
+                colors.remove(&id);
+            }
+        }
     }
 
     /// The remote `library_id` of a connected devserver, learned from its window
@@ -509,6 +536,20 @@ impl DevserverFeed {
             .unwrap()
             .get(id)
             .and_then(|s| s.lock().unwrap().first().map(|r| r.library_id.clone()))
+    }
+
+    /// The devserver id owning `library_id`, learned from the live window
+    /// snapshots (each devserver's records carry its remote `library_id`). The
+    /// reverse of [`library_id_of`]; the close handler uses it to find which
+    /// devserver's watcher view to bury a `lib-<hex>::…` window through (D2).
+    fn devserver_id_for_library(&self, library_id: &str) -> Option<String> {
+        self.windows.lock().unwrap().iter().find_map(|(id, snap)| {
+            snap.lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.library_id == library_id)
+                .then(|| id.clone())
+        })
     }
 }
 
@@ -530,6 +571,14 @@ impl chan_server::DevserverFeedSource for DevserverFeed {
             .flatten()
             .cloned()
             .collect()
+    }
+
+    fn pane_color(&self, library_id: &str) -> Option<String> {
+        // The colour of the connected devserver owning `library_id` — its own
+        // cached `LocalColorStore` value. `WorkspaceHost::pane_color` delegates
+        // here for `lib-<hex>` ids; `None` -> the editor's default accent.
+        let id = self.devserver_id_for_library(library_id)?;
+        self.colors.lock().unwrap().get(&id).cloned()
     }
 }
 
@@ -571,11 +620,12 @@ fn devserver_route_prefix(slug: &str) -> String {
     }
 }
 
-/// Poll a connected devserver's served-workspace list into the feed cache so the
-/// (sync) [`DevserverFeed::workspaces`] can serve it without blocking on HTTP.
-/// Fires [`EmbeddedServer::signal_library_change`] only when the rows actually
-/// change, so the launcher re-pushes on a real delta, not every tick. Stops when
-/// `cancel` flips true (disconnect), the same signal that stops the window watcher.
+/// Poll a connected devserver's served-workspace list AND its own pane-highlight
+/// colour into the feed caches so the (sync) [`DevserverFeed::workspaces`] /
+/// [`DevserverFeed::pane_color`] serve them without blocking on HTTP. Fires
+/// [`EmbeddedServer::signal_library_change`] only when something actually changes,
+/// so the launcher re-pushes on a real delta, not every tick. Stops when `cancel`
+/// flips true (disconnect), the same signal that stops the window watcher.
 fn spawn_devserver_workspace_poll(
     state: Arc<AppState>,
     id: String,
@@ -584,14 +634,16 @@ fn spawn_devserver_workspace_poll(
 ) {
     const POLL: std::time::Duration = std::time::Duration::from_secs(5);
     tauri::async_runtime::spawn(async move {
-        let mut last: Option<Vec<devserver::DevserverWorkspaceRow>> = None;
+        let mut last_ws: Option<Vec<devserver::DevserverWorkspaceRow>> = None;
+        let mut last_color: Option<Option<String>> = None;
         loop {
             if *cancel.borrow_and_update() {
                 return;
             }
+            let mut changed = false;
             match devserver::fetch_workspaces(&conn).await {
                 Ok(rows) => {
-                    if last.as_ref() != Some(&rows) {
+                    if last_ws.as_ref() != Some(&rows) {
                         let library_id = state.devserver_feed.library_id_of(&id);
                         let mapped = rows
                             .iter()
@@ -599,14 +651,25 @@ fn spawn_devserver_workspace_poll(
                             .map(|r| to_launcher_workspace(&id, library_id.clone(), r))
                             .collect();
                         state.devserver_feed.set_workspaces(id.clone(), mapped);
-                        if let Some(embedded) = state.embedded() {
-                            embedded.signal_library_change();
-                        }
-                        last = Some(rows);
+                        last_ws = Some(rows);
+                        changed = true;
                     }
                 }
                 Err(e) => {
                     tracing::debug!(devserver = %id, error = %e, "polling devserver workspaces failed");
+                }
+            }
+            // The devserver's own pane-highlight colour (seam #5 round-3): cache it
+            // so a devserver window's `?pane=` injects that devserver's colour.
+            let color = devserver::fetch_local_color(&conn).await;
+            if last_color.as_ref() != Some(&color) {
+                state.devserver_feed.set_color(id.clone(), color.clone());
+                last_color = Some(color);
+                changed = true;
+            }
+            if changed {
+                if let Some(embedded) = state.embedded() {
+                    embedded.signal_library_change();
                 }
             }
             tokio::select! {
@@ -1053,7 +1116,7 @@ fn add_devserver(
                     label,
                     token: String::new(),
                     added_at: config::current_millis(),
-                    color: None,
+                    auto_hide_control: false,
                 };
                 let id = entry.id.clone();
                 cfg.devservers.push(entry);
@@ -1166,6 +1229,7 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
     if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(id) {
         let _ = cancel.send(true);
     }
+    state.devserver_watcher_views.lock().unwrap().remove(id);
     teardown_devserver_windows(app, state, id);
     // Drop it from the launcher feed (seam #1) and re-push so its windows +
     // workspaces leave the launcher; the watcher/poll already stopped on `cancel`.
@@ -1419,7 +1483,7 @@ async fn connect_devserver_impl(
     // spawn it over the library feed (`/api/library/windows/watch`), and its
     // snapshots reconcile open whatever the devserver persisted. An EMPTY feed is
     // valid (a fresh devserver, or one the user emptied before disconnecting).
-    let (cancel, snapshot) =
+    let (cancel, snapshot, view) =
         window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn.clone()).await?;
     // Feed the launcher (seam #1): register this devserver's live window snapshot
     // and start polling its served workspaces into the cache. Both stop when the
@@ -1431,6 +1495,13 @@ async fn connect_devserver_impl(
         conn.clone(),
         cancel.subscribe(),
     );
+    // Track the watcher view so the close handler can bury this devserver's
+    // windows through it (D2).
+    state
+        .devserver_watcher_views
+        .lock()
+        .unwrap()
+        .insert(id.clone(), view);
     state
         .devserver_watchers
         .lock()
@@ -1615,11 +1686,12 @@ async fn reconnect_devserver(
                 if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(&id) {
                     let _ = cancel.send(true); // the watcher reconciles its windows away
                 }
-                let (cancel, snapshot) = window_watcher_wiring::spawn_devserver_window_watcher(
-                    app.clone(),
-                    probe.clone(),
-                )
-                .await?;
+                let (cancel, snapshot, view) =
+                    window_watcher_wiring::spawn_devserver_window_watcher(
+                        app.clone(),
+                        probe.clone(),
+                    )
+                    .await?;
                 // Re-point the launcher feed (seam #1) at the fresh snapshot + a
                 // poll on the rotated token; the old poll stopped on the cancel above.
                 state.devserver_feed.register_windows(id.clone(), snapshot);
@@ -1629,6 +1701,11 @@ async fn reconnect_devserver(
                     probe,
                     cancel.subscribe(),
                 );
+                state
+                    .devserver_watcher_views
+                    .lock()
+                    .unwrap()
+                    .insert(id.clone(), view);
                 state
                     .devserver_watchers
                     .lock()
@@ -1801,6 +1878,9 @@ fn register_devserver_from_handoff(
     script: Option<String>,
 ) -> Result<(), String> {
     use chan_server::{DevserverInput, DevserverRegistry};
+    // The handoff carries a URL; the registry's `add` now takes host+port (the
+    // devserver model switched back to Host+Port), so parse it apart here.
+    let (host, port) = devserver::parse_devserver_url(&url)?;
     let registry = config::DevserverConfigRegistry::new(
         Arc::clone(&state.store),
         Arc::clone(&state.devserver_remove_hook),
@@ -1808,11 +1888,12 @@ fn register_devserver_from_handoff(
         Arc::clone(&state.devserver_feed),
     );
     registry.add(DevserverInput {
-        url,
+        host,
+        port,
         label: name,
         script,
         token: None,
-        color: None,
+        auto_hide_control: false,
     })?;
     Ok(())
 }
@@ -2788,6 +2869,7 @@ fn main() {
         devserver_feed: Arc::new(DevserverFeed::default()),
         devserver_windows: Mutex::new(HashMap::new()),
         devserver_watchers: Mutex::new(HashMap::new()),
+        devserver_watcher_views: Mutex::new(HashMap::new()),
         devserver_active_transfers: Mutex::new(std::collections::HashSet::new()),
         control_terminal_prefixes: Mutex::new(HashMap::new()),
         devserver_remove_hook: Arc::new(OnceLock::new()),
@@ -3917,6 +3999,21 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
     if label.starts_with("local::") {
         if let Some(view) = state.local_watcher_view() {
             view.unbury(label);
+        }
+        if removed {
+            rebuild_window_menu(app);
+        }
+        return true;
+    }
+    // A watcher-managed DEVSERVER window: un-bury through ITS devserver view (D2).
+    // The bury destroyed the webview (the reconcile closed it), so there's nothing
+    // to show() — un-burying lets the reconcile reopen it at its window_id.
+    if label.starts_with("lib-") {
+        let library_id = label.split("::").next().unwrap_or(label);
+        if let Some(ds_id) = state.devserver_feed.devserver_id_for_library(library_id) {
+            if let Some(view) = state.devserver_watcher_views.lock().unwrap().get(&ds_id) {
+                view.unbury(label);
+            }
         }
         if removed {
             rebuild_window_menu(app);

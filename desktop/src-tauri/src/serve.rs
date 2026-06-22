@@ -1034,6 +1034,40 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                             }
                             return;
                         }
+                        // A watcher-managed DEVSERVER window (`lib-<hex>::<id>`):
+                        // bury it through THAT devserver's watcher view (mirror
+                        // local:: above) so its reconcile CLOSES the webview —
+                        // dropping the `/ws`, so the remote pushes `connected:false`
+                        // and the launcher dot reflects hidden (D2). The old path
+                        // (`window.hide()` below) kept the webview + `/ws` alive, so
+                        // the dot stayed green on both dot-hide and OS-close. The
+                        // record stays, reopenable from the Window menu / the dot.
+                        if label_for_close.starts_with("lib-") {
+                            api.prevent_close();
+                            let title = app_for_close
+                                .get_webview_window(&label_for_close)
+                                .and_then(|w| w.title().ok())
+                                .unwrap_or_else(|| label_for_close.clone());
+                            let library_id = label_for_close
+                                .split("::")
+                                .next()
+                                .unwrap_or(&label_for_close);
+                            if let Some(ds_id) =
+                                state.devserver_feed.devserver_id_for_library(library_id)
+                            {
+                                if let Some(view) =
+                                    state.devserver_watcher_views.lock().unwrap().get(&ds_id)
+                                {
+                                    view.bury(&label_for_close);
+                                }
+                            }
+                            state.bury_window(&label_for_close, &title);
+                            crate::rebuild_window_menu(&app_for_close);
+                            if !silent_hide {
+                                show_bury_notice(&app_for_close, &title);
+                            }
+                            return;
+                        }
                         let bury = if label_for_close.starts_with("terminal-") {
                             state
                                 .embedded
@@ -1110,14 +1144,36 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                             .lock()
                             .unwrap()
                             .remove(&label_for_close);
-                        // A watcher-buried local window destroyed here was buried
-                        // by the reconcile (the user red-dot-closed it); KEEP it
-                        // in the reopen menu. Only drop it from the buried list on
-                        // a real teardown/discard (not in the watcher bury set).
-                        let watcher_buried = state
-                            .local_watcher_view()
-                            .map(|v| v.is_buried(&label_for_close))
-                            .unwrap_or(false);
+                        // A watcher-buried window destroyed here was buried by its
+                        // reconcile (the user hid it); KEEP it in the reopen menu.
+                        // Check the LOCAL view for `local::` windows and the owning
+                        // DEVSERVER view for `lib-<hex>::…` windows (D2) — a hidden
+                        // devserver window is reopenable while connected. Only a
+                        // real teardown/discard (in NO watcher bury set — e.g. the
+                        // view was already dropped on disconnect) drops it.
+                        let watcher_buried = if label_for_close.starts_with("lib-") {
+                            let library_id = label_for_close
+                                .split("::")
+                                .next()
+                                .unwrap_or(&label_for_close);
+                            state
+                                .devserver_feed
+                                .devserver_id_for_library(library_id)
+                                .and_then(|ds_id| {
+                                    state
+                                        .devserver_watcher_views
+                                        .lock()
+                                        .unwrap()
+                                        .get(&ds_id)
+                                        .map(|v| v.is_buried(&label_for_close))
+                                })
+                                .unwrap_or(false)
+                        } else {
+                            state
+                                .local_watcher_view()
+                                .map(|v| v.is_buried(&label_for_close))
+                                .unwrap_or(false)
+                        };
                         if !watcher_buried && state.remove_buried(&label_for_close) {
                             crate::rebuild_window_menu(&app_for_close);
                         }
@@ -1446,11 +1502,10 @@ const KEY_BRIDGE_JS: &str = r#"
   // (split right / down), Cmd+Shift+T (reopen closed), Cmd+Shift+[/]
   // (tab nav), Cmd+Shift+G (find prev), plus the context-aware spawn
   // family Cmd+T (terminal) / Cmd+O (File Browser) / Cmd+P (Team
-  // Work), whose `app.files.toggle` / `app.terminal.teamWork`
-  // commands route through the context-aware helpers in App.svelte.
-  // (Graph has no chord — the Cmd+Shift+M toggle was retired per the
-  // nav-contract decision; the Graph menu/command surface stays.)
-  // Universal Hybrid NAV `t/o/p/v` covers the web/Win/Linux fallback path.
+  // Work) / Cmd+Shift+M (Graph), whose `app.files.toggle` /
+  // `app.terminal.teamWork` / `app.graph.toggle` commands route
+  // through the context-aware helpers in App.svelte. Universal
+  // Hybrid NAV `t/o/p/v` covers the web/Win/Linux fallback path.
   function onKey(e) {
     const meta = e.metaKey || e.ctrlKey;
     if (!meta) return;
@@ -1571,6 +1626,7 @@ const KEY_BRIDGE_JS: &str = r#"
           return;
         case 'KeyG':         fire(e, 'app.find.prev');     return;
         case 'KeyT':         fire(e, 'app.tab.reopenClosed'); return;
+        case 'KeyM':         fire(e, 'app.graph.toggle');  return;
         // Cmd+Shift+I (mac) / Ctrl+Shift+I (Linux,
         // Windows) toggles broadcast-input select-all/deselect-all for the
         // active terminal (mirrors iTerm). Ungated within the shift branch so
@@ -1876,30 +1932,29 @@ mod tests {
 
     #[test]
     fn key_bridge_drops_chords_covered_by_pane_mode() {
-        // Chords with a Pane Mode equivalent (or retired entirely) stay out of
-        // the native bridge. The direct-chord exceptions (Cmd+T terminal, Cmd+O
-        // files, Cmd+P Team Work, Cmd+S search) are asserted in
-        // `key_bridge_keeps_independent_chords`; the absences here catch
-        // accidental reverts of chords that should go through Pane Mode only —
-        // and of `app.graph.toggle`, whose Cmd+Shift+M chord was retired per the
-        // nav-contract decision (the Graph menu/command surface stays).
+        // Chords with a Pane Mode equivalent stay out of the native
+        // bridge. The direct-chord exceptions (Cmd+T terminal, Cmd+O
+        // files, Cmd+Shift+M graph, Cmd+P Team Work, Cmd+S search)
+        // are asserted in `key_bridge_keeps_independent_chords`; the
+        // absences here catch accidental reverts of chords that
+        // should go through Pane Mode only.
         assert!(!KEY_BRIDGE_JS.contains("app.file.new"));
         assert!(!KEY_BRIDGE_JS.contains("Backquote"));
-        assert!(!KEY_BRIDGE_JS.contains("app.graph.toggle"));
     }
 
     #[test]
     fn key_bridge_keeps_independent_chords() {
         // Tab close + reopen + Find on page + tab nav + tab jump
         // are NOT duplicated by Pane Mode and must stay reachable
-        // through the native bridge. Cmd+T / Cmd+O / Cmd+P are the
-        // context-aware spawn chord family (Graph's Cmd+Shift+M was
-        // retired — see `key_bridge_drops_chords_covered_by_pane_mode`).
+        // through the native bridge. Cmd+T / Cmd+O / Cmd+P /
+        // Cmd+Shift+M are the context-aware
+        // spawn chord family.
         assert!(KEY_BRIDGE_JS.contains("app.terminal.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.files.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.terminal.teamWork"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.prev"));
         assert!(KEY_BRIDGE_JS.contains("app.pane.next"));
+        assert!(KEY_BRIDGE_JS.contains("app.graph.toggle"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.close"));
         assert!(KEY_BRIDGE_JS.contains("app.tab.reopenClosed"));
         assert!(KEY_BRIDGE_JS.contains("app.find.open"));

@@ -101,11 +101,12 @@ pub struct Devserver {
     /// Wall-clock millis when the devserver was added.
     #[serde(default)]
     pub added_at: u64,
-    /// Per-library pane-highlight colour (hex `#rrggbb`), or `None` for the
-    /// default accent. Mirrors the launcher wire ([`DevserverEntry::color`]);
-    /// the desktop injects it as `?pane=` when minting this devserver's windows.
+    /// Whether the control terminal auto-hides on a successful connect (D4 — the
+    /// devserver form's "auto-hide control terminal on success" checkbox). The
+    /// connect flow reads it to hide the control terminal programmatically (no
+    /// bury notice) once connected.
     #[serde(default)]
-    pub color: Option<String>,
+    pub auto_hide_control: bool,
 }
 
 /// Per-window layout snapshot pushed when a workspace webview closes,
@@ -304,14 +305,34 @@ impl chan_server::LocalColorStore for LocalColorConfig {
 /// Project a stored [`Devserver`] to the launcher's wire [`DevserverEntry`],
 /// eliding the token (only its presence, `has_token`, crosses the wire) and
 /// joining the live connection state (`connected`) from `conns`.
+/// Form + validate the desktop's stored dial URL from the launcher's host+port
+/// (the wire model since the devserver form switched back to Host+Port, smoke
+/// #3). The desktop persists the URL (the dial path, dedup, and window-restore
+/// key are URL-based); `entry_from_devserver` re-exposes host+port on the wire.
+fn devserver_url(host: &str, port: u16) -> Result<String, String> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err("devserver host is required".to_string());
+    }
+    let url = format!("http://{host}:{port}");
+    crate::devserver::parse_devserver_url(&url)?;
+    Ok(url)
+}
+
 fn entry_from_devserver(
     d: &Devserver,
     conns: &DevserverConns,
     feed: &crate::DevserverFeed,
 ) -> DevserverEntry {
+    // The desktop stores the dial URL (formed from the user's host+port); the wire
+    // entry exposes host+port. A stored URL is always valid (add/update validate
+    // it), so the parse should not fail; fall back defensively to (raw, 0).
+    let (host, port) =
+        crate::devserver::parse_devserver_url(&d.url).unwrap_or_else(|_| (d.url.clone(), 0));
     DevserverEntry {
         id: d.id.clone(),
-        url: d.url.clone(),
+        host,
+        port,
         label: d.label.clone(),
         script: d.script.clone(),
         has_token: !d.token.is_empty(),
@@ -320,10 +341,12 @@ fn entry_from_devserver(
         connected: conns.is_connected(&d.id),
         // The connected library id, learned from the live window feed (`None`
         // until this devserver is connected with ≥1 window). `pane_color` matches
-        // a devserver window's `library_id` against this to find its colour.
+        // a devserver window's `library_id` against this (in the feed) to resolve
+        // its colour; no colour lives on the entry anymore (each library's colour
+        // is on its own host).
         library_id: feed.library_id_of(&d.id),
-        // Per-library pane-highlight colour the launcher picker round-trips.
-        color: d.color.clone(),
+        // D4: whether the control terminal auto-hides on connect success.
+        auto_hide_control: d.auto_hide_control,
     }
 }
 
@@ -344,11 +367,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
     }
 
     fn add(&self, input: DevserverInput) -> Result<DevserverEntry, String> {
-        let url = input.url.trim().to_string();
-        // Defense in depth: the route layer validates the URL, but the
-        // `chan open {url}` handoff reaches `add` directly — reject a URL that
-        // doesn't parse as `scheme://host[:port]` here too.
-        crate::devserver::parse_devserver_url(&url)?;
+        let url = devserver_url(&input.host, input.port)?;
         let token = input.token.unwrap_or_default().trim().to_string();
         let mut store = self.store.lock().unwrap();
         let mut cfg = store.get().map_err(|e| e.to_string())?;
@@ -359,7 +378,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
             label: input.label.unwrap_or_default(),
             token,
             added_at: now_millis(),
-            color: input.color,
+            auto_hide_control: input.auto_hide_control,
         };
         cfg.devservers.push(entry.clone());
         store.save(&cfg).map_err(|e| e.to_string())?;
@@ -367,8 +386,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
     }
 
     fn update(&self, id: &str, input: DevserverInput) -> Result<Option<DevserverEntry>, String> {
-        let url = input.url.trim().to_string();
-        crate::devserver::parse_devserver_url(&url)?;
+        let url = devserver_url(&input.host, input.port)?;
         let mut store = self.store.lock().unwrap();
         let mut cfg = store.get().map_err(|e| e.to_string())?;
         let Some(ds) = cfg.devservers.iter_mut().find(|d| d.id == id) else {
@@ -379,10 +397,8 @@ impl DevserverRegistry for DevserverConfigRegistry {
         // path reads as "derive the label from the URL host" / "no script").
         ds.label = input.label.unwrap_or_default();
         ds.script = input.script.unwrap_or_default();
-        // Colour is full-replace like label/script: the edit dialog pre-fills the
-        // current colour (it's readable, unlike the token) and resubmits it, so
-        // `None` legitimately clears it back to the default accent.
-        ds.color = input.color;
+        // D4 flag is full-replace like label/script (the edit form resubmits it).
+        ds.auto_hide_control = input.auto_hide_control;
         // Token is the lone keep-on-blank field: a write-only credential the
         // launcher never reads back, so its edit form can't resubmit it.
         if let Some(tok) = input.token {
@@ -677,7 +693,7 @@ mod tests {
                 label: "lab box".into(),
                 token: "tok_secret".into(),
                 added_at: 42,
-                color: Some("#ff8800".into()),
+                auto_hide_control: true,
             }],
             ..Default::default()
         };
@@ -720,19 +736,18 @@ mod tests {
         );
         let added = reg
             .add(DevserverInput {
-                url: "https://box.example.com:8787".into(),
+                host: "box.example.com".into(),
+                port: 8787,
                 label: Some("lab".into()),
                 script: Some("ssh -L …".into()),
                 token: Some("tok_secret".into()),
-                color: Some("#3366ff".into()),
+                auto_hide_control: false,
             })
             .expect("add");
         assert!(added.has_token);
-        assert_eq!(added.url, "https://box.example.com:8787");
+        assert_eq!(added.host, "box.example.com");
+        assert_eq!(added.port, 8787);
         assert_eq!(added.library_id, None);
-        // The pane-highlight colour persists + projects back on the wire entry
-        // (unlike the token, which is elided).
-        assert_eq!(added.color.as_deref(), Some("#3366ff"));
         let listed = reg.list();
         assert_eq!(listed.len(), 1);
         assert!(listed[0].has_token);
@@ -758,7 +773,8 @@ mod tests {
         );
         let id = reg
             .add(DevserverInput {
-                url: "http://127.0.0.1:8787".into(),
+                host: "127.0.0.1".into(),
+                port: 8787,
                 token: Some("tok_one".into()),
                 ..Default::default()
             })
@@ -769,7 +785,8 @@ mod tests {
             .update(
                 &id,
                 DevserverInput {
-                    url: "http://127.0.0.1:9000".into(),
+                    host: "127.0.0.1".into(),
+                    port: 9000,
                     label: Some("renamed".into()),
                     token: None,
                     ..Default::default()
@@ -777,7 +794,8 @@ mod tests {
             )
             .expect("update")
             .expect("found");
-        assert_eq!(updated.url, "http://127.0.0.1:9000");
+        assert_eq!(updated.host, "127.0.0.1");
+        assert_eq!(updated.port, 9000);
         assert_eq!(updated.label, "renamed");
         assert!(updated.has_token);
         assert_eq!(
@@ -788,7 +806,8 @@ mod tests {
         reg.update(
             &id,
             DevserverInput {
-                url: "http://127.0.0.1:9000".into(),
+                host: "127.0.0.1".into(),
+                port: 9000,
                 token: Some("tok_two".into()),
                 ..Default::default()
             },
@@ -817,7 +836,8 @@ mod tests {
             .update(
                 "nope",
                 DevserverInput {
-                    url: "http://127.0.0.1:8787".into(),
+                    host: "127.0.0.1".into(),
+                    port: 8787,
                     ..Default::default()
                 },
             )
@@ -851,7 +871,8 @@ mod tests {
         );
         let id = reg
             .add(DevserverInput {
-                url: "http://127.0.0.1:8787".into(),
+                host: "127.0.0.1".into(),
+                port: 8787,
                 ..Default::default()
             })
             .expect("add")
@@ -865,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_add_rejects_a_bad_url() {
+    fn registry_add_rejects_an_empty_host() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
@@ -878,7 +899,8 @@ mod tests {
         );
         assert!(reg
             .add(DevserverInput {
-                url: "not a url".into(),
+                host: "".into(),
+                port: 8787,
                 ..Default::default()
             })
             .is_err());

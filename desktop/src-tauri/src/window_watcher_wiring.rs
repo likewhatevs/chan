@@ -325,7 +325,14 @@ async fn stream_window_feed(
 pub(crate) async fn spawn_devserver_window_watcher(
     app: AppHandle,
     conn: DevserverConn,
-) -> Result<(watch::Sender<bool>, Arc<Mutex<Vec<WindowRecord>>>), String> {
+) -> Result<
+    (
+        watch::Sender<bool>,
+        Arc<Mutex<Vec<WindowRecord>>>,
+        Arc<WatcherViewState>,
+    ),
+    String,
+> {
     let seed = crate::devserver::fetch_library_windows(&conn)
         .await
         .unwrap_or_default();
@@ -361,6 +368,11 @@ pub(crate) async fn spawn_devserver_window_watcher(
     };
     let feed = DevserverWindowFeed { snapshot, change };
     let view = Arc::new(WatcherViewState::default());
+    // A handle on the view for the caller so the close handler can bury THIS
+    // devserver's windows through it (D2): a bury flips `should_show` false and
+    // the reconcile CLOSES the webview (drops the `/ws`), so the launcher dot
+    // reflects hidden — unlike a bare `window.hide()`, which keeps the `/ws` live.
+    let view_handle = Arc::clone(&view);
     let mut cancel_loop = cancel_rx;
     tauri::async_runtime::spawn(watch_loop(None, feed, surface, view, async move {
         while !*cancel_loop.borrow_and_update() {
@@ -369,5 +381,5 @@ pub(crate) async fn spawn_devserver_window_watcher(
             }
         }
     }));
-    Ok((cancel_tx, snapshot_handle))
+    Ok((cancel_tx, snapshot_handle, view_handle))
 }
