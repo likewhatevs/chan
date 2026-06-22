@@ -775,7 +775,11 @@ mod devserver_route_tests {
         } else {
             Body::empty()
         };
-        let response = router.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+        let response = router
+            .clone()
+            .oneshot(req.body(body).unwrap())
+            .await
+            .unwrap();
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -847,8 +851,16 @@ mod devserver_route_tests {
         let reg = Arc::new(FakeRegistry::seeded());
         let router = router_with(Some(reg), false);
         for (method, uri, body) in [
-            ("POST", "/api/library/devservers", Some(r#"{"url":"https://x"}"#)),
-            ("PUT", "/api/library/devservers/ds1", Some(r#"{"url":"https://x"}"#)),
+            (
+                "POST",
+                "/api/library/devservers",
+                Some(r#"{"url":"https://x"}"#),
+            ),
+            (
+                "PUT",
+                "/api/library/devservers/ds1",
+                Some(r#"{"url":"https://x"}"#),
+            ),
             ("DELETE", "/api/library/devservers/ds1", None),
         ] {
             let (status, _) = request(&router, method, uri, body).await;

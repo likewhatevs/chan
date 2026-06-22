@@ -230,7 +230,10 @@ pub struct DevserverConfigRegistry {
 }
 
 impl DevserverConfigRegistry {
-    pub fn new(store: Arc<Mutex<ConfigStore>>, on_remove: Arc<OnceLock<DevserverRemoveHook>>) -> Self {
+    pub fn new(
+        store: Arc<Mutex<ConfigStore>>,
+        on_remove: Arc<OnceLock<DevserverRemoveHook>>,
+    ) -> Self {
         Self { store, on_remove }
     }
 }
@@ -679,7 +682,10 @@ mod tests {
         assert_eq!(updated.url, "http://127.0.0.1:9000");
         assert_eq!(updated.label, "renamed");
         assert!(updated.has_token);
-        assert_eq!(store.lock().unwrap().get().unwrap().devservers[0].token, "tok_one");
+        assert_eq!(
+            store.lock().unwrap().get().unwrap().devservers[0].token,
+            "tok_one"
+        );
         // A non-blank token replaces it.
         reg.update(
             &id,
@@ -691,7 +697,10 @@ mod tests {
         )
         .expect("update")
         .expect("found");
-        assert_eq!(store.lock().unwrap().get().unwrap().devservers[0].token, "tok_two");
+        assert_eq!(
+            store.lock().unwrap().get().unwrap().devservers[0].token,
+            "tok_two"
+        );
     }
 
     #[test]
