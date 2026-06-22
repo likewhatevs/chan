@@ -150,7 +150,7 @@ Per-crate rules that come up often when editing this code. For the full design r
 - **Crate design references** (canonical; `README.md` next to each is the consumer-facing entry):
   - [`gateway/crates/profile/design.md`](../gateway/crates/profile/design.md): schema, two-tier auth, atomic upsert, block fan-out.
   - [`gateway/crates/identity/design.md`](../gateway/crates/identity/design.md): OAuth providers, PAT lifecycle, session contract, workspace-gate mint, dashboard.
-  - [`gateway/crates/workspace-proxy/design.md`](../gateway/crates/workspace-proxy/design.md): apex / wildcard split, workspace-gate verify, registry model, reverse-proxy hygiene.
+  - [`gateway/crates/devserver-proxy/design.md`](../gateway/crates/devserver-proxy/design.md): apex / wildcard split, workspace-gate verify, registry model, reverse-proxy hygiene.
   - [`gateway/crates/admin/design.md`](../gateway/crates/admin/design.md): command surface, output contract, exit codes.
   - [`gateway/crates/gateway-common/design.md`](../gateway/crates/gateway-common/design.md): why a shared crate, what belongs and what does not.
 - **Issue tracker**: GitHub repo `fiorix/chan`.
