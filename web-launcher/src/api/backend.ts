@@ -1,34 +1,11 @@
-// The backend the launcher talks to, split into two independently-sourced
-// halves:
+// The backend the launcher talks to: the library's live HTTP client. Registry
+// CRUD (workspaces + devservers) and the window feed are all served by the
+// library's `/api/library/*` handlers, so the launcher reads and mutates real
+// state on every surface (desktop loopback + devserver) through one client.
 //
-//   - The window feed (list + watch) is served live: the library's HTTP
-//     handlers exist, so the launcher reads the authoritative open-window set
-//     straight off the server.
-//   - The registry CRUD (workspaces + devservers) is served by the in-memory
-//     mock until its HTTP handlers are deployed; pointing REGISTRY at liveApi
-//     moves it over with no other change.
-//
-// Each source implements the full LibraryApi; `backend` is composed from the
-// two so the rest of the app stays a single LibraryApi consumer.
+// `mock.ts` stays an in-memory test double the vitest suites import directly (or
+// pin via `vi.mock("./backend")`); it is no longer wired into the runtime path.
 
 import { liveApi, type LibraryApi } from "./library";
-import { mockApi } from "./mock";
 
-const REGISTRY: LibraryApi = mockApi;
-const WINDOW_FEED: LibraryApi = liveApi;
-
-export const backend: LibraryApi = {
-  // Registry CRUD.
-  listWorkspaces: REGISTRY.listWorkspaces,
-  addLocalWorkspace: REGISTRY.addLocalWorkspace,
-  setWorkspaceOn: REGISTRY.setWorkspaceOn,
-  removeWorkspace: REGISTRY.removeWorkspace,
-  listDevservers: REGISTRY.listDevservers,
-  addDevserver: REGISTRY.addDevserver,
-  updateDevserver: REGISTRY.updateDevserver,
-  removeDevserver: REGISTRY.removeDevserver,
-  // Window feed.
-  listWindows: WINDOW_FEED.listWindows,
-  watchWindows: WINDOW_FEED.watchWindows,
-  createWindow: WINDOW_FEED.createWindow,
-};
+export const backend: LibraryApi = liveApi;
