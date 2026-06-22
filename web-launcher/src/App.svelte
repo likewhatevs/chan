@@ -39,7 +39,7 @@
       <p>
         A workspace is just a directory — chan treats it as a project. Add your
         first one, or open a terminal and run
-        <code>chan serve /path/to/project</code>.
+        <code>chan open /path/to/project</code>.
       </p>
       <div class="empty-actions">
         {#if !readOnly}
