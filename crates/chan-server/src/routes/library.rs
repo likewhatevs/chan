@@ -29,14 +29,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chan_library::{allocate_workspace_prefix, ServeConfig};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{oneshot, Notify};
 
 use crate::devserver::bytes_eq;
 use crate::static_assets::serve_launcher;
 use crate::{
-    CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, LauncherWorkspace, WindowRecord,
-    WindowSet, WorkspaceHost,
+    CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, LauncherWorkspace,
+    SetWorkspaceOnOutcome, WindowRecord, WindowSet, WorkspaceHost,
 };
 
 /// State shared by the `/api/library/workspaces` handlers: the library host plus
@@ -430,46 +430,86 @@ async fn handle_open_devserver_workspace(
 /// Body of the workspace on/off/forget routes: the remote mount `prefix` to
 /// target. It rides the JSON body, not a path segment — a mount prefix can carry
 /// characters axum's `Path` extractor and intervening proxies mangle (`%2F`), and
-/// the gateway-proxied path makes it worse.
+/// the gateway-proxied path makes it worse. `force` is read only by `/off` (a
+/// destructive off of a workspace with live terminals); `on`/`forget` ignore it.
 #[derive(Deserialize)]
 struct DevserverWorkspaceRef {
     prefix: String,
+    #[serde(default)]
+    force: bool,
+}
+
+/// The `409 Conflict` body the `/off` route returns when an UNforced off is
+/// refused because the workspace still has live terminal sessions. The launcher
+/// matches `error == "live_terminals"` (distinguishing it from a plain
+/// `NO_DESKTOP` 409), shows `active_terminals` in a confirm prompt, then retries
+/// the off with `force: true`. The `active_terminals` field name mirrors the
+/// devserver's internal `ActiveTerminalsRejection`, so the confirm flow is parity
+/// with the workspace-off the desktop already drives over the devserver API.
+#[derive(Serialize)]
+struct LiveTerminalsRejection {
+    /// Discriminator the launcher matches on — always `"live_terminals"`.
+    error: &'static str,
+    /// Live terminal sessions the off would kill.
+    active_terminals: usize,
 }
 
 /// `POST /api/library/devservers/{id}/workspaces/on` `{prefix}`: turn a connected
 /// devserver's workspace (the remote mount `prefix`) on through the desktop
-/// bridge. 204/409.
+/// bridge. 204/409 (`on` never blocks on terminals, so `force` is irrelevant).
 async fn handle_devserver_workspace_on(
     State(host): State<Arc<WorkspaceHost>>,
     AxumPath(id): AxumPath<String>,
     Json(body): Json<DevserverWorkspaceRef>,
 ) -> Response {
-    set_devserver_workspace_on(&host, id, body.prefix, true).await
+    set_devserver_workspace_on(&host, id, body.prefix, true, false).await
 }
 
-/// `POST /api/library/devservers/{id}/workspaces/off` `{prefix}`: turn it off. 204/409.
+/// `POST /api/library/devservers/{id}/workspaces/off` `{prefix, force}`: turn it
+/// off through the desktop bridge. An unforced off of a workspace with live
+/// terminals answers 409 + [`LiveTerminalsRejection`] so the launcher can confirm
+/// and retry with `force: true` (which force-offs → 204).
 async fn handle_devserver_workspace_off(
     State(host): State<Arc<WorkspaceHost>>,
     AxumPath(id): AxumPath<String>,
     Json(body): Json<DevserverWorkspaceRef>,
 ) -> Response {
-    set_devserver_workspace_on(&host, id, body.prefix, false).await
+    set_devserver_workspace_on(&host, id, body.prefix, false, body.force).await
 }
 
-/// Shared on/off dispatch for a connected devserver's workspace.
+/// Shared on/off dispatch for a connected devserver's workspace. Maps the bridge
+/// outcome: `Done` → 204; `NeedsForce` → 409 + [`LiveTerminalsRejection`] (the
+/// distinguishable confirm signal); a bridge error → 409 with the message (no
+/// desktop attached / devserver not connected).
 async fn set_devserver_workspace_on(
     host: &WorkspaceHost,
     id: String,
     prefix: String,
     on: bool,
+    force: bool,
 ) -> Response {
-    dispatch_window_op(host, |reply| DesktopWindowOp::SetDevserverWorkspaceOn {
-        id,
-        prefix,
-        on,
-        reply,
-    })
-    .await
+    match host
+        .desktop_bridge()
+        .dispatch(|reply| DesktopWindowOp::SetDevserverWorkspaceOn {
+            id,
+            prefix,
+            on,
+            force,
+            reply,
+        })
+        .await
+    {
+        Ok(SetWorkspaceOnOutcome::Done) => StatusCode::NO_CONTENT.into_response(),
+        Ok(SetWorkspaceOnOutcome::NeedsForce { active_terminals }) => (
+            StatusCode::CONFLICT,
+            Json(LiveTerminalsRejection {
+                error: "live_terminals",
+                active_terminals,
+            }),
+        )
+            .into_response(),
+        Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
+    }
 }
 
 /// `POST /api/library/devservers/{id}/workspaces/forget` `{prefix}`: forget
@@ -1126,7 +1166,7 @@ mod window_op_route_tests {
     use tower::ServiceExt;
 
     use super::launcher_router;
-    use crate::{DesktopBridge, DesktopWindowOp, WorkspaceHost, NO_DESKTOP};
+    use crate::{DesktopBridge, DesktopWindowOp, SetWorkspaceOnOutcome, WorkspaceHost, NO_DESKTOP};
 
     fn library() -> Library {
         let dir = tempfile::tempdir().unwrap();
@@ -1192,9 +1232,11 @@ mod window_op_route_tests {
                     | DesktopWindowOp::DisconnectDevserver { reply, .. }
                     | DesktopWindowOp::OpenDevserverTerminal { reply, .. }
                     | DesktopWindowOp::OpenDevserverWorkspace { reply, .. }
-                    | DesktopWindowOp::SetDevserverWorkspaceOn { reply, .. }
                     | DesktopWindowOp::ForgetDevserverWorkspace { reply, .. } => {
                         let _ = reply.send(Ok(()));
+                    }
+                    DesktopWindowOp::SetDevserverWorkspaceOn { reply, .. } => {
+                        let _ = reply.send(Ok(SetWorkspaceOnOutcome::Done));
                     }
                     DesktopWindowOp::PickFolder { reply } => {
                         let _ = reply.send(Ok(Some("/picked/dir".to_string())));
@@ -1292,5 +1334,71 @@ mod window_op_route_tests {
         let (status, body) = post(&router, "/api/library/fs/pick-folder").await;
         assert_eq!(status, StatusCode::CONFLICT, "pick-folder");
         assert_eq!(body, NO_DESKTOP, "pick-folder");
+    }
+
+    #[tokio::test]
+    async fn devserver_workspace_off_force_confirm_round_trip() {
+        // A fake desktop that mirrors the live-terminals guard: an UNforced off
+        // replies NeedsForce(count); an on, or a forced off, replies Done.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<DesktopWindowOp>(4);
+        let bridge = DesktopBridge {
+            window_ops: Some(tx),
+            window_titles: Default::default(),
+        };
+        let host = Arc::new(WorkspaceHost::with_desktop_bridge(
+            library(),
+            bridge,
+            crate::route_builder(),
+        ));
+        tokio::spawn(async move {
+            while let Some(op) = rx.recv().await {
+                if let DesktopWindowOp::SetDevserverWorkspaceOn {
+                    on, force, reply, ..
+                } = op
+                {
+                    let outcome = if !on && !force {
+                        SetWorkspaceOnOutcome::NeedsForce {
+                            active_terminals: 2,
+                        }
+                    } else {
+                        SetWorkspaceOnOutcome::Done
+                    };
+                    let _ = reply.send(Ok(outcome));
+                }
+            }
+        });
+        let router = launcher_router(host, None, None);
+        // Unforced off with live terminals → 409 + the distinguishable
+        // live-terminals body the launcher confirms against.
+        let (status, body) = send(
+            &router,
+            "POST",
+            "/api/library/devservers/ds1/workspaces/off",
+            Some(r#"{"prefix":"myws"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "unforced off");
+        assert_eq!(
+            body, r#"{"error":"live_terminals","active_terminals":2}"#,
+            "needs-force body"
+        );
+        // Retried with force:true → force-off → 204.
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/library/devservers/ds1/workspaces/off",
+            Some(r#"{"prefix":"myws","force":true}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "forced off");
+        // On never blocks on terminals → 204 (force irrelevant).
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/library/devservers/ds1/workspaces/on",
+            Some(r#"{"prefix":"myws"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "on");
     }
 }

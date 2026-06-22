@@ -34,6 +34,24 @@ pub enum NewWindowKind {
     Workspace { key: String },
 }
 
+/// Outcome of a [`DesktopWindowOp::SetDevserverWorkspaceOn`] request. An `on`
+/// request, or a forced off, always resolves to [`Done`](Self::Done); an UNforced
+/// off of a workspace with live terminal sessions resolves to
+/// [`NeedsForce`](Self::NeedsForce) so the launcher can confirm-then-force.
+///
+/// Richer than the plain `Result<(), String>` the other ops reply with: the live
+/// terminal COUNT has to round-trip the bridge so the launcher shows it in the
+/// confirm prompt and retries with `force: true` — parity with the local/remote
+/// workspace-off confirm flow.
+#[derive(Debug)]
+pub enum SetWorkspaceOnOutcome {
+    /// The mount state was set (on, off, or a forced off).
+    Done,
+    /// An unforced off was refused: `active_terminals` live terminal sessions
+    /// would be killed. The launcher confirms, then retries with `force: true`.
+    NeedsForce { active_terminals: usize },
+}
+
 /// A window-management request the control socket hands to the desktop.
 /// Each carries a `oneshot` the desktop completes with `Ok(..)`/`Err(msg)`.
 #[derive(Debug)]
@@ -102,13 +120,18 @@ pub enum DesktopWindowOp {
     },
     /// Turn a connected devserver's workspace on or off, keyed by `(id, prefix)`
     /// (the remote mount prefix). The launcher's devserver-workspace on/off toggle
-    /// drives this; the reply is `Ok(())` once the remote mount state is set.
-    /// Inert without a desktop attached — the route then answers [`NO_DESKTOP`].
+    /// drives this. `force` is consulted only for an off: an unforced off of a
+    /// workspace with live terminals replies [`SetWorkspaceOnOutcome::NeedsForce`]
+    /// (carrying the count) so the launcher confirms-then-retries with
+    /// `force: true`; an on, or a forced off, replies
+    /// [`SetWorkspaceOnOutcome::Done`]. Inert without a desktop attached — the
+    /// route then answers [`NO_DESKTOP`].
     SetDevserverWorkspaceOn {
         id: String,
         prefix: String,
         on: bool,
-        reply: oneshot::Sender<Result<(), String>>,
+        force: bool,
+        reply: oneshot::Sender<Result<SetWorkspaceOnOutcome, String>>,
     },
     /// Forget (unregister) a connected devserver's workspace, keyed by
     /// `(id, prefix)`. The launcher's devserver-workspace Remove button drives

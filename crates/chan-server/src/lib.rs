@@ -54,7 +54,8 @@ pub use config::ServerConfig;
 // Re-export the modules so internal `crate::…::` paths resolve unchanged, and
 // the public types so chan-desktop keeps reaching them via `chan_server::`.
 pub use chan_library::desktop_window_ops::{
-    DesktopBridge, DesktopWindowOp, DesktopWindowSender, NewWindowKind, NO_DESKTOP,
+    DesktopBridge, DesktopWindowOp, DesktopWindowSender, NewWindowKind, SetWorkspaceOnOutcome,
+    NO_DESKTOP,
 };
 pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
 pub use chan_library::windows::{CreateWindow, WindowKind, WindowRecord, WindowSet};
