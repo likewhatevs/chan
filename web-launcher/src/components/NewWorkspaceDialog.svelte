@@ -33,6 +33,8 @@
   let name = $state(editing?.label ?? "");
   let script = $state(editing?.script ?? "");
   let token = $state("");
+  // Auto-hide the connect control terminal once the devserver connects.
+  let autoHideControl = $state(editing?.auto_hide_control ?? false);
 
   const title = $derived(
     editing ? (readOnlyEdit ? "Devserver" : "Edit devserver") : "New workspace",
@@ -112,6 +114,7 @@
           label: name.trim() || undefined,
           script: script.trim() || undefined,
           token: t || undefined,
+          auto_hide_control: autoHideControl,
         },
         editing?.id,
       );
@@ -228,6 +231,10 @@
         spellcheck="false"
         disabled={readOnlyEdit}></textarea>
     </label>
+    <label class="check-field">
+      <input type="checkbox" bind:checked={autoHideControl} disabled={readOnlyEdit} />
+      Auto-hide control terminal on success
+    </label>
   {/if}
 
   {#if error}
@@ -286,6 +293,17 @@
     margin-bottom: 0.85rem;
     font-size: 0.85rem;
     color: var(--text-secondary);
+  }
+
+  /* Inline checkbox + label (the auto-hide control-terminal option). */
+  .check-field {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.85rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    cursor: pointer;
   }
 
   .field input,

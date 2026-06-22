@@ -64,6 +64,7 @@ const devservers: MockDevserver[] = [
     // Seeded connected so the merged view (remote windows + remote workspace
     // rows + the Disconnect action) has something real to render with no desktop.
     connected: true,
+    auto_hide_control: false,
   },
 ];
 
@@ -178,6 +179,7 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
     has_token: ds.has_token,
     library_id: ds.library_id,
     connected: ds.connected,
+    auto_hide_control: ds.auto_hide_control,
   };
 }
 
@@ -248,6 +250,7 @@ export const mockApi: LibraryApi = {
       library_id: null,
       // A freshly added devserver is not connected until the desktop dials it.
       connected: false,
+      auto_hide_control: input.auto_hide_control ?? false,
     };
     devservers.push(ds);
     return tick(publicDevserver(ds));
@@ -260,6 +263,7 @@ export const mockApi: LibraryApi = {
     ds.port = input.port;
     ds.label = input.label ?? "";
     ds.script = input.script ?? "";
+    ds.auto_hide_control = input.auto_hide_control ?? false;
     // A token omitted on edit leaves the stored one unchanged (the write-only
     // contract): only a non-empty token replaces it.
     if (input.token) {

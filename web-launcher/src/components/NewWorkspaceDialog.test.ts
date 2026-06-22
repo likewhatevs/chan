@@ -73,6 +73,15 @@ describe("New workspace dialog", () => {
     expect(el.textContent).toContain("Add devserver");
   });
 
+  it("offers an auto-hide control-terminal checkbox (off by default for a new devserver)", () => {
+    openNewDialog("devserver");
+    const el = render();
+    const cb = el.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+    expect(cb).not.toBeNull();
+    expect(cb!.checked).toBe(false);
+    expect(el.textContent).toContain("Auto-hide control terminal on success");
+  });
+
   it("offers separate Host and Port fields", () => {
     openNewDialog("devserver");
     const el = render();
@@ -152,6 +161,7 @@ describe("New workspace dialog", () => {
       has_token: true,
       library_id: null,
       connected: false,
+      auto_hide_control: false,
     };
     openEditDevserver(ds);
     const el = render();
@@ -179,6 +189,7 @@ describe("New workspace dialog", () => {
       has_token: false,
       library_id: "lib-abc",
       connected: true,
+      auto_hide_control: false,
     };
     openEditDevserver(ds);
     const el = render();

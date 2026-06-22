@@ -108,6 +108,12 @@ export interface DevserverEntry {
    * edits while connected). Always false on a surface with no desktop bridge.
    */
   connected: boolean;
+  /**
+   * Auto-hide the connect control terminal once the devserver connects: the
+   * desktop buries the control-terminal window on success instead of leaving it
+   * open. Set from the add/edit dialog; false when unset.
+   */
+  auto_hide_control: boolean;
 }
 
 /** Write payload for add/edit devserver. `token` absent on edit leaves it unchanged. */
@@ -120,6 +126,8 @@ export interface DevserverInput {
   script?: string;
   /** Bearer for a proxied/gateway devserver, so the user connects without scraping. */
   token?: string;
+  /** Auto-hide the connect control terminal on a successful connect. */
+  auto_hide_control?: boolean;
 }
 
 // ---- The client surface -------------------------------------------------
