@@ -916,29 +916,29 @@ async fn share_landing_root_unauthed_redirects_to_login() {
 }
 
 #[tokio::test]
-async fn share_landing_root_minted_jwt_redirect() {
-    // Whole-devserver open: /s/:owner (no workspace) mints the entry JWT
-    // and redirects to the proxy ROOT, where the launcher is served — the
-    // same flow as the per-workspace landing minus the tenant path.
+async fn share_landing_root_owner_minted_jwt_redirect() {
+    // Whole-devserver open is OWNER-ONLY this round: the owner opening their
+    // OWN devserver (caller == owner) mints the entry JWT and redirects to
+    // the proxy ROOT, where the launcher is served — the per-workspace flow
+    // minus the tenant path.
     let app = TestApp::new().await;
     let mut c = Client::new(&app);
-    let caller_uid = fake_user_id();
-    happy_login(&app, &mut c, caller_uid, "alice@x.com").await;
+    let uid = fake_user_id();
+    happy_login(&app, &mut c, uid, "owner@x.com").await;
     Mock::given(method("GET"))
-        .and(path(format!("/v1/users/{caller_uid}")))
+        .and(path(format!("/v1/users/{uid}")))
         .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
-            caller_uid,
-            "alice@x.com",
-            "alice",
+            uid,
+            "owner@x.com",
+            "owner-handle",
         )))
         .mount(&app.profile)
         .await;
-
-    let owner_uid = Uuid::new_v4();
+    // `/s/owner-handle` resolves to the logged-in user → caller == owner.
     Mock::given(method("GET"))
         .and(path("/v1/users/by-username"))
         .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
-            owner_uid,
+            uid,
             "owner@x.com",
             "owner-handle",
         )))
@@ -947,10 +947,8 @@ async fn share_landing_root_minted_jwt_redirect() {
     let dsid = "a".repeat(64);
     mock_live_devserver(&app, "owner-handle", &dsid).await;
     Mock::given(method("GET"))
-        .and(path(format!(
-            "/v1/users/{owner_uid}/devservers/{dsid}/access"
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "viewer"})))
+        .and(path(format!("/v1/users/{uid}/devservers/{dsid}/access")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "owner"})))
         .mount(&app.profile)
         .await;
 
@@ -965,6 +963,32 @@ async fn share_landing_root_minted_jwt_redirect() {
         !location.contains("/photos/"),
         "root open must not carry a workspace segment: {location}"
     );
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn share_landing_root_grantee_denied() {
+    // Owner-only gate: a GRANTEE (caller != owner) does NOT get
+    // whole-devserver open — they keep the per-workspace share landing. 404
+    // (same shape as unknown-handle) so it can't probe ownership. The gate
+    // fires before any devserver lookup, so no live-devserver/access mocks.
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let caller_uid = fake_user_id();
+    happy_login(&app, &mut c, caller_uid, "grantee@x.com").await;
+    let owner_uid = Uuid::new_v4();
+    Mock::given(method("GET"))
+        .and(path("/v1/users/by-username"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            owner_uid,
+            "owner@x.com",
+            "owner-handle",
+        )))
+        .mount(&app.profile)
+        .await;
+
+    let (s, _, _, _) = c.send(Method::GET, "/s/owner-handle", None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
     app.cleanup().await;
 }
 

@@ -1209,6 +1209,18 @@ async fn share_landing_root(
         .await?
         .ok_or(Error::NotFound)?;
 
+    // OWNER-ONLY (this round). On the gateway surface the launcher's
+    // `/api/library/*` runs `bearer=None` (tunnel-trust: the proxy gates the
+    // edge but forwards no role), so a GRANTEE who reached the launcher root
+    // would get full library mutation (add/rm/on-off workspaces, devserver
+    // CRUD). Until the proxy injects a signed caller/role header, restrict
+    // whole-devserver open to the owner; grantees keep the per-workspace
+    // share landings (`/s/:owner/:workspace`). 404 (not 403) preserves the
+    // handle-existence privacy parity with the resolve above.
+    if uid != owner_user.id {
+        return Err(Error::NotFound);
+    }
+
     // The owner's LIVE devserver (one per user); its id is the drv claim.
     // No admin client / no live devserver -> 404 (same shape as no-access).
     let client =
