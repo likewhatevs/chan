@@ -4059,6 +4059,44 @@ mod tests {
         assert_eq!(addr, SocketAddr::new(ipv6("::"), 8787));
     }
 
+    /// The baked prod tunnel endpoint is a wire string the gateway answers
+    /// to: `chan devserver --tunnel-token=…` must resolve prod with no
+    /// `--tunnel-url`. Pin it so the default can't silently drift off
+    /// `devserver.chan.app` (a green build wouldn't catch a typo).
+    #[test]
+    fn devserver_tunnel_url_defaults_to_prod_endpoint() {
+        let cli = Cli::parse_from(["chan", "devserver"]);
+        match cli.command {
+            Command::Devserver {
+                tunnel_url,
+                tunnel_token,
+                ..
+            } => {
+                assert_eq!(tunnel_url, "https://devserver.chan.app/v1/tunnel");
+                // No token by default → tunnel mode stays off until opted in.
+                assert_eq!(tunnel_token, None);
+            }
+            other => panic!("expected Command::Devserver, got {other:?}"),
+        }
+    }
+
+    /// An explicit `--tunnel-url` still overrides the baked default.
+    #[test]
+    fn devserver_tunnel_url_override_wins() {
+        let cli = Cli::parse_from([
+            "chan",
+            "devserver",
+            "--tunnel-url",
+            "http://127.0.0.1:7777/v1/tunnel",
+        ]);
+        match cli.command {
+            Command::Devserver { tunnel_url, .. } => {
+                assert_eq!(tunnel_url, "http://127.0.0.1:7777/v1/tunnel");
+            }
+            other => panic!("expected Command::Devserver, got {other:?}"),
+        }
+    }
+
     #[test]
     fn parse_idle_timeout_units() {
         assert_eq!(parse_idle_timeout("30s").unwrap(), Duration::from_secs(30));
