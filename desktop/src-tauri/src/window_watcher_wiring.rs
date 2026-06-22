@@ -218,6 +218,7 @@ async fn run_devserver_window_feed(
     conn: DevserverConn,
     snapshot: Arc<Mutex<Vec<WindowRecord>>>,
     change: Arc<Notify>,
+    state: Arc<AppState>,
     mut cancel: watch::Receiver<bool>,
 ) {
     const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
@@ -229,7 +230,7 @@ async fn run_devserver_window_feed(
         }
         tokio::select! {
             _ = cancel.changed() => return,
-            result = stream_window_feed(&conn, &snapshot, &change) => {
+            result = stream_window_feed(&conn, &snapshot, &change, &state) => {
                 if let Err(e) = result {
                     tracing::debug!(
                         host = %conn.host,
@@ -256,6 +257,7 @@ async fn stream_window_feed(
     conn: &DevserverConn,
     snapshot: &Arc<Mutex<Vec<WindowRecord>>>,
     change: &Arc<Notify>,
+    state: &Arc<AppState>,
 ) -> Result<(), String> {
     use futures::StreamExt;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -275,6 +277,20 @@ async fn stream_window_feed(
     while let Some(message) = ws.next().await {
         if let Message::Text(text) = message.map_err(|e| format!("watch stream: {e}"))? {
             if let Ok(set) = serde_json::from_str::<WindowSet>(&text) {
+                // Refresh this library's active-transfer cache so the desktop
+                // close guard can see a remote window's in-flight transfer (the
+                // desktop sees no remote `/ws`; the feed bit is its only signal).
+                // The library_id is constant per devserver; an empty snapshot
+                // carries none, but then there are no windows to guard either.
+                if let Some(library_id) = set.windows.first().map(|r| r.library_id.clone()) {
+                    let active: Vec<String> = set
+                        .windows
+                        .iter()
+                        .filter(|r| r.active_transfer)
+                        .map(native_label)
+                        .collect();
+                    state.refresh_devserver_active_transfers(&library_id, &active);
+                }
                 *snapshot.lock().unwrap() = set.windows;
                 change.notify_one();
             }
@@ -307,12 +323,16 @@ pub(crate) async fn spawn_devserver_window_watcher(
     let host = conn.host.clone();
     let port = conn.port;
     let devserver_name = conn.name.clone();
+    // Shared state so the feed task can refresh the active-transfer cache the
+    // close guard reads for this devserver's windows.
+    let state = Arc::clone(app.state::<Arc<AppState>>().inner());
     // The WS feed task owns `conn`, pushes changes into `snapshot` + wakes
     // `change`, and stops when `cancel` flips true.
     tauri::async_runtime::spawn(run_devserver_window_feed(
         conn,
         Arc::clone(&snapshot),
         Arc::clone(&change),
+        state,
         cancel_rx.clone(),
     ));
     let surface = TauriNativeSurface {

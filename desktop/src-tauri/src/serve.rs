@@ -956,14 +956,17 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                     WindowEvent::CloseRequested { api, .. } => {
                         let state = app_for_close.state::<Arc<AppState>>();
                         // Active-transfer guard (BEFORE any bury/close path): a
-                        // window with an in-flight upload/download must never
-                        // close silently and kill the transfer. Prompt — "Keep
-                        // open" (hold, stay visible to watch it finish) vs
-                        // "Cancel transfer & close" (abort + close). Keyed on the
-                        // `?w=` session id (not the native label). Only
-                        // local-library windows report a count the embedded host
-                        // can see; a remote/devserver window reads false (its
-                        // transfers live on that server — not ours to guard).
+                        // window with an in-flight upload/download must never close
+                        // silently and kill the transfer. A LOCAL window reports its
+                        // count through the embedded host (keyed on the `?w=` session
+                        // id), and its red-dot close DESTROYS it — so the prompt
+                        // offers "Cancel transfer & close" vs "Keep open". A
+                        // connected-DEVSERVER window's transfer lives in the remote
+                        // SPA + server, surfaced via the `active_transfer` feed bit
+                        // (cached, keyed by composite label); its red-dot close only
+                        // HIDES it (the transfer keeps running in the live webview),
+                        // so that prompt is "Hide" vs "Keep open" — the desktop never
+                        // cancels a remote transfer (the user does, from the SPA).
                         if state
                             .embedded
                             .get()
@@ -972,6 +975,15 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                         {
                             api.prevent_close();
                             prompt_transfer_close(&app_for_close, &state, &label_for_close);
+                            return;
+                        }
+                        if state.devserver_window_has_active_transfer(&label_for_close) {
+                            api.prevent_close();
+                            prompt_devserver_transfer_close(
+                                &app_for_close,
+                                &state,
+                                &label_for_close,
+                            );
                             return;
                         }
                         // A watcher-managed local window (`local::<id>`): the
@@ -1166,6 +1178,54 @@ fn prompt_transfer_close(app: &AppHandle, state: &Arc<AppState>, label: &str) {
             crate::rebuild_window_menu(&app_cb);
             if let Some(w) = app_cb.get_webview_window(&label_cb) {
                 let _ = w.destroy();
+            }
+        });
+}
+
+/// Active-transfer guard prompt for a CONNECTED-DEVSERVER window. The transfer
+/// lives in the remote SPA the webview hosts (and on the remote server), so the
+/// desktop can't cancel it cleanly — and DESTROYING the webview would just make
+/// the devserver watcher reopen the window on its next feed push. So the choice
+/// is hold vs hide, never "cancel": "Keep open" (default/Escape) stays visible to
+/// watch it; "Hide" buries the window the normal devserver way (the webview stays
+/// ALIVE and hidden, so the transfer keeps running, reopenable from the Window
+/// menu). To actually cancel, the user uses the SPA's transfer bar. Async `.show`
+/// only (a blocking dialog on the event-loop thread deadlocks); the callback runs
+/// on the main thread, where the hide/menu mutations are safe.
+fn prompt_devserver_transfer_close(app: &AppHandle, state: &Arc<AppState>, label: &str) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    let title = app
+        .get_webview_window(label)
+        .and_then(|w| w.title().ok())
+        .unwrap_or_else(|| label.to_string());
+    let app_cb = app.clone();
+    let state_cb = Arc::clone(state);
+    let label_cb = label.to_string();
+    app.dialog()
+        .message(format!(
+            "\"{title}\" has a file transfer in progress. Keep the window open to \
+             watch it finish, or hide it — the transfer keeps running in the \
+             background (cancel it from the transfer bar if you need to)."
+        ))
+        .title("Transfer in progress")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Hide window".into(),
+            "Keep open".into(),
+        ))
+        .show(move |hide| {
+            if !hide {
+                // Keep open: `prevent_close` already kept it open + visible.
+                return;
+            }
+            // Hide the normal devserver way: the webview stays alive (so the
+            // transfer continues), buried into the Window menu for reopen. Mirrors
+            // the `else`-branch bury in the close handler, minus the second bury
+            // notice (this prompt already explained the hide).
+            if let Some(w) = app_cb.get_webview_window(&label_cb) {
+                let t = w.title().unwrap_or_else(|_| label_cb.clone());
+                let _ = w.hide();
+                state_cb.bury_window(&label_cb, &t);
+                crate::rebuild_window_menu(&app_cb);
             }
         });
 }
@@ -1534,6 +1594,26 @@ mod tests {
         let open = vec!["local::w-5".to_string()];
         assert_eq!(resolve_label_from("local::w-1", &open), "local::w-1");
         assert_eq!(resolve_label_from("lib-z::w-3", &[]), "lib-z::w-3");
+    }
+
+    #[test]
+    fn refresh_library_transfers_replaces_only_that_librarys_slice() {
+        use std::collections::HashSet;
+        let mut set: HashSet<String> = ["lib-a::w1", "lib-a::w2", "lib-b::w9"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // A fresh lib-a push: only w3 is transferring now — its old slice drops,
+        // the other library is untouched.
+        crate::refresh_library_transfers(&mut set, "lib-a", &["lib-a::w3".to_string()]);
+        assert!(set.contains("lib-a::w3"));
+        assert!(!set.contains("lib-a::w1"));
+        assert!(!set.contains("lib-a::w2"));
+        assert!(set.contains("lib-b::w9"));
+        // A lib-a push with nothing transferring clears its slice only.
+        crate::refresh_library_transfers(&mut set, "lib-a", &[]);
+        assert!(!set.iter().any(|l| l.starts_with("lib-a::")));
+        assert!(set.contains("lib-b::w9"));
     }
 
     #[test]

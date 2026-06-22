@@ -270,6 +270,7 @@ mod tests {
             token: "tok".into(),
             persisted: true,
             connected: false,
+            active_transfer: false,
         }
     }
 

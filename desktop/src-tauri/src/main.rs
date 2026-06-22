@@ -116,6 +116,14 @@ pub struct AppState {
     /// reap — it learned its `library_id` lazily from the feed). Supersedes the
     /// imperative `devserver_windows` tracking for the watcher-driven path.
     pub devserver_watchers: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    /// Composite native labels (`{library_id}::{window_id}`) of connected-
+    /// devserver windows that currently have an in-flight file transfer, as
+    /// reported by each devserver's windows feed (`WindowRecord.active_transfer`).
+    /// A desktop webview onto a remote devserver sees no remote `/ws` traffic, so
+    /// the feed bit is the close guard's only signal that a remote window is
+    /// mid-transfer (the local library answers through the embedded host instead).
+    /// Volatile: each devserver feed push refreshes its library's slice.
+    pub devserver_active_transfers: Mutex<std::collections::HashSet<String>>,
     /// The embedded control-terminal tenant prefix (`/control-N`) running each
     /// scripted devserver's connect script, keyed by `Devserver.id`. Kept
     /// separate from `devserver_windows` because this is a LOCAL embedded
@@ -257,6 +265,21 @@ fn lowest_free_window_number(
         .expect("the naturals always contain a free slot")
 }
 
+/// Replace `library_id`'s slice of the active-transfer label set: drop every
+/// entry under the `{library_id}::` prefix, then insert `active_labels`. Split
+/// out as a free function so the per-library refresh is unit-testable without an
+/// `AppState`. Each devserver's feed owns its own library prefix, so refreshing
+/// one library never disturbs another's entries.
+fn refresh_library_transfers(
+    set: &mut std::collections::HashSet<String>,
+    library_id: &str,
+    active_labels: &[String],
+) {
+    let prefix = format!("{library_id}::");
+    set.retain(|l| !l.starts_with(&prefix));
+    set.extend(active_labels.iter().cloned());
+}
+
 impl AppState {
     /// The embedded local server, once `.setup()` has started it. The
     /// window-watcher wiring reads the library's window feed through this.
@@ -273,6 +296,29 @@ impl AppState {
     /// Record the watcher's view state so close handlers can reach it. Set once.
     pub(crate) fn set_local_watcher_view(&self, view: Arc<window_watcher::WatcherViewState>) {
         let _ = self.local_watcher_view.set(view);
+    }
+
+    /// Refresh the active-transfer labels for one devserver library from a feed
+    /// snapshot: drop this library's stale slice and re-add the labels the push
+    /// marks `active_transfer`. Volatile per-push state — the windows feed
+    /// re-reports the bit on every change, so each push fully refreshes the slice.
+    pub(crate) fn refresh_devserver_active_transfers(
+        &self,
+        library_id: &str,
+        active_labels: &[String],
+    ) {
+        let mut set = self.devserver_active_transfers.lock().unwrap();
+        refresh_library_transfers(&mut set, library_id, active_labels);
+    }
+
+    /// True iff the cached feed bit marks this devserver window (a composite
+    /// `{library_id}::{window_id}` native label) as having an in-flight transfer.
+    /// The local library answers through the embedded host instead.
+    pub(crate) fn devserver_window_has_active_transfer(&self, native_label: &str) -> bool {
+        self.devserver_active_transfers
+            .lock()
+            .unwrap()
+            .contains(native_label)
     }
 
     /// Push a closing window's layout onto the LRU stack. Best
@@ -2527,6 +2573,7 @@ fn main() {
         devservers: devserver::DevserverConns::default(),
         devserver_windows: Mutex::new(HashMap::new()),
         devserver_watchers: Mutex::new(HashMap::new()),
+        devserver_active_transfers: Mutex::new(std::collections::HashSet::new()),
         control_terminal_prefixes: Mutex::new(HashMap::new()),
         devserver_remove_hook: Arc::new(OnceLock::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
