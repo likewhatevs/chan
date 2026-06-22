@@ -1041,7 +1041,7 @@ fn show_bury_notice(app: &AppHandle, title: &str) {
     };
     app.dialog()
         .message(format!(
-            "\"{title}\" is now hidden, not closed.\n\nIts terminals and layout keep running. Reopen it from the Window menu, or with {chord}."
+            "\"{title}\" wasn't closed — its terminals and layout are still running. Reopen it from the Window menu, or with {chord}."
         ))
         .title("Window Hidden")
         .kind(MessageDialogKind::Info)
