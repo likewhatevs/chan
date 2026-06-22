@@ -4,6 +4,7 @@
   import { themeState, toggleTheme } from "../state/theme.svelte";
   import { openNewDialog } from "../state/dialog.svelte";
   import { openTerminal } from "../state/library.svelte";
+  import { readOnly } from "../state/capabilities";
 </script>
 
 <header class="topbar">
@@ -21,12 +22,14 @@
       aria-label="Open terminal"
       title="Open terminal"
       onclick={() => openTerminal()}>⌨</button>
-    <button
-      class="icon-btn"
-      type="button"
-      aria-label="New workspace"
-      title="New workspace"
-      onclick={() => openNewDialog("local")}>+</button>
+    {#if !readOnly}
+      <button
+        class="icon-btn"
+        type="button"
+        aria-label="New workspace"
+        title="New workspace"
+        onclick={() => openNewDialog("local")}>+</button>
+    {/if}
   </div>
 </header>
 

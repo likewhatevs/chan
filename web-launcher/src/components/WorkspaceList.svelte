@@ -15,6 +15,7 @@
     confirmBulkDelete,
   } from "../state/selection.svelte";
   import { basename } from "../lib/windowLabel";
+  import { readOnly } from "../state/capabilities";
   import type { WorkspaceEntry } from "../api/library";
 
   function displayName(ws: WorkspaceEntry): string {
@@ -28,7 +29,7 @@
   <section class="group">
     <h2 class="group-title">🏠 Local</h2>
 
-    {#if selectedCount > 0}
+    {#if selectedCount > 0 && !readOnly}
       <div class="bulk-bar" role="toolbar" aria-label="Bulk actions">
         <span class="bulk-count">{selectedCount} selected</span>
         {#if selection.confirmingDelete}
@@ -64,23 +65,30 @@
     <ul class="rows">
       {#each library.workspaces as ws (ws.workspace_id)}
         <li class="row" class:selected={isSelected(ws.workspace_id)}>
-          <input
-            class="row-check"
-            type="checkbox"
-            checked={isSelected(ws.workspace_id)}
-            aria-label={`Select ${displayName(ws)}`}
-            onchange={() => toggleSelected(ws.workspace_id)} />
+          {#if !readOnly}
+            <input
+              class="row-check"
+              type="checkbox"
+              checked={isSelected(ws.workspace_id)}
+              aria-label={`Select ${displayName(ws)}`}
+              onchange={() => toggleSelected(ws.workspace_id)} />
+          {/if}
           <div class="row-main">
             <span class="row-name">{displayName(ws)}</span>
             <span class="row-sub" title={ws.path}>{ws.path}</span>
           </div>
           <div class="row-actions">
-            <button
-              class="pill"
-              class:on={ws.on}
-              type="button"
-              aria-pressed={ws.on}
-              onclick={() => toggleWorkspace(ws.workspace_id, !ws.on)}>{ws.on ? "On" : "Off"}</button>
+            {#if readOnly}
+              <!-- Read-only surface: the on/off state is shown but not toggleable. -->
+              <span class="pill" class:on={ws.on} aria-disabled="true">{ws.on ? "On" : "Off"}</span>
+            {:else}
+              <button
+                class="pill"
+                class:on={ws.on}
+                type="button"
+                aria-pressed={ws.on}
+                onclick={() => toggleWorkspace(ws.workspace_id, !ws.on)}>{ws.on ? "On" : "Off"}</button>
+            {/if}
           </div>
         </li>
       {/each}

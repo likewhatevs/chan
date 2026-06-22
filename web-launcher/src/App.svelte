@@ -11,6 +11,7 @@
   import { library, loadLibrary, openTerminal } from "./state/library.svelte";
   import { dialog, openNewDialog } from "./state/dialog.svelte";
   import { applyTheme } from "./state/theme.svelte";
+  import { readOnly } from "./state/capabilities";
 
   onMount(() => {
     applyTheme();
@@ -41,13 +42,18 @@
         <code>chan serve /path/to/project</code>.
       </p>
       <div class="empty-actions">
-        <button class="btn primary" type="button" onclick={() => openNewDialog("local")}>
-          New workspace
-        </button>
+        {#if !readOnly}
+          <button class="btn primary" type="button" onclick={() => openNewDialog("local")}>
+            New workspace
+          </button>
+        {/if}
         <button class="btn" type="button" onclick={() => openTerminal()}>
           Open terminal
         </button>
       </div>
+      {#if readOnly}
+        <p class="manage-hint">Manage workspaces from the desktop app or the chan CLI.</p>
+      {/if}
     </div>
   {:else}
     <WorkspaceList />
@@ -108,5 +114,11 @@
     gap: 0.6rem;
     justify-content: center;
     flex-wrap: wrap;
+  }
+
+  .manage-hint {
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
   }
 </style>
