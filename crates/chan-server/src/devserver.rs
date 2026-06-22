@@ -1608,6 +1608,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn library_workspaces_lists_registered_with_on_state() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        // Register + mount one workspace so it lists as on.
+        let prefix = state.register_workspace(ws.path()).await.expect("mount");
+        let host = state.host.clone();
+        let app = build_devserver_app(state, host);
+
+        // Tunnel-trust on the devserver surface: no bearer needed.
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/workspaces")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let rows = rows.as_array().expect("array of workspaces");
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        // workspace_id is the route prefix without its leading slash.
+        assert_eq!(row["workspace_id"], prefix.trim_start_matches('/'));
+        assert_eq!(row["on"], true);
+        // Path is the canonical workspace root; label is its basename.
+        let basename = ws.path().file_name().unwrap().to_str().unwrap();
+        assert!(row["path"].as_str().unwrap().ends_with(basename));
+        assert!(!row["label"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn launcher_mounts_at_library_root() {
         use axum::body::to_bytes;
         use tower::ServiceExt;

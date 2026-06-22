@@ -16,6 +16,8 @@
 //! launcher would have been blind to its own windows; unifying them here fixes
 //! that and removes the double-registration.
 
+use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -26,6 +28,8 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get};
 use axum::{Json, Router};
+use chan_library::allocate_workspace_prefix;
+use serde::Serialize;
 use tokio::sync::Notify;
 
 use crate::devserver::bytes_eq;
@@ -51,6 +55,7 @@ const WATCH_WS_PATH: &str = "/api/library/windows/watch";
 /// presents it on every data call.
 pub fn launcher_router(host: Arc<WorkspaceHost>, bearer: Option<&str>) -> Router {
     let api = Router::new()
+        .route("/api/library/workspaces", get(handle_list_workspaces))
         .route(
             "/api/library/windows",
             get(handle_list_library_windows).post(handle_create_library_window),
@@ -207,4 +212,58 @@ async fn handle_discard_library_window(
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Workspaces (`/api/library/workspaces`). List today; add/on/off/rm next.
+// ---------------------------------------------------------------------------
+
+/// The launcher's workspace row. `workspace_id` is the route prefix without its
+/// leading slash — a single legible segment the launcher addresses by
+/// (`/api/library/workspaces/{id}/{on|off}`) and treats as opaque; the server
+/// owns the scheme. `on` = currently mounted/served. No token: the launcher
+/// opens a workspace's tenant separately (which carries its own per-tenant
+/// token), so the workspace list never needs one.
+#[derive(Serialize)]
+struct LauncherWorkspace {
+    workspace_id: String,
+    path: String,
+    label: String,
+    on: bool,
+}
+
+/// `GET /api/library/workspaces`: one row per registered library workspace (the
+/// set `chan list` shows, read live from the host library — the source of
+/// truth), each stamped with whether it is currently served (`mounted_prefixes`
+/// supplies the live on-state). Sorted by id for a stable list.
+async fn handle_list_workspaces(State(host): State<Arc<WorkspaceHost>>) -> Response {
+    let mounted: HashSet<String> = match host.mounted_prefixes() {
+        Ok(prefixes) => prefixes.into_iter().collect(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let mut rows: Vec<LauncherWorkspace> = host
+        .library()
+        .list_workspaces()
+        .into_iter()
+        .filter_map(|ws| {
+            let prefix = allocate_workspace_prefix(&ws.root_path).ok()?;
+            Some(LauncherWorkspace {
+                workspace_id: prefix.trim_start_matches('/').to_string(),
+                path: ws.root_path.to_string_lossy().into_owned(),
+                label: workspace_label(&ws.root_path),
+                on: mounted.contains(&prefix),
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| a.workspace_id.cmp(&b.workspace_id));
+    Json(rows).into_response()
+}
+
+/// A workspace's display label: its directory basename. The launcher falls back
+/// to the path basename when the label is empty, so the two agree.
+fn workspace_label(root: &Path) -> String {
+    root.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string()
 }
