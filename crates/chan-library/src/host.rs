@@ -766,10 +766,15 @@ impl WorkspaceHost {
     /// one has no windows).
     pub fn assemble_window_records(&self) -> Vec<WindowRecord> {
         let Some(registry) = self.window_registry() else {
-            return Vec::new();
+            // No local registry installed: still surface a connected devserver's
+            // windows, so a desktop holding only remote connections lists them.
+            return self
+                .devserver_feed()
+                .map(|feed| feed.windows())
+                .unwrap_or_default();
         };
         let library_id = self.library_id();
-        registry
+        let mut records: Vec<WindowRecord> = registry
             .snapshot()
             .into_iter()
             .map(|row| {
@@ -782,7 +787,14 @@ impl WorkspaceHost {
                 record.active_transfer = active_transfer;
                 record
             })
-            .collect()
+            .collect();
+        // Append connected devservers' windows after the local set. Each record
+        // carries its own remote `library_id`, so the desktop groups them under
+        // the right per-library window-menu section.
+        if let Some(feed) = self.devserver_feed() {
+            records.extend(feed.windows());
+        }
+        records
     }
 
     /// Mint a window: persist a new registry row and return its assembled

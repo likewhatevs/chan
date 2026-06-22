@@ -111,6 +111,34 @@ pub fn launcher_router(
             "/api/library/devservers/:id/connect",
             post(handle_connect_devserver),
         )
+        // The connected-devserver bridge ops mirror connect: a desktop drains
+        // them, a desktop-less surface answers NO_DESKTOP/409. Only the slash-free
+        // devserver `:id` is in the path; the workspace `prefix`/`path` ride the
+        // JSON body (a structured prefix in a path segment is proxy-fragile).
+        .route(
+            "/api/library/devservers/:id/disconnect",
+            post(handle_disconnect_devserver),
+        )
+        .route(
+            "/api/library/devservers/:id/terminal",
+            post(handle_devserver_terminal),
+        )
+        .route(
+            "/api/library/devservers/:id/workspaces/open",
+            post(handle_open_devserver_workspace),
+        )
+        .route(
+            "/api/library/devservers/:id/workspaces/on",
+            post(handle_devserver_workspace_on),
+        )
+        .route(
+            "/api/library/devservers/:id/workspaces/off",
+            post(handle_devserver_workspace_off),
+        )
+        .route(
+            "/api/library/devservers/:id/workspaces/forget",
+            post(handle_forget_devserver_workspace),
+        )
         // Native folder picker — another desktop-bridge dispatch (the launcher's
         // New-Workspace "Browse…"), so it sits with the other bridge ops.
         .route("/api/library/fs/pick-folder", post(handle_pick_folder))
@@ -348,6 +376,119 @@ async fn handle_connect_devserver(
     .await
 }
 
+/// `POST /api/library/devservers/{id}/disconnect`: disconnect a connected
+/// devserver through the desktop bridge — drop its live connection and windows,
+/// back to registered-but-offline. 204 on success; 409 (`NO_DESKTOP`) with no
+/// desktop attached.
+async fn handle_disconnect_devserver(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::DisconnectDevserver {
+        id,
+        reply,
+    })
+    .await
+}
+
+/// `POST /api/library/devservers/{id}/terminal`: open a standalone-terminal
+/// window on a connected devserver through the desktop bridge. 204/409.
+async fn handle_devserver_terminal(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::OpenDevserverTerminal {
+        id,
+        reply,
+    })
+    .await
+}
+
+/// Body of `POST /api/library/devservers/{id}/workspaces/open`: the remote
+/// workspace root to open a window for.
+#[derive(Deserialize)]
+struct OpenDevserverWorkspace {
+    path: String,
+}
+
+/// `POST /api/library/devservers/{id}/workspaces/open` `{path}`: open (or focus)
+/// a workspace window rooted at the remote `path` on a connected devserver
+/// through the desktop bridge. 204/409.
+async fn handle_open_devserver_workspace(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<OpenDevserverWorkspace>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::OpenDevserverWorkspace {
+        id,
+        path: body.path,
+        reply,
+    })
+    .await
+}
+
+/// Body of the workspace on/off/forget routes: the remote mount `prefix` to
+/// target. It rides the JSON body, not a path segment — a mount prefix can carry
+/// characters axum's `Path` extractor and intervening proxies mangle (`%2F`), and
+/// the gateway-proxied path makes it worse.
+#[derive(Deserialize)]
+struct DevserverWorkspaceRef {
+    prefix: String,
+}
+
+/// `POST /api/library/devservers/{id}/workspaces/on` `{prefix}`: turn a connected
+/// devserver's workspace (the remote mount `prefix`) on through the desktop
+/// bridge. 204/409.
+async fn handle_devserver_workspace_on(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<DevserverWorkspaceRef>,
+) -> Response {
+    set_devserver_workspace_on(&host, id, body.prefix, true).await
+}
+
+/// `POST /api/library/devservers/{id}/workspaces/off` `{prefix}`: turn it off. 204/409.
+async fn handle_devserver_workspace_off(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<DevserverWorkspaceRef>,
+) -> Response {
+    set_devserver_workspace_on(&host, id, body.prefix, false).await
+}
+
+/// Shared on/off dispatch for a connected devserver's workspace.
+async fn set_devserver_workspace_on(
+    host: &WorkspaceHost,
+    id: String,
+    prefix: String,
+    on: bool,
+) -> Response {
+    dispatch_window_op(host, |reply| DesktopWindowOp::SetDevserverWorkspaceOn {
+        id,
+        prefix,
+        on,
+        reply,
+    })
+    .await
+}
+
+/// `POST /api/library/devservers/{id}/workspaces/forget` `{prefix}`: forget
+/// (unregister) a connected devserver's workspace (the remote mount `prefix`)
+/// through the desktop bridge. POST-with-body rather than DELETE — a DELETE body
+/// is poorly supported across clients/proxies. 204/409.
+async fn handle_forget_devserver_workspace(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<DevserverWorkspaceRef>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::ForgetDevserverWorkspace {
+        id,
+        prefix: body.prefix,
+        reply,
+    })
+    .await
+}
+
 /// `POST /api/library/fs/pick-folder`: open the OS native folder dialog through
 /// the desktop bridge and return the chosen directory as a JSON string, or
 /// `null` when the user cancels. The launcher's New-Workspace "Browse…" calls
@@ -416,6 +557,12 @@ async fn handle_list_workspaces(State(state): State<Arc<LauncherState>>) -> Resp
         })
         .collect();
     rows.sort_by(|a, b| a.workspace_id.cmp(&b.workspace_id));
+    // Append connected devservers' workspaces after the sorted local rows. The
+    // feed already tags each with its `devserver_id` + remote `library_id`, and
+    // the SPA groups them by `devserver_id`, so local rows stay first.
+    if let Some(feed) = host.devserver_feed() {
+        rows.extend(feed.workspaces());
+    }
     Json(rows).into_response()
 }
 
@@ -991,12 +1138,30 @@ mod window_op_route_tests {
     }
 
     async fn post(router: &axum::Router, uri: &str) -> (StatusCode, String) {
-        let req = Request::builder()
-            .method("POST")
-            .uri(uri)
-            .body(Body::empty())
+        send(router, "POST", uri, None).await
+    }
+
+    /// Drive any method, optionally with a JSON body (sets the content-type so the
+    /// `Json` extractor accepts it — needed for `workspaces/open`).
+    async fn send(
+        router: &axum::Router,
+        method: &str,
+        uri: &str,
+        json: Option<&str>,
+    ) -> (StatusCode, String) {
+        let mut builder = Request::builder().method(method).uri(uri);
+        let body = match json {
+            Some(j) => {
+                builder = builder.header("content-type", "application/json");
+                Body::from(j.to_string())
+            }
+            None => Body::empty(),
+        };
+        let response = router
+            .clone()
+            .oneshot(builder.body(body).unwrap())
+            .await
             .unwrap();
-        let response = router.clone().oneshot(req).await.unwrap();
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -1023,7 +1188,12 @@ mod window_op_route_tests {
                 match op {
                     DesktopWindowOp::Open { reply, .. }
                     | DesktopWindowOp::Hide { reply, .. }
-                    | DesktopWindowOp::ConnectDevserver { reply, .. } => {
+                    | DesktopWindowOp::ConnectDevserver { reply, .. }
+                    | DesktopWindowOp::DisconnectDevserver { reply, .. }
+                    | DesktopWindowOp::OpenDevserverTerminal { reply, .. }
+                    | DesktopWindowOp::OpenDevserverWorkspace { reply, .. }
+                    | DesktopWindowOp::SetDevserverWorkspaceOn { reply, .. }
+                    | DesktopWindowOp::ForgetDevserverWorkspace { reply, .. } => {
                         let _ = reply.send(Ok(()));
                     }
                     DesktopWindowOp::PickFolder { reply } => {
@@ -1042,6 +1212,31 @@ mod window_op_route_tests {
         // route maps the dispatch success to 204.
         let (status, _) = post(&router, "/api/library/devservers/ds1/connect").await;
         assert_eq!(status, StatusCode::NO_CONTENT, "connect");
+        // The 5 new devserver bridge ops ride the same bridge → 204. disconnect +
+        // terminal take no body; open carries {path}; on/off/forget carry {prefix}.
+        for uri in [
+            "/api/library/devservers/ds1/disconnect",
+            "/api/library/devservers/ds1/terminal",
+        ] {
+            let (status, _) = post(&router, uri).await;
+            assert_eq!(status, StatusCode::NO_CONTENT, "{uri}");
+        }
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/library/devservers/ds1/workspaces/open",
+            Some(r#"{"path":"/remote/ws"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "workspaces/open");
+        for uri in [
+            "/api/library/devservers/ds1/workspaces/on",
+            "/api/library/devservers/ds1/workspaces/off",
+            "/api/library/devservers/ds1/workspaces/forget",
+        ] {
+            let (status, _) = send(&router, "POST", uri, Some(r#"{"prefix":"myws"}"#)).await;
+            assert_eq!(status, StatusCode::NO_CONTENT, "{uri}");
+        }
         // Pick-folder returns the chosen path as a JSON string (200).
         let (status, body) = post(&router, "/api/library/fs/pick-folder").await;
         assert_eq!(status, StatusCode::OK, "pick-folder");
@@ -1064,6 +1259,34 @@ mod window_op_route_tests {
         let (status, body) = post(&router, "/api/library/devservers/ds1/connect").await;
         assert_eq!(status, StatusCode::CONFLICT, "connect");
         assert_eq!(body, NO_DESKTOP, "connect");
+        // The new devserver bridge ops are inert without a desktop too — 409
+        // NO_DESKTOP, so the launcher's row buttons are safe to show everywhere.
+        for uri in [
+            "/api/library/devservers/ds1/disconnect",
+            "/api/library/devservers/ds1/terminal",
+        ] {
+            let (status, body) = post(&router, uri).await;
+            assert_eq!(status, StatusCode::CONFLICT, "{uri}");
+            assert_eq!(body, NO_DESKTOP, "{uri}");
+        }
+        let (status, body) = send(
+            &router,
+            "POST",
+            "/api/library/devservers/ds1/workspaces/open",
+            Some(r#"{"path":"/remote/ws"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "workspaces/open");
+        assert_eq!(body, NO_DESKTOP, "workspaces/open");
+        for uri in [
+            "/api/library/devservers/ds1/workspaces/on",
+            "/api/library/devservers/ds1/workspaces/off",
+            "/api/library/devservers/ds1/workspaces/forget",
+        ] {
+            let (status, body) = send(&router, "POST", uri, Some(r#"{"prefix":"myws"}"#)).await;
+            assert_eq!(status, StatusCode::CONFLICT, "{uri}");
+            assert_eq!(body, NO_DESKTOP, "{uri}");
+        }
         // Pick-folder is inert without a desktop too — 409 NO_DESKTOP, so the
         // launcher falls back to plain text entry.
         let (status, body) = post(&router, "/api/library/fs/pick-folder").await;
