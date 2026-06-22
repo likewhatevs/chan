@@ -6,6 +6,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.43.0] - 2026-06-22
+
+A round centred on **one launcher, three surfaces**: the `web-launcher` SPA is served at `/` by the
+`chan-library` `WorkspaceHost` root fallback and reached identically on the desktop loopback, a
+`chan devserver`, and the gateway-proxied root through the existing transparent proxy — the native
+desktop `main.js` launcher was retired. Alongside it, the v0.42.0-reported "indexing stalls" turned out
+to be a slow (not broken, not a regression) single-tail-flush cold embed that *looked* frozen; it now
+commits progress incrementally and runs faster on macOS. Plus the editor / team / window-close
+carryover and `cs upload`/`cs download`.
+
+### Added
+
+- **Web-launcher unification across all three surfaces.** chan-server embeds `web-launcher/dist`
+  (`serve_launcher`) + serves `/api/library/{workspaces,windows}`, installed on the `chan-library`
+  `WorkspaceHost` root fallback; the desktop loads the same SPA from its embedded loopback. Per-surface
+  auth: full workspace mutation on the loopback, read-only over the gateway/tunnel.
+- **Gateway "Open whole devserver."** An owner-only `GET /s/:owner` mints an entry token and forwards the
+  browser to the devserver root (launcher) through devserver-proxy; the gateway renders nothing.
+- **`cs upload` / `cs download`** raise the Inspector upload/download UI from a workspace terminal.
+- **Team-setup dialog survives a window reload** (the in-progress config persists).
+
+### Changed
+
+- **Embeddings cold reindex commits incrementally** — progress advances live and partial results are
+  searchable mid-run, instead of one tail flush that looked frozen.
+- **Apple Accelerate CPU BLAS** for embeddings on macOS (~1.5–2× faster cold reindex; target-gated, no
+  Linux/musl impact).
+- **Editor source toggle** gated to renderable files (`.md`/`.json`/`.csv`), Ctrl+E on Linux/Windows;
+  `web/EDITOR.md` refreshed to the shipped `@today`/`@date` macros.
+- **Window-close notice** simplified; **empty-workspace copy** reframed as a project directory + inline
+  Open-terminal.
+
+### Notes
+
+- Windows Authenticode signing remains out (certs pending). The launcher devservers-list bridge, grantee
+  mutation over the gateway (a signed proxy role header), and the launcher drag-drop folder-add gesture
+  are deferred to a future round.
+
 ## [v0.42.0] - 2026-06-22
 
 A round centred on **"opening a chan-library behaves identically whether it is local or remote."**
