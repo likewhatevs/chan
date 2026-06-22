@@ -56,6 +56,23 @@ pub enum ControlRequest {
         #[serde(default)]
         carousel_off: bool,
     },
+    // Category 1: raise the Inspector upload / download action in the
+    // originating window (`cs upload` / `cs download`). `path` is the
+    // CLI-absolutized target; the server relativizes it to workspace-rel and
+    // resolves is_dir via `stat` (like `OpenPath`), so it carries no is_dir.
+    // Upload targets a directory (the server falls back to the parent dir when
+    // `path` is a file, and to the workspace root when omitted -> "."); download
+    // targets a file or directory. Non-blocking: the server pushes a
+    // window_command keyed by window_id and returns immediately, exactly like
+    // the sibling open_* commands; only that window raises the (existing) UI.
+    Upload {
+        window_id: String,
+        path: PathBuf,
+    },
+    Download {
+        window_id: String,
+        path: PathBuf,
+    },
     // Category 2: act on / inspect live PTY sessions the server owns. No
     // window_id; the server resolves sessions through its registry.
     TermWrite {
@@ -587,6 +604,46 @@ mod survey_wire_tests {
         let back: ControlRequest =
             serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
         assert!(matches!(back, ControlRequest::Unserve { .. }));
+    }
+
+    #[test]
+    fn upload_request_tag_window_id_and_path() {
+        // `cs upload`: wire tag `upload`, a window_id + the absolutized path
+        // (the server relativizes it). A rename here would silently break
+        // `cs upload` <-> the control-socket handler.
+        let req = ControlRequest::Upload {
+            window_id: "workspace-aa-0".into(),
+            path: PathBuf::from("/home/u/notes/sub"),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "upload");
+        assert_eq!(v["window_id"], "workspace-aa-0");
+        assert_eq!(v["path"], "/home/u/notes/sub");
+        let back: ControlRequest =
+            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back, ControlRequest::Upload { .. }));
+    }
+
+    #[test]
+    fn download_request_tag_window_id_and_path() {
+        // `cs download`: wire tag `download`, a window_id + the absolutized
+        // path. is_dir is NOT on this wire — the server resolves it via stat
+        // before pushing the window_command.
+        let req = ControlRequest::Download {
+            window_id: "workspace-aa-0".into(),
+            path: PathBuf::from("/home/u/notes/file.md"),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["type"], "download");
+        assert_eq!(v["window_id"], "workspace-aa-0");
+        assert_eq!(v["path"], "/home/u/notes/file.md");
+        assert!(
+            v.get("is_dir").is_none(),
+            "is_dir is server-resolved, not on the wire"
+        );
+        let back: ControlRequest =
+            serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
+        assert!(matches!(back, ControlRequest::Download { .. }));
     }
 
     #[test]

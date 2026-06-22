@@ -9,6 +9,7 @@ import {
   __testApplyOverlaysFromHash,
   browserSelection,
   discardWindowSession,
+  fileOps,
   graphReloadSignal,
   onWatchEvent,
   openFsGraphForDirectory,
@@ -652,6 +653,81 @@ describe("window commands", () => {
     expect(tab.expanded).toEqual(["notes"]);
     expect(tab.inspectorOpen).toBe(true);
     expect(browserSelection.path).toBe("notes/today.md");
+  });
+
+  test("download routes to fileOps.downloadPathWithProgress with the server-resolved is_dir (A4)", () => {
+    window.history.replaceState(null, "", "/?w=window-a");
+    const spy = vi
+      .spyOn(fileOps, "downloadPathWithProgress")
+      .mockImplementation(() => {});
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "download",
+      path: "notes/a.md",
+      is_dir: false,
+    });
+    expect(spy).toHaveBeenCalledWith("notes/a.md", false);
+
+    // The workspace root downloads as a dir (zip), mirroring the root pill.
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "download",
+      path: "",
+      is_dir: true,
+    });
+    expect(spy).toHaveBeenCalledWith("", true);
+    spy.mockRestore();
+  });
+
+  test("upload raises a file picker (the Inspector input's twin), no upload until files are picked (A4)", () => {
+    window.history.replaceState(null, "", "/?w=window-a");
+    const clickSpy = vi
+      .spyOn(HTMLInputElement.prototype, "click")
+      .mockImplementation(() => {});
+    const uploadSpy = vi
+      .spyOn(fileOps, "uploadFilesTo")
+      .mockImplementation(async () => {});
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-a",
+      command: "upload",
+      path: "notes",
+    });
+
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(uploadSpy).not.toHaveBeenCalled();
+    clickSpy.mockRestore();
+    uploadSpy.mockRestore();
+  });
+
+  test("upload / download for a DIFFERENT window are ignored (A4)", () => {
+    window.history.replaceState(null, "", "/?w=window-a");
+    const dl = vi.spyOn(fileOps, "downloadPathWithProgress").mockImplementation(() => {});
+    const clickSpy = vi
+      .spyOn(HTMLInputElement.prototype, "click")
+      .mockImplementation(() => {});
+
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-OTHER",
+      command: "download",
+      path: "notes/a.md",
+      is_dir: false,
+    });
+    onWatchEvent({
+      type: "window_command",
+      window_id: "window-OTHER",
+      command: "upload",
+      path: "notes",
+    });
+    expect(dl).not.toHaveBeenCalled();
+    expect(clickSpy).not.toHaveBeenCalled();
+    dl.mockRestore();
+    clickSpy.mockRestore();
   });
 });
 

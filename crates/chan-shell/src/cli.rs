@@ -73,6 +73,21 @@ pub enum ShellAction {
         #[arg(long = "carousel-off")]
         carousel_off: bool,
     },
+    /// Upload files into the current window, raising the SAME upload UI as the
+    /// Inspector pill (a file picker, then a progress indicator). Targets a
+    /// directory: with PATH a directory, files land there; with PATH a file,
+    /// they land in its parent; without PATH, the workspace root.
+    Upload {
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        path: Option<PathBuf>,
+    },
+    /// Download a workspace file or directory through the current window,
+    /// reusing the Inspector's download-with-progress UI (a directory downloads
+    /// as a zip). PATH defaults to the terminal's current directory.
+    Download {
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
+        path: Option<PathBuf>,
+    },
     /// Terminal operations against the current window's live sessions.
     ///
     /// Prefix matching applies here too: `cs t n` / `cs t w` / `cs t l`
@@ -666,6 +681,36 @@ pub async fn dispatch(action: ShellAction) -> Result<()> {
                     window_id: env.window_id,
                     carousel_index,
                     carousel_off,
+                },
+            )
+            .await?;
+            eprintln!("{message}");
+            Ok(())
+        }
+        ShellAction::Upload { path } => {
+            let env = open_env()?;
+            // No path -> target the terminal's cwd (the server relativizes it
+            // to a workspace dir, falling back to the root).
+            let abs = absolutize(path.unwrap_or(PathBuf::from(".")))?;
+            let message = send_control_request(
+                &env.control_socket,
+                ControlRequest::Upload {
+                    window_id: env.window_id,
+                    path: abs,
+                },
+            )
+            .await?;
+            eprintln!("{message}");
+            Ok(())
+        }
+        ShellAction::Download { path } => {
+            let env = open_env()?;
+            let abs = absolutize(path.unwrap_or(PathBuf::from(".")))?;
+            let message = send_control_request(
+                &env.control_socket,
+                ControlRequest::Download {
+                    window_id: env.window_id,
+                    path: abs,
                 },
             )
             .await?;

@@ -800,6 +800,22 @@ type WindowCommandFrame =
   | {
       type: "window_command";
       window_id: string;
+      command: "upload";
+      // Workspace-relative target directory ("" = workspace root).
+      path: string;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
+      command: "download";
+      // Workspace-relative file/dir path ("" = workspace root).
+      path: string;
+      // Server-resolved (the SPA names the download / a dir downloads as a zip).
+      is_dir: boolean;
+    }
+  | {
+      type: "window_command";
+      window_id: string;
       command: "open_survey";
       survey: SurveySpec;
       // The target terminal's name (the survey's `--tab-name`), camelCase
@@ -1070,6 +1086,33 @@ function terminalSlotForName(name: string): string | null {
   return t?.id ?? null;
 }
 
+/// Raise a file picker and upload the chosen files into `destDir`, the
+/// programmatic twin of the Inspector pill's hidden `<input type=file>`: a `cs
+/// upload` has no DOM input to click, so synthesize one and hand the picked
+/// files to the SAME `fileOps.uploadFilesTo` the pill uses (shared
+/// transfer-progress indicator). The input is detached after a pick OR a
+/// cancel; an empty selection is a no-op.
+function raiseUploadPicker(destDir: string): void {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = true;
+  input.style.display = "none";
+  input.addEventListener(
+    "change",
+    () => {
+      const files = input.files;
+      input.remove();
+      if (files && files.length > 0) void fileOps.uploadFilesTo(destDir, files);
+    },
+    { once: true },
+  );
+  // Reclaim the detached input when the picker is dismissed without a pick
+  // (the `change` event never fires on cancel).
+  input.addEventListener("cancel", () => input.remove(), { once: true });
+  document.body.appendChild(input);
+  input.click();
+}
+
 async function handleWindowCommand(raw: unknown): Promise<void> {
   const frame = raw as Partial<WindowCommandFrame> | null;
   if (!frame || frame.window_id !== sessionWindowId()) return;
@@ -1134,6 +1177,20 @@ async function handleWindowCommand(raw: unknown): Promise<void> {
     }
     setTransientStatus("opened dashboard");
     scheduleSessionSave();
+    return;
+  }
+  if (frame.command === "upload" && typeof frame.path === "string") {
+    // `cs upload`: raise the SAME upload UI the Inspector pill uses — open a
+    // file picker, then hand the picked files to fileOps.uploadFilesTo (which
+    // drives the shared transfer-progress indicator). Reuse, not a parallel path.
+    raiseUploadPicker(frame.path);
+    setTransientStatus(`upload to ${frame.path || "/"}`);
+    return;
+  }
+  if (frame.command === "download" && typeof frame.path === "string") {
+    // `cs download`: reuse the Inspector's download-with-progress action.
+    fileOps.downloadPathWithProgress(frame.path, frame.is_dir === true);
+    setTransientStatus(`downloading ${frame.path || "/"}`);
     return;
   }
   if (frame.command === "open_survey" && frame.survey) {

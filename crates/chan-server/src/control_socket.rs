@@ -77,6 +77,19 @@ enum WindowCommand {
         #[serde(skip_serializing_if = "is_false")]
         carousel_off: bool,
     },
+    // `cs upload` / `cs download`: raise the Inspector upload / download UI in
+    // the originating window, reusing the SPA's fileOps (not a parallel path).
+    // Both paths are workspace-relative ("" = workspace root). Upload targets a
+    // directory; download carries `is_dir` (resolved server-side via stat) so
+    // the SPA names the download correctly. Fire-and-forget like the open_*
+    // commands.
+    Upload {
+        path: String,
+    },
+    Download {
+        path: String,
+        is_dir: bool,
+    },
     // Raise the `cs terminal survey` overlay. The SurveySpec nests under
     // `survey` (it is camelCase, unlike the snake_case sibling fields, so
     // nesting keeps the two conventions from mixing in one object). The SPA
@@ -524,6 +537,26 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 carousel_off,
                 events_tx,
             ))
+        }
+        ControlRequest::Upload { window_id, path } => {
+            if let Err(message) = require_window_id(&window_id) {
+                return ControlResponse::Error { message };
+            }
+            let workspace = match workspace_from_cell(workspace_cell, tenant) {
+                Ok(workspace) => workspace,
+                Err(message) => return ControlResponse::Error { message },
+            };
+            into_response(upload_path(&workspace, &window_id, &path, events_tx))
+        }
+        ControlRequest::Download { window_id, path } => {
+            if let Err(message) = require_window_id(&window_id) {
+                return ControlResponse::Error { message };
+            }
+            let workspace = match workspace_from_cell(workspace_cell, tenant) {
+                Ok(workspace) => workspace,
+                Err(message) => return ControlResponse::Error { message },
+            };
+            into_response(download_path(&workspace, &window_id, &path, events_tx))
         }
         ControlRequest::TermWrite {
             tab_name,
@@ -1723,6 +1756,71 @@ fn open_dashboard(
         events_tx,
     )?;
     Ok("dashboard request queued".into())
+}
+
+/// Category 1: raise the file-upload UI in the originating window, targeting a
+/// directory. `requested` is the CLI-absolutized path; we relativize it and,
+/// when it points at a FILE (or doesn't resolve to a directory), target its
+/// parent so the upload always lands in a folder. An empty rel (the workspace
+/// root) targets the root, mirroring the workspace-root Inspector pill. Reuses
+/// the SPA's `fileOps.uploadFilesTo` (no parallel upload path).
+fn upload_path(
+    workspace: &Workspace,
+    window_id: &str,
+    requested: &Path,
+    events_tx: &broadcast::Sender<String>,
+) -> Result<String, String> {
+    let rel = abs_to_workspace_rel(workspace.root(), requested)?;
+    let dir = if rel.is_empty() || workspace.stat(&rel).map(|s| s.is_dir).unwrap_or(false) {
+        rel
+    } else {
+        parent_rel(&rel)
+    };
+    send_window_command(
+        window_id,
+        WindowCommand::Upload { path: dir.clone() },
+        events_tx,
+    )?;
+    Ok(if dir.is_empty() {
+        "upload request queued for /".into()
+    } else {
+        format!("upload request queued for {dir}")
+    })
+}
+
+/// Category 1: raise the download-with-progress UI in the originating window
+/// for `requested` (the CLI-absolutized path). We relativize it and resolve
+/// `is_dir` via stat so the SPA names the download (a directory downloads as a
+/// zip). The workspace root is downloadable (is_dir, like the workspace-root
+/// Inspector pill). Reuses the SPA's `fileOps.downloadPathWithProgress`.
+fn download_path(
+    workspace: &Workspace,
+    window_id: &str,
+    requested: &Path,
+    events_tx: &broadcast::Sender<String>,
+) -> Result<String, String> {
+    let rel = abs_to_workspace_rel(workspace.root(), requested)?;
+    let is_dir = if rel.is_empty() {
+        true
+    } else {
+        workspace
+            .stat(&rel)
+            .map_err(|e| format!("stat {rel}: {e}"))?
+            .is_dir
+    };
+    send_window_command(
+        window_id,
+        WindowCommand::Download {
+            path: rel.clone(),
+            is_dir,
+        },
+        events_tx,
+    )?;
+    Ok(if rel.is_empty() {
+        "download request queued for /".into()
+    } else {
+        format!("download request queued for {rel}")
+    })
 }
 
 /// Category 2: ENQUEUE bytes onto the matching live sessions' write queues.
