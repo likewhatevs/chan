@@ -1178,7 +1178,9 @@ async fn cmd_remove(path: PathBuf) -> Result<()> {
     // flock and would otherwise fail `WorkspaceLocked` on a live serve.
     // Best-effort — if we can't reach the holder, fall through and let the
     // reset surface the real error.
-    let _ = unserve_running(&lib, &path).await;
+    // `remove: true` so a devserver/desktop host also unregisters the
+    // workspace from its own library + overlay (not just the local config.toml).
+    let _ = unserve_running(&lib, &path, true).await;
     remove_from_registry(&lib, &path)
 }
 
@@ -1216,7 +1218,11 @@ fn remove_from_registry(lib: &Library, path: &Path) -> Result<()> {
 /// registry (`chan workspace rm`), INDEPENDENT of the teardown outcome.
 async fn cmd_close(path: PathBuf, remove: bool) -> Result<()> {
     let lib = library()?;
-    match unserve_running(&lib, &path).await {
+    // Pass `remove` through so a host (devserver/desktop) that serves this
+    // workspace also unregisters it from its own library + overlay; the local
+    // `remove_from_registry` below then handles the caller's config.toml +
+    // metadata (and the not-served / standalone cases the host can't).
+    match unserve_running(&lib, &path, remove).await {
         Ok(UnserveOutcome::Unserved) => println!("closed: {}", path.display()),
         Ok(UnserveOutcome::NotServed) => println!("(not served: {})", path.display()),
         // A reachable-but-failed teardown is still "best effort": report it,
@@ -1245,7 +1251,13 @@ enum UnserveOutcome {
 /// control socket, asks it to tear down (the server decides scope: a
 /// dedicated serve exits, a devserver/desktop unmounts just that tenant),
 /// and waits for the flock to release.
-async fn unserve_running(lib: &Library, path: &Path) -> Result<UnserveOutcome> {
+///
+/// With `remove`, a HOST (devserver / desktop) also UNREGISTERS the workspace
+/// from its library + overlay, so the removal is reflected in the host's own
+/// registry — not just the caller's local `config.toml`. This is what keeps a
+/// devserver-served workspace from lingering in the launcher (and surviving a
+/// restart) after `chan close --remove` / `chan workspace rm`.
+async fn unserve_running(lib: &Library, path: &Path, remove: bool) -> Result<UnserveOutcome> {
     let Some(paths) = lib.workspace_paths_for(path) else {
         return Ok(UnserveOutcome::NotServed); // not registered => nothing serving
     };
@@ -1261,10 +1273,13 @@ async fn unserve_running(lib: &Library, path: &Path) -> Result<UnserveOutcome> {
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     chan_shell::send_control_request(
         &socket,
-        chan_shell::ControlRequest::Close { path: canonical },
+        chan_shell::ControlRequest::Close {
+            path: canonical,
+            remove,
+        },
     )
     .await
-    .with_context(|| format!("asking the server (pid {}) to unserve", record.pid))?;
+    .with_context(|| format!("asking the server (pid {}) to tear down", record.pid))?;
     wait_for_lock_release(&paths.lock);
     Ok(UnserveOutcome::Unserved)
 }

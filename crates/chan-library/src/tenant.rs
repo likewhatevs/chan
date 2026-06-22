@@ -51,9 +51,20 @@ pub trait WorkspaceCellHandle: Send + Sync {
 /// as `Weak<dyn HostControl>` so the control socket never names the concrete
 /// host type.
 pub trait HostControl: Send + Sync {
-    /// Unmount the hosted tenant whose root matches `root` (the `chan unserve`
+    /// Unmount the hosted tenant whose root matches `root` (the `chan close`
     /// over-the-host path). `Ok(false)` when no tenant owns that path.
     fn close_workspace_for_root(&self, root: &Path) -> Result<bool, Error>;
+
+    /// Remove the workspace at `root` from this host: unmount it, UNREGISTER it
+    /// from the host library, and forget it from the on/off overlay — the
+    /// over-the-control-socket equivalent of the launcher's `DELETE
+    /// /api/library/workspaces/{id}` (`chan close --remove` / `chan workspace
+    /// rm` of a workspace this host serves). Runs IN the host process so the
+    /// host's in-memory library + the persisted overlay both reflect it (a
+    /// CLI-local `config.toml` edit would leave the host's caches stale and the
+    /// workspace lingering in the launcher / surviving a restart). `Ok(false)`
+    /// when no workspace was registered for `root`.
+    fn remove_workspace_for_root(&self, root: &Path) -> Result<bool, Error>;
 
     /// The full library window set — every window across every tenant, as the
     /// authoritative records `cs window list` and the launcher render. Assembled

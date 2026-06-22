@@ -943,9 +943,14 @@ impl WorkspaceHost {
 
     /// Close the mounted workspace whose root matches `root` (by canonical
     /// form), returning whether one was found and closed. The control-socket
-    /// `Unserve` handler uses this to unmount a single hosted tenant by path
+    /// `Close` handler uses this to unmount a single hosted tenant by path
     /// without disturbing the rest of the host. A terminal tenant (no
     /// workspace root) never matches a real workspace root.
+    ///
+    /// On a successful unmount it also records the workspace OFF in the on/off
+    /// overlay, so a devserver restart (which re-mounts from the overlay) does
+    /// not bring a just-closed workspace back up. The launcher's in-memory view
+    /// already reflects the unmount; this persists it.
     pub fn close_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
         let target = canonical_key(root);
         let prefix = {
@@ -959,9 +964,39 @@ impl WorkspaceHost {
                 .map(|runtime| runtime.handle.prefix.clone())
         };
         match prefix {
-            Some(prefix) => self.close_workspace(&prefix),
+            Some(prefix) => {
+                let closed = self.close_workspace(&prefix)?;
+                if closed {
+                    if let Some(overlay) = self.workspace_overlay() {
+                        overlay.set(&root.to_string_lossy(), false);
+                    }
+                }
+                Ok(closed)
+            }
             None => Ok(false),
         }
+    }
+
+    /// Remove the workspace at `root`: unmount it if mounted, UNREGISTER it from
+    /// the host library, then forget it from the on/off overlay. The
+    /// over-the-control-socket equivalent of the launcher's `DELETE
+    /// /api/library/workspaces/{id}` (`handle_remove_workspace`), so `chan close
+    /// --remove` / `chan workspace rm` of a workspace this host serves removes
+    /// it everywhere — not just from the caller's local `config.toml`. Runs in
+    /// the host process so the host's in-memory library + the persisted overlay
+    /// stay consistent (a CLI-side `config.toml` edit alone would leave them
+    /// stale, so the workspace lingers in the launcher and survives a restart).
+    /// Returns whether a workspace was registered for `root`.
+    pub fn remove_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
+        // Unmount first (releases the per-workspace flock before the unregister's
+        // reset); a no-op when the workspace is registered-but-off or not held here.
+        let _ = self.close_workspace_for_root(root);
+        let removed = self.library().unregister_workspace(root)?;
+        // Forget the on/off state so a devserver restart doesn't re-mount it.
+        if let Some(overlay) = self.workspace_overlay() {
+            overlay.forget(&root.to_string_lossy());
+        }
+        Ok(removed)
     }
 
     /// Close the workspace mounted at `prefix`.
@@ -1167,6 +1202,10 @@ impl WorkspaceHost {
 impl HostControl for WorkspaceHost {
     fn close_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
         self.close_workspace_for_root(root)
+    }
+
+    fn remove_workspace_for_root(&self, root: &Path) -> Result<bool, Error> {
+        self.remove_workspace_for_root(root)
     }
 
     fn assemble_window_records(&self) -> Vec<WindowRecord> {

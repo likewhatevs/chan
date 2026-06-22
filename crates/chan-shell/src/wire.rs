@@ -247,8 +247,17 @@ pub enum ControlRequest {
     // `chan devserver` / chan-desktop) unmounts just that tenant and keeps
     // running. The client carries no scope hint — the server knows its own
     // kind. `path` is the canonical workspace root.
+    //
+    // `remove` carries the `--remove` intent through to a HOST so the host
+    // also UNREGISTERS the workspace from its library + on/off overlay (the
+    // `DELETE /api/library/workspaces/{id}` equivalent) — without it, removing
+    // only the caller's local `config.toml` leaves a devserver-served workspace
+    // lingering in the launcher and surviving a restart. A standalone serve
+    // ignores it (it exits either way; the caller forgets the local registry).
     Close {
         path: PathBuf,
+        #[serde(default)]
+        remove: bool,
     },
 }
 
@@ -592,19 +601,26 @@ mod survey_wire_tests {
     }
 
     #[test]
-    fn close_request_tag_and_path() {
-        // Pin the `chan close` transport wire: tag `close`, a single
-        // `path` (the canonical workspace root). A rename here would silently
-        // break `cmd_close` ↔ the control-socket handler.
+    fn close_request_tag_path_and_remove() {
+        // Pin the `chan close` transport wire: tag `close`, the canonical
+        // workspace `path`, and the `--remove` flag a HOST reads to also
+        // unregister. A rename here would silently break `cmd_close` ↔ the
+        // control-socket handler.
         let req = ControlRequest::Close {
             path: PathBuf::from("/home/u/notes"),
+            remove: true,
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(v["type"], "close");
         assert_eq!(v["path"], "/home/u/notes");
+        assert_eq!(v["remove"], true);
         let back: ControlRequest =
             serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
-        assert!(matches!(back, ControlRequest::Close { .. }));
+        assert!(matches!(back, ControlRequest::Close { remove: true, .. }));
+
+        // `remove` defaults to false when omitted (a plain `chan close`).
+        let back: ControlRequest = serde_json::from_str(r#"{"type":"close","path":"/x"}"#).unwrap();
+        assert!(matches!(back, ControlRequest::Close { remove: false, .. }));
     }
 
     #[test]

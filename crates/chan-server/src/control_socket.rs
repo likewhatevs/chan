@@ -749,7 +749,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 .await
                 .map(|()| format!("hid window {id}")),
         ),
-        ControlRequest::Close { path } => handle_unserve(unserve, &path).await,
+        ControlRequest::Close { path, remove } => handle_unserve(unserve, &path, remove).await,
     }
 }
 
@@ -759,7 +759,13 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
 /// process exits and the flock releases; a multi-tenant host unmounts just
 /// that tenant; an opt-out process refuses. The response still flushes before
 /// a standalone process drains and exits.
-async fn handle_unserve(scope: &UnserveScope, path: &Path) -> ControlResponse {
+///
+/// `remove` carries `chan close --remove` (and `chan workspace rm`) through to
+/// a HOST: it then also UNREGISTERS the workspace from its library + overlay
+/// (so a devserver-served workspace disappears from the launcher and does not
+/// survive a restart), not just unmounts it. A standalone serve ignores it —
+/// it exits either way, and the caller forgets the local registry.
+async fn handle_unserve(scope: &UnserveScope, path: &Path, remove: bool) -> ControlResponse {
     match scope {
         UnserveScope::Standalone { root, shutdown_tx } => {
             if !same_path(root, path) {
@@ -779,6 +785,21 @@ async fn handle_unserve(scope: &UnserveScope, path: &Path) -> ControlResponse {
         UnserveScope::Host(weak) => match weak.upgrade() {
             None => ControlResponse::Error {
                 message: "host is shutting down".into(),
+            },
+            // `--remove` routes through the host's registry+overlay removal (the
+            // `DELETE /api/library/workspaces/{id}` equivalent), so the host's
+            // own library + persisted overlay reflect it; a plain close just
+            // unmounts the tenant and keeps the registration.
+            Some(host) if remove => match host.remove_workspace_for_root(path) {
+                Ok(true) => ControlResponse::Ok {
+                    message: format!("removed {}", path.display()),
+                },
+                Ok(false) => ControlResponse::Error {
+                    message: format!("no workspace registered for {}", path.display()),
+                },
+                Err(e) => ControlResponse::Error {
+                    message: format!("removing {}: {e}", path.display()),
+                },
             },
             Some(host) => match host.close_workspace_for_root(path) {
                 Ok(true) => ControlResponse::Ok {
@@ -2100,7 +2121,7 @@ mod tests {
             root: dir.path().to_path_buf(),
             shutdown_tx: Arc::new(tx),
         };
-        let resp = handle_unserve(&scope, dir.path()).await;
+        let resp = handle_unserve(&scope, dir.path(), false).await;
         assert!(matches!(resp, ControlResponse::Ok { .. }));
         assert!(*rx.borrow(), "matching root fires the shutdown signal");
     }
@@ -2114,7 +2135,7 @@ mod tests {
             root: served.path().to_path_buf(),
             shutdown_tx: Arc::new(tx),
         };
-        let resp = handle_unserve(&scope, other.path()).await;
+        let resp = handle_unserve(&scope, other.path(), false).await;
         assert!(matches!(resp, ControlResponse::Error { .. }));
         assert!(!*rx.borrow(), "a foreign root must NOT fire shutdown");
     }
@@ -2122,7 +2143,7 @@ mod tests {
     #[tokio::test]
     async fn unserve_unsupported_refuses() {
         let dir = tempfile::tempdir().expect("root");
-        let resp = handle_unserve(&UnserveScope::Unsupported, dir.path()).await;
+        let resp = handle_unserve(&UnserveScope::Unsupported, dir.path(), false).await;
         assert!(matches!(resp, ControlResponse::Error { .. }));
     }
 

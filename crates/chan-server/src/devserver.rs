@@ -393,12 +393,35 @@ impl DevserverState {
         // Workspace on/off → the library-owned overlay store. The overlay sorts
         // by path on save for a stable file.
         if let Some(overlay) = self.host.workspace_overlay() {
+            // Reconcile against the HOST before persisting, not the in-memory
+            // map alone: a control-socket `chan close --remove` unregisters a
+            // workspace from the library without touching this map, and a plain
+            // `chan close` unmounts it without updating the map's `on`. Trusting
+            // the stale map would re-grow a removed workspace into the overlay
+            // and persist a closed one as on, so a restart resurrects it. Drop
+            // rows no longer registered in the library, and take `on` from what
+            // is ACTUALLY mounted now. (The map stays the row SOURCE so a
+            // registered-but-off row the devserver tracks still survives.)
+            let registered: std::collections::HashSet<PathBuf> = self
+                .host
+                .library()
+                .list_workspaces()
+                .into_iter()
+                .map(|w| canonical_root(&w.root_path))
+                .collect();
+            let mounted: std::collections::HashSet<String> = self
+                .host
+                .mounted_prefixes()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
             let rows: Vec<PersistedWorkspace> = {
                 let map = self.workspaces.lock().unwrap_or_else(|e| e.into_inner());
                 map.values()
+                    .filter(|record| registered.contains(&canonical_root(&record.root)))
                     .map(|record| PersistedWorkspace {
                         path: record.root.to_string_lossy().into_owned(),
-                        on: record.on,
+                        on: mounted.contains(&record.prefix),
                     })
                     .collect()
             };
@@ -1035,6 +1058,14 @@ fn workspace_label(root: &Path) -> String {
         .unwrap_or_else(|| root.display().to_string())
 }
 
+/// Canonical form of a workspace root for cross-store comparison (the library
+/// registers canonical roots; the overlay/map store them as written). Falls
+/// back to the path as-is when it no longer resolves on disk so a vanished
+/// root still compares equal to its own stored form.
+fn canonical_root(root: &Path) -> PathBuf {
+    std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1513,6 +1544,104 @@ mod tests {
         let canonical = ws.path().canonicalize().expect("canonicalize workspace");
         assert_eq!(rows[0].path, canonical.to_string_lossy());
         assert!(!rows[0].on);
+    }
+
+    #[tokio::test]
+    async fn host_remove_is_not_resurrected_by_a_later_persist() {
+        // `chan close --remove` routes through the HOST (remove_workspace_for_root),
+        // which the devserver in-memory map never sees. A later persist_state (here,
+        // a new registration) must NOT re-grow the removed workspace into the
+        // overlay from that stale map — persist reconciles against the library.
+        let home = tempfile::tempdir().expect("home");
+        let ws_a = tempfile::tempdir().expect("ws a");
+        let ws_b = tempfile::tempdir().expect("ws b");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        state
+            .register_workspace(ws_a.path())
+            .await
+            .expect("mount a");
+        state
+            .register_workspace(ws_b.path())
+            .await
+            .expect("mount b");
+
+        // Remove A the over-the-control-socket way (host-level), bypassing the map.
+        assert!(state
+            .host
+            .remove_workspace_for_root(ws_a.path())
+            .expect("remove a"));
+
+        // A guaranteed persist_state.
+        let ws_c = tempfile::tempdir().expect("ws c");
+        state
+            .register_workspace(ws_c.path())
+            .await
+            .expect("mount c");
+
+        let canon = |d: &tempfile::TempDir| {
+            d.path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let paths: Vec<String> = state
+            .host
+            .workspace_overlay()
+            .expect("overlay")
+            .entries()
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+        assert!(
+            !paths.contains(&canon(&ws_a)),
+            "removed A must not be re-persisted: {paths:?}"
+        );
+        assert!(paths.contains(&canon(&ws_b)), "B persists: {paths:?}");
+        assert!(paths.contains(&canon(&ws_c)), "C persists: {paths:?}");
+    }
+
+    #[tokio::test]
+    async fn host_close_persists_off_through_a_later_persist() {
+        // A plain `chan close` (host-level close_workspace_for_root) records the
+        // workspace OFF, and a later persist_state must keep it off (derive `on`
+        // from what is mounted) rather than flip it back on from the stale map —
+        // else a restart re-mounts a just-closed workspace.
+        let home = tempfile::tempdir().expect("home");
+        let ws_a = tempfile::tempdir().expect("ws a");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+
+        state
+            .register_workspace(ws_a.path())
+            .await
+            .expect("mount a");
+        assert!(state
+            .host
+            .close_workspace_for_root(ws_a.path())
+            .expect("close a"));
+
+        // A later persist (a new registration).
+        let ws_b = tempfile::tempdir().expect("ws b");
+        state
+            .register_workspace(ws_b.path())
+            .await
+            .expect("mount b");
+
+        let canon = ws_a
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let rows = state.host.workspace_overlay().expect("overlay").entries();
+        let a = rows
+            .iter()
+            .find(|r| r.path == canon)
+            .expect("A is still registered (off)");
+        assert!(!a.on, "closed A stays off across a later persist_state");
     }
 
     #[tokio::test]
