@@ -21,7 +21,7 @@
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chan_server::{DevserverEntry, DevserverInput, DevserverRegistry};
@@ -200,6 +200,15 @@ impl ConfigStore {
     }
 }
 
+/// Side effect run after a devserver row is removed via the registry's
+/// [`remove`](DevserverRegistry::remove) (the HTTP `DELETE` path), so reaping a
+/// live connection/windows matches the Tauri `remove_devserver` command. Set
+/// once, after the Tauri `AppHandle` exists (the registry installs before it),
+/// via the shared [`OnceLock`] cell — the chan-server-side registry can't see
+/// the `AppHandle` directly, so the desktop injects the teardown as a closure.
+/// A no-op when nothing is live (removing a not-connected devserver).
+pub type DevserverRemoveHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// chan-desktop's [`DevserverRegistry`] implementation — the bridge the
 /// launcher's `/api/library/devservers` routes reach through
 /// [`WorkspaceHost::devserver_registry`](chan_server::WorkspaceHost::devserver_registry).
@@ -213,11 +222,16 @@ impl ConfigStore {
 /// token on update keeps the stored one.
 pub struct DevserverConfigRegistry {
     store: Arc<Mutex<ConfigStore>>,
+    /// Filled (once the `AppHandle` exists) with the live-connection teardown;
+    /// `remove` fires it after dropping a row so the HTTP `DELETE` reaps the
+    /// same connection/windows the Tauri command does. Empty until then (and on
+    /// headless surfaces) — `remove` then only drops the config row.
+    on_remove: Arc<OnceLock<DevserverRemoveHook>>,
 }
 
 impl DevserverConfigRegistry {
-    pub fn new(store: Arc<Mutex<ConfigStore>>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<Mutex<ConfigStore>>, on_remove: Arc<OnceLock<DevserverRemoveHook>>) -> Self {
+        Self { store, on_remove }
     }
 }
 
@@ -297,14 +311,23 @@ impl DevserverRegistry for DevserverConfigRegistry {
     }
 
     fn remove(&self, id: &str) -> Result<bool, String> {
-        let mut store = self.store.lock().unwrap();
-        let mut cfg = store.get().map_err(|e| e.to_string())?;
-        let before = cfg.devservers.len();
-        cfg.devservers.retain(|d| d.id != id);
-        if cfg.devservers.len() == before {
-            return Ok(false);
+        {
+            let mut store = self.store.lock().unwrap();
+            let mut cfg = store.get().map_err(|e| e.to_string())?;
+            let before = cfg.devservers.len();
+            cfg.devservers.retain(|d| d.id != id);
+            if cfg.devservers.len() == before {
+                return Ok(false);
+            }
+            store.save(&cfg).map_err(|e| e.to_string())?;
         }
-        store.save(&cfg).map_err(|e| e.to_string())?;
+        // Row dropped: reap any live connection/windows so the HTTP DELETE
+        // matches the Tauri command's teardown. The store lock is released
+        // above first — the teardown locks the other AppState maps, never the
+        // store. A no-op when the devserver wasn't connected.
+        if let Some(hook) = self.on_remove.get() {
+            hook(id);
+        }
         Ok(true)
     }
 }
@@ -602,7 +625,7 @@ mod tests {
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
         }));
-        let reg = DevserverConfigRegistry::new(Arc::clone(&store));
+        let reg = DevserverConfigRegistry::new(Arc::clone(&store), Arc::new(OnceLock::new()));
         let added = reg
             .add(DevserverInput {
                 url: "https://box.example.com:8787".into(),
@@ -631,7 +654,7 @@ mod tests {
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
         }));
-        let reg = DevserverConfigRegistry::new(Arc::clone(&store));
+        let reg = DevserverConfigRegistry::new(Arc::clone(&store), Arc::new(OnceLock::new()));
         let id = reg
             .add(DevserverInput {
                 url: "http://127.0.0.1:8787".into(),
@@ -677,7 +700,7 @@ mod tests {
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
         }));
-        let reg = DevserverConfigRegistry::new(store);
+        let reg = DevserverConfigRegistry::new(store, Arc::new(OnceLock::new()));
         let missing = reg
             .update(
                 "nope",
@@ -691,13 +714,46 @@ mod tests {
         assert!(!reg.remove("nope").expect("remove ok"));
     }
 
+    /// `remove` fires the teardown hook ONLY when a row was actually dropped,
+    /// with that id — so the HTTP DELETE reaps the live connection, and a
+    /// missing-id remove (or a not-found) doesn't fire a spurious teardown.
+    #[test]
+    fn registry_remove_fires_hook_only_when_a_row_was_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let fired: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let hook_cell: Arc<OnceLock<DevserverRemoveHook>> = Arc::new(OnceLock::new());
+        let fired_for_hook = Arc::clone(&fired);
+        hook_cell
+            .set(Arc::new(move |id: &str| {
+                fired_for_hook.lock().unwrap().push(id.to_string())
+            }))
+            .ok();
+        let reg = DevserverConfigRegistry::new(Arc::clone(&store), Arc::clone(&hook_cell));
+        let id = reg
+            .add(DevserverInput {
+                url: "http://127.0.0.1:8787".into(),
+                ..Default::default()
+            })
+            .expect("add")
+            .id;
+        // Missing id: nothing dropped → hook must NOT fire.
+        assert!(!reg.remove("nope").expect("remove ok"));
+        assert!(fired.lock().unwrap().is_empty());
+        // Real id: row dropped → hook fires once with that id.
+        assert!(reg.remove(&id).expect("remove ok"));
+        assert_eq!(fired.lock().unwrap().as_slice(), &[id]);
+    }
+
     #[test]
     fn registry_add_rejects_a_bad_url() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
         }));
-        let reg = DevserverConfigRegistry::new(store);
+        let reg = DevserverConfigRegistry::new(store, Arc::new(OnceLock::new()));
         assert!(reg
             .add(DevserverInput {
                 url: "not a url".into(),

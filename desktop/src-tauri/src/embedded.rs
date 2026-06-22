@@ -12,7 +12,7 @@ use axum::Router;
 use chan_server::{DesktopBridge, DesktopWindowOp, SharedWindowTitles, WindowRecord, WindowTitles};
 use tokio::sync::{mpsc, watch, Notify};
 
-use crate::config::{ConfigStore, DevserverConfigRegistry};
+use crate::config::{ConfigStore, DevserverConfigRegistry, DevserverRemoveHook};
 use crate::serve;
 
 /// Bound on the window-ops channel: interactive `cs window` calls are
@@ -43,7 +43,10 @@ pub struct EmbeddedServer {
 }
 
 impl EmbeddedServer {
-    pub async fn start(config_store: Arc<Mutex<ConfigStore>>) -> Result<Self, String> {
+    pub async fn start(
+        config_store: Arc<Mutex<ConfigStore>>,
+        devserver_remove_hook: Arc<OnceLock<DevserverRemoveHook>>,
+    ) -> Result<Self, String> {
         let library = chan_workspace::Library::open()
             .map_err(|e| format!("opening chan workspace registry for embedded server: {e}"))?;
         // Install the desktop bridge: a window-ops channel (the consumer
@@ -77,7 +80,10 @@ impl EmbeddedServer {
         // desktop reads (the shared store handle) — mirror of the workspace
         // overlay above. The headless devserver / plain `chan serve` install
         // none (empty list, 404 mutation).
-        host.install_devserver_registry(Arc::new(DevserverConfigRegistry::new(config_store)));
+        host.install_devserver_registry(Arc::new(DevserverConfigRegistry::new(
+            config_store,
+            devserver_remove_hook,
+        )));
         // Install the launcher SPA as the loopback's root fallback so the
         // desktop launcher loads the same web-launcher served at `/` on every
         // surface — parity with the devserver's `build_devserver_app`. Without

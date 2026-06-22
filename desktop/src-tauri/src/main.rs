@@ -123,6 +123,13 @@ pub struct AppState {
     /// (reaping the script PTY) on disconnect/forget, and reconnect must never
     /// mistake it for a workspace window. Absent for a no-script devserver.
     pub control_terminal_prefixes: Mutex<HashMap<String, String>>,
+    /// Teardown hook the launcher's [`DevserverConfigRegistry`] fires after an
+    /// HTTP `DELETE /api/library/devservers/{id}` drops a row, so that path
+    /// reaps a live connection/windows the same way the Tauri `remove_devserver`
+    /// command does. The registry (chan-server side) can't see the `AppHandle`,
+    /// so it's installed with this shared cell and the desktop fills it (with a
+    /// closure over the `AppHandle`) once Tauri setup runs.
+    pub devserver_remove_hook: Arc<OnceLock<config::DevserverRemoveHook>>,
     /// Set when the user confirmed the quit dialog: the re-fired
     /// `ExitRequested` (from `app.exit(0)` in the dialog callback)
     /// must pass instead of prompting again.
@@ -919,6 +926,24 @@ fn teardown_devserver_windows(app: &tauri::AppHandle, state: &AppState, id: &str
     }
 }
 
+/// Fully tear down a devserver's live connection: drop the in-memory
+/// connection, stop its window watcher (which reconciles its windows away), reap
+/// its windows and control-terminal tenant, then signal the launcher to refresh.
+/// Shared by `disconnect_devserver`, `remove_devserver`, and the registry's
+/// HTTP-DELETE teardown hook so all three reap a connected devserver
+/// identically. Idempotent and a no-op when the devserver wasn't connected.
+fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &str) {
+    state.devservers.remove(id);
+    // Cancel the window watcher (it detaches its windows, not reap — the
+    // devserver keeps its set server-side); the imperative windows + control
+    // terminal are reaped by `teardown_devserver_windows` below.
+    if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(id) {
+        let _ = cancel.send(true);
+    }
+    teardown_devserver_windows(app, state, id);
+    let _ = app.emit(serve::SERVES_CHANGED, ());
+}
+
 /// Poll a devserver's info endpoint until it answers or the budget runs out.
 /// The connect script may take a moment to bring the devserver up, or prompt
 /// for credentials in the control terminal, so the wait is generous; a
@@ -1198,16 +1223,7 @@ fn disconnect_devserver(
     state: State<Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    state.devservers.remove(&id);
-    // Stop the window watcher. Flipping its cancel makes IT reconcile its windows
-    // away (detach, NOT reap: the devserver keeps its set server-side, so a later
-    // reconnect restores them). The control terminal + any residual imperative
-    // windows are torn down separately below.
-    if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(&id) {
-        let _ = cancel.send(true);
-    }
-    teardown_devserver_windows(&app, &state, &id);
-    let _ = app.emit(serve::SERVES_CHANGED, ());
+    teardown_devserver_connection(&app, &state, &id);
     Ok(())
 }
 
@@ -1463,8 +1479,6 @@ fn remove_devserver(
     state: State<Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    state.devservers.remove(&id);
-    teardown_devserver_windows(&app, &state, &id);
     {
         let mut store = state.store.lock().unwrap();
         let mut cfg = store.get().map_err(err)?;
@@ -1474,7 +1488,9 @@ fn remove_devserver(
             store.save(&cfg).map_err(err)?;
         }
     }
-    let _ = app.emit(serve::SERVES_CHANGED, ());
+    // Reap the live connection/windows (no-op when not connected). Shared with
+    // the launcher's HTTP-DELETE path so both Remove routes behave identically.
+    teardown_devserver_connection(&app, &state, &id);
     Ok(())
 }
 
@@ -1525,7 +1541,10 @@ fn register_devserver_from_handoff(
     script: Option<String>,
 ) -> Result<(), String> {
     use chan_server::{DevserverInput, DevserverRegistry};
-    let registry = config::DevserverConfigRegistry::new(Arc::clone(&state.store));
+    let registry = config::DevserverConfigRegistry::new(
+        Arc::clone(&state.store),
+        Arc::clone(&state.devserver_remove_hook),
+    );
     registry.add(DevserverInput {
         url,
         label: name,
@@ -2403,6 +2422,7 @@ fn main() {
         devserver_windows: Mutex::new(HashMap::new()),
         devserver_watchers: Mutex::new(HashMap::new()),
         control_terminal_prefixes: Mutex::new(HashMap::new()),
+        devserver_remove_hook: Arc::new(OnceLock::new()),
         quit_confirmed: std::sync::atomic::AtomicBool::new(false),
         quit_prompt_open: std::sync::atomic::AtomicBool::new(false),
     });
@@ -2425,14 +2445,31 @@ fn main() {
             #[cfg(target_os = "macos")]
             fix_macos_login_path();
 
-            // Share the desktop's config handle with the embedded host so the
-            // launcher's devserver registry persists through the same lock.
+            // Share the desktop's config handle + devserver-remove hook cell with
+            // the embedded host so the launcher's devserver registry persists
+            // through the same lock and its HTTP DELETE can reap a live connection.
             let config_store = Arc::clone(&state_for_setup.store);
-            match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(config_store)) {
+            let remove_hook = Arc::clone(&state_for_setup.devserver_remove_hook);
+            match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(
+                config_store,
+                remove_hook,
+            )) {
                 Ok(server) => {
                     if state_for_setup.embedded.set(server).is_err() {
                         tracing::warn!("embedded local server initialized more than once");
                     }
+                    // Fill the registry's remove hook now that the AppHandle
+                    // exists: the launcher's HTTP DELETE then reaps a live
+                    // devserver's connection/windows like `remove_devserver`.
+                    // The closure holds only the AppHandle (no Arc cycle) and
+                    // resolves the AppState from it at call time.
+                    let app_for_teardown = app.handle().clone();
+                    let _ = state_for_setup.devserver_remove_hook.set(Arc::new(
+                        move |id: &str| {
+                            let state = app_for_teardown.state::<Arc<AppState>>();
+                            teardown_devserver_connection(&app_for_teardown, &state, id);
+                        },
+                    ));
                     // Spawn the `cs window <op>` consumer now that the
                     // AppHandle exists: it owns the bridge receiver and
                     // turns lifecycle requests into Tauri window actions.
