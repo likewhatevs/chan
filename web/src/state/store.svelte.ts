@@ -53,6 +53,14 @@ import {
   type Tab,
 } from "./tabs.svelte";
 import { isEditableText } from "./fileTypes";
+import {
+  beginTransfer,
+  cancelTransfer,
+  failTransfer,
+  finishTransfer,
+  restoreTransfers,
+  setTransferProgress,
+} from "./transfers.svelte";
 import { isTauriDesktop, runDesktopDownload } from "../api/desktop";
 import {
   appendDefaultMd,
@@ -1521,6 +1529,15 @@ export async function bootstrap(): Promise<void> {
         await restoreLayout(reloadLayout);
       }
       if (!fresh) applyTreeExpandedReloadSnapshot();
+      // Restore the transfer bubble: terminal rows as-is; an in-flight transfer
+      // (its XHR died with the reload) becomes "interrupted", with a Retry that
+      // re-runs a download from its source (uploads cannot retry — the File is
+      // gone). Fresh windows start with no transfers.
+      if (!fresh) {
+        restoreTransfers(
+          (source) => () => fileOps.downloadPathWithProgress(source.path, source.isDir),
+        );
+      }
       // Per-overlay state from the hash lands on top of any
       // session-restored knobs so a shared URL always wins. Skipped
       // in fresh windows so the New-Window menu starts truly clean.
@@ -4023,7 +4040,9 @@ export const fileOps = {
         api.downloadUrl(path),
         window.location.href,
       ).toString();
-      void runDesktopDownload(url, downloadFilename(path, isDir));
+      // Pass the source so an interrupted download (window reload) can offer
+      // Retry from the transfer bubble.
+      void runDesktopDownload(url, downloadFilename(path, isDir), { path, isDir });
       return;
     }
     this.downloadPath(path, isDir);
@@ -4119,15 +4138,18 @@ export const fileOps = {
       cancelRequested = true;
       activeAbort?.abort();
     };
+    // The prominent transfer bubble (one aggregate row for this upload op); the
+    // status-bar text below mirrors it for the at-a-glance corner indicator.
+    const transferLabel = files.length === 1 ? files[0]!.name : `${files.length} files`;
+    const xferId = beginTransfer({ kind: "upload", filename: transferLabel, cancel });
     const setUploadStatus = (file: File, index: number, loaded: number): void => {
       const currentLoaded = Math.min(Math.max(loaded, 0), file.size);
-      const progress =
-        totalBytes > 0
-          ? Math.min(100, Math.round(((completedBytes + currentLoaded) / totalBytes) * 100))
-          : 100;
+      const frac =
+        totalBytes > 0 ? Math.min(1, (completedBytes + currentLoaded) / totalBytes) : 1;
+      setTransferProgress(xferId, frac);
       fileTransferStatus.value = {
-        label: `uploading ${index + 1}/${files.length}: ${file.name} ${progress}%`,
-        progress,
+        label: `uploading ${index + 1}/${files.length}: ${file.name} ${Math.round(frac * 100)}%`,
+        progress: Math.round(frac * 100),
         cancel,
       };
     };
@@ -4154,6 +4176,7 @@ export const fileOps = {
         uploaded.push(result.path);
         await refreshTreeForPath(result.path);
       }
+      finishTransfer(xferId);
       if (uploaded.length > 0) {
         revealAndSelect(uploaded[uploaded.length - 1]!);
         setTransientStatus(
@@ -4164,8 +4187,10 @@ export const fileOps = {
       }
     } catch (e) {
       if ((e as Error).name === "AbortError") {
+        cancelTransfer(xferId);
         setTransientStatus("Upload cancelled");
       } else {
+        failTransfer(xferId, (e as Error).message);
         ui.status = `upload failed: ${(e as Error).message}`;
         ui.statusKind = "persistent";
       }

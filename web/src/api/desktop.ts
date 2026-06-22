@@ -11,6 +11,13 @@ import {
   finishDownloadTransfer,
   setDownloadProgress,
 } from "../state/downloadTransfer.svelte";
+import {
+  beginTransfer,
+  cancelTransfer,
+  failTransfer,
+  finishTransfer,
+  setTransferProgress,
+} from "../state/transfers.svelte";
 
 type TauriWindow = Window &
   typeof globalThis & {
@@ -193,12 +200,21 @@ export async function openWebInspector(): Promise<boolean> {
 export async function runDesktopDownload(
   url: string,
   filename: string,
+  source: { path: string; isDir: boolean } | null = null,
 ): Promise<string> {
   if (!isTauriDesktop()) {
     throw new Error("runDesktopDownload called outside chan-desktop");
   }
   const xhr = new XMLHttpRequest();
   beginDownloadTransfer(filename, () => xhr.abort());
+  // The prominent transfer bubble (alongside the inspector indicator above).
+  // `source` lets an interrupted download offer Retry after a window reload.
+  const xferId = beginTransfer({
+    kind: "download",
+    filename,
+    cancel: () => xhr.abort(),
+    source,
+  });
   try {
     const bytes = await new Promise<Uint8Array>((resolve, reject) => {
       xhr.open("GET", url);
@@ -206,11 +222,10 @@ export async function runDesktopDownload(
       xhr.onprogress = (event) => {
         // Content-Length present -> a real ratio; otherwise leave the
         // indicator indeterminate (null) rather than faking a number.
-        setDownloadProgress(
-          event.lengthComputable && event.total > 0
-            ? event.loaded / event.total
-            : null,
-        );
+        const frac =
+          event.lengthComputable && event.total > 0 ? event.loaded / event.total : null;
+        setDownloadProgress(frac);
+        setTransferProgress(xferId, frac);
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
@@ -231,10 +246,14 @@ export async function runDesktopDownload(
       { filename, bytes: Array.from(bytes) },
     );
     finishDownloadTransfer(saved.path);
+    finishTransfer(xferId, saved.path);
     return saved.path;
   } catch (err) {
     const message = (err as Error)?.message ?? String(err);
     failDownloadTransfer(message);
+    // A user abort is a cancel, not a failure (the bubble shows "Cancelled").
+    if (message === "download cancelled") cancelTransfer(xferId);
+    else failTransfer(xferId, message);
     throw err instanceof Error ? err : new Error(message);
   }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import AppStatusBar from "./components/AppStatusBar.svelte";
+  import TransferBubble from "./components/TransferBubble.svelte";
   import ConfirmModal from "./components/ConfirmModal.svelte";
   import ConflictModal from "./components/ConflictModal.svelte";
   import DisconnectOverlay from "./components/DisconnectOverlay.svelte";
@@ -107,6 +108,7 @@
   import { applyEditorTheme, DEFAULT_EDITOR_THEME } from "./state/editorTheme";
   import { flushPendingBufferWrites, pruneEditorBuffers } from "./state/editorBuffer";
   import { isTauriDesktop, reloadWindow, requestCloseWindow } from "./api/desktop";
+  import { activeTransferCount } from "./state/transfers.svelte";
   import { currentOS } from "./state/shortcuts";
   import { api } from "./api/client";
   import {
@@ -1259,6 +1261,19 @@
     window.removeEventListener("pagehide", onUnloadFlushBuffers);
   });
 
+  // Pure-browser close guard for in-flight transfers (the desktop has its own
+  // CloseRequested hold/cancel prompt, so this is gated off on the desktop to
+  // avoid a double prompt). The XHR dies on unload, so a standard-cancellable
+  // beforeunload gives the user the chance to keep the page.
+  function onBeforeUnloadTransfers(e: BeforeUnloadEvent): void {
+    if (!isTauriDesktop() && activeTransferCount() > 0) {
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  }
+  onMount(() => window.addEventListener("beforeunload", onBeforeUnloadTransfers));
+  onDestroy(() => window.removeEventListener("beforeunload", onBeforeUnloadTransfers));
+
   /// Pane-focus-click restore: when chan-desktop is unfocused and the user
   /// clicks back, the first click should also select the pane under the
   /// cursor (not stay on the previously-focused pane). Cmd+Tab keyboard
@@ -1323,6 +1338,10 @@
      lifted above every overlay so users keep visibility on
      long-running work no matter which panel they're in. -->
 <AppStatusBar />
+<!-- The file-transfer bubble (cs upload / cs download progress + cancel),
+     opened from the status-bar transfers indicator. Mounted once, anchored to
+     the window so it floats above the panes near the status bar. -->
+<TransferBubble />
 <!-- Pane Mode (Cmd+K) cheatsheet, toggled with `h` while pane mode
      is active. Gated on the live `paneMode.active` so it auto-hides
      the moment the transaction commits / discards. -->

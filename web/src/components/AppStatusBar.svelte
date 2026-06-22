@@ -28,6 +28,7 @@
     openWorkspaceWarningsDialog,
     ui,
   } from "../state/store.svelte";
+  import { transfers, toggleTransfers } from "../state/transfers.svelte";
   import { paneMode } from "../state/tabs.svelte";
 
   let collapsed = $state(false);
@@ -48,6 +49,10 @@
   );
   const importVisible = $derived(importStatus.value !== null);
   const transferVisible = $derived(fileTransferStatus.value !== null);
+  // The transfers-bubble launcher: shown whenever any transfer record exists
+  // (active or finished), so the bubble stays reachable after a transfer ends.
+  const transfersBubbleVisible = $derived(transfers.items.length > 0);
+  const activeXfers = $derived(transfers.items.filter((t) => t.state === "active").length);
   const statusVisible = $derived(!!ui.status);
   const statusActionVisible = $derived(
     statusVisible &&
@@ -56,7 +61,12 @@
   );
   const paneModeVisible = $derived(paneMode.active);
   const anyVisible = $derived(
-    indexVisible || importVisible || transferVisible || statusVisible || paneModeVisible,
+    indexVisible ||
+      importVisible ||
+      transferVisible ||
+      transfersBubbleVisible ||
+      statusVisible ||
+      paneModeVisible,
   );
 
   function toggleCollapse(): void {
@@ -151,7 +161,22 @@
             {/if}
           </span>
         {/if}
-        {#if (indexVisible || importVisible || transferVisible) && statusVisible}
+        {#if (indexVisible || importVisible || transferVisible) && transfersBubbleVisible}
+          <span class="sep"> - </span>
+        {/if}
+        {#if transfersBubbleVisible}
+          <button
+            type="button"
+            class="section status-action"
+            aria-label="show file transfers"
+            title="Show file transfers"
+            onclick={toggleTransfers}
+          >
+            {#if activeXfers > 0}<span class="dot working"></span>{/if}
+            ⇅ Transfers ({transfers.items.length})
+          </button>
+        {/if}
+        {#if (indexVisible || importVisible || transferVisible || transfersBubbleVisible) && statusVisible}
           <span class="sep"> - </span>
         {/if}
         {#if statusVisible}
