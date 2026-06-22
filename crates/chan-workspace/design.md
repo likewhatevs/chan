@@ -33,26 +33,22 @@ Out of scope:
 
 ## 2. Architecture overview
 
-```
-                 +------------------------+
-                 |   Library (per-mach.)  |
-                 |   ~/.chan/config.toml  |
-                 |   Mutex<Registry>      |
-                 +-----------+------------+
-                             |
-                  open_workspace |
-                             v
-              +-----------------------------+
-              |     Workspace (per directory)   |
-              |     WorkspaceLock held          |
-              |  +------+------+----------+ |
-              |  | FS   | Idx  | Graph    | |
-              |  | ops  | tan- | sqlite   | |
-              |  | safe | tivy | (Mutex   | |
-              |  |      |+cand.| + pool)  | |
-              |  +------+------+----------+ |
-              |     Watcher | Report        |
-              +-----------------------------+
+```mermaid
+flowchart TB
+  Lib["Library — registry at ~/.chan"] --> WS["Workspace (writer-locked handle)"]
+  subgraph Subsystems
+    FS["Filesystem — cap-std, CAS, trash, drafts"]
+    Search["Search — tantivy BM25 (+ optional candle embeddings)"]
+    Graph["Graph — sqlite: links, tags, mentions, headings"]
+    Watch["Watch — notify -> debounced incremental index"]
+  end
+  WS --> FS
+  WS --> Search
+  WS --> Graph
+  WS --> Watch
+  Watch -. re-index .-> Search
+  Watch -. re-index .-> Graph
+  WS --> Report["report() -> chan-report"]
 ```
 
   - `Library` is a per-machine handle. Apps construct one at startup and keep it alive. It owns the registry and the config-file path.
@@ -195,6 +191,12 @@ Chunking is configurable per-index via `Chunking` (`Headings`, `WholeDoc`, `Fixe
 Embedding dominates the wall-clock cost of a full rebuild on real workspaces (BM25 is a tantivy commit per chunk, cheap; embedding scales linearly with chunk count and waits on the model). To avoid throwing that work away on a crash, the per-file vector shard carries a `body_hash` field (sha256 over the canonical `(chunk_id, body)` sequence) stamped at write time. On the next `build_all`, the per-file path re-chunks from disk, computes a fresh `body_hash`, and asks the on-disk shard for its `(model, body_hash)` pair; on match the file skips the embed queue (the vectors are still valid because identical chunks under the same model deterministically produce identical embeddings). The count of files that took the skip path surfaces as `BuildSummary.embeds_reused`, so the CLI and tests can observe partial-rebuild resumption rather than infer it.
 
 Each per-file shard under `embeddings/` carries its own `FORMAT_VERSION` (currently 2), checked per shard in `load_all`; a mismatch drops the shard silently and the next `build_all` re-embeds that file. This is intentionally independent of the schema-version wipe path: a shard-format bump should NOT invalidate BM25 segments or other shards, only the shards that actually need re-encoding. The `--no-default-features` build excludes the entire embed path including the skip check; the `embeds_reused` field stays in `BuildSummary` and reads zero.
+
+#### Embed batch cadence and the CPU backend
+
+`build_all` accumulates parsed chunks across files and flushes them to the embedder in `EMBED_BATCH_CHUNKS`-sized groups (the value comes from `SearchAggression::budget()`: 64 / 128 / 256 chunks for Conservative / Balanced / Aggressive). Each flush first commits the BM25 writer, then runs one blocking forward pass over the batch and writes the resulting per-file vector shards. Committing per flush is what makes `indexed_vectors`, the `reindex_with` progress events, and the BM25→hybrid search upgrade advance incrementally as a long cold build runs, instead of landing only when the whole pass returns: a large cold reindex would otherwise report zero vectors and a frozen progress chip for the minutes the embed takes. The cadence is deliberately kept below a typical workspace's chunk count (chunks-per-file is usually ~10), so a cold build commits in several visible steps rather than one tail flush. The batch size is a flush/commit cadence only — the embedder always runs `INFER_BATCH`-sized forward passes internally — so it carries no embedding-throughput cost.
+
+Embedding runs on CPU by default: the candle Metal backend exhausts GPU memory and stalls on large workspaces, so the GPU path is opt-in via `CHAN_ENABLE_GPU=1`. On macOS the CPU path links Apple's Accelerate framework as candle's BLAS backend — the target-gated `accelerate` feature, wired alongside `metal` under `cfg(target_os = "macos")` — routing bge-small's matmuls through Accelerate's `sgemm` for a measured ~1.5–2× cold-reindex speedup over candle's default SIMD-threaded `gemm` (modest because the default is already vectorized, and the forward pass also spends time in non-matmul ops). The feature pulls the Apple-only `accelerate-src`, so the static-musl Linux release binary structurally cannot pull it in.
 
 #### Walk filter
 
