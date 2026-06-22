@@ -65,12 +65,14 @@ import {
   allTerminalTabs,
   applyTerminalRoster,
   clearTabError,
+  findTeamWorkPendingLead,
   flagExternalChange,
   refreshTabFromDisk,
   rekeyTabsForRename,
   setTerminalBroadcastBySession,
   tabsForPath,
 } from "./tabs.svelte";
+import { openTeamDialog, teamDialogState } from "./teamDialog.svelte";
 import { graphData, invalidateGraph, ensureGraphLoaded } from "./graphData.svelte";
 import { withTokenQuery } from "../api/transport";
 import { uiConfirm } from "./confirm.svelte";
@@ -1471,6 +1473,15 @@ export async function bootstrap(): Promise<void> {
     } finally {
       bootstrapHydrated = true;
     }
+    // Reopen the Team Work spawn-agents dialog if the restored layout carried a
+    // pending lead terminal (#4 reload-survival). The tab ids regenerated on
+    // restore, so we relocate the lead by its `teamWorkPending` flag; the dialog
+    // reseeds its form from that tab's config draft. Skipped in fresh windows
+    // (no restore ran). `twk` is session-only, so a shared URL never reopens it.
+    if (!fresh) {
+      const pendingLead = findTeamWorkPendingLead();
+      if (pendingLead) openTeamDialog(pendingLead);
+    }
     if (!unwatch) {
       unwatch = openWatchSocket(onWatchEvent, onWatchStatus, onWatchReady);
     }
@@ -1986,7 +1997,17 @@ function serializeSession(): SessionPayload | null {
   // spawning fresh shells. (sessionStorage, the same-tab reattach channel, is
   // gone on a fresh load.) `treeExpanded` rides along only here, where there is
   // durable content to restore it into.
-  if (layoutHasDurableContent(layout) || layoutHasReattachableTerminal(layout)) {
+  //
+  // An open Team Work spawn-agents dialog also forces the full session save: its
+  // lead terminal may be the window's only tab and may not have connected (no
+  // `tsid`) yet, which would otherwise fall to the structure-only branch below
+  // and drop the dialog's `twk` config draft. Persisting the full session keeps
+  // the dialog reload-survivable (#4).
+  if (
+    layoutHasDurableContent(layout) ||
+    layoutHasReattachableTerminal(layout) ||
+    teamDialogState.request !== null
+  ) {
     const treeMap: Record<string, boolean> = {};
     for (const [k, v] of Object.entries(treeExpanded.map)) {
       if (v) treeMap[k] = true;

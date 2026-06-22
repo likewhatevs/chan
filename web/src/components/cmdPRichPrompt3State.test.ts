@@ -17,9 +17,11 @@ describe("Cmd+P Team Work lead terminal", () => {
   test("createTeamWorkLeadTerminal spawns a fresh (normal) terminal in the active pane and returns it", () => {
     // The Team Work bubble is gone: the lead is a normal terminal (the
     // orchestrator delivers its identity prompt via the queue), so this just
-    // spawns + returns - no openActiveTeamWork.
+    // spawns + returns - no openActiveTeamWork. It also flags the spawned tab
+    // `teamWorkPending` with the dialog's initial config so a reload reopens
+    // the dialog over it (#4 reload-survival).
     expect(tabs).toMatch(
-      /export function createTeamWorkLeadTerminal\([\s\S]*?opts: OpenTerminalOptions = \{\},[\s\S]*?\): TerminalTab \| null \{[\s\S]*?const p = activePane\(\);[\s\S]*?return openTerminalInPane\(p\.id, opts\);/,
+      /export function createTeamWorkLeadTerminal\([\s\S]*?opts: OpenTerminalOptions = \{\},[\s\S]*?\): TerminalTab \| null \{[\s\S]*?const p = activePane\(\);[\s\S]*?openTerminalInPane\(p\.id, opts\);[\s\S]*?teamWorkPending = defaultTeamConfig\(\);[\s\S]*?return tab;/,
     );
     expect(tabs).not.toMatch(/openActiveTeamWork/);
   });

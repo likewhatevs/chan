@@ -2,7 +2,13 @@
   import { Bot, X } from "lucide-svelte";
   import { onMount } from "svelte";
   import { api } from "../api/client";
-  import { closeTab } from "../state/tabs.svelte";
+  import {
+    clearTeamWorkPending,
+    closeTab,
+    setTeamWorkPendingConfig,
+    teamWorkPendingConfig,
+  } from "../state/tabs.svelte";
+  import { scheduleSessionSave } from "../state/store.svelte";
   import {
     assignMemberToCell,
     closeTeamDialog,
@@ -37,9 +43,14 @@
   } = $props();
 
   // The dialog is unmounted + remounted across requests so this
-  // single-shot capture is intended.
+  // single-shot capture is intended. The lead terminal carries the live config
+  // draft (seeded with defaultTeamConfig at Cmd+P), so seeding from it here both
+  // resumes a normal open AND restores the in-progress config after a window
+  // reload reopened this dialog (#4 reload-survival).
   // svelte-ignore state_referenced_locally
-  let config: TeamDialogConfig = $state(defaultTeamConfig());
+  let config: TeamDialogConfig = $state(
+    teamWorkPendingConfig(request) ?? defaultTeamConfig(),
+  );
   // Tracks the last auto-derived tab-group so editing the config path
   // keeps the group in sync UNTIL the user hand-edits it: while
   // `config.tabGroup` still equals this last auto value it is re-derived
@@ -69,6 +80,16 @@
   onMount(() => {
     queueMicrotask(() => nameInputEl?.focus());
     void refreshDirSuggestions(config.teamDir);
+  });
+
+  // Mirror the live config draft onto the lead terminal and schedule a session
+  // save on every edit, so a window reload reopens this dialog with exactly
+  // what the user was editing (#4 reload-survival). The App-root layout effect
+  // doesn't track `teamWorkPending`, so the save has to be scheduled here; it's
+  // debounced, so a burst of keystrokes collapses to one write.
+  $effect(() => {
+    setTeamWorkPendingConfig(request, config);
+    scheduleSessionSave();
   });
 
   const issue = $derived<string | null>(validateTeamConfig(config));
@@ -270,6 +291,11 @@
         leadTabId: request.leadTabId,
         leadPaneId: request.leadPaneId,
       });
+      // The lead terminal is now a committed lead, not a pending dialog: drop
+      // the reopen-on-reload flag + persist so a later reload doesn't resurrect
+      // this dialog over it (#4).
+      clearTeamWorkPending(request);
+      scheduleSessionSave();
       closeTeamDialog();
     } catch (err) {
       submitError = `bootstrap failed: ${(err as Error).message}`;

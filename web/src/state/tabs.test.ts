@@ -6,6 +6,12 @@ import { confirmState, resolveConfirm } from "./confirm.svelte";
 import { pathPromptState, resolvePathPrompt } from "./store.svelte";
 import { editorToolsPrefs } from "./editorTools.svelte";
 import {
+  closeTeamDialog,
+  defaultTeamConfig,
+  openTeamDialog,
+  teamDialogState,
+} from "./teamDialog.svelte";
+import {
   activePane,
   applyTerminalRoster,
   beginMissingFileReopen,
@@ -83,6 +89,10 @@ import {
   setTerminalSession,
   shouldCloseTabAfterDragEnd,
   createTeamWorkLeadTerminal,
+  clearTeamWorkPending,
+  findTeamWorkPendingLead,
+  setTeamWorkPendingConfig,
+  teamWorkPendingConfig,
   splitPane,
   tabLabel,
   tabLabelInPane,
@@ -2218,6 +2228,131 @@ describe("terminal session serialization", () => {
     expect(tab.terminalSessionId).toBe("term_pre_mount");
 
     await restored;
+  });
+});
+
+describe("Team Work dialog reload-survival (#4)", () => {
+  test("createTeamWorkLeadTerminal flags a pending lead with the default config", () => {
+    resetLayout([]);
+    const lead = createTeamWorkLeadTerminal({});
+    expect(lead?.kind).toBe("terminal");
+    if (lead?.kind !== "terminal") return;
+    expect(lead.teamWorkPending).toEqual(defaultTeamConfig());
+    // The pending lead is discoverable by its flag for the reopen-on-reload path.
+    expect(findTeamWorkPendingLead()).toEqual({
+      leadTabId: lead.id,
+      leadPaneId: activePane().id,
+    });
+  });
+
+  test("the pending config rides the session payload but NOT the shareable hash", () => {
+    resetLayout([]);
+    const lead = createTeamWorkLeadTerminal({});
+    if (lead?.kind !== "terminal") return;
+    const req = { leadTabId: lead.id, leadPaneId: activePane().id };
+    // A member env can carry secrets, so it must never leak into the URL hash.
+    setTeamWorkPendingConfig(req, {
+      ...defaultTeamConfig(),
+      teamDir: "secret-team",
+      members: [
+        { name: "Lead", command: "claude", env: "TOKEN=hunter2", isLead: true },
+      ],
+    });
+
+    const hashSnapshot = serializeLayout();
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+
+    expect(JSON.stringify(hashSnapshot)).not.toContain("twk");
+    expect(JSON.stringify(hashSnapshot)).not.toContain("hunter2");
+    expect(JSON.stringify(sessionSnapshot)).toContain("\"twk\"");
+    expect(JSON.stringify(sessionSnapshot)).toContain("secret-team");
+  });
+
+  test("restores the pending lead + its config from a session layout", async () => {
+    resetLayout([]);
+    const lead = createTeamWorkLeadTerminal({});
+    if (lead?.kind !== "terminal") return;
+    const req = { leadTabId: lead.id, leadPaneId: activePane().id };
+    setTeamWorkPendingConfig(req, { ...defaultTeamConfig(), teamDir: "alpha", size: 3 });
+
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    await restoreLayout(sessionSnapshot!);
+
+    const [tab] = activePane().tabs;
+    expect(tab?.kind).toBe("terminal");
+    if (tab?.kind !== "terminal") return;
+    expect(tab.teamWorkPending?.teamDir).toBe("alpha");
+    expect(tab.teamWorkPending?.size).toBe(3);
+    // The restored tab has a fresh id; the dialog relocates it by the flag.
+    const pending = findTeamWorkPendingLead();
+    expect(pending?.leadTabId).toBe(tab.id);
+    expect(teamWorkPendingConfig(pending!)?.teamDir).toBe("alpha");
+  });
+
+  test("grafts the pending config onto a hash-restored lead (reload via URL hash)", async () => {
+    resetLayout([]);
+    const lead = createTeamWorkLeadTerminal({});
+    if (lead?.kind !== "terminal") return;
+    setTeamWorkPendingConfig(
+      { leadTabId: lead.id, leadPaneId: activePane().id },
+      { ...defaultTeamConfig(), teamDir: "beta" },
+    );
+
+    // A plain reload carries the hash (no twk); the session layout grafts it
+    // back positionally, same as tsid.
+    const hashSnapshot = serializeLayout();
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    await restoreLayout(hashSnapshot!, sessionSnapshot);
+
+    const [tab] = activePane().tabs;
+    if (tab?.kind !== "terminal") return;
+    expect(tab.teamWorkPending?.teamDir).toBe("beta");
+    expect(findTeamWorkPendingLead()?.leadTabId).toBe(tab.id);
+  });
+
+  test("reopen wiring: a restored pending lead drives openTeamDialog (store bootstrap path)", async () => {
+    closeTeamDialog();
+    resetLayout([]);
+    const lead = createTeamWorkLeadTerminal({});
+    if (lead?.kind !== "terminal") return;
+    setTeamWorkPendingConfig(
+      { leadTabId: lead.id, leadPaneId: activePane().id },
+      { ...defaultTeamConfig(), teamDir: "gamma" },
+    );
+
+    // Simulate the reload: serialize the session, drop the dialog request (it's
+    // in-memory, lost on reload), restore the layout fresh.
+    const sessionSnapshot = serializeLayout({ terminalSessions: true });
+    closeTeamDialog();
+    expect(teamDialogState.request).toBeNull();
+    await restoreLayout(sessionSnapshot!);
+
+    // What store.svelte.ts does after restore in bootstrap:
+    const pending = findTeamWorkPendingLead();
+    expect(pending).not.toBeNull();
+    if (pending) openTeamDialog(pending);
+
+    const [tab] = activePane().tabs;
+    expect(teamDialogState.request).toEqual({
+      leadTabId: tab.id,
+      leadPaneId: activePane().id,
+    });
+    expect(teamWorkPendingConfig(teamDialogState.request!)?.teamDir).toBe("gamma");
+    closeTeamDialog();
+  });
+
+  test("clearTeamWorkPending drops the flag so a committed lead won't reopen", () => {
+    resetLayout([]);
+    const lead = createTeamWorkLeadTerminal({});
+    if (lead?.kind !== "terminal") return;
+    const req = { leadTabId: lead.id, leadPaneId: activePane().id };
+    clearTeamWorkPending(req);
+    // Assert through the live layout (the reactive accessors the dialog +
+    // serializer use), not the factory's return reference.
+    expect(teamWorkPendingConfig(req)).toBeNull();
+    expect(findTeamWorkPendingLead()).toBeNull();
+    // A committed lead's terminal carries no twk into the session payload.
+    expect(JSON.stringify(serializeLayout({ terminalSessions: true }))).not.toContain("twk");
   });
 });
 

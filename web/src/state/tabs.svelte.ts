@@ -30,6 +30,11 @@ import {
 } from "../terminal/keymap";
 import { notify } from "./notify.svelte";
 import { isRichPromptVisible, showRichPromptForTab } from "./richPrompt.svelte";
+import {
+  defaultTeamConfig,
+  type TeamDialogConfig,
+  type TeamDialogRequest,
+} from "./teamDialog.svelte";
 // `isDraftPath` comes from the side-effect-free `workspace.svelte`
 // leaf module (NOT store.svelte), so importing it here doesn't trigger
 // store's eager draft-promotion-sink registration. See the cycle note
@@ -340,6 +345,15 @@ export type TerminalTab = {
   /// ring (the heap is gone on a reload, so the in-memory copy cannot
   /// help; the replay would only re-establish a still-recent negotiation).
   keyboardProtocol?: TerminalKeyboardProtocolState;
+  /// Set iff this is a Team Work LEAD terminal with the spawn-agents dialog
+  /// open over it (Cmd+P, pre-Bootstrap). Holds the live config draft so a
+  /// window reload reopens the dialog over the restored lead terminal with
+  /// exactly what the user was editing. Seeded in `createTeamWorkLeadTerminal`,
+  /// mirrored from the dialog on every edit, cleared on Bootstrap (the terminal
+  /// becomes a committed lead), and gone with the tab on Cancel. Serialized as
+  /// `SerTab.twk` in the per-window session payload ONLY (never the shareable
+  /// URL hash) since a member's `env` can carry secrets.
+  teamWorkPending?: TeamDialogConfig;
 };
 
 export type GraphFilters = {
@@ -1150,7 +1164,67 @@ export function createTeamWorkLeadTerminal(
   opts: OpenTerminalOptions = {},
 ): TerminalTab | null {
   const p = activePane();
-  return openTerminalInPane(p.id, opts);
+  const tab = openTerminalInPane(p.id, opts);
+  // Mark it as a pending Team Work lead carrying the dialog's initial config.
+  // The dialog edits this draft in place (and a reload reopens the dialog from
+  // it); see `TerminalTab.teamWorkPending`.
+  if (tab) tab.teamWorkPending = defaultTeamConfig();
+  return tab;
+}
+
+/// Locate the open Team Work spawn-agents dialog's lead terminal, if any: the
+/// single terminal tab still flagged `teamWorkPending`. Returns the
+/// `{leadTabId, leadPaneId}` the dialog reopens against, or null when no team
+/// setup is in flight. Used on reload by `store.svelte.ts` to reopen the dialog
+/// over the restored lead terminal (the tab ids regenerate on restore, so the
+/// per-tab flag is the bridge back to the right pane + tab).
+export function findTeamWorkPendingLead(): TeamDialogRequest | null {
+  for (const node of Object.values(layout.nodes)) {
+    if (node.kind !== "leaf") continue;
+    for (const tab of node.tabs) {
+      if (tab.kind === "terminal" && tab.teamWorkPending) {
+        return { leadTabId: tab.id, leadPaneId: node.id };
+      }
+    }
+  }
+  return null;
+}
+
+/// Read the live config draft for a Team Work lead terminal (the dialog seeds
+/// its form from this on open / reload). Null when the request no longer maps
+/// to a pending lead terminal.
+export function teamWorkPendingConfig(
+  req: TeamDialogRequest,
+): TeamDialogConfig | null {
+  return teamWorkLeadTab(req)?.teamWorkPending ?? null;
+}
+
+/// Mirror the dialog's live config draft onto its lead terminal so it rides the
+/// session payload (`SerTab.twk`) and survives a reload. The dialog calls this
+/// on every edit; the caller also schedules a session save.
+export function setTeamWorkPendingConfig(
+  req: TeamDialogRequest,
+  config: TeamDialogConfig,
+): void {
+  const tab = teamWorkLeadTab(req);
+  if (tab) tab.teamWorkPending = config;
+}
+
+/// Clear the pending-dialog flag once Team Work has bootstrapped: the lead
+/// terminal becomes a committed lead and must no longer reopen the dialog on a
+/// subsequent reload.
+export function clearTeamWorkPending(req: TeamDialogRequest): void {
+  const tab = teamWorkLeadTab(req);
+  if (tab) tab.teamWorkPending = undefined;
+}
+
+/// Resolve a dialog request to its lead TerminalTab, or null if the pane/tab no
+/// longer exists or isn't a terminal.
+function teamWorkLeadTab(req: TeamDialogRequest): TerminalTab | null {
+  const node = layout.nodes[req.leadPaneId];
+  if (!node || node.kind !== "leaf") return null;
+  const tab = node.tabs.find((t) => t.id === req.leadTabId);
+  return tab && tab.kind === "terminal" ? tab : null;
 }
 
 export type OpenTerminalOptions = {
@@ -3890,6 +3964,12 @@ type SerTab = {
   /// Rich Prompt bubble was visible — reshow it on reload so a restored queued
   /// message is actionable without re-toggling Cmd+Shift+P. Session payloads only.
   rpv?: 1;
+  /// Team Work spawn-agents dialog config draft for a pending LEAD terminal, so
+  /// a reload reopens the dialog with exactly what the user was editing. Stored
+  /// verbatim (the session blob isn't size-constrained like the URL hash).
+  /// Per-window session payloads ONLY — kept out of the shareable URL hash since
+  /// a member's `env` can carry secrets. See `TerminalTab.teamWorkPending`.
+  twk?: TeamDialogConfig;
   /// Graph tab state.
   gm?: "s" | "f" | "l";
   gs?: string;
@@ -4137,6 +4217,10 @@ function serializeTab(
         ? { pp: { id: t.pendingPrompt.id, ph: "queued" as const } }
         : {}),
       ...(opts.terminalSessions && isRichPromptVisible(t.id) ? { rpv: 1 as const } : {}),
+      // Pending Team Work dialog config: session payloads only (never the
+      // shareable URL hash). Reopens the dialog with the user's in-progress
+      // config on reload.
+      ...(opts.terminalSessions && t.teamWorkPending ? { twk: t.teamWorkPending } : {}),
       ...active,
     };
   }
@@ -4384,6 +4468,11 @@ export async function restoreLayout(
           // re-proves it (still queued → keep + position; drained → clear) via
           // reproveRestoredPrompt.
           const pp = sertab.pp ?? savedTerm?.pp;
+          // Restore a pending Team Work dialog config (#4 reload-survival). The
+          // hash carries no `twk` (session-only), so a hash reload sources it
+          // from the positional `savedTerm` graft, same as `tsid`. Presence
+          // makes `findTeamWorkPendingLead` reopen the dialog post-restore.
+          const twk = sertab.twk ?? savedTerm?.twk;
           const tab: TerminalTab = {
             kind: "terminal",
             id: id("term"),
@@ -4407,6 +4496,7 @@ export async function restoreLayout(
             ...(pp && (pp.ph === "sent" || pp.ph === "queued")
               ? { pendingPrompt: { id: pp.id, phase: pp.ph } }
               : {}),
+            ...(twk ? { teamWorkPending: twk } : {}),
           };
           p.tabs.push(tab);
           if (sertab.a) p.activeTabId = tab.id;
@@ -4656,6 +4746,7 @@ export function hydrateTerminalSessionsFromLayout(sessionLayout: SerNode | null)
             : undefined;
       }
       if (savedTerm.rpd) liveTerms[j]!.richPromptDraftPath = savedTerm.rpd;
+      if (savedTerm.twk) liveTerms[j]!.teamWorkPending = savedTerm.twk;
     }
   }
 }
