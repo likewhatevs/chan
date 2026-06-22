@@ -1075,6 +1075,14 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                                     view.bury(&label_for_close);
                                 }
                             }
+                            // Override the feed `connected` to hidden (B1) + re-push,
+                            // so the launcher dot flips even for a standalone terminal
+                            // whose remote `/ws` never reports disconnected.
+                            if state.devserver_feed.set_buried(&label_for_close, true) {
+                                if let Some(embedded) = state.embedded() {
+                                    embedded.signal_library_change();
+                                }
+                            }
                             state.bury_window(&label_for_close, &title);
                             crate::rebuild_window_menu(&app_for_close);
                             if !silent_hide {

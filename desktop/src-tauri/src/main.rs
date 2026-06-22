@@ -497,6 +497,19 @@ pub struct DevserverFeed {
     /// devserver's `library_id` so it groups under the devserver. `connected`
     /// mirrors the window's shown/hidden state (the launcher dot).
     control: Mutex<HashMap<String, ControlFeedRecord>>,
+    /// Devserver id -> its remote `library_id`, cached once learned from a window
+    /// (B2). `library_id_of` falls back to this so the control record still emits
+    /// on RECONNECT when the live feed is momentarily empty (no windows yet) —
+    /// otherwise the control terminal wouldn't show until a later window arrives.
+    /// Survives disconnect (the same devserver keeps its library_id on reconnect).
+    library_ids: Mutex<HashMap<String, String>>,
+    /// Native labels of devserver windows the desktop has LOCALLY buried (B1).
+    /// `windows()` overrides their `connected` to false so the launcher dot
+    /// reflects hidden the moment they're hidden — the desktop's bury state is the
+    /// truth for the dot (a workspace window's remote `/ws` push agrees, but a
+    /// standalone terminal on the shared `/terminal` tenant never pushes
+    /// `connected:false`, so its dot hung without this).
+    buried: Mutex<std::collections::HashSet<String>>,
 }
 
 /// The desktop's per-devserver control-terminal feed entry (D3). The emitted
@@ -517,13 +530,22 @@ impl DevserverFeed {
         self.windows.lock().unwrap().insert(id, snapshot);
     }
 
-    /// Drop a disconnected devserver from every feed (windows + workspace +
-    /// colour + control cache).
+    /// Drop a disconnected devserver from the per-connection feeds (windows +
+    /// workspace + colour + control). KEEPS `library_ids` (the same devserver
+    /// keeps its id on reconnect — B2). Clears its buried-label overrides (B1) so a
+    /// reconnect doesn't show its reopened windows as hidden.
     fn forget(&self, id: &str) {
         self.windows.lock().unwrap().remove(id);
         self.workspaces.lock().unwrap().remove(id);
         self.colors.lock().unwrap().remove(id);
         self.control.lock().unwrap().remove(id);
+        if let Some(library_id) = self.library_ids.lock().unwrap().get(id).cloned() {
+            let prefix = format!("{library_id}::");
+            self.buried
+                .lock()
+                .unwrap()
+                .retain(|l| !l.starts_with(&prefix));
+        }
     }
 
     /// Register a devserver's control terminal as a feed record (D3). Called once
@@ -574,15 +596,38 @@ impl DevserverFeed {
         }
     }
 
-    /// The remote `library_id` of a connected devserver, learned from its window
-    /// snapshot (a devserver with no windows yet has none — `library_id` is a
-    /// best-effort tag; the SPA groups remote rows by `devserver_id`).
+    /// The remote `library_id` of a connected devserver. Learned from the live
+    /// window snapshot and CACHED (B2): on reconnect the snapshot can be empty for
+    /// a moment (no windows yet), so fall back to the cached value — otherwise the
+    /// control record (which needs the library_id) wouldn't emit until a later
+    /// window arrives.
     fn library_id_of(&self, id: &str) -> Option<String> {
-        self.windows
+        let from_snapshot = self
+            .windows
             .lock()
             .unwrap()
             .get(id)
-            .and_then(|s| s.lock().unwrap().first().map(|r| r.library_id.clone()))
+            .and_then(|s| s.lock().unwrap().first().map(|r| r.library_id.clone()));
+        if let Some(lib) = from_snapshot {
+            self.library_ids
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), lib.clone());
+            return Some(lib);
+        }
+        self.library_ids.lock().unwrap().get(id).cloned()
+    }
+
+    /// Mark a devserver window LOCALLY buried (or un-buried) so `windows()`
+    /// overrides its `connected` (B1). Returns whether it changed, so the caller
+    /// fires the library-change signal only on a real flip.
+    fn set_buried(&self, label: &str, buried: bool) -> bool {
+        let mut set = self.buried.lock().unwrap();
+        if buried {
+            set.insert(label.to_string())
+        } else {
+            set.remove(label)
+        }
     }
 
     /// The devserver id owning `library_id`, learned from the live window
@@ -609,6 +654,21 @@ impl chan_server::DevserverFeedSource for DevserverFeed {
             .values()
             .flat_map(|snapshot| snapshot.lock().unwrap().clone())
             .collect();
+        // Override `connected` for windows the desktop has LOCALLY buried (B1) so
+        // the launcher dot reflects hidden immediately — the desktop's bury state
+        // is the truth for the dot. A workspace window's remote `/ws` drop agrees,
+        // but a standalone terminal on the shared `/terminal` tenant never pushes
+        // `connected:false`, so its dot hung without this.
+        {
+            let buried = self.buried.lock().unwrap();
+            if !buried.is_empty() {
+                for r in records.iter_mut() {
+                    if buried.contains(&window_watcher::native_label(r)) {
+                        r.connected = false;
+                    }
+                }
+            }
+        }
         // Append each devserver's control-terminal record (D3), tagged with that
         // devserver's `library_id` so the launcher groups it under the devserver
         // (control=true → rendered FIRST). Skipped while the library_id is still
@@ -1618,6 +1678,14 @@ async fn connect_devserver_impl(
                 let _ = w.close();
             }
         });
+    }
+    // Re-push the launcher feed now so the control-terminal record appears
+    // immediately (B2). On a FRESH connect the boot terminal's feed push would
+    // trigger this, but on RECONNECT the feed can be empty for a beat — the cached
+    // library_id (`library_id_of`) lets `windows()` emit the control record, and
+    // this signal makes the launcher pick it up without waiting for a later window.
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
     }
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(())
@@ -4099,6 +4167,13 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
         if let Some(ds_id) = state.devserver_feed.devserver_id_for_library(library_id) {
             if let Some(view) = state.devserver_watcher_views.lock().unwrap().get(&ds_id) {
                 view.unbury(label);
+            }
+        }
+        // Clear the feed `connected` override (B1) + re-push so the dot goes back
+        // to shown; the reconcile reopens the webview and the `/ws` reconnects.
+        if state.devserver_feed.set_buried(label, false) {
+            if let Some(embedded) = state.embedded() {
+                embedded.signal_library_change();
             }
         }
         if removed {
