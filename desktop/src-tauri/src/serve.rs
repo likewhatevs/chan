@@ -787,6 +787,10 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
     let app_owned = app.clone();
     let label_owned = window_label.to_string();
     let title_owned = title.to_string();
+    // The SPA's `?w=` session id (= `WindowRecord.window_id` for a watcher
+    // window), owned so the 'static close handler can query the active-transfer
+    // guard by it — it diverges from the native label for watcher windows.
+    let session_owned = session_id.to_string();
     // The passed kind (`terminal` / `control`) for terminal windows, else
     // "workspace" (covers local / outbound) — the kind `cs window list` shows.
     // Captured owned so the 'static main-thread closure can hold it.
@@ -884,6 +888,7 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                 let app_for_close = app_owned.clone();
                 let label_for_close = label_owned.clone();
                 let key_for_close = config_key.clone();
+                let session_for_close = session_owned.clone();
                 window.on_window_event(move |event| match event {
                     // The OS close button BURIES an SPA window instead of
                     // destroying it: the webview hides, live terminals and
@@ -899,6 +904,25 @@ fn build_workspace_window(app: &AppHandle, spec: WindowSpec<'_>) -> Result<(), S
                     // and never reach this branch.
                     WindowEvent::CloseRequested { api, .. } => {
                         let state = app_for_close.state::<Arc<AppState>>();
+                        // Active-transfer guard (BEFORE any bury/close path): a
+                        // window with an in-flight upload/download must never
+                        // close silently and kill the transfer. Prompt — "Keep
+                        // open" (hold, stay visible to watch it finish) vs
+                        // "Cancel transfer & close" (abort + close). Keyed on the
+                        // `?w=` session id (not the native label). Only
+                        // local-library windows report a count the embedded host
+                        // can see; a remote/devserver window reads false (its
+                        // transfers live on that server — not ours to guard).
+                        if state
+                            .embedded
+                            .get()
+                            .map(|e| e.window_has_active_transfer(&session_for_close))
+                            .unwrap_or(false)
+                        {
+                            api.prevent_close();
+                            prompt_transfer_close(&app_for_close, &state, &label_for_close);
+                            return;
+                        }
                         // A watcher-managed local window (`local::<id>`): the
                         // red-dot close BURIES it through the watcher view state
                         // (should_show false -> the reconcile closes the native
@@ -1041,6 +1065,58 @@ fn show_bury_notice(app: &AppHandle, title: &str) {
         .title("Window Hidden")
         .kind(MessageDialogKind::Info)
         .show(|_| {});
+}
+
+/// The active-transfer close guard's prompt (mirror of the live-shells confirm).
+/// The caller has ALREADY `prevent_close`d, so:
+/// - "Keep open" (the safe default / Escape) leaves the window untouched and
+///   VISIBLE so the user watches the transfer's bubble finish — a hold, NOT a
+///   bury.
+/// - "Cancel transfer & close" buries the watcher view (so the reconcile won't
+///   reopen it) + keeps it in the Window menu, then DESTROYS the webview now.
+///   That teardown aborts the in-flight XHR (server upload cleanup is already
+///   safe — no orphan/partial); the workspace's terminal PTYs survive
+///   server-side, so a later reopen reconnects them with no transfer.
+///
+/// Async `.show` only — a blocking dialog on the event-loop thread deadlocks
+/// (see `show_bury_notice`); the callback runs on the main thread, where the
+/// view/menu/destroy mutations are safe.
+fn prompt_transfer_close(app: &AppHandle, state: &Arc<AppState>, label: &str) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    let title = app
+        .get_webview_window(label)
+        .and_then(|w| w.title().ok())
+        .unwrap_or_else(|| label.to_string());
+    let app_cb = app.clone();
+    let state_cb = Arc::clone(state);
+    let label_cb = label.to_string();
+    app.dialog()
+        .message(format!(
+            "\"{title}\" has a file transfer in progress. Cancel it and close the \
+             window, or keep the window open until the transfer finishes?"
+        ))
+        .title("Transfer in progress")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Cancel transfer & close".into(),
+            "Keep open".into(),
+        ))
+        .show(move |cancel_and_close| {
+            if !cancel_and_close {
+                // Keep open: `prevent_close` already kept it open + visible.
+                return;
+            }
+            // Cancel: bury the view so the watcher reconcile won't reopen it,
+            // keep it in the reopen menu, then destroy the webview now to abort
+            // the in-flight XHR (the PTYs survive server-side for a later reopen).
+            if let Some(view) = state_cb.local_watcher_view() {
+                view.bury(&label_cb);
+            }
+            state_cb.bury_window(&label_cb, &title);
+            crate::rebuild_window_menu(&app_cb);
+            if let Some(w) = app_cb.get_webview_window(&label_cb) {
+                let _ = w.destroy();
+            }
+        });
 }
 
 /// Snapshot the window's URL hash and push the resulting WindowConfig

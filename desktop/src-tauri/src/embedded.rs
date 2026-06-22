@@ -167,6 +167,26 @@ impl EmbeddedServer {
             .tenant_has_window_sessions(&prefix_for_key(key), window_label)
     }
 
+    /// True when the window whose `?w=` session id is `window_id` has ≥1
+    /// in-flight file transfer (upload/download). The transfer-close guard
+    /// (serve.rs `CloseRequested`) queries it to prompt before closing a window
+    /// mid-transfer — the mirror of `workspace_window_has_live_shells`.
+    ///
+    /// Keyed on the `?w=` window id (NOT the native window label: they diverge
+    /// for watcher-opened windows, where the label is `{library_id}::{window_id}`
+    /// — serve.rs:750). The serving tenant's prefix isn't on the close handler
+    /// (`config_key` is empty for watcher windows), so resolve it from the live
+    /// window records here. Local library only: a remote/devserver window's
+    /// transfers live on that server, so it's absent from these records and reads
+    /// `false` — correct, it's not ours to guard.
+    pub fn window_has_active_transfer(&self, window_id: &str) -> bool {
+        let records = self.assemble_window_records();
+        match tenant_prefix_for_window(&records, window_id) {
+            Some(prefix) => self.host.tenant_has_active_transfer(&prefix, window_id),
+            None => false,
+        }
+    }
+
     pub async fn open_workspace(&self, key: &str) -> Result<String, String> {
         use chan_workspace::ChanError;
         // A workspace just turned OFF can keep its flock for a beat: a
@@ -444,6 +464,17 @@ fn prefix_for_key(key: &str) -> String {
     format!("/{}", serve::workspace_window_prefix(key))
 }
 
+/// The serving tenant prefix for the window whose `?w=` id is `window_id`, found
+/// in a window-record snapshot. The active-transfer guard resolves a closing
+/// window's tenant this way because the close handler doesn't carry it. `None`
+/// when no record matches (a remote/other-library window, or already gone).
+fn tenant_prefix_for_window(records: &[WindowRecord], window_id: &str) -> Option<String> {
+    records
+        .iter()
+        .find(|r| r.window_id == window_id)
+        .map(|r| r.prefix.clone())
+}
+
 async fn serve_router(
     listener: tokio::net::TcpListener,
     app: Router,
@@ -465,5 +496,35 @@ mod tests {
         let prefix = prefix_for_key(key);
         assert!(prefix.starts_with("/workspace-"));
         assert_eq!(prefix, format!("/{}", serve::workspace_window_prefix(key)));
+    }
+
+    fn rec(window_id: &str, prefix: &str) -> WindowRecord {
+        WindowRecord {
+            window_id: window_id.into(),
+            library_id: "local".into(),
+            kind: chan_server::WindowKind::Workspace,
+            title: String::new(),
+            ordinal: 1,
+            workspace_path: Some("/tmp/notes".into()),
+            prefix: prefix.into(),
+            token: "tok".into(),
+            persisted: true,
+            connected: true,
+        }
+    }
+
+    #[test]
+    fn tenant_prefix_for_window_resolves_by_session_id_not_label() {
+        // The active-transfer guard keys on the `?w=` window id, which diverges
+        // from the native `local::w-2` label — resolution is by window_id.
+        let records = vec![rec("w-1", "/workspace-aaa"), rec("w-2", "/workspace-bbb")];
+        assert_eq!(
+            tenant_prefix_for_window(&records, "w-2").as_deref(),
+            Some("/workspace-bbb")
+        );
+        // A native label (not a bare window id) must NOT match.
+        assert_eq!(tenant_prefix_for_window(&records, "local::w-2"), None);
+        // An unknown / already-gone window resolves to no tenant.
+        assert_eq!(tenant_prefix_for_window(&records, "missing"), None);
     }
 }
