@@ -116,12 +116,13 @@ pub async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::U
 /// Single-page-app fallback for the launcher bundle, mirroring
 /// [`serve_static`] but for [`LauncherAssets`]. Stateless: the launcher
 /// always mounts at the devserver/library root `/`, so there is no
-/// per-workspace prefix to inject — `inject_chan_meta` runs with an empty
-/// prefix (a documented no-op) to keep the index shape identical to the
-/// main SPA's. `/api`/`/ws` misses still 404 rather than returning the SPA
-/// shell, so the launcher's `/api/library/*` calls and the reserved
-/// namespace get JSON-style 404s, not HTML.
-pub async fn serve_launcher(uri: axum::http::Uri) -> Response {
+/// per-workspace prefix to inject. When `read_only` (the tunnel-trust
+/// devserver/gateway surface, where workspace mutation is gated out), the
+/// index gets a `<meta name="chan-launcher-readonly">` hint so the SPA hides
+/// its mutation controls instead of showing buttons that 403. `/api`/`/ws`
+/// misses still 404 rather than returning the SPA shell, so the launcher's
+/// `/api/library/*` calls and the reserved namespace get JSON-style 404s.
+pub async fn serve_launcher(uri: axum::http::Uri, read_only: bool) -> Response {
     let path = uri.path();
     if path.starts_with("/api") || path == "/ws" {
         return (StatusCode::NOT_FOUND, "not found").into_response();
@@ -135,7 +136,7 @@ pub async fn serve_launcher(uri: axum::http::Uri) -> Response {
     };
     if let Some(file) = LauncherAssets::get(candidate) {
         let body = if is_index {
-            inject_chan_meta(&file.data, "", false)
+            inject_launcher_meta(&file.data, read_only)
         } else {
             file.data.into_owned()
         };
@@ -146,7 +147,7 @@ pub async fn serve_launcher(uri: axum::http::Uri) -> Response {
     }
     // SPA fallback: client-side routes resolve to index.html.
     if let Some(file) = LauncherAssets::get("index.html") {
-        let body = inject_chan_meta(&file.data, "", false);
+        let body = inject_launcher_meta(&file.data, read_only);
         return with_static_cache_headers(
             ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response(),
             true,
@@ -205,6 +206,28 @@ pub fn inject_chan_meta(html: &[u8], prefix: &str, settings_disabled: bool) -> V
     }
     let mut out = Vec::with_capacity(html.len() + insert.len());
     let after_head = pos + needle.len();
+    out.extend_from_slice(&html[..after_head]);
+    out.extend_from_slice(insert.as_bytes());
+    out.extend_from_slice(&html[after_head..]);
+    out
+}
+
+/// Inject the launcher's read-only hint right after the opening `<head>` when
+/// `read_only`: `<meta name="chan-launcher-readonly" content="1">`. The SPA
+/// reads it to hide its workspace mutation controls on the tunnel-trust
+/// devserver surface (where mutation is gated out and would 403). No-op
+/// otherwise, or when `<head>` is absent (returns the original bytes).
+fn inject_launcher_meta(html: &[u8], read_only: bool) -> Vec<u8> {
+    if !read_only {
+        return html.to_vec();
+    }
+    let needle = b"<head>";
+    let Some(pos) = html.windows(needle.len()).position(|w| w == needle) else {
+        return html.to_vec();
+    };
+    let insert = "<meta name=\"chan-launcher-readonly\" content=\"1\">";
+    let after_head = pos + needle.len();
+    let mut out = Vec::with_capacity(html.len() + insert.len());
     out.extend_from_slice(&html[..after_head]);
     out.extend_from_slice(insert.as_bytes());
     out.extend_from_slice(&html[after_head..]);

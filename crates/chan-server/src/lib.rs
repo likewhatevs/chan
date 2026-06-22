@@ -998,12 +998,26 @@ pub fn install_local_workspace_overlay(host: &WorkspaceHost) {
 /// (`build_devserver_app`) — so the one launcher is reached on every surface
 /// through the existing transparent proxy.
 ///
-/// `bearer` is the per-surface launcher token gating `/api/library/*`: the
-/// desktop loopback passes its per-window token; the devserver passes its
-/// management token; `None` leaves the data surface ungated (the static SPA
-/// shell is always public regardless, so it loads before it holds the token).
-pub fn install_launcher_root_fallback(host: &Arc<WorkspaceHost>, bearer: Option<&str>) {
-    host.install_root_fallback(routes::launcher_router(host.clone(), bearer));
+/// `bearer` gates `/api/library/*`: the desktop loopback passes its per-window
+/// token, the devserver passes `None` (tunnel-trust; the gateway proxy gates at
+/// its edge). The static SPA shell is always public regardless, so it loads
+/// before it holds the token.
+///
+/// `serve_addr` is the read-only/full discriminator AND the mount enabler for
+/// workspace mutation (which is loopback-only):
+///   - `Some(cell)` — the loopback: workspace add/on/off/rm is served, and the
+///     mount path reads the listen address from the `OnceLock`. The embedder
+///     fills it AFTER it binds (the install happens before the bind), so it is
+///     read at request time, not install time.
+///   - `None` — the tunnel-trust devserver/gateway surface: workspaces are
+///     read-only (mutation handlers answer 403, and the SPA shell is served with
+///     a read-only hint so it hides those controls).
+pub fn install_launcher_root_fallback(
+    host: &Arc<WorkspaceHost>,
+    bearer: Option<&str>,
+    serve_addr: Option<Arc<std::sync::OnceLock<std::net::SocketAddr>>>,
+) {
+    host.install_root_fallback(routes::launcher_router(host.clone(), bearer, serve_addr));
 }
 
 #[async_trait::async_trait]

@@ -807,7 +807,13 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
     // launcher XHR reaches `/api/library/*` with zero creds. A `Some(token)`
     // gate would 401 every call. The desktop LOOPBACK passes `Some(token)`
     // instead (it has no proxy; the SPA presents the token via `?t=`).
-    crate::install_launcher_root_fallback(&host, None);
+    //
+    // `serve_addr = None`: the gateway surface serves workspaces READ-ONLY.
+    // `bearer=None` can't distinguish owner from grantee, so mutating routes
+    // (add/on/off/rm) must not be exposed over the tunnel; owners
+    // manage a headless devserver's workspaces via the bearer-gated
+    // `/api/devserver/*` API + `cs`/CLI instead.
+    crate::install_launcher_root_fallback(&host, None, None);
     public.merge(authed).merge(host.router())
 }
 
@@ -1646,6 +1652,129 @@ mod tests {
         assert!(!row["label"].as_str().unwrap().is_empty());
     }
 
+    /// The `on` state of a workspace `id` from the launcher list, or `None` when
+    /// no row matches (forgotten).
+    async fn launcher_workspace_on(app: &axum::Router, id: &str) -> Option<bool> {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/workspaces")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["workspace_id"] == id)
+            .map(|r| r["on"].as_bool().unwrap())
+    }
+
+    #[tokio::test]
+    async fn library_workspaces_crud_is_loopback_only() {
+        use axum::body::to_bytes;
+        use std::sync::OnceLock;
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let ws = tempfile::tempdir().expect("workspace");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+
+        // Read-only surface (serve_addr = None): a mutating call is refused 403,
+        // so a grantee can never escalate to mutation.
+        let readonly = crate::routes::launcher_router(host.clone(), None, None);
+        let refused = readonly
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/library/workspaces/anything/off")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        // Loopback surface: serve_addr filled post-bind enables the full CRUD.
+        let cell = Arc::new(OnceLock::new());
+        cell.set(addr).unwrap();
+        let app = crate::routes::launcher_router(host.clone(), None, Some(cell));
+
+        // add: register + mount the folder; 200 with the new row (on).
+        let body = format!(r#"{{"path":{:?}}}"#, ws.path().to_string_lossy());
+        let added = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/library/workspaces")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(added.status(), StatusCode::OK);
+        let bytes = to_bytes(added.into_body(), 64 * 1024).await.unwrap();
+        let row: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let id = row["workspace_id"].as_str().unwrap().to_string();
+        assert_eq!(row["on"], true);
+        assert_eq!(launcher_workspace_on(&app, &id).await, Some(true));
+
+        // off: unmount, keep the registration (still listed, now off).
+        let off = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri(format!("/api/library/workspaces/{id}/off"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(off.status(), StatusCode::NO_CONTENT);
+        assert_eq!(launcher_workspace_on(&app, &id).await, Some(false));
+
+        // on: remount at the same stable id.
+        let on = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri(format!("/api/library/workspaces/{id}/on"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(on.status(), StatusCode::NO_CONTENT);
+        assert_eq!(launcher_workspace_on(&app, &id).await, Some(true));
+
+        // rm: unregister; the workspace disappears from the list.
+        let removed = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/library/workspaces/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+        assert_eq!(launcher_workspace_on(&app, &id).await, None);
+    }
+
     #[tokio::test]
     async fn launcher_mounts_at_library_root() {
         use axum::body::to_bytes;
@@ -1734,7 +1863,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
         let host = state.host.clone();
-        let app = crate::routes::launcher_router(host, Some("test-token"));
+        let app = crate::routes::launcher_router(host, Some("test-token"), None);
 
         // No credential: rejected.
         let unauth = app

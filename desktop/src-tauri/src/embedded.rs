@@ -72,13 +72,19 @@ impl EmbeddedServer {
         // surface — parity with the devserver's `build_devserver_app`. Without
         // it the root `/` 404s (`host_dispatch` only matches tenant prefixes).
         //
-        // `bearer = None` is the localhost-trust intermediate: the loopback
-        // binds `127.0.0.1` only, so `/api/library/*` is reachable just from
-        // this machine. The agreed target is a per-window launcher token minted
-        // at startup, passed here as `Some(&token)` and baked into the
-        // main-window URL as `?t={token}` (the SPA presents it on every data
-        // call); see the token contract with the launcher owner.
-        chan_server::install_launcher_root_fallback(&host, None);
+        // Read-only localhost-trust INTERMEDIATE (`bearer=None`, `serve_addr=None`).
+        // The loopback's target is the FULL mutable surface: a per-window launcher
+        // token minted at startup passed as `Some(&token)`, and an
+        // `Arc<OnceLock<SocketAddr>>` for `serve_addr` filled with the listen
+        // address AFTER the bind below (mount needs it; the install runs before the
+        // bind, so it is read at request time) — e.g.:
+        //   let addr_cell = Arc::new(OnceLock::new());
+        //   install_launcher_root_fallback(&host, Some(&token), Some(addr_cell.clone()));
+        //   // …after `listener.local_addr()`:  let _ = addr_cell.set(addr);
+        // Until that lands, `None`/`None` serves the launcher read-only on the
+        // loopback (list + windows; workspace mutation gated out) — see the token
+        // contract with the launcher owner.
+        chan_server::install_launcher_root_fallback(&host, None, None);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| format!("binding embedded chan server: {e}"))?;
         listener
