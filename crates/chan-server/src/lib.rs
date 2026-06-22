@@ -919,6 +919,19 @@ fn terminal_router(state: Arc<AppState>) -> Router {
             "/api/terminals/:session/broadcast",
             post(api_set_terminal_broadcast),
         )
+        // Standalone-terminal file transfer: `cs upload` / `cs download` from a
+        // workspace-less terminal land here (cwd / shell-uid scoped). Same URLs
+        // as the workspace router so the SPA's transfer bubble is unchanged; the
+        // handlers re-root the path at `/` and pre-flight read/write access.
+        .route(
+            "/api/files/upload",
+            post(crate::routes::transfer::api_terminal_upload_file)
+                .layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
+        .route(
+            "/api/files/*path",
+            get(crate::routes::transfer::api_terminal_read_file),
+        )
         .route("/api/build-info", get(api_build_info))
         .route("/api/health", get(api_health))
         // Global preferences: Cmd+, flips the pane to the terminal config
@@ -1475,3 +1488,19 @@ fn router(state: Arc<AppState>) -> Router {
 
 // `sanitize_prefix` + `ServeHandle::launch_url` tests live in chan-library
 // (`serve_config`) alongside the moved types.
+
+#[cfg(test)]
+mod terminal_router_tests {
+    use super::*;
+
+    // Constructing the slim terminal router asserts its routes assemble without
+    // an axum conflict — in particular the standalone-transfer pair
+    // (`/api/files/upload` POST + `/api/files/*path` GET) coexisting on this
+    // tenant. A conflict panics at build time, which would otherwise only
+    // surface when a real standalone-terminal window opens.
+    #[tokio::test]
+    async fn terminal_router_assembles_with_standalone_transfer_routes() {
+        let state = crate::state::test_support::make_test_state(false);
+        let _router = terminal_router(state);
+    }
+}

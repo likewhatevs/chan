@@ -79,7 +79,9 @@ enum WindowCommand {
     },
     // `cs upload` / `cs download`: raise the Inspector upload / download UI in
     // the originating window, reusing the SPA's fileOps (not a parallel path).
-    // Both paths are workspace-relative ("" = workspace root). Upload targets a
+    // On a workspace tenant `path` is workspace-relative ("" = workspace root);
+    // on a standalone terminal it is a filesystem-absolute path with its leading
+    // `/` stripped (the terminal-tenant route re-roots it). Upload targets a
     // directory; download carries `is_dir` (resolved server-side via stat) so
     // the SPA names the download correctly. Fire-and-forget like the open_*
     // commands.
@@ -542,21 +544,38 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             if let Err(message) = require_window_id(&window_id) {
                 return ControlResponse::Error { message };
             }
-            let workspace = match workspace_from_cell(workspace_cell, tenant) {
-                Ok(workspace) => workspace,
-                Err(message) => return ControlResponse::Error { message },
-            };
-            into_response(upload_path(&workspace, &window_id, &path, events_tx))
+            // A standalone terminal has no workspace to anchor at: the CLI
+            // already absolutized `path` against the session cwd, so the
+            // transfer is cwd / shell-uid scoped (no workspace wall).
+            match tenant {
+                ControlTenant::TerminalOnly => {
+                    into_response(upload_path_standalone(&window_id, &path, events_tx))
+                }
+                ControlTenant::Workspace => {
+                    let workspace = match workspace_from_cell(workspace_cell, tenant) {
+                        Ok(workspace) => workspace,
+                        Err(message) => return ControlResponse::Error { message },
+                    };
+                    into_response(upload_path(&workspace, &window_id, &path, events_tx))
+                }
+            }
         }
         ControlRequest::Download { window_id, path } => {
             if let Err(message) = require_window_id(&window_id) {
                 return ControlResponse::Error { message };
             }
-            let workspace = match workspace_from_cell(workspace_cell, tenant) {
-                Ok(workspace) => workspace,
-                Err(message) => return ControlResponse::Error { message },
-            };
-            into_response(download_path(&workspace, &window_id, &path, events_tx))
+            match tenant {
+                ControlTenant::TerminalOnly => {
+                    into_response(download_path_standalone(&window_id, &path, events_tx))
+                }
+                ControlTenant::Workspace => {
+                    let workspace = match workspace_from_cell(workspace_cell, tenant) {
+                        Ok(workspace) => workspace,
+                        Err(message) => return ControlResponse::Error { message },
+                    };
+                    into_response(download_path(&workspace, &window_id, &path, events_tx))
+                }
+            }
         }
         ControlRequest::TermWrite {
             tab_name,
@@ -1842,6 +1861,72 @@ fn download_path(
     } else {
         format!("download request queued for {rel}")
     })
+}
+
+/// `cs upload` from a standalone-terminal window (no workspace). The CLI
+/// absolutized `requested` against the session cwd, so it is the destination
+/// the user means; we resolve the target DIRECTORY (the path itself if it is a
+/// directory, else its parent) and signal the window. The path is sent with its
+/// leading `/` stripped so the SPA's transfer bubble builds a clean
+/// `/api/files/upload` request; the terminal-tenant route re-roots it and
+/// pre-flights writability. No workspace wall — the reach is the shell's uid.
+fn upload_path_standalone(
+    window_id: &str,
+    requested: &Path,
+    events_tx: &broadcast::Sender<String>,
+) -> Result<String, String> {
+    let dir = if std::fs::metadata(requested)
+        .map(|m| m.is_dir())
+        .unwrap_or(false)
+    {
+        requested.to_path_buf()
+    } else {
+        requested
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| requested.to_path_buf())
+    };
+    send_window_command(
+        window_id,
+        WindowCommand::Upload {
+            path: strip_leading_slash(&dir),
+        },
+        events_tx,
+    )?;
+    Ok(format!("upload request queued for {}", dir.display()))
+}
+
+/// `cs download` from a standalone-terminal window (no workspace). `requested`
+/// is the CLI-absolutized source; we stat it for `is_dir` (and to fail fast on
+/// a missing path) and signal the window. Same leading-slash-stripped path
+/// convention as [`upload_path_standalone`]; the terminal-tenant route does the
+/// full readability pre-flight before building any tarball.
+fn download_path_standalone(
+    window_id: &str,
+    requested: &Path,
+    events_tx: &broadcast::Sender<String>,
+) -> Result<String, String> {
+    let meta = std::fs::metadata(requested)
+        .map_err(|e| format!("cannot access {}: {e}", requested.display()))?;
+    send_window_command(
+        window_id,
+        WindowCommand::Download {
+            path: strip_leading_slash(requested),
+            is_dir: meta.is_dir(),
+        },
+        events_tx,
+    )?;
+    Ok(format!(
+        "download request queued for {}",
+        requested.display()
+    ))
+}
+
+/// Drop the leading `/` from an absolute path so the SPA's `/api/files/{path}`
+/// URL stays clean (no `//`); the terminal-tenant route re-roots the value at
+/// `/`. See `crate::routes::transfer`.
+fn strip_leading_slash(p: &Path) -> String {
+    p.to_string_lossy().trim_start_matches('/').to_string()
 }
 
 /// Category 2: ENQUEUE bytes onto the matching live sessions' write queues.

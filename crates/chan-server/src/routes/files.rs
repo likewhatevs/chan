@@ -410,14 +410,46 @@ fn download_path_sync(
 ) -> chan_workspace::Result<DownloadPayload> {
     let stat = workspace.stat(path)?;
     if stat.is_dir {
+        // Pre-flight: every file in the tree we will tar is readable, before
+        // any archive work, so a download fails fast and produces no partial
+        // archive (the archive is built in memory, but this avoids the wasted
+        // work and gives a clear "cannot read X" error up front).
+        verify_readable_workspace_tree(workspace, path).map_err(chan_workspace::ChanError::Io)?;
         let bytes = archive_directory_sync(workspace, path)?;
         Ok(DownloadPayload::DirectoryTar(bytes))
     } else {
+        // A single file is read into memory; an unreadable file surfaces the
+        // error here with no bytes sent.
         workspace.read(path).map(DownloadPayload::File)
     }
 }
 
-fn download_filename(path: &str) -> String {
+/// Pre-flight for a directory download: confirm every file in the tree we will
+/// tar is readable before any archive work. Walks via `Workspace::list` so it
+/// visits exactly the entries `archive_directory_sync` will (same `.chan` /
+/// `.git` filter), and opens each backing file to check read permission without
+/// pulling its bytes (the archive reads them next).
+fn verify_readable_workspace_tree(
+    workspace: &chan_workspace::Workspace,
+    rel: &str,
+) -> std::result::Result<(), String> {
+    for child in workspace
+        .list(rel)
+        .map_err(|e| format!("cannot read directory {rel}: {e}"))?
+    {
+        let child_rel = join_rel(rel.trim_matches('/'), &child.name);
+        if child.is_dir {
+            verify_readable_workspace_tree(workspace, &child_rel)?;
+        } else {
+            std::fs::File::open(workspace.root().join(&child_rel))
+                .map(|_| ())
+                .map_err(|e| format!("cannot read {child_rel}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn download_filename(path: &str) -> String {
     let raw = path
         .rsplit('/')
         .find(|segment| !segment.is_empty())
@@ -437,7 +469,7 @@ fn download_filename(path: &str) -> String {
     }
 }
 
-fn content_disposition_attachment(path: &str) -> String {
+pub(crate) fn content_disposition_attachment(path: &str) -> String {
     format!("attachment; filename=\"{}\"", download_filename(path))
 }
 
@@ -450,7 +482,7 @@ fn download_archive_filename(path: &str) -> String {
     }
 }
 
-fn content_disposition_archive(path: &str) -> String {
+pub(crate) fn content_disposition_archive(path: &str) -> String {
     format!(
         "attachment; filename=\"{}\"",
         download_archive_filename(path)
@@ -522,7 +554,7 @@ pub struct ReadFileQuery {
     stream: Option<String>,
 }
 
-fn query_flag(value: &Option<String>) -> bool {
+pub(crate) fn query_flag(value: &Option<String>) -> bool {
     matches!(
         value.as_deref(),
         Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
@@ -939,6 +971,11 @@ fn replace_file_sync(
             "not a file: {trimmed}"
         )));
     }
+    // Pre-flight: the parent directory is writable before overwriting, so a
+    // failed replace writes nothing.
+    let abs = workspace.root().join(trimmed);
+    let parent = abs.parent().unwrap_or_else(|| workspace.root());
+    crate::routes::transfer::verify_writable_dir(parent).map_err(chan_workspace::ChanError::Io)?;
     workspace.write_bytes(trimmed, bytes)?;
     Ok(UploadFileResponse {
         path: trimmed.to_string(),
@@ -961,6 +998,15 @@ fn upload_file_sync(
             )));
         }
     }
+    // Pre-flight: the destination directory is writable before any write, so a
+    // failed upload writes nothing (fail fast, no partial file).
+    let abs_dir = if dir.is_empty() {
+        workspace.root().to_path_buf()
+    } else {
+        workspace.root().join(&dir)
+    };
+    crate::routes::transfer::verify_writable_dir(&abs_dir)
+        .map_err(chan_workspace::ChanError::Io)?;
     let filename = upload_leaf_filename(original_name)?;
     let rel = join_rel(&dir, &filename);
     if create_target_exists(workspace, &rel) {
@@ -973,7 +1019,7 @@ fn upload_file_sync(
     })
 }
 
-fn upload_leaf_filename(original_name: &str) -> chan_workspace::Result<String> {
+pub(crate) fn upload_leaf_filename(original_name: &str) -> chan_workspace::Result<String> {
     let leaf = original_name
         .trim()
         .rsplit(['/', '\\'])
@@ -993,8 +1039,8 @@ fn upload_leaf_filename(original_name: &str) -> chan_workspace::Result<String> {
 #[cfg(test)]
 mod file_browser_listing_tests {
     use super::{
-        create_target_exists, list_dir_entries, list_files_sync, replace_file_sync,
-        upload_file_sync, upload_leaf_filename, ListFilesQuery,
+        create_target_exists, download_path_sync, list_dir_entries, list_files_sync,
+        replace_file_sync, upload_file_sync, upload_leaf_filename, DownloadPayload, ListFilesQuery,
     };
 
     #[test]
@@ -1094,6 +1140,80 @@ mod file_browser_listing_tests {
 
         assert!(matches!(err, chan_workspace::ChanError::PathAlreadyExists(p) if p == "same.bin"));
         assert_eq!(workspace.read("same.bin").unwrap(), b"old");
+    }
+
+    #[test]
+    fn download_path_sync_archives_a_readable_directory_tree() {
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.create_dir("docs").unwrap();
+        workspace.write_bytes("docs/a.txt", b"a").unwrap();
+        workspace.write_bytes("docs/b.txt", b"b").unwrap();
+
+        // The readability pre-flight passes for an ordinary tree and the tar is
+        // produced.
+        match download_path_sync(&workspace, "docs").unwrap() {
+            DownloadPayload::DirectoryTar(bytes) => assert!(!bytes.is_empty()),
+            DownloadPayload::File(_) => panic!("expected a directory tar"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn download_path_sync_preflights_an_unreadable_workspace_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.create_dir("docs").unwrap();
+        workspace.write_bytes("docs/secret.txt", b"x").unwrap();
+        let secret = root.path().join("docs/secret.txt");
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root bypasses permission bits; only assert when the chmod truly denies.
+        if std::fs::File::open(&secret).is_ok() {
+            return;
+        }
+        let message = match download_path_sync(&workspace, "docs") {
+            Ok(_) => panic!("expected an unreadable-file error"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            message.contains("secret.txt"),
+            "error should name the file: {message}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upload_file_sync_preflights_an_unwritable_destination() {
+        use std::os::unix::fs::PermissionsExt;
+        let cfg = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        lib.register_workspace(root.path()).unwrap();
+        let workspace = lib.open_workspace(root.path()).unwrap();
+        workspace.create_dir("locked").unwrap();
+        let locked = root.path().join("locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root bypasses directory write bits; skip the assertion then (and
+        // restore perms so the TempDir can clean up).
+        if tempfile::Builder::new().tempfile_in(&locked).is_ok() {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let err = upload_file_sync(&workspace, "locked", "x.txt", b"data").unwrap_err();
+        let message = err.to_string();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(message.contains("not writable"), "{message}");
+        assert!(
+            !root.path().join("locked/x.txt").exists(),
+            "a rejected upload writes nothing"
+        );
     }
 
     #[test]
