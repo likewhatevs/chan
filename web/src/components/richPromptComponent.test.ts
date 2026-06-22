@@ -138,6 +138,17 @@ describe("RichPrompt.svelte component", () => {
     // From the greyed card, recall un-greys (the text is already shown); from an
     // empty composer it restores the buffer. Both best-effort cancel.
     expect(richPromptSrc).toMatch(/if \(isPending\) \{[\s\S]{1,200}enterLocalEdit\(\);/);
+    // The card-up recall MUST fold the readOnly->editable reconfigure into its
+    // own dispatch and DEFER focus to a microtask — same WKWebView flip the
+    // delivered path folds. Leaning on the out-of-band lock $effect + a
+    // synchronous focus leaves the card un-typeable until a remount (the
+    // ArrowUp-stuck-read-only regression).
+    const recallPending = richPromptSrc.match(
+      /if \(isPending\) \{[\s\S]*?return true;\n    \}/,
+    )?.[0];
+    expect(recallPending).toBeTruthy();
+    expect(recallPending).toContain("lockCompartment.reconfigure(lockExtensions(false))");
+    expect(recallPending).toContain("queueMicrotask(() => view?.focus())");
     expect(richPromptSrc).toMatch(/view\.state\.doc\.length > 0 \|\| !lastQueued\) return false/);
     expect(richPromptSrc).toMatch(/const \{ id, text \} = lastQueued;/);
     expect(richPromptSrc).toMatch(/sendCancelToTerminal\(tab\.id, id\)/);

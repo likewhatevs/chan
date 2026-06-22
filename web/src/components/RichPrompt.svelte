@@ -228,7 +228,18 @@
       if (lastQueued) sendCancelToTerminal(tab.id, lastQueued.id);
       lastQueued = null;
       enterLocalEdit();
-      view.focus();
+      // Un-grey the card in the SAME transaction — the text is already shown, so
+      // keep it and drop the caret at the end — instead of leaning on the
+      // out-of-band lock $effect to unlock after the fact. That flip lands a
+      // synchronous view.focus() while the editor is still readOnly, which
+      // WKWebView drops, leaving the card un-typeable until a remount (the same
+      // failure consumeTerminalPhase's delivered path folds away). Defer focus to
+      // a microtask so it lands AFTER the $effect's trailing reconfigure.
+      view.dispatch({
+        selection: { anchor: view.state.doc.length },
+        effects: lockCompartment.reconfigure(lockExtensions(false)),
+      });
+      queueMicrotask(() => view?.focus());
       return true;
     }
     if (view.state.doc.length > 0 || !lastQueued) return false;
