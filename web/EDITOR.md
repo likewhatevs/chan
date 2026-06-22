@@ -4,9 +4,11 @@ How the WYSIWYG editor in `web/` is meant to behave. This document is the source
 
 ## Core principle
 
-The editor is **live-preview**: any line or inline element shows its rendered form when the cursor is elsewhere, and reveals its markdown source when the cursor enters it. Moving the cursor away hides the source again. No mode toggle, no separate "source view" pane.
+The editor is **live-preview**: any line or inline element shows its rendered form when the cursor is elsewhere, and reveals its markdown source when the cursor enters it. Moving the cursor away hides the source again. This is the default surface for renderable files.
 
 This mirrors Obsidian's Live Preview model. The user types markdown freely; the editor renders it on the fly and re-shows the markers as soon as the user needs to edit them.
+
+A whole-document **Source view** is also available — the "Show Source Code" toggle (Cmd/Ctrl+E, or the tab's right-click menu) flips to the raw text in a plain CodeMirror editor. The toggle is gated to files that have a rendered surface: markdown ↔ `wysiwyg`, JSON ↔ `pretty`, CSV/TSV ↔ `table`. A plain source file (`.rs`, `.py`, `.toml`, `Makefile`) has only the source view, so the toggle is a no-op there — it never forces an invalid markdown render on non-markdown text.
 
 ## Per-element behavior
 
@@ -54,10 +56,17 @@ This mirrors Obsidian's Live Preview model. The user types markdown freely; the 
 - Editing the `alt` text is plain text editing.
 - Editing the `src` opens a search dropdown anchored to the markdown with image-result previews (same shape as the insert flow). When the path doesn't resolve, render an inline error row under the markdown: `"<path>" could not be found.`
 
-### Calendar shortcuts `!/today`, `!/date`
+### Date macros `@today`, `@date`
 
-- Typing `!/today` or `!/date` opens a calendar picker over the supported formats. The picker is **editor-only**: it inserts a plain date string into the source. The markdown contains no special marker.
-- Dates are never indexed. No graph edges, no FTS column, no per-date search. (See the chan-core task at the bottom.)
+- Typed verbatim as reserved macro words. Committing the trigger (press **Space** or **Enter**) rewrites it as a date string in the user's default format (`workspace.info.preferences.date_format`, falling back to ISO); the committing space / newline is consumed, not inserted (so the flow is "type `@today`, hit Space, see the date, keep typing"). The freshly-written date is then auto-detected by the date matcher and rendered as a date **pill** (clicking the pill opens the calendar / format popover).
+  - `@today`: bakes today's date and moves on — no popover.
+  - `@date`: same insertion, then opens the calendar / format popover anchored at the date so the user can navigate to a different day or switch format without selecting one first.
+- `today` / `date` are also reserved by the contact-bubble trigger detection, so typing `@today` / `@date` does not steal Enter for an `@`-mention commit.
+- Dates are an editor-only convenience: they insert a plain date string, never a special marker. They are never indexed — no graph edges, no FTS column, no per-date search. (See the chan-workspace task at the bottom.)
+
+### Page-break macros `@pagebreak`, `@break`
+
+- Typed as reserved macro words like the date macros. Committing the trigger rewrites it into a page-break atom — an `<hr class="chan-page-break">` line — rendered as an atomic page break (caret motion skips it in one keystroke). The macro words `@pagebreak`, `@break` (alongside `@today`, `@date`) suppress the contact bubble so the `@` does not open an `@`-mention search.
 
 ### Lists `- item`, `1. item`, `- [ ] task`
 
@@ -85,14 +94,11 @@ This mirrors Obsidian's Live Preview model. The user types markdown freely; the 
 - No underline.
 - No date indexing, date search, or date graph edges. Dates are an editor convenience for typing absolute dates fast.
 
-## Companion task: chan-core date tokens
+## Companion task: chan-workspace date tokens
 
-There is residual date-extraction code in chan-core that should be removed once the principle above lands. Inventory at the time of writing:
+There is residual date-extraction code in chan-workspace that can be removed now that dates are an editor-only convenience (see above). Referenced by symbol (line numbers drift):
 
-- `crates/chan-workspace/src/markdown/tokens.rs:1-12` — header doc about date tokens
-- `crates/chan-workspace/src/markdown/tokens.rs:22` — `Token::Date` enum variant
-- `crates/chan-workspace/src/markdown/tokens.rs:65-79` — date pattern match + token emission
-- `crates/chan-workspace/src/markdown/tokens.rs:182-248` — date tests
-- `crates/chan-workspace/src/workspace.rs:1306-1309` — explicit `Token::Date` skip in `build_edges`
+- `crates/chan-workspace/src/markdown/tokens.rs` — the date-token header doc, the `Token::Date { iso }` enum variant, its date pattern match + token emission, and the date tests.
+- `crates/chan-workspace/src/workspace.rs` — the explicit `Token::Date { .. } => {}` skip in `build_edges`.
 
 The skip already prevents date tokens from polluting the graph, so no behavior changes in production today. Delete the variant + tests when convenient to drop the carrying cost.

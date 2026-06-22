@@ -49,9 +49,12 @@ describe("keymap + runCommand routing", () => {
 });
 
 describe("store-side helper", () => {
-  test("toggleActiveFileTabMode flips between source and wysiwyg on the active file tab", () => {
+  test("toggleActiveFileTabMode flips between source and the file's rendered mode", () => {
+    // Gated to renderable files via defaultModeForPath (md→wysiwyg, json→pretty,
+    // csv→table); source-only files (.rs/.py) yield "source" and the toggle
+    // no-ops. Mirrors FileEditorTab's hasRenderedMode / renderedModeForTab gate.
     expect(tabs).toMatch(
-      /export function toggleActiveFileTabMode\(\): void \{[\s\S]{1,800}if \(!tab \|\| tab\.kind !== "file"\) return;[\s\S]{1,200}tab\.mode = tab\.mode === "source" \? "wysiwyg" : "source";/,
+      /export function toggleActiveFileTabMode\(\): void \{[\s\S]{1,800}if \(!tab \|\| tab\.kind !== "file"\) return;[\s\S]{1,300}const rendered = defaultModeForPath\(tab\.path, tab\.fileKind\);[\s\S]{1,120}if \(rendered === "source"\) return;[\s\S]{1,200}setMode\(tab, tab\.mode === "source" \? rendered : "source"\);/,
     );
   });
 

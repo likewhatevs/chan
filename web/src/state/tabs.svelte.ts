@@ -3594,18 +3594,25 @@ export function setMode(tab: Tab, mode: Mode): void {
   if (tab.kind === "file") tab.mode = mode;
 }
 
-/// Flip the active pane's file tab between source and the rendered
-/// surface. Routed via the Mod+E chord and the editor's right-click
-/// "Show Source Code" entry. Caret remap lives inside
-/// `FileEditorTab.svelte`'s `doToggleMode`; this helper does the basic
-/// flip and lets the editor's internal effect handle position fidelity.
-/// No-op when the active tab isn't a file tab.
+/// Flip the active pane's file tab between source and its rendered surface
+/// (markdown → wysiwyg, JSON → pretty, CSV/TSV → table). Gated to files that
+/// HAVE a rendered surface: plain text (.rs/.py/.toml/Makefile) has only source
+/// mode, so the Mod+E chord is a NO-OP there instead of forcing an invalid
+/// wysiwyg render. `defaultModeForPath` yields the rendered mode for renderable
+/// files and "source" for source-only ones — the same split FileEditorTab's
+/// in-menu "Show Source Code" toggle uses (`hasRenderedMode` /
+/// `renderedModeForTab`). Routed via the Mod+E chord; the right-click "Show
+/// Source Code" entry runs FileEditorTab's `doToggleMode` (which adds caret
+/// remapping). This helper does the basic flip and lets the editor's internal
+/// effect handle position fidelity. No-op when the active tab isn't a file tab.
 export function toggleActiveFileTabMode(): void {
   const node = layout.nodes[layout.activePaneId];
   if (!node || node.kind !== "leaf") return;
   const tab = node.tabs.find((t) => t.id === node.activeTabId);
   if (!tab || tab.kind !== "file") return;
-  tab.mode = tab.mode === "source" ? "wysiwyg" : "source";
+  const rendered = defaultModeForPath(tab.path, tab.fileKind);
+  if (rendered === "source") return;
+  setMode(tab, tab.mode === "source" ? rendered : "source");
 }
 
 /// Tab-state mutators. These exist so child components (FileEditorTab

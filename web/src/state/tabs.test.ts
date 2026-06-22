@@ -100,6 +100,7 @@ import {
   terminalBroadcastMemberIds,
   terminalEnvTabNameStale,
   terminalTabGroup,
+  toggleActiveFileTabMode,
   toggleActiveTerminalBroadcastSelectAll,
   truncateTabTitle,
   type BrowserTab,
@@ -2228,6 +2229,46 @@ describe("terminal session serialization", () => {
     expect(tab.terminalSessionId).toBe("term_pre_mount");
 
     await restored;
+  });
+});
+
+describe("toggleActiveFileTabMode source<->rendered gate (#3/#7)", () => {
+  test("markdown flips source <-> wysiwyg", () => {
+    const tab = fileTab({ path: "notes/a.md", fileKind: "document", mode: "wysiwyg" });
+    resetLayout([tab]);
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "source" });
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "wysiwyg" });
+  });
+
+  test("JSON flips source <-> pretty (not wysiwyg)", () => {
+    const tab = fileTab({ path: "data/x.json", fileKind: "text", mode: "pretty" });
+    resetLayout([tab]);
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "source" });
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "pretty" });
+  });
+
+  test("CSV flips source <-> table", () => {
+    const tab = fileTab({ path: "rows.csv", fileKind: "text", mode: "table" });
+    resetLayout([tab]);
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "source" });
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "table" });
+  });
+
+  test("plain-text source files (.rs) do NOT toggle — no invalid wysiwyg render", () => {
+    const tab = fileTab({ path: "src/lib.rs", fileKind: "text", mode: "source" });
+    resetLayout([tab]);
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "source" });
+    // Even if a stale wysiwyg slipped in somehow, the gate refuses to render it.
+    (activePane().tabs[0] as FileTab).mode = "source";
+    toggleActiveFileTabMode();
+    expect(activePane().tabs[0]).toMatchObject({ mode: "source" });
   });
 });
 
