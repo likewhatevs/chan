@@ -31,7 +31,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use axum::body::Body;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, Request as HttpRequest, StatusCode};
 use axum::middleware::{self, Next};
@@ -46,7 +45,7 @@ use crate::devserver_api::{
     ActiveTerminalsRejection, DevserverInfo, DevserverWindow, MountedPrefix, OpenWorkspaceRequest,
     SetWorkspaceOnRequest, WorkspaceEntry, DEVSERVER_API_PROTOCOL,
 };
-use crate::{CreateWindow, Error, ServeConfig, WindowRecord, WindowSet, WorkspaceHost};
+use crate::{Error, ServeConfig, WorkspaceHost};
 // Prefix allocation lives in chan-library (the window-record assembly needs the
 // stable OFF-workspace prefix); the devserver mounts at the same prefix.
 use chan_library::windows::WindowRegistry;
@@ -789,125 +788,27 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             delete(handle_forget).post(handle_set_workspace_on),
         )
         .route("/api/devserver/windows", get(handle_list_windows))
-        .route(
-            "/api/library/windows",
-            get(handle_list_library_windows).post(handle_create_library_window),
-        )
-        .route(
-            "/api/library/windows/watch",
-            get(handle_watch_library_windows),
-        )
-        .route(
-            "/api/library/windows/:window_id",
-            delete(handle_discard_library_window),
-        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
         ))
         .with_state(state);
-    // Serve the web-launcher SPA at the library root `/` (and its
-    // `/api/library/*` surface) as the host's root fallback — without it the
-    // root 404s, since `host_dispatch` only matches workspace-tenant prefixes.
-    crate::install_launcher_root_fallback(&host);
+    // Serve the web-launcher SPA at the library root `/` plus the `/api/library/*`
+    // data surface (windows; workspaces next) as the host's root fallback —
+    // without it the root 404s, since `host_dispatch` only matches
+    // workspace-tenant prefixes. The `/api/library/windows*` routes used to live
+    // in `authed` above; they now live in the shared launcher bundle so the
+    // desktop loopback gets them too (the loopback never built this router).
+    //
+    // `bearer = None` (TUNNEL-TRUST) on the gateway surface: the devserver has
+    // no inbound ports, and the gateway proxy is the sole auth boundary — it
+    // validates the `devserver_gate` at its edge and STRIPS every client
+    // credential (`?t=`, Cookie, Authorization) before forwarding, so a
+    // launcher XHR reaches `/api/library/*` with zero creds. A `Some(token)`
+    // gate would 401 every call. The desktop LOOPBACK passes `Some(token)`
+    // instead (it has no proxy; the SPA presents the token via `?t=`).
+    crate::install_launcher_root_fallback(&host, None);
     public.merge(authed).merge(host.router())
-}
-
-/// `GET /api/library/windows`: the full library window set every client
-/// reconciles to. A thin wrapper over the host's shared `assemble_window_records`,
-/// which the desktop watcher and `cs window list` also call in-process, so every
-/// client reads one assembly with no divergence.
-async fn handle_list_library_windows(
-    State(state): State<Arc<DevserverState>>,
-) -> Json<Vec<WindowRecord>> {
-    Json(state.host.assemble_window_records())
-}
-
-/// `GET /api/library/windows/watch`: a WebSocket that pushes the full window set
-/// on connect and again on every change, so a client reconciles its surface to
-/// the live library state without polling. Bearer-gated via the management
-/// middleware (the `Authorization` header); a browser WebSocket cannot send that
-/// header, so a browser client needs the bearer in a query parameter, while `cs`
-/// and the desktop use the header.
-async fn handle_watch_library_windows(
-    State(state): State<Arc<DevserverState>>,
-    ws: WebSocketUpgrade,
-) -> Response {
-    let host = state.host.clone();
-    ws.on_upgrade(move |socket| watch_library_windows(socket, host))
-}
-
-/// Push a fresh window-set snapshot on connect and on every change. Sending the
-/// whole set rather than a delta keeps the client's reconcile idempotent: a
-/// dropped frame self-heals on the next push. The change waiter is armed
-/// (`enable`d) BEFORE each snapshot so a change that lands between the snapshot
-/// and the await is never missed. The loop ends when the client disconnects.
-async fn watch_library_windows(mut socket: WebSocket, host: Arc<WorkspaceHost>) {
-    let notify = host.library_change_notify();
-    let changed = notify.notified();
-    tokio::pin!(changed);
-    loop {
-        // Arm the change waiter BEFORE the snapshot. A `Notified` records the
-        // `notify_waiters` count when it is created, so creating and `enable`-ing
-        // it before the snapshot guarantees a change during the snapshot or the
-        // `send().await` advances that count and wakes the `select!` below,
-        // rather than being read into a snapshot the waiter was armed after. The
-        // explicit `enable` also keeps this consumer's ordering identical to the
-        // desktop's local watcher.
-        changed.as_mut().enable();
-        let set = WindowSet {
-            windows: host.assemble_window_records(),
-        };
-        let frame = match serde_json::to_string(&set) {
-            Ok(frame) => frame,
-            Err(_) => break,
-        };
-        if socket.send(Message::Text(frame)).await.is_err() {
-            break; // the client is gone
-        }
-        tokio::select! {
-            _ = changed.as_mut() => {
-                // A window-set change woke us: drop the consumed waiter and
-                // re-arm a fresh one, which the next loop turn enables before
-                // it reads the snapshot.
-                changed.set(notify.notified());
-            }
-            msg = socket.recv() => match msg {
-                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
-                _ => {} // ignore any other client frame
-            },
-        }
-    }
-}
-
-/// `POST /api/library/windows` `{kind, workspace_path?}`: mint a window. The
-/// library assigns the id and persists the record; the registry change bridge
-/// fires the watch. Returns the assembled record in the feed shape.
-async fn handle_create_library_window(
-    State(state): State<Arc<DevserverState>>,
-    Json(req): Json<CreateWindow>,
-) -> Response {
-    match state.host.mint_window(req.kind, req.workspace_path) {
-        Ok(record) => Json(record).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// `DELETE /api/library/windows/{window_id}`: discard a window by dropping its
-/// record; the change bridge fires the watch, and each client's reconcile then
-/// closes the window. `discard_window` reaps the window's own session state
-/// (its shared-terminal-tenant session, a workspace tenant's layout blob), so a
-/// single registry discard is the authoritative cleanup. 404 when no window has
-/// that id.
-async fn handle_discard_library_window(
-    State(state): State<Arc<DevserverState>>,
-    AxumPath(window_id): AxumPath<String>,
-) -> Response {
-    match state.host.discard_window(&window_id) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
 }
 
 /// Bind the per-user discovery socket whose registration handler mounts the
@@ -1045,16 +946,11 @@ async fn handle_list_windows(
     Json(Vec::new())
 }
 
-/// Route the watch feed authenticates by `?t=`. A browser cannot set the
-/// `Authorization` header on a WebSocket, so the watch upgrade alone accepts the
-/// bearer as a query param; every other route stays header-only, since a query
-/// token leaks through URL logs and the regular SPA `fetch` can set the header.
-const WATCH_WS_PATH: &str = "/api/library/windows/watch";
-
-/// Gate every management route except `info` on the devserver bearer token. The
-/// token arrives in the `Authorization: Bearer` header (`cs`, the desktop, the
-/// SPA `fetch`); the watch WebSocket additionally accepts it as the `?t=` query
-/// param (see [`WATCH_WS_PATH`]).
+/// Gate every `/api/devserver/*` management route except `info` on the devserver
+/// bearer token. The token arrives in the `Authorization: Bearer` header (`cs`,
+/// the desktop). The management surface is header-only: it has no WebSocket
+/// route, so there is no `?t=` query-token path here (the launcher's watch WS
+/// lives in [`crate::routes::launcher_router`], which owns its own `?t=` rule).
 async fn require_bearer(
     State(state): State<Arc<DevserverState>>,
     req: HttpRequest<Body>,
@@ -1066,15 +962,7 @@ async fn require_bearer(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
     let token = state.token.as_bytes();
-    // The `?t=` query token is accepted only for the watch WebSocket, where the
-    // browser has no other way to present it; offering it elsewhere would add a
-    // URL-leakable auth path the header already covers.
-    let query_token = (req.uri().path() == WATCH_WS_PATH)
-        .then(|| req.uri().query().and_then(query_bearer))
-        .flatten();
-    let authorized = header_token.is_some_and(|t| bytes_eq(t.as_bytes(), token))
-        || query_token.is_some_and(|t| bytes_eq(t.as_bytes(), token));
-    if authorized {
+    if header_token.is_some_and(|t| bytes_eq(t.as_bytes(), token)) {
         next.run(req).await
     } else {
         (
@@ -1085,19 +973,11 @@ async fn require_bearer(
     }
 }
 
-/// The `t` bearer from a URL query string (`...?t=<token>`), for a client that
-/// cannot set the `Authorization` header (a browser WebSocket). Tokens are
-/// alphanumeric, so the value needs no percent-decoding.
-fn query_bearer(query: &str) -> Option<&str> {
-    query.split('&').find_map(|pair| {
-        let (key, value) = pair.split_once('=')?;
-        (key == "t").then_some(value)
-    })
-}
-
 /// Length-then-content comparison of two byte slices in time independent of
 /// where they first differ, so a wrong token leaks no position information.
-fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+/// `pub(crate)` so the launcher bundle ([`crate::routes::launcher_router`])
+/// reuses the one vetted constant-time compare for its own bearer gate.
+pub(crate) fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -1648,8 +1528,12 @@ mod tests {
         let host = state.host.clone();
         let app = build_devserver_app(state, host);
 
-        // The feed is bearer-gated.
-        let unauth = app
+        // On the devserver (gateway surface) the feed is TUNNEL-TRUSTED: the
+        // launcher bundle installs with `bearer = None`, because the gateway
+        // proxy strips every client credential and is the sole auth boundary. So
+        // the feed serves WITHOUT a bearer (the loopback's `?t=` gate is covered
+        // by `launcher_router_bearer_gates_data_routes`).
+        let listed = app
             .clone()
             .oneshot(
                 HttpRequest::builder()
@@ -1659,7 +1543,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(listed.status(), StatusCode::OK);
 
         // The watch route is registered (no conflict with the discard route): a
         // plain GET is a 4xx upgrade error, not a 404.
@@ -1668,7 +1552,6 @@ mod tests {
             .oneshot(
                 HttpRequest::builder()
                     .uri("/api/library/windows/watch")
-                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1684,7 +1567,6 @@ mod tests {
                 HttpRequest::builder()
                     .method("POST")
                     .uri("/api/library/windows")
-                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(r#"{"kind":"terminal"}"#))
                     .unwrap(),
@@ -1706,7 +1588,6 @@ mod tests {
                 HttpRequest::builder()
                     .method("DELETE")
                     .uri(format!("/api/library/windows/{window_id}"))
-                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1718,7 +1599,6 @@ mod tests {
                 HttpRequest::builder()
                     .method("DELETE")
                     .uri("/api/library/windows/w-nope")
-                    .header(header::AUTHORIZATION, "Bearer test-token")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1803,14 +1683,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_token_authorizes_only_the_watch_websocket() {
+    async fn launcher_router_bearer_gates_data_routes() {
         use tower::ServiceExt;
 
+        // The LOOPBACK surface installs the launcher bundle with `Some(token)`
+        // (the desktop per-window token). Drive `launcher_router` directly with a
+        // token to pin the bearer semantics: header for every route, `?t=` for the
+        // watch WS only. (The devserver/gateway surface uses `None` — tunnel-trust
+        // — verified in `library_windows_feed_lists_mints_and_discards`.)
         let home = tempfile::tempdir().expect("home");
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let state = test_state(home.path(), addr);
         let host = state.host.clone();
-        let app = build_devserver_app(state, host);
+        let app = crate::routes::launcher_router(host, Some("test-token"));
+
+        // No credential: rejected.
+        let unauth = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/windows")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+
+        // Valid `Authorization` header: allowed.
+        let with_header = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/windows")
+                    .header(header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(with_header.status(), StatusCode::OK);
 
         // A regular route does NOT accept `?t=`: the header is required (a query
         // token leaks via URL logs, and the SPA fetch can set the header).
