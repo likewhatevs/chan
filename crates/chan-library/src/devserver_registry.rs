@@ -43,6 +43,12 @@ pub struct DevserverEntry {
     /// Whether a bearer token is stored for this devserver. The value itself is
     /// never echoed back over the wire.
     pub has_token: bool,
+    /// Auto-hide the connect CONTROL terminal once the devserver connects: when
+    /// set, the desktop's connect flow buries the control-terminal window on
+    /// success instead of leaving it open. Set from the add/edit dialog.
+    /// `#[serde(default)]`: a row without the field reads `false`.
+    #[serde(default)]
+    pub auto_hide_control: bool,
     /// The library id this devserver is assigned once known, joining its window
     /// rows in the feed to the user's name for it. `None` before the devserver's
     /// first connect, when no library id exists yet.
@@ -77,6 +83,10 @@ pub struct DevserverInput {
     /// Optional bearer token (write-only). `None` on update keeps the stored one.
     #[serde(default)]
     pub token: Option<String>,
+    /// Auto-hide the connect control terminal on a successful connect (the
+    /// dialog's checkbox). `#[serde(default)]`: an absent field reads `false`.
+    #[serde(default)]
+    pub auto_hide_control: bool,
 }
 
 /// The launcher's devserver CRUD, inverted so chan-library (and chan-server's

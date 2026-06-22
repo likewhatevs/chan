@@ -1000,6 +1000,7 @@ mod devserver_route_tests {
                     has_token: true,
                     library_id: None,
                     connected: false,
+                    auto_hide_control: false,
                 }]),
             }
         }
@@ -1022,6 +1023,7 @@ mod devserver_route_tests {
                 has_token: input.token.is_some(),
                 library_id: None,
                 connected: false,
+                auto_hide_control: input.auto_hide_control,
             };
             self.rows.lock().unwrap().push(entry.clone());
             Ok(entry)
@@ -1037,6 +1039,7 @@ mod devserver_route_tests {
             };
             row.host = input.host;
             row.port = input.port;
+            row.auto_hide_control = input.auto_hide_control;
             if let Some(label) = input.label {
                 row.label = label;
             }
@@ -1221,20 +1224,21 @@ mod devserver_route_tests {
     }
 
     #[tokio::test]
-    async fn add_devserver_carries_no_color() {
-        // The devserver add/edit form no longer carries `color`; a devserver's
-        // pane colour is set from the focus-border flow, not this dialog.
+    async fn add_devserver_carries_no_color_but_round_trips_auto_hide_control() {
+        // The add/edit form no longer carries `color` (set from the focus-border
+        // flow), but it DOES carry `auto_hide_control` (W4), echoed back.
         let reg = Arc::new(FakeRegistry::default());
         let router = router_with(Some(reg), true);
         let (status, body) = request(
             &router,
             "POST",
             "/api/library/devservers",
-            Some(r#"{"host":"box","port":9000}"#),
+            Some(r#"{"host":"box","port":9000,"auto_hide_control":true}"#),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["color"], serde_json::Value::Null);
+        assert_eq!(body["auto_hide_control"], true);
     }
 
     /// An in-memory [`LocalColorStore`] so the local-color routes are exercised
