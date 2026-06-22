@@ -1473,10 +1473,12 @@ fn looks_like_devserver_url(target: &str) -> bool {
     }
 }
 
-/// `chan open {url}`: register (and connect) a devserver by URL via the
-/// CLI→desktop handoff. The devserver entry lives in the desktop's config
-/// (the same registry the launcher reads), so this needs a running
-/// chan-desktop to land into — without one there is nowhere to persist it.
+/// `chan open {url}`: REGISTER a devserver by URL via the CLI→desktop handoff,
+/// then return. It does NOT dial/connect — connecting is the launcher's
+/// Connect button. The devserver entry lives in the desktop's config (the same
+/// registry the launcher reads), so this needs a running chan-desktop to land
+/// into; without one there is nowhere to persist it (no standalone fallback —
+/// a URL is never served locally).
 async fn cmd_open_devserver(
     url: String,
     name: Option<String>,
@@ -1495,7 +1497,10 @@ async fn cmd_open_devserver(
     use chan_server::handoff::Outcome;
     match chan_server::handoff::try_open_devserver(&url, name.as_deref(), script.as_deref()).await {
         Outcome::HandedOff => {
-            println!("chan: registered devserver {url} with chan-desktop.");
+            // Registered, not connected: point the user at the launcher's
+            // Connect button. Labelled by --name when given, else the URL.
+            let label = name.as_deref().unwrap_or(&url);
+            println!("registered \"{label}\". Open it from the launcher.");
             Ok(())
         }
         Outcome::VersionSkew {
@@ -1508,10 +1513,12 @@ async fn cmd_open_devserver(
         Outcome::DesktopError { message } => {
             anyhow::bail!("chan-desktop could not register the devserver: {message}")
         }
-        Outcome::NoDesktop => anyhow::bail!(
-            "no running chan-desktop found to register the devserver into. A devserver entry \
-             lives in the desktop's config; start chan-desktop and try again."
-        ),
+        // No desktop = nowhere to register. Unlike the path form, a URL never
+        // falls back to a standalone serve (mirrors the window-op "needs the
+        // desktop" refusal).
+        Outcome::NoDesktop => {
+            anyhow::bail!("chan open {url} needs the chan desktop app running.")
+        }
     }
 }
 
