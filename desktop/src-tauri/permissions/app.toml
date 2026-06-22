@@ -24,7 +24,6 @@ permissions = [
   "allow-add-devserver",
   "allow-list-devservers",
   "allow-remove-devserver",
-  "allow-connect-devserver",
   "allow-disconnect-devserver",
   "allow-list-devserver-workspaces",
   "allow-open-devserver-workspace",
@@ -200,11 +199,6 @@ commands.allow = ["list_devservers"]
 identifier = "allow-remove-devserver"
 description = "Enables the remove_devserver command."
 commands.allow = ["remove_devserver"]
-
-[[permission]]
-identifier = "allow-connect-devserver"
-description = "Enables the connect_devserver command."
-commands.allow = ["connect_devserver"]
 
 [[permission]]
 identifier = "allow-disconnect-devserver"

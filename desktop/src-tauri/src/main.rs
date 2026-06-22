@@ -1096,10 +1096,14 @@ fn spawn_control_terminal_exit_watcher(
 /// cannot read still works); with no script, the devserver runs locally and
 /// the token comes from its `~/.chan/devserver/config.json`. Once connected
 /// the launcher polls the devserver's workspace list.
-#[tauri::command]
-async fn connect_devserver(
+///
+/// Driven over the desktop bridge: the launcher's Connect button fires
+/// `POST /api/library/devservers/{id}/connect` → `DesktopWindowOp::ConnectDevserver`
+/// → `window_ops`, which calls this. There is no `#[tauri::command]` wrapper —
+/// the launcher is pure HTTP, never a Tauri invoke.
+async fn connect_devserver_impl(
     app: tauri::AppHandle,
-    state: State<'_, Arc<AppState>>,
+    state: Arc<AppState>,
     id: String,
 ) -> Result<(), String> {
     let (url, script) = {
@@ -1732,6 +1736,108 @@ async fn desktop_handle_upgrade(
         Err(e) => Response::Error {
             message: format!("update check failed: {e}"),
         },
+    }
+}
+
+/// On-launch background self-update check. The desktop registers
+/// `tauri-plugin-updater`, but only the hand `chan upgrade` (the hand-off
+/// `desktop_handle_upgrade` path) drives it — a running desktop never checks on
+/// its own, so it stays on its installed version until the user upgrades by
+/// hand. Spawn a background check on launch so a stale desktop updates itself.
+///
+/// Opt-out mirrors the CLI's `CHAN_UPDATE_CHECK=0` (`chan::update` `ENV_DISABLE`)
+/// so one env silences both the CLI banner probe and this desktop check. The new
+/// bundle is downloaded + installed in the background, then the user is asked
+/// whether to relaunch now (the bundle applies on the next launch either way, so
+/// "Later" is non-destructive). Windows has no updater feed (see
+/// `desktop_handle_upgrade`), so this is a no-op there.
+#[cfg(unix)]
+fn spawn_launch_update_check(app: tauri::AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+
+    // Mirror the CLI opt-out exactly: only the literal "0" disables it.
+    if matches!(std::env::var("CHAN_UPDATE_CHECK"), Ok(v) if v == "0") {
+        tracing::info!("on-launch update check disabled by CHAN_UPDATE_CHECK=0");
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let updater = match app.updater() {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!(error = %e, "on-launch update check: updater unavailable");
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => {
+                let version = update.version.clone();
+                tracing::info!(%version, "on-launch update available; downloading");
+                match update
+                    .download_and_install(|_chunk, _total| {}, || {})
+                    .await
+                {
+                    Ok(()) => {
+                        // Re-affirm the `~/.local/bin/{chan,cs}` shims to the
+                        // (possibly relocated) new binary, mirroring the
+                        // `chan upgrade` install path.
+                        match cs_install::install_bin_shims() {
+                            Ok(n) => {
+                                tracing::info!(shims = n, "re-affirmed bin shims after update")
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "re-affirming bin shims after update failed")
+                            }
+                        }
+                        tracing::info!(%version, "on-launch update installed; prompting to restart");
+                        prompt_restart_for_update(&app, &version);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "on-launch update download/install failed");
+                    }
+                }
+            }
+            Ok(None) => tracing::info!("on-launch update check: already up to date"),
+            Err(e) => tracing::warn!(error = %e, "on-launch update check failed"),
+        }
+    });
+}
+
+#[cfg(windows)]
+fn spawn_launch_update_check(_app: tauri::AppHandle) {
+    // No Windows updater feed (see `desktop_handle_upgrade`); nothing to check.
+}
+
+/// After an on-launch update installs, ask whether to relaunch now. The new
+/// bundle is already on disk, so "Later" simply applies it on the next launch;
+/// "Restart" relaunches into the new version immediately. Tauri dialogs must run
+/// on the main thread.
+#[cfg(unix)]
+fn prompt_restart_for_update(app: &tauri::AppHandle, version: &str) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+    let app_owned = app.clone();
+    let message = format!(
+        "chan-desktop {version} has been downloaded. Restart now to use it, \
+         or it will apply the next time you open chan-desktop."
+    );
+    let scheduled = app.run_on_main_thread(move || {
+        app_owned
+            .clone()
+            .dialog()
+            .message(message)
+            .title("Update ready")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Restart".into(),
+                "Later".into(),
+            ))
+            .show(move |restart| {
+                if restart {
+                    app_owned.restart();
+                }
+            });
+    });
+    if let Err(e) = scheduled {
+        tracing::warn!(error = %e, "scheduling the update-ready restart prompt failed");
     }
 }
 
@@ -2709,6 +2815,11 @@ fn main() {
                 }
             });
 
+            // On-launch self-update check: a running stale desktop updates
+            // itself instead of only on a hand `chan upgrade`. Spawns its own
+            // background task; honors CHAN_UPDATE_CHECK=0.
+            spawn_launch_update_check(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2747,7 +2858,6 @@ fn main() {
             add_devserver,
             list_devservers,
             remove_devserver,
-            connect_devserver,
             disconnect_devserver,
             list_devserver_workspaces,
             open_devserver_workspace,

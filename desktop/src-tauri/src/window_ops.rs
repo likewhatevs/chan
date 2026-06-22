@@ -1,10 +1,12 @@
-//! Consumer for the `cs window <op>` bridge.
+//! Consumer for the desktop window bridge.
 //!
-//! The embedded chan-server hands each `cs window new|open|rm|hide|title`
-//! request to the desktop over an mpsc channel (see
-//! `chan_server::DesktopBridge`); this module owns the receiver and turns
-//! each [`DesktopWindowOp`] into the matching Tauri window action, then
-//! completes the op's `oneshot` so the blocked `cs` command unblocks.
+//! The embedded chan-server hands each window request to the desktop over an
+//! mpsc channel (see `chan_server::DesktopBridge`); this module owns the
+//! receiver and turns each [`DesktopWindowOp`] into the matching Tauri action,
+//! then completes the op's `oneshot` so the blocked caller unblocks. The
+//! requests come from two surfaces: the `cs window new|open|rm|hide|title` CLI,
+//! and the launcher's `/api/library/*` HTTP routes (status-dot open/hide, the
+//! devserver Connect button, the New-Workspace folder picker).
 //!
 //! Tauri window operations (build / show / destroy / set_title / dialogs)
 //! must run on the main thread, so the handlers hop there via
@@ -65,6 +67,37 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
         DesktopWindowOp::Close { id, force, reply } => {
             close_window(app, state, id, force, reply).await;
         }
+        DesktopWindowOp::ConnectDevserver { id, reply } => {
+            // The launcher's Connect button fires this over the bridge; it runs
+            // the full devserver connect flow (control terminal, token scrape,
+            // dial, window watcher).
+            let _ = reply.send(crate::connect_devserver_impl(app, state, id).await);
+        }
+        DesktopWindowOp::PickFolder { reply } => {
+            // The launcher's New-Workspace "Browse…" button fires this over the
+            // bridge to get a real native folder dialog. The picker is async-
+            // callback based and Tauri dialogs must run on the main thread, so the
+            // `on_main` hop only SCHEDULES the dialog; the chosen path (or cancel)
+            // completes the oneshot from the picker callback. `Ok(None)` = the
+            // user cancelled.
+            let app2 = app.clone();
+            let scheduled = on_main(&app, move || {
+                use tauri_plugin_dialog::DialogExt;
+                app2.dialog().file().pick_folder(move |chosen| {
+                    let path = chosen
+                        .and_then(|fp| fp.into_path().ok())
+                        .map(|p| p.to_string_lossy().into_owned());
+                    let _ = reply.send(Ok(path));
+                });
+            })
+            .await;
+            if let Err(e) = scheduled {
+                // The reply moved into the picker callback; if SCHEDULING the
+                // dialog failed nothing completes it, and the dropped sender maps
+                // to an error server-side.
+                tracing::warn!(error = %e, "scheduling the folder picker failed");
+            }
+        }
     }
 }
 
@@ -85,12 +118,15 @@ async fn new_workspace_window(state: &Arc<AppState>, key: &str) -> Result<String
     Ok(crate::window_watcher::native_label(&record))
 }
 
-/// `cs window hide`: route through the OS close-button path so the
-/// existing bury handler (which knows this window's restore key) runs.
-/// `close()` requests a close — the handler hides SPA windows — unlike
-/// `destroy()`, which `rm` uses to truly remove.
+/// `cs window hide` / the launcher status-dot hide: route through the OS
+/// close-button path so the existing bury handler (which knows this window's
+/// restore key) runs. `close()` requests a close — the handler hides SPA
+/// windows — unlike `destroy()`, which `rm` uses to truly remove. Resolves the
+/// launcher's bare `window_id` to the composite native label first (see
+/// [`serve::resolve_window_label`]).
 fn hide_window(app: &AppHandle, id: &str) -> Result<(), String> {
-    match app.get_webview_window(id) {
+    let label = serve::resolve_window_label(app, id);
+    match app.get_webview_window(&label) {
         Some(w) => w.close().map_err(|e| format!("hiding {id}: {e}")),
         None => Err(format!("no window {id}")),
     }

@@ -448,14 +448,65 @@ pub fn control_terminal_label(devserver_id: &str) -> String {
 /// best-effort reopen a closed-but-saved workspace window whose
 /// workspace is still running. Errors when the id names nothing the
 /// desktop can act on.
+/// Resolve the id an open/hide op carries to a native window label. The
+/// launcher's status-dot affordance sends a BARE library-minted `window_id`
+/// (e.g. `w-1a2b`), but a watched window's native label is the composite
+/// `{library_id}::{window_id}` ([`crate::window_watcher::native_label`]) — so a
+/// bare id never matches `get_webview_window` directly. `cs window` callers
+/// pass the full label already (composite, or a legacy `terminal-`/`workspace-`
+/// scheme), so an id that is itself a live label OR already contains `::` is
+/// used verbatim. Otherwise match the open native window whose label ends with
+/// `::{id}` (a devserver window hides its webview alive, so the scan finds it).
+/// With NO live window the id is a buried LOCAL watched window — the reconcile
+/// destroyed its native window on bury, so it can't be scanned; fall back to the
+/// `local::` composite for the view-driven un-bury in [`open_window_by_label`].
+pub(crate) fn resolve_window_label(app: &AppHandle, id: &str) -> String {
+    // A live window whose exact label IS `id` wins — covers `cs window` passing a
+    // legacy `terminal-`/`workspace-` label that carries no `::`.
+    if app.get_webview_window(id).is_some() {
+        return id.to_string();
+    }
+    let open: Vec<String> = app.webview_windows().into_keys().collect();
+    resolve_label_from(id, &open)
+}
+
+/// Pure resolution core (unit-testable without a live Tauri app): pick the
+/// native label for `id` given the currently-open native labels. A composite or
+/// legacy label (one containing `::`) is used verbatim; a bare `window_id`
+/// matches the open `{library_id}::{id}` window; with none open it resolves to
+/// the local composite (the only windows that bury by DESTROY — vs hide-alive —
+/// are the local library's, so an un-scannable bare id is a buried local one).
+fn resolve_label_from(id: &str, open_labels: &[String]) -> String {
+    if id.contains("::") {
+        return id.to_string();
+    }
+    let suffix = format!("::{id}");
+    if let Some(label) = open_labels.iter().find(|l| l.ends_with(&suffix)) {
+        return label.clone();
+    }
+    format!("local::{id}")
+}
+
 pub fn open_window_by_label(
     app: &AppHandle,
     state: &Arc<AppState>,
     label: &str,
 ) -> Result<(), String> {
+    let label = resolve_window_label(app, label);
+    let label = label.as_str();
+    // A watched LOCAL window un-buries through the watcher view: its bury
+    // DESTROYED the native window (the reconcile closed it), so there is no
+    // webview to `show()` — `unbury_window` flips the view and the reconcile
+    // reopens it at its `window_id`. This must run even when there is no live
+    // webview, so it precedes the `get_webview_window` check below.
+    if label.starts_with("local::") {
+        crate::unbury_window(app, label);
+        return Ok(());
+    }
     if app.get_webview_window(label).is_some() {
-        // Live (visible or buried): `unbury_window` shows + focuses, and
-        // drops it from the buried list / Window menu if it was hidden.
+        // Live (visible or hidden-alive — e.g. a devserver window): `unbury_window`
+        // shows + focuses, and drops it from the buried list / Window menu if it
+        // was hidden.
         crate::unbury_window(app, label);
         return Ok(());
     }
@@ -1454,6 +1505,36 @@ const KEY_BRIDGE_JS: &str = r#"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_label_matches_a_bare_window_id_to_its_composite_native_label() {
+        // The launcher's status-dot open/hide sends the BARE library-minted
+        // `window_id`; the desktop must resolve it to the composite native label
+        // the watcher actually opened (`{library_id}::{window_id}`).
+        let open = vec!["local::w-1".to_string(), "lib-abc::w-2".to_string()];
+        assert_eq!(resolve_label_from("w-1", &open), "local::w-1");
+        assert_eq!(resolve_label_from("w-2", &open), "lib-abc::w-2");
+    }
+
+    #[test]
+    fn resolve_label_falls_back_to_local_for_a_buried_window_with_no_native_surface() {
+        // A buried LOCAL watched window was DESTROYED by the reconcile, so it is
+        // not in the open set — resolve it to its `local::` composite so the
+        // view-driven un-bury still reaches it.
+        let open = vec!["lib-abc::w-9".to_string()];
+        assert_eq!(resolve_label_from("w-1", &open), "local::w-1");
+        assert_eq!(resolve_label_from("w-1", &[]), "local::w-1");
+    }
+
+    #[test]
+    fn resolve_label_passes_a_full_composite_or_legacy_label_through_verbatim() {
+        // `cs window open/hide` passes the full label already; a composite is used
+        // verbatim even when its native window was destroyed (not in the open set),
+        // so `cs window open <composite>` reaches the view-driven reopen too.
+        let open = vec!["local::w-5".to_string()];
+        assert_eq!(resolve_label_from("local::w-1", &open), "local::w-1");
+        assert_eq!(resolve_label_from("lib-z::w-3", &[]), "lib-z::w-3");
+    }
 
     #[test]
     fn invoke_handler_registers_reload_window_and_open_devtools() {
