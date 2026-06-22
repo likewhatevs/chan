@@ -92,6 +92,13 @@ pub struct WindowRecord {
     /// A `/ws` socket tagged with `window_id` is live right now: some client has
     /// it open (visible OR buried; the server cannot tell those apart).
     pub connected: bool,
+    /// A file transfer (upload or download) is in flight for this window right
+    /// now. Volatile per-push state (the whole set is re-assembled each push), so
+    /// a client with no `/ws` view of the serving tenant — the desktop onto a
+    /// remote devserver — still learns a window is mid-transfer and can guard its
+    /// close. `#[serde(default)]`: a record without the field reads `false`.
+    #[serde(default)]
+    pub active_transfer: bool,
 }
 
 /// The window-set watch frame: a full snapshot pushed on connect and on every
@@ -159,6 +166,10 @@ impl PersistedWindow {
             token,
             persisted: true,
             connected,
+            // The live transfer bit is overlaid by the feed assembly
+            // (`assemble_window_records`), the one place that holds tenant
+            // transfer state; a freshly assembled/minted record defaults off.
+            active_transfer: false,
         }
     }
 }
@@ -501,6 +512,7 @@ mod tests {
             token: "tok_term".into(),
             persisted: true,
             connected: true,
+            active_transfer: false,
         };
         let v = serde_json::to_value(&rec).unwrap();
         assert_eq!(
@@ -515,6 +527,7 @@ mod tests {
                 "token": "tok_term",
                 "persisted": true,
                 "connected": true,
+                "active_transfer": false,
             })
         );
         assert_eq!(rec, serde_json::from_value(v).unwrap());
@@ -535,6 +548,7 @@ mod tests {
             token: String::new(),
             persisted: true,
             connected: false,
+            active_transfer: false,
         };
         assert_eq!(
             serde_json::to_value(&rec).unwrap(),
@@ -549,7 +563,28 @@ mod tests {
                 "token": "",
                 "persisted": true,
                 "connected": false,
+                "active_transfer": false,
             })
+        );
+        // `#[serde(default)]`: a record minted before this field existed (no
+        // `active_transfer` key) deserializes with the bit off — the desktop
+        // simply sees no in-flight transfer until the next push carries one.
+        let legacy = json!({
+            "window_id": "w-99aa88bb77cc66dd",
+            "library_id": "lib-0f1e2d3c4b5a6978",
+            "kind": "workspace",
+            "title": "🏠 /home/u/notes Window 2",
+            "ordinal": 2,
+            "workspace_path": "/home/u/notes",
+            "prefix": "/api/notes-1a2b3c",
+            "token": "",
+            "persisted": true,
+            "connected": false,
+        });
+        assert!(
+            !serde_json::from_value::<WindowRecord>(legacy)
+                .unwrap()
+                .active_transfer
         );
     }
 
@@ -567,10 +602,12 @@ mod tests {
                 token: "tok_term".into(),
                 persisted: true,
                 connected: true,
+                active_transfer: true,
             }],
         };
         let v = serde_json::to_value(&set).unwrap();
         assert_eq!(v["windows"][0]["window_id"], "w-1a2b3c4d5e6f7081");
+        assert_eq!(v["windows"][0]["active_transfer"], true);
         assert_eq!(v["windows"].as_array().unwrap().len(), 1);
         assert_eq!(set, serde_json::from_value(v).unwrap());
     }
@@ -800,6 +837,8 @@ mod tests {
         assert_eq!(rec.token, "");
         assert!(rec.persisted, "a registry row is always persisted");
         assert!(!rec.connected);
+        // `to_record` leaves the transfer bit off; the feed assembly overlays it.
+        assert!(!rec.active_transfer);
         // The durable fields carry through unchanged.
         assert_eq!(rec.kind, WindowKind::Workspace);
         assert_eq!(rec.ordinal, 1);

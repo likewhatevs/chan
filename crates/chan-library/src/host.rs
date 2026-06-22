@@ -677,7 +677,13 @@ impl WorkspaceHost {
             .into_iter()
             .map(|row| {
                 let (prefix, token, connected) = self.window_live_state(&row);
-                row.to_record(library_id.to_string(), prefix, token, connected)
+                // Overlay the volatile transfer bit from the serving tenant: the
+                // remote feed is the only channel a desktop webview onto a
+                // devserver has to learn a window is mid-transfer.
+                let active_transfer = self.tenant_has_active_transfer(&prefix, &row.window_id);
+                let mut record = row.to_record(library_id.to_string(), prefix, token, connected);
+                record.active_transfer = active_transfer;
+                record
             })
             .collect()
     }
