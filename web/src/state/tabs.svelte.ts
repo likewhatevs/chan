@@ -2226,14 +2226,46 @@ async function loadTabContent(
   }
 }
 
+/// Peek whether `path` opens as text without downloading it whole. Reuses the
+/// server's content gate (`read_text_with_stat`, shared with `cs open`): the
+/// stream read emits its meta for a plaintext file — we abort right after — and
+/// fails with a 415 for a binary one. "error" (a real read failure, e.g. a
+/// missing file) lets the caller fall through to a normal open so the editor tab
+/// surfaces the actual cause.
+async function probeOpenableAsText(
+  path: string,
+): Promise<"openable" | "binary" | "error"> {
+  const controller = new AbortController();
+  try {
+    await api.readStream(path, {
+      signal: controller.signal,
+      onMeta() {
+        // The server accepted it as text; stop the download here — the real
+        // load re-reads it into the tab.
+        controller.abort();
+      },
+    });
+    return "openable"; // a small file finished before the abort landed
+  } catch (e) {
+    if (controller.signal.aborted) return "openable"; // aborted after meta = text
+    if (e instanceof ApiError && e.status === 415) return "binary";
+    return "error";
+  }
+}
+
 /// Open a file in a specific pane. If already open there, just focus.
 export async function openInPane(
   paneId: string,
   path: string,
   opts: OpenFileOptions = {},
 ): Promise<void> {
-  if (!isEditableText(path)) {
-    notify(`'${path}' is not an editable text file`);
+  // The extension may not be editable, but the file can still be plaintext (an
+  // odd suffix, no extension). Peek the content and let the server's gate
+  // decide — matching `cs open`. Editable-by-extension files skip the peek.
+  // A binary file is refused (it stays view-only in the browser/inspector); a
+  // real read error falls through to a normal open so the tab shows the cause.
+  if (!isEditableText(path) && (await probeOpenableAsText(path)) === "binary") {
+    notify(`'${path}' is not a text file`);
     return;
   }
   const p = pane(paneId);
@@ -2249,8 +2281,10 @@ export async function openInPane(
   if (pendingReopen) {
     pendingMissingFileReopenTabId = null;
     const pathKind = classifyPath(path);
+    // A non-extension-editable file that passed the content peek is source-like
+    // (an odd suffix, not markdown), so it opens in source mode, not wysiwyg.
     pendingReopen.fileKind =
-      pathKind === "document" || pathKind === "text" ? pathKind : "document";
+      pathKind === "document" || pathKind === "text" ? pathKind : "text";
     pendingReopen.path = path;
     pendingReopen.content = "";
     pendingReopen.saved = "";
@@ -2283,8 +2317,10 @@ export async function openInPane(
   // mode (wysiwyg would just render the raw bytes with no visible
   // benefit, plus the menu hides the toggle for text-kind tabs).
   const pathKind = classifyPath(path);
+  // A non-extension-editable file that passed the content peek is source-like
+  // (an odd suffix, not markdown), so it opens in source mode, not wysiwyg.
   const fileKind: FileKind =
-    pathKind === "document" || pathKind === "text" ? pathKind : "document";
+    pathKind === "document" || pathKind === "text" ? pathKind : "text";
   const newTab: FileTab = {
     kind: "file",
     fileKind,

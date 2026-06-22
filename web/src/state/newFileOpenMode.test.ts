@@ -53,12 +53,16 @@ describe("item 2: defaultModeForPath open-mode split", () => {
     );
   });
 
-  test("openInPane gates only on isEditableText (a type check, not writability)", () => {
-    // "Open even if read-only": the gate is the editable-text type
-    // check, never the fs-writable flag, so a read-only editable file
-    // still opens.
+  test("openInPane peeks content for non-extension-editable files, never gates on writability", () => {
+    // "Open even if read-only": the open path never consults the
+    // fs-writable flag, so a read-only file still opens. The hard
+    // extension gate is gone: an editable-by-extension file opens
+    // straight away, and any other file is peeked (the server's content
+    // gate decides) and refused only when it is binary.
     expect(tabs).toMatch(
-      /export async function openInPane\([\s\S]{1,400}if \(!isEditableText\(path\)\) \{/,
+      /export async function openInPane\([\s\S]{1,500}if \(!isEditableText\(path\) && \(await probeOpenableAsText\(path\)\) === "binary"\) \{/,
     );
+    // The peek maps a 415 (the server's binary refusal) to "binary".
+    expect(tabs).toMatch(/probeOpenableAsText[\s\S]{1,1400}status === 415\) return "binary"/);
   });
 });

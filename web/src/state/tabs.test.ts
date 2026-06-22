@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { api } from "../api/client";
+import { ApiError } from "../api/errors";
 import { confirmState, resolveConfirm } from "./confirm.svelte";
 import { pathPromptState, resolvePathPrompt } from "./store.svelte";
 import { editorToolsPrefs } from "./editorTools.svelte";
@@ -3396,5 +3397,56 @@ describe("layoutHasPersistableStructure (terminal-only / empty-split persistence
 
   test("returns false for a null layout", () => {
     expect(layoutHasPersistableStructure(null)).toBe(false);
+  });
+});
+
+describe("openInPane content peek (open any plaintext, refuse binary)", () => {
+  test("opens a non-extension-editable file the server serves as text", async () => {
+    resetLayout([]);
+    // The probe and the real load both hit the mock; both resolve as text, so
+    // the odd-suffix file opens as a source tab (the server's content gate, the
+    // same one `cs open` uses, accepted it).
+    vi.spyOn(api, "readStream").mockResolvedValue({
+      path: "src/app.unknownext",
+      content: "plain text body\n",
+      mtime: 1,
+      mtime_ns: "1",
+      writable: true,
+    });
+    await openInPane("pane-test", "src/app.unknownext");
+    const openTabs = activePane().tabs;
+    expect(openTabs).toHaveLength(1);
+    const live = openTabs[0];
+    if (live?.kind !== "file") throw new Error("expected a file tab");
+    expect(live.path).toBe("src/app.unknownext");
+    expect(live.content).toBe("plain text body\n");
+    // Non-markdown plaintext opens in source mode, not wysiwyg.
+    expect(live.fileKind).toBe("text");
+  });
+
+  test("refuses a binary file (415) without opening a tab", async () => {
+    resetLayout([]);
+    vi.spyOn(api, "readStream").mockRejectedValue(
+      new ApiError(415, "file is not editable text"),
+    );
+    await openInPane("pane-test", "assets/logo.bin");
+    // The binary file is refused: no tab opens (it stays view-only).
+    expect(activePane().tabs).toHaveLength(0);
+  });
+
+  test("editable-by-extension files skip the peek and open directly", async () => {
+    resetLayout([]);
+    const read = vi.spyOn(api, "readStream").mockResolvedValue({
+      path: "notes/a.md",
+      content: "# hi\n",
+      mtime: 1,
+      mtime_ns: "1",
+      writable: true,
+    });
+    await openInPane("pane-test", "notes/a.md");
+    expect(activePane().tabs).toHaveLength(1);
+    // A `.md` is editable by extension, so it never peeks: readStream is the
+    // single real load, not a probe + a load.
+    expect(read).toHaveBeenCalledTimes(1);
   });
 });

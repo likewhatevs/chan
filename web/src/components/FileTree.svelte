@@ -25,7 +25,7 @@
   import { clampMenu } from "./menuClamp";
   import { portal } from "./portal";
   import type { TreeEntry } from "../api/types";
-  import { isEditableText } from "../state/fileTypes";
+  import { classifyPath, isEditableText } from "../state/fileTypes";
   import { classifyFile, iconFor } from "../state/kinds";
   import {
     dirtyPaths,
@@ -849,10 +849,10 @@
         e.preventDefault();
         if (curRow.isDir) {
           toggle(curRow.path);
-        } else if (isEditableText(curRow.path)) {
-          // Same flow as a double-click on the row: open in the
-          // active pane and close the browser overlay so the user
-          // lands on the editor.
+        } else if (classifyPath(curRow.path) !== "media") {
+          // Same flow as a double-click on the row: attempt the open (the open
+          // path peeks the content and refuses a binary file). Media stays
+          // view-only in the inspector, so Enter does not attempt it.
           void onOpen(curRow.path);
         }
         break;
@@ -1290,6 +1290,7 @@
       {/if}
     {:else}
       {@const editable = isEditableText(node.path)}
+      {@const openable = classifyPath(node.path) !== "media"}
       {@const contact = contactPaths.has(node.path)}
       {@const kind = classifyFile(node.path, contact ? "contact" : undefined)}
       {@const Icon = iconFor(kind)}
@@ -1327,13 +1328,14 @@
         </span>
         <!-- Single click selects (mirrors graph tab semantics);
              double click opens. Both stop propagation so the row's
-             implicit focus / drag handlers don't double-fire.
-             Non-editable files never bind dblclick so the gesture
-             can't even attempt to open a binary file in the editor. -->
+             implicit focus / drag handlers don't double-fire. Media
+             (images/PDFs) stay view-only in the inspector and never
+             bind dblclick; every other file attempts the open, which
+             peeks the content and refuses a binary one. -->
         <button
           class="name"
           onclick={(e) => selectPath(node.path, e)}
-          ondblclick={editable ? () => void onOpen(node.path) : undefined}
+          ondblclick={openable ? () => void onOpen(node.path) : undefined}
         >{node.name}</button>
         {#if editorDirty.has(node.path)}
           <span class="dirty-dot unsaved" title="unsaved changes" aria-label="unsaved">●</span>
