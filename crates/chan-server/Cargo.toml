@@ -37,10 +37,11 @@ embed-model = ["embeddings", "dep:zstd"]
 # OFL.txt into that directory on enable.
 # Implies nothing; the bundle is purely additive.
 embed-font = []
-# Pass-throughs for chan-workspace's GPU backends. The chan binary's
-# target-conditional dep wiring auto-flips `metal` on macOS; `cuda`
-# stays opt-in on Linux.
+# Pass-throughs for chan-workspace's GPU + CPU-BLAS backends. The chan
+# binary's target-conditional dep wiring auto-flips `metal` + `accelerate`
+# on macOS; `cuda` stays opt-in on Linux.
 metal = ["chan-workspace/metal"]
+accelerate = ["chan-workspace/accelerate"]
 cuda = ["chan-workspace/cuda"]
 
 [dependencies]

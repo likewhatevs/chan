@@ -119,6 +119,22 @@ metal = [
     "candle-nn/metal",
     "candle-transformers/metal",
 ]
+# macOS-only: link Apple's Accelerate framework as candle's CPU BLAS
+# backend. The embed default is CPU (Metal hangs on large workspaces, so
+# GPU is opt-in via CHAN_ENABLE_GPU). Routing the bge-small matmuls through
+# Accelerate's sgemm gives a measured ~1.5-2x cold-reindex speedup over
+# candle's default CPU path with no GPU-memory risk — modest because that
+# default is already the SIMD-threaded `gemm` crate, not naive. Pulls
+# `accelerate-src` (Apple-only). The chan binary forwards this automatically
+# on macOS targets via target-conditional wiring; enabling it on
+# Linux/Windows fails at build time, so the static-musl Linux binary
+# structurally cannot pull it in.
+accelerate = [
+    "embeddings",
+    "candle-core/accelerate",
+    "candle-nn/accelerate",
+    "candle-transformers/accelerate",
+]
 # Linux-only opt-in: `--features cuda` wires candle's CUDA backend.
 # Needs libcuda + libcublas at runtime so default Linux builds stay
 # hermetic. Enabling on macOS fails to compile (cudarc requires the
