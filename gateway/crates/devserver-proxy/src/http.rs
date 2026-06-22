@@ -75,12 +75,21 @@ async fn dispatch(State(state): State<AppState>, req: Request) -> Response {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
 
-    // Wildcard root `/` -> dashboard. The dashboard lives at
-    // id.chan.app/workspaces in prod (configurable via DASHBOARD_URL);
-    // devserver-proxy doesn't render any UI of its own, so a
-    // bare-domain hit bounces.
+    // Wildcard root `/`: an UNAUTHENTICATED bare-domain hit bounces to the
+    // dashboard front door (id.chan.app/workspaces in prod, configurable
+    // via DASHBOARD_URL) — devserver-proxy renders no UI of its own, and an
+    // unauthenticated launcher can't call `/api/library/*` (it needs the
+    // `?t=` bearer), so the dashboard is where you sign in and Open.
+    //
+    // A root request that DOES carry a gate credential (`?t=` entry token
+    // or a `devserver_gate` session cookie) is a whole-devserver open: fall
+    // through to the gate, which forwards `/` to the devserver root where
+    // the launcher SPA is served. `proxy::handle` is segment-preserving, so
+    // `/` forwards unchanged.
     let path = req.uri().path();
-    if path == "/" || path.is_empty() {
+    if (path == "/" || path.is_empty())
+        && !crate::proxy::has_gate_credential(req.uri(), req.headers())
+    {
         return Redirect::to(&cfg.dashboard_url).into_response();
     }
 

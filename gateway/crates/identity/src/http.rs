@@ -164,6 +164,7 @@ pub fn router(
             "/api/grants/:id",
             axum::routing::delete(devserver_grants_delete),
         )
+        .route("/s/:owner", get(share_landing_root))
         .route("/s/:owner/:workspace", get(share_landing))
         .route(
             "/desktop/authorize",
@@ -1160,6 +1161,91 @@ async fn share_landing(
 
     let url = format!(
         "{scheme}://{host}{port}/{workspace}/?t={token}",
+        scheme = state.cfg.workspace_public_scheme,
+        port = state.cfg.workspace_public_port,
+    );
+    Ok(Redirect::to(&url))
+}
+
+/// Whole-devserver open: land the caller on the launcher served at the
+/// devserver ROOT. Same flow as `share_landing` minus the `/{workspace}`
+/// segment — resolve the owner's one live devserver, check access (owner
+/// or grantee), mint an entry JWT (`drv` = that devserver_id) against
+/// `{owner}.devserver.chan.app`, and 303 to the proxy ROOT `…/?t={token}`
+/// so the proxy sets its `devserver_gate` cookie and forwards `/` to the
+/// launcher. This is the deferred whole-devserver open; the per-workspace
+/// `share_landing` above is the same shape with a tenant path.
+async fn share_landing_root(
+    State(state): State<AppState>,
+    session: Session,
+    Path(owner): Path<String>,
+) -> Result<Redirect> {
+    let owner = owner.trim().to_ascii_lowercase();
+    if !valid_username(&owner) {
+        return Err(Error::NotFound);
+    }
+
+    // Unauthenticated: stash + send to login. 303 so a refresh on the SPA
+    // root doesn't re-trigger the open flow.
+    let uid = session
+        .get::<Uuid>(KEY_USER)
+        .await
+        .map_err(|e| Error::Anyhow(anyhow::anyhow!("session get: {e}")))?;
+    let Some(uid) = uid else {
+        let dest = format!("/s/{owner}");
+        session
+            .insert(KEY_POST_LOGIN_REDIRECT, &dest)
+            .await
+            .map_err(|e| Error::Anyhow(anyhow::anyhow!("session insert: {e}")))?;
+        return Ok(Redirect::to("/"));
+    };
+
+    // Resolve the owner handle. 404 is the same shape as "no access" and
+    // "unknown devserver", so a stranger cannot probe a handle's existence.
+    let owner_user = state
+        .cfg
+        .profile_client
+        .find_user_by_username(&owner)
+        .await?
+        .ok_or(Error::NotFound)?;
+
+    // The owner's LIVE devserver (one per user); its id is the drv claim.
+    // No admin client / no live devserver -> 404 (same shape as no-access).
+    let client =
+        state.cfg.workspace_admin.as_ref().ok_or_else(|| {
+            Error::Anyhow(anyhow::anyhow!("workspace admin client not configured"))
+        })?;
+    let live = client.list_user_tunnels(&owner_user.username).await?;
+    let devserver_id = live
+        .first()
+        .map(|t| t.devserver_id.clone())
+        .ok_or(Error::NotFound)?;
+
+    let access = state
+        .cfg
+        .profile_client
+        .devserver_access(owner_user.id, &devserver_id, uid)
+        .await?
+        .ok_or(Error::NotFound)?;
+
+    let host = state.cfg.devserver_host_for(&owner_user.username);
+    let token = gateway_common::devserver_gate::encode_entry(
+        state.cfg.workspace_gate_secret.as_bytes(),
+        uid,
+        &devserver_id,
+        &host,
+    )
+    .map_err(|e| Error::Anyhow(anyhow::anyhow!("mint entry token: {e}")))?;
+
+    tracing::info!(
+        owner = %owner_user.username,
+        caller = %uid,
+        role = %access.role,
+        "whole-devserver landing: minting entry token",
+    );
+
+    let url = format!(
+        "{scheme}://{host}{port}/?t={token}",
         scheme = state.cfg.workspace_public_scheme,
         port = state.cfg.workspace_public_port,
     );

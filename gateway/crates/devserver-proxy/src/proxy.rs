@@ -336,6 +336,18 @@ fn resolve_gate(state: &AppState, req: &Request, devserver_id: &str, aud: &str) 
     Gate::Reject
 }
 
+/// True when a request carries a gate credential — an `?t=` entry token
+/// or a `devserver_gate` session cookie. The dispatcher uses this to
+/// decide what a bare wildcard `/` means: a credential-bearing root is an
+/// authenticated open that falls through to the gate and is forwarded to
+/// the devserver root (where the launcher SPA is served), while a naked
+/// bare-domain hit bounces to the dashboard front door. This does NOT
+/// validate the credential — `resolve_gate` does that on the
+/// fall-through; it only distinguishes "an open attempt" from "naked".
+pub(crate) fn has_gate_credential(uri: &Uri, headers: &HeaderMap) -> bool {
+    entry_token_param(uri).is_some() || !devserver_gate_cookies(headers).is_empty()
+}
+
 /// True when the path targets the devserver's local-only management API
 /// (`/api/devserver` or `/api/devserver/...`). The proxy 404s it on the
 /// public wildcard so only tenant content reaches the tunnel; the owner
@@ -994,6 +1006,29 @@ mod tests {
         assert!(devserver_gate_cookies(&h).is_empty());
 
         assert!(devserver_gate_cookies(&HeaderMap::new()).is_empty());
+    }
+
+    #[test]
+    fn has_gate_credential_detects_token_or_cookie() {
+        let u = |s: &str| s.parse::<Uri>().unwrap();
+        let empty = HeaderMap::new();
+        // Naked root: no token, no cookie -> bounce to dashboard.
+        assert!(!has_gate_credential(&u("/"), &empty));
+        // `?t=` entry token -> authenticated open.
+        assert!(has_gate_credential(&u("/?t=abc.def.ghi"), &empty));
+        // An empty `t=` is not a credential.
+        assert!(!has_gate_credential(&u("/?t="), &empty));
+        // A `devserver_gate` session cookie -> authenticated open.
+        let mut h = HeaderMap::new();
+        h.insert(
+            header::COOKIE,
+            HeaderValue::from_static("devserver_gate=abc.def.ghi"),
+        );
+        assert!(has_gate_credential(&u("/"), &h));
+        // An unrelated cookie is not a credential.
+        let mut h = HeaderMap::new();
+        h.insert(header::COOKIE, HeaderValue::from_static("foo=bar"));
+        assert!(!has_gate_credential(&u("/"), &h));
     }
 
     #[test]

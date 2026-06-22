@@ -122,6 +122,18 @@
     void loadGrants(devserverId);
   }
 
+  // Open the whole devserver: hand off to the identity `/s/:owner` route,
+  // which mints a `devserver_gate` entry token and redirects through the
+  // proxy to the launcher served at the devserver root. These are the
+  // signed-in user's OWN devservers, so the owner is always us. Only
+  // offered for an online devserver (an offline one has no live tunnel to
+  // open). Same-origin navigation, so a relative path is enough.
+  function openDevserver() {
+    const username = meStore.me?.user.username;
+    if (!username) return;
+    window.location.href = `/s/${encodeURIComponent(username)}`;
+  }
+
   // Client-side email shape check; stricter than the backend's lax
   // `valid_email` because a grant only resolves when an OAuth sign-in
   // surfaces the same address, so a typo'd row would never claim.
@@ -221,6 +233,11 @@
                 <span class="status" data-status={d.online ? "online" : "offline"} aria-hidden="true">
                   {d.online ? "online" : "offline"}
                 </span>
+                {#if d.online}
+                  <button type="button" class="ghost" onclick={openDevserver}>
+                    Open
+                  </button>
+                {/if}
                 <button
                   type="button"
                   class="ghost"
