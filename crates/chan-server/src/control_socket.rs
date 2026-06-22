@@ -205,7 +205,7 @@ pub fn pick_socket_path() -> PathBuf {
 /// transient-sounding "workspace cell unavailable".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlTenant {
-    /// A workspace mount (`chan serve`, a desktop workspace tenant):
+    /// A workspace mount (`chan open`, a desktop workspace tenant):
     /// the cell is None only transiently (storage reset window).
     Workspace,
     /// chan-desktop's workspace-less `/terminal` tenant: terminal /
@@ -246,7 +246,7 @@ pub struct ControlSocketCtx {
     /// shared title map. The lifecycle verbs send ops down the channel.
     pub desktop: crate::desktop_window_ops::DesktopBridge,
     pub tenant: ControlTenant,
-    /// How `ControlRequest::Unserve` tears this process's workspace(s) down.
+    /// How `ControlRequest::Close` tears this process's workspace(s) down.
     pub unserve: UnserveScope,
 }
 
@@ -625,7 +625,7 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
             // The library is the single authority for the window set: one
             // assembly (`assemble_window_records`) the desktop watcher, the
             // launcher, and `cs window list` all reconcile to, so they never
-            // disagree. A standalone `chan serve` has no host and thus no
+            // disagree. A standalone `chan open` serve has no host and thus no
             // library window set — the honest answer is empty.
             let records = match unserve {
                 UnserveScope::Host(weak) => weak
@@ -749,13 +749,13 @@ async fn handle_request(req: ControlRequest, ctx: &ControlSocketCtx) -> ControlR
                 .await
                 .map(|()| format!("hid window {id}")),
         ),
-        ControlRequest::Unserve { path } => handle_unserve(unserve, &path).await,
+        ControlRequest::Close { path } => handle_unserve(unserve, &path).await,
     }
 }
 
 /// Tear down whatever this process serves for `path`, the server side of
-/// `chan unserve`. The scope (built at mount time) decides: a standalone
-/// `chan serve` of that root fires its graceful-shutdown signal so the
+/// `chan close`. The scope (built at mount time) decides: a standalone
+/// `chan open` serve of that root fires its graceful-shutdown signal so the
 /// process exits and the flock releases; a multi-tenant host unmounts just
 /// that tenant; an opt-out process refuses. The response still flushes before
 /// a standalone process drains and exits.

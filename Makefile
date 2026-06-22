@@ -234,8 +234,8 @@ clean: ## Remove local build outputs (root workspace, web, gateway, desktop).
 	$(MAKE) -C desktop clean
 
 .PHONY: dev
-dev: chan ## Run chan serve against /tmp/chan-dev with no token.
-	$(BIN) serve /tmp/chan-dev --no-token
+dev: chan ## Run chan open against /tmp/chan-dev with no token.
+	$(BIN) open /tmp/chan-dev --no-token
 
 .PHONY: all build rpm
 all: chan

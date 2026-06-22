@@ -1,16 +1,16 @@
-//! Cross-process proof of `chan unserve` (the W5 mechanism, contracts.md
-//! Amendment 1/3): a SEPARATE `chan serve --standalone` process holds a
-//! workspace's writer flock and its per-pid control socket; `chan unserve
+//! Cross-process proof of `chan close` (the W5 mechanism, contracts.md
+//! Amendment 1/3): a SEPARATE `chan open --standalone` process holds a
+//! workspace's writer flock and its per-pid control socket; `chan close
 //! <path>` discovers that process from the on-disk `writer.lock` record
 //! (`{pid, …}`) → its control socket (`$TMPDIR/chan-control-<pid>-*.sock`),
-//! sends the `Unserve` verb, and the serve process exits + releases the flock.
+//! sends the `Close` verb, and the serve process exits + releases the flock.
 //!
 //! @@Alex's requirement, verbatim: "On a workspace that is being served,
-//! calling `unserve` will send the signal to tear down the other one."
+//! calling `close` will send the signal to tear down the other one."
 //!
 //! Isolation: a throwaway `HOME` redirects the whole `~/.chan` library, and a
 //! shared socket dir is set as BOTH `TMPDIR` and `XDG_RUNTIME_DIR` on the serve
-//! child AND the unserve invocation — the per-pid control-socket discovery only
+//! child AND the close invocation — the per-pid control-socket discovery only
 //! resolves when both processes agree on where the socket lives.
 //! `--standalone` and `CHAN_NO_DESKTOP_HANDOFF` keep the serve from handing off
 //! to a running chan-desktop. Unix-only: the control socket is a Unix socket and
@@ -29,14 +29,14 @@ use tempfile::TempDir;
 /// The built `chan` binary under test (Cargo points this at the target dir).
 const CHAN: &str = env!("CARGO_BIN_EXE_chan");
 
-/// A `chan serve` writes its lock record during open and force-exits well
-/// inside this grace window on the unserve signal. Generous for a loaded CI box.
+/// A `chan open` serve writes its lock record during open and force-exits well
+/// inside this grace window on the close signal. Generous for a loaded CI box.
 const READY_BUDGET: Duration = Duration::from_secs(30);
 const EXIT_BUDGET: Duration = Duration::from_secs(15);
 
 /// Throwaway `HOME` (the whole `~/.chan` library) + a shared socket dir set as
 /// both `TMPDIR` (where the per-pid control socket lives) and `XDG_RUNTIME_DIR`,
-/// so the serve and unserve processes agree on the control-socket location.
+/// so the serve and close processes agree on the control-socket location.
 /// Dropping it removes everything.
 struct Sandbox {
     home: TempDir,
@@ -79,7 +79,7 @@ impl Sandbox {
     }
 }
 
-/// A spawned `chan serve` child + a background-drained stderr transcript (so
+/// A spawned `chan open` serve child + a background-drained stderr transcript (so
 /// the pipe never fills and wedges the child, and the test can wait for the
 /// "ready" marker). Dropping it always kills and reaps the child, so a
 /// panicking assertion never strands a server holding the flock.
@@ -92,7 +92,7 @@ impl Serve {
     fn spawn(sandbox: &Sandbox, ws: &Path) -> Self {
         let mut child = sandbox
             .command()
-            .arg("serve")
+            .arg("open")
             .arg(ws)
             // `--here` serves the path verbatim (sidesteps the enclosing-VCS
             // refusal if the temp dir ever lands inside a working tree);
@@ -108,7 +108,7 @@ impl Serve {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("spawn chan serve");
+            .expect("spawn chan open");
         let stderr = Arc::new(Mutex::new(Vec::new()));
         if let Some(pipe) = child.stderr.take() {
             let sink = stderr.clone();
@@ -131,7 +131,7 @@ impl Serve {
 
     /// `serve` prints `chan is ready:\n<url>` to stderr only after its control
     /// socket AND HTTP listener are up — so this is the readiness signal that
-    /// guarantees `unserve` can actually connect to the control socket (the
+    /// guarantees `close` can actually connect to the control socket (the
     /// `writer.lock` record alone is written earlier, during workspace open).
     fn wait_ready(&self, timeout: Duration) -> bool {
         poll(timeout, || {
@@ -193,11 +193,11 @@ fn lock_held_by(home: &Path, pid: u32) -> bool {
 }
 
 #[test]
-fn unserve_tears_down_the_separate_serve_process() {
+fn close_tears_down_the_separate_serve_process() {
     let sandbox = Sandbox::new();
     let ws = sandbox.workspace();
 
-    // Process A: a real `chan serve` holds the workspace's writer flock, writes
+    // Process A: a real `chan open` serve holds the workspace's writer flock, writes
     // its `{pid, …}` record (the discovery index), and opens its control socket.
     let mut serve = Serve::spawn(&sandbox, &ws);
     assert!(
@@ -210,33 +210,33 @@ fn unserve_tears_down_the_separate_serve_process() {
         "serve is ready but its writer.lock record is missing or names another pid"
     );
 
-    // Process B: a SEPARATE `chan unserve` invocation discovers process A and
+    // Process B: a SEPARATE `chan close` invocation discovers process A and
     // sends it the teardown verb.
     let out = sandbox
         .command()
-        .arg("unserve")
+        .arg("close")
         .arg(&ws)
         .output()
-        .expect("run chan unserve");
+        .expect("run chan close");
     assert!(
         out.status.success(),
-        "chan unserve failed: status={:?}\nstdout={}\nstderr={}",
+        "chan close failed: status={:?}\nstdout={}\nstderr={}",
         out.status,
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
     assert!(
-        String::from_utf8_lossy(&out.stdout).contains("unserved"),
-        "chan unserve did not report success: {}",
+        String::from_utf8_lossy(&out.stdout).contains("closed"),
+        "chan close did not report success: {}",
         String::from_utf8_lossy(&out.stdout),
     );
 
     // Assert 1 — the thing @@Alex wants proven: the OTHER process exits, because
-    // `unserve` reached it over its control socket (Unserve → shutdown_tx →
+    // `close` reached it over its control socket (Close → shutdown_tx →
     // graceful exit). Not this process; the separate serve we spawned.
     assert!(
         poll(EXIT_BUDGET, || serve.has_exited()),
-        "the serve process did not exit after `chan unserve` — the teardown signal never reached it"
+        "the serve process did not exit after `chan close` — the teardown signal never reached it"
     );
 
     // Assert 2 — clean teardown, not a wedge: the writer flock is released, so a
@@ -248,7 +248,69 @@ fn unserve_tears_down_the_separate_serve_process() {
             sandbox.home.path(),
             fresh.pid()
         )),
-        "a fresh serve never acquired the released flock after unserve:\n{}",
+        "a fresh serve never acquired the released flock after close:\n{}",
         fresh.stderr_dump(),
+    );
+}
+
+/// `chan close --remove` on a registered-but-not-served workspace forgets it
+/// from the registry: the teardown is a no-op ("not served"), but --remove
+/// still unregisters — proving the forget runs independent of the close
+/// outcome. (The teardown half of close is already proven above against a
+/// live serve; this covers the registry half without a process to tear down.)
+#[test]
+fn close_remove_forgets_an_unserved_workspace() {
+    let sandbox = Sandbox::new();
+    let ws = sandbox.workspace();
+
+    // Register the workspace WITHOUT serving it.
+    let add = sandbox
+        .command()
+        .args(["workspace", "add"])
+        .arg(&ws)
+        .output()
+        .expect("run chan workspace add");
+    assert!(
+        add.status.success(),
+        "workspace add failed: {}",
+        String::from_utf8_lossy(&add.stderr),
+    );
+
+    // close --remove: nothing is serving (a no-op teardown), but the workspace
+    // is still forgotten.
+    let out = sandbox
+        .command()
+        .arg("close")
+        .arg("--remove")
+        .arg(&ws)
+        .output()
+        .expect("run chan close --remove");
+    assert!(
+        out.status.success(),
+        "chan close --remove failed: status={:?}\nstdout={}\nstderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("not served"),
+        "expected a not-served note from the teardown half: {stdout}",
+    );
+    assert!(
+        stdout.contains("unregistered"),
+        "expected an unregistered note from --remove: {stdout}",
+    );
+
+    // The registry is now empty (we only ever added this one).
+    let ls = sandbox
+        .command()
+        .args(["workspace", "ls"])
+        .output()
+        .expect("run chan workspace ls");
+    assert!(
+        String::from_utf8_lossy(&ls.stdout).contains("no workspaces registered"),
+        "registry not empty after --remove: {}",
+        String::from_utf8_lossy(&ls.stdout),
     );
 }

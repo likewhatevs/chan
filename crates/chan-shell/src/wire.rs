@@ -97,7 +97,7 @@ pub enum ControlRequest {
     // Category 4 (desktop window lifecycle): drive the desktop's OS
     // windows from the terminal. These reach the Tauri app through the
     // in-process bridge the embedded server installs; a standalone
-    // `chan serve` has no desktop attached and refuses them. `new` is the
+    // `chan open` (standalone serve) has no desktop attached and refuses them. `new` is the
     // only one without an id: the server derives the kind from the calling
     // tenant (a terminal tenant spawns a terminal window; a workspace
     // tenant spawns another window of that workspace) and returns the new
@@ -238,15 +238,16 @@ pub enum ControlRequest {
         window_id: Option<String>,
     },
     // Category 5 (process teardown): tear down the server serving `path`,
-    // the transport behind `chan unserve <path>`. `cmd_unserve` discovers the
-    // serving process from the workspace's `writer.lock` and sends this over
-    // that process's control socket; THE SERVER DECIDES SCOPE from `path`: a
-    // standalone `chan serve` of that root fires its own graceful shutdown
-    // (the process exits, releasing the flock), while a multi-tenant host (a
+    // the transport behind `chan close <path>` (and `chan workspace rm`, which
+    // closes before it forgets). `cmd_close` discovers the serving process
+    // from the workspace's `writer.lock` and sends this over that process's
+    // control socket; THE SERVER DECIDES SCOPE from `path`: a standalone
+    // `chan open <path>` of that root fires its own graceful shutdown (the
+    // process exits, releasing the flock), while a multi-tenant host (a
     // `chan devserver` / chan-desktop) unmounts just that tenant and keeps
     // running. The client carries no scope hint — the server knows its own
     // kind. `path` is the canonical workspace root.
-    Unserve {
+    Close {
         path: PathBuf,
     },
 }
@@ -591,19 +592,19 @@ mod survey_wire_tests {
     }
 
     #[test]
-    fn unserve_request_tag_and_path() {
-        // Pin the `chan unserve` transport wire: tag `unserve`, a single
+    fn close_request_tag_and_path() {
+        // Pin the `chan close` transport wire: tag `close`, a single
         // `path` (the canonical workspace root). A rename here would silently
-        // break `cmd_unserve` ↔ the control-socket handler.
-        let req = ControlRequest::Unserve {
+        // break `cmd_close` ↔ the control-socket handler.
+        let req = ControlRequest::Close {
             path: PathBuf::from("/home/u/notes"),
         };
         let v: serde_json::Value = serde_json::to_value(&req).unwrap();
-        assert_eq!(v["type"], "unserve");
+        assert_eq!(v["type"], "close");
         assert_eq!(v["path"], "/home/u/notes");
         let back: ControlRequest =
             serde_json::from_str(&serde_json::to_string(&req).unwrap()).unwrap();
-        assert!(matches!(back, ControlRequest::Unserve { .. }));
+        assert!(matches!(back, ControlRequest::Close { .. }));
     }
 
     #[test]

@@ -30,11 +30,17 @@
 //   chan workspace contacts import csv FILE --into DIR
 //                                   import a Google Contacts CSV as one
 //                                   markdown note per contact under DIR
-//   chan serve [-4|-6] [--host H --port N]
-//                                   run the HTTP server. Defaults
-//                                   to 127.0.0.1 (loopback only);
-//                                   -6 picks ::1 instead. The
-//                                   embedded web editor talks to this.
+//   chan open {PATH} [-4|-6] [--host H --port N]
+//                                   register + serve a workspace. Defaults
+//                                   to 127.0.0.1 (loopback only); -6 picks
+//                                   ::1 instead. The embedded web editor
+//                                   talks to this. With chan-desktop running
+//                                   it hands the workspace to a native window.
+//   chan open {URL} [--name --script]
+//                                   register a devserver (scheme://host) with
+//                                   the desktop instead of serving a path.
+//   chan close {PATH} [--remove]    tear down a workspace's server; --remove
+//                                   also forgets it from the registry.
 //   chan config get [KEY]           print a preference value
 //   chan config set KEY=VALUE       update a preference
 //
@@ -63,9 +69,9 @@ use serde::Serialize;
 
 mod update;
 
-/// Extended description for `chan serve`. The keybindings list is
-/// generated from `web/src/state/shortcuts.ts` (the single source of
-/// truth for chan's chords). Resync after any change to that file
+/// Extended `long_about` for `chan open` (the workspace-serve form). The
+/// keybindings list is generated from `web/src/state/shortcuts.ts` (the
+/// single source of truth for chan's chords). Resync after any change to that file
 /// with `node web/scripts/shortcuts-table.mjs --serve-long-about`
 /// and paste the output between the BEGIN/END markers below. The
 /// native shell (chan-desktop) layers VS Code-shaped chords on top
@@ -174,21 +180,50 @@ enum Command {
         /// Shell to generate completions for.
         shell: Shell,
     },
-    /// Tear down a running `chan serve` for a workspace, releasing its
-    /// writer lock, without forgetting the workspace. The inverse of
-    /// `chan serve`. `chan workspace rm` runs this first so it can forget a
-    /// workspace that is currently being served.
-    Unserve {
+    /// Tear down a running server for a workspace, releasing its writer
+    /// lock — the inverse of `chan open {path}`. "Not currently served" is
+    /// treated as success (close is idempotent). With `--remove` it then
+    /// also forgets the workspace from the registry, like `chan workspace
+    /// rm`, independent of whether anything was serving it.
+    Close {
         #[arg(value_hint = clap::ValueHint::AnyPath)]
         path: PathBuf,
+        /// After tearing down the server, also forget the workspace from the
+        /// registry (filesystem contents untouched). Runs regardless of the
+        /// teardown outcome.
+        #[arg(long)]
+        remove: bool,
     },
-    /// Run the HTTP server. Defaults to 127.0.0.1 (loopback only).
+    /// Open a workspace, or register a devserver.
+    ///
+    /// `chan open {PATH}` registers the directory as a workspace (creating
+    /// it if needed) and serves it: with chan-desktop running it hands the
+    /// workspace to a native window and returns; otherwise it binds a local
+    /// loopback server and prints the URL. Serving is load-bearing — a bare
+    /// `chan workspace add` only registers; serving mounts the workspace so
+    /// the editor, terminal, and devserver can reach it.
+    ///
+    /// `chan open {URL}` (a `scheme://host[:port]` value) registers a
+    /// devserver with the desktop instead: the `{url, name, script}` entry
+    /// lands in the same config the launcher reads, and the desktop dials
+    /// it. Needs a running chan-desktop; `--name` / `--script` apply only to
+    /// this form.
     #[command(long_about = SERVE_LONG_ABOUT)]
-    Serve {
-        path: Option<PathBuf>,
-        /// Serve the given path verbatim instead of suggesting the
-        /// enclosing VCS repository root. Without this flag, `chan
-        /// serve` refuses to start when the workspace path lives inside
+    Open {
+        /// A local workspace PATH, or a devserver URL (scheme://host[:port]).
+        /// A value containing `://` is treated as a devserver URL; anything
+        /// else is a path.
+        target: Option<String>,
+        /// (URL form) Optional label for the devserver's launcher section.
+        #[arg(long)]
+        name: Option<String>,
+        /// (URL form) Optional connect script the desktop runs before it
+        /// dials the devserver.
+        #[arg(long)]
+        script: Option<String>,
+        /// (PATH form) Serve the given path verbatim instead of suggesting
+        /// the enclosing VCS repository root. Without this flag, `chan
+        /// open` refuses to start when the workspace path lives inside
         /// a Git / Mercurial / Subversion working tree (exit 70 +
         /// `chan-error: vcs-parent` marker on stderr) because the
         /// repo root is almost always a better workspace root: it
@@ -214,7 +249,7 @@ enum Command {
         #[arg(long, default_value_t = 8787)]
         port: u16,
         /// URL path prefix to mount the server under. Lets a reverse
-        /// proxy multiplex many `chan serve` instances under one host
+        /// proxy multiplex many `chan open` instances under one host
         /// (e.g. `workspace.example.com/{user}/`). Canonicalized to
         /// `/seg[/seg...]` with `[A-Za-z0-9-]+` segments; trailing
         /// slashes and `//` runs are tolerated. Anything else is
@@ -275,7 +310,7 @@ enum Command {
     },
     /// Run a headless multi-workspace devserver on one address.
     ///
-    /// Aggregates many workspaces behind one port: a `chan serve <path>`
+    /// Aggregates many workspaces behind one port: a `chan open <path>`
     /// on this box registers its workspace with the running devserver and
     /// exits instead of binding its own server, so the devserver owns each
     /// workspace's single-writer flock. A desktop client lists, opens, and
@@ -328,7 +363,7 @@ enum Command {
     /// Self-upgrade: read release metadata from chan.app, download
     /// the selected CLI asset, verify SHA256, and atomically replace
     /// the running binary. Set `CHAN_UPDATE_CHECK=0` to silence the
-    /// banner that fires on `chan serve` startup.
+    /// banner that fires on `chan open` startup.
     Upgrade {
         /// Skip the confirmation prompt.
         #[arg(short = 'y', long)]
@@ -352,7 +387,7 @@ enum Command {
         path: PathBuf,
     },
     /// Internal: stdio bridge to the MCP server hosted in-process
-    /// by a running `chan serve`. Connects to the per-server Unix-
+    /// by a running `chan open`. Connects to the per-server Unix-
     /// domain socket and pipes stdin/stdout through it. Used by the
     /// external MCP clients so agent child processes can reach the
     /// live workspace without trying to reopen it (which would deadlock
@@ -371,8 +406,8 @@ enum Command {
 /// operations (add / ls / rm) with the per-workspace content
 /// operations (index / reports / search / graph / status / metadata /
 /// contacts) under one verb, so the top-level surface carries only the
-/// process-lifecycle and app-level commands (serve, devserver,
-/// unserve, config, ...). Mirrors the `IndexAction` / `ReportsAction`
+/// process-lifecycle and app-level commands (open, close, devserver,
+/// config, ...). Mirrors the `IndexAction` / `ReportsAction`
 /// sub-enum pattern.
 #[derive(Subcommand, Debug)]
 enum WorkspaceAction {
@@ -643,7 +678,7 @@ enum IndexAction {
     /// Flip the workspace's Hybrid-search opt-in. Refuses if the model
     /// isn't downloaded; the error points at `chan workspace index
     /// download-model`. The flag persists in
-    /// `<index_dir>/config.toml` so it survives `chan serve`
+    /// `<index_dir>/config.toml` so it survives `chan open`
     /// restarts.
     EnableSemantic {
         /// Workspace root (required).
@@ -738,11 +773,11 @@ where
 /// desktop-aware subcommands behave.
 ///
 /// - [`Personality::Standalone`] — the `chan` binary from install.sh (and
-///   the `cs -> chan` symlink). `chan serve` always runs its own server and
+///   the `cs -> chan` symlink). `chan open` always runs its own server and
 ///   opens the browser; it never hands off to a running chan-desktop.
 ///   `chan upgrade` replaces the CLI tarball in place.
 /// - [`Personality::Desktop`] — chan-desktop invoked as `chan` (via the
-///   `~/.local/bin/chan` shim). `chan serve` integrates with the desktop:
+///   `~/.local/bin/chan` shim). `chan open` integrates with the desktop:
 ///   it hands the workspace to the running desktop, or launches the GUI.
 ///   `chan upgrade` drives the desktop's `tauri-plugin-updater`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -807,9 +842,11 @@ where
         },
         Command::Shell { action } => chan_shell::dispatch(action).await,
         Command::Completions { shell } => cmd_completions(shell),
-        Command::Unserve { path } => cmd_unserve(path).await,
-        Command::Serve {
-            path,
+        Command::Close { path, remove } => cmd_close(path, remove).await,
+        Command::Open {
+            target,
+            name,
+            script,
             here,
             host,
             ipv4,
@@ -823,26 +860,36 @@ where
             no_settings,
             standalone,
         } => {
-            let addr = resolve_listen_addr(host, ipv4, ipv6, port)?;
-            let prefix = chan_server::sanitize_prefix(prefix.as_deref().unwrap_or(""))
-                .map_err(|e| anyhow::anyhow!("invalid --prefix: {e}"))?;
-            cmd_serve(
-                ServeArgs {
-                    addr,
-                    prefix,
-                    idle_timeout: timeout,
-                    path,
-                    here,
-                    no_token,
-                    no_browser,
-                    search_aggression,
-                    no_settings,
-                    standalone,
-                    verbose,
-                },
-                personality,
-            )
-            .await
+            // Polymorphic dispatch: a `scheme://host` value registers a
+            // devserver via the desktop handoff; anything else is a local
+            // workspace path that gets registered + served.
+            match target {
+                Some(t) if looks_like_devserver_url(&t) => {
+                    cmd_open_devserver(t, name, script).await
+                }
+                _ => {
+                    let addr = resolve_listen_addr(host, ipv4, ipv6, port)?;
+                    let prefix = chan_server::sanitize_prefix(prefix.as_deref().unwrap_or(""))
+                        .map_err(|e| anyhow::anyhow!("invalid --prefix: {e}"))?;
+                    cmd_serve(
+                        ServeArgs {
+                            addr,
+                            prefix,
+                            idle_timeout: timeout,
+                            path: target.map(PathBuf::from),
+                            here,
+                            no_token,
+                            no_browser,
+                            search_aggression,
+                            no_settings,
+                            standalone,
+                            verbose,
+                        },
+                        personality,
+                    )
+                    .await
+                }
+            }
         }
         Command::Ps { json } => cmd_ps(json).await,
         Command::Devserver {
@@ -936,7 +983,7 @@ fn ensure_workspace_registered(
 }
 
 fn cmd_add(path: PathBuf, semantic_search: bool, reports: bool) -> Result<()> {
-    // Mirror `chan serve`'s behavior: create the directory if it
+    // Mirror `chan open`'s behavior: create the directory if it
     // doesn't exist yet. Single verb covers both "register an
     // existing dir" and "make a fresh workspace here". A separate
     // `chan init` would be a synonym; not worth the mental
@@ -1015,7 +1062,7 @@ fn cmd_completions(shell: Shell) -> Result<()> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ServedBy {
-    /// A dedicated `chan serve` bound to this one workspace.
+    /// A dedicated `chan open` bound to this one workspace.
     Standalone,
     /// chan-desktop's embedded server.
     Desktop,
@@ -1132,15 +1179,24 @@ async fn cmd_remove(path: PathBuf) -> Result<()> {
     // Best-effort — if we can't reach the holder, fall through and let the
     // reset surface the real error.
     let _ = unserve_running(&lib, &path).await;
+    remove_from_registry(&lib, &path)
+}
+
+/// Forget `path` from the registry: drop the registry key and the whole
+/// `~/.chan/workspaces/<key>/` metadata dir (trash included), leaving the
+/// filesystem contents untouched. Shared by `chan workspace rm` and `chan
+/// close --remove`. The caller is responsible for tearing down any running
+/// serve first (`unregister_workspace` does not).
+fn remove_from_registry(lib: &Library, path: &Path) -> Result<()> {
     // Capture the metadata root before `unregister_workspace` drops the
     // registry key (after which the path no longer resolves to it).
-    let metadata_root = lib.workspace_paths_for(&path).map(|p| p.root);
+    let metadata_root = lib.workspace_paths_for(path).map(|p| p.root);
     let removed = lib
-        .unregister_workspace(&path)
+        .unregister_workspace(path)
         .with_context(|| format!("unregistering {}", path.display()))?;
     if removed {
         // `reset_workspace(Everything)` deliberately preserves the trash +
-        // lock dirs (other callers rely on that). `chan workspace rm` means
+        // lock dirs (other callers rely on that). Forgetting a workspace means
         // "forget everything", so drop the whole metadata dir — trash
         // included — leaving no `~/.chan/workspaces/<key>/` behind.
         if let Some(root) = metadata_root {
@@ -1153,13 +1209,25 @@ async fn cmd_remove(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Tear down a running `chan serve` (or other launcher) holding `path`,
-/// releasing its writer lock, without forgetting the workspace.
-async fn cmd_unserve(path: PathBuf) -> Result<()> {
+/// `chan close {path}`: tear down a running server holding `path`, releasing
+/// its writer lock. Best-effort — "not currently served" (and an unreachable
+/// holder) is treated as success, since the goal is "this workspace is not
+/// served". With `remove`, it then also forgets the workspace from the
+/// registry (`chan workspace rm`), INDEPENDENT of the teardown outcome.
+async fn cmd_close(path: PathBuf, remove: bool) -> Result<()> {
     let lib = library()?;
-    match unserve_running(&lib, &path).await? {
-        UnserveOutcome::Unserved => println!("unserved: {}", path.display()),
-        UnserveOutcome::NotServed => println!("(not served: {})", path.display()),
+    match unserve_running(&lib, &path).await {
+        Ok(UnserveOutcome::Unserved) => println!("closed: {}", path.display()),
+        Ok(UnserveOutcome::NotServed) => println!("(not served: {})", path.display()),
+        // A reachable-but-failed teardown is still "best effort": report it,
+        // then (with --remove) forget the workspace anyway.
+        Err(e) => eprintln!(
+            "chan: could not reach the server for {} ({e}); treating as closed.",
+            path.display()
+        ),
+    }
+    if remove {
+        remove_from_registry(&lib, &path)?;
     }
     Ok(())
 }
@@ -1172,9 +1240,9 @@ enum UnserveOutcome {
     NotServed,
 }
 
-/// Shared by `chan unserve` and `chan workspace rm`. Discovers the process
+/// Shared by `chan close` and `chan workspace rm`. Discovers the process
 /// serving `path` from its `writer.lock` record, reaches it over its
-/// control socket, asks it to unserve (the server decides scope: a
+/// control socket, asks it to tear down (the server decides scope: a
 /// dedicated serve exits, a devserver/desktop unmounts just that tenant),
 /// and waits for the flock to release.
 async fn unserve_running(lib: &Library, path: &Path) -> Result<UnserveOutcome> {
@@ -1193,7 +1261,7 @@ async fn unserve_running(lib: &Library, path: &Path) -> Result<UnserveOutcome> {
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     chan_shell::send_control_request(
         &socket,
-        chan_shell::ControlRequest::Unserve { path: canonical },
+        chan_shell::ControlRequest::Close { path: canonical },
     )
     .await
     .with_context(|| format!("asking the server (pid {}) to unserve", record.pid))?;
@@ -1202,13 +1270,13 @@ async fn unserve_running(lib: &Library, path: &Path) -> Result<UnserveOutcome> {
 }
 
 /// Find a control socket for `pid` by its well-known name
-/// (`$TMPDIR/chan-control-<pid>-<rand>.sock`). A dedicated `chan serve` has
-/// exactly one; a multi-tenant devserver has one per tenant under the same
-/// pid. Either way every socket routes the `Unserve { path }` verb to the
+/// (`$TMPDIR/chan-control-<pid>-<rand>.sock`). A dedicated `chan open` serve
+/// has exactly one; a multi-tenant devserver has one per tenant under the
+/// same pid. Either way every socket routes the `Close { path }` verb to the
 /// server, which acts by path — so the first match is sufficient and we
 /// must NOT broadcast (once the first tenant unmounts, the rest 404).
 /// Returns `None` where the socket isn't a temp-dir file (Windows named
-/// pipes aren't enumerable here — unserve over the wire is unix-first this
+/// pipes aren't enumerable here — teardown over the wire is unix-first this
 /// round).
 fn control_socket_for_pid(pid: u32) -> Option<PathBuf> {
     control_socket_for_pid_in(&std::env::temp_dir(), pid)
@@ -1228,7 +1296,7 @@ fn control_socket_for_pid_in(dir: &Path, pid: u32) -> Option<PathBuf> {
 
 /// Block (bounded) until the writer lock for `lock_dir` is free after a
 /// serve was asked to unserve. The server drops the flock asynchronously
-/// during graceful shutdown, so a `chan serve` racing right behind would
+/// during graceful shutdown, so a `chan open` racing right behind would
 /// otherwise see a transient `WorkspaceLocked`.
 fn wait_for_lock_release(lock_dir: &Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1341,17 +1409,14 @@ fn print_vcs_parent_error(root: &Path, parent: &chan_workspace::VcsParent) {
         repo_abs.display(),
         root_abs.display(),
     );
+    eprintln!("hint: open repo root:    chan open {}", repo_abs.display());
     eprintln!(
-        "hint: serve repo root:    chan serve {}",
-        repo_abs.display()
-    );
-    eprintln!(
-        "hint: serve only subdir:  chan serve --here {}",
+        "hint: open only subdir:  chan open --here {}",
         root_abs.display(),
     );
 }
 
-/// Resolved `chan serve` invocation: every CLI input after listen-addr
+/// Resolved `chan open` invocation: every CLI input after listen-addr
 /// and prefix resolution, grouped so the handler takes one argument
 /// instead of a 15-parameter tail.
 struct ServeArgs {
@@ -1370,7 +1435,7 @@ struct ServeArgs {
 
 /// Make a serve root absolute against the process cwd. `canonicalize`
 /// resolves symlinks for an existing dir; `std::path::absolute` makes a
-/// not-yet-created path absolute lexically (so `chan serve new-dir` still
+/// not-yet-created path absolute lexically (so `chan open new-dir` still
 /// lands under the cwd); the final fallback returns the input unchanged
 /// (only reachable if both fail, e.g. an unreadable cwd). The result must
 /// be absolute so the desktop handoff — which runs with cwd "/" — and the
@@ -1388,6 +1453,99 @@ fn missing_workspace_path(cmd: &str, hint: &str) -> anyhow::Error {
     anyhow::anyhow!("chan {cmd} requires a workspace path; e.g. `{hint}`")
 }
 
+/// Discriminate `chan open`'s polymorphic argument: a value shaped like
+/// `scheme://host…` is a devserver URL; everything else is a local workspace
+/// path. We don't pull a URL crate for the discriminator — the desktop parses
+/// and validates the full URL when it dials. Requiring `://` with a non-empty
+/// scheme and authority keeps a Windows path (`C:\…`) or a bare `host:port`
+/// (no `//`) from misfiring as a URL — mirroring §3's "reject bare host:port"
+/// so the path/URL split is unambiguous.
+fn looks_like_devserver_url(target: &str) -> bool {
+    match target.split_once("://") {
+        Some((scheme, rest)) => {
+            !scheme.is_empty()
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+                && !rest.is_empty()
+        }
+        None => false,
+    }
+}
+
+/// `chan open {url}`: register (and connect) a devserver by URL via the
+/// CLI→desktop handoff. The devserver entry lives in the desktop's config
+/// (the same registry the launcher reads), so this needs a running
+/// chan-desktop to land into — without one there is nowhere to persist it.
+async fn cmd_open_devserver(
+    url: String,
+    name: Option<String>,
+    script: Option<String>,
+) -> Result<()> {
+    // Refuse a devserver-in-a-devserver: this CLI running inside a devserver
+    // session has no path to the desktop's registry, and nesting one headless
+    // multi-tenant server inside another is not a shape the registry models.
+    if in_devserver_context().await {
+        anyhow::bail!(
+            "cannot register a devserver from inside a devserver: `chan open {url}` writes \
+             into the desktop's devserver registry, which a devserver session cannot reach. \
+             Run it from chan-desktop (or a plain shell on the box running chan-desktop)."
+        );
+    }
+    use chan_server::handoff::Outcome;
+    match chan_server::handoff::try_open_devserver(&url, name.as_deref(), script.as_deref()).await {
+        Outcome::HandedOff => {
+            println!("chan: registered devserver {url} with chan-desktop.");
+            Ok(())
+        }
+        Outcome::VersionSkew {
+            desktop_version, ..
+        } => anyhow::bail!(
+            "chan-desktop is version {desktop_version}, CLI is {}; cannot register the \
+             devserver. Restart chan-desktop to pick up the new version.",
+            chan_server::handoff::CHAN_VERSION,
+        ),
+        Outcome::DesktopError { message } => {
+            anyhow::bail!("chan-desktop could not register the devserver: {message}")
+        }
+        Outcome::NoDesktop => anyhow::bail!(
+            "no running chan-desktop found to register the devserver into. A devserver entry \
+             lives in the desktop's config; start chan-desktop and try again."
+        ),
+    }
+}
+
+/// True when this CLI runs inside a chan terminal that a `chan devserver`
+/// serves — `chan open {url}` would otherwise register a devserver into a
+/// devserver, which the registry (a desktop-config concept) does not nest.
+/// Resolved by an `Identify` round-trip on `$CHAN_CONTROL_SOCKET`; an absent
+/// socket / unreachable holder / any other serving kind ⇒ not a devserver
+/// context (so a plain shell or a desktop terminal proceeds to the handoff).
+async fn in_devserver_context() -> bool {
+    let Some(socket) = std::env::var("CHAN_CONTROL_SOCKET")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    else {
+        return false;
+    };
+    let Ok(message) = chan_shell::send_control_request(
+        &PathBuf::from(socket),
+        chan_shell::ControlRequest::Identify,
+    )
+    .await
+    else {
+        return false;
+    };
+    matches!(
+        serde_json::from_str::<chan_shell::Identity>(&message),
+        Ok(chan_shell::Identity {
+            kind: chan_shell::ServeKind::Devserver,
+            ..
+        })
+    )
+}
+
 async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
     let ServeArgs {
         addr,
@@ -1403,14 +1561,14 @@ async fn cmd_serve(args: ServeArgs, personality: Personality) -> Result<()> {
         verbose,
     } = args;
     let lib = library()?;
-    // `chan serve` requires an explicit workspace root; with no path it is
-    // a clear error. An explicit path auto-registers, so `chan serve
+    // `chan open {path}` requires an explicit workspace root; with no path it
+    // is a clear error. An explicit path auto-registers, so `chan open
     // /some/dir` works without a prior `chan workspace add`.
-    let root = path.ok_or_else(|| missing_workspace_path("serve", "chan serve ."))?;
+    let root = path.ok_or_else(|| missing_workspace_path("open", "chan open ."))?;
     // Resolve to an absolute path against the CLI's cwd before anything
     // downstream consumes it. The macOS desktop handoff opens the
     // workspace in a process whose cwd is "/", and the workspace registry
-    // is keyed by the canonical path, so a bare `chan serve .` must not
+    // is keyed by the canonical path, so a bare `chan open .` must not
     // leak a relative root (the desktop would resolve it against "/" and
     // open the filesystem root).
     let root = absolutize_serve_root(root);
@@ -2251,7 +2409,7 @@ async fn follow_launchd_until_stopped(uid: u32) -> Result<()> {
     Ok(())
 }
 
-/// Integrate a Desktop-personality `chan serve` with the desktop app.
+/// Integrate a Desktop-personality `chan open` with the desktop app.
 ///
 /// Returns:
 /// - `Some(Ok(()))` when the desktop opened the workspace window (either a
@@ -2318,7 +2476,7 @@ async fn maybe_handoff_to_desktop(root: &Path) -> Option<Result<()>> {
     }
 }
 
-/// Launch the desktop GUI for a `chan serve` that found no running desktop,
+/// Launch the desktop GUI for a `chan open` that found no running desktop,
 /// then hand it the workspace. Unix-only (the desktop + handoff socket are
 /// unix); off unix there's no GUI to launch, so fall back to standalone.
 #[cfg(unix)]
@@ -2370,7 +2528,7 @@ async fn launch_desktop_and_handoff(root: &Path) -> Result<()> {
         }
         if std::time::Instant::now() >= deadline {
             anyhow::bail!(
-                "timed out waiting for chan-desktop to start; run `chan serve` again \
+                "timed out waiting for chan-desktop to start; run `chan open` again \
                  once it is up, or set CHAN_NO_DESKTOP_HANDOFF=1 for a standalone server"
             );
         }
@@ -3938,6 +4096,25 @@ fn print_import_summary(summary: &chan_workspace::ImportSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn devserver_url_discriminator() {
+        // scheme://host shapes are devserver URLs.
+        assert!(looks_like_devserver_url("https://box.example.com:8787"));
+        assert!(looks_like_devserver_url("http://127.0.0.1:8787"));
+        assert!(looks_like_devserver_url("https://alice.devserver.chan.app"));
+        // Everything else is a local path: bare host:port (no `//`), a
+        // relative or absolute path, `.`, a Windows drive path, and an empty
+        // authority.
+        assert!(!looks_like_devserver_url("box.example.com:8787"));
+        assert!(!looks_like_devserver_url("."));
+        assert!(!looks_like_devserver_url("./notes"));
+        assert!(!looks_like_devserver_url("/home/u/notes"));
+        assert!(!looks_like_devserver_url("notes"));
+        assert!(!looks_like_devserver_url(r"C:\Users\u\notes"));
+        assert!(!looks_like_devserver_url("://nohost"));
+        assert!(!looks_like_devserver_url("https://"));
+    }
 
     #[test]
     fn control_socket_for_pid_matches_only_that_pid() {

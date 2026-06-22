@@ -16,10 +16,10 @@ curl -fsSL https://chan.app/install.sh | sh
 
 # 2. Open any existing git repo, or clone chan's source to try it out.
 git clone https://github.com/fiorix/chan
-chan serve ./chan
+chan open ./chan
 ```
 
-`chan serve` starts a loopback server, prints a URL carrying a per-launch bearer token on stderr, and opens your default browser. From there you drive the workspace like it is your own machine: editor, terminal, Team Work, file browser, graph, and dashboard as tiling tabs and panes.
+`chan open` starts a loopback server, prints a URL carrying a per-launch bearer token on stderr, and opens your default browser. From there you drive the workspace like it is your own machine: editor, terminal, Team Work, file browser, graph, and dashboard as tiling tabs and panes.
 
 The in-browser experience is the full IDE. Browser keyboard shortcuts are constrained by the browser itself, so the keyboard story is suboptimal there but still powerful: see Hybrid Nav (`Cmd+.`) for keyboard-driven navigation. For a native window and remote-attach support (macOS `.app`, Linux AppImage), use chan-desktop; see ["Reach a workspace remotely"](#reach-a-workspace-remotely) below and the [manual](https://chan.app/manual/).
 
@@ -59,7 +59,7 @@ See [`design.md`](design.md) for the architecture and how the frontend embeds in
 make                # frontend bundle + debug binary
 make build-release  # frontend + embedded model bundle + release binary
 make install        # copy target/release/chan to PREFIX/bin
-make dev            # run `chan serve /tmp/chan-dev --no-token`
+make dev            # run `chan open /tmp/chan-dev --no-token`
 ```
 
 `make help` lists every target. Manual `cargo` / `npm` calls still work; the Makefile is just a shortcut.
@@ -78,10 +78,10 @@ Embedded terminal tabs start at the workspace root and export Chan MCP discovery
 
 ```bash
 chan workspace add ~/Notes              # register the workspace
-chan serve ~/Notes            # bind 127.0.0.1:8787 and open browser
+chan open ~/Notes             # bind 127.0.0.1:8787 and open browser
 ```
 
-The first launch prints the URL on stderr and opens the user's default browser. The URL carries a per-launch bearer token; the same token also accepts an `Authorization: Bearer ...` header. The token is persisted at `<state>/tokens/token` so a `cargo build && chan serve` cycle does not invalidate the browser's cached sessionStorage token.
+The first launch prints the URL on stderr and opens the user's default browser. The URL carries a per-launch bearer token; the same token also accepts an `Authorization: Bearer ...` header. The token is persisted at `<state>/tokens/token` so a `cargo build && chan open` cycle does not invalidate the browser's cached sessionStorage token.
 
 `chan --help` documents the full subcommand surface (serve, index, search, graph, status, config, metadata, reports, contacts, upgrade, ...) and every flag. The [manual](https://chan.app/manual/) covers day-to-day use: serve flags and workspace registration live in [workspaces](docs/manual/workspaces.md), self-upgrade in [upgrade and troubleshooting](docs/manual/upgrade-and-troubleshooting.md).
 

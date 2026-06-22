@@ -62,9 +62,11 @@ fn cs_help_shows_shell_subcommands() {
         "shell help should list `dashboard`: {stdout}"
     );
     // A top-level-only command must not appear: this is the shell group.
+    // `upgrade` is top-level-only and (unlike `open`) is not also a `cs`
+    // action, so its absence proves this is the shell surface.
     assert!(
-        !stdout.contains("serve"),
-        "shell help should not list the top-level `serve`: {stdout}"
+        !stdout.contains("upgrade"),
+        "shell help should not list the top-level `upgrade`: {stdout}"
     );
 }
 

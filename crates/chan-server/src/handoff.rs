@@ -1,7 +1,7 @@
 //! CLI-to-desktop workspace handoff over a well-known per-user endpoint:
 //! a Unix-domain socket on unix, a named pipe on Windows.
 //!
-//! When chan-desktop is running and the user types `chan serve
+//! When chan-desktop is running and the user types `chan open
 //! ~/notes` in a terminal, the natural intent is "show me this workspace
 //! in the app," not "fail because the desktop already holds the
 //! per-workspace flock." This module is the same-user IPC channel that
@@ -515,8 +515,10 @@ where
 /// distinct variants exist so the CLI can print the right note.
 #[derive(Debug)]
 pub enum Outcome {
-    /// The desktop opened the workspace window. The CLI exits 0 without
-    /// opening the workspace (the desktop owns the flock).
+    /// The desktop accepted the request: it opened the workspace window
+    /// (`try_handoff`) or registered the devserver (`try_open_devserver`).
+    /// The CLI exits 0 without opening anything itself (the desktop owns the
+    /// flock / the devserver lifecycle).
     HandedOff,
     /// No desktop discovered: no socket, connect refused, stale
     /// socket, or any I/O error before a valid response. The
@@ -612,7 +614,7 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
 
 /// Windows: connect the well-known named pipe and round-trip one
 /// `OpenWorkspace`. A missing pipe (no desktop) maps to `NoDesktop` at once —
-/// it must NOT hang the common no-desktop `chan serve`; a momentarily-busy pipe
+/// it must NOT hang the common no-desktop `chan open`; a momentarily-busy pipe
 /// (the desktop mid accept-swap) gets a short bounded retry. Same request /
 /// timed response / parse as the unix arm.
 #[cfg(windows)]
@@ -687,6 +689,150 @@ pub async fn try_handoff(workspace_path: &Path) -> Outcome {
 #[cfg(not(any(unix, windows)))]
 pub async fn try_handoff(_workspace_path: &std::path::Path) -> Outcome {
     Outcome::NoDesktop
+}
+
+/// Try to register (and connect) a devserver by `url` with a running same-user
+/// desktop — the `chan open {url}` path. Connects the well-known socket, sends
+/// an `OpenDevserver` request, and maps the reply: `DevserverRegistered` ->
+/// `HandedOff`; a protocol skew -> `VersionSkew`; an `Error` -> `DesktopError`;
+/// any other reply / connect failure / stale socket / malformed line ->
+/// `NoDesktop` (the caller surfaces "no desktop to register the devserver
+/// into"). Mirrors `try_handoff`'s framing + timeouts. `name` / `script` ride
+/// along as the optional launcher label + connect script; the bearer token
+/// never travels this socket (the desktop owns credentials).
+#[cfg(unix)]
+pub async fn try_open_devserver(url: &str, name: Option<&str>, script: Option<&str>) -> Outcome {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixStream;
+
+    let Some(socket_path) = well_known_socket_path() else {
+        return Outcome::NoDesktop;
+    };
+    if !socket_path.exists() {
+        return Outcome::NoDesktop;
+    }
+
+    let connect = UnixStream::connect(&socket_path);
+    let stream = match tokio::time::timeout(Duration::from_millis(1500), connect).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(_)) | Err(_) => return Outcome::NoDesktop,
+    };
+
+    let req = Request::OpenDevserver {
+        protocol: PROTOCOL_VERSION,
+        cli_version: CHAN_VERSION.into(),
+        url: url.to_string(),
+        name: name.map(str::to_string),
+        script: script.map(str::to_string),
+    };
+    let mut payload = match serde_json::to_vec(&req) {
+        Ok(v) => v,
+        Err(_) => return Outcome::NoDesktop,
+    };
+    payload.push(b'\n');
+
+    let (read, mut write) = stream.into_split();
+    let io = async {
+        write.write_all(&payload).await?;
+        write.flush().await?;
+        let mut reader = BufReader::new(read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        Ok::<String, std::io::Error>(line)
+    };
+    let line = match tokio::time::timeout(Duration::from_millis(3000), io).await {
+        Ok(Ok(line)) if !line.trim().is_empty() => line,
+        _ => return Outcome::NoDesktop,
+    };
+
+    map_devserver_response(&line)
+}
+
+/// Windows: the same `OpenDevserver` round-trip over the well-known named pipe,
+/// mirroring `try_handoff`'s Windows arm (a missing pipe maps to `NoDesktop` at
+/// once; a momentarily-busy pipe gets a short bounded retry).
+#[cfg(windows)]
+pub async fn try_open_devserver(url: &str, name: Option<&str>, script: Option<&str>) -> Outcome {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    const ERROR_PIPE_BUSY: i32 = 231;
+
+    let Some(socket_path) = well_known_socket_path() else {
+        return Outcome::NoDesktop;
+    };
+
+    let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+    let client = loop {
+        match ClientOptions::new().open(&socket_path) {
+            Ok(c) => break c,
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                if std::time::Instant::now() >= deadline {
+                    return Outcome::NoDesktop;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Err(_) => return Outcome::NoDesktop,
+        }
+    };
+
+    let req = Request::OpenDevserver {
+        protocol: PROTOCOL_VERSION,
+        cli_version: CHAN_VERSION.into(),
+        url: url.to_string(),
+        name: name.map(str::to_string),
+        script: script.map(str::to_string),
+    };
+    let mut payload = match serde_json::to_vec(&req) {
+        Ok(v) => v,
+        Err(_) => return Outcome::NoDesktop,
+    };
+    payload.push(b'\n');
+
+    let (read, mut write) = tokio::io::split(client);
+    let io = async {
+        write.write_all(&payload).await?;
+        write.flush().await?;
+        let mut reader = BufReader::new(read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        Ok::<String, std::io::Error>(line)
+    };
+    let line = match tokio::time::timeout(Duration::from_millis(3000), io).await {
+        Ok(Ok(line)) if !line.trim().is_empty() => line,
+        _ => return Outcome::NoDesktop,
+    };
+
+    map_devserver_response(&line)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub async fn try_open_devserver(_url: &str, _name: Option<&str>, _script: Option<&str>) -> Outcome {
+    Outcome::NoDesktop
+}
+
+/// Map an `OpenDevserver` reply line to an [`Outcome`]. Shared by the unix +
+/// windows arms so the response handling stays in one place: only
+/// `DevserverRegistered` is a success; a workspace/upgrade reply to a
+/// devserver request (or an unparseable line) is a desktop we can't talk to
+/// sanely, so it falls back to `NoDesktop` rather than guessing.
+#[cfg(any(unix, windows))]
+fn map_devserver_response(line: &str) -> Outcome {
+    match serde_json::from_str::<Response>(line) {
+        Ok(Response::DevserverRegistered { .. }) => Outcome::HandedOff,
+        Ok(Response::VersionSkew {
+            desktop_version,
+            desktop_protocol,
+        }) => Outcome::VersionSkew {
+            desktop_version,
+            desktop_protocol,
+        },
+        Ok(Response::Error { message }) => Outcome::DesktopError { message },
+        Ok(Response::Opened { .. })
+        | Ok(Response::UpgradeStarted { .. })
+        | Ok(Response::UpgradeChecked { .. })
+        | Err(_) => Outcome::NoDesktop,
+    }
 }
 
 /// Outcome of an upgrade-trigger attempt against the well-known socket.
@@ -825,6 +971,18 @@ mod tests {
         assert_eq!(upgrade, serde_json::from_str::<Request>(&json).unwrap());
         assert_eq!(upgrade.protocol(), PROTOCOL_VERSION);
         assert_eq!(upgrade.cli_version(), "9.9.9");
+
+        let devserver = Request::OpenDevserver {
+            protocol: PROTOCOL_VERSION,
+            cli_version: "9.9.9".into(),
+            url: "https://box.example.com:8787".into(),
+            name: Some("box".into()),
+            script: None,
+        };
+        let json = serde_json::to_string(&devserver).unwrap();
+        assert!(json.contains("\"type\":\"open_devserver\""));
+        assert!(json.contains("\"url\":\"https://box.example.com:8787\""));
+        assert_eq!(devserver, serde_json::from_str::<Request>(&json).unwrap());
     }
 
     #[test]
@@ -862,6 +1020,13 @@ mod tests {
         let json = serde_json::to_string(&checked).unwrap();
         assert!(json.contains("\"status\":\"upgrade_checked\""));
         assert_eq!(checked, serde_json::from_str::<Response>(&json).unwrap());
+
+        let registered = Response::DevserverRegistered {
+            desktop_version: CHAN_VERSION.into(),
+        };
+        let json = serde_json::to_string(&registered).unwrap();
+        assert!(json.contains("\"status\":\"devserver_registered\""));
+        assert_eq!(registered, serde_json::from_str::<Response>(&json).unwrap());
     }
 
     #[test]
@@ -1046,6 +1211,45 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn listener_round_trip_devserver_registered() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("hand.sock");
+        let _handle = start_listener(sock.clone(), move |req| async move {
+            match req {
+                Request::OpenDevserver {
+                    url, name, script, ..
+                } => {
+                    assert_eq!(url, "https://box.example.com:8787");
+                    assert_eq!(name.as_deref(), Some("box"));
+                    assert_eq!(script.as_deref(), Some("echo connect"));
+                    Response::DevserverRegistered {
+                        desktop_version: CHAN_VERSION.into(),
+                    }
+                }
+                Request::OpenWorkspace { .. } => Response::Error {
+                    message: "unexpected open".into(),
+                },
+                Request::Upgrade { .. } => Response::Error {
+                    message: "unexpected upgrade".into(),
+                },
+            }
+        })
+        .unwrap();
+        match devserver_over(
+            &sock,
+            "https://box.example.com:8787",
+            Some("box"),
+            Some("echo connect"),
+        )
+        .await
+        {
+            Response::DevserverRegistered { .. } => {}
+            other => panic!("expected DevserverRegistered, got {other:?}"),
+        }
+    }
+
     /// Connect directly to `sock` and round-trip one OpenWorkspace. Mirrors
     /// try_handoff's wire framing but targets an explicit socket so the
     /// test doesn't depend on the well-known path.
@@ -1066,6 +1270,25 @@ mod tests {
             protocol: PROTOCOL_VERSION,
             cli_version: CHAN_VERSION.into(),
             check_only,
+        };
+        round_trip(sock, &req).await
+    }
+
+    /// Round-trip one `OpenDevserver` request, mirroring try_open_devserver's
+    /// framing.
+    #[cfg(unix)]
+    async fn devserver_over(
+        sock: &std::path::Path,
+        url: &str,
+        name: Option<&str>,
+        script: Option<&str>,
+    ) -> Response {
+        let req = Request::OpenDevserver {
+            protocol: PROTOCOL_VERSION,
+            cli_version: CHAN_VERSION.into(),
+            url: url.into(),
+            name: name.map(str::to_string),
+            script: script.map(str::to_string),
         };
         round_trip(sock, &req).await
     }

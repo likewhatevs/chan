@@ -8,7 +8,7 @@
 //! tempdirs, so the entire `~/.chan` library (workspace registry, devserver
 //! config, per-uid discovery socket) is isolated from the developer's real
 //! state and from other tests. `CHAN_NO_DESKTOP_HANDOFF` +
-//! `CHAN_NO_DEVSERVER_HANDOFF` keep a `chan serve` standalone instead of
+//! `CHAN_NO_DEVSERVER_HANDOFF` keep a `chan open` standalone instead of
 //! handing the workspace off to whatever is already running on the box.
 //!
 //! What this suite does NOT reach (hand-smoke only): the Tauri window
@@ -16,7 +16,7 @@
 //! `WorkspaceHost::close_terminal_tenant` in-process. There is no HTTP route
 //! for that synchronous reap, so the desktop's own teardown is verified by
 //! `chan-server`'s unit tests plus a manual smoke. What IS covered here: the
-//! spawned-process signal behavior (SIGINT/SIGTERM/SIGKILL of `chan serve`
+//! spawned-process signal behavior (SIGINT/SIGTERM/SIGKILL of `chan open`
 //! and `chan devserver`), advisory-flock release, persisted-config survival,
 //! and the host-side workspace-tenant PTY reap reachable over the management
 //! API.
@@ -164,12 +164,12 @@ impl Drop for Server {
     }
 }
 
-/// Spawn `chan serve <root>` standalone on an OS-assigned port and return it
-/// once the ready URL is printed. `serve` prints `chan is ready:\n<url>` to
+/// Spawn `chan open <root>` standalone on an OS-assigned port and return it
+/// once the ready URL is printed. The serve prints `chan is ready:\n<url>` to
 /// stderr with the real bound address (it binds `:0` then reads `local_addr`).
 async fn spawn_serve(sandbox: &Sandbox, root: &Path, no_token: bool) -> (Server, SocketAddr) {
     let mut cmd = sandbox.command();
-    cmd.arg("serve")
+    cmd.arg("open")
         .arg(root)
         // `--here` serves the path verbatim, sidestepping the enclosing-VCS
         // refusal in case the temp dir ever lands inside a working tree.
@@ -179,14 +179,14 @@ async fn spawn_serve(sandbox: &Sandbox, root: &Path, no_token: bool) -> (Server,
     if no_token {
         cmd.arg("--no-token");
     }
-    let mut child = cmd.spawn().expect("spawn chan serve");
+    let mut child = cmd.spawn().expect("spawn chan open");
     let out = Transcript::capture(&mut child);
     let server = Server { child, out };
     let line = server
         .out
         .wait_for("http://127.0.0.1:", Duration::from_secs(30))
         .await
-        .unwrap_or_else(|| panic!("chan serve never became ready:\n{}", server.out.dump()));
+        .unwrap_or_else(|| panic!("chan open never became ready:\n{}", server.out.dump()));
     (server, parse_addr(&line))
 }
 
@@ -435,7 +435,7 @@ async fn spawn_tenant_terminal(
 // Scenarios.
 // ---------------------------------------------------------------------------
 
-/// SIGINT a `chan serve` whose cold index is still settling: it must exit
+/// SIGINT a `chan open` whose cold index is still settling: it must exit
 /// inside the grace budget, and a second serve on the same root must then
 /// reacquire the writer flock (proving the first released it cleanly).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
