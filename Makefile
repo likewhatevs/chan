@@ -23,6 +23,7 @@ SDME ?= limactl shell default sudo sdme
 
 BIN := target/release/chan
 WEB_BUILD_STAMP := web/.chan-build-stamp
+LAUNCHER_BUILD_STAMP := web-launcher/.chan-build-stamp
 REPO_ROOT := $(abspath .)
 
 # Gateway release crate set. Single source for the pre-push gateway
@@ -151,17 +152,30 @@ gateway-build: gateway-spa ## Build the gateway release crates (GATEWAY_CARGO_FL
 gateway-release-crates: ## Print the gateway release crate names on one line.
 	@echo $(GATEWAY_RELEASE_CRATES)
 
+.PHONY: web-launcher
+web-launcher: ## Build the embedded launcher bundle (web-launcher/dist).
+	# chan-server bakes BOTH frontend bundles via rust-embed: web/dist
+	# (WebAssets) and web-launcher/dist (LauncherAssets, the devserver/library
+	# root SPA). web-launcher/dist is a gitignored build artifact, so every
+	# path that builds web/dist before the cargo/rust-embed step must build
+	# this too — wired as a prerequisite of `web`/`web-check` so the single
+	# `make web` funnel (root `chan`, desktop/Makefile, packaging/linux,
+	# release.yml) builds both with no per-consumer edit.
+	cd web-launcher && $(NPM) install && $(NPM) run build
+	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(LAUNCHER_BUILD_STAMP)"
+
 .PHONY: web
-web: ## Build the embedded web bundle.
+web: web-launcher ## Build the embedded web bundle.
 	cd web && $(NPM) install && $(NPM) run build
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
 
 .PHONY: web-check
-web-check: ## Run frontend check, vitest, and production build.
+web-check: web-launcher ## Run frontend check, vitest, and production build.
 	# vitest (npm test == `vitest run`) gates here so the pre-push / ci-linux
 	# path covers the frontend unit tests. The Make gate previously ran only
 	# svelte-check + build, leaving vitest ungated after CI was simplified to
-	# the make ci-* targets.
+	# the make ci-* targets. The `web-launcher` prerequisite builds the launcher
+	# bundle so the pre-push / release cargo build embeds a real launcher.
 	cd web && $(NPM) install && $(NPM) run check && $(NPM) test && $(NPM) run build
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
 
@@ -208,7 +222,8 @@ uninstall: ## Remove chan from PREFIX/bin.
 clean: ## Remove local build outputs (root workspace, web, gateway, desktop).
 	$(CARGO) clean
 	rm -rf web/dist web/node_modules web/pkg
-	rm -f $(WEB_BUILD_STAMP)
+	rm -rf web-launcher/dist web-launcher/node_modules
+	rm -f $(WEB_BUILD_STAMP) $(LAUNCHER_BUILD_STAMP)
 	# gateway/ is its own cargo workspace: root `cargo clean` never
 	# touches gateway/target. The npm paths mirror gateway/.gitignore
 	# (monorepo node_modules + the rust-embed SPA dist).

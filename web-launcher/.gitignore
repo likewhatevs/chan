@@ -3,6 +3,10 @@ node_modules/
 dist/
 .svelte-kit/
 
+# Relink stamp the Makefile rewrites after every launcher build (mirrors
+# web/.chan-build-stamp) so chan-server's rust-embed relinks the bundle.
+.chan-build-stamp
+
 # Vite cache
 .vite/
 

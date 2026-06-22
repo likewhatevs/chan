@@ -24,6 +24,18 @@ fn main() {
     println!("cargo:rerun-if-changed={}", dist.display());
     walk(dist);
 
+    // The launcher bundle (web-launcher/dist) is baked by `LauncherAssets`
+    // exactly as `WebAssets` bakes web/dist; mirror the handling. It's a
+    // gitignored build artifact, so a fresh clone / isolated gate worktree
+    // has none — create the empty dir so the rust-embed macro succeeds (it
+    // errors on a missing folder), and track it so a rebuilt launcher
+    // relinks. The binary serves the launcher only once
+    // `cd web-launcher && npm install && npm run build` has run.
+    let launcher_dist = Path::new("../../web-launcher/dist");
+    let _ = std::fs::create_dir_all(launcher_dist);
+    println!("cargo:rerun-if-changed={}", launcher_dist.display());
+    walk(launcher_dist);
+
     // Makefile rewrites this after every frontend build. Tracking
     // it forces release binaries to relink even when the generated
     // asset names and contents happen to be unchanged.
@@ -32,6 +44,15 @@ fn main() {
         let _ = std::fs::write(web_build_stamp, b"not-built\n");
     }
     println!("cargo:rerun-if-changed={}", web_build_stamp.display());
+
+    // The launcher's build stamp, mirroring web/.chan-build-stamp: the
+    // Makefile rewrites it after every launcher build so a release binary
+    // relinks even when the hashed asset names happen to be unchanged.
+    let launcher_build_stamp = Path::new("../../web-launcher/.chan-build-stamp");
+    if !launcher_build_stamp.exists() {
+        let _ = std::fs::write(launcher_build_stamp, b"not-built\n");
+    }
+    println!("cargo:rerun-if-changed={}", launcher_build_stamp.display());
 
     // Embedded model bundle. Only consumed when the `embed-model`
     // cargo feature is on: the `include_bytes!` in
