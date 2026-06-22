@@ -535,20 +535,39 @@ impl chan_server::DevserverFeedSource for DevserverFeed {
 
 /// Tag a connected devserver's workspace row as a launcher row: keyed by its
 /// remote mount `prefix` and discriminated by `devserver_id` (the field the SPA
-/// groups + routes on); `library_id` is the best-effort remote-library tag.
+/// groups + routes on); `library_id` is the best-effort remote-library tag. The
+/// remote prefix is an absolute route path (`/slug`); the `LauncherWorkspace.prefix`
+/// contract is the slash-free SLUG (local + devserver alike, pinned by
+/// chan-library's doc), so strip the leading slash here. The on/off/forget ops
+/// round-trip that slug and [`devserver_route_prefix`] re-adds the slash for the
+/// remote management API.
 fn to_launcher_workspace(
     devserver_id: &str,
     library_id: Option<String>,
     row: devserver::DevserverWorkspaceRow,
 ) -> chan_server::LauncherWorkspace {
+    let slug = row.prefix.trim_start_matches('/').to_string();
     chan_server::LauncherWorkspace {
-        workspace_id: row.prefix.clone(),
+        workspace_id: slug.clone(),
         path: row.path,
         label: row.label,
         on: row.on,
         library_id,
         devserver_id: Some(devserver_id.to_string()),
-        prefix: row.prefix,
+        prefix: slug,
+    }
+}
+
+/// The launcher addresses a devserver workspace by its slash-free slug (the
+/// `LauncherWorkspace.prefix` contract), but the devserver management API
+/// (`/api/devserver/workspaces{prefix}/on`, the DELETE) addresses it as an
+/// absolute route path. Re-add the leading slash for the remote call; idempotent
+/// so an already-absolute prefix passes through unchanged.
+fn devserver_route_prefix(slug: &str) -> String {
+    if slug.starts_with('/') {
+        slug.to_string()
+    } else {
+        format!("/{slug}")
     }
 }
 
@@ -1678,7 +1697,7 @@ pub(crate) async fn forget_devserver_workspace_impl(
         .devservers
         .get(&id)
         .ok_or_else(|| format!("devserver {id} is not connected"))?;
-    devserver::forget_workspace(&conn, &prefix).await
+    devserver::forget_workspace(&conn, &devserver_route_prefix(&prefix)).await
 }
 
 /// Set a registered devserver workspace on (mount + mint a fresh tenant token)
@@ -1699,7 +1718,7 @@ pub(crate) async fn set_devserver_workspace_on_impl(
         .devservers
         .get(&id)
         .ok_or_else(|| format!("devserver {id} is not connected"))?;
-    devserver::set_workspace_on(&conn, &prefix, on, false)
+    devserver::set_workspace_on(&conn, &devserver_route_prefix(&prefix), on, false)
         .await
         .map_err(|e| match e {
             devserver::SetWorkspaceOnError::ActiveTerminals { active_terminals } => format!(
