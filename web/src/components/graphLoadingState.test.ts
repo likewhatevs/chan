@@ -54,10 +54,11 @@ describe("graph empty-state: indexing vs genuinely-empty copy", () => {
   });
 });
 
-// Once indexing finishes, an empty-during-indexing graph must repopulate
-// so the "temporarily unavailable while indexing" copy is honest. An
-// $effect fires reloadGraph() on the indexBuilding true->false edge.
-describe("graph empty-state: auto-reload on index-complete", () => {
+// Once indexing finishes, the index-derived edges must layer onto the
+// always-seeded fs spine, so a graph opened mid-index upgrades to its
+// rich form. An $effect fires reloadGraph() on the indexBuilding
+// true->false edge.
+describe("graph index-complete: re-layer the index-derived edges", () => {
   test("an effect tracks indexBuilding and fires only on the true->false edge", () => {
     // prevIndexBuilding latches the prior value; the effect bails unless
     // the transition is building -> not-building (no reload loop).
@@ -67,9 +68,16 @@ describe("graph empty-state: auto-reload on index-complete", () => {
     );
   });
 
-  test("the edge reload is visible-only, empty-only, and reuses reloadGraph", () => {
+  test("the edge reload is visible-only, semantic-mode-only, and reuses reloadGraph", () => {
+    // NOT gated on nodes.length === 0: the fs spine keeps `nodes`
+    // non-empty, so the re-layer must fire regardless of node count, in
+    // semantic mode only (filesystem / language modes have their own
+    // surfaces).
     expect(graph).toMatch(
-      /untrack\(\(\) => \{\s*if \(visible && nodes\.length === 0\) void reloadGraph\(\);\s*\}\)/,
+      /untrack\(\(\) => \{\s*if \(visible && !filesystemMode && !languageMode\) void reloadGraph\(\);\s*\}\)/,
+    );
+    expect(graph).not.toMatch(
+      /if \(visible && nodes\.length === 0\) void reloadGraph\(\)/,
     );
   });
 });

@@ -1844,6 +1844,18 @@
     return node.kind === "directory";
   }
 
+  /// Mirror the server's directory node id (graph.rs::directory_node_id):
+  /// a directory renders under `directory:<path>` in the semantic graph,
+  /// where the bare path is the FILE node id. The fs-graph names every
+  /// node by bare path, so seeding the fs spine under the semantic graph
+  /// requires rewriting fs directory ids (and the dir endpoints of fs
+  /// edges) to this form so a directory's fs-seeded node and its semantic
+  /// node collapse onto one id. Root (path "") stays "" — it aligns
+  /// across both sources.
+  function directoryNodeId(path: string): string {
+    return path === "" ? "" : `directory:${path}`;
+  }
+
   function stripDirectoryPrefix(id: string): string {
     if (id.startsWith("directory:")) return id.slice("directory:".length);
     if (id.startsWith("folder:")) return id.slice("folder:".length);
@@ -2056,10 +2068,18 @@
             : { scope: "workspace" as const, path: "" };
       const renderedNodesById = new Map<string, RenderedNode>();
       const renderedEdgesByKey = new Map<string, RenderedEdge>();
+      // The seeded fs spine lives in `renderedNodesById` / `nodes`, NOT
+      // `fsNodes`: the semantic-mode inspector reads `selectedNode` /
+      // `nodeById`, and `selectedFsNode` is gated on `filesystemMode`, so
+      // leaving `fsNodes` empty in semantic mode keeps the inspector
+      // correct (no fs-row fallback) while the spine still renders.
       fsNodes = [];
       fsTruncated = false;
-      nodes = [];
-      edges = [];
+      // Do NOT blank `nodes` / `edges` to `[]` here: the fs spine is
+      // seeded into the maps and published below, so an index-settle
+      // RE-load keeps the existing graph on screen instead of flashing
+      // empty across the await. A one-frame empty on the very first load
+      // (before the spine arrives) is fine.
       const publish = (): void => {
         if (seq !== graphLoadSeq) return;
         nodes = [...renderedNodesById.values()];
@@ -2074,6 +2094,66 @@
           }
         }
       };
+      // Seed the always-available filesystem `contains` spine FIRST so the
+      // directory / file skeleton renders immediately, even before the
+      // index has settled. The semantic stream then merges its richer
+      // nodes (link / tag / mention / language) ON TOP of the same maps:
+      // a file (bare-path id) or a directory (normalized to
+      // `directory:<path>`) collides on id and the semantic node replaces
+      // the fs-seeded one; everything else layers on. Only the
+      // tree-bearing scopes seed a spine; the tag / mention / contact /
+      // language lenses have no directory tree (and no fsGraph scope), so
+      // they fall straight through to the stream as before.
+      if (
+        currentScope &&
+        (currentScope.kind === "file" ||
+          currentScope.kind === "dir" ||
+          currentScope.kind === "workspace")
+      ) {
+        const fsScope =
+          currentScope.kind === "file" ? "file" : "directory";
+        const fsPath =
+          currentScope.kind === "file" || currentScope.kind === "dir"
+            ? currentScope.path
+            : "";
+        let cursor: string | undefined;
+        let fs: FsGraphResponse | undefined;
+        do {
+          fs = await api.fsGraph({
+            scope: fsScope,
+            path: fsPath,
+            depth: Math.max(graphState.depth, 1),
+            limit: GRAPH_BATCH_NODES,
+            cursor,
+          });
+          if (seq !== graphLoadSeq) return;
+          // Directory ids that need the `directory:` prefix so the fs
+          // spine collapses onto the semantic graph. File / ghost /
+          // symlink-leaf endpoints keep their bare path.
+          const fsDirIds = new Set<string>();
+          for (const n of fs.nodes) {
+            if (isFsDirectory(n)) fsDirIds.add(n.id);
+          }
+          const normalizeId = (id: string): string =>
+            fsDirIds.has(id) ? directoryNodeId(id) : id;
+          for (const mapped of mapFsNodes(fs)) {
+            const id = normalizeId(mapped.id);
+            renderedNodesById.set(id, { ...mapped, id });
+          }
+          for (const mapped of mapFsEdges(fs)) {
+            const source = normalizeId(mapped.source);
+            const target = normalizeId(mapped.target);
+            const edge = { ...mapped, source, target };
+            renderedEdgesByKey.set(graphEdgeKey(edge), edge);
+          }
+          publish();
+          cursor = fs.cursor ?? undefined;
+          if (!fs.done && cursor) {
+            await yieldToFrame();
+            if (seq !== graphLoadSeq) return;
+          }
+        } while (!fs.done && cursor);
+      }
       await api.graphStream(
         {
           ...graphScope,
@@ -2408,19 +2488,22 @@
     }, 250);
   });
 
-  /// Repopulate an EMPTY graph once indexing finishes. The load effect
-  /// above tracks only `visible` + `loadKey`, and the watcher path only
-  /// fires on real file edits — neither covers the initial index of
-  /// PRE-EXISTING files, so a graph opened mid-index comes up at 0 nodes
-  /// and would otherwise revert to "no markdown files…" (the genuine-empty
-  /// copy) instead of populating. Fire `reloadGraph()` on the
-  /// `indexBuilding` true→false edge so the "temporarily unavailable while
-  /// indexing" copy is honest. Guards: edge-only via `prevIndexBuilding`
-  /// (no reload loop); `visible`-only (don't wake a backgrounded tab); and
-  /// `nodes.length === 0` so a populated graph — whose live updates the
-  /// watcher (graphReloadSignal) already drives — doesn't double-load when
-  /// a save's reindex flips the same signal. `nodes`/`visible` are read
-  /// untracked so only `indexBuilding` re-fires this effect.
+  /// Layer the index-derived graph in once indexing finishes. The load
+  /// effect above tracks only `visible` + `loadKey`, and the watcher path
+  /// only fires on real file edits — neither covers the initial index of
+  /// PRE-EXISTING files. A semantic-mode graph opened mid-index shows the
+  /// always-available fs spine immediately (seeded in `load()`), so `nodes`
+  /// is non-empty, but the link / tag / mention / language edges only
+  /// arrive once the index settles. Fire `reloadGraph()` on the
+  /// `indexBuilding` true→false edge so those layer on. Guards: edge-only
+  /// via `prevIndexBuilding` (no reload loop); `visible`-only (don't wake a
+  /// backgrounded tab); semantic-mode only (filesystem mode is structural,
+  /// language mode is its own surface). NOT gated on `nodes.length === 0`:
+  /// the fs spine keeps `nodes` populated, so the old empty-only guard
+  /// would never fire the re-layer. Distinct trigger from the
+  /// graphReloadSignal watcher (a save's reindex), so no double-load.
+  /// `visible` / mode are read untracked so only `indexBuilding` re-fires
+  /// this effect.
   let prevIndexBuilding = false;
   $effect(() => {
     const building = indexBuilding;
@@ -2428,7 +2511,7 @@
     prevIndexBuilding = building;
     if (!wasBuilding || building) return; // not a true -> false edge
     untrack(() => {
-      if (visible && nodes.length === 0) void reloadGraph();
+      if (visible && !filesystemMode && !languageMode) void reloadGraph();
     });
   });
 
