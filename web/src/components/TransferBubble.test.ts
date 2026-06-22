@@ -16,6 +16,7 @@ import {
   cancelTransfer,
   restoreTransfers,
   showTransfers,
+  setTransferSignalSink,
   activeTransferCount,
 } from "../state/transfers.svelte";
 
@@ -133,5 +134,15 @@ describe("TransferBubble", () => {
     cancelTransfer(id);
     expect(activeTransferCount()).toBe(0);
     expect(transfers.items[0]!.state).toBe("cancelled");
+  });
+
+  test("the signal sink fires the active count on start/end (the /ws emit feed)", () => {
+    const seen: number[] = [];
+    setTransferSignalSink((active) => seen.push(active));
+    const id = beginTransfer({ kind: "upload", filename: "x.md", cancel: vi.fn() });
+    finishTransfer(id);
+    setTransferSignalSink(null);
+    // begin -> 1, finish -> 0: the count the server tracks per socket.
+    expect(seen).toEqual([1, 0]);
   });
 });

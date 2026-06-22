@@ -1392,6 +1392,10 @@ export interface WatchSubscription {
   /// Unsubscribe this socket from a directory scope. Last unsubscribe
   /// across all sockets tears the server-side watcher down.
   unsubscribeDir(dir: WatchScopeDir): void;
+  /// Report this window's in-flight transfer count to the server (the
+  /// per-window active-transfer signal the desktop close guard queries).
+  /// Best-effort while connecting; the owner re-announces from `onReady`.
+  reportTransfers(active: number): void;
   /// Close the socket and stop reconnecting.
   close(): void;
 }
@@ -1414,6 +1418,7 @@ export function openWatchSocket(
   const sub = (() => socket.close()) as WatchSubscription;
   sub.subscribeDir = (dir: WatchScopeDir) => socket.send({ type: "sub", dir });
   sub.unsubscribeDir = (dir: WatchScopeDir) => socket.send({ type: "unsub", dir });
+  sub.reportTransfers = (active: number) => socket.send({ type: "transfers", active });
   sub.close = () => socket.close();
   return sub;
 }

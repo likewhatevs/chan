@@ -111,6 +111,20 @@ export function activeTransferCount(): number {
   return transfers.items.filter((t) => t.state === "active").length;
 }
 
+/// The sink that pushes the active-transfer count to the server over the window
+/// `/ws` ({"type":"transfers","active":<n>}). `store` registers it against the
+/// watch socket; we call it whenever the count could change. null in tests / on
+/// a surface with no watch socket.
+let signalSink: ((active: number) => void) | null = null;
+
+export function setTransferSignalSink(sink: ((active: number) => void) | null): void {
+  signalSink = sink;
+}
+
+function emitSignal(): void {
+  signalSink?.(activeTransferCount());
+}
+
 /// Start tracking a new active transfer; returns its id. `cancel` aborts the
 /// in-flight XHR. `source` is set for downloads so a later interrupt can retry.
 export function beginTransfer(opts: {
@@ -133,6 +147,7 @@ export function beginTransfer(opts: {
     retry: null,
   });
   persist();
+  emitSignal();
   return id;
 }
 
@@ -152,6 +167,7 @@ export function finishTransfer(id: string, savedPath: string | null = null): voi
   t.retry = null;
   t.savedPath = savedPath;
   persist();
+  emitSignal();
 }
 
 export function cancelTransfer(id: string): void {
@@ -160,6 +176,7 @@ export function cancelTransfer(id: string): void {
   t.state = "cancelled";
   t.cancel = null;
   persist();
+  emitSignal();
 }
 
 export function failTransfer(id: string, error: string): void {
@@ -169,6 +186,7 @@ export function failTransfer(id: string, error: string): void {
   t.cancel = null;
   t.error = error;
   persist();
+  emitSignal();
 }
 
 /// Remove a terminal transfer row (the bubble's per-row dismiss).
@@ -177,6 +195,7 @@ export function dismissTransfer(id: string): void {
   if (i < 0) return;
   transfers.items.splice(i, 1);
   persist();
+  emitSignal();
 }
 
 export function showTransfers(): void {
@@ -239,4 +258,7 @@ export function restoreTransfers(
     };
   });
   transfers.shown = parsed.shown === true;
+  // After a reload every record is terminal/interrupted (count 0), but emit so
+  // the server's per-socket count is correct from the first announce.
+  emitSignal();
 }

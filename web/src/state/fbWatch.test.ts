@@ -69,7 +69,7 @@ function frames(ws: FakeWebSocket): WsClientFrame[] {
 /// points emit idempotently; the refcount assertions care about real
 /// directory scopes.
 function dirFrames(ws: FakeWebSocket): WsClientFrame[] {
-  return frames(ws).filter((f) => f.dir !== "");
+  return frames(ws).filter((f) => f.type !== "transfers" && f.dir !== "");
 }
 
 let socket: FakeWebSocket;
@@ -191,6 +191,6 @@ describe("fbWatch scoped subscription manager", () => {
     expect(sent).toContainEqual({ type: "sub", dir: "notes" });
     expect(sent).toContainEqual({ type: "sub", dir: "tasks" });
     // `notes` is shared by two instances but replayed exactly once.
-    expect(sent.filter((f) => f.dir === "notes")).toHaveLength(1);
+    expect(sent.filter((f) => f.type !== "transfers" && f.dir === "notes")).toHaveLength(1);
   });
 });

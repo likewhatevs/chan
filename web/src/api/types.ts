@@ -688,13 +688,18 @@ export type WsFsFrame = { type: "fs"; dir: WatchScopeDir; event: WatchEventWire 
 /// socket's subscriber id; a socket close implicitly unsubscribes all.
 export type WsSubFrame = { type: "sub"; dir: WatchScopeDir };
 export type WsUnsubFrame = { type: "unsub"; dir: WatchScopeDir };
+/// Per-window active-transfer signal: `active` = count of in-flight cs
+/// upload/download transfers in this window. Emitted on every start/end and
+/// once on each (re)connect; the server tracks it per-`/ws`-socket so the
+/// desktop close guard can prompt before closing a window mid-transfer.
+export type WsTransfersFrame = { type: "transfers"; active: number };
 
 /// The client -> server frame union. Other server -> client frames
 /// (`progress`, `window_command`, `config_changed`, ...) are handled
 /// structurally in the store dispatcher and are intentionally not enumerated
 /// here; this union is only the outbound scope-control path the transport
 /// stub serializes.
-export type WsClientFrame = WsSubFrame | WsUnsubFrame;
+export type WsClientFrame = WsSubFrame | WsUnsubFrame | WsTransfersFrame;
 
 export type InspectorKind =
   | "workspace"

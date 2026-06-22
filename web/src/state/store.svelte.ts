@@ -54,12 +54,14 @@ import {
 } from "./tabs.svelte";
 import { isEditableText } from "./fileTypes";
 import {
+  activeTransferCount,
   beginTransfer,
   cancelTransfer,
   failTransfer,
   finishTransfer,
   restoreTransfers,
   setTransferProgress,
+  setTransferSignalSink,
 } from "./transfers.svelte";
 import { isTauriDesktop, runDesktopDownload } from "../api/desktop";
 import {
@@ -630,6 +632,12 @@ export function watchSystemTheme(): () => void {
 /// `watchSubscription()` exposes it to those surfaces
 /// without re-opening a second socket.
 let unwatch: WatchSubscription | null = null;
+
+// Push the per-window active-transfer count to the server over the window `/ws`
+// whenever the transfer model's count changes. The sink reads the live
+// `unwatch` each call, so it always targets the current (reconnecting) socket;
+// `onWatchReady` re-announces the count on every (re)connect.
+setTransferSignalSink((active) => unwatch?.reportTransfers(active));
 
 /// Accessor for the live watcher subscription so File Browser / Graph
 /// instances can push `sub` / `unsub` frames for the directories they
@@ -1283,6 +1291,10 @@ function onWatchStatus(status: WsStatus): void {
 /// call time (both modules are loaded by then), so the static circular
 /// import between store and fbWatch is benign.
 function onWatchReady(): void {
+  // Re-announce this window's active-transfer count: the server registry is
+  // per-socket and a fresh socket starts at zero, so a reconnect mid-transfer
+  // must re-assert the count or the close guard would think the window is idle.
+  unwatch?.reportTransfers(activeTransferCount());
   fbWatchResyncAll();
   // Seed the cross-window terminal roster on every (re)connect. Live updates
   // ride `terminal_roster` `/ws` frames; this closes the window where a
