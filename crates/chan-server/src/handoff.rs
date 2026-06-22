@@ -97,10 +97,11 @@ pub enum Request {
         cli_version: String,
         check_only: bool,
     },
-    /// Ask the desktop to register (and connect) a devserver by URL — the
-    /// `chan open {url}` handoff. The desktop writes the `{url, name, script}`
-    /// entry into the same config its launcher devserver registry reads, then
-    /// dials it. The CLI sends this from its `open` command; the desktop's
+    /// Ask the desktop to register a devserver by URL — the `chan open {url}`
+    /// handoff. The desktop writes the `{url, name, script}` entry into the same
+    /// config its launcher devserver registry reads; the launcher's Connect
+    /// button drives the dial (the CLI does not auto-connect). The CLI sends
+    /// this from its `open` command; the desktop's
     /// listener handles it. The bearer token is NOT carried here (same as the workspace
     /// handoff — the desktop owns credentials), so a tokened devserver is set up
     /// from the launcher dialog, not the CLI handoff.
@@ -691,7 +692,7 @@ pub async fn try_handoff(_workspace_path: &std::path::Path) -> Outcome {
     Outcome::NoDesktop
 }
 
-/// Try to register (and connect) a devserver by `url` with a running same-user
+/// Try to register a devserver by `url` with a running same-user
 /// desktop — the `chan open {url}` path. Connects the well-known socket, sends
 /// an `OpenDevserver` request, and maps the reply: `DevserverRegistered` ->
 /// `HandedOff`; a protocol skew -> `VersionSkew`; an `Error` -> `DesktopError`;
