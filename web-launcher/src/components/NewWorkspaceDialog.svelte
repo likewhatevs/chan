@@ -21,8 +21,7 @@
   let localPath = $state("");
 
   // Devserver form, seeded from the edit target.
-  let host = $state(editing?.host ?? "");
-  let port = $state(editing ? String(editing.port) : "");
+  let url = $state(editing?.url ?? "");
   let name = $state(editing?.label ?? "");
   let script = $state(editing?.script ?? "");
   let token = $state("");
@@ -64,15 +63,23 @@
     }
   }
 
-  async function submitDevserver(): Promise<void> {
-    const h = host.trim();
-    if (!h) {
-      error = "Devserver host is required.";
-      return;
+  // A devserver URL must carry an explicit scheme://host form: a bare
+  // `host:port` is rejected as ambiguous (`new URL` would read the host as the
+  // scheme), and the desktop derives the port from the scheme (https→443,
+  // http→80) when one is omitted, so the scheme is required.
+  function isDevserverUrl(raw: string): boolean {
+    try {
+      const parsed = new URL(raw);
+      return (parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.hostname !== "";
+    } catch {
+      return false;
     }
-    const p = Number.parseInt(port.trim(), 10);
-    if (!Number.isInteger(p) || p < 1 || p > 65535) {
-      error = "Port must be a number between 1 and 65535.";
+  }
+
+  async function submitDevserver(): Promise<void> {
+    const u = url.trim();
+    if (!isDevserverUrl(u)) {
+      error = "Enter a full URL with a scheme, e.g. https://box.example.com:8787.";
       return;
     }
     const t = token.trim();
@@ -80,8 +87,7 @@
     try {
       await saveDevserver(
         {
-          host: h,
-          port: p,
+          url: u,
           label: name.trim() || undefined,
           script: script.trim() || undefined,
           token: t || undefined,
@@ -132,27 +138,17 @@
   {:else}
     <p class="intro">
       Connect to a chan devserver, a headless box serving many workspaces. The desktop dials
-      host:port; its workspaces appear in their own group.
+      the URL; its workspaces appear in their own group.
     </p>
-    <div class="row3">
+    <div class="row2">
       <label class="field">
-        Host
+        Devserver URL
         <input
           type="text"
-          bind:value={host}
-          placeholder="127.0.0.1"
+          bind:value={url}
+          placeholder="https://box.example.com:8787"
           autocomplete="off"
           spellcheck="false"
-          onkeydown={(e) => onFieldKey(e, submitDevserver)} />
-      </label>
-      <label class="field port">
-        Port
-        <input
-          type="number"
-          min="1"
-          max="65535"
-          bind:value={port}
-          placeholder="8787"
           onkeydown={(e) => onFieldKey(e, submitDevserver)} />
       </label>
       <label class="field">
@@ -267,9 +263,9 @@
     opacity: 0.8;
   }
 
-  .row3 {
+  .row2 {
     display: grid;
-    grid-template-columns: 1fr 0.6fr 1fr;
+    grid-template-columns: 1.8fr 1fr;
     gap: 0.6rem;
   }
 

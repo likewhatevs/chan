@@ -63,26 +63,26 @@ describe("workspace registry", () => {
 describe("devserver registry", () => {
   it("adds a devserver and reports a stored token without echoing it", async () => {
     const before = library.devservers.length;
-    await saveDevserver({ host: "box.test", port: 9001, label: "qa", token: "tok_secret" });
+    await saveDevserver({ url: "https://box.test:9001", label: "qa", token: "tok_secret" });
     expect(library.devservers.length).toBe(before + 1);
-    const added = library.devservers.find((d) => d.host === "box.test")!;
+    const added = library.devservers.find((d) => d.url === "https://box.test:9001")!;
     expect(added.has_token).toBe(true);
     expect(Object.prototype.hasOwnProperty.call(added, "token")).toBe(false);
     expect(added.label).toBe("qa");
   });
 
   it("edits a devserver, keeping the stored token when none is supplied", async () => {
-    await saveDevserver({ host: "edit.test", port: 9002, token: "tok_keep" });
-    const ds = library.devservers.find((d) => d.host === "edit.test")!;
-    await saveDevserver({ host: "edit.test", port: 9003 }, ds.id);
+    await saveDevserver({ url: "https://edit.test:9002", token: "tok_keep" });
+    const ds = library.devservers.find((d) => d.url === "https://edit.test:9002")!;
+    await saveDevserver({ url: "https://edit.test:9003" }, ds.id);
     const updated = library.devservers.find((d) => d.id === ds.id)!;
-    expect(updated.port).toBe(9003);
+    expect(updated.url).toBe("https://edit.test:9003");
     expect(updated.has_token).toBe(true);
   });
 
   it("removes a devserver", async () => {
-    await saveDevserver({ host: "gone.test", port: 9004 });
-    const ds = library.devservers.find((d) => d.host === "gone.test")!;
+    await saveDevserver({ url: "https://gone.test:9004" });
+    const ds = library.devservers.find((d) => d.url === "https://gone.test:9004")!;
     const before = library.devservers.length;
     await removeDevserver(ds.id);
     expect(library.devservers.length).toBe(before - 1);

@@ -32,9 +32,12 @@ describe("WorkspaceList multi-select rendering", () => {
 
     // No bulk bar before anything is selected.
     expect(target.querySelector('[aria-label="Bulk actions"]')).toBeNull();
-    // The per-row Remove button is gone; the On/Off pill stays.
+    // The per-row Remove button is gone; each row carries a pill action — "Open"
+    // for an on workspace, "Turn on" for an off one (the seed has both).
     expect(target.textContent).not.toContain("Remove");
     expect(target.querySelector(".pill")).not.toBeNull();
+    expect(target.textContent).toContain("Open");
+    expect(target.textContent).toContain("Turn on");
 
     // Select a row -> the reactive Set drives the bulk bar + the checkbox.
     const id = library.workspaces[0]!.workspace_id;

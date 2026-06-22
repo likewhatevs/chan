@@ -33,8 +33,7 @@ const workspaces: WorkspaceEntry[] = [
 const devservers: MockDevserver[] = [
   {
     id: "ds-1",
-    host: "box.example.com",
-    port: 8787,
+    url: "https://box.example.com:8787",
     label: "prod",
     script: "ssh box.example.com -L 8787:localhost:8787 chan devserver",
     has_token: true,
@@ -105,8 +104,7 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
   // Never echo the token; report only whether one is stored (write-only wire).
   return {
     id: ds.id,
-    host: ds.host,
-    port: ds.port,
+    url: ds.url,
     label: ds.label,
     script: ds.script,
     has_token: ds.has_token,
@@ -154,8 +152,7 @@ export const mockApi: LibraryApi = {
   addDevserver: (input) => {
     const ds: MockDevserver = {
       id: `ds-${nextDs++}`,
-      host: input.host,
-      port: input.port,
+      url: input.url,
       label: input.label ?? "",
       script: input.script ?? "",
       has_token: !!input.token,
@@ -170,8 +167,7 @@ export const mockApi: LibraryApi = {
   updateDevserver: (id, input) => {
     const ds = devservers.find((d) => d.id === id);
     if (!ds) throw new Error(`unknown devserver ${id}`);
-    ds.host = input.host;
-    ds.port = input.port;
+    ds.url = input.url;
     ds.label = input.label ?? "";
     ds.script = input.script ?? "";
     // A token omitted on edit leaves the stored one unchanged (the write-only

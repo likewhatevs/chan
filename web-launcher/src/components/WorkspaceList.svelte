@@ -3,7 +3,7 @@
   // quick-toggle pill. Selecting one or more rows reveals a bulk-action bar
   // (Turn On / Turn Off / Delete) that loops the singular library ops; delete
   // is bulk-only, behind a confirm. (The per-row Remove button is gone.)
-  import { library, toggleWorkspace } from "../state/library.svelte";
+  import { library, toggleWorkspace, openWorkspaceWindow } from "../state/library.svelte";
   import {
     selection,
     isSelected,
@@ -81,13 +81,13 @@
             {#if readOnly}
               <!-- Read-only surface: the on/off state is shown but not toggleable. -->
               <span class="pill" class:on={ws.on} aria-disabled="true">{ws.on ? "On" : "Off"}</span>
+            {:else if ws.on}
+              <!-- On: open a window onto it. Turning off is a bulk action. -->
+              <button class="pill on" type="button" onclick={() => openWorkspaceWindow(ws.path)}
+                >Open</button>
             {:else}
-              <button
-                class="pill"
-                class:on={ws.on}
-                type="button"
-                aria-pressed={ws.on}
-                onclick={() => toggleWorkspace(ws.workspace_id, !ws.on)}>{ws.on ? "On" : "Off"}</button>
+              <button class="pill" type="button" onclick={() => toggleWorkspace(ws.workspace_id, true)}
+                >Turn on</button>
             {/if}
           </div>
         </li>

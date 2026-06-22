@@ -48,6 +48,31 @@ describe("New workspace dialog", () => {
     expect(el.textContent).toContain("Add devserver");
   });
 
+  it("offers a single Devserver URL field (Host/Port dropped)", () => {
+    openNewDialog("devserver");
+    const el = render();
+    expect(el.textContent).toContain("Devserver URL");
+    expect(el.textContent).not.toContain("Host");
+    expect(el.textContent).not.toContain("Port");
+    // No number input remains (the old Port field).
+    expect(el.querySelector('input[type="number"]')).toBeNull();
+  });
+
+  it("rejects a bare host:port that omits the scheme", () => {
+    openNewDialog("devserver");
+    const el = render();
+    const urlField = el.querySelector('input[type="text"]') as HTMLInputElement;
+    urlField.value = "box.example.com:8787";
+    urlField.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    const addBtn = [...el.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Add devserver"),
+    ) as HTMLButtonElement;
+    addBtn.click();
+    flushSync();
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain("scheme");
+  });
+
   it("switches body when the choice changes", () => {
     openNewDialog("local");
     const el = render();
@@ -66,8 +91,7 @@ describe("New workspace dialog", () => {
   it("prefills the edit form and reports a stored token without echoing it", () => {
     const ds: DevserverEntry = {
       id: "ds-edit",
-      host: "edit.example",
-      port: 8123,
+      url: "https://edit.example:8123",
       label: "staging",
       script: "",
       has_token: true,
@@ -76,8 +100,9 @@ describe("New workspace dialog", () => {
     openEditDevserver(ds);
     const el = render();
     expect(el.textContent).toContain("Save changes");
-    const host = el.querySelector('input[type="text"]') as HTMLInputElement | null;
-    expect(host?.value).toBe("edit.example");
+    // The first text input is the Devserver URL field, seeded from the entry.
+    const urlField = el.querySelector('input[type="text"]') as HTMLInputElement | null;
+    expect(urlField?.value).toBe("https://edit.example:8123");
     const token = el.querySelector('input[type="password"]') as HTMLInputElement | null;
     expect(token?.value).toBe("");
     expect(token?.placeholder).toContain("leave blank to keep");

@@ -102,9 +102,16 @@ export async function openTerminal(): Promise<void> {
   await backend.createWindow("terminal");
 }
 
+/** Open a window onto an on workspace: mint a workspace window of the local
+ * library (the desktop embed focuses an existing one for the same path). The
+ * window feed updates through the watch subscription, so nothing to refresh. */
+export async function openWorkspaceWindow(path: string): Promise<void> {
+  await backend.createWindow("workspace", path);
+}
+
 /** The user's name for a remote library, joined by its library id. */
 export function remoteLibraryName(libraryId: string): string | null {
   const ds = library.devservers.find((d) => d.library_id === libraryId);
   if (!ds) return null;
-  return ds.label || `${ds.host}:${ds.port}`;
+  return ds.label || ds.url;
 }
