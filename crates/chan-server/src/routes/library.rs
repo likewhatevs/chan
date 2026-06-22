@@ -27,7 +27,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chan_library::{allocate_workspace_prefix, ServeConfig};
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ use tokio::sync::Notify;
 
 use crate::devserver::bytes_eq;
 use crate::static_assets::serve_launcher;
-use crate::{CreateWindow, WindowRecord, WindowSet, WorkspaceHost};
+use crate::{CreateWindow, DevserverEntry, DevserverInput, WindowRecord, WindowSet, WorkspaceHost};
 
 /// State shared by the `/api/library/workspaces` handlers: the library host plus
 /// the surface's serve address. `serve_addr` is the read-only/full discriminator
@@ -111,8 +111,24 @@ pub fn launcher_router(
             "/api/library/workspaces/:id",
             delete(handle_remove_workspace),
         )
+        .with_state(Arc::new(LauncherState {
+            host: host.clone(),
+            serve_addr: serve_addr.clone(),
+        }));
+    // Devservers: list on BOTH surfaces (a registry-less surface returns empty);
+    // add/update/remove gated mutable (403 read-only, 404 no registry) inside the
+    // handlers, same as workspaces.
+    let devservers = Router::new()
+        .route(
+            "/api/library/devservers",
+            get(handle_list_devservers).post(handle_add_devserver),
+        )
+        .route(
+            "/api/library/devservers/:id",
+            put(handle_update_devserver).delete(handle_remove_devserver),
+        )
         .with_state(Arc::new(LauncherState { host, serve_addr }));
-    let api = windows.merge(workspaces);
+    let api = windows.merge(workspaces).merge(devservers);
     let api = match bearer {
         Some(token) => {
             let token = token.to_string();
@@ -496,4 +512,331 @@ async fn handle_remove_workspace(
         overlay.forget(&root.to_string_lossy());
     }
     StatusCode::NO_CONTENT.into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Devservers (`/api/library/devservers`). The set lives in chan-desktop's config,
+// reached through an installed `DevserverRegistry` (see `devserver_registry.rs`).
+// The desktop loopback installs one; the headless devserver/gateway leaves it
+// `None`, where the routes serve an empty list and 404 every mutation.
+// ---------------------------------------------------------------------------
+
+/// `GET /api/library/devservers`: every configured devserver (tokens elided).
+/// Served on ALL surfaces with NO `serve_addr` gate: a surface with no registry
+/// installed (the headless devserver/gateway) returns an empty list, which is
+/// exactly the spec — a devserver-served launcher has no other devservers to
+/// list. Infallible, mirroring the window feed.
+async fn handle_list_devservers(
+    State(state): State<Arc<LauncherState>>,
+) -> Json<Vec<DevserverEntry>> {
+    Json(
+        state
+            .host
+            .devserver_registry()
+            .map(|reg| reg.list())
+            .unwrap_or_default(),
+    )
+}
+
+/// `POST /api/library/devservers` `{url, label?, script?, token?}`: register a
+/// devserver, returning the stored row with its assigned id (token elided).
+/// Loopback-only ([`require_mutable`] → 403 on the read-only surface). A registry
+/// rejection (a bad URL) maps to 400; no registry installed maps to 404
+/// (defensive — the desktop loopback always installs one).
+async fn handle_add_devserver(
+    State(state): State<Arc<LauncherState>>,
+    Json(input): Json<DevserverInput>,
+) -> Response {
+    if let Err(resp) = require_mutable(&state) {
+        return *resp;
+    }
+    let Some(reg) = state.host.devserver_registry() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match reg.add(input) {
+        Ok(entry) => Json(entry).into_response(),
+        Err(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+    }
+}
+
+/// `PUT /api/library/devservers/{id}` `{url, label?, script?, token?}`: edit a
+/// devserver in place; a blank/absent `token` keeps the stored one. Loopback-only.
+/// 404 when no devserver has the id (or no registry is installed); 400 on a
+/// registry rejection.
+async fn handle_update_devserver(
+    State(state): State<Arc<LauncherState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(input): Json<DevserverInput>,
+) -> Response {
+    if let Err(resp) = require_mutable(&state) {
+        return *resp;
+    }
+    let Some(reg) = state.host.devserver_registry() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match reg.update(&id, input) {
+        Ok(Some(entry)) => Json(entry).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+    }
+}
+
+/// `DELETE /api/library/devservers/{id}`: remove a devserver. Loopback-only.
+/// 404 when no devserver has the id (or no registry is installed); 400 on a
+/// registry rejection.
+async fn handle_remove_devserver(
+    State(state): State<Arc<LauncherState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    if let Err(resp) = require_mutable(&state) {
+        return *resp;
+    }
+    let Some(reg) = state.host.devserver_registry() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match reg.remove(&id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod devserver_route_tests {
+    //! The devserver route gate semantics, exercised over a fake registry: list
+    //! is uniform (empty without a registry, no `serve_addr` gate); mutations are
+    //! `require_mutable` first (403 read-only) then registry-keyed (404 absent /
+    //! missing id, 400 on rejection); the token is never echoed back.
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use chan_workspace::Library;
+    use tower::ServiceExt;
+
+    use super::launcher_router;
+    use crate::{DevserverEntry, DevserverInput, DevserverRegistry, WorkspaceHost};
+
+    /// An in-memory `DevserverRegistry` standing in for the desktop config so the
+    /// route gates are exercised without a desktop. `add` echoes the input back as
+    /// a stored row (rejecting the sentinel url `"bad"` to drive the 400 path);
+    /// `update`/`remove` 404 (`Ok(None)`/`Ok(false)`) unless the id is present.
+    #[derive(Default)]
+    struct FakeRegistry {
+        rows: Mutex<Vec<DevserverEntry>>,
+    }
+
+    impl FakeRegistry {
+        fn seeded() -> Self {
+            FakeRegistry {
+                rows: Mutex::new(vec![DevserverEntry {
+                    id: "ds1".into(),
+                    url: "https://box.example.com:8787".into(),
+                    label: "box".into(),
+                    script: String::new(),
+                    has_token: true,
+                    library_id: None,
+                }]),
+            }
+        }
+    }
+
+    impl DevserverRegistry for FakeRegistry {
+        fn list(&self) -> Vec<DevserverEntry> {
+            self.rows.lock().unwrap().clone()
+        }
+        fn add(&self, input: DevserverInput) -> Result<DevserverEntry, String> {
+            if input.url == "bad" {
+                return Err("rejected url".into());
+            }
+            let entry = DevserverEntry {
+                id: "ds-new".into(),
+                url: input.url,
+                label: input.label.unwrap_or_default(),
+                script: input.script.unwrap_or_default(),
+                has_token: input.token.is_some(),
+                library_id: None,
+            };
+            self.rows.lock().unwrap().push(entry.clone());
+            Ok(entry)
+        }
+        fn update(
+            &self,
+            id: &str,
+            input: DevserverInput,
+        ) -> Result<Option<DevserverEntry>, String> {
+            let mut rows = self.rows.lock().unwrap();
+            let Some(row) = rows.iter_mut().find(|r| r.id == id) else {
+                return Ok(None);
+            };
+            row.url = input.url;
+            if let Some(label) = input.label {
+                row.label = label;
+            }
+            Ok(Some(row.clone()))
+        }
+        fn remove(&self, id: &str) -> Result<bool, String> {
+            let mut rows = self.rows.lock().unwrap();
+            let before = rows.len();
+            rows.retain(|r| r.id != id);
+            Ok(rows.len() != before)
+        }
+    }
+
+    /// A launcher router over an empty host with the given registry installed (or
+    /// none). `mutable` Some → a loopback surface with a bound `serve_addr` (the
+    /// mutation gate opens); None → the read-only devserver/gateway surface. The
+    /// bearer is `None`, leaving the data surface public so tests need no header.
+    fn router_with(registry: Option<Arc<dyn DevserverRegistry>>, mutable: bool) -> axum::Router {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open_at(dir.path().join("config.toml")).unwrap();
+        // The router never reads the config file again; leak the dir so the path
+        // the Library holds stays valid for the (short) test body.
+        std::mem::forget(dir);
+        let host = Arc::new(WorkspaceHost::new(lib, crate::route_builder()));
+        if let Some(reg) = registry {
+            host.install_devserver_registry(reg);
+        }
+        let serve_addr = mutable.then(|| {
+            let cell = OnceLock::new();
+            let _ = cell.set("127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+            Arc::new(cell)
+        });
+        launcher_router(host, None, serve_addr)
+    }
+
+    async fn request(
+        router: &axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder().method(method).uri(uri);
+        let body = if let Some(b) = body {
+            req = req.header(header::CONTENT_TYPE, "application/json");
+            Body::from(b.to_string())
+        } else {
+            Body::empty()
+        };
+        let response = router.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn list_without_registry_is_empty() {
+        // The headless devserver/gateway installs no registry: GET returns `[]`
+        // (200) on every surface — no `serve_addr` gate.
+        for mutable in [false, true] {
+            let router = router_with(None, mutable);
+            let (status, body) = request(&router, "GET", "/api/library/devservers", None).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, serde_json::json!([]));
+        }
+    }
+
+    #[tokio::test]
+    async fn list_returns_seeded_rows_without_token() {
+        let reg = Arc::new(FakeRegistry::seeded());
+        let router = router_with(Some(reg), false);
+        let (status, body) = request(&router, "GET", "/api/library/devservers", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body[0]["id"], "ds1");
+        assert_eq!(body[0]["url"], "https://box.example.com:8787");
+        assert_eq!(body[0]["has_token"], true);
+        // The token value is never serialized back, only its presence.
+        assert!(body[0].get("token").is_none());
+    }
+
+    #[tokio::test]
+    async fn add_on_loopback_returns_row_token_elided() {
+        let reg = Arc::new(FakeRegistry::default());
+        let router = router_with(Some(reg), true);
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/api/library/devservers",
+            Some(r#"{"url":"https://box:9000","token":"secret"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["url"], "https://box:9000");
+        assert_eq!(body["has_token"], true);
+        assert!(body.get("token").is_none(), "token must not echo back");
+    }
+
+    #[tokio::test]
+    async fn add_rejected_by_registry_is_400() {
+        let reg = Arc::new(FakeRegistry::default());
+        let router = router_with(Some(reg), true);
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/library/devservers",
+            Some(r#"{"url":"bad"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn mutation_on_read_only_surface_is_403() {
+        // require_mutable runs FIRST: even with a registry installed, the
+        // read-only devserver/gateway surface refuses every mutation with 403.
+        let reg = Arc::new(FakeRegistry::seeded());
+        let router = router_with(Some(reg), false);
+        for (method, uri, body) in [
+            ("POST", "/api/library/devservers", Some(r#"{"url":"https://x"}"#)),
+            ("PUT", "/api/library/devservers/ds1", Some(r#"{"url":"https://x"}"#)),
+            ("DELETE", "/api/library/devservers/ds1", None),
+        ] {
+            let (status, _) = request(&router, method, uri, body).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn mutation_without_registry_is_404() {
+        // Loopback (mutable) but no registry installed — defensive 404 (the
+        // desktop loopback always installs one).
+        let router = router_with(None, true);
+        let (status, _) = request(
+            &router,
+            "POST",
+            "/api/library/devservers",
+            Some(r#"{"url":"https://x"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn update_and_remove_missing_id_is_404() {
+        let reg = Arc::new(FakeRegistry::default());
+        let router = router_with(Some(reg), true);
+        let (put_status, _) = request(
+            &router,
+            "PUT",
+            "/api/library/devservers/nope",
+            Some(r#"{"url":"https://x"}"#),
+        )
+        .await;
+        assert_eq!(put_status, StatusCode::NOT_FOUND);
+        let (del_status, _) =
+            request(&router, "DELETE", "/api/library/devservers/nope", None).await;
+        assert_eq!(del_status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn remove_existing_is_204() {
+        let reg = Arc::new(FakeRegistry::seeded());
+        let router = router_with(Some(reg), true);
+        let (status, _) = request(&router, "DELETE", "/api/library/devservers/ds1", None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
 }
