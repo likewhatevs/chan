@@ -966,6 +966,39 @@ impl WorkspaceHost {
         Ok(removed)
     }
 
+    /// Discard every persisted window rooted at `root` — a workspace turned OFF
+    /// or FORGOTTEN must not leave ghost windows in the launcher feed (the windows
+    /// persist in the registry, so without this they survive the unmount and, on a
+    /// devserver, a disconnect→reconnect). Matches a window's `workspace_path` to
+    /// `root` by canonical form (the same join [`assemble_window_records`](
+    /// Self::assemble_window_records) uses), discarding each via
+    /// [`discard_window`](Self::discard_window) so its tenant state is reaped too.
+    /// Returns the count discarded; a no-op with no registry or no match. Fires
+    /// only on explicit off/forget (via [`close_workspace`](Self::close_workspace)
+    /// / [`remove_workspace_for_root`](Self::remove_workspace_for_root)), NOT on
+    /// host shutdown (which drops runtimes without closing), so windows still
+    /// restore across a restart.
+    pub fn discard_workspace_windows(&self, root: &Path) -> usize {
+        let Some(registry) = self.window_registry() else {
+            return 0;
+        };
+        let target = canonical_key(root);
+        let ids: Vec<String> = registry
+            .snapshot()
+            .into_iter()
+            .filter(|row| {
+                row.workspace_path
+                    .as_deref()
+                    .is_some_and(|p| canonical_key(Path::new(p)) == target)
+            })
+            .map(|row| row.window_id)
+            .collect();
+        for id in &ids {
+            let _ = self.discard_window(id);
+        }
+        ids.len()
+    }
+
     /// Reap all state a discarded `window_id` owns across mounted tenants, so a
     /// registry discard is the SINGLE authoritative cleanup — even a non-SPA
     /// discard (cs-driven, a watcher reconcile, a crashed client) that never
@@ -1178,6 +1211,11 @@ impl WorkspaceHost {
         if let Some(overlay) = self.workspace_overlay() {
             overlay.forget(&root.to_string_lossy());
         }
+        // Drop any windows still rooted here. `close_workspace` already purges
+        // when the workspace was mounted; this covers forgetting a registered-
+        // but-off workspace whose windows persisted (idempotent — a no-op when
+        // close_workspace already cleared them).
+        self.discard_workspace_windows(root);
         Ok(removed)
     }
 
@@ -1206,6 +1244,10 @@ impl WorkspaceHost {
         let Some(runtime) = runtime else {
             return Ok(false);
         };
+        // Turning a workspace off must drop its windows from the feed (they are
+        // persisted in the registry, so without this they linger as ghosts). The
+        // root is the join key; capture it before the runtime is torn down.
+        let root = runtime.root.clone();
         // Tear down explicitly (rather than leaving it to Drop) so we hold a
         // `Weak` to the workspace and can wait for the per-workspace flock to
         // release before returning. Without this an in-process close then
@@ -1217,6 +1259,7 @@ impl WorkspaceHost {
         if let Some((weak, lock_dir)) = released {
             wait_for_workspace_release(&weak, &lock_dir);
         }
+        self.discard_workspace_windows(&root);
         self.notify_window_change();
         Ok(true)
     }
@@ -1831,6 +1874,44 @@ mod tests {
         host.open_registered_workspace(root.path(), serve_config("/second"))
             .await
             .expect("reopen after close");
+    }
+
+    #[tokio::test]
+    async fn off_purges_only_its_own_windows_from_the_feed() {
+        // S1: turning a workspace OFF must drop ITS windows from the feed (they
+        // persist in the registry, so without the purge they linger as ghosts);
+        // a different workspace's window is untouched.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+        host.open_registered_workspace(root.path(), serve_config("/workspace"))
+            .await
+            .expect("open");
+
+        let store = tempfile::tempdir().expect("store dir");
+        let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
+        let mine = registry.create(
+            WindowKind::Workspace,
+            Some(root.path().to_string_lossy().into_owned()),
+        );
+        let other = registry.create(WindowKind::Workspace, Some("/tmp/other".into()));
+        host.install_window_registry(registry, "local".into());
+        assert_eq!(host.assemble_window_records().len(), 2);
+
+        assert!(host.close_workspace("/workspace").expect("close"));
+
+        let records = host.assemble_window_records();
+        assert_eq!(records.len(), 1, "the off workspace's window is purged");
+        assert_eq!(
+            records[0].window_id, other.window_id,
+            "a different workspace's window survives"
+        );
+        assert!(
+            !records.iter().any(|r| r.window_id == mine.window_id),
+            "the off workspace's window is gone from the feed"
+        );
     }
 
     #[tokio::test]
