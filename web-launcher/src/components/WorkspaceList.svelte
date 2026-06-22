@@ -1,19 +1,25 @@
 <script lang="ts">
-  // The local workspace registry. Each row has a select checkbox + an on/off
-  // quick-toggle pill. Selecting one or more rows reveals a bulk-action bar
-  // (Turn On / Turn Off / Delete) that loops the singular library ops; delete
-  // is bulk-only, behind a confirm. (The per-row Remove button is gone.)
-  import { library, toggleWorkspace, openWorkspaceWindow } from "../state/library.svelte";
+  // The workspace feed, grouped like the window feed: a Local section (the local
+  // registry) first, then one section per connected devserver (its served
+  // workspaces, merged in by the library). Each row carries two icon actions —
+  // [NEW WINDOW] (open a window onto it; greyed until the workspace is ON) and
+  // [ON/OFF] (the tenant toggle). Local rows add a select checkbox feeding the
+  // bulk bar (Turn On / Turn Off / Remove); remove is bulk-only there. A remote
+  // row adds a [FORGET] action (unmount + drop) and routes its on/off/open/forget
+  // to the owning devserver. The read-only surface shows the on-state statically.
+  import { AppWindow, Power, Trash2 } from "lucide-svelte";
   import {
-    selection,
-    isSelected,
-    toggleSelected,
-    clearSelection,
-    bulkSetOn,
-    requestBulkDelete,
-    cancelBulkDelete,
-    confirmBulkDelete,
-  } from "../state/selection.svelte";
+    library,
+    toggleWorkspace,
+    openWorkspaceWindow,
+    openDevserverWorkspace,
+    setDevserverWorkspaceOn,
+    forgetDevserverWorkspace,
+    reportError,
+    clearError,
+  } from "../state/library.svelte";
+  import { isSelected, toggleSelected } from "../state/selection.svelte";
+  import SelectionBar from "./SelectionBar.svelte";
   import { basename } from "../lib/windowLabel";
   import { readOnly } from "../state/capabilities";
   import type { WorkspaceEntry } from "../api/library";
@@ -22,56 +28,65 @@
     return ws.label || basename(ws.path) || ws.path;
   }
 
-  const selectedCount = $derived(selection.selected.length);
+  interface RemoteGroup {
+    devserverId: string;
+    label: string;
+    workspaces: WorkspaceEntry[];
+  }
+
+  function remoteName(devserverId: string): string {
+    const ds = library.devservers.find((d) => d.id === devserverId);
+    return ds?.label || ds?.url || devserverId;
+  }
+
+  // Group the merged workspace feed: local rows (no devserver_id) stay in the
+  // Local section; remote rows group under their devserver.
+  function buildRemoteGroups(workspaces: WorkspaceEntry[]): RemoteGroup[] {
+    const map = new Map<string, WorkspaceEntry[]>();
+    for (const w of workspaces) {
+      if (!w.devserver_id) continue;
+      const arr = map.get(w.devserver_id) ?? [];
+      arr.push(w);
+      map.set(w.devserver_id, arr);
+    }
+    return [...map.entries()]
+      .map(([devserverId, ws]) => ({ devserverId, label: remoteName(devserverId), workspaces: ws }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  const localWorkspaces = $derived(library.workspaces.filter((w) => w.devserver_id === null));
+  const remoteGroups = $derived(buildRemoteGroups(library.workspaces));
+
+  // Per-row actions surface their failure in the banner (the actions throw so
+  // the bulk loop can count failures; the per-row caller catches here).
+  async function run(action: Promise<void>): Promise<void> {
+    clearError();
+    try {
+      await action;
+    } catch (e) {
+      reportError(e);
+    }
+  }
 </script>
 
-{#if library.workspaces.length}
+{#if localWorkspaces.length}
   <section class="group">
     <h2 class="group-title">🏠 Local</h2>
 
-    {#if selectedCount > 0 && !readOnly}
-      <div class="bulk-bar" role="toolbar" aria-label="Bulk actions">
-        <span class="bulk-count">{selectedCount} selected</span>
-        {#if selection.confirmingDelete}
-          <span class="bulk-confirm">Delete {selectedCount}?</span>
-          <button
-            class="btn-ghost danger"
-            type="button"
-            disabled={selection.busy}
-            onclick={confirmBulkDelete}>Confirm delete</button>
-          <button class="btn-ghost" type="button" onclick={cancelBulkDelete}>Cancel</button>
-        {:else}
-          <button
-            class="btn-ghost"
-            type="button"
-            disabled={selection.busy}
-            onclick={() => bulkSetOn(true)}>Turn On</button>
-          <button
-            class="btn-ghost"
-            type="button"
-            disabled={selection.busy}
-            onclick={() => bulkSetOn(false)}>Turn Off</button>
-          <button
-            class="btn-ghost danger"
-            type="button"
-            disabled={selection.busy}
-            onclick={requestBulkDelete}>Delete</button>
-          <button class="btn-ghost" type="button" onclick={clearSelection}>Clear</button>
-        {/if}
-        {#if selection.note}<span class="bulk-note">{selection.note}</span>{/if}
-      </div>
+    {#if !readOnly}
+      <SelectionBar kind="workspace" />
     {/if}
 
     <ul class="rows">
-      {#each library.workspaces as ws (ws.workspace_id)}
-        <li class="row" class:selected={isSelected(ws.workspace_id)}>
+      {#each localWorkspaces as ws (ws.workspace_id)}
+        <li class="row" class:selected={isSelected("workspace", ws.workspace_id)}>
           {#if !readOnly}
             <input
               class="row-check"
               type="checkbox"
-              checked={isSelected(ws.workspace_id)}
+              checked={isSelected("workspace", ws.workspace_id)}
               aria-label={`Select ${displayName(ws)}`}
-              onchange={() => toggleSelected(ws.workspace_id)} />
+              onchange={() => toggleSelected("workspace", ws.workspace_id)} />
           {/if}
           <div class="row-main">
             <span class="row-name">{displayName(ws)}</span>
@@ -79,15 +94,26 @@
           </div>
           <div class="row-actions">
             {#if readOnly}
-              <!-- Read-only surface: the on/off state is shown but not toggleable. -->
               <span class="pill" class:on={ws.on} aria-disabled="true">{ws.on ? "On" : "Off"}</span>
-            {:else if ws.on}
-              <!-- On: open a window onto it. Turning off is a bulk action. -->
-              <button class="pill on" type="button" onclick={() => openWorkspaceWindow(ws.path)}
-                >Open</button>
             {:else}
-              <button class="pill" type="button" onclick={() => toggleWorkspace(ws.workspace_id, true)}
-                >Turn on</button>
+              <button
+                class="icon-btn"
+                type="button"
+                disabled={!ws.on}
+                title={ws.on ? "New window" : "Turn on to open a window"}
+                aria-label={`New window of ${displayName(ws)}`}
+                onclick={() => run(openWorkspaceWindow(ws.path))}>
+                <AppWindow size={16} />
+              </button>
+              <button
+                class="icon-btn"
+                class:on={ws.on}
+                type="button"
+                title={ws.on ? "Turn off" : "Turn on"}
+                aria-label={`${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
+                onclick={() => run(toggleWorkspace(ws.workspace_id, !ws.on))}>
+                <Power size={16} />
+              </button>
             {/if}
           </div>
         </li>
@@ -96,39 +122,50 @@
   </section>
 {/if}
 
-<style>
-  .bulk-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.6rem;
-    padding: 0.4rem 0.6rem;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg-card);
-    font-size: 0.85rem;
-  }
-  .bulk-count,
-  .bulk-confirm {
-    font-weight: 600;
-    color: var(--text);
-  }
-  .bulk-note {
-    color: var(--danger);
-  }
-  .btn-ghost.danger:hover:not(:disabled) {
-    color: var(--danger);
-    border-color: var(--danger);
-  }
-  .row-check {
-    margin-right: 0.6rem;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-  .row-main {
-    flex: 1;
-  }
-  .row.selected {
-    background: color-mix(in srgb, var(--brand) 10%, var(--bg-card));
-  }
-</style>
+{#each remoteGroups as g (g.devserverId)}
+  <section class="group">
+    <h2 class="group-title">↗ {g.label}</h2>
+    <ul class="rows">
+      {#each g.workspaces as ws (ws.workspace_id)}
+        <li class="row">
+          <div class="row-main">
+            <span class="row-name">{displayName(ws)}</span>
+            <span class="row-sub" title={ws.path}>{ws.path}</span>
+          </div>
+          <div class="row-actions">
+            {#if readOnly}
+              <span class="pill" class:on={ws.on} aria-disabled="true">{ws.on ? "On" : "Off"}</span>
+            {:else}
+              <button
+                class="icon-btn"
+                type="button"
+                disabled={!ws.on}
+                title={ws.on ? "New window" : "Turn on to open a window"}
+                aria-label={`New window of ${displayName(ws)}`}
+                onclick={() => run(openDevserverWorkspace(g.devserverId, ws.path))}>
+                <AppWindow size={16} />
+              </button>
+              <button
+                class="icon-btn"
+                class:on={ws.on}
+                type="button"
+                title={ws.on ? "Turn off" : "Turn on"}
+                aria-label={`${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
+                onclick={() => run(setDevserverWorkspaceOn(g.devserverId, ws.prefix, !ws.on))}>
+                <Power size={16} />
+              </button>
+              <button
+                class="icon-btn danger"
+                type="button"
+                title="Forget"
+                aria-label={`Forget ${displayName(ws)}`}
+                onclick={() => run(forgetDevserverWorkspace(g.devserverId, ws.prefix))}>
+                <Trash2 size={16} />
+              </button>
+            {/if}
+          </div>
+        </li>
+      {/each}
+    </ul>
+  </section>
+{/each}

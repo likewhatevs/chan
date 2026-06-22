@@ -28,6 +28,17 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** Surface a failed action in the launcher's error banner. Components catch
+ * their action rejections and route them here; the throwing actions stay
+ * uniform (so bulk loops can count per-item failures). */
+export function reportError(e: unknown): void {
+  library.error = errorText(e);
+}
+
+export function clearError(): void {
+  library.error = null;
+}
+
 /** Load both registries and subscribe to the window feed (idempotent watch). */
 export async function loadLibrary(): Promise<void> {
   library.loading = true;
@@ -48,11 +59,15 @@ export async function loadLibrary(): Promise<void> {
     try {
       unwatch = backend.watchWindows((set) => {
         library.windows = set.windows;
-        // The feed also fires on workspace mount/unmount (chan open / on / off),
-        // so re-fetch the workspace list to reflect the new on-state live —
-        // no manual reload. Coalesced so a burst of window pushes collapses to
-        // at most one extra GET.
+        // The feed also fires on workspace mount/unmount (chan open / on / off)
+        // and on a devserver connect/disconnect (its windows enter/leave + its
+        // served-workspace rows merge in/out, and its `connected` flag flips),
+        // so re-fetch both registries to reflect the new state live — no manual
+        // reload, even when the change is out-of-band (desktop menu / CLI /
+        // another launcher). Each is coalesced so a burst of window pushes
+        // collapses to at most one extra GET apiece.
         void refreshWorkspacesLive();
+        void refreshDevserversLive();
       });
     } catch {
       // The window feed is best-effort: a host without WebSocket or a failed
@@ -100,6 +115,32 @@ async function refreshDevservers(): Promise<void> {
   library.devservers = await backend.listDevservers();
 }
 
+// The live devserver re-fetch the window-watch feed drives, mirroring
+// refreshWorkspacesLive: a connect/disconnect flips `connected` (Connect vs
+// Disconnect) and changes which devservers' workspaces merge into the feed.
+// Coalesced + best-effort for the same reasons (no leaked timer; a transient
+// list error heals on the next push).
+let liveDevserversRefreshing = false;
+let liveDevserversRefreshPending = false;
+
+async function refreshDevserversLive(): Promise<void> {
+  if (liveDevserversRefreshing) {
+    liveDevserversRefreshPending = true;
+    return;
+  }
+  liveDevserversRefreshing = true;
+  try {
+    do {
+      liveDevserversRefreshPending = false;
+      library.devservers = await backend.listDevservers();
+    } while (liveDevserversRefreshPending);
+  } catch {
+    // Best-effort: a failed live re-fetch must not tear down the feed.
+  } finally {
+    liveDevserversRefreshing = false;
+  }
+}
+
 export async function addLocalWorkspace(path: string): Promise<void> {
   await backend.addLocalWorkspace(path);
   await refreshWorkspaces();
@@ -134,17 +175,54 @@ export async function removeDevserver(id: string): Promise<void> {
   await refreshDevservers();
 }
 
-/** Connect a devserver — a desktop action: the desktop runs its connect
- * command and dials the URL. Its windows then appear in the feed via the watch
- * push, so there is nothing to refresh here. A failure (a non-desktop surface
- * 409s, or the connect command/dial fails) surfaces in the error banner. */
+// The devserver bridge actions are desktop actions: a surface with no desktop
+// bridge answers 409. They throw on failure (uniform with the workspace actions,
+// so the bulk loop can count per-item failures); the per-row callers catch and
+// route the error to the banner via reportError. Connect/disconnect re-list the
+// devserver registry so the acting client's Connect/Disconnect flips at once
+// (the watch push keeps it live for out-of-band changes); the window-minting
+// actions (terminal / open) rely on the watch push alone.
+
+/** Connect a devserver: the desktop runs its connect command and dials the URL.
+ * Its windows + served workspaces then appear in the feed via the watch push. */
 export async function connectDevserver(id: string): Promise<void> {
-  library.error = null;
-  try {
-    await backend.connectDevserver(id);
-  } catch (e) {
-    library.error = errorText(e);
-  }
+  await backend.connectDevserver(id);
+  await refreshDevservers();
+}
+
+/** Disconnect a devserver: its windows + served-workspace rows leave the feed;
+ * the registry entry stays so Connect can redial. */
+export async function disconnectDevserver(id: string): Promise<void> {
+  await backend.disconnectDevserver(id);
+  await refreshDevservers();
+}
+
+/** Open a terminal window on a connected devserver. The window feed updates
+ * through the watch subscription, so nothing to refresh here. */
+export async function openDevserverTerminal(id: string): Promise<void> {
+  await backend.openDevserverTerminal(id);
+}
+
+/** Open a window onto a connected devserver's served workspace by its remote
+ * path. The window feed updates through the watch subscription. */
+export async function openDevserverWorkspace(id: string, path: string): Promise<void> {
+  await backend.openDevserverWorkspace(id, path);
+}
+
+/** Turn a connected devserver's served workspace on/off by its mounted prefix.
+ * The merged workspace rows refresh through the watch push (the desktop bridges
+ * its workspace-cache change into the library change-signal). */
+export async function setDevserverWorkspaceOn(
+  id: string,
+  prefix: string,
+  on: boolean,
+): Promise<void> {
+  await backend.setDevserverWorkspaceOn(id, prefix, on);
+}
+
+/** Forget (unmount + drop) a connected devserver's served workspace by prefix. */
+export async function forgetDevserverWorkspace(id: string, prefix: string): Promise<void> {
+  await backend.forgetDevserverWorkspace(id, prefix);
 }
 
 /** Mint a new terminal window of the local library. The window feed updates

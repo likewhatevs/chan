@@ -25,9 +25,29 @@ const DS_LIBRARY_ID = "lib-7f3a9c21b40d8e65";
 let nextWs = 3;
 let nextDs = 3;
 
+// Local workspace rows carry the merged-feed tags too: devserver_id null marks
+// them local (the SPA groups by devserver_id), library_id "local", and a
+// slash-free prefix that equals the workspace_id (local rows route on/off/rm by
+// workspace_id — mirrors the server's local LauncherWorkspace).
 const workspaces: WorkspaceEntry[] = [
-  { workspace_id: "ws-1", path: "/Users/fiorix/notes", label: "", on: true },
-  { workspace_id: "ws-2", path: "/Users/fiorix/work/journal", label: "Journal", on: false },
+  {
+    workspace_id: "ws-1",
+    path: "/Users/fiorix/notes",
+    label: "",
+    on: true,
+    library_id: "local",
+    devserver_id: null,
+    prefix: "ws-1",
+  },
+  {
+    workspace_id: "ws-2",
+    path: "/Users/fiorix/work/journal",
+    label: "Journal",
+    on: false,
+    library_id: "local",
+    devserver_id: null,
+    prefix: "ws-2",
+  },
 ];
 
 const devservers: MockDevserver[] = [
@@ -39,6 +59,34 @@ const devservers: MockDevserver[] = [
     has_token: true,
     token: "tok_seeded_prod",
     library_id: DS_LIBRARY_ID,
+    // Seeded connected so the merged view (remote windows + remote workspace
+    // rows + the Disconnect action) has something real to render with no desktop.
+    connected: true,
+  },
+];
+
+// A connected devserver's served workspaces, merged into the workspace feed
+// tagged with their devserver_id + library_id. Only surface while the owning
+// devserver is connected (the live feed source returns connected devservers'
+// workspaces); listWorkspaces filters on the devserver's `connected`.
+const devserverWorkspaces: WorkspaceEntry[] = [
+  {
+    workspace_id: "ds-1:w/api",
+    path: "/srv/api",
+    label: "api",
+    on: true,
+    library_id: DS_LIBRARY_ID,
+    devserver_id: "ds-1",
+    prefix: "w/api",
+  },
+  {
+    workspace_id: "ds-1:w/docs",
+    path: "/srv/docs",
+    label: "docs",
+    on: false,
+    library_id: DS_LIBRARY_ID,
+    devserver_id: "ds-1",
+    prefix: "w/docs",
   },
 ];
 
@@ -109,7 +157,16 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
     script: ds.script,
     has_token: ds.has_token,
     library_id: ds.library_id,
+    connected: ds.connected,
   };
+}
+
+/** The merged workspace feed: local rows + every connected devserver's served
+ * workspaces (the live feed source supplies only connected devservers'). */
+function mergedWorkspaces(): WorkspaceEntry[] {
+  const connectedIds = new Set(devservers.filter((d) => d.connected).map((d) => d.id));
+  const remote = devserverWorkspaces.filter((w) => w.devserver_id && connectedIds.has(w.devserver_id));
+  return [...workspaces, ...remote].map((w) => ({ ...w }));
 }
 
 // A small async hop so the SPA exercises its loading paths the way it will
@@ -119,10 +176,19 @@ function tick<T>(value: T): Promise<T> {
 }
 
 export const mockApi: LibraryApi = {
-  listWorkspaces: () => tick(workspaces.map((w) => ({ ...w }))),
+  listWorkspaces: () => tick(mergedWorkspaces()),
 
   addLocalWorkspace: (path) => {
-    const entry: WorkspaceEntry = { workspace_id: `ws-${nextWs++}`, path, label: "", on: true };
+    const workspace_id = `ws-${nextWs++}`;
+    const entry: WorkspaceEntry = {
+      workspace_id,
+      path,
+      label: "",
+      on: true,
+      library_id: "local",
+      devserver_id: null,
+      prefix: workspace_id,
+    };
     workspaces.push(entry);
     return tick({ ...entry });
   },
@@ -159,6 +225,8 @@ export const mockApi: LibraryApi = {
       token: input.token ?? "",
       // No library id until the desktop connects this devserver for the first time.
       library_id: null,
+      // A freshly added devserver is not connected until the desktop dials it.
+      connected: false,
     };
     devservers.push(ds);
     return tick(publicDevserver(ds));
@@ -185,16 +253,99 @@ export const mockApi: LibraryApi = {
     return tick(undefined);
   },
 
-  // The mock has no desktop to dial, so connecting just marks the devserver's
-  // existing windows live and pushes the feed — enough for the mock SPA and
+  // The mock has no desktop to dial, so connecting just marks the devserver
+  // connected (its served-workspace rows then merge into the feed) and its
+  // existing windows live, then pushes the feed — enough for the mock SPA and
   // tests to see the connect action take effect. A real surface runs the
   // connect command and dials the URL through the desktop bridge.
   connectDevserver: (id) => {
     const ds = devservers.find((d) => d.id === id);
-    if (ds?.library_id) {
-      for (const w of windows) if (w.library_id === ds.library_id) w.connected = true;
+    if (ds) {
+      ds.connected = true;
+      if (ds.library_id) {
+        for (const w of windows) if (w.library_id === ds.library_id) w.connected = true;
+      }
       notify();
     }
+    return tick(undefined);
+  },
+
+  // Disconnect drops the live connection: the devserver's windows detach and
+  // its served-workspace rows leave the merged feed (mergedWorkspaces filters
+  // on `connected`). The registry entry stays (Connect can redial).
+  disconnectDevserver: (id) => {
+    const ds = devservers.find((d) => d.id === id);
+    if (ds) {
+      ds.connected = false;
+      if (ds.library_id) {
+        for (const w of windows) if (w.library_id === ds.library_id) w.connected = false;
+      }
+      notify();
+    }
+    return tick(undefined);
+  },
+
+  // Open a terminal window on a connected devserver: mint a remote terminal
+  // window in that library and push the feed. A real surface drives the bridge.
+  openDevserverTerminal: (id) => {
+    const ds = devservers.find((d) => d.id === id);
+    if (ds?.library_id) {
+      const ordinal =
+        windows.filter((w) => w.library_id === ds.library_id && w.kind === "terminal").length + 1;
+      windows.push({
+        window_id: `w-${id}-term-${windows.length + 1}`,
+        library_id: ds.library_id,
+        kind: "terminal",
+        title: `↗ Terminal Window ${ordinal}`,
+        ordinal,
+        workspace_path: null,
+        prefix: `t/${id}-${ordinal}`,
+        token: "tok_remote_term",
+        persisted: true,
+        connected: true,
+      });
+      notify();
+    }
+    return tick(undefined);
+  },
+
+  // Open a window onto one of a connected devserver's served workspaces (by its
+  // remote path): mint a remote workspace window and push the feed.
+  openDevserverWorkspace: (id, path) => {
+    const ds = devservers.find((d) => d.id === id);
+    if (ds?.library_id) {
+      const base = path.split("/").filter(Boolean).pop() ?? "workspace";
+      windows.push({
+        window_id: `w-${id}-ws-${windows.length + 1}`,
+        library_id: ds.library_id,
+        kind: "workspace",
+        title: `↗ ${base} Window 1`,
+        ordinal: 1,
+        workspace_path: path,
+        prefix: `w/${base}`,
+        token: "tok_remote_ws",
+        persisted: true,
+        connected: true,
+      });
+      notify();
+    }
+    return tick(undefined);
+  },
+
+  // Turn a connected devserver's served workspace on/off by its mounted prefix.
+  setDevserverWorkspaceOn: (id, prefix, on) => {
+    const ws = devserverWorkspaces.find((w) => w.devserver_id === id && w.prefix === prefix);
+    if (ws) ws.on = on;
+    notify();
+    return tick(undefined);
+  },
+
+  // Forget (unmount + drop) a connected devserver's served workspace by prefix:
+  // remove the row + any of its windows, then push the feed.
+  forgetDevserverWorkspace: (id, prefix) => {
+    const i = devserverWorkspaces.findIndex((w) => w.devserver_id === id && w.prefix === prefix);
+    if (i >= 0) devserverWorkspaces.splice(i, 1);
+    notify();
     return tick(undefined);
   },
 

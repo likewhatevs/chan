@@ -1,6 +1,8 @@
-// Component test: mounting WorkspaceList and selecting a row reveals the bulk
-// bar. This exercises the real Svelte 5 runtime reactivity of the selection
-// Set (a static check wouldn't catch a non-reactive Set), per jsdom.
+// Component test: WorkspaceList renders the redesigned local rows (icon actions
+// [New window] + [On/Off], no per-row Remove), the merged devserver workspace
+// group (A4), and reveals the bulk bar when a local row is selected. Exercises
+// the real Svelte 5 runtime reactivity of the kind-aware selection (a static
+// check wouldn't catch a non-reactive selection), per jsdom.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
@@ -19,6 +21,12 @@ vi.mock("../api/backend", async () => {
 let target: HTMLElement | null = null;
 let app: Record<string, unknown> | null = null;
 
+function ariaLabels(): string[] {
+  return [...(target?.querySelectorAll("button[aria-label]") ?? [])].map(
+    (b) => b.getAttribute("aria-label") ?? "",
+  );
+}
+
 beforeEach(async () => {
   clearSelection();
   await loadLibrary();
@@ -32,30 +40,49 @@ afterEach(() => {
   clearSelection();
 });
 
-describe("WorkspaceList multi-select rendering", () => {
-  it("reveals the bulk bar + checks the row when a workspace is selected", () => {
+describe("WorkspaceList redesign", () => {
+  it("renders local rows with icon actions and no per-row Remove", () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(WorkspaceList, { target });
 
-    // No bulk bar before anything is selected.
+    // No bulk bar before anything is selected, and no per-row Remove text.
     expect(target.querySelector('[aria-label="Bulk actions"]')).toBeNull();
-    // The per-row Remove button is gone; each row carries a pill action — "Open"
-    // for an on workspace, "Turn on" for an off one (the seed has both).
     expect(target.textContent).not.toContain("Remove");
-    expect(target.querySelector(".pill")).not.toBeNull();
-    expect(target.textContent).toContain("Open");
-    expect(target.textContent).toContain("Turn on");
+    // The redesigned local rows carry icon actions (aria-labelled), not the old
+    // "Open" / "Turn on" text pills; the mutable surface shows no static pill.
+    expect(target.querySelector(".pill")).toBeNull();
+    const labels = ariaLabels();
+    expect(labels.some((l) => l.startsWith("New window of"))).toBe(true);
+    expect(labels.some((l) => l.startsWith("Turn off") || l.startsWith("Turn on"))).toBe(true);
+  });
 
-    // Select a row -> the reactive Set drives the bulk bar + the checkbox.
-    const id = library.workspaces[0]!.workspace_id;
-    toggleSelected(id);
+  it("renders the connected devserver's workspaces as their own group (A4)", () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WorkspaceList, { target });
+
+    // The seed devserver "prod" is connected, so its served workspaces merge in
+    // under a "↗ prod" group header.
+    expect(target.textContent).toContain("↗ prod");
+    expect(target.textContent).toContain("/srv/api");
+    // A remote row offers a Forget action (per-row; remote rows are not bulk).
+    expect(ariaLabels().some((l) => l.startsWith("Forget"))).toBe(true);
+  });
+
+  it("reveals the bulk bar + checks the row when a local workspace is selected", () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WorkspaceList, { target });
+
+    const localId = library.workspaces.find((w) => w.devserver_id === null)!.workspace_id;
+    toggleSelected("workspace", localId);
     flushSync();
 
     expect(target.querySelector('[aria-label="Bulk actions"]')).not.toBeNull();
     expect(target.textContent).toContain("1 selected");
     expect(target.textContent).toContain("Turn On");
-    expect(target.textContent).toContain("Delete");
+    expect(target.textContent).toContain("Remove");
     const checks = [...target.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[];
     expect(checks.some((c) => c.checked)).toBe(true);
   });

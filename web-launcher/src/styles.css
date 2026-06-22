@@ -97,6 +97,55 @@ body {
   cursor: default;
 }
 
+/* Square icon button — the registry rows' per-action affordances (new window,
+   on/off, new terminal, edit, connect/disconnect, forget). `.on` tints it the
+   accent (an active toggle); `.danger` reddens it on hover (a destructive op). */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--btn-border);
+  border-radius: 7px;
+  background: var(--btn-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.icon-btn:hover:not(:disabled) {
+  border-color: var(--brand);
+  color: var(--text);
+}
+
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.icon-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.icon-btn.danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Multi-select affordances shared by the workspace + devserver lists. */
+.row-check {
+  margin-right: 0.6rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.row.selected {
+  background: color-mix(in srgb, var(--brand) 10%, var(--bg-card));
+}
+
 /* ---- Groups + rows (registry lists and the window feed) --------------- */
 
 .group {

@@ -13,6 +13,10 @@
   import { readOnly } from "../state/capabilities";
 
   const editing = dialog.editing;
+  // A connected devserver can't be edited (the backend rejects the write), so
+  // the form opens read-only: inputs disabled, no Save — disconnect first to
+  // edit. Captured at open (the dialog mounts fresh each time).
+  const readOnlyEdit = editing?.connected === true;
 
   let error = $state<string | null>(null);
   let submitting = $state(false);
@@ -27,7 +31,9 @@
   let script = $state(editing?.script ?? "");
   let token = $state("");
 
-  const title = $derived(editing ? "Edit devserver" : "New workspace");
+  const title = $derived(
+    editing ? (readOnlyEdit ? "Devserver" : "Edit devserver") : "New workspace",
+  );
   const showChoices = $derived(!editing);
   const showLocal = $derived(dialog.choice === "local" && !editing);
 
@@ -156,10 +162,16 @@
       </div>
     </label>
   {:else}
-    <p class="intro">
-      Connect to a chan devserver, a headless box serving many workspaces. The desktop dials
-      the URL; its workspaces appear in their own group.
-    </p>
+    {#if readOnlyEdit}
+      <p class="intro">
+        This devserver is connected, so its settings are read-only. Disconnect it to edit.
+      </p>
+    {:else}
+      <p class="intro">
+        Connect to a chan devserver, a headless box serving many workspaces. The desktop dials
+        the URL; its workspaces appear in their own group.
+      </p>
+    {/if}
     <div class="row2">
       <label class="field">
         Devserver URL
@@ -169,6 +181,7 @@
           placeholder="https://box.example.com:8787"
           autocomplete="off"
           spellcheck="false"
+          disabled={readOnlyEdit}
           onkeydown={(e) => onFieldKey(e, submitDevserver)} />
       </label>
       <label class="field">
@@ -178,6 +191,7 @@
           bind:value={name}
           placeholder="optional"
           autocomplete="off"
+          disabled={readOnlyEdit}
           onkeydown={(e) => onFieldKey(e, submitDevserver)} />
       </label>
     </div>
@@ -188,6 +202,7 @@
         bind:value={token}
         placeholder={editing?.has_token ? "stored; leave blank to keep" : "optional"}
         autocomplete="off"
+        disabled={readOnlyEdit}
         onkeydown={(e) => onFieldKey(e, submitDevserver)} />
     </label>
     <label class="field">
@@ -197,7 +212,8 @@
         bind:value={script}
         placeholder="ssh box -L 8787:localhost:8787 chan devserver --bind 127.0.0.1 --port 8787"
         autocomplete="off"
-        spellcheck="false"></textarea>
+        spellcheck="false"
+        disabled={readOnlyEdit}></textarea>
     </label>
   {/if}
 
@@ -208,6 +224,9 @@
   <div class="dialog-footer">
     {#if showLocal}
       <button class="btn primary" type="button" disabled={submitting} onclick={submitLocal}>Add</button>
+    {:else if readOnlyEdit}
+      <!-- Connected: read-only, so the only action is to dismiss. -->
+      <button class="btn primary" type="button" onclick={closeDialog}>OK</button>
     {:else}
       <button class="btn primary" type="button" disabled={submitting} onclick={submitDevserver}>
         {editing ? "Save changes" : "Add devserver"}

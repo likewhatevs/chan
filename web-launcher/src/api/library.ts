@@ -43,7 +43,13 @@ export interface WindowSet {
 
 // ---- The workspace registry ---------------------------------------------
 
-/** A registered workspace (a local folder) in the library registry. */
+/**
+ * A workspace row in the launcher's workspace feed. Local rows are folders in
+ * the local registry (`devserver_id` null); remote rows are workspaces a
+ * connected devserver serves (`devserver_id` set), merged into the same feed so
+ * the SPA groups them under their devserver. The field names ARE the wire (the
+ * server's `LauncherWorkspace`).
+ */
 export interface WorkspaceEntry {
   /** Registry-assigned stable id (the server owns the scheme). */
   workspace_id: string;
@@ -53,6 +59,17 @@ export interface WorkspaceEntry {
   label: string;
   /** Tenant is currently served (on) vs registered-but-off. */
   on: boolean;
+  /** The library serving this row: null/"local" for local rows; the remote
+   * library id for a devserver-served row. */
+  library_id: string | null;
+  /** The devserver serving this row: null for a local row; the devserver
+   * registry id for a remote row (the row's group key + route target). */
+  devserver_id: string | null;
+  /** The mounted route prefix. For a local row it equals the workspace_id (the
+   * slash-free local prefix; local on/off/rm route by workspace_id). For a
+   * devserver row it is the remote mount prefix the devserver workspace
+   * on/off/forget routes target. */
+  prefix: string;
 }
 
 // ---- The devserver registry ---------------------------------------------
@@ -84,6 +101,12 @@ export interface DevserverEntry {
    * null before the devserver's first connect, when no library id exists yet.
    */
   library_id: string | null;
+  /**
+   * Whether the desktop currently holds a live connection to this devserver.
+   * Drives Connect vs Disconnect and gates Edit read-only (the backend rejects
+   * edits while connected). Always false on a surface with no desktop bridge.
+   */
+  connected: boolean;
 }
 
 /** Write payload for add/edit devserver. `token` absent on edit leaves it unchanged. */
@@ -114,6 +137,21 @@ export interface LibraryApi {
    * the URL). A pure desktop action: a surface with no desktop bridge answers
    * 409, so the launcher only offers it where window-ops are available. */
   connectDevserver(id: string): Promise<void>;
+  /** Tear down the desktop's live connection to a devserver (its windows leave
+   * the feed). A desktop action; a surface with no desktop bridge answers 409. */
+  disconnectDevserver(id: string): Promise<void>;
+  /** Open a terminal window on a connected devserver (desktop action, 409 with
+   * no bridge). */
+  openDevserverTerminal(id: string): Promise<void>;
+  /** Open a window onto one of a connected devserver's served workspaces by its
+   * remote path (desktop action, 409 with no bridge). */
+  openDevserverWorkspace(id: string, path: string): Promise<void>;
+  /** Turn a connected devserver's served workspace on/off by its mounted prefix
+   * (desktop action, 409 with no bridge). */
+  setDevserverWorkspaceOn(id: string, prefix: string, on: boolean): Promise<void>;
+  /** Forget (unmount + drop) a connected devserver's served workspace by its
+   * mounted prefix (desktop action, 409 with no bridge). */
+  forgetDevserverWorkspace(id: string, prefix: string): Promise<void>;
   /** Open the desktop's native folder picker; resolves to the chosen absolute
    * path, or null if the user cancelled. A pure desktop action (no desktop
    * bridge → 409), offered only where window-ops are available. */
@@ -182,6 +220,24 @@ export const liveApi: LibraryApi = {
   removeDevserver: (id) => req("DELETE", `/api/library/devservers/${encodeURIComponent(id)}`),
   connectDevserver: (id) =>
     req("POST", `/api/library/devservers/${encodeURIComponent(id)}/connect`),
+  disconnectDevserver: (id) =>
+    req("POST", `/api/library/devservers/${encodeURIComponent(id)}/disconnect`),
+  openDevserverTerminal: (id) =>
+    req("POST", `/api/library/devservers/${encodeURIComponent(id)}/terminal`),
+  openDevserverWorkspace: (id, path) =>
+    req("POST", `/api/library/devservers/${encodeURIComponent(id)}/workspaces/open`, { path }),
+  setDevserverWorkspaceOn: (id, prefix, on) =>
+    req(
+      "POST",
+      `/api/library/devservers/${encodeURIComponent(id)}/workspaces/${encodeURIComponent(
+        prefix,
+      )}/${on ? "on" : "off"}`,
+    ),
+  forgetDevserverWorkspace: (id, prefix) =>
+    req(
+      "DELETE",
+      `/api/library/devservers/${encodeURIComponent(id)}/workspaces/${encodeURIComponent(prefix)}`,
+    ),
   pickFolder: () => req("POST", "/api/library/fs/pick-folder"),
   listWindows: () => req("GET", "/api/library/windows"),
   watchWindows: (onSet) => {

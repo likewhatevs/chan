@@ -120,6 +120,7 @@ describe("New workspace dialog", () => {
       script: "",
       has_token: true,
       library_id: null,
+      connected: false,
     };
     openEditDevserver(ds);
     const el = render();
@@ -132,5 +133,28 @@ describe("New workspace dialog", () => {
     expect(token?.placeholder).toContain("leave blank to keep");
     // The edit form has no choice switcher.
     expect(el.querySelectorAll('[role="radio"]').length).toBe(0);
+  });
+
+  it("opens read-only (OK, no Save, disabled inputs) for a connected devserver", () => {
+    const ds: DevserverEntry = {
+      id: "ds-live",
+      url: "https://live.example:8200",
+      label: "live",
+      script: "",
+      has_token: false,
+      library_id: "lib-abc",
+      connected: true,
+    };
+    openEditDevserver(ds);
+    const el = render();
+    // A read-only notice, no Save, an OK dismiss instead.
+    expect(el.textContent).toContain("read-only");
+    expect(el.textContent).not.toContain("Save changes");
+    const ok = [...el.querySelectorAll("button")].find((b) => b.textContent?.trim() === "OK");
+    expect(ok).toBeTruthy();
+    // The fields are disabled (no edits while connected).
+    const urlField = el.querySelector('input[type="text"]') as HTMLInputElement;
+    expect(urlField.disabled).toBe(true);
+    expect((el.querySelector("textarea") as HTMLTextAreaElement).disabled).toBe(true);
   });
 });
