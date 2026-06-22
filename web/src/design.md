@@ -1,6 +1,44 @@
-# chan web: colors and themes
+# chan web frontend
 
-Single reference for the chan frontend color system. Two theme axes, one canonical semantic palette, and a fixed syntax-highlight palette for code. Update this file in the same commit as any change to `App.svelte`'s palette blocks, the editor theme sheets under `web/src/editor/themes/`, or `web/src/editor/highlight.ts`.
+Design reference for the chan web frontend: first the two web SPAs and how each is served, then the color system both share. Update this file in the same commit as a change to the frontend serving topology, `App.svelte`'s palette blocks, the editor theme sheets under `web/src/editor/themes/`, or `web/src/editor/highlight.ts`.
+
+## Two web frontends
+
+chan ships **two** Svelte 5 + Vite web SPAs, both embedded into chan-server as `RustEmbed` bundles (`crates/chan-server/src/static_assets.rs`) and both built on the color system below:
+
+- **`web/` — the main SPA** (this directory): the per-workspace UI — editor, file browser, graph, terminals, dashboard — talking to `/api/*` (files, drafts, index, contacts, config, `fs/transfer`, plus the `/ws` event stream). chan-server serves it from `WebAssets` (`RustEmbed` over `web/dist`) through `serve_static`, the router `.fallback`, so it answers a workspace tenant's routes. `serve_static` runs `inject_chan_meta` to stamp two tags the SPA reads at boot via `api/transport.ts`: `<meta chan-prefix>` (the URL mount prefix, so a reverse-proxied instance builds correct `/api` URLs) and `<meta chan-settings-disabled>` (greys the Settings surface).
+- **`web-launcher/` — the launcher SPA**: a small, pure `/api/library/*` HTTP client (workspaces · windows · devservers) served at the host/library root `/` from `LauncherAssets` via `serve_launcher` + the `WorkspaceHost` root fallback. It reads `<meta chan-launcher-readonly>` to hide mutation controls on read-only surfaces. The launcher is reached on **all three surfaces** — devserver/tunnel, gateway-proxied (`{owner}.devserver.chan.app/`), and desktop loopback — the same bundle per-surface installed, with per-surface auth (None tunnel-trust / Some loopback window token) and a read-only-gateway vs full-loopback workspace-mutation split. Its internals are documented in `web-launcher/design.md`.
+
+The two are complementary: the launcher is the cross-workspace registry (pick / add / toggle a workspace, mint a window), and opening a workspace window lands the user in the main SPA. Both honor the theme axes + canonical palette below, so a launcher served over a tunnel and the workspace UI on loopback read identically.
+
+```mermaid
+flowchart TB
+    subgraph web["web/ — main SPA (the workspace UI)"]
+        WAPP["App.svelte · editor · file browser · graph · terminals · dashboard<br/>over /api/* (files · drafts · index · contacts · config · fs/transfer · /ws)<br/>reads &lt;meta chan-prefix&gt; + &lt;meta chan-settings-disabled&gt; (api/transport.ts)"]
+    end
+    subgraph launcher["web-launcher/ — launcher SPA (the registry)"]
+        LAPP["TopBar · WorkspaceList · WindowFeed · NewWorkspaceDialog<br/>pure /api/library/* client (workspaces · windows · devservers)<br/>reads &lt;meta chan-launcher-readonly&gt; → hides mutation controls"]
+    end
+    subgraph cs["chan-server static_assets.rs — two RustEmbed bundles"]
+        WEBA["WebAssets = RustEmbed(web/dist)<br/>serve_static + inject_chan_meta · router .fallback (workspace tenant)"]
+        LAUNA["LauncherAssets = RustEmbed(web-launcher/dist)<br/>serve_launcher · WorkspaceHost root fallback at /"]
+    end
+    WAPP -->|served by| WEBA
+    LAPP -->|served by| LAUNA
+    subgraph surfaces["the launcher is served on all 3 surfaces (same bundle)"]
+        direction LR
+        DEV["devserver / tunnel<br/>auth None (tunnel-trust) · workspaces read-only"]
+        GW["gateway-proxied<br/>{owner}.devserver.chan.app/ via devserver-proxy · read-only"]
+        LOOP["desktop loopback<br/>auth Some(window token) · full mutation"]
+    end
+    LAUNA --- DEV
+    LAUNA --- LOOP
+    DEV --- GW
+```
+
+## Colors and themes
+
+The rest of this document is the single reference for the chan frontend color system: two theme axes, one canonical semantic palette, and a fixed syntax-highlight palette for code.
 
 ## Two theme axes
 
