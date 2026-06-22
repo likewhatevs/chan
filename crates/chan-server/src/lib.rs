@@ -58,7 +58,9 @@ pub use chan_library::desktop_window_ops::{
 };
 pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
 pub use chan_library::windows::{CreateWindow, WindowKind, WindowRecord, WindowSet};
-pub(crate) use chan_library::{desktop_window_ops, window_presence, window_titles};
+pub(crate) use chan_library::{
+    desktop_window_ops, window_presence, window_titles, window_transfers,
+};
 pub use chan_library::{
     DevserverEntry, DevserverInput, DevserverRegistry, HostedWorkspace, PersistedWorkspace,
     WorkspaceHost, WorkspaceOverlay,
@@ -563,6 +565,9 @@ async fn build_app(
     // Shared by the `/ws` route (presence updates) and the host's window-set
     // assembly (cloned onto AppState below).
     let window_presence = Arc::new(window_presence::WindowPresence::new());
+    // Per-window in-flight transfer count; shared with the host's close guard
+    // the same way as presence (cloned into TenantArtifacts off AppState below).
+    let window_transfers = Arc::new(window_transfers::WindowTransfers::new());
     // A standalone serve unserves by exiting the process (its shutdown
     // signal); a hosted tenant unserves by unmounting itself from the host.
     let unserve_scope = match unserve {
@@ -640,6 +645,7 @@ async fn build_app(
         ephemeral_sessions: Mutex::new(std::collections::HashMap::new()),
         terminal_session_dir: None,
         window_presence,
+        window_transfers,
         window_titles: desktop.window_titles.clone(),
         instance_id: random_token(),
     });
@@ -762,6 +768,7 @@ async fn build_terminal_app(
     let survey_bus = Arc::new(survey::SurveyBus::new());
     let window_bus = Arc::new(window_bus::WindowBus::new());
     let window_presence = Arc::new(window_presence::WindowPresence::new());
+    let window_transfers = Arc::new(window_transfers::WindowTransfers::new());
     let terminal_registry_cell: control_socket::TerminalRegistryCell =
         Arc::new(std::sync::OnceLock::new());
     let control_socket_path = control_socket::pick_socket_path();
@@ -848,6 +855,7 @@ async fn build_terminal_app(
         // store); a control / desktop-local terminal passes None.
         terminal_session_dir: session_dir,
         window_presence,
+        window_transfers,
         window_titles: desktop.window_titles.clone(),
         instance_id: random_token(),
     });
@@ -1075,6 +1083,9 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
         shutdown_tx,
     } = a;
     let window_presence = state.window_presence.clone();
+    // The SAME Arc the AppState holds, so the `/ws` route's transfer updates
+    // and the host's close-guard query read one shared count (mirror presence).
+    let window_transfers = state.window_transfers.clone();
     let cell: Arc<dyn chan_library::WorkspaceCellHandle> = Arc::new(CellHandle(workspace_cell));
     chan_library::TenantArtifacts {
         app,
@@ -1083,6 +1094,7 @@ fn into_tenant_artifacts(a: AppArtifacts) -> chan_library::TenantArtifacts {
         shutdown_tx,
         prefix,
         window_presence,
+        window_transfers,
         cell,
         keepalive: Box::new((
             last_activity,

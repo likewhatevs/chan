@@ -24,6 +24,7 @@ pub mod terminal_sessions;
 pub mod time;
 pub mod window_presence;
 pub mod window_titles;
+pub mod window_transfers;
 pub mod windows;
 pub mod workspace_persist;
 

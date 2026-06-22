@@ -140,6 +140,10 @@ pub struct AppState {
     /// the module docs). Feeds `GET /api/windows` and `cs window list`
     /// with the connected/saved split.
     pub window_presence: Arc<crate::window_presence::WindowPresence>,
+    /// Per-window in-flight transfer count (refcounted; see the module
+    /// docs). Reported by the SPA over `/ws` and read by the desktop close
+    /// guard (`WorkspaceHost::tenant_has_active_transfer`).
+    pub window_transfers: Arc<crate::window_transfers::WindowTransfers>,
     /// Desktop-written, server-read map of window id -> OS title + kind.
     /// Empty unless chan-desktop is the embedder; `GET /api/windows` and
     /// `cs window list` read it to show the real OS title alongside each
@@ -294,6 +298,7 @@ pub(crate) mod test_support {
             ephemeral_sessions: Mutex::new(HashMap::new()),
             terminal_session_dir: None,
             window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
+            window_transfers: Arc::new(crate::window_transfers::WindowTransfers::new()),
             window_titles: Arc::new(crate::window_titles::WindowTitles::new()),
             instance_id: "test-instance".to_string(),
         })

@@ -23,6 +23,7 @@ use tokio::sync::watch;
 use crate::desktop_window_ops::DesktopBridge;
 use crate::terminal_sessions::Registry as TerminalRegistry;
 use crate::window_presence::WindowPresence;
+use crate::window_transfers::WindowTransfers;
 use crate::windows::WindowRecord;
 use crate::{Error, ServeConfig};
 
@@ -118,6 +119,9 @@ pub struct TenantArtifacts {
     /// Which window ids hold a live `/ws` socket — the `connected` source for
     /// the window-record assembly.
     pub window_presence: Arc<WindowPresence>,
+    /// Per-window in-flight transfer count — the desktop close handler's
+    /// "is a transfer running?" query (`tenant_has_active_transfer`).
+    pub window_transfers: Arc<WindowTransfers>,
     /// Reach the tenant's live workspace + drive teardown/reindex-cancel
     /// without naming the route layer's `WorkspaceCell`.
     pub cell: Arc<dyn WorkspaceCellHandle>,

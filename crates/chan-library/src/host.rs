@@ -613,6 +613,33 @@ impl WorkspaceHost {
             .any(|entry| entry.window_id.as_deref() == Some(window_id))
     }
 
+    /// True when the tenant mounted at `prefix` has at least one file
+    /// transfer (upload / download) in flight for `window_id`.
+    ///
+    /// chan-desktop's close handler asks this — alongside
+    /// [`Self::tenant_has_window_sessions`] — before letting a window close:
+    /// a window with a transfer running gets a hold/cancel prompt instead of
+    /// closing out from under the transfer. The count is reported by the SPA
+    /// over `/ws` and RAII-cleared when the socket drops, so a reloaded
+    /// window reads inactive without any client message. Sync and cheap (one
+    /// read lock + a map lookup); safe to call from the Tauri event-loop
+    /// thread. `false` when no tenant is mounted at `prefix`.
+    pub fn tenant_has_active_transfer(&self, prefix: &str, window_id: &str) -> bool {
+        let Ok(prefix) = sanitize_prefix(prefix) else {
+            return false;
+        };
+        let Ok(workspaces) = self.workspaces.read() else {
+            return false;
+        };
+        let Some(runtime) = workspaces.get(&prefix) else {
+            return false;
+        };
+        runtime
+            .artifacts
+            .window_transfers
+            .window_has_active_transfer(window_id)
+    }
+
     /// How many live terminal sessions the tenant mounted at `prefix` is
     /// running, or `0` when nothing is mounted there. The reversible
     /// workspace-off path reads this to refuse an unmount that would kill
@@ -1316,6 +1343,7 @@ mod tests {
             shutdown_tx: Arc::new(shutdown_tx),
             prefix: Arc::new(RwLock::new(String::new())),
             window_presence: Arc::new(crate::window_presence::WindowPresence::new()),
+            window_transfers: Arc::new(crate::window_transfers::WindowTransfers::new()),
             cell,
             keepalive: Box::new(()),
         }
