@@ -285,7 +285,12 @@ impl LocalColorConfig {
 
 impl chan_server::LocalColorStore for LocalColorConfig {
     fn get(&self) -> Option<String> {
-        self.store.lock().unwrap().get().ok().and_then(|c| c.local_color)
+        self.store
+            .lock()
+            .unwrap()
+            .get()
+            .ok()
+            .and_then(|c| c.local_color)
     }
 
     fn set(&self, color: Option<String>) -> Result<(), String> {

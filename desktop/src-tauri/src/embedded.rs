@@ -93,7 +93,9 @@ impl EmbeddedServer {
         // SAME shared desktop config the devserver registry uses, so the host reads
         // the local colour when minting local windows and the launcher's
         // local-colour route writes it.
-        host.install_local_color_store(Arc::new(crate::config::LocalColorConfig::new(config_store)));
+        host.install_local_color_store(Arc::new(crate::config::LocalColorConfig::new(
+            config_store,
+        )));
         // Install the launcher SPA as the loopback's root fallback so the
         // desktop launcher loads the same web-launcher served at `/` on every
         // surface — parity with the devserver's `build_devserver_app`. Without

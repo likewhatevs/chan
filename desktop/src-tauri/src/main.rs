@@ -510,7 +510,6 @@ impl DevserverFeed {
             .get(id)
             .and_then(|s| s.lock().unwrap().first().map(|r| r.library_id.clone()))
     }
-
 }
 
 impl chan_server::DevserverFeedSource for DevserverFeed {
