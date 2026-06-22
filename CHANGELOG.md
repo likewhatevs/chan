@@ -6,6 +6,47 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.44.0] - 2026-06-22
+
+A round that makes the launcher a true view of the real library on the desktop, finishes the
+`chan serve`/`unserve` → `chan open`/`close` verb migration, and turns `cs upload`/`cs download` into a
+visible, cancellable, reload-surviving surface. The launcher's registry CRUD — workspaces **and**
+devservers — flipped off the in-memory mock onto the live `/api/library/*` client, so the desktop
+launcher lists the user's real `~/.chan` workspaces and configured devservers instead of a hardcoded
+fake set.
+
+### Added
+
+- **Launcher reflects reality.** The web-launcher registry CRUD flipped from the in-memory mock to the
+  live HTTP client; the desktop loopback lists/mutates the real workspaces + devservers.
+- **Live devserver registry.** `GET/POST /api/library/devservers` + `PUT/DELETE /:id`, backed by a
+  `DevserverRegistry` bridge over the desktop config (token write-only — `has_token` reported, never
+  echoed); empty + 404-mutation on the headless/gateway surface.
+- **Per-row Open / Turn on.** A workspace row's pill is now **Open** (mint a new workspace window) when on,
+  **Turn on** when off; read-only surfaces keep the static pill.
+- **Transfer progress bubble for `cs upload`/`cs download`** — a prominent, cancellable surface (reusing
+  the download-progress idiom), survives a window reload (in-flight restores as *interrupted*, never a
+  frozen bar; download offers Retry, upload Dismiss), with a terminal-style **window close-guard**
+  (closing a window mid-transfer prompts hold / cancel).
+- **`cs open` + the file browser open any plaintext file.** `cs open {path}` opens any existing plaintext
+  file (content peek, not extension) and creates a nonexistent path as plaintext; the file browser peeks
+  content before refusing, matching the same gate.
+
+### Changed
+
+- **`chan serve`/`unserve` → `chan open`/`close`** (verbs + polymorphic target: a path opens/serves a local
+  workspace with the existing desktop/devserver handoff; a `scheme://host` URL registers a devserver).
+- **Devserver form takes one full URL** (scheme included), not Host + Port — the forward hook for the
+  devserver-proxy dial; the desktop defaults the port from the scheme.
+- **Window-bury notice simplified** (no em dash).
+
+### Fixed
+
+- **Rich-prompt ArrowUp recall** no longer leaves the composer stuck read-only on a queued message (the
+  un-grey is folded into the dispatch + focus deferred, matching the delivered path).
+- **`chan close --remove` unregisters from a running devserver** (config + overlay + launcher, durable
+  across a `persist_state`); a plain `chan close` now persists the workspace's off-state.
+
 ## [v0.43.0] - 2026-06-22
 
 A round centred on **one launcher, three surfaces**: the `web-launcher` SPA is served at `/` by the
