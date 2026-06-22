@@ -1058,18 +1058,21 @@ impl Index {
     }
 }
 
-// Cross-file embedding batch size, in chunks (the default/Balanced
-// profile). Tuned for candle + bge-small: large enough to amortize
-// forward-pass setup over a useful work unit, small enough that working
-// memory stays modest (~6 MB at 384-dim) and the progress chip un-freezes
-// between flushes. `flush_embed_batch` runs the whole batch in one blocking
-// forward pass that pins the drain loop (no chip advance during it), so a
-// smaller batch = shorter freeze window + more frequent EmbedBatch ticks.
-// Halved from 4096 (Theme-5 in-flush freeze): with GPU forced to CPU the
-// per-call kernel-launch amortization argument is weaker, so the throughput
-// cost of the smaller batch is small and the UX win is direct. Only used
-// when the `embeddings` feature is on; harmless otherwise.
-const EMBED_BATCH_CHUNKS: usize = 2048;
+// Cross-file embedding flush/commit cadence, in chunks (the default/Balanced
+// profile). This is NOT the forward-pass size — the embedder always runs in
+// `INFER_BATCH`-sized passes internally, so this value does not change device
+// utilization. What it controls is how often the drain loop FLUSHES: each
+// flush commits BM25 and writes the accumulated files' vectors, so a smaller
+// value makes `indexed_vectors`, the Dashboard node states, and the bm25->hybrid
+// search upgrade all advance INCREMENTALLY instead of landing only at the end.
+// A flush runs as one blocking forward pass that pins the drain loop (no chip
+// advance during it), so smaller = shorter freeze window + more frequent
+// progress. Kept well below a typical repo's chunk count (chunks-per-file is
+// usually ~10) so a cold build commits in several visible steps rather than one
+// multi-minute tail flush; large enough that tantivy segment churn stays modest.
+// Working memory is ~3.5 KB/chunk resident. Only used with the `embeddings`
+// feature; harmless otherwise.
+const EMBED_BATCH_CHUNKS: usize = 128;
 
 /// One worker -> main message. The worker is responsible only for
 /// reading the file and parsing it into chunks; the writer side
@@ -1144,10 +1147,15 @@ impl SearchAggression {
             SearchAggression::Balanced => 4,
             SearchAggression::Aggressive => 8,
         };
+        // Flush/commit cadence in chunks (see EMBED_BATCH_CHUNKS): every
+        // profile commits vectors incrementally during a cold build so the
+        // progress chip + Dashboard advance instead of freezing on one tail
+        // flush. Conservative flushes finest (lowest resident memory / most
+        // responsive); Aggressive coarsest (fewer commits, larger work units).
         let embed_batch_chunks = match self {
-            SearchAggression::Conservative => 1024,
+            SearchAggression::Conservative => 64,
             SearchAggression::Balanced => EMBED_BATCH_CHUNKS,
-            SearchAggression::Aggressive => 8192,
+            SearchAggression::Aggressive => 256,
         };
         SearchBudget {
             worker_count,
@@ -1366,12 +1374,28 @@ mod tests {
 
         assert_eq!(conservative.worker_count, 1);
         assert_eq!(conservative.queue_bound, 2);
-        assert_eq!(conservative.embed_batch_chunks, 1024);
+        assert_eq!(conservative.embed_batch_chunks, 64);
         assert_eq!(balanced.queue_bound, balanced.worker_count * 4);
         assert_eq!(balanced.embed_batch_chunks, EMBED_BATCH_CHUNKS);
         assert!(aggressive.worker_count <= 8);
         assert_eq!(aggressive.queue_bound, aggressive.worker_count * 8);
-        assert_eq!(aggressive.embed_batch_chunks, 8192);
+        assert_eq!(aggressive.embed_batch_chunks, 256);
+
+        // Incremental-commit invariant: the flush cadence must stay small
+        // enough that a cold build of a normal repo (chunks-per-file ~10, so a
+        // few hundred chunks for a modest tree) commits vectors in SEVERAL
+        // flushes, not one multi-minute tail flush that freezes the progress
+        // chip + Dashboard. A representative cold build must cross the Balanced
+        // threshold many times over. Guards against a regression back to a
+        // batch larger than a typical repo's chunk count.
+        assert!(
+            balanced.embed_batch_chunks <= 128,
+            "default flush cadence must keep cold-build vectors committing \
+             incrementally; got {}",
+            balanced.embed_batch_chunks
+        );
+        assert!(conservative.embed_batch_chunks <= balanced.embed_batch_chunks);
+        assert!(balanced.embed_batch_chunks <= aggressive.embed_batch_chunks);
     }
 
     #[test]
