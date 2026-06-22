@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{header, Request, StatusCode};
@@ -454,6 +454,16 @@ struct DevserverWorkspaceRef {
     force: bool,
 }
 
+/// Body of `POST /api/library/workspaces/{id}/off`: `force` overrides the
+/// live-terminal guard (a destructive off kills the workspace's terminals). The
+/// body is OPTIONAL — an absent/empty body reads `force: false` — so the field is
+/// purely additive; the launcher sends `force: true` on the confirm-retry.
+#[derive(Deserialize, Default)]
+struct WorkspaceOff {
+    #[serde(default)]
+    force: bool,
+}
+
 /// The `409 Conflict` body the `/off` route returns when an UNforced off is
 /// refused because the workspace still has live terminal sessions. The launcher
 /// matches `error == "live_terminals"` (distinguishing it from a plain
@@ -774,10 +784,15 @@ async fn handle_workspace_on(
 async fn handle_workspace_off(
     State(state): State<Arc<LauncherState>>,
     AxumPath(id): AxumPath<String>,
+    body: Bytes,
 ) -> Response {
     if let Err(resp) = require_mutable(&state) {
         return *resp;
     }
+    // Optional `{ force }` body (additive — absent/empty reads `force: false`).
+    let force = serde_json::from_slice::<WorkspaceOff>(&body)
+        .unwrap_or_default()
+        .force;
     let Some((allocated, root)) = resolve_workspace(&state.host, &id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -788,6 +803,22 @@ async fn handle_workspace_off(
         .host
         .mounted_prefix_for_root(&root)
         .unwrap_or(allocated);
+    // Live terminals would be killed by the unmount — confirm first, in parity
+    // with the devserver off: an unforced off of a workspace with live terminals
+    // answers 409 + the shared `live_terminals` body the launcher already parses;
+    // the launcher then retries with `force: true`. (OFF still PRESERVES the
+    // window records per B3 — only the close is gated, not the records.)
+    let active_terminals = state.host.tenant_terminal_session_count(&prefix);
+    if active_terminals > 0 && !force {
+        return (
+            StatusCode::CONFLICT,
+            Json(LiveTerminalsRejection {
+                error: "live_terminals",
+                active_terminals,
+            }),
+        )
+            .into_response();
+    }
     match state.host.close_workspace(&prefix) {
         Ok(_) => {
             set_overlay(&state.host, &root, false);
@@ -1326,6 +1357,67 @@ mod devserver_route_tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn local_workspace_off_confirms_on_live_terminals_then_force_offs() {
+        // B8 parity with the devserver off: an UNforced local off of a workspace
+        // with live terminals → 409 `live_terminals` (the shared shape the
+        // launcher already parses); retry with force:true → 204.
+        let cfg = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let lib = chan_workspace::Library::open_at(cfg.path().join("config.toml")).unwrap();
+        std::mem::forget(cfg);
+        lib.register_workspace(root.path()).unwrap();
+        let host = Arc::new(WorkspaceHost::new(lib, crate::route_builder()));
+
+        let prefix = chan_library::allocate_workspace_prefix(root.path()).unwrap();
+        let id = prefix.trim_start_matches('/').to_string();
+        host.open_registered_workspace(
+            root.path(),
+            chan_library::ServeConfig {
+                addr: "127.0.0.1:0".parse().unwrap(),
+                no_token: true,
+                prefix: prefix.clone(),
+                idle_timeout: None,
+                open_browser: false,
+                search_aggression: None,
+                settings_disabled: false,
+                verbose: false,
+            },
+        )
+        .await
+        .expect("mount workspace");
+
+        // Spawn a live terminal in the workspace tenant via its HTTP create
+        // endpoint (no-token tenant → no auth needed).
+        let create = Request::builder()
+            .method("POST")
+            .uri(format!("{prefix}/api/terminals"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"name":"t","command":"sleep 60"}"#))
+            .unwrap();
+        let created = host.clone().router().oneshot(create).await.unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED, "terminal spawned");
+        assert_eq!(host.tenant_terminal_session_count(&prefix), 1);
+
+        let serve_addr = {
+            let cell = OnceLock::new();
+            let _ = cell.set("127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+            Arc::new(cell)
+        };
+        let launcher = launcher_router(host.clone(), None, Some(serve_addr));
+        let off_uri = format!("/api/library/workspaces/{id}/off");
+
+        // Unforced off → 409 + the shared live_terminals body with the count.
+        let (status, body) = request(&launcher, "POST", &off_uri, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "live_terminals");
+        assert_eq!(body["active_terminals"], 1);
+
+        // Retry with force → the off goes through (204).
+        let (status, _) = request(&launcher, "POST", &off_uri, Some(r#"{"force":true}"#)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
     }
 }
 
