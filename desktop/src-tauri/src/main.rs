@@ -42,7 +42,13 @@ const SYSTEM_NOTICE: &str = "system-notice";
 /// Process-wide state. Shared via `Arc` because Tauri commands and
 /// background runtime owners need the same state handle.
 pub struct AppState {
-    store: Mutex<ConfigStore>,
+    /// Shared config handle. An `Arc<Mutex<…>>` (not a bare `Mutex`) so the
+    /// launcher's [`DevserverConfigRegistry`](config::DevserverConfigRegistry),
+    /// installed into the embedded host, writes the SAME config the desktop's
+    /// own commands and the window-config LRU do — every full-file rewrite
+    /// serializes through one lock, so a devserver CRUD can't lose an update to
+    /// a concurrent window-config save.
+    store: Arc<Mutex<ConfigStore>>,
     /// Live embedded local workspaces keyed by canonical workspace path.
     serves: Mutex<HashMap<String, ServeHandle>>,
     /// In-process chan-server host for normal local workspaces.
@@ -773,32 +779,26 @@ const DEVSERVER_LABEL_MAX_CHARS: usize = 120;
 /// aggregator the desktop dials out to; this records the connection
 /// recipe so it renders as a `[DEVSERVER {host}]` launcher section.
 ///
-/// Idempotent on `host:port`: re-adding the same endpoint updates its
+/// Idempotent on `url`: re-adding the same endpoint updates its
 /// script/label instead of stacking a duplicate, mirroring
 /// `add_outbound_workspace`'s URL dedup.
 #[tauri::command]
 fn add_devserver(
     app: tauri::AppHandle,
     state: State<Arc<AppState>>,
-    host: String,
-    port: u16,
+    url: String,
     script: String,
     label: String,
 ) -> Result<String, String> {
-    let host = normalize_devserver_host(&host)?;
-    if port == 0 {
-        return Err("devserver port must be between 1 and 65535".to_string());
-    }
+    let url = url.trim().to_string();
+    // Validate the URL parses as scheme://host[:port] (rejects bare host:port).
+    devserver::parse_devserver_url(&url)?;
     let script = script.trim().to_string();
     let label = normalize_devserver_label(&label)?;
     let id = {
         let mut store = state.store.lock().unwrap();
         let mut cfg = store.get().map_err(err)?;
-        let id = match cfg
-            .devservers
-            .iter_mut()
-            .find(|d| d.host == host && d.port == port)
-        {
+        let id = match cfg.devservers.iter_mut().find(|d| d.url == url) {
             Some(existing) => {
                 existing.script = script;
                 if !label.is_empty() {
@@ -816,10 +816,10 @@ fn add_devserver(
                 // each scope distinct (the F6 d&d isolation).
                 let entry = Devserver {
                     id: uuid::Uuid::new_v4().to_string(),
-                    host,
-                    port,
+                    url,
                     script,
                     label,
+                    token: String::new(),
                     added_at: config::current_millis(),
                 };
                 let id = entry.id.clone();
@@ -840,8 +840,7 @@ fn add_devserver(
 #[derive(Debug, Clone, Serialize)]
 struct DevserverView {
     id: String,
-    host: String,
-    port: u16,
+    url: String,
     script: String,
     label: String,
     added_at: u64,
@@ -859,8 +858,7 @@ fn list_devservers(state: State<Arc<AppState>>) -> Result<Vec<DevserverView>, St
         .map(|d| DevserverView {
             connected: state.devservers.is_connected(&d.id),
             id: d.id,
-            host: d.host,
-            port: d.port,
+            url: d.url,
             script: d.script,
             label: d.label,
             added_at: d.added_at,
@@ -872,11 +870,14 @@ fn list_devservers(state: State<Arc<AppState>>) -> Result<Vec<DevserverView>, St
 /// host when unlabelled.
 fn devserver_display(d: &Devserver) -> String {
     let label = d.label.trim();
-    if label.is_empty() {
-        d.host.clone()
-    } else {
-        label.to_string()
+    if !label.is_empty() {
+        return label.to_string();
     }
+    // No label: fall back to the URL host (the `[DEVSERVER {host}]` identity),
+    // or the raw URL if it somehow doesn't parse.
+    devserver::parse_devserver_url(&d.url)
+        .map(|(host, _)| host)
+        .unwrap_or_else(|_| d.url.clone())
 }
 
 /// Record a window the desktop opened for a devserver, so a later disconnect
@@ -1076,15 +1077,18 @@ async fn connect_devserver(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    let (host, port, script) = {
+    let (url, script) = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         let ds = cfg
             .devservers
             .iter()
             .find(|d| d.id == id)
             .ok_or_else(|| format!("no devserver {id}"))?;
-        (ds.host.clone(), ds.port, ds.script.clone())
+        (ds.url.clone(), ds.script.clone())
     };
+    // Parse the stored URL into the (host, port) the raw-tunnel dial uses
+    // (the port defaults from the scheme when omitted).
+    let (host, port) = devserver::parse_devserver_url(&url)?;
     // A configured script runs in a control terminal that brings the
     // devserver up; with no script the devserver is expected to be running
     // already.
@@ -1381,37 +1385,32 @@ fn update_devserver(
     app: tauri::AppHandle,
     state: State<Arc<AppState>>,
     id: String,
-    host: String,
-    port: u16,
+    url: String,
     script: String,
     label: String,
 ) -> Result<(), String> {
     if state.devservers.is_connected(&id) {
         return Err("disconnect this devserver before editing it".to_string());
     }
-    let host = normalize_devserver_host(&host)?;
-    if port == 0 {
-        return Err("devserver port must be between 1 and 65535".to_string());
-    }
+    let url = url.trim().to_string();
+    devserver::parse_devserver_url(&url)?;
     let script = script.trim().to_string();
     let label = normalize_devserver_label(&label)?;
     {
         let mut store = state.store.lock().unwrap();
         let mut cfg = store.get().map_err(err)?;
-        if cfg
-            .devservers
-            .iter()
-            .any(|d| d.id != id && d.host == host && d.port == port)
-        {
-            return Err(format!("another devserver is already at {host}:{port}"));
+        if cfg.devservers.iter().any(|d| d.id != id && d.url == url) {
+            return Err(format!("another devserver is already at {url}"));
         }
         let ds = cfg
             .devservers
             .iter_mut()
             .find(|d| d.id == id)
             .ok_or_else(|| format!("no devserver {id}"))?;
-        ds.host = host;
-        ds.port = port;
+        // Leave `ds.token` untouched: an edit keeps the stored credential
+        // (it's write-only, so the form can't resubmit it), mirroring the
+        // registry's keep-on-blank token semantics.
+        ds.url = url;
         ds.script = script;
         ds.label = label;
         store.save(&cfg).map_err(err)?;
@@ -1479,17 +1478,6 @@ fn remove_devserver(
     Ok(())
 }
 
-fn normalize_devserver_host(raw: &str) -> Result<String, String> {
-    let host = raw.trim();
-    if host.is_empty() {
-        return Err("devserver host is required".to_string());
-    }
-    if host.chars().any(char::is_whitespace) {
-        return Err("devserver host must not contain spaces".to_string());
-    }
-    Ok(host.to_string())
-}
-
 fn normalize_devserver_label(raw: &str) -> Result<String, String> {
     let label = raw.trim().to_string();
     if label.chars().count() > DEVSERVER_LABEL_MAX_CHARS {
@@ -1519,6 +1507,31 @@ fn open_local_workspace(state: State<Arc<AppState>>, path: String) -> Result<(),
         .embedded()
         .ok_or_else(|| "embedded local server is unavailable".to_string())?
         .mint_window(chan_server::WindowKind::Workspace, Some(key))?;
+    Ok(())
+}
+
+/// Register (and persist) a devserver from a `chan open {url}` CLI handoff.
+/// Writes the `{url, name, script}` entry through the same
+/// [`DevserverConfigRegistry`](config::DevserverConfigRegistry) the launcher's
+/// `/api/library/devservers` routes use (the shared config handle), so the new
+/// row shows up in the launcher. The handoff carries no token (the desktop owns
+/// credentials — a tokened devserver is set up from the launcher dialog), so
+/// this registers it untokened; the user connects it from its launcher row.
+#[cfg(any(unix, windows))]
+fn register_devserver_from_handoff(
+    state: &Arc<AppState>,
+    url: String,
+    name: Option<String>,
+    script: Option<String>,
+) -> Result<(), String> {
+    use chan_server::{DevserverInput, DevserverRegistry};
+    let registry = config::DevserverConfigRegistry::new(Arc::clone(&state.store));
+    registry.add(DevserverInput {
+        url,
+        label: name,
+        script,
+        token: None,
+    })?;
     Ok(())
 }
 
@@ -2373,9 +2386,11 @@ fn main() {
         Ok(n) => tracing::info!(shims = n, "installed chan/cs bin shims into ~/.local/bin"),
         Err(e) => tracing::warn!(error = %e, "installing bin shims failed"),
     }
-    let store = ConfigStore::new().expect("failed to init config store");
+    let store = Arc::new(Mutex::new(
+        ConfigStore::new().expect("failed to init config store"),
+    ));
     let state = Arc::new(AppState {
-        store: Mutex::new(store),
+        store,
         serves: Mutex::new(HashMap::new()),
         embedded: OnceLock::new(),
         local_watcher_view: OnceLock::new(),
@@ -2410,7 +2425,10 @@ fn main() {
             #[cfg(target_os = "macos")]
             fix_macos_login_path();
 
-            match tauri::async_runtime::block_on(embedded::EmbeddedServer::start()) {
+            // Share the desktop's config handle with the embedded host so the
+            // launcher's devserver registry persists through the same lock.
+            let config_store = Arc::clone(&state_for_setup.store);
+            match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(config_store)) {
                 Ok(server) => {
                     if state_for_setup.embedded.set(server).is_err() {
                         tracing::warn!("embedded local server initialized more than once");
@@ -2575,6 +2593,19 @@ fn main() {
                                 Request::Upgrade { check_only, .. } => {
                                     desktop_handle_upgrade(app, check_only).await
                                 }
+                                Request::OpenDevserver {
+                                    url, name, script, ..
+                                } => match register_devserver_from_handoff(
+                                    &state, url, name, script,
+                                ) {
+                                    Ok(()) => {
+                                        let _ = app.emit(serve::SERVES_CHANGED, ());
+                                        Response::DevserverRegistered {
+                                            desktop_version: CHAN_VERSION.into(),
+                                        }
+                                    }
+                                    Err(message) => Response::Error { message },
+                                },
                             }
                         }
                     })

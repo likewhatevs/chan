@@ -21,8 +21,10 @@
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chan_server::{DevserverEntry, DevserverInput, DevserverRegistry};
 use serde::{Deserialize, Serialize};
 
 /// Cap on how many window configs we retain in the LRU stack.
@@ -58,10 +60,10 @@ pub struct OutboundWorkspace {
 /// workspaces under one `[DEVSERVER {host}]` launcher section and drives
 /// them through the devserver's management API.
 ///
-/// This struct is the *local* connection recipe only: host/port for the
-/// tunnel endpoint plus the user's connect `script` (the control terminal
-/// runs it, e.g. an `ssh -L` invocation). The devserver owns the
-/// per-workspace URLs/tokens and their lifecycle; the desktop persists
+/// This struct is the *local* connection recipe only: the full devserver URL
+/// (scheme included) the desktop dials plus the user's connect `script` (the
+/// control terminal runs it, e.g. an `ssh -L` invocation). The devserver owns
+/// the per-workspace URLs/tokens and their lifecycle; the desktop persists
 /// just enough to re-offer the connection and re-open its windows.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Devserver {
@@ -69,12 +71,14 @@ pub struct Devserver {
     /// restore, and the in-memory connection-state map. Not sent to the
     /// devserver.
     pub id: String,
-    /// Tunnel endpoint host the desktop dials (e.g. `127.0.0.1` for a
-    /// local `ssh -L` forward). Also the default `[DEVSERVER {host}]`
-    /// section label until the devserver reports its own `host_label`.
-    pub host: String,
-    /// Tunnel endpoint port the desktop dials.
-    pub port: u16,
+    /// The full devserver URL the desktop dials, scheme included
+    /// (`https://box.example.com:8787`, or `http://127.0.0.1:8787` for an
+    /// `ssh -L` loopback forward). The scheme is load-bearing: the dial path
+    /// branches raw-tunnel vs proxied-HTTPS on it (the proxied + OAuth branch
+    /// is a deferred follow-up). The parsed host is also the default
+    /// `[DEVSERVER {host}]` section label until the devserver reports its own
+    /// `host_label`. A missing port defaults from the scheme at dial time.
+    pub url: String,
     /// The connect script the CONTROL TERMINAL runs in its PTY (typically
     /// an `ssh user@box -L {port}:localhost:{port} chan devserver ...`).
     /// It blocks for the life of the session; its return means the
@@ -82,9 +86,16 @@ pub struct Devserver {
     #[serde(default)]
     pub script: String,
     /// Optional user label for the launcher section header and window
-    /// titles. Empty falls back to `host`.
+    /// titles. Empty falls back to the URL host.
     #[serde(default)]
     pub label: String,
+    /// Bearer token for the devserver. Write-only over the launcher wire: the
+    /// registry reports its presence via `has_token` and never echoes the
+    /// value back. Stored so an edit can keep it; empty means none. (The
+    /// connect flow still scrapes/reads a fresh token at dial — this is the
+    /// launcher-supplied credential for the deferred proxied/OAuth dial.)
+    #[serde(default)]
+    pub token: String,
     /// Wall-clock millis when the devserver was added.
     #[serde(default)]
     pub added_at: u64,
@@ -186,6 +197,115 @@ impl ConfigStore {
         fs::write(&tmp, bytes)?;
         fs::rename(&tmp, &self.path)?;
         Ok(())
+    }
+}
+
+/// chan-desktop's [`DevserverRegistry`] implementation — the bridge the
+/// launcher's `/api/library/devservers` routes reach through
+/// [`WorkspaceHost::devserver_registry`](chan_server::WorkspaceHost::devserver_registry).
+/// It wraps the SHARED [`ConfigStore`] handle (the same `Arc<Mutex<ConfigStore>>`
+/// the desktop's own commands and the window-config LRU use), so every config
+/// write — devserver CRUD, window stack, outbound attachments — serializes
+/// through one lock and can't lose an update to a concurrent full-file rewrite.
+///
+/// The token is write-only: `add`/`update` accept it, `list` and the returned
+/// entry only report [`has_token`](DevserverEntry::has_token). A blank/absent
+/// token on update keeps the stored one.
+pub struct DevserverConfigRegistry {
+    store: Arc<Mutex<ConfigStore>>,
+}
+
+impl DevserverConfigRegistry {
+    pub fn new(store: Arc<Mutex<ConfigStore>>) -> Self {
+        Self { store }
+    }
+}
+
+/// Project a stored [`Devserver`] to the launcher's wire [`DevserverEntry`],
+/// eliding the token (only its presence, `has_token`, crosses the wire).
+fn entry_from_devserver(d: &Devserver) -> DevserverEntry {
+    DevserverEntry {
+        id: d.id.clone(),
+        url: d.url.clone(),
+        label: d.label.clone(),
+        script: d.script.clone(),
+        has_token: !d.token.is_empty(),
+        // The desktop config doesn't track the connected library id — it's
+        // resolved from the live window feed — so the registry reports `None`
+        // (the pre-connect state). Joining it back is a follow-up.
+        library_id: None,
+    }
+}
+
+impl DevserverRegistry for DevserverConfigRegistry {
+    fn list(&self) -> Vec<DevserverEntry> {
+        // Infallible by contract (mirrors the window feed): a read error
+        // surfaces as an empty list, not a 500.
+        let store = self.store.lock().unwrap();
+        store
+            .get()
+            .map(|cfg| cfg.devservers.iter().map(entry_from_devserver).collect())
+            .unwrap_or_default()
+    }
+
+    fn add(&self, input: DevserverInput) -> Result<DevserverEntry, String> {
+        let url = input.url.trim().to_string();
+        // Defense in depth: the route layer validates the URL, but the
+        // `chan open {url}` handoff reaches `add` directly — reject a URL that
+        // doesn't parse as `scheme://host[:port]` here too.
+        crate::devserver::parse_devserver_url(&url)?;
+        let token = input.token.unwrap_or_default().trim().to_string();
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = store.get().map_err(|e| e.to_string())?;
+        let entry = Devserver {
+            id: uuid::Uuid::new_v4().to_string(),
+            url,
+            script: input.script.unwrap_or_default(),
+            label: input.label.unwrap_or_default(),
+            token,
+            added_at: now_millis(),
+        };
+        cfg.devservers.push(entry.clone());
+        store.save(&cfg).map_err(|e| e.to_string())?;
+        Ok(entry_from_devserver(&entry))
+    }
+
+    fn update(&self, id: &str, input: DevserverInput) -> Result<Option<DevserverEntry>, String> {
+        let url = input.url.trim().to_string();
+        crate::devserver::parse_devserver_url(&url)?;
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = store.get().map_err(|e| e.to_string())?;
+        let Some(ds) = cfg.devservers.iter_mut().find(|d| d.id == id) else {
+            return Ok(None);
+        };
+        ds.url = url;
+        // label/script are full-replace (None/empty clears, which the display
+        // path reads as "derive the label from the URL host" / "no script").
+        ds.label = input.label.unwrap_or_default();
+        ds.script = input.script.unwrap_or_default();
+        // Token is the lone keep-on-blank field: a write-only credential the
+        // launcher never reads back, so its edit form can't resubmit it.
+        if let Some(tok) = input.token {
+            let tok = tok.trim();
+            if !tok.is_empty() {
+                ds.token = tok.to_string();
+            }
+        }
+        let entry = entry_from_devserver(ds);
+        store.save(&cfg).map_err(|e| e.to_string())?;
+        Ok(Some(entry))
+    }
+
+    fn remove(&self, id: &str) -> Result<bool, String> {
+        let mut store = self.store.lock().unwrap();
+        let mut cfg = store.get().map_err(|e| e.to_string())?;
+        let before = cfg.devservers.len();
+        cfg.devservers.retain(|d| d.id != id);
+        if cfg.devservers.len() == before {
+            return Ok(false);
+        }
+        store.save(&cfg).map_err(|e| e.to_string())?;
+        Ok(true)
     }
 }
 
@@ -443,10 +563,10 @@ mod tests {
         let cfg = Config {
             devservers: vec![Devserver {
                 id: "ds-1".into(),
-                host: "127.0.0.1".into(),
-                port: 8787,
+                url: "http://127.0.0.1:8787".into(),
                 script: "ssh box -L 8787:localhost:8787 chan devserver".into(),
                 label: "lab box".into(),
+                token: "tok_secret".into(),
                 added_at: 42,
             }],
             ..Default::default()
@@ -462,15 +582,127 @@ mod tests {
         // added_at default so a hand-written config stays loadable.
         let raw = r#"{
             "id": "ds-1",
-            "host": "127.0.0.1",
-            "port": 8787
+            "url": "http://127.0.0.1:8787"
         }"#;
         let ds: Devserver = serde_json::from_str(raw).expect("minimal load");
         assert_eq!(ds.id, "ds-1");
-        assert_eq!(ds.host, "127.0.0.1");
-        assert_eq!(ds.port, 8787);
+        assert_eq!(ds.url, "http://127.0.0.1:8787");
         assert_eq!(ds.script, "");
         assert_eq!(ds.label, "");
+        assert_eq!(ds.token, "");
         assert_eq!(ds.added_at, 0);
+    }
+
+    /// The registry projects a stored `Devserver` to a wire `DevserverEntry`
+    /// with the token elided and `has_token` reporting its presence; it never
+    /// echoes the token value.
+    #[test]
+    fn registry_list_elides_token_reports_has_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let reg = DevserverConfigRegistry::new(Arc::clone(&store));
+        let added = reg
+            .add(DevserverInput {
+                url: "https://box.example.com:8787".into(),
+                label: Some("lab".into()),
+                script: Some("ssh -L …".into()),
+                token: Some("tok_secret".into()),
+            })
+            .expect("add");
+        assert!(added.has_token);
+        assert_eq!(added.url, "https://box.example.com:8787");
+        assert_eq!(added.library_id, None);
+        let listed = reg.list();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].has_token);
+        // The token value never appears on the wire entry (no field for it);
+        // the on-disk config still holds it for the connect path.
+        let cfg = store.lock().unwrap().get().unwrap();
+        assert_eq!(cfg.devservers[0].token, "tok_secret");
+    }
+
+    /// `update` with a blank/absent token keeps the stored one; a non-blank
+    /// token replaces it. URL/label/script are full-replace.
+    #[test]
+    fn registry_update_keeps_token_on_blank_replaces_on_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let reg = DevserverConfigRegistry::new(Arc::clone(&store));
+        let id = reg
+            .add(DevserverInput {
+                url: "http://127.0.0.1:8787".into(),
+                token: Some("tok_one".into()),
+                ..Default::default()
+            })
+            .expect("add")
+            .id;
+        // Blank token + new url/label: token survives, the rest replace.
+        let updated = reg
+            .update(
+                &id,
+                DevserverInput {
+                    url: "http://127.0.0.1:9000".into(),
+                    label: Some("renamed".into()),
+                    token: None,
+                    ..Default::default()
+                },
+            )
+            .expect("update")
+            .expect("found");
+        assert_eq!(updated.url, "http://127.0.0.1:9000");
+        assert_eq!(updated.label, "renamed");
+        assert!(updated.has_token);
+        assert_eq!(store.lock().unwrap().get().unwrap().devservers[0].token, "tok_one");
+        // A non-blank token replaces it.
+        reg.update(
+            &id,
+            DevserverInput {
+                url: "http://127.0.0.1:9000".into(),
+                token: Some("tok_two".into()),
+                ..Default::default()
+            },
+        )
+        .expect("update")
+        .expect("found");
+        assert_eq!(store.lock().unwrap().get().unwrap().devservers[0].token, "tok_two");
+    }
+
+    #[test]
+    fn registry_update_and_remove_missing_id_signal_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let reg = DevserverConfigRegistry::new(store);
+        let missing = reg
+            .update(
+                "nope",
+                DevserverInput {
+                    url: "http://127.0.0.1:8787".into(),
+                    ..Default::default()
+                },
+            )
+            .expect("update ok");
+        assert!(missing.is_none());
+        assert!(!reg.remove("nope").expect("remove ok"));
+    }
+
+    #[test]
+    fn registry_add_rejects_a_bad_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(ConfigStore {
+            path: dir.path().join("config.json"),
+        }));
+        let reg = DevserverConfigRegistry::new(store);
+        assert!(reg
+            .add(DevserverInput {
+                url: "not a url".into(),
+                ..Default::default()
+            })
+            .is_err());
     }
 }

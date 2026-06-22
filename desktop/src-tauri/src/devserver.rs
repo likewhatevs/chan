@@ -155,8 +155,33 @@ fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("building devserver http client: {e}"))
 }
 
+/// The management-API origin the desktop dials. Raw HTTP over the tunnel today
+/// (the common `ssh -L` loopback case). FOLLOW-UP: a proxied-HTTPS dial (with
+/// OAuth) will branch on the stored URL's scheme — [`parse_devserver_url`] keeps
+/// the host/port; the scheme-aware branch is deferred (OAuth not built yet).
 fn base_origin(host: &str, port: u16) -> String {
     format!("http://{host}:{port}")
+}
+
+/// Parse a stored devserver URL into the `(host, port)` the raw-tunnel dial
+/// uses. The port defaults from the scheme when the URL omits it (`https`→443,
+/// `http`→80), so `https://x.devserver.chan.app` resolves without an explicit
+/// port. Bare `host:port` (no scheme) is rejected — the launcher requires a
+/// `scheme://host` URL. The scheme is preserved in the stored URL for the
+/// deferred proxied-HTTPS+OAuth dial branch (see [`base_origin`]); this only
+/// extracts what the current raw-tunnel dial needs.
+pub fn parse_devserver_url(url: &str) -> Result<(String, u16), String> {
+    let parsed =
+        url::Url::parse(url.trim()).map_err(|e| format!("invalid devserver URL {url:?}: {e}"))?;
+    let host = parsed
+        .host_str()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| format!("devserver URL {url:?} has no host"))?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| format!("devserver URL {url:?} has no port and an unknown scheme"))?;
+    Ok((host, port))
 }
 
 /// Assemble the tenant URL the desktop opens for a devserver tenant:
@@ -517,6 +542,34 @@ pub async fn set_workspace_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_devserver_url_reads_host_and_explicit_port() {
+        assert_eq!(
+            parse_devserver_url("http://127.0.0.1:8787").unwrap(),
+            ("127.0.0.1".to_string(), 8787)
+        );
+    }
+
+    #[test]
+    fn parse_devserver_url_defaults_port_from_scheme() {
+        assert_eq!(
+            parse_devserver_url("https://box.example.com").unwrap(),
+            ("box.example.com".to_string(), 443)
+        );
+        assert_eq!(
+            parse_devserver_url("http://box.example.com").unwrap(),
+            ("box.example.com".to_string(), 80)
+        );
+    }
+
+    #[test]
+    fn parse_devserver_url_rejects_bare_host_port_and_garbage() {
+        // Bare host:port has no scheme — the launcher requires scheme://host.
+        assert!(parse_devserver_url("127.0.0.1:8787").is_err());
+        assert!(parse_devserver_url("not a url").is_err());
+        assert!(parse_devserver_url("").is_err());
+    }
 
     #[test]
     fn assemble_tenant_url_uses_host_port_prefix_token() {

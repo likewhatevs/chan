@@ -6,12 +6,13 @@
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::Router;
 use chan_server::{DesktopBridge, DesktopWindowOp, SharedWindowTitles, WindowRecord, WindowTitles};
 use tokio::sync::{mpsc, watch, Notify};
 
+use crate::config::{ConfigStore, DevserverConfigRegistry};
 use crate::serve;
 
 /// Bound on the window-ops channel: interactive `cs window` calls are
@@ -42,7 +43,7 @@ pub struct EmbeddedServer {
 }
 
 impl EmbeddedServer {
-    pub async fn start() -> Result<Self, String> {
+    pub async fn start(config_store: Arc<Mutex<ConfigStore>>) -> Result<Self, String> {
         let library = chan_workspace::Library::open()
             .map_err(|e| format!("opening chan workspace registry for embedded server: {e}"))?;
         // Install the desktop bridge: a window-ops channel (the consumer
@@ -71,6 +72,12 @@ impl EmbeddedServer {
         // (~/.chan/workspaces.json), so the boot path re-serves what was on and
         // toggles persist their on/off — the same store the devserver uses.
         chan_server::install_local_workspace_overlay(&host);
+        // Install the launcher's devserver registry over the desktop config so
+        // the `/api/library/devservers` CRUD persists to the SAME config the
+        // desktop reads (the shared store handle) — mirror of the workspace
+        // overlay above. The headless devserver / plain `chan serve` install
+        // none (empty list, 404 mutation).
+        host.install_devserver_registry(Arc::new(DevserverConfigRegistry::new(config_store)));
         // Install the launcher SPA as the loopback's root fallback so the
         // desktop launcher loads the same web-launcher served at `/` on every
         // surface — parity with the devserver's `build_devserver_app`. Without
