@@ -2331,6 +2331,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_download_on_a_terminal_tenant_signal_the_window_cwd_scoped() {
+        // `cs upload` / `cs download` from a standalone terminal now WORK
+        // (cwd / shell-uid scoped) instead of refusing. The CLI absolutized the
+        // path; the control socket signals the window with it, leading `/`
+        // stripped, rather than returning TERMINAL_ONLY_NEEDS_WORKSPACE. A live
+        // /ws subscriber stands in for the connected window.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, b"x").unwrap();
+
+        let workspace_cell: Arc<RwLock<Option<WorkspaceCell>>> = Arc::new(RwLock::new(None));
+        let ctx = test_ctx(workspace_cell, ControlTenant::TerminalOnly);
+        let mut rx = ctx.events_tx.subscribe();
+
+        // Download a file: window is signalled with is_dir=false and the path
+        // stripped of its leading slash.
+        let response = handle_request(
+            ControlRequest::Download {
+                window_id: "terminal-win-0".into(),
+                path: file.clone(),
+            },
+            &ctx,
+        )
+        .await;
+        match response {
+            ControlResponse::Ok { message } => {
+                assert!(message.contains("download request queued"), "{message}")
+            }
+            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+        }
+        let frame = rx.try_recv().expect("download window command broadcast");
+        let stripped_file = file.to_string_lossy().trim_start_matches('/').to_string();
+        assert!(frame.contains("download"), "frame: {frame}");
+        assert!(
+            frame.contains(&stripped_file),
+            "frame missing stripped path: {frame}"
+        );
+
+        // Upload targets the directory itself.
+        let response = handle_request(
+            ControlRequest::Upload {
+                window_id: "terminal-win-0".into(),
+                path: dir.path().to_path_buf(),
+            },
+            &ctx,
+        )
+        .await;
+        match response {
+            ControlResponse::Ok { message } => {
+                assert!(message.contains("upload request queued"), "{message}")
+            }
+            ControlResponse::Error { message } => panic!("unexpected error: {message}"),
+        }
+        let frame = rx.try_recv().expect("upload window command broadcast");
+        let stripped_dir = dir
+            .path()
+            .to_string_lossy()
+            .trim_start_matches('/')
+            .to_string();
+        assert!(frame.contains("upload"), "frame: {frame}");
+        assert!(frame.contains(&stripped_dir), "frame: {frame}");
+    }
+
+    #[tokio::test]
     async fn window_list_without_a_host_is_empty() {
         // The library owns the window set; `cs window list` reads it through
         // the host handle (`assemble_window_records`). A control socket with
