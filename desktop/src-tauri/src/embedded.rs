@@ -63,6 +63,10 @@ impl EmbeddedServer {
         // Install the local library's window registry so the window feed has
         // data (~/.chan/windows.json, library id "local").
         chan_server::install_local_window_registry(&host);
+        // Install the local library's workspace on/off overlay
+        // (~/.chan/workspaces.json), so the boot path re-serves what was on and
+        // toggles persist their on/off — the same store the devserver uses.
+        chan_server::install_local_workspace_overlay(&host);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| format!("binding embedded chan server: {e}"))?;
         listener
@@ -318,6 +322,14 @@ impl EmbeddedServer {
         self.host
             .ensure_first_open_terminal()
             .map_err(|e| format!("ensuring the first-open terminal: {e}"))
+    }
+
+    /// The local library's persisted workspace on/off overlay (installed at
+    /// start). The boot path reads its `on_paths()` to re-serve; the toggle
+    /// commands write it on each on/off so a restart comes back as the user left
+    /// it.
+    pub fn workspace_overlay(&self) -> Option<&Arc<chan_server::WorkspaceOverlay>> {
+        self.host.workspace_overlay()
     }
 
     /// Discard a window: remove its registry row and reap its terminal

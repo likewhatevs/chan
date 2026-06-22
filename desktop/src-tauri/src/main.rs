@@ -149,17 +149,14 @@ pub struct RemoteReopen {
     pub devserver: Option<DevserverReopen>,
 }
 
-/// The devserver context a menu-reopened window needs (see `RemoteReopen`):
-/// which devserver owns it and how to re-create + track it.
+/// The devserver context a menu-reopened workspace window needs (see
+/// `RemoteReopen`): which devserver owns it and how to re-create + track it.
 #[derive(Debug, Clone)]
 pub struct DevserverReopen {
     /// Devserver id — the teardown key (a disconnect closes this window).
     pub id: String,
     /// Tenant route prefix — the tracking `window_id` for a workspace window.
     pub prefix: String,
-    /// A standalone-terminal tenant (vs a workspace) — selects the re-create +
-    /// track shape (terminal family window vs outbound workspace window).
-    pub is_terminal: bool,
 }
 
 /// One buried (hidden, not closed) window: see `AppState::buried_windows`.
@@ -602,31 +599,28 @@ async fn set_workspace_on(
     Ok(())
 }
 
-/// Snapshot every currently-on local workspace into the desktop config as `on`
-/// rows of the shared workspace overlay (the same `{path, on}` shape the
-/// devserver persists), so the next boot re-serves them (the §3.2 boot matrix).
-/// Off workspaces are simply absent — the CLI registry surfaces them off.
-/// Called after each on/off toggle and on clean shutdown. Best-effort: a
-/// persistence failure is logged, never fatal to the toggle or the exit.
+/// Snapshot every currently-on local workspace into the library-owned workspace
+/// overlay (`~/.chan/workspaces.json`) as `on` rows, so the next boot re-serves
+/// them (the §3.2 boot matrix). Off workspaces are simply absent — the CLI
+/// registry surfaces them off; a workspace that fails to re-serve at boot is not
+/// in `serves` and so drops out of this snapshot on the next clean shutdown.
+/// Called after each on/off toggle and on clean shutdown. Best-effort: a no-op
+/// when the embedded host / overlay is unavailable, never fatal to the toggle or
+/// the exit.
 fn persist_workspaces(state: &AppState) {
+    let Some(embedded) = state.embedded.get() else {
+        return;
+    };
+    let Some(overlay) = embedded.workspace_overlay() else {
+        return;
+    };
     let mut keys: Vec<String> = state.serves.lock().unwrap().keys().cloned().collect();
     keys.sort();
-    let workspaces: Vec<chan_server::PersistedWorkspace> = keys
+    let rows: Vec<chan_server::PersistedWorkspace> = keys
         .into_iter()
         .map(|path| chan_server::PersistedWorkspace { path, on: true })
         .collect();
-    let mut store = state.store.lock().unwrap();
-    match store.get() {
-        Ok(mut cfg) => {
-            cfg.workspaces = workspaces;
-            if let Err(e) = store.save(&cfg) {
-                tracing::warn!(error = %e, "persisting workspaces failed");
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "reading config to persist workspaces failed");
-        }
-    }
+    overlay.replace(rows);
 }
 
 #[tauri::command]
@@ -874,13 +868,6 @@ fn list_devservers(state: State<Arc<AppState>>) -> Result<Vec<DevserverView>, St
         .collect())
 }
 
-/// Stable window id shared by ALL of a devserver's standalone-terminal windows,
-/// so they form one window family (Cmd+Shift+N / unbury grouping) and Forget can
-/// find them.
-fn devserver_terminal_window_id(id: &str) -> String {
-    format!("devserver-{id}-terminal")
-}
-
 /// Display name for a devserver in the Window menu: its user label, or its
 /// host when unlabelled.
 fn devserver_display(d: &Devserver) -> String {
@@ -902,58 +889,6 @@ fn track_devserver_window(state: &AppState, id: &str, window: DevserverWindow) {
         .entry(id.to_string())
         .or_default()
         .push(window);
-}
-
-/// Re-create the devserver's persisted standalone-terminal windows (W10): fetch
-/// the persisted set (`GET /api/devserver/terminals`) and (re)build one window
-/// per entry at its stable label (`?w=<label>`), so they re-surface both on an
-/// explicit connect AND on an auto-reconnect across a devserver restart (the
-/// terminals re-mount server-side at stable prefixes). Seeds the window-seq past
-/// the persisted labels so a later New-Terminal mint can't collide with a
-/// re-created one after a process restart. Best-effort per terminal; returns the
-/// count re-created (0 = none persisted, or the devserver is unreachable).
-// Imperative connect/reconnect orchestrator superseded by the devserver watcher
-// (the reconcile re-surfaces persisted terminals). The whole per-label
-// devserver-terminal system this drives (its `POST /api/devserver/terminals`
-// endpoint, `PersistedTerminal`, `remount_terminal`) is inert now that New
-// Terminal mints library windows on the shared terminal tenant — slated for
-// removal in a follow-up cleanup.
-#[allow(dead_code)]
-async fn reopen_devserver_terminal_windows(
-    app: &tauri::AppHandle,
-    state: &AppState,
-    id: &str,
-) -> usize {
-    let Some(conn) = state.devservers.get(id) else {
-        return 0;
-    };
-    let persisted = devserver::fetch_terminals(&conn).await.unwrap_or_default();
-    if persisted.is_empty() {
-        return 0;
-    }
-    let family_id = devserver_terminal_window_id(id);
-    let labels: Vec<String> = persisted.iter().map(|t| t.label.clone()).collect();
-    serve::reserve_window_seq_above(&labels);
-    let mut created = 0;
-    for t in persisted {
-        if let Err(e) =
-            serve::spawn_devserver_terminal_window_at_label(app, &family_id, &t.label, &t.url)
-        {
-            tracing::warn!(devserver = %id, label = %t.label, error = %e, "re-creating a persisted devserver terminal failed");
-            continue;
-        }
-        track_devserver_window(
-            state,
-            id,
-            DevserverWindow {
-                window_id: family_id.clone(),
-                label: t.label,
-                prefix: None,
-            },
-        );
-        created += 1;
-    }
-    created
 }
 
 /// Close every window the desktop opened for a devserver (its standalone
@@ -2637,19 +2572,6 @@ fn main() {
             // reopen that workspace's persisted windows at their stable window_id),
             // and let the library's first-open rule mint one boot terminal only on
             // a truly fresh library (empty registry, marker unset).
-            let enabled: Vec<String> = state_for_setup
-                .store
-                .lock()
-                .unwrap()
-                .get()
-                .map(|cfg| {
-                    cfg.workspaces
-                        .into_iter()
-                        .filter(|w| w.on)
-                        .map(|w| w.path)
-                        .collect()
-                })
-                .unwrap_or_default();
             let handle = app.handle().clone();
             let state_for_restore = Arc::clone(&state_for_setup);
             tauri::async_runtime::spawn(async move {
@@ -2660,11 +2582,16 @@ fn main() {
                         tracing::warn!(error = %e, "mounting the shared terminal tenant on boot failed");
                     }
                 }
-                // Re-serve each workspace that was on at the last clean shutdown.
-                // Serial so concurrent opens can't race the shared embedded host;
-                // on a failure surface a notice and leave it off (the key drops
-                // out of the persisted workspace overlay on the next clean
-                // shutdown).
+                // Re-serve each workspace that was on at the last clean shutdown,
+                // read from the library-owned workspace overlay. Serial so
+                // concurrent opens can't race the shared embedded host; on a
+                // failure surface a notice and leave it off (the key drops out of
+                // the overlay on the next clean shutdown).
+                let enabled: Vec<String> = state_for_restore
+                    .embedded()
+                    .and_then(|embedded| embedded.workspace_overlay())
+                    .map(|overlay| overlay.on_paths())
+                    .unwrap_or_default();
                 for key in enabled {
                     if let Err(e) =
                         serve::start(handle.clone(), Arc::clone(&state_for_restore), key.clone())
@@ -3334,7 +3261,6 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
                         continue;
                     }
                 };
-                let is_terminal = row.kind.as_deref() == Some("terminal");
                 let tail = row
                     .title
                     .clone()
@@ -3346,14 +3272,12 @@ pub fn refresh_remote_windows_menu(app: &tauri::AppHandle) {
                         base_title: row.title.unwrap_or_else(|| display.clone()),
                         menu_title: format!("{display} — {tail}"),
                         config_key: config::remote_window_key(&row.prefix),
-                        // Workspace reopen routes through the connecting screen
-                        // like the reconnect path; the terminal branch bypasses
-                        // it (spawns the tenant window directly).
+                        // Workspace reopen routes through the connecting screen,
+                        // like the reconnect path.
                         connecting: true,
                         devserver: Some(DevserverReopen {
                             id: id.clone(),
                             prefix: row.prefix,
-                            is_terminal,
                         }),
                     },
                 );
@@ -3419,27 +3343,15 @@ fn open_remote_window_from_menu(app: &tauri::AppHandle, label: &str) {
         tracing::warn!(label, "remote window menu entry has no stored connection");
         return;
     };
-    // A CLOSED devserver window (L10): re-create it at its label AND re-track it
-    // under the devserver so a later disconnect tears it down. A terminal tenant
-    // spawns its tenant window directly (no connecting screen); a workspace
-    // tenant reuses the outbound reopen (connecting screen, like reconnect).
+    // A CLOSED devserver WORKSPACE window (L10): re-create it at its label AND
+    // re-track it under the devserver so a later disconnect tears it down. It
+    // reuses the outbound reopen (connecting screen, like reconnect).
     if let Some(ds) = entry.devserver.clone() {
-        let tracked = if ds.is_terminal {
-            let family_id = devserver_terminal_window_id(&ds.id);
-            serve::spawn_devserver_terminal_window_at_label(app, &family_id, label, &entry.url).map(
-                |()| DevserverWindow {
-                    window_id: family_id,
-                    label: label.to_string(),
-                    prefix: None,
-                },
-            )
-        } else {
-            serve::reopen_remote_window(app, label, &entry).map(|()| DevserverWindow {
-                window_id: ds.prefix.clone(),
-                label: label.to_string(),
-                prefix: Some(ds.prefix.clone()),
-            })
-        };
+        let tracked = serve::reopen_remote_window(app, label, &entry).map(|()| DevserverWindow {
+            window_id: ds.prefix.clone(),
+            label: label.to_string(),
+            prefix: Some(ds.prefix.clone()),
+        });
         match tracked {
             Ok(window) => {
                 let state = app.state::<Arc<AppState>>();
@@ -4022,32 +3934,6 @@ mod tests {
         // Degenerate label without a dash stays itself (never matches a
         // family-prefixed lookup, which always ends in '-').
         assert_eq!(window_family_prefix("main"), "main");
-    }
-
-    #[test]
-    fn devserver_terminal_label_matches_the_new_window_lookup() {
-        // All of a devserver's standalone terminals (the connect flow's first,
-        // every New Terminal, and Cmd+Shift+N) spawn under the SAME stable
-        // window id, so they share one outbound label family. Cmd+Shift+N
-        // recovers the focused devserver by recomputing that family prefix from
-        // the devserver id; pin that the spawn side and the lookup side agree,
-        // so the kind grouping can't silently drift.
-        let id = "11112222-3333-4444-5555-666677778888";
-        let window_id = devserver_terminal_window_id(id);
-        let spawned_label = serve::new_outbound_window_label(&window_id);
-        let lookup_prefix = serve::outbound_window_prefix(&devserver_terminal_window_id(id));
-        assert!(
-            spawned_label.starts_with(&format!("{lookup_prefix}-")),
-            "Cmd+Shift+N lookup prefix {lookup_prefix} must match a spawned terminal label {spawned_label}",
-        );
-        // And every terminal of one devserver shares the family (the unbury /
-        // Cmd+Shift+N grouping), distinct from another devserver's.
-        let other = serve::outbound_window_prefix(&devserver_terminal_window_id("99990000-aaaa"));
-        assert_ne!(lookup_prefix, other);
-        assert_eq!(
-            window_family_prefix(&spawned_label),
-            format!("{lookup_prefix}-")
-        );
     }
 
     #[test]

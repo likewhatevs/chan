@@ -59,7 +59,7 @@ pub use chan_library::desktop_window_ops::{
 pub use chan_library::window_titles::{SharedWindowTitles, WindowMeta, WindowTitles};
 pub use chan_library::windows::{CreateWindow, WindowKind, WindowRecord, WindowSet};
 pub(crate) use chan_library::{desktop_window_ops, window_presence, window_titles};
-pub use chan_library::{HostedWorkspace, PersistedWorkspace, WorkspaceHost};
+pub use chan_library::{HostedWorkspace, PersistedWorkspace, WorkspaceHost, WorkspaceOverlay};
 pub use devserver::{
     persisted_devserver_token, run_devserver, DevserverConfig, DevserverTunnel,
     DEVSERVER_TOKEN_MARKER,
@@ -976,6 +976,19 @@ pub fn install_local_window_registry(host: &WorkspaceHost) {
         Arc::new(chan_library::windows::WindowRegistry::open(store)),
         "local".to_string(),
     );
+}
+
+/// Install the local-disk library's workspace on/off overlay on chan-desktop's
+/// embedded `host`: the persisted on/off set at `~/.chan/workspaces.json`,
+/// co-located with the window registry. The desktop's counterpart to the
+/// devserver's `~/.chan/devserver/workspaces.json`; the boot path reads it to
+/// re-serve the workspaces the user left on.
+pub fn install_local_workspace_overlay(host: &WorkspaceHost) {
+    let store = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".chan")
+        .join("workspaces.json");
+    host.install_workspace_overlay(Arc::new(WorkspaceOverlay::open(store)));
 }
 
 #[async_trait::async_trait]

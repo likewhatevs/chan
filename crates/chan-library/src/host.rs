@@ -23,7 +23,9 @@ use crate::desktop_window_ops::DesktopBridge;
 use crate::tenant::{HostControl, TenantArtifacts, TenantBuilder, UnserveMode};
 use crate::terminal_sessions::CloseReason;
 use crate::windows::{PersistedWindow, WindowKind, WindowRecord, WindowRegistry};
-use crate::{allocate_workspace_prefix, sanitize_prefix, Error, ServeConfig, ServeHandle};
+use crate::{
+    allocate_workspace_prefix, sanitize_prefix, Error, ServeConfig, ServeHandle, WorkspaceOverlay,
+};
 
 /// One workspace mounted into a [`WorkspaceHost`].
 #[derive(Debug, Clone)]
@@ -74,6 +76,13 @@ pub struct WorkspaceHost {
     /// feed (`assemble_window_records`) reads it. Empty on a host that never
     /// installs one (its window set is empty).
     window_registry: OnceLock<Arc<WindowRegistry>>,
+    /// The library's persisted workspace on/off overlay — which registered
+    /// workspaces were mounted (`on`) at the last save. Installed once via
+    /// [`install_workspace_overlay`](Self::install_workspace_overlay); the boot/
+    /// restore path reads it to re-serve, toggles write it. The registry stays
+    /// the existence source; this is the on/off overlay over it. Empty on a host
+    /// that never installs one (nothing persisted on, so nothing re-serves).
+    workspace_overlay: OnceLock<Arc<WorkspaceOverlay>>,
     /// This library's identity: `"local"` for the baked-in local-disk library,
     /// `lib-<hex>` for a devserver. Stamped on every window record. Set with the
     /// registry; defaults to `"local"` when unset.
@@ -149,6 +158,7 @@ impl WorkspaceHost {
             builder,
             self_weak: OnceLock::new(),
             window_registry: OnceLock::new(),
+            workspace_overlay: OnceLock::new(),
             library_id: OnceLock::new(),
             terminal_tenant_prefix: OnceLock::new(),
             library_change_notify: Arc::new(Notify::new()),
@@ -198,6 +208,20 @@ impl WorkspaceHost {
     /// This library's persisted window registry, once installed.
     pub fn window_registry(&self) -> Option<&Arc<WindowRegistry>> {
         self.window_registry.get()
+    }
+
+    /// Install this library's persisted workspace on/off overlay. Idempotent
+    /// set-once; the embedder (devserver / desktop) builds it at its store path
+    /// (co-located with the window registry) and calls this once after wrapping
+    /// the host in an `Arc`. The boot/restore path reads it to re-serve the
+    /// workspaces that were on; toggles write it.
+    pub fn install_workspace_overlay(&self, overlay: Arc<WorkspaceOverlay>) {
+        let _ = self.workspace_overlay.set(overlay);
+    }
+
+    /// This library's persisted workspace on/off overlay, once installed.
+    pub fn workspace_overlay(&self) -> Option<&Arc<WorkspaceOverlay>> {
+        self.workspace_overlay.get()
     }
 
     /// This library's identity (`"local"` until a devserver installs its own).
@@ -700,10 +724,10 @@ impl WorkspaceHost {
     /// blocking I/O never stalls a concurrent tenant mount/unmount. Returns the
     /// session count reaped.
     ///
-    /// The on-disk TERMINAL blob (`terminal_blob`, a chan-server store keyed by
-    /// the tenant's session dir) is not reaped here — chan-library can't reach
-    /// it; a per-label terminal's blob is cleaned by the devserver's
-    /// `forget_terminal`. (Follow-up: surface the terminal blob to this path.)
+    /// The on-disk TERMINAL layout blob (`terminal_blob`, a chan-server store
+    /// keyed by the tenant's session dir) is not reaped here — chan-library
+    /// can't reach it. (Follow-up: surface the terminal blob to this path so a
+    /// discarded terminal window's layout is cleaned too.)
     fn reap_discarded_window_state(&self, window_id: &str) -> usize {
         let (registries, workspaces) = {
             let tenants = match self.workspaces.read() {

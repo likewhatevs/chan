@@ -7,9 +7,8 @@
 //!
 //! - `GET  /api/devserver/info` (unauthenticated): health, version, label.
 //! - `GET  /api/devserver/workspaces` (bearer): the workspaces to group.
-//! - `POST /api/devserver/terminals` (bearer): mount a standalone terminal.
 //!
-//! Every workspace and terminal is its own tokened tenant. The devserver
+//! Every workspace is its own tokened tenant. The devserver
 //! returns each tenant's `prefix` and per-tenant `token`; the desktop
 //! assembles the tenant URL itself, `http://{host}:{port}{prefix}/index.html?t={token}`,
 //! and opens it with the same outbound-window machinery as any remote URL.
@@ -306,79 +305,17 @@ fn row_from_entry(
     })
 }
 
-/// One element of `GET /api/devserver/terminals`: a persisted standalone
-/// terminal the desktop re-creates as a window on connect. `label` is the
-/// stable `?w=` window key the desktop minted; `prefix`/`token` are the
-/// current mount (the prefix need not be byte-stable across restarts).
-#[derive(Debug, Clone, Deserialize)]
-struct PersistedTerminalEntry {
-    label: String,
-    prefix: String,
-    token: String,
-}
-
-/// A persisted devserver terminal as the desktop re-creates it: its stable
-/// window label + the assembled tenant URL.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DevserverTerminalRow {
-    pub label: String,
-    pub url: String,
-}
-
-/// `GET /api/devserver/terminals`: the devserver's persisted standalone
-/// terminals (Seam 4 Amendment 5), each with its assembled tenant URL, to
-/// re-surface as windows on connect/reconnect.
-// Imperative devserver-window path superseded by the window watcher (the
-// reconcile re-surfaces terminals); deleted with the imperative layer in
-// S2-DEVSERVER D3.
-#[allow(dead_code)]
-pub async fn fetch_terminals(conn: &DevserverConn) -> Result<Vec<DevserverTerminalRow>, String> {
-    let url = format!(
-        "{}/api/devserver/terminals",
-        base_origin(&conn.host, conn.port)
-    );
-    let resp = http_client()?
-        .get(&url)
-        .bearer_auth(&conn.token)
-        .send()
-        .await
-        .map_err(|e| format!("listing devserver terminals: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!(
-            "devserver terminals returned HTTP {}",
-            resp.status()
-        ));
-    }
-    let entries = resp
-        .json::<Vec<PersistedTerminalEntry>>()
-        .await
-        .map_err(|e| format!("decoding devserver terminals: {e}"))?;
-    entries
-        .into_iter()
-        .map(|e| {
-            let url = assemble_tenant_url(&conn.host, conn.port, &e.prefix, &e.token)?;
-            Ok(DevserverTerminalRow {
-                label: e.label,
-                url,
-            })
-        })
-        .collect()
-}
-
 /// One row of `GET /api/devserver/windows` (contracts.md Amendment 8): a
-/// PERSISTED window across any of the devserver's tenants (workspace OR
-/// standalone terminal). The desktop enumerates these to offer CLOSED-but-
+/// PERSISTED workspace window the desktop enumerates to offer CLOSED-but-
 /// persisted windows for reopen in the Window menu. Deserialized 1:1 from the
-/// frozen wire; `kind`/`title` are optional (mirror `WindowInfo`). `prefix` +
-/// the CURRENT (re-minted) per-mount `token` assemble the reopen URL; `token`
-/// is empty when the tenant is off (not menu-reopenable — use the launcher row).
+/// frozen wire; `title` is optional (mirrors `WindowInfo`). `prefix` + the
+/// CURRENT (re-minted) per-mount `token` assemble the reopen URL; `token` is
+/// empty when the tenant is off (not menu-reopenable — use the launcher row).
 #[derive(Debug, Clone, Deserialize)]
 pub struct DevserverWindowRow {
     pub label: String,
     pub prefix: String,
     pub token: String,
-    #[serde(default)]
-    pub kind: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     pub connected: bool,
@@ -625,24 +562,24 @@ mod tests {
 
     #[test]
     fn devserver_window_row_decodes_amendment_8_shape() {
-        // Pins the GET /api/devserver/windows wire (Amendment 8): kind/title are
+        // Pins the GET /api/devserver/windows wire (Amendment 8): title is
         // optional; connected/saved drive the reopenable filter; token is empty
-        // when the tenant is off. A drift here reds before the menu misbehaves.
+        // when the tenant is off. An extra wire field (e.g. a legacy `kind`) is
+        // ignored. A drift here reds before the menu misbehaves.
         let json = r#"[
           {"label":"workspace-abc-1","prefix":"/api/notes-abc","token":"tok1","kind":"workspace","title":"🏠 /n Window 1","connected":false,"saved":true},
-          {"label":"terminal-win-2","prefix":"/control-3","token":"","connected":true,"saved":true}
+          {"label":"workspace-def-2","prefix":"/api/notes-def","token":"","connected":true,"saved":true}
         ]"#;
         let rows: Vec<DevserverWindowRow> = serde_json::from_str(json).unwrap();
         assert_eq!(rows.len(), 2);
-        // Row 0: workspace, reopenable (saved && !connected), kind/title present.
+        // Row 0: reopenable (saved && !connected), title present; the unknown
+        // `kind` field is ignored.
         assert_eq!(rows[0].label, "workspace-abc-1");
         assert_eq!(rows[0].prefix, "/api/notes-abc");
         assert_eq!(rows[0].token, "tok1");
-        assert_eq!(rows[0].kind.as_deref(), Some("workspace"));
         assert_eq!(rows[0].title.as_deref(), Some("🏠 /n Window 1"));
         assert!(rows[0].saved && !rows[0].connected);
-        // Row 1: optional kind/title absent (defaults None); empty token = off.
-        assert_eq!(rows[1].kind, None);
+        // Row 1: optional title absent (defaults None); empty token = off.
         assert_eq!(rows[1].title, None);
         assert!(rows[1].token.is_empty());
         assert!(rows[1].connected); // NOT reopenable (a client is attached)
@@ -717,16 +654,6 @@ mod tests {
             row.url,
             "http://127.0.0.1:8787/api/notes-1a2b3c/index.html?t=tok_live"
         );
-    }
-
-    #[test]
-    fn persisted_terminal_entry_decodes_a_bare_array_element() {
-        let json = r#"[{"label":"outbound-abc123-3","prefix":"/control-2","token":"tok_t"}]"#;
-        let entries: Vec<PersistedTerminalEntry> = serde_json::from_str(json).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].label, "outbound-abc123-3");
-        assert_eq!(entries[0].prefix, "/control-2");
-        assert_eq!(entries[0].token, "tok_t");
     }
 
     #[test]
