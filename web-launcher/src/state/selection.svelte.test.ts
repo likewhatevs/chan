@@ -1,7 +1,7 @@
 // Multi-select + bulk-action tests against the in-memory mock. Each case adds
 // its own workspaces so it is robust to the shared module-level mock state.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   selection,
   isSelected,
@@ -13,6 +13,14 @@ import {
   confirmBulkDelete,
 } from "./selection.svelte";
 import { addLocalWorkspace, library, loadLibrary } from "./library.svelte";
+
+// Pin the in-memory mock as the backend so these tests drive the registry with
+// no live server, independent of how the app composes its default backend. The
+// async-import factory dodges vi.mock's hoist-over-imports trap.
+vi.mock("../api/backend", async () => {
+  const { mockApi } = await import("../api/mock");
+  return { backend: mockApi };
+});
 
 beforeEach(async () => {
   clearSelection();

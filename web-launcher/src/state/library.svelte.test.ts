@@ -2,7 +2,7 @@
 // assert deltas rather than absolute counts, since the mock state is a shared
 // module-level singleton mutated across cases.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   addLocalWorkspace,
   library,
@@ -12,6 +12,15 @@ import {
   saveDevserver,
   toggleWorkspace,
 } from "./library.svelte";
+
+// Pin the in-memory mock as the backend so these tests drive the registry +
+// window feed with no live server, independent of how the app composes its
+// default backend. The async-import factory dodges vi.mock's hoist-over-imports
+// trap (the factory can't close over a top-level import binding).
+vi.mock("../api/backend", async () => {
+  const { mockApi } = await import("../api/mock");
+  return { backend: mockApi };
+});
 
 beforeEach(async () => {
   await loadLibrary();

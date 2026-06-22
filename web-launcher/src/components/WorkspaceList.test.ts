@@ -2,11 +2,19 @@
 // bar. This exercises the real Svelte 5 runtime reactivity of the selection
 // Set (a static check wouldn't catch a non-reactive Set), per jsdom.
 
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import WorkspaceList from "./WorkspaceList.svelte";
 import { library, loadLibrary } from "../state/library.svelte";
 import { toggleSelected, clearSelection } from "../state/selection.svelte";
+
+// Pin the in-memory mock as the backend so the mounted list renders real rows
+// with no live server, independent of how the app composes its default backend.
+// The async-import factory dodges vi.mock's hoist-over-imports trap.
+vi.mock("../api/backend", async () => {
+  const { mockApi } = await import("../api/mock");
+  return { backend: mockApi };
+});
 
 let target: HTMLElement | null = null;
 let app: Record<string, unknown> | null = null;
