@@ -110,7 +110,11 @@ pub struct AppState {
     /// present here is connected (the launcher polls its workspace list and
     /// can open its tenants); absent means disconnected. In memory only:
     /// the bearer token rotates, so it is re-acquired on each connect.
-    pub devservers: devserver::DevserverConns,
+    pub devservers: Arc<devserver::DevserverConns>,
+    /// The launcher's connected-devserver feed source (seam #1). Installed on the
+    /// embedded host; populated on connect and drained on disconnect. The host
+    /// reads it when assembling the launcher's window + workspace lists.
+    pub devserver_feed: Arc<DevserverFeed>,
     /// Windows the desktop opened for each devserver (its standalone terminal
     /// and workspace tenants), keyed by `Devserver.id`. Tracked so a
     /// disconnect tears down exactly its windows, and a reconnect re-opens its
@@ -457,6 +461,141 @@ impl AppState {
             .map(|b| (b.label.clone(), b.title.clone()))
             .collect()
     }
+}
+
+/// The launcher's connected-devserver feed source (seam #1): aggregates every
+/// connected devserver's live window snapshot and cached workspace rows so the
+/// embedded host merges them into the local launcher surface (one launcher lists
+/// local + remote alike). Installed on the host via
+/// `WorkspaceHost::install_devserver_feed`; the desktop registers a devserver on
+/// connect ([`connect_devserver_impl`]) and drops it on disconnect
+/// ([`teardown_devserver_connection`]). The trait reads are sync: the window
+/// snapshots are the SAME `Arc<Mutex<…>>` each devserver window-watcher feed task
+/// writes, and the async-fetched workspaces are served from a cache a per-devserver
+/// poll task refreshes ([`spawn_devserver_workspace_poll`]).
+#[derive(Default)]
+pub struct DevserverFeed {
+    /// Devserver id -> its live window snapshot (shared with the watcher feed task).
+    windows: Mutex<HashMap<String, Arc<Mutex<Vec<chan_server::WindowRecord>>>>>,
+    /// Devserver id -> its cached served workspaces (refreshed by the poll task).
+    workspaces: Mutex<HashMap<String, Vec<chan_server::LauncherWorkspace>>>,
+}
+
+impl DevserverFeed {
+    /// Track a freshly-connected devserver's window snapshot so `windows()` sees
+    /// it; the Arc is the one the watcher feed task mutates in place.
+    fn register_windows(&self, id: String, snapshot: Arc<Mutex<Vec<chan_server::WindowRecord>>>) {
+        self.windows.lock().unwrap().insert(id, snapshot);
+    }
+
+    /// Drop a disconnected devserver from both feeds (windows + workspace cache).
+    fn forget(&self, id: &str) {
+        self.windows.lock().unwrap().remove(id);
+        self.workspaces.lock().unwrap().remove(id);
+    }
+
+    /// Replace a devserver's cached workspace rows (the poll task gates this on a
+    /// real change, so this just stores).
+    fn set_workspaces(&self, id: String, rows: Vec<chan_server::LauncherWorkspace>) {
+        self.workspaces.lock().unwrap().insert(id, rows);
+    }
+
+    /// The remote `library_id` of a connected devserver, learned from its window
+    /// snapshot (a devserver with no windows yet has none — `library_id` is a
+    /// best-effort tag; the SPA groups remote rows by `devserver_id`).
+    fn library_id_of(&self, id: &str) -> Option<String> {
+        self.windows
+            .lock()
+            .unwrap()
+            .get(id)
+            .and_then(|s| s.lock().unwrap().first().map(|r| r.library_id.clone()))
+    }
+}
+
+impl chan_server::DevserverFeedSource for DevserverFeed {
+    fn windows(&self) -> Vec<chan_server::WindowRecord> {
+        self.windows
+            .lock()
+            .unwrap()
+            .values()
+            .flat_map(|snapshot| snapshot.lock().unwrap().clone())
+            .collect()
+    }
+
+    fn workspaces(&self) -> Vec<chan_server::LauncherWorkspace> {
+        self.workspaces
+            .lock()
+            .unwrap()
+            .values()
+            .flatten()
+            .cloned()
+            .collect()
+    }
+}
+
+/// Tag a connected devserver's workspace row as a launcher row: keyed by its
+/// remote mount `prefix` and discriminated by `devserver_id` (the field the SPA
+/// groups + routes on); `library_id` is the best-effort remote-library tag.
+fn to_launcher_workspace(
+    devserver_id: &str,
+    library_id: Option<String>,
+    row: devserver::DevserverWorkspaceRow,
+) -> chan_server::LauncherWorkspace {
+    chan_server::LauncherWorkspace {
+        workspace_id: row.prefix.clone(),
+        path: row.path,
+        label: row.label,
+        on: row.on,
+        library_id,
+        devserver_id: Some(devserver_id.to_string()),
+        prefix: row.prefix,
+    }
+}
+
+/// Poll a connected devserver's served-workspace list into the feed cache so the
+/// (sync) [`DevserverFeed::workspaces`] can serve it without blocking on HTTP.
+/// Fires [`EmbeddedServer::signal_library_change`] only when the rows actually
+/// change, so the launcher re-pushes on a real delta, not every tick. Stops when
+/// `cancel` flips true (disconnect), the same signal that stops the window watcher.
+fn spawn_devserver_workspace_poll(
+    state: Arc<AppState>,
+    id: String,
+    conn: devserver::DevserverConn,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+) {
+    const POLL: std::time::Duration = std::time::Duration::from_secs(5);
+    tauri::async_runtime::spawn(async move {
+        let mut last: Option<Vec<devserver::DevserverWorkspaceRow>> = None;
+        loop {
+            if *cancel.borrow_and_update() {
+                return;
+            }
+            match devserver::fetch_workspaces(&conn).await {
+                Ok(rows) => {
+                    if last.as_ref() != Some(&rows) {
+                        let library_id = state.devserver_feed.library_id_of(&id);
+                        let mapped = rows
+                            .iter()
+                            .cloned()
+                            .map(|r| to_launcher_workspace(&id, library_id.clone(), r))
+                            .collect();
+                        state.devserver_feed.set_workspaces(id.clone(), mapped);
+                        if let Some(embedded) = state.embedded() {
+                            embedded.signal_library_change();
+                        }
+                        last = Some(rows);
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(devserver = %id, error = %e, "polling devserver workspaces failed");
+                }
+            }
+            tokio::select! {
+                _ = cancel.changed() => return,
+                _ = tokio::time::sleep(POLL) => {}
+            }
+        }
+    });
 }
 
 /// Merged workspace view returned to the frontend. Two flavours share
@@ -1008,6 +1147,12 @@ fn teardown_devserver_connection(app: &tauri::AppHandle, state: &AppState, id: &
         let _ = cancel.send(true);
     }
     teardown_devserver_windows(app, state, id);
+    // Drop it from the launcher feed (seam #1) and re-push so its windows +
+    // workspaces leave the launcher; the watcher/poll already stopped on `cancel`.
+    state.devserver_feed.forget(id);
+    if let Some(embedded) = state.embedded() {
+        embedded.signal_library_change();
+    }
     let _ = app.emit(serve::SERVES_CHANGED, ());
 }
 
@@ -1173,6 +1318,13 @@ async fn connect_devserver_impl(
     state: Arc<AppState>,
     id: String,
 ) -> Result<(), String> {
+    // Idempotency (seam #3): a re-Connect on an already-connected devserver is a
+    // no-op, not an error. Without this the second connect re-ran the control
+    // terminal + scrape, which raced the live one ("control terminal was closed
+    // before the devserver connected").
+    if state.devservers.is_connected(&id) {
+        return Ok(());
+    }
     let (url, script) = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         let ds = cfg
@@ -1247,8 +1399,18 @@ async fn connect_devserver_impl(
     // spawn it over the library feed (`/api/library/windows/watch`), and its
     // snapshots reconcile open whatever the devserver persisted. An EMPTY feed is
     // valid (a fresh devserver, or one the user emptied before disconnecting).
-    let cancel =
+    let (cancel, snapshot) =
         window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), conn.clone()).await?;
+    // Feed the launcher (seam #1): register this devserver's live window snapshot
+    // and start polling its served workspaces into the cache. Both stop when the
+    // disconnect flips `cancel` (the poll subscribes to the same channel).
+    state.devserver_feed.register_windows(id.clone(), snapshot);
+    spawn_devserver_workspace_poll(
+        Arc::clone(&state),
+        id.clone(),
+        conn.clone(),
+        cancel.subscribe(),
+    );
     state
         .devserver_watchers
         .lock()
@@ -1284,20 +1446,6 @@ async fn connect_devserver_impl(
     Ok(())
 }
 
-/// Disconnect from a devserver: drop the live connection and tear down the
-/// windows it opened (standalone terminal, workspace tenants, control
-/// terminal), so its section returns to the connect affordance with no orphan
-/// windows left pointing at a server the desktop no longer talks to.
-#[tauri::command]
-fn disconnect_devserver(
-    app: tauri::AppHandle,
-    state: State<Arc<AppState>>,
-    id: String,
-) -> Result<(), String> {
-    teardown_devserver_connection(&app, &state, &id);
-    Ok(())
-}
-
 /// The live workspace rows for a connected devserver, each with an assembled
 /// tenant URL. Empty when the devserver is not connected. The launcher polls
 /// this on an interval to track serve-driven additions and removals.
@@ -1319,10 +1467,10 @@ async fn list_devserver_workspaces(
 /// watcher's reconcile-to-empty — unlike the old imperative `outbound-` spawn,
 /// which lived outside the feed and vanished on reconnect. The SPA Open button
 /// turns the workspace ON first, so the minted record resolves a live token (an
-/// off workspace mints an empty token the watcher skips).
-#[tauri::command]
-async fn open_devserver_workspace(
-    state: State<'_, Arc<AppState>>,
+/// off workspace mints an empty token the watcher skips). Reached over the
+/// desktop bridge from the launcher's `workspaces/open` route (seam #2).
+pub(crate) async fn open_devserver_workspace_impl(
+    state: &Arc<AppState>,
     id: String,
     path: String,
 ) -> Result<(), String> {
@@ -1339,10 +1487,10 @@ async fn open_devserver_workspace(
 /// id, persists the record, and fires the watch, so the desktop's window watcher
 /// opens it as a `lib-` terminal on the devserver's shared `/terminal` tenant —
 /// the same terminal family as the connect-time boot terminal, not an isolated
-/// per-window tenant.
-#[tauri::command]
-async fn open_devserver_terminal(
-    state: State<'_, Arc<AppState>>,
+/// per-window tenant. Reached over the desktop bridge from the launcher's
+/// per-devserver `terminal` route (seam #2).
+pub(crate) async fn open_devserver_terminal_impl(
+    state: &Arc<AppState>,
     id: String,
 ) -> Result<(), String> {
     let conn = state
@@ -1447,9 +1595,20 @@ async fn reconnect_devserver(
                 if let Some(cancel) = state.devserver_watchers.lock().unwrap().remove(&id) {
                     let _ = cancel.send(true); // the watcher reconciles its windows away
                 }
-                let cancel =
-                    window_watcher_wiring::spawn_devserver_window_watcher(app.clone(), probe)
-                        .await?;
+                let (cancel, snapshot) = window_watcher_wiring::spawn_devserver_window_watcher(
+                    app.clone(),
+                    probe.clone(),
+                )
+                .await?;
+                // Re-point the launcher feed (seam #1) at the fresh snapshot + a
+                // poll on the rotated token; the old poll stopped on the cancel above.
+                state.devserver_feed.register_windows(id.clone(), snapshot);
+                spawn_devserver_workspace_poll(
+                    Arc::clone(&state),
+                    id.clone(),
+                    probe,
+                    cancel.subscribe(),
+                );
                 state
                     .devserver_watchers
                     .lock()
@@ -1508,10 +1667,10 @@ fn update_devserver(
 
 /// Forget (unmount) a workspace on a connected devserver via its management
 /// API. The devserver stops serving that workspace; its files on the box are
-/// untouched and it can be re-mounted later.
-#[tauri::command]
-async fn forget_devserver_workspace(
-    state: State<'_, Arc<AppState>>,
+/// untouched and it can be re-mounted later. Reached over the desktop bridge
+/// from the launcher's `workspaces/{prefix}` DELETE route (seam #2).
+pub(crate) async fn forget_devserver_workspace_impl(
+    state: &Arc<AppState>,
     id: String,
     prefix: String,
 ) -> Result<(), String> {
@@ -1524,22 +1683,30 @@ async fn forget_devserver_workspace(
 
 /// Set a registered devserver workspace on (mount + mint a fresh tenant token)
 /// or off (unmount, keep registered) — the on/off toggle on a devserver row,
-/// distinct from Forget (`forget_devserver_workspace`). An unforced off with
-/// live terminals fails with [`SetWorkspaceOnError::ActiveTerminals`] so the SPA
-/// confirms then retries with `force: true`. The launcher reflects the new state
-/// via the next poll (the row is re-fetched, not returned).
-#[tauri::command]
-async fn set_devserver_workspace_on(
-    state: State<'_, Arc<AppState>>,
+/// distinct from Forget ([`forget_devserver_workspace_impl`]). Reached over the
+/// desktop bridge from the launcher's `workspaces/{prefix}/on|off` routes (seam
+/// #2), which carry no `force` — an unforced off rejected for live terminals
+/// surfaces as an error string (the bridge op reply is `Result<(), String>`, so
+/// the typed [`SetWorkspaceOnError::ActiveTerminals`] can't round-trip a
+/// confirm-then-force the way the old Tauri command did).
+pub(crate) async fn set_devserver_workspace_on_impl(
+    state: &Arc<AppState>,
     id: String,
     prefix: String,
     on: bool,
-    force: bool,
-) -> Result<(), devserver::SetWorkspaceOnError> {
-    let conn = state.devservers.get(&id).ok_or_else(|| {
-        devserver::SetWorkspaceOnError::other(format!("devserver {id} is not connected"))
-    })?;
-    devserver::set_workspace_on(&conn, &prefix, on, force).await
+) -> Result<(), String> {
+    let conn = state
+        .devservers
+        .get(&id)
+        .ok_or_else(|| format!("devserver {id} is not connected"))?;
+    devserver::set_workspace_on(&conn, &prefix, on, false)
+        .await
+        .map_err(|e| match e {
+            devserver::SetWorkspaceOnError::ActiveTerminals { active_terminals } => format!(
+                "workspace has {active_terminals} running terminal(s); close them before turning it off"
+            ),
+            devserver::SetWorkspaceOnError::Other { message } => message,
+        })
 }
 
 /// Forget a devserver: drops any live connection, tears down its windows, and
@@ -1615,6 +1782,7 @@ fn register_devserver_from_handoff(
     let registry = config::DevserverConfigRegistry::new(
         Arc::clone(&state.store),
         Arc::clone(&state.devserver_remove_hook),
+        Arc::clone(&state.devservers),
     );
     registry.add(DevserverInput {
         url,
@@ -2592,7 +2760,8 @@ fn main() {
         buried_windows: Mutex::new(Vec::new()),
         silent_hides: Mutex::new(std::collections::HashSet::new()),
         remote_reopen: Mutex::new(HashMap::new()),
-        devservers: devserver::DevserverConns::default(),
+        devservers: Arc::new(devserver::DevserverConns::default()),
+        devserver_feed: Arc::new(DevserverFeed::default()),
         devserver_windows: Mutex::new(HashMap::new()),
         devserver_watchers: Mutex::new(HashMap::new()),
         devserver_active_transfers: Mutex::new(std::collections::HashSet::new()),
@@ -2625,13 +2794,24 @@ fn main() {
             // through the same lock and its HTTP DELETE can reap a live connection.
             let config_store = Arc::clone(&state_for_setup.store);
             let remove_hook = Arc::clone(&state_for_setup.devserver_remove_hook);
+            let conns_for_registry = Arc::clone(&state_for_setup.devservers);
             match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(
                 config_store,
                 remove_hook,
+                conns_for_registry,
             )) {
                 Ok(server) => {
                     if state_for_setup.embedded.set(server).is_err() {
                         tracing::warn!("embedded local server initialized more than once");
+                    }
+                    // Install the connected-devserver feed source (seam #1) so the
+                    // launcher merges remote windows + workspaces. Done after the
+                    // host is up; connections (which populate it) only start later.
+                    if let Some(embedded) = state_for_setup.embedded.get() {
+                        // Clone the concrete Arc; the call coerces it to
+                        // `Arc<dyn DevserverFeedSource>` (unsizing at the arg).
+                        let feed = Arc::clone(&state_for_setup.devserver_feed);
+                        embedded.install_devserver_feed(feed);
                     }
                     // Fill the registry's remove hook now that the AppHandle
                     // exists: the launcher's HTTP DELETE then reaps a live
@@ -2927,14 +3107,9 @@ fn main() {
             add_devserver,
             list_devservers,
             remove_devserver,
-            disconnect_devserver,
             list_devserver_workspaces,
-            open_devserver_workspace,
-            open_devserver_terminal,
             reconnect_devserver,
             update_devserver,
-            forget_devserver_workspace,
-            set_devserver_workspace_on,
             auth::auth_status,
             auth::open_signin,
             auth::signout,

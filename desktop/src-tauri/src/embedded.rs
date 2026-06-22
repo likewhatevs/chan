@@ -13,6 +13,7 @@ use chan_server::{DesktopBridge, DesktopWindowOp, SharedWindowTitles, WindowReco
 use tokio::sync::{mpsc, watch, Notify};
 
 use crate::config::{ConfigStore, DevserverConfigRegistry, DevserverRemoveHook};
+use crate::devserver::DevserverConns;
 use crate::serve;
 
 /// Bound on the window-ops channel: interactive `cs window` calls are
@@ -46,6 +47,7 @@ impl EmbeddedServer {
     pub async fn start(
         config_store: Arc<Mutex<ConfigStore>>,
         devserver_remove_hook: Arc<OnceLock<DevserverRemoveHook>>,
+        devserver_conns: Arc<DevserverConns>,
     ) -> Result<Self, String> {
         let library = chan_workspace::Library::open()
             .map_err(|e| format!("opening chan workspace registry for embedded server: {e}"))?;
@@ -83,6 +85,7 @@ impl EmbeddedServer {
         host.install_devserver_registry(Arc::new(DevserverConfigRegistry::new(
             config_store,
             devserver_remove_hook,
+            devserver_conns,
         )));
         // Install the launcher SPA as the loopback's root fallback so the
         // desktop launcher loads the same web-launcher served at `/` on every
@@ -358,6 +361,20 @@ impl EmbeddedServer {
     /// registry change signal — that misses tenant transitions.
     pub fn library_change_notify(&self) -> Arc<Notify> {
         self.host.library_change_notify()
+    }
+
+    /// Install the launcher's connected-devserver feed source (seam #1) so
+    /// `assemble_window_records` + the list-workspaces route merge connected
+    /// devservers' windows + workspaces into the local launcher surface.
+    pub fn install_devserver_feed(&self, feed: Arc<dyn chan_server::DevserverFeedSource>) {
+        self.host.install_devserver_feed(feed);
+    }
+
+    /// Fire the library-change signal so the launcher's window + workspace watch
+    /// feeds re-push — the desktop calls this when its devserver feed (window
+    /// snapshot or workspace cache) changes.
+    pub fn signal_library_change(&self) {
+        self.host.signal_library_change();
     }
 
     /// Mint a window into the local library registry and return its assembled

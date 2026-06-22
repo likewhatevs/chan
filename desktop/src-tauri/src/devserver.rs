@@ -139,7 +139,7 @@ impl SetWorkspaceOnError {
 
 /// A devserver workspace as the launcher renders it: the tenant fields plus
 /// the assembled tenant URL ready for the outbound-window machinery.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DevserverWorkspaceRow {
     pub prefix: String,
     pub path: String,

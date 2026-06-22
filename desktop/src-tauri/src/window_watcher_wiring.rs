@@ -70,10 +70,19 @@ struct LocalWindowFeed {
 
 impl WindowFeed for LocalWindowFeed {
     fn snapshot(&self) -> Vec<WindowRecord> {
+        // `assemble_window_records` now MERGES connected devservers' windows
+        // (seam #1) for the launcher. The LOCAL native watcher must only
+        // reconcile LOCAL windows — devserver windows are driven by their own
+        // per-devserver watcher — so filter to this library, else the local
+        // reconcile would try to open remote records via the local opener (and
+        // trip its same-library debug-assert).
         self.state
             .embedded()
             .map(|embedded| embedded.assemble_window_records())
             .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.library_id == LOCAL_LIBRARY_ID)
+            .collect()
     }
 
     fn change_notify(&self) -> Arc<Notify> {
@@ -292,6 +301,13 @@ async fn stream_window_feed(
                     state.refresh_devserver_active_transfers(&library_id, &active);
                 }
                 *snapshot.lock().unwrap() = set.windows;
+                // Re-push the launcher feed (seam #1): a devserver window change
+                // shifts the merged launcher window set, so signal the embedded
+                // host to re-assemble + re-push. The devserver only pushes on a
+                // real change, so this is already change-gated.
+                if let Some(embedded) = state.embedded() {
+                    embedded.signal_library_change();
+                }
                 change.notify_one();
             }
         }
@@ -313,11 +329,14 @@ async fn stream_window_feed(
 pub(crate) async fn spawn_devserver_window_watcher(
     app: AppHandle,
     conn: DevserverConn,
-) -> Result<watch::Sender<bool>, String> {
+) -> Result<(watch::Sender<bool>, Arc<Mutex<Vec<WindowRecord>>>), String> {
     let seed = crate::devserver::fetch_library_windows(&conn)
         .await
         .unwrap_or_default();
     let snapshot = Arc::new(Mutex::new(seed));
+    // A handle on the snapshot for the caller's launcher feed (seam #1): the same
+    // Arc the feed task mutates, so the launcher reads this devserver's live windows.
+    let snapshot_handle = Arc::clone(&snapshot);
     let change = Arc::new(Notify::new());
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let host = conn.host.clone();
@@ -354,5 +373,5 @@ pub(crate) async fn spawn_devserver_window_watcher(
             }
         }
     }));
-    Ok(cancel_tx)
+    Ok((cancel_tx, snapshot_handle))
 }

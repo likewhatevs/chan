@@ -73,6 +73,30 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
             // dial, window watcher).
             let _ = reply.send(crate::connect_devserver_impl(app, state, id).await);
         }
+        // The launcher's connected-devserver row buttons fire these over the
+        // bridge (seam #2). Each reuses the same connection state the connect
+        // flow set up; the reply unblocks the route's `dispatch_window_op`.
+        DesktopWindowOp::DisconnectDevserver { id, reply } => {
+            crate::teardown_devserver_connection(&app, &state, &id);
+            let _ = reply.send(Ok(()));
+        }
+        DesktopWindowOp::OpenDevserverTerminal { id, reply } => {
+            let _ = reply.send(crate::open_devserver_terminal_impl(&state, id).await);
+        }
+        DesktopWindowOp::OpenDevserverWorkspace { id, path, reply } => {
+            let _ = reply.send(crate::open_devserver_workspace_impl(&state, id, path).await);
+        }
+        DesktopWindowOp::SetDevserverWorkspaceOn {
+            id,
+            prefix,
+            on,
+            reply,
+        } => {
+            let _ = reply.send(crate::set_devserver_workspace_on_impl(&state, id, prefix, on).await);
+        }
+        DesktopWindowOp::ForgetDevserverWorkspace { id, prefix, reply } => {
+            let _ = reply.send(crate::forget_devserver_workspace_impl(&state, id, prefix).await);
+        }
         DesktopWindowOp::PickFolder { reply } => {
             // The launcher's New-Workspace "Browse…" button fires this over the
             // bridge to get a real native folder dialog. The picker is async-

@@ -27,6 +27,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chan_server::{DevserverEntry, DevserverInput, DevserverRegistry};
 use serde::{Deserialize, Serialize};
 
+use crate::devserver::DevserverConns;
+
 /// Cap on how many window configs we retain in the LRU stack.
 /// Newest first; older entries past the cap are evicted on save.
 /// Twenty is roomy enough for several concurrently-open workspaces
@@ -227,26 +229,39 @@ pub struct DevserverConfigRegistry {
     /// same connection/windows the Tauri command does. Empty until then (and on
     /// headless surfaces) — `remove` then only drops the config row.
     on_remove: Arc<OnceLock<DevserverRemoveHook>>,
+    /// The live connection map (shared with `AppState.devservers`), so `list`
+    /// reports each row's [`DevserverEntry::connected`] — the launcher shows
+    /// Connect vs Disconnect + gates Edit read-only off it.
+    conns: Arc<DevserverConns>,
 }
 
 impl DevserverConfigRegistry {
     pub fn new(
         store: Arc<Mutex<ConfigStore>>,
         on_remove: Arc<OnceLock<DevserverRemoveHook>>,
+        conns: Arc<DevserverConns>,
     ) -> Self {
-        Self { store, on_remove }
+        Self {
+            store,
+            on_remove,
+            conns,
+        }
     }
 }
 
 /// Project a stored [`Devserver`] to the launcher's wire [`DevserverEntry`],
-/// eliding the token (only its presence, `has_token`, crosses the wire).
-fn entry_from_devserver(d: &Devserver) -> DevserverEntry {
+/// eliding the token (only its presence, `has_token`, crosses the wire) and
+/// joining the live connection state (`connected`) from `conns`.
+fn entry_from_devserver(d: &Devserver, conns: &DevserverConns) -> DevserverEntry {
     DevserverEntry {
         id: d.id.clone(),
         url: d.url.clone(),
         label: d.label.clone(),
         script: d.script.clone(),
         has_token: !d.token.is_empty(),
+        // A live connection in the desktop's in-memory map means connected; a
+        // headless surface installs no registry, so this never runs there.
+        connected: conns.is_connected(&d.id),
         // The desktop config doesn't track the connected library id — it's
         // resolved from the live window feed — so the registry reports `None`
         // (the pre-connect state). Joining it back is a follow-up.
@@ -261,7 +276,12 @@ impl DevserverRegistry for DevserverConfigRegistry {
         let store = self.store.lock().unwrap();
         store
             .get()
-            .map(|cfg| cfg.devservers.iter().map(entry_from_devserver).collect())
+            .map(|cfg| {
+                cfg.devservers
+                    .iter()
+                    .map(|d| entry_from_devserver(d, &self.conns))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -284,7 +304,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
         };
         cfg.devservers.push(entry.clone());
         store.save(&cfg).map_err(|e| e.to_string())?;
-        Ok(entry_from_devserver(&entry))
+        Ok(entry_from_devserver(&entry, &self.conns))
     }
 
     fn update(&self, id: &str, input: DevserverInput) -> Result<Option<DevserverEntry>, String> {
@@ -308,7 +328,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
                 ds.token = tok.to_string();
             }
         }
-        let entry = entry_from_devserver(ds);
+        let entry = entry_from_devserver(ds, &self.conns);
         store.save(&cfg).map_err(|e| e.to_string())?;
         Ok(Some(entry))
     }
@@ -628,7 +648,11 @@ mod tests {
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
         }));
-        let reg = DevserverConfigRegistry::new(Arc::clone(&store), Arc::new(OnceLock::new()));
+        let reg = DevserverConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::new(OnceLock::new()),
+            Arc::new(crate::devserver::DevserverConns::default()),
+        );
         let added = reg
             .add(DevserverInput {
                 url: "https://box.example.com:8787".into(),
@@ -657,7 +681,11 @@ mod tests {
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
         }));
-        let reg = DevserverConfigRegistry::new(Arc::clone(&store), Arc::new(OnceLock::new()));
+        let reg = DevserverConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::new(OnceLock::new()),
+            Arc::new(crate::devserver::DevserverConns::default()),
+        );
         let id = reg
             .add(DevserverInput {
                 url: "http://127.0.0.1:8787".into(),
@@ -709,7 +737,11 @@ mod tests {
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
         }));
-        let reg = DevserverConfigRegistry::new(store, Arc::new(OnceLock::new()));
+        let reg = DevserverConfigRegistry::new(
+            store,
+            Arc::new(OnceLock::new()),
+            Arc::new(crate::devserver::DevserverConns::default()),
+        );
         let missing = reg
             .update(
                 "nope",
@@ -740,7 +772,11 @@ mod tests {
                 fired_for_hook.lock().unwrap().push(id.to_string())
             }))
             .ok();
-        let reg = DevserverConfigRegistry::new(Arc::clone(&store), Arc::clone(&hook_cell));
+        let reg = DevserverConfigRegistry::new(
+            Arc::clone(&store),
+            Arc::clone(&hook_cell),
+            Arc::new(crate::devserver::DevserverConns::default()),
+        );
         let id = reg
             .add(DevserverInput {
                 url: "http://127.0.0.1:8787".into(),
@@ -762,7 +798,11 @@ mod tests {
         let store = Arc::new(Mutex::new(ConfigStore {
             path: dir.path().join("config.json"),
         }));
-        let reg = DevserverConfigRegistry::new(store, Arc::new(OnceLock::new()));
+        let reg = DevserverConfigRegistry::new(
+            store,
+            Arc::new(OnceLock::new()),
+            Arc::new(crate::devserver::DevserverConns::default()),
+        );
         assert!(reg
             .add(DevserverInput {
                 url: "not a url".into(),
