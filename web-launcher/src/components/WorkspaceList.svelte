@@ -18,6 +18,8 @@
     reportError,
     clearError,
   } from "../state/library.svelte";
+  import { liveTerminalsCount } from "../api/library";
+  import { requestConfirm } from "../state/confirm.svelte";
   import { isSelected, toggleSelected } from "../state/selection.svelte";
   import SelectionBar from "./SelectionBar.svelte";
   import { basename } from "../lib/windowLabel";
@@ -65,6 +67,35 @@
       await action;
     } catch (e) {
       reportError(e);
+    }
+  }
+
+  // Toggle a remote (devserver) workspace. Turning ON is a plain action. Turning
+  // OFF can hit live terminal sessions: the server answers 409 live_terminals
+  // with the count, so on that specific error we open the in-SPA confirm (never
+  // a native dialog) showing N and, on confirm, retry the same off forced
+  // (force:true). Any other error — including a plain NO_DESKTOP 409, which
+  // liveTerminalsCount maps to null — goes straight to the banner.
+  async function toggleRemoteWorkspace(devserverId: string, prefix: string, on: boolean): Promise<void> {
+    if (on) {
+      await run(setDevserverWorkspaceOn(devserverId, prefix, true));
+      return;
+    }
+    clearError();
+    try {
+      await setDevserverWorkspaceOn(devserverId, prefix, false);
+    } catch (e) {
+      const n = liveTerminalsCount(e);
+      if (n === null) {
+        reportError(e);
+        return;
+      }
+      requestConfirm({
+        title: "Turn off workspace?",
+        message: `${n} live terminal session${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} still running. Turn off anyway?`,
+        confirmLabel: "Turn off",
+        onConfirm: () => run(setDevserverWorkspaceOn(devserverId, prefix, false, true)),
+      });
     }
   }
 </script>
@@ -151,7 +182,7 @@
                 type="button"
                 title={ws.on ? "Turn off" : "Turn on"}
                 aria-label={`${ws.on ? "Turn off" : "Turn on"} ${displayName(ws)}`}
-                onclick={() => run(setDevserverWorkspaceOn(g.devserverId, ws.prefix, !ws.on))}>
+                onclick={() => toggleRemoteWorkspace(g.devserverId, ws.prefix, !ws.on)}>
                 <Power size={16} />
               </button>
               <button

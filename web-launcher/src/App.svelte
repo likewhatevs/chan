@@ -8,8 +8,10 @@
   import DevserverList from "./components/DevserverList.svelte";
   import WindowFeed from "./components/WindowFeed.svelte";
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
+  import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import { library, loadLibrary, openTerminal } from "./state/library.svelte";
   import { dialog, openNewDialog } from "./state/dialog.svelte";
+  import { confirm } from "./state/confirm.svelte";
   import { applyTheme } from "./state/theme.svelte";
   import { readOnly } from "./state/capabilities";
 
@@ -64,6 +66,10 @@
 
 {#if dialog.open}
   <NewWorkspaceDialog />
+{/if}
+
+{#if confirm.open}
+  <ConfirmDialog />
 {/if}
 
 <style>

@@ -6,12 +6,13 @@
 // has something real to render. Mutations notify the watch subscribers, so
 // the feed updates live when a workspace toggles or a devserver is added.
 
-import type {
-  DevserverEntry,
-  LibraryApi,
-  WindowRecord,
-  WindowSet,
-  WorkspaceEntry,
+import {
+  ApiError,
+  type DevserverEntry,
+  type LibraryApi,
+  type WindowRecord,
+  type WindowSet,
+  type WorkspaceEntry,
 } from "./library";
 
 // The mock stores the bearer alongside the public record; the public shape
@@ -89,6 +90,23 @@ const devserverWorkspaces: WorkspaceEntry[] = [
     prefix: "w/docs",
   },
 ];
+
+// How many live terminal sessions a remote workspace has, keyed by
+// `devserver_id:prefix`. A workspace listed here makes an UNFORCED off answer
+// 409 `live_terminals` (mirroring the server), so the SPA + tests exercise the
+// confirm-and-retry path; a forced off ignores it and turns off. Seeded on the
+// connected `ds-1:w/api` so the confirm path is reachable in the mock SPA.
+const liveTerminals = new Map<string, number>([["ds-1:w/api", 2]]);
+
+/** Re-seed the remote-workspace state the confirm-and-retry flow mutates (the
+ * `ds-1:w/api` row turns off on a forced retry and drops its live-terminal
+ * flag). Test-only, so a suite that exercises the flow stays order-independent;
+ * unused on the live SPA path. */
+export function resetMockRemoteWorkspaces(): void {
+  for (const w of devserverWorkspaces) w.on = w.prefix === "w/docs" ? false : true;
+  liveTerminals.clear();
+  liveTerminals.set("ds-1:w/api", 2);
+}
 
 const windows: WindowRecord[] = [
   {
@@ -333,8 +351,21 @@ export const mockApi: LibraryApi = {
   },
 
   // Turn a connected devserver's served workspace on/off by its mounted prefix.
-  setDevserverWorkspaceOn: (id, prefix, on) => {
+  // An UNFORCED off of a workspace with seeded live terminals answers 409
+  // live_terminals (like the server), so the launcher opens its confirm dialog;
+  // a forced off clears the live-terminal flag and turns off.
+  setDevserverWorkspaceOn: (id, prefix, on, force) => {
     const ws = devserverWorkspaces.find((w) => w.devserver_id === id && w.prefix === prefix);
+    const key = `${id}:${prefix}`;
+    if (!on && !force && liveTerminals.has(key)) {
+      return Promise.reject(
+        new ApiError(
+          409,
+          JSON.stringify({ error: "live_terminals", active_terminals: liveTerminals.get(key) }),
+        ),
+      );
+    }
+    if (!on && force) liveTerminals.delete(key);
     if (ws) ws.on = on;
     notify();
     return tick(undefined);

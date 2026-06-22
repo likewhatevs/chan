@@ -147,8 +147,10 @@ export interface LibraryApi {
    * remote path (desktop action, 409 with no bridge). */
   openDevserverWorkspace(id: string, path: string): Promise<void>;
   /** Turn a connected devserver's served workspace on/off by its mounted prefix
-   * (desktop action, 409 with no bridge). */
-  setDevserverWorkspaceOn(id: string, prefix: string, on: boolean): Promise<void>;
+   * (desktop action, 409 with no bridge). An unforced off of a workspace that
+   * still has live terminal sessions answers 409 `{error:"live_terminals",
+   * active_terminals:N}`; pass `force` to tear them down and turn off anyway. */
+  setDevserverWorkspaceOn(id: string, prefix: string, on: boolean, force?: boolean): Promise<void>;
   /** Forget (unmount + drop) a connected devserver's served workspace by its
    * mounted prefix (desktop action, 409 with no bridge). */
   forgetDevserverWorkspace(id: string, prefix: string): Promise<void>;
@@ -178,6 +180,27 @@ export class ApiError extends Error {
     super(body || `HTTP ${status}`);
     this.name = "ApiError";
   }
+}
+
+/**
+ * The live-terminal count carried by an unforced devserver-workspace off that
+ * was refused because the workspace still has live terminal sessions. Returns
+ * `active_terminals` when `e` is an `ApiError` whose 409 body parses to
+ * `{error:"live_terminals", active_terminals:N}`, else null — so the launcher
+ * can confirm-and-retry only that case and let a plain `NO_DESKTOP` 409 (whose
+ * body is not that JSON) fall through to the generic error banner.
+ */
+export function liveTerminalsCount(e: unknown): number | null {
+  if (!(e instanceof ApiError) || e.status !== 409) return null;
+  try {
+    const body = JSON.parse(e.message) as { error?: unknown; active_terminals?: unknown };
+    if (body.error === "live_terminals" && typeof body.active_terminals === "number") {
+      return body.active_terminals;
+    }
+  } catch {
+    // Not JSON (e.g. the plain `NO_DESKTOP` string body) → not the live case.
+  }
+  return null;
 }
 
 // The bearer the library hands the SPA. On loopback the launcher is served
@@ -230,11 +253,13 @@ export const liveApi: LibraryApi = {
   // distinct POST routes; forget is POST (a DELETE body is poorly supported).
   openDevserverWorkspace: (id, path) =>
     req("POST", `/api/library/devservers/${encodeURIComponent(id)}/workspaces/open`, { path }),
-  setDevserverWorkspaceOn: (id, prefix, on) =>
+  // `on` posts just the prefix; `off` carries `force` so an unforced off can
+  // answer 409 live_terminals and the launcher retry the same route forced.
+  setDevserverWorkspaceOn: (id, prefix, on, force) =>
     req(
       "POST",
       `/api/library/devservers/${encodeURIComponent(id)}/workspaces/${on ? "on" : "off"}`,
-      { prefix },
+      on ? { prefix } : { prefix, force: force ?? false },
     ),
   forgetDevserverWorkspace: (id, prefix) =>
     req("POST", `/api/library/devservers/${encodeURIComponent(id)}/workspaces/forget`, { prefix }),

@@ -211,13 +211,16 @@ export async function openDevserverWorkspace(id: string, path: string): Promise<
 
 /** Turn a connected devserver's served workspace on/off by its mounted prefix.
  * The merged workspace rows refresh through the watch push (the desktop bridges
- * its workspace-cache change into the library change-signal). */
+ * its workspace-cache change into the library change-signal). An unforced off of
+ * a workspace with live terminals throws an `ApiError` the caller maps to a
+ * confirm dialog (see `liveTerminalsCount`); `force` retries past it. */
 export async function setDevserverWorkspaceOn(
   id: string,
   prefix: string,
   on: boolean,
+  force?: boolean,
 ): Promise<void> {
-  await backend.setDevserverWorkspaceOn(id, prefix, on);
+  await backend.setDevserverWorkspaceOn(id, prefix, on, force);
 }
 
 /** Forget (unmount + drop) a connected devserver's served workspace by prefix. */
