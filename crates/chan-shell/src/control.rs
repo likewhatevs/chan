@@ -172,6 +172,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn absolutize_resolves_dot_and_relative_paths_against_the_cwd() {
+        let cwd = std::env::current_dir().unwrap();
+        // `.` resolves to the current directory: `cs upload .` / `cs download .`
+        // target the terminal's cwd.
+        assert_eq!(absolutize(PathBuf::from(".")).unwrap(), cwd.join("."));
+        // Any relative path is joined onto the cwd.
+        assert_eq!(
+            absolutize(PathBuf::from("sub/x")).unwrap(),
+            cwd.join("sub/x")
+        );
+        // An absolute path passes through unchanged.
+        let abs = if cfg!(windows) {
+            PathBuf::from("C:\\abs\\x")
+        } else {
+            PathBuf::from("/abs/x")
+        };
+        assert_eq!(absolutize(abs.clone()).unwrap(), abs);
+    }
+
+    #[test]
     fn open_env_requires_window_id_and_control_socket() {
         let err = open_env_from(None, Some("/tmp/chan-control.sock".into())).unwrap_err();
         assert!(err.to_string().contains("CHAN_WINDOW_ID"));
