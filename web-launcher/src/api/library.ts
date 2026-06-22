@@ -224,20 +224,20 @@ export const liveApi: LibraryApi = {
     req("POST", `/api/library/devservers/${encodeURIComponent(id)}/disconnect`),
   openDevserverTerminal: (id) =>
     req("POST", `/api/library/devservers/${encodeURIComponent(id)}/terminal`),
+  // The devserver-workspace ops carry the remote mount `prefix` / `path` in the
+  // JSON body, not a path segment: a mount prefix can hold characters axum's
+  // Path extractor + intervening (gateway) proxies mangle. on/off/forget are
+  // distinct POST routes; forget is POST (a DELETE body is poorly supported).
   openDevserverWorkspace: (id, path) =>
     req("POST", `/api/library/devservers/${encodeURIComponent(id)}/workspaces/open`, { path }),
   setDevserverWorkspaceOn: (id, prefix, on) =>
     req(
       "POST",
-      `/api/library/devservers/${encodeURIComponent(id)}/workspaces/${encodeURIComponent(
-        prefix,
-      )}/${on ? "on" : "off"}`,
+      `/api/library/devservers/${encodeURIComponent(id)}/workspaces/${on ? "on" : "off"}`,
+      { prefix },
     ),
   forgetDevserverWorkspace: (id, prefix) =>
-    req(
-      "DELETE",
-      `/api/library/devservers/${encodeURIComponent(id)}/workspaces/${encodeURIComponent(prefix)}`,
-    ),
+    req("POST", `/api/library/devservers/${encodeURIComponent(id)}/workspaces/forget`, { prefix }),
   pickFolder: () => req("POST", "/api/library/fs/pick-folder"),
   listWindows: () => req("GET", "/api/library/windows"),
   watchWindows: (onSet) => {
