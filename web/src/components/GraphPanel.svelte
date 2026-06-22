@@ -2446,6 +2446,30 @@
     }, 250);
   });
 
+  /// Repopulate an EMPTY graph once indexing finishes. The load effect
+  /// above tracks only `visible` + `loadKey`, and the watcher path only
+  /// fires on real file edits — neither covers the initial index of
+  /// PRE-EXISTING files, so a graph opened mid-index comes up at 0 nodes
+  /// and would otherwise revert to "no markdown files…" (the genuine-empty
+  /// copy) instead of populating. Fire `reloadGraph()` on the
+  /// `indexBuilding` true→false edge so the "temporarily unavailable while
+  /// indexing" copy is honest. Guards: edge-only via `prevIndexBuilding`
+  /// (no reload loop); `visible`-only (don't wake a backgrounded tab); and
+  /// `nodes.length === 0` so a populated graph — whose live updates the
+  /// watcher (graphReloadSignal) already drives — doesn't double-load when
+  /// a save's reindex flips the same signal. `nodes`/`visible` are read
+  /// untracked so only `indexBuilding` re-fires this effect.
+  let prevIndexBuilding = false;
+  $effect(() => {
+    const building = indexBuilding;
+    const wasBuilding = prevIndexBuilding;
+    prevIndexBuilding = building;
+    if (!wasBuilding || building) return; // not a true -> false edge
+    untrack(() => {
+      if (visible && nodes.length === 0) void reloadGraph();
+    });
+  });
+
   /// Persist the live selection so it survives a window reload (the
   /// selected node used to be lost on reload). The serializer already writes
   /// `gn`/`gnl` from graphState.selectedNodeId/Label, and restore reads

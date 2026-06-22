@@ -54,6 +54,26 @@ describe("graph empty-state: indexing vs genuinely-empty copy", () => {
   });
 });
 
+// Once indexing finishes, an empty-during-indexing graph must repopulate
+// so the "temporarily unavailable while indexing" copy is honest. An
+// $effect fires reloadGraph() on the indexBuilding true->false edge.
+describe("graph empty-state: auto-reload on index-complete", () => {
+  test("an effect tracks indexBuilding and fires only on the true->false edge", () => {
+    // prevIndexBuilding latches the prior value; the effect bails unless
+    // the transition is building -> not-building (no reload loop).
+    expect(graph).toMatch(/let prevIndexBuilding = false;/);
+    expect(graph).toMatch(
+      /\$effect\(\(\) => \{\s*const building = indexBuilding;\s*const wasBuilding = prevIndexBuilding;\s*prevIndexBuilding = building;\s*if \(!wasBuilding \|\| building\) return;/,
+    );
+  });
+
+  test("the edge reload is visible-only, empty-only, and reuses reloadGraph", () => {
+    expect(graph).toMatch(
+      /untrack\(\(\) => \{\s*if \(visible && nodes\.length === 0\) void reloadGraph\(\);\s*\}\)/,
+    );
+  });
+});
+
 // While the index is building, dead-end ("missing") nodes may just be
 // not-yet-indexed link targets, so they are pulled back (with their
 // edges) until the index settles; once idle they render as real
