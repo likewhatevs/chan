@@ -392,6 +392,27 @@ impl WorkspaceHost {
         self.local_color.get()
     }
 
+    /// The pane-highlight colour for a window of `library_id`, resolving the two
+    /// colour sources behind one accessor so the desktop injects it at mint time
+    /// without knowing where each colour lives. `"local"` resolves to the
+    /// local-library colour (the installed [`local_color_store`](
+    /// Self::local_color_store)); a `lib-<hex>` id resolves to that devserver's
+    /// [`DevserverEntry::color`](crate::DevserverEntry), found by matching
+    /// `library_id` in the installed [`devserver_registry`](
+    /// Self::devserver_registry). `None` — no source installed, no matching
+    /// devserver, or an unset colour — means the editor falls back to the default
+    /// accent.
+    pub fn pane_color(&self, library_id: &str) -> Option<String> {
+        if library_id == "local" {
+            return self.local_color_store().and_then(|store| store.get());
+        }
+        self.devserver_registry()?
+            .list()
+            .into_iter()
+            .find(|entry| entry.library_id.as_deref() == Some(library_id))
+            .and_then(|entry| entry.color)
+    }
+
     /// Install the library root's fallback router — served by `host_dispatch`
     /// when no tenant prefix matches (the launcher SPA + its `/api/library/*`
     /// surface). Idempotent set-once; the embedder (devserver / desktop
@@ -2703,5 +2724,67 @@ mod tests {
             mint_terminal_marks_persisted("local").await,
             "local terminal window must ALSO be persisted (uniform, no library_id branch)"
         );
+    }
+
+    /// A fixed-value `LocalColorStore` for the `pane_color` resolution test.
+    struct FixedLocalColor(Option<String>);
+    impl LocalColorStore for FixedLocalColor {
+        fn get(&self) -> Option<String> {
+            self.0.clone()
+        }
+        fn set(&self, _color: Option<String>) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// A `DevserverRegistry` returning a fixed row list; only `list` is used by
+    /// `pane_color`, so the mutators are inert.
+    struct FixedDevservers(Vec<crate::DevserverEntry>);
+    impl DevserverRegistry for FixedDevservers {
+        fn list(&self) -> Vec<crate::DevserverEntry> {
+            self.0.clone()
+        }
+        fn add(&self, _input: crate::DevserverInput) -> Result<crate::DevserverEntry, String> {
+            Err("unused".into())
+        }
+        fn update(
+            &self,
+            _id: &str,
+            _input: crate::DevserverInput,
+        ) -> Result<Option<crate::DevserverEntry>, String> {
+            Ok(None)
+        }
+        fn remove(&self, _id: &str) -> Result<bool, String> {
+            Ok(false)
+        }
+    }
+
+    #[test]
+    fn pane_color_resolves_local_and_devserver_by_library_id() {
+        let cfg = tempfile::tempdir().expect("config dir");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        let host = WorkspaceHost::new(lib, fake_builder());
+
+        // Nothing installed: every lookup is the default accent (None).
+        assert_eq!(host.pane_color("local"), None);
+        assert_eq!(host.pane_color("lib-abc"), None);
+
+        host.install_local_color_store(Arc::new(FixedLocalColor(Some("#111".into()))));
+        host.install_devserver_registry(Arc::new(FixedDevservers(vec![crate::DevserverEntry {
+            id: "ds1".into(),
+            url: "https://box".into(),
+            label: String::new(),
+            script: String::new(),
+            has_token: false,
+            color: Some("#abc".into()),
+            library_id: Some("lib-abc".into()),
+            connected: true,
+        }])));
+
+        // "local" → the local-colour source; a devserver lib id → its row colour.
+        assert_eq!(host.pane_color("local"), Some("#111".into()));
+        assert_eq!(host.pane_color("lib-abc"), Some("#abc".into()));
+        // An unknown devserver library id falls back to the default accent.
+        assert_eq!(host.pane_color("lib-missing"), None);
     }
 }
