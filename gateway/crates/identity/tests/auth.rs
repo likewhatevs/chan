@@ -904,6 +904,71 @@ async fn share_landing_grantee_minted_jwt_redirect() {
 }
 
 #[tokio::test]
+async fn share_landing_root_unauthed_redirects_to_login() {
+    // Whole-devserver open (/s/:owner, no workspace) while signed out:
+    // 303 to the login root, same as the per-workspace landing.
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let (s, _, _, location) = c.send(Method::GET, "/s/owner-handle", None).await;
+    assert_eq!(s, StatusCode::SEE_OTHER);
+    assert_eq!(location, "/");
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn share_landing_root_minted_jwt_redirect() {
+    // Whole-devserver open: /s/:owner (no workspace) mints the entry JWT
+    // and redirects to the proxy ROOT, where the launcher is served — the
+    // same flow as the per-workspace landing minus the tenant path.
+    let app = TestApp::new().await;
+    let mut c = Client::new(&app);
+    let caller_uid = fake_user_id();
+    happy_login(&app, &mut c, caller_uid, "alice@x.com").await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/users/{caller_uid}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            caller_uid,
+            "alice@x.com",
+            "alice",
+        )))
+        .mount(&app.profile)
+        .await;
+
+    let owner_uid = Uuid::new_v4();
+    Mock::given(method("GET"))
+        .and(path("/v1/users/by-username"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(live_user_body(
+            owner_uid,
+            "owner@x.com",
+            "owner-handle",
+        )))
+        .mount(&app.profile)
+        .await;
+    let dsid = "a".repeat(64);
+    mock_live_devserver(&app, "owner-handle", &dsid).await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/v1/users/{owner_uid}/devservers/{dsid}/access"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"role": "viewer"})))
+        .mount(&app.profile)
+        .await;
+
+    let (s, _, _, location) = c.send(Method::GET, "/s/owner-handle", None).await;
+    assert_eq!(s, StatusCode::SEE_OTHER);
+    assert!(
+        location.starts_with("https://owner-handle.devserver.chan.app/?t="),
+        "got {location}"
+    );
+    // Root open lands at the devserver ROOT — no `/{workspace}/` segment.
+    assert!(
+        !location.contains("/photos/"),
+        "root open must not carry a workspace segment: {location}"
+    );
+    app.cleanup().await;
+}
+
+#[tokio::test]
 async fn share_landing_no_access_is_404() {
     let app = TestApp::new().await;
     let mut c = Client::new(&app);
