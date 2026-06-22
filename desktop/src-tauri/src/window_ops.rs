@@ -90,9 +90,11 @@ async fn handle(app: AppHandle, state: Arc<AppState>, op: DesktopWindowOp) {
             id,
             prefix,
             on,
+            force,
             reply,
         } => {
-            let _ = reply.send(crate::set_devserver_workspace_on_impl(&state, id, prefix, on).await);
+            let _ = reply
+                .send(crate::set_devserver_workspace_on_impl(&state, id, prefix, on, force).await);
         }
         DesktopWindowOp::ForgetDevserverWorkspace { id, prefix, reply } => {
             let _ = reply.send(crate::forget_devserver_workspace_impl(&state, id, prefix).await);

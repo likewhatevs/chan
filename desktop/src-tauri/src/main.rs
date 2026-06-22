@@ -1703,29 +1703,31 @@ pub(crate) async fn forget_devserver_workspace_impl(
 /// Set a registered devserver workspace on (mount + mint a fresh tenant token)
 /// or off (unmount, keep registered) — the on/off toggle on a devserver row,
 /// distinct from Forget ([`forget_devserver_workspace_impl`]). Reached over the
-/// desktop bridge from the launcher's `workspaces/{prefix}/on|off` routes (seam
-/// #2), which carry no `force` — an unforced off rejected for live terminals
-/// surfaces as an error string (the bridge op reply is `Result<(), String>`, so
-/// the typed [`SetWorkspaceOnError::ActiveTerminals`] can't round-trip a
-/// confirm-then-force the way the old Tauri command did).
+/// desktop bridge from the launcher's `workspaces/on|off` routes (seam #2/#4).
+/// An unforced off of a workspace with live terminals is NOT an error: it
+/// resolves to [`SetWorkspaceOnOutcome::NeedsForce`] with the live-terminal
+/// count, so the launcher confirms then retries with `force: true` (which
+/// force-offs → [`Done`](chan_server::SetWorkspaceOnOutcome::Done)).
 pub(crate) async fn set_devserver_workspace_on_impl(
     state: &Arc<AppState>,
     id: String,
     prefix: String,
     on: bool,
-) -> Result<(), String> {
+    force: bool,
+) -> Result<chan_server::SetWorkspaceOnOutcome, String> {
     let conn = state
         .devservers
         .get(&id)
         .ok_or_else(|| format!("devserver {id} is not connected"))?;
-    devserver::set_workspace_on(&conn, &devserver_route_prefix(&prefix), on, false)
-        .await
-        .map_err(|e| match e {
-            devserver::SetWorkspaceOnError::ActiveTerminals { active_terminals } => format!(
-                "workspace has {active_terminals} running terminal(s); close them before turning it off"
-            ),
-            devserver::SetWorkspaceOnError::Other { message } => message,
-        })
+    match devserver::set_workspace_on(&conn, &devserver_route_prefix(&prefix), on, force).await {
+        Ok(()) => Ok(chan_server::SetWorkspaceOnOutcome::Done),
+        // Live-terminal block is a confirmable outcome, not a failure: round-trip
+        // the count so the launcher can offer the force-off.
+        Err(devserver::SetWorkspaceOnError::ActiveTerminals { active_terminals }) => {
+            Ok(chan_server::SetWorkspaceOnOutcome::NeedsForce { active_terminals })
+        }
+        Err(devserver::SetWorkspaceOnError::Other { message }) => Err(message),
+    }
 }
 
 /// Forget a devserver: drops any live connection, tears down its windows, and
