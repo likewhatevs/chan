@@ -490,6 +490,24 @@ pub struct DevserverFeed {
     /// (default accent). Surfaced through `pane_color` so a devserver window's
     /// `?pane=` injects that devserver's own colour (seam #5 round-3).
     colors: Mutex<HashMap<String, String>>,
+    /// Devserver id -> its script-connection control terminal, surfaced as a
+    /// synthetic feed record (D3) so it shows FIRST in that devserver's launcher
+    /// list. The control terminal runs on the LOCAL embedded terminal tenant (so
+    /// the record carries its local prefix/token), but `windows()` tags it with the
+    /// devserver's `library_id` so it groups under the devserver. `connected`
+    /// mirrors the window's shown/hidden state (the launcher dot).
+    control: Mutex<HashMap<String, ControlFeedRecord>>,
+}
+
+/// The desktop's per-devserver control-terminal feed entry (D3). The emitted
+/// record's `window_id` is the control terminal's real native label
+/// (`control-terminal-<id>`), so the launcher's hide/open resolves straight to the
+/// live window via [`serve::resolve_window_label`].
+struct ControlFeedRecord {
+    prefix: String,
+    token: String,
+    /// Whether the control-terminal window is currently shown (the launcher dot).
+    connected: bool,
 }
 
 impl DevserverFeed {
@@ -500,11 +518,40 @@ impl DevserverFeed {
     }
 
     /// Drop a disconnected devserver from every feed (windows + workspace +
-    /// colour cache).
+    /// colour + control cache).
     fn forget(&self, id: &str) {
         self.windows.lock().unwrap().remove(id);
         self.workspaces.lock().unwrap().remove(id);
         self.colors.lock().unwrap().remove(id);
+        self.control.lock().unwrap().remove(id);
+    }
+
+    /// Register a devserver's control terminal as a feed record (D3). Called once
+    /// the control terminal is spawned (connect); `windows()` surfaces it (tagged
+    /// with the devserver `library_id`, once known) so it shows first in the list.
+    fn register_control(&self, id: String, prefix: String, token: String) {
+        self.control.lock().unwrap().insert(
+            id,
+            ControlFeedRecord {
+                prefix,
+                token,
+                connected: true,
+            },
+        );
+    }
+
+    /// Update the control-terminal record's shown/hidden state (the launcher dot).
+    /// Returns whether it changed, so the caller fires the library-change signal
+    /// only on a real flip. A no-op (false) when there's no control record.
+    fn set_control_connected(&self, id: &str, connected: bool) -> bool {
+        let mut control = self.control.lock().unwrap();
+        match control.get_mut(id) {
+            Some(rec) if rec.connected != connected => {
+                rec.connected = connected;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Replace a devserver's cached workspace rows (the poll task gates this on a
@@ -555,12 +602,31 @@ impl DevserverFeed {
 
 impl chan_server::DevserverFeedSource for DevserverFeed {
     fn windows(&self) -> Vec<chan_server::WindowRecord> {
-        self.windows
+        let mut records: Vec<chan_server::WindowRecord> = self
+            .windows
             .lock()
             .unwrap()
             .values()
             .flat_map(|snapshot| snapshot.lock().unwrap().clone())
-            .collect()
+            .collect();
+        // Append each devserver's control-terminal record (D3), tagged with that
+        // devserver's `library_id` so the launcher groups it under the devserver
+        // (control=true → rendered FIRST). Skipped while the library_id is still
+        // unknown (no windows yet) — it appears once the devserver has a window.
+        // The window_id IS the control terminal's real native label, so the
+        // launcher's hide/open resolves straight to the live window.
+        for (id, rec) in self.control.lock().unwrap().iter() {
+            if let Some(library_id) = self.library_id_of(id) {
+                records.push(chan_server::WindowRecord::control_terminal(
+                    library_id,
+                    serve::control_terminal_label(id),
+                    rec.prefix.clone(),
+                    rec.token.clone(),
+                    rec.connected,
+                ));
+            }
+        }
+        records
     }
 
     fn workspaces(&self) -> Vec<chan_server::LauncherWorkspace> {
@@ -1409,14 +1475,14 @@ async fn connect_devserver_impl(
     if state.devservers.is_connected(&id) {
         return Ok(());
     }
-    let (url, script) = {
+    let (url, script, auto_hide_control) = {
         let cfg = state.store.lock().unwrap().get().map_err(err)?;
         let ds = cfg
             .devservers
             .iter()
             .find(|d| d.id == id)
             .ok_or_else(|| format!("no devserver {id}"))?;
-        (ds.url.clone(), ds.script.clone())
+        (ds.url.clone(), ds.script.clone(), ds.auto_hide_control)
     };
     // Parse the stored URL into the (host, port) the raw-tunnel dial uses
     // (the port defaults from the scheme when omitted).
@@ -1438,6 +1504,12 @@ async fn connect_devserver_impl(
             .lock()
             .unwrap()
             .insert(id.clone(), ct.prefix.clone());
+        // Surface the control terminal in this devserver's launcher list (D3).
+        // The feed record waits for the devserver's library_id (learned below),
+        // so register now and `windows()` emits it once the id is known.
+        state
+            .devserver_feed
+            .register_control(id.clone(), ct.prefix.clone(), ct.token.clone());
         Some(ct)
     };
     let token = match &control {
@@ -1532,6 +1604,20 @@ async fn connect_devserver_impl(
             id.clone(),
             ct.prefix.clone(),
         );
+    }
+    // D4: auto-hide the control terminal on connect success when the devserver's
+    // "auto-hide control terminal on success" is set. A PROGRAMMATIC hide → reuse
+    // the A5 silent-hide path so it does NOT fire the bury notice (unlike the OS
+    // close button); the close handler buries it + flips its launcher dot hidden.
+    if auto_hide_control && control.is_some() {
+        let label = serve::control_terminal_label(&id);
+        state.mark_silent_hide(&label);
+        let app_for_hide = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(w) = app_for_hide.get_webview_window(&label) {
+                let _ = w.close();
+            }
+        });
     }
     let _ = app.emit(serve::SERVES_CHANGED, ());
     Ok(())
@@ -4028,6 +4114,14 @@ pub fn unbury_window(app: &tauri::AppHandle, label: &str) -> bool {
         }
         None => false,
     };
+    // A re-shown control terminal flips its launcher dot back to shown (D3/D4).
+    if let Some(ds_id) = label.strip_prefix("control-terminal-") {
+        if state.devserver_feed.set_control_connected(ds_id, true) {
+            if let Some(embedded) = state.embedded() {
+                embedded.signal_library_change();
+            }
+        }
+    }
     if removed {
         rebuild_window_menu(app);
     }
