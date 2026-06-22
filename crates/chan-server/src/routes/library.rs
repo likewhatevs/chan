@@ -987,7 +987,8 @@ mod devserver_route_tests {
             FakeRegistry {
                 rows: Mutex::new(vec![DevserverEntry {
                     id: "ds1".into(),
-                    url: "https://box.example.com:8787".into(),
+                    host: "box.example.com".into(),
+                    port: 8787,
                     label: "box".into(),
                     script: String::new(),
                     has_token: true,
@@ -1004,18 +1005,20 @@ mod devserver_route_tests {
             self.rows.lock().unwrap().clone()
         }
         fn add(&self, input: DevserverInput) -> Result<DevserverEntry, String> {
-            if input.url == "bad" {
-                return Err("rejected url".into());
+            if input.host == "bad" {
+                return Err("rejected host".into());
             }
             let entry = DevserverEntry {
                 id: "ds-new".into(),
-                url: input.url,
+                host: input.host,
+                port: input.port,
                 label: input.label.unwrap_or_default(),
                 script: input.script.unwrap_or_default(),
                 has_token: input.token.is_some(),
                 library_id: None,
                 connected: false,
-                color: input.color,
+                // Colour is set via the focus-border flow, not the add dialog.
+                color: None,
             };
             self.rows.lock().unwrap().push(entry.clone());
             Ok(entry)
@@ -1029,7 +1032,8 @@ mod devserver_route_tests {
             let Some(row) = rows.iter_mut().find(|r| r.id == id) else {
                 return Ok(None);
             };
-            row.url = input.url;
+            row.host = input.host;
+            row.port = input.port;
             if let Some(label) = input.label {
                 row.label = label;
             }
@@ -1110,7 +1114,8 @@ mod devserver_route_tests {
         let (status, body) = request(&router, "GET", "/api/library/devservers", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body[0]["id"], "ds1");
-        assert_eq!(body[0]["url"], "https://box.example.com:8787");
+        assert_eq!(body[0]["host"], "box.example.com");
+        assert_eq!(body[0]["port"], 8787);
         assert_eq!(body[0]["has_token"], true);
         // The token value is never serialized back, only its presence.
         assert!(body[0].get("token").is_none());
@@ -1124,11 +1129,12 @@ mod devserver_route_tests {
             &router,
             "POST",
             "/api/library/devservers",
-            Some(r#"{"url":"https://box:9000","token":"secret"}"#),
+            Some(r#"{"host":"box","port":9000,"token":"secret"}"#),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["url"], "https://box:9000");
+        assert_eq!(body["host"], "box");
+        assert_eq!(body["port"], 9000);
         assert_eq!(body["has_token"], true);
         assert!(body.get("token").is_none(), "token must not echo back");
     }
@@ -1141,7 +1147,7 @@ mod devserver_route_tests {
             &router,
             "POST",
             "/api/library/devservers",
-            Some(r#"{"url":"bad"}"#),
+            Some(r#"{"host":"bad","port":1}"#),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -1157,12 +1163,12 @@ mod devserver_route_tests {
             (
                 "POST",
                 "/api/library/devservers",
-                Some(r#"{"url":"https://x"}"#),
+                Some(r#"{"host":"x","port":1}"#),
             ),
             (
                 "PUT",
                 "/api/library/devservers/ds1",
-                Some(r#"{"url":"https://x"}"#),
+                Some(r#"{"host":"x","port":1}"#),
             ),
             ("DELETE", "/api/library/devservers/ds1", None),
         ] {
@@ -1180,7 +1186,7 @@ mod devserver_route_tests {
             &router,
             "POST",
             "/api/library/devservers",
-            Some(r#"{"url":"https://x"}"#),
+            Some(r#"{"host":"x","port":1}"#),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -1194,7 +1200,7 @@ mod devserver_route_tests {
             &router,
             "PUT",
             "/api/library/devservers/nope",
-            Some(r#"{"url":"https://x"}"#),
+            Some(r#"{"host":"x","port":1}"#),
         )
         .await;
         assert_eq!(put_status, StatusCode::NOT_FOUND);
@@ -1212,19 +1218,20 @@ mod devserver_route_tests {
     }
 
     #[tokio::test]
-    async fn add_devserver_round_trips_color() {
-        // The launcher add route carries `color` in and back out (the picker's hex).
+    async fn add_devserver_carries_no_color() {
+        // The devserver add/edit form no longer carries `color`; a devserver's
+        // pane colour is set from the focus-border flow, not this dialog.
         let reg = Arc::new(FakeRegistry::default());
         let router = router_with(Some(reg), true);
         let (status, body) = request(
             &router,
             "POST",
             "/api/library/devservers",
-            Some(r##"{"url":"https://box:9000","color":"#ff8800"}"##),
+            Some(r#"{"host":"box","port":9000}"#),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["color"], "#ff8800");
+        assert_eq!(body["color"], serde_json::Value::Null);
     }
 
     /// An in-memory [`LocalColorStore`] so the local-color routes are exercised

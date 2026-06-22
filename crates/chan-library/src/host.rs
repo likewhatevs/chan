@@ -2772,7 +2772,8 @@ mod tests {
         host.install_local_color_store(Arc::new(FixedLocalColor(Some("#111".into()))));
         host.install_devserver_registry(Arc::new(FixedDevservers(vec![crate::DevserverEntry {
             id: "ds1".into(),
-            url: "https://box".into(),
+            host: "box".into(),
+            port: 8787,
             label: String::new(),
             script: String::new(),
             has_token: false,

@@ -28,12 +28,12 @@ use serde::{Deserialize, Serialize};
 pub struct DevserverEntry {
     /// Stable registry id used for row actions and the connection-state map.
     pub id: String,
-    /// The full devserver URL the desktop dials, scheme included
-    /// (`https://box.example.com:8787`). The scheme is load-bearing: the dial
-    /// path branches raw-tunnel vs proxied-HTTPS on it (the proxied branch, with
-    /// OAuth, is a deferred follow-up). When the URL omits a port the desktop
-    /// defaults it from the scheme (https -> 443, http -> 80) at dial time.
-    pub url: String,
+    /// The devserver host the desktop dials: hostname or IP, no scheme or port
+    /// (`box.example.com`). The desktop forms the dial / tenant URL from `host` +
+    /// `port` (`http://{host}:{port}{prefix}...`).
+    pub host: String,
+    /// The devserver port the desktop dials.
+    pub port: u16,
     /// Optional user label for the launcher section header; empty means derive
     /// the label from the URL host.
     pub label: String,
@@ -64,14 +64,18 @@ pub struct DevserverEntry {
     pub connected: bool,
 }
 
-/// The add/update payload. `url` is required; the rest are optional. `token` is
-/// write-only — `Some` sets it; `None` on an update keeps the stored one.
+/// The add/update payload. `host` + `port` are required; the rest are optional.
+/// `token` is write-only — `Some` sets it; `None` on an update keeps the stored
+/// one. (No `color`: a devserver's pane-highlight colour is set from the
+/// focus-border menu and persisted per chan-library, not via this dialog.)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct DevserverInput {
-    /// The full devserver URL (scheme included). The route layer validates it
-    /// parses as `scheme://host[:port]` before this reaches the registry.
-    pub url: String,
-    /// Optional user label; `None`/empty derives from the URL host.
+    /// The devserver host (hostname or IP, no scheme or port). Required; the
+    /// registry validates it is non-empty.
+    pub host: String,
+    /// The devserver port. Required.
+    pub port: u16,
+    /// Optional user label; `None`/empty derives from the host.
     #[serde(default)]
     pub label: Option<String>,
     /// Optional connect script.
@@ -80,11 +84,6 @@ pub struct DevserverInput {
     /// Optional bearer token (write-only). `None` on update keeps the stored one.
     #[serde(default)]
     pub token: Option<String>,
-    /// Optional pane-highlight colour (hex `#rrggbb`). `None` on update keeps the
-    /// stored one (same as `label`/`script`); the registry copies it onto the
-    /// stored [`DevserverEntry`].
-    #[serde(default)]
-    pub color: Option<String>,
 }
 
 /// The launcher's devserver CRUD, inverted so chan-library (and chan-server's
