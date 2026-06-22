@@ -74,6 +74,51 @@ pub enum DesktopWindowOp {
         id: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Disconnect a connected devserver by id: drop the live connection and its
+    /// windows, returning it to the registered-but-offline state. The launcher's
+    /// Disconnect button drives this over the bridge; the reply is `Ok(())` once
+    /// torn down. Inert without a desktop attached — the route then answers
+    /// [`NO_DESKTOP`], like the other devserver ops.
+    DisconnectDevserver {
+        id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Open a fresh standalone-terminal window on a connected devserver by id.
+    /// The launcher's per-devserver New-Terminal button drives this; the reply is
+    /// `Ok(())` once the window is spawning. Inert without a desktop attached —
+    /// the route then answers [`NO_DESKTOP`].
+    OpenDevserverTerminal {
+        id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Open (or focus) a workspace window on a connected devserver by id, rooted
+    /// at the remote workspace `path`. The launcher's devserver-workspace Open
+    /// button drives this; the reply is `Ok(())` once the window is spawning.
+    /// Inert without a desktop attached — the route then answers [`NO_DESKTOP`].
+    OpenDevserverWorkspace {
+        id: String,
+        path: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Turn a connected devserver's workspace on or off, keyed by `(id, prefix)`
+    /// (the remote mount prefix). The launcher's devserver-workspace on/off toggle
+    /// drives this; the reply is `Ok(())` once the remote mount state is set.
+    /// Inert without a desktop attached — the route then answers [`NO_DESKTOP`].
+    SetDevserverWorkspaceOn {
+        id: String,
+        prefix: String,
+        on: bool,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Forget (unregister) a connected devserver's workspace, keyed by
+    /// `(id, prefix)`. The launcher's devserver-workspace Remove button drives
+    /// this; the reply is `Ok(())` once the remote registry drops it. Inert
+    /// without a desktop attached — the route then answers [`NO_DESKTOP`].
+    ForgetDevserverWorkspace {
+        id: String,
+        prefix: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Open the OS native folder-picker dialog and return the chosen
     /// directory, or `None` when the user cancels. The launcher's
     /// New-Workspace dialog drives this over the bridge so the Folder field

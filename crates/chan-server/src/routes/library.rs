@@ -29,14 +29,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chan_library::{allocate_workspace_prefix, ServeConfig};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::sync::{oneshot, Notify};
 
 use crate::devserver::bytes_eq;
 use crate::static_assets::serve_launcher;
 use crate::{
-    CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, WindowRecord, WindowSet,
-    WorkspaceHost,
+    CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, LauncherWorkspace, WindowRecord,
+    WindowSet, WorkspaceHost,
 };
 
 /// State shared by the `/api/library/workspaces` handlers: the library host plus
@@ -384,20 +384,6 @@ async fn dispatch_window_op(
 // Workspaces (`/api/library/workspaces`). List today; add/on/off/rm next.
 // ---------------------------------------------------------------------------
 
-/// The launcher's workspace row. `workspace_id` is the route prefix without its
-/// leading slash — a single legible segment the launcher addresses by
-/// (`/api/library/workspaces/{id}/{on|off}`) and treats as opaque; the server
-/// owns the scheme. `on` = currently mounted/served. No token: the launcher
-/// opens a workspace's tenant separately (which carries its own per-tenant
-/// token), so the workspace list never needs one.
-#[derive(Serialize)]
-struct LauncherWorkspace {
-    workspace_id: String,
-    path: String,
-    label: String,
-    on: bool,
-}
-
 /// `GET /api/library/workspaces`: one row per registered library workspace (the
 /// set `chan list` shows, read live from the host library — the source of
 /// truth), each stamped with whether it is currently served. The on-state is
@@ -412,12 +398,20 @@ async fn handle_list_workspaces(State(state): State<Arc<LauncherState>>) -> Resp
         .list_workspaces()
         .into_iter()
         .filter_map(|ws| {
-            let prefix = allocate_workspace_prefix(&ws.root_path).ok()?;
+            let workspace_id = allocate_workspace_prefix(&ws.root_path)
+                .ok()?
+                .trim_start_matches('/')
+                .to_string();
             Some(LauncherWorkspace {
-                workspace_id: prefix.trim_start_matches('/').to_string(),
                 path: ws.root_path.to_string_lossy().into_owned(),
                 label: workspace_label(&ws.root_path),
                 on: host.is_root_mounted(&ws.root_path),
+                // Local rows: no devserver, prefix == workspace_id (the slash-free
+                // slug); on/off/remove route by workspace_id (the round-1 path).
+                library_id: None,
+                devserver_id: None,
+                prefix: workspace_id.clone(),
+                workspace_id,
             })
         })
         .collect();
@@ -529,11 +523,16 @@ async fn handle_add_workspace(
     {
         Ok(hosted) => {
             set_overlay(&state.host, &hosted.root, true);
+            let workspace_id = hosted.prefix.trim_start_matches('/').to_string();
             Json(LauncherWorkspace {
-                workspace_id: hosted.prefix.trim_start_matches('/').to_string(),
                 path: hosted.root.to_string_lossy().into_owned(),
                 label: workspace_label(&hosted.root),
                 on: true,
+                // A freshly added workspace is always local (no devserver).
+                library_id: None,
+                devserver_id: None,
+                prefix: workspace_id.clone(),
+                workspace_id,
             })
             .into_response()
         }
@@ -749,6 +748,7 @@ mod devserver_route_tests {
                     script: String::new(),
                     has_token: true,
                     library_id: None,
+                    connected: false,
                 }]),
             }
         }
@@ -769,6 +769,7 @@ mod devserver_route_tests {
                 script: input.script.unwrap_or_default(),
                 has_token: input.token.is_some(),
                 library_id: None,
+                connected: false,
             };
             self.rows.lock().unwrap().push(entry.clone());
             Ok(entry)

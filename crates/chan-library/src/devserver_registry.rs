@@ -47,6 +47,14 @@ pub struct DevserverEntry {
     /// rows in the feed to the user's name for it. `None` before the devserver's
     /// first connect, when no library id exists yet.
     pub library_id: Option<String>,
+    /// Whether the desktop currently holds a live connection to this devserver.
+    /// Volatile runtime state populated by chan-desktop from its connection map;
+    /// `false` on a headless/registry-less surface that tracks no connections.
+    /// The launcher reads it to show Connect vs Disconnect and gate Edit
+    /// read-only while connected. `#[serde(default)]`: a row without the field
+    /// reads `false`.
+    #[serde(default)]
+    pub connected: bool,
 }
 
 /// The add/update payload. `url` is required; the rest are optional. `token` is

@@ -16,6 +16,7 @@ use axum::http::{Request, StatusCode, Uri};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Router;
 use chan_workspace::{Library, Workspace};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tower::ServiceExt;
 
@@ -37,6 +38,70 @@ pub struct HostedWorkspace {
     pub prefix: String,
     /// Launch handle for browser/webview clients.
     pub handle: ServeHandle,
+}
+
+/// The launcher's workspace row: one registered workspace as the launcher lists
+/// it. `workspace_id` is the route prefix without its leading slash — a single
+/// legible segment the launcher addresses by and treats as opaque. `on` =
+/// currently mounted/served. No token: the launcher opens a workspace's tenant
+/// separately (which carries its own per-tenant token).
+///
+/// Local rows (the host's own library) carry `devserver_id: None` and route
+/// their on/off/remove by `workspace_id` (the round-1 by-root path). Rows merged
+/// in from a connected devserver via [`DevserverFeedSource::workspaces`] carry
+/// `devserver_id: Some(..)` + the remote `library_id`, and the SPA groups them by
+/// `devserver_id` and routes their on/off/forget by `prefix` (seam #2's ops).
+///
+/// Defined here, not in chan-server's route module, because
+/// [`DevserverFeedSource`] returns it and that trait is a chan-library type the
+/// host holds; chan-server re-exports it for its route handlers (the same
+/// define-in-library / re-export-from-server shape as [`DevserverEntry`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LauncherWorkspace {
+    /// Route prefix without its leading slash — the launcher's opaque local key.
+    pub workspace_id: String,
+    /// Absolute workspace root path (display + the add/open argument).
+    pub path: String,
+    /// Display label (the directory basename).
+    pub label: String,
+    /// Currently mounted/served.
+    pub on: bool,
+    /// Owning library identity: `None` (treated as local) for the host's own
+    /// rows; the remote `lib-<hex>` for a devserver row. The SPA groups remote
+    /// rows under their devserver by this + `devserver_id`.
+    #[serde(default)]
+    pub library_id: Option<String>,
+    /// `Some(devserver id)` for a row merged in from a connected devserver;
+    /// `None` for a local row. The discriminator the SPA groups + routes on.
+    #[serde(default)]
+    pub devserver_id: Option<String>,
+    /// The mounted route prefix (no leading slash). For local rows this equals
+    /// `workspace_id`; for devserver rows the seam #2 on/off/forget ops target
+    /// this remote prefix.
+    #[serde(default)]
+    pub prefix: String,
+}
+
+/// Supplies the launcher's connected-devserver feed: the window records and
+/// served workspaces of every devserver the desktop currently holds open, merged
+/// into the local launcher surface so one launcher lists local + remote alike.
+///
+/// Inverted onto [`WorkspaceHost`] like [`DevserverRegistry`] /
+/// [`WorkspaceOverlay`]: the connection state lives in chan-desktop (invisible
+/// from chan-library), so the desktop installs an `Arc<dyn DevserverFeedSource>`
+/// and the host reads it at assembly time. A host that installs none (the
+/// headless devserver / plain `chan open`) merges nothing — its launcher is
+/// local-only. The desktop fires [`WorkspaceHost::signal_library_change`] when
+/// its feed changes so the watch feed re-pushes.
+pub trait DevserverFeedSource: Send + Sync {
+    /// Connected devservers' window records (each carries its remote
+    /// `library_id`), appended to the local window set by
+    /// [`WorkspaceHost::assemble_window_records`].
+    fn windows(&self) -> Vec<WindowRecord>;
+    /// Connected devservers' served workspaces, already tagged with their
+    /// `devserver_id` + remote `library_id`, appended to the local workspace
+    /// rows by the launcher's list-workspaces route.
+    fn workspaces(&self) -> Vec<LauncherWorkspace>;
 }
 
 /// In-process multi-workspace host.
@@ -91,6 +156,14 @@ pub struct WorkspaceHost {
     /// request time. Empty on the headless devserver / plain `chan open` — the
     /// routes then serve an empty devserver list and 404 mutation.
     devserver_registry: OnceLock<Arc<dyn DevserverRegistry>>,
+    /// The launcher's connected-devserver feed, inverted like
+    /// [`devserver_registry`](Self::devserver_registry): chan-desktop installs an
+    /// `Arc<dyn DevserverFeedSource>` over its live connections, and
+    /// [`assemble_window_records`](Self::assemble_window_records) + the
+    /// list-workspaces route merge its windows/workspaces into the local launcher
+    /// surface. Empty on the headless devserver / plain `chan open` — the launcher
+    /// is then local-only.
+    devserver_feed: OnceLock<Arc<dyn DevserverFeedSource>>,
     /// This library's identity: `"local"` for the baked-in local-disk library,
     /// `lib-<hex>` for a devserver. Stamped on every window record. Set with the
     /// registry; defaults to `"local"` when unset.
@@ -176,6 +249,7 @@ impl WorkspaceHost {
             window_registry: OnceLock::new(),
             workspace_overlay: OnceLock::new(),
             devserver_registry: OnceLock::new(),
+            devserver_feed: OnceLock::new(),
             library_id: OnceLock::new(),
             terminal_tenant_prefix: OnceLock::new(),
             library_change_notify: Arc::new(Notify::new()),
@@ -258,6 +332,20 @@ impl WorkspaceHost {
         self.devserver_registry.get()
     }
 
+    /// Install the launcher's connected-devserver feed. Idempotent set-once;
+    /// chan-desktop calls this once with an impl over its live connections, so the
+    /// launcher merges connected devservers' windows + workspaces. A host that
+    /// never installs one (headless devserver / plain `chan open`) merges nothing.
+    pub fn install_devserver_feed(&self, feed: Arc<dyn DevserverFeedSource>) {
+        let _ = self.devserver_feed.set(feed);
+    }
+
+    /// The launcher's connected-devserver feed, once installed. `None` on a host
+    /// whose embedder installed none — the launcher is then local-only.
+    pub fn devserver_feed(&self) -> Option<&Arc<dyn DevserverFeedSource>> {
+        self.devserver_feed.get()
+    }
+
     /// Install the library root's fallback router — served by `host_dispatch`
     /// when no tenant prefix matches (the launcher SPA + its `/api/library/*`
     /// surface). Idempotent set-once; the embedder (devserver / desktop
@@ -277,6 +365,15 @@ impl WorkspaceHost {
     /// registry mint/discard, presence connect/disconnect, and tenant on/off.
     pub fn library_change_notify(&self) -> Arc<Notify> {
         self.library_change_notify.clone()
+    }
+
+    /// Fire the aggregate library-change signal so the window-set watch feed
+    /// re-pushes a fresh snapshot. The public entry point chan-desktop calls when
+    /// its connected-devserver feed or workspace cache changes (a devserver
+    /// connects/disconnects, a remote window appears) — the merged-in windows and
+    /// workspaces shift without any local registry event to drive the push.
+    pub fn signal_library_change(&self) {
+        self.library_change_notify.notify_waiters();
     }
 
     /// Register the host's own `Arc` so per-tenant control sockets can reach it

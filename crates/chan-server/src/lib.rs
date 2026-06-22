@@ -62,8 +62,8 @@ pub(crate) use chan_library::{
     desktop_window_ops, window_presence, window_titles, window_transfers,
 };
 pub use chan_library::{
-    DevserverEntry, DevserverInput, DevserverRegistry, HostedWorkspace, PersistedWorkspace,
-    WorkspaceHost, WorkspaceOverlay,
+    DevserverEntry, DevserverFeedSource, DevserverInput, DevserverRegistry, HostedWorkspace,
+    LauncherWorkspace, PersistedWorkspace, WorkspaceHost, WorkspaceOverlay,
 };
 pub use devserver::{
     persisted_devserver_token, run_devserver, DevserverConfig, DevserverTunnel,

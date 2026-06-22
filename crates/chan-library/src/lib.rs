@@ -33,7 +33,7 @@ pub use config::{
 };
 pub use devserver_registry::{DevserverEntry, DevserverInput, DevserverRegistry};
 pub use error::Error;
-pub use host::{HostedWorkspace, WorkspaceHost};
+pub use host::{DevserverFeedSource, HostedWorkspace, LauncherWorkspace, WorkspaceHost};
 pub use prefix::{allocate_workspace_prefix, workspace_slug};
 pub use serve_config::{sanitize_prefix, ServeConfig, ServeHandle};
 pub use tenant::{
