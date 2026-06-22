@@ -38,7 +38,7 @@
 
   function remoteName(devserverId: string): string {
     const ds = library.devservers.find((d) => d.id === devserverId);
-    return ds?.label || ds?.url || devserverId;
+    return ds?.label || (ds ? `${ds.host}:${ds.port}` : null) || devserverId;
   }
 
   // Group the merged workspace feed: local rows (no devserver_id) stay in the

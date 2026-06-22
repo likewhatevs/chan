@@ -55,11 +55,13 @@ describe("DevserverList redesign", () => {
     expect(newTerm!.disabled).toBe(false);
     // A select checkbox feeds the bulk bar; the per-row Remove is gone.
     expect(target!.querySelector('input[type="checkbox"]')).toBeTruthy();
+    // The row endpoint is rendered as host:port.
+    expect(target!.querySelector(".row-sub")?.textContent).toBe("box.example.com:8787");
   });
 
   it("shows Connect (New terminal disabled) for a disconnected devserver and fires connect", async () => {
     // A freshly added devserver starts disconnected.
-    await saveDevserver({ url: "https://fresh.example:9100", label: "fresh" });
+    await saveDevserver({ host: "fresh.example", port: 9100, label: "fresh" });
     mountList();
 
     const connect = byAria("Connect fresh");
@@ -75,7 +77,7 @@ describe("DevserverList redesign", () => {
     flushSync();
 
     expect(library.error).toBeNull();
-    const fresh = library.devservers.find((d) => d.url === "https://fresh.example:9100")!;
+    const fresh = library.devservers.find((d) => d.host === "fresh.example" && d.port === 9100)!;
     expect(fresh.connected).toBe(true);
     // The row flips to Disconnect after connecting.
     expect(byAria("Disconnect fresh")).toBeTruthy();

@@ -253,5 +253,5 @@ export async function toggleWindow(w: WindowRecord): Promise<void> {
 export function remoteLibraryName(libraryId: string): string | null {
   const ds = library.devservers.find((d) => d.library_id === libraryId);
   if (!ds) return null;
-  return ds.label || ds.url;
+  return ds.label || `${ds.host}:${ds.port}`;
 }

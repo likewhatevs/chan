@@ -106,8 +106,8 @@ describe("devserver multi-select", () => {
   });
 
   it("bulk turn on connects every selected devserver", async () => {
-    await saveDevserver({ url: "https://bulk-on.example:9200", label: "bulk-on" });
-    const ds = library.devservers.find((d) => d.url === "https://bulk-on.example:9200")!;
+    await saveDevserver({ host: "bulk-on.example", port: 9200, label: "bulk-on" });
+    const ds = library.devservers.find((d) => d.host === "bulk-on.example" && d.port === 9200)!;
     expect(ds.connected).toBe(false);
     toggleSelected("devserver", ds.id);
     await bulkSetOn("devserver", true);
@@ -115,8 +115,8 @@ describe("devserver multi-select", () => {
   });
 
   it("confirmed bulk remove drops the selected devserver", async () => {
-    await saveDevserver({ url: "https://bulk-rm.example:9300", label: "bulk-rm" });
-    const ds = library.devservers.find((d) => d.url === "https://bulk-rm.example:9300")!;
+    await saveDevserver({ host: "bulk-rm.example", port: 9300, label: "bulk-rm" });
+    const ds = library.devservers.find((d) => d.host === "bulk-rm.example" && d.port === 9300)!;
     const before = library.devservers.length;
     toggleSelected("devserver", ds.id);
     requestBulkDelete("devserver");

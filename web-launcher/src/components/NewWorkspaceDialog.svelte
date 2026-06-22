@@ -25,8 +25,11 @@
   // desktop embed swaps in a native folder picker (both POST the same path).
   let localPath = $state("");
 
-  // Devserver form, seeded from the edit target.
-  let url = $state(editing?.url ?? "");
+  // Devserver form, seeded from the edit target. Host + port are separate
+  // fields (the desktop forms the dial URL from them). Port binds to a number
+  // input (null while empty) and is validated to an integer 1–65535 on submit.
+  let host = $state(editing?.host ?? "");
+  let port = $state<number | null>(editing?.port ?? null);
   let name = $state(editing?.label ?? "");
   let script = $state(editing?.script ?? "");
   let token = $state("");
@@ -84,23 +87,19 @@
     }
   }
 
-  // A devserver URL must carry an explicit scheme://host form: a bare
-  // `host:port` is rejected as ambiguous (`new URL` would read the host as the
-  // scheme), and the desktop derives the port from the scheme (https→443,
-  // http→80) when one is omitted, so the scheme is required.
-  function isDevserverUrl(raw: string): boolean {
-    try {
-      const parsed = new URL(raw);
-      return (parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.hostname !== "";
-    } catch {
-      return false;
-    }
+  // The host is a bare hostname or IP (no scheme, no port); the desktop forms
+  // the dial URL from host + port. The port must be an integer in the valid TCP
+  // range (1–65535). A blank host or an out-of-range / non-integer port is
+  // rejected before the write.
+  function validPort(p: number | null): p is number {
+    return p !== null && Number.isInteger(p) && p >= 1 && p <= 65535;
   }
 
   async function submitDevserver(): Promise<void> {
-    const u = url.trim();
-    if (!isDevserverUrl(u)) {
-      error = "Enter a full URL with a scheme, e.g. https://box.example.com:8787.";
+    const h = host.trim();
+    const p = port;
+    if (!h || !validPort(p)) {
+      error = "Enter a host and a port (1–65535).";
       return;
     }
     const t = token.trim();
@@ -108,7 +107,8 @@
     try {
       await saveDevserver(
         {
-          url: u,
+          host: h,
+          port: p,
           label: name.trim() || undefined,
           script: script.trim() || undefined,
           token: t || undefined,
@@ -169,32 +169,45 @@
     {:else}
       <p class="intro">
         Connect to a chan devserver, a headless box serving many workspaces. The desktop dials
-        the URL; its workspaces appear in their own group.
+        the host and port; its workspaces appear in their own group.
       </p>
     {/if}
     <div class="row2">
       <label class="field">
-        Devserver URL
+        Host
         <input
           type="text"
-          bind:value={url}
-          placeholder="https://box.example.com:8787"
+          bind:value={host}
+          placeholder="box.example.com"
           autocomplete="off"
           spellcheck="false"
           disabled={readOnlyEdit}
           onkeydown={(e) => onFieldKey(e, submitDevserver)} />
       </label>
       <label class="field">
-        Name
+        Port
         <input
-          type="text"
-          bind:value={name}
-          placeholder="optional"
+          type="number"
+          min="1"
+          max="65535"
+          bind:value={port}
+          placeholder="8787"
           autocomplete="off"
+          spellcheck="false"
           disabled={readOnlyEdit}
           onkeydown={(e) => onFieldKey(e, submitDevserver)} />
       </label>
     </div>
+    <label class="field">
+      Name
+      <input
+        type="text"
+        bind:value={name}
+        placeholder="optional"
+        autocomplete="off"
+        disabled={readOnlyEdit}
+        onkeydown={(e) => onFieldKey(e, submitDevserver)} />
+    </label>
     <label class="field">
       Token <span class="muted">(connect to a proxied or gateway devserver without scraping)</span>
       <input

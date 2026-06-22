@@ -83,12 +83,13 @@ export interface DevserverEntry {
   /** Stable registry id used for row actions and the connection-state map. */
   id: string;
   /**
-   * The full devserver URL the desktop dials, scheme included
-   * (`https://box.example.com:8787`). The scheme is load-bearing: the dial path
-   * branches on it, and the port defaults from it (https→443, http→80) when the
-   * URL omits one.
+   * The devserver host the desktop dials: hostname or IP, no scheme or port
+   * (`box.example.com`). The desktop forms the dial / tenant URL from `host` +
+   * `port` (`http://{host}:{port}{prefix}...`).
    */
-  url: string;
+  host: string;
+  /** The devserver port the desktop dials. */
+  port: number;
   /** Optional user label for the launcher section header. */
   label: string;
   /** Optional connect command the control terminal runs (e.g. an ssh forward). */
@@ -111,8 +112,10 @@ export interface DevserverEntry {
 
 /** Write payload for add/edit devserver. `token` absent on edit leaves it unchanged. */
 export interface DevserverInput {
-  /** The full devserver URL (scheme included); validated `scheme://host[:port]`. */
-  url: string;
+  /** The devserver host (hostname or IP, no scheme or port). Required, non-empty. */
+  host: string;
+  /** The devserver port. Required. */
+  port: number;
   label?: string;
   script?: string;
   /** Bearer for a proxied/gateway devserver, so the user connects without scraping. */

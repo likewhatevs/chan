@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import NewWorkspaceDialog from "./NewWorkspaceDialog.svelte";
 import { openNewDialog, openEditDevserver, selectChoice, closeDialog } from "../state/dialog.svelte";
+import { library } from "../state/library.svelte";
 import type { DevserverEntry } from "../api/library";
 
 // Pin the in-memory mock as the backend so the Browse… picker returns a canned
@@ -72,29 +73,58 @@ describe("New workspace dialog", () => {
     expect(el.textContent).toContain("Add devserver");
   });
 
-  it("offers a single Devserver URL field (Host/Port dropped)", () => {
+  it("offers separate Host and Port fields", () => {
     openNewDialog("devserver");
     const el = render();
-    expect(el.textContent).toContain("Devserver URL");
-    expect(el.textContent).not.toContain("Host");
-    expect(el.textContent).not.toContain("Port");
-    // No number input remains (the old Port field).
-    expect(el.querySelector('input[type="number"]')).toBeNull();
+    expect(el.textContent).toContain("Host");
+    expect(el.textContent).toContain("Port");
+    expect(el.textContent).not.toContain("Devserver URL");
+    // The Port field is a number input.
+    expect(el.querySelector('input[type="number"]')).not.toBeNull();
   });
 
-  it("rejects a bare host:port that omits the scheme", () => {
+  it("rejects an empty host or an out-of-range port", () => {
     openNewDialog("devserver");
     const el = render();
-    const urlField = el.querySelector('input[type="text"]') as HTMLInputElement;
-    urlField.value = "box.example.com:8787";
-    urlField.dispatchEvent(new Event("input", { bubbles: true }));
+    const hostField = el.querySelector('input[type="text"]') as HTMLInputElement;
+    const portField = el.querySelector('input[type="number"]') as HTMLInputElement;
+    // Host filled but the port is out of range → rejected with the new message.
+    hostField.value = "box.example.com";
+    hostField.dispatchEvent(new Event("input", { bubbles: true }));
+    portField.value = "70000";
+    portField.dispatchEvent(new Event("input", { bubbles: true }));
     flushSync();
     const addBtn = [...el.querySelectorAll("button")].find((b) =>
       b.textContent?.includes("Add devserver"),
     ) as HTMLButtonElement;
     addBtn.click();
     flushSync();
-    expect(el.querySelector('[role="alert"]')?.textContent).toContain("scheme");
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain("1–65535");
+  });
+
+  it("submits a valid host and port", async () => {
+    openNewDialog("devserver");
+    const el = render();
+    const hostField = el.querySelector('input[type="text"]') as HTMLInputElement;
+    const portField = el.querySelector('input[type="number"]') as HTMLInputElement;
+    hostField.value = "valid.example.com";
+    hostField.dispatchEvent(new Event("input", { bubbles: true }));
+    portField.value = "8787";
+    portField.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+    const addBtn = [...el.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes("Add devserver"),
+    ) as HTMLButtonElement;
+    addBtn.click();
+    // saveDevserver → backend tick → refresh hops; drain to a macrotask boundary.
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    // A valid submit closes the dialog (no validation error raised).
+    expect(el.querySelector('[role="alert"]')).toBeNull();
+    const added = library.devservers.find(
+      (d) => d.host === "valid.example.com" && d.port === 8787,
+    );
+    expect(added).toBeTruthy();
   });
 
   it("switches body when the choice changes", () => {
@@ -115,7 +145,8 @@ describe("New workspace dialog", () => {
   it("prefills the edit form and reports a stored token without echoing it", () => {
     const ds: DevserverEntry = {
       id: "ds-edit",
-      url: "https://edit.example:8123",
+      host: "edit.example",
+      port: 8123,
       label: "staging",
       script: "",
       has_token: true,
@@ -125,9 +156,12 @@ describe("New workspace dialog", () => {
     openEditDevserver(ds);
     const el = render();
     expect(el.textContent).toContain("Save changes");
-    // The first text input is the Devserver URL field, seeded from the entry.
-    const urlField = el.querySelector('input[type="text"]') as HTMLInputElement | null;
-    expect(urlField?.value).toBe("https://edit.example:8123");
+    // The first text input is the Host field, seeded from the entry; the Port
+    // number input carries its port.
+    const hostField = el.querySelector('input[type="text"]') as HTMLInputElement | null;
+    expect(hostField?.value).toBe("edit.example");
+    const portField = el.querySelector('input[type="number"]') as HTMLInputElement | null;
+    expect(portField?.value).toBe("8123");
     const token = el.querySelector('input[type="password"]') as HTMLInputElement | null;
     expect(token?.value).toBe("");
     expect(token?.placeholder).toContain("leave blank to keep");
@@ -138,7 +172,8 @@ describe("New workspace dialog", () => {
   it("opens read-only (OK, no Save, disabled inputs) for a connected devserver", () => {
     const ds: DevserverEntry = {
       id: "ds-live",
-      url: "https://live.example:8200",
+      host: "live.example",
+      port: 8200,
       label: "live",
       script: "",
       has_token: false,
@@ -152,9 +187,10 @@ describe("New workspace dialog", () => {
     expect(el.textContent).not.toContain("Save changes");
     const ok = [...el.querySelectorAll("button")].find((b) => b.textContent?.trim() === "OK");
     expect(ok).toBeTruthy();
-    // The fields are disabled (no edits while connected).
-    const urlField = el.querySelector('input[type="text"]') as HTMLInputElement;
-    expect(urlField.disabled).toBe(true);
+    // The host + port fields are disabled (no edits while connected).
+    const hostField = el.querySelector('input[type="text"]') as HTMLInputElement;
+    expect(hostField.disabled).toBe(true);
+    expect((el.querySelector('input[type="number"]') as HTMLInputElement).disabled).toBe(true);
     expect((el.querySelector("textarea") as HTMLTextAreaElement).disabled).toBe(true);
   });
 });

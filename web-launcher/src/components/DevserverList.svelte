@@ -25,7 +25,7 @@
   import type { DevserverEntry } from "../api/library";
 
   function endpoint(ds: DevserverEntry): string {
-    return ds.url;
+    return `${ds.host}:${ds.port}`;
   }
   function displayName(ds: DevserverEntry): string {
     return ds.label || endpoint(ds);
