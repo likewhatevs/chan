@@ -1667,7 +1667,11 @@
      ring reads uniformly 1px around all four sides instead of
      thicker at the body than at the top bar. */
   .pane.focused {
-    border-color: var(--pane-active-focus);
+    /* `--pane-highlight-color` is the per-window library colour the desktop
+       carries on the URL (`?pane=<hex>`, applied to the document root at
+       boot). When present it overrides the `data-focus-color` preset;
+       absent, the preset / default blue accent applies. */
+    border-color: var(--pane-highlight-color, var(--pane-active-focus));
   }
   /* Single-shot wobble fires on the newly focused pane when the
      active pane CHANGES (keyboard/click pane-switch via
@@ -1689,7 +1693,7 @@
     }
     40% {
       box-shadow:
-        0 0 0 6px color-mix(in srgb, var(--pane-active-focus) 55%, transparent),
+        0 0 0 6px color-mix(in srgb, var(--pane-highlight-color, var(--pane-active-focus)) 55%, transparent),
         var(--pane-shadow);
     }
   }

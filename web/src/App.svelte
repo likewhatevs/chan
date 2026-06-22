@@ -115,6 +115,7 @@
     applyInitialPageWidth,
     watchPageWidth,
   } from "./state/pageWidth.svelte";
+  import { applyInitialPaneColor } from "./state/paneColor";
   import { installIdleTracker, setReadMode } from "./state/idle.svelte";
   import {
     installScreensaverTracker,
@@ -268,6 +269,11 @@
     applyInitialTheme();
     applyEditorTheme(DEFAULT_EDITOR_THEME);
     applyInitialPageWidth();
+    // Per-window pane-highlight colour from the URL `?pane=<hex>` the desktop
+    // mints. Sets `--pane-highlight-color` (consumed by the active-pane border
+    // + focus halo in Pane.svelte) when the param is a valid hex; a no-op
+    // otherwise, so the `data-focus-color` presets stay in effect.
+    applyInitialPaneColor();
     // While in "system" mode, follow OS-level theme changes live.
     // The listener stays alive for the whole app's lifetime.
     watchSystemTheme();
