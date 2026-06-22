@@ -75,9 +75,12 @@ pub struct LauncherWorkspace {
     /// `None` for a local row. The discriminator the SPA groups + routes on.
     #[serde(default)]
     pub devserver_id: Option<String>,
-    /// The mounted route prefix (no leading slash). For local rows this equals
-    /// `workspace_id`; for devserver rows the seam #2 on/off/forget ops target
-    /// this remote prefix.
+    /// The mounted route prefix, ALWAYS the slash-free slug (leading slash
+    /// stripped) — local AND devserver rows alike. For local rows it equals
+    /// `workspace_id`; for devserver rows the feed must strip the remote prefix's
+    /// leading slash before tagging so the on/off/forget ops carry a clean slug.
+    /// (Prefixes are single-segment `[a-z0-9-]` slugs, so `%2F` never arises —
+    /// the reason the seam #2 ops can safely round-trip `prefix` as a value.)
     #[serde(default)]
     pub prefix: String,
 }
@@ -100,7 +103,9 @@ pub trait DevserverFeedSource: Send + Sync {
     fn windows(&self) -> Vec<WindowRecord>;
     /// Connected devservers' served workspaces, already tagged with their
     /// `devserver_id` + remote `library_id`, appended to the local workspace
-    /// rows by the launcher's list-workspaces route.
+    /// rows by the launcher's list-workspaces route. Each row's `prefix` MUST be
+    /// the slash-free slug (leading slash stripped), so the seam #2 on/off/forget
+    /// ops carry a clean single segment.
     fn workspaces(&self) -> Vec<LauncherWorkspace>;
 }
 
