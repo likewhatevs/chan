@@ -111,6 +111,14 @@ export function activeTransferCount(): number {
   return transfers.items.filter((t) => t.state === "active").length;
 }
 
+/// True while an upload is mid-flight. Both upload entry points (a new
+/// upload and a file replace) drive the transfer bubble now, so the
+/// single-upload-at-a-time guard reads the bubble's own records instead
+/// of a dedicated status-bar slot.
+export function uploadInFlight(): boolean {
+  return transfers.items.some((t) => t.kind === "upload" && t.state === "active");
+}
+
 /// The sink that pushes the active-transfer count to the server over the window
 /// `/ws` ({"type":"transfers","active":<n>}). `store` registers it against the
 /// watch socket; we call it whenever the count could change. null in tests / on

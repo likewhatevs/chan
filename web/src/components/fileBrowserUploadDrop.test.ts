@@ -19,24 +19,42 @@ describe("File Browser upload via the Upload button", () => {
     expect(tree).toContain("fileOps.uploadFilesTo(target.path");
   });
 
-  test("store upload flow exposes progress, cancel, and tree refresh", () => {
-    expect(store).toContain("fileTransferStatus");
+  test("store upload flow drives the transfer bubble with cancel + tree refresh", () => {
+    // Both upload entry points (new upload + replace) route through the
+    // transfer bubble now; the old fileTransferStatus status-bar slot is gone.
+    expect(store).not.toContain("fileTransferStatus");
     expect(store).toContain("AbortController");
     expect(store).toContain("api.uploadFile(file, destDir");
     expect(store).toContain("await refreshTreeForPath(result.path)");
     expect(store).toContain("upload failed: '${target}' already exists");
+    expect(store).toContain("beginTransfer({ kind: \"upload\"");
+    expect(store).toContain("setTransferProgress(xferId");
+    expect(store).toContain("finishTransfer(xferId)");
+    // The single-upload-at-a-time guard reads the bubble's records.
+    expect(store).toContain("uploadInFlight()");
   });
 
-  test("api client uses XHR so upload progress can feed the status bar", () => {
+  test("replace upload also routes through the transfer bubble", () => {
+    expect(store).toMatch(
+      /replaceFileAt\(targetPath: string, picked: File\)[\s\S]*?beginTransfer\(\{\s*kind: "upload"/,
+    );
+  });
+
+  test("api client uses XHR so upload progress can feed the transfer bubble", () => {
     expect(client).toContain("new XMLHttpRequest()");
     expect(client).toContain("xhr.upload.onprogress");
     expect(client).toContain('/api/files/upload');
     expect(client).toContain("opts.signal?.addEventListener");
   });
 
-  test("status bar renders upload progress with cancellation", () => {
-    expect(statusBar).toContain("fileTransferStatus");
-    expect(statusBar).toContain('aria-label="file transfer status"');
-    expect(statusBar).toContain('aria-label="cancel upload"');
+  test("status bar retired the inline upload text; transfers launch from the bubble", () => {
+    // The inline upload status section (with its own cancel ×) is gone;
+    // progress + cancel now live in the transfer bubble (TransferBubble.svelte),
+    // reachable from the status bar's transfers launcher.
+    expect(statusBar).not.toContain("fileTransferStatus");
+    expect(statusBar).not.toContain('aria-label="file transfer status"');
+    expect(statusBar).not.toContain('aria-label="cancel upload"');
+    expect(statusBar).toContain('aria-label="show file transfers"');
+    expect(statusBar).toContain("⇅ Transfers (");
   });
 });

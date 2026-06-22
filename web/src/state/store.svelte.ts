@@ -62,6 +62,7 @@ import {
   restoreTransfers,
   setTransferProgress,
   setTransferSignalSink,
+  uploadInFlight,
 } from "./transfers.svelte";
 import { isTauriDesktop, runDesktopDownload } from "../api/desktop";
 import {
@@ -2340,16 +2341,6 @@ export const importStatus = $state<{ value: { label: string } | null }>({
   value: null,
 });
 
-export const fileTransferStatus = $state<{
-  value: {
-    label: string;
-    progress: number | null;
-    cancel: (() => void) | null;
-  } | null;
-}>({
-  value: null,
-});
-
 /// Open/closed state of the content-search command palette
 /// (`SearchPanel.svelte`). Toggled by Cmd/Ctrl+K and by the
 /// search button in the toolbar.
@@ -4060,7 +4051,7 @@ export const fileOps = {
     this.downloadPath(path, isDir);
   },
   async replaceFileAt(targetPath: string, picked: File): Promise<void> {
-    if (fileTransferStatus.value) {
+    if (uploadInFlight()) {
       ui.status = "upload already in progress";
       ui.statusKind = "persistent";
       return;
@@ -4073,46 +4064,42 @@ export const fileOps = {
     }
     const activeAbort = new AbortController();
     const cancel = (): void => activeAbort.abort();
-    const setUploadStatus = (loaded: number): void => {
-      const currentLoaded = Math.min(Math.max(loaded, 0), picked.size);
-      const progress =
-        picked.size > 0 ? Math.min(100, Math.round((currentLoaded / picked.size) * 100)) : 100;
-      fileTransferStatus.value = {
-        label: `replacing ${targetPath} ${progress}%`,
-        progress,
-        cancel,
-      };
-    };
-    fileTransferStatus.value = {
-      label: `replacing ${targetPath}`,
-      progress: picked.size > 0 ? 0 : 100,
+    // The replace drives the transfer bubble (the single transfer surface)
+    // the same way a new upload does; the bubble row is keyed to the file
+    // being replaced.
+    const xferId = beginTransfer({
+      kind: "upload",
+      filename: targetPath.split("/").pop() || targetPath,
       cancel,
-    };
+    });
     try {
-      setUploadStatus(0);
       await api.replaceFile(picked, targetPath, {
         signal: activeAbort.signal,
-        onProgress: (progress) => setUploadStatus(progress.loaded),
+        onProgress: (progress) => {
+          const loaded = Math.min(Math.max(progress.loaded, 0), picked.size);
+          setTransferProgress(xferId, picked.size > 0 ? Math.min(1, loaded / picked.size) : 1);
+        },
       });
       await refreshTreeForPath(targetPath);
       for (const tab of tabsForPath(targetPath)) {
         await refreshTabFromDisk(tab.tabId);
       }
+      finishTransfer(xferId);
       revealAndSelect(targetPath);
       setTransientStatus(`Replaced '${targetPath}'`);
     } catch (e) {
       if ((e as Error).name === "AbortError") {
+        cancelTransfer(xferId);
         setTransientStatus("Upload cancelled");
       } else {
+        failTransfer(xferId, (e as Error).message);
         ui.status = `upload failed: ${(e as Error).message}`;
         ui.statusKind = "persistent";
       }
-    } finally {
-      fileTransferStatus.value = null;
     }
   },
   async uploadFilesTo(destDir: string, dropped: FileList | File[]): Promise<void> {
-    if (fileTransferStatus.value) {
+    if (uploadInFlight()) {
       ui.status = "upload already in progress";
       ui.statusKind = "persistent";
       return;
@@ -4150,37 +4137,27 @@ export const fileOps = {
       cancelRequested = true;
       activeAbort?.abort();
     };
-    // The prominent transfer bubble (one aggregate row for this upload op); the
-    // status-bar text below mirrors it for the at-a-glance corner indicator.
+    // The transfer bubble (the single transfer surface) carries one aggregate
+    // row for this upload op.
     const transferLabel = files.length === 1 ? files[0]!.name : `${files.length} files`;
     const xferId = beginTransfer({ kind: "upload", filename: transferLabel, cancel });
-    const setUploadStatus = (file: File, index: number, loaded: number): void => {
+    const reportProgress = (file: File, loaded: number): void => {
       const currentLoaded = Math.min(Math.max(loaded, 0), file.size);
       const frac =
         totalBytes > 0 ? Math.min(1, (completedBytes + currentLoaded) / totalBytes) : 1;
       setTransferProgress(xferId, frac);
-      fileTransferStatus.value = {
-        label: `uploading ${index + 1}/${files.length}: ${file.name} ${Math.round(frac * 100)}%`,
-        progress: Math.round(frac * 100),
-        cancel,
-      };
     };
 
-    fileTransferStatus.value = {
-      label: `preparing ${files.length} upload${files.length === 1 ? "" : "s"}`,
-      progress: totalBytes > 0 ? 0 : 100,
-      cancel,
-    };
     const uploaded: string[] = [];
     try {
       for (let i = 0; i < files.length; i++) {
         if (cancelRequested) throw uploadCancelledError();
         const file = files[i]!;
         activeAbort = new AbortController();
-        setUploadStatus(file, i, 0);
+        reportProgress(file, 0);
         const result = await api.uploadFile(file, destDir, {
           signal: activeAbort.signal,
-          onProgress: (progress) => setUploadStatus(file, i, progress.loaded),
+          onProgress: (progress) => reportProgress(file, progress.loaded),
         });
         activeAbort = null;
         if (cancelRequested) throw uploadCancelledError();
@@ -4208,7 +4185,6 @@ export const fileOps = {
       }
     } finally {
       activeAbort = null;
-      fileTransferStatus.value = null;
     }
   },
   async createFile(parentPath: string): Promise<void> {
