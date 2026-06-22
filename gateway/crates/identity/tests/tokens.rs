@@ -432,7 +432,7 @@ async fn pat_validate_endpoint_requires_internal_bearer() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["user_id"].as_str().unwrap(), uid.to_string());
     // W1: the response carries the devserver identity (lowercase hex
-    // SHA-256 of the PAT). workspace-proxy keys the registry + drv on it.
+    // SHA-256 of the PAT). devserver-proxy keys the registry + drv on it.
     let ds = v["devserver_id"].as_str().expect("devserver_id present");
     assert_eq!(ds.len(), 64);
     assert!(ds.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')));

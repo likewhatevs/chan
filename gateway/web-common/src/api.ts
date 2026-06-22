@@ -1,6 +1,6 @@
-// Shared fetch wrapper for the SPAs embedded by identity-service
-// and workspace-proxy-service. credentials: include so the id_session
-// cookie set by identity-service is sent on every /api call.
+// Shared fetch wrapper for the SPA embedded by identity-service.
+// credentials: include so the id_session cookie set by identity-service
+// is sent on every /api call.
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) {

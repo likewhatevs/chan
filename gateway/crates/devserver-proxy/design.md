@@ -21,9 +21,15 @@ Two public hostnames pointed at the same process:
   - `/healthz` -- liveness.
   - Anything else -- 404.
 
-- `*.devserver.chan.app` (wildcard): tenant content only. One devserver
-  per user; the `{workspace}` path segment is tenant routing, never a gate key.
-  - `/` -- 302 to `https://id.chan.app/workspaces`.
+- `*.devserver.chan.app` (wildcard): the devserver's own content — the
+  launcher SPA at the root and tenant workspaces under `/{workspace}`. One
+  devserver per user; the `{workspace}` path segment is tenant routing, never
+  a gate key.
+  - `/` with no `devserver_gate` cookie and no `?t=` -- 302 to
+    `https://id.chan.app/workspaces` (the dashboard front door; the proxy
+    renders no UI of its own).
+  - `/` or `/?t=<jwt>` carrying a gate credential -- gated like a tenant path
+    and forwarded to the devserver root, where the launcher SPA is served.
   - `/api/devserver/*` -- 404 (the devserver's local-only management API is
     never proxied; the gateway carries tenant content only).
   - `/{workspace}/?t=<jwt>` -- entry: validate the entry token, set the `devserver_gate` cookie, 303 to the clean URL.
@@ -50,6 +56,35 @@ The gate is per-DEVSERVER: there is one devserver per user, one host (`{user}.de
 
 The shared JWT type and signing helpers live in `gateway_common::devserver_gate`.
 
+## Whole-devserver open (launcher)
+
+The owner opens their whole devserver — landing on the launcher served at the
+devserver root — through identity's `GET /s/:owner`, which mints an entry token
+the same way the per-workspace landing does. The proxy exchanges it for the
+session cookie and forwards `/` to the launcher:
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant ID as identity (id.chan.app)
+    participant PX as devserver-proxy (*.devserver.chan.app)
+    participant DS as chan devserver (launcher)
+
+    B->>ID: GET /s/{owner}  (owner-only)
+    Note over ID: resolve the owner's live devserver (drv);<br/>mint a 30s entry JWT (drv, aud)
+    ID-->>B: 303 {owner}.devserver.chan.app/?t={entry_jwt}
+    B->>PX: GET /?t={entry_jwt}
+    Note over PX: gate: decode the entry JWT (aud + drv)
+    PX-->>B: Set-Cookie devserver_gate (Path=/); 303 /  (strip ?t=)
+    B->>PX: GET /  (devserver_gate cookie)
+    Note over PX: gate passes; strip Cookie/Authorization;<br/>forward / unchanged
+    PX->>DS: GET /  (over the tunnel; no client creds)
+    DS-->>B: launcher SPA
+    B->>PX: GET /api/library/...  (cookie)
+    PX->>DS: GET /api/library/...  (gated; tunnel-trust)
+    DS-->>B: data
+```
+
 ## Public surface
 
 Full route table is in [`README.md`](README.md). Critical paths:
@@ -69,6 +104,8 @@ Auth gate for `*.devserver.chan.app/{workspace}/...`, in order:
 5. Anything else (no cookie, expired cookie, bad signature, wrong devserver) -> 404.
 
 The gate always runs: every devserver is authenticated, there is no un-gated pass-through. On pass, the FULL inbound path (only `?t=` stripped) is forwarded into the tunnel; the devserver routes the `{workspace}` tenant internally.
+
+The wildcard root `/` follows the same gate. An unauthenticated `/` (no `?t=`, no `devserver_gate` cookie) 302s to the dashboard, but a `/` carrying a credential falls through to the gate and is forwarded to the devserver root, where the launcher SPA is served (`proxy::handle` is segment-preserving, so `/` forwards unchanged). The launcher's same-origin `/api/library/*` calls ride the same cookie gate. Note the proxy strips every inbound client credential before forwarding — `?t=`, `Cookie`, and `Authorization` — so the devserver authenticates a proxied request by trusting the gated tunnel, not a forwarded bearer; the gate at the proxy edge is the sole authorization for tenant content.
 
 The 404 path checks `Accept: text/html`; browsers get the styled "workspace not found" page, everything else gets the JSON `{"error":"not found"}` shape. Owners returning after the 24h cookie expires bounce through `id.chan.app/workspaces`; a bookmark to a devserver URL is not a session.
 

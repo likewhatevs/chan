@@ -49,7 +49,7 @@ license-file = ["../../LICENSE", "0"]
 extended-description = """\
 Internal HTTP API in front of Postgres for the chan-gateway suite.
 Holds users, linked OAuth identities and per-user workspace URLs. Called
-only by sibling gateway services (identity, workspace-proxy); not exposed
+only by sibling gateway services (identity, devserver-proxy); not exposed
 publicly. Ships as a single static binary."""
 section = "net"
 priority = "optional"

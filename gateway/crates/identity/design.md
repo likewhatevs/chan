@@ -101,6 +101,8 @@ devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it a
 
 The post-login redirect is validated to start with a single `/` and to contain no `:` or `//` prefix, so a hostile stash cannot point the callback at another origin.
 
+`GET /s/:owner` is the whole-devserver open: it lands the caller on the launcher served at the devserver root instead of a single workspace. Same shape as the per-workspace landing — validate `owner`, stash + login if unauthenticated, then resolve the owner's live devserver, mint a 30s entry JWT (`drv` = that devserver id, `aud` = `{owner}.devserver.chan.app`), and 303 to the proxy root `…/?t=<jwt>`. It is restricted to the **owner**: the caller must equal `:owner`, otherwise 404 (the same shape as an unknown handle, so it does not reveal ownership). The launcher's `/api/library/*` surface is gated only at the proxy edge and carries no per-caller role on the gateway surface, so a grantee opening the root would get full library mutation; whole-devserver open is therefore owner-only, and grantees use the per-workspace landing (`/s/:owner/:workspace`).
+
 ### Per-workspace sharing grants (SPA surface)
 
 The owner manages workspaces and grants from the dashboard. Routes (all session-gated; the session user is implicitly the owner):

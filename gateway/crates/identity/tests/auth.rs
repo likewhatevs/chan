@@ -372,7 +372,7 @@ async fn login_then_me() {
     let uid = fake_user_id();
     happy_login(&app, &mut c, uid, "octo@example.com").await;
 
-    // /api/me returns just the user; workspaces moved to workspace-proxy.
+    // /api/me returns just the user; devserver content lives behind devserver-proxy.
     Mock::given(method("GET"))
         .and(path(format!("/v1/users/{uid}")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({

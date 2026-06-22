@@ -4,6 +4,46 @@ The account, sign-in, and reverse-proxy surface for chan.app, a separate nested
 Cargo workspace. This glossary fixes the domain language; decisions and their
 rationale live in `docs/adr/`.
 
+## Topology
+
+```mermaid
+flowchart TB
+    subgraph browser["Browser"]
+        IDSPA["identity SPA — id.chan.app"]
+        LAUNCH["web-launcher SPA<br/>(served through the proxy at the devserver root)"]
+    end
+
+    subgraph gw["chan gateway (nested Cargo workspace)"]
+        ID["identity-service · id.chan.app<br/>OAuth · sessions · PATs · /s/:owner open · token validate"]
+        PROXY["devserver-proxy<br/>devserver.chan.app apex: admin + tunnel + healthz<br/>*.devserver.chan.app wildcard: launcher root + tenants + devserver_gate"]
+        PROFILE["profile-service<br/>internal HTTP over Postgres · users · identities · devserver grants"]
+        ADMIN["admin-service"]
+        COMMON["gateway-common<br/>domain · devserver_gate · profile_client"]
+        PG[("Postgres")]
+    end
+
+    subgraph box["User's machine"]
+        DS["chan devserver · library = ~/.chan workspaces<br/>serves the launcher at / · tenants under /{workspace}/ · /api/library/*"]
+    end
+
+    IDSPA -->|OAuth · manage devservers · Open| ID
+    ID -->|mint entry token (drv, aud)| IDSPA
+    ID <-->|users · grants · access| PROFILE
+    PROFILE --- PG
+    PROXY -->|validate PAT · /internal/v1/tokens/validate| ID
+    DS ==>|tunnel register with PAT · devserver.chan.app/v1/tunnel| PROXY
+    PROXY ==>|gated tenant + root traffic over the tunnel| DS
+    LAUNCH -->|/api/library/* via the proxy| PROXY
+    ID --> COMMON
+    PROXY --> COMMON
+    PROFILE --> COMMON
+```
+
+`admin-service` is the operator console; `gateway-common` holds the shared
+domain config, the `devserver_gate` JWT type, and the profile/workspace-admin
+clients. devserver-proxy renders no UI of its own — it forwards the launcher
+that the devserver serves at its root.
+
 ## The devserver model
 
 **devserver**:
