@@ -112,6 +112,38 @@ describe("remote workspace OFF confirm-and-retry", () => {
     spy.mockRestore();
   });
 
+  it("opens the SAME confirm-and-retry for a LOCAL workspace off (B8 parity)", async () => {
+    // Parity with the devserver path: turning off a LOCAL workspace with live
+    // terminals must confirm + force-retry, not silently kill the terminals.
+    const { setMockLocalLiveTerminals } = await import("../api/mock");
+    const ws = library.workspaces.find((w) => w.devserver_id === null && w.on)!;
+    setMockLocalLiveTerminals(ws.workspace_id, 3);
+
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WorkspaceList, { target });
+
+    expect(ws.on).toBe(true);
+    expect(confirm.open).toBe(false);
+
+    // The seed on local workspace is "notes" (/Users/fiorix/notes).
+    offButton("Turn off notes").click();
+    await settle();
+    flushSync();
+
+    // The same confirm opens with N; the workspace is NOT off yet.
+    expect(confirm.open).toBe(true);
+    expect(confirm.message).toContain("3 live terminal sessions");
+    expect(library.workspaces.find((w) => w.workspace_id === ws.workspace_id)!.on).toBe(true);
+
+    // Confirming retries forced → the local workspace turns off.
+    await resolveConfirm();
+    flushSync();
+    expect(confirm.open).toBe(false);
+    expect(library.workspaces.find((w) => w.workspace_id === ws.workspace_id)!.on).toBe(false);
+    expect(library.error).toBeNull();
+  });
+
   it("renders the confirm via the in-SPA Modal (role=dialog), never a native one", () => {
     // ConfirmDialog is built on Modal — a role="dialog" overlay — so the prompt
     // is in-SPA, not window.confirm (the no_native_dialogs.test.ts scan enforces

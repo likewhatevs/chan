@@ -146,8 +146,8 @@ export async function addLocalWorkspace(path: string): Promise<void> {
   await refreshWorkspaces();
 }
 
-export async function toggleWorkspace(id: string, on: boolean): Promise<void> {
-  await backend.setWorkspaceOn(id, on);
+export async function toggleWorkspace(id: string, on: boolean, force?: boolean): Promise<void> {
+  await backend.setWorkspaceOn(id, on, force);
   await refreshWorkspaces();
 }
 

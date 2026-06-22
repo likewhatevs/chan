@@ -93,12 +93,22 @@ const devserverWorkspaces: WorkspaceEntry[] = [
   },
 ];
 
-// How many live terminal sessions a remote workspace has, keyed by
-// `devserver_id:prefix`. A workspace listed here makes an UNFORCED off answer
-// 409 `live_terminals` (mirroring the server), so the SPA + tests exercise the
-// confirm-and-retry path; a forced off ignores it and turns off. Seeded on the
-// connected `ds-1:w/api` so the confirm path is reachable in the mock SPA.
+// How many live terminal sessions a workspace has — REMOTE rows keyed by
+// `devserver_id:prefix`, LOCAL rows by `local:<workspace_id>`. A workspace
+// listed here makes an UNFORCED off answer 409 `live_terminals` (mirroring the
+// server), so the SPA + tests exercise the confirm-and-retry path; a forced off
+// ignores it and turns off. Seeded on the connected `ds-1:w/api` so the
+// devserver confirm is reachable in the mock SPA; local entries are added by
+// the test helper below.
 const liveTerminals = new Map<string, number>([["ds-1:w/api", 2]]);
+
+/** Test-only: flag a LOCAL workspace as having N live terminal sessions so an
+ * unforced `setWorkspaceOn(id, false)` answers 409 `live_terminals` (exercises
+ * the local off confirm-and-retry, parity with the devserver path). A forced
+ * off clears the flag. */
+export function setMockLocalLiveTerminals(workspace_id: string, n: number): void {
+  liveTerminals.set(`local:${workspace_id}`, n);
+}
 
 /** Re-seed the remote-workspace state the confirm-and-retry flow mutates (the
  * `ds-1:w/api` row turns off on a forced retry and drops its live-terminal
@@ -246,14 +256,28 @@ export const mockApi: LibraryApi = {
     return tick({ ...entry });
   },
 
-  setWorkspaceOn: (id, on) => {
+  setWorkspaceOn: (id, on, force) => {
     const ws = workspaces.find((w) => w.workspace_id === id);
+    // Mirror the server: an UNFORCED off of a workspace with live terminals
+    // answers 409 live_terminals; a forced off (or no live terminals) proceeds.
+    const liveKey = `local:${id}`;
+    if (!on && !force && liveTerminals.has(liveKey)) {
+      return Promise.reject(
+        new ApiError(
+          409,
+          JSON.stringify({ error: "live_terminals", active_terminals: liveTerminals.get(liveKey) }),
+        ),
+      );
+    }
     if (ws) ws.on = on;
     // Turning a workspace off PURGES its workspace windows from the feed,
     // mirroring the backend's discard_workspace_windows (off + forget) — no
     // stale window records linger. On does not restore them (the user opens
     // new ones).
-    if (!on && ws) discardWorkspaceWindows(ws.path);
+    if (!on && ws) {
+      discardWorkspaceWindows(ws.path);
+      liveTerminals.delete(liveKey);
+    }
     notify();
     return tick(undefined);
   },

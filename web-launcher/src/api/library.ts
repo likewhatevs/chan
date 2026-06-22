@@ -141,7 +141,10 @@ export interface DevserverInput {
 export interface LibraryApi {
   listWorkspaces(): Promise<WorkspaceEntry[]>;
   addLocalWorkspace(path: string): Promise<WorkspaceEntry>;
-  setWorkspaceOn(id: string, on: boolean): Promise<void>;
+  /** Turn a local workspace on/off. An unforced off of a workspace with live
+   * terminal sessions answers 409 `live_terminals` (parse with
+   * `liveTerminalsCount`); retry with `force: true` to off it anyway. */
+  setWorkspaceOn(id: string, on: boolean, force?: boolean): Promise<void>;
   removeWorkspace(id: string): Promise<void>;
   listDevservers(): Promise<DevserverEntry[]>;
   addDevserver(input: DevserverInput): Promise<DevserverEntry>;
@@ -247,8 +250,14 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 export const liveApi: LibraryApi = {
   listWorkspaces: () => req("GET", "/api/library/workspaces"),
   addLocalWorkspace: (path) => req("POST", "/api/library/workspaces", { path }),
-  setWorkspaceOn: (id, on) =>
-    req("POST", `/api/library/workspaces/${encodeURIComponent(id)}/${on ? "on" : "off"}`),
+  setWorkspaceOn: (id, on, force) =>
+    req(
+      "POST",
+      `/api/library/workspaces/${encodeURIComponent(id)}/${on ? "on" : "off"}`,
+      // The off route accepts a `{ force }` body (live-terminal confirm); on
+      // takes no body.
+      on ? undefined : { force: force ?? false },
+    ),
   removeWorkspace: (id) => req("DELETE", `/api/library/workspaces/${encodeURIComponent(id)}`),
   listDevservers: () => req("GET", "/api/library/devservers"),
   addDevserver: (input) => req("POST", "/api/library/devservers", input),
