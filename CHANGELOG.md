@@ -6,6 +6,62 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [v0.42.0] - 2026-06-22
+
+A round centred on **"opening a chan-library behaves identically whether it is local or remote."**
+The library now owns the open rules — first open mints exactly one terminal (and never again),
+workspace on/off and terminal-window persistence live in one place — so chan-desktop and a headless
+`chan devserver` inherit one definition. Alongside it, the chan.app gateway migrated to a
+**per-devserver** model: a user's devserver is a first-class entity reached through an
+always-authenticated, segment-preserving reverse-proxy over a per-devserver tunnel.
+
+### Added
+
+- **Open a chan-library identically, local or remote.** The first time a library is opened with an
+  empty window set it mints exactly one terminal and records that it has done so; close that terminal
+  and reopen the library and it comes back with none. This rule now lives in the library itself, so
+  the desktop's local library and a connected `chan devserver` behave the same — replacing the
+  desktop's per-boot "always a shell" floor and the per-connection bootstrap flag.
+- **Per-devserver sharing on chan.app.** A user's devserver is a first-class entity with a stable id;
+  the identity dashboard's **Devservers** page manages it and email-based **sharing grants**
+  (viewer/editor), and per-workspace share links hand an authenticated browser straight to the
+  devserver. (Opening the *whole* devserver as a launcher is deferred — see below.)
+- **Library-aware drag-and-drop scope.** Tab and pane drags carry a structured
+  `(library_id, container, workspace)` scope, so a terminal or workspace tab only drops within its own
+  library and workspace — consistent local and remote.
+
+### Changed
+
+- **The gateway is now a per-devserver, always-authenticated reverse-proxy.** Renamed
+  `workspace-proxy → devserver-proxy` and `workspace-gate → devserver-gate`; tunnel registration is
+  keyed on the token-resolved `devserver_id`, the tunnel always authenticates, and the proxy forwards
+  the full request path unchanged to the devserver's own router (it renders nothing itself).
+- **New Terminal and Cmd+Shift+N on a devserver window** mint through the focused window's library — a
+  proper library terminal on the shared terminal tenant — instead of a local/legacy isolated terminal.
+- **Workspace on/off and terminal-window persistence are unified** into one library-owned shape, so a
+  restart comes back serving exactly what was on, local and devserver alike.
+
+### Fixed
+
+- Intra-window pane drag-and-drop, which broke under the new library-aware scope: the scope rode a
+  DataTransfer MIME *type* and WebKit mangled the `:` / `|`, so even same-window drops were rejected.
+  The scope token is now hex-encoded and byte-stable.
+- The rich-prompt composer becoming un-typeable after a queued message drained: the clear now
+  re-enables editing in the same transaction and refocuses on a microtask.
+- Terminal query-reply garbage (`…R` / `…c`, cursor-position and device-attribute replies) printed at
+  the prompt after a Cmd+R reattach: the replay window that suppresses replies to historical queries
+  now ends when the replayed ring has drained, not when the `ready` frame arrives.
+- Devserver tenant root: `/{slug}/` now serves (trailing slash canonicalized).
+- Cross-window tab-drag scope now keys on workspace identity rather than the window label.
+
+### Removed
+
+- The dead per-label devserver terminal subsystem — `POST /api/devserver/terminals` and its handlers,
+  `PersistedTerminal` persistence, and the Window-menu terminal-reopen path — superseded by library
+  terminals on the shared tenant.
+- The tunnel's `public` wire field and the dead per-workspace public-router path; the tunnel is always
+  authenticated.
+
 ## [v0.41.0] - 2026-06-21
 
 A round centred on the window lifecycle: a single library window registry now owns every window
