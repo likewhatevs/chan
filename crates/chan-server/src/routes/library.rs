@@ -164,10 +164,12 @@ pub fn launcher_router(
             host: host.clone(),
             serve_addr: serve_addr.clone(),
         }));
-    // Library config: the local-library pane-highlight colour. GET on any surface
-    // (a no-store surface reports `null` = default accent); PUT is loopback-only
-    // (`require_mutable` → 403 read-only), since the local colour belongs to the
-    // desktop's own library, not a remote devserver's launcher view of it.
+    // Library config: this library's own pane-highlight colour. GET + PUT on
+    // EVERY surface (a no-store surface reports `null` = default accent / 404s the
+    // PUT): a library's colour belongs to that library, set from a pane's
+    // focus-border menu on its own serving host — a devserver window sets ITS
+    // devserver's colour. The bearer gate is the auth (no `require_mutable`: it
+    // mutates the surface's own library, not someone else's).
     let config = Router::new()
         .route(
             "/api/library/local-color",
@@ -937,18 +939,18 @@ async fn handle_get_local_color(State(state): State<Arc<LauncherState>>) -> Json
     Json(LocalColor { color })
 }
 
-/// `PUT /api/library/local-color` `{ color }`: set the local library's
-/// pane-highlight colour (`null` clears it to the default). Loopback-only
-/// ([`require_mutable`] → 403 read-only); 404 when no store is installed
-/// (defensive — the desktop loopback always installs one); 400 on a persist
-/// failure.
+/// `PUT /api/library/local-color` `{ color }`: set the library's own
+/// pane-highlight colour (`null` clears it to the default). Available on EVERY
+/// surface, NOT loopback-only: a library's colour belongs to that library and is
+/// set from a pane's focus-border menu on its OWN serving host — local windows
+/// hit the desktop loopback, a devserver window hits that devserver. The bearer
+/// gate (the per-surface launcher token) is the auth; there is no `require_mutable`
+/// because this mutates the surface's OWN library, not someone else's. 204 on
+/// success; 404 when no store is installed; 400 on a persist failure.
 async fn handle_set_local_color(
     State(state): State<Arc<LauncherState>>,
     Json(body): Json<LocalColor>,
 ) -> Response {
-    if let Err(resp) = require_mutable(&state) {
-        return *resp;
-    }
     let Some(store) = state.host.local_color_store() else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -998,7 +1000,6 @@ mod devserver_route_tests {
                     has_token: true,
                     library_id: None,
                     connected: false,
-                    color: None,
                 }]),
             }
         }
@@ -1021,8 +1022,6 @@ mod devserver_route_tests {
                 has_token: input.token.is_some(),
                 library_id: None,
                 connected: false,
-                // Colour is set via the focus-border flow, not the add dialog.
-                color: None,
             };
             self.rows.lock().unwrap().push(entry.clone());
             Ok(entry)
@@ -1300,19 +1299,21 @@ mod devserver_route_tests {
     }
 
     #[tokio::test]
-    async fn local_color_set_is_read_only_403_then_404_without_store() {
-        // Read-only surface: PUT is refused before the store is consulted.
-        let read_only = color_router(Some(Arc::new(FakeColorStore::default())), false);
+    async fn local_color_set_works_on_the_devserver_surface_not_loopback_only() {
+        // A library's colour is settable on its OWN serving host, including the
+        // read-only/devserver surface (`mutable=false`): no `require_mutable`, so
+        // a devserver window can set its devserver's colour. 204 with a store.
+        let devserver_surface = color_router(Some(Arc::new(FakeColorStore::default())), false);
         let (status, _) = request(
-            &read_only,
+            &devserver_surface,
             "PUT",
             "/api/library/local-color",
             Some(r##"{"color":"#0af"}"##),
         )
         .await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        // Loopback but no store installed: 404 (defensive — the desktop installs one).
-        let no_store = color_router(None, true);
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        // No store installed: 404 (defensive) on any surface.
+        let no_store = color_router(None, false);
         let (status, _) = request(
             &no_store,
             "PUT",

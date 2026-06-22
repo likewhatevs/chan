@@ -107,6 +107,12 @@ pub trait DevserverFeedSource: Send + Sync {
     /// the slash-free slug (leading slash stripped), so the seam #2 on/off/forget
     /// ops carry a clean single segment.
     fn workspaces(&self) -> Vec<LauncherWorkspace>;
+    /// The pane-highlight colour of the connected devserver whose library is
+    /// `library_id` — its own `LocalColorStore` value, fetched from the devserver
+    /// (`GET /api/library/local-color`) and cached desktop-side. `None` when no
+    /// such devserver is connected or it has no colour set (default accent).
+    /// [`WorkspaceHost::pane_color`] resolves a `lib-<hex>` window through this.
+    fn pane_color(&self, library_id: &str) -> Option<String>;
 }
 
 /// The local library's pane-highlight colour, injected onto [`WorkspaceHost`]
@@ -392,25 +398,22 @@ impl WorkspaceHost {
         self.local_color.get()
     }
 
-    /// The pane-highlight colour for a window of `library_id`, resolving the two
-    /// colour sources behind one accessor so the desktop injects it at mint time
-    /// without knowing where each colour lives. `"local"` resolves to the
-    /// local-library colour (the installed [`local_color_store`](
-    /// Self::local_color_store)); a `lib-<hex>` id resolves to that devserver's
-    /// [`DevserverEntry::color`](crate::DevserverEntry), found by matching
-    /// `library_id` in the installed [`devserver_registry`](
-    /// Self::devserver_registry). `None` — no source installed, no matching
-    /// devserver, or an unset colour — means the editor falls back to the default
-    /// accent.
+    /// The pane-highlight colour for a window of `library_id`, resolving each
+    /// chan-library's own colour behind one accessor so the desktop injects it at
+    /// mint time without knowing where each colour lives. `"local"` resolves to
+    /// the local-library colour (the installed [`local_color_store`](
+    /// Self::local_color_store)); a `lib-<hex>` id resolves to that connected
+    /// devserver's own colour — its remote `LocalColorStore`, fetched + cached by
+    /// the desktop and surfaced through [`DevserverFeedSource::pane_color`]. (Each
+    /// library's colour lives in THAT library's host, set from a pane's
+    /// focus-border menu; there is no desktop-side per-devserver colour.) `None` —
+    /// no source installed, no matching devserver, or an unset colour — means the
+    /// editor falls back to the default accent.
     pub fn pane_color(&self, library_id: &str) -> Option<String> {
         if library_id == "local" {
             return self.local_color_store().and_then(|store| store.get());
         }
-        self.devserver_registry()?
-            .list()
-            .into_iter()
-            .find(|entry| entry.library_id.as_deref() == Some(library_id))
-            .and_then(|entry| entry.color)
+        self.devserver_feed()?.pane_color(library_id)
     }
 
     /// Install the library root's fallback router — served by `host_dispatch`
@@ -2818,30 +2821,26 @@ mod tests {
         }
     }
 
-    /// A `DevserverRegistry` returning a fixed row list; only `list` is used by
-    /// `pane_color`, so the mutators are inert.
-    struct FixedDevservers(Vec<crate::DevserverEntry>);
-    impl DevserverRegistry for FixedDevservers {
-        fn list(&self) -> Vec<crate::DevserverEntry> {
-            self.0.clone()
+    /// A `DevserverFeedSource` that resolves one library's colour through
+    /// `pane_color`; windows/workspaces are inert (unused by this test).
+    struct FixedFeed {
+        library_id: String,
+        color: String,
+    }
+    impl DevserverFeedSource for FixedFeed {
+        fn windows(&self) -> Vec<WindowRecord> {
+            Vec::new()
         }
-        fn add(&self, _input: crate::DevserverInput) -> Result<crate::DevserverEntry, String> {
-            Err("unused".into())
+        fn workspaces(&self) -> Vec<LauncherWorkspace> {
+            Vec::new()
         }
-        fn update(
-            &self,
-            _id: &str,
-            _input: crate::DevserverInput,
-        ) -> Result<Option<crate::DevserverEntry>, String> {
-            Ok(None)
-        }
-        fn remove(&self, _id: &str) -> Result<bool, String> {
-            Ok(false)
+        fn pane_color(&self, library_id: &str) -> Option<String> {
+            (library_id == self.library_id).then(|| self.color.clone())
         }
     }
 
     #[test]
-    fn pane_color_resolves_local_and_devserver_by_library_id() {
+    fn pane_color_resolves_local_from_store_and_devserver_from_feed() {
         let cfg = tempfile::tempdir().expect("config dir");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
         let host = WorkspaceHost::new(lib, fake_builder());
@@ -2851,19 +2850,13 @@ mod tests {
         assert_eq!(host.pane_color("lib-abc"), None);
 
         host.install_local_color_store(Arc::new(FixedLocalColor(Some("#111".into()))));
-        host.install_devserver_registry(Arc::new(FixedDevservers(vec![crate::DevserverEntry {
-            id: "ds1".into(),
-            host: "box".into(),
-            port: 8787,
-            label: String::new(),
-            script: String::new(),
-            has_token: false,
-            color: Some("#abc".into()),
-            library_id: Some("lib-abc".into()),
-            connected: true,
-        }])));
+        host.install_devserver_feed(Arc::new(FixedFeed {
+            library_id: "lib-abc".into(),
+            color: "#abc".into(),
+        }));
 
-        // "local" → the local-colour source; a devserver lib id → its row colour.
+        // "local" → the local-colour store; a devserver lib id → that devserver's
+        // own colour, surfaced through the feed (NOT a desktop-side field).
         assert_eq!(host.pane_color("local"), Some("#111".into()));
         assert_eq!(host.pane_color("lib-abc"), Some("#abc".into()));
         // An unknown devserver library id falls back to the default accent.
