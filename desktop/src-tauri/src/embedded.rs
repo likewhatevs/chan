@@ -67,6 +67,11 @@ impl EmbeddedServer {
         // (~/.chan/workspaces.json), so the boot path re-serves what was on and
         // toggles persist their on/off — the same store the devserver uses.
         chan_server::install_local_workspace_overlay(&host);
+        // Install the launcher SPA as the loopback's root fallback so the
+        // desktop launcher loads the same web-launcher served at `/` on every
+        // surface — parity with the devserver's `build_devserver_app`. Without
+        // it the root `/` 404s (`host_dispatch` only matches tenant prefixes).
+        chan_server::install_launcher_root_fallback(&host);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| format!("binding embedded chan server: {e}"))?;
         listener
