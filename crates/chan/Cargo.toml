@@ -55,7 +55,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-# Self-upgrade flow (`chan upgrade` + the probe in `chan serve`).
+# Self-upgrade flow (`chan upgrade` + the probe in `chan open`).
 # reqwest is workspace-shared so we inherit rustls + the same
 # *_PROXY env-var handling install.sh expects.
 serde = { workspace = true }

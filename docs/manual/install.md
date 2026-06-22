@@ -1,6 +1,6 @@
 # Installing Chan
 
-Chan ships two ways. **Chan Desktop** is the native app for macOS and Linux and is what most people want — installing it also sets up the `chan` and `cs` command line, so there is nothing else to download. The **standalone CLI** is just `chan` (plus a `cs` symlink) for a terminal-first `chan serve`, an SSH workflow, or a headless server.
+Chan ships two ways. **Chan Desktop** is the native app for macOS and Linux and is what most people want — installing it also sets up the `chan` and `cs` command line, so there is nothing else to download. The **standalone CLI** is just `chan` (plus a `cs` symlink) for a terminal-first `chan open`, an SSH workflow, or a headless server.
 
 Pick your download from the [install page](/install/), then follow the steps below.
 
@@ -65,7 +65,7 @@ Unsupported OS and architecture pairs fail explicitly. Read the script before pi
 Point chan at any folder — a git repo, your notes, anything:
 
 ```sh
-chan serve ~/notes
+chan open ~/notes
 ```
 
 The CLI starts a loopback server, prints a URL with a per-launch bearer token, and opens your browser. With Chan Desktop, opening a workspace gives you a native window instead. Next: [Creating or opening a workspace](workspaces.md).

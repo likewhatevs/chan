@@ -1,7 +1,7 @@
 //! CLI-to-devserver workspace registration over a well-known per-user
 //! Unix socket.
 //!
-//! When a devserver is running on a box and the user types `chan serve
+//! When a devserver is running on a box and the user types `chan open
 //! ~/notes` in a terminal there, the natural intent is "add this workspace
 //! to the devserver," not "bind a second standalone server that fights the
 //! devserver for the workspace flock." This module is the same-user IPC

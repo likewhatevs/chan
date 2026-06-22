@@ -2,8 +2,8 @@
      aria-labelledby="arch-title arch-desc" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
   <title id="arch-title">Chan running across three workspaces from one desktop app</title>
   <desc id="arch-desc">Chan Desktop on a Mac drives three windows: a local
-    on-disk workspace, a chan serve running in a Lima Ubuntu VM reached over
-    localhost, and a chan serve on a remote VPS reached over an SSH tunnel.</desc>
+    on-disk workspace, a chan open running in a Lima Ubuntu VM reached over
+    localhost, and a chan open on a remote VPS reached over an SSH tunnel.</desc>
 
   <style>
     .label { fill: #191816; font-size: 14px; }
@@ -53,7 +53,7 @@
 
   <!-- Lima VM serve (right of Window 2) -->
   <rect class="serve" x="370" y="160" width="270" height="48" rx="8" />
-  <text class="label" x="386" y="180">Lima VM &#183; chan serve</text>
+  <text class="label" x="386" y="180">Lima VM &#183; chan open</text>
   <text class="sub" x="386" y="198">listening on :8787</text>
 
   <!-- SSH tunnel node (right of Window 3) -->
@@ -65,7 +65,7 @@
   <rect class="group" x="720" y="180" width="250" height="120" rx="10" />
   <text class="grouptitle label" x="740" y="208">VPS (remote host)</text>
   <rect class="serve" x="740" y="220" width="210" height="48" rx="6" />
-  <text class="sub" x="756" y="240">chan serve ./project</text>
+  <text class="sub" x="756" y="240">chan open ./project</text>
   <text class="sub" x="756" y="258">listening on :18787</text>
 
   <!-- Edges: each window points right to the workspace it drives -->

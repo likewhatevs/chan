@@ -2,7 +2,7 @@
 //! workspace readiness, rendered by the SPA on a locked OverlayShell.
 //! chan-server owns the readiness flow so local and remote (tunnel)
 //! workspaces get the identical experience; the desktop shell only picks
-//! a path and launches `chan serve`.
+//! a path and launches `chan open`.
 //!
 //! The snapshot is DERIVED from live state on every poll, so there is no
 //! first-boot flag to persist or reset:
@@ -262,7 +262,7 @@ fn build_snapshot(
 
 /// The `cs` offer is owner-only: a settings-locked (kiosk) deployment must
 /// not let the operator at the keyboard mutate the host's PATH. The default
-/// leaves `settings_disabled` false, so the offer shows on a plain `chan serve`.
+/// leaves `settings_disabled` false, so the offer shows on a plain `chan open`.
 fn cs_link_allowed(state: &AppState) -> bool {
     !state.settings_disabled
 }

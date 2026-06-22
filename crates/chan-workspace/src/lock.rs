@@ -1,6 +1,6 @@
 // Cross-process advisory locks for per-workspace state.
 //
-// Two processes (e.g. `chan serve` running on a workspace that the
+// Two processes (e.g. `chan open` running on a workspace that the
 // native desktop app then opens) must not both try to write the
 // search index or graph DB at once. We use file-based advisory
 // locks via fs4 (Unix flock + Windows LockFileEx).
@@ -13,8 +13,8 @@
 // canonical path, and start time — written right after the advisory
 // lock is won. It serves two jobs: a contender can tell a live holder
 // (refuse) from a stale record a dead one left behind (steal), and
-// `chan unserve` reads it to find the process serving a path. The
-// record shape is a cross-lane contract (`chan unserve` parses it).
+// `chan close` reads it to find the process serving a path. The
+// record shape is a cross-lane contract (`chan close` parses it).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -29,7 +29,7 @@ use crate::error::{ChanError, Result};
 /// it wins the advisory lock.
 ///
 /// Cross-lane on-disk shape (frozen in the round's `contracts.md`):
-/// `chan unserve` parses it to discover the serving process. Keep the
+/// `chan close` parses it to discover the serving process. Keep the
 /// field set and `started_at`'s RFC3339 format stable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LockRecord {
@@ -61,7 +61,7 @@ impl WorkspaceLock {
     /// Contended path: the OS lock is held. We read the record and only
     /// **steal** when the recorded holder is **provably dead** (its pid
     /// no longer exists) and the record names this same workspace — the
-    /// case where a dead `chan serve`'s lock fd was inherited by a still-
+    /// case where a dead `chan open`'s lock fd was inherited by a still-
     /// living child and pins the flock with no real writer behind it. In
     /// every uncertain case — record missing, unparseable, for a
     /// different path, the holder alive, or liveness indeterminate — we
@@ -138,7 +138,7 @@ impl Drop for WorkspaceLock {
 }
 
 /// Read and parse the [`LockRecord`] in `<lock_dir>/writer.lock`, if
-/// present and well-formed. `chan unserve` uses this to discover the
+/// present and well-formed. `chan close` uses this to discover the
 /// process serving a workspace path.
 pub fn read_lock_record(lock_dir: &Path) -> Option<LockRecord> {
     read_record_at(&lock_dir.join("writer.lock"))

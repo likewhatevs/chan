@@ -13,7 +13,7 @@
 //!   workspace instead of starting blank.
 //!
 //! Per-workspace serve URLs are intentionally NOT persisted: chan rotates
-//! the bearer token on every `chan serve`, so a saved URL would
+//! the bearer token on every `chan open`, so a saved URL would
 //! decay to garbage between launches. The URL lives in `AppState`
 //! in memory while a serve is running, and the desktop webview
 //! reloads it fresh on every On toggle.

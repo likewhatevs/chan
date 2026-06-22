@@ -27,7 +27,7 @@ Sessions are selected by `--tab-name <name>` (one session, the tab's CHAN_TAB_NA
 
 ## The `cs window` command family
 
-`cs window` inspects and manages the chan windows themselves — the OS windows, not the terminal tabs inside them. Prefix matching applies (`cs w l`, `cs w n`, `cs w o`); use `cs w hi` for `hide`, since a bare `h` is `help`. `cs window list` works anywhere; the rest drive the desktop app and report an error under a standalone `chan serve`, which has no windows to manage.
+`cs window` inspects and manages the chan windows themselves — the OS windows, not the terminal tabs inside them. Prefix matching applies (`cs w l`, `cs w n`, `cs w o`); use `cs w hi` for `hide`, since a bare `h` is `help`. `cs window list` works anywhere; the rest drive the desktop app and report an error under a standalone `chan open`, which has no windows to manage.
 
 - `list` shows every window chan knows about, with its id, kind (terminal or workspace), title, and status (`open` and/or `saved`). `--json` for machine output. The id is the handle the other verbs take.
 - `new` opens a window. From a standalone terminal it opens another standalone terminal window; from a workspace it opens another window of that workspace. It prints the new window id.

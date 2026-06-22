@@ -398,7 +398,7 @@ impl AppState {
 /// * `kind = "local"`: a chan-registry entry, backed by a
 ///   workspace mounted into the embedded server. Includes the canonical
 ///   filesystem path and live URL.
-/// * `kind = "outbound"`: a remote `chan serve` explicitly attached
+/// * `kind = "outbound"`: a remote `chan open` explicitly attached
 ///   by URL. No desktop-owned lifecycle; `id` points at the stored
 ///   attachment row.
 ///
@@ -1555,7 +1555,7 @@ fn register_devserver_from_handoff(
 }
 
 /// Open a workspace in a native window in response to a CLI handoff
-/// request (`chan serve <workspace>` while this desktop is running).
+/// request (`chan open <workspace>` while this desktop is running).
 ///
 /// Mirrors the `add_workspace` flow: register + boot the workspace through the
 /// shared embedded Library, then `serve::start` (mount + mint the
@@ -2138,7 +2138,7 @@ fn run_as_cs_if_requested() -> Result<bool, String> {
 /// CLI in-process with the Desktop personality and EXIT instead of launching
 /// the GUI. This is what makes a desktop install also provide `chan` with no
 /// separate download. Mirrors `run_as_cs_if_requested`: a pre-GUI argv probe
-/// that short-circuits `main`. The Desktop personality makes `chan serve`
+/// that short-circuits `main`. The Desktop personality makes `chan open`
 /// integrate with the running desktop (handoff / GUI launch) and `chan
 /// upgrade` drive the desktop updater rather than replacing a CLI tarball.
 /// Returns `Ok(true)` when it handled the invocation, `Ok(false)` for a
@@ -2151,7 +2151,7 @@ fn run_as_chan_if_requested() -> Result<bool, String> {
     if !chan_shell::invoked_as_chan(&chan_shell::invoked_arg0()) {
         return Ok(false);
     }
-    // `chan serve` needs a multi-threaded runtime; everything else runs fine
+    // `chan open` needs a multi-threaded runtime; everything else runs fine
     // on it too. shutdown_background() detaches chan-workspace's uncancellable
     // reindex pool on exit, matching the standalone `chan` binary's shim.
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -2584,7 +2584,7 @@ fn main() {
 
             // CLI-to-desktop handoff listener (ratified Option B). Binds the
             // well-known per-user endpoint (a UDS on unix, a named pipe on
-            // Windows) so a `chan serve <workspace>` in a terminal hands the
+            // Windows) so a `chan open <workspace>` in a terminal hands the
             // workspace to this desktop window instead of failing on the
             // per-workspace flock. Leaked for the process lifetime (the registry
             // watcher above uses the same Box::leak pattern; the handle's Drop

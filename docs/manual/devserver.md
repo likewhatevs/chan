@@ -1,6 +1,6 @@
 # Devserver
 
-A devserver is one `chan devserver` process that hosts many workspaces behind a single port. On the box, you start a devserver and then register workspaces into it with `chan serve PATH`: each `chan serve` registers its workspace and exits instead of binding its own port, so one process owns each workspace. Chan Desktop attaches to the devserver and lists its workspaces in their own launcher group. See [workspaces](workspaces.md) for the serve side and [Chan Desktop](desktop.md) for the attach lifecycle.
+A devserver is one `chan devserver` process that hosts many workspaces behind a single port. On the box, you start a devserver and then register workspaces into it with `chan open PATH`: each `chan open` registers its workspace and exits instead of binding its own port, so one process owns each workspace. Chan Desktop attaches to the devserver and lists its workspaces in their own launcher group. See [workspaces](workspaces.md) for the serve side and [Chan Desktop](desktop.md) for the attach lifecycle.
 
 ```sh
 chan devserver --bind 127.0.0.1 --port 8787

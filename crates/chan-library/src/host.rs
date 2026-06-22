@@ -1,7 +1,7 @@
 //! Multi-workspace host runtime.
 //!
 //! `WorkspaceHost` is the in-process owner that chan-desktop can embed
-//! instead of spawning one `chan serve` child per local workspace. Each
+//! instead of spawning one `chan open` child per local workspace. Each
 //! mounted workspace still gets its own `AppState`, watcher, indexer,
 //! MCP bridge, control socket, terminal registry, and route prefix.
 
@@ -66,7 +66,7 @@ pub struct WorkspaceHost {
     builder: Arc<dyn TenantBuilder>,
     /// The host's own `Arc`, downgraded, registered by
     /// [`install_self`](Self::install_self). Lets a per-tenant control socket
-    /// reach back for a `chan unserve` of a hosted path (unmount that tenant).
+    /// reach back for a `chan close` of a hosted path (unmount that tenant).
     /// Empty until an embedder opts in; a host that never does answers
     /// `Unserve` with an "unsupported" message (correct for chan-desktop,
     /// which tears workspaces down in-process).
@@ -88,7 +88,7 @@ pub struct WorkspaceHost {
     /// [`workspace_overlay`](Self::workspace_overlay): the devserver set lives in
     /// chan-desktop's config (invisible from chan-library), so the embedder
     /// installs an `Arc<dyn DevserverRegistry>` and the launcher routes read it at
-    /// request time. Empty on the headless devserver / plain `chan serve` — the
+    /// request time. Empty on the headless devserver / plain `chan open` — the
     /// routes then serve an empty devserver list and 404 mutation.
     devserver_registry: OnceLock<Arc<dyn DevserverRegistry>>,
     /// This library's identity: `"local"` for the baked-in local-disk library,
@@ -246,7 +246,7 @@ impl WorkspaceHost {
     /// calls this once (next to [`install_workspace_overlay`](
     /// Self::install_workspace_overlay)) with an impl over its config. A host that
     /// never installs one answers [`devserver_registry`](Self::devserver_registry)
-    /// with `None` — the headless devserver / plain `chan serve`.
+    /// with `None` — the headless devserver / plain `chan open`.
     pub fn install_devserver_registry(&self, registry: Arc<dyn DevserverRegistry>) {
         let _ = self.devserver_registry.set(registry);
     }
@@ -280,7 +280,7 @@ impl WorkspaceHost {
     }
 
     /// Register the host's own `Arc` so per-tenant control sockets can reach it
-    /// for a `chan unserve` of a hosted path. Idempotent; an embedder that
+    /// for a `chan close` of a hosted path. Idempotent; an embedder that
     /// wants control-socket unserve of hosted workspaces calls this once after
     /// wrapping the host in an `Arc` (the devserver does). A host that never
     /// calls it answers `Unserve` with an "unsupported" message — correct for
@@ -1674,7 +1674,7 @@ mod tests {
             .await
             .expect("open");
 
-        // The `chan unserve` host path: unmount the matching tenant by root.
+        // The `chan close` host path: unmount the matching tenant by root.
         assert!(host
             .close_workspace_for_root(root.path())
             .expect("close by root"));

@@ -1,7 +1,7 @@
 //! Headless multi-workspace devserver.
 //!
 //! `run_devserver` binds a [`WorkspaceHost`] to a real address and adds two
-//! surfaces a desktop client and the `chan serve` CLI drive over it:
+//! surfaces a desktop client and the `chan open` CLI drive over it:
 //!
 //! - A management HTTP/JSON API under the reserved `/api/devserver/*`
 //!   namespace ([`crate::devserver_api`]): list, mount, forget workspaces
@@ -12,7 +12,7 @@
 //!   management routes match before the per-tenant fallback, and the only
 //!   reserved top-level slug is `api`.
 //! - A per-user Unix discovery socket ([`crate::devserver_handoff`]): a
-//!   `chan serve <path>` on the same box registers its workspace with the
+//!   `chan open <path>` on the same box registers its workspace with the
 //!   running devserver and exits instead of binding its own server, so the
 //!   devserver owns the single-writer flock.
 //!
@@ -561,7 +561,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     let library_id = persisted.library_id.clone();
 
     let host = Arc::new(WorkspaceHost::new(library, crate::route_builder()));
-    // Opt in to control-socket `chan unserve`: a hosted workspace's tenant can
+    // Opt in to control-socket `chan close`: a hosted workspace's tenant can
     // then be unmounted by path (it does not kill the multi-tenant process).
     host.install_self();
     // Install the persisted window registry (the Seam-W source of truth) beside
@@ -650,7 +650,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
     state.persist_state();
 
     // Serve-handoff discovery. A bind failure is non-fatal: the management
-    // API still works, only the `chan serve` registration path is disabled.
+    // API still works, only the `chan open` registration path is disabled.
     let _discovery = start_discovery_listener(state.clone());
 
     let app = build_devserver_app(state.clone(), host.clone());
@@ -658,7 +658,7 @@ pub async fn run_devserver(library: Library, config: DevserverConfig) -> anyhow:
         .await
         .with_context(|| format!("binding devserver on {}", config.addr))?;
     // Report the bound address, not the requested one, so `--port 0` prints
-    // the OS-assigned port (mirrors `chan serve`). Falls back to the request
+    // the OS-assigned port (mirrors `chan open`). Falls back to the request
     // on the impossible local_addr() error rather than refusing to serve.
     let local_addr = listener.local_addr().unwrap_or(config.addr);
     println!("chan devserver: listening on http://{local_addr}");
@@ -1084,7 +1084,7 @@ mod tests {
     async fn port_zero_bind_resolves_to_a_concrete_port() {
         // The ready line reports `listener.local_addr()`, not the requested
         // addr, so `chan devserver --port 0` prints the OS-assigned port (the
-        // shape `chan serve` reports) instead of `:0`.
+        // shape `chan open` reports) instead of `:0`.
         let requested: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let listener = tokio::net::TcpListener::bind(requested).await.unwrap();
         let local_addr = listener.local_addr().unwrap_or(requested);

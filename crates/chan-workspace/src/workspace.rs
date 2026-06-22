@@ -481,7 +481,7 @@ impl Workspace {
         // Converge the graph against disk on every open. The watcher
         // only sees events that happen WHILE a server is running, so a
         // file added/removed/edited while nothing was watching (closed
-        // laptop, `chan serve` not running) leaves the graph diverged
+        // laptop, `chan open` not running) leaves the graph diverged
         // from the live tree, and no consumer's startup path catches it:
         // chan-server only triggers a full reindex when an index side is
         // wholly EMPTY, and the indexer only reconciles on watcher
@@ -2354,7 +2354,7 @@ impl Workspace {
     /// `chan workspace index enable-semantic` / `disable-semantic` CLI and the
     /// `/api/index/semantic/{enable,disable}` endpoints both route
     /// here; the change persists to `<root>/dashboard.toml` so a
-    /// `chan serve` restart honours it.
+    /// `chan open` restart honours it.
     pub fn set_semantic_enabled(&self, enabled: bool) -> Result<()> {
         self.update_dashboard(|cfg| {
             if cfg.semantic_enabled == enabled {
@@ -5002,7 +5002,7 @@ mod tests {
             assert!(files.iter().any(|f| f == "top.md"));
             // Drop the handle so the flock + live-workspace weak ref
             // release; the re-open below then takes the same path a
-            // fresh `chan serve` would.
+            // fresh `chan open` would.
         }
 
         // Simulate "added while no server watched": write the nested

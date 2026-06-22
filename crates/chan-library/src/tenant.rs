@@ -8,7 +8,7 @@
 //!   `WorkspaceCell` / `Indexer` (which stay in the route layer). The route
 //!   layer hands back an `Arc<dyn WorkspaceCellHandle>` over the shared cell.
 //! - [`HostControl`] — the slice of the host a control-socket connection
-//!   reaches through a `Weak` back-reference: unmount a tenant (`chan unserve`)
+//!   reaches through a `Weak` back-reference: unmount a tenant (`chan close`)
 //!   and read the library window set (`cs window list`). Lets the control
 //!   socket hold `Weak<dyn HostControl>` instead of a concrete `WorkspaceHost`.
 
@@ -73,12 +73,12 @@ pub trait HostControl: Send + Sync {
 }
 
 /// How a control socket's process tears down the workspace named by a
-/// `ControlRequest::Unserve` — the server-decides-scope half of `chan unserve`.
+/// `ControlRequest::Close` — the server-decides-scope half of `chan close`.
 /// The route layer's tenant builder builds it from an [`UnserveMode`] the
 /// embedder picks, and it rides in the control socket's context.
 #[derive(Clone)]
 pub enum UnserveScope {
-    /// A standalone `chan serve <root>`: unserve of `root` fires the process
+    /// A standalone `chan open <root>`: unserve of `root` fires the process
     /// graceful-shutdown signal, so the whole process exits and releases the
     /// flock. `root` guards against unserving a path this server does not serve.
     Standalone {
@@ -97,7 +97,7 @@ pub enum UnserveScope {
 }
 
 /// The embedder's choice of [`UnserveScope`] kind, passed to the tenant builder
-/// (which fills in the standalone shutdown handle). A standalone `chan serve`
+/// (which fills in the standalone shutdown handle). A standalone `chan open`
 /// passes [`UnserveMode::Standalone`]; a `WorkspaceHost` passes
 /// [`UnserveMode::Host`] once it registered its self-handle, else
 /// [`UnserveMode::Unsupported`].
