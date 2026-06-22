@@ -176,6 +176,11 @@ web-check: web-launcher ## Run frontend check, vitest, and production build.
 	# svelte-check + build, leaving vitest ungated after CI was simplified to
 	# the make ci-* targets. The `web-launcher` prerequisite builds the launcher
 	# bundle so the pre-push / release cargo build embeds a real launcher.
+	#
+	# The web-launcher prerequisite only BUILDS the launcher (vite build), which
+	# misses type errors + unit regressions, so gate its svelte-check + vitest
+	# here too (it already ran `npm install`). Both SPAs are now fully gated.
+	cd web-launcher && $(NPM) run check && $(NPM) test
 	cd web && $(NPM) install && $(NPM) run check && $(NPM) test && $(NPM) run build
 	@date -u '+%Y-%m-%dT%H:%M:%SZ' > "$(WEB_BUILD_STAMP)"
 
