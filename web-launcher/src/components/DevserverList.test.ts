@@ -57,17 +57,6 @@ describe("DevserverList redesign", () => {
     expect(target!.querySelector('input[type="checkbox"]')).toBeTruthy();
   });
 
-  it("shows a colour swatch on a devserver row that has a colour set", () => {
-    // The seed devserver "prod" carries color #e58c4d.
-    mountList();
-    const swatch = target!.querySelector(".row-swatch") as HTMLElement | null;
-    expect(swatch).not.toBeNull();
-    // The swatch tints to the assigned hex; jsdom normalises the inline colour
-    // to rgb(), so assert the parsed background while the title keeps the hex.
-    expect(swatch!.style.background).toBe("rgb(229, 140, 77)");
-    expect(swatch!.getAttribute("title")).toContain("#e58c4d");
-  });
-
   it("shows Connect (New terminal disabled) for a disconnected devserver and fires connect", async () => {
     // A freshly added devserver starts disconnected.
     await saveDevserver({ url: "https://fresh.example:9100", label: "fresh" });

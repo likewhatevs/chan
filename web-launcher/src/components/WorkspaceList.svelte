@@ -15,7 +15,6 @@
     openDevserverWorkspace,
     setDevserverWorkspaceOn,
     forgetDevserverWorkspace,
-    setLocalColor,
     reportError,
     clearError,
   } from "../state/library.svelte";
@@ -60,22 +59,6 @@
   const localWorkspaces = $derived(library.workspaces.filter((w) => w.devserver_id === null));
   const remoteGroups = $derived(buildRemoteGroups(library.workspaces));
 
-  // The local library's pane-highlight colour. The native colour input has no
-  // empty state, so an unset colour renders the input at the accent default but
-  // still submits null (clear) through the action.
-  const LOCAL_ACCENT = "#3fb950";
-
-  // Persist the local-library colour through the action (a chosen hex sets it,
-  // null clears to the default accent), routing any failure to the banner.
-  async function changeLocalColor(color: string | null): Promise<void> {
-    clearError();
-    try {
-      await setLocalColor(color);
-    } catch (e) {
-      reportError(e);
-    }
-  }
-
   // Per-row actions surface their failure in the banner (the actions throw so
   // the bulk loop can count failures; the per-row caller catches here).
   async function run(action: Promise<void>): Promise<void> {
@@ -119,28 +102,7 @@
 
 {#if localWorkspaces.length}
   <section class="group">
-    <div class="group-head">
-      <h2 class="group-title">🏠 Local</h2>
-      {#if !readOnly}
-        <!-- The local library's pane-highlight colour: a native swatch + a
-             clear-to-default affordance, persisted on change. -->
-        <div class="color-control" title="Local library pane colour">
-          <input
-            type="color"
-            aria-label="Local library pane colour"
-            value={library.localColor || LOCAL_ACCENT}
-            oninput={(e) => changeLocalColor(e.currentTarget.value)} />
-          {#if library.localColor}
-            <button
-              class="color-clear"
-              type="button"
-              aria-label="Reset local library pane colour to default"
-              title="Reset to default accent"
-              onclick={() => changeLocalColor(null)}>Default</button>
-          {/if}
-        </div>
-      {/if}
-    </div>
+    <h2 class="group-title">🏠 Local</h2>
 
     {#if !readOnly}
       <SelectionBar kind="workspace" />

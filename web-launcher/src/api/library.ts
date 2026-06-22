@@ -96,13 +96,6 @@ export interface DevserverEntry {
   /** Whether a bearer token is stored (the value is never returned). */
   has_token: boolean;
   /**
-   * Optional per-library pane-highlight colour as a hex string (`#rrggbb`): the
-   * desktop tints a window's active-pane highlight with its library's colour.
-   * Absent/null falls back to the default accent. The add/edit dialog sets it;
-   * the row shows it as a swatch.
-   */
-  color?: string | null;
-  /**
    * The library id this devserver is assigned once known, joining its window
    * rows in the feed to the user's name for it (the "↗ + name" remote label).
    * null before the devserver's first connect, when no library id exists yet.
@@ -124,8 +117,6 @@ export interface DevserverInput {
   script?: string;
   /** Bearer for a proxied/gateway devserver, so the user connects without scraping. */
   token?: string;
-  /** Pane-highlight colour (hex `#rrggbb`); absent/null = the default accent. */
-  color?: string | null;
 }
 
 // ---- The client surface -------------------------------------------------
@@ -142,12 +133,6 @@ export interface LibraryApi {
   addDevserver(input: DevserverInput): Promise<DevserverEntry>;
   updateDevserver(id: string, input: DevserverInput): Promise<DevserverEntry>;
   removeDevserver(id: string): Promise<void>;
-  /** The local library's pane-highlight colour (hex `#rrggbb`), or null for the
-   * default accent. Served on every surface (no store → null). */
-  getLocalColor(): Promise<string | null>;
-  /** Set the local library's pane-highlight colour; null clears it to the
-   * default accent. Loopback-only (403 read-only on a read-only surface). */
-  setLocalColor(color: string | null): Promise<void>;
   /** Tell the desktop to connect a devserver (run its connect command + dial
    * the URL). A pure desktop action: a surface with no desktop bridge answers
    * 409, so the launcher only offers it where window-ops are available. */
@@ -256,9 +241,6 @@ export const liveApi: LibraryApi = {
   updateDevserver: (id, input) =>
     req("PUT", `/api/library/devservers/${encodeURIComponent(id)}`, input),
   removeDevserver: (id) => req("DELETE", `/api/library/devservers/${encodeURIComponent(id)}`),
-  getLocalColor: () =>
-    req<{ color: string | null }>("GET", "/api/library/local-color").then((r) => r.color),
-  setLocalColor: (color) => req("PUT", "/api/library/local-color", { color }),
   connectDevserver: (id) =>
     req("POST", `/api/library/devservers/${encodeURIComponent(id)}/connect`),
   disconnectDevserver: (id) =>

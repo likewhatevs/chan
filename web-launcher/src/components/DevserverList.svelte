@@ -64,10 +64,6 @@
           {/if}
           <div class="row-main">
             <span class="row-name">
-              {#if ds.color}<span
-                  class="row-swatch"
-                  style={`background:${ds.color}`}
-                  title={`Pane colour ${ds.color}`}></span>{/if}
               {displayName(ds)}
               {#if ds.connected}<span class="dot live" title="Connected"></span>{/if}
               {#if ds.has_token}<span class="chip" title="A connect token is stored">🔒 token</span>{/if}

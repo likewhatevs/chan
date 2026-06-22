@@ -135,49 +135,6 @@ describe("New workspace dialog", () => {
     expect(el.querySelectorAll('[role="radio"]').length).toBe(0);
   });
 
-  it("renders a colour input on the devserver form, seeded from the entry's color", () => {
-    const ds: DevserverEntry = {
-      id: "ds-color",
-      url: "https://color.example:8300",
-      label: "tinted",
-      script: "",
-      has_token: false,
-      color: "#e58c4d",
-      library_id: null,
-      connected: false,
-    };
-    openEditDevserver(ds);
-    const el = render();
-    const colorInput = el.querySelector('input[type="color"]') as HTMLInputElement | null;
-    expect(colorInput).not.toBeNull();
-    expect(colorInput!.value).toBe("#e58c4d");
-    // The form echoes the chosen hex; a Default button clears it back to accent.
-    expect(el.textContent).toContain("#e58c4d");
-    const def = [...el.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Default");
-    expect(def).toBeTruthy();
-  });
-
-  it("disables the colour control on a connected (read-only) devserver", () => {
-    const ds: DevserverEntry = {
-      id: "ds-color-live",
-      url: "https://color-live.example:8301",
-      label: "live",
-      script: "",
-      has_token: false,
-      color: "#3fb950",
-      library_id: "lib-xyz",
-      connected: true,
-    };
-    openEditDevserver(ds);
-    const el = render();
-    const colorInput = el.querySelector('input[type="color"]') as HTMLInputElement;
-    expect(colorInput.disabled).toBe(true);
-    // No Default clear button on the read-only surface.
-    expect(
-      [...el.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Default"),
-    ).toBe(false);
-  });
-
   it("opens read-only (OK, no Save, disabled inputs) for a connected devserver", () => {
     const ds: DevserverEntry = {
       id: "ds-live",

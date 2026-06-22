@@ -70,44 +70,6 @@ describe("WorkspaceList redesign", () => {
     expect(ariaLabels().some((l) => l.startsWith("Forget"))).toBe(true);
   });
 
-  it("reflects library.localColor in the local colour control and persists a change", async () => {
-    target = document.createElement("div");
-    document.body.appendChild(target);
-    app = mount(WorkspaceList, { target });
-
-    // loadLibrary seeded the mock's local colour (#3fb950) into library.localColor.
-    expect(library.localColor).toBe("#3fb950");
-    const swatch = target.querySelector('input[type="color"]') as HTMLInputElement | null;
-    expect(swatch).not.toBeNull();
-    expect(swatch!.value).toBe("#3fb950");
-
-    // Changing the swatch routes through setLocalColor (the action + the mock's
-    // tick); a macrotask boundary drains it before asserting the new state.
-    swatch!.value = "#ff8800";
-    swatch!.dispatchEvent(new Event("input", { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 0));
-    flushSync();
-    expect(library.localColor).toBe("#ff8800");
-    expect(library.error).toBeNull();
-  });
-
-  it("clears the local colour to default through the Default button", async () => {
-    target = document.createElement("div");
-    document.body.appendChild(target);
-    app = mount(WorkspaceList, { target });
-
-    // A non-null localColor shows a Default clear affordance.
-    const def = [...target.querySelectorAll("button")].find(
-      (b) => b.textContent?.trim() === "Default",
-    ) as HTMLButtonElement | undefined;
-    expect(def).toBeTruthy();
-    def!.click();
-    await new Promise((r) => setTimeout(r, 0));
-    flushSync();
-    expect(library.localColor).toBeNull();
-    expect(library.error).toBeNull();
-  });
-
   it("reveals the bulk bar + checks the row when a local workspace is selected", () => {
     target = document.createElement("div");
     document.body.appendChild(target);

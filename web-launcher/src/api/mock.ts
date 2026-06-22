@@ -59,8 +59,6 @@ const devservers: MockDevserver[] = [
     script: "ssh box.example.com -L 8787:localhost:8787 chan devserver",
     has_token: true,
     token: "tok_seeded_prod",
-    // A seeded pane-highlight colour so the row swatch is visible in the mock SPA.
-    color: "#e58c4d",
     library_id: DS_LIBRARY_ID,
     // Seeded connected so the merged view (remote windows + remote workspace
     // rows + the Disconnect action) has something real to render with no desktop.
@@ -161,11 +159,6 @@ const windows: WindowRecord[] = [
   },
 ];
 
-// The local library's pane-highlight colour (hex `#rrggbb`), or null for the
-// default accent. A module-level singleton mirroring the desktop config store;
-// getLocalColor reads it, setLocalColor writes it (null clears to default).
-let localColor: string | null = "#3fb950";
-
 const subscribers = new Set<(set: WindowSet) => void>();
 
 function notify(): void {
@@ -181,7 +174,6 @@ function publicDevserver(ds: MockDevserver): DevserverEntry {
     label: ds.label,
     script: ds.script,
     has_token: ds.has_token,
-    color: ds.color ?? null,
     library_id: ds.library_id,
     connected: ds.connected,
   };
@@ -249,8 +241,6 @@ export const mockApi: LibraryApi = {
       script: input.script ?? "",
       has_token: !!input.token,
       token: input.token ?? "",
-      // A non-empty colour on add sets it; absent/null means the default accent.
-      color: input.color || null,
       // No library id until the desktop connects this devserver for the first time.
       library_id: null,
       // A freshly added devserver is not connected until the desktop dials it.
@@ -272,26 +262,12 @@ export const mockApi: LibraryApi = {
       ds.token = input.token;
       ds.has_token = true;
     }
-    // Colour on edit: an omitted/undefined colour keeps the stored one (the
-    // token pattern); an explicit `null` clears it to the default accent, and a
-    // non-empty hex sets it.
-    if (input.color !== undefined) {
-      ds.color = input.color || null;
-    }
     return tick(publicDevserver(ds));
   },
 
   removeDevserver: (id) => {
     const i = devservers.findIndex((d) => d.id === id);
     if (i >= 0) devservers.splice(i, 1);
-    return tick(undefined);
-  },
-
-  // The local library's pane-highlight colour, an in-memory singleton standing
-  // in for the desktop config store: get reads it, set writes it (null clears).
-  getLocalColor: () => tick(localColor),
-  setLocalColor: (color) => {
-    localColor = color;
     return tick(undefined);
   },
 
