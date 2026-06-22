@@ -2429,8 +2429,8 @@ export function openGraph(): void {
 
 /** Spawn a graph tab rooted at the focused surface's context.
  *  Mirrors `paneModeOpenGraph` (which targets the Hybrid Nav draft);
- *  this variant spawns in the live layout for the `chan:command
- *  app.graph.toggle` command (the native Graph menu). Passing a
+ *  this variant spawns in the live layout for top-level chords
+ *  (`Cmd+Shift+M`, `chan:command app.graph.toggle`). Passing a
  *  `file:` or `dir:` scope lands the new graph already scoped and
  *  the breadcrumb above the inspector body renders the ancestor
  *  chain. Falls back to workspace scope when no context is

@@ -106,16 +106,15 @@ describe("shouldEscapeTerminal lookup", () => {
     expect(shouldEscapeTerminal(e)).toBe(true);
   });
 
-  test("Cmd+Shift+M (retired graph chord) no longer escapes on web", () => {
-    // The top-level Cmd+Shift+M web chord is retired (graphs open via
-    // Hybrid Nav / "Graph from here"), so a focused terminal keeps the
-    // keystroke instead of bubbling it to a now-absent App handler.
+  test("Cmd+Shift+M (graph) escapes", () => {
+    // The top-level Cmd+Shift+M graph chord bubbles out of a focused
+    // terminal to the App keymap (escapeTerminal on app.graph.toggle).
     const e = new KeyboardEvent("keydown", {
       key: "m",
       metaKey: true,
       shiftKey: true,
     });
-    expect(shouldEscapeTerminal(e)).toBe(false);
+    expect(shouldEscapeTerminal(e)).toBe(true);
   });
 
   test("Cmd+, (settings) escapes", () => {

@@ -387,10 +387,8 @@
   ///   Cmd+T          -> Terminal (native; Cmd+Alt+T on web Mac)
   ///   Cmd+O          -> File Browser (native; Cmd+Alt+O on web Mac)
   ///   Cmd+P          -> Team Work (native; Cmd+Alt+P on web Mac)
-  ///   (Graph has no top-level web chord — spawn it via Mod+. g/v or the
-  ///   native menu's app.graph.toggle command; "Graph from here" in a graph
-  ///   inspector spawns a new graph tab.)
-  ///   Mod+. t/o/p/v  -> universal aliases via Hybrid Nav
+  ///   Cmd+Shift+M    -> Graph (native + web)
+  ///   Mod+. t/o/p/m  -> universal aliases via Hybrid Nav
   ///
   /// Other app chords:
   ///   Cmd/Ctrl+,             -> flip focused Hybrid surface
@@ -569,9 +567,9 @@
       }
       case "g":
       case "G":
-      case "v":
-      case "V":
-        // Graph: workspace-only.
+      case "m":
+      case "M":
+        // Graph: workspace-only (Hybrid Nav Mod+. M, with g as a mnemonic alias).
         if (ui.terminalOnly) return;
         paneModeOpenGraph(resolveSpawnContext());
         return;
@@ -712,6 +710,13 @@
     if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey && e.code === "KeyP") {
       e.preventDefault();
       spawnTeamWorkFromContext();
+      return;
+    }
+    // Cmd+Shift+M spawns a context-aware graph on both web and native.
+    // Browsers don't reserve this chord so no Cmd+Alt+M fallback is needed.
+    if (e.metaKey && !e.altKey && e.shiftKey && !e.ctrlKey && e.code === "KeyM") {
+      e.preventDefault();
+      spawnGraphFromContext();
       return;
     }
     // `terminal.richPrompt` toggles the Rich Prompt bubble, PER-TERMINAL,
@@ -1102,10 +1107,8 @@
         flipHybrid(layout.activePaneId);
         return;
       // chan-desktop's KEY_BRIDGE_JS fires these ids on native Cmd+T /
-      // Cmd+O / Cmd+P. Same context-aware helpers as the web chords so both
-      // platforms behave identically. `app.graph.toggle` stays wired for the
-      // native Graph menu item; the Cmd+Shift+M web chord is retired (graphs
-      // spawn via Mod+. g/v or "Graph from here").
+      // Cmd+O / Cmd+P / Cmd+Shift+M. Same context-aware helpers as the web
+      // chords so both platforms behave identically.
       case "app.files.toggle":
         spawnBrowserFromContext();
         return;

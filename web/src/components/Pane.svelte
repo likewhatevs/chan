@@ -1358,8 +1358,7 @@
              and the empty-pane carousel slide 1. Click any row
              to spawn the matching surface in the active pane;
              chord hints reflect the canonical chord for each
-             action (Cmd+T / Cmd+O / Cmd+P; Graph via the menu /
-             Hybrid Nav). The
+             action (Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). The
              dispatchCommand call routes through the same
              context-aware helper the chord layer uses, so the
              new surface lands on the focused tab's context

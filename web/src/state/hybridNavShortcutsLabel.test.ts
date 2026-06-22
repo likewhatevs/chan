@@ -18,12 +18,9 @@ describe("shortcuts.ts Hybrid Nav label casing", () => {
     expect(shortcuts).toContain("Mod+. p (Hybrid Nav)");
     expect(shortcuts).toContain("Mod+. o (Hybrid Nav)");
     expect(shortcuts).toContain("Mod+. t (Hybrid Nav)");
-    // The graph chord lives on the `web` field (Mod+. V) with a title-case
-    // `Hybrid Nav` note (Cmd+Shift+M is fully retired, web + native), so it
-    // spot-checks the capital-V web chord + the note rather than the old
-    // `Mod+. v (Hybrid Nav)` parenthetical.
-    expect(shortcuts).toContain('web: "Mod+. V"');
-    expect(shortcuts).toContain('note: "Hybrid Nav"');
+    // The graph top-level chord is Cmd+Shift+M (web + native) again; its
+    // Hybrid Nav alias is Mod+. M, carried in the title-case note.
+    expect(shortcuts).toContain('note: "or Mod+. M (Hybrid Nav)"');
   });
 
   test("`Enter Hybrid Nav` label reads title-case", () => {

@@ -23,15 +23,15 @@ describe("Cmd+K pane mode keymap (inversion)", () => {
 });
 
 // Hybrid NAV spawn cases: numeric 1/2/3/4 are gone (they duplicated
-// Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). Letter mnemonics t/o/p/v/g
+// Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M). Letter mnemonics t/o/p/m/g
 // are the in-NAV path; f/F (Search) and h/H (Help) are unchanged.
 describe("Cmd+K pane mode keymap (transactional staging)", () => {
   test("g / G writes directly to the draft layout (no immediate commit)", () => {
     expect(app).toMatch(
-      /case "g":\s*\n\s*case "G":\s*\n?\s*case "v":\s*\n\s*case "V":[\s\S]*?paneModeOpenGraph\(resolveSpawnContext\(\)\);[\s\S]*?return;/,
+      /case "g":\s*\n\s*case "G":\s*\n?\s*case "m":\s*\n\s*case "M":[\s\S]*?paneModeOpenGraph\(resolveSpawnContext\(\)\);[\s\S]*?return;/,
     );
-    // v / V kept as legacy aliases - muscle memory protection.
-    expect(app).toMatch(/case "v":\s*\n\s*case "V":[\s\S]*?paneModeOpenGraph/);
+    // m / M is the Hybrid Nav graph chord (Mod+. M); g / G is the mnemonic alias.
+    expect(app).toMatch(/case "m":\s*\n\s*case "M":[\s\S]*?paneModeOpenGraph/);
   });
 
   test("lowercase f opens the Search overlay (commits first)", () => {
@@ -126,18 +126,19 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords", () => {
     );
   });
 
-  test("the graph has no top-level web keydown (Cmd+Shift+M retired)", () => {
-    // The Cmd+Shift+M web chord is retired: graphs open via Hybrid Nav
-    // (Mod+. V/G), the "Graph from here" inspector action (a new graph
-    // tab), or the native Graph menu (app.graph.toggle bridge, below).
-    expect(app).not.toMatch(/e\.code === "KeyM"[\s\S]{0,80}spawnGraphFromContext\(\)/);
+  test("Cmd+Shift+M (web + native) spawns graph with context", () => {
+    // The top-level Cmd+Shift+M graph chord: the web keydown fires
+    // spawnGraphFromContext; the native half routes via the app.graph.toggle
+    // bridge (below). Hybrid Nav Mod+. M is the in-NAV alias.
+    expect(app).toMatch(
+      /e\.metaKey && !e\.altKey && e\.shiftKey && !e\.ctrlKey && e\.code === "KeyM"[\s\S]*?spawnGraphFromContext\(\)/,
+    );
   });
 
   test("chan:command bridge routes through context-aware helpers", () => {
     // chan-desktop's KEY_BRIDGE_JS fires these commands on native
-    // Cmd+T / Cmd+O / Cmd+P (and the native Graph menu fires
-    // app.graph.toggle); they route through the same helpers as the
-    // web chords.
+    // Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M; they route through the same
+    // helpers as the web chords.
     expect(app).toMatch(
       /case "app\.terminal\.toggle":\s*\n\s*spawnTerminalFromContext\(\);/,
     );

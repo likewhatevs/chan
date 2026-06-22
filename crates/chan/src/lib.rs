@@ -86,7 +86,7 @@ In-app keybindings (Cmd = Ctrl on Linux / Windows):
   Flip focused Hybrid                          Cmd+,
   Team Work                                    Cmd+Alt+P   (macOS web + native everywhere; all platforms via Mod+. p (Hybrid Nav))
   File browser                                 Cmd+Alt+O   (macOS web + native everywhere; all platforms via Mod+. o (Hybrid Nav))
-  Graph                                        Cmd+. V   (Hybrid Nav; native Cmd+Shift+M pending retirement)
+  Graph                                        Cmd+Shift+M   (or Mod+. M (Hybrid Nav))
   New terminal                                 Cmd+Alt+T   (macOS web + native everywhere; all platforms via Mod+. t (Hybrid Nav))
   Reload window                                Cmd+R   (Ctrl+Shift+R on Linux / Windows)
   New draft                                    Cmd+N
