@@ -1,19 +1,19 @@
 # Chan Gateway
 
-The gateway is the self-hostable server side of chan's tunnel. It lets a fleet of `chan serve` instances dial out and be reached from anywhere in the browser, behind sign-in, without opening inbound ports on each machine. It lives in this repo under `gateway/` and is yours to run; the maintainer's own deployment at `id.chan.app` and `devserver.chan.app` is experimental, ships with sign-in off by default, and is not a hosted product.
+The gateway is the self-hostable server side of chan's tunnel. It lets a fleet of `chan devserver` instances dial out and be reached from anywhere in the browser, behind sign-in, without opening inbound ports on each machine. It lives in this repo under `gateway/` and is yours to run; the maintainer's own deployment at `id.chan.app` and `devserver.chan.app` is experimental, ships with sign-in off by default, and is not a hosted product.
 
-![Where Chan Gateway sits: each chan serve dials out over an authenticated tunnel to a self-hosted gateway — identity, devserver-proxy, profile on Postgres, and an admin CLI — while a browser signs in at identity and reaches the workspace through the devserver-proxy's reverse proxy.](/assets/gateway-architecture.svg)
+![Where Chan Gateway sits: each chan devserver dials out over an authenticated tunnel to a self-hosted gateway — identity, devserver-proxy, profile on Postgres, and an admin CLI — while a browser signs in at identity and reaches each workspace through the devserver-proxy's reverse proxy.](/assets/gateway-architecture.svg)
 
 ## How chan uses it
 
-Instead of binding a local port, `chan serve` can publish a workspace over an outbound tunnel to a gateway, which reverse-proxies it back to you:
+Instead of binding a local port, `chan devserver` can publish your whole library over a single outbound tunnel to a gateway, which reverse-proxies it back to you:
 
 ```sh
 export CHAN_TUNNEL_TOKEN=chan_pat_...     # a token your gateway issued
-chan serve ~/notes --tunnel-url https://workspace.example.com/v1/tunnel
+chan devserver --tunnel-url https://devserver.example.com/v1/tunnel
 ```
 
-`chan` dials the gateway, registers the workspace over an authenticated tunnel, and serves every request through the same router the local listener uses. The workspace is then reachable at `{user}.workspace.example.com/{workspace}/*`, gated by the gateway.
+`chan devserver` dials the gateway, registers over an authenticated tunnel, and serves every request through the same router the local listener uses. Each mounted workspace is then reachable at `{user}.devserver.example.com/{workspace}/*`, gated by the gateway.
 
 ## Services
 
@@ -26,7 +26,7 @@ identity         id.chan.app            OAuth sign-in (GitHub, Google,
                                         GitLab), sessions, personal access
                                         tokens, the account SPA
 devserver-proxy  devserver.chan.app     tunnel registration (POST /v1/tunnel)
-                 + *.devserver.chan.app  + reverse proxy into each chan serve
+                 + *.devserver.chan.app  + reverse proxy into each chan devserver
 profile          internal               users, identities, workspaces, flags
                                         over Postgres; called by identity
                                         and the admin CLI

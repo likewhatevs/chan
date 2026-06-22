@@ -193,7 +193,7 @@ The control frames are exchanged once per tunnel lifetime; encode cost is irrele
 
 ### HelloAckOk.prefix
 
-Server-assigned public path prefix, shape `/{workspace}` — one leading slash, no trailing slash. The username is not in the path: the production fronting proxy routes per-user wildcard subdomains (`{user}.workspace.chan.app`), so the host carries the user and the path carries the workspace. chan-server embeds the prefix as `<meta name="chan-prefix">` so the SPA's relative URLs resolve under the workspace without the operator passing a prefix flag.
+Server-assigned public path prefix, shape `/{workspace}` — one leading slash, no trailing slash. The username is not in the path: the production fronting proxy routes per-user wildcard subdomains (`{user}.devserver.chan.app`), so the host carries the user and the path carries the workspace. chan-server embeds the prefix as `<meta name="chan-prefix">` so the SPA's relative URLs resolve under the workspace without the operator passing a prefix flag.
 
 ### ProtocolVersion negotiation
 

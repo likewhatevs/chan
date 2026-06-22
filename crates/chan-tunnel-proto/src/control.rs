@@ -14,10 +14,12 @@ impl ProtocolVersion {
 
 /// First frame, client -> server. Sent right after the HTTP/2
 /// stream opens. The token in the `Authorization` header
-/// authenticates the user; this frame names the workspace the client
-/// wants to expose. Tokens are user-scoped, not workspace-scoped, so
-/// the same token can register `(user, notes)` and `(user,
-/// journal)` from two separate `chan serve` instances.
+/// authenticates the caller. This frame also carries a workspace
+/// name, but the production gateway resolves the devserver identity
+/// from the token and ignores the value: `chan devserver` sends the
+/// fixed placeholder `"devserver"`, and one registration carries the
+/// caller's whole library. The field stays in the wire type so the
+/// protocol itself is workspace-agnostic.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hello {
     pub protocol: ProtocolVersion,
@@ -57,7 +59,7 @@ pub struct HelloAckOk {
     pub protocol: ProtocolVersion,
     /// Public path prefix on the gateway's wildcard subdomain.
     /// Shape: `/{workspace}` (one leading slash, no trailing slash).
-    /// The username lives in the host (`{user}.workspace.chan.app`),
+    /// The username lives in the host (`{user}.devserver.chan.app`),
     /// not in the path; chan-server uses this value as
     /// `<meta name="chan-prefix">` so the SPA's relative URLs
     /// resolve under that workspace.

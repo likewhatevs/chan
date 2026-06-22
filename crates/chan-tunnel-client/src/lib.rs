@@ -1,7 +1,7 @@
 //! chan-tunnel client library.
 //!
-//! Used by `chan serve --tunnel-url ... --tunnel-token ...`. The
-//! eventual entry point dials the public tunnel endpoint over
+//! Used by `chan devserver --tunnel-token ...`. The eventual
+//! entry point dials the gateway's tunnel endpoint over
 //! h2/TLS, runs `handshake` over the resulting bidirectional
 //! stream, and serves every yamux substream with a user-supplied
 //! `tower::Service` (typically an `axum::Router`) via hyper.
@@ -145,7 +145,7 @@ impl Default for ClientConfig {
     }
 }
 
-/// What the server told the client during HelloAck. `chan serve`
+/// What the server told the client during HelloAck. `chan devserver`
 /// uses `prefix` to wire its router so the user does not pass
 /// `--prefix` manually.
 #[derive(Debug, Clone)]
@@ -280,7 +280,7 @@ where
 /// Run the tunnel client until cancelled: dial, register, serve
 /// substreams, reconnect on disconnect with exponential backoff.
 ///
-/// Designed for `chan serve` to call as a long-lived future;
+/// Designed for `chan devserver` to call as a long-lived future;
 /// dropping it cancels everything cleanly. Returns only on
 /// configuration errors that retrying cannot recover from
 /// (invalid URL, invalid workspace name, missing token).

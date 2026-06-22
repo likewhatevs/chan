@@ -1,7 +1,7 @@
 //! Live tunnel registry keyed by `(user, workspace)`.
 //!
 //! A registered tunnel exposes one operation: open a fresh
-//! outbound yamux substream against the connected `chan serve`
+//! outbound yamux substream against the connected `chan devserver`
 //! peer. The actual yamux `Connection` is owned by a per-tunnel
 //! driver task; the registry only stores a `TunnelHandle` that
 //! sends open requests over an mpsc channel.
