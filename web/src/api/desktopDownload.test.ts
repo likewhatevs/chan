@@ -12,6 +12,10 @@ describe("desktop download capability", () => {
     expect(desktop).toContain("xhr.responseType = \"arraybuffer\"");
     expect(desktop).toContain("xhr.onprogress");
     expect(desktop).toContain("event.loaded / event.total");
+    // A streamed-tar directory download has no Content-Length, so the progress
+    // is guarded to an indeterminate `null` (the bubble renders the moving bar)
+    // rather than dividing by a zero/absent total into a NaN%.
+    expect(desktop).toContain("event.lengthComputable && event.total > 0");
     // Hands the finished bytes to the Tauri command as a Vec<u8>.
     expect(desktop).toContain('tauriInvoke<{ path: string }>(\n      "save_file_to_downloads"');
     expect(desktop).toContain("Array.from(bytes)");
