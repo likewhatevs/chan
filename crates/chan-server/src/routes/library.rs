@@ -16,7 +16,6 @@
 //! launcher would have been blind to its own windows; unifying them here fixes
 //! that and removes the double-registration.
 
-use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -380,14 +379,13 @@ struct LauncherWorkspace {
 
 /// `GET /api/library/workspaces`: one row per registered library workspace (the
 /// set `chan list` shows, read live from the host library — the source of
-/// truth), each stamped with whether it is currently served (`mounted_prefixes`
-/// supplies the live on-state). Sorted by id for a stable list.
+/// truth), each stamped with whether it is currently served. The on-state is
+/// resolved by canonical ROOT (`is_root_mounted`), not by a slug-prefix
+/// membership test, so it reads correctly on the desktop — which mounts tenants
+/// at `workspace-<hash>`, a prefix the slug check would never match. Sorted by
+/// id for a stable list.
 async fn handle_list_workspaces(State(state): State<Arc<LauncherState>>) -> Response {
     let host = &state.host;
-    let mounted: HashSet<String> = match host.mounted_prefixes() {
-        Ok(prefixes) => prefixes.into_iter().collect(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
     let mut rows: Vec<LauncherWorkspace> = host
         .library()
         .list_workspaces()
@@ -398,7 +396,7 @@ async fn handle_list_workspaces(State(state): State<Arc<LauncherState>>) -> Resp
                 workspace_id: prefix.trim_start_matches('/').to_string(),
                 path: ws.root_path.to_string_lossy().into_owned(),
                 label: workspace_label(&ws.root_path),
-                on: mounted.contains(&prefix),
+                on: host.is_root_mounted(&ws.root_path),
             })
         })
         .collect();
@@ -558,9 +556,16 @@ async fn handle_workspace_off(
     if let Err(resp) = require_mutable(&state) {
         return *resp;
     }
-    let Some((prefix, root)) = resolve_workspace(&state.host, &id) else {
+    let Some((allocated, root)) = resolve_workspace(&state.host, &id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    // Close the prefix the workspace is ACTUALLY mounted at — the desktop mounts
+    // at `workspace-<hash>`, not the slug — falling back to the allocated slug
+    // when it is not mounted (then the close is a no-op).
+    let prefix = state
+        .host
+        .mounted_prefix_for_root(&root)
+        .unwrap_or(allocated);
     match state.host.close_workspace(&prefix) {
         Ok(_) => {
             set_overlay(&state.host, &root, false);
@@ -580,11 +585,16 @@ async fn handle_remove_workspace(
     if let Err(resp) = require_mutable(&state) {
         return *resp;
     }
-    let Some((prefix, root)) = resolve_workspace(&state.host, &id) else {
+    let Some((allocated, root)) = resolve_workspace(&state.host, &id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // Unmount first (releases the flock before the unregister's reset); a no-op
-    // when the workspace is registered-but-off.
+    // Unmount the ACTUAL mounted prefix first (releases the flock before the
+    // unregister's reset) — the desktop mounts at `workspace-<hash>`, not the
+    // slug — falling back to the allocated slug when registered-but-off (a no-op).
+    let prefix = state
+        .host
+        .mounted_prefix_for_root(&root)
+        .unwrap_or(allocated);
     let _ = state.host.close_workspace(&prefix);
     if let Err(e) = state.host.library().unregister_workspace(&root) {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();

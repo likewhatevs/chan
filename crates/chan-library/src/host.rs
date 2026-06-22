@@ -1147,6 +1147,29 @@ impl WorkspaceHost {
         runtime.artifacts.cell.workspace()
     }
 
+    /// True iff a workspace with this canonical root is mounted (under ANY
+    /// prefix). The launcher's `on` state reads this so it reflects the real
+    /// mount regardless of the prefix scheme that mounted it — the desktop
+    /// mounts at `workspace-<hash>` while the devserver mounts at the slug, so a
+    /// slug-prefix membership check reads `off` on the desktop.
+    pub fn is_root_mounted(&self, root: &Path) -> bool {
+        self.live_workspace(root).is_some()
+    }
+
+    /// The prefix string this canonical root is CURRENTLY mounted at (the
+    /// `workspaces` map key), regardless of which scheme mounted it (slug vs
+    /// `workspace-<hash>`), or `None` when it is not mounted. The launcher's
+    /// off/remove path targets this so it closes the REAL tenant on the desktop,
+    /// not the slug prefix the desktop never mounted at.
+    pub fn mounted_prefix_for_root(&self, root: &Path) -> Option<String> {
+        let target = canonical_key(root);
+        let workspaces = self.workspaces.read().ok()?;
+        workspaces
+            .iter()
+            .find(|(_, runtime)| canonical_key(&runtime.root) == target)
+            .map(|(prefix, _)| prefix.clone())
+    }
+
     fn router_for_path(&self, path: &str) -> Result<Option<Router>, Error> {
         let workspaces = self
             .workspaces
@@ -1718,6 +1741,45 @@ mod tests {
         // After close, the handle is no longer live.
         assert!(host.close_workspace("/workspace").expect("close"));
         assert!(host.live_workspace(root.path()).is_none());
+    }
+
+    #[tokio::test]
+    async fn by_root_resolution_sees_a_non_slug_mount() {
+        // B1b regression: the desktop mounts a workspace tenant at
+        // `workspace-<hash>`, NOT at its slug prefix, so the old slug-membership
+        // on-check read `off` there. `is_root_mounted` / `mounted_prefix_for_root`
+        // resolve by canonical ROOT, so they see the real mount whatever scheme
+        // mounted it.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib, fake_builder()));
+
+        // Mount at a desktop-style prefix that is NOT the workspace's slug.
+        let mount_prefix = "/workspace-deadbeef";
+        let slug = allocate_workspace_prefix(root.path()).expect("slug prefix");
+        assert_ne!(slug, mount_prefix, "test needs a non-slug mount prefix");
+        host.open_registered_workspace(root.path(), serve_config(mount_prefix))
+            .await
+            .expect("open");
+
+        // On-state and the off/rm target both resolve by root, not by the slug.
+        assert!(host.is_root_mounted(root.path()));
+        assert_eq!(
+            host.mounted_prefix_for_root(root.path()).as_deref(),
+            Some(mount_prefix)
+        );
+
+        // An unknown root is not mounted (no panic) — the launcher shows `off`.
+        let other = tempfile::tempdir().expect("other dir");
+        assert!(!host.is_root_mounted(other.path()));
+        assert!(host.mounted_prefix_for_root(other.path()).is_none());
+
+        // Closing the REAL prefix unmounts it; by-root resolution then reads off.
+        assert!(host.close_workspace(mount_prefix).expect("close"));
+        assert!(!host.is_root_mounted(root.path()));
+        assert!(host.mounted_prefix_for_root(root.path()).is_none());
     }
 
     #[tokio::test]
