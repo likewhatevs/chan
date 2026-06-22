@@ -4,8 +4,9 @@
   // recomposed from kind/ordinal/workspace_path, never from the opaque
   // window_id or the library-composed title. The same feed drives the desktop
   // Window menu and `cs window list`, so all three always agree.
-  import { library, remoteLibraryName } from "../state/library.svelte";
+  import { library, remoteLibraryName, toggleWindow } from "../state/library.svelte";
   import { LOCAL_LIBRARY_ID, librarySectionLabel, windowRowLabel } from "../lib/windowLabel";
+  import { readOnly } from "../state/capabilities";
   import type { WindowRecord } from "../api/library";
 
   interface Group {
@@ -61,10 +62,22 @@
                 {/if}
               </div>
               <div class="row-actions">
-                <span
-                  class="dot"
-                  class:live={w.connected}
-                  title={w.connected ? "Connected" : "Detached"}></span>
+                {#if readOnly}
+                  <!-- Read-only surface (gateway/devserver): the dot shows the
+                       connection state but can't drive a native window. -->
+                  <span
+                    class="dot"
+                    class:live={w.connected}
+                    title={w.connected ? "Connected" : "Detached"}></span>
+                {:else}
+                  <button
+                    class="dot"
+                    class:live={w.connected}
+                    type="button"
+                    aria-label={w.connected ? "Hide window" : "Open window"}
+                    title={w.connected ? "Hide window" : "Open window"}
+                    onclick={() => toggleWindow(w)}></button>
+                {/if}
               </div>
             </li>
           {/each}

@@ -115,6 +115,12 @@ export interface LibraryApi {
   /** Mint a window of the local library (client supplies the kind; the library
    * supplies the id + persists). A terminal window has no workspace_path. */
   createWindow(kind: WindowKind, workspacePath?: string): Promise<WindowRecord>;
+  /** Open (focus a live window / un-hide a buried one) via the desktop window
+   * bridge. Rejects on a surface with no desktop attached. */
+  openWindow(id: string): Promise<void>;
+  /** Hide (bury) a window via the desktop window bridge — notification-free,
+   * unlike the OS close button. Rejects with no desktop attached. */
+  hideWindow(id: string): Promise<void>;
 }
 
 /** A non-2xx response, carrying the status and the server's text body. */
@@ -186,4 +192,6 @@ export const liveApi: LibraryApi = {
       kind,
       ...(workspacePath ? { workspace_path: workspacePath } : {}),
     }),
+  openWindow: (id) => req("POST", `/api/library/windows/${encodeURIComponent(id)}/open`),
+  hideWindow: (id) => req("POST", `/api/library/windows/${encodeURIComponent(id)}/hide`),
 };

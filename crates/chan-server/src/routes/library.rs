@@ -31,11 +31,14 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chan_library::{allocate_workspace_prefix, ServeConfig};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Notify;
+use tokio::sync::{oneshot, Notify};
 
 use crate::devserver::bytes_eq;
 use crate::static_assets::serve_launcher;
-use crate::{CreateWindow, DevserverEntry, DevserverInput, WindowRecord, WindowSet, WorkspaceHost};
+use crate::{
+    CreateWindow, DesktopWindowOp, DevserverEntry, DevserverInput, WindowRecord, WindowSet,
+    WorkspaceHost,
+};
 
 /// State shared by the `/api/library/workspaces` handlers: the library host plus
 /// the surface's serve address. `serve_addr` is the read-only/full discriminator
@@ -92,6 +95,14 @@ pub fn launcher_router(
         .route(
             "/api/library/windows/:window_id",
             delete(handle_discard_library_window),
+        )
+        .route(
+            "/api/library/windows/:window_id/open",
+            post(handle_open_library_window),
+        )
+        .route(
+            "/api/library/windows/:window_id/hide",
+            post(handle_hide_library_window),
         )
         .with_state(host.clone());
     // Workspaces: list always; the mutation routes are always present but
@@ -276,6 +287,51 @@ async fn handle_discard_library_window(
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/library/windows/{window_id}/open`: focus a live window or un-hide a
+/// buried one through the desktop window bridge, so the launcher's status dot can
+/// open a window directly. 204 on success; 409 when no desktop is attached (the
+/// standalone serve / devserver surface can't drive a native window).
+async fn handle_open_library_window(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(window_id): AxumPath<String>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::Open {
+        id: window_id,
+        reply,
+    })
+    .await
+}
+
+/// `POST /api/library/windows/{window_id}/hide`: bury (hide) a window through the
+/// desktop window bridge. Notification-free by construction: the bury notice
+/// fires only in the desktop's OS-close (`CloseRequested`) handler, not the
+/// generic window ops, so a launcher-driven hide skips it. 204 on success; 409
+/// when no desktop is attached.
+async fn handle_hide_library_window(
+    State(host): State<Arc<WorkspaceHost>>,
+    AxumPath(window_id): AxumPath<String>,
+) -> Response {
+    dispatch_window_op(&host, |reply| DesktopWindowOp::Hide {
+        id: window_id,
+        reply,
+    })
+    .await
+}
+
+/// Dispatch a unit-reply desktop window op and map it to HTTP: `Ok(())` → 204,
+/// `Err(msg)` → 409 with the message (no desktop attached, or the manager is
+/// gone). 409 keeps these idempotent-ish view ops distinct from a 5xx — the
+/// caller can't drive a native window here, which the body explains.
+async fn dispatch_window_op(
+    host: &WorkspaceHost,
+    make_op: impl FnOnce(oneshot::Sender<Result<(), String>>) -> DesktopWindowOp,
+) -> Response {
+    match host.desktop_bridge().dispatch(make_op).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(msg) => (StatusCode::CONFLICT, msg).into_response(),
     }
 }
 
@@ -838,5 +894,88 @@ mod devserver_route_tests {
         let router = router_with(Some(reg), true);
         let (status, _) = request(&router, "DELETE", "/api/library/devservers/ds1", None).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+}
+
+#[cfg(test)]
+mod window_op_route_tests {
+    //! The launcher window open/hide routes: with a desktop bridge attached they
+    //! dispatch and answer 204; with none (the standalone serve / devserver
+    //! surface) they answer 409 carrying `NO_DESKTOP`.
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use chan_workspace::Library;
+    use tower::ServiceExt;
+
+    use super::launcher_router;
+    use crate::{DesktopBridge, DesktopWindowOp, WorkspaceHost, NO_DESKTOP};
+
+    fn library() -> Library {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open_at(dir.path().join("config.toml")).unwrap();
+        // The router never reads the config file again; leak the dir so the path
+        // the Library holds stays valid for the (short) test body.
+        std::mem::forget(dir);
+        lib
+    }
+
+    async fn post(router: &axum::Router, uri: &str) -> (StatusCode, String) {
+        let req = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(req).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn open_and_hide_with_a_desktop_are_204() {
+        // A fake desktop drains the op channel and replies Ok(()) to the unit-reply
+        // ops, so the route maps the dispatch success to 204.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<DesktopWindowOp>(4);
+        let bridge = DesktopBridge {
+            window_ops: Some(tx),
+            window_titles: Default::default(),
+        };
+        let host = Arc::new(WorkspaceHost::with_desktop_bridge(
+            library(),
+            bridge,
+            crate::route_builder(),
+        ));
+        tokio::spawn(async move {
+            while let Some(op) = rx.recv().await {
+                match op {
+                    DesktopWindowOp::Open { reply, .. } | DesktopWindowOp::Hide { reply, .. } => {
+                        let _ = reply.send(Ok(()));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let router = launcher_router(host, None, None);
+        for verb in ["open", "hide"] {
+            let (status, _) = post(&router, &format!("/api/library/windows/w-1/{verb}")).await;
+            assert_eq!(status, StatusCode::NO_CONTENT, "{verb}");
+        }
+    }
+
+    #[tokio::test]
+    async fn open_and_hide_without_a_desktop_are_409_no_desktop() {
+        // The default host has no `window_ops` sender (standalone / devserver):
+        // dispatch refuses with NO_DESKTOP, which the route maps to 409.
+        let host = Arc::new(WorkspaceHost::new(library(), crate::route_builder()));
+        let router = launcher_router(host, None, None);
+        for verb in ["open", "hide"] {
+            let (status, body) = post(&router, &format!("/api/library/windows/w-1/{verb}")).await;
+            assert_eq!(status, StatusCode::CONFLICT, "{verb}");
+            assert_eq!(body, NO_DESKTOP, "{verb}");
+        }
     }
 }

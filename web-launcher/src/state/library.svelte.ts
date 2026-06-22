@@ -109,6 +109,14 @@ export async function openWorkspaceWindow(path: string): Promise<void> {
   await backend.createWindow("workspace", path);
 }
 
+/** Toggle a window from the feed's status dot: hide it if it is connected,
+ * otherwise open (focus/un-hide) it. The dot reflects the live feed after the
+ * watch push, so there is no optimistic flip here. */
+export async function toggleWindow(w: WindowRecord): Promise<void> {
+  if (w.connected) await backend.hideWindow(w.window_id);
+  else await backend.openWindow(w.window_id);
+}
+
 /** The user's name for a remote library, joined by its library id. */
 export function remoteLibraryName(libraryId: string): string | null {
   const ds = library.devservers.find((d) => d.library_id === libraryId);

@@ -210,6 +210,23 @@ export const mockApi: LibraryApi = {
     return tick({ ...rec });
   },
 
+  // The mock has no desktop, so open/hide just flip the in-memory window's
+  // `connected` and push the feed — enough for the mock SPA and tests to see the
+  // status dot react. A real surface drives the native window through the bridge.
+  openWindow: (id) => {
+    const w = windows.find((x) => x.window_id === id);
+    if (w) w.connected = true;
+    notify();
+    return tick(undefined);
+  },
+
+  hideWindow: (id) => {
+    const w = windows.find((x) => x.window_id === id);
+    if (w) w.connected = false;
+    notify();
+    return tick(undefined);
+  },
+
   watchWindows: (onSet) => {
     subscribers.add(onSet);
     // Full snapshot on subscribe, mirroring the live watch socket.
