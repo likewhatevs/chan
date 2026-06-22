@@ -824,9 +824,9 @@ async fn handle_remove_workspace(
     if let Some(overlay) = state.host.workspace_overlay() {
         overlay.forget(&root.to_string_lossy());
     }
-    // Drop any windows still rooted here (S1): close_workspace purges when the
-    // workspace was mounted; this also covers forgetting an off workspace whose
-    // windows lingered. Idempotent.
+    // FORGET purges the window records (the workspace is gone). OFF preserves
+    // them (filtered from the live feed until ON re-includes them), so the
+    // discard belongs only here on the forget path.
     state.host.discard_workspace_windows(&root);
     StatusCode::NO_CONTENT.into_response()
 }

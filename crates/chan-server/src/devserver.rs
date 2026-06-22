@@ -383,6 +383,11 @@ impl DevserverState {
         // trash (@@Alex "bin it!!"). Unmount above dropped the tenant's handle,
         // so the writer lock is released before the reset.
         self.host.library().unregister_workspace(&root)?;
+        // FORGET purges the workspace's window records so they don't resurrect on
+        // reconnect (finding #8). OFF (`set_workspace_on {on:false}` above) only
+        // unmounts — `close_workspace` no longer discards — so an off devserver
+        // workspace keeps its layout for ON to restore.
+        self.host.discard_workspace_windows(&root);
         self.persist_state();
         Ok(true)
     }

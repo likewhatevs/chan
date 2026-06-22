@@ -826,14 +826,26 @@ impl WorkspaceHost {
             .unwrap_or(0)
     }
 
-    /// The full library window set: every window across every tenant, as the
-    /// authoritative records the launcher, `cs window list`, and the desktop
-    /// watcher reconcile to. Joins each persisted registry row with its serving
-    /// tenant's live state: a workspace window carries its mounted tenant's
-    /// prefix and token (or, when the workspace is off, a stable derived prefix
-    /// with no token), and `connected` reflects a live `/ws` socket for that
-    /// window id. Empty when no registry is installed (a host that never opened
-    /// one has no windows).
+    /// Whether a persisted window row appears in the LIVE window feed. A workspace
+    /// window shows only while its workspace is currently MOUNTED/ON: turning the
+    /// workspace OFF leaves the record on disk (so ON restores the same
+    /// windows/panes/tabs) but hides it from the live Open-windows, so an off
+    /// workspace never shows ghost windows. A terminal window is never
+    /// workspace-gated; a workspace row missing its path is included defensively.
+    fn window_in_live_feed(&self, row: &PersistedWindow) -> bool {
+        match (row.kind, row.workspace_path.as_deref()) {
+            (WindowKind::Workspace, Some(path)) => self.is_root_mounted(Path::new(path)),
+            _ => true,
+        }
+    }
+
+    /// The full library window set: the records the launcher, `cs window list`,
+    /// and the desktop watcher reconcile to. Joins each persisted registry row
+    /// with its serving tenant's live state (prefix/token/`connected`), and
+    /// includes a workspace window only while its workspace is mounted (an off
+    /// workspace's records are filtered out — preserved on disk, hidden from the
+    /// live feed; see [`window_in_live_feed`](Self::window_in_live_feed)). Empty
+    /// when no registry is installed (a host that never opened one has no windows).
     pub fn assemble_window_records(&self) -> Vec<WindowRecord> {
         let Some(registry) = self.window_registry() else {
             // No local registry installed: still surface a connected devserver's
@@ -847,6 +859,10 @@ impl WorkspaceHost {
         let mut records: Vec<WindowRecord> = registry
             .snapshot()
             .into_iter()
+            // An OFF workspace's window records stay on disk (so turning it back
+            // ON restores them) but are filtered OUT of the live feed — they must
+            // not show as ghosts pointing at an unmounted workspace.
+            .filter(|row| self.window_in_live_feed(row))
             .map(|row| {
                 let (prefix, token, connected) = self.window_live_state(&row);
                 // Overlay the volatile transfer bit from the serving tenant: the
@@ -1214,10 +1230,10 @@ impl WorkspaceHost {
         if let Some(overlay) = self.workspace_overlay() {
             overlay.forget(&root.to_string_lossy());
         }
-        // Drop any windows still rooted here. `close_workspace` already purges
-        // when the workspace was mounted; this covers forgetting a registered-
-        // but-off workspace whose windows persisted (idempotent — a no-op when
-        // close_workspace already cleared them).
+        // FORGET is the ONLY path that purges the window records: the workspace is
+        // gone for good, so drop its layout too. (OFF, by contrast, just unmounts
+        // and leaves the records — filtered from the live feed until ON restores
+        // them.) A no-op when the workspace had no windows.
         self.discard_workspace_windows(root);
         Ok(removed)
     }
@@ -1247,10 +1263,10 @@ impl WorkspaceHost {
         let Some(runtime) = runtime else {
             return Ok(false);
         };
-        // Turning a workspace off must drop its windows from the feed (they are
-        // persisted in the registry, so without this they linger as ghosts). The
-        // root is the join key; capture it before the runtime is torn down.
-        let root = runtime.root.clone();
+        // Turning a workspace OFF (unmount) PRESERVES its persisted window records
+        // so turning it back ON restores the same windows/panes/tabs (the PTYs
+        // restart). The records are merely filtered out of the LIVE feed while the
+        // workspace is off (see `window_in_live_feed`); only FORGET purges them.
         // Tear down explicitly (rather than leaving it to Drop) so we hold a
         // `Weak` to the workspace and can wait for the per-workspace flock to
         // release before returning. Without this an in-process close then
@@ -1262,7 +1278,6 @@ impl WorkspaceHost {
         if let Some((weak, lock_dir)) = released {
             wait_for_workspace_release(&weak, &lock_dir);
         }
-        self.discard_workspace_windows(&root);
         self.notify_window_change();
         Ok(true)
     }
@@ -1880,10 +1895,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn off_purges_only_its_own_windows_from_the_feed() {
-        // S1: turning a workspace OFF must drop ITS windows from the feed (they
-        // persist in the registry, so without the purge they linger as ghosts);
-        // a different workspace's window is untouched.
+    async fn off_filters_windows_from_feed_but_preserves_them_for_on_restore() {
+        // B3: turning a workspace OFF must HIDE its windows from the live feed
+        // (finding #1) but PRESERVE the persisted records so turning it back ON
+        // restores them. A terminal window is never workspace-gated. Only FORGET
+        // purges (covered by `forget_purges_the_workspaces_windows`).
         let cfg = tempfile::tempdir().expect("config dir");
         let root = tempfile::tempdir().expect("workspace");
         let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
@@ -1895,25 +1911,74 @@ mod tests {
 
         let store = tempfile::tempdir().expect("store dir");
         let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
-        let mine = registry.create(
+        let ws = registry.create(
             WindowKind::Workspace,
             Some(root.path().to_string_lossy().into_owned()),
         );
-        let other = registry.create(WindowKind::Workspace, Some("/tmp/other".into()));
-        host.install_window_registry(registry, "local".into());
-        assert_eq!(host.assemble_window_records().len(), 2);
+        let term = registry.create(WindowKind::Terminal, None);
+        host.install_window_registry(registry.clone(), "local".into());
 
+        let feed_ids = || {
+            host.assemble_window_records()
+                .into_iter()
+                .map(|r| r.window_id)
+                .collect::<Vec<_>>()
+        };
+        // Mounted: both the workspace window and the terminal are in the feed.
+        assert!(feed_ids().contains(&ws.window_id) && feed_ids().contains(&term.window_id));
+
+        // OFF: the workspace window is FILTERED from the live feed, the terminal
+        // is unaffected, and the record is STILL persisted in the registry.
         assert!(host.close_workspace("/workspace").expect("close"));
-
-        let records = host.assemble_window_records();
-        assert_eq!(records.len(), 1, "the off workspace's window is purged");
-        assert_eq!(
-            records[0].window_id, other.window_id,
-            "a different workspace's window survives"
-        );
         assert!(
-            !records.iter().any(|r| r.window_id == mine.window_id),
-            "the off workspace's window is gone from the feed"
+            !feed_ids().contains(&ws.window_id),
+            "off workspace window is hidden from the live feed"
+        );
+        assert!(feed_ids().contains(&term.window_id), "terminal unaffected");
+        assert!(
+            registry
+                .snapshot()
+                .iter()
+                .any(|r| r.window_id == ws.window_id),
+            "off PRESERVES the record (not purged) so ON can restore it"
+        );
+
+        // ON: re-mount → the workspace window re-appears in the feed.
+        host.open_registered_workspace(root.path(), serve_config("/workspace"))
+            .await
+            .expect("reopen");
+        assert!(
+            feed_ids().contains(&ws.window_id),
+            "ON re-includes the preserved window record"
+        );
+    }
+
+    #[tokio::test]
+    async fn forget_purges_the_workspaces_windows() {
+        // FORGET (remove) is the only path that purges the records — unlike OFF,
+        // they do not come back.
+        let cfg = tempfile::tempdir().expect("config dir");
+        let root = tempfile::tempdir().expect("workspace");
+        let lib = Library::open_at(cfg.path().join("config.toml")).expect("library");
+        lib.register_workspace(root.path()).expect("register");
+        let host = Arc::new(WorkspaceHost::new(lib.clone(), fake_builder()));
+        host.open_registered_workspace(root.path(), serve_config("/workspace"))
+            .await
+            .expect("open");
+
+        let store = tempfile::tempdir().expect("store dir");
+        let registry = Arc::new(WindowRegistry::open(store.path().join("windows.json")));
+        registry.create(
+            WindowKind::Workspace,
+            Some(root.path().to_string_lossy().into_owned()),
+        );
+        host.install_window_registry(registry.clone(), "local".into());
+        assert_eq!(registry.snapshot().len(), 1);
+
+        assert!(host.remove_workspace_for_root(root.path()).expect("forget"));
+        assert!(
+            registry.snapshot().is_empty(),
+            "forget purges the window record"
         );
     }
 
@@ -2489,17 +2554,23 @@ mod tests {
         let ws = registry.create(WindowKind::Workspace, Some("/tmp/notes".into()));
         host.install_window_registry(registry, "lib-abc".into());
 
+        // The off (unmounted) workspace window is FILTERED out of the live feed
+        // (B3: its record is preserved on disk, hidden until the workspace is ON);
+        // only the terminal shows.
         let records = host.assemble_window_records();
-        assert_eq!(records.len(), 2);
-        // Every row is stamped with the library id and is persisted.
+        assert_eq!(records.len(), 1, "off workspace filtered; terminal stays");
+        assert!(
+            !records.iter().any(|r| r.window_id == ws.window_id),
+            "off workspace window is hidden from the live feed"
+        );
+        // The terminal row is stamped with the library id and persisted. No
+        // terminal tenant is mounted here, so it has no live prefix/token and is
+        // not connected; durable fields carry through. (When the shared tenant IS
+        // mounted it resolves — see
+        // `assemble_resolves_a_terminal_window_to_the_shared_tenant`.)
         assert!(records
             .iter()
             .all(|r| r.library_id == "lib-abc" && r.persisted));
-
-        // No terminal tenant is mounted in this test, so the terminal window
-        // has no live prefix/token and is not connected; durable fields carry
-        // through. (When the shared tenant IS mounted it resolves — see
-        // `assemble_resolves_a_terminal_window_to_the_shared_tenant`.)
         let term_rec = records
             .iter()
             .find(|r| r.window_id == term.window_id)
@@ -2509,21 +2580,6 @@ mod tests {
         assert_eq!(term_rec.token, "");
         assert!(!term_rec.connected);
         assert_eq!(term_rec.title, term.title);
-
-        // An off (unmounted) workspace carries its stable derived prefix, no
-        // token, not connected.
-        let ws_rec = records
-            .iter()
-            .find(|r| r.window_id == ws.window_id)
-            .expect("workspace row");
-        assert_eq!(ws_rec.kind, WindowKind::Workspace);
-        assert_eq!(ws_rec.workspace_path.as_deref(), Some("/tmp/notes"));
-        assert_eq!(
-            ws_rec.prefix,
-            allocate_workspace_prefix(Path::new("/tmp/notes")).unwrap()
-        );
-        assert_eq!(ws_rec.token, "");
-        assert!(!ws_rec.connected);
     }
 
     #[tokio::test]
@@ -2588,15 +2644,15 @@ mod tests {
             .expect("mint workspace");
         assert_eq!(ws.workspace_path.as_deref(), Some("/tmp/notes"));
 
-        let mut ids: Vec<String> = host
+        // The terminal lands in the live feed. The unmounted workspace window is
+        // minted + persisted but FILTERED out (B3) until its workspace is on, so
+        // the feed shows only the terminal.
+        let ids: Vec<String> = host
             .assemble_window_records()
             .into_iter()
             .map(|r| r.window_id)
             .collect();
-        ids.sort();
-        let mut expected = vec![term.window_id.clone(), ws.window_id.clone()];
-        expected.sort();
-        assert_eq!(ids, expected);
+        assert_eq!(ids, vec![term.window_id.clone()]);
 
         // Discard drops the row and reports it existed; a second discard is a
         // no-op (the handler's 404 path), as is an unknown id.
@@ -2604,12 +2660,12 @@ mod tests {
         assert!(!host.discard_window(&term.window_id).expect("re-discard"));
         assert!(!host.discard_window("w-doesnotexist0000").expect("unknown"));
 
-        let remaining: Vec<String> = host
-            .assemble_window_records()
-            .into_iter()
-            .map(|r| r.window_id)
-            .collect();
-        assert_eq!(remaining, vec![ws.window_id]);
+        // Feed now empty: the terminal is discarded and the off workspace window
+        // is still filtered. Its record nonetheless persists — discarding it
+        // (the FORGET-style explicit discard) returns true the first time.
+        assert!(host.assemble_window_records().is_empty());
+        assert!(host.discard_window(&ws.window_id).expect("discard ws"));
+        assert!(!host.discard_window(&ws.window_id).expect("re-discard ws"));
     }
 
     #[test]
@@ -2688,9 +2744,15 @@ mod tests {
             host.ensure_first_open_terminal().expect("open").is_none(),
             "non-empty registry → no first-open mint"
         );
-        let records = host.assemble_window_records();
-        assert_eq!(records.len(), 1, "only the pre-existing workspace window");
-        assert_eq!(records[0].kind, WindowKind::Workspace);
+        // The pre-existing workspace is unmounted, so its window is filtered from
+        // the live feed (B3); crucially, NO first-open terminal was minted into it.
+        assert!(
+            !host
+                .assemble_window_records()
+                .iter()
+                .any(|r| r.kind == WindowKind::Terminal),
+            "no first-open terminal was minted"
+        );
     }
 
     #[test]
