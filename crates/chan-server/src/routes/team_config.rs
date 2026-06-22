@@ -300,6 +300,28 @@ pub(crate) fn generate_bootstrap_md(team_dir: &str, config: &TeamConfig) -> Stri
          \"Reaching the host\" below); workers do not contact {host_handle} directly.\n\n"
     ));
 
+    out.push_str("## Between tasks - drain your queue\n\n");
+    out.push_str(
+        "Pokes QUEUE in your terminal: `cs terminal write` feeds a per-tab FIFO\n\
+         (bound 100) that delivers one message at a time - the next only after\n\
+         you go idle (finish generating). So finishing a task surfaces any\n\
+         pending pokes as your next message(s); there is no poll command - the\n\
+         queue delivers to you.\n\n",
+    );
+    out.push_str("BEFORE you start the next task:\n\n");
+    out.push_str(
+        "1. Drain your queue - process EVERY pending poke that has arrived\n\
+        \x20  (read + act/ack each). Don't start new work while pokes are still\n\
+        \x20  pending.\n\
+         2. Use the pause to reconcile what you're doing against what peers now\n\
+        \x20  expect - a queued poke may be a correction, a re-scope, a \"my work\n\
+        \x20  landed at sha X\", or a HOLD. Reconcile FIRST.\n\n",
+    );
+    out.push_str(
+        "(To read another member's terminal, use `cs terminal scrollback\n\
+         --tab-name=<their-tab>`.)\n\n",
+    );
+
     out.push_str("## Reaching the host\n\n");
     out.push_str(&format!(
         "{lead_handle} reaches {host_handle} with `cs terminal survey` (a blocking\n\
@@ -805,6 +827,15 @@ mod tests {
         assert!(
             bootstrap.contains("target the lead's tab"),
             "--tab-name fallback guidance present"
+        );
+        // The between-tasks queue-drain discipline is baked into every team.
+        assert!(
+            bootstrap.contains("## Between tasks - drain your queue"),
+            "queue-drain section present"
+        );
+        assert!(
+            bootstrap.contains("Drain your queue - process EVERY pending poke"),
+            "queue-drain step 1 present"
         );
         // No em dashes; ASCII only.
         assert!(!bootstrap.contains('\u{2014}'), "no em dashes");
