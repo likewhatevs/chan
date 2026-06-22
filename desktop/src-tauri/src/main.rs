@@ -511,19 +511,6 @@ impl DevserverFeed {
             .and_then(|s| s.lock().unwrap().first().map(|r| r.library_id.clone()))
     }
 
-    /// The devserver id owning `library_id`, learned from the live window
-    /// snapshots (each devserver's records carry its remote `library_id`). The
-    /// reverse of [`library_id_of`]; the pane-colour inject uses it to map a
-    /// minting devserver window's `library_id` back to its config row's colour.
-    fn devserver_id_for_library(&self, library_id: &str) -> Option<String> {
-        self.windows.lock().unwrap().iter().find_map(|(id, snap)| {
-            snap.lock()
-                .unwrap()
-                .iter()
-                .any(|r| r.library_id == library_id)
-                .then(|| id.clone())
-        })
-    }
 }
 
 impl chan_server::DevserverFeedSource for DevserverFeed {
@@ -1819,6 +1806,7 @@ fn register_devserver_from_handoff(
         Arc::clone(&state.store),
         Arc::clone(&state.devserver_remove_hook),
         Arc::clone(&state.devservers),
+        Arc::clone(&state.devserver_feed),
     );
     registry.add(DevserverInput {
         url,
@@ -2832,10 +2820,12 @@ fn main() {
             let config_store = Arc::clone(&state_for_setup.store);
             let remove_hook = Arc::clone(&state_for_setup.devserver_remove_hook);
             let conns_for_registry = Arc::clone(&state_for_setup.devservers);
+            let feed_for_registry = Arc::clone(&state_for_setup.devserver_feed);
             match tauri::async_runtime::block_on(embedded::EmbeddedServer::start(
                 config_store,
                 remove_hook,
                 conns_for_registry,
+                feed_for_registry,
             )) {
                 Ok(server) => {
                     if state_for_setup.embedded.set(server).is_err() {

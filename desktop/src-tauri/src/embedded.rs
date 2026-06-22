@@ -48,6 +48,7 @@ impl EmbeddedServer {
         config_store: Arc<Mutex<ConfigStore>>,
         devserver_remove_hook: Arc<OnceLock<DevserverRemoveHook>>,
         devserver_conns: Arc<DevserverConns>,
+        devserver_feed: Arc<crate::DevserverFeed>,
     ) -> Result<Self, String> {
         let library = chan_workspace::Library::open()
             .map_err(|e| format!("opening chan workspace registry for embedded server: {e}"))?;
@@ -86,6 +87,7 @@ impl EmbeddedServer {
             Arc::clone(&config_store),
             devserver_remove_hook,
             devserver_conns,
+            devserver_feed,
         )));
         // Install the local-library pane-highlight colour store (seam #5) over the
         // SAME shared desktop config the devserver registry uses, so the host reads
@@ -400,18 +402,14 @@ impl EmbeddedServer {
         self.host.signal_library_change();
     }
 
-    /// The LOCAL library's pane-highlight colour (hex), or `None` for the default
-    /// accent — read from the installed [`LocalColorStore`](chan_server::LocalColorStore).
-    /// Injected as `?pane=` when minting local windows (seam #5).
-    pub fn local_pane_color(&self) -> Option<String> {
-        self.host.local_color_store().and_then(|store| store.get())
-    }
-
-    /// This host's library id (`"local"`). The pane-colour inject branches on it:
-    /// a window whose `library_id` equals this is LOCAL (local colour); anything
-    /// else is a devserver window (its own `color`).
-    pub fn library_id(&self) -> &str {
-        self.host.library_id()
+    /// The pane-highlight colour for a window of `library_id` (seam #5): the host
+    /// resolves the two sources behind one call — local (the installed
+    /// [`LocalColorStore`](chan_server::LocalColorStore)) vs a devserver
+    /// (`DevserverEntry.color` matched by `library_id` in the devserver registry).
+    /// `None` -> the editor falls back to the default accent. Injected as `?pane=`
+    /// at mint time.
+    pub fn pane_color(&self, library_id: &str) -> Option<String> {
+        self.host.pane_color(library_id)
     }
 
     /// Mint a window into the local library registry and return its assembled

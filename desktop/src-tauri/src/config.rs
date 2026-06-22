@@ -245,6 +245,11 @@ pub struct DevserverConfigRegistry {
     /// reports each row's [`DevserverEntry::connected`] — the launcher shows
     /// Connect vs Disconnect + gates Edit read-only off it.
     conns: Arc<DevserverConns>,
+    /// The connected-devserver feed (shared with `AppState.devserver_feed`), so
+    /// `list` resolves each row's `library_id` from the live window snapshot.
+    /// `WorkspaceHost::pane_color` matches a devserver window's `library_id`
+    /// against these entries to find its colour, so the projection MUST carry it.
+    feed: Arc<crate::DevserverFeed>,
 }
 
 impl DevserverConfigRegistry {
@@ -252,11 +257,13 @@ impl DevserverConfigRegistry {
         store: Arc<Mutex<ConfigStore>>,
         on_remove: Arc<OnceLock<DevserverRemoveHook>>,
         conns: Arc<DevserverConns>,
+        feed: Arc<crate::DevserverFeed>,
     ) -> Self {
         Self {
             store,
             on_remove,
             conns,
+            feed,
         }
     }
 }
@@ -292,7 +299,11 @@ impl chan_server::LocalColorStore for LocalColorConfig {
 /// Project a stored [`Devserver`] to the launcher's wire [`DevserverEntry`],
 /// eliding the token (only its presence, `has_token`, crosses the wire) and
 /// joining the live connection state (`connected`) from `conns`.
-fn entry_from_devserver(d: &Devserver, conns: &DevserverConns) -> DevserverEntry {
+fn entry_from_devserver(
+    d: &Devserver,
+    conns: &DevserverConns,
+    feed: &crate::DevserverFeed,
+) -> DevserverEntry {
     DevserverEntry {
         id: d.id.clone(),
         url: d.url.clone(),
@@ -302,10 +313,10 @@ fn entry_from_devserver(d: &Devserver, conns: &DevserverConns) -> DevserverEntry
         // A live connection in the desktop's in-memory map means connected; a
         // headless surface installs no registry, so this never runs there.
         connected: conns.is_connected(&d.id),
-        // The desktop config doesn't track the connected library id — it's
-        // resolved from the live window feed — so the registry reports `None`
-        // (the pre-connect state). Joining it back is a follow-up.
-        library_id: None,
+        // The connected library id, learned from the live window feed (`None`
+        // until this devserver is connected with ≥1 window). `pane_color` matches
+        // a devserver window's `library_id` against this to find its colour.
+        library_id: feed.library_id_of(&d.id),
         // Per-library pane-highlight colour the launcher picker round-trips.
         color: d.color.clone(),
     }
@@ -321,7 +332,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
             .map(|cfg| {
                 cfg.devservers
                     .iter()
-                    .map(|d| entry_from_devserver(d, &self.conns))
+                    .map(|d| entry_from_devserver(d, &self.conns, &self.feed))
                     .collect()
             })
             .unwrap_or_default()
@@ -347,7 +358,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
         };
         cfg.devservers.push(entry.clone());
         store.save(&cfg).map_err(|e| e.to_string())?;
-        Ok(entry_from_devserver(&entry, &self.conns))
+        Ok(entry_from_devserver(&entry, &self.conns, &self.feed))
     }
 
     fn update(&self, id: &str, input: DevserverInput) -> Result<Option<DevserverEntry>, String> {
@@ -375,7 +386,7 @@ impl DevserverRegistry for DevserverConfigRegistry {
                 ds.token = tok.to_string();
             }
         }
-        let entry = entry_from_devserver(ds, &self.conns);
+        let entry = entry_from_devserver(ds, &self.conns, &self.feed);
         store.save(&cfg).map_err(|e| e.to_string())?;
         Ok(Some(entry))
     }
@@ -700,6 +711,7 @@ mod tests {
             Arc::clone(&store),
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
+            Arc::new(crate::DevserverFeed::default()),
         );
         let added = reg
             .add(DevserverInput {
@@ -737,6 +749,7 @@ mod tests {
             Arc::clone(&store),
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
+            Arc::new(crate::DevserverFeed::default()),
         );
         let id = reg
             .add(DevserverInput {
@@ -793,6 +806,7 @@ mod tests {
             store,
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
+            Arc::new(crate::DevserverFeed::default()),
         );
         let missing = reg
             .update(
@@ -828,6 +842,7 @@ mod tests {
             Arc::clone(&store),
             Arc::clone(&hook_cell),
             Arc::new(crate::devserver::DevserverConns::default()),
+            Arc::new(crate::DevserverFeed::default()),
         );
         let id = reg
             .add(DevserverInput {
@@ -854,6 +869,7 @@ mod tests {
             store,
             Arc::new(OnceLock::new()),
             Arc::new(crate::devserver::DevserverConns::default()),
+            Arc::new(crate::DevserverFeed::default()),
         );
         assert!(reg
             .add(DevserverInput {
