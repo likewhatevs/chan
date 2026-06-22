@@ -1036,7 +1036,7 @@ fn show_bury_notice(app: &AppHandle, title: &str) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
     app.dialog()
         .message(format!(
-            "\"{title}\" wasn't closed — its terminals and layout are still running. Reopen it from the Window menu."
+            "\"{title}\" was hidden, not closed. Reopen it from the Window menu."
         ))
         .title("Window Hidden")
         .kind(MessageDialogKind::Info)
