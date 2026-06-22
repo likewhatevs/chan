@@ -65,7 +65,7 @@ impl EmbeddedServer {
         ));
         // Register the host's self-handle so its per-tenant control sockets can
         // reach it for teardown — otherwise the desktop's tenants report
-        // `UnserveMode::Unsupported` and `chan unserve` fails. Parity with the
+        // `UnserveMode::Unsupported` and `chan close` fails. Parity with the
         // devserver path's `host.install_self()`.
         host.install_self();
         // Install the local library's window registry so the window feed has
