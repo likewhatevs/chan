@@ -109,6 +109,25 @@ pub trait DevserverFeedSource: Send + Sync {
     fn workspaces(&self) -> Vec<LauncherWorkspace>;
 }
 
+/// The local library's pane-highlight colour, injected onto [`WorkspaceHost`]
+/// like [`DevserverRegistry`]: the value lives in chan-desktop's config
+/// (`~/.chan/desktop`, invisible from chan-library), so the desktop installs an
+/// `Arc<dyn LocalColorStore>` and the launcher's local-color routes read/write it
+/// through the host. A host that installs none (the headless devserver / plain
+/// `chan open`) reports `None` (the default accent) and ignores writes — the
+/// local colour belongs to the desktop's own library.
+///
+/// The colour is a hex string (`#rrggbb`); `None` is the default accent. The
+/// desktop injects it per-window at mint time, mirroring a devserver row's
+/// [`DevserverEntry::color`](crate::DevserverEntry).
+pub trait LocalColorStore: Send + Sync {
+    /// The local library's pane-highlight colour, or `None` for the default accent.
+    fn get(&self) -> Option<String>;
+    /// Persist the local library's pane-highlight colour; `None` clears it back to
+    /// the default. `Err` only on a real persist failure.
+    fn set(&self, color: Option<String>) -> Result<(), String>;
+}
+
 /// In-process multi-workspace host.
 ///
 /// This is intentionally a thin owner around the existing per-workspace
@@ -169,6 +188,13 @@ pub struct WorkspaceHost {
     /// surface. Empty on the headless devserver / plain `chan open` — the launcher
     /// is then local-only.
     devserver_feed: OnceLock<Arc<dyn DevserverFeedSource>>,
+    /// The local library's pane-highlight colour store, inverted like
+    /// [`devserver_registry`](Self::devserver_registry): the value lives in
+    /// chan-desktop's config, so the embedder installs an `Arc<dyn
+    /// LocalColorStore>` and the launcher's local-color routes read/write it.
+    /// Empty on the headless devserver / plain `chan open` — the local colour is
+    /// then the default accent and writes are ignored.
+    local_color: OnceLock<Arc<dyn LocalColorStore>>,
     /// This library's identity: `"local"` for the baked-in local-disk library,
     /// `lib-<hex>` for a devserver. Stamped on every window record. Set with the
     /// registry; defaults to `"local"` when unset.
@@ -255,6 +281,7 @@ impl WorkspaceHost {
             workspace_overlay: OnceLock::new(),
             devserver_registry: OnceLock::new(),
             devserver_feed: OnceLock::new(),
+            local_color: OnceLock::new(),
             library_id: OnceLock::new(),
             terminal_tenant_prefix: OnceLock::new(),
             library_change_notify: Arc::new(Notify::new()),
@@ -349,6 +376,20 @@ impl WorkspaceHost {
     /// whose embedder installed none — the launcher is then local-only.
     pub fn devserver_feed(&self) -> Option<&Arc<dyn DevserverFeedSource>> {
         self.devserver_feed.get()
+    }
+
+    /// Install the local library's pane-highlight colour store. Idempotent
+    /// set-once; chan-desktop calls this once with an impl over its config. A host
+    /// that never installs one reports the default accent and ignores writes.
+    pub fn install_local_color_store(&self, store: Arc<dyn LocalColorStore>) {
+        let _ = self.local_color.set(store);
+    }
+
+    /// The local library's pane-highlight colour store, once installed. `None` on
+    /// a host whose embedder installed none (headless devserver / plain
+    /// `chan open`) — the local colour is then the default accent.
+    pub fn local_color_store(&self) -> Option<&Arc<dyn LocalColorStore>> {
+        self.local_color.get()
     }
 
     /// Install the library root's fallback router — served by `host_dispatch`

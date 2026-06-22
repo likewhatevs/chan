@@ -64,7 +64,7 @@ pub(crate) use chan_library::{
 };
 pub use chan_library::{
     DevserverEntry, DevserverFeedSource, DevserverInput, DevserverRegistry, HostedWorkspace,
-    LauncherWorkspace, PersistedWorkspace, WorkspaceHost, WorkspaceOverlay,
+    LauncherWorkspace, LocalColorStore, PersistedWorkspace, WorkspaceHost, WorkspaceOverlay,
 };
 pub use devserver::{
     persisted_devserver_token, run_devserver, DevserverConfig, DevserverTunnel,

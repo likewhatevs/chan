@@ -164,6 +164,19 @@ pub fn launcher_router(
             host: host.clone(),
             serve_addr: serve_addr.clone(),
         }));
+    // Library config: the local-library pane-highlight colour. GET on any surface
+    // (a no-store surface reports `null` = default accent); PUT is loopback-only
+    // (`require_mutable` → 403 read-only), since the local colour belongs to the
+    // desktop's own library, not a remote devserver's launcher view of it.
+    let config = Router::new()
+        .route(
+            "/api/library/local-color",
+            get(handle_get_local_color).put(handle_set_local_color),
+        )
+        .with_state(Arc::new(LauncherState {
+            host: host.clone(),
+            serve_addr: serve_addr.clone(),
+        }));
     // Devservers: list on BOTH surfaces (a registry-less surface returns empty);
     // add/update/remove gated mutable (403 read-only, 404 no registry) inside the
     // handlers, same as workspaces.
@@ -177,7 +190,7 @@ pub fn launcher_router(
             put(handle_update_devserver).delete(handle_remove_devserver),
         )
         .with_state(Arc::new(LauncherState { host, serve_addr }));
-    let api = windows.merge(workspaces).merge(devservers);
+    let api = windows.merge(workspaces).merge(config).merge(devservers);
     let api = match bearer {
         Some(token) => {
             let token = token.to_string();
@@ -899,6 +912,48 @@ async fn handle_remove_devserver(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Local-library colour (`/api/library/local-color`). The value lives in the
+// desktop config, reached through an installed `LocalColorStore`. GET is served
+// on every surface (no store → `null`); PUT is loopback-only.
+// ---------------------------------------------------------------------------
+
+/// The local-library pane-highlight colour as the launcher reads/writes it:
+/// `color` is a hex string (`#rrggbb`) or `null` for the default accent.
+#[derive(Serialize, Deserialize)]
+struct LocalColor {
+    color: Option<String>,
+}
+
+/// `GET /api/library/local-color`: the local library's pane-highlight colour
+/// (`{ color }`), or `{ color: null }` on a surface with no store installed (the
+/// default accent). Served on all surfaces, infallible.
+async fn handle_get_local_color(State(state): State<Arc<LauncherState>>) -> Json<LocalColor> {
+    let color = state.host.local_color_store().and_then(|store| store.get());
+    Json(LocalColor { color })
+}
+
+/// `PUT /api/library/local-color` `{ color }`: set the local library's
+/// pane-highlight colour (`null` clears it to the default). Loopback-only
+/// ([`require_mutable`] → 403 read-only); 404 when no store is installed
+/// (defensive — the desktop loopback always installs one); 400 on a persist
+/// failure.
+async fn handle_set_local_color(
+    State(state): State<Arc<LauncherState>>,
+    Json(body): Json<LocalColor>,
+) -> Response {
+    if let Err(resp) = require_mutable(&state) {
+        return *resp;
+    }
+    let Some(store) = state.host.local_color_store() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match store.set(body.color) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod devserver_route_tests {
     //! The devserver route gate semantics, exercised over a fake registry: list
@@ -914,7 +969,9 @@ mod devserver_route_tests {
     use tower::ServiceExt;
 
     use super::launcher_router;
-    use crate::{DevserverEntry, DevserverInput, DevserverRegistry, WorkspaceHost};
+    use crate::{
+        DevserverEntry, DevserverInput, DevserverRegistry, LocalColorStore, WorkspaceHost,
+    };
 
     /// An in-memory `DevserverRegistry` standing in for the desktop config so the
     /// route gates are exercised without a desktop. `add` echoes the input back as
@@ -1152,6 +1209,107 @@ mod devserver_route_tests {
         let router = router_with(Some(reg), true);
         let (status, _) = request(&router, "DELETE", "/api/library/devservers/ds1", None).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn add_devserver_round_trips_color() {
+        // The launcher add route carries `color` in and back out (the picker's hex).
+        let reg = Arc::new(FakeRegistry::default());
+        let router = router_with(Some(reg), true);
+        let (status, body) = request(
+            &router,
+            "POST",
+            "/api/library/devservers",
+            Some(r##"{"url":"https://box:9000","color":"#ff8800"}"##),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["color"], "#ff8800");
+    }
+
+    /// An in-memory [`LocalColorStore`] so the local-color routes are exercised
+    /// without a desktop: `get` reads the current value, `set` overwrites it.
+    #[derive(Default)]
+    struct FakeColorStore {
+        color: Mutex<Option<String>>,
+    }
+
+    impl LocalColorStore for FakeColorStore {
+        fn get(&self) -> Option<String> {
+            self.color.lock().unwrap().clone()
+        }
+        fn set(&self, color: Option<String>) -> Result<(), String> {
+            *self.color.lock().unwrap() = color;
+            Ok(())
+        }
+    }
+
+    /// A launcher router with an optional local-color store installed (the colour
+    /// routes need no devserver registry). `mutable` opens the PUT gate.
+    fn color_router(store: Option<Arc<dyn LocalColorStore>>, mutable: bool) -> axum::Router {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open_at(dir.path().join("config.toml")).unwrap();
+        std::mem::forget(dir);
+        let host = Arc::new(WorkspaceHost::new(lib, crate::route_builder()));
+        if let Some(store) = store {
+            host.install_local_color_store(store);
+        }
+        let serve_addr = mutable.then(|| {
+            let cell = OnceLock::new();
+            let _ = cell.set("127.0.0.1:8080".parse::<SocketAddr>().unwrap());
+            Arc::new(cell)
+        });
+        launcher_router(host, None, serve_addr)
+    }
+
+    #[tokio::test]
+    async fn local_color_get_default_is_null_without_store() {
+        // No store installed (headless): GET reports the default accent as null.
+        let router = color_router(None, true);
+        let (status, body) = request(&router, "GET", "/api/library/local-color", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["color"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn local_color_set_then_get_round_trips() {
+        let store = Arc::new(FakeColorStore::default());
+        let router = color_router(Some(store), true);
+        let (set_status, _) = request(
+            &router,
+            "PUT",
+            "/api/library/local-color",
+            Some(r##"{"color":"#0af"}"##),
+        )
+        .await;
+        assert_eq!(set_status, StatusCode::NO_CONTENT);
+        let (get_status, body) = request(&router, "GET", "/api/library/local-color", None).await;
+        assert_eq!(get_status, StatusCode::OK);
+        assert_eq!(body["color"], "#0af");
+    }
+
+    #[tokio::test]
+    async fn local_color_set_is_read_only_403_then_404_without_store() {
+        // Read-only surface: PUT is refused before the store is consulted.
+        let read_only = color_router(Some(Arc::new(FakeColorStore::default())), false);
+        let (status, _) = request(
+            &read_only,
+            "PUT",
+            "/api/library/local-color",
+            Some(r##"{"color":"#0af"}"##),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        // Loopback but no store installed: 404 (defensive — the desktop installs one).
+        let no_store = color_router(None, true);
+        let (status, _) = request(
+            &no_store,
+            "PUT",
+            "/api/library/local-color",
+            Some(r##"{"color":"#0af"}"##),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }
 
