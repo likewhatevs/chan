@@ -8,7 +8,7 @@
   import DevserverList from "./components/DevserverList.svelte";
   import WindowFeed from "./components/WindowFeed.svelte";
   import NewWorkspaceDialog from "./components/NewWorkspaceDialog.svelte";
-  import { library, loadLibrary } from "./state/library.svelte";
+  import { library, loadLibrary, openTerminal } from "./state/library.svelte";
   import { dialog, openNewDialog } from "./state/dialog.svelte";
   import { applyTheme } from "./state/theme.svelte";
 
@@ -35,10 +35,19 @@
   {#if isEmpty}
     <div class="empty">
       <h2>No workspaces yet</h2>
-      <p>A workspace is a local folder with your markdown files. Add one to get started.</p>
-      <button class="btn primary" type="button" onclick={() => openNewDialog("local")}>
-        New workspace
-      </button>
+      <p>
+        A workspace is just a directory — chan treats it as a project. Add your
+        first one, or open a terminal and run
+        <code>chan serve /path/to/project</code>.
+      </p>
+      <div class="empty-actions">
+        <button class="btn primary" type="button" onclick={() => openNewDialog("local")}>
+          New workspace
+        </button>
+        <button class="btn" type="button" onclick={() => openTerminal()}>
+          Open terminal
+        </button>
+      </div>
     </div>
   {:else}
     <WorkspaceList />
@@ -82,5 +91,22 @@
   .empty p {
     line-height: 1.5;
     margin-bottom: 1.25rem;
+  }
+
+  .empty p code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85em;
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--text-secondary) 16%, transparent);
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .empty-actions {
+    display: flex;
+    gap: 0.6rem;
+    justify-content: center;
+    flex-wrap: wrap;
   }
 </style>
