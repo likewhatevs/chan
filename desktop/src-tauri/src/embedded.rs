@@ -6,7 +6,7 @@
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::Router;
 use chan_server::{DesktopBridge, DesktopWindowOp, SharedWindowTitles, WindowRecord, WindowTitles};
@@ -35,6 +35,10 @@ pub struct EmbeddedServer {
     /// consumer task. `None` once taken, so a double-take can't spawn two
     /// consumers. The sender lives inside the host's [`DesktopBridge`].
     pending_window_ops: tokio::sync::Mutex<Option<mpsc::Receiver<DesktopWindowOp>>>,
+    /// Per-launch bearer minted at startup. The launcher main window carries it
+    /// in its URL as `?t=`, and the SPA presents it on every `/api/library/*`
+    /// call; it gates that loopback surface (see [`launcher_token`](Self::launcher_token)).
+    launcher_token: String,
 }
 
 impl EmbeddedServer {
@@ -72,19 +76,19 @@ impl EmbeddedServer {
         // surface — parity with the devserver's `build_devserver_app`. Without
         // it the root `/` 404s (`host_dispatch` only matches tenant prefixes).
         //
-        // Read-only localhost-trust INTERMEDIATE (`bearer=None`, `serve_addr=None`).
-        // The loopback's target is the FULL mutable surface: a per-window launcher
-        // token minted at startup passed as `Some(&token)`, and an
-        // `Arc<OnceLock<SocketAddr>>` for `serve_addr` filled with the listen
-        // address AFTER the bind below (mount needs it; the install runs before the
-        // bind, so it is read at request time) — e.g.:
-        //   let addr_cell = Arc::new(OnceLock::new());
-        //   install_launcher_root_fallback(&host, Some(&token), Some(addr_cell.clone()));
-        //   // …after `listener.local_addr()`:  let _ = addr_cell.set(addr);
-        // Until that lands, `None`/`None` serves the launcher read-only on the
-        // loopback (list + windows; workspace mutation gated out) — see the token
-        // contract with the launcher owner.
-        chan_server::install_launcher_root_fallback(&host, None, None);
+        // The loopback serves the FULL launcher surface, workspace mutation
+        // included: `Some(&launcher_token)` gates `/api/library/*` on a per-launch
+        // bearer (the main-window URL carries it as `?t=`; the SPA presents it on
+        // every data call), and `serve_addr` lets the workspace-mount path read
+        // this server's own listen address. The install runs before the bind, so
+        // the address is delivered through a cell filled right after `local_addr()`.
+        let launcher_token = uuid::Uuid::new_v4().to_string();
+        let addr_cell: Arc<OnceLock<SocketAddr>> = Arc::new(OnceLock::new());
+        chan_server::install_launcher_root_fallback(
+            &host,
+            Some(&launcher_token),
+            Some(addr_cell.clone()),
+        );
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .map_err(|e| format!("binding embedded chan server: {e}"))?;
         listener
@@ -93,6 +97,8 @@ impl EmbeddedServer {
         let addr = listener
             .local_addr()
             .map_err(|e| format!("reading embedded listener addr: {e}"))?;
+        // The mount path can now resolve tenant URLs against this server.
+        let _ = addr_cell.set(addr);
         let listener = tokio::net::TcpListener::from_std(listener)
             .map_err(|e| format!("adopting embedded listener: {e}"))?;
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -112,6 +118,7 @@ impl EmbeddedServer {
             shutdown_tx,
             terminal_url: tokio::sync::Mutex::new(None),
             pending_window_ops: tokio::sync::Mutex::new(Some(window_ops_rx)),
+            launcher_token,
         })
     }
 
@@ -119,6 +126,13 @@ impl EmbeddedServer {
     /// rename / destroy) and the server reads for `cs window list`.
     pub fn window_titles(&self) -> SharedWindowTitles {
         self.host.desktop_bridge().window_titles.clone()
+    }
+
+    /// The per-launch launcher bearer. The desktop bakes it into the launcher
+    /// main-window URL as `?t=`, so the loopback `/api/library/*` surface
+    /// accepts the launcher's calls.
+    pub fn launcher_token(&self) -> &str {
+        &self.launcher_token
     }
 
     /// Take the `cs window <op>` receiver exactly once (in Tauri

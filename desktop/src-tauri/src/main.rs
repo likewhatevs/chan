@@ -2466,24 +2466,48 @@ fn main() {
                 }
             }
 
-            // Closing the main window via the red traffic light or
-            // Cmd+W should hide it, not destroy it: hidden serve
-            // children can still keep the process alive, and
-            // reopening via Dock click or the Window > Workspaces menu
-            // item should be instant. Without this, a closed main
-            // window cannot be brought back without quitting and
-            // relaunching.
-            if let Some(main) = app.get_webview_window("main") {
-                let _ = main.set_title(LAUNCHER_WINDOW_TITLE);
-                let main_for_event = main.clone();
-                main.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = main_for_event.hide();
+            // The launcher window loads the embedded loopback's root `/`, where
+            // the same web-launcher SPA is served as on every other surface
+            // (replacing the former native `main.js` launcher). Its `?t=` token
+            // authorizes the launcher's `/api/library/*` calls. Built here rather
+            // than declared statically because the loopback address is dynamic and
+            // is only known after the embedded server starts above.
+            //
+            // Closing it via the red traffic light or Cmd+W hides, not destroys:
+            // hidden serve children keep the process alive, and reopening via Dock
+            // click or the Window > Workspaces menu item is instant.
+            if let Some(embedded) = state_for_setup.embedded.get() {
+                let launcher_url =
+                    format!("http://{}/?t={}", embedded.addr(), embedded.launcher_token());
+                match launcher_url.parse::<tauri::Url>() {
+                    Ok(url) => {
+                        match WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+                            .title(LAUNCHER_WINDOW_TITLE)
+                            .inner_size(960.0, 600.0)
+                            .min_inner_size(720.0, 400.0)
+                            .resizable(true)
+                            .build()
+                        {
+                            Ok(main) => {
+                                let main_for_event = main.clone();
+                                main.on_window_event(move |event| {
+                                    if let WindowEvent::CloseRequested { api, .. } = event {
+                                        api.prevent_close();
+                                        let _ = main_for_event.hide();
+                                    }
+                                });
+                                let _ = main.show();
+                                let _ = main.set_focus();
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "building the launcher window failed")
+                            }
+                        }
                     }
-                });
-                let _ = main.show();
-                let _ = main.set_focus();
+                    Err(e) => {
+                        tracing::warn!(error = %e, url = %launcher_url, "bad launcher window URL")
+                    }
+                }
             }
 
             // Registry watcher. Leaked: we want it alive for the

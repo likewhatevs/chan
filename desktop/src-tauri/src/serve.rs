@@ -1487,51 +1487,6 @@ mod tests {
     }
 
     #[test]
-    fn new_workspace_local_choice_has_no_desktop_preflight() {
-        // The desktop must not run its own first-boot pre-flight:
-        // chan's SPA owns workspace readiness (PreflightOverlay.svelte)
-        // plus the optional Semantic / Reports layer toggles, and a
-        // desktop-side scan would double-dialog with, and race, the
-        // SPA boot surface. The [New] modal's Local choice just
-        // registers the folder and opens it. Pin the shape so a
-        // refactor can't reintroduce a desktop-side pre-flight.
-        const MAIN_JS: &str = include_str!("../../src/main.js");
-        const MAIN_RS: &str = include_str!("main.rs");
-        // The [New] modal registers via add_workspace
-        // WITHOUT threading a desktop-chosen feature pair (the SPA's
-        // onboarding card enables the optional layers post-boot).
-        assert!(
-            MAIN_JS.contains("showNewWorkspaceDialog("),
-            "main.js must open the [New] workspace modal (showNewWorkspaceDialog)",
-        );
-        assert!(
-            MAIN_JS.contains("invoke('add_workspace', { path: localPath }"),
-            "the Local choice must register the chosen folder via add_workspace",
-        );
-        // No desktop pre-flight wiring may exist: no scan
-        // IPC, no report renderer, no feature toggles, and none of the
-        // explanatory copy the SPA owns.
-        for gone in [
-            "compute_workspace_preflight",
-            "renderPreflightReport",
-            "data-feat=\"bge\"",
-            "data-feat=\"reports\"",
-            "BM25 keyword search is",
-            "dense-vector embeddings",
-        ] {
-            assert!(
-                !MAIN_JS.contains(gone),
-                "main.js must not carry the removed desktop pre-flight ({gone})",
-            );
-        }
-        // The Rust IPC backend is gone too: no pre-flight scan in the app.
-        assert!(
-            !MAIN_RS.contains("fn compute_workspace_preflight("),
-            "the desktop compute_workspace_preflight IPC must be removed",
-        );
-    }
-
-    #[test]
     fn registry_commands_run_in_process_not_via_chan_cli() {
         // chan-desktop runs without a `chan` binary: `add_workspace`
         // and `remove_workspace` route through the embedded host's
@@ -1850,27 +1805,6 @@ mod tests {
             .collect()
     }
 
-    /// Command names a JS source passes to `call('cmd', ...)` (the literal
-    /// first argument). Used to read the launcher's `invoke('cmd')` sites.
-    fn js_invoke_commands(src: &str, call: &str) -> Vec<String> {
-        let needle = format!("{call}(");
-        src.split(needle.as_str())
-            .skip(1)
-            .filter_map(|part| {
-                let part = part.trim_start();
-                let quote = part.chars().next()?;
-                if quote != '"' && quote != '\'' {
-                    return None;
-                }
-                let rest = &part[1..];
-                let end = rest.find(quote)?;
-                let cmd = &rest[..end];
-                (!cmd.is_empty() && cmd.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-                    .then(|| cmd.to_string())
-            })
-            .collect()
-    }
-
     #[test]
     fn workspace_capability_grants_opener_to_workspace_and_outbound_windows() {
         let windows = capability_windows(WORKSPACE_CAPABILITY_JSON);
@@ -1972,29 +1906,8 @@ mod tests {
     // Tauri's ACL denies any `generate_handler!` command that no granted
     // permission allows. The gate and the mock smoke both bypass the ACL (unit
     // tests call the Rust fns directly; a mocked Tauri has no ACL), so a
-    // registered-but-ungranted command only fails in the real app. These three
+    // registered-but-ungranted command only fails in the real app. These two
     // tests pin the command/ACL parity so drift reds the gate instead.
-
-    #[test]
-    fn app_acl_grants_every_launcher_command() {
-        // Every command the launcher (main.js) invokes must be granted to the
-        // main-window set. A throw from one denied invoke during the main
-        // render blanks the whole launcher (e.g. list_devservers in refresh).
-        const MAIN_JS: &str = include_str!("../../src/main.js");
-        let invoked = js_invoke_commands(MAIN_JS, "invoke");
-        assert!(
-            invoked.len() >= 20,
-            "expected the launcher's invoke() commands, found {invoked:?}",
-        );
-        let granted = app_permission_set_commands("main-window");
-        for command in &invoked {
-            assert!(
-                granted.contains(command),
-                "the launcher invokes `{command}` but it is not in the main-window ACL set; its IPC \
-                 is denied at runtime. Add a permission to permissions/app.toml.",
-            );
-        }
-    }
 
     #[test]
     fn app_acl_grants_every_registered_command() {

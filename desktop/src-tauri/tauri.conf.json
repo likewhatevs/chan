@@ -12,18 +12,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [
-      {
-        "label": "main",
-        "title": "Chan Desktop",
-        "width": 960,
-        "height": 600,
-        "minWidth": 720,
-        "minHeight": 400,
-        "resizable": true,
-        "url": "index.html"
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src https://www.youtube-nocookie.com https://www.google.com"
     }
