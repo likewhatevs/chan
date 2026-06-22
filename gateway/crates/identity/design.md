@@ -73,21 +73,21 @@ PAT shape: `chan_pat_<32 random bytes, base64url, no pad>`.
 
 1. Resolve `user_id` from the session.
 2. `profile.get_user(uid)`. Flush session and 401 if the user is gone underneath the cookie.
-3. Call devserver-proxy admin `GET /admin/v1/users/{username}/tunnels` for the live-workspace list. Empty for blocked users.
-4. Return `{user, workspaces: [TunnelView]}`.
+3. Call devserver-proxy admin `GET /admin/v1/users/{username}/tunnels` for the live-devserver list (one devserver per user). Empty for blocked users, and empty (with a log line, not a 500) on a devserver-proxy outage so the rest of the dashboard still loads from profile.
+4. Return `{user, devservers: [{devserver_id, status}], flags}`, where `flags` is the per-user resolved feature-flag map.
 
-The SPA renders one card per workspace. Each card's "open" link points at `/api/workspaces/open?u={user}&d={workspace}` (server-side, see below) so the entry token is minted at click time, not at page-render time (otherwise short-exp tokens go stale before the user clicks).
+The dashboard renders one card per devserver and flips it online/offline against that list. The card's "Open" navigates to `/s/{username}` (the whole-devserver share landing, below); the entry token is minted server-side at click time, not at page render, so a short-exp token can't go stale before the click.
 
-### Workspace-gate mint
+### Devserver-gate mint
 
-`GET /api/workspaces/open?u={user}&d={workspace}`:
+The share-landing handlers (below) mint the entry token; there is no standalone open endpoint. The mint is keyed on the owner's single devserver:
 
 1. Resolve session; refuse if anonymous or blocked.
-2. Resolve `u` to a user record via profile `GET /v1/users/by-username`. Unknown handle returns 404 (same shape as no-access and unknown-workspace).
-3. Call profile `GET /v1/users/{owner_id}/workspaces/{d}/access?as= {session.user_id}`. Owner returns `owner`, an accepted grantee returns `viewer`/`editor`, anything else 404.
-4. Verify the workspace is live on devserver-proxy for `u` (cheap defense-in-depth; devserver-proxy is the authority on registrations).
-5. Mint a 30s `entry` JWT (HS256, `WORKSPACE_GATE_SECRET`) with `{sub: session.user_id, drv: d, aud: "{u}.devserver.chan.app", ...}`. `sub` is the *caller's* id, not the owner's, so the devserver_gate cookie minted on the next leg carries the right identity for upstream collab attribution.
-6. 303 to `https://{u}.devserver.chan.app/{d}/?t=<jwt>`.
+2. Resolve the owner handle to a user record via profile `GET /v1/users/by-username`. Unknown handle returns 404 (same shape as no-access).
+3. Resolve the owner's live devserver id from devserver-proxy (`list_user_tunnels`); no live devserver returns 404.
+4. Call profile `GET /v1/users/{owner_id}/devservers/{devserver_id}/access?as={session.user_id}`. Owner returns `owner`, an accepted grantee returns `viewer`/`editor`, anything else 404. A grant is whole-devserver, so the `{workspace}` segment never enters the access check.
+5. Mint a 30s `entry` JWT (HS256, `WORKSPACE_GATE_SECRET`) with `{sub: session.user_id, drv: <devserver_id>, aud: "{owner}.devserver.chan.app", ...}`. `sub` is the *caller's* id, not the owner's, so the devserver_gate cookie minted on the next leg carries the right identity for upstream collab attribution.
+6. 303 to `https://{owner}.devserver.chan.app/{workspace}/?t=<jwt>` (per-workspace) or `https://{owner}.devserver.chan.app/?t=<jwt>` (whole-devserver root).
 
 devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it as a host-only `devserver_gate` cookie, and 303s to the clean URL. The shared JWT type lives in `gateway_common::devserver_gate`.
 
@@ -97,23 +97,21 @@ devserver-proxy verifies the JWT, mints its own 24h session-shape JWT, sets it a
 
 1. Validate `owner` (username shape) and `workspace` (1-64 lowercase alnum + `[._-]`); malformed values 404.
 2. No session: stash `/s/:owner/:workspace` under `post_login_redirect` and 303 to `/`. The SPA renders the OAuth picker; on callback, the stash is consumed and the user lands back here with a fresh session.
-3. With a session: resolve owner -> profile access check -> mint entry JWT -> 303 to devserver-proxy. Same code path as `/api/workspaces/open` once auth is established.
+3. With a session: resolve owner -> profile access check -> mint entry JWT -> 303 to devserver-proxy. This is the devserver-gate mint above; the `{workspace}` is only the redirect path, not part of the access check.
 
 The post-login redirect is validated to start with a single `/` and to contain no `:` or `//` prefix, so a hostile stash cannot point the callback at another origin.
 
 `GET /s/:owner` is the whole-devserver open: it lands the caller on the launcher served at the devserver root instead of a single workspace. Same shape as the per-workspace landing — validate `owner`, stash + login if unauthenticated, then resolve the owner's live devserver, mint a 30s entry JWT (`drv` = that devserver id, `aud` = `{owner}.devserver.chan.app`), and 303 to the proxy root `…/?t=<jwt>`. It is restricted to the **owner**: the caller must equal `:owner`, otherwise 404 (the same shape as an unknown handle, so it does not reveal ownership). The launcher's `/api/library/*` surface is gated only at the proxy edge and carries no per-caller role on the gateway surface, so a grantee opening the root would get full library mutation; whole-devserver open is therefore owner-only, and grantees use the per-workspace landing (`/s/:owner/:workspace`).
 
-### Per-workspace sharing grants (SPA surface)
+### Devserver sharing grants (SPA surface)
 
-The owner manages workspaces and grants from the dashboard. Routes (all session-gated; the session user is implicitly the owner):
+The owner manages grants from the dashboard. A grant is whole-devserver — the sharing unit — giving the grantee the owner's entire library. A devserver is not created or deleted from the dashboard: it appears when a `chan devserver` registers over the tunnel and goes offline when it disconnects. Routes (all session-gated; the session user is implicitly the owner):
 
-- `POST /api/workspaces` body `{workspace_name}` (idempotent create; the workspace persists with no grants and no live tunnel, so the dashboard can show it offline)
-- `DELETE /api/workspaces/:workspace` (FK cascade drops every grant)
-- `POST /api/workspaces/:workspace/grants` body `{grantee_email, role}` (idempotent create / role-promote; auto-upserts the parent workspace on the profile side)
-- `GET  /api/workspaces/:workspace/grants`
+- `POST /api/devservers/:devserver_id/grants` body `{grantee_email, role}` (create / role-promote)
+- `GET  /api/devservers/:devserver_id/grants`
 - `DELETE /api/grants/:id`
-- `GET  /api/workspaces/owned` (workspaces I own; from the `workspaces` table joined with grant counts)
-- `GET  /api/workspaces/incoming` (workspaces shared with me)
+- `GET  /api/devservers/owned` (devservers I own, with grant counts)
+- `GET  /api/devservers/incoming` (devservers shared with me)
 
 All forward to profile-service over the service bearer. Validation re-runs in profile; identity does only the cheap shape check before the round trip.
 
@@ -188,7 +186,7 @@ Plus (in `http.rs`):
 - Internal validate bearer compared the same way.
 - PAT validate compares hashes (the upstream lookup is a parameterised SQL query, not a string compare).
 
-### Workspace-gate mint, not session sharing
+### Devserver-gate mint, not session sharing
 
 `WORKSPACE_GATE_SECRET` is the only credential identity uses to talk auth to devserver-proxy. It is distinct from `PROFILE_AUTH_TOKEN`, `IDENTITY_INTERNAL_TOKEN` and `WORKSPACE_ADMIN_TOKEN`. identity uses it only to mint `typ: entry` tokens; devserver-proxy uses it to verify those and to mint its own `typ: session` cookies.
 
