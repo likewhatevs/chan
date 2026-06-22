@@ -148,18 +148,16 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "File",
   },
   // Graph command. Context-aware spawn: the focused doc / terminal cwd
-  // seeds the graph's scope. The top-level Cmd+Shift+M web chord is
-  // retired; on the web the graph opens via Hybrid Nav (Mod+. V), the
-  // "Graph from here" inspector action (a new graph tab), or a menu.
-  // `native` keeps the Cmd+Shift+M chord chan-desktop's KEY_BRIDGE_JS
-  // still binds (serve.rs) until that native binding is retired in step.
+  // seeds the graph's scope. There is no top-level Cmd+Shift+M chord
+  // (retired on web + native); the graph opens via Hybrid Nav (Mod+. V),
+  // the "Graph from here" inspector action (a new graph tab), or the
+  // native Graph menu (the app.graph.toggle command bridge).
   {
     id: "app.graph.toggle",
     label: "Graph",
     web: "Mod+. V",
-    native: "Mod+Shift+M",
     group: "App",
-    note: "Hybrid Nav; native Cmd+Shift+M pending retirement",
+    note: "Hybrid Nav",
     escapeTerminal: true,
   },
   // New terminal in the active pane as a direct chord. Browsers
