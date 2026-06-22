@@ -1,6 +1,6 @@
 # chan-tunnel-client
 
-Client library for chan-tunnel. Dials a public tunnel terminator over h2/TLS at `/v1/tunnel`, runs the Hello / HelloAck round-trip, hands the post-handshake byte stream to yamux, and serves every inbound substream with a user-supplied `axum::Router` via hyper h1 (`with_upgrades()` so WebSockets stay attached). Embedded into `chan serve` so a user-running `chan` registers its workspace at the public host and receives forwarded HTTP requests over a single long-lived h2 connection.
+Client library for chan-tunnel. Dials a public tunnel terminator over h2/TLS at `/v1/tunnel`, runs the Hello / HelloAck round-trip, hands the post-handshake byte stream to yamux, and serves every inbound substream with a user-supplied `axum::Router` via hyper h1 (`with_upgrades()` so WebSockets stay attached). Embedded into `chan-server` and driven by `chan devserver`, which registers at the public host and receives forwarded HTTP requests over a single long-lived h2 connection.
 
 ```toml
 [dependencies]
@@ -10,8 +10,8 @@ chan-tunnel-client = "0.11"
 ## Public surface
 
 ```
-ClientConfig                  url, token, workspace, public flag,
-                              backoff, dial timeout, events tx,
+ClientConfig                  url, token, workspace, backoff,
+                              dial timeout, events tx,
                               substream concurrency cap
 Registration                  HelloAck contents (prefix/user/workspace)
 TunnelEvent                   Connected / Disconnected / DialFailed

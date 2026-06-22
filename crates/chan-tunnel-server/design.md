@@ -25,8 +25,8 @@
 chan-tunnel is split across three crates under `crates/` in this repository:
 
 - `chan-tunnel-proto`: pure wire types (`Hello`, `HelloAck`, `ProtocolVersion`, `error_code`), framing codec, workspace-name and username validators, `H2Duplex`. See [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md) for byte-level details.
-- `chan-tunnel-client`: dial side, embedded into `chan serve`.
-- `chan-tunnel-server` (this crate): library form of the terminator. Two embedders: the gateway's `devserver-proxy` (`gateway/crates/devserver-proxy`), which supplies an identity-service `Validator` (returning the token-resolved `devserver_id`) and runs behind nginx for TLS; and chan-desktop (`desktop/src-tauri`), which binds a loopback-only listener fed by `ssh -R` forwards.
+- `chan-tunnel-client`: dial side, driven by `chan devserver` (embedded in `chan-server`).
+- `chan-tunnel-server` (this crate): library form of the terminator. Embedded by the gateway's `devserver-proxy` (`gateway/crates/devserver-proxy`), which supplies an identity-service `Validator` (returning the token-resolved `devserver_id`) and runs behind nginx for TLS.
 
 End-to-end shape (gateway deployment): `chan devserver --tunnel-token` calls `chan_tunnel_client::run(cfg, router)` which dials `devserver.chan.app/v1/tunnel`. nginx terminates TLS and `grpc_pass`-es `/v1/tunnel` as h2c to `serve_tunnel_listener`. Each accepted connection becomes a yamux session managed by a per-tunnel driver task and indexed in the shared `Registry`. The public side looks up the `TunnelHandle` for `(user, devserver_id)`, opens a fresh outbound substream, and runs hyper h1 client over it to forward the request (with WebSocket upgrade bridging). `devserver-proxy` mounts its own proxy layer (`proxy.rs`): it parses `{user}` out of the wildcard host (`{user}.devserver.chan.app`), gates on `devserver_access`, and forwards the full `/{workspace}/...` path (segment-preserving) by calling `TunnelHandle::open` directly. (The turn-key `public_router` this crate used to ship was deleted — see the migration note.)
 
@@ -36,16 +36,16 @@ This document covers terminator-side design. The wire format is in chan-tunnel-p
 
 The terminator side of chan-tunnel needs to:
 
-- Accept long-lived h2c POSTs from arbitrary `chan serve` clients.
+- Accept long-lived h2c POSTs from arbitrary `chan devserver` clients.
 - Authenticate the bearer token before committing to the body, so bad-token failures return 401 / 403 distinctly (not as a generic handshake error after a 200).
 - Run the Hello / HelloAck round-trip and bind the registration to `(validated_user, requested_workspace)`, emitting structured `HelloAck::Refused` frames for policy failures.
 - Multiplex per-public-request substreams over the resulting yamux session.
 - Expose live tunnels to a public-facing axum router so the host can route public requests at the registered peer.
-- Tolerate flap (a `chan serve` restart should reclaim its workspace without waiting for a TCP timeout).
+- Tolerate flap (a `chan devserver` restart should reclaim its registration without waiting for a TCP timeout).
 
 Out of scope:
 
-- TLS termination. The gateway's nginx does it; the desktop relies on loopback + SSH. This crate runs h2c.
+- TLS termination. The gateway's nginx does it. This crate runs h2c.
 - Token issuance / identity. The `Validator` trait is the seam.
 - Persistence. The registry is in-memory; a restart drops every tunnel and clients reconnect.
 - Wire format (chan-tunnel-proto).
@@ -53,7 +53,7 @@ Out of scope:
 ## 2. Architecture overview
 
 ```
-                 fronting layer (nginx grpc_pass / ssh -R)
+                 fronting layer (nginx grpc_pass)
                               |
                               v h2c
                  +---------------------------+
@@ -186,7 +186,7 @@ The substream is already a multiplexed channel; running h2 inside would be mux-o
 
 ### Why h2c (not TLS) on the listener
 
-The deployment in front owns transport security: nginx terminates TLS at the gateway and forwards h2c via `grpc_pass` on the `/v1/tunnel` path; chan-desktop binds 127.0.0.1 and lets `ssh -R` provide confidentiality. Running rustls here would duplicate trust config and complicate cert rotation. The listener itself is h2c-only; any host can put its own TLS layer in front.
+The deployment in front owns transport security: nginx terminates TLS at the gateway and forwards h2c via `grpc_pass` on the `/v1/tunnel` path. Running rustls here would duplicate trust config and complicate cert rotation. The listener itself is h2c-only; any host can put its own TLS layer in front.
 
 ## 4. Public API surface
 
@@ -322,7 +322,6 @@ Single umbrella enum `ServerError` with seven variants (see section 4). Conversi
   - A thin facade over `chan_tunnel_server::Registry`, used by the proxy, dashboard, and admin handlers.
   - Its own reverse-proxy layer (`proxy.rs`) for `{user}.devserver.chan.app/{workspace}/...`: wildcard-host routing, a per-devserver `devserver_gate` cookie/JWT auth gate, and segment-PRESERVING forward (the `{workspace}` segment is kept) over hyper h1 and tungstenite WebSocket substreams from `TunnelHandle::open`. (The turn-key `public_router` was deleted; the proxy was always the real path.)
   - chan-tunnel-client as a dev-dep so `tests/api.rs` can register a fake devserver against a real listener — this is the e2e coverage of the substream-forwarding + WS-bridge mechanics.
-- `desktop/src-tauri` (chan-desktop): runtime dep. Embeds a loopback-only tunnel listener (user-initiated, fed by `ssh -R` from a remote `chan serve`) with a local `Validator`, plus per-tenant 127.0.0.1 listeners that forward via `TunnelHandle::open`. A supervisor polls `Registry::list_all()` for fresh registrations.
 - This crate's own e2e test (`tests/listener_e2e.rs`) drives a real chan-tunnel-client against `serve_tunnel_listener` over localhost, covering the auth gates, the devserver_id keying, refusal codes, the per-user cap, and reconnect eviction.
 
 ## 9. Open questions / future extensions

@@ -5,10 +5,10 @@
 chan-tunnel is split into three crates under `crates/` in this repository:
 
 - `chan-tunnel-proto` (this crate): pure wire types and a sync codec — Hello / HelloAck, the workspace-name and username validators, the `H2Duplex` adapter, and the `TUNNEL_PATH` / `MAX_CONTROL_FRAME_BYTES` constants. No runtime state.
-- `chan-tunnel-client`: dials a tunnel terminator over h2/TLS (or h2c), runs the Hello round-trip, hands the post-handshake duplex to yamux, and serves inbound substreams with a user-supplied axum router. Embedded into `chan serve` (`crates/chan-server`).
-- `chan-tunnel-server`: terminates tunnel connections, exposes the `Validator` seam, registers live tunnels in a shared `Registry` keyed by `(user, workspace)`, and offers a `public_router` that opens fresh yamux substreams to forward public requests. Embedded by the gateway's `workspace-proxy` (`gateway/crates/workspace-proxy`) and by chan-desktop (`desktop/src-tauri`).
+- `chan-tunnel-client`: dials a tunnel terminator over h2/TLS (or h2c), runs the Hello round-trip, hands the post-handshake duplex to yamux, and serves inbound substreams with a user-supplied axum router. Embedded into `chan-server` (`crates/chan-server`), driven by `chan devserver`.
+- `chan-tunnel-server`: terminates tunnel connections, exposes the `Validator` seam, registers live tunnels in a shared `Registry`, and opens fresh yamux substreams to forward public requests. Embedded by the gateway's `devserver-proxy` (`gateway/crates/devserver-proxy`).
 
-End-to-end shape: `chan serve` (running on the user's machine) embeds chan-tunnel-client and dials the terminator at `POST {tunnel-host}/v1/tunnel`. After Hello / HelloAck the single h2 stream becomes a yamux session; the terminator opens one substream per public request and runs hyper h1 over it.
+End-to-end shape: `chan devserver` (running on a box) embeds chan-tunnel-client and dials the terminator at `POST {tunnel-host}/v1/tunnel`. After Hello / HelloAck the single h2 stream becomes a yamux session; the terminator opens one substream per public request and runs hyper h1 over it.
 
 This document is the canonical reference for the wire format and framing. The client and server design.md files reference back here for any byte-level detail.
 
@@ -257,10 +257,9 @@ The async helpers return `IoFrameError`; the sync codec returns `FrameError`. Cl
 Transitively:
 
 - `crates/chan-server`: depends on chan-tunnel-client and re-exports `is_valid_workspace_name`, `sanitize_workspace_name`, and `MAX_WORKSPACE_NAME_LEN` (module `chan_server::tunnel`) so the `chan` CLI can validate the user-typed workspace name before dialing.
-- `gateway/crates/workspace-proxy` (separate Cargo workspace): chan-tunnel-server at runtime; chan-tunnel-client and this crate as dev-deps for the end-to-end test in `tests/api.rs`.
-- `desktop/src-tauri` (chan-desktop): embeds chan-tunnel-server and this crate at runtime for its local tunnel listener; chan-tunnel-client is a dev-dep for `tests/tunnel_e2e.rs`.
+- `gateway/crates/devserver-proxy` (separate Cargo workspace): chan-tunnel-server at runtime; chan-tunnel-client and this crate as dev-deps for the end-to-end test in `tests/api.rs`.
 
 ## 9. Open questions / future extensions
 
-- Multi-workspace over a single tunnel. Today one h2 stream registers one `(user, workspace)`. A `Hello { workspaces: Vec<...> }` shape would amortise TLS/h2 setup for users running several `chan serve` instances, but requires a registry rework on the server to attribute inbound substreams to the right workspace.
+- Multi-workspace over a single tunnel — already met above the protocol, so no wire change is planned. `chan devserver` registers one tunnel (keyed on its token-resolved devserver id) and the gateway's devserver-proxy routes workspaces by the preserved `{workspace}` path segment, so a whole library rides one h2/yamux session without a `Hello { workspaces: Vec<...> }` shape or a per-workspace registry rework.
 - Negotiated frame cap. Both sides hard-code 64 KiB; a larger cap negotiated inside `Hello` would let future versions carry richer initial metadata without a protocol bump.

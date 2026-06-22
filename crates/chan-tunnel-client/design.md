@@ -5,16 +5,16 @@
 chan-tunnel is split across three crates under `crates/` in this repository:
 
 - `chan-tunnel-proto`: pure wire types (`Hello`, `HelloAck`, `ProtocolVersion`, the `error_code` refusal constants), the framing codec, the workspace-name and username validators, and `H2Duplex`. See [`chan-tunnel-proto/design.md`](../chan-tunnel-proto/design.md) for byte-level details.
-- `chan-tunnel-client` (this crate): dials the terminator, runs the Hello round-trip, multiplexes yamux substreams onto an axum router. Embedded into `chan serve` (`crates/chan-server`).
-- `chan-tunnel-server`: terminator library, consumed by the gateway's `workspace-proxy` and by chan-desktop's embedded tunnel listener. Owns `Validator`, `Registry`, and the public-facing router.
+- `chan-tunnel-client` (this crate): dials the terminator, runs the Hello round-trip, multiplexes yamux substreams onto an axum router. Embedded into `chan-server` (`crates/chan-server`) and driven by `chan devserver`.
+- `chan-tunnel-server`: terminator library, consumed by the gateway's `devserver-proxy`. Owns `Validator`, `Registry`, and the substream-forwarding seam.
 
-End-to-end shape: `chan serve` calls `chan_tunnel_client::run(cfg, router)`. `run` POSTs to `{tunnel-host}/v1/tunnel` over h2/TLS, exchanges Hello / HelloAck through the resulting bidirectional stream, then yamux-multiplexes per-request substreams. The terminator accepts the connection in `serve_tunnel_listener`, registers the workspace in its `Registry`, and opens fresh substreams to forward public requests.
+End-to-end shape: `chan devserver` calls `chan_tunnel_client::run(cfg, router)`. `run` POSTs to `{tunnel-host}/v1/tunnel` over h2/TLS, exchanges Hello / HelloAck through the resulting bidirectional stream, then yamux-multiplexes per-request substreams. The terminator accepts the connection in `serve_tunnel_listener`, registers the devserver in its `Registry`, and opens fresh substreams to forward public requests.
 
 This document is the dial and handshake reference. The wire format itself lives in chan-tunnel-proto's design.md.
 
 ## 1. Problem and scope
 
-A user running `chan serve` on a laptop wants their workspace reachable on a public URL without opening a port or configuring DNS. The constraint is "dial out only, HTTPS only." The shape that fits is one long-lived `POST /v1/tunnel` carrying yamux frames after a short handshake.
+A user running `chan devserver` on a box wants their library reachable on a public URL without opening a port or configuring DNS. The constraint is "dial out only, HTTPS only." The shape that fits is one long-lived `POST /v1/tunnel` carrying yamux frames after a short handshake.
 
 This crate owns:
 
@@ -39,9 +39,9 @@ Out of scope:
 +--------------------------+             +--------------------+
 |  ClientConfig            |             |   axum::Router     |
 |  (url, token, workspace, |             |  (provided by the  |
-|   public, backoff,       |             |   embedder, e.g.   |
-|   timeout, events,       |             |   chan serve's     |
-|   proxy, substream cap)  |             |   inner app)       |
+|   backoff, timeout,      |             |   embedder, e.g.   |
+|   events, proxy,         |             |   chan devserver's |
+|   substream cap)         |             |   inner app)       |
 +--------------------------+             +--------------------+
             |                                    ^
             v                                    |
@@ -84,7 +84,7 @@ Connection lifecycle:
 |              | normalization, request POST, status mapping,      |
 |              | `H2Duplex` construction, `build_tls_config`       |
 
-`handshake` and `serve_substreams` are free functions over a generic `S: AsyncRead + AsyncWrite + Unpin + Send + 'static` so wire tests (e.g. `gateway/crates/workspace-proxy/tests/api.rs`) can pass a duplex built from a raw h2 stream and exercise the Hello round-trip without standing up TLS. The same generic lets `dial` pass an `H2Duplex` produced from a real h2 stream.
+`handshake` and `serve_substreams` are free functions over a generic `S: AsyncRead + AsyncWrite + Unpin + Send + 'static` so wire tests (e.g. `gateway/crates/devserver-proxy/tests/api.rs`) can pass a duplex built from a raw h2 stream and exercise the Hello round-trip without standing up TLS. The same generic lets `dial` pass an `H2Duplex` produced from a real h2 stream.
 
 ### Per-substream serving
 
@@ -130,7 +130,7 @@ pub struct ClientConfig {
     pub proxy: Option<Url>,
     pub max_concurrent_substreams: usize,
 }
-impl Default for ClientConfig { /* workspace.chan.app/v1/tunnel */ }
+impl Default for ClientConfig { /* devserver.chan.app/v1/tunnel */ }
 
 pub struct Registration {
     pub prefix: String,
@@ -209,7 +209,7 @@ Client-specific notes:
 ## 6. Trust boundaries / validation
 
 - **Server certificate**: rustls with `rustls-native-certs` for the trust store, ALPN forced to `h2`. `run` builds the TLS config once and reuses it across reconnects (the macOS keychain walk is expensive); `dial_with_tls` lets other callers do the same.
-- **URL scheme gate**: only `https://` and `http://` are accepted. `http://` against a non-loopback host logs a warning (bearer token in cleartext); we don't refuse outright because legitimate cases exist (private VPN, Tailscale, in-cluster service, the desktop's loopback listener behind `ssh -R`).
+- **URL scheme gate**: only `https://` and `http://` are accepted. `http://` against a non-loopback host logs a warning (bearer token in cleartext); we don't refuse outright because legitimate cases exist (private VPN, Tailscale, in-cluster service, a loopback listener behind `ssh -R`).
 - **Workspace name** (`is_valid_workspace_name` from chan-tunnel-proto): checked before sending `Hello`. The server checks again, but catching it locally avoids a round-trip and surfaces a config error to the user.
 - **Token**: empty token is rejected by `run` before the first dial. The token itself is opaque to this crate; the server's `Validator` decides whether it's valid.
 - **Proxy credentials**: taken from the proxy URL's userinfo and sent only as the Basic CONNECT header. CONNECT failure messages carry the numeric status but never echo proxy-supplied response text, so a hostile proxy cannot reflect credentials into logs.
@@ -222,10 +222,9 @@ Single umbrella enum `ClientError` with six variants (see section 4). `From` imp
 
 ## 8. Consumers
 
-- `crates/chan-server`: runtime dep. `chan serve --tunnel-url ... --tunnel-token ...` calls `chan_tunnel_client::run(cfg, router)` to expose its inner axum app through the tunnel; consumes `TunnelEvent` and `Registration` to wire the prefix and surface "connected / retrying" status to the operator.
-- `crates/chan-tunnel-server`: dev-dep. The e2e tests (`tests/listener_e2e.rs`, `tests/public_e2e.rs`) use `dial` to drive a real client against `serve_tunnel_listener` and the public router over localhost h2c.
-- `gateway/crates/workspace-proxy`: dev-dep. `tests/api.rs` uses `handshake` + `serve_substreams` over a hand-built h2 stream to register a fake `chan serve` against the proxy's real listener.
-- `desktop/src-tauri`: dev-dep. `tests/tunnel_e2e.rs` dials chan-desktop's embedded tunnel listener.
+- `crates/chan-server`: runtime dep. `chan devserver --tunnel-token` calls `chan_tunnel_client::run(cfg, router)` to expose its inner axum app through the tunnel; consumes `TunnelEvent` and `Registration` to wire the prefix and surface "connected / retrying" status to the operator.
+- `crates/chan-tunnel-server`: dev-dep. The e2e test (`tests/listener_e2e.rs`) uses `dial` to drive a real client against `serve_tunnel_listener` over localhost h2c.
+- `gateway/crates/devserver-proxy`: dev-dep. `tests/api.rs` uses `handshake` + `serve_substreams` over a hand-built h2 stream to register a fake `chan devserver` against the proxy's real listener.
 
 ## 9. Open questions / future extensions
 
