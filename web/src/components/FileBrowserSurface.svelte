@@ -30,7 +30,7 @@
   import { markPaneModalOpen } from "../state/paneModalGuard.svelte";
   import { tabMenu } from "../state/tabMenu.svelte";
   import { chordFor } from "../state/shortcuts";
-  import { isEditableText } from "../state/fileTypes";
+  import { classifyEntry, isOpenableTextKind } from "../state/kinds";
   import {
     browserSelection,
     browserSidePanes,
@@ -381,7 +381,10 @@
     const path = browserSelection.path;
     if (!path) return;
     const entry = tree.entries.find((e) => e.path === path);
-    if (entry && !entry.is_dir && isEditableText(entry.path)) {
+    // Gate on the server content kind, mirroring the inspector's Open
+    // pill and the tree's double-click: an odd-suffix plaintext file
+    // (content-sniffed to `text`) opens instead of falling to Download.
+    if (entry && !entry.is_dir && isOpenableTextKind(classifyEntry(entry))) {
       void openInActivePane(entry.path);
       if (isOverlay) closeSurface();
     }

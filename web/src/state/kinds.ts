@@ -62,6 +62,21 @@ export function classifyFile(
   return classifyPath(path);
 }
 
+/// True for file kinds the editor opens as text: markdown documents,
+/// contacts (markdown notes flagged `chan.kind: contact`), and plain
+/// source / config / shell text. Gates the inspector's Open-vs-Download
+/// pill and the File Browser's open-selection off the SERVER-provided
+/// content kind. The per-directory listing content-sniffs an unknown
+/// extension to `text` / `binary`, so an odd-suffix plaintext file lands
+/// as `text` here and gets "Open" like the tree's double-click instead
+/// of the extension-gated "Download". Media, binary, and the not-yet-
+/// sniffed `pending` kind are not openable as text. Accepts the broad
+/// `Kind` (what `classifyEntry` returns) so callers can pass it directly;
+/// folder / tag / mention / date all fall through to false.
+export function isOpenableTextKind(kind: Kind): boolean {
+  return kind === "document" || kind === "text" || kind === "contact";
+}
+
 /// Human label used in kind chips. Lowercased; chip CSS handles
 /// uppercasing so callers can compose strings with the label.
 export function labelFor(kind: Kind): string {

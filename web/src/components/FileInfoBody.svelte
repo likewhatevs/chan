@@ -28,7 +28,7 @@
     ReportPrefix,
     TreeEntry,
   } from "../api/types";
-  import { isEditableText, isImage, isMarkdown, isPdf } from "../state/fileTypes";
+  import { isImage, isMarkdown, isPdf } from "../state/fileTypes";
   import { basename, formatMtime, formatSize } from "../state/format";
   import { printMarkdownDocument } from "../editor/print";
   import { desktopOs, isTauriDesktop } from "../api/desktop";
@@ -61,7 +61,7 @@
   } from "../state/store.svelte";
   import { openTerminalInActivePane } from "../state/tabs.svelte";
   import { terminalFromHereTarget, shellQuotePath } from "../terminal/fromHere";
-  import { classifyEntry } from "../state/kinds";
+  import { classifyEntry, isOpenableTextKind } from "../state/kinds";
   import KindChip from "./KindChip.svelte";
   import { ChevronDown, Copy } from "lucide-svelte";
 
@@ -606,7 +606,12 @@
     const p = entry.path;
     const image = !isDir && isImage(p);
     const pdf = !isDir && isPdf(p);
-    const editable = !isDir && isEditableText(p);
+    // Editability follows the server-provided content kind, not the path
+    // extension: the file browser's per-directory listing content-sniffs
+    // an odd-suffix file to `text` / `binary`, so a plaintext file with an
+    // unknown extension gets "Open" (matching the tree's double-click,
+    // which peeks the content) instead of the extension-gated "Download".
+    const editable = !isDir && isOpenableTextKind(classifyEntry(entry));
     const markdown = !isDir && isMarkdown(p);
     const media = image || pdf;
 
@@ -815,7 +820,8 @@
      one consistent layout: header -> actions -> lazy content. Per
      inspector-spec.md the actions move up here from the old bottom-of-
      body placement. The contextual actions differ by entry kind:
-       - editable file: Open (gated on isEditableText, even read-only);
+       - editable file: Open (gated on the server content kind, so an
+         odd-suffix plaintext file opens like the tree double-click);
        - media (image): View/Zoom; (pdf): View PDF;
        - every entry: Upload + Download (+ progress indicator);
        - host-provided: Show File/Directory (onReveal), Graph from here
@@ -1028,7 +1034,6 @@
     {/if}
   </div>
 {:else}
-  {@const editable = isEditableText(entry.path)}
   {@const image = isImage(entry.path)}
   {@const pdf = isPdf(entry.path)}
   {@const fileKind = classifyEntry(entry)}
