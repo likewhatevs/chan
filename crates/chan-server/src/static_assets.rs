@@ -29,6 +29,16 @@ use crate::state::AppState;
 #[folder = "../../web/dist/"]
 struct WebAssets;
 
+/// Launcher bundle baked at compile time, mirroring [`WebAssets`] but for
+/// `web-launcher/dist/` — the pure `/api/library/*` HTTP client served at the
+/// devserver/library root `/` (the desktop launcher SPA and the gateway's
+/// "Open devserver" both reach it through the transparent proxy). Same
+/// debug-reads-from-disk / release-embeds behavior as `WebAssets`; build.rs
+/// emits rerun-if-changed for the folder so a re-bundled launcher relinks.
+#[derive(RustEmbed)]
+#[folder = "../../web-launcher/dist/"]
+struct LauncherAssets;
+
 /// Server-side resource bundle for runtime fonts. Files at
 /// `crates/chan-server/resources/fonts/` are baked in via
 /// rust-embed and served under `/static/fonts/<name>`.
@@ -99,6 +109,52 @@ pub async fn serve_static(State(state): State<Arc<AppState>>, uri: axum::http::U
     (
         StatusCode::NOT_FOUND,
         "frontend bundle not built; run `cd web && npm install && npm run build`",
+    )
+        .into_response()
+}
+
+/// Single-page-app fallback for the launcher bundle, mirroring
+/// [`serve_static`] but for [`LauncherAssets`]. Stateless: the launcher
+/// always mounts at the devserver/library root `/`, so there is no
+/// per-workspace prefix to inject — `inject_chan_meta` runs with an empty
+/// prefix (a documented no-op) to keep the index shape identical to the
+/// main SPA's. `/api`/`/ws` misses still 404 rather than returning the SPA
+/// shell, so the launcher's `/api/library/*` calls and the reserved
+/// namespace get JSON-style 404s, not HTML.
+pub async fn serve_launcher(uri: axum::http::Uri) -> Response {
+    let path = uri.path();
+    if path.starts_with("/api") || path == "/ws" {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let candidate = path.trim_start_matches('/');
+    let is_index = candidate.is_empty() || candidate == "index.html";
+    let candidate = if candidate.is_empty() {
+        "index.html"
+    } else {
+        candidate
+    };
+    if let Some(file) = LauncherAssets::get(candidate) {
+        let body = if is_index {
+            inject_chan_meta(&file.data, "", false)
+        } else {
+            file.data.into_owned()
+        };
+        return with_static_cache_headers(
+            ([(header::CONTENT_TYPE, content_type_for(candidate))], body).into_response(),
+            is_index,
+        );
+    }
+    // SPA fallback: client-side routes resolve to index.html.
+    if let Some(file) = LauncherAssets::get("index.html") {
+        let body = inject_chan_meta(&file.data, "", false);
+        return with_static_cache_headers(
+            ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response(),
+            true,
+        );
+    }
+    (
+        StatusCode::NOT_FOUND,
+        "launcher bundle not built; run `cd web-launcher && npm install && npm run build`",
     )
         .into_response()
 }

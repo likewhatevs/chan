@@ -98,6 +98,14 @@ pub struct WorkspaceHost {
     /// `WindowPresence` connect/disconnect, tenant on/off — so the watch feed
     /// pushes a fresh snapshot. The aggregate every client's reconcile awaits.
     library_change_notify: Arc<Notify>,
+    /// The library root's fallback router, served when no tenant prefix matches
+    /// a request (the launcher SPA + its `/api/library/*` surface live here).
+    /// Installed once via [`install_root_fallback`](Self::install_root_fallback);
+    /// chan-library cannot depend on chan-server, so the embedder (devserver /
+    /// desktop loopback) builds the launcher router in chan-server and hands it
+    /// in. Empty on a host with no root surface — the root `/` then 404s, the
+    /// prior behavior.
+    root_fallback: OnceLock<Router>,
 }
 
 struct HostedWorkspaceRuntime {
@@ -162,6 +170,7 @@ impl WorkspaceHost {
             library_id: OnceLock::new(),
             terminal_tenant_prefix: OnceLock::new(),
             library_change_notify: Arc::new(Notify::new()),
+            root_fallback: OnceLock::new(),
         }
     }
 
@@ -222,6 +231,16 @@ impl WorkspaceHost {
     /// This library's persisted workspace on/off overlay, once installed.
     pub fn workspace_overlay(&self) -> Option<&Arc<WorkspaceOverlay>> {
         self.workspace_overlay.get()
+    }
+
+    /// Install the library root's fallback router — served by `host_dispatch`
+    /// when no tenant prefix matches (the launcher SPA + its `/api/library/*`
+    /// surface). Idempotent set-once; the embedder (devserver / desktop
+    /// loopback) builds the launcher router in chan-server and calls this once
+    /// after wrapping the host in an `Arc`, before `router()`. A host that never
+    /// installs one keeps the prior behavior: the root `/` 404s.
+    pub fn install_root_fallback(&self, router: Router) {
+        let _ = self.root_fallback.set(router);
     }
 
     /// This library's identity (`"local"` until a devserver installs its own).
@@ -1073,6 +1092,15 @@ impl WorkspaceHost {
             Ok(router) => router,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         }) else {
+            // No tenant prefix owns this path. Serve the library root fallback
+            // (the launcher SPA + `/api/library/*`) when one is installed;
+            // otherwise 404, the prior behavior.
+            if let Some(fallback) = self.root_fallback.get() {
+                return match fallback.clone().oneshot(req).await {
+                    Ok(response) => response,
+                    Err(e) => match e {},
+                };
+            }
             return StatusCode::NOT_FOUND.into_response();
         };
         match router.oneshot(req).await {

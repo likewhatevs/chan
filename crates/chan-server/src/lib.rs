@@ -991,6 +991,16 @@ pub fn install_local_workspace_overlay(host: &WorkspaceHost) {
     host.install_workspace_overlay(Arc::new(WorkspaceOverlay::open(store)));
 }
 
+/// Install the launcher SPA as the host's root fallback: the devserver/library
+/// root `/` then serves `web-launcher` (and its `/api/library/*` surface)
+/// instead of 404ing. Both embedders call this once after wrapping the host in
+/// an `Arc` — chan-desktop's loopback (`embedded.rs`) and the headless devserver
+/// (`build_devserver_app`) — so the one launcher is reached on every surface
+/// through the existing transparent proxy.
+pub fn install_launcher_root_fallback(host: &WorkspaceHost) {
+    host.install_root_fallback(routes::launcher_router());
+}
+
 #[async_trait::async_trait]
 impl chan_library::TenantBuilder for RouteLayer {
     async fn build_workspace(

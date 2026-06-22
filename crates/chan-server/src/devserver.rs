@@ -806,6 +806,10 @@ fn build_devserver_app(state: Arc<DevserverState>, host: Arc<WorkspaceHost>) -> 
             require_bearer,
         ))
         .with_state(state);
+    // Serve the web-launcher SPA at the library root `/` (and its
+    // `/api/library/*` surface) as the host's root fallback — without it the
+    // root 404s, since `host_dispatch` only matches workspace-tenant prefixes.
+    crate::install_launcher_root_fallback(&host);
     public.merge(authed).merge(host.router())
 }
 
@@ -1721,6 +1725,87 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn launcher_mounts_at_library_root() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt;
+
+        let home = tempfile::tempdir().expect("home");
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let state = test_state(home.path(), addr);
+        let host = state.host.clone();
+        let app = build_devserver_app(state, host);
+
+        // Root `/` serves the launcher SPA shell — public (no bearer), 200, HTML.
+        // Today, without the root fallback, this 404s: `host_dispatch` only
+        // matches workspace-tenant prefixes.
+        let root = app
+            .clone()
+            .oneshot(HttpRequest::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(root.status(), StatusCode::OK);
+        assert_eq!(
+            root.headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("text/html; charset=utf-8"),
+        );
+        let body = to_bytes(root.into_body(), 1 << 20).await.unwrap();
+        let html = std::str::from_utf8(&body).unwrap();
+        assert!(html.contains("Chan Launcher"), "launcher index served at /");
+        assert!(html.contains(r#"id="app""#));
+
+        // The hashed module script the shell references resolves under `/`
+        // (vite `base: "./"` makes `./assets/..` land at the library root).
+        let asset = html
+            .split_once("src=\"")
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(src, _)| src.trim_start_matches("./").to_string())
+            .expect("index references a module script");
+        let asset_resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/{asset}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            asset_resp.status(),
+            StatusCode::OK,
+            "launcher asset {asset} must resolve"
+        );
+
+        // A client-side route falls back to the shell; an `/api` miss stays a
+        // real 404 (never the SPA HTML), so the launcher's `/api/library/*`
+        // calls get JSON-style errors.
+        let spa = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/anywhere")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(spa.status(), StatusCode::OK);
+
+        let api_miss = app
+            .oneshot(
+                HttpRequest::builder()
+                    .uri("/api/library/not-a-route")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(api_miss.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
