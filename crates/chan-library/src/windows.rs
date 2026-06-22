@@ -99,6 +99,46 @@ pub struct WindowRecord {
     /// close. `#[serde(default)]`: a record without the field reads `false`.
     #[serde(default)]
     pub active_transfer: bool,
+    /// This is a devserver's script-connection CONTROL terminal — the window
+    /// running the connect script. The desktop surfaces it in that devserver's
+    /// feed (tagged with the devserver's `library_id`), and the launcher renders
+    /// it FIRST in the devserver's window list. Omitted from the wire when false
+    /// (the common case), so only a control window carries it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub control: bool,
+}
+
+impl WindowRecord {
+    /// Build the wire record for a devserver's CONTROL terminal — the window
+    /// running its connect script. The desktop mints this (it drives the connect
+    /// spawn lifecycle) and adds it to that devserver's feed snapshot, tagged with
+    /// the devserver's `library_id` so the launcher groups it there and renders it
+    /// FIRST (ordinal 0 + `control`). The session runs on the LOCAL shared
+    /// terminal tenant, so `prefix`/`token` point there, but the window GROUPS
+    /// under the devserver. Not persisted: the desktop owns its per-connection
+    /// lifecycle. `connected` reflects whether a `/ws` view is live.
+    pub fn control_terminal(
+        library_id: String,
+        window_id: String,
+        prefix: String,
+        token: String,
+        connected: bool,
+    ) -> Self {
+        WindowRecord {
+            window_id,
+            library_id,
+            kind: WindowKind::Terminal,
+            title: "Control Terminal".to_string(),
+            ordinal: 0,
+            workspace_path: None,
+            prefix,
+            token,
+            persisted: false,
+            connected,
+            active_transfer: false,
+            control: true,
+        }
+    }
 }
 
 /// The window-set watch frame: a full snapshot pushed on connect and on every
@@ -170,6 +210,9 @@ impl PersistedWindow {
             // (`assemble_window_records`), the one place that holds tenant
             // transfer state; a freshly assembled/minted record defaults off.
             active_transfer: false,
+            // A persisted registry row is never the control terminal — that is a
+            // transient, desktop-driven window built via [`WindowRecord::control_terminal`].
+            control: false,
         }
     }
 }
@@ -513,6 +556,7 @@ mod tests {
             persisted: true,
             connected: true,
             active_transfer: false,
+            control: false,
         };
         let v = serde_json::to_value(&rec).unwrap();
         assert_eq!(
@@ -549,6 +593,7 @@ mod tests {
             persisted: true,
             connected: false,
             active_transfer: false,
+            control: false,
         };
         assert_eq!(
             serde_json::to_value(&rec).unwrap(),
@@ -603,13 +648,36 @@ mod tests {
                 persisted: true,
                 connected: true,
                 active_transfer: true,
+                control: false,
             }],
         };
         let v = serde_json::to_value(&set).unwrap();
         assert_eq!(v["windows"][0]["window_id"], "w-1a2b3c4d5e6f7081");
         assert_eq!(v["windows"][0]["active_transfer"], true);
+        // A non-control window omits `control` from the wire.
+        assert!(v["windows"][0].get("control").is_none());
         assert_eq!(v["windows"].as_array().unwrap().len(), 1);
         assert_eq!(set, serde_json::from_value(v).unwrap());
+    }
+
+    #[test]
+    fn control_terminal_record_is_terminal_first_and_control_flagged() {
+        let rec = WindowRecord::control_terminal(
+            "lib-0f1e2d3c4b5a6978".into(),
+            "control-terminal-ds1".into(),
+            "/api/terminal".into(),
+            "tok_ctl".into(),
+            true,
+        );
+        assert_eq!(rec.kind, WindowKind::Terminal);
+        assert_eq!(rec.library_id, "lib-0f1e2d3c4b5a6978");
+        assert_eq!(rec.ordinal, 0, "rendered first");
+        assert!(rec.control);
+        assert!(!rec.persisted, "transient, desktop-driven lifecycle");
+        // `control` IS on the wire when true (the launcher renders it first).
+        let v = serde_json::to_value(&rec).unwrap();
+        assert_eq!(v["control"], true);
+        assert_eq!(rec, serde_json::from_value(v).unwrap());
     }
 
     #[test]
