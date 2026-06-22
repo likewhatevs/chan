@@ -8,6 +8,7 @@ import {
   connectDevserver,
   library,
   loadLibrary,
+  openWorkspaceWindow,
   removeDevserver,
   removeWorkspace,
   saveDevserver,
@@ -67,6 +68,19 @@ describe("workspace registry", () => {
     const before = library.workspaces.length;
     await removeWorkspace(target.workspace_id);
     expect(library.workspaces.length).toBe(before - 1);
+  });
+
+  it("drops a workspace's windows from the feed when it is turned off (no stale state)", async () => {
+    // Self-contained against the shared mock: add an on workspace, open a window
+    // onto it, then turn it off. The off purges its windows (the backend's
+    // discard_workspace_windows, mirrored in the mock) and the watch push
+    // replaces library.windows wholesale, so no ghost window record lingers.
+    await addLocalWorkspace("/tmp/w6-off");
+    const ws = library.workspaces.find((w) => w.path === "/tmp/w6-off")!;
+    await openWorkspaceWindow("/tmp/w6-off");
+    expect(library.windows.some((w) => w.workspace_path === "/tmp/w6-off")).toBe(true);
+    await toggleWorkspace(ws.workspace_id, false);
+    expect(library.windows.some((w) => w.workspace_path === "/tmp/w6-off")).toBe(false);
   });
 });
 

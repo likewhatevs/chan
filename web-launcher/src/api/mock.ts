@@ -168,6 +168,18 @@ function notify(): void {
   for (const fn of subscribers) fn(set);
 }
 
+/** Drop every local workspace window rooted at `path` from the feed — mirrors
+ * the backend's `discard_workspace_windows` so an off/forgotten workspace
+ * leaves no ghost window records. */
+function discardWorkspaceWindows(path: string): void {
+  for (let i = windows.length - 1; i >= 0; i--) {
+    const w = windows[i]!;
+    if (w.kind === "workspace" && w.library_id === "local" && w.workspace_path === path) {
+      windows.splice(i, 1);
+    }
+  }
+}
+
 function publicDevserver(ds: MockDevserver): DevserverEntry {
   // Never echo the token; report only whether one is stored (write-only wire).
   return {
@@ -218,20 +230,22 @@ export const mockApi: LibraryApi = {
   setWorkspaceOn: (id, on) => {
     const ws = workspaces.find((w) => w.workspace_id === id);
     if (ws) ws.on = on;
-    // An off workspace's windows lose their tenant token; on restores it.
-    for (const w of windows) {
-      if (w.kind === "workspace" && w.library_id === "local" && w.workspace_path === ws?.path) {
-        w.token = on ? `tok_${id}` : "";
-        w.connected = on && w.connected;
-      }
-    }
+    // Turning a workspace off PURGES its workspace windows from the feed,
+    // mirroring the backend's discard_workspace_windows (off + forget) — no
+    // stale window records linger. On does not restore them (the user opens
+    // new ones).
+    if (!on && ws) discardWorkspaceWindows(ws.path);
     notify();
     return tick(undefined);
   },
 
   removeWorkspace: (id) => {
     const i = workspaces.findIndex((w) => w.workspace_id === id);
-    if (i >= 0) workspaces.splice(i, 1);
+    if (i >= 0) {
+      discardWorkspaceWindows(workspaces[i]!.path);
+      workspaces.splice(i, 1);
+      notify();
+    }
     return tick(undefined);
   },
 
