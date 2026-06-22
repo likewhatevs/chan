@@ -17,12 +17,14 @@ describe("desktop download capability", () => {
     expect(desktop).toContain("Array.from(bytes)");
   });
 
-  test("it gates on isTauriDesktop and workspaces the transfer store", () => {
+  test("it gates on isTauriDesktop and drives the unified transfer model", () => {
     expect(desktop).toContain('runDesktopDownload called outside chan-desktop');
-    expect(desktop).toContain("beginDownloadTransfer(filename");
-    expect(desktop).toContain("finishDownloadTransfer(saved.path)");
-    expect(desktop).toContain("failDownloadTransfer(message)");
-    // The store-backed cancel aborts the in-flight fetch.
+    // The transfer bubble is the single download surface (the old per-flow
+    // downloadTransfer store is retired).
+    expect(desktop).toContain("beginTransfer({");
+    expect(desktop).toContain("finishTransfer(xferId, saved.path)");
+    expect(desktop).toContain("failTransfer(xferId, message)");
+    // The model-backed cancel aborts the in-flight fetch.
     expect(desktop).toContain("() => xhr.abort()");
   });
 });

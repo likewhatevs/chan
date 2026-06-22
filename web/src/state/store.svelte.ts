@@ -4042,10 +4042,10 @@ export const fileOps = {
   /// keep the `<a download>` path. chan-desktop's webview has no such
   /// manager, so on desktop we route through `runDesktopDownload`
   /// (api/desktop.ts): it fetches over the loopback connection with
-  /// XHR progress and saves through a Tauri command, driving the shared
-  /// `downloadTransfer` store the inspector indicator binds to.
-  /// Fire-and-forget: the store carries progress / error / savedPath
-  /// so callers don't await.
+  /// XHR progress and saves through a Tauri command, driving the
+  /// transfer bubble (the single download surface).
+  /// Fire-and-forget: the transfer model carries progress / error /
+  /// savedPath so callers don't await.
   downloadPathWithProgress(path: string, isDir: boolean): void {
     if (isTauriDesktop()) {
       const url = new URL(

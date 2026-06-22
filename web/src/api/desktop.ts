@@ -6,12 +6,6 @@
 /// need to dispatch differently (window reload, DevTools, etc.).
 
 import {
-  beginDownloadTransfer,
-  failDownloadTransfer,
-  finishDownloadTransfer,
-  setDownloadProgress,
-} from "../state/downloadTransfer.svelte";
-import {
   beginTransfer,
   cancelTransfer,
   failTransfer,
@@ -186,9 +180,8 @@ export async function openWebInspector(): Promise<boolean> {
 /// Desktop-native download for the inspector's Download button.
 /// The browser hands `<a download>` to its own download manager;
 /// the desktop webview has none, so this fetches the file over
-/// the loopback connection with XHR progress (driving the
-/// `downloadTransfer` store for the in-app indicator) and writes
-/// it to the user's Downloads folder via the
+/// the loopback connection with XHR progress (shown in the transfer
+/// bubble) and writes it to the user's Downloads folder via the
 /// `save_file_to_downloads` Tauri command.
 ///
 /// `url` is the absolute tokenized download URL (the caller computes it
@@ -206,9 +199,8 @@ export async function runDesktopDownload(
     throw new Error("runDesktopDownload called outside chan-desktop");
   }
   const xhr = new XMLHttpRequest();
-  beginDownloadTransfer(filename, () => xhr.abort());
-  // The prominent transfer bubble (alongside the inspector indicator above).
-  // `source` lets an interrupted download offer Retry after a window reload.
+  // The transfer bubble is the single download surface. `source` lets an
+  // interrupted download offer Retry after a window reload.
   const xferId = beginTransfer({
     kind: "download",
     filename,
@@ -224,7 +216,6 @@ export async function runDesktopDownload(
         // indicator indeterminate (null) rather than faking a number.
         const frac =
           event.lengthComputable && event.total > 0 ? event.loaded / event.total : null;
-        setDownloadProgress(frac);
         setTransferProgress(xferId, frac);
       };
       xhr.onload = () => {
@@ -245,12 +236,10 @@ export async function runDesktopDownload(
       // Tauri serializes a Uint8Array to a number[] for a Vec<u8> arg.
       { filename, bytes: Array.from(bytes) },
     );
-    finishDownloadTransfer(saved.path);
     finishTransfer(xferId, saved.path);
     return saved.path;
   } catch (err) {
     const message = (err as Error)?.message ?? String(err);
-    failDownloadTransfer(message);
     // A user abort is a cancel, not a failure (the bubble shows "Cancelled").
     if (message === "download cancelled") cancelTransfer(xferId);
     else failTransfer(xferId, message);
@@ -273,21 +262,20 @@ export async function saveBytesToDownloads(
   if (!isTauriDesktop()) {
     throw new Error("saveBytesToDownloads called outside chan-desktop");
   }
-  // The bytes already exist, so cancelling has nothing to abort; pass a
-  // null cancel and let the indicator show an indeterminate-then-done
-  // transfer.
-  beginDownloadTransfer(filename, null);
+  // The bytes already exist, so cancelling has nothing to abort; pass a null
+  // cancel and let the bubble show an indeterminate-then-done transfer.
+  const xferId = beginTransfer({ kind: "download", filename, cancel: null });
   try {
     const saved = await tauriInvoke<{ path: string }>("save_file_to_downloads", {
       // Tauri serializes a Uint8Array to a number[] for a Vec<u8> arg.
       filename,
       bytes: Array.from(bytes),
     });
-    finishDownloadTransfer(saved.path);
+    finishTransfer(xferId, saved.path);
     return saved.path;
   } catch (err) {
     const message = (err as Error)?.message ?? String(err);
-    failDownloadTransfer(message);
+    failTransfer(xferId, message);
     throw err instanceof Error ? err : new Error(message);
   }
 }

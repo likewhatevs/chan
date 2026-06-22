@@ -2,8 +2,8 @@
 //
 // The inspector Download button routes through
 // fileOps.downloadPathWithProgress, which branches on isTauriDesktop():
-//   - desktop -> runDesktopDownload (progress-tracked, drives
-//                the downloadTransfer store the indicator binds to),
+//   - desktop -> runDesktopDownload (progress-tracked, shown in the
+//                transfer bubble),
 //   - browser -> the existing <a download> hand-off to the native
 //                download manager.
 // These tests pin that branch so the desktop integration can't silently

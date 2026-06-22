@@ -26,11 +26,6 @@
     workspace,
   } from "../state/store.svelte";
   import { ensureGraphLoaded, graphData } from "../state/graphData.svelte";
-  import {
-    downloadTransfer,
-    downloadTransferActive,
-    clearDownloadTransfer,
-  } from "../state/downloadTransfer.svelte";
   import { openTerminalInActivePane } from "../state/tabs.svelte";
   import { terminalFromHereTarget } from "../terminal/fromHere";
   import InspectorActionPill, {
@@ -100,16 +95,11 @@
   }
 
   function downloadSelection(): void {
-    // Desktop routes through the progress-tracked capability (the
-    // downloadTransfer store drives the indicator below); the browser
-    // hands off to its native download manager. true = is_dir.
+    // Desktop routes through the progress-tracked capability (the transfer
+    // bubble shows progress); the browser hands off to its native download
+    // manager. true = is_dir.
     fileOps.downloadPathWithProgress("", true);
   }
-
-  /// Live desktop-download indicator (browser path leaves this null --
-  /// the browser's own download manager owns the progress UI).
-  const transfer = $derived(downloadTransfer.value);
-  const downloadBusy = $derived(downloadTransferActive());
 
   const uploadTitle =
     "Upload adds the selected file to this directory. You can also drop files onto File Browser rows.";
@@ -135,8 +125,7 @@
   }
 
   /// Split-action model for the inspector variant: a "File Browser" primary
-  /// plus the Upload / Download / Terminal / Graph dropdown. $derived so the
-  /// Download item tracks the live downloadBusy state.
+  /// plus the Upload / Download / Terminal / Graph dropdown.
   const actionModel = $derived.by<{
     main: InspectorAction;
     secondary: InspectorAction[];
@@ -147,7 +136,6 @@
         label: "Download",
         onClick: downloadSelection,
         title: downloadTitle,
-        disabled: downloadBusy,
       },
       { label: "Terminal from here", onClick: newTerminalHere },
     ];
@@ -354,56 +342,6 @@
         secondary={actionModel.secondary}
       />
     </div>
-    {#if transfer}
-      <div
-        class="dl-indicator"
-        class:err={!!transfer.error}
-        role="status"
-        aria-live="polite"
-      >
-        {#if transfer.error}
-          <div class="dl-line">Download failed: {transfer.error}</div>
-          <button
-            class="dl-dismiss"
-            type="button"
-            onclick={clearDownloadTransfer}>Dismiss</button
-          >
-        {:else if transfer.savedPath}
-          <div class="dl-line" title={transfer.savedPath}>
-            Saved to {transfer.savedPath}
-          </div>
-          <button
-            class="dl-dismiss"
-            type="button"
-            onclick={clearDownloadTransfer}>Dismiss</button
-          >
-        {:else}
-          <div class="dl-progress" aria-hidden="true">
-            <div
-              class="dl-bar"
-              class:indeterminate={transfer.progress === null}
-              style={transfer.progress !== null
-                ? `width: ${Math.round(transfer.progress * 100)}%`
-                : ""}
-            ></div>
-          </div>
-          <div class="dl-row">
-            <span class="dl-line"
-              >Downloading {transfer.filename}{transfer.progress !== null
-                ? ` (${Math.round(transfer.progress * 100)}%)`
-                : "..."}</span
-            >
-            {#if transfer.cancel}
-              <button
-                class="dl-dismiss"
-                type="button"
-                onclick={() => transfer.cancel?.()}>Cancel</button
-              >
-            {/if}
-          </div>
-        {/if}
-      </div>
-    {/if}
     <input
       bind:this={uploadInput}
       class="file-picker"
@@ -595,70 +533,6 @@
     opacity: 0;
     pointer-events: none;
   }
-  /* Desktop-download indicator (browser path stays null -> not
-     rendered). Mirrors FileInfoBody's `.dl-*` chrome inside the
-     inspector so the desktop webview, which has no native download
-     manager, still shows progress + the saved path. */
-  .dl-indicator {
-    margin-top: 0.5rem;
-    padding: 0.4rem 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg-elev);
-    font-size: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-  .dl-indicator.err {
-    border-color: var(--warn-text);
-    color: var(--warn-text);
-  }
-  .dl-line {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text);
-  }
-  .dl-indicator.err .dl-line { color: var(--warn-text); }
-  .dl-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.4rem;
-  }
-  .dl-progress {
-    height: 4px;
-    border-radius: 2px;
-    background: var(--border);
-    overflow: hidden;
-  }
-  .dl-bar {
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.15s linear;
-  }
-  .dl-bar.indeterminate {
-    width: 40%;
-    animation: dl-slide 1.1s ease-in-out infinite;
-  }
-  @keyframes dl-slide {
-    0% { margin-left: -40%; }
-    100% { margin-left: 100%; }
-  }
-  .dl-dismiss {
-    flex-shrink: 0;
-    background: transparent;
-    border: 1px solid var(--btn-border);
-    border-radius: 3px;
-    color: var(--text);
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-    padding: 1px 8px;
-    align-self: flex-start;
-  }
-  .dl-dismiss:hover { border-color: var(--btn-hover); }
   .refs { margin: 0.8rem 0 0 0; }
   .refs h4 {
     font-size: 12px;

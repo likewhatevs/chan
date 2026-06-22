@@ -51,7 +51,6 @@ describe("WorkspaceInfoBody variant split + directory action row", () => {
     expect(workspaceInfo).toMatch(
       /fileOps\.downloadPathWithProgress\("", true\)/,
     );
-    expect(workspaceInfo).toMatch(/disabled: downloadBusy/);
   });
 
   test("the dropdown offers Terminal from here, rooted at the workspace root", () => {
@@ -78,9 +77,11 @@ describe("WorkspaceInfoBody variant split + directory action row", () => {
     );
   });
 
-  test("the download progress indicator (.dl-*) is present", () => {
-    expect(workspaceInfo).toContain('class="dl-indicator"');
-    expect(workspaceInfo).toContain("clearDownloadTransfer");
+  test("the inline download progress indicator is retired (the transfer bubble owns it)", () => {
+    // Download progress now shows in the single transfer bubble, not an inline
+    // inspector bar — parity with FileInfoBody, which also dropped its `.dl-*`.
+    expect(workspaceInfo).not.toContain('class="dl-indicator"');
+    expect(workspaceInfo).not.toContain("downloadTransfer");
   });
 
   test("WorkspaceSlotConfig carries no default-workspace config, only recents", () => {
