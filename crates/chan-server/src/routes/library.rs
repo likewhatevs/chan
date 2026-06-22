@@ -936,6 +936,7 @@ mod devserver_route_tests {
                     has_token: true,
                     library_id: None,
                     connected: false,
+                    color: None,
                 }]),
             }
         }
@@ -957,6 +958,7 @@ mod devserver_route_tests {
                 has_token: input.token.is_some(),
                 library_id: None,
                 connected: false,
+                color: input.color,
             };
             self.rows.lock().unwrap().push(entry.clone());
             Ok(entry)

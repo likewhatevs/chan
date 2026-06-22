@@ -43,6 +43,13 @@ pub struct DevserverEntry {
     /// Whether a bearer token is stored for this devserver. The value itself is
     /// never echoed back over the wire.
     pub has_token: bool,
+    /// Optional per-library pane-highlight colour as a hex string (`#rrggbb`):
+    /// the editor tints a window's active-pane highlight with its library's
+    /// colour. `None` falls back to the default accent. Persisted by chan-desktop;
+    /// the launcher add/edit dialog sets it. `#[serde(default)]`: a row without
+    /// the field reads `None`.
+    #[serde(default)]
+    pub color: Option<String>,
     /// The library id this devserver is assigned once known, joining its window
     /// rows in the feed to the user's name for it. `None` before the devserver's
     /// first connect, when no library id exists yet.
@@ -73,6 +80,11 @@ pub struct DevserverInput {
     /// Optional bearer token (write-only). `None` on update keeps the stored one.
     #[serde(default)]
     pub token: Option<String>,
+    /// Optional pane-highlight colour (hex `#rrggbb`). `None` on update keeps the
+    /// stored one (same as `label`/`script`); the registry copies it onto the
+    /// stored [`DevserverEntry`].
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 /// The launcher's devserver CRUD, inverted so chan-library (and chan-server's
