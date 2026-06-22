@@ -54,31 +54,41 @@
         <h3 class="group-title">{g.label}</h3>
         <ul class="rows">
           {#each g.windows as w (w.window_id)}
-            <li class="row">
-              <div class="row-main">
-                <span class="row-name">{windowRowLabel(w)}</span>
-                {#if w.workspace_path}
-                  <span class="row-sub" title={w.workspace_path}>{w.workspace_path}</span>
-                {/if}
-              </div>
-              <div class="row-actions">
-                {#if readOnly}
-                  <!-- Read-only surface (gateway/devserver): the dot shows the
-                       connection state but can't drive a native window. -->
+            <li>
+              {#if readOnly}
+                <!-- Read-only surface (gateway/devserver): the dot shows the
+                     connection state but can't drive a native window. -->
+                <div class="row">
+                  <div class="row-main">
+                    <span class="row-name">{windowRowLabel(w)}</span>
+                    {#if w.workspace_path}
+                      <span class="row-sub" title={w.workspace_path}>{w.workspace_path}</span>
+                    {/if}
+                  </div>
                   <span
                     class="dot"
                     class:live={w.connected}
                     title={w.connected ? "Connected" : "Detached"}></span>
-                {:else}
-                  <button
-                    class="dot"
-                    class:live={w.connected}
-                    type="button"
-                    aria-label={w.connected ? "Hide window" : "Open window"}
-                    title={w.connected ? "Hide window" : "Open window"}
-                    onclick={() => toggleWindow(w)}></button>
-                {/if}
-              </div>
+                </div>
+              {:else}
+                <!-- The whole row toggles the native window: hide it if
+                     connected, open (focus / un-hide) it otherwise. The dot is
+                     the connection-state indicator. -->
+                <button
+                  class="row row-toggle"
+                  type="button"
+                  aria-label={w.connected ? "Hide window" : "Open window"}
+                  title={w.connected ? "Hide window" : "Open window"}
+                  onclick={() => toggleWindow(w)}>
+                  <div class="row-main">
+                    <span class="row-name">{windowRowLabel(w)}</span>
+                    {#if w.workspace_path}
+                      <span class="row-sub" title={w.workspace_path}>{w.workspace_path}</span>
+                    {/if}
+                  </div>
+                  <span class="dot" class:live={w.connected}></span>
+                </button>
+              {/if}
             </li>
           {/each}
         </ul>

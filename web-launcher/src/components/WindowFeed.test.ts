@@ -1,7 +1,7 @@
-// Component test: the Open-windows feed renders each window's status dot as a
-// toggle button and flips a window's state on click. This exercises the real
-// Svelte 5 runtime (a static check misses the reactive feed re-render after the
-// watch push), per jsdom.
+// Component test: the Open-windows feed renders each window as a whole-row
+// toggle button (the dot is the state indicator) and flips a window's state on
+// click. This exercises the real Svelte 5 runtime (a static check misses the
+// reactive feed re-render after the watch push), per jsdom.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
@@ -32,23 +32,25 @@ afterEach(() => {
   app = null;
 });
 
-describe("WindowFeed status dot", () => {
-  it("renders dots as toggle buttons and flips a detached window on click", async () => {
+describe("WindowFeed row toggle", () => {
+  it("renders rows as toggle buttons and flips a detached window on click", async () => {
     target = document.createElement("div");
     document.body.appendChild(target);
     app = mount(WindowFeed, { target });
 
-    const dots = [...target.querySelectorAll("button.dot")] as HTMLButtonElement[];
-    expect(dots.length).toBeGreaterThan(0);
-    // The seed includes one detached window — its dot offers "Open window".
-    const open = dots.find((b) => b.getAttribute("aria-label") === "Open window");
+    const rows = [...target.querySelectorAll("button.row-toggle")] as HTMLButtonElement[];
+    expect(rows.length).toBeGreaterThan(0);
+    // Every row carries its connection-state dot indicator.
+    expect(target.querySelector("button.row-toggle .dot")).toBeTruthy();
+    // The seed includes one detached window — its row offers "Open window".
+    const open = rows.find((b) => b.getAttribute("aria-label") === "Open window");
     expect(open).toBeTruthy();
 
     open!.click();
-    // The mock flips `connected` + pushes the feed; the dot re-renders as a
-    // "Hide window" toggle, so no "Open window" dot remains.
+    // The mock flips `connected` + pushes the feed; the row re-renders as a
+    // "Hide window" toggle, so no "Open window" row remains.
     await Promise.resolve();
     flushSync();
-    expect(target.querySelector('button.dot[aria-label="Open window"]')).toBeNull();
+    expect(target.querySelector('button.row-toggle[aria-label="Open window"]')).toBeNull();
   });
 });

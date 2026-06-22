@@ -1,10 +1,12 @@
 <script lang="ts">
   // The devserver registry: each remote library the desktop dials out to,
-  // with edit and remove. A stored token shows as a lock chip (the value is
-  // never returned). Connect is a desktop action, so in the browser it is
-  // inert ("desktop only"); the registry CRUD here is fully browser-testable.
-  import { library, removeDevserver } from "../state/library.svelte";
+  // with connect, edit, and remove. A stored token shows as a lock chip (the
+  // value is never returned). Connect is a desktop action — enabled on the
+  // mutable (desktop loopback) surface and disabled on the read-only
+  // devserver/gateway surface; the registry CRUD here is fully browser-testable.
+  import { library, connectDevserver, removeDevserver } from "../state/library.svelte";
   import { openEditDevserver } from "../state/dialog.svelte";
+  import { readOnly } from "../state/capabilities";
   import type { DevserverEntry } from "../api/library";
 
   function endpoint(ds: DevserverEntry): string {
@@ -29,7 +31,13 @@
             <span class="row-sub" title={endpoint(ds)}>{endpoint(ds)}</span>
           </div>
           <div class="row-actions">
-            <button class="btn-ghost" type="button" disabled title="Connect is a desktop action">Connect</button>
+            <button
+              class="btn-ghost"
+              type="button"
+              disabled={readOnly}
+              title={readOnly ? "Connect is a desktop action" : undefined}
+              aria-label={`Connect ${displayName(ds)}`}
+              onclick={() => connectDevserver(ds.id)}>Connect</button>
             <button
               class="btn-ghost"
               type="button"

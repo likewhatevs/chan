@@ -185,6 +185,23 @@ export const mockApi: LibraryApi = {
     return tick(undefined);
   },
 
+  // The mock has no desktop to dial, so connecting just marks the devserver's
+  // existing windows live and pushes the feed — enough for the mock SPA and
+  // tests to see the connect action take effect. A real surface runs the
+  // connect command and dials the URL through the desktop bridge.
+  connectDevserver: (id) => {
+    const ds = devservers.find((d) => d.id === id);
+    if (ds?.library_id) {
+      for (const w of windows) if (w.library_id === ds.library_id) w.connected = true;
+      notify();
+    }
+    return tick(undefined);
+  },
+
+  // The mock has no native dialog, so it returns a canned path as if the user
+  // picked one. A real desktop opens the OS folder picker; cancel returns null.
+  pickFolder: () => tick("/Users/you/picked-folder"),
+
   listWindows: () => tick(windows.map((w) => ({ ...w }))),
 
   createWindow: (kind, workspacePath) => {

@@ -130,7 +130,10 @@ body {
   background: var(--bg-card);
 }
 
-.row + .row {
+/* The divider sits between list items. A registry row IS its <li> (the li
+   carries .row); a window-feed row wraps a .row button/div in its <li>. Keying
+   off the <li> draws the divider uniformly either way. */
+.rows > li + li {
   border-top: 1px solid var(--border);
 }
 
@@ -206,24 +209,28 @@ body {
   opacity: 1;
 }
 
-/* On the desktop loopback the dot is a click target (open/hide the window);
-   strip the button chrome so it stays the same circle. The read-only surface
-   renders it as a static <span> instead. */
-button.dot {
-  padding: 0;
+/* On the desktop loopback the whole window-feed row is the open/hide click
+   target; strip the button chrome so it still reads as a row, with a hover
+   wash and a focus ring. The read-only surface renders the row as a static
+   <div> and the dot as a plain indicator. */
+button.row-toggle {
+  width: 100%;
+  font: inherit;
+  color: inherit;
   border: none;
   appearance: none;
   -webkit-appearance: none;
+  text-align: left;
   cursor: pointer;
 }
 
-button.dot:hover {
-  opacity: 0.7;
+button.row-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
 }
 
-button.dot:focus-visible {
+button.row-toggle:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 /* ---- Window feed ------------------------------------------------------ */

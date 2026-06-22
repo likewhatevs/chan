@@ -1,8 +1,15 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, unmount, flushSync } from "svelte";
 import NewWorkspaceDialog from "./NewWorkspaceDialog.svelte";
 import { openNewDialog, openEditDevserver, selectChoice, closeDialog } from "../state/dialog.svelte";
 import type { DevserverEntry } from "../api/library";
+
+// Pin the in-memory mock as the backend so the Browse… picker returns a canned
+// path with no live server. The async-import factory dodges vi.mock's hoist trap.
+vi.mock("../api/backend", async () => {
+  const { mockApi } = await import("../api/mock");
+  return { backend: mockApi };
+});
 
 let target: HTMLElement | null = null;
 let app: Record<string, unknown> | null = null;
@@ -37,6 +44,23 @@ describe("New workspace dialog", () => {
     const el = render();
     expect(el.querySelector('input[type="text"]')).not.toBeNull();
     expect(el.textContent).toContain("Folder path");
+  });
+
+  it("fills the folder path from the Browse… native picker", async () => {
+    openNewDialog("local");
+    const el = render();
+    const browse = [...el.querySelectorAll("button")].find(
+      (b) => b.textContent?.trim() === "Browse…",
+    ) as HTMLButtonElement | undefined;
+    expect(browse).toBeTruthy();
+
+    browse!.click();
+    // The picker resolves through the action + the mock's tick; drain the full
+    // microtask queue (a macrotask hop) before the bound input reflects it.
+    await new Promise((r) => setTimeout(r, 0));
+    flushSync();
+    const input = el.querySelector('input[type="text"]') as HTMLInputElement;
+    expect(input.value).toBe("/Users/you/picked-folder");
   });
 
   it("shows the masked token field + connect command for the devserver choice", () => {

@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   addLocalWorkspace,
+  connectDevserver,
   library,
   loadLibrary,
   removeDevserver,
@@ -95,5 +96,17 @@ describe("devserver registry", () => {
     const before = library.devservers.length;
     await removeDevserver(ds.id);
     expect(library.devservers.length).toBe(before - 1);
+  });
+
+  it("connects a devserver and marks its library's windows live", async () => {
+    // The seed devserver carries a library id (already connected once); the
+    // mock marks that library's windows connected and pushes the feed.
+    const ds = library.devservers.find((d) => d.library_id)!;
+    library.error = null;
+    await connectDevserver(ds.id);
+    expect(library.error).toBeNull();
+    const remote = library.windows.filter((w) => w.library_id === ds.library_id);
+    expect(remote.length).toBeGreaterThan(0);
+    expect(remote.every((w) => w.connected)).toBe(true);
   });
 });

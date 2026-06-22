@@ -9,7 +9,8 @@
   // need no manual reset.
   import Modal from "./Modal.svelte";
   import { closeDialog, dialog, selectChoice, type DialogChoice } from "../state/dialog.svelte";
-  import { addLocalWorkspace, saveDevserver } from "../state/library.svelte";
+  import { addLocalWorkspace, pickFolder, saveDevserver } from "../state/library.svelte";
+  import { readOnly } from "../state/capabilities";
 
   const editing = dialog.editing;
 
@@ -43,6 +44,20 @@
     if (e.key === "Enter") {
       e.preventDefault();
       submit();
+    }
+  }
+
+  // Browse… opens the desktop's native folder picker and fills the path. A
+  // desktop action, so it is offered only on the mutable (desktop) surface
+  // (same gate as the devserver Connect button); the text input stays the
+  // fallback, and the only path in a plain browser where the route 409s.
+  async function browse(): Promise<void> {
+    error = null;
+    try {
+      const picked = await pickFolder();
+      if (picked) localPath = picked;
+    } catch (e) {
+      error = msg(e);
     }
   }
 
@@ -127,13 +142,18 @@
     <p class="intro">A local folder with your markdown files (a git repository, or any directory).</p>
     <label class="field">
       Folder path
-      <input
-        type="text"
-        bind:value={localPath}
-        placeholder="/Users/you/notes"
-        autocomplete="off"
-        spellcheck="false"
-        onkeydown={(e) => onFieldKey(e, submitLocal)} />
+      <div class="path-row">
+        <input
+          type="text"
+          bind:value={localPath}
+          placeholder="/Users/you/notes"
+          autocomplete="off"
+          spellcheck="false"
+          onkeydown={(e) => onFieldKey(e, submitLocal)} />
+        {#if !readOnly}
+          <button class="btn" type="button" onclick={browse}>Browse…</button>
+        {/if}
+      </div>
     </label>
   {:else}
     <p class="intro">
@@ -249,6 +269,25 @@
 
   .field textarea {
     resize: vertical;
+  }
+
+  /* The folder field pairs its text input with a Browse… button (the native
+     folder picker on the desktop surface). The input takes the remaining width;
+     the button keeps its size. */
+  .path-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: stretch;
+  }
+
+  .path-row input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .path-row .btn {
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .field input:focus,

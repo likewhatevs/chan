@@ -110,6 +110,14 @@ export interface LibraryApi {
   addDevserver(input: DevserverInput): Promise<DevserverEntry>;
   updateDevserver(id: string, input: DevserverInput): Promise<DevserverEntry>;
   removeDevserver(id: string): Promise<void>;
+  /** Tell the desktop to connect a devserver (run its connect command + dial
+   * the URL). A pure desktop action: a surface with no desktop bridge answers
+   * 409, so the launcher only offers it where window-ops are available. */
+  connectDevserver(id: string): Promise<void>;
+  /** Open the desktop's native folder picker; resolves to the chosen absolute
+   * path, or null if the user cancelled. A pure desktop action (no desktop
+   * bridge → 409), offered only where window-ops are available. */
+  pickFolder(): Promise<string | null>;
   listWindows(): Promise<WindowRecord[]>;
   watchWindows(onSet: (set: WindowSet) => void): () => void;
   /** Mint a window of the local library (client supplies the kind; the library
@@ -172,6 +180,9 @@ export const liveApi: LibraryApi = {
   updateDevserver: (id, input) =>
     req("PUT", `/api/library/devservers/${encodeURIComponent(id)}`, input),
   removeDevserver: (id) => req("DELETE", `/api/library/devservers/${encodeURIComponent(id)}`),
+  connectDevserver: (id) =>
+    req("POST", `/api/library/devservers/${encodeURIComponent(id)}/connect`),
+  pickFolder: () => req("POST", "/api/library/fs/pick-folder"),
   listWindows: () => req("GET", "/api/library/windows"),
   watchWindows: (onSet) => {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";

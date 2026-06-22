@@ -48,6 +48,11 @@ export async function loadLibrary(): Promise<void> {
     try {
       unwatch = backend.watchWindows((set) => {
         library.windows = set.windows;
+        // The feed also fires on workspace mount/unmount (chan open / on / off),
+        // so re-fetch the workspace list to reflect the new on-state live —
+        // no manual reload. Coalesced so a burst of window pushes collapses to
+        // at most one extra GET.
+        void refreshWorkspacesLive();
       });
     } catch {
       // The window feed is best-effort: a host without WebSocket or a failed
@@ -63,6 +68,32 @@ export function stopWatching(): void {
 
 async function refreshWorkspaces(): Promise<void> {
   library.workspaces = await backend.listWorkspaces();
+}
+
+// The live re-fetch the window-watch feed drives. The feed pushes a full
+// snapshot on every window change, so bursts are coalesced: while a re-fetch
+// is in flight, a later push just flags one more run, and the in-flight call
+// re-runs once when it lands. No timer, so nothing leaks between tests, and a
+// transient list error is swallowed — the next push (or a manual reload) heals.
+let liveRefreshing = false;
+let liveRefreshPending = false;
+
+async function refreshWorkspacesLive(): Promise<void> {
+  if (liveRefreshing) {
+    liveRefreshPending = true;
+    return;
+  }
+  liveRefreshing = true;
+  try {
+    do {
+      liveRefreshPending = false;
+      library.workspaces = await backend.listWorkspaces();
+    } while (liveRefreshPending);
+  } catch {
+    // Best-effort: a failed live re-fetch must not tear down the feed.
+  } finally {
+    liveRefreshing = false;
+  }
 }
 
 async function refreshDevservers(): Promise<void> {
@@ -84,6 +115,13 @@ export async function removeWorkspace(id: string): Promise<void> {
   await refreshWorkspaces();
 }
 
+/** Open the desktop's native folder picker for the New-Workspace Folder field;
+ * returns the chosen absolute path, or null on cancel / a non-desktop surface.
+ * Throws on a real error so the dialog can surface it. */
+export async function pickFolder(): Promise<string | null> {
+  return (await backend.pickFolder()) ?? null;
+}
+
 /** Add (no id) or edit (id) a devserver; an empty `token` on edit is unchanged. */
 export async function saveDevserver(input: DevserverInput, id?: string): Promise<void> {
   if (id) await backend.updateDevserver(id, input);
@@ -94,6 +132,19 @@ export async function saveDevserver(input: DevserverInput, id?: string): Promise
 export async function removeDevserver(id: string): Promise<void> {
   await backend.removeDevserver(id);
   await refreshDevservers();
+}
+
+/** Connect a devserver — a desktop action: the desktop runs its connect
+ * command and dials the URL. Its windows then appear in the feed via the watch
+ * push, so there is nothing to refresh here. A failure (a non-desktop surface
+ * 409s, or the connect command/dial fails) surfaces in the error banner. */
+export async function connectDevserver(id: string): Promise<void> {
+  library.error = null;
+  try {
+    await backend.connectDevserver(id);
+  } catch (e) {
+    library.error = errorText(e);
+  }
 }
 
 /** Mint a new terminal window of the local library. The window feed updates
