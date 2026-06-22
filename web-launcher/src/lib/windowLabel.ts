@@ -34,8 +34,10 @@ export function rowLabel(kind: WindowKind, ordinal: number, workspacePath: strin
   return `${base} Window ${ordinal}`;
 }
 
-/** Convenience over a whole record. */
+/** Convenience over a whole record. The devserver's connect control terminal
+ * reads as "Control terminal" rather than the recomposed "Terminal Window 0". */
 export function windowRowLabel(w: WindowRecord): string {
+  if (w.control) return "Control terminal";
   return rowLabel(w.kind, w.ordinal, w.workspace_path);
 }
 

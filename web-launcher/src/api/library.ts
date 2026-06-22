@@ -34,6 +34,9 @@ export interface WindowRecord {
   persisted: boolean;
   /** A /ws socket tagged with window_id is live right now. */
   connected: boolean;
+  /** The devserver's connect CONTROL terminal (runs the connect script). The
+   * feed renders it FIRST in its library group; the desktop mints it. */
+  control: boolean;
 }
 
 /** Full snapshot pushed on connect and on every change over the watch socket. */

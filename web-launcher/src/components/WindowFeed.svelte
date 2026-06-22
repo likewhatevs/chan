@@ -16,6 +16,8 @@
   }
 
   function sortWindows(a: WindowRecord, b: WindowRecord): number {
+    // The connect control terminal is pinned FIRST in its devserver group.
+    if (a.control !== b.control) return a.control ? -1 : 1;
     if (a.kind !== b.kind) return a.kind === "terminal" ? -1 : 1;
     return a.ordinal - b.ordinal;
   }

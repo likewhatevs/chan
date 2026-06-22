@@ -53,4 +53,20 @@ describe("WindowFeed row toggle", () => {
     flushSync();
     expect(target.querySelector('button.row-toggle[aria-label="Open window"]')).toBeNull();
   });
+
+  it("pins the devserver's control terminal FIRST in its group (W3)", () => {
+    target = document.createElement("div");
+    document.body.appendChild(target);
+    app = mount(WindowFeed, { target });
+
+    // The seed devserver "prod" group carries a control terminal (control:true,
+    // ordinal 0); the feed sorts it first and labels it "Control terminal".
+    const groups = [...target.querySelectorAll(".group")];
+    const dsGroup = groups.find((g) =>
+      g.querySelector(".group-title")?.textContent?.includes("prod"),
+    );
+    expect(dsGroup).toBeTruthy();
+    const firstRowName = dsGroup!.querySelector(".rows li .row-name");
+    expect(firstRowName?.textContent?.trim()).toBe("Control terminal");
+  });
 });

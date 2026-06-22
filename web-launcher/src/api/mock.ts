@@ -122,6 +122,7 @@ const windows: WindowRecord[] = [
     token: "tok_local_term",
     persisted: true,
     connected: true,
+    control: false,
   },
   {
     window_id: "w-local-notes-1",
@@ -134,6 +135,22 @@ const windows: WindowRecord[] = [
     token: "tok_local_notes",
     persisted: true,
     connected: true,
+    control: false,
+  },
+  {
+    // The devserver's connect control terminal: control:true, ordinal 0 → the
+    // feed pins it FIRST in the ds1 group (the desktop mints it).
+    window_id: "w-ds1-control",
+    library_id: DS_LIBRARY_ID,
+    kind: "terminal",
+    title: "↗ Control terminal",
+    ordinal: 0,
+    workspace_path: null,
+    prefix: "t/ds1-control",
+    token: "tok_ds1_control",
+    persisted: false,
+    connected: true,
+    control: true,
   },
   {
     window_id: "w-ds1-term-1",
@@ -146,6 +163,7 @@ const windows: WindowRecord[] = [
     token: "",
     persisted: true,
     connected: false,
+    control: false,
   },
   {
     window_id: "w-ds1-api-1",
@@ -158,6 +176,7 @@ const windows: WindowRecord[] = [
     token: "tok_ds1_api",
     persisted: true,
     connected: true,
+    control: false,
   },
 ];
 
@@ -343,6 +362,7 @@ export const mockApi: LibraryApi = {
         token: "tok_remote_term",
         persisted: true,
         connected: true,
+        control: false,
       });
       notify();
     }
@@ -366,6 +386,7 @@ export const mockApi: LibraryApi = {
         token: "tok_remote_ws",
         persisted: true,
         connected: true,
+        control: false,
       });
       notify();
     }
@@ -425,6 +446,7 @@ export const mockApi: LibraryApi = {
       token: "tok_local",
       persisted: true,
       connected: true,
+      control: false,
     };
     windows.push(rec);
     notify();
