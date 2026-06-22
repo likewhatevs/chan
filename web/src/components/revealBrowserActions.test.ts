@@ -13,18 +13,28 @@ describe("file-browser reveal actions", () => {
     expect(terminal).not.toContain("function graphTerminalCwd()");
   });
 
-  test("graph inspector reveal buttons reveal in a browser TAB", () => {
+  test("graph inspector Open / reveal buttons reveal in a browser TAB", () => {
     // Reveal opens a File Browser TAB via openBrowserInActivePane so
     // the graph tab persists. The overlay-era revealPathInBrowser +
-    // close() chain is gone.
-    expect(graph).toContain("function revealSelectedFile()");
-    expect(graph).toContain("function revealSelectedFsEntry()");
+    // close() chain is gone. The dedicated revealSelectedFile /
+    // revealSelectedFsEntry helpers were deleted; revealPathInBrowserTab
+    // is the single reveal-into-a-new-FB-tab primitive the inspector
+    // binds directly on onOpen (file) and onReveal (dir).
+    expect(graph).not.toContain("function revealSelectedFile(");
+    expect(graph).not.toContain("function revealSelectedFsEntry(");
     expect(graph).toContain("function revealPathInBrowserTab(path: string, isDir: boolean)");
-    expect(graph).toContain("revealPathInBrowserTab(selectedNode.path, false)");
+    // File "Open" → revealPathInBrowserTab(path, false): a file selection
+    // spawns a File Browser tab with the file selected.
+    expect(graph).toContain(
+      "() => revealPathInBrowserTab(inspectorSelection.path, false)",
+    );
+    expect(graph).toContain(
+      "onOpen={fsKind === \"file\" ? () => revealPathInBrowserTab(fsPath, false) : undefined}",
+    );
     // Directories expand the directory ITSELF (upto = parts.length)
     // so the File Browser opens AT the dir; files expand ancestors.
     expect(graph).toContain(
-      "revealPathInBrowserTab(selectedFsNode.path, isFsDirectory(selectedFsNode))",
+      "onReveal={fsIsDir ? () => revealPathInBrowserTab(fsPath, true) : undefined}",
     );
     expect(graph).toContain("openBrowserInActivePane(isRoot ? {} : { select: path })");
     // No overlay-era reveal/close leftovers in the reveal path.
@@ -100,15 +110,20 @@ describe("no inline close affordance on first-class surfaces", () => {
     expect(graph).toMatch(/onSetAsScope=\{\(\) => graphFromHere\(fsPath, fsIsDir\)\}/);
   });
 
-  test("graphFromHere re-roots in place: dir to itself, file to its parent", () => {
-    // A directory re-roots to dir:<path> (workspace root for "").
-    // A file re-roots to its parent dir. The old always-parent rule
+  test("graphFromHere spawns a new tab scoped dir to itself, file to its parent", () => {
+    // A directory scopes to dir:<path> (workspace root for "").
+    // A file scopes to its parent dir. The old always-parent rule
     // made re-rooting a child folder a no-op and left the inspector blank.
+    // The nav contract now spawns a NEW graph tab (openGraphInActivePane)
+    // seeded at scopeId + pre-selected on the node, instead of re-rooting
+    // the current tab in place.
     expect(graph).toContain("function graphFromHere(path: string, isDir: boolean)");
     expect(graph).toMatch(/if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "workspace";/);
     expect(graph).toMatch(/const parent = slash > 0 \? path\.slice\(0, slash\) : ""/);
     expect(graph).toMatch(/scopeId = parent \? `dir:\$\{parent\}` : "workspace"/);
-    expect(graph).toMatch(/graphState\.pendingSelectId = path/);
+    expect(graph).toMatch(
+      /openGraphInActivePane\(\{\s*mode: "semantic",\s*scopeId,\s*depth: 1,\s*pendingSelectId: path,\s*\}\)/,
+    );
   });
 
   test("GraphPanel renders the scope-crumbs ancestor breadcrumb", () => {

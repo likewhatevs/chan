@@ -17,8 +17,15 @@ describe("shortcuts.ts Hybrid Nav label casing", () => {
     // Spot-check entries that confirm the rename is complete.
     expect(shortcuts).toContain("Mod+. p (Hybrid Nav)");
     expect(shortcuts).toContain("Mod+. o (Hybrid Nav)");
-    expect(shortcuts).toContain("Mod+. v (Hybrid Nav)");
     expect(shortcuts).toContain("Mod+. t (Hybrid Nav)");
+    // The graph chord moved onto the `web` field (Mod+. V) and its note
+    // now carries the native-retirement meaning, so it spot-checks the
+    // title-case form in the note + the capital-V web chord rather than
+    // the old `Mod+. v (Hybrid Nav)` parenthetical.
+    expect(shortcuts).toContain('web: "Mod+. V"');
+    expect(shortcuts).toContain(
+      'note: "Hybrid Nav; native Cmd+Shift+M pending retirement"',
+    );
   });
 
   test("`Enter Hybrid Nav` label reads title-case", () => {

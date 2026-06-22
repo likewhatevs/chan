@@ -93,7 +93,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     escapeTerminal: true,
   },
   // Team Work chord: Mod+P native / Cmd+Alt+P web-Mac so the
-  // spawn-chord family (Cmd+T/O/P, Cmd+Shift+M) reads uniformly.
+  // spawn-chord family (Cmd+T/O/P) reads uniformly.
   // Hybrid Nav `p` covers Win/Linux web where Cmd+P is the
   // browser's print dialog and Cmd+Alt+P isn't available.
   {
@@ -147,17 +147,19 @@ export const SHORTCUTS: readonly Shortcut[] = [
     native: "Backspace",
     group: "File",
   },
-  // Graph top-level chord. Context-aware spawn: the focused doc /
-  // terminal cwd seeds the graph's scope. Native and web share
-  // the same chord because browsers don't reserve Cmd+Shift+M.
-  // Hybrid Nav `v` is the fallback discoverability path.
+  // Graph command. Context-aware spawn: the focused doc / terminal cwd
+  // seeds the graph's scope. The top-level Cmd+Shift+M web chord is
+  // retired; on the web the graph opens via Hybrid Nav (Mod+. V), the
+  // "Graph from here" inspector action (a new graph tab), or a menu.
+  // `native` keeps the Cmd+Shift+M chord chan-desktop's KEY_BRIDGE_JS
+  // still binds (serve.rs) until that native binding is retired in step.
   {
     id: "app.graph.toggle",
     label: "Graph",
-    web: "Mod+Shift+M",
+    web: "Mod+. V",
     native: "Mod+Shift+M",
     group: "App",
-    note: "or Mod+. v (Hybrid Nav)",
+    note: "Hybrid Nav; native Cmd+Shift+M pending retirement",
     escapeTerminal: true,
   },
   // New terminal in the active pane as a direct chord. Browsers

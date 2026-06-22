@@ -7,20 +7,27 @@ import panel from "./GraphPanel.svelte?raw";
 // because the handlers live inside the Svelte component.
 
 describe("Show Directory reveals + ENTERS the directory in the File Browser", () => {
-  test("revealSelectedFsEntry opens a File Browser TAB, expanding the dir itself", () => {
-    // revealSelectedFsEntry routes through revealPathInBrowserTab.
+  test("the dir-node Open opens a File Browser TAB, expanding the dir itself", () => {
+    // The dir "Open" routes through revealPathInBrowserTab(fsPath, true).
     // Directories pass isDir=true so the browser expands the directory
     // itself (upto = parts.length) and opens AT it; files expand ancestors.
+    // The dedicated revealSelectedFsEntry helper was deleted; the inspector
+    // binds the revealPathInBrowserTab primitive directly.
     expect(panel).toMatch(
-      /function revealSelectedFsEntry\(\): void \{[\s\S]*?revealPathInBrowserTab\(selectedFsNode\.path, isFsDirectory\(selectedFsNode\)\)/,
+      /onReveal=\{fsIsDir \? \(\) => revealPathInBrowserTab\(fsPath, true\) : undefined\}/,
     );
     expect(panel).toMatch(
       /function revealPathInBrowserTab\(path: string, isDir: boolean\)[\s\S]*?const upto = isDir \? parts\.length : parts\.length - 1;/,
     );
   });
 
-  test("the dir-node inspector still binds onReveal to revealSelectedFsEntry", () => {
-    expect(panel).toMatch(/onReveal=\{revealSelectedFsEntry\}/);
+  test("the semantic dir-node inspector also reveals the dir via revealPathInBrowserTab", () => {
+    // A semantic directory selection's "Open" routes through
+    // FileInfoBody's openDirInBrowser → onReveal, spawning a File
+    // Browser tab AT the directory (isDir=true).
+    expect(panel).toMatch(
+      /onReveal=\{\s*inspectorSelection\?\.kind === "directory"[\s\S]*?\(\) => revealPathInBrowserTab\(inspectorSelection\.path, true\)/,
+    );
   });
 });
 
@@ -36,9 +43,19 @@ describe("Graph from here on a directory re-roots at the dir itself + keeps it s
     );
   });
 
-  test("graphFromHere pins + selects the node so the inspector stays populated", () => {
+  test("graphFromHere spawns a new semantic graph tab seeded + pre-selected on the node", () => {
+    // The new nav contract: from-here spawns a fresh graph TAB
+    // (openGraphInActivePane) rather than re-rooting in place. depth
+    // resets to 1 so the new graph starts tight, and pendingSelectId
+    // lands it already selected on the clicked node so the inspector
+    // stays populated.
     expect(panel).toMatch(
-      /graphState\.scopeId = scopeId;\s*graphState\.depth = 1;[\s\S]*?graphState\.pendingSelectId = path;\s*selectedId = path;/,
+      /openGraphInActivePane\(\{\s*mode: "semantic",\s*scopeId,\s*depth: 1,\s*pendingSelectId: path,\s*\}\)/,
+    );
+    // The old in-place re-root (mutating the current tab + selectedId)
+    // is gone.
+    expect(panel).not.toMatch(
+      /function graphFromHere[\s\S]*?graphState\.scopeId = scopeId;[\s\S]*?selectedId = path;/,
     );
   });
 

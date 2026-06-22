@@ -33,50 +33,79 @@ describe("graph reload is anchored on scope/depth/mode, not layout churn", () =>
   });
 });
 
-describe("Open routes to the editor, not a graph reload", () => {
-  test("openSelectedFile opens the selected file in the active pane", () => {
+describe("Open spawns a File Browser tab with the item selected, not a graph reload", () => {
+  test("the nav contract: graphFromHere spawns a NEW graph tab (no in-place re-root)", () => {
+    // The old contract re-rooted in place (mutating graphState +
+    // selectedId). The new contract spawns a fresh semantic graph tab
+    // seeded at the clicked node via openGraphInActivePane, leaving the
+    // current graph untouched.
     expect(panel).toMatch(
-      /function openSelectedFile\(\): void \{[\s\S]*?openInActivePane\(selectedNode\.path\)/,
+      /function graphFromHere\(path: string, isDir: boolean\): void \{[\s\S]*?openGraphInActivePane\(\{\s*mode: "semantic",\s*scopeId,\s*depth: 1,\s*pendingSelectId: path,\s*\}\)/,
+    );
+    // openGraphInActivePane is the tab-spawn primitive, imported from
+    // the tabs state module (replacing the old in-place mutation).
+    expect(panel).toMatch(/openGraphInActivePane/);
+    expect(panel).toMatch(/from "\.\.\/state\/tabs\.svelte"/);
+    // The deleted in-place re-root no longer mutates the current tab.
+    expect(panel).not.toMatch(
+      /function graphFromHere[\s\S]*?graphState\.scopeId = scopeId;[\s\S]*?selectedId = path;/,
     );
   });
 
-  test("the semantic-node inspector binds onOpen to openSelectedFile for file selections", () => {
+  test("the semantic-node inspector binds onOpen to a NEW File Browser tab for file selections", () => {
+    // "Open" on a file spawns a File Browser tab with the file selected
+    // (revealPathInBrowserTab, isDir=false), replacing the editor-open
+    // openSelectedFile of the old contract (now deleted).
     expect(panel).toMatch(
-      /onOpen=\{[\s\S]*?inspectorSelection\?\.kind === "file"\s*\?\s*openSelectedFile/,
+      /onOpen=\{\s*inspectorSelection\?\.kind === "file"\s*\?\s*\(\) => revealPathInBrowserTab\(inspectorSelection\.path, false\)/,
     );
+    // The deleted editor-open helper is gone everywhere.
+    expect(panel).not.toMatch(/openSelectedFile/);
   });
 
-  test("the fs-mode inspector binds onOpen to openInActivePane for file nodes", () => {
-    // No close() after openInActivePane: the graph is a tab and close()
+  test("the fs-mode inspector binds onOpen to a File Browser tab for file nodes", () => {
+    // Files spawn a File Browser tab via revealPathInBrowserTab (isDir
+    // false); the editor-open openInActivePane(fsPath) of the old
+    // contract is gone. No close() either: the graph is a tab and close()
     // would close the pane's new active tab instead of the graph.
     expect(panel).toMatch(
-      /onOpen=\{fsKind === "file"\s*\?\s*\(\) => \{ void openInActivePane\(fsPath\); \}/,
+      /onOpen=\{fsKind === "file" \? \(\) => revealPathInBrowserTab\(fsPath, false\) : undefined\}/,
     );
     expect(panel).not.toMatch(/void openInActivePane\(fsPath\); close\(\);/);
   });
 });
 
-describe("Show File reveals in the File Browser, not a graph reload", () => {
-  test("revealSelectedFile reveals + selects the path in a browser tab", () => {
-    // Reveal routes through revealPathInBrowserTab (openBrowserInActivePane),
-    // not the overlay-era revealPathInBrowser + close().
+describe("Open / Reveal spawn a File Browser tab via revealPathInBrowserTab, not a graph reload", () => {
+  test("the surviving reveal primitive routes through revealPathInBrowserTab (browser tab)", () => {
+    // Reveal opens a File Browser TAB via openBrowserInActivePane, not
+    // the overlay-era revealPathInBrowser + close(). The dedicated
+    // revealSelectedFile / revealSelectedFsEntry helpers were deleted;
+    // revealPathInBrowserTab(path, isDir) is the single reveal-into-a-
+    // new-FB-tab primitive the inspector binds directly.
     expect(panel).toMatch(
-      /function revealSelectedFile\(\): void \{[\s\S]*?revealPathInBrowserTab\(selectedNode\.path, false\)/,
+      /function revealPathInBrowserTab\(path: string, isDir: boolean\): void \{[\s\S]*?openBrowserInActivePane\(isRoot \? \{\} : \{ select: path \}\)/,
     );
+    expect(panel).not.toMatch(/function revealSelectedFile\(/);
+    expect(panel).not.toMatch(/function revealSelectedFsEntry\(/);
   });
 
-  test("revealSelectedFsEntry reveals the fs-node path in a browser tab", () => {
+  test("the fs-mode inspector binds onReveal to revealPathInBrowserTab for directories", () => {
     // Directories pass isDir=true so the browser expands the dir itself;
     // files expand ancestors. Detailed branch pins are in
     // graphDirInspectorHotfix.test.ts.
     expect(panel).toMatch(
-      /function revealSelectedFsEntry\(\): void \{[\s\S]*?revealPathInBrowserTab\(selectedFsNode\.path, isFsDirectory\(selectedFsNode\)\)/,
+      /onReveal=\{fsIsDir \? \(\) => revealPathInBrowserTab\(fsPath, true\) : undefined\}/,
     );
   });
 
-  test("inspector binds onReveal to the reveal helpers (not a reload)", () => {
-    expect(panel).toMatch(/onReveal=\{revealSelectedFile\}/);
-    expect(panel).toMatch(/onReveal=\{revealSelectedFsEntry\}/);
+  test("the semantic inspector binds onReveal to revealPathInBrowserTab for directories", () => {
+    // A directory selection's "Open" routes through FileInfoBody's
+    // openDirInBrowser → onReveal, spawning a File Browser tab AT the
+    // directory (isDir=true). Non-directory selections leave onReveal
+    // undefined (file uses onOpen above).
+    expect(panel).toMatch(
+      /onReveal=\{\s*inspectorSelection\?\.kind === "directory"[\s\S]*?\(\) => revealPathInBrowserTab\(inspectorSelection\.path, true\)/,
+    );
   });
 });
 

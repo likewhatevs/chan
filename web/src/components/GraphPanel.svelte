@@ -28,6 +28,7 @@
     canReopenClosedTab,
     graphLinkFor,
     openBrowserInActivePane,
+    openGraphInActivePane,
     openInActivePane,
     reopenClosedTab,
     type GraphTab,
@@ -260,7 +261,7 @@
     // In semantic mode the directory spine ships in the
     // already-loaded /api/graph payload, so a directory double-click
     // toggles its children purely client-side - no fs-graph fetch, no
-    // mode flip. The fresh Cmd+Shift+M graph is semantic, so this is
+    // mode flip. The fresh from-here graph is semantic, so this is
     // what makes double-click-to-expand work there without first
     // running "Graph from here" on the root. The directory node is a
     // `folder`-kind RenderedNode whose `path` is the bare workspace-
@@ -482,35 +483,30 @@
     }
   }
 
+  /// "Graph from here" spawns a NEW graph tab seeded at the clicked node
+  /// (the nav contract: a from-here graph is always its own tab, never an
+  /// in-place re-root of the current one). The new tab opens in semantic
+  /// mode — a directory scope pulls the `contains` spine plus every layer
+  /// (link / backlink / hashtag / contact / language) and supports
+  /// double-click / depth-slider expansion, so the from-here graph stays
+  /// rich. `pendingSelectId` lands the new graph already selected on the
+  /// node. Upward navigation is the breadcrumb (`rescopeFromHere`, still
+  /// in-place); this is the only "set as scope" path that spawns a tab.
   function graphFromHere(path: string, isDir: boolean): void {
     let scopeId: string;
     if (isDir) {
       scopeId = path ? `dir:${path}` : "workspace";
-      // STAY in semantic mode for a directory re-scope. Flipping to
-      // filesystem mode here would get double-click expansion but
-      // that mode emits directories ONLY - it
-      // drops every other layer (files' link / backlink / hashtag /
-      // contact / language edges) the fresh Cmd+Shift+M graph shows.
-      // The semantic dir-scope load already pulls all those layers
-      // plus the directory `contains` spine, and double-click /
-      // depth-slider expansion works in semantic mode
-      // (toggleSemanticDirExpand + the expanded-ancestor scopedNodeIds
-      // branch), so re-scoping a directory keeps the rich graph.
-      graphState.mode = "semantic";
     } else {
       const slash = path.lastIndexOf("/");
       const parent = slash > 0 ? path.slice(0, slash) : "";
       scopeId = parent ? `dir:${parent}` : "workspace";
     }
-    graphState.scopeId = scopeId;
-    graphState.depth = 1;
-    // Pin + select the node so the re-rooted graph lands on it. Setting
-    // pendingSelectId routes through load()'s post-fetch selection so the
-    // inspector re-populates on the clicked node once the new scope
-    // loads; selectedId is set eagerly so the inspector doesn't flash
-    // empty in the reload window.
-    graphState.pendingSelectId = path;
-    selectedId = path;
+    openGraphInActivePane({
+      mode: "semantic",
+      scopeId,
+      depth: 1,
+      pendingSelectId: path,
+    });
   }
 
   function close(): void {
@@ -1623,17 +1619,6 @@
     return out;
   });
 
-  function openSelectedFile(): void {
-    if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
-      // Open the file in the active pane and leave the graph tab in
-      // place (File Browser inspector "Open" parity). Do NOT call
-      // close() here: openInActivePane has already made the new file
-      // tab this pane's active tab, so onClose's reactive `active.id`
-      // would resolve to that just-opened tab and close it.
-      void openInActivePane(selectedNode.path);
-    }
-  }
-
   /// Try to resolve a mention/contact label to a real .md file on
   /// disk: scan tree.entries for a contact-kind entry whose basename
   /// (sans .md) includes the mention label case-insensitively. Loose
@@ -1696,29 +1681,6 @@
     map[""] = true;
     for (const e of expanded) map[e] = true;
     persistTreeExpanded();
-  }
-
-  /// "Show in file browser" handler for image / semantic file nodes.
-  /// FileInfoBody only renders the button when this is set + the
-  /// selection is an image, so it's safe to bind for every file.
-  function revealSelectedFile(): void {
-    if (selectedNode && selectedNode.kind === "file" && !selectedNode.missing) {
-      revealPathInBrowserTab(selectedNode.path, false);
-    }
-  }
-
-  /// "Show File" / "Show Directory" handler for fs-mode nodes. Pulls the
-  /// path off the FsGraphNode so it works for directories (which have no
-  /// semantic-graph counterpart in selectedNode) and for files surfaced
-  /// only via the fs-graph.
-  function revealSelectedFsEntry(): void {
-    if (
-      selectedFsNode &&
-      (isFsDirectory(selectedFsNode) || selectedFsNode.kind === "file") &&
-      selectedFsNode.path !== undefined
-    ) {
-      revealPathInBrowserTab(selectedFsNode.path, isFsDirectory(selectedFsNode));
-    }
   }
 
   function selectFromList(n: RenderedNode): void {
@@ -2838,21 +2800,19 @@
              report; tags / refs / backlinks for files) by routing
              through InspectorBody. FileInfoBody dispatches on
              entry.is_dir so the "file" selection variant covers both
-             shapes. File keeps the "Open" extra editor action.
-             The breadcrumb above handles upward navigation;
-             "Graph from here" (`onSetAsScope` → `graphFromHere`)
-             re-roots this graph, and a fresh from-here graph tab
-             comes from chord spawn (Cmd+Shift+M). -->
+             shapes. Per the nav contract "Open" spawns a NEW File
+             Browser tab with the item selected (file via onOpen, dir
+             via FileInfoBody's openDirInBrowser → onReveal); "Graph
+             from here" (`onSetAsScope` → `graphFromHere`) spawns a new
+             graph tab. The breadcrumb above handles upward navigation. -->
         {@const fsPath = selectedFsNode.path}
         {@const fsKind = selectedFsNode.kind}
         {@const fsIsDir = isFsDirectory(selectedFsNode)}
         <InspectorBody
           selection={{ kind: "file", path: fsPath }}
           showRefs
-          onOpen={fsKind === "file"
-            ? () => { void openInActivePane(fsPath); }
-            : undefined}
-          onReveal={revealSelectedFsEntry}
+          onOpen={fsKind === "file" ? () => revealPathInBrowserTab(fsPath, false) : undefined}
+          onReveal={fsIsDir ? () => revealPathInBrowserTab(fsPath, true) : undefined}
           onNavigate={(p) => {
             const peer = fsNodes.find((n) => n.path === p);
             if (peer) {
@@ -2921,20 +2881,26 @@
           selection={inspectorSelection}
           onOpen={
             inspectorSelection?.kind === "file"
-              ? openSelectedFile
+              ? () => revealPathInBrowserTab(inspectorSelection.path, false)
               : inspectorSelection?.kind === "mention" && selectedContactPath
                 ? () => {
-                    // Mention/contact "Open": route the
-                    // resolved contact file (looked up via
-                    // tree.kind === "contact") through the active
-                    // pane. Leave the graph tab open (File Browser
-                    // parity); see openSelectedFile for why close()
-                    // would close the just-opened file tab.
-                    void openInActivePane(selectedContactPath!);
+                    // Mention/contact "Open": route the resolved contact
+                    // file (looked up via tree.kind === "contact") to a
+                    // new File Browser tab with it selected, matching the
+                    // file/dir nav contract.
+                    revealPathInBrowserTab(selectedContactPath!, false);
                   }
                 : undefined
           }
-          onReveal={revealSelectedFile}
+          onReveal={
+            inspectorSelection?.kind === "directory"
+              ? // Directory "Open": FileInfoBody routes a directory's
+                // "Open" button through openDirInBrowser → onReveal, so a
+                // dir reveals into a new File Browser tab here (the file
+                // case uses onOpen above). Fixes the dir-Open no-op.
+                () => revealPathInBrowserTab(inspectorSelection.path, true)
+              : undefined
+          }
           onNavigate={selectByPath}
           onContactNavigate={selectByPath}
           onSetAsScope={

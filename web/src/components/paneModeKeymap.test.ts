@@ -126,16 +126,18 @@ describe("Cmd+T / O / P / Cmd+Shift+M top-level chords", () => {
     );
   });
 
-  test("Cmd+Shift+M (web + native) spawns graph with context", () => {
-    expect(app).toMatch(
-      /e\.metaKey && !e\.altKey && e\.shiftKey && !e\.ctrlKey && e\.code === "KeyM"[\s\S]*?spawnGraphFromContext\(\)/,
-    );
+  test("the graph has no top-level web keydown (Cmd+Shift+M retired)", () => {
+    // The Cmd+Shift+M web chord is retired: graphs open via Hybrid Nav
+    // (Mod+. V/G), the "Graph from here" inspector action (a new graph
+    // tab), or the native Graph menu (app.graph.toggle bridge, below).
+    expect(app).not.toMatch(/e\.code === "KeyM"[\s\S]{0,80}spawnGraphFromContext\(\)/);
   });
 
   test("chan:command bridge routes through context-aware helpers", () => {
     // chan-desktop's KEY_BRIDGE_JS fires these commands on native
-    // Cmd+T / Cmd+O / Cmd+P / Cmd+Shift+M and they route through
-    // the same helpers as the web chords.
+    // Cmd+T / Cmd+O / Cmd+P (and the native Graph menu fires
+    // app.graph.toggle); they route through the same helpers as the
+    // web chords.
     expect(app).toMatch(
       /case "app\.terminal\.toggle":\s*\n\s*spawnTerminalFromContext\(\);/,
     );

@@ -1587,7 +1587,7 @@
     // `attachCustomKeyEventHandler` reads: false = let the
     // browser dispatch it). App.svelte's window-level keymap
     // then handles the chord. Without this gate Cmd+P,
-    // Cmd+Shift+M, Cmd+R, etc. fired from a focused terminal
+    // Cmd+R, Cmd+, etc. fired from a focused terminal
     // would be swallowed by xterm + written to the PTY as
     // escape sequences.
     if (shouldEscapeTerminal(e)) return false;

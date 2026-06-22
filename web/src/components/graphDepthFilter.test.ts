@@ -172,14 +172,14 @@ describe("directory expand/collapse in the rich semantic graph", () => {
     expect(graph).toMatch(/seedExpandedFromSelected\(graphState\.depth\)/);
   });
 
-  test("graph-from-here on a directory STAYS in semantic mode", () => {
-    // Bug (c): re-scoping a directory keeps the rich graph (all layers)
-    // instead of flipping to the directories-only filesystem mode.
+  test("graph-from-here spawns a new semantic graph tab seeded at the node", () => {
+    // Nav contract: "Graph from here" spawns a NEW graph tab (never an
+    // in-place re-root). It opens in semantic mode so a directory from-here
+    // keeps the rich graph (all layers) instead of the directories-only
+    // filesystem mode, and pendingSelectId lands the tab selected on the node.
     expect(graph).toMatch(
-      /if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "workspace";[\s\S]{1,800}graphState\.mode = "semantic";/,
+      /function graphFromHere\(path: string, isDir: boolean\): void \{[\s\S]{1,800}openGraphInActivePane\(\{\s*mode: "semantic",[\s\S]{1,200}pendingSelectId: path,/,
     );
-    expect(graph).not.toMatch(
-      /if \(isDir\) \{\s*scopeId = path \? `dir:\$\{path\}` : "workspace";[\s\S]{1,800}graphState\.mode = "filesystem";/,
-    );
+    expect(graph).not.toMatch(/graphState\.mode = "filesystem"/);
   });
 });
